@@ -460,6 +460,12 @@ export interface CopilotAdoptionSummary {
   licenceOpportunityEstimate?: LicenceValueEstimate;
   /** The same model over the recommended candidates already using Copilot Chat without a licence. */
   licenceChatUsersEstimate?: LicenceValueEstimate;
+  /**
+   * The same model over every licence candidate, recommended or not - the headline's "all candidates"
+   * option, and the only figure there is when nobody is recommended. Optional only so older fixtures
+   * still type-check; the server always sends it.
+   */
+  licenceAllCandidatesEstimate?: LicenceValueEstimate;
 
   funnel: ReportCategory[];
   bandBreakdown: ReportCategory[];

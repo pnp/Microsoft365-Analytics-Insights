@@ -20,6 +20,7 @@ vi.mock('../../api/copilotAdoptionApi', () => ({
 // Imported after the mock so the panel picks up the stubbed module.
 const { default: CoworkPanel } = await import('./CoworkPanel');
 const { resetTimeSavedStore, TIME_SAVED_STORAGE_KEY } = await import('./coworkTimeSaved');
+const { resetTimeSavedCohortStore, TIME_SAVED_COHORT_STORAGE_KEY } = await import('./timeSavedCohort');
 
 const OPTIONS = {
   workingDaysPerWeek: 5,
@@ -238,6 +239,7 @@ describe('CoworkPanel', () => {
     fetchCowork.mockReset();
     fetchCowork.mockResolvedValue(page([row({})]));
     resetTimeSavedStore();
+    resetTimeSavedCohortStore();
   });
 
   it('explains a missing import instead of showing an empty candidate list', async () => {
@@ -575,6 +577,42 @@ describe('CoworkPanel', () => {
     // No second ceiling beside a headline that already is one, and no list of nobody to open.
     expect(within(hero).queryByText(/^a month if all/)).toBeNull();
     expect(within(hero).queryByRole('button', { name: /to enable/ })).toBeNull();
+    // It says why it is modelling every seat holder, and that nobody ready is not the reader's choice.
+    expect(within(hero).getByText(/^Nobody is ready for Cowork yet in this period, so this models every Copilot seat holder instead/)).toBeTruthy();
+    expect(within(hero).getByRole('radio', { name: 'Ready now (0)' })).toBeDisabled();
+    expect(within(hero).getByRole('radio', { name: 'All Copilot seat holders (400)' })).toBeChecked();
+    expect(sessionStorage.getItem(TIME_SAVED_COHORT_STORAGE_KEY)).toBeNull();
+  });
+
+  /**
+   * The option to model every Copilot seat holder as well as the people ready now. Ready now stays the
+   * default - it is the spending-policy decision - and is shown beside everyone when they lead.
+   */
+  it('models every Copilot seat holder when chosen, with the people ready now beside them', async () => {
+    const user = userEvent.setup();
+    await renderSettled(withEstimates());
+
+    expect(screen.getByRole('radio', { name: 'Ready now (40)' })).toBeChecked();
+    await user.click(screen.getByRole('radio', { name: 'All Copilot seat holders (400)' }));
+
+    const hero = screen.getByRole('region', { name: '933\u20131,865 hours a month' });
+    expect(within(hero).getByText('if all 400 Copilot seat holders used Cowork')).toBeTruthy();
+    expect(within(hero).getByText(/^Modelling every Copilot seat holder, not only the people ready now/)).toBeTruthy();
+    // Where a rollout starts, in place of the ceiling it has become.
+    expect(within(hero).getByText('87\u2013173 h')).toBeTruthy();
+    expect(within(hero).getByText('a month from the 40 people ready for Cowork now')).toBeTruthy();
+    expect(within(hero).queryByText('a month if all 400 Copilot seat holders used Cowork')).toBeNull();
+    expect(within(hero).getByText('a working day, for each Copilot seat holder')).toBeTruthy();
+    expect(JSON.parse(sessionStorage.getItem(TIME_SAVED_COHORT_STORAGE_KEY) ?? '{}')).toEqual({ cowork: 'all' });
+
+    // The working follows the headline.
+    expect(screen.getByRole('radio', { name: 'All 400 Copilot seat holders' })).toBeChecked();
+    expect(screen.getByText('158,400')).toBeTruthy();
+
+    await user.click(screen.getByRole('radio', { name: 'Ready now (40)' }));
+    expect(screen.getByRole('region', { name: '87\u2013173 hours a month' })).toBeTruthy();
+    expect(screen.getByRole('radio', { name: 'The 40 people ready now' })).toBeChecked();
+    expect(sessionStorage.getItem(TIME_SAVED_COHORT_STORAGE_KEY)).toBeNull();
   });
 
   it('shows the Cowork use already observed, badged as observed', async () => {
@@ -690,6 +728,7 @@ describe('CoworkPanel time-saved assumptions', () => {
     fetchCowork.mockReset();
     fetchCowork.mockResolvedValue(page([row({})]));
     resetTimeSavedStore();
+    resetTimeSavedCohortStore();
   });
 
   it('recomputes the headline from the reader\u2019s own minutes and keeps them for the session', async () => {
@@ -838,6 +877,7 @@ describe('CoworkPanel headline actions', () => {
     fetchCowork.mockReset();
     fetchCowork.mockResolvedValue(page([row({})]));
     resetTimeSavedStore();
+    resetTimeSavedCohortStore();
     scrollIntoView.mockReset();
     // jsdom implements no scrolling, so the call is recorded rather than performed.
     Element.prototype.scrollIntoView = scrollIntoView;
@@ -887,6 +927,24 @@ describe('CoworkPanel headline actions', () => {
     expect(scrollIntoView).toHaveBeenCalled();
     await waitFor(() => expect(fetchCowork).toHaveBeenCalled());
     expect((fetchCowork.mock.calls.at(-1)![1] as { recommendedOnly: boolean }).recommendedOnly).toBe(true);
+  });
+
+  it('opens every seat holder, with the list\u2019s filters lifted, when the headline models them all', async () => {
+    const user = userEvent.setup();
+    await renderSettled(withEstimates());
+    await user.click(screen.getByRole('radio', { name: 'All Copilot seat holders (400)' }));
+    await waitFor(() => expect(fetchCowork).toHaveBeenCalled());
+    fetchCowork.mockClear();
+
+    await user.click(screen.getByRole('button', { name: 'See all 400 Copilot seat holders' }));
+
+    expect(screen.getByRole('tab', { name: /People to enable/, selected: true })).toBeTruthy();
+    expect(scrollIntoView).toHaveBeenCalled();
+    await waitFor(() => expect(fetchCowork).toHaveBeenCalled());
+    const filters = fetchCowork.mock.calls.at(-1)![1] as { recommendedOnly: boolean; coworkUsersOnly: boolean; tiers: string[] };
+    expect(filters.recommendedOnly).toBe(false);
+    expect(filters.coworkUsersOnly).toBe(false);
+    expect(filters.tiers).toEqual([]);
   });
 });
 

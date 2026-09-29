@@ -1,4 +1,4 @@
-import { makeStyles, tokens, Text, Button, Badge } from '@fluentui/react-components';
+import { makeStyles, tokens, Text, Button, Badge, MessageBar, MessageBarBody } from '@fluentui/react-components';
 import { ArrowRight16Regular, Options16Regular } from '@fluentui/react-icons';
 import type { CopilotAdoptionOptions, CopilotAdoptionSummary } from '../../types/copilotAdoption';
 import { formatCount } from '../shared/KpiGrid';
@@ -12,11 +12,13 @@ import {
   type CoworkProjection,
   type TimeSavedAssumptionState,
 } from './coworkTimeSaved';
+import { resolveTimeSavedCohort, type TimeSavedCohort } from './timeSavedCohort';
 import {
   AssumptionBadge,
   COWORK_ACTIVITY_COLOUR,
   COWORK_ACTIVITY_LABEL,
   COWORK_OBSERVED_COLOUR,
+  CohortPicker,
   EVIDENCE_GREEN,
   ModelledBadge,
   TIME_SAVED_COWORK_COLOUR,
@@ -99,7 +101,9 @@ const useStyles = makeStyles({
  * Leads with the people ready for Cowork now, because that is the decision this tab exists for: who
  * to put in the spending policy. Every Copilot seat holder is beside it as the ceiling, and says it
  * is one - it has people who are not ready yet hand Cowork the same share of their work, so it
- * overstates. When nobody is ready, the ceiling leads instead rather than the headline vanishing.
+ * overstates. The reader can make every seat holder the headline instead, with the people ready now
+ * beside it; and when nobody is ready, every seat holder leads on its own and says why, rather than
+ * the headline vanishing.
  *
  * Beneath the figure, where it would come from: the share of the hours each kind of work Cowork can
  * take on accounts for - the meetings people organise and attend, the email they send, their Teams
@@ -117,14 +121,21 @@ export default function CoworkTimeSavedHero({
   summary,
   options,
   timeSaved,
+  cohort,
+  onCohortChange,
   onAdjust,
   onShowPeople,
+  onShowAll,
 }: {
   summary: CopilotAdoptionSummary;
   options: CopilotAdoptionOptions;
   timeSaved: TimeSavedAssumptionState;
+  /** The reader's choice of who to model - see useTimeSavedCohorts. */
+  cohort: TimeSavedCohort;
+  onCohortChange: (cohort: TimeSavedCohort) => void;
   onAdjust: () => void;
   onShowPeople: () => void;
+  onShowAll: () => void;
 }) {
   const styles = useStyles();
   const t = useT();
@@ -132,8 +143,10 @@ export default function CoworkTimeSavedHero({
 
   const ready = projectCoworkTimeSaved(summary.coworkValueEstimate, assumptions, options);
   const full = projectCoworkTimeSaved(summary.coworkFullRolloutEstimate, assumptions, options);
-  const headline = ready ?? full;
-  if (!headline) return null;
+  const resolved = resolveTimeSavedCohort(cohort, ready, full);
+  if (!resolved) return null;
+  const { projection: headline, cohort: shown, fallback } = resolved;
+  const everyone = shown === 'all';
 
   const figures = {
     taskMinutes: formatAssumption(assumptions.taskMinutes),
@@ -144,7 +157,7 @@ export default function CoworkTimeSavedHero({
     modelledRange(t, formatCount(projection.hoursLow), formatCount(projection.hoursHigh));
 
   const stats: HeroStat[] = [];
-  if (ready && full) {
+  if (!everyone && full) {
     stats.push({
       key: 'ceiling',
       value: t('copilotAdoptionTimeSaved.hero.hoursValue', { range: hours(full) }),
@@ -158,6 +171,21 @@ export default function CoworkTimeSavedHero({
       ),
       hint: t('copilotAdoptionCowork.timeSaved.hero.ceiling.hint'),
     });
+  } else if (everyone && ready) {
+    // Modelling everyone, where a rollout would start is the comparison that matters.
+    stats.push({
+      key: 'ready',
+      value: t('copilotAdoptionTimeSaved.hero.hoursValue', { range: hours(ready) }),
+      label: t(
+        plural(
+          ready.cohortUsers,
+          'copilotAdoptionCowork.timeSaved.hero.ready.label.one',
+          'copilotAdoptionCowork.timeSaved.hero.ready.label.other',
+        ),
+        { users: formatCount(ready.cohortUsers) },
+      ),
+      hint: t('copilotAdoptionCowork.timeSaved.hero.ready.hint'),
+    });
   }
   stats.push(
     {
@@ -165,7 +193,7 @@ export default function CoworkTimeSavedHero({
       value: t('copilotAdoptionTimeSaved.stat.perPerson.value', {
         range: modelledRange(t, formatModelled(headline.minutesPerPersonDayLow), formatModelled(headline.minutesPerPersonDayHigh)),
       }),
-      label: t(ready ? 'copilotAdoptionCowork.timeSaved.hero.perPerson.label' : 'copilotAdoptionCowork.timeSaved.hero.perPerson.labelAll'),
+      label: t(everyone ? 'copilotAdoptionCowork.timeSaved.hero.perPerson.labelAll' : 'copilotAdoptionCowork.timeSaved.hero.perPerson.label'),
       hint: t('copilotAdoptionCowork.timeSaved.hero.perPerson.hint'),
     },
     {
@@ -264,7 +292,7 @@ export default function CoworkTimeSavedHero({
       }
       infoTitle={t('copilotAdoptionCowork.timeSaved.hero.infoTitle')}
       info={{
-        what: t('copilotAdoptionCowork.timeSaved.hero.info.what'),
+        what: t(everyone ? 'copilotAdoptionCowork.timeSaved.hero.info.whatAll' : 'copilotAdoptionCowork.timeSaved.hero.info.what'),
         how: t('copilotAdoptionCowork.timeSaved.hero.info.how'),
         formula: t('copilotAdoptionCowork.timeSaved.hero.info.formula', {
           ...figures,
@@ -273,22 +301,41 @@ export default function CoworkTimeSavedHero({
         }),
         source: t('copilotAdoptionCowork.timeSaved.hero.info.source'),
       }}
+      picker={
+        full ? (
+          <CohortPicker
+            value={shown}
+            onChange={onCohortChange}
+            options={[
+              {
+                value: 'recommended',
+                label: t('copilotAdoptionCowork.timeSaved.cohort.ready', { users: formatCount(ready?.cohortUsers ?? 0) }),
+                disabled: !ready,
+              },
+              {
+                value: 'all',
+                label: t('copilotAdoptionCowork.timeSaved.cohort.all', { users: formatCount(full.cohortUsers) }),
+              },
+            ]}
+          />
+        ) : undefined
+      }
       headline={t('copilotAdoptionTimeSaved.hero.hoursRange', { range: hours(headline) })}
       subline={
-        ready
+        everyone
           ? t(
-              plural(
-                ready.cohortUsers,
-                'copilotAdoptionCowork.timeSaved.hero.readyAdoption.one',
-                'copilotAdoptionCowork.timeSaved.hero.readyAdoption.other',
-              ),
-              { users: formatCount(ready.cohortUsers) },
-            )
-          : t(
               plural(
                 headline.cohortUsers,
                 'copilotAdoptionCowork.timeSaved.hero.fullAdoption.one',
                 'copilotAdoptionCowork.timeSaved.hero.fullAdoption.other',
+              ),
+              { users: formatCount(headline.cohortUsers) },
+            )
+          : t(
+              plural(
+                headline.cohortUsers,
+                'copilotAdoptionCowork.timeSaved.hero.readyAdoption.one',
+                'copilotAdoptionCowork.timeSaved.hero.readyAdoption.other',
               ),
               { users: formatCount(headline.cohortUsers) },
             )
@@ -301,6 +348,15 @@ export default function CoworkTimeSavedHero({
         ),
         { tasks: formatCount(headline.tasks) },
       )}
+      notice={
+        everyone ? (
+          <MessageBar intent="info">
+            <MessageBarBody>
+              {t(fallback ? 'copilotAdoptionCowork.timeSaved.hero.noneReady' : 'copilotAdoptionCowork.timeSaved.hero.allNotice')}
+            </MessageBarBody>
+          </MessageBar>
+        ) : undefined
+      }
       stats={stats}
       breakdown={breakdown}
       basis={t(
@@ -314,17 +370,30 @@ export default function CoworkTimeSavedHero({
           <Button appearance="primary" size="small" icon={<Options16Regular />} onClick={onAdjust}>
             {t('copilotAdoptionTimeSaved.hero.adjust')}
           </Button>
-          {readyUsers > 0 && (
-            <Button appearance="secondary" size="small" icon={<ArrowRight16Regular />} iconPosition="after" onClick={onShowPeople}>
+          {everyone ? (
+            <Button appearance="secondary" size="small" icon={<ArrowRight16Regular />} iconPosition="after" onClick={onShowAll}>
               {t(
                 plural(
-                  readyUsers,
-                  'copilotAdoptionCowork.timeSaved.hero.seePeople.one',
-                  'copilotAdoptionCowork.timeSaved.hero.seePeople.other',
+                  headline.cohortUsers,
+                  'copilotAdoptionCowork.timeSaved.hero.seeAll.one',
+                  'copilotAdoptionCowork.timeSaved.hero.seeAll.other',
                 ),
-                { users: formatCount(readyUsers) },
+                { users: formatCount(headline.cohortUsers) },
               )}
             </Button>
+          ) : (
+            readyUsers > 0 && (
+              <Button appearance="secondary" size="small" icon={<ArrowRight16Regular />} iconPosition="after" onClick={onShowPeople}>
+                {t(
+                  plural(
+                    readyUsers,
+                    'copilotAdoptionCowork.timeSaved.hero.seePeople.one',
+                    'copilotAdoptionCowork.timeSaved.hero.seePeople.other',
+                  ),
+                  { users: formatCount(readyUsers) },
+                )}
+              </Button>
+            )
           )}
         </>
       }

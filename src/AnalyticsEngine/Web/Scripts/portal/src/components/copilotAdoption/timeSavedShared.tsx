@@ -27,6 +27,7 @@ import {
 } from './coworkTimeSaved';
 import { EVIDENCE_METHOD_LABEL, EVIDENCE_METHOD_TOOLTIP, type EvidenceItem } from './coworkTimeSavedEvidence';
 import { revealElement } from './adoptionShared';
+import type { TimeSavedCohort } from './timeSavedCohort';
 
 /**
  * What the two time-saved surfaces share: the licence estimate on the Licence opportunities tab and
@@ -195,6 +196,14 @@ const useHeroStyles = makeStyles({
     gap: '6px',
     flexWrap: 'wrap',
   },
+  picker: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '4px 12px',
+    flexWrap: 'wrap',
+    marginTop: '10px',
+    color: tokens.colorNeutralForeground2,
+  },
   headline: {
     display: 'block',
     marginTop: '10px',
@@ -294,6 +303,7 @@ export function TimeSavedHeroFrame({
   badges,
   infoTitle,
   info,
+  picker,
   headline,
   subline,
   caption,
@@ -311,6 +321,8 @@ export function TimeSavedHeroFrame({
   badges: ReactNode;
   infoTitle: string;
   info: InfoTipContent;
+  /** Who the headline models - see CohortPicker. Above the figure, because it decides the figure. */
+  picker?: ReactNode;
   headline: string;
   subline: string;
   caption?: string;
@@ -339,6 +351,8 @@ export function TimeSavedHeroFrame({
           <InfoTip title={infoTitle} content={info} />
         </div>
       </div>
+
+      {picker}
 
       <span id={id} className={styles.headline}>
         {headline}
@@ -384,6 +398,43 @@ export function TimeSavedHeroFrame({
 
       {footer}
     </section>
+  );
+}
+
+/**
+ * The headline's choice of who to model: the people recommended, or everyone they were drawn from.
+ *
+ * Recommended leads by default - it is the decision each tab supports - and an option with nobody in it
+ * is shown but disabled, so a reader whose tenant has nobody recommended can see why the headline is
+ * modelling everyone. Not printed: the line under the figure already says who it covers.
+ */
+export function CohortPicker({
+  value,
+  options,
+  onChange,
+}: {
+  value: TimeSavedCohort;
+  options: Array<{ value: TimeSavedCohort; label: string; disabled?: boolean }>;
+  onChange: (value: TimeSavedCohort) => void;
+}) {
+  const styles = useHeroStyles();
+  const t = useT();
+  return (
+    <div className={styles.picker} data-print="hide">
+      <Text size={200} weight="semibold">
+        {t('copilotAdoptionTimeSaved.cohort.label')}
+      </Text>
+      <RadioGroup
+        layout="horizontal"
+        value={value}
+        onChange={(_e, data) => onChange(data.value as TimeSavedCohort)}
+        aria-label={t('copilotAdoptionTimeSaved.cohort.label')}
+      >
+        {options.map((option) => (
+          <Radio key={option.value} value={option.value} label={option.label} disabled={option.disabled} />
+        ))}
+      </RadioGroup>
+    </div>
   );
 }
 
@@ -844,7 +895,7 @@ export function useCalculatorFocus(focusRequest: number): { ref: RefObject<HTMLD
   return { ref, highlighted };
 }
 
-/** A pair of cohorts the calculator can show its working for. */
+/** The cohorts the calculator can show its working for. */
 export function ScenarioPicker<T extends string>({
   value,
   options,

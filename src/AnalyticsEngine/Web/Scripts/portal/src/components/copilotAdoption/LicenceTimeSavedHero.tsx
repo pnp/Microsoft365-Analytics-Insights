@@ -12,7 +12,9 @@ import {
   type LicenceProjection,
   type TimeSavedAssumptionState,
 } from './coworkTimeSaved';
+import { resolveTimeSavedCohort, type TimeSavedCohort } from './timeSavedCohort';
 import {
+  CohortPicker,
   ModelledBadge,
   PublishedEvidenceBadge,
   TIME_SAVED_ACTIVITY_COLOUR,
@@ -24,6 +26,11 @@ import {
 } from './timeSavedShared';
 
 const useStyles = makeStyles({
+  notices: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '8px',
+  },
   breakdown: {
     marginTop: '18px',
   },
@@ -82,6 +89,11 @@ const useStyles = makeStyles({
  * using Copilot Chat: the strongest part of the case, because their demand is observed rather than
  * inferred, and the part Copilot Chat may already be giving them some of.
  *
+ * The reader can model every licence candidate instead of the recommended ones. That is what sizes a
+ * purchase on a tenant where nobody uses Microsoft 365 heavily enough to be recommended - there, it
+ * leads on its own and says why - and beside it the recommended candidates show how much of it the
+ * list stands behind.
+ *
  * There is deliberately no equivalent figure for people who already hold a licence: no decision
  * hangs on it.
  */
@@ -89,21 +101,32 @@ export default function LicenceTimeSavedHero({
   summary,
   options,
   timeSaved,
+  cohort,
+  onCohortChange,
   onAdjust,
   onShowRecommended,
+  onShowAll,
 }: {
   summary: CopilotAdoptionSummary;
   options: CopilotAdoptionOptions;
   timeSaved: TimeSavedAssumptionState;
+  /** The reader's choice of who to model - see useTimeSavedCohorts. */
+  cohort: TimeSavedCohort;
+  onCohortChange: (cohort: TimeSavedCohort) => void;
   onAdjust: () => void;
   onShowRecommended: () => void;
+  onShowAll: () => void;
 }) {
   const styles = useStyles();
   const t = useT();
   const { assumptions, customised } = timeSaved;
 
   const recommended = projectLicenceTimeSaved(summary.licenceOpportunityEstimate, assumptions, options);
-  if (!recommended) return null;
+  const all = projectLicenceTimeSaved(summary.licenceAllCandidatesEstimate, assumptions, options);
+  const resolved = resolveTimeSavedCohort(cohort, recommended, all);
+  if (!resolved) return null;
+  const { projection: headline, cohort: shown, fallback } = resolved;
+  const everyone = shown === 'all';
   const chatUsers = projectLicenceTimeSaved(summary.licenceChatUsersEstimate, assumptions, options);
 
   const figures = {
@@ -115,45 +138,65 @@ export default function LicenceTimeSavedHero({
   const hours = (projection: LicenceProjection) =>
     modelledRange(t, formatCount(projection.hoursLow), formatCount(projection.hoursHigh));
 
-  const stats: HeroStat[] = [
-    chatUsers
-      ? {
-          key: 'chatUsers',
-          value: t('copilotAdoptionTimeSaved.hero.hoursValue', { range: hours(chatUsers) }),
-          label: t(
-            plural(
-              chatUsers.cohortUsers,
-              'copilotAdoptionTimeSaved.licence.hero.chatUsers.label.one',
-              'copilotAdoptionTimeSaved.licence.hero.chatUsers.label.other',
+  const stats: HeroStat[] = [];
+  if (!everyone) {
+    stats.push(
+      chatUsers
+        ? {
+            key: 'chatUsers',
+            value: t('copilotAdoptionTimeSaved.hero.hoursValue', { range: hours(chatUsers) }),
+            label: t(
+              plural(
+                chatUsers.cohortUsers,
+                'copilotAdoptionTimeSaved.licence.hero.chatUsers.label.one',
+                'copilotAdoptionTimeSaved.licence.hero.chatUsers.label.other',
+              ),
+              { users: formatCount(chatUsers.cohortUsers) },
             ),
-            { users: formatCount(chatUsers.cohortUsers) },
-          ),
-          hint: t('copilotAdoptionTimeSaved.licence.hero.chatUsers.hint'),
-        }
-      : {
-          key: 'chatUsers',
-          value: '\u2014',
-          label: t('copilotAdoptionTimeSaved.licence.hero.chatUsers.none'),
-        },
+            hint: t('copilotAdoptionTimeSaved.licence.hero.chatUsers.hint'),
+          }
+        : {
+            key: 'chatUsers',
+            value: '\u2014',
+            label: t('copilotAdoptionTimeSaved.licence.hero.chatUsers.none'),
+          },
+    );
+  } else if (recommended) {
+    // Modelling everyone, the part of it the list stands behind is the comparison that matters.
+    stats.push({
+      key: 'recommended',
+      value: t('copilotAdoptionTimeSaved.hero.hoursValue', { range: hours(recommended) }),
+      label: t(
+        plural(
+          recommended.cohortUsers,
+          'copilotAdoptionTimeSaved.licence.hero.recommended.label.one',
+          'copilotAdoptionTimeSaved.licence.hero.recommended.label.other',
+        ),
+        { users: formatCount(recommended.cohortUsers) },
+      ),
+      hint: t('copilotAdoptionTimeSaved.licence.hero.recommended.hint'),
+    });
+  }
+  stats.push(
     {
       key: 'perPerson',
       value: t('copilotAdoptionTimeSaved.stat.perPerson.value', {
-        range: modelledRange(t, formatModelled(recommended.minutesPerPersonDayLow), formatModelled(recommended.minutesPerPersonDayHigh)),
+        range: modelledRange(t, formatModelled(headline.minutesPerPersonDayLow), formatModelled(headline.minutesPerPersonDayHigh)),
       }),
-      label: t('copilotAdoptionTimeSaved.licence.hero.perPerson.label'),
+      label: t(everyone ? 'copilotAdoptionTimeSaved.licence.hero.perPerson.labelAll' : 'copilotAdoptionTimeSaved.licence.hero.perPerson.label'),
       hint: t('copilotAdoptionTimeSaved.licence.hero.perPerson.hint'),
     },
     {
       key: 'fte',
       value: t('copilotAdoptionTimeSaved.stat.fte.value', {
-        range: modelledRange(t, formatModelled(recommended.fteLow), formatModelled(recommended.fteHigh)),
+        range: modelledRange(t, formatModelled(headline.fteLow), formatModelled(headline.fteHigh)),
       }),
       label: t('copilotAdoptionTimeSaved.stat.fte.label'),
-      hint: t('copilotAdoptionTimeSaved.stat.fte.hint', { hours: formatCount(recommended.hoursPerFullTimeMonth) }),
+      hint: t('copilotAdoptionTimeSaved.stat.fte.hint', { hours: formatCount(headline.hoursPerFullTimeMonth) }),
     },
-  ];
+  );
 
-  const segments = recommended.activities.map((a) => ({
+  const segments = headline.activities.map((a) => ({
     key: a.activity,
     label: t(TIME_SAVED_ACTIVITY_LABEL[a.activity]),
     colour: TIME_SAVED_ACTIVITY_COLOUR[a.activity],
@@ -163,7 +206,7 @@ export default function LicenceTimeSavedHero({
   const shares = wholeShares(segments.map((s) => s.sharePct));
 
   const breakdown =
-    recommended.hoursHigh > 0 ? (
+    headline.hoursHigh > 0 ? (
       <div className={styles.breakdown}>
         <Text size={200} weight="semibold">
           {t('copilotAdoptionTimeSaved.licence.hero.breakdownTitle')}
@@ -224,32 +267,79 @@ export default function LicenceTimeSavedHero({
       }
       infoTitle={t('copilotAdoptionTimeSaved.licence.hero.infoTitle')}
       info={{
-        what: t('copilotAdoptionTimeSaved.licence.hero.info.what'),
-        how: t('copilotAdoptionTimeSaved.licence.hero.info.how'),
+        what: t(everyone ? 'copilotAdoptionTimeSaved.licence.hero.info.whatAll' : 'copilotAdoptionTimeSaved.licence.hero.info.what'),
+        how: t(everyone ? 'copilotAdoptionTimeSaved.licence.hero.info.howAll' : 'copilotAdoptionTimeSaved.licence.hero.info.how'),
         formula: t('copilotAdoptionTimeSaved.licence.hero.info.formula', {
           ...figures,
-          days: formatNumber(recommended.workingDaysPerMonth, { maximumFractionDigits: 2 }),
+          days: formatNumber(headline.workingDaysPerMonth, { maximumFractionDigits: 2 }),
           hoursPerDay: formatAssumption(assumptions.hoursPerDay),
         }),
         source: t('copilotAdoptionTimeSaved.licence.hero.info.source'),
       }}
-      headline={t('copilotAdoptionTimeSaved.hero.hoursRange', { range: hours(recommended) })}
-      subline={t(
-        plural(
-          recommended.cohortUsers,
-          'copilotAdoptionTimeSaved.licence.hero.cohort.one',
-          'copilotAdoptionTimeSaved.licence.hero.cohort.other',
-        ),
-        { users: formatCount(recommended.cohortUsers) },
-      )}
+      picker={
+        all ? (
+          <CohortPicker
+            value={shown}
+            onChange={onCohortChange}
+            options={[
+              {
+                value: 'recommended',
+                label: t('copilotAdoptionTimeSaved.cohort.licence.recommended', {
+                  users: formatCount(recommended?.cohortUsers ?? 0),
+                }),
+                disabled: !recommended,
+              },
+              {
+                value: 'all',
+                label: t('copilotAdoptionTimeSaved.cohort.licence.all', { users: formatCount(all.cohortUsers) }),
+              },
+            ]}
+          />
+        ) : undefined
+      }
+      headline={t('copilotAdoptionTimeSaved.hero.hoursRange', { range: hours(headline) })}
+      subline={
+        everyone
+          ? t(
+              plural(
+                headline.cohortUsers,
+                'copilotAdoptionTimeSaved.licence.hero.cohortAll.one',
+                'copilotAdoptionTimeSaved.licence.hero.cohortAll.other',
+              ),
+              { users: formatCount(headline.cohortUsers) },
+            )
+          : t(
+              plural(
+                headline.cohortUsers,
+                'copilotAdoptionTimeSaved.licence.hero.cohort.one',
+                'copilotAdoptionTimeSaved.licence.hero.cohort.other',
+              ),
+              { users: formatCount(headline.cohortUsers) },
+            )
+      }
       caption={t('copilotAdoptionTimeSaved.licence.hero.caption')}
       notice={
-        recommended.candidatesCapped ? (
-          <MessageBar intent="warning">
-            <MessageBarBody>
-              {t('copilotAdoptionTimeSaved.licence.hero.capped', { cap: formatNumber(options.maxOpportunityCandidates) })}
-            </MessageBarBody>
-          </MessageBar>
+        everyone || headline.candidatesCapped ? (
+          <div className={styles.notices}>
+            {everyone && (
+              <MessageBar intent="info">
+                <MessageBarBody>
+                  {t(
+                    fallback
+                      ? 'copilotAdoptionTimeSaved.licence.hero.noneRecommended'
+                      : 'copilotAdoptionTimeSaved.licence.hero.allNotice',
+                  )}
+                </MessageBarBody>
+              </MessageBar>
+            )}
+            {headline.candidatesCapped && (
+              <MessageBar intent="warning">
+                <MessageBarBody>
+                  {t('copilotAdoptionTimeSaved.licence.hero.capped', { cap: formatNumber(options.maxOpportunityCandidates) })}
+                </MessageBarBody>
+              </MessageBar>
+            )}
+          </div>
         ) : undefined
       }
       stats={stats}
@@ -265,17 +355,30 @@ export default function LicenceTimeSavedHero({
           <Button appearance="primary" size="small" icon={<Options16Regular />} onClick={onAdjust}>
             {t('copilotAdoptionTimeSaved.hero.adjust')}
           </Button>
-          {summary.recommendedForLicence > 0 && (
-            <Button appearance="secondary" size="small" icon={<ArrowRight16Regular />} iconPosition="after" onClick={onShowRecommended}>
+          {everyone ? (
+            <Button appearance="secondary" size="small" icon={<ArrowRight16Regular />} iconPosition="after" onClick={onShowAll}>
               {t(
                 plural(
-                  summary.recommendedForLicence,
-                  'copilotAdoptionTimeSaved.licence.hero.seeRecommended.one',
-                  'copilotAdoptionTimeSaved.licence.hero.seeRecommended.other',
+                  headline.cohortUsers,
+                  'copilotAdoptionTimeSaved.licence.hero.seeAll.one',
+                  'copilotAdoptionTimeSaved.licence.hero.seeAll.other',
                 ),
-                { users: formatCount(summary.recommendedForLicence) },
+                { users: formatCount(headline.cohortUsers) },
               )}
             </Button>
+          ) : (
+            summary.recommendedForLicence > 0 && (
+              <Button appearance="secondary" size="small" icon={<ArrowRight16Regular />} iconPosition="after" onClick={onShowRecommended}>
+                {t(
+                  plural(
+                    summary.recommendedForLicence,
+                    'copilotAdoptionTimeSaved.licence.hero.seeRecommended.one',
+                    'copilotAdoptionTimeSaved.licence.hero.seeRecommended.other',
+                  ),
+                  { users: formatCount(summary.recommendedForLicence) },
+                )}
+              </Button>
+            )
           )}
         </>
       }

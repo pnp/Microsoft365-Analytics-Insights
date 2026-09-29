@@ -11,6 +11,7 @@ import {
 } from '../api/copilotAdoptionApi';
 import { AdoptionBand, CopilotResourceTypeKind, type CopilotAdoptionOptions, type CopilotAdoptionSummary } from '../types/copilotAdoption';
 import { TIME_SAVED_STORAGE_KEY, resetTimeSavedStore } from '../components/copilotAdoption/coworkTimeSaved';
+import { TIME_SAVED_COHORT_STORAGE_KEY, resetTimeSavedCohortStore } from '../components/copilotAdoption/timeSavedCohort';
 import { loadCatalog } from '../i18n';
 
 vi.mock('../api/copilotAdoptionApi', async (importOriginal) => ({
@@ -864,7 +865,75 @@ describe('CopilotAdoptionPage modelled time saved', () => {
   const tile = async (label: string, timeout?: number) =>
     (await screen.findByText(label, undefined, timeout ? { timeout } : undefined)).closest('.fui-Card') as HTMLElement;
 
-  beforeEach(() => resetTimeSavedStore());
+  // Every licence candidate, recommended or not: the 9 recommended and 31 lighter users - 3,000
+  // meetings x 10 + 30,000 emails x 5 + 4,500 documents x 8 = 216,000 minutes = 3,600 hours, 1,800 at
+  // the conservative end.
+  const licenceAllCandidates = {
+    ...licenceEstimate,
+    cohortUsers: 40,
+    addressableMeetings: 3000,
+    addressableMailThreads: 30000,
+    addressableDocuments: 4500,
+    hoursPerMonthLow: 1800,
+    hoursPerMonthHigh: 3600,
+  };
+
+  beforeEach(() => {
+    resetTimeSavedStore();
+    resetTimeSavedCohortStore();
+  });
+
+  /**
+   * The tabs let the reader model every licence candidate, or every Copilot seat holder, instead of the
+   * people recommended. The overview must then quote the same people - or it would put one figure on
+   * the tile and another on the tab it links to.
+   */
+  it('quotes every licence candidate on the licensing tile when the reader chose to model them all', async () => {
+    sessionStorage.setItem(TIME_SAVED_COHORT_STORAGE_KEY, JSON.stringify({ licence: 'all' }));
+    vi.mocked(fetchAdoptionSummary).mockResolvedValue(withEstimate({ licenceAllCandidatesEstimate: licenceAllCandidates }));
+
+    await renderPage();
+
+    const licence = await tile('Time back from licensing');
+    expect(within(licence).getByText('1,800\u20133,600 h')).toBeVisible();
+    expect(within(licence).getByText('a month if all 40 licence candidates were licensed')).toBeVisible();
+    // The Cowork tile keeps its own choice: the people ready now.
+    expect(within(await tile('Time back from Cowork')).getByText('15\u201330 h')).toBeVisible();
+  });
+
+  it('quotes every Copilot seat holder on the Cowork tile when the reader chose to model them all', async () => {
+    sessionStorage.setItem(TIME_SAVED_COHORT_STORAGE_KEY, JSON.stringify({ cowork: 'all' }));
+    vi.mocked(fetchAdoptionSummary).mockResolvedValue(withEstimate({ licenceAllCandidatesEstimate: licenceAllCandidates }));
+
+    await renderPage();
+
+    const cowork = await tile('Time back from Cowork');
+    expect(within(cowork).getByText('75\u2013150 h')).toBeVisible();
+    expect(within(cowork).getByText('a month if all 100 Copilot seat holders used Cowork')).toBeVisible();
+    expect(within(await tile('Time back from licensing')).getByText('1,200\u20132,400 h')).toBeVisible();
+  });
+
+  /**
+   * The customer this exists for: nobody uses Microsoft 365 heavily enough to be recommended, and the
+   * licensing tile used to vanish. Every candidate stands in, and the tile says whose time it is.
+   */
+  it('models every licence candidate on the licensing tile when nobody is recommended', async () => {
+    vi.mocked(fetchAdoptionSummary).mockResolvedValue(
+      withEstimate({
+        recommendedForLicence: 0,
+        licenceOpportunityEstimate: { ...licenceEstimate, cohortUsers: 0, hoursPerMonthLow: 0, hoursPerMonthHigh: 0 },
+        licenceChatUsersEstimate: { ...licenceEstimate, cohortUsers: 0, hoursPerMonthLow: 0, hoursPerMonthHigh: 0 },
+        licenceAllCandidatesEstimate: licenceAllCandidates,
+      }),
+    );
+
+    await renderPage();
+
+    const licence = await tile('Time back from licensing');
+    expect(within(licence).getByText('1,800\u20133,600 h')).toBeVisible();
+    expect(within(licence).getByText('a month if all 40 licence candidates were licensed')).toBeVisible();
+    expect(within(licence).queryByText(/recommended people/)).toBeNull();
+  });
 
   it('puts each modelled figure on a tile of its own, marked as modelled', async () => {
     vi.mocked(fetchAdoptionSummary).mockResolvedValue(withEstimate());
