@@ -1,5 +1,5 @@
 /**
- * English text for the administration pages: service configuration, Teams permissions, user lookup, profiling and the install log.
+ * English text for the administration pages: service configuration, Teams permissions, user lookup, profiling, the install log and the user import checkpoint.
  *
  * Every key here must have a Spanish counterpart in `../es/admin.ts`; the type of that module
  * makes a missing one a build failure.
@@ -352,6 +352,56 @@ export const admin = {
   'admin.installLog.title': 'Install Log',
   'admin.installLog.viewConfig': 'View config',
   'admin.installLog.viewLog': 'View log',
+
+  // User import: the Graph user import's /users/delta checkpoint.
+  'admin.userImport.title': 'User import',
+  'admin.userImport.description':
+    'The user import keeps people and their details - department, job title, office, manager and licences - up to date from Microsoft Entra ID. After its first full read it saves a checkpoint (a Microsoft Graph delta token), so each later run reads only what has changed since.',
+  'admin.userImport.loading': 'Loading the user import checkpoint...',
+  'admin.userImport.loadFailed': "Couldn't load the user import checkpoint.",
+  'admin.userImport.clearFailed': "Couldn't clear the user import checkpoint.",
+  'admin.userImport.state.title': 'Current state',
+  'admin.userImport.state.ariaLabel': 'User import checkpoint',
+  'admin.userImport.state.importLabel': 'User import',
+  'admin.userImport.state.importEnabled': 'Switched on',
+  'admin.userImport.state.importDisabled': 'Switched off (GraphUsersMetadata)',
+  'admin.userImport.state.importUnknown': "Unknown - the import settings couldn't be read",
+  'admin.userImport.state.storageLabel': 'Where the checkpoint is kept',
+  'admin.userImport.state.storageRedis': 'In Azure Cache for Redis',
+  'admin.userImport.state.storageNone':
+    "Nowhere - Azure Cache for Redis isn't configured, so every run reads every user",
+  'admin.userImport.state.checkpointLabel': 'Stored checkpoint',
+  'admin.userImport.state.checkpointPresent': 'Yes - the next run reads only what has changed',
+  'admin.userImport.state.checkpointAbsent': 'None - the next run reads every user',
+  'admin.userImport.state.keyLabel': 'Redis key',
+  'admin.userImport.state.lastCompletedLabel': 'Last completed',
+  'admin.userImport.state.lastCompletedNone': 'Not recorded',
+  'admin.userImport.state.intervalLabel': 'Runs',
+  'admin.userImport.state.intervalHours': 'At most once every {hours} h',
+  'admin.userImport.state.everyCycle': 'On every import cycle',
+  'admin.userImport.clear.title': 'Read every user again',
+  'admin.userImport.clear.description':
+    'Clear the checkpoint when user details in the reports look out of date, or after the user import has been switched off or failing for weeks. The next run then reads every user, exactly as a first install does. Nothing is deleted from the database.',
+  'admin.userImport.clear.cost': 'On a large tenant, a full read takes much longer than a normal run.',
+  'admin.userImport.clear.noRedis':
+    'There is nothing to clear: without Azure Cache for Redis the checkpoint is never saved, and every run already reads every user.',
+  'admin.userImport.clear.importOff':
+    'The user import is switched off, so nothing reads the users until it is switched back on. Clearing the checkpoint now makes that first run read every user.',
+  'admin.userImport.clear.runOnNextCycle': 'Run the user import on the next import cycle',
+  'admin.userImport.clear.runOnNextCycleHint': 'Otherwise it waits until {hours} h after it last completed.',
+  'admin.userImport.clear.button': 'Clear checkpoint...',
+  'admin.userImport.confirm.title': 'Clear the user import checkpoint?',
+  'admin.userImport.confirm.body':
+    'The next user import reads every user from Microsoft Entra ID, instead of only what has changed.',
+  'admin.userImport.confirm.running':
+    "If a user import is running right now, it won't save its checkpoint when it finishes, so the full read still happens.",
+  'admin.userImport.confirm.clear': 'Clear checkpoint',
+  'admin.userImport.confirm.clearing': 'Clearing...',
+  'admin.userImport.schedule.nextCycle': 'It runs on the next import cycle.',
+  'admin.userImport.schedule.afterInterval': 'It runs once its {hours} h interval has passed.',
+  'admin.userImport.result.cleared': 'Checkpoint cleared. The next user import reads every user.',
+  'admin.userImport.result.nothingStored':
+    'There was no stored checkpoint, so the next user import reads every user anyway.',
 } as const;
 
 export default admin;

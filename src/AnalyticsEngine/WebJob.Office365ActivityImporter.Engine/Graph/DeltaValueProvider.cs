@@ -217,20 +217,12 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         }
 
         /// <summary>
-        /// Cache key for this tenant's stored user delta token.
+        /// Cache key for this tenant's stored user delta token. Defined in <see cref="UserImportCheckpointKeys"/>,
+        /// which the web portal's User import page also reads, so the two can never disagree about it.
         /// </summary>
-        /// <remarks>
-        /// Versioned by <see cref="GraphUserDeltaQuery.SelectVersion"/> on purpose. Graph fixes the
-        /// <c>$select</c> when a token is minted, so a stored token keeps returning the OLD property set
-        /// however the query is edited afterwards. Including the version means a selection change
-        /// invalidates the token automatically: the next import falls through to a full enumeration and
-        /// the newly selected property is populated for users who have not otherwise changed. Without
-        /// this, a new column stays empty forever on every upgraded tenant while looking perfectly
-        /// correct on a fresh install - which is close to undetectable.
-        /// </remarks>
         string GetRedisUserDeltaCacheKey()
         {
-            return $"UserDeltaCode-{_appConfig.TenantGUID}-{GraphUserDeltaQuery.SelectVersion}";
+            return UserImportCheckpointKeys.DeltaToken(_appConfig.TenantGUID);
         }
     }
 }

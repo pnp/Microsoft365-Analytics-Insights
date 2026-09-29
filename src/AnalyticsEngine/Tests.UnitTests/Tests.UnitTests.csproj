@@ -61,6 +61,8 @@
     <Compile Include="SentEmailImporterPipelineTests.cs" />
     <Compile Include="SentEmailImportTests.cs" />
     <Compile Include="GraphPagingFailureTests.cs" />
+    <Compile Include="GraphUserDeltaTokenRecoveryTests.cs" />
+    <Compile Include="UserImportCheckpointApiTests.cs" />
     <Compile Include="GraphExceptionTelemetryTests.cs" />
     <Compile Include="SentEmailMailboxSkipListTests.cs" />
     <Compile Include="InstallTests\VNetIntegrationTests.cs" />

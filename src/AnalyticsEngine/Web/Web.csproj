@@ -225,6 +225,7 @@
   </ItemGroup>
   <ItemGroup>
     <Compile Include="AllowCorsForOrgUrlsAttribute.cs" />
+    <Compile Include="RequireSameOriginXhrAttribute.cs" />
     <Compile Include="App_Start\FilterConfig.cs" />
     <Compile Include="App_Start\RouteConfig.cs" />
     <Compile Include="App_Start\Startup.Auth.cs" />
@@ -253,6 +254,7 @@
     <Compile Include="Controllers\TeamsAuthAPIController.cs" />
     <Compile Include="Controllers\UpdateCheckAPIController.cs" />
     <Compile Include="Controllers\UserDataLookupAPIController.cs" />
+    <Compile Include="Controllers\UserImportCheckpointAPIController.cs" />
     <Compile Include="Global.asax.cs">
       <DependentUpon>Global.asax</DependentUpon>
     </Compile>
@@ -285,6 +287,8 @@
     <Compile Include="Models\UserDataLookup\SqlUserDataLookupQuery.cs" />
     <Compile Include="Models\UserDataLookup\UserDataLookupRules.cs" />
     <Compile Include="Models\UserDataLookup\UserDataLookupService.cs" />
+    <Compile Include="Models\UserImport\UserImportCheckpointModels.cs" />
+    <Compile Include="Models\UserImport\UserImportCheckpointService.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
     <Compile Include="Startup.cs" />
     <Compile Include="GraphTokenClaims.cs" />

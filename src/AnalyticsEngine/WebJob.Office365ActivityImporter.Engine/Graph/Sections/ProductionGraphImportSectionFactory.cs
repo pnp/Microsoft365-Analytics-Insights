@@ -39,8 +39,9 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Sections
     {
         // Keys for the per-section "last run" timestamps used to daily-gate the non-fresh Graph imports.
         // Stored verbatim (unprefixed) in Redis db 0, so they can be cleared manually with e.g.
-        // `redis-cli DEL GraphUsersMetadataLastImported`.
-        public const string GraphUsersMetadataLastImportedKey = "GraphUsersMetadataLastImported";
+        // `redis-cli DEL GraphUsersMetadataLastImported`. The user import's key is shared with the web portal's
+        // User import page, which clears it to make the import run on the next cycle.
+        public const string GraphUsersMetadataLastImportedKey = Common.Entities.Redis.UserImportCheckpointKeys.LastCompleted;
         public const string GraphTeamsLastImportedKey = "GraphTeamsLastImported";
         public const string GraphCopilotUsageReportsLastImportedKey = "GraphCopilotUsageReportsLastImported";
         public const string GraphCopilotUsageReportUserCountTrendLastImportedKey = GraphCopilotUsageReportsLastImportedKey + ":UserCountTrend";
@@ -114,8 +115,12 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Sections
                     {
                         // Update Graph users first
                         var userUpdater = new UserMetadataUpdater(_logger, _settings, _graphAppIndentityOAuthContext.Creds, httpClient);
-                        await userUpdater.InsertAndUpdateDatabaseFromExternalUsers();
-                        return true;
+
+                        // False when the /users/delta read did not complete (#664). The cadence gate is then not
+                        // stamped and no "finished section" event is sent, so the import is retried next cycle
+                        // rather than a failed read passing for a tenant in which nothing changed. Returning
+                        // instead of throwing also lets the sections after this one run.
+                        return await userUpdater.InsertAndUpdateDatabaseFromExternalUsers();
                     }),
 
                 // Not cadence-gated: the activity/usage-report phase owns its own once-a-day throttle via
