@@ -644,6 +644,11 @@ namespace Tests.UnitTests
             Assert.IsFalse(cells.Any(c => c.Contains("Every licensed user matching the filter was analysed")));
             Assert.IsTrue(cells.Any(c => c.StartsWith("FEWER THAN THE LICENCE HOLDERS THIS FILTER SELECTS: 12 more")));
             Assert.IsTrue(cells.Any(c => c.Contains("it counts only the licence holders the analysis reached: 12 more")));
+
+            // And the first sheet, which is the one read on its own.
+            var report = SheetCells(CopilotAdoptionWorkbook.Build(analysis), "Report");
+            Assert.IsFalse(report.Any(c => c.StartsWith("Every licensed user")), "The cover sheet must not claim a complete analysis either.");
+            Assert.IsTrue(report.Any(c => c.StartsWith("Fewer than the licence holders this filter selects: 12 more")));
         }
 
         [TestMethod]
@@ -657,6 +662,22 @@ namespace Tests.UnitTests
 
             Assert.IsTrue(cells.Any(c => c.StartsWith("Every licensed user matching the filter was analysed")));
             Assert.IsFalse(cells.Any(c => c.Contains("beyond the analysis limit")));
+
+            // Complete, but of the filter's people - which the cover sheet says rather than implying the tenant.
+            var report = SheetCells(CopilotAdoptionWorkbook.Build(analysis), "Report");
+            Assert.IsTrue(report.Contains("Every licensed user matching the filter was analysed - not the whole tenant."));
+            Assert.IsFalse(report.Contains("Every licensed user was analysed."));
+        }
+
+        [TestMethod]
+        public void Workbook_CoverSheetSaysEveryoneWasAnalysedOnlyForTheWholeTenant()
+        {
+            var analysis = SyntheticAnalysis();
+            analysis.Summary.ScoredUsers = analysis.Summary.LicensedUsers;
+
+            var report = SheetCells(CopilotAdoptionWorkbook.Build(analysis), "Report");
+
+            Assert.IsTrue(report.Contains("Every licensed user was analysed."));
         }
 
         [TestMethod]

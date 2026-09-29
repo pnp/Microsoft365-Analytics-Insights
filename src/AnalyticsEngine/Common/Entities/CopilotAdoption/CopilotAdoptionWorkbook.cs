@@ -180,10 +180,7 @@ namespace Common.Entities.CopilotAdoption
                 "Take a snapshot before an enablement programme and another afterwards; the two files are directly comparable.");
             AddMeta(sheet, "Period covered", $"{summary.WindowDays} days",
                 "All 'this period' figures use this window.");
-            AddMeta(sheet, "Users analysed", summary.ScoredUsers,
-                summary.ScoredUsers < summary.LicensedUsers
-                    ? $"Of {summary.LicensedUsers:N0} licences. Rates in this workbook are of the analysed users only."
-                    : "Every licensed user was analysed.");
+            AddMeta(sheet, "Users analysed", summary.ScoredUsers, UsersAnalysedReportNote(summary));
             AddMeta(sheet, "From (UTC)", summary.FromUtc, string.Empty);
             AddMeta(sheet, "To (UTC)", summary.ToUtc, string.Empty);
             AddMeta(sheet, "History window", $"{summary.Options.HistoryDays} days",
@@ -281,6 +278,35 @@ namespace Common.Entities.CopilotAdoption
             return detail?.Values != null && detail.Values.TryGetValue("count", out count) && count != null
                 ? Convert.ToInt32(count, CultureInfo.InvariantCulture)
                 : 0;
+        }
+
+        /// <summary>
+        /// The Report sheet's note on how many users were analysed: all of them, a subset, or all of a slice -
+        /// and which slice. The first sheet is the one read on its own, so it must agree with the view's
+        /// warnings and with the Headline figures sheet rather than claim the whole tenant was covered.
+        /// </summary>
+        private static string UsersAnalysedReportNote(CopilotAdoptionSummary summary)
+        {
+            var notAnalysedInView = LicenceHoldersNotAnalysed(summary);
+            if (notAnalysedInView > 0)
+            {
+                return $"Fewer than the licence holders this filter selects: {notAnalysedInView:N0} more are beyond the "
+                    + "analysis limit. Rates in this workbook are of the analysed users only.";
+            }
+
+            if (summary.ScoredUsers < summary.LicensedUsers)
+            {
+                return $"Of {summary.LicensedUsers:N0} licences. Rates in this workbook are of the analysed users only.";
+            }
+
+            if (!string.IsNullOrWhiteSpace(summary.UserFilterDescription))
+            {
+                return "Every licensed user matching the filter was analysed - not the whole tenant.";
+            }
+
+            return string.IsNullOrWhiteSpace(summary.ScopedEmailDomain)
+                ? "Every licensed user was analysed."
+                : "Every licensed user on " + summary.ScopedEmailDomain + " was analysed - not the whole tenant.";
         }
 
         private static string YesNo(bool value)
