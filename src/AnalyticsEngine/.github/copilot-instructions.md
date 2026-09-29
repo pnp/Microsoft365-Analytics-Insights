@@ -4,9 +4,10 @@
 - **Never** put real customer/tenant/environment data — including anything obtained by analysing a database, external system, or "example"/sample data (DB names, tenant/org/agent GUIDs, agent/user names, URLs, paths, row counts, raw payloads) — into source, tests, commit messages, PRs, issues, screenshots, or documentation. Use synthetic substitutes (`Contoso`, zeroed GUIDs) and **always double-check the diff before committing/pushing**. See the repo-wide policy in [`.github/copilot-instructions.md`](../../../.github/copilot-instructions.md).
 
 ## Git workflow
-- Never commit. Never push. Make file changes only.
-- Wait for the user to explicitly say "commit", "commit and push", or similar before running any `git commit` / `git push`. "Commit and push" given for one change does not extend to subsequent changes — ask again each time.
-- This applies to all branches, including `dev`, and to the sibling wiki repo at `V:\Repos\Microsoft365-Analytics-Insights.wiki`.
+- **Never push to, merge into or otherwise update `dev` or `main` without an explicit request for that specific push or merge.** Permission for one does not extend to the next.
+- **Any other branch: commit and push whenever you like, without asking.** Changes reach `dev` through a PR.
+- The sibling wiki repo publishes its `master` as soon as it is pushed: commit freely, but push `master` only when asked.
+- The full rule, including staging only your own changes in a shared clone, is *Git workflow* in the repo-wide [`.github/copilot-instructions.md`](../../../.github/copilot-instructions.md).
 
 ## Project Guidelines
 - User prefers to keep the existing InsertBatch row-by-row implementation rather than replacing it with SqlBulkCopy.

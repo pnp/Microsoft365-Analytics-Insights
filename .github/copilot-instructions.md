@@ -55,6 +55,12 @@ That file is the source of truth for:
 
 Always read it before making changes under `src/AnalyticsEngine/`.
 
+## Git workflow: never update `dev` or `main` unasked
+- **Never push to, merge into or otherwise update `dev` or `main` unless the user asks for that specific push or merge.** That covers a direct `git push`, `gh pr merge`, and anything else that moves either branch. Permission for one does not carry over to the next, so ask again each time. Never force-push either branch.
+- **Every other branch is yours: commit and push whenever you like, without asking.** Checkpoint work, get CI running, open or update a PR. Work reaches `dev` through a pull request (below), and reaches `main` only through the release PR.
+- **The wiki publishes its `master` the moment it is pushed**, so treat wiki `master` like `main`: commit locally whenever you like, and push only when asked.
+- **Commit only your own changes.** Other Copilot instances share the local clones, so work in a `git worktree` per task and stage explicit paths. Never use `git add -A` or `git commit -a`.
+
 ## Pull requests
 - Always open PRs against the `dev` branch unless the user explicitly says to target `main` (or another branch).
 - This applies to both human-driven and Copilot-driven PRs, including coding-agent tasks that auto-create branches.
