@@ -1074,6 +1074,8 @@ function Get-IpClass {
     param([string] $Ip)
     try { $addr = [System.Net.IPAddress]::Parse($Ip) } catch { return 'unknown' }
     if ($addr.AddressFamily -eq [System.Net.Sockets.AddressFamily]::InterNetworkV6) {
+        if ([System.Net.IPAddress]::IsLoopback($addr)) { return 'loopback' }
+        if ($addr.IsIPv6LinkLocal) { return 'link-local' }
         $b6 = $addr.GetAddressBytes()
         if (($b6[0] -band 0xFE) -eq 0xFC) { return 'private' }   # fc00::/7 unique local
         return 'public'
