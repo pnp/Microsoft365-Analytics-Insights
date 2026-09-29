@@ -220,7 +220,7 @@ The commit-message convention is literally `Merge stable build <n> (origin/main)
 Then verify and report:
 
 1. Build and test locally if the merge needed hand-resolution.
-2. Push (**with permission**) and watch the **`net10 build`** workflow (`net10.yml`, job `drift_check` plus the build/test jobs). Never add `net10` to `ci.yml` or `tests.yml` — that would rename the required checks and block PRs on `dev`/`main`, the exact failure seen in issue #270.
+2. Push `net10` (it is neither `dev` nor `main`, so rule 1 needs no separate permission) and watch the **`net10 build`** workflow (`net10.yml`, job `drift_check` plus the build/test jobs). Never add `net10` to `ci.yml` or `tests.yml` — that would rename the required checks and block PRs on `dev`/`main`, the exact failure seen in issue #270.
 3. Confirm `git rev-list --left-right --count origin/main...origin/net10` shows **0 on the left**.
 4. In your final report, state the divergence before and after, every hunk you resolved by hand, and every `main` change you deliberately dropped as not-applicable with the reason.
 
