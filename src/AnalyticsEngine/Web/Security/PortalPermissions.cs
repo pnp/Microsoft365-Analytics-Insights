@@ -3,9 +3,13 @@ using System;
 using System.Collections.Specialized;
 using System.Configuration;
 using System.Linq;
+using System.Net;
 using System.Net.Http;
+using System.Net.Http.Formatting;
+using System.Net.Http.Headers;
 using System.Security.Claims;
 using System.Security.Principal;
+using System.Text;
 using System.Web.Http;
 
 namespace Web.AnalyticsWeb.Security
@@ -226,6 +230,57 @@ namespace Web.AnalyticsWeb.Security
                 Role = PortalRoles.For(permission),
                 Message = permission == PortalPermission.Administration ? AdministrationMessage : SeePiiMessage,
             };
+        }
+    }
+
+    /// <summary>
+    /// The 403 for a caller whose permissions do not cover an endpoint, in a form that caller can read.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// JSON for the SPA and for scripts, whatever <c>Accept</c> they send. Left to content negotiation, Web API
+    /// answers a browser navigation - whose <c>Accept</c> ranks <c>application/xml</c> above <c>*/*</c> -
+    /// with the body serialised as XML, because the XML formatter is still registered.
+    /// </para>
+    /// <para>
+    /// A document navigation - an export link opened from a bookmark, or after the permission was withdrawn -
+    /// gets <see cref="PortalPermissionDeniedModel.Message"/> as plain text instead, because the person who
+    /// clicked has to be able to read it. The Copilot Adoption export's not-ready response makes the same call.
+    /// </para>
+    /// </remarks>
+    public static class PortalPermissionDenied
+    {
+        public static HttpResponseMessage Response(HttpRequestMessage request, PortalPermission permission)
+        {
+            var body = PortalPermissionDeniedModel.For(permission);
+            HttpResponseMessage response;
+            if (IsDocumentNavigation(request))
+            {
+                response = request.CreateResponse(HttpStatusCode.Forbidden);
+                response.Content = new StringContent(body.Message, Encoding.UTF8, "text/plain");
+            }
+            else
+            {
+                var json = (MediaTypeFormatter)request.GetConfiguration()?.Formatters.JsonFormatter ?? new JsonMediaTypeFormatter();
+                response = request.CreateResponse(HttpStatusCode.Forbidden, body, json);
+            }
+
+            // The refusal is about this user's roles right now; a cache must not replay it after they change.
+            response.Headers.CacheControl = new CacheControlHeaderValue { NoStore = true, Private = true };
+            return response;
+        }
+
+        /// <summary>The same test the sign-in middleware uses to tell a page load from a script's request.</summary>
+        internal static bool IsDocumentNavigation(HttpRequestMessage request)
+        {
+            if (request == null) return false;
+            return HeaderIs(request, "Sec-Fetch-Mode", "navigate") || HeaderIs(request, "Sec-Fetch-Dest", "document");
+        }
+
+        private static bool HeaderIs(HttpRequestMessage request, string name, string value)
+        {
+            return request.Headers.TryGetValues(name, out var values)
+                && values.Any(v => string.Equals(v?.Trim(), value, StringComparison.OrdinalIgnoreCase));
         }
     }
 

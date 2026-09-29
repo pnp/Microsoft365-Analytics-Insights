@@ -94,7 +94,7 @@ namespace Common.Entities.CopilotAdoption
                 WriteCoworkEstimateSheet(workbook, summary, configured, modelOptions);
                 if (includeIndividualData) WriteOpportunitiesSheet(workbook, analysis);
                 WriteLicenceEstimateSheet(workbook, summary, configured, modelOptions);
-                WriteMethodSheet(workbook, summary);
+                WriteMethodSheet(workbook, summary, includeIndividualData);
                 WriteSnapshotFactsSheet(workbook, summary);
                 WriteRunDiagnosticsSheet(workbook, summary);
                 WriteSettingsSheet(workbook, configured, modelOptions);
@@ -131,7 +131,8 @@ namespace Common.Entities.CopilotAdoption
         /// scored by the same rules, and this is what lets a reader confirm that rather than assume
         /// it - the tuning is adjustable, so "adoption went up" could otherwise mean "the bar moved".
         /// </summary>
-        private static void WriteReportSheet(XlsxWriter workbook, CopilotAdoptionSummary summary, bool includeIndividualData)        {
+        private static void WriteReportSheet(XlsxWriter workbook, CopilotAdoptionSummary summary, bool includeIndividualData)
+        {
             var sheet = workbook.AddSheet("Report");
             sheet.SetColumnWidths(42, 34, 60);
 
@@ -2185,7 +2186,7 @@ namespace Common.Entities.CopilotAdoption
         /// dies the moment it leaves the browser - and this file is explicitly meant to be circulated
         /// and compared months later, by which point nobody remembers what "habitual" meant.
         /// </summary>
-        private static void WriteMethodSheet(XlsxWriter workbook, CopilotAdoptionSummary summary)
+        private static void WriteMethodSheet(XlsxWriter workbook, CopilotAdoptionSummary summary, bool includeIndividualData)
         {
             var sheet = workbook.AddSheet("How this is calculated");
             sheet.SetColumnWidths(30, 96);
@@ -2305,8 +2306,13 @@ namespace Common.Entities.CopilotAdoption
                 + "but also states that unlicensed Copilot Chat usage is not available through Microsoft Graph reports APIs; "
                 + "(https://learn.microsoft.com/en-us/microsoft-365/copilot/extensibility/api/admin-settings/reports/copilotreportroot-getmicrosoft365copilotusageuserdetail). "
                 + "Audit data via Purview or the Office 365 Management Activity API is the programmatic route for that signal. "
-                + "Where both sources cover the same licensed user, the Licensed users sheet shows both figures side by side "
-                + "with their source and window. Do not average or silently reconcile them into one number.");
+                + (includeIndividualData
+                    ? "Where both sources cover the same licensed user, the Licensed users sheet shows both figures side by side "
+                      + "with their source and window. "
+                    : "Where both sources cover the same licensed user, the per-user list shows both figures side by side "
+                      + "with their source and window; this file was exported without the See PII permission, so that list "
+                      + "is not included. ")
+                + "Do not average or silently reconcile them into one number.");
 
             AddMethod(sheet, "Comparing two exports",
                 "Comparison lives in these files, not in the product. There is no stored history, no saved "
@@ -2336,11 +2342,16 @@ namespace Common.Entities.CopilotAdoption
                 + "that rose because the denominator shrank (reclaiming idle seats does exactly that) can "
                 + "be told apart from one that rose because more people used Copilot. Always diff the "
                 + "counts alongside the rate.\n"
-                + "Per-user movement is a diff of the 'Licensed users' sheet on 'User principal name'. "
-                + "That sheet carries the same columns as the CSV export, so the two never disagree - but "
-                + "it stops at the workbook row cap (maxWorkbookUserRows on the Settings sheet), so on a "
-                + "tenant with more seats than that, use the per-user CSV export for the full population "
-                + "instead.");
+                + (includeIndividualData
+                    ? "Per-user movement is a diff of the 'Licensed users' sheet on 'User principal name'. "
+                      + "That sheet carries the same columns as the CSV export, so the two never disagree - but "
+                      + "it stops at the workbook row cap (maxWorkbookUserRows on the Settings sheet), so on a "
+                      + "tenant with more seats than that, use the per-user CSV export for the full population "
+                      + "instead."
+                    : "Per-user movement cannot be read from this file: it was exported without the See PII "
+                      + "permission, so it has no 'Licensed users' sheet. Its 'Snapshot facts' match a full "
+                      + "export's except accountabilityRollup.count, which is 0 when the roll-up is grouped by "
+                      + "manager, because those rows name managers."));
 
             AddMethod(sheet, "Licence classification",
                 "Microsoft ships Copilot-branded SKUs that are not a Microsoft 365 Copilot licence (Copilot Studio, "
@@ -2371,7 +2382,8 @@ namespace Common.Entities.CopilotAdoption
                 sheet.AddBlankRow();
                 AddMethod(sheet, "Microsoft guidance catalogue",
                     "Every Microsoft-published resource this report can attach to a recommended action, as at "
-                    + $"catalogue version {summary.GuidanceCatalogueVersion}. Listed in full so the per-user "
+                    + $"catalogue version {summary.GuidanceCatalogueVersion}. Listed in full so the "
+                    + (includeIndividualData ? "per-user " : string.Empty)
                     + "recommendations can be followed without the portal, and so two snapshots taken under "
                     + "different catalogue versions can be told apart.");
                 sheet.AddHeaderRow("Resource", "URL");

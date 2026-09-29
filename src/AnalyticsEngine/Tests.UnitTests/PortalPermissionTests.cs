@@ -133,7 +133,7 @@ namespace Tests.UnitTests
             ["TeamsExplorerAPIController.Meetings"] = Any,             // trims the named leaderboards
             ["TeamsExplorerAPIController.Collaboration"] = Any,
             ["TeamsExplorerAPIController.Conversations"] = Any,
-            ["TeamsExplorerAPIController.People"] = Pii,
+            ["TeamsExplorerAPIController.People"] = Any,               // trims the champion and dormant lists
             ["TeamsExplorerAPIController.Export"] = Any,               // refuses the people sections without See PII
 
             ["UpdateCheckAPIController.Get"] = Admin,
@@ -488,7 +488,6 @@ namespace Tests.UnitTests
             (HttpMethod.Get, "api/LicenceActivity/users?overviewId=synthetic&licenceTypeId=1", "seePii"),
             (HttpMethod.Get, "api/LicenceActivity/export?overviewId=synthetic&usersId=synthetic", "seePii"),
             (HttpMethod.Get, "api/AgentCosts/users", "seePii"),
-            (HttpMethod.Get, "api/TeamsExplorer/people", "seePii"),
             (HttpMethod.Get, "api/TeamsExplorer/export/people", "seePii"),
             (HttpMethod.Get, "api/TeamsExplorer/export/dormant", "seePii"),
             (HttpMethod.Get, "api/TeamsExplorer/export/PEOPLE", "seePii"),
@@ -520,6 +519,68 @@ namespace Tests.UnitTests
                     if ((string)json["code"] != PortalPermissionDeniedModel.ErrorCode || (string)json["permission"] != endpoint.Permission)
                     {
                         failures.Add($"{endpoint.Method} {endpoint.Url}: wrong refusal {body}");
+                    }
+                }
+
+                Assert.AreEqual(0, failures.Count, string.Join(Environment.NewLine, failures));
+            }
+        }
+
+        [TestMethod]
+        public async Task ARefusal_IsJsonForAScript_WhateverItAsksFor()
+        {
+            // Left to content negotiation, a caller preferring XML - a browser navigation among them - would get
+            // the body serialised as XML, because the XML formatter is still registered. The SPA's own download
+            // calls ask for the file type, and must still get the JSON it parses into the permission message.
+            var accepts = new[] { "application/xml", "text/csv", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" };
+            using (var host = new PortalTestHost(PortalTestHost.WebControllers(), PortalTestHost.SignedIn(), PortalAccessPolicy.Enforcing))
+            {
+                var failures = new List<string>();
+                foreach (var accept in accepts)
+                foreach (var endpoint in Refused.Where(e => e.Method == HttpMethod.Get))
+                {
+                    var request = new HttpRequestMessage(HttpMethod.Get, endpoint.Url);
+                    request.Headers.Accept.ParseAdd(accept);
+
+                    var response = await host.Client.SendAsync(request);
+                    var body = await response.Content.ReadAsStringAsync();
+                    if (response.StatusCode != HttpStatusCode.Forbidden
+                        || response.Content.Headers.ContentType?.MediaType != "application/json"
+                        || (string)JObject.Parse(body)["permission"] != endpoint.Permission)
+                    {
+                        failures.Add($"{accept} {endpoint.Url}: {(int)response.StatusCode} {response.Content.Headers.ContentType} {body}");
+                    }
+                }
+
+                Assert.AreEqual(0, failures.Count, string.Join(Environment.NewLine, failures));
+            }
+        }
+
+        [TestMethod]
+        public async Task ARefusedPageLoad_GetsAMessageAPersonCanRead()
+        {
+            // An export link opened from a bookmark, or after the permission was withdrawn, is a navigation: the
+            // body lands in a browser tab, in front of the person who clicked.
+            using (var host = new PortalTestHost(PortalTestHost.WebControllers(), PortalTestHost.SignedIn(), PortalAccessPolicy.Enforcing))
+            {
+                var failures = new List<string>();
+                foreach (var endpoint in Refused.Where(e => e.Method == HttpMethod.Get))
+                {
+                    var request = new HttpRequestMessage(HttpMethod.Get, endpoint.Url);
+                    request.Headers.Accept.ParseAdd("text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8");
+                    request.Headers.Add("Sec-Fetch-Mode", "navigate");
+                    request.Headers.Add("Sec-Fetch-Dest", "document");
+
+                    var response = await host.Client.SendAsync(request);
+                    var body = await response.Content.ReadAsStringAsync();
+                    var permission = endpoint.Permission == PortalPermissionNames.Administration
+                        ? PortalPermission.Administration
+                        : PortalPermission.SeePii;
+                    if (response.StatusCode != HttpStatusCode.Forbidden
+                        || response.Content.Headers.ContentType?.MediaType != "text/plain"
+                        || body != PortalPermissionDeniedModel.For(permission).Message)
+                    {
+                        failures.Add($"{endpoint.Url}: {(int)response.StatusCode} {response.Content.Headers.ContentType} {body}");
                     }
                 }
 
@@ -656,6 +717,42 @@ namespace Tests.UnitTests
             finally
             {
                 MemoryCache.Default.Remove(query.CacheKey("meetings"));
+            }
+        }
+
+        [TestMethod]
+        public async Task TeamsPeople_WithoutSeePii_KeepTheDepartmentCounts_AndTheCachedSectionKeepsTheNames()
+        {
+            // Power users per department is a count, so every reader sees it; only the lists that name people go.
+            var store = new FakeTeamsStore();
+            var query = TeamsExplorerQuery.Create(28, DateTime.UtcNow, TeamsExplorerQuery.DefaultGrouping, 37);
+            MemoryCache.Default.Remove(query.CacheKey("people"));
+            try
+            {
+                using (var host = new PortalTestHost(
+                    new[] { typeof(TeamsExplorerAPIController) },
+                    PortalTestHost.SignedIn(),
+                    PortalAccessPolicy.Enforcing,
+                    _ => new TeamsExplorerAPIController(store, () => new TeamsExplorerSources())))
+                {
+                    var trimmed = JObject.Parse(await host.Client.GetStringAsync("api/TeamsExplorer/people?days=28&top=37"));
+                    Assert.AreEqual(0, ((JArray)trimmed["champions"]).Count);
+                    Assert.AreEqual(0, ((JArray)trimmed["dormant"]).Count);
+                    Assert.AreEqual("Πωλήσεις", (string)trimmed["championsByDepartment"][0]["name"]);
+                    Assert.AreEqual(9, (int)trimmed["championsByDepartment"][0]["count"]);
+                    Assert.IsFalse(trimmed.ToString().Contains("@contoso.com"));
+
+                    // The next reader holds the permission and is served from the same cache entry.
+                    host.Principal = PortalTestHost.SignedIn(PortalRoles.SeePii);
+                    var full = JObject.Parse(await host.Client.GetStringAsync("api/TeamsExplorer/people?days=28&top=37"));
+                    Assert.AreEqual("champion@contoso.com", (string)full["champions"][0]["userPrincipalName"]);
+                    Assert.AreEqual("dormant@contoso.com", (string)full["dormant"][0]["userPrincipalName"]);
+                    Assert.AreEqual(1, store.PeopleCalls, "The second reader must have been served from the cache.");
+                }
+            }
+            finally
+            {
+                MemoryCache.Default.Remove(query.CacheKey("people"));
             }
         }
 
@@ -817,6 +914,7 @@ namespace Tests.UnitTests
         private sealed class FakeTeamsStore : ITeamsExplorerStore
         {
             internal int MeetingsCalls;
+            internal int PeopleCalls;
 
             public Task<Tuple<int, int>> GetTeamCountsAsync() => Task.FromResult(Tuple.Create(1, 1));
 
@@ -840,7 +938,15 @@ namespace Tests.UnitTests
             public Task<TeamsConversations> GetConversationsAsync(TeamsExplorerQuery query, bool cognitiveAvailable)
                 => Task.FromResult(new TeamsConversations());
 
-            public Task<TeamsPeople> GetPeopleAsync(TeamsExplorerQuery query) => Task.FromResult(new TeamsPeople());
+            public Task<TeamsPeople> GetPeopleAsync(TeamsExplorerQuery query)
+            {
+                Interlocked.Increment(ref PeopleCalls);
+                var people = new TeamsPeople();
+                people.Champions.Add(new TeamsPersonRow { UserPrincipalName = "champion@contoso.com", Department = "Ventes" });
+                people.Dormant.Add(new TeamsPersonRow { UserPrincipalName = "dormant@contoso.com", Department = "Ventes" });
+                people.ChampionsByDepartment.Add(new TeamsNamedCountRow { Name = "Πωλήσεις", Count = 9 });
+                return Task.FromResult(people);
+            }
         }
 
         #endregion

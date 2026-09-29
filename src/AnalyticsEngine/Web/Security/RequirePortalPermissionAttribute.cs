@@ -1,6 +1,4 @@
 using System;
-using System.Net;
-using System.Net.Http;
 using System.Web.Http.Controllers;
 using System.Web.Http.Filters;
 
@@ -24,7 +22,7 @@ namespace Web.AnalyticsWeb.Security
     /// </para>
     /// <para>
     /// Every Web API action must be classified - by this attribute, or by an entry in
-    /// <c>PortalEndpointPermissionTests</c> recording that it is open to every signed-in user - so a new
+    /// <c>PortalPermissionTests.ExpectedAccess</c> recording that it is open to every signed-in user - so a new
     /// endpoint cannot ship without someone deciding who may call it.
     /// </para>
     /// </remarks>
@@ -53,8 +51,7 @@ namespace Web.AnalyticsWeb.Security
                 return;
             }
 
-            actionContext.Response = actionContext.Request.CreateResponse(
-                HttpStatusCode.Forbidden, PortalPermissionDeniedModel.For(Permission));
+            actionContext.Response = PortalPermissionDenied.Response(actionContext.Request, Permission);
         }
     }
 }

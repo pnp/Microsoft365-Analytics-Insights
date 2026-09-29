@@ -734,6 +734,27 @@ namespace Tests.UnitTests
             Assert.IsTrue(SheetCells(trimmed, "Report").Any(c => c.Contains("not included (needs the See PII permission)")));
             Assert.IsFalse(text.Contains("Accountability roll-up"), "The roll-up's rows are managers when it is grouped by manager.");
 
+            // The method sheet must not send the reader to a sheet this file leaves out...
+            var method = SheetCells(trimmed, "How this is calculated");
+            Assert.IsTrue(SheetCells(full, "How this is calculated").Any(c => c.Contains("'Licensed users' sheet on")),
+                "The control: the full file's method sheet does point at the per-user sheet.");
+            foreach (var omitted in new[] { "Licensed users", "Licence opportunities" })
+            {
+                Assert.IsFalse(method.Any(c => c.Contains(omitted + " sheet shows") || c.Contains("'" + omitted + "' sheet on")),
+                    "The method sheet points at the " + omitted + " sheet, which this file leaves out.");
+            }
+
+            // ...and what it says about comparing this file with a full export has to hold.
+            StringAssert.Contains(string.Join("\n", method), "accountabilityRollup.count");
+            var fullFacts = SheetCells(full, "Snapshot facts");
+            var trimmedFacts = SheetCells(trimmed, "Snapshot facts");
+            Assert.AreEqual(fullFacts.Count, trimmedFacts.Count, "Every Snapshot fact must still be there, in the same order.");
+            var rollupCountCell = fullFacts.IndexOf("accountabilityRollup.count") + 1;
+            Assert.AreNotEqual(0, rollupCountCell, "The roll-up's row count is missing from Snapshot facts.");
+            var differing = Enumerable.Range(0, fullFacts.Count).Where(i => fullFacts[i] != trimmedFacts[i]).ToList();
+            CollectionAssert.AreEqual(new List<int> { rollupCountCell }, differing,
+                "Only accountabilityRollup.count may differ from a full export, as the method sheet says.");
+
             Assert.IsTrue(analysis.Summary.AccountabilityRollup.Count > 0, "The cached analysis must never be edited for one reader.");
         }
 

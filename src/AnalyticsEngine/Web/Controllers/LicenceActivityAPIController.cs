@@ -114,7 +114,7 @@ namespace Web.AnalyticsWeb.Controllers
                 // on every export rather than trusted from when the user list was loaded, so a snapshot
                 // taken while the permission was held cannot be exported after it is withdrawn.
                 if (usersId != null && !PortalAccess.Evaluate(Request, User).SeePii)
-                    return Task.FromResult(Reply(HttpStatusCode.Forbidden, PortalPermissionDeniedModel.For(PortalPermission.SeePii)));
+                    return Task.FromResult<IHttpActionResult>(ResponseMessage(PortalPermissionDenied.Response(Request, PortalPermission.SeePii)));
                 var context = _context();
                 if (!context.Sources.UserMetadata) return Task.FromResult(MissingMetadata());
                 var overview = _overviews.Find(context.Scope, overviewId);

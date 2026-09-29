@@ -37,9 +37,10 @@ namespace Web.AnalyticsWeb.Controllers
     /// can never be served across a day boundary.
     /// </para>
     /// <para>
-    /// People are behind the portal's See PII permission (#661): the People tab and its exports are
-    /// refused without it, and the meetings section is served without its named leaderboards. The cached
-    /// section is the complete one; a reader without the permission gets a trimmed copy of it.
+    /// People are behind the portal's See PII permission (#661): without it the People tab keeps its
+    /// power users per department but loses the champion and dormant lists, their exports are refused,
+    /// and the meetings section is served without its named leaderboards. The cached section is the
+    /// complete one; a reader without the permission gets a trimmed copy of it.
     /// </para>
     /// </remarks>
     [Authorize]
@@ -147,13 +148,14 @@ namespace Web.AnalyticsWeb.Controllers
         // GET: api/TeamsExplorer/people?days=28&top=20
         [HttpGet]
         [Route("people")]
-        [RequirePortalPermission(PortalPermission.SeePii)]
         public Task<IHttpActionResult> People(
             int days = TeamsExplorerQuery.DefaultWindowDays,
             int top = TeamsExplorerQuery.DefaultTop)
         {
             var query = BuildQuery(days, TeamsExplorerQuery.DefaultGrouping, top);
-            return CachedAsync("people", query, () => _store.GetPeopleAsync(query));
+            Func<TeamsPeople, TeamsPeople> forReader = null;
+            if (!PortalAccess.Evaluate(Request, User).SeePii) forReader = p => p.WithoutIndividualData();
+            return CachedAsync("people", query, () => _store.GetPeopleAsync(query), forReader);
         }
 
         /// <summary>
@@ -185,7 +187,7 @@ namespace Web.AnalyticsWeb.Controllers
 
             if (TeamsExplorerExports.NamesPeople(section) && !PortalAccess.Evaluate(Request, User).SeePii)
             {
-                return Request.CreateResponse(HttpStatusCode.Forbidden, PortalPermissionDeniedModel.For(PortalPermission.SeePii));
+                return PortalPermissionDenied.Response(Request, PortalPermission.SeePii);
             }
 
             var query = BuildQuery(days, groupBy, top);

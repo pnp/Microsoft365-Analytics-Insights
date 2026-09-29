@@ -547,6 +547,19 @@ namespace Common.Entities.TeamsExplorer
         public List<TeamsPersonRow> Champions { get; set; } = new List<TeamsPersonRow>();
         public List<TeamsPersonRow> Dormant { get; set; } = new List<TeamsPersonRow>();
         public List<TeamsNamedCountRow> ChampionsByDepartment { get; set; } = new List<TeamsNamedCountRow>();
+
+        /// <summary>
+        /// This section without the two lists that name people, for a reader who does not hold the portal's
+        /// See PII permission (#661). The power users per department stay: they are a count, and every
+        /// reader sees aggregates. A shallow copy, because the section is cached and shared between readers.
+        /// </summary>
+        public TeamsPeople WithoutIndividualData()
+        {
+            var copy = (TeamsPeople)MemberwiseClone();
+            copy.Champions = new List<TeamsPersonRow>();
+            copy.Dormant = new List<TeamsPersonRow>();
+            return copy;
+        }
     }
 
     #endregion
