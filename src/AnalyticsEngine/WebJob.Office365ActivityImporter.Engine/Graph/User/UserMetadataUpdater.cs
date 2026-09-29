@@ -403,8 +403,10 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 }
                 else if (UserImportCommitPolicy.ShouldCommitDelta(phaseResults))
                 {
-                    await _userLoader.CommitDeltaTokenAsync();
-                    cycleCompleted = true;
+                    // False when the loader withheld the new token because the checkpoint was cleared while this
+                    // run was in progress (an admin asking for a full re-read); it has logged why. Reporting the run
+                    // as not done keeps the cadence gate open, so that re-read happens on the next cycle.
+                    cycleCompleted = await _userLoader.CommitDeltaTokenAsync();
                 }
                 else
                 {

@@ -60,6 +60,12 @@ export const errors = {
   'errors.profiling.statusFailed': "Couldn't load profiling status ({status}).",
   'errors.profiling.traceLogsFailed': "Couldn't load profiling trace logs ({status}).",
   'errors.systemStatus.loadFailed': "Couldn't load system status ({status}).",
+  'errors.userImportCheckpoint.loadFailed': "Couldn't load the user import checkpoint ({status}).",
+  'errors.userImportCheckpoint.clearFailed': "Couldn't clear the user import checkpoint ({status}).",
+  'errors.userImportCheckpoint.redisUnavailable':
+    "Couldn't reach Azure Cache for Redis, where the checkpoint is kept. Check that the cache is running and that this web app can connect to it, then try again.",
+  'errors.userImportCheckpoint.redisNotConfigured':
+    "Azure Cache for Redis isn't configured for this deployment, so there is no checkpoint to clear.",
   'errors.updateCheck.failed': "Couldn't check for updates ({status}).",
 
   // Licence activity API

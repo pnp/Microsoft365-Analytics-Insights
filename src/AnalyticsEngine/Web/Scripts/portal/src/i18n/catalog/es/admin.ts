@@ -1,7 +1,7 @@
 import type { admin as en } from '../en/admin';
 
 /**
- * Spanish (es-ES) text for the administration pages: service configuration, Teams permissions, user lookup, profiling and the install log.
+ * Spanish (es-ES) text for the administration pages: service configuration, Teams permissions, user lookup, profiling, the install log and the user import checkpoint.
  *
  * Typed against the English module, so a key added there without a translation here fails the
  * build rather than reaching a customer as English text inside a Spanish page.
@@ -359,6 +359,57 @@ const admin: Record<keyof typeof en, string> = {
   'admin.installLog.title': 'Registro de instalación',
   'admin.installLog.viewConfig': 'Ver configuración',
   'admin.installLog.viewLog': 'Ver registro',
+
+  // User import: the Graph user import's /users/delta checkpoint.
+  'admin.userImport.title': 'Importación de usuarios',
+  'admin.userImport.description':
+    'La importación de usuarios mantiene al día a las personas y sus datos (departamento, puesto, oficina, responsable y licencias) a partir de Microsoft Entra ID. Tras su primera lectura completa guarda un punto de control (un token delta de Microsoft Graph), de modo que cada ejecución posterior solo lee lo que ha cambiado desde entonces.',
+  'admin.userImport.loading': 'Cargando el punto de control de la importación de usuarios...',
+  'admin.userImport.loadFailed': 'No se pudo cargar el punto de control de la importación de usuarios.',
+  'admin.userImport.clearFailed': 'No se pudo borrar el punto de control de la importación de usuarios.',
+  'admin.userImport.state.title': 'Estado actual',
+  'admin.userImport.state.ariaLabel': 'Punto de control de la importación de usuarios',
+  'admin.userImport.state.importLabel': 'Importación de usuarios',
+  'admin.userImport.state.importEnabled': 'Activada',
+  'admin.userImport.state.importDisabled': 'Desactivada (GraphUsersMetadata)',
+  'admin.userImport.state.importUnknown': 'Desconocido: no se pudo leer la configuración de importación',
+  'admin.userImport.state.storageLabel': 'Dónde se guarda el punto de control',
+  'admin.userImport.state.storageRedis': 'En Azure Cache for Redis',
+  'admin.userImport.state.storageNone':
+    'En ningún sitio: Azure Cache for Redis no está configurado, así que cada ejecución lee todos los usuarios',
+  'admin.userImport.state.checkpointLabel': 'Punto de control guardado',
+  'admin.userImport.state.checkpointPresent': 'Sí: la próxima ejecución solo lee lo que ha cambiado',
+  'admin.userImport.state.checkpointAbsent': 'Ninguno: la próxima ejecución lee todos los usuarios',
+  'admin.userImport.state.keyLabel': 'Clave de Redis',
+  'admin.userImport.state.lastCompletedLabel': 'Última finalización',
+  'admin.userImport.state.lastCompletedNone': 'No registrada',
+  'admin.userImport.state.intervalLabel': 'Frecuencia',
+  'admin.userImport.state.intervalHours': 'Como máximo una vez cada {hours} h',
+  'admin.userImport.state.everyCycle': 'En cada ciclo de importación',
+  'admin.userImport.clear.title': 'Volver a leer todos los usuarios',
+  'admin.userImport.clear.description':
+    'Borre el punto de control cuando los datos de los usuarios en los informes parezcan desactualizados, o después de que la importación de usuarios haya estado desactivada o fallando durante semanas. La siguiente ejecución leerá entonces todos los usuarios, igual que en una instalación nueva. No se elimina nada de la base de datos.',
+  'admin.userImport.clear.cost': 'En un inquilino grande, una lectura completa tarda mucho más que una ejecución normal.',
+  'admin.userImport.clear.noRedis':
+    'No hay nada que borrar: sin Azure Cache for Redis el punto de control nunca se guarda, y cada ejecución ya lee todos los usuarios.',
+  'admin.userImport.clear.importOff':
+    'La importación de usuarios está desactivada, así que nada lee los usuarios hasta que se vuelva a activar. Si borra ahora el punto de control, esa primera ejecución leerá todos los usuarios.',
+  'admin.userImport.clear.runOnNextCycle': 'Ejecutar la importación de usuarios en el próximo ciclo de importación',
+  'admin.userImport.clear.runOnNextCycleHint': 'Si no, espera hasta {hours} h después de su última finalización.',
+  'admin.userImport.clear.button': 'Borrar punto de control...',
+  'admin.userImport.confirm.title': '¿Borrar el punto de control de la importación de usuarios?',
+  'admin.userImport.confirm.body':
+    'La próxima importación de usuarios leerá todos los usuarios de Microsoft Entra ID, en lugar de solo lo que ha cambiado.',
+  'admin.userImport.confirm.running':
+    'Si ahora mismo se está ejecutando una importación de usuarios, no guardará su punto de control al terminar, así que la lectura completa se hará igualmente.',
+  'admin.userImport.confirm.clear': 'Borrar punto de control',
+  'admin.userImport.confirm.clearing': 'Borrando...',
+  'admin.userImport.schedule.nextCycle': 'Se ejecutará en el próximo ciclo de importación.',
+  'admin.userImport.schedule.afterInterval': 'Se ejecutará cuando haya pasado su intervalo de {hours} h.',
+  'admin.userImport.result.cleared':
+    'Punto de control borrado. La próxima importación de usuarios leerá todos los usuarios.',
+  'admin.userImport.result.nothingStored':
+    'No había ningún punto de control guardado, así que la próxima importación de usuarios leerá todos los usuarios de todos modos.',
 };
 
 export default admin;

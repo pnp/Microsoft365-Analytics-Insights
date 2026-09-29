@@ -144,7 +144,7 @@ namespace Tests.UnitTests.FakeLoaderClasses
             return Task.FromResult<List<LicenseDetails>>(null);
         }
 
-        public async Task CommitDeltaTokenAsync()
+        public async Task<bool> CommitDeltaTokenAsync()
         {
             if (_hasPendingDeltaToken)
             {
@@ -156,7 +156,10 @@ namespace Tests.UnitTests.FakeLoaderClasses
                 await _deltaProvider.SetDeltaToken(_pendingDeltaToken);
                 _pendingDeltaToken = null;
                 _hasPendingDeltaToken = false;
+                return true;
             }
+
+            return false;
         }
     }
 

@@ -1,5 +1,6 @@
 using Common.Entities;
 using Common.Entities.Config;
+using Common.Entities.Redis;
 using DataUtils;
 using Microsoft.ApplicationInsights;
 using Microsoft.ApplicationInsights.Channel;
@@ -363,6 +364,118 @@ namespace Tests.UnitTests
 
         #endregion
 
+        #region A checkpoint cleared while an import runs stays cleared
+
+        [TestMethod]
+        public async Task ANormalDeltaRun_ChecksTheCheckpointIsStillStored_ThenSavesTheNewOne()
+        {
+            var store = new RecordingDeltaValueProvider(StoredToken);
+            var logger = new CapturingLogger();
+            var handler = new ScriptedGraphHandler().Then(HttpStatusCode.OK, FinalPage(FreshToken, UserJson(1)));
+
+            using (var client = new ManualGraphCallClient(handler, logger))
+            {
+                var loader = new GraphUserLoader(client, store, logger, null);
+                await loader.LoadAllActiveUsers();
+
+                Assert.IsTrue(await loader.CommitDeltaTokenAsync());
+                Assert.AreEqual(FreshToken, store.Token);
+                CollectionAssert.AreEqual(new[] { "Get", "Get", "Set:" + FreshToken }, store.Calls.ToArray(),
+                    "A run that continued from a stored checkpoint reads it again just before replacing it.");
+            }
+        }
+
+        [TestMethod]
+        public async Task ACheckpointClearedWhileTheImportRuns_IsNotSavedBackByThatRun()
+        {
+            var store = new RecordingDeltaValueProvider(StoredToken);
+            var logger = new CapturingLogger();
+            var handler = new ScriptedGraphHandler().Then(HttpStatusCode.OK, FinalPage(FreshToken, UserJson(1)));
+
+            using (var client = new ManualGraphCallClient(handler, logger))
+            {
+                var loader = new GraphUserLoader(client, store, logger, null);
+                await loader.LoadAllActiveUsers();
+
+                // An admin clears the checkpoint from the portal while the run is still processing users.
+                await store.ClearDeltaToken();
+
+                Assert.IsFalse(await loader.CommitDeltaTokenAsync(), "The run must report that it did not save its checkpoint.");
+                Assert.IsNull(store.Token, "Saving this run's token would silently undo the clear, and the full re-read would never happen.");
+                Assert.AreEqual(0, store.SetCalls);
+                Assert.IsTrue(logger.Messages(LogLevel.Warning).Any(m => m.Contains("cleared while this import was running")));
+            }
+        }
+
+        [TestMethod]
+        public async Task AFullRead_SavesItsCheckpoint_EvenIfAClearArrivesMeanwhile()
+        {
+            var store = new RecordingDeltaValueProvider();
+            var logger = new CapturingLogger();
+            var handler = new ScriptedGraphHandler().Then(HttpStatusCode.OK, FinalPage(FreshToken, UserJson(1), UserJson(2)));
+
+            using (var client = new ManualGraphCallClient(handler, logger))
+            {
+                var loader = new GraphUserLoader(client, store, logger, null);
+                await loader.LoadAllActiveUsers();
+                await store.ClearDeltaToken();
+
+                Assert.IsTrue(await loader.CommitDeltaTokenAsync(), "A full read has already done what a clear asks for.");
+                Assert.AreEqual(FreshToken, store.Token);
+                Assert.AreEqual(1, store.Calls.Count(c => c == "Get"), "A full read has no earlier checkpoint to check for.");
+            }
+        }
+
+        [TestMethod]
+        public async Task ARedisBlipAtCommitTime_StillSavesTheNewCheckpoint()
+        {
+            var redis = new FakeStringValueStore();
+            var provider = NewRedisProvider(redis);
+            await provider.SetDeltaToken(StoredToken);
+
+            var logger = new CapturingLogger();
+            var handler = new ScriptedGraphHandler().Then(HttpStatusCode.OK, FinalPage(FreshToken, UserJson(1)));
+
+            using (var client = new ManualGraphCallClient(handler, logger))
+            {
+                var loader = new GraphUserLoader(client, provider, logger, null);
+                await loader.LoadAllActiveUsers();
+
+                redis.ThrowOnGet = true;
+                Assert.IsTrue(await loader.CommitDeltaTokenAsync(),
+                    "An unreadable store is not a cleared one: the read falls back to the checkpoint this run started from, so it saves as it always did.");
+            }
+
+            redis.ThrowOnGet = false;
+            Assert.AreEqual(FreshToken, await provider.GetDeltaToken());
+        }
+
+        [TestMethod]
+        public async Task TheKeyTheWebPortalDeletes_IsTheOneTheImporterChecksBeforeSaving()
+        {
+            var redis = new FakeStringValueStore();
+            var provider = NewRedisProvider(redis);
+            await provider.SetDeltaToken(StoredToken);
+
+            var logger = new CapturingLogger();
+            var handler = new ScriptedGraphHandler().Then(HttpStatusCode.OK, FinalPage(FreshToken, UserJson(1)));
+
+            using (var client = new ManualGraphCallClient(handler, logger))
+            {
+                var loader = new GraphUserLoader(client, provider, logger, null);
+                await loader.LoadAllActiveUsers();
+
+                // Exactly the key the Administration > User import page deletes.
+                await redis.DeleteString(UserImportCheckpointKeys.DeltaToken(Guid.Empty));
+
+                Assert.IsFalse(await loader.CommitDeltaTokenAsync());
+            }
+
+            Assert.AreEqual(0, redis.Count, "The portal's clear must survive a run that was already in progress.");
+        }
+
+        #endregion
+
         #region UserMetadataUpdater: an incomplete read is not a finished import
 
         [TestMethod]
@@ -477,6 +590,64 @@ namespace Tests.UnitTests
                 Assert.IsTrue(warnings.Any(w => w.Contains("rejected the stored /users/delta token") && w.Contains("HTTP 400") && w.Contains("Request_UnsupportedQuery")));
                 Assert.IsTrue(warnings.Any(w => w.Contains("/users/delta read stopped") && w.Contains("HTTP 403") && w.Contains("token was kept")));
                 Assert.IsTrue(warnings.Any(w => w.Contains("NOT moving the user checkpoint forward")));
+            }
+            finally
+            {
+                await DeleteTestUsers(upn);
+            }
+        }
+
+        /// <summary>
+        /// The web portal's clear, arriving while a user import is running. That run must not save its checkpoint
+        /// over the clear, and must not be recorded as finished - otherwise the cadence gate would hold the full
+        /// re-read the admin asked for back for a whole interval.
+        /// </summary>
+        [TestMethod]
+        public async Task ClearedWhileRunning_EndToEnd_TheRunIsNotFinished_AndTheNextRunReadsEveryone()
+        {
+            var upn = $"delta-cleared-{DateTime.UtcNow.Ticks}@contoso.com";
+            var aadId = Guid.NewGuid().ToString();
+            await DeleteTestUsers(upn);
+
+            var channel = new RecordingTelemetryChannel();
+            var store = new RecordingDeltaValueProvider();
+            var handler = new ScriptedGraphHandler()
+                .Then(HttpStatusCode.OK, FinalPage("checkpoint-1", UserJson(aadId, upn, "10001")))
+                .Then(HttpStatusCode.OK, FinalPage("checkpoint-2", UserJson(aadId, upn, "20002")))
+                .Then(HttpStatusCode.OK, FinalPage("checkpoint-3", UserJson(aadId, upn, "30003")));
+
+            try
+            {
+                using (var configuration = NewTelemetryConfiguration(channel))
+                {
+                    var logger = new AnalyticsLogger(new TelemetryClient(configuration), "UserImportTest");
+                    using (var client = new ManualGraphCallClient(handler, logger))
+                    {
+                        var loader = new GraphDeltaReadWithoutLicenceCalls(new GraphUserLoader(client, store, logger, null));
+
+                        Assert.IsTrue(await new UserMetadataUpdater(logger, new AppConfig(), loader).InsertAndUpdateDatabaseFromExternalUsers(), "Run 1");
+                        Assert.AreEqual("checkpoint-1", store.Token);
+
+                        loader.DuringRun = () => store.ClearDeltaToken().GetAwaiter().GetResult();
+                        Assert.IsFalse(await new UserMetadataUpdater(logger, new AppConfig(), loader).InsertAndUpdateDatabaseFromExternalUsers(),
+                            "Run 2 was cleared part-way through, so it must not be recorded as a finished user import.");
+                        Assert.IsNull(store.Token, "Run 2 must not save its checkpoint over the clear.");
+
+                        loader.DuringRun = null;
+                        Assert.IsTrue(await new UserMetadataUpdater(logger, new AppConfig(), loader).InsertAndUpdateDatabaseFromExternalUsers(), "Run 3");
+                        Assert.AreEqual("checkpoint-3", store.Token);
+                    }
+                }
+
+                Assert.AreEqual(3, handler.Requests.Count);
+                StringAssert.Contains(handler.Requests[1], "$deltatoken=checkpoint-1");
+                Assert.IsFalse(handler.Requests[2].Contains("$deltatoken"), "Run 3 reads every user, as the clear asked.");
+                Assert.IsTrue(Warnings(channel).Any(w => w.Contains("cleared while this import was running")));
+
+                using (var db = new AnalyticsEntitiesContext())
+                {
+                    Assert.AreEqual("30003", (await db.users.SingleAsync(u => u.UserPrincipalName == upn)).PostalCode);
+                }
             }
             finally
             {
@@ -615,6 +786,7 @@ namespace Tests.UnitTests
             public string Token { get; private set; }
             public int ClearCalls => _calls.Count(c => c == "Clear");
             public int SetCalls => _calls.Count(c => c.StartsWith("Set:", StringComparison.Ordinal));
+            public IReadOnlyList<string> Calls => _calls.ToList();
 
             /// <summary>The calls made after the last occurrence of <paramref name="marker"/>.</summary>
             public List<string> CallsAfter(string marker)
@@ -695,8 +867,17 @@ namespace Tests.UnitTests
             public IDeltaValueProvider DeltaValueProvider => _graph.DeltaValueProvider;
             public bool LastLoadReachedDeltaLink => _graph.LastLoadReachedDeltaLink;
             public Task<List<GraphUser>> LoadAllActiveUsers() => _graph.LoadAllActiveUsers();
-            public Task CommitDeltaTokenAsync() => _graph.CommitDeltaTokenAsync();
-            public Task<List<SubscribedSku>> LoadTenantSkus() => Task.FromResult<List<SubscribedSku>>(null);
+            public Task<bool> CommitDeltaTokenAsync() => _graph.CommitDeltaTokenAsync();
+            public Task<List<SubscribedSku>> LoadTenantSkus()
+            {
+                // The updater calls this part-way through a run, after the /users/delta read: the moment to
+                // simulate something else happening while the import is running.
+                DuringRun?.Invoke();
+                return Task.FromResult<List<SubscribedSku>>(null);
+            }
+
+            /// <summary>Runs in the middle of each import, after the delta read and before the commit.</summary>
+            public Action DuringRun { get; set; }
             public Task<List<Microsoft.Graph.Models.User>> LoadUsersBySku(Guid skuId) => Task.FromResult(new List<Microsoft.Graph.Models.User>());
             public Task<List<LicenseDetails>> LoadUserLicenseDetails(string userId) => Task.FromResult<List<LicenseDetails>>(null);
         }

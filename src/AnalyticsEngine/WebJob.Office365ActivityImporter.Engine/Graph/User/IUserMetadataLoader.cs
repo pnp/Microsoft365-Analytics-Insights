@@ -65,6 +65,12 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         /// persisted delta is preserved and the failed users will be retried
         /// on the next cycle.
         /// </summary>
-        Task CommitDeltaTokenAsync();
+        /// <returns>
+        /// True when the new token was saved. False when there was none to save, or when it was deliberately
+        /// withheld because the stored checkpoint was cleared while the import was running - an admin asking
+        /// for a full re-read from the web portal's User import page. The caller must then report the run as
+        /// not done, so that re-read happens on the next cycle rather than after the cadence interval.
+        /// </returns>
+        Task<bool> CommitDeltaTokenAsync();
     }
 }

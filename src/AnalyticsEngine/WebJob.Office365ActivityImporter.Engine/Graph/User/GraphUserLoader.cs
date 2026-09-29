@@ -8,54 +8,10 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
+using GraphUserDeltaQuery = Common.Entities.Redis.GraphUserDeltaQuery;
 
 namespace WebJob.Office365ActivityImporter.Engine.Graph
 {
-    /// <summary>
-    /// The <c>/users/delta</c> query this product tracks users with, and the version stamp that pins it.
-    /// </summary>
-    /// <remarks>
-    /// Microsoft Graph fixes the <c>$select</c> when a delta token is first minted: a stored token
-    /// continues the cycle it was created for, so widening the selection later does NOT start returning
-    /// the new property to a tenant that already has one. That makes every <c>$select</c> change a
-    /// breaking change for existing deployments unless the stored token is invalidated with it.
-    ///
-    /// <para>
-    /// <see cref="SelectVersion"/> is part of the delta-token cache key, so bumping it discards the
-    /// stored token and the next import performs one full enumeration under the new selection. That is
-    /// the only thing that makes a newly selected property arrive for users who have not otherwise
-    /// changed - and those are the overwhelming majority on an established tenant.
-    /// </para>
-    ///
-    /// <para>
-    /// <b>Bump <see cref="SelectVersion"/> in the same change that edits <see cref="Select"/>.</b>
-    /// Forgetting it does not fail anywhere: the import keeps running, the new column simply stays
-    /// empty forever on every upgraded tenant while looking correct on a fresh install. v2 added
-    /// <c>createdDateTime</c> for the Copilot Adoption seat-tenure proxy.
-    /// </para>
-    /// </remarks>
-    public static class GraphUserDeltaQuery
-    {
-        /// <summary>Bump whenever <see cref="Select"/> changes. Part of the delta-token cache key.</summary>
-        public const string SelectVersion = "v2";
-
-        /// <summary>
-        /// Properties tracked for user changes.
-        /// </summary>
-        /// <remarks>
-        /// assignedLicenses / assignedPlans are here as defence-in-depth so that a user whose ONLY
-        /// change is a licence assignment is still surfaced by /users/delta on subsequent runs. The
-        /// primary correctness guarantee for licence counts comes from UserMetadataUpdater /
-        /// UserLicenseProcessor processing the full DB user population each run, not just delta users.
-        ///
-        /// createdDateTime is Entra's immutable account-creation timestamp, used by Copilot Adoption as
-        /// the seat-tenure proxy until real licence-assignment history exists.
-        /// </remarks>
-        public const string Select =
-            "id,accountEnabled,createdDateTime,officeLocation,usageLocation,jobTitle,department,mail,"
-            + "userPrincipalName,manager,companyName,postalCode,country,state,assignedLicenses,assignedPlans";
-    }
-
     /// <summary>
     /// Graph API implementation of user metadata loader
     /// </summary>
@@ -76,6 +32,10 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         private string _pendingDeltaToken;
         private bool _hasPendingDeltaToken;
 
+        // The stored token the buffered read continued from, or null when it read the full user list. Commit
+        // uses it to notice the checkpoint being cleared while this import was running (see CommitDeltaTokenAsync).
+        private string _pendingBaseToken;
+
         public GraphUserLoader(ManualGraphCallClient httpClient, IDeltaValueProvider deltaValueProvider, ILogger logger, GraphServiceClient graphServiceClient)
         {
             this._httpClient = httpClient;
@@ -94,6 +54,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             // Reset any previously buffered token, and the completeness flag, before a new load.
             _pendingDeltaToken = null;
             _hasPendingDeltaToken = false;
+            _pendingBaseToken = null;
             LastLoadReachedDeltaLink = false;
 
             // Cache delta using tenant ID
@@ -144,6 +105,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             else
             {
                 LastLoadReachedDeltaLink = true;
+                _pendingBaseToken = usersQueryDelta;
             }
 
             var results = read.Users;
@@ -239,14 +201,38 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             public int FailedPage { get; set; }
         }
 
-        public async Task CommitDeltaTokenAsync()
+        /// <inheritdoc />
+        public async Task<bool> CommitDeltaTokenAsync()
         {
-            if (_hasPendingDeltaToken)
+            if (!_hasPendingDeltaToken)
             {
-                await _deltaValueProvider.SetDeltaToken(_pendingDeltaToken);
-                _pendingDeltaToken = null;
-                _hasPendingDeltaToken = false;
+                return false;
             }
+
+            if (!string.IsNullOrEmpty(_pendingBaseToken))
+            {
+                // This run continued from a stored checkpoint. If that checkpoint has gone since, it was cleared
+                // while the run was in progress - by an admin on the web portal's User import page, or by hand in
+                // Redis - to ask for a full re-read. Saving this run's token would quietly undo that request, so
+                // it is withheld and the next run reads the full user list, as the clear intended. A failed read
+                // here falls back to the checkpoint this run started from, so a Redis blip still saves as before.
+                var stored = await _deltaValueProvider.GetDeltaToken();
+                if (string.IsNullOrEmpty(stored))
+                {
+                    _logger.LogWarning("User import - the stored /users/delta checkpoint was cleared while this import was running, so this run's new checkpoint is not being saved. " +
+                        "The next run reads the full user list, as the clear intended.");
+                    _pendingDeltaToken = null;
+                    _hasPendingDeltaToken = false;
+                    _pendingBaseToken = null;
+                    return false;
+                }
+            }
+
+            await _deltaValueProvider.SetDeltaToken(_pendingDeltaToken);
+            _pendingDeltaToken = null;
+            _hasPendingDeltaToken = false;
+            _pendingBaseToken = null;
+            return true;
         }
 
         public async Task<List<SubscribedSku>> LoadTenantSkus()
