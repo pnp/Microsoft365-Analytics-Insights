@@ -874,7 +874,8 @@ namespace Tests.UnitTests
             var low = cells.IndexOf("Modelled hours a month (low)");
             Assert.AreEqual(allCandidates.HoursPerMonthLow.ToString(CultureInfo.InvariantCulture), cells[low + 3]);
 
-            Assert.IsTrue(cells.Any(c => c.Contains("licence candidate - everyone active without a licence, recommended or not -")),
+            Assert.IsTrue(cells.Any(c => c.Contains(
+                    "licence candidate - everyone without a licence who used Microsoft 365 or Copilot Chat in the period, recommended or not -")),
                 "The assumptions must describe every candidate as such, not as recommended.");
             Assert.IsFalse(cells.Any(c => c.Contains("recommended licence candidate")),
                 "Nobody is recommended, so no assumption may describe the volumes as the recommended people's.");

@@ -72,9 +72,17 @@ function sessionStore(): Storage | undefined {
 /** The choice held in memory when session storage cannot be used, so switching still works. */
 let memoryFallback = '';
 
+/**
+ * Set once a write to session storage has failed - a full quota, or a browser (older Safari in private
+ * browsing, for one) that lets the page read storage but not write to it. From then on the choice lives
+ * in memory for the rest of the page: reading the store would keep returning the value from before the
+ * failed write, and the picker would appear not to respond.
+ */
+let storageFailed = false;
+
 function readRaw(): string {
   const store = sessionStore();
-  if (!store) return memoryFallback;
+  if (!store || storageFailed) return memoryFallback;
   try {
     return store.getItem(TIME_SAVED_COHORT_STORAGE_KEY) ?? '';
   } catch {
@@ -87,12 +95,12 @@ const listeners = new Set<() => void>();
 function writeRaw(value: string): void {
   memoryFallback = value;
   const store = sessionStore();
-  if (store) {
+  if (store && !storageFailed) {
     try {
       if (value) store.setItem(TIME_SAVED_COHORT_STORAGE_KEY, value);
       else store.removeItem(TIME_SAVED_COHORT_STORAGE_KEY);
     } catch {
-      // Quota or a blocked store: the in-memory copy above keeps the page consistent.
+      storageFailed = true;
     }
   }
   for (const listener of [...listeners]) listener();
@@ -105,8 +113,9 @@ function subscribe(listener: () => void): () => void {
   };
 }
 
-/** Test-only: forget the stored choice. */
+/** Test-only: forget the stored choice, and any earlier failure to store one. */
 export function resetTimeSavedCohortStore(): void {
+  storageFailed = false;
   writeRaw('');
 }
 

@@ -2154,7 +2154,8 @@ namespace Common.Entities.CopilotAdoption
             {
                 licenceEstimate.Assumptions.Add(
                     $"Volumes are observed from Microsoft's usage reports for {cohortUsers:N0} licence "
-                    + $"candidate{Plural(cohortUsers)} - everyone active without a licence, recommended or not - "
+                    + $"candidate{Plural(cohortUsers)} - everyone without a licence who used Microsoft 365 or "
+                    + "Copilot Chat in the period, recommended or not - "
                     + $"restated over {Num(WorkingDaysPerMonth(o))} working days a month.");
             }
             else

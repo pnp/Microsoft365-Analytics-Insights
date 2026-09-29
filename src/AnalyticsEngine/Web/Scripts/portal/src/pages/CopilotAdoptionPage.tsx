@@ -2320,11 +2320,14 @@ function buildTimeSavedKpis(
       key: 'licenceTimeSaved',
       label: t('copilotAdoption.page.kpi.licenceTimeSaved.label'),
       value: t('copilotAdoption.page.kpi.hoursValue', { range: compactHoursRange(t, licence.hoursLow, licence.hoursHigh) }),
+      // A capped list cannot say "all": every candidate past its limit is missing, so the figure is a floor.
       hint: everyone
-        ? t(
-            plural(licence.cohortUsers, 'copilotAdoption.page.kpi.licenceTimeSaved.hintAll.one', 'copilotAdoption.page.kpi.licenceTimeSaved.hintAll.other'),
-            { users: formatCount(licence.cohortUsers) },
-          )
+        ? licence.candidatesCapped
+          ? t('copilotAdoption.page.kpi.licenceTimeSaved.hintAllCapped', { users: formatCount(licence.cohortUsers) })
+          : t(
+              plural(licence.cohortUsers, 'copilotAdoption.page.kpi.licenceTimeSaved.hintAll.one', 'copilotAdoption.page.kpi.licenceTimeSaved.hintAll.other'),
+              { users: formatCount(licence.cohortUsers) },
+            )
         : t(
             plural(licence.cohortUsers, 'copilotAdoption.page.kpi.licenceTimeSaved.hint.one', 'copilotAdoption.page.kpi.licenceTimeSaved.hint.other'),
             { users: formatCount(licence.cohortUsers) },

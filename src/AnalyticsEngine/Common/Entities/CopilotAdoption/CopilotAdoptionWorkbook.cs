@@ -1933,8 +1933,8 @@ namespace Common.Entities.CopilotAdoption
                 "Recommended: every unlicensed person recommended for a licence - proven demand or a "
                 + "workload-inferred business case. Already using Copilot Chat: the recommended candidates with "
                 + "Copilot Chat use this period, the strongest part of the case because the demand is observed. "
-                + "Every licence candidate: everyone active in Copilot Chat or Microsoft 365 this period without "
-                + "a licence, recommended or not - the potential if all of them were licensed, not the purchase "
+                + "Every licence candidate: everyone without a licence who used Microsoft 365 or Copilot Chat this "
+                + "period, recommended or not - the potential if all of them were licensed, not the purchase "
                 + "the list recommends."
                 + (recommended.CandidatesCapped || allCandidates.CandidatesCapped
                     ? $" TRUNCATED: the candidate list reached its {configured.MaxOpportunityCandidates:N0}-candidate "

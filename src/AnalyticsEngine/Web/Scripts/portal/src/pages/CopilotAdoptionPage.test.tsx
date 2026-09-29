@@ -935,6 +935,25 @@ describe('CopilotAdoptionPage modelled time saved', () => {
     expect(within(licence).queryByText(/recommended people/)).toBeNull();
   });
 
+  /**
+   * On a large tenant the candidate list stops at its limit, so "all N candidates" would present a floor
+   * as a total - the one surface that did not say so, while the tab and the Excel report both do.
+   */
+  it('calls a capped candidate list a floor on the tile rather than every candidate', async () => {
+    sessionStorage.setItem(TIME_SAVED_COHORT_STORAGE_KEY, JSON.stringify({ licence: 'all' }));
+    vi.mocked(fetchAdoptionSummary).mockResolvedValue(
+      withEstimate({ licenceAllCandidatesEstimate: { ...licenceAllCandidates, candidatesCapped: true } }),
+    );
+
+    await renderPage();
+
+    const licence = await tile('Time back from licensing');
+    expect(
+      within(licence).getByText('a month for the first 40 licence candidates - the list stopped at its limit, so treat this as a floor'),
+    ).toBeVisible();
+    expect(within(licence).queryByText(/if all 40 licence candidates/)).toBeNull();
+  });
+
   it('puts each modelled figure on a tile of its own, marked as modelled', async () => {
     vi.mocked(fetchAdoptionSummary).mockResolvedValue(withEstimate());
 

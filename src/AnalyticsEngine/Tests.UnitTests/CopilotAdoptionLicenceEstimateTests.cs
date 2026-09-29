@@ -319,8 +319,9 @@ namespace Tests.UnitTests
 
         /// <summary>
         /// The portal's "all candidates" option: every candidate the list ranked, recommended or not, so a
-        /// reader can size a purchase for everyone active without a licence - with the recommended cohort,
-        /// the default, as a part of it that can never model more time than the whole.
+        /// reader can size a purchase for everyone without a licence who used Microsoft 365 or Copilot Chat -
+        /// with the recommended cohort, the default, as a part of it that can never model more time than
+        /// the whole.
         /// </summary>
         [TestMethod]
         public void Summary_ModelsEveryCandidate_RecommendedOrNot_ForTheAllCandidatesOption()
@@ -413,7 +414,8 @@ namespace Tests.UnitTests
             Assert.AreEqual(recommended.Assumptions.Count, all.Assumptions.Count);
 
             Assert.IsTrue(recommended.Assumptions.Any(a => a.Contains("for 10 recommended licence candidates,")));
-            Assert.IsTrue(all.Assumptions.Any(a => a.Contains("for 10 licence candidates - everyone active without a licence, recommended or not -")));
+            Assert.IsTrue(all.Assumptions.Any(a => a.Contains(
+                "for 10 licence candidates - everyone without a licence who used Microsoft 365 or Copilot Chat in the period, recommended or not -")));
             Assert.IsFalse(all.Assumptions.Any(a => a.Contains("recommended licence candidate")),
                 "Every candidate must not be described as recommended.");
         }

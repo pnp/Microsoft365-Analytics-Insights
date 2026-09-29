@@ -314,7 +314,7 @@ describe('OpportunitiesPanel every licence candidate', () => {
     expect(within(model).getByText('8,000')).toBeTruthy();
     expect(
       within(model).getByText(
-        "Volumes are observed from Microsoft's usage reports for 40 licence candidates - everyone active without a licence, recommended or not - restated over 20 working days a month.",
+        "Volumes are observed from Microsoft's usage reports for 40 licence candidates - everyone without a licence who used Microsoft 365 or Copilot Chat in the period, recommended or not - restated over 20 working days a month.",
       ),
     ).toBeTruthy();
     expect(within(model).getByText(/for every licence candidate, recommended or not;/)).toBeTruthy();
@@ -368,7 +368,7 @@ describe('OpportunitiesPanel every licence candidate', () => {
     const model = await openTimeSaved(user);
     expect(
       within(model).getByText(
-        "Volumes are observed from Microsoft's usage reports for 40 licence candidates - everyone active without a licence, recommended or not - restated over 20 working days a month.",
+        "Volumes are observed from Microsoft's usage reports for 40 licence candidates - everyone without a licence who used Microsoft 365 or Copilot Chat in the period, recommended or not - restated over 20 working days a month.",
       ),
     ).toBeTruthy();
     // One cohort to show, so nothing to choose between.

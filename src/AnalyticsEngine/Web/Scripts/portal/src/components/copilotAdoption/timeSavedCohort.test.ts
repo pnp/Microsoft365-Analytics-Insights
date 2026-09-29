@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { act, renderHook } from '@testing-library/react';
 import {
   DEFAULT_TIME_SAVED_COHORTS,
@@ -94,5 +94,30 @@ describe('useTimeSavedCohorts', () => {
 
     expect(second.result.current.cohorts.cowork).toBe('all');
     expect(second.result.current.cohorts.licence).toBe('recommended');
+  });
+
+  /**
+   * A browser that lets the page read session storage but not write to it - a full quota, or older
+   * Safari in private browsing. Reading the store would keep returning the old choice and the picker
+   * would appear not to respond, so the choice moves to memory for the rest of the page.
+   */
+  it('still switches when the browser refuses to store the choice', () => {
+    const setItem = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new DOMException('The quota has been exceeded.', 'QuotaExceededError');
+    });
+    try {
+      const { result } = renderHook(() => useTimeSavedCohorts());
+
+      act(() => result.current.setCohort('licence', 'all'));
+      expect(result.current.cohorts.licence).toBe('all');
+
+      act(() => result.current.setCohort('cowork', 'all'));
+      expect(result.current.cohorts).toEqual({ licence: 'all', cowork: 'all' });
+
+      act(() => result.current.setCohort('licence', 'recommended'));
+      expect(result.current.cohorts).toEqual({ licence: 'recommended', cowork: 'all' });
+    } finally {
+      setItem.mockRestore();
+    }
   });
 });
