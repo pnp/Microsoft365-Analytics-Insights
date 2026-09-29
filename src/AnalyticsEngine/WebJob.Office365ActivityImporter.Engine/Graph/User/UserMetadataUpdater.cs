@@ -572,6 +572,25 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                         + $"not be understood: {string.Join(", ", skipped)}. Re-save them on the User organisations page.");
                 }
 
+                // Skipped whole, every cycle, once an import has found the attribute holding lists at this
+                // configuration - not only in the cycle that happened to see a list. A later delta is usually
+                // people who changed something else, without a list, and merging it would read their absent
+                // attribute as "no value". They stay in the $select and the token key, so the token does not
+                // churn; saving the type moves its generation and clears the mark.
+                var holdingLists = orgTypes
+                    .Where(t => t != null && t.AttributeHoldsLists)
+                    .ToList();
+                if (holdingLists.Count > 0)
+                {
+                    var stillSkipped = new HashSet<int>(holdingLists.Select(t => t.Id));
+                    parsed = parsed.Where(p => !stillSkipped.Contains(p.OrgTypeId)).ToList();
+                    _logger.LogWarning(
+                        $"User import - still skipping {holdingLists.Count} organisation type(s) whose Entra attribute "
+                        + "was found holding a list of values: "
+                        + string.Join(", ", holdingLists.Select(t => $"'{t.Name}' ({t.EntraAttributeName})"))
+                        + ". Point them at a single-valued attribute on the User organisations page.");
+                }
+
                 if (parsed.Count == 0)
                 {
                     return;

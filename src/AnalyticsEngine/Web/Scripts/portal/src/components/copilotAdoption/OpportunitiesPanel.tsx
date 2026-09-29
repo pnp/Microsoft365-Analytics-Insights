@@ -341,6 +341,9 @@ export default function OpportunitiesPanel({
     filters.search !== '' ||
     filters.recommendedOnly ||
     filters.existingCopilotUsersOnly;
+  // The page-wide filter narrows the list before this panel's own filters apply, so an empty list under
+  // it says nothing about the rest of the tenant.
+  const pageScoped = filters.userFilter !== '';
 
   // Only the warnings that explain an empty or thin candidate list. The page header already carries
   // the full set, and repeating all of them here would bury the one that answers "why is this empty?".
@@ -466,7 +469,9 @@ export default function OpportunitiesPanel({
               <Text weight="semibold" block>
                 {t(candidatesCapped
                   ? 'copilotAdoptionUsers.opportunities.noneQualifiedCapped'
-                  : 'copilotAdoptionUsers.opportunities.noneQualified')}
+                  : pageScoped
+                    ? 'copilotAdoptionUsers.opportunities.noneQualifiedInView'
+                    : 'copilotAdoptionUsers.opportunities.noneQualified')}
               </Text>
               <Text size={200} block className={styles.muted}>
                 {tNode('copilotAdoptionUsers.opportunities.emptyIntro', {

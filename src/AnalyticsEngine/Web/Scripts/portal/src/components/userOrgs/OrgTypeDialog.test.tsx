@@ -275,6 +275,26 @@ describe('OrgTypeDialog', () => {
     expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled();
   });
 
+  it('cannot be dismissed while a save is in flight', async () => {
+    // A save still running when the dialog closed landed in whichever dialog was open by then - closing
+    // it and throwing away what was typed, or showing this save's refusal against another type.
+    let finish: () => void = () => {};
+    const onSave = vi.fn().mockReturnValue(new Promise<void>((resolve) => { finish = resolve; }));
+    const onDismiss = vi.fn();
+    renderWithProvider(<OrgTypeDialog open editing={null} onDismiss={onDismiss} onSave={onSave} />);
+
+    await typeInto(/^Name/, 'From spreadsheet');
+    await userEvent.click(screen.getByLabelText(/A CSV file uploaded here/));
+    await userEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Cancel' })).toBeDisabled());
+    await userEvent.keyboard('{Escape}');
+    expect(onDismiss).not.toHaveBeenCalled();
+
+    await act(async () => { finish(); });
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Cancel' })).toBeEnabled());
+  });
+
   it('does not require a test for a CSV-sourced type', async () => {
     const onSave = vi.fn().mockResolvedValue(undefined);
     renderWithProvider(<OrgTypeDialog open editing={null} onDismiss={vi.fn()} onSave={onSave} />);

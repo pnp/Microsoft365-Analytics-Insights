@@ -269,6 +269,20 @@ namespace Common.Entities.CopilotAdoption
             sheet.AddRow(name, value, XlsxCell.Wrapped(notes));
         }
 
+        /// <summary>
+        /// How many licence holders a filtered view selects that the capped licensed-user analysis never
+        /// reached - the count its <see cref="CopilotAdoptionWarningKeys.ScopedLicensedUsersNotAnalysed"/>
+        /// warning carries - or 0.
+        /// </summary>
+        private static int LicenceHoldersNotAnalysed(CopilotAdoptionSummary summary)
+        {
+            var detail = summary.WarningDetails?.FirstOrDefault(d => d.Key == CopilotAdoptionWarningKeys.ScopedLicensedUsersNotAnalysed);
+            object count;
+            return detail?.Values != null && detail.Values.TryGetValue("count", out count) && count != null
+                ? Convert.ToInt32(count, CultureInfo.InvariantCulture)
+                : 0;
+        }
+
         private static string YesNo(bool value)
         {
             return value ? "Yes" : "No";
@@ -303,14 +317,26 @@ namespace Common.Entities.CopilotAdoption
 
             var first = sheet.CurrentRow + 1;
 
+            // A filtered view can select licence holders the capped licensed-user analysis never reached -
+            // its scopedLicensedUsersNotAnalysed warning says how many. Every figure below leaves them out,
+            // so neither the seat count nor "users analysed" may present the view as complete.
+            var notAnalysedInView = LicenceHoldersNotAnalysed(summary);
+
             AddMeta(sheet, "Copilot licences", summary.LicensedUsers,
-                "Users holding at least one licence classified as a Microsoft 365 Copilot licence. The assigned-seat count.");
+                "Users holding at least one licence classified as a Microsoft 365 Copilot licence. The assigned-seat count."
+                + (notAnalysedInView > 0
+                    ? $" In this filtered view it counts only the licence holders the analysis reached: {notAnalysedInView:N0} "
+                      + "more that the filter selects are beyond the analysis limit and are not counted here."
+                    : string.Empty));
             AddMeta(sheet, "Purchased Copilot seats", summary.PurchasedCopilotSeats.HasValue ? (object)summary.PurchasedCopilotSeats.Value : "Unknown",
                 "Purchased seats from Graph subscribedSkus prepaidUnits for the SKUs classified as Copilot seats. Unknown means subscribedSkus was unavailable or the permission is missing - deliberately not zero.");
             AddMeta(sheet, "Unassigned Copilot seats", summary.UnassignedCopilotSeats.HasValue ? (object)summary.UnassignedCopilotSeats.Value : "Unknown",
                 "Purchased minus assigned, per Copilot SKU. A seat nobody holds, as distinct from a seat somebody holds but does not use - the two need different decisions, so they are never merged.");
             AddMeta(sheet, "Users analysed", summary.ScoredUsers,
-                summary.ScoredUsers < summary.LicensedUsers
+                notAnalysedInView > 0
+                    ? $"FEWER THAN THE LICENCE HOLDERS THIS FILTER SELECTS: {notAnalysedInView:N0} more are beyond the "
+                      + "analysis limit. Every rate below is of the users analysed, not of everyone the filter selects."
+                    : summary.ScoredUsers < summary.LicensedUsers
                     ? "FEWER THAN THE SEAT COUNT. Every rate below is of these users, not of the whole tenant, "
                       + "and must not be quoted as a tenant-wide figure."
                     : !string.IsNullOrWhiteSpace(summary.UserFilterDescription)

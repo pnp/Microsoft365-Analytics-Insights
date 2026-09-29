@@ -249,6 +249,15 @@ describe('OpportunitiesPanel licence headline', () => {
     expect(screen.queryByText(/candidate limit/)).toBeNull();
   });
 
+  it('says nobody in the view qualifies, not nobody in the tenant, under a page-wide filter', async () => {
+    // Only the people the page filter selects were searched; the rest of the tenant may hold candidates.
+    const s = summary({ licenceOpportunityEstimate: { ...RECOMMENDED, cohortUsers: 0 }, licenceChatUsersEstimate: undefined });
+    renderWithProvider(<OpportunitiesPanel windowDays={28} summary={s} options={s.options} userFilter="d:department~Sales" />);
+
+    expect(await screen.findByText('Nobody in this view qualifies as a licence candidate for the selected period.')).toBeTruthy();
+    expect(screen.queryByText(/Nobody in this tenant qualifies/)).toBeNull();
+  });
+
   it('reads in Spanish', async () => {
     await loadCatalog('es');
     await renderPanel(summary(), 'es');

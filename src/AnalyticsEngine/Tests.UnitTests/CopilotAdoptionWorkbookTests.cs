@@ -625,6 +625,41 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public void Workbook_DoesNotClaimAFilteredViewWasFullyAnalysedWhenItsLicenceHoldersWereBeyondTheCap()
+        {
+            // The licensed-user analysis stops at its cap by user id, and a filter can select people past it.
+            // The view's own warning says how many; the headline sheet said "every licensed user matching the
+            // filter was analysed" beside it.
+            var analysis = SyntheticAnalysis();
+            var summary = analysis.Summary;
+            summary.UserFilterDescription = "Department is Sales";
+            summary.ScoredUsers = summary.LicensedUsers;
+            CopilotAdoptionWarnings.Add(
+                summary,
+                CopilotAdoptionWarningKeys.ScopedLicensedUsersNotAnalysed,
+                new Dictionary<string, object> { { "count", 12 }, { "maxUsers", 50000 } });
+
+            var cells = SheetCells(CopilotAdoptionWorkbook.Build(analysis), "Headline figures");
+
+            Assert.IsFalse(cells.Any(c => c.Contains("Every licensed user matching the filter was analysed")));
+            Assert.IsTrue(cells.Any(c => c.StartsWith("FEWER THAN THE LICENCE HOLDERS THIS FILTER SELECTS: 12 more")));
+            Assert.IsTrue(cells.Any(c => c.Contains("it counts only the licence holders the analysis reached: 12 more")));
+        }
+
+        [TestMethod]
+        public void Workbook_StillSaysAFilteredViewWasFullyAnalysedWhenItWas()
+        {
+            var analysis = SyntheticAnalysis();
+            analysis.Summary.UserFilterDescription = "Department is Sales";
+            analysis.Summary.ScoredUsers = analysis.Summary.LicensedUsers;
+
+            var cells = SheetCells(CopilotAdoptionWorkbook.Build(analysis), "Headline figures");
+
+            Assert.IsTrue(cells.Any(c => c.StartsWith("Every licensed user matching the filter was analysed")));
+            Assert.IsFalse(cells.Any(c => c.Contains("beyond the analysis limit")));
+        }
+
+        [TestMethod]
         public void Workbook_IncludesTheAccountabilityRollup()
         {
             var text = SheetText(CopilotAdoptionWorkbook.Build(SyntheticAnalysis()));

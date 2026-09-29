@@ -496,6 +496,26 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public async Task ATypeAlreadyFoundHoldingListsIsSkippedInLaterCyclesToo()
+        {
+            // The cycle after the one that found lists is usually people who changed something else, and
+            // none of them has a list: merging it would read their absent attribute as "no value" for a type
+            // already known to be unusable. Skipped whole, as in the cycle that found the lists.
+            const string listAttribute = "extension_0123456789abcdef0123456789abcdef_costCentres";
+            var orgTypes = new FakeUserOrgTypeStore(listAttribute, "extensionAttribute1").MarkHoldingLists(1);
+            var assignments = new FakeUserOrgAssignmentStore();
+            var withoutAList = new GraphUser { UserPrincipalName = "b@contoso.com", AccountEnabled = true, Id = Guid.NewGuid().ToString() };
+            var loader = new FakeUserMetadataLoader(new List<GraphUser> { withoutAList, NewGraphUser() });
+
+            await RunImport(loader, orgTypes, assignments);
+
+            Assert.IsFalse(assignments.LastUpdates.Any(u => u.OrgTypeId == 1), "Nothing merged for a type known to hold lists.");
+            Assert.IsTrue(assignments.LastUpdates.Any(u => u.OrgTypeId == 2), "The other type is imported as usual.");
+            CollectionAssert.AreEquivalent(new[] { 2 }, orgTypes.RefreshCalls.Single().ExpectedGenerations.Keys.ToArray());
+            Assert.AreEqual(0, orgTypes.ListValuedCalls.Count, "Nothing new was found, so nothing new is recorded.");
+        }
+
+        [TestMethod]
         public async Task FailingToRecordTheRefreshDoesNotFailTheImportOrWithholdTheToken()
         {
             // The values are already applied. A label that failed to update is not worth failing the
@@ -615,6 +635,13 @@ namespace Tests.UnitTests
 
             /// <summary>Simulates the org tables not existing yet.</summary>
             public bool Throw { get; set; }
+
+            /// <summary>As an earlier cycle would have left it: found holding lists at its current configuration.</summary>
+            public FakeUserOrgTypeStore MarkHoldingLists(int id)
+            {
+                _types.Single(t => t.Id == id).AttributeHoldsLists = true;
+                return this;
+            }
 
             public Task<IReadOnlyList<UserOrgType>> GetEnabledEntraTypesAsync(CancellationToken cancellationToken = default(CancellationToken))
             {

@@ -222,7 +222,12 @@ export default function OrgTypeDialog({ open, editing, onDismiss, onSave }: OrgT
   };
 
   return (
-    <Dialog open={open} onOpenChange={(_e, data) => !data.open && onDismiss()}>
+    <Dialog
+      open={open}
+      // Not while a save is in flight: it would land in whatever dialog is open by then - closing it and
+      // throwing away what was typed, or showing this save's refusal on another type.
+      onOpenChange={(_e, data) => !data.open && !saving && onDismiss()}
+    >
       <DialogSurface mountNode={undefined}>
         <DialogBody>
           <DialogTitle>
@@ -368,7 +373,7 @@ export default function OrgTypeDialog({ open, editing, onDismiss, onSave }: OrgT
             </div>
           </DialogContent>
           <DialogActions>
-            <Button appearance="secondary" onClick={onDismiss}>
+            <Button appearance="secondary" onClick={onDismiss} disabled={saving}>
               {t('userOrgs.dialog.cancel')}
             </Button>
             <Button appearance="primary" onClick={save} disabled={!canSave || saving}>
