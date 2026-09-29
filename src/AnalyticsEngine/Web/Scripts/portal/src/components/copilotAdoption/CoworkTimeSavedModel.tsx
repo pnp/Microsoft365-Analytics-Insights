@@ -13,6 +13,7 @@ import {
   type TimeSavedAssumptionState,
 } from './coworkTimeSaved';
 import { COWORK_ACTIVITY_SHARE_WHY, COWORK_OVERVIEW_URL, COWORK_TASK_RATIONALE } from './coworkTimeSavedEvidence';
+import { resolveTimeSavedCohort, type TimeSavedCohort } from './timeSavedCohort';
 import {
   AssumptionBadge,
   AssumptionInput,
@@ -56,16 +57,22 @@ const COWORK_MINUTES_KEYS: readonly TimeSavedAssumptionKey[] = [
  * licence, on top of what that licence gives back. The only thing it can be checked against is the
  * tenant's own Cowork users, and the shares card does that; the Copilot evidence and its sense check
  * sit with the licence estimate, on the Licence opportunities tab.
+ *
+ * It shows its working for the cohort the headline models - the people ready now, or every Copilot
+ * seat holder - and follows the headline when the reader switches it.
  */
 export default function CoworkTimeSavedModel({
   summary,
   options,
   timeSaved,
+  cohort,
   focusRequest = 0,
 }: {
   summary: CopilotAdoptionSummary;
   options: CopilotAdoptionOptions;
   timeSaved: TimeSavedAssumptionState;
+  /** The reader's choice of who the headline models - see useTimeSavedCohorts. */
+  cohort: TimeSavedCohort;
   /**
    * Incremented by the headline's "Adjust the assumptions" button. Each new value scrolls the
    * calculator into view, focuses its first figure and briefly rings it.
@@ -79,8 +86,17 @@ export default function CoworkTimeSavedModel({
 
   const ready = projectCoworkTimeSaved(summary.coworkValueEstimate, assumptions, options);
   const full = projectCoworkTimeSaved(summary.coworkFullRolloutEstimate, assumptions, options);
-  // The people ready now first, as on the headline: that is the spending-policy decision.
-  const [scenario, setScenario] = useState<Scenario>(ready ? 'ready' : 'full');
+  // The cohort the headline models - the people ready now unless the reader chose every seat holder,
+  // or nobody is ready.
+  const shown: Scenario = resolveTimeSavedCohort(cohort, ready, full)?.cohort === 'all' ? 'full' : 'ready';
+  const [scenario, setScenario] = useState<Scenario>(shown);
+  // Follows the headline: when the reader switches who it models, the working switches with it. Set
+  // during render rather than in an effect, so the table never shows one frame of the old cohort.
+  const [followed, setFollowed] = useState<Scenario>(shown);
+  if (followed !== shown) {
+    setFollowed(shown);
+    setScenario(shown);
+  }
   const { ref: calculatorRef, highlighted } = useCalculatorFocus(focusRequest);
 
   const projection = (scenario === 'ready' ? ready : full) ?? ready ?? full;

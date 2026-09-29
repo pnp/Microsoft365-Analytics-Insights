@@ -7,9 +7,11 @@ import {
   formatModelled,
   modelledRange,
   projectLicenceTimeSaved,
+  type LicenceProjection,
   type TimeSavedAssumptionKey,
   type TimeSavedAssumptionState,
 } from './coworkTimeSaved';
+import { resolveTimeSavedCohort, type TimeSavedCohort } from './timeSavedCohort';
 import {
   ACTIVITY_RATIONALE,
   CONSERVATIVE_EVIDENCE,
@@ -37,7 +39,7 @@ import {
   useModelStyles,
 } from './timeSavedShared';
 
-type Scenario = 'recommended' | 'chatUsers';
+type Scenario = 'recommended' | 'chatUsers' | 'all';
 
 function senseCheckKey(verdict: SenseCheckVerdict): TranslationKey {
   switch (verdict) {
@@ -60,16 +62,23 @@ function senseCheckKey(verdict: SenseCheckVerdict): TranslationKey {
  * the result is compared with published per-person figures. The studies measured Microsoft 365
  * Copilot in the hands of newly licensed people - the largest randomised who received a licence - so
  * they are the right yardstick for exactly this estimate.
+ *
+ * It shows its working for the cohort the headline models - the people recommended, or every licence
+ * candidate - and follows the headline when the reader switches it. The candidates already using
+ * Copilot Chat can be opened here too.
  */
 export default function LicenceTimeSavedModel({
   summary,
   options,
   timeSaved,
+  cohort,
   focusRequest = 0,
 }: {
   summary: CopilotAdoptionSummary;
   options: CopilotAdoptionOptions;
   timeSaved: TimeSavedAssumptionState;
+  /** The reader's choice of who the headline models - see useTimeSavedCohorts. */
+  cohort: TimeSavedCohort;
   /** Incremented by the headline's "Adjust the assumptions" button - see useCalculatorFocus. */
   focusRequest?: number;
 }) {
@@ -79,20 +88,77 @@ export default function LicenceTimeSavedModel({
 
   const recommended = projectLicenceTimeSaved(summary.licenceOpportunityEstimate, assumptions, options);
   const chatUsers = projectLicenceTimeSaved(summary.licenceChatUsersEstimate, assumptions, options);
-  const [scenario, setScenario] = useState<Scenario>('recommended');
+  const all = projectLicenceTimeSaved(summary.licenceAllCandidatesEstimate, assumptions, options);
+  const resolved = resolveTimeSavedCohort(cohort, recommended, all);
+  const shown: Scenario = resolved?.cohort ?? 'recommended';
+
+  const [scenario, setScenario] = useState<Scenario>(shown);
+  // Follows the headline: when the reader switches who it models, the working switches with it. Set
+  // during render rather than in an effect, so the table never shows one frame of the old cohort.
+  const [followed, setFollowed] = useState<Scenario>(shown);
+  if (followed !== shown) {
+    setFollowed(shown);
+    setScenario(shown);
+  }
   const { ref: calculatorRef, highlighted } = useCalculatorFocus(focusRequest);
 
-  if (!recommended) return null;
-  const projection = (scenario === 'chatUsers' ? chatUsers : recommended) ?? recommended;
+  if (!resolved) return null;
+  // The headline's cohort - the one the sense check describes, whichever the table is showing.
+  const headline = resolved.projection;
+  const byScenario: Record<Scenario, LicenceProjection | null> = { recommended, chatUsers, all };
+  const current: Scenario = byScenario[scenario] ? scenario : shown;
+  const projection = byScenario[current] ?? headline;
+  const everyoneShown = current === 'all';
 
   const conservativePercent = formatNumber(assumptions.conservativeRatio * 100, { maximumFractionDigits: 1 });
   const maxCandidates = formatNumber(options.maxOpportunityCandidates);
   const range = benchmarkRange();
-  // Published figures are averages across the people each study licensed, so the average recommended
-  // candidate is the like-for-like comparison, at the conservative end.
-  const verdict = senseCheck(recommended.minutesPerPersonDayLow);
-  const benchmarkScale = Math.max(range.max, recommended.minutesPerPersonDayHigh) * 1.1;
+  // Published figures are averages across the people each study licensed, so the average person the
+  // headline models is the like-for-like comparison, at the conservative end.
+  const verdict = senseCheck(headline.minutesPerPersonDayLow);
+  const benchmarkScale = Math.max(range.max, headline.minutesPerPersonDayHigh) * 1.1;
   const commit = (field: TimeSavedAssumptionKey, value: number) => setAssumption(field, value);
+
+  const scenarios: Array<{ value: Scenario; label: string }> = [];
+  if (recommended) {
+    scenarios.push({
+      value: 'recommended',
+      label: t(
+        plural(
+          recommended.cohortUsers,
+          'copilotAdoptionTimeSaved.licence.model.scenario.recommended.one',
+          'copilotAdoptionTimeSaved.licence.model.scenario.recommended.other',
+        ),
+        { users: formatCount(recommended.cohortUsers) },
+      ),
+    });
+  }
+  if (chatUsers) {
+    scenarios.push({
+      value: 'chatUsers',
+      label: t(
+        plural(
+          chatUsers.cohortUsers,
+          'copilotAdoptionTimeSaved.licence.model.scenario.chatUsers.one',
+          'copilotAdoptionTimeSaved.licence.model.scenario.chatUsers.other',
+        ),
+        { users: formatCount(chatUsers.cohortUsers) },
+      ),
+    });
+  }
+  if (all) {
+    scenarios.push({
+      value: 'all',
+      label: t(
+        plural(
+          all.cohortUsers,
+          'copilotAdoptionTimeSaved.licence.model.scenario.all.one',
+          'copilotAdoptionTimeSaved.licence.model.scenario.all.other',
+        ),
+        { users: formatCount(all.cohortUsers) },
+      ),
+    });
+  }
 
   return (
     <div className={styles.stack}>
@@ -103,39 +169,10 @@ export default function LicenceTimeSavedModel({
             {t('copilotAdoptionTimeSaved.licence.model.title')}
           </Text>
           <Text size={200} className={styles.note}>
-            {t('copilotAdoptionTimeSaved.licence.model.intro')}
+            {t(everyoneShown ? 'copilotAdoptionTimeSaved.licence.model.introAll' : 'copilotAdoptionTimeSaved.licence.model.intro')}
           </Text>
 
-          {chatUsers && (
-            <ScenarioPicker<Scenario>
-              value={scenario}
-              onChange={setScenario}
-              options={[
-                {
-                  value: 'recommended',
-                  label: t(
-                    plural(
-                      recommended.cohortUsers,
-                      'copilotAdoptionTimeSaved.licence.model.scenario.recommended.one',
-                      'copilotAdoptionTimeSaved.licence.model.scenario.recommended.other',
-                    ),
-                    { users: formatCount(recommended.cohortUsers) },
-                  ),
-                },
-                {
-                  value: 'chatUsers',
-                  label: t(
-                    plural(
-                      chatUsers.cohortUsers,
-                      'copilotAdoptionTimeSaved.licence.model.scenario.chatUsers.one',
-                      'copilotAdoptionTimeSaved.licence.model.scenario.chatUsers.other',
-                    ),
-                    { users: formatCount(chatUsers.cohortUsers) },
-                  ),
-                },
-              ]}
-            />
-          )}
+          {scenarios.length > 1 && <ScenarioPicker<Scenario> value={current} onChange={setScenario} options={scenarios} />}
 
           <div className={styles.tableWrap}>
             <table className={styles.table}>
@@ -324,25 +361,37 @@ export default function LicenceTimeSavedModel({
             {t('copilotAdoptionTimeSaved.senseCheck.title')}
           </Text>
           <Text size={200}>
-            {t('copilotAdoptionTimeSaved.senseCheck.intro', {
-              range: modelledRange(
-                t,
-                formatModelled(recommended.minutesPerPersonDayLow),
-                formatModelled(recommended.minutesPerPersonDayHigh),
-              ),
-            })}
+            {resolved.cohort === 'all'
+              ? t('copilotAdoptionTimeSaved.senseCheck.introAll', {
+                  range: modelledRange(
+                    t,
+                    formatModelled(headline.minutesPerPersonDayLow),
+                    formatModelled(headline.minutesPerPersonDayHigh),
+                  ),
+                })
+              : t('copilotAdoptionTimeSaved.senseCheck.intro', {
+                  range: modelledRange(
+                    t,
+                    formatModelled(headline.minutesPerPersonDayLow),
+                    formatModelled(headline.minutesPerPersonDayHigh),
+                  ),
+                })}
           </Text>
 
           <div role="list" aria-label={t('copilotAdoptionTimeSaved.senseCheck.title')}>
             <div role="listitem" className={mergeClasses(styles.benchmarkRow, styles.modelRow)}>
               <Text size={200} weight="semibold">
-                {t('copilotAdoptionTimeSaved.senseCheck.yourModelAverage')}
+                {t(
+                  resolved.cohort === 'all'
+                    ? 'copilotAdoptionTimeSaved.senseCheck.yourModelAverageAll'
+                    : 'copilotAdoptionTimeSaved.senseCheck.yourModelAverage',
+                )}
               </Text>
               <div className={styles.benchmarkBarTrack} aria-hidden="true">
                 <div
                   className={styles.benchmarkBar}
                   style={{
-                    width: `${Math.min(100, (recommended.minutesPerPersonDayHigh / benchmarkScale) * 100)}%`,
+                    width: `${Math.min(100, (headline.minutesPerPersonDayHigh / benchmarkScale) * 100)}%`,
                     backgroundColor: tokens.colorBrandBackground,
                     opacity: 0.35,
                   }}
@@ -350,7 +399,7 @@ export default function LicenceTimeSavedModel({
                 <div
                   className={styles.benchmarkBar}
                   style={{
-                    width: `${Math.min(100, (recommended.minutesPerPersonDayLow / benchmarkScale) * 100)}%`,
+                    width: `${Math.min(100, (headline.minutesPerPersonDayLow / benchmarkScale) * 100)}%`,
                     backgroundColor: tokens.colorBrandBackground,
                   }}
                 />
@@ -359,8 +408,8 @@ export default function LicenceTimeSavedModel({
                 {t('copilotAdoptionTimeSaved.senseCheck.minutesRange', {
                   range: modelledRange(
                     t,
-                    formatModelled(recommended.minutesPerPersonDayLow),
-                    formatModelled(recommended.minutesPerPersonDayHigh),
+                    formatModelled(headline.minutesPerPersonDayLow),
+                    formatModelled(headline.minutesPerPersonDayHigh),
                   ),
                 })}
               </Text>
@@ -429,17 +478,29 @@ export default function LicenceTimeSavedModel({
             </li>
             <li key="licence-assumption-volumes">
               <Text size={200}>
-                {t(
-                  plural(
-                    projection.cohortUsers,
-                    'copilotAdoptionTimeSaved.licence.assumption.volumes.one',
-                    'copilotAdoptionTimeSaved.licence.assumption.volumes.other',
-                  ),
-                  {
-                    users: formatNumber(projection.cohortUsers),
-                    workingDays: formatNumber(projection.workingDaysPerMonth, { maximumFractionDigits: 15 }),
-                  },
-                )}
+                {everyoneShown
+                  ? t(
+                      plural(
+                        projection.cohortUsers,
+                        'copilotAdoptionTimeSaved.licence.assumption.volumesAll.one',
+                        'copilotAdoptionTimeSaved.licence.assumption.volumesAll.other',
+                      ),
+                      {
+                        users: formatNumber(projection.cohortUsers),
+                        workingDays: formatNumber(projection.workingDaysPerMonth, { maximumFractionDigits: 15 }),
+                      },
+                    )
+                  : t(
+                      plural(
+                        projection.cohortUsers,
+                        'copilotAdoptionTimeSaved.licence.assumption.volumes.one',
+                        'copilotAdoptionTimeSaved.licence.assumption.volumes.other',
+                      ),
+                      {
+                        users: formatNumber(projection.cohortUsers),
+                        workingDays: formatNumber(projection.workingDaysPerMonth, { maximumFractionDigits: 15 }),
+                      },
+                    )}
               </Text>
             </li>
             <li key="licence-assumption-chatUsers">

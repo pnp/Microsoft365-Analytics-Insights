@@ -313,6 +313,55 @@ namespace Tests.UnitTests
             Assert.AreEqual(2, analysis.Summary.RecommendedForLicence, "The candidates are still recommended.");
             Assert.AreEqual(0, analysis.Summary.LicenceOpportunityEstimate.CohortUsers);
             Assert.AreEqual(0, analysis.Summary.LicenceChatUsersEstimate.CohortUsers);
+            Assert.AreEqual(0, analysis.Summary.LicenceAllCandidatesEstimate.CohortUsers,
+                "Every candidate is just as unmodellable without the volumes as the recommended ones.");
+        }
+
+        /// <summary>
+        /// The portal's "all candidates" option: every candidate the list ranked, recommended or not, so a
+        /// reader can size a purchase for everyone without a licence who used Microsoft 365 or Copilot Chat -
+        /// with the recommended cohort, the default, as a part of it that can never model more time than
+        /// the whole.
+        /// </summary>
+        [TestMethod]
+        public void Summary_ModelsEveryCandidate_RecommendedOrNot_ForTheAllCandidatesOption()
+        {
+            var analysis = AnalysisWith(ProvenDemand(), WorkloadInferred(), NotRecommended());
+
+            new CopilotAdoptionService().FinaliseSummary(analysis);
+            var summary = analysis.Summary;
+
+            Assert.AreEqual(2, summary.LicenceOpportunityEstimate.CohortUsers, "Recommended stays the recommended people.");
+            Assert.AreEqual(3, summary.LicenceAllCandidatesEstimate.CohortUsers, "Every candidate, recommended or not.");
+            Assert.IsTrue(summary.LicenceAllCandidatesEstimate.HoursPerMonthHigh > summary.LicenceOpportunityEstimate.HoursPerMonthHigh,
+                "The candidate the list does not recommend still has work a licence could save time on.");
+            Assert.IsTrue(summary.LicenceAllCandidatesEstimate.IsModelled);
+
+            // Built exactly as the recommended estimate is, from the same rows: the arithmetic is shared.
+            var expected = CopilotAdoptionScoring.EstimateLicenceValue(
+                analysis.Opportunities, Options(), candidatesCapped: false, cohort: LicenceEstimateCohort.AllCandidates);
+            Assert.AreEqual(expected.HoursPerMonthHigh, summary.LicenceAllCandidatesEstimate.HoursPerMonthHigh);
+            Assert.AreEqual(expected.HoursPerMonthLow, summary.LicenceAllCandidatesEstimate.HoursPerMonthLow);
+            Assert.AreEqual(expected.AddressableMeetings, summary.LicenceAllCandidatesEstimate.AddressableMeetings);
+        }
+
+        /// <summary>
+        /// The customer this option exists for: nobody uses Microsoft 365 heavily enough to be recommended,
+        /// so the recommended estimate is rightly empty - and used to leave nothing to size a purchase with.
+        /// </summary>
+        [TestMethod]
+        public void Summary_StillModelsEveryCandidate_WhenNobodyIsRecommended()
+        {
+            var analysis = AnalysisWith(NotRecommended("quiet.one@contoso.com"), NotRecommended("quiet.two@contoso.com"));
+
+            new CopilotAdoptionService().FinaliseSummary(analysis);
+            var summary = analysis.Summary;
+
+            Assert.AreEqual(0, summary.RecommendedForLicence);
+            Assert.AreEqual(0, summary.LicenceOpportunityEstimate.CohortUsers, "An empty cohort, not a modelled zero.");
+            Assert.AreEqual(2, summary.LicenceAllCandidatesEstimate.CohortUsers);
+            Assert.IsTrue(summary.LicenceAllCandidatesEstimate.HoursPerMonthHigh > 0,
+                "Light users still attend meetings, read email and open documents.");
         }
 
         [TestMethod]
@@ -321,12 +370,15 @@ namespace Tests.UnitTests
             var analysis = AnalysisWith(
                 ProvenDemand("proven@contoso.com"),
                 WorkloadInferred("busy@fabrikam.com"),
-                WorkloadInferred("heavy@fabrikam.com", chatInteractions: 4));
+                WorkloadInferred("heavy@fabrikam.com", chatInteractions: 4),
+                NotRecommended("quiet@fabrikam.com"));
             analysis.OpportunitiesCapped = true;
 
             var service = new CopilotAdoptionService();
             service.FinaliseSummary(analysis);
             Assert.IsTrue(analysis.Summary.LicenceOpportunityEstimate.CandidatesCapped);
+            Assert.IsTrue(analysis.Summary.LicenceAllCandidatesEstimate.CandidatesCapped,
+                "Every candidate is the cohort the cap cuts first: its figure is a floor too.");
 
             // The cap was applied to the tenant-wide ranking, so a narrowed view is just as likely to be
             // missing candidates - even though it holds far fewer rows than the cap.
@@ -336,9 +388,36 @@ namespace Tests.UnitTests
             Assert.AreEqual(2, scoped.Summary.LicenceOpportunityEstimate.CohortUsers,
                 "A domain-scoped report must model that domain's candidates only.");
             Assert.AreEqual(1, scoped.Summary.LicenceChatUsersEstimate.CohortUsers);
+            Assert.AreEqual(3, scoped.Summary.LicenceAllCandidatesEstimate.CohortUsers,
+                "Every candidate in the domain, recommended or not - and nobody from another one.");
             Assert.IsTrue(scoped.Summary.LicenceOpportunityEstimate.CandidatesCapped);
+            Assert.IsTrue(scoped.Summary.LicenceAllCandidatesEstimate.CandidatesCapped);
             Assert.AreEqual(3, analysis.Summary.LicenceOpportunityEstimate.CohortUsers,
                 "Scoping must never write into the cached tenant-wide analysis.");
+            Assert.AreEqual(4, analysis.Summary.LicenceAllCandidatesEstimate.CohortUsers,
+                "Scoping must never write into the cached tenant-wide analysis.");
+        }
+
+        /// <summary>
+        /// The arithmetic is the same for every cohort; only who the assumptions say the volumes belong to
+        /// differs. Calling every candidate "recommended" would misdescribe the people the hours are for.
+        /// </summary>
+        [TestMethod]
+        public void Estimate_NamesItsCohortInTheAssumptions()
+        {
+            var recommended = CopilotAdoptionScoring.ModelLicenceValue(10, 1234, 5678, 910, Options());
+            var all = CopilotAdoptionScoring.ModelLicenceValue(
+                10, 1234, 5678, 910, Options(), cohort: LicenceEstimateCohort.AllCandidates);
+
+            Assert.AreEqual(recommended.HoursPerMonthHigh, all.HoursPerMonthHigh, "The cohort never changes the arithmetic.");
+            Assert.AreEqual(recommended.HoursPerMonthLow, all.HoursPerMonthLow);
+            Assert.AreEqual(recommended.Assumptions.Count, all.Assumptions.Count);
+
+            Assert.IsTrue(recommended.Assumptions.Any(a => a.Contains("for 10 recommended licence candidates,")));
+            Assert.IsTrue(all.Assumptions.Any(a => a.Contains(
+                "for 10 licence candidates - everyone without a licence who used Microsoft 365 or Copilot Chat in the period, recommended or not -")));
+            Assert.IsFalse(all.Assumptions.Any(a => a.Contains("recommended licence candidate")),
+                "Every candidate must not be described as recommended.");
         }
 
         #endregion
@@ -364,12 +443,14 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
-        public void Summary_SerialisesBothLicenceEstimates()
+        public void Summary_SerialisesEveryLicenceEstimate()
         {
             var json = JObject.Parse(Newtonsoft.Json.JsonConvert.SerializeObject(new CopilotAdoptionSummary()));
 
             Assert.IsNotNull(json.Property("licenceOpportunityEstimate"));
             Assert.IsNotNull(json.Property("licenceChatUsersEstimate"));
+            Assert.IsNotNull(json.Property("licenceAllCandidatesEstimate"),
+                "The portal reads licenceAllCandidatesEstimate; any other name renders the all-candidates option blank.");
         }
 
         #endregion

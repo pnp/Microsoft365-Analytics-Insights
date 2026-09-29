@@ -615,6 +615,8 @@ const TIME_SAVED_ASSUMPTION_SPECS: TimeSavedAssumptionSpec[] = [
     requiredFacts: {
       saves: ['assumptions.meetingMinutes', 'assumptions.emailMinutes', 'assumptions.documentMinutes'],
       volumes: ['projection.cohortUsers', 'projection.workingDaysPerMonth'],
+      // The same sentence for every licence candidate, recommended or not - the "all candidates" cohort.
+      volumesAll: ['projection.cohortUsers', 'projection.workingDaysPerMonth'],
       chatUsers: [],
       // The cap the list reached - rendered only when it did.
       capped: ['maxCandidates'],
