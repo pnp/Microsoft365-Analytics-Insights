@@ -1,5 +1,6 @@
 using Common.Entities.UserOrgs;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using WebJob.Office365ActivityImporter.Engine.Graph;
@@ -192,6 +193,29 @@ namespace Tests.UnitTests
             var recreated = GraphUserOrgSelection.FromTypes(new[] { EntraType(2, "extensionAttribute1") });
 
             Assert.AreNotEqual(original.DeltaKeyQualifier, recreated.DeltaKeyQualifier);
+        }
+
+        [TestMethod]
+        public void ARebuiltDatabaseDoesNotReuseTheOldDatabasesToken()
+        {
+            // Recreate the tables - or the database - and the first type is id 1 at generation 1 again,
+            // with the same attribute, while Redis still holds the old database's token for exactly that.
+            // Graph would answer it with only the users changed since, and everyone else would never be
+            // assigned. The creation time is what tells the two incarnations apart.
+            var old = EntraType(1, "extensionAttribute1");
+            old.CreatedUtc = new DateTime(2026, 1, 1, 9, 0, 0, DateTimeKind.Utc);
+            var rebuilt = EntraType(1, "extensionAttribute1");
+            rebuilt.CreatedUtc = new DateTime(2026, 3, 1, 9, 0, 0, DateTimeKind.Utc);
+            var sameAgain = EntraType(1, "extensionAttribute1");
+            sameAgain.CreatedUtc = old.CreatedUtc;
+
+            Assert.AreNotEqual(
+                GraphUserOrgSelection.FromTypes(new[] { old }).DeltaKeyQualifier,
+                GraphUserOrgSelection.FromTypes(new[] { rebuilt }).DeltaKeyQualifier);
+            Assert.AreEqual(
+                GraphUserOrgSelection.FromTypes(new[] { old }).DeltaKeyQualifier,
+                GraphUserOrgSelection.FromTypes(new[] { sameAgain }).DeltaKeyQualifier,
+                "The same type read again keeps its token.");
         }
 
         [TestMethod]

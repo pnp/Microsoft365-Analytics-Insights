@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Button,
   Combobox,
@@ -93,21 +93,28 @@ export default function OrgTypeDialog({ open, editing, onDismiss, onSave }: OrgT
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
 
-  // The attribute that was last proved to work. Saving is gated on this matching what is in the box,
+  // The attribute that was last proved to work, and the test that proved it - no test for the saved
+  // attribute, which was proved when it was saved. Saving is gated on this matching what is in the box,
   // so editing the attribute after a successful test re-arms the requirement.
-  const [provenAttribute, setProvenAttribute] = useState<string | null>(null);
+  const [proof, setProof] = useState<{ attribute: string; result: UserOrgTestResult | null } | null>(null);
+
+  // Moves on every test, and every time the dialog opens, closes or turns to another type: a test answered
+  // after that belongs to a dialog that is no longer there, and must not prove anything in this one.
+  const testRun = useRef(0);
 
   useEffect(() => {
+    testRun.current++;
     if (!open) return;
     setName(editing?.name ?? '');
     setSource(editing?.source ?? 'entra');
     setAttribute(editing?.entraAttributeName ?? '');
     setIsEnabled(editing?.isEnabled ?? true);
+    setTesting(false);
     setTestResult(null);
     setSaveError(null);
     // An attribute that is already saved was proved when it was saved, so editing an unchanged type
     // does not force the admin to re-test it.
-    setProvenAttribute(editing?.entraAttributeName ?? null);
+    setProof(editing?.entraAttributeName ? { attribute: editing.entraAttributeName, result: null } : null);
   }, [open, editing]);
 
   useEffect(() => {
@@ -141,8 +148,6 @@ export default function OrgTypeDialog({ open, editing, onDismiss, onSave }: OrgT
   // the only fix that keeps the values - so demanding a successful test first would leave them with
   // no non-destructive option at all.
   const needsProof = source === 'entra' && isEnabled;
-  const attributeProven =
-    !needsProof || (provenAttribute !== null && attributeKey(provenAttribute) === attributeKey(attribute));
 
   // Whether saving throws away the values the type holds now: a change of source or attribute - by the
   // server's measure of "the same attribute", or the warning below cries wolf over a change of case.
@@ -158,22 +163,30 @@ export default function OrgTypeDialog({ open, editing, onDismiss, onSave }: OrgT
   const unprovenForDiscard = (result: UserOrgTestResult | null) =>
     !!result && result.succeeded && result.hasNoValue && result.nameUnverified === true && wouldDiscard;
 
+  // Judged against what saving would do now, not when the test ran.
+  const attributeProven =
+    !needsProof ||
+    (proof !== null && attributeKey(proof.attribute) === attributeKey(attribute) && !unprovenForDiscard(proof.result));
+
   const canSave =
     name.trim().length > 0 &&
     (source !== 'entra' || attribute.trim().length > 0) &&
     attributeProven;
 
   const runTest = async () => {
+    const run = ++testRun.current;
     setTesting(true);
     setTestResult(null);
     try {
       const result = await testEntraAttribute(attribute, testUpn);
+      if (run !== testRun.current) return;
       setTestResult(result);
       // A user who simply has no value still proves the attribute is readable, which is what saving
       // is gated on - the attribute existing, not this particular person having a value for it. Except
       // where Graph never checked the name and the save would discard values: see unprovenForDiscard.
-      setProvenAttribute(result.succeeded && !unprovenForDiscard(result) ? attribute : null);
+      setProof(result.succeeded ? { attribute, result } : null);
     } catch (e) {
+      if (run !== testRun.current) return;
       setTestResult({
         succeeded: false,
         upn: testUpn,
@@ -185,9 +198,9 @@ export default function OrgTypeDialog({ open, editing, onDismiss, onSave }: OrgT
         hasNoValue: false,
         message: userOrgErrorMessage(e, t, 'errors.userOrgs.testFailed'),
       });
-      setProvenAttribute(null);
+      setProof(null);
     } finally {
-      setTesting(false);
+      if (run === testRun.current) setTesting(false);
     }
   };
 

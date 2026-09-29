@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { screen, waitFor, fireEvent } from '@testing-library/react';
+import { act, screen, waitFor, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { renderWithProvider } from '../../test/renderWithProvider';
 import OrgTypeDialog from './OrgTypeDialog';
@@ -205,6 +205,42 @@ describe('OrgTypeDialog', () => {
     await waitFor(() => expect(screen.getByRole('button', { name: 'Save' })).toBeEnabled());
     expect(screen.getByText(/does not check the property name after the dot/)).toBeInTheDocument();
     expect(screen.queryByText(/can only be saved once a test finds a value/)).not.toBeInTheDocument();
+  });
+
+  it('ignores a test answered after the dialog has moved on to another type', async () => {
+    // A slow test started while creating a type must not prove the same attribute for the next type
+    // opened: the first had nothing to discard, the second has ten values, and a schema-extension test
+    // that found no value is not enough to throw them away.
+    let answer: (result: UserOrgTestResult) => void = () => {};
+    testEntraAttribute.mockReturnValue(new Promise<UserOrgTestResult>((resolve) => { answer = resolve; }));
+    const view = renderWithProvider(<OrgTypeDialog open editing={null} onDismiss={vi.fn()} onSave={vi.fn()} />);
+
+    await typeInto(/^Name/, 'Cost Centre');
+    typeAttribute('contoso_costs.costCentre');
+    await typeInto(/Test it against a user/, 'someone@contoso.com');
+    await userEvent.click(screen.getByRole('button', { name: 'Test' }));
+
+    view.rerender(<OrgTypeDialog open={false} editing={null} onDismiss={vi.fn()} onSave={vi.fn()} />);
+    view.rerender(<OrgTypeDialog open editing={saved} onDismiss={vi.fn()} onSave={vi.fn()} />);
+    typeAttribute('contoso_costs.costCentre');
+    await act(async () => {
+      answer(
+        testResult({
+          attributeName: 'contoso_costs.costCentre',
+          graphProperty: 'contoso_costs',
+          rawValue: null,
+          normalisedValue: null,
+          hasNoValue: true,
+          nameUnverified: true,
+          messageCode: 'noValueUnverified',
+          messageValues: { container: 'contoso_costs' },
+        }),
+      );
+    });
+
+    expect(screen.queryByText(/does not check the property name after the dot/)).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Test' })).toBeEnabled();
   });
 
   it('keeps saving disabled when the attribute cannot be read, and explains why', async () => {

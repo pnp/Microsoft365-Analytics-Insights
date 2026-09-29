@@ -159,12 +159,20 @@ export default function CsvImportPanel({ orgType, onImportFinished }: CsvImportP
   const noMatchingRows = preview !== null && preview.totalRows > 0 && matchedRows === 0;
   const clearCountForMode = preview ? (mode === 'replace' ? preview.wouldClearCount : preview.mergeWouldClearCount) : 0;
   const needsClearConfirmation = clearCountForMode > 0;
+  // The columns in the choosers are the ones the preview was read with. Two equal columns are refused
+  // before the file is read again, so the preview - and its draft - still describe the columns the
+  // admin has just moved away from, and importing it would not import what the choosers show.
+  const columnsMatchPreview =
+    preview === null ||
+    ((columns.userColumn ?? preview.userColumnIndex) === preview.userColumnIndex &&
+      (columns.valueColumn ?? preview.valueColumnIndex) === preview.valueColumnIndex);
   const importDisabled =
     busy ||
     preview === null ||
     preview.blocking !== null ||
     preview.draftId === null ||
     noMatchingRows ||
+    !columnsMatchPreview ||
     (needsClearConfirmation && !confirmedClear);
 
   useEffect(() => {
@@ -309,6 +317,8 @@ export default function CsvImportPanel({ orgType, onImportFinished }: CsvImportP
       return;
     }
     if (next.userColumn === next.valueColumn) {
+      // The confirmation was given for the preview on screen, which these columns no longer match.
+      setConfirmedClear(false);
       setError(t('userOrgs.csv.apiError.invalidColumns'));
       return;
     }

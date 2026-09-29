@@ -113,7 +113,10 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         /// case. Repointing a type from one attribute to another and back, or deleting and recreating
         /// it, both return to a key that already holds a token; Graph would answer it with only the
         /// users changed since, leaving everybody else permanently unassigned in a type that had just
-        /// been emptied. Including each type's id and source generation makes those keys distinct.
+        /// been emptied. Including each type's id and source generation makes those keys distinct - and
+        /// its creation time, because the id and generation start again from 1 when the tables are
+        /// recreated, while the token cache (Redis) can outlive the database: the first type of a rebuilt
+        /// database would otherwise land on the previous database's first type's token.
         /// </remarks>
         public static GraphUserOrgSelection FromTypes(IEnumerable<UserOrgType> types)
         {
@@ -131,7 +134,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             var qualifierInputs = materialised
                 .Select(t => t.Id.ToString(CultureInfo.InvariantCulture)
                     + ":" + (t.EntraAttributeName ?? string.Empty)
-                    + ":" + t.SourceGeneration.ToString(CultureInfo.InvariantCulture))
+                    + ":" + t.SourceGeneration.ToString(CultureInfo.InvariantCulture)
+                    + ":" + t.CreatedUtc.Ticks.ToString(CultureInfo.InvariantCulture))
                 .OrderBy(s => s, StringComparer.Ordinal)
                 .ToList();
 

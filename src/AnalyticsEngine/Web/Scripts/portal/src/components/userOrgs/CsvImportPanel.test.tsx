@@ -329,6 +329,34 @@ describe('CsvImportPanel', () => {
     expect(previewCsv).toHaveBeenLastCalledWith(1, expect.any(File), { userColumn: 0, valueColumn: 2 });
   });
 
+  it('will not import the previous preview while the chosen columns clash', async () => {
+    // Two equal columns are refused before the file is read again, so the preview - and its draft -
+    // still describe the columns the admin has just moved away from. Importing then would import
+    // something other than what the column choosers show.
+    previewCsv
+      .mockResolvedValueOnce(
+        preview({ columns: ['UserPrincipalName', 'Centre', 'Region'], columnCount: 3, userColumnIndex: 0, valueColumnIndex: 1 }),
+      )
+      .mockResolvedValueOnce(
+        preview({ columns: ['UserPrincipalName', 'Centre', 'Region'], columnCount: 3, userColumnIndex: 0, valueColumnIndex: 2, draftId: 43 }),
+      );
+    renderWithProvider(<CsvImportPanel orgType={orgType()} onImportFinished={vi.fn()} />);
+    await chooseFile();
+    await screen.findByText('alex.wilber@contoso.com');
+    expect(screen.getByRole('button', { name: /^Import/ })).toBeEnabled();
+
+    await userEvent.selectOptions(screen.getByLabelText('Value column'), '0');
+
+    expect(await screen.findByText(/Choose two different columns/i)).toBeInTheDocument();
+    expect(previewCsv).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole('button', { name: /^Import/ })).toBeDisabled();
+
+    await userEvent.selectOptions(screen.getByLabelText('Value column'), '2');
+
+    await waitFor(() => expect(previewCsv).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(screen.getByRole('button', { name: /^Import/ })).toBeEnabled());
+  });
+
   it('asks for two different columns without re-reading the file', async () => {
     previewCsv.mockResolvedValueOnce(
       preview({
