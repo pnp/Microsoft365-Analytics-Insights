@@ -77,10 +77,12 @@
     Acquire and normalise the packages but do not deploy anything.
 
 .PARAMETER DiagnoseOnly
-    Do not download or deploy anything; just run the reachability/DNS/HTTP diagnostic
-    (see -VerifySiteReachable) against the App and SCM hostnames and exit. Needs no
+    Do not download or deploy anything; just run the connectivity diagnostic (see
+    -VerifySiteReachable) against the App and SCM hostnames and exit. Needs no
     credentials - only -WebAppName (and optionally -ScmHostName or -PublishProfilePath
-    to pin the SCM host). Handy for triaging a 403 from a VM on the VNet.
+    to pin the SCM host). Run it on the machine that will deploy to find out why the SCM
+    endpoint cannot be reached (name resolution / HOSTS, proxy, or no network path to a
+    private endpoint), or why it returns 403.
 
 .PARAMETER RunDbUpgrade
     After deploying content, run the database schema upgrade (EF migrations + custom SQL
@@ -151,12 +153,22 @@
     Maximum attempts for transient (5xx / 408 / 429 / network) failures. Default 5.
 
 .PARAMETER VerifySiteReachable
-    After deploying, resolve DNS and test TCP 443 for the App (main) and SCM hostnames,
-    classify each resolved IP as private/public, and do a best-effort HTTP GET of the App
-    site to report the status it returns. Useful on private-networking setups: a PUBLIC
-    resolve with public access disabled explains a 403 (hitting the public interface);
-    a PRIVATE resolve that still returns 403 points at main-site Access Restrictions or
-    app configuration rather than DNS.
+    After deploying, diagnose how this machine reaches the App (main) and SCM hostnames:
+      * Name resolution through the system resolver - the one the deployment itself uses -
+        so HOSTS-file entries count. On Windows, the DNS server's own answer is shown next
+        to a HOSTS entry that overrides it, and a privatelink CNAME is reported.
+      * The system proxy, if any. A proxy resolves the name itself, so HOSTS entries and
+        private DNS on this machine do not apply to proxied requests.
+      * TCP 443 to each address, classed as open / refused / timed out / unreachable, with
+        what that means for a private or public address. For example, a PRIVATE address that
+        times out means there is no network path to the private endpoint, which no DNS or
+        HOSTS change can fix; a PUBLIC address that accepts TCP means a 403 is expected when
+        public network access is disabled.
+      * A best-effort HTTP GET of the App site and the status it returns. A PRIVATE address
+        that still returns 403 points at main-site Access Restrictions or app configuration
+        rather than DNS.
+    The same diagnostic runs automatically when the SCM connectivity check fails without an
+    HTTP response.
 
 .EXAMPLE
     # Download latest stable release and deploy everything, auth via portal publish profile.
@@ -175,6 +187,11 @@
     .\Deploy-AppServiceContent.ps1 -WebAppName contoso-analytics -PublishProfilePath .\p.PublishSettings -VerifySiteReachable
 
 .EXAMPLE
+    # Deploy nothing: find out why this machine cannot reach the SCM endpoint (DNS / HOSTS,
+    # proxy, TCP 443 path to the private endpoint). No credentials needed.
+    .\Deploy-AppServiceContent.ps1 -WebAppName contoso-analytics -DiagnoseOnly
+
+.EXAMPLE
     # Deploy everything AND run the DB upgrade in one pass.
     .\Deploy-AppServiceContent.ps1 -WebAppName contoso-analytics -PublishProfilePath .\contoso-analytics.PublishSettings -RunDbUpgrade
 
@@ -185,6 +202,30 @@
 .NOTES
     Requires network access to api.github.com (unless -SourceFolder) and to the
     App Service SCM endpoint (https://<app>.scm.azurewebsites.net).
+
+    Private endpoints and public network access disabled:
+      * The app's private endpoint ('sites' sub-resource) serves both the app and its SCM
+        (Kudu) host name on the same private IP, so this script can deploy through it. With
+        public network access disabled, SCM is closed to the internet as well.
+      * The deploying machine then needs BOTH:
+          1. the SCM host name resolving to the private endpoint IP - through the
+             'privatelink.azurewebsites.net' Private DNS zone, or a HOSTS entry; and
+          2. a network route to that IP (the app's VNet, a peered VNet, or VPN /
+             ExpressRoute) with TCP 443 allowed.
+        A HOSTS entry only provides 1. It also has no effect on requests sent through a
+        proxy, because the proxy resolves the name itself.
+      * On Windows PowerShell 5.1 every failed connection reads 'Unable to connect to the
+        remote server'; the detail after '->' says whether it timed out or was refused, and
+        which IP:port was tried. A steady ~21s per attempt means there is no network path,
+        not a DNS problem.
+      * An HTTP 403 carrying 'x-ms-forbidden-ip' is App Service blocking the request at the
+        network layer (e.g. it arrived on the public endpoint while public network access is
+        disabled), not an authentication failure.
+      * Access restrictions are normally not evaluated for private-endpoint traffic, and FTP
+        is not available through a private endpoint (this script uses HTTPS only).
+      * The installer (AnalyticsInstaller.exe) publishes through the same SCM endpoint and has
+        the same requirements.
+      * https://learn.microsoft.com/azure/app-service/overview-private-endpoint#kuduscm-endpoint
 #>
 [CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'Medium')]
 param(
@@ -282,10 +323,32 @@ function Get-HttpErrorBody {
     return $null
 }
 
+function Get-InnermostException {
+    param([System.Exception] $Exception)
+    $e = $Exception
+    while ($null -ne $e -and $null -ne $e.InnerException) { $e = $e.InnerException }
+    return $e
+}
+
 function Get-ExceptionSummary {
     param($ErrorRecord)
     $status = Get-HttpStatus $ErrorRecord
     $msg = $ErrorRecord.Exception.Message
+    # Windows PowerShell 5.1 reports every failed connection as 'Unable to connect to the remote
+    # server'. The innermost (socket) exception says what really happened - timed out or refused -
+    # and the IP:port that was tried, so append it. PowerShell 7 already folds it into the outer
+    # message, and a bare cancellation ('A task was canceled.') adds nothing, so skip those.
+    $inner = Get-InnermostException $ErrorRecord.Exception
+    if ($null -ne $inner -and -not [object]::ReferenceEquals($inner, $ErrorRecord.Exception) -and
+        $inner -isnot [System.OperationCanceledException]) {
+        $innerMsg = ([string]$inner.Message -replace '\s+', ' ').Trim()
+        if ($innerMsg -and $msg.IndexOf($innerMsg.TrimEnd('.'), [System.StringComparison]::OrdinalIgnoreCase) -lt 0) {
+            $msg = '{0} -> {1}' -f $msg.TrimEnd(), $innerMsg
+        }
+    }
+    # A proxy URL can carry a user name and password before an '@', and .NET quotes the
+    # proxy URL in its errors, so never print the user-info part of a URL.
+    $msg = $msg -replace '(\b[a-z][a-z0-9+.\-]*://)[^/\s@''"]+@', '$1***@'
     if ($null -ne $status) { return ('HTTP {0}: {1}' -f $status, $msg) }
     return $msg
 }
@@ -638,6 +701,32 @@ Could not resolve any App Service credentials. Use one of:
 }
 
 # ----------------------------------------------------------------- Kudu deploy ---
+function Write-ScmNetworkBlockHelp {
+    # SCM answered 403 with x-ms-forbidden-ip: App Service refused the request because of where it
+    # came from (the network), not who sent it (the credentials).
+    param([string] $ScmHost, [string] $ForbiddenIp)
+    $fip = $ForbiddenIp.Trim(' ', '[', ']')
+    Write-WarnMsg "SCM returned HTTP 403 with x-ms-forbidden-ip: $fip - App Service blocked this request at the NETWORK layer."
+    Write-WarnMsg 'This is not an authentication failure: other credentials or an AAD token will get the same 403.'
+    $decoded = Get-EmbeddedIpv4 $fip
+    if ($decoded) {
+        Write-WarnMsg "That IPv6 is private-endpoint traffic from $decoded, so name resolution and routing to the private endpoint work."
+        Write-WarnMsg 'It is blocked by access restrictions (the SCM site''s, or the main site''s if SCM uses them). Allow fc00::/7, e.g.'
+        Write-WarnMsg '  az webapp config access-restriction add -g <rg> -n <app> --scm-site true --action Allow --priority 200 --ip-address fc00::/7'
+    } else {
+        Write-WarnMsg 'App Service does this when a request reaches the app''s PUBLIC endpoint while public network access is disabled,'
+        Write-WarnMsg 'or when access restrictions do not allow the caller. To deploy over the private endpoint this machine needs BOTH:'
+        Write-WarnMsg "  1. '$ScmHost' resolving to the private endpoint IP ('privatelink.azurewebsites.net' Private DNS zone, or a HOSTS entry); and"
+        Write-WarnMsg '  2. a network path to that IP (the app''s VNet, a peered VNet, or VPN/ExpressRoute) with TCP 443 allowed.'
+        Write-WarnMsg '     A HOSTS entry only provides step 1.'
+    }
+    $proxy = Get-SystemProxyUri "https://$ScmHost/"
+    if ($proxy) {
+        Write-WarnMsg "Requests to the SCM host go through proxy $proxy, which resolves the name itself: HOSTS entries on this machine do not apply."
+    }
+    Write-WarnMsg 'Run this script with -DiagnoseOnly for a DNS / proxy / TCP 443 check from this machine.'
+}
+
 function Test-KuduReachable {
     param([string] $ScmHost, [hashtable] $Headers)
     $uri = "https://$ScmHost/api/continuouswebjobs"
@@ -647,11 +736,25 @@ function Test-KuduReachable {
         } | Out-Null
         return $true
     } catch {
-        $status = Get-HttpStatus $_
+        $err = $_
+        $status = Get-HttpStatus $err
+        $forbiddenIp = $null
+        if ($status -eq 403) { $forbiddenIp = Get-HttpErrorHeader $err 'x-ms-forbidden-ip' }
+        if ($forbiddenIp) {
+            Write-ScmNetworkBlockHelp -ScmHost $ScmHost -ForbiddenIp $forbiddenIp
+            throw "SCM endpoint $ScmHost blocked this machine at the network layer (HTTP 403, x-ms-forbidden-ip: $forbiddenIp). This is not an authentication failure - see the warnings above."
+        }
         if ($status -eq 401 -or $status -eq 403) {
             throw "Authentication to $ScmHost failed (HTTP $status). If SCM basic authentication is disabled by policy, use an AAD token (-AccessToken or -ResourceGroup with az/Az)."
         }
-        throw "Cannot reach SCM endpoint $ScmHost ($(Get-ExceptionSummary $_)). Check the app name, network access restrictions / private endpoints, or use a VM on the app's VNet."
+        $summary = Get-ExceptionSummary $err
+        if ($null -eq $status) {
+            # No HTTP response at all (DNS, routing, firewall or proxy): diagnose it before failing.
+            # A failure of the diagnosis itself must never hide the original error.
+            try { Test-SiteReachability -ScmHost $ScmHost } catch { Write-WarnMsg "Connectivity diagnosis failed: $(Get-ExceptionSummary $_)" }
+            throw "Cannot reach SCM endpoint $ScmHost ($summary). See the connectivity diagnosis above."
+        }
+        throw "Cannot reach SCM endpoint $ScmHost ($summary). Check the app name, network access restrictions / private endpoints, or use a VM on the app's VNet."
     }
 }
 
@@ -979,6 +1082,7 @@ function Get-IpClass {
     if ($b[0] -eq 10) { return 'private' }
     if ($b[0] -eq 172 -and $b[1] -ge 16 -and $b[1] -le 31) { return 'private' }
     if ($b[0] -eq 192 -and $b[1] -eq 168) { return 'private' }
+    if ($b[0] -eq 100 -and $b[1] -ge 64 -and $b[1] -le 127) { return 'private' }   # 100.64.0.0/10 shared space, usable in VNets
     if ($b[0] -eq 127) { return 'loopback' }
     if ($b[0] -eq 169 -and $b[1] -eq 254) { return 'link-local' }
     return 'public'
@@ -999,38 +1103,129 @@ function Get-EmbeddedIpv4 {
 }
 
 function Resolve-HostIps {
+    # Ips: the addresses this machine will actually connect to, from the system resolver - the one
+    # Invoke-RestMethod uses - so a HOSTS-file entry counts exactly as it does for the deployment.
+    # Resolve-DnsName -DnsOnly (Windows only) skips the HOSTS file, so it is used only for the CNAME
+    # chain (e.g. privatelink) and to show the DNS server's own answer (DnsIps) next to a HOSTS entry.
     param([string] $HostName)
-    $ips = @(); $cnames = @()
+    $ips = @(); $err = $null
+    try {
+        $ips = @([System.Net.Dns]::GetHostAddresses($HostName) | ForEach-Object { $_.IPAddressToString })
+    } catch {
+        $err = ([string](Get-InnermostException $_.Exception).Message).Trim()
+    }
+    $ips = @($ips | Select-Object -Unique)
+
+    $dnsIps = @(); $cnames = @(); $dnsError = $null; $dnsQueried = $false
     if (Get-Command Resolve-DnsName -ErrorAction SilentlyContinue) {
+        $dnsQueried = $true
         try {
-            $recs = Resolve-DnsName -Name $HostName -Type A -DnsOnly -ErrorAction Stop
-            foreach ($r in $recs) {
+            foreach ($r in @(Resolve-DnsName -Name $HostName -Type A -DnsOnly -ErrorAction Stop)) {
+                if ($r.PSObject.Properties['Section'] -and [string]$r.Section -ne 'Answer') { continue }
                 if ($r.PSObject.Properties['NameHost'] -and $r.NameHost) { $cnames += $r.NameHost }
-                if ($r.PSObject.Properties['IPAddress'] -and $r.IPAddress) { $ips += $r.IPAddress }
+                if ($r.PSObject.Properties['IPAddress'] -and $r.IPAddress) { $dnsIps += $r.IPAddress }
             }
-        } catch { }
+        } catch { $dnsError = $_.Exception.Message }
     }
-    if (-not $ips) {
-        try { $ips = [System.Net.Dns]::GetHostAddresses($HostName) | ForEach-Object { $_.IPAddressToString } } catch { }
-    }
+    $dnsIps = @($dnsIps | Select-Object -Unique)
+
+    # The DNS query asks for A records only, so compare it with the IPv4 addresses. When none of
+    # them is in the DNS server's answer, this machine is not using it: a HOSTS entry (or another
+    # local override) is in effect.
+    $v4 = @($ips | Where-Object { $_ -notmatch ':' })
+    $override = $dnsQueried -and $v4.Count -gt 0 -and @($v4 | Where-Object { $dnsIps -contains $_ }).Count -eq 0
     return [pscustomobject]@{
-        Ips    = @($ips | Select-Object -Unique)
-        CNames = @($cnames | Select-Object -Unique)
+        Ips           = $ips
+        Error         = $err
+        DnsIps        = $dnsIps
+        DnsError      = $dnsError
+        CNames        = @($cnames | Select-Object -Unique)
+        HostsOverride = [bool]$override
     }
 }
 
+function Get-SystemProxyUri {
+    # The proxy Invoke-RestMethod / Invoke-WebRequest use for $Url, or $null for a direct
+    # connection. PowerShell 7: HttpClient.DefaultProxy (HTTPS_PROXY / NO_PROXY, then the Windows
+    # proxy settings). Windows PowerShell 5.1: WebRequest.DefaultWebProxy (the Windows / Internet
+    # Options proxy settings, including PAC scripts and auto-detect).
+    param([string] $Url)
+    try {
+        $uri = [Uri]$Url
+        $proxy = $null
+        $httpClient = 'System.Net.Http.HttpClient' -as [type]
+        if ($httpClient -and $httpClient.GetProperty('DefaultProxy')) { $proxy = $httpClient::DefaultProxy }
+        else { $proxy = [System.Net.WebRequest]::DefaultWebProxy }
+        # Ask IsBypassed first: an environment-variable proxy returns itself from GetProxy even for
+        # a NO_PROXY host, and .NET Framework returns the destination itself when there is no proxy.
+        if ($null -eq $proxy -or $proxy.IsBypassed($uri)) { return $null }
+        $p = $proxy.GetProxy($uri)
+        if ($null -eq $p -or $p.Equals($uri)) { return $null }
+        # Scheme, host and port only: the result is printed, and a proxy URL can carry credentials.
+        return $p.GetComponents([System.UriComponents]::SchemeAndServer, [System.UriFormat]::UriEscaped)
+    } catch { return $null }
+}
+
 function Test-Tcp443 {
-    param([string] $HostName, [int] $TimeoutMs = 5000)
+    # Classifies a direct TCP connection to Address:443 as:
+    #   open        - the handshake completed.
+    #   refused     - actively refused (TCP reset): something answers there, but not on 443.
+    #   timed out   - nothing answered within TimeoutMs: no route, or a firewall / NSG silently
+    #                 drops the traffic (Windows itself gives up after ~21s).
+    #   unreachable - the network reported that there is no route to the address.
+    #   failed: <socket error> - anything else.
+    param([string] $Address, [int] $TimeoutMs = 5000)
     $client = $null
     try {
-        $client = New-Object System.Net.Sockets.TcpClient
-        $iar = $client.BeginConnect($HostName, 443, $null, $null)
-        if ($iar.AsyncWaitHandle.WaitOne($TimeoutMs) -and $client.Connected) {
-            $client.EndConnect($iar); return $true
+        $ip = [System.Net.IPAddress]::Parse($Address)
+        $client = New-Object System.Net.Sockets.TcpClient($ip.AddressFamily)
+        $iar = $client.BeginConnect($ip, 443, $null, $null)
+        if (-not $iar.AsyncWaitHandle.WaitOne($TimeoutMs)) { return 'timed out' }
+        $client.EndConnect($iar)
+        return 'open'
+    } catch {
+        $e = $_.Exception
+        while ($null -ne $e -and $e -isnot [System.Net.Sockets.SocketException]) { $e = $e.InnerException }
+        if ($null -eq $e) { return ('failed: {0}' -f (Get-InnermostException $_.Exception).Message) }
+        switch ([string]$e.SocketErrorCode) {
+            'ConnectionRefused'  { return 'refused' }
+            'TimedOut'           { return 'timed out' }
+            'NetworkUnreachable' { return 'unreachable' }
+            'HostUnreachable'    { return 'unreachable' }
+            'NetworkDown'        { return 'unreachable' }
+            'HostDown'           { return 'unreachable' }
         }
-        return $false
-    } catch { return $false }
-    finally { if ($client) { $client.Close() } }
+        return ('failed: {0}' -f $e.SocketErrorCode)
+    } finally { if ($client) { $client.Close() } }
+}
+
+function Get-TcpFinding {
+    # What a Test-Tcp443 result means for an address of a given Get-IpClass class.
+    param([string] $Class, [string] $Tcp, [int] $TimeoutSec = 5)
+    $ok = $false; $text = $null
+    $noPath = 'No DNS or HOSTS change can fix this: deploy from a machine on the app''s VNet, a peered VNet or VPN/ExpressRoute, or fix the routing / NSG / firewall.'
+    switch ($Class) {
+        'private' {
+            switch ($Tcp) {
+                'open'        { $ok = $true; $text = 'private address that accepts TCP 443 - this machine has a network path to it.' }
+                'timed out'   { $text = ('private address, but nothing answered on TCP 443 within {0}s: there is NO NETWORK PATH from this machine to the private endpoint (no route, or an NSG / firewall drops the traffic). {1}' -f $TimeoutSec, $noPath) }
+                'unreachable' { $text = ('private address, but the network reports it unreachable: this machine has NO ROUTE to the private endpoint. {0}' -f $noPath) }
+                'refused'     { $text = 'private address that actively REFUSED TCP 443: something answers there, but not HTTPS. Check it is the app''s private endpoint IP (portal: Private endpoint > DNS configuration) and that no firewall rejects 443.' }
+                default       { $text = ('private address; TCP 443 {0}.' -f $Tcp) }
+            }
+        }
+        'public' {
+            if ($Tcp -eq 'open') {
+                $text = 'PUBLIC address that accepts TCP 443: requests from this machine reach the app''s public endpoint. If public network access is disabled on the app, App Service answers them with HTTP 403 (x-ms-forbidden-ip) - expected, and not a credentials problem.'
+            } else {
+                $text = ('PUBLIC address, and TCP 443 {0}: this machine cannot connect directly to the app''s public endpoint (outbound firewall, no route, or a network that only allows traffic through a proxy).' -f $Tcp)
+            }
+        }
+        'loopback'   { $text = 'loopback address: the name points at this machine itself - check the HOSTS file.' }
+        'link-local' { $text = 'link-local address: not an App Service or private endpoint address - check the HOSTS file and DNS.' }
+        default      { $text = ('TCP 443 {0}.' -f $Tcp) }
+    }
+    return [pscustomobject]@{ Ok = $ok; Text = $text }
 }
 
 function ConvertTo-HeaderMap {
@@ -1049,19 +1244,34 @@ function ConvertTo-HeaderMap {
     return $map
 }
 
+function Get-HttpErrorHeader {
+    # A response header from a failed Invoke-RestMethod / Invoke-WebRequest call, or $null.
+    param($ErrorRecord, [string] $Name)
+    try {
+        $resp = $ErrorRecord.Exception.Response
+        if ($null -ne $resp) {
+            $map = ConvertTo-HeaderMap $resp.Headers
+            if ($map.ContainsKey($Name)) { return [string]$map[$Name] }
+        }
+    } catch { }
+    return $null
+}
+
 function Get-HttpProbe {
     param([string] $Url, [int] $TimeoutSec = 20)
-    $status = $null; $headers = @{}
+    $status = $null; $headers = @{}; $err = $null
     try {
         $r = Invoke-WebRequest -Uri $Url -Method Get -TimeoutSec $TimeoutSec -MaximumRedirection 0 -UseBasicParsing -ErrorAction Stop
         $status = [int]$r.StatusCode
         $headers = ConvertTo-HeaderMap $r.Headers
     } catch {
-        $status = Get-HttpStatus $_
-        $resp = $null; try { $resp = $_.Exception.Response } catch { }
+        $e = $_
+        $status = Get-HttpStatus $e
+        $resp = $null; try { $resp = $e.Exception.Response } catch { }
         if ($resp) { try { $headers = ConvertTo-HeaderMap $resp.Headers } catch { } }
+        if ($null -eq $status) { $err = Get-ExceptionSummary $e }
     }
-    return [pscustomobject]@{ Status = $status; Headers = $headers }
+    return [pscustomobject]@{ Status = $status; Headers = $headers; Error = $err }
 }
 
 function Resolve-ScmHostOnly {
@@ -1072,50 +1282,110 @@ function Resolve-ScmHostOnly {
     return "$WebAppName.scm.azurewebsites.net"
 }
 
+function Write-ScmRouteInfo {
+    # Where requests to the SCM host will go from this machine: the address the system resolver
+    # returns (HOSTS file included, exactly as for the deployment) and the proxy, if any.
+    param([string] $ScmHost)
+    $res = Resolve-HostIps -HostName $ScmHost
+    $proxy = Get-SystemProxyUri "https://$ScmHost/"
+    if ($res.Ips.Count -gt 0) {
+        $line = 'SCM address    : ' + ((@($res.Ips | ForEach-Object { '{0} ({1})' -f $_, (Get-IpClass $_) })) -join ', ')
+        if ($res.HostsOverride) {
+            $dns = if ($res.DnsIps.Count -gt 0) { 'answers ' + ($res.DnsIps -join ', ') } else { 'has no answer' }
+            $line += " - from the HOSTS file or another local override; the DNS server $dns"
+        }
+        Write-Info $line
+    } else {
+        $why = if ($res.Error) { $res.Error } else { 'no addresses' }
+        $color = if ($proxy) { [ConsoleColor]::Gray } else { [ConsoleColor]::Yellow }
+        Write-Log "SCM address    : does not resolve from this machine ($why)" $color
+    }
+    if ($proxy) { Write-Info "Proxy          : $proxy - it resolves the SCM host itself, so HOSTS entries on this machine do not apply" }
+    else { Write-Info 'Proxy          : none (direct connection)' }
+}
+
 function Test-SiteReachability {
     param([string] $ScmHost)
     Write-Step 'Checking site reachability / DNS'
     $mainHost = $ScmHost -replace '\.scm\.', '.'
     if ($mainHost -eq $ScmHost) { $mainHost = "$WebAppName.azurewebsites.net" }
 
+    $tcpTimeoutMs = 5000
     $anyPublic = $false
     $anyResolved = $false
+    $tested = @()
+    $proxied = @()
     $targets = @(
         [pscustomobject]@{ Label = 'App'; Host = $mainHost }
         [pscustomobject]@{ Label = 'SCM'; Host = $ScmHost }
     )
     foreach ($t in $targets) {
+        $proxy = Get-SystemProxyUri "https://$($t.Host)/"
+        if ($proxy) { $proxied += [pscustomobject]@{ Label = $t.Label; Proxy = $proxy } }
         $res = Resolve-HostIps -HostName $t.Host
-        if (-not $res.Ips) {
-            Write-WarnMsg ("{0,-3} {1} -> DNS did not resolve" -f $t.Label, $t.Host)
+        if ($res.Ips.Count -eq 0) {
+            $why = if ($res.Error) { $res.Error } else { 'no addresses' }
+            Write-WarnMsg ("{0,-3} {1} -> does not resolve from this machine ({2})" -f $t.Label, $t.Host, $why)
             continue
         }
         $anyResolved = $true
-        $classes = @($res.Ips | ForEach-Object { Get-IpClass $_ } | Select-Object -Unique)
-        if ($classes -contains 'public') { $anyPublic = $true }
-        $tcp = Test-Tcp443 -HostName $t.Host
-        $plNote = if ($res.CNames -match 'privatelink') { ' (privatelink CNAME present)' } else { '' }
-        $line = ("{0,-3} {1} -> {2} [{3}]{4}  TCP443={5}" -f `
-            $t.Label, $t.Host, ($res.Ips -join ', '), ($classes -join '/'), $plNote, $(if ($tcp) { 'open' } else { 'closed' }))
-        if ($classes -contains 'public') { Write-WarnMsg $line } else { Write-Ok $line }
+        $parts = @()
+        $allGood = $true
+        foreach ($ip in @($res.Ips | Select-Object -First 4)) {
+            $class = Get-IpClass $ip
+            $tcp = Test-Tcp443 -Address $ip -TimeoutMs $tcpTimeoutMs
+            if ($class -eq 'public') { $anyPublic = $true }
+            if ($class -ne 'private' -or $tcp -ne 'open') { $allGood = $false }
+            $parts += ('{0} [{1}]  TCP443={2}' -f $ip, $class, $tcp)
+            $tested += [pscustomobject]@{ Label = $t.Label; Ip = $ip; Class = $class; Tcp = $tcp }
+        }
+        $plNote = if ($res.CNames -match 'privatelink') { '  (privatelink CNAME present)' } else { '' }
+        $line = '{0,-3} {1} -> {2}{3}' -f $t.Label, $t.Host, ($parts -join '; '), $plNote
+        if ($allGood) { Write-Ok $line } else { Write-WarnMsg $line }
+        if ($res.HostsOverride) {
+            $dnsSays = if ($res.DnsIps.Count -gt 0) {
+                'the DNS server answers ' + ((@($res.DnsIps | ForEach-Object { '{0} [{1}]' -f $_, (Get-IpClass $_) })) -join ', ')
+            } else {
+                'the DNS server has no answer' + $(if ($res.DnsError) { " ($($res.DnsError))" } else { '' })
+            }
+            Write-Info "      HOSTS file (or another local override) in use: $dnsSays, but this machine uses the address above."
+        }
+    }
+
+    # What each address / TCP result means. App and SCM normally share one address, so each
+    # combination is explained once.
+    foreach ($g in @($tested | Group-Object -Property Ip, Tcp)) {
+        $first = $g.Group[0]
+        $finding = Get-TcpFinding -Class $first.Class -Tcp $first.Tcp -TimeoutSec ([int]($tcpTimeoutMs / 1000))
+        $text = '{0} ({1}): {2}' -f $first.Ip, ((@($g.Group | ForEach-Object { $_.Label })) -join ', '), $finding.Text
+        if ($finding.Ok) { Write-Ok $text } else { Write-WarnMsg $text }
+    }
+
+    if ($proxied.Count -gt 0) {
+        foreach ($p in $proxied) { Write-WarnMsg ('{0} requests go through proxy {1}' -f $p.Label, $p.Proxy) }
+        Write-WarnMsg 'A proxy resolves the host name and connects to it itself, so HOSTS entries and private DNS on this machine do NOT'
+        Write-WarnMsg 'apply to proxied requests, and the direct TCP tests above do not show the path they take. To deploy over a private'
+        Write-WarnMsg 'endpoint, bypass the proxy for these hosts (proxy exceptions / PAC file; NO_PROXY on PowerShell 7), or have the proxy reach it.'
+    } else {
+        Write-Info 'Proxy: none - requests from this machine connect directly.'
     }
 
     if ($anyPublic) {
-        Write-WarnMsg 'A hostname resolves to a PUBLIC IP from this machine, so traffic goes out the public interface.'
-        Write-WarnMsg 'If public network access is disabled on the app, the App (main) site returns HTTP 403 that way.'
-        Write-WarnMsg "To reach it privately: link a 'privatelink.azurewebsites.net' Private DNS Zone to this VNet with"
-        Write-WarnMsg "A records for both '$mainHost' and '$ScmHost' -> the private-endpoint IP, and use the VNet DNS."
-    } elseif ($anyResolved) {
-        Write-Ok 'Hostnames resolve to private IPs (private-endpoint path).'
-    } else {
-        Write-WarnMsg 'Neither hostname resolved from this machine - check DNS server / network connectivity.'
+        Write-WarnMsg 'To reach the app privately, this machine needs BOTH:'
+        Write-WarnMsg ("  1. '{0}' and '{1}' resolving to the private endpoint IP - a 'privatelink.azurewebsites.net'" -f $mainHost, $ScmHost)
+        Write-WarnMsg '     Private DNS zone linked to the VNet whose DNS this machine uses, or HOSTS entries; and'
+        Write-WarnMsg '  2. a network path to that IP (the app''s VNet, a peered VNet, or VPN/ExpressRoute) with TCP 443 allowed.'
+        Write-WarnMsg '     A HOSTS entry only provides step 1.'
+    } elseif (-not $anyResolved -and $proxied.Count -eq 0) {
+        Write-WarnMsg 'Neither hostname resolves from this machine - check its DNS server and network connectivity.'
     }
 
     # App-layer probe: shows what a browser on this machine actually gets back.
     $probe = Get-HttpProbe -Url "https://$mainHost/"
     $appStatus = $probe.Status
     if ($null -eq $appStatus) {
-        Write-Info "App  GET https://$mainHost/ -> no HTTP response (timeout or connection blocked)"
+        $why = if ($probe.Error) { $probe.Error } else { 'timeout or connection blocked' }
+        Write-Info "App  GET https://$mainHost/ -> no HTTP response ($why)"
         return
     }
     $interp = ''
@@ -1216,6 +1486,7 @@ try {
     Write-Step 'Connecting to App Service (Kudu/SCM)'
     $auth = Resolve-KuduAuth
     Write-Info "SCM host       : $($auth.ScmHost)"
+    Write-ScmRouteInfo -ScmHost $auth.ScmHost
     Write-Info "Auth mode      : $($auth.Kind)"
     Test-KuduReachable -ScmHost $auth.ScmHost -Headers $auth.Headers | Out-Null
     Write-Ok 'SCM endpoint reachable and authenticated.'
