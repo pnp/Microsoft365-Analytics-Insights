@@ -649,6 +649,16 @@ namespace Tests.UnitTests
             var report = SheetCells(CopilotAdoptionWorkbook.Build(analysis), "Report");
             Assert.IsFalse(report.Any(c => c.StartsWith("Every licensed user")), "The cover sheet must not claim a complete analysis either.");
             Assert.IsTrue(report.Any(c => c.StartsWith("Fewer than the licence holders this filter selects: 12 more")));
+
+            // Nor may its Population row count only the analysed people as the filter's members.
+            summary.UnscopedLicensedUsers = summary.LicensedUsers + 500;
+            var population = SheetCells(CopilotAdoptionWorkbook.Build(analysis), "Report")
+                .Single(c => c.StartsWith("Only the people matching the filter"));
+            StringAssert.Contains(population, string.Format(
+                CultureInfo.InvariantCulture,
+                " {0:N0} of the tenant's {1:N0} Copilot licence holders are in it. 12 of them are beyond the analysis limit",
+                summary.LicensedUsers + 12,
+                summary.LicensedUsers + 500));
         }
 
         [TestMethod]

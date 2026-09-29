@@ -788,12 +788,22 @@ namespace Common.Entities.CopilotAdoption
 
             if (!hasDomain && !hasFilter) return "Every Copilot seat holder the analysis could see.";
 
+            // The licence holders the filter selects include any the capped analysis never reached - its
+            // scopedLicensedUsersNotAnalysed warning counts them - or this row and "Users analysed" below
+            // would disagree about how many people are in the filter.
+            var notAnalysedInView = LicenceHoldersNotAnalysed(summary);
             var of = summary.UnscopedLicensedUsers.HasValue
                 ? string.Format(
                     CultureInfo.InvariantCulture,
                     " {0:N0} of the tenant's {1:N0} Copilot licence holders are in it.",
-                    summary.LicensedUsers,
+                    summary.LicensedUsers + notAnalysedInView,
                     summary.UnscopedLicensedUsers.Value)
+                  + (notAnalysedInView > 0
+                      ? string.Format(
+                          CultureInfo.InvariantCulture,
+                          " {0:N0} of them are beyond the analysis limit and are left out of every figure.",
+                          notAnalysedInView)
+                      : string.Empty)
                 : string.Empty;
 
             return (hasFilter
