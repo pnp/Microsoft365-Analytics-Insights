@@ -181,9 +181,9 @@ export const userOrgs: Record<keyof typeof en, string> = {
   'userOrgs.csv.showingFirst':
     'Se muestran las primeras {count} filas. Se importa el archivo completo.',
   'userOrgs.csv.truncated.one':
-    '1 nombre de organizaci\u00f3n supera los {max} caracteres y se almacenar\u00e1 abreviado. Los nombres id\u00e9nticos en sus primeros {max} caracteres se convierten en una sola organizaci\u00f3n.',
+    '1 fila de este archivo tiene un nombre de organizaci\u00f3n de m\u00e1s de {max} caracteres. Si se importa, el nombre se almacena abreviado, y los nombres id\u00e9nticos en sus primeros {max} caracteres se convierten en una sola organizaci\u00f3n.',
   'userOrgs.csv.truncated.other':
-    '{count} nombres de organizaci\u00f3n superan los {max} caracteres y se almacenar\u00e1n abreviados. Los nombres id\u00e9nticos en sus primeros {max} caracteres se convierten en una sola organizaci\u00f3n.',
+    '{count} filas de este archivo tienen un nombre de organizaci\u00f3n de m\u00e1s de {max} caracteres. Los que se importen se almacenan abreviados, y los nombres id\u00e9nticos en sus primeros {max} caracteres se convierten en una sola organizaci\u00f3n.',
   'userOrgs.csv.problems':
     'Algunas filas no se pueden usar: {problems}. Se omiten y se contabilizan; el resto del archivo se importa igualmente.',
   'userOrgs.csv.problemLine': 'l\u00ednea {line} ({reason})',

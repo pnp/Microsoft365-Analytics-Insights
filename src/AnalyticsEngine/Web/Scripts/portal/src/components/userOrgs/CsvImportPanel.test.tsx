@@ -546,6 +546,20 @@ describe('CsvImportPanel', () => {
     expect(screen.getByRole('button', { name: /^Import/ })).toBeDisabled();
   });
 
+  it('words over-long names as rows in the file, not as values the import will store', async () => {
+    // The count is the parser's: taken before a later row for the same person supersedes one and before
+    // anyone is matched. "Will be stored shortened" was a promise about rows the import may never store.
+    previewCsv.mockResolvedValue(preview({ truncatedValueCount: 1234 }));
+    renderWithProvider(<CsvImportPanel orgType={orgType()} onImportFinished={vi.fn()} />);
+
+    await chooseFile();
+
+    expect(
+      await screen.findByText(/^1,234 rows in this file have an organisation name longer than 848 characters\. Any of those names that are imported are stored shortened/),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/will be stored shortened/)).not.toBeInTheDocument();
+  });
+
   it('gates a merge that clears existing values and passes the confirmed clear count', async () => {
     previewCsv.mockResolvedValue(preview({ mergeWouldClearCount: 3 }));
     importCsv.mockResolvedValue({ jobId: 7, rowsQueued: 3, rowsInvalid: 0 });

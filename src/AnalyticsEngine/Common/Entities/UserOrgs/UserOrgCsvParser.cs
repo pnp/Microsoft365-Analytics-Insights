@@ -180,6 +180,11 @@ namespace Common.Entities.UserOrgs
         /// user from the organisation entirely would be the worse outcome - but it has to be said out
         /// loud, because two names that differ only after the cut-off silently become one organisation,
         /// and nothing else in the import summary would reveal that.
+        /// <para>
+        /// Counted per row of the file, before a later row for the same user supersedes one and before
+        /// users are matched: it describes the file, not what the import will store, and the portal words
+        /// it that way.
+        /// </para>
         /// </remarks>
         public int TruncatedValueCount { get; set; }
 

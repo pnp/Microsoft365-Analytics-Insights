@@ -436,8 +436,10 @@ namespace Web.AnalyticsWeb.Models.UserOrgs
         public int MatchedUserCount { get; set; }
 
         /// <summary>
-        /// How many rows carry an organisation name too long for the column, which will be stored
-        /// shortened.
+        /// How many rows in the file carry an organisation name too long for the column. A fact about the
+        /// file, like the unreadable rows: counted before a later row for the same user supersedes one,
+        /// and before users are matched, so the portal words it as rows in the file - any of them that are
+        /// imported are stored shortened.
         /// </summary>
         [JsonProperty("truncatedValueCount")]
         public int TruncatedValueCount { get; set; }

@@ -178,9 +178,9 @@ export const userOrgs = {
   'userOrgs.csv.clearsValue': 'clears the value',
   'userOrgs.csv.showingFirst': 'Showing the first {count} rows. The whole file is imported.',
   'userOrgs.csv.truncated.one':
-    '1 organisation name is longer than {max} characters and will be stored shortened. Names that are identical for their first {max} characters become one organisation.',
+    '1 row in this file has an organisation name longer than {max} characters. If it is imported, the name is stored shortened, and names that are identical for their first {max} characters become one organisation.',
   'userOrgs.csv.truncated.other':
-    '{count} organisation names are longer than {max} characters and will be stored shortened. Names that are identical for their first {max} characters become one organisation.',
+    '{count} rows in this file have an organisation name longer than {max} characters. Any of those names that are imported are stored shortened, and names that are identical for their first {max} characters become one organisation.',
   'userOrgs.csv.problems':
     'Some rows cannot be used: {problems}. They are skipped and counted; the rest of the file still imports.',
   'userOrgs.csv.problemLine': 'line {line} ({reason})',
