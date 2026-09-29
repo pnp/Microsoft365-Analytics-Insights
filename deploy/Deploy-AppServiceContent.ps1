@@ -1263,9 +1263,16 @@ function Get-HttpProbe {
     param([string] $Url, [int] $TimeoutSec = 20)
     $status = $null; $headers = @{}; $err = $null
     try {
-        $r = Invoke-WebRequest -Uri $Url -Method Get -TimeoutSec $TimeoutSec -MaximumRedirection 0 -UseBasicParsing -ErrorAction Stop
-        $status = [int]$r.StatusCode
-        $headers = ConvertTo-HeaderMap $r.Headers
+        # Windows PowerShell 5.1 outputs a 301/302 and then writes a non-terminating
+        # 'MaximumRedirectExceeded' error, which -ErrorAction Stop would turn into a failure with no
+        # response - losing the redirect to sign-in that a healthy app usually answers with. HTTP
+        # errors and connection failures are terminating errors on every version, so they still
+        # reach the catch block; PowerShell 7 throws there for a 3xx as well.
+        $r = Invoke-WebRequest -Uri $Url -Method Get -TimeoutSec $TimeoutSec -MaximumRedirection 0 -UseBasicParsing -ErrorAction SilentlyContinue
+        if ($null -ne $r) {
+            $status = [int]$r.StatusCode
+            $headers = ConvertTo-HeaderMap $r.Headers
+        }
     } catch {
         $e = $_
         $status = Get-HttpStatus $e
