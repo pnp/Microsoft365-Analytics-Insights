@@ -89,7 +89,13 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         /// <summary>
         /// Main method
         /// </summary>
-        public async Task InsertAndUpdateDatabaseFromExternalUsers()
+        /// <returns>
+        /// True when the cycle completed and the new Graph delta token was committed. False when it did not -
+        /// above all when the <c>/users/delta</c> read stopped before its <c>@odata.deltaLink</c> (issue #664) -
+        /// so the import section is not recorded as done and is retried on the next cycle. A failure in any
+        /// database phase still throws, exactly as before.
+        /// </returns>
+        public async Task<bool> InsertAndUpdateDatabaseFromExternalUsers()
         {
             const int BATCH_SIZE = 500;
             var phaseResults = new UserImportPhaseResults();
@@ -114,6 +120,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
 
                 // Load from Graph & update delta code once done
                 var allActiveGraphUsers = await _userLoader.LoadAllActiveUsers();
+                var deltaReadCompleted = _userLoader.LastLoadReachedDeltaLink;
                 _logger.LogInformation($"User import - loaded {allActiveGraphUsers.Count.ToString("N0")} users from Graph");
 
                 // Pre-build dictionary for O(1) graph user lookups by AAD ID (avoids O(n) scans per user in manager resolution)
@@ -381,14 +388,29 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 //
                 // The check is explicit rather than implied by that control flow so the
                 // guarantee survives someone adding a catch: see UserImportCommitPolicy (#372).
-                if (UserImportCommitPolicy.ShouldCommitDelta(phaseResults))
+                bool cycleCompleted;
+                if (!deltaReadCompleted)
+                {
+                    // The read never reached an @odata.deltaLink, so there is no new token and
+                    // CommitDeltaTokenAsync would quietly do nothing. Say so, and report the run as
+                    // incomplete so it is neither stamped as done nor announced as a finished section:
+                    // otherwise a read that fails on every run looks exactly like a tenant in which
+                    // nothing changes (#664).
+                    _logger.LogWarning("User import - NOT moving the user checkpoint forward: the Graph /users/delta read did not reach its end (no @odata.deltaLink), " +
+                        "so this run's user list is incomplete and there is no new delta token to save. The users that were read have been saved; " +
+                        "the next cycle reads again from the stored checkpoint, or reads the full user list if there is none.");
+                    cycleCompleted = false;
+                }
+                else if (UserImportCommitPolicy.ShouldCommitDelta(phaseResults))
                 {
                     await _userLoader.CommitDeltaTokenAsync();
+                    cycleCompleted = true;
                 }
                 else
                 {
                     _logger.LogWarning("User import - NOT committing the Graph delta token: at least one import phase did not complete. " +
                         "The same users will be reprocessed on the next cycle rather than being skipped.");
+                    cycleCompleted = false;
                 }
 
                 // Final cleanup
@@ -397,6 +419,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 allActiveGraphUsers.Clear();
                 allDbUsersForLicenseRefresh?.Clear();
                 allDbUsers?.Clear();
+
+                return cycleCompleted;
             }
         }
 

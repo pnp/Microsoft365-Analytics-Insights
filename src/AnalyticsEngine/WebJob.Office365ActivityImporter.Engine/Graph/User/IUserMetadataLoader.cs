@@ -18,8 +18,23 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         /// <summary>
         /// Loads all active users from the external source
         /// </summary>
-        /// <returns>List of active users</returns>
+        /// <returns>
+        /// List of active users. When <see cref="LastLoadReachedDeltaLink"/> is false afterwards, the list is
+        /// only what was read before the load stopped - possibly nothing.
+        /// </returns>
         Task<List<GraphUser>> LoadAllActiveUsers();
+
+        /// <summary>
+        /// Whether the most recent <see cref="LoadAllActiveUsers"/> read the complete delta result: every page,
+        /// ending in an <c>@odata.deltaLink</c> whose token <see cref="CommitDeltaTokenAsync"/> can persist.
+        /// </summary>
+        /// <remarks>
+        /// False means the read stopped early, so the users returned are partial and there is no new checkpoint
+        /// to save. The caller must report the import as incomplete rather than as done: from the returned list
+        /// alone, "nothing changed in the tenant" and "the read failed" look identical - both are empty. That is
+        /// how an expired token stalled the import for weeks while every run looked successful (issue #664).
+        /// </remarks>
+        bool LastLoadReachedDeltaLink { get; }
 
         /// <summary>
         /// Loads all subscribed SKUs for the tenant.

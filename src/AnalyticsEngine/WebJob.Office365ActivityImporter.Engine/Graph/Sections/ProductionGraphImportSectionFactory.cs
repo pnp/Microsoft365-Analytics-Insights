@@ -114,8 +114,12 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Sections
                     {
                         // Update Graph users first
                         var userUpdater = new UserMetadataUpdater(_logger, _settings, _graphAppIndentityOAuthContext.Creds, httpClient);
-                        await userUpdater.InsertAndUpdateDatabaseFromExternalUsers();
-                        return true;
+
+                        // False when the /users/delta read did not complete (#664). The cadence gate is then not
+                        // stamped and no "finished section" event is sent, so the import is retried next cycle
+                        // rather than a failed read passing for a tenant in which nothing changed. Returning
+                        // instead of throwing also lets the sections after this one run.
+                        return await userUpdater.InsertAndUpdateDatabaseFromExternalUsers();
                     }),
 
                 // Not cadence-gated: the activity/usage-report phase owns its own once-a-day throttle via

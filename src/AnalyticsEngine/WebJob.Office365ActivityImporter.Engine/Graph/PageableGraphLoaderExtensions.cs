@@ -9,14 +9,20 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
     {
         public static async Task<List<T>> LoadAllPagesWithThrottleRetries<T>(this ManualGraphCallClient client, string url, ILogger logger, bool throwOnNotFound = false, bool throwOnHttpError = false)
         {
-            var results = await LoadPageableGraphResponseAllWithOptionalDelta<T>(client, url, logger, null, throwOnNotFound, throwOnHttpError);
+            var results = await LoadPageableGraphResponseAllWithOptionalDelta<T>(client, url, logger, null, throwOnNotFound, throwOnHttpError, null);
 
             return results;
         }
 
-        public static async Task<List<T>> LoadAllPagesPlusDeltaWithThrottleRetries<T>(this ManualGraphCallClient client, string url, ILogger logger, Func<string, Task> deltaTokenFunc, bool throwOnNotFound = false, bool throwOnHttpError = false)
+        /// <param name="onPageFailed">
+        /// Optional. Told which failure ended a <b>lenient</b> load early, and on which page (1 = the initial
+        /// request), just before the rows gathered so far are returned. Never called when every page loads, or
+        /// when strict paging rethrows instead. It lets a caller keep the lenient partial result and still act on
+        /// the failure: the user import uses it to recognise a delta token that Graph has rejected (issue #664).
+        /// </param>
+        public static async Task<List<T>> LoadAllPagesPlusDeltaWithThrottleRetries<T>(this ManualGraphCallClient client, string url, ILogger logger, Func<string, Task> deltaTokenFunc, bool throwOnNotFound = false, bool throwOnHttpError = false, Action<System.Net.Http.HttpRequestException, int> onPageFailed = null)
         {
-            var results = await LoadPageableGraphResponseAllWithOptionalDelta<T>(client, url, logger, deltaTokenFunc, throwOnNotFound, throwOnHttpError);
+            var results = await LoadPageableGraphResponseAllWithOptionalDelta<T>(client, url, logger, deltaTokenFunc, throwOnNotFound, throwOnHttpError, onPageFailed);
 
             return results;
         }
@@ -38,7 +44,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         /// reported to the admin as "this tenant has no Copilot licences" while recording a clean import.
         /// Any caller that reads meaning into emptiness, or that writes an import log, must pass true.
         /// </param>
-        static async Task<List<T>> LoadPageableGraphResponseAllWithOptionalDelta<T>(ManualGraphCallClient client, string url, ILogger logger, Func<string, Task> deltaTokenFunc, bool throwOnNotFound = false, bool throwOnHttpError = false)
+        static async Task<List<T>> LoadPageableGraphResponseAllWithOptionalDelta<T>(ManualGraphCallClient client, string url, ILogger logger, Func<string, Task> deltaTokenFunc, bool throwOnNotFound, bool throwOnHttpError, Action<System.Net.Http.HttpRequestException, int> onPageFailed)
         {
             var allResults = new List<T>();
 
@@ -64,6 +70,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                     pageSuccess = false;
                     logger.LogDebug($"Got 404 loading {typeof(T).Name} page {pageCount} ({ex.GraphErrorCode ?? "unknown"}). " +
                         "Returning results up to current page.");
+                    onPageFailed?.Invoke(ex, pageCount);
                     nextUrl = null;
                 }
                 catch (System.Net.Http.HttpRequestException ex)
@@ -93,6 +100,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                         // Application Insights exception record instead of three.
                         logger.LogWarning($"Unexpected HTTP error on page {pageCount}: {ex.Message}. " +
                             "Will not retry page & returning results upto current page.");
+                        onPageFailed?.Invoke(ex, pageCount);
                         nextUrl = null;
                     }
                 }

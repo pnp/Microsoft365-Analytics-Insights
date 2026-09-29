@@ -33,6 +33,15 @@ namespace Tests.UnitTests.FakeLoaderClasses
         public bool ThrowOnCommitDeltaToken { get; set; }
 
         /// <summary>
+        /// When true, LoadAllActiveUsers behaves like a /users/delta read that stopped before its last page:
+        /// it still returns the fake users, but reaches no deltaLink, so no new delta token is buffered and
+        /// <see cref="LastLoadReachedDeltaLink"/> is false.
+        /// </summary>
+        public bool SimulateIncompleteDeltaRead { get; set; }
+
+        public bool LastLoadReachedDeltaLink { get; private set; }
+
+        /// <summary>
         /// When non-null AND the delta provider already has a token (i.e. this is
         /// NOT the first run), LoadAllActiveUsers returns this list instead of the
         /// full fake-user list. Mirrors the real Graph behaviour where /users/delta
@@ -83,9 +92,11 @@ namespace Tests.UnitTests.FakeLoaderClasses
         public async Task<List<GraphUser>> LoadAllActiveUsers()
         {
             // Simulate GraphUserLoader behavior: buffer the new delta token in
-            // memory; only CommitDeltaTokenAsync persists it.
-            _pendingDeltaToken = SimulatedNewDeltaToken;
-            _hasPendingDeltaToken = true;
+            // memory; only CommitDeltaTokenAsync persists it. An incomplete read
+            // never reached a deltaLink, so there is nothing to buffer.
+            LastLoadReachedDeltaLink = !SimulateIncompleteDeltaRead;
+            _hasPendingDeltaToken = LastLoadReachedDeltaLink;
+            _pendingDeltaToken = _hasPendingDeltaToken ? SimulatedNewDeltaToken : null;
 
             // Simulate Graph delta behaviour: when a delta token is already
             // persisted and the test has supplied a delta-only subset, return

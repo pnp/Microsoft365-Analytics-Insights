@@ -176,6 +176,7 @@
     <Compile Include="Graph\Email\SentEmailImporter.cs" />
     <Compile Include="Graph\Email\SentEmailMailboxSkipList.cs" />
     <Compile Include="Graph\Email\SentEmailSentimentScorer.cs" />
+    <Compile Include="Graph\GraphDeltaTokenRejection.cs" />
     <Compile Include="Graph\GraphHttpException.cs" />
     <Compile Include="Graph\GraphEndpointTemplate.cs" />
     <Compile Include="Graph\GraphResourceNotFoundException.cs" />

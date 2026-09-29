@@ -86,34 +86,67 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
 
         public IDeltaValueProvider DeltaValueProvider => _deltaValueProvider;
 
+        /// <inheritdoc />
+        public bool LastLoadReachedDeltaLink { get; private set; }
+
         public async Task<List<GraphUser>> LoadAllActiveUsers()
         {
-            // Cache delta using tenant ID
-            var usersQueryDelta = await _deltaValueProvider.GetDeltaToken();
-            var initialDeltaUrl = $"https://graph.microsoft.com:443/v1.0/users/delta" +
-                $"?$select={GraphUserDeltaQuery.Select}" +
-                "&$expand=manager";
-            if (!string.IsNullOrEmpty(usersQueryDelta))
-            {
-                initialDeltaUrl += $"&$deltatoken={usersQueryDelta}";
-            }
-
-            // Reset any previously buffered token before a new load.
+            // Reset any previously buffered token, and the completeness flag, before a new load.
             _pendingDeltaToken = null;
             _hasPendingDeltaToken = false;
+            LastLoadReachedDeltaLink = false;
 
-            var results = await _httpClient.LoadAllPagesPlusDeltaWithThrottleRetries<GraphUser>(initialDeltaUrl, _logger,
-                (deltaLink) =>
+            // Cache delta using tenant ID
+            var usersQueryDelta = await _deltaValueProvider.GetDeltaToken();
+            var read = await ReadDeltaRound(usersQueryDelta);
+
+            // Graph refuses a token it considers too old, or has reset. Replaying it can never succeed and nothing
+            // else ever clears it, so without this every later run read 0 users and still counted as a success
+            // (issue #664). Only the initial request carries the token - later pages follow $skiptoken links - so
+            // only a failure on page 1 can be a rejection of it.
+            if (read.Failure != null && read.FailedPage == 1
+                && GraphDeltaTokenRejection.IsRejectedDeltaToken(read.Failure, requestCarriedDeltaToken: !string.IsNullOrEmpty(usersQueryDelta)))
+            {
+                _logger.LogWarning($"User import - Microsoft Graph rejected the stored /users/delta token ({DescribeFailure(read.Failure)}): it has expired, or Graph has reset synchronisation. " +
+                    "Discarding the token and reading the full user list again in this run, which also catches up on every change made while it was unusable.");
+
+                try
                 {
-                    // Buffer the new delta in memory. It will only be persisted to
-                    // the underlying provider when CommitDeltaTokenAsync is called
-                    // after the rest of the import succeeds.
-                    _pendingDeltaToken = StringUtils.ExtractCodeFromGraphUrl(deltaLink);
-                    _hasPendingDeltaToken = true;
-                    return Task.CompletedTask;
-                });
+                    // ClearDeltaToken rather than overwriting the key: the Redis store also forgets its in-process
+                    // fallback copy, which would otherwise hand the dead token back the next time a read fails.
+                    await _deltaValueProvider.ClearDeltaToken();
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, $"User import - couldn't discard the rejected /users/delta token: {ex.Message}. " +
+                        "Not reading the full user list in this run, so the run is incomplete; the next cycle will try again.");
+                    return new List<GraphUser>();
+                }
 
+                // Once, and with no $deltatoken at all. Never $deltatoken=latest: that means "sync from now" and would
+                // skip every change made while the import was stuck. A failure of this read cannot be taken for a
+                // token rejection, because it carries no token, so the recovery can never loop.
+                usersQueryDelta = null;
+                read = await ReadDeltaRound(null);
+            }
 
+            if (read.Failure != null)
+            {
+                var tokenOutcome = string.IsNullOrEmpty(usersQueryDelta)
+                    ? "No delta token was in use, so the next run reads the full user list again."
+                    : "The stored delta token was kept, because this failure does not mean it has expired; the next run resumes from it.";
+                _logger.LogWarning($"User import - the /users/delta read stopped on page {read.FailedPage:N0} ({DescribeFailure(read.Failure)}) after {read.Users.Count:N0} user(s). {tokenOutcome}");
+            }
+            else if (!_hasPendingDeltaToken)
+            {
+                _logger.LogWarning("User import - the /users/delta read ended without an @odata.deltaLink, so there is no new delta token to save.");
+            }
+            else
+            {
+                LastLoadReachedDeltaLink = true;
+            }
+
+            var results = read.Users;
             if (string.IsNullOrEmpty(usersQueryDelta))
             {
                 _logger.LogInformation($"User import - read {results.Count.ToString("N0")} users (all) from Graph API");
@@ -143,6 +176,67 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             var allActiveGraphUsers = allGraphUsers.Where(u => u.AccountEnabled.HasValue && u.AccountEnabled.Value).ToList();
 
             return allActiveGraphUsers;
+        }
+
+        /// <summary>
+        /// One pass over <c>/users/delta</c>, from <paramref name="deltaToken"/> or, when it is empty, from the
+        /// start. Buffers the new token if the pass reaches an <c>@odata.deltaLink</c>, and records the failure
+        /// that ended it early, if one did.
+        /// </summary>
+        private async Task<DeltaReadRound> ReadDeltaRound(string deltaToken)
+        {
+            var url = $"https://graph.microsoft.com:443/v1.0/users/delta" +
+                $"?$select={GraphUserDeltaQuery.Select}" +
+                "&$expand=manager";
+            if (!string.IsNullOrEmpty(deltaToken))
+            {
+                url += $"&$deltatoken={deltaToken}";
+            }
+
+            var round = new DeltaReadRound();
+            round.Users = await _httpClient.LoadAllPagesPlusDeltaWithThrottleRetries<GraphUser>(url, _logger,
+                (deltaLink) =>
+                {
+                    // Buffer the new delta in memory. It will only be persisted to
+                    // the underlying provider when CommitDeltaTokenAsync is called
+                    // after the rest of the import succeeds.
+                    _pendingDeltaToken = StringUtils.ExtractCodeFromGraphUrl(deltaLink);
+                    _hasPendingDeltaToken = true;
+                    return Task.CompletedTask;
+                },
+                // Lenient paging, deliberately: a failure part-way still returns the users read so far, and the
+                // rest of the import - the licence refresh in particular, which does not use this token - still
+                // runs. What must not happen is the failure passing for "nothing changed", so it is recorded
+                // here and the load reports itself incomplete.
+                onPageFailed: (ex, page) =>
+                {
+                    round.Failure = ex;
+                    round.FailedPage = page;
+                });
+
+            return round;
+        }
+
+        /// <summary>
+        /// The HTTP status and Graph error code, without the URL: the URL carries the delta token, and
+        /// <see cref="ManualGraphCallClient"/> has already logged it in full.
+        /// </summary>
+        private static string DescribeFailure(Exception failure)
+        {
+            var graphError = failure as GraphHttpException;
+            if (graphError == null)
+            {
+                return failure.Message;
+            }
+
+            return $"HTTP {(int)graphError.StatusCode} ({graphError.StatusCode}), Graph error code '{graphError.GraphErrorCode ?? "unknown"}'";
+        }
+
+        private sealed class DeltaReadRound
+        {
+            public List<GraphUser> Users { get; set; }
+            public Exception Failure { get; set; }
+            public int FailedPage { get; set; }
         }
 
         public async Task CommitDeltaTokenAsync()
