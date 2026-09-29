@@ -1706,6 +1706,9 @@ WHERE resource_type = 'APPLICATION' AND resource_database_id = DB_ID()
 
             public Task<int> RecordEntraRefreshAsync(IReadOnlyDictionary<int, int> expectedGenerations, DateTime refreshedUtc, CancellationToken cancellationToken = default(CancellationToken))
                 => _inner.RecordEntraRefreshAsync(expectedGenerations, refreshedUtc, cancellationToken);
+
+            public Task<int> RecordListValuedAsync(IReadOnlyDictionary<int, int> expectedGenerations, CancellationToken cancellationToken = default(CancellationToken))
+                => _inner.RecordListValuedAsync(expectedGenerations, cancellationToken);
         }
 
         /// <summary>A Graph probe that lets something else happen while it is being waited on.</summary>
@@ -1955,6 +1958,32 @@ WHERE resource_type = 'APPLICATION' AND resource_database_id = DB_ID()
     public class UserOrgUploadLimitTests
     {
         private const int Limit = AnalyticsWeb::Web.AnalyticsWeb.Controllers.UserOrgAPIController.MaxUploadBytes;
+
+        [TestMethod]
+        public void TheUnusableRowsShownAreTheFirstInTheFileWithoutReadingPastTheCap()
+        {
+            // A file of half a million unreadable rows used to become half a million models, sorted, to keep
+            // the first few. Both lists arrive in line order, so no more than the cap is needed from either.
+            var read = 0;
+            IEnumerable<UserOrgCsvRowProblem> UnreadableEvenLines()
+            {
+                for (var line = 2; line < 1000002; line += 2)
+                {
+                    read++;
+                    yield return new UserOrgCsvRowProblem(line, UserOrgCsvProblemCodes.NotAValidUpn, "reason", "not a upn " + line, "X");
+                }
+            }
+
+            var unknown = new[] { new UserOrgStagedRow(3, "nobody@contoso.com", "Y"), new UserOrgStagedRow(9, "gone@contoso.com", "Z") };
+
+            var rows = UserOrgAdminService.FirstUnusableRows(UnreadableEvenLines(), unknown, 4);
+
+            CollectionAssert.AreEqual(new[] { 2, 3, 4, 6 }, rows.Select(r => r.LineNumber).ToArray(), "The first four in the file, merged.");
+            CollectionAssert.AreEqual(
+                new[] { UserOrgCsvProblemCodes.NotAValidUpn, UserOrgCsvProblemCodes.UnknownUser, UserOrgCsvProblemCodes.NotAValidUpn, UserOrgCsvProblemCodes.NotAValidUpn },
+                rows.Select(r => r.Code).ToArray());
+            Assert.AreEqual(4, read, "Nothing past the cap is read from the parser's problems.");
+        }
 
         /// <summary>
         /// Posts a file as the portal does, as multipart form data, and says whether the controller read it

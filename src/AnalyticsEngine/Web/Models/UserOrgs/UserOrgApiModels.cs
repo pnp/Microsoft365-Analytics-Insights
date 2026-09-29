@@ -53,6 +53,14 @@ namespace Web.AnalyticsWeb.Models.UserOrgs
         [JsonProperty("lastRefreshedUtc")]
         public string LastRefreshedUtc { get; set; }
 
+        /// <summary>
+        /// Whether the last user import found this type's Entra attribute holding a list of values rather
+        /// than one, so it cannot be imported until the type is pointed at another attribute. See
+        /// <c>UserOrgType.AttributeHoldsLists</c>.
+        /// </summary>
+        [JsonProperty("attributeHoldsLists")]
+        public bool AttributeHoldsLists { get; set; }
+
         [JsonProperty("lastImport")]
         public UserOrgImportJobModel LastImport { get; set; }
     }

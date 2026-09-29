@@ -312,6 +312,20 @@ describe('UserOrgsPage', () => {
     expect(within(rowFor('Division')).getByText('Never')).toBeInTheDocument();
   });
 
+  it('says a type whose attribute holds lists cannot be imported, rather than that it is waiting', async () => {
+    // No import will ever refresh it until the type points at another attribute, so "waiting for the
+    // next user import" would tell the admin that nothing is wrong.
+    fetchOrgTypes.mockResolvedValue([
+      orgType({ id: 1, name: 'Skills', entraAttributeName: 'extension_0123456789abcdef0123456789abcdef_skills', attributeHoldsLists: true }),
+    ]);
+
+    renderWithProvider(<UserOrgsPage />);
+
+    await screen.findByRole('columnheader', { name: 'Last refreshed' });
+    expect(within(rowFor('Skills')).getByText(/Can't be imported: its attribute holds a list of values/)).toBeInTheDocument();
+    expect(within(rowFor('Skills')).queryByText('Waiting for the next user import')).not.toBeInTheDocument();
+  });
+
   it('does not contradict a failed import shown beside it', async () => {
     // The Source column already says a file was imported and failed, so "no file imported" next to it
     // would read as a contradiction. Nothing was applied, and that is what the column must say.

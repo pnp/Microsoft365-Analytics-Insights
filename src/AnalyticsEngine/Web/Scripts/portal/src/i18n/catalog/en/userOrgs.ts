@@ -42,6 +42,8 @@ export const userOrgs = {
   'userOrgs.lastRefreshed.noImportYet': 'No successful import yet',
   'userOrgs.lastRefreshed.clearedBySourceChange': 'Cleared when the source changed',
   'userOrgs.lastRefreshed.never': 'Never',
+  'userOrgs.lastRefreshed.holdsLists':
+    "Can't be imported: its attribute holds a list of values. Point the type at an attribute with one value per user.",
 
   // Job status, as shown beside a CSV type
   'userOrgs.status.pending': 'pending',

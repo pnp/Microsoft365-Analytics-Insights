@@ -115,7 +115,7 @@ namespace Common.Entities.UserOrgs
     internal sealed class SqlUserOrgTypeStore : SqlUserOrgStoreBase, IUserOrgTypeStore
     {
         private const string SelectColumns =
-            "id, name, source_kind, entra_attribute_name, is_enabled, source_generation, created_utc, modified_utc, last_refreshed_utc, revision";
+            "id, name, source_kind, entra_attribute_name, is_enabled, source_generation, created_utc, modified_utc, last_refreshed_utc, revision, list_valued_generation";
 
         public SqlUserOrgTypeStore(string connectionString) : base(connectionString)
         {
@@ -529,7 +529,9 @@ DELETE FROM dbo.user_org_types WHERE id = @id;";
                     // The same fence as the Entra merge: a type that was switched to CSV, disabled or
                     // repointed while this cycle was loading users was not refreshed by it, whatever
                     // happened to its values. Never moves a time backwards, so an older cycle that
-                    // finishes late cannot make a type look staler than it is.
+                    // finishes late cannot make a type look staler than it is. And never a type whose
+                    // attribute was found holding lists at this configuration: its values were never
+                    // read, and a quiet delta cycle confirms nothing about them.
                     var sql = @"
 UPDATE t
 SET t.last_refreshed_utc = @refreshedUtc
@@ -538,6 +540,7 @@ JOIN (VALUES " + rows + @") AS refreshed (id, generation) ON refreshed.id = t.id
 WHERE t.source_kind = @entra
   AND t.is_enabled = 1
   AND t.source_generation = refreshed.generation
+  AND (t.list_valued_generation IS NULL OR t.list_valued_generation <> t.source_generation)
   AND (t.last_refreshed_utc IS NULL OR t.last_refreshed_utc < @refreshedUtc);";
 
                     using (var cmd = Command(connection, sql))
@@ -556,6 +559,43 @@ WHERE t.source_kind = @entra
             }
 
             return stamped;
+        }
+
+        public async Task<int> RecordListValuedAsync(
+            IReadOnlyDictionary<int, int> expectedGenerations,
+            CancellationToken cancellationToken = default(CancellationToken))
+        {
+            if (expectedGenerations == null || expectedGenerations.Count == 0)
+            {
+                return 0;
+            }
+
+            // A handful of types at most - an attribute holding lists is a configuration mistake - so one
+            // statement per type, with the merge's fence: only at the configuration the cycle read.
+            const string sql = @"
+UPDATE dbo.user_org_types
+SET list_valued_generation = source_generation
+WHERE id = @id
+  AND source_kind = @entra
+  AND is_enabled = 1
+  AND source_generation = @gen;";
+
+            var marked = 0;
+            using (var connection = await OpenAsync(cancellationToken).ConfigureAwait(false))
+            {
+                foreach (var pair in expectedGenerations)
+                {
+                    using (var cmd = Command(connection, sql))
+                    {
+                        cmd.Parameters.Add("@id", SqlDbType.Int).Value = pair.Key;
+                        cmd.Parameters.Add("@gen", SqlDbType.Int).Value = pair.Value;
+                        cmd.Parameters.Add("@entra", SqlDbType.TinyInt).Value = (byte)UserOrgSourceKind.EntraAttribute;
+                        marked += await cmd.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+                    }
+                }
+            }
+
+            return marked;
         }
 
         private static void Validate(UserOrgType type)
@@ -645,6 +685,8 @@ WHERE t.source_kind = @entra
                 ModifiedUtc = ReadNullableDate(reader, 7),
                 LastRefreshedUtc = ReadNullableDate(reader, 8),
                 Revision = reader.GetInt32(9),
+                // Only at the configuration it was found under: any change moves the generation past it.
+                AttributeHoldsLists = !reader.IsDBNull(10) && reader.GetInt32(10) == reader.GetInt32(5),
             };
         }
     }

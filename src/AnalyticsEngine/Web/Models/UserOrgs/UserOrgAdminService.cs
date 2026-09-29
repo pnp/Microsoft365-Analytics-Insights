@@ -553,17 +553,7 @@ namespace Web.AnalyticsWeb.Models.UserOrgs
 
             // Everything that will not be imported, in file order: rows that could not be read, and rows
             // naming nobody. The two cannot overlap - an unreadable row is never staged.
-            preview.UnusableRows = parsed.Problems.Select(ToUnusableRow)
-                .Concat(summary.UnknownRowList.Select(r => new UserOrgCsvUnusableRowModel
-                {
-                    LineNumber = r.LineNumber,
-                    Upn = r.Upn,
-                    OrgValue = r.OrgValue,
-                    Code = UserOrgCsvProblemCodes.UnknownUser,
-                }))
-                .OrderBy(r => r.LineNumber)
-                .Take(MaxUnusableRows)
-                .ToList();
+            preview.UnusableRows = FirstUnusableRows(parsed.Problems, summary.UnknownRowList, MaxUnusableRows);
             preview.UnusableRowCount = parsed.Problems.Count + summary.UnknownRows;
 
             Emit(new UserOrgImportTelemetryEvent
@@ -937,6 +927,33 @@ namespace Web.AnalyticsWeb.Models.UserOrgs
                 .ToList();
         }
 
+        /// <summary>
+        /// The first <paramref name="max"/> rows that will not be imported, in file order: the rows that
+        /// could not be read and the rows naming nobody, merged.
+        /// </summary>
+        /// <remarks>
+        /// Both come in line order, so the first <paramref name="max"/> of the two together are among the
+        /// first <paramref name="max"/> of each - taken before merging, so a file of half a million
+        /// unreadable rows is not turned into half a million models and sorted to keep ten thousand.
+        /// </remarks>
+        internal static List<UserOrgCsvUnusableRowModel> FirstUnusableRows(
+            IEnumerable<UserOrgCsvRowProblem> problems,
+            IEnumerable<UserOrgStagedRow> unknownRows,
+            int max)
+        {
+            return (problems ?? Enumerable.Empty<UserOrgCsvRowProblem>()).Take(max).Select(ToUnusableRow)
+                .Concat((unknownRows ?? Enumerable.Empty<UserOrgStagedRow>()).Take(max).Select(r => new UserOrgCsvUnusableRowModel
+                {
+                    LineNumber = r.LineNumber,
+                    Upn = r.Upn,
+                    OrgValue = r.OrgValue,
+                    Code = UserOrgCsvProblemCodes.UnknownUser,
+                }))
+                .OrderBy(r => r.LineNumber)
+                .Take(max)
+                .ToList();
+        }
+
         private static UserOrgCsvUnusableRowModel ToUnusableRow(UserOrgCsvRowProblem problem)
         {
             return new UserOrgCsvUnusableRowModel
@@ -991,6 +1008,7 @@ namespace Web.AnalyticsWeb.Models.UserOrgs
                 CreatedUtc = Iso(type.CreatedUtc),
                 ModifiedUtc = type.ModifiedUtc.HasValue ? Iso(type.ModifiedUtc.Value) : null,
                 LastRefreshedUtc = type.LastRefreshedUtc.HasValue ? Iso(type.LastRefreshedUtc.Value) : null,
+                AttributeHoldsLists = type.AttributeHoldsLists,
                 LastImport = summary.LastImport == null ? null : ToModel(summary.LastImport, DateTime.UtcNow),
             };
         }

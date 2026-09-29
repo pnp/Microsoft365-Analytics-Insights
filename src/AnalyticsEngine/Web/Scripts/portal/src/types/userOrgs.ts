@@ -129,6 +129,11 @@ export interface UserOrgType {
    * changed.
    */
   lastRefreshedUtc: string | null;
+  /**
+   * The last user import found this Entra type's attribute holding a list of values rather than one, so
+   * it cannot be imported until the type is pointed at another attribute. Absent from an older server.
+   */
+  attributeHoldsLists?: boolean;
   lastImport: UserOrgImportJob | null;
 }
 

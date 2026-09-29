@@ -606,8 +606,10 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 {
                     // Skipped whole, for everyone: a list is not "no value", so clearing the users who have
                     // one would be wrong, and clearing only the users without one would half-apply a
-                    // configuration known to be wrong. Nor is the type recorded as refreshed below, so its
-                    // "Last refreshed" time goes stale - which is what tells an administrator to look.
+                    // configuration known to be wrong. Nor is the type recorded as refreshed - now or in a
+                    // later cycle, which is why it is recorded as holding lists: the delta token moves on,
+                    // and the next cycle, often one in which nobody with a list changed, would otherwise
+                    // stamp a type whose values were never read. The admin page says what is wrong.
                     var names = orgTypes
                         .Where(t => t != null && listValued.Contains(t.Id))
                         .Select(t => $"'{t.Name}' ({t.EntraAttributeName})");
@@ -616,6 +618,11 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                         + $"list of values rather than one: {string.Join(", ", names)}. Their values were left as they "
                         + "were. A user can be in only one organisation of each type, so these values cannot be "
                         + "imported. Point the type at a single-valued attribute on the User organisations page.");
+
+                    await RecordOrgTypesListValued(
+                        listValued
+                            .Where(expectedGenerations.ContainsKey)
+                            .ToDictionary(id => id, id => expectedGenerations[id]));
                 }
 
                 if (updates.Count > 0)
@@ -665,6 +672,34 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                     $"User import - failed to apply user organisation values ({ex.Message}). The rest of the user "
                     + "import completed, but the Graph delta token will NOT be committed, so the next cycle re-reads "
                     + "the users needed to populate them.");
+            }
+        }
+
+        /// <summary>
+        /// Records that these org types' attributes hold lists, so no later cycle stamps them as refreshed
+        /// until their configuration changes.
+        /// </summary>
+        /// <remarks>
+        /// Never throws, and never withholds the delta token - re-reading the tenant cannot make a list into
+        /// one value. A failure leaves the old behaviour for this configuration: the type is not stamped by
+        /// this cycle, but a later quiet one may.
+        /// </remarks>
+        private async Task RecordOrgTypesListValued(IReadOnlyDictionary<int, int> expectedGenerations)
+        {
+            if (_orgTypeStore == null || expectedGenerations.Count == 0)
+            {
+                return;
+            }
+
+            try
+            {
+                await _orgTypeStore.RecordListValuedAsync(expectedGenerations);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(
+                    $"User import - could not record that {expectedGenerations.Count} organisation type(s) hold lists "
+                    + $"({ex.Message}). The User organisations page may show them as refreshed after a later import.");
             }
         }
 

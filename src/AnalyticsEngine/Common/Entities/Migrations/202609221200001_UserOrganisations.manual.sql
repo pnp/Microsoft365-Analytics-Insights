@@ -83,6 +83,12 @@ BEGIN
         -- was applied. NULL until the first refresh, and reset to NULL whenever the values are
         -- discarded because the source changed.
         [last_refreshed_utc] datetime2(7) NULL,
+        -- The source_generation at which a user import found the type's Entra attribute holding a list
+        -- of values rather than one. While it equals source_generation the type cannot be imported, so
+        -- it is never recorded as refreshed: the delta token moves on regardless, and a later quiet cycle
+        -- would otherwise stamp a type whose values were never read. Any change of source, attribute or
+        -- enabled flag moves the generation, and with it this.
+        [list_valued_generation] int NULL,
         CONSTRAINT [PK_user_org_types] PRIMARY KEY CLUSTERED ([id] ASC),
         CONSTRAINT [CK_user_org_types_source_kind] CHECK ([source_kind] IN (1, 2))
     );
@@ -373,6 +379,7 @@ BEGIN
        OR OBJECT_ID(N'dbo.user_org_import_changes', N'U') IS NULL
        OR COL_LENGTH(N'dbo.user_org_import_jobs', N'change_log_status') IS NULL
        OR COL_LENGTH(N'dbo.user_org_types', N'revision') IS NULL
+       OR COL_LENGTH(N'dbo.user_org_types', N'list_valued_generation') IS NULL
        OR NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'dbo.user_org_types') AND name = N'UX_user_org_types_name' AND is_unique = 1)
        OR NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'dbo.user_org_values') AND name = N'UX_user_org_values_type_name' AND is_unique = 1)
        OR NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'dbo.user_org_values') AND name = N'UX_user_org_values_id_type' AND is_unique = 1)

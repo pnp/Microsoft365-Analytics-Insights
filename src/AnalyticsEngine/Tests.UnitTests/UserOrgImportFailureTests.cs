@@ -484,6 +484,15 @@ namespace Tests.UnitTests
                 "The type is skipped for everyone: the list is not read as \"no value\", and nobody without one is cleared either.");
             Assert.AreEqual("Retail", assignments.LastUpdates.Single(u => u.OrgTypeId == 2 && u.OrgValue != null).OrgValue);
             CollectionAssert.AreEquivalent(new[] { 2 }, orgTypes.RefreshCalls.Single().ExpectedGenerations.Keys.ToArray());
+
+            // Recorded, so no later cycle stamps it either: the delta token still moves on, and the next
+            // one - often a cycle in which nobody with a list changed - would otherwise vouch for values
+            // that were never read.
+            var marked = orgTypes.ListValuedCalls.Single();
+            CollectionAssert.AreEquivalent(new[] { 1 }, marked.Keys.ToArray());
+            Assert.AreEqual(1, marked[1], "At the generation the cycle read, so a change of configuration lifts it.");
+            Assert.AreEqual("fake-new-delta", await loader.DeltaValueProvider.GetDeltaToken(),
+                "Not withheld: re-reading the tenant cannot turn a list into one value.");
         }
 
         [TestMethod]
@@ -642,6 +651,15 @@ namespace Tests.UnitTests
             {
                 RefreshCalls.Add((expectedGenerations, refreshedUtc));
                 if (ThrowOnRecordRefresh) throw new InvalidOperationException("Invalid column name 'last_refreshed_utc'.");
+                return Task.FromResult(expectedGenerations.Count);
+            }
+
+            /// <summary>Every list-valued mark the updater recorded, in order.</summary>
+            public List<IReadOnlyDictionary<int, int>> ListValuedCalls { get; } = new List<IReadOnlyDictionary<int, int>>();
+
+            public Task<int> RecordListValuedAsync(IReadOnlyDictionary<int, int> expectedGenerations, CancellationToken cancellationToken = default(CancellationToken))
+            {
+                ListValuedCalls.Add(expectedGenerations);
                 return Task.FromResult(expectedGenerations.Count);
             }
         }

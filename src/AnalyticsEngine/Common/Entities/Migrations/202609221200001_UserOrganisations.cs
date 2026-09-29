@@ -71,6 +71,12 @@ BEGIN
         -- was applied. NULL until the first refresh, and reset to NULL whenever the values are
         -- discarded because the source changed.
         [last_refreshed_utc] datetime2(7) NULL,
+        -- The source_generation at which a user import found the type's Entra attribute holding a list
+        -- of values rather than one. While it equals source_generation the type cannot be imported, so
+        -- it is never recorded as refreshed: the delta token moves on regardless, and a later quiet cycle
+        -- would otherwise stamp a type whose values were never read. Any change of source, attribute or
+        -- enabled flag moves the generation, and with it this.
+        [list_valued_generation] int NULL,
         CONSTRAINT [PK_user_org_types] PRIMARY KEY CLUSTERED ([id] ASC),
         CONSTRAINT [CK_user_org_types_source_kind] CHECK ([source_kind] IN (1, 2))
     );

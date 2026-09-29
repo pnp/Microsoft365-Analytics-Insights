@@ -149,6 +149,18 @@ namespace Common.Entities.UserOrgs
         /// the source changed, so it cannot vouch for values from a source the type no longer uses.
         /// </remarks>
         public DateTime? LastRefreshedUtc { get; set; }
+
+        /// <summary>
+        /// Whether a user import found this type's Entra attribute holding a list of values rather than
+        /// one, at its current configuration.
+        /// </summary>
+        /// <remarks>
+        /// Such a type cannot be imported - a user is in one organisation of each type - so it is never
+        /// recorded as refreshed, and the admin page says why rather than "waiting for the next import".
+        /// Any change of source, attribute or enabled flag moves <see cref="SourceGeneration"/> and so
+        /// clears it; the next import finds out afresh.
+        /// </remarks>
+        public bool AttributeHoldsLists { get; set; }
     }
 
     /// <summary>An org type plus the counts the admin page shows next to it.</summary>

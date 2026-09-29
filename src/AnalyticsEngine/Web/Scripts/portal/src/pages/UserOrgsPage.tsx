@@ -37,6 +37,7 @@ const useStyles = makeStyles({
   toolbar: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px' },
   mono: { fontFamily: tokens.fontFamilyMonospace, wordBreak: 'break-all' },
   muted: { color: tokens.colorNeutralForeground3 },
+  warning: { color: tokens.colorStatusWarningForeground1 },
   actions: { display: 'flex', gap: '4px' },
 });
 
@@ -233,7 +234,11 @@ export default function UserOrgsPage() {
                       )}
                     </TableCell>
                     <TableCell>
-                      {type.lastRefreshedUtc ? (
+                      {type.source === 'entra' && type.attributeHoldsLists ? (
+                        // No import will ever refresh it, so "waiting for the next user import" - or a
+                        // time from before - would tell the admin nothing is wrong.
+                        <Text className={styles.warning}>{t('userOrgs.lastRefreshed.holdsLists')}</Text>
+                      ) : type.lastRefreshedUtc ? (
                         formatDateParts(new Date(type.lastRefreshedUtc), {
                           dateStyle: 'short',
                           timeStyle: 'short',

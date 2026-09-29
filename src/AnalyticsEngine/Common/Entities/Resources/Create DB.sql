@@ -258,6 +258,7 @@ CREATE TABLE [dbo].[user_org_types] (
     [created_utc] datetime2(7) NOT NULL CONSTRAINT [DF_user_org_types_created_utc] DEFAULT SYSUTCDATETIME(),
     [modified_utc] datetime2(7) NULL,
     [last_refreshed_utc] datetime2(7) NULL,
+    [list_valued_generation] int NULL,
     CONSTRAINT [PK_user_org_types] PRIMARY KEY CLUSTERED ([id] ASC),
     CONSTRAINT [CK_user_org_types_source_kind] CHECK ([source_kind] IN (1, 2))
 );

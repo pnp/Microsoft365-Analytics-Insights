@@ -1796,6 +1796,52 @@ VALUES ('{upn.Replace("'", "''")}', {(accountEnabled.HasValue ? (accountEnabled.
         }
 
         [TestMethod]
+        public async Task ATypeFoundHoldingListsIsNotStampedUntilItsConfigurationChanges()
+        {
+            // The delta token moves on after a cycle that found lists, so the next cycle - often one in which
+            // nobody with a list changed - would stamp as refreshed a type whose values were never read.
+            var listValued = await CreateEntraType("Cost Centres", "extension_0123456789abcdef0123456789abcdef_costCentres");
+            var other = await CreateEntraType("Cost Centre", "extensionAttribute1");
+
+            Assert.AreEqual(1, await _types.RecordListValuedAsync(new Dictionary<int, int> { { listValued, 1 } }));
+            Assert.IsTrue((await _types.GetAsync(listValued)).AttributeHoldsLists);
+            Assert.IsTrue(
+                (await _types.GetSummariesAsync()).Single(s => s.Type.Id == listValued).Type.AttributeHoldsLists,
+                "The admin page reads it from the summaries.");
+            Assert.IsFalse((await _types.GetAsync(other)).AttributeHoldsLists);
+
+            var quietCycle = new Dictionary<int, int> { { listValued, 1 }, { other, 1 } };
+            Assert.AreEqual(1, await _types.RecordEntraRefreshAsync(quietCycle, CycleStart), "Only the other type.");
+            Assert.IsNull((await _types.GetAsync(listValued)).LastRefreshedUtc);
+            Assert.AreEqual(CycleStart, (await _types.GetAsync(other)).LastRefreshedUtc);
+
+            // Repointed: a new configuration, which the next import finds out about afresh.
+            var type = await _types.GetAsync(listValued);
+            type.EntraAttributeName = "extensionAttribute2";
+            await _types.UpdateAsync(type, true, true);
+            var repointed = await _types.GetAsync(listValued);
+            Assert.IsFalse(repointed.AttributeHoldsLists);
+            Assert.AreEqual(1, await _types.RecordEntraRefreshAsync(
+                new Dictionary<int, int> { { listValued, repointed.SourceGeneration } }, CycleStart.AddHours(1)));
+            Assert.AreEqual(CycleStart.AddHours(1), (await _types.GetAsync(listValued)).LastRefreshedUtc);
+        }
+
+        [TestMethod]
+        public async Task RecordListValued_OnlyAtTheGenerationTheCycleRead()
+        {
+            // The same fence as the refresh: a type repointed while the cycle was loading users is a
+            // configuration this cycle never read.
+            var typeId = await CreateEntraType("Cost Centres", "extensionAttribute1");
+            var type = await _types.GetAsync(typeId);
+            type.EntraAttributeName = "extensionAttribute2";
+            await _types.UpdateAsync(type, true, true);
+
+            Assert.AreEqual(0, await _types.RecordListValuedAsync(new Dictionary<int, int> { { typeId, 1 } }));
+            Assert.IsFalse((await _types.GetAsync(typeId)).AttributeHoldsLists);
+            Assert.AreEqual(0, await _types.RecordListValuedAsync(null));
+        }
+
+        [TestMethod]
         public async Task Update_ThatDiscardsTheValuesAlsoForgetsWhenTheyWereRefreshed()
         {
             // The time vouches for values. Once the values are gone, keeping it would claim a refresh

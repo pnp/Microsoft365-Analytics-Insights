@@ -40,6 +40,8 @@ export const userOrgs: Record<keyof typeof en, string> = {
   'userOrgs.lastRefreshed.noImportYet': 'A\u00fan no hay ninguna importaci\u00f3n correcta',
   'userOrgs.lastRefreshed.clearedBySourceChange': 'Se borr\u00f3 al cambiar el origen',
   'userOrgs.lastRefreshed.never': 'Nunca',
+  'userOrgs.lastRefreshed.holdsLists':
+    'No se puede importar: su atributo contiene una lista de valores. Asigne el tipo a un atributo con un \u00fanico valor por usuario.',
 
   // Job status, as shown beside a CSV type
   'userOrgs.status.pending': 'pendiente',

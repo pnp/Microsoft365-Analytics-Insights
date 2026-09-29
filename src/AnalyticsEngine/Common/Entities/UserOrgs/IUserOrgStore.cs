@@ -112,11 +112,30 @@ namespace Common.Entities.UserOrgs
         /// <param name="refreshedUtc">When the cycle began. A type's time never moves backwards.</param>
         /// <remarks>
         /// Called even when the cycle changed nobody's value: a delta query that returns no changes
-        /// is still a confirmation that the stored values are current, and it is the usual case.
+        /// is still a confirmation that the stored values are current, and it is the usual case. Never
+        /// stamps a type whose attribute was found holding lists (<see cref="RecordListValuedAsync"/>).
         /// </remarks>
         Task<int> RecordEntraRefreshAsync(
             IReadOnlyDictionary<int, int> expectedGenerations,
             System.DateTime refreshedUtc,
+            CancellationToken cancellationToken = default(CancellationToken));
+
+        /// <summary>
+        /// Records that a user import found these Entra-sourced types' attributes holding lists of values,
+        /// and returns how many were marked.
+        /// </summary>
+        /// <param name="expectedGenerations">
+        /// Org type id to the source generation the cycle read, with the same fence as
+        /// <see cref="RecordEntraRefreshAsync"/>. The mark holds only at that generation, so any later
+        /// change of source, attribute or enabled flag lifts it (<see cref="UserOrgType.AttributeHoldsLists"/>).
+        /// </param>
+        /// <remarks>
+        /// Persisted rather than simply not stamping the type that cycle: the delta token still moves on, so
+        /// the next cycle - often one in which nobody with a list changed - would otherwise stamp as
+        /// refreshed a type whose values were never read.
+        /// </remarks>
+        Task<int> RecordListValuedAsync(
+            IReadOnlyDictionary<int, int> expectedGenerations,
             CancellationToken cancellationToken = default(CancellationToken));
     }
 

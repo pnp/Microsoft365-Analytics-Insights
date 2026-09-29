@@ -283,6 +283,9 @@ namespace Tests.UnitTests
 
             public Task<int> RecordEntraRefreshAsync(IReadOnlyDictionary<int, int> expectedGenerations, DateTime refreshedUtc, CancellationToken cancellationToken = default(CancellationToken))
                 => throw new NotSupportedException();
+
+            public Task<int> RecordListValuedAsync(IReadOnlyDictionary<int, int> expectedGenerations, CancellationToken cancellationToken = default(CancellationToken))
+                => throw new NotSupportedException();
         }
     }
 }
