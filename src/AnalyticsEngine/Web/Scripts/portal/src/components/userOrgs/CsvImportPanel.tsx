@@ -1033,17 +1033,23 @@ function ImportHistory({
 
 function shouldShowColumnChooser(preview: UserOrgCsvPreview): boolean {
   // Also for a two-column file in which no row could be read: the usual cause is the columns the
-  // other way round, with no header to say so.
+  // other way round, with no header to say so. And for a headerless file whose second column is blank
+  // on every sampled row: refused by default, because that is also what a list of user principal names
+  // exported with a trailing separator looks like, but the admin can say it is the values - rows
+  // clearing people's values first - and have the whole file read with those columns.
   return (
     preview.columnCount > 2 ||
     preview.blocking?.code === 'chooseColumns' ||
-    (preview.blocking?.code === 'noUsableRows' && preview.columnCount >= 2)
+    (preview.blocking?.code === 'noUsableRows' && preview.columnCount >= 2) ||
+    (preview.blocking?.code === 'oneColumn' && preview.columnCount >= 2)
   );
 }
 
 function blockingMessage(preview: UserOrgCsvPreview, t: TFunction): string {
   const blocking = preview.blocking;
   if (!blocking) return '';
+  // "Only one column" beside a chooser offering two would read as a contradiction.
+  if (blocking.code === 'oneColumn' && preview.columnCount >= 2) return t('userOrgs.csv.oneColumnSecondBlank');
   const key = isBlockingCode(blocking.code) ? BLOCKING_KEYS[blocking.code] : null;
   if (!key) return t('userOrgs.csv.blocking.generic');
   return t(key, {

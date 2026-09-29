@@ -445,6 +445,29 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public void AHeaderlessFileWhoseValuesAreBlankInItsFirstRowsIsReadInFullOnceTheColumnsAreChosen()
+        {
+            // Refused by default - a list of names with a trailing separator looks exactly like this - but
+            // the portal offers the column chooser for it, and chosen columns are read to the end.
+            var builder = new StringBuilder();
+            for (var i = 1; i <= 25; i++)
+            {
+                builder.Append("user").Append(i).Append("@contoso.com,").Append(i == 21 ? GreekOrgName : string.Empty).Append("\r\n");
+            }
+
+            var detected = Parse(builder.ToString());
+            Assert.AreEqual(UserOrgCsvBlockingCodes.OneColumn, detected.Blocking?.Code);
+            Assert.AreEqual(2, detected.ColumnCount, "The chooser needs to know there are two columns to offer.");
+
+            var chosen = Parse(builder.ToString(), null, new UserOrgCsvParseOptions { UserColumn = 0, ValueColumn = 1 });
+
+            Assert.IsNull(chosen.Blocking);
+            Assert.AreEqual(25, chosen.Rows.Count);
+            Assert.AreEqual(GreekOrgName, chosen.Rows.Single(r => r.Upn == "user21@contoso.com").OrgValue);
+            Assert.AreEqual(24, chosen.Rows.Count(r => r.OrgValue == null), "The rest clear their values.");
+        }
+
+        [TestMethod]
         public void ATrailingEmptyColumnIsNotAChoiceToMake()
         {
             // A spreadsheet with an empty column after the data writes a trailing delimiter on every

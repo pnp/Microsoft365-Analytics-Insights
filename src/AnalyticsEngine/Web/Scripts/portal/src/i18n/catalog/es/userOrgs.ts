@@ -215,6 +215,8 @@ export const userOrgs: Record<keyof typeof en, string> = {
     'Este archivo tiene varias columnas. Elija cu\u00e1l contiene el nombre principal de usuario de cada persona y cu\u00e1l contiene el valor.',
   'userOrgs.csv.blocking.oneColumn':
     'Este archivo tiene una sola columna. Necesita dos: el nombre principal de usuario de cada persona y su valor.',
+  'userOrgs.csv.oneColumnSecondBlank':
+    'Solo una columna tiene contenido en las primeras filas de este archivo, as\u00ed que no se puede saber si la otra contiene los valores o es una columna vac\u00eda tras una lista de nombres. Si contiene los valores (vac\u00edos en esas filas, lo que los borra), elija las dos columnas a continuaci\u00f3n.',
   'userOrgs.csv.blocking.tooManyRows':
     'Este archivo tiene m\u00e1s de {max} filas. Div\u00eddalo en archivos m\u00e1s peque\u00f1os e imp\u00f3rtelos de uno en uno.',
   'userOrgs.csv.blocking.tooManyColumns':

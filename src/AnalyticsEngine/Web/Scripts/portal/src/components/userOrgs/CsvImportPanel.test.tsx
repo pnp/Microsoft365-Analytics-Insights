@@ -427,6 +427,30 @@ describe('CsvImportPanel', () => {
     expect(screen.getByRole('button', { name: 'Clear' })).toBeInTheDocument();
   });
 
+  it('offers the column chooser for a headerless file whose second column is blank in its first rows', async () => {
+    // Refused by default - a list of names exported with a trailing separator looks the same - but a
+    // file that clears its first twenty people's values and sets the next one's is a real file, and
+    // with no chooser it could not be imported without editing it.
+    previewCsv.mockResolvedValueOnce(
+      preview({
+        draftId: null,
+        blocking: { code: 'oneColumn', line: null, lastLine: null, max: null },
+        headerDetected: false,
+        columns: null,
+        columnCount: 2,
+        rows: [],
+        totalRows: 0,
+      }),
+    );
+
+    renderWithProvider(<CsvImportPanel orgType={orgType()} onImportFinished={vi.fn()} />);
+    await chooseFile();
+
+    expect(await screen.findByLabelText('User principal name column')).toBeInTheDocument();
+    expect(screen.getByText(/Only one column holds anything in this file's first rows/)).toBeInTheDocument();
+    expect(screen.queryByText(/This file has only one column/)).not.toBeInTheDocument();
+  });
+
   it('offers the column chooser for a two-column file in which no row could be read', async () => {
     // Usually the columns the other way round, with no header to say so.
     previewCsv.mockResolvedValueOnce(

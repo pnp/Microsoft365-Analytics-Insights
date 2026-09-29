@@ -212,6 +212,8 @@ export const userOrgs = {
     "This file has several columns. Choose which one holds each person's user principal name and which holds the value.",
   'userOrgs.csv.blocking.oneColumn':
     "This file has only one column. It needs two: each person's user principal name, and their value.",
+  'userOrgs.csv.oneColumnSecondBlank':
+    "Only one column holds anything in this file's first rows, so it can't tell whether the other is the values or an empty column after a list of names. If it is the values - blank on those rows, which clears them - choose the two columns below.",
   'userOrgs.csv.blocking.tooManyRows':
     'This file has more than {max} rows. Split it into smaller files and import them one at a time.',
   'userOrgs.csv.blocking.tooManyColumns':
