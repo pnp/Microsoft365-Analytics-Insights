@@ -1786,6 +1786,45 @@ WHERE resource_type = 'APPLICATION' AND resource_database_id = DB_ID()
         }
 
         [TestMethod]
+        public async Task AListDroppedFromMemoryBetweenItsSummaryAndItsPageIsReportedAsGone()
+        {
+            // Memory drops the oldest complete lists when a new import needs the room. Dropped between the
+            // summary and the page - or between two pages of a download - the page read found nothing, and
+            // the dialog was told "available" with an empty last page: a list, or a downloaded file, that
+            // ended as though complete.
+            var a = AddUser("a@contoso.com");
+            var typeId = await NewType("Cost Centre");
+            await _assignments.MergeAsync(new[] { new UserOrgAssignmentUpdate(a, typeId, "Old") });
+            var jobId = await ImportThroughTheService(typeId, "UPN,Cost Centre\r\na@contoso.com,New\r\n");
+            var oneListOnly = new InMemoryUserOrgChangeLog(InMemoryUserOrgChangeLog.DefaultMaxChanges, maxLogs: 1);
+            await new UserOrgChangeLogShipper(_jobs, _outbox, _types, () => oneListOnly).ShipAsync(jobId);
+            Assert.AreEqual("available", (await ServiceReadingFrom(oneListOnly).GetChangesAsync(jobId, null, null, 50, CancellationToken.None)).Status);
+
+            var page = await ServiceReadingFrom(new DropsTheListBeforeEachPage(oneListOnly))
+                .GetChangesAsync(jobId, null, null, 50, CancellationToken.None);
+
+            Assert.AreEqual("missing", page.Status);
+            Assert.IsNull(page.Summary, "Not a summary of a list that can no longer be read.");
+        }
+
+        [TestMethod]
+        public async Task ASearchThatMatchesNobodyIsStillAnAvailableList()
+        {
+            // The other empty last page: the list is there, and nobody in it starts with this.
+            var a = AddUser("a@contoso.com");
+            var typeId = await NewType("Cost Centre");
+            await _assignments.MergeAsync(new[] { new UserOrgAssignmentUpdate(a, typeId, "Old") });
+            var jobId = await ImportThroughTheService(typeId, "UPN,Cost Centre\r\na@contoso.com,New\r\n");
+            await new UserOrgChangeLogShipper(_jobs, _outbox, _types, () => _memoryLog).ShipAsync(jobId);
+
+            var page = await _service.GetChangesAsync(jobId, "zz", null, 50, CancellationToken.None);
+
+            Assert.AreEqual("available", page.Status);
+            Assert.AreEqual(0, page.Items.Count);
+            Assert.IsNotNull(page.Summary);
+        }
+
+        [TestMethod]
         public async Task AskingForAListStillToBeWrittenTriesTheWriteAgain()
         {
             // A write the store refused is otherwise retried only by the next sweep - which the admin
@@ -1876,6 +1915,38 @@ WHERE resource_type = 'APPLICATION' AND resource_database_id = DB_ID()
 
             public Task<UserOrgChangeLogPage> GetChangesAsync(string logId, string search, string continuation, int pageSize, CancellationToken cancellationToken)
                 => throw new InvalidOperationException("unreachable");
+        }
+
+        /// <summary>
+        /// A one-list memory log in which another import completes just before every page is read - so the
+        /// list asked for is dropped between its summary and its page, as it would be to make room.
+        /// </summary>
+        private sealed class DropsTheListBeforeEachPage : IUserOrgChangeLog
+        {
+            private readonly InMemoryUserOrgChangeLog _inner;
+            private int _others;
+
+            public DropsTheListBeforeEachPage(InMemoryUserOrgChangeLog inner)
+            {
+                _inner = inner;
+            }
+
+            public UserOrgChangeLogStatus Destination => _inner.Destination;
+
+            public Task AppendAsync(UserOrgChangeLogImport import, IReadOnlyList<UserOrgChangeRecord> changes, CancellationToken cancellationToken)
+                => _inner.AppendAsync(import, changes, cancellationToken);
+
+            public Task CompleteAsync(UserOrgChangeLogImport import, CancellationToken cancellationToken)
+                => _inner.CompleteAsync(import, cancellationToken);
+
+            public Task<UserOrgChangeLogImport> GetImportAsync(string logId, CancellationToken cancellationToken)
+                => _inner.GetImportAsync(logId, cancellationToken);
+
+            public async Task<UserOrgChangeLogPage> GetChangesAsync(string logId, string search, string continuation, int pageSize, CancellationToken cancellationToken)
+            {
+                await _inner.CompleteAsync(new UserOrgChangeLogImport { LogId = "other-" + (++_others) }, cancellationToken);
+                return await _inner.GetChangesAsync(logId, search, continuation, pageSize, cancellationToken);
+            }
         }
     }
 

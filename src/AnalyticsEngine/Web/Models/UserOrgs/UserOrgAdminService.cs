@@ -777,6 +777,18 @@ namespace Web.AnalyticsWeb.Models.UserOrgs
                     .GetChangesAsync(logId, search, continuation, pageSize <= 0 ? DefaultChangePageSize : pageSize, cancellationToken)
                     .ConfigureAwait(false);
 
+                // A list can go between the two reads - memory drops the oldest complete lists to make room
+                // for a new import - and a list that has gone reads as an empty last page. Asked again when
+                // that is what came back, so the list and its download say it has gone rather than ending
+                // as though there were nothing (more) in it.
+                if ((page.Items == null || page.Items.Count == 0)
+                    && page.Continuation == null
+                    && await log.GetImportAsync(logId, cancellationToken).ConfigureAwait(false) == null)
+                {
+                    model.Status = "missing";
+                    return model;
+                }
+
                 model.Status = "available";
                 model.Summary = ToModel(summary);
                 model.Items = page.Items.Select(ToModel).ToList();

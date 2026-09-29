@@ -223,6 +223,23 @@ describe('CsvImportPanel', () => {
     expect(screen.queryByRole('button', { name: /^Import/ })).not.toBeInTheDocument();
   });
 
+  it('writes preview line numbers the way the reader writes numbers', async () => {
+    // Every other line number and count on the panel goes through formatNumber; "12345" beside them
+    // read as a different kind of figure, and in Spanish as a differently written one.
+    previewCsv.mockResolvedValue(
+      preview({
+        rows: [{ lineNumber: 12345, upn: 'alex.wilber@contoso.com', orgValue: 'Retail', userExists: true, clearsValue: false }],
+      }),
+    );
+    renderWithProvider(<CsvImportPanel orgType={orgType()} onImportFinished={vi.fn()} />);
+
+    await chooseFile();
+
+    const table = await screen.findByRole('table', { name: 'File preview' });
+    expect(within(table).getByText('12,345')).toBeInTheDocument();
+    expect(within(table).queryByText('12345')).not.toBeInTheDocument();
+  });
+
   it('shows a generic translated message for an unknown blocking code', async () => {
     previewCsv.mockResolvedValue(
       preview({

@@ -628,7 +628,7 @@ function PreviewTable({
           <TableBody>
             {preview.rows.map((row) => (
               <TableRow key={row.lineNumber}>
-                <TableCell>{row.lineNumber}</TableCell>
+                <TableCell>{formatNumber(row.lineNumber)}</TableCell>
                 <TableCell className={styles.mono}>{row.upn}</TableCell>
                 <TableCell>
                   {row.clearsValue ? (
