@@ -2,6 +2,10 @@ using Common.Entities;
 using Common.Entities.Config;
 using Common.Entities.UserOrgs;
 using DataUtils;
+using Microsoft.ApplicationInsights;
+using Microsoft.ApplicationInsights.Channel;
+using Microsoft.ApplicationInsights.DataContracts;
+using Microsoft.ApplicationInsights.Extensibility;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using Newtonsoft.Json;
 using System;
@@ -516,6 +520,53 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public async Task AValueTooLongToStoreIsStoredShortenedAndTheImportSaysSoWithoutQuotingIt()
+        {
+            // extensionAttribute1-15 hold up to 1,024 characters and an org value 848. Shortened rather than
+            // dropped, as a CSV's is - and said so, because values that differ only past the limit become one
+            // organisation, and the save-time test only ever saw the one user it was run against.
+            const string greek = "Καλημέρα κόσμε ";
+            var orgTypes = new FakeUserOrgTypeStore("extensionAttribute1");
+            var assignments = new FakeUserOrgAssignmentStore();
+            var user = NewGraphUser();
+            user.AdditionalProperties = JsonConvert.DeserializeObject<Dictionary<string, Newtonsoft.Json.Linq.JToken>>(
+                JsonConvert.SerializeObject(new
+                {
+                    onPremisesExtensionAttributes = new { extensionAttribute1 = string.Concat(Enumerable.Repeat(greek, 60)) + "North" },
+                }));
+            var loader = new FakeUserMetadataLoader(new List<GraphUser> { user });
+            var channel = new RecordingTelemetryChannel();
+
+            using (var configuration = new TelemetryConfiguration
+            {
+                TelemetryChannel = channel,
+                ConnectionString = "InstrumentationKey=00000000-0000-0000-0000-000000000001",
+            })
+            {
+                await RunImport(
+                    loader,
+                    orgTypes,
+                    assignments,
+                    logger: new AnalyticsLogger(new TelemetryClient(configuration), "Office365ActivityImporter"));
+
+                var stored = assignments.LastUpdates.Single(u => u.OrgTypeId == 1).OrgValue;
+                Assert.AreEqual(UserOrgRules.MaxOrgValueLength, stored.Length, "Stored shortened, not dropped.");
+                CollectionAssert.AreEquivalent(
+                    new[] { 1 },
+                    orgTypes.RefreshCalls.Single().ExpectedGenerations.Keys.ToArray(),
+                    "Its values were read and stored, so the type was refreshed.");
+
+                var traces = channel.Sent.OfType<TraceTelemetry>().ToList();
+                var warning = traces.Single(t => t.SeverityLevel == SeverityLevel.Warning && t.Message.Contains("shortened"));
+                StringAssert.Contains(warning.Message, "'Org 1' (extensionAttribute1): 1");
+                StringAssert.Contains(warning.Message, UserOrgRules.MaxOrgValueLength.ToString());
+                Assert.IsFalse(
+                    traces.Any(t => t.Message.Contains(greek.Trim())),
+                    "Counts and configuration only: the value itself is tenant data, and no trace may quote it.");
+            }
+        }
+
+        [TestMethod]
         public async Task FailingToRecordTheRefreshDoesNotFailTheImportOrWithholdTheToken()
         {
             // The values are already applied. A label that failed to update is not worth failing the
@@ -559,10 +610,11 @@ namespace Tests.UnitTests
             FakeUserMetadataLoader loader,
             IUserOrgTypeStore orgTypes,
             IUserOrgAssignmentStore assignments,
-            IClock clock = null)
+            IClock clock = null,
+            AnalyticsLogger logger = null)
         {
             var updater = new UserMetadataUpdater(
-                AnalyticsLogger.ConsoleOnlyTracer(),
+                logger ?? AnalyticsLogger.ConsoleOnlyTracer(),
                 BuildConfig(),
                 loader,
                 DefaultAnalyticsDbContextFactory.Instance,
@@ -614,6 +666,44 @@ namespace Tests.UnitTests
                 var url = Uri.UnescapeDataString(request.RequestUri.ToString());
                 Urls.Add(url);
                 return Task.FromResult(_respond(url));
+            }
+        }
+
+        /// <summary>Keeps every telemetry item the logger sends, so a test can read the import's own traces.</summary>
+        private sealed class RecordingTelemetryChannel : ITelemetryChannel
+        {
+            private readonly object _gate = new object();
+            private readonly List<ITelemetry> _sent = new List<ITelemetry>();
+
+            public IList<ITelemetry> Sent
+            {
+                get
+                {
+                    lock (_gate)
+                    {
+                        return _sent.ToList();
+                    }
+                }
+            }
+
+            public bool? DeveloperMode { get; set; }
+
+            public string EndpointAddress { get; set; }
+
+            public void Send(ITelemetry item)
+            {
+                lock (_gate)
+                {
+                    _sent.Add(item);
+                }
+            }
+
+            public void Flush()
+            {
+            }
+
+            public void Dispose()
+            {
             }
         }
 

@@ -534,6 +534,57 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public void BuildUpdates_CountsTheValuesItShortensSoTheImportCanSaySo()
+        {
+            // extensionAttribute1-15 hold up to 1,024 characters; an org value holds 848. Stored shortened, as
+            // a CSV's is - but then two values that differ only past the limit are one organisation, and
+            // nothing but this count would ever tell anyone.
+            const string listAttribute = "extension_0123456789abcdef0123456789abcdef_costCentres";
+            var longPrefix = string.Concat(Enumerable.Repeat(GreekOrgName + " ", 60));
+            Func<string, string, object, string> json = (attribute1, employeeType, list) =>
+                Newtonsoft.Json.JsonConvert.SerializeObject(new Dictionary<string, object>
+                {
+                    { "onPremisesExtensionAttributes", new Dictionary<string, object> { { "extensionAttribute1", attribute1 } } },
+                    { "employeeType", employeeType },
+                    { listAttribute, list },
+                });
+            var graphUsers = new[]
+            {
+                User("a@contoso.com", json(longPrefix + "North", longPrefix + "Staff", longPrefix)),
+                User("b@contoso.com", json(longPrefix + "South", "Staff", new[] { "CC-1", "CC-2" })),
+                User("c@contoso.com", json("Retail" + new string(' ', 900), "Staff", null)),
+            };
+            var types = new[] { Type(10, "extensionAttribute1"), Type(11, "employeeType"), Type(12, listAttribute) };
+            var users = Users(Pair("a@contoso.com", 1), Pair("b@contoso.com", 2), Pair("c@contoso.com", 3));
+            var shortened = new Dictionary<int, int>();
+
+            var updates = UserOrgMappingRules.BuildUpdates(graphUsers, types, users, null, shortened);
+
+            Assert.AreEqual(2, shortened[10], "North and South are both over the limit.");
+            Assert.AreEqual(1, shortened[11]);
+            Assert.IsFalse(
+                shortened.ContainsKey(12),
+                "A type skipped for holding lists stores nothing, so nothing is counted for it - not even its long single value.");
+            Assert.AreEqual(2, shortened.Count);
+
+            var north = updates.Single(u => u.UserId == 1 && u.OrgTypeId == 10).OrgValue;
+            Assert.AreEqual(UserOrgRules.MaxOrgValueLength, north.Length, "Stored shortened, not dropped.");
+            Assert.AreEqual(
+                north,
+                updates.Single(u => u.UserId == 2 && u.OrgTypeId == 10).OrgValue,
+                "Which is exactly why it is counted: past the limit, North and South are one organisation.");
+            Assert.AreEqual(
+                "Retail",
+                updates.Single(u => u.UserId == 3 && u.OrgTypeId == 10).OrgValue,
+                "Padding is not length: trimmed, this value fits, so it is not counted.");
+
+            CollectionAssert.AreEqual(
+                updates.Select(u => (u.UserId, u.OrgTypeId, u.OrgValue)).ToArray(),
+                UserOrgMappingRules.BuildUpdates(graphUsers, types, users).Select(u => (u.UserId, u.OrgTypeId, u.OrgValue)).ToArray(),
+                "Asking for the count is optional and changes nothing that is stored.");
+        }
+
+        [TestMethod]
         public void ParseOrgTypes_SkipsAndReportsTypesWhoseAttributeNoLongerParses()
         {
             IReadOnlyList<string> skipped;

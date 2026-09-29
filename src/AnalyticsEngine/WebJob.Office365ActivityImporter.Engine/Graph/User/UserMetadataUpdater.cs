@@ -620,7 +620,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 }
 
                 var listValued = new HashSet<int>();
-                var updates = UserOrgMappingRules.BuildUpdates(graphUsers, parsed, userIdsByUpn, listValued);
+                var shortened = new Dictionary<int, int>();
+                var updates = UserOrgMappingRules.BuildUpdates(graphUsers, parsed, userIdsByUpn, listValued, shortened);
                 if (listValued.Count > 0)
                 {
                     // Skipped whole, for everyone: a list is not "no value", so clearing the users who have
@@ -653,6 +654,23 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                         $"User import - user organisations: {result.Applied.ToString("N0")} assignment(s) set, "
                         + $"{result.Cleared.ToString("N0")} cleared, {result.ValuesCreated.ToString("N0")} new organisation value(s) "
                         + $"across {parsed.Count} organisation type(s).");
+
+                    if (shortened.Count > 0)
+                    {
+                        // Stored shortened rather than dropped, as a CSV's are, but said so: values that differ
+                        // only past the limit are now one organisation, and the save-time test sees only the one
+                        // user it was run against. Counts and configuration only - the values are tenant data.
+                        var shortenedTypes = orgTypes
+                            .Where(t => t != null && shortened.ContainsKey(t.Id))
+                            .GroupBy(t => t.Id)
+                            .Select(g => $"'{g.First().Name}' ({g.First().EntraAttributeName}): {shortened[g.Key].ToString("N0")}");
+                        _logger.LogWarning(
+                            $"User import - {shortened.Values.Sum().ToString("N0")} organisation value(s) were longer than "
+                            + $"{UserOrgRules.MaxOrgValueLength} characters, the most that can be stored, and were shortened to "
+                            + $"fit: {string.Join(", ", shortenedTypes)}. Values that differ only after that point are stored as "
+                            + "the same organisation. Shorten them in Entra ID, or point the type at a different attribute on "
+                            + "the User organisations page.");
+                    }
 
                     if (result.FencedOut > 0)
                     {

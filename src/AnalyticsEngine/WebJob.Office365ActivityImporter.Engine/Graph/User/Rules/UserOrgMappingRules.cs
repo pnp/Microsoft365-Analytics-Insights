@@ -62,15 +62,25 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         /// configuration known to be wrong; left as it was, the type waits for its attribute to be fixed,
         /// like one Graph rejects.
         /// </para>
+        /// <para>
+        /// A value longer than <see cref="UserOrgRules.MaxOrgValueLength"/> - <c>extensionAttribute1-15</c>, for
+        /// one, hold up to 1,024 characters - is stored shortened, exactly as a CSV's is (see
+        /// <see cref="UserOrgRules.NormaliseOrgValue"/>), and counted per type in
+        /// <paramref name="shortenedValueCounts"/> so the import can say so: two values that differ only past
+        /// the limit become one organisation, and the save-time test only ever sees the one user it was run
+        /// against. A type skipped for holding lists stores nothing, so nothing is counted for it.
+        /// </para>
         /// </remarks>
         public static IReadOnlyList<UserOrgAssignmentUpdate> BuildUpdates(
             IEnumerable<GraphUser> graphUsers,
             IReadOnlyList<UserOrgTypeAttribute> orgTypes,
             IReadOnlyDictionary<string, int> userIdsByUpn,
-            ISet<int> listValuedOrgTypeIds = null)
+            ISet<int> listValuedOrgTypeIds = null,
+            IDictionary<int, int> shortenedValueCounts = null)
         {
             var updates = new List<UserOrgAssignmentUpdate>();
             var listValued = new HashSet<int>();
+            var shortened = new Dictionary<int, int>();
 
             if (graphUsers == null || orgTypes == null || orgTypes.Count == 0 || userIdsByUpn == null)
             {
@@ -106,10 +116,32 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                         continue;
                     }
 
+                    if (UserOrgRules.WouldTruncate(raw))
+                    {
+                        int count;
+                        shortened.TryGetValue(orgType.OrgTypeId, out count);
+                        shortened[orgType.OrgTypeId] = count + 1;
+                    }
+
                     updates.Add(new UserOrgAssignmentUpdate(
                         userId,
                         orgType.OrgTypeId,
                         UserOrgRules.NormaliseOrgValue(raw)));
+                }
+            }
+
+            if (shortenedValueCounts != null)
+            {
+                foreach (var pair in shortened)
+                {
+                    if (listValued.Contains(pair.Key))
+                    {
+                        continue;
+                    }
+
+                    int existing;
+                    shortenedValueCounts.TryGetValue(pair.Key, out existing);
+                    shortenedValueCounts[pair.Key] = existing + pair.Value;
                 }
             }
 
