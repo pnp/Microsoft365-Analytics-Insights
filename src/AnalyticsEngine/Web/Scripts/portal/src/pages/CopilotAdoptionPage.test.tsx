@@ -952,6 +952,13 @@ describe('CopilotAdoptionPage modelled time saved', () => {
       within(licence).getByText('a month for the first 40 licence candidates - the list stopped at its limit, so treat this as a floor'),
     ).toBeVisible();
     expect(within(licence).queryByText(/if all 40 licence candidates/)).toBeNull();
+
+    // The definition behind the tile says the same, rather than "every licence candidate".
+    fireEvent.click(within(licence).getByRole('button', { name: /How "Time back from licensing" is calculated/ }));
+    expect(
+      await screen.findByText(/^The time Microsoft 365 Copilot could give back each month if the first 40 licence candidates on the list/),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/if every licence candidate/)).toBeNull();
   });
 
   it('puts each modelled figure on a tile of its own, marked as modelled', async () => {

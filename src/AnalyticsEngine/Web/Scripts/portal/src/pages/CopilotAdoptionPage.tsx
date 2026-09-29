@@ -2338,7 +2338,11 @@ function buildTimeSavedKpis(
         ? { label: t('copilotAdoption.page.kpi.licenceTimeSaved.open'), onClick: () => onOpenTab('opportunities') }
         : undefined,
       info: {
-        what: t(everyone ? 'copilotAdoption.page.kpi.licenceTimeSaved.whatAll' : 'copilotAdoption.page.kpi.licenceTimeSaved.what'),
+        what: everyone
+          ? licence.candidatesCapped
+            ? t('copilotAdoption.page.kpi.licenceTimeSaved.whatAllCapped', { users: formatCount(licence.cohortUsers) })
+            : t('copilotAdoption.page.kpi.licenceTimeSaved.whatAll')
+          : t('copilotAdoption.page.kpi.licenceTimeSaved.what'),
         how: t('copilotAdoption.page.kpi.licenceTimeSaved.how'),
         formula: t('copilotAdoption.page.kpi.licenceTimeSaved.formula', {
           meeting: minutes(assumptions.meetingMinutes),
