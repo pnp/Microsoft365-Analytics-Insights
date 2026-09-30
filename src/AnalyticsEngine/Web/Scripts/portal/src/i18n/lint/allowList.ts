@@ -74,7 +74,6 @@ export const ALLOWED_LITERALS = new Set<string>([
   'SQL',
   'SQL Server',
   'Azure SQL',
-  'Redis',
   'API',
   'CSV',
   'JSON',

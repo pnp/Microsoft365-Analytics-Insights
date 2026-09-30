@@ -793,6 +793,24 @@ namespace Common.Entities.CopilotAdoption
         [JsonProperty("licenceChatUsersEstimate")]
         public LicenceValueEstimate LicenceChatUsersEstimate { get; set; } = new LicenceValueEstimate();
 
+        /// <summary>
+        /// The same model over EVERY licence candidate, recommended or not: everyone the candidate list
+        /// ranked - active in Copilot Chat or Microsoft 365 in the period without a Copilot licence.
+        /// </summary>
+        /// <remarks>
+        /// Published beside <see cref="LicenceOpportunityEstimate"/> so the portal can offer "all users"
+        /// as well as "recommended users". The recommended cohort stays the default: it is the purchase the
+        /// list makes the case for. But on a tenant where nobody uses Microsoft 365 heavily enough to be
+        /// recommended, the recommended figure is empty, and this is the only way to size a purchase at
+        /// all. Built from the same rows and options, so the recommended cohort can never model more time
+        /// than the population it is drawn from, and capped by the same
+        /// <see cref="CopilotAdoptionOptions.MaxOpportunityCandidates"/> - which it is far likelier to
+        /// reach, and says so through <see cref="LicenceValueEstimate.CandidatesCapped"/>. Empty when the
+        /// candidate list is, or the Microsoft 365 usage reports are unavailable.
+        /// </remarks>
+        [JsonProperty("licenceAllCandidatesEstimate")]
+        public LicenceValueEstimate LicenceAllCandidatesEstimate { get; set; } = new LicenceValueEstimate();
+
         #endregion
 
         #region Charts

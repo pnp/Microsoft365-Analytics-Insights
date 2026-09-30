@@ -37,7 +37,6 @@ namespace Tests.FakeDataGen.StressTests.FakeLoaders
             // Create minimal connection strings using same technique
             var connStrings = (AppConnectionStrings)System.Runtime.Serialization.FormatterServices.GetUninitializedObject(typeof(AppConnectionStrings));
             connStrings.DatabaseConnectionString = "Server=fake;Database=fake;User Id=fake;Password=fake;";
-            connStrings.RedisConnectionString = "fake:6380,password=fake,ssl=True,abortConnect=False";
             connStrings.ServiceBusConnectionString = "Endpoint=sb://fake.servicebus.windows.net/;SharedAccessKeyName=fake;SharedAccessKey=fake";
             connStrings.StorageConnectionString = "DefaultEndpointsProtocol=https;AccountName=fake;AccountKey=fake;EndpointSuffix=core.windows.net";
 

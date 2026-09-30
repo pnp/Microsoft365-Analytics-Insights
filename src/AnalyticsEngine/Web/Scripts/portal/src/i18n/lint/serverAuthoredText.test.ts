@@ -617,6 +617,8 @@ const TIME_SAVED_ASSUMPTION_SPECS: TimeSavedAssumptionSpec[] = [
     requiredFacts: {
       saves: ['assumptions.meetingMinutes', 'assumptions.emailMinutes', 'assumptions.documentMinutes'],
       volumes: ['projection.cohortUsers', 'projection.workingDaysPerMonth'],
+      // The same sentence for every licence candidate, recommended or not - the "all candidates" cohort.
+      volumesAll: ['projection.cohortUsers', 'projection.workingDaysPerMonth'],
       chatUsers: [],
       // The cap the list reached - rendered only when it did.
       capped: ['maxCandidates'],
@@ -1924,7 +1926,7 @@ describe('Service Configuration update-check errors', () => {
 });
 
 describe('Teams authorisation server errors', () => {
-  it('keeps the Redis prerequisite error aligned with the SPA catalog entry', () => {
+  it('keeps the Azure Storage prerequisite error aligned with the SPA catalog entry', () => {
     const source = readFileSync(join(process.cwd(), '..', '..', 'Controllers', 'TeamsAuthAPIController.cs'), 'utf8');
     // Every ApiErrorModel the controller builds, literals joined: teamAuthErrorText matches the sentence
     // exactly, so text appended on the server, or a second sentence, would reach a Spanish reader in English.
@@ -1932,7 +1934,7 @@ describe('Teams authorisation server errors', () => {
     const sentences = [...source.matchAll(/new ApiErrorModel\(\s*((?:"(?:[^"\\]|\\.)*"\s*\+?\s*)+)\)/g)]
       .map((m) => [...m[1].matchAll(/"((?:[^"\\]|\\.)*)"/g)].map((part) => csharpStringLiteralValue(part[1])).join(''));
     expect(sentences.length, 'an ApiErrorModel whose message is not literal text').toBe(opened);
-    expect(sentences).toEqual([EN_CATALOG['admin.teams.teamList.redisNotConfigured']]);
+    expect(sentences).toEqual([EN_CATALOG['admin.teams.teamList.storageNotConfigured']]);
     // A reply carrying text some other way (an anonymous { message }) would skip the check above.
     expect([...source.matchAll(/\bContent\s*\(/g)].length, 'a Teams authorisation Content(...) reply that is not an ApiErrorModel')
       .toBe([...source.matchAll(/\bContent\s*\(\s*HttpStatusCode\.\w+,\s*new ApiErrorModel\(/g)].length);

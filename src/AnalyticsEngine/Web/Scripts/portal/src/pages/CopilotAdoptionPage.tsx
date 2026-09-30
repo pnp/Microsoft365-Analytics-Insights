@@ -82,6 +82,11 @@ import {
   useTimeSavedAssumptions,
   type TimeSavedAssumptions,
 } from '../components/copilotAdoption/coworkTimeSaved';
+import {
+  resolveTimeSavedCohort,
+  useTimeSavedCohorts,
+  type TimeSavedCohorts,
+} from '../components/copilotAdoption/timeSavedCohort';
 import UserFilterBar from '../components/userFilter/UserFilterBar';
 import UserFilterPrintSummary from '../components/userFilter/UserFilterPrintSummary';
 import {
@@ -955,7 +960,8 @@ function ExecutiveTab({
   const t = useT();
   const o = summary.options;
   const { assumptions: timeSavedAssumptions } = useTimeSavedAssumptions(summary);
-  const kpis = buildExecutiveKpis(summary, t, timeSavedAssumptions, onOpenTab);
+  const { cohorts: timeSavedCohorts } = useTimeSavedCohorts();
+  const kpis = buildExecutiveKpis(summary, t, timeSavedAssumptions, timeSavedCohorts, onOpenTab);
   return (
     <>
       <KpiGrid items={kpis} />
@@ -1255,7 +1261,8 @@ function AnalystTab({
   const styles = useStyles();
   const t = useT();
   const { assumptions: timeSavedAssumptions } = useTimeSavedAssumptions(summary);
-  const kpis = buildKpis(summary, t, timeSavedAssumptions, onOpenTab);
+  const { cohorts: timeSavedCohorts } = useTimeSavedCohorts();
+  const kpis = buildKpis(summary, t, timeSavedAssumptions, timeSavedCohorts, onOpenTab);
   const o = summary.options;
   const accountabilityCopy = accountabilityDimensionCopy(summary, t);
 
@@ -2393,6 +2400,7 @@ function buildExecutiveKpis(
   summary: CopilotAdoptionSummary,
   t: TFunction,
   timeSaved: TimeSavedAssumptions,
+  cohorts: TimeSavedCohorts,
   onOpenTab?: (tab: AdoptionTab) => void,
 ): KpiDefinition[] {
   const executiveKeys = new Set([
@@ -2405,7 +2413,7 @@ function buildExecutiveKpis(
     'licenceTimeSaved',
     'coworkTimeSaved',
   ]);
-  return buildKpis(summary, t, timeSaved, onOpenTab).filter((item) => executiveKeys.has(item.key));
+  return buildKpis(summary, t, timeSaved, cohorts, onOpenTab).filter((item) => executiveKeys.has(item.key));
 }
 
 /**
@@ -2418,17 +2426,20 @@ function buildExecutiveKpis(
  * different decisions on different evidence, and a sum would recreate the blended figure that let
  * Copilot's evidence stand behind Cowork's.
  *
- * Built from the same projections and assumptions as the tabs that explain them - the reader's own
- * for this session, or the product defaults - so the overview can never quote a model differently
- * from its tab. Each is badged and drawn as modelled, links to its tab, and is absent rather than a
- * modelled zero when there is nobody to model. The values use compact numbers where they are shorter
- * in the reader's language, so a seven-digit range still fits the tile and the "h" never wraps onto a
- * line of its own.
+ * Built from the same projections, assumptions and cohorts as the tabs that explain them - the
+ * reader's own for this session, or the product defaults - so the overview can never quote a model
+ * differently from its tab, or for different people: a reader who chose to model every licence
+ * candidate or every Copilot seat holder on a tab sees that figure here too, and so does a tenant
+ * where nobody is recommended. Each is badged and drawn as modelled, links to its tab, and is absent
+ * rather than a modelled zero when there is nobody to model. The values use compact numbers where they
+ * are shorter in the reader's language, so a seven-digit range still fits the tile and the "h" never
+ * wraps onto a line of its own.
  */
 function buildTimeSavedKpis(
   summary: CopilotAdoptionSummary,
   t: TFunction,
   assumptions: TimeSavedAssumptions,
+  cohorts: TimeSavedCohorts,
   onOpenTab?: (tab: AdoptionTab) => void,
 ): KpiDefinition[] {
   const o = summary.options;
@@ -2436,23 +2447,41 @@ function buildTimeSavedKpis(
   const percent = formatNumber(assumptions.conservativeRatio * 100, { maximumFractionDigits: 1 });
   const minutes = (value: number) => formatNumber(value, { maximumFractionDigits: 2 });
 
-  const licence = projectLicenceTimeSaved(summary.licenceOpportunityEstimate, assumptions, o);
-  if (licence) {
+  const licenceCohort = resolveTimeSavedCohort(
+    cohorts.licence,
+    projectLicenceTimeSaved(summary.licenceOpportunityEstimate, assumptions, o),
+    projectLicenceTimeSaved(summary.licenceAllCandidatesEstimate, assumptions, o),
+  );
+  if (licenceCohort) {
+    const licence = licenceCohort.projection;
+    const everyone = licenceCohort.cohort === 'all';
     items.push({
       key: 'licenceTimeSaved',
       label: t('copilotAdoption.page.kpi.licenceTimeSaved.label'),
       value: t('copilotAdoption.page.kpi.hoursValue', { range: compactHoursRange(t, licence.hoursLow, licence.hoursHigh) }),
-      hint: t(
-        plural(licence.cohortUsers, 'copilotAdoption.page.kpi.licenceTimeSaved.hint.one', 'copilotAdoption.page.kpi.licenceTimeSaved.hint.other'),
-        { users: formatCount(licence.cohortUsers) },
-      ),
+      // A capped list cannot say "all": every candidate past its limit is missing, so the figure is a floor.
+      hint: everyone
+        ? licence.candidatesCapped
+          ? t('copilotAdoption.page.kpi.licenceTimeSaved.hintAllCapped', { users: formatCount(licence.cohortUsers) })
+          : t(
+              plural(licence.cohortUsers, 'copilotAdoption.page.kpi.licenceTimeSaved.hintAll.one', 'copilotAdoption.page.kpi.licenceTimeSaved.hintAll.other'),
+              { users: formatCount(licence.cohortUsers) },
+            )
+        : t(
+            plural(licence.cohortUsers, 'copilotAdoption.page.kpi.licenceTimeSaved.hint.one', 'copilotAdoption.page.kpi.licenceTimeSaved.hint.other'),
+            { users: formatCount(licence.cohortUsers) },
+          ),
       tone: 'opportunity',
       modelledBadge: t('copilotAdoption.page.kpi.modelledBadge'),
       action: onOpenTab
         ? { label: t('copilotAdoption.page.kpi.licenceTimeSaved.open'), onClick: () => onOpenTab('opportunities') }
         : undefined,
       info: {
-        what: t('copilotAdoption.page.kpi.licenceTimeSaved.what'),
+        what: everyone
+          ? licence.candidatesCapped
+            ? t('copilotAdoption.page.kpi.licenceTimeSaved.whatAllCapped', { users: formatCount(licence.cohortUsers) })
+            : t('copilotAdoption.page.kpi.licenceTimeSaved.whatAll')
+          : t('copilotAdoption.page.kpi.licenceTimeSaved.what'),
         how: t('copilotAdoption.page.kpi.licenceTimeSaved.how'),
         formula: t('copilotAdoption.page.kpi.licenceTimeSaved.formula', {
           meeting: minutes(assumptions.meetingMinutes),
@@ -2466,24 +2495,30 @@ function buildTimeSavedKpis(
   }
 
   if (summary.coworkReadinessAvailable) {
-    // The people ready now lead, as on the Cowork tab: that is the spending-policy decision. When
-    // nobody is ready, the ceiling stands in - and says it is every seat holder, not the ready few.
-    const ready = projectCoworkTimeSaved(summary.coworkValueEstimate, assumptions, o);
-    const cowork = ready ?? projectCoworkTimeSaved(summary.coworkFullRolloutEstimate, assumptions, o);
-    if (cowork) {
+    // The people ready now lead, as on the Cowork tab: that is the spending-policy decision. When the
+    // reader chose every seat holder, or nobody is ready, the ceiling stands in - and says it is every
+    // seat holder, not the ready few.
+    const coworkCohort = resolveTimeSavedCohort(
+      cohorts.cowork,
+      projectCoworkTimeSaved(summary.coworkValueEstimate, assumptions, o),
+      projectCoworkTimeSaved(summary.coworkFullRolloutEstimate, assumptions, o),
+    );
+    if (coworkCohort) {
+      const cowork = coworkCohort.projection;
       items.push({
         key: 'coworkTimeSaved',
         label: t('copilotAdoption.page.kpi.coworkTimeSaved.label'),
         value: t('copilotAdoption.page.kpi.hoursValue', { range: compactHoursRange(t, cowork.hoursLow, cowork.hoursHigh) }),
-        hint: ready
-          ? t(
-              plural(ready.cohortUsers, 'copilotAdoption.page.kpi.coworkTimeSaved.hintReady.one', 'copilotAdoption.page.kpi.coworkTimeSaved.hintReady.other'),
-              { users: formatCount(ready.cohortUsers) },
-            )
-          : t(
-              plural(cowork.cohortUsers, 'copilotAdoption.page.kpi.coworkTimeSaved.hintCeiling.one', 'copilotAdoption.page.kpi.coworkTimeSaved.hintCeiling.other'),
-              { users: formatCount(cowork.cohortUsers) },
-            ),
+        hint:
+          coworkCohort.cohort === 'recommended'
+            ? t(
+                plural(cowork.cohortUsers, 'copilotAdoption.page.kpi.coworkTimeSaved.hintReady.one', 'copilotAdoption.page.kpi.coworkTimeSaved.hintReady.other'),
+                { users: formatCount(cowork.cohortUsers) },
+              )
+            : t(
+                plural(cowork.cohortUsers, 'copilotAdoption.page.kpi.coworkTimeSaved.hintCeiling.one', 'copilotAdoption.page.kpi.coworkTimeSaved.hintCeiling.other'),
+                { users: formatCount(cowork.cohortUsers) },
+              ),
         tone: 'opportunity',
         modelledBadge: t('copilotAdoption.page.kpi.modelledBadge'),
         action: onOpenTab
@@ -2513,6 +2548,7 @@ function buildKpis(
   summary: CopilotAdoptionSummary,
   t: TFunction,
   timeSaved: TimeSavedAssumptions,
+  cohorts: TimeSavedCohorts,
   onOpenTab?: (tab: AdoptionTab) => void,
 ): KpiDefinition[] {
   const o = summary.options;
@@ -2727,7 +2763,7 @@ function buildKpis(
   });
 
   // Last: a model follows the measurements it is built on, never leads them.
-  items.push(...buildTimeSavedKpis(summary, t, timeSaved, onOpenTab));
+  items.push(...buildTimeSavedKpis(summary, t, timeSaved, cohorts, onOpenTab));
 
   return items;
 }

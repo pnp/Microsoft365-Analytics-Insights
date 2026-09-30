@@ -42,12 +42,12 @@ namespace App.ControlPanel.Engine
         /// </summary>
         public async Task RunPostCreatePaaSTasks(WebSiteResource webApp, AppServicePlanResource appServicePlan, DatabasePaaSInfo dbInfo, StorageAccountResource storage, AutomationAccountResource automationAccount,
             AppInsightsInfo appInsights,
-            RedisInstallResult redis, CognitiveServicesInfo cognitiveServicesInfo,
+            CognitiveServicesInfo cognitiveServicesInfo,
             KeyVaultResource keyVault, string serviceBusConnectionString, SubscriptionResource subscription,
             SqlServerResource sqlServer = null, SqlAuthDecision sqlAuthDecision = null, Guid installerObjectId = default(Guid))
         {
             // Configure app-service connection-strings, etc
-            await ConfigureWebApp(webApp, appServicePlan, dbInfo, storage, redis, cognitiveServicesInfo, appInsights, serviceBusConnectionString, keyVault);
+            await ConfigureWebApp(webApp, appServicePlan, dbInfo, storage, cognitiveServicesInfo, appInsights, serviceBusConnectionString, keyVault);
 
             // Download/extract the release while the App Service is still available. Kudu/SCM
             // rejects deployments while the site resource is stopped.
@@ -518,7 +518,6 @@ namespace App.ControlPanel.Engine
 
         async Task ConfigureWebApp(WebSiteResource webApp, AppServicePlanResource appServicePlan, DatabasePaaSInfo backendInfo,
             StorageAccountResource storage,
-            RedisInstallResult redis,
             CognitiveServicesInfo cognitiveServicesInfo,
             AppInsightsInfo appInsights, string serviceBusConnectionString, KeyVaultResource keyVault)
         {
@@ -578,25 +577,6 @@ namespace App.ControlPanel.Engine
             }
 
             // Connection strings
-            // Build the Redis connection string from the install-task result, which abstracts over
-            // both Azure Managed Redis (port 10000) and pre-existing legacy classic Azure Cache for
-            // Redis (port 6380) that the installer chose to reuse.
-            //
-            // When the cache is RBAC-only (no access keys), we deliberately omit the password
-            // segment so that CacheConnectionManager skips its key-based attempt and authenticates
-            // via Entra ID using the runtime service principal credentials.
-            string redisConnectionString;
-            if (redis.UseRbacAuth)
-            {
-                redisConnectionString = $"{redis.HostName}:{redis.Port},ssl=True,abortConnect=False";
-                _logger.LogInformation("Redis connection string built for RBAC/Entra ID auth (no access key).");
-            }
-            else
-            {
-                redisConnectionString = $"{redis.HostName}:{redis.Port},password={redis.PrimaryKey},ssl=True,abortConnect=False";
-                _logger.LogInformation("Redis connection string built for key-based auth.");
-            }
-
             var storageInfo = new AzStorageConnectionInfo(storage);
             var connectionStrings = new ConnectionStringDictionary();
             connectionStrings.Properties.Add("SPOInsightsEntities", new ConnStringValueTypePair(backendInfo.ConnectionString, ConnectionStringType.SqlAzure));
@@ -611,8 +591,6 @@ namespace App.ControlPanel.Engine
             {
                 _logger.LogInformation("Service Bus is disabled; skipping 'ServiceBus' connection-string on the App Service.");
             }
-            connectionStrings.Properties.Add("Redis", new ConnStringValueTypePair(redisConnectionString, ConnectionStringType.Custom));
-
             var siteConfig = BuildPostCreateSiteConfig(appServicePlan?.Data?.Sku);
             try
             {
@@ -625,6 +603,8 @@ namespace App.ControlPanel.Engine
             }
             await PreserveUnmanagedAppSettingsAsync(webApp, appSettings);
             await webApp.UpdateApplicationSettingsAsync(appSettings);
+            // The App Service connection string PUT replaces the collection with the dictionary supplied
+            // here. Obsolete installer-managed connection strings are deliberately absent on upgrades.
             await webApp.UpdateConnectionStringsAsync(connectionStrings);
 
             _logger.LogInformation("App Service connection-strings & app-settings configured");

@@ -1669,6 +1669,17 @@ namespace Common.Entities.CopilotAdoption
                     analysis.OpportunitiesCapped)
                 : new LicenceValueEstimate { CandidatesCapped = analysis.OpportunitiesCapped };
 
+            // And every candidate, recommended or not - the portal's "all users" option. Recommended stays
+            // the default, but when nobody uses Microsoft 365 heavily enough to be recommended it is empty,
+            // and this is then the only figure a purchase can be sized with.
+            summary.LicenceAllCandidatesEstimate = volumesObserved
+                ? CopilotAdoptionScoring.EstimateLicenceValue(
+                    opportunities,
+                    _options,
+                    analysis.OpportunitiesCapped,
+                    LicenceEstimateCohort.AllCandidates)
+                : new LicenceValueEstimate();
+
             // Last, because it reads the licensed, unlicensed, opportunity and Cowork populations
             // together - the point of the domain view is that those four answer one question per
             // organisation rather than four separate ones.

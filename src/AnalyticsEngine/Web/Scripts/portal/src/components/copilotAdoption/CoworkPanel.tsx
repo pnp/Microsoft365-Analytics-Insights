@@ -67,6 +67,7 @@ import CoworkQuadrant from './CoworkQuadrant';
 import CoworkTimeSavedHero from './CoworkTimeSavedHero';
 import CoworkTimeSavedModel from './CoworkTimeSavedModel';
 import { useTimeSavedAssumptions } from './coworkTimeSaved';
+import { useTimeSavedCohorts } from './timeSavedCohort';
 import { copilotAdoptionWarningText, coworkRationaleText, coworkTierLabel, isCoworkWarning } from './serverText';
 
 const PAGE_SIZE = 50;
@@ -386,6 +387,7 @@ export default function CoworkPanel({
   const { isExpanded, toggle: toggleRow, resetRows, expandAll, collapseAll, allExpanded } = useRowExpansion();
   const [section, setSection] = useState<CoworkSection>('timeSaved');
   const timeSaved = useTimeSavedAssumptions(summary);
+  const { cohorts, setCohort } = useTimeSavedCohorts();
   // Requests, not flags: each click must act again, including a second click on a section that is
   // already open - which is exactly when a plain setSection() changes nothing the reader can see.
   const [assumptionFocusRequest, setAssumptionFocusRequest] = useState(0);
@@ -533,8 +535,15 @@ export default function CoworkPanel({
         summary={summary}
         options={options}
         timeSaved={timeSaved}
+        cohort={cohorts.cowork}
+        onCohortChange={(cohort) => setCohort('cowork', cohort)}
         onAdjust={adjustAssumptions}
         onShowPeople={() => showPeople({ recommendedOnly: true, tiers: [] })}
+        // Every seat holder the headline models: each filter that would narrow the list lifted, and the
+        // page-wide user filter kept - it is the population the headline was modelled for.
+        onShowAll={() =>
+          showPeople({ search: '', recommendedOnly: false, coworkUsersOnly: false, tiers: [] })
+        }
       />
 
       <div className={styles.sectionNav} data-print="hide" ref={sectionNavRef}>
@@ -568,6 +577,7 @@ export default function CoworkPanel({
           summary={summary}
           options={options}
           timeSaved={timeSaved}
+          cohort={cohorts.cowork}
           focusRequest={assumptionFocusRequest}
         />
       </div>

@@ -42,7 +42,7 @@ namespace Tests.UnitTests
         }
 
         /// <summary>
-        /// Use real adaptor. Fake data in redis & SQL to get new stats set.
+        /// Use real adaptors. Fake data in the state store & SQL to get new stats set.
         /// </summary>
         [TestMethod]
         public async Task UsageStatsReporterRealTests()
@@ -51,13 +51,14 @@ namespace Tests.UnitTests
             var logger = AnalyticsLogger.ConsoleOnlyTracer();
             using (var db = new AnalyticsEntitiesContext())
             {
-                // Fake "last uploaded". Also test
+                // Fake "last uploaded". Also test the round trip through the persisted loader - the production
+                // class, over an in-memory state store so the test needs no Azure Storage.
                 var randoDate = DateTime.UtcNow.AddYears(-12);
                 var sqlStatsAdaptor = new SqlUsageStatsBuilder(db, logger, tenantId);
-                var redisDatesAdaptor = new RedisStatsDatesLoader(new Common.Entities.Config.AppConfig());
+                var statsDatesAdaptor = new PersistedStatsDatesLoader(new Common.Entities.State.InMemoryKeyValueStore());
 
-                await redisDatesAdaptor.RegisterLastUploadDt(randoDate);
-                var randoDateResult = await redisDatesAdaptor.GetLastUploadDt();
+                await statsDatesAdaptor.RegisterLastUploadDt(randoDate);
+                var randoDateResult = await statsDatesAdaptor.GetLastUploadDt();
                 Assert.IsTrue(randoDateResult.HasValue && randoDateResult.Value == randoDate);
 
                 // Clear out config. Stats should fail
@@ -65,7 +66,7 @@ namespace Tests.UnitTests
                 await db.SaveChangesAsync();
 
                 // Do everything for real except actually upload stats
-                var r = new UsageStatsManager(sqlStatsAdaptor, redisDatesAdaptor, new FakeStatsUploader(logger, false), logger);
+                var r = new UsageStatsManager(sqlStatsAdaptor, statsDatesAdaptor, new FakeStatsUploader(logger, false), logger);
 
                 var result = await r.ProcessAndUploadStats();   // Won't work because no config saved in DB
                 Assert.IsFalse(result);

@@ -2,7 +2,7 @@ namespace Web.AnalyticsWeb
 {
     /// <summary>
     /// Claim types used to carry the signed-in admin's Microsoft Graph token in the encrypted
-    /// auth cookie. This lets the SPA obtain a Graph token (via SiteTokenAPI) without Redis.
+    /// auth cookie. This lets the SPA obtain a Graph token (via SiteTokenAPI) without any server-side token store.
     /// </summary>
     public static class GraphTokenClaims
     {

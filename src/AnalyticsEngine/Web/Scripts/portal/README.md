@@ -30,9 +30,10 @@ each other's tooling. The area switcher sits in the header; each area has its ow
 | `#/admin/health` | **Service health** | System health: overview, import liveness, exceptions, component health, data overview and configuration, each lazily loaded from its own cached endpoint. |
 | `#/admin/install-log` | **Install log** | History of configurations applied to the solution (the `sys_configs` table): when, by whom, install messages, and the config JSON per entry. The most recent is the current configuration. |
 | `#/admin/profiling` | **Profiling** | Current state of the profiling data: earliest/latest dates for each compiled profiling table and the source activity tables that feed it (each with the **SQL** behind it), plus a paged view of the profiling runbooks' trace log (`profiling.TraceLogs`). Lets admins quickly check the runbooks have run, data is fresh, and spot errors. |
-| `#/admin/teams-permissions` | **Teams permissions** | Authorise / de-authorise Teams for deep analytics (stores a delegated refresh token in Redis). Ported from the original app. |
+| `#/admin/teams-permissions` | **Teams permissions** | Authorise / de-authorise Teams for deep analytics (stores a delegated refresh token per Team in the `TeamsAuth` partition of the `AnalyticsState` Azure Table in the solution's storage account). Ported from the original app. |
 | `#/admin/user-lookup` | **User data lookup** | Enter a user's UPN to see all of their data held in SQL: profile, per-category record counts (broken down by workload, including Copilot and Power Platform; each row has a **SQL** button to view & copy the query behind its count), drill-down to recent rows, and which **import workloads** are enabled (so a legitimate 0 count is explained). |
-| `#/admin/configuration` | **Service configuration** | What this deployment is pointed at: SQL, Redis, Cognitive Services and Service Bus, plus the Teams calls import state and the Graph call webhook (with a live validation POST to test it). |
+| `#/admin/user-import` | **User import** | Whether the Graph user import has a stored checkpoint (its `/users/delta` token, kept in the `UserImport` partition of the `AnalyticsState` Azure Table), where it is kept, when the import last completed and how often it runs - and a confirmed **Clear checkpoint** action so the next run reads every user again, optionally on the next import cycle. The in-product version of deleting the stored token by hand (issue #664). The token itself never reaches the browser. |
+| `#/admin/configuration` | **Service configuration** | What this deployment is pointed at: SQL, the storage account (which holds the runtime state table), Cognitive Services and Service Bus, plus the Teams calls import state and the Graph call webhook (with a live validation POST to test it). |
 
 Routing uses `HashRouter`, so the whole SPA is served by a single MVC action and no IIS /
 MVC route changes are needed to add pages.
@@ -48,9 +49,9 @@ the two cannot drift — adding a page means adding one entry to `ROUTES`.
 The user signs in via the server's Azure AD (OIDC) redirect, which gates the `[Authorize]`'d
 host action. During that redirect the server captures the OAuth **refresh token** into the
 encrypted, httpOnly auth cookie. The SPA then gets a fresh Graph **access token** from
-`api/SiteTokenAPI` (which mints one from the cookie's refresh token). This works **without
-Redis** — Redis is only needed to persist Teams refresh tokens for the importer's deep
-analytics.
+`api/SiteTokenAPI` (which mints one from the cookie's refresh token). Nothing about the
+signed-in admin's token is stored server-side; only authorising a Team for deep analytics copies
+that refresh token into the runtime state table, for the importer to read that Team's channels.
 
 There is **no client-side sign-in**. A client-side MSAL fallback used to exist for when
 `SiteTokenAPI` returned no token, but it was pinned to a hard-coded app registration that no
@@ -105,6 +106,17 @@ auth cookie, so a token in the request body would be ignored.
 | _(none - origin-relative)_ | `api/UserFilter` | The user filter's picker: which attributes can be filtered on (`/dimensions`) and each one's values, largest first (`/values?dimension=&search=&take=`). |
 | _(none - origin-relative)_ | `api/TeamsExplorer` | Teams Explorer: source availability, and one endpoint per tab (`/overview`, `/adoption`, `/meetings`, `/collaboration`, `/conversations`, `/people`) plus `/export/{section}` CSVs. |
 | _(none - origin-relative)_ | `api/WebActivity` | SharePoint web activity: source availability, and one endpoint per tab (`/overview`, `/visits`, `/pages`, `/journeys`, `/geography`, `/search`, `/technology`) plus `/export/{section}` CSVs. |
+| _(none - origin-relative)_ | `api/UserImportCheckpoint` | User import checkpoint: `GET` its state; `POST /clear` (body `{ "runOnNextCycle": bool }`) deletes it. The only state-changing call the portal makes to its own API, so the server requires the `X-Requested-With` header `apiFetch` sends (see below). |
+
+### Calls that change something
+
+The site authenticates with a cookie, and a browser sends that cookie with a request whichever page started it,
+so an action that changes state is open to cross-site request forgery unless the server checks where the request
+came from. Such actions carry `RequireSameOriginXhrAttribute` (in the `Web` project): the request must have
+`X-Requested-With: XMLHttpRequest` - which `apiFetch` always sends, an HTML form cannot set, and another origin
+can only add after a CORS preflight that this site never grants with credentials - and, when the browser sends
+`Sec-Fetch-Site`, it must be `same-origin`. A refused request gets a bare `403`. Call such an action through
+`apiFetch`, never raw `fetch`, or it will be refused.
 
 `window.o365AnalyticsBuildLabel` is not an endpoint: it is the running build's label
 (`Common.Entities.BuildConstants.BuildLabel`, stamped as `Build <number>` by ci.yml), substituted

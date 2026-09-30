@@ -765,7 +765,7 @@ namespace Tests.UnitTests
         public async Task UserMetadataUpdater_LicenceRefreshSpansEntireDb_NotJustDeltaUsers()
         {
             // Regression test for the licence-count drift bug seen against tenants
-            // that persist the Graph users/delta token (e.g. Redis-backed deployments).
+            // that persist the Graph users/delta token (every deployment with Azure Storage configured).
             //
             // Scenario reproduced:
             //   Run 1: two users (A and B) exist in Graph, neither has a licence.
@@ -830,7 +830,7 @@ namespace Tests.UnitTests
 
             // IMPORTANT: re-use the SAME loader instance across both runs so the
             // FakeDeltaValueProvider keeps the token persisted by run 1 - this
-            // mirrors a Redis-backed deployment.
+            // mirrors a deployment that persists it in the state table.
             var fakeLoader = new FakeUserMetadataLoader(
                 new List<GraphUser> { userAGraph, userBGraph },
                 emptySkuPage,

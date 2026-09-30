@@ -176,6 +176,7 @@
     <Compile Include="Graph\Email\SentEmailImporter.cs" />
     <Compile Include="Graph\Email\SentEmailMailboxSkipList.cs" />
     <Compile Include="Graph\Email\SentEmailSentimentScorer.cs" />
+    <Compile Include="Graph\GraphDeltaTokenRejection.cs" />
     <Compile Include="Graph\GraphHttpException.cs" />
     <Compile Include="Graph\GraphEndpointTemplate.cs" />
     <Compile Include="Graph\GraphResourceNotFoundException.cs" />
@@ -197,6 +198,7 @@
     <Compile Include="Graph\Teams\TeamChannelDeltaTokenStores.cs" />
     <Compile Include="Graph\Teams\TeamsChannelCrawler.cs" />
     <Compile Include="Graph\Teams\Extensions\ChatMessageListExtensions.cs" />
+    <Compile Include="Graph\Teams\Extensions\CognitiveResultCache.cs" />
     <Compile Include="Graph\Teams\Extensions\TeamsCognitiveExtensions.cs" />
     <Compile Include="Graph\Teams\TeamsCrawlConfig.cs" />
     <Compile Include="Graph\Teams\TeamsFinder.cs" />
@@ -254,7 +256,6 @@
     <Compile Include="Graph\UsageReports\YammerDeviceUsageLoader.cs" />
     <Compile Include="Graph\UsageReports\YammerUserUsageLoader.cs" />
     <Compile Include="Graph\UsageReports\TeamsUserUsageLoader.cs" />
-    <Compile Include="Graph\UserActivityLastImportedRedisSingleDateLoader.cs" />
     <Compile Include="Graph\User\GraphUserGroupsCache.cs" />
     <Compile Include="Graph\User\GraphUserLoader.cs" />
     <Compile Include="Graph\User\IUserBulkUpdateWriter.cs" />
@@ -272,7 +273,6 @@
     <Compile Include="Graph\User\UserBatchProcessor.cs" />
     <Compile Include="Graph\User\Rules\UserMetadataMappingRules.cs" />
     <Compile Include="Graph\User\Rules\UserOrgMappingRules.cs" />
-    <Compile Include="Graph\User\GraphUserOrgSelection.cs" />
     <Compile Include="Graph\User\UserDataMapper.cs" />
     <Compile Include="Graph\User\UserGraphResponse.cs" />
     <Compile Include="Graph\User\UserGroupsCache.cs" />
@@ -289,7 +289,7 @@
       <DesignTime>True</DesignTime>
       <DependentUpon>Resources.resx</DependentUpon>
     </Compile>
-    <Compile Include="RedisSingleDateLoader.cs" />
+    <Compile Include="KeyValueSingleDateStore.cs" />
     <Compile Include="ReportCompletionStore.cs" />
     <Compile Include="SingleDateStore.cs" />
     <Compile Include="StatsUploader\AdoptionStatsCollector.cs" />
@@ -298,7 +298,7 @@
     <Compile Include="StatsUploader\BaseClasses.cs" />
     <Compile Include="StatsUploader\EmbeddedCsvSkuAllowList.cs" />
     <Compile Include="StatsUploader\InMemoryStatsDatesLoader.cs" />
-    <Compile Include="StatsUploader\RedisStatsDatesLoader.cs" />
+    <Compile Include="StatsUploader\PersistedStatsDatesLoader.cs" />
     <Compile Include="StatsUploader\UsageStatsManager.cs" />
     <Compile Include="StatsUploader\SqlUsageStatsBuilder.cs" />
     <Compile Include="StatsUploader\WebApiStatsUploader.cs" />

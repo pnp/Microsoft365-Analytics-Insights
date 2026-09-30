@@ -4,7 +4,7 @@ using Common.Entities;
 using Common.Entities.Calls;
 using Common.Entities.Config;
 using Common.Entities.Installer;
-using Common.Entities.Redis;
+using Common.Entities.State;
 using Newtonsoft.Json;
 using System;
 using System.Data.Entity;
@@ -55,7 +55,7 @@ namespace Web.AnalyticsWeb.Models
         }
 
         public string WebAppConfigSQL { get; set; }
-        public string WebAppConfigRedis { get; set; }
+        public string WebAppConfigStorage { get; set; }
         public string WebAppConfigServiceBus { get; set; }
         public string WebAppConfigCognitive { get; set; }
         public bool CognitiveServiceEnabled { get; set; }
@@ -76,7 +76,7 @@ namespace Web.AnalyticsWeb.Models
 
         #endregion
 
-        internal async static Task<SystemStatus> LoadFrom(AnalyticsEntitiesContext db, CacheConnectionManager cache)
+        internal async static Task<SystemStatus> LoadFrom(AnalyticsEntitiesContext db)
         {
             SystemStatus status = null;
 
@@ -104,9 +104,10 @@ namespace Web.AnalyticsWeb.Models
             // Config
             var config = new AppConfig();
             status.WebAppConfigCognitive = config.CognitiveEndpoint;
-            status.WebAppConfigRedis = string.IsNullOrWhiteSpace(config.ConnectionStrings.RedisConnectionString)
-                ? "(not configured - Teams deep analytics disabled)"
-                : StackExchange.Redis.ConfigurationOptions.Parse(config.ConnectionStrings.RedisConnectionString).SslHost;
+
+            // The storage account that holds the runtime state table (and the solution's blobs). The account name
+            // only - never the key. Null when no Storage connection string is configured; the page says so itself.
+            status.WebAppConfigStorage = StorageTableClientFactory.GetAccountName(config.ConnectionStrings.StorageConnectionString);
             status.WebAppConfigSQL = new Microsoft.Data.SqlClient.SqlConnectionStringBuilder(config.ConnectionStrings.DatabaseConnectionString).DataSource;
             status.WebAppConfigServiceBus = string.IsNullOrWhiteSpace(config.ConnectionStrings.ServiceBusConnectionString)
                 ? "(disabled)"

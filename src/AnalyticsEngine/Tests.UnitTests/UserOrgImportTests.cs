@@ -4,6 +4,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using WebJob.Office365ActivityImporter.Engine.Graph;
+using GraphUserDeltaQuery = Common.Entities.State.GraphUserDeltaQuery;
 
 namespace Tests.UnitTests
 {

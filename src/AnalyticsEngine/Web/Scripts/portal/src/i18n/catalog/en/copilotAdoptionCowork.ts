@@ -167,6 +167,18 @@ export const copilotAdoptionCowork = {
   'copilotAdoptionCowork.timeSaved.hero.observed.users.one': 'Already happening: {users} person used Cowork in this period.',
   'copilotAdoptionCowork.timeSaved.hero.observed.users.other': 'Already happening: {users} people used Cowork in this period.',
 
+  // Time saved - who the headline models
+  'copilotAdoptionCowork.timeSaved.cohort.ready': 'Ready now ({users})',
+  'copilotAdoptionCowork.timeSaved.cohort.all': 'All Copilot seat holders ({users})',
+  'copilotAdoptionCowork.timeSaved.hero.info.whatAll': 'The time Cowork could give back each month if every Copilot seat holder used it, on top of what their Microsoft 365 Copilot licences already save, as a range - the ceiling, not a target. It is the value of enabling Cowork, paid for in Copilot Credits. No study has measured it, so every figure here is an assumption.',
+  'copilotAdoptionCowork.timeSaved.hero.allNotice': 'Modelling every Copilot seat holder, not only the people ready now: the ceiling, not a target. It has people who are not ready yet hand Cowork the same share of their work as everyone else, which they would likely not.',
+  'copilotAdoptionCowork.timeSaved.hero.noneReady': 'Nobody is ready for Cowork yet in this period, so this models every Copilot seat holder instead: the ceiling, not a target. It has people who are not ready yet hand Cowork the same share of their work as everyone else, which they would likely not.',
+  'copilotAdoptionCowork.timeSaved.hero.ready.label.one': 'a month from the {users} person ready for Cowork now',
+  'copilotAdoptionCowork.timeSaved.hero.ready.label.other': 'a month from the {users} people ready for Cowork now',
+  'copilotAdoptionCowork.timeSaved.hero.ready.hint': 'Where a rollout starts: the people to put in the Cowork spending policy first.',
+  'copilotAdoptionCowork.timeSaved.hero.seeAll.one': 'See the {users} Copilot seat holder',
+  'copilotAdoptionCowork.timeSaved.hero.seeAll.other': 'See all {users} Copilot seat holders',
+
   // Time saved - the model
   'copilotAdoptionCowork.timeSaved.model.title': 'How the Cowork estimate works',
   'copilotAdoptionCowork.timeSaved.model.intro': 'Where Cowork could save time for the people not yet using it, from the work they already do by hand. For each kind of work Cowork can take on, the volume comes from Microsoft\u2019s usage reports; how much of it people would hand to Cowork, and the minutes Cowork would save on each piece on top of Microsoft 365 Copilot, are assumptions - no study has measured either. Cowork tasks already in Microsoft\u2019s Cowork usage report are counted as reported. Change any figure below and the headline, this table and the overview\u2019s time back from Cowork all follow.',

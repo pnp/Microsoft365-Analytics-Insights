@@ -1,7 +1,7 @@
 ﻿using Common.Entities.Config;
-using Common.Entities.Redis;
-using Common.Entities.Redis.Teams;
+using Common.Entities.State;
 using System.Collections.Generic;
+using System.Linq;
 using System.Net;
 using System.Threading.Tasks;
 using System.Web.Http;
@@ -24,14 +24,20 @@ namespace Web.AnalyticsWeb.Controllers
                 return response;
             }
 
-            // Redis is optional. With no cache no Team can have a stored token, so report
+            // Without a Storage connection string no Team can have a stored token, so report
             // everything as unauthorised rather than failing.
-            var cache = GetConnectionManager();
+            var tokens = GetTokenStore();
+            var authorised = tokens != null
+                ? await tokens.GetAuthorisationStatusAsync(teamIds)
+                : new Dictionary<string, bool>();
 
             foreach (var teamId in teamIds)
             {
-                var cachedToken = cache != null ? await cache.GetTeamRefreshToken(teamId) : null;
-                response.Add(new TeamAuthStatusResponse { TeamId = teamId, HasAuthToken = cachedToken != null });
+                response.Add(new TeamAuthStatusResponse
+                {
+                    TeamId = teamId,
+                    HasAuthToken = teamId != null && authorised.TryGetValue(teamId, out var hasToken) && hasToken,
+                });
             }
             return response;
         }
@@ -47,18 +53,17 @@ namespace Web.AnalyticsWeb.Controllers
                 return NotFound();
             }
 
-            // Redis is optional for the web app, but Teams deep analytics specifically needs it to
-            // store the per-Team refresh token. Without it, return a clear, actionable message
-            // rather than a misleading 401.
-            var cache = GetConnectionManager();
-            if (cache == null)
+            // Teams deep analytics needs somewhere to keep the per-Team refresh token the importer reads.
+            // Without it, return a clear, actionable message rather than a misleading 401.
+            var tokens = GetTokenStore();
+            if (tokens == null)
             {
                 return Content(HttpStatusCode.ServiceUnavailable, new ApiErrorModel(
-                    "Teams deep analytics can't be enabled because Redis is not configured for this deployment. " +
-                    "Add a Redis connection string so Teams authorisation tokens can be stored."));
+                    "Teams deep analytics can't be enabled because Azure Storage is not configured for this deployment. " +
+                    "Add a Storage connection string so Teams authorisation tokens can be stored."));
             }
 
-            // Get redis-cached token we got on login in Startup.ConfigureAuth
+            // The refresh token captured into the auth cookie at sign-in (Startup.ConfigureAuth)
             var auth = await base.GetCachedUserAccessTokenAsync();
             if (auth == null || string.IsNullOrEmpty(auth.RefreshToken))
             {
@@ -67,17 +72,17 @@ namespace Web.AnalyticsWeb.Controllers
 
             if (authTeamData.TeamIdsToAuth != null)
             {
-                foreach (var teamIdToAuth in authTeamData.TeamIdsToAuth)
+                foreach (var teamIdToAuth in authTeamData.TeamIdsToAuth.Where(id => !string.IsNullOrEmpty(id)))
                 {
-                    await cache.SetTeamRefreshToken(teamIdToAuth, auth.RefreshToken);
+                    await tokens.SetRefreshTokenAsync(teamIdToAuth, auth.RefreshToken);
                 }
             }
 
             if (authTeamData.TeamIdsToDeauth != null)
             {
-                foreach (var teamIdToDeAuth in authTeamData.TeamIdsToDeauth)
+                foreach (var teamIdToDeAuth in authTeamData.TeamIdsToDeauth.Where(id => !string.IsNullOrEmpty(id)))
                 {
-                    await cache.RemoveTeamAuthToken(teamIdToDeAuth);
+                    await tokens.RemoveRefreshTokenAsync(teamIdToDeAuth);
                 }
             }
 
@@ -85,14 +90,11 @@ namespace Web.AnalyticsWeb.Controllers
         }
 
         /// <summary>
-        /// Gets the Redis cache manager, or <c>null</c> when Redis is not configured (optional).
+        /// The per-Team token store, or <c>null</c> when no Storage connection string is configured.
         /// </summary>
-        CacheConnectionManager GetConnectionManager()
+        TeamsTokenStore GetTokenStore()
         {
-            var appConfig = new AppConfig();
-            var cache = CacheConnectionManager.TryGetConnectionManager(appConfig.ConnectionStrings.RedisConnectionString, tenantId: appConfig.TenantGUID.ToString(), clientId: appConfig.ClientID, clientSecret: appConfig.ClientSecret);
-
-            return cache;
+            return TeamsTokenStore.TryOpen(new AppConfig());
         }
     }
 }

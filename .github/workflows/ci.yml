@@ -25,7 +25,6 @@ env:
   TenantDomain: ${{ secrets.APP_TENANTDOMAIN }}
   CognitiveEndpoint: ${{ secrets.APP_COGNITIVEENDPOINT }}
   CognitiveKey: ${{ secrets.APP_COGNITIVEKEY}}
-  redis: ${{ secrets.CONNECTIONSTRINGS_REDIS }}
   ServiceBus: ${{ secrets.CONNECTIONSTRINGS_SERVICEBUS }}
   Storage: ${{ secrets.CONNECTIONSTRINGS_STORAGE }}
   SoftwareDownloadURL: ${{ secrets.SOFTWAREDOWNLOADURL }}

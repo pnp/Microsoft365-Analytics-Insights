@@ -20,7 +20,7 @@ namespace Tests.UnitTests
     /// <summary>
     /// The App Insights save side driven entirely through the write ports added by issue #369: the
     /// custom-event section orchestration, the page-view save result, and the day manager's forwarding.
-    /// Runs with zero SQL Server, Graph, Redis or Service Bus dependency.
+    /// Runs with zero SQL Server, Graph, Azure Storage or Service Bus dependency.
     /// </summary>
     [TestClass]
     public class AppInsightsSavePortTests

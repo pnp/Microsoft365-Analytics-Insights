@@ -38,7 +38,7 @@ The CLI discovers this agent from `.github/agents/` in the **code** repo, but al
 - **Canonical product name: "Microsoft 365 Advanced Analytics"** (full solution: "Microsoft 365 Advanced Analytics Engine"). Standardize prose to this. **Protect** code/identifier strings — never rewrite `Office365ActivityImporter`, `operation_Name == "Office365ActivityImporter"`, the `Office 365 Management API`/Activity API name, or app-setting/connection-string keys. Generic platform references ("the Office 365 / Microsoft 365 admin center") are not the product name — only rename the `… Advanced Analytics [Engine]` phrases unless told otherwise.
 - **Use `learn.microsoft.com`**, not the legacy `docs.microsoft.com`, for Microsoft Learn links.
 - **Sidebar IA** is grouped into 8 sections (Overview, Getting started, Installation, Operations, Upgrade notes, Solutions, Reference, Project). `_Sidebar.md` is the source of truth for orphan checks; keep sidebar labels consistent with each page's title.
-- The wiki documents an Azure-hosted M365 analytics importer: two Entra app registrations (Installer + Runtime), RBAC-first auth (Service Bus / Storage / Redis / Cognitive / Key Vault), a SQL analytics DB, and Power BI reporting solutions built on top.
+- The wiki documents an Azure-hosted M365 analytics importer: two Entra app registrations (Installer + Runtime), RBAC-first auth (Service Bus / Storage / Cognitive / Key Vault), a SQL analytics DB, runtime state in an Azure Table (`AnalyticsState`), and Power BI reporting solutions built on top.
 
 ## Method
 

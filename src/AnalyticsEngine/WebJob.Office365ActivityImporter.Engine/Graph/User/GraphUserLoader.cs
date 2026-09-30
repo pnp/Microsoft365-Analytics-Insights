@@ -1,3 +1,4 @@
+﻿using Common.Entities.UserOrgs;
 using DataUtils;
 using Microsoft.Extensions.Logging;
 using Microsoft.Graph;
@@ -8,54 +9,10 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
+using GraphUserDeltaQuery = Common.Entities.State.GraphUserDeltaQuery;
 
 namespace WebJob.Office365ActivityImporter.Engine.Graph
 {
-    /// <summary>
-    /// The <c>/users/delta</c> query this product tracks users with, and the version stamp that pins it.
-    /// </summary>
-    /// <remarks>
-    /// Microsoft Graph fixes the <c>$select</c> when a delta token is first minted: a stored token
-    /// continues the cycle it was created for, so widening the selection later does NOT start returning
-    /// the new property to a tenant that already has one. That makes every <c>$select</c> change a
-    /// breaking change for existing deployments unless the stored token is invalidated with it.
-    ///
-    /// <para>
-    /// <see cref="SelectVersion"/> is part of the delta-token cache key, so bumping it discards the
-    /// stored token and the next import performs one full enumeration under the new selection. That is
-    /// the only thing that makes a newly selected property arrive for users who have not otherwise
-    /// changed - and those are the overwhelming majority on an established tenant.
-    /// </para>
-    ///
-    /// <para>
-    /// <b>Bump <see cref="SelectVersion"/> in the same change that edits <see cref="Select"/>.</b>
-    /// Forgetting it does not fail anywhere: the import keeps running, the new column simply stays
-    /// empty forever on every upgraded tenant while looking correct on a fresh install. v2 added
-    /// <c>createdDateTime</c> for the Copilot Adoption seat-tenure proxy.
-    /// </para>
-    /// </remarks>
-    public static class GraphUserDeltaQuery
-    {
-        /// <summary>Bump whenever <see cref="Select"/> changes. Part of the delta-token cache key.</summary>
-        public const string SelectVersion = "v2";
-
-        /// <summary>
-        /// Properties tracked for user changes.
-        /// </summary>
-        /// <remarks>
-        /// assignedLicenses / assignedPlans are here as defence-in-depth so that a user whose ONLY
-        /// change is a licence assignment is still surfaced by /users/delta on subsequent runs. The
-        /// primary correctness guarantee for licence counts comes from UserMetadataUpdater /
-        /// UserLicenseProcessor processing the full DB user population each run, not just delta users.
-        ///
-        /// createdDateTime is Entra's immutable account-creation timestamp, used by Copilot Adoption as
-        /// the seat-tenure proxy until real licence-assignment history exists.
-        /// </remarks>
-        public const string Select =
-            "id,accountEnabled,createdDateTime,officeLocation,usageLocation,jobTitle,department,mail,"
-            + "userPrincipalName,manager,companyName,postalCode,country,state,assignedLicenses,assignedPlans";
-    }
-
     /// <summary>
     /// Graph API implementation of user metadata loader
     /// </summary>
@@ -76,6 +33,10 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         private string _pendingDeltaToken;
         private bool _hasPendingDeltaToken;
 
+        // The stored token the buffered read continued from, or null when it read the full user list. Commit
+        // uses it to notice the checkpoint being cleared while this import was running (see CommitDeltaTokenAsync).
+        private string _pendingBaseToken;
+
         /// <summary>
         /// The extra Graph properties this tenant's configured user-org types need. Defaults to
         /// <see cref="GraphUserOrgSelection.None"/>, so a caller that never configures orgs issues
@@ -89,15 +50,6 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         /// </summary>
         private bool _orgSelectionRejected;
 
-        /// <summary>
-        /// Whether the most recent attempt actually sent a stored delta token.
-        /// </summary>
-        /// <remarks>
-        /// Load-bearing for telling a dead token apart from an unusable <c>$select</c>: Graph answers
-        /// 400 for both, and mistaking one for the other leaves organisation values permanently stale.
-        /// </remarks>
-        private bool _lastLoadUsedStoredToken;
-
         public GraphUserLoader(ManualGraphCallClient httpClient, IDeltaValueProvider deltaValueProvider, ILogger logger, GraphServiceClient graphServiceClient)
         {
             this._httpClient = httpClient;
@@ -107,6 +59,9 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         }
 
         public IDeltaValueProvider DeltaValueProvider => _deltaValueProvider;
+
+        /// <inheritdoc />
+        public bool LastLoadReachedDeltaLink { get; private set; }
 
         /// <summary>
         /// Declares which org attributes this cycle should read.
@@ -167,7 +122,57 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
 
         public async Task<List<GraphUser>> LoadAllActiveUsers()
         {
-            var results = await LoadWithOrgFallback().ConfigureAwait(false);
+            // Reset any previously buffered token, and the completeness flag, before a new load.
+            _pendingDeltaToken = null;
+            _hasPendingDeltaToken = false;
+            _pendingBaseToken = null;
+            LastLoadReachedDeltaLink = false;
+
+            var read = await ReadWithTokenRecovery(_orgSelection);
+
+            // The request carrying the organisation attributes failed, and not because of a dead token -
+            // ReadWithTokenRecovery has already ruled that out. Any such failure is worth one attempt without
+            // them, because the alternative is that licences, managers and department metadata stop importing
+            // too. It also keeps a partial org-carrying read away from the organisation merge, which only ever
+            // sees a complete one.
+            if (read != null && read.Failure != null && !_orgSelection.IsEmpty)
+            {
+                read = await FallBackWithoutOrgAttributes(read.Failure);
+            }
+
+            if (read == null)
+            {
+                // A rejected token could not be discarded; ReadWithTokenRecovery has logged why.
+                return new List<GraphUser>();
+            }
+
+            var usersQueryDelta = read.DeltaToken;
+            if (read.Failure != null)
+            {
+                var tokenOutcome = string.IsNullOrEmpty(usersQueryDelta)
+                    ? "No delta token was in use, so the next run reads the full user list again."
+                    : "The stored delta token was kept, because this failure does not mean it has expired; the next run resumes from it.";
+                _logger.LogWarning($"User import - the /users/delta read stopped on page {read.FailedPage:N0} ({DescribeFailure(read.Failure)}) after {read.Users.Count:N0} user(s). {tokenOutcome}");
+            }
+            else if (!_hasPendingDeltaToken)
+            {
+                _logger.LogWarning("User import - the /users/delta read ended without an @odata.deltaLink, so there is no new delta token to save.");
+            }
+            else
+            {
+                LastLoadReachedDeltaLink = true;
+                _pendingBaseToken = usersQueryDelta;
+            }
+
+            var results = read.Users;
+            if (string.IsNullOrEmpty(usersQueryDelta))
+            {
+                _logger.LogInformation($"User import - read {results.Count.ToString("N0")} users (all) from Graph API");
+            }
+            else
+            {
+                _logger.LogInformation($"User import - read {results.Count.ToString("N0")} updated users from Graph API, using last delta.");
+            }
 
             // Graph for some reason gives duplicates; filter that out.
             // HashSet pre-allocated to results.Count avoids the per-Grouping allocation that
@@ -192,98 +197,99 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         }
 
         /// <summary>
-        /// Loads the users, distinguishing a stale delta token from an unusable <c>$select</c>.
+        /// Reads <c>/users/delta</c> under one selection from the key's stored token, recovering by itself from
+        /// a token Graph refuses: the token is discarded and the full user list read once, with the same selection.
         /// </summary>
+        /// <returns>The read, or <c>null</c> when a rejected token could not be discarded.</returns>
         /// <remarks>
-        /// <para>
-        /// Graph answers a 400 both for a property it does not recognise <b>and</b> for a delta token
-        /// it will not accept - an expired one, or one minted under a different query. Treating every
-        /// 400 as "the administrator's attribute is wrong" was a genuine trap: the retry would drop
-        /// the org properties, commit a fresh token under the <i>unqualified</i> key, and leave the
-        /// stale token sitting on the qualified key forever. Every later cycle would pick that stale
-        /// token up again, 400 again, and fall back again - so organisation values would never update
-        /// again while the user import looked perfectly healthy.
-        /// </para>
-        /// <para>
-        /// So a token is ruled out first. If one was sent, it is discarded and the <b>same</b>
-        /// selection retried, which is a full enumeration and the correct response to a dead token.
-        /// Only a request that carried no token can blame the selection.
-        /// </para>
+        /// Applies to every selection a cycle tries, not just the first. The without-organisations fallback
+        /// switches to the unqualified key, which on a tenant that has had organisations configured for a while
+        /// holds a token nobody has written since before the feature was enabled - so it is precisely the read
+        /// most likely to meet a dead token.
         /// </remarks>
-        private async Task<List<GraphUser>> LoadWithOrgFallback()
+        private async Task<DeltaReadRound> ReadWithTokenRecovery(GraphUserOrgSelection selection)
         {
-            try
+            // Cache delta using tenant ID
+            var usersQueryDelta = await _deltaValueProvider.GetDeltaToken();
+            var read = await ReadDeltaRound(selection, usersQueryDelta);
+
+            // Graph refuses a token it considers too old, or has reset. Replaying it can never succeed and nothing
+            // else ever clears it, so without this every later run read 0 users and still counted as a success
+            // (issue #664). Only the initial request carries the token - later pages follow $skiptoken links - so
+            // only a failure on page 1 can be a rejection of it.
+            var requestCarriedDeltaToken = !string.IsNullOrEmpty(usersQueryDelta);
+            if (read.Failure != null && read.FailedPage == 1)
             {
-                return await LoadWithTokenRecovery(_orgSelection).ConfigureAwait(false);
-            }
-            catch (GraphHttpException ex)
-            {
-                if (!_orgSelection.IsEmpty)
+                if (GraphDeltaTokenRejection.IsRejectedDeltaToken(read.Failure, requestCarriedDeltaToken))
                 {
-                    return await FallBackWithoutOrgAttributes(ex).ConfigureAwait(false);
+                    _logger.LogWarning($"User import - Microsoft Graph rejected the stored /users/delta token ({DescribeFailure(read.Failure)}): it has expired, or Graph has reset synchronisation. " +
+                        "Discarding the token and reading the full user list again in this run, which also catches up on every change made while it was unusable.");
+                }
+                else if (IsAmbiguousOrgCycleRejection(read.Failure, requestCarriedDeltaToken))
+                {
+                    _logger.LogWarning($"User import - Microsoft Graph refused a request that carried the stored /users/delta token ({DescribeFailure(read.Failure)}). " +
+                        "With organisation attributes configured that is how Graph answers a dead token as well as an attribute it does not recognise, so the token is ruled out first: " +
+                        "discarding it and reading the full user list again in this run. This cycle will take longer than usual.");
+                }
+                else
+                {
+                    return read;
                 }
 
-                // No organisation attributes and nothing left to try. Returning an empty result is
-                // precisely what this method did before this feature existed - no delta link was
-                // reached, so no token is committed and the next cycle simply tries again.
-                _logger.LogWarning(
-                    $"User import - reading users from Graph failed with HTTP {(int)ex.StatusCode}. No delta token "
-                    + "will be committed, so the next cycle retries.");
-                return new List<GraphUser>();
+                try
+                {
+                    // ClearDeltaToken rather than overwriting the key: the persisted store also forgets its in-process
+                    // fallback copy, which would otherwise hand the dead token back the next time a read fails.
+                    await _deltaValueProvider.ClearDeltaToken();
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, $"User import - couldn't discard the rejected /users/delta token: {ex.Message}. " +
+                        "Not reading the full user list in this run, so the run is incomplete; the next cycle will try again.");
+                    return null;
+                }
+
+                // Once, and with no $deltatoken at all. Never $deltatoken=latest: that means "sync from now" and would
+                // skip every change made while the import was stuck. A failure of this read cannot be taken for a
+                // token rejection, because it carries no token, so the recovery can never loop.
+                read = await ReadDeltaRound(selection, null);
             }
+
+            return read;
         }
 
         /// <summary>
-        /// Loads under one selection, recovering by itself from a delta token Graph refuses.
+        /// Whether, in a cycle that reads organisation attributes, a refused request that carried a token must be
+        /// treated as a dead token even though <see cref="GraphDeltaTokenRejection"/> does not recognise its shape.
         /// </summary>
         /// <remarks>
         /// <para>
-        /// Graph answers a token it will not accept - expired, or minted for a different query - with a
-        /// 400 or 410. Without clearing it the token is sent again every cycle, rejected every cycle,
-        /// and the import quietly does nothing forever.
+        /// Graph answers a 400 both for a property it does not recognise <b>and</b> for a delta token it will not
+        /// accept - an expired one, or one minted under a different query - and not always with an error code the
+        /// narrow test knows. Treating such a 400 as "the administrator's attribute is wrong" was a genuine trap:
+        /// the fallback would drop the org properties, commit a fresh token under the <i>unqualified</i> key, and
+        /// leave the stale token sitting on the qualified key forever. Every later cycle would pick it up again, 400
+        /// again, and fall back again - so organisation values would never update again while the user import looked
+        /// perfectly healthy. So the token is ruled out first: only a request that carried no token can blame the
+        /// selection.
         /// </para>
         /// <para>
-        /// This has to apply to <b>every</b> selection the cycle tries, not just the first. The fallback
-        /// path switches to the unqualified cache key, which on a tenant that has had organisations
-        /// configured for a while holds a token nobody has written since before the feature was enabled
-        /// - so it is precisely the load most likely to meet a dead token. An earlier version recovered
-        /// only on the first attempt and let the fallback's own rejection escape, which killed the whole
-        /// user import instead of completing it without organisation values.
+        /// Keyed on the cycle's configured selection, not the attempt's, so it also covers the fallback read. A
+        /// deployment with no organisation types keeps <see cref="GraphDeltaTokenRejection"/>'s rule exactly, and with
+        /// it the guarantee that a transient fault never costs a full re-read of the tenant (issue #664).
         /// </para>
         /// </remarks>
-        private async Task<List<GraphUser>> LoadWithTokenRecovery(GraphUserOrgSelection selection)
+        private bool IsAmbiguousOrgCycleRejection(Exception failure, bool requestCarriedDeltaToken)
         {
-            try
+            if (!requestCarriedDeltaToken || _orgSelection.IsEmpty)
             {
-                return await LoadUsersPageByPage(selection).ConfigureAwait(false);
+                return false;
             }
-            catch (GraphHttpException ex) when (_lastLoadUsedStoredToken && IsTokenRejection(ex))
-            {
-                _logger.LogWarning(
-                    $"User import - Microsoft Graph rejected the stored delta token (HTTP {(int)ex.StatusCode}). "
-                    + "Discarding it and re-reading every user once. This cycle will take longer than usual.");
 
-                await _deltaValueProvider.ClearDeltaToken().ConfigureAwait(false);
-
-                // No token this time, so a further failure is genuinely about the query or the service
-                // and is left for the caller to interpret.
-                return await LoadUsersPageByPage(selection).ConfigureAwait(false);
-            }
-        }
-
-        /// <summary>
-        /// Whether Graph is refusing the delta token itself rather than failing for another reason.
-        /// </summary>
-        /// <remarks>
-        /// Deliberately narrow. Discarding the token costs a full re-enumeration of the tenant, which on
-        /// a 200,000-user tenant is expensive, so a transient 503 or an exhausted throttle budget must
-        /// not trigger it. Graph answers a token it will not accept with 400 (commonly
-        /// <c>resyncRequired</c>) or 410 Gone.
-        /// </remarks>
-        private static bool IsTokenRejection(GraphHttpException ex)
-        {
-            return ex.StatusCode == System.Net.HttpStatusCode.BadRequest
-                || ex.StatusCode == System.Net.HttpStatusCode.Gone;
+            var graphError = failure as GraphHttpException;
+            return graphError != null
+                && (graphError.StatusCode == System.Net.HttpStatusCode.BadRequest
+                    || graphError.StatusCode == System.Net.HttpStatusCode.Gone);
         }
 
         /// <summary>
@@ -297,29 +303,30 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         ///
         /// Falling back is deliberately not restricted to a 400: any failure of the org-carrying request
         /// is worth one attempt without it, because the alternative is importing nothing at all. The
-        /// fallback goes through <see cref="LoadWithTokenRecovery"/> because it switches to the
-        /// unqualified cache key, which is the one most likely to be holding a token nobody has written
-        /// since before organisations were configured. If even that fails there is nothing left to try,
-        /// so an empty result is returned - the same outcome this method produced before org attributes
-        /// existed, and one that commits no token.
+        /// fallback goes through <see cref="ReadWithTokenRecovery"/> because it switches to the
+        /// unqualified key, which is the one most likely to be holding a token nobody has written
+        /// since before organisations were configured. If even that fails, the read is reported
+        /// incomplete exactly as it is for a deployment with no organisation types, and no token is
+        /// committed.
         /// </remarks>
-        private async Task<List<GraphUser>> FallBackWithoutOrgAttributes(GraphHttpException ex)
+        private async Task<DeltaReadRound> FallBackWithoutOrgAttributes(Exception failure)
         {
             _orgSelectionRejected = true;
 
-            if (ex.StatusCode == System.Net.HttpStatusCode.BadRequest)
+            var graphError = failure as GraphHttpException;
+            if (graphError != null && graphError.StatusCode == System.Net.HttpStatusCode.BadRequest)
             {
                 _logger.LogError(
                     $"User import - Microsoft Graph rejected the configured organisation attributes "
                     + $"({_orgSelection}). Organisation values will NOT be refreshed this cycle, but the rest of the "
                     + "user import will continue. Check those attributes still exist in the tenant on the User "
-                    + "organisations page. Graph said: " + ex.Message);
+                    + $"organisations page. Graph said: {DescribeFailure(failure)}.");
             }
             else
             {
                 _logger.LogWarning(
                     $"User import - the request carrying the configured organisation attributes ({_orgSelection}) "
-                    + $"failed with HTTP {(int)ex.StatusCode}. Retrying without them so the rest of the user import "
+                    + $"failed ({DescribeFailure(failure)}). Retrying without them so the rest of the user import "
                     + "can continue. Organisation values will NOT be refreshed this cycle.");
             }
 
@@ -328,37 +335,31 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             // while querying without the org properties.
             _deltaValueProvider.SetKeyQualifier(GraphUserOrgSelection.None.DeltaKeyQualifier);
 
-            try
-            {
-                return await LoadWithTokenRecovery(GraphUserOrgSelection.None).ConfigureAwait(false);
-            }
-            catch (GraphHttpException fallbackEx)
-            {
-                _logger.LogWarning(
-                    $"User import - reading users without the organisation attributes also failed with HTTP "
-                    + $"{(int)fallbackEx.StatusCode}. No delta token will be committed, so the next cycle retries.");
-                return new List<GraphUser>();
-            }
+            return await ReadWithTokenRecovery(GraphUserOrgSelection.None);
         }
 
-        private async Task<List<GraphUser>> LoadUsersPageByPage(GraphUserOrgSelection orgSelection)
+        /// <summary>
+        /// One pass over <c>/users/delta</c> under <paramref name="selection"/>, from <paramref name="deltaToken"/>
+        /// or, when it is empty, from the start. Buffers the new token if the pass reaches an
+        /// <c>@odata.deltaLink</c>, and records the failure that ended it early, if one did.
+        /// </summary>
+        private async Task<DeltaReadRound> ReadDeltaRound(GraphUserOrgSelection selection, string deltaToken)
         {
-            // Cache delta using tenant ID
-            var usersQueryDelta = await _deltaValueProvider.GetDeltaToken();
-            _lastLoadUsedStoredToken = !string.IsNullOrEmpty(usersQueryDelta);
-            var initialDeltaUrl = $"https://graph.microsoft.com:443/v1.0/users/delta" +
-                $"?$select={orgSelection.BuildSelect(GraphUserDeltaQuery.Select)}" +
+            var url = $"https://graph.microsoft.com:443/v1.0/users/delta" +
+                $"?$select={selection.BuildSelect(GraphUserDeltaQuery.Select)}" +
                 "&$expand=manager";
-            if (!string.IsNullOrEmpty(usersQueryDelta))
+            if (!string.IsNullOrEmpty(deltaToken))
             {
-                initialDeltaUrl += $"&$deltatoken={usersQueryDelta}";
+                url += $"&$deltatoken={deltaToken}";
             }
 
-            // Reset any previously buffered token before a new load.
+            // A round abandoned for a retry or a fallback must never leave a token behind for the next one to commit:
+            // it would be saved under whatever key and selection are in force by then.
             _pendingDeltaToken = null;
             _hasPendingDeltaToken = false;
 
-            var results = await _httpClient.LoadAllPagesPlusDeltaWithThrottleRetries<GraphUser>(initialDeltaUrl, _logger,
+            var round = new DeltaReadRound { DeltaToken = deltaToken };
+            round.Users = await _httpClient.LoadAllPagesPlusDeltaWithThrottleRetries<GraphUser>(url, _logger,
                 (deltaLink) =>
                 {
                     // Buffer the new delta in memory. It will only be persisted to
@@ -368,37 +369,75 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                     _hasPendingDeltaToken = true;
                     return Task.CompletedTask;
                 },
-                // Strict when the answer can be acted on: with org attributes in play (so the fallback
-                // can drop them) or with a stored token (so a token Graph refuses can be discarded).
-                // LoadAllPagesPlusDeltaWithThrottleRetries otherwise swallows a non-transient HTTP
-                // failure, logs a warning and returns the rows gathered so far - so a 400 came back as
-                // an empty user list, nothing could react to it, and the import quietly did nothing
-                // every cycle. A token Graph has rejected is never retried out of that state.
-                //
-                // Left lenient for the one case with no recourse - no org attributes and no token -
-                // which is the behaviour every existing deployment has today.
-                throwOnHttpError: !orgSelection.IsEmpty || _lastLoadUsedStoredToken);
+                // Lenient paging, deliberately: a failure part-way still returns the users read so far, and the
+                // rest of the import - the licence refresh in particular, which does not use this token - still
+                // runs. What must not happen is the failure passing for "nothing changed", so it is recorded
+                // here and the load reports itself incomplete.
+                onPageFailed: (ex, page) =>
+                {
+                    round.Failure = ex;
+                    round.FailedPage = page;
+                });
 
-            if (string.IsNullOrEmpty(usersQueryDelta))
-            {
-                _logger.LogInformation($"User import - read {results.Count.ToString("N0")} users (all) from Graph API");
-            }
-            else
-            {
-                _logger.LogInformation($"User import - read {results.Count.ToString("N0")} updated users from Graph API, using last delta.");
-            }
-
-            return results;
+            return round;
         }
 
-        public async Task CommitDeltaTokenAsync()
+        /// <summary>
+        /// The HTTP status and Graph error code, without the URL: the URL carries the delta token, and
+        /// <see cref="ManualGraphCallClient"/> has already logged it in full.
+        /// </summary>
+        private static string DescribeFailure(Exception failure)
         {
-            if (_hasPendingDeltaToken)
+            var graphError = failure as GraphHttpException;
+            if (graphError == null)
             {
-                await _deltaValueProvider.SetDeltaToken(_pendingDeltaToken);
-                _pendingDeltaToken = null;
-                _hasPendingDeltaToken = false;
+                return failure.Message;
             }
+
+            return $"HTTP {(int)graphError.StatusCode} ({graphError.StatusCode}), Graph error code '{graphError.GraphErrorCode ?? "unknown"}'";
+        }
+
+        private sealed class DeltaReadRound
+        {
+            /// <summary>The stored token the round continued from, or null when it read the full user list.</summary>
+            public string DeltaToken { get; set; }
+            public List<GraphUser> Users { get; set; }
+            public Exception Failure { get; set; }
+            public int FailedPage { get; set; }
+        }
+
+        /// <inheritdoc />
+        public async Task<bool> CommitDeltaTokenAsync()
+        {
+            if (!_hasPendingDeltaToken)
+            {
+                return false;
+            }
+
+            if (!string.IsNullOrEmpty(_pendingBaseToken))
+            {
+                // This run continued from a stored checkpoint. If that checkpoint has gone since, it was cleared
+                // while the run was in progress - by an admin on the web portal's User import page, or by hand in
+                // the state table - to ask for a full re-read. Saving this run's token would quietly undo that request, so
+                // it is withheld and the next run reads the full user list, as the clear intended. A failed read
+                // here falls back to the checkpoint this run started from, so a storage blip still saves as before.
+                var stored = await _deltaValueProvider.GetDeltaToken();
+                if (string.IsNullOrEmpty(stored))
+                {
+                    _logger.LogWarning("User import - the stored /users/delta checkpoint was cleared while this import was running, so this run's new checkpoint is not being saved. " +
+                        "The next run reads the full user list, as the clear intended.");
+                    _pendingDeltaToken = null;
+                    _hasPendingDeltaToken = false;
+                    _pendingBaseToken = null;
+                    return false;
+                }
+            }
+
+            await _deltaValueProvider.SetDeltaToken(_pendingDeltaToken);
+            _pendingDeltaToken = null;
+            _hasPendingDeltaToken = false;
+            _pendingBaseToken = null;
+            return true;
         }
 
         public async Task<List<SubscribedSku>> LoadTenantSkus()

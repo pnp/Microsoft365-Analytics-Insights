@@ -1,8 +1,10 @@
-using Common.Entities.Redis;
+using Common.Entities.State;
 using Microsoft.Extensions.Logging;
 using Newtonsoft.Json;
 using System;
 using System.Collections.Generic;
+using System.Globalization;
+using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
 
@@ -30,10 +32,9 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
     /// <summary>
     /// Stores the "these users have no mailbox" negative cache for the sent-email importer.
     ///
-    /// Deliberately a <b>single</b> key holding the whole set rather than one key per user: the importer
-    /// runs every cycle against every user, so per-user lookups would be one round trip per user per
-    /// cycle (200,000 round trips at the tenant scale this solution targets). One read at the start of a
-    /// run and one write at the end is O(1) regardless of tenant size.
+    /// Deliberately a whole set read once at the start of a run and written once at the end, never one lookup
+    /// per user: the importer runs every cycle against every user, so per-user lookups would be one round trip
+    /// per user per cycle (200,000 round trips at the tenant scale this solution targets).
     /// </summary>
     public interface ISentEmailMailboxSkipList
     {
@@ -42,8 +43,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
     }
 
     /// <summary>
-    /// In-memory skip list, used when Redis isn't configured. The cache still works for the lifetime of
-    /// the WebJob process (which runs many import cycles), and resets on restart - so a restart is itself
+    /// In-memory skip list, used when no Storage connection string is configured. The cache still works for the lifetime
+    /// of the WebJob process (which runs many import cycles), and resets on restart - so a restart is itself
     /// a way to force an immediate re-check of every mailbox.
     /// </summary>
     public class InMemorySentEmailMailboxSkipList : ISentEmailMailboxSkipList
@@ -78,36 +79,78 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
     }
 
     /// <summary>
-    /// Redis-backed skip list, so the negative cache survives WebJob restarts and is shared between the
-    /// importer instances. Reads and writes are <b>fail-open</b>: a Redis outage yields an empty skip list
-    /// (so every mailbox is checked, exactly like the legacy behaviour) rather than failing the import.
+    /// Durable skip list in the runtime state store (the <see cref="StatePartitions.SentEmails"/> partition of the
+    /// state table), so the negative cache survives WebJob restarts. Reads and writes are <b>fail-open</b>: a storage
+    /// outage yields an empty skip list (so every mailbox is checked, exactly like the legacy behaviour) rather than
+    /// failing the import.
     /// </summary>
-    public class RedisSentEmailMailboxSkipList : ISentEmailMailboxSkipList
+    /// <remarks>
+    /// <para>
+    /// A table row holds at most 1 MiB, and on a large tenant the list can outgrow that even compressed: guests and
+    /// unlicensed accounts have no mailbox, and around 125,000 UPNs is already too many for one row. So the list is a
+    /// header row (<see cref="CacheKey"/>: when it was last rebuilt and how many pages hold it) plus pages of at most
+    /// <see cref="MaxUpnsPerPage"/> UPNs (<see cref="PageKey"/>), sorted so that neighbouring UPNs share prefixes and
+    /// compress well. At 200,000 mailbox-less users that is 20 page reads per cycle, not 200,000.
+    /// </para>
+    /// <para>
+    /// Pages are written before the header and pages a shorter list no longer needs are deleted after it, so a
+    /// failed save leaves the previous header pointing at pages that still exist. A page that cannot be read makes
+    /// the whole list read as empty, like any other read failure.
+    /// </para>
+    /// </remarks>
+    public class PersistedSentEmailMailboxSkipList : ISentEmailMailboxSkipList
     {
+        /// <summary>The header row: when the list was last rebuilt by a full sweep, and how many pages hold it.</summary>
         internal const string CacheKey = "SentEmailNoMailboxUsers";
 
-        private readonly CacheConnectionManager _cacheConnectionManager;
+        /// <summary>
+        /// UPNs per page. Even at the longest UPN Entra allows (113 characters) a page is about 1.2 MB of JSON, which
+        /// fits one row compressed; a typical page is well under 100 KB.
+        /// </summary>
+        internal const int MaxUpnsPerPage = 10000;
+
+        /// <summary>How many pages are read at once.</summary>
+        private const int PageReadConcurrency = 16;
+
+        private readonly IKeyValueStore _store;
         private readonly ILogger _logger;
 
-        public RedisSentEmailMailboxSkipList(string redisConnectionString, ILogger logger, string tenantId = null, string clientId = null, string clientSecret = null)
+        public PersistedSentEmailMailboxSkipList(IKeyValueStore store, ILogger logger)
         {
-            _cacheConnectionManager = CacheConnectionManager.GetConnectionManager(redisConnectionString, tenantId: tenantId, clientId: clientId, clientSecret: clientSecret);
+            _store = store ?? throw new ArgumentNullException(nameof(store));
             _logger = logger;
         }
+
+        /// <summary>The key of page <paramref name="page"/> (zero-based).</summary>
+        internal static string PageKey(int page) => CacheKey + ":" + page.ToString(CultureInfo.InvariantCulture);
 
         public async Task<MailboxSkipList> LoadAsync()
         {
             try
             {
-                var raw = await _cacheConnectionManager.GetString(CacheKey);
-                if (string.IsNullOrEmpty(raw))
+                var header = ParseHeader(await _store.GetStringAsync(CacheKey));
+                if (header == null)
                     return MailboxSkipList.Empty();
 
-                return JsonConvert.DeserializeObject<MailboxSkipList>(raw) ?? MailboxSkipList.Empty();
+                var upns = new List<string>(header.Count);
+                for (var first = 0; first < header.Pages; first += PageReadConcurrency)
+                {
+                    var batch = Enumerable.Range(first, Math.Min(PageReadConcurrency, header.Pages - first)).ToList();
+                    var pages = await Task.WhenAll(batch.Select(p => _store.GetStringAsync(PageKey(p))));
+                    for (var i = 0; i < pages.Length; i++)
+                    {
+                        if (pages[i] == null)
+                            throw new InvalidDataException($"page {batch[i] + 1} of {header.Pages} is missing");
+
+                        upns.AddRange(JsonConvert.DeserializeObject<List<string>>(pages[i]) ?? new List<string>());
+                    }
+                }
+
+                return new MailboxSkipList { GeneratedUtc = header.GeneratedUtc, Upns = upns };
             }
             catch (Exception ex)
             {
-                _logger?.LogWarning($"Sent emails: could not read the no-mailbox skip list from Redis ({ex.Message}); " +
+                _logger?.LogWarning($"Sent emails: could not read the no-mailbox skip list from the state store ({ex.Message}); " +
                     "every mailbox will be checked this cycle.");
                 return MailboxSkipList.Empty();
             }
@@ -117,13 +160,74 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
         {
             try
             {
-                await _cacheConnectionManager.SetString(CacheKey, JsonConvert.SerializeObject(skipList));
+                var upns = new HashSet<string>((skipList?.Upns ?? new List<string>()).Where(u => !string.IsNullOrEmpty(u)), StringComparer.OrdinalIgnoreCase)
+                    .ToList();
+                upns.Sort(StringComparer.OrdinalIgnoreCase);
+                var pageCount = (upns.Count + MaxUpnsPerPage - 1) / MaxUpnsPerPage;
+
+                // Read before anything is overwritten, so the pages a shorter list no longer needs can be removed.
+                var previousPageCount = ParseHeaderLeniently(await _store.GetStringAsync(CacheKey))?.Pages ?? 0;
+
+                for (var p = 0; p < pageCount; p++)
+                {
+                    var page = upns.GetRange(p * MaxUpnsPerPage, Math.Min(MaxUpnsPerPage, upns.Count - p * MaxUpnsPerPage));
+                    await _store.SetStringAsync(PageKey(p), JsonConvert.SerializeObject(page));
+                }
+
+                await _store.SetStringAsync(CacheKey, JsonConvert.SerializeObject(new SkipListHeader
+                {
+                    GeneratedUtc = skipList?.GeneratedUtc,
+                    Pages = pageCount,
+                    Count = upns.Count,
+                }));
+
+                for (var p = pageCount; p < previousPageCount; p++)
+                {
+                    await _store.DeleteAsync(PageKey(p));
+                }
             }
             catch (Exception ex)
             {
-                _logger?.LogWarning($"Sent emails: could not save the no-mailbox skip list to Redis ({ex.Message}); " +
+                _logger?.LogWarning($"Sent emails: could not save the no-mailbox skip list to the state store ({ex.Message}); " +
                     "mailbox-less users will be re-checked next cycle.");
             }
+        }
+
+        private static SkipListHeader ParseHeader(string raw)
+        {
+            if (string.IsNullOrEmpty(raw))
+                return null;
+
+            var header = JsonConvert.DeserializeObject<SkipListHeader>(raw);
+            if (header != null && (header.Pages < 0 || header.Count < 0))
+                throw new InvalidDataException($"the header says {header.Pages} page(s) and {header.Count} UPN(s)");
+
+            return header;
+        }
+
+        /// <summary>The stored header, or <c>null</c> when there is none or it cannot be understood.</summary>
+        private static SkipListHeader ParseHeaderLeniently(string raw)
+        {
+            try
+            {
+                return ParseHeader(raw);
+            }
+            catch (Exception ex) when (ex is JsonException || ex is InvalidDataException)
+            {
+                return null;
+            }
+        }
+
+        internal sealed class SkipListHeader
+        {
+            [JsonProperty("generatedUtc")]
+            public DateTime? GeneratedUtc { get; set; }
+
+            [JsonProperty("pages")]
+            public int Pages { get; set; }
+
+            [JsonProperty("count")]
+            public int Count { get; set; }
         }
     }
 }

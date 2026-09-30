@@ -78,6 +78,8 @@
     <Compile Include="SentEmailImporterPipelineTests.cs" />
     <Compile Include="SentEmailImportTests.cs" />
     <Compile Include="GraphPagingFailureTests.cs" />
+    <Compile Include="GraphUserDeltaTokenRecoveryTests.cs" />
+    <Compile Include="UserImportCheckpointApiTests.cs" />
     <Compile Include="GraphExceptionTelemetryTests.cs" />
     <Compile Include="SentEmailMailboxSkipListTests.cs" />
     <Compile Include="InstallTests\VNetIntegrationTests.cs" />
@@ -404,6 +406,8 @@
     <Compile Include="FakeLoaderClasses\FakeActivitySubscriptionManager.cs" />
     <Compile Include="GraphUsageReportImportTests.cs" />
     <Compile Include="SingleDateStoreTests.cs" />
+    <Compile Include="StateStoreAzuriteTests.cs" />
+    <Compile Include="StateStoreTests.cs" />
     <Compile Include="AutoThrottleHttpClientTests.cs" />
     <Compile Include="CallsImportTests.cs" />
     <Compile Include="GraphImportTests.cs" />

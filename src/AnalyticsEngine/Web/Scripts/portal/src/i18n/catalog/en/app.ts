@@ -45,6 +45,7 @@ export const app = {
   'app.route.teamsPermissions': 'Teams permissions',
   'app.route.userLookup': 'User data lookup',
   'app.route.userOrgs': 'User organisations',
+  'app.route.userImport': 'User import',
   'app.route.configuration': 'Service configuration',
 } as const;
 

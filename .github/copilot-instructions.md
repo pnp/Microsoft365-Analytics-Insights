@@ -50,7 +50,7 @@ That file is the source of truth for:
 
 - Project guidelines (e.g. `InsertBatch` row-by-row implementation preference)
 - NuGet package management (App.Template.config vs App.config, .NET Standard 2.0 vs .NET Framework 4.8 mismatches)
-- Azure Cache for Redis auth conventions
+- Runtime state (Azure Table storage) conventions
 - Documentation / wiki repo location (`Microsoft365-Analytics-Insights.wiki` sibling directory)
 
 Always read it before making changes under `src/AnalyticsEngine/`.

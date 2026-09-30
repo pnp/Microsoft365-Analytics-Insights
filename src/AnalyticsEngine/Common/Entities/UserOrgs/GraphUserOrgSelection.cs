@@ -1,4 +1,3 @@
-using Common.Entities.UserOrgs;
 using System;
 using System.Collections.Generic;
 using System.Globalization;
@@ -6,7 +5,7 @@ using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
 
-namespace WebJob.Office365ActivityImporter.Engine.Graph
+namespace Common.Entities.UserOrgs
 {
     /// <summary>
     /// The extra Graph properties this tenant's configured user-org types need, and the qualifier that
@@ -115,7 +114,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         /// users changed since, leaving everybody else permanently unassigned in a type that had just
         /// been emptied. Including each type's id and source generation makes those keys distinct - and
         /// its creation time, because the id and generation start again from 1 when the tables are
-        /// recreated, while the token cache (Redis) can outlive the database: the first type of a rebuilt
+        /// recreated, while the token store (the state table) can outlive the database: the first type of a rebuilt
         /// database would otherwise land on the previous database's first type's token.
         /// </remarks>
         public static GraphUserOrgSelection FromTypes(IEnumerable<UserOrgType> types)

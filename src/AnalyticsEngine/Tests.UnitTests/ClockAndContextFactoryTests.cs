@@ -17,7 +17,7 @@ namespace Tests.UnitTests
     /// Coverage for the two ports introduced by issue #368 - <see cref="IClock"/> and
     /// <see cref="IAnalyticsDbContextFactory"/> - and their adapters.
     ///
-    /// All of these run with zero SQL Server, Graph, Redis or Service Bus. Note that
+    /// All of these run with zero SQL Server, Graph, Azure Storage or Service Bus. Note that
     /// <c>DefaultAnalyticsDbContextFactory_Create_ReturnsDistinctContextPerCall</c> constructs EF6
     /// contexts but never queries: EF6 construction is lazy, so no connection is opened. It needs only
     /// the <c>SPOInsightsEntities</c> entry to exist in config.

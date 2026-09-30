@@ -225,7 +225,7 @@ namespace Web.AnalyticsWeb.Models.Health
             {
                 // Reuse the homepage's tested logic (config from the applied installer config + a
                 // cached Graph lookup of the Teams call-records webhook subscription).
-                var status = await SystemStatus.LoadFrom(db, null);
+                var status = await SystemStatus.LoadFrom(db);
                 return new CallWebhookStatusResult
                 {
                     CallsImportEnabled = status.CallsImportEnabled,

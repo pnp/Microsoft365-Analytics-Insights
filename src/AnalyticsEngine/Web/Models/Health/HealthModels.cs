@@ -193,8 +193,6 @@ namespace Web.AnalyticsWeb.Models.Health
         public List<string> EnabledImports { get; set; } = new List<string>();
         [JsonProperty("sqlServer")]
         public string SqlServer { get; set; }
-        [JsonProperty("redisHost")]
-        public string RedisHost { get; set; }
         [JsonProperty("serviceBusEndpoint")]
         public string ServiceBusEndpoint { get; set; }
         [JsonProperty("cognitiveEndpoint")]

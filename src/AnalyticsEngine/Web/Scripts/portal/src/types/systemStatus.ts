@@ -25,7 +25,8 @@ export interface SystemStatus {
   callWebhookExpiry: string | null;
   callWebhookStatusDetail: string | null;
   webAppConfigSQL: string | null;
-  webAppConfigRedis: string | null;
+  /** The storage account holding the runtime state table (account name only); null when not configured. */
+  webAppConfigStorage: string | null;
   webAppConfigCognitive: string | null;
   cognitiveServiceEnabled: boolean;
   webAppConfigServiceBus: string | null;

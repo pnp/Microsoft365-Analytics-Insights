@@ -73,6 +73,12 @@ export const errors = {
   'errors.profiling.statusFailed': "Couldn't load profiling status ({status}).",
   'errors.profiling.traceLogsFailed': "Couldn't load profiling trace logs ({status}).",
   'errors.systemStatus.loadFailed': "Couldn't load system status ({status}).",
+  'errors.userImportCheckpoint.loadFailed': "Couldn't load the user import checkpoint ({status}).",
+  'errors.userImportCheckpoint.clearFailed': "Couldn't clear the user import checkpoint ({status}).",
+  'errors.userImportCheckpoint.storageUnavailable':
+    "Couldn't reach Azure Table storage, where the checkpoint is kept. Check that this web app can reach the solution's storage account and that its runtime identity can read and write tables, then try again.",
+  'errors.userImportCheckpoint.storageNotConfigured':
+    "Azure Storage isn't configured for this deployment, so there is no checkpoint to clear.",
   'errors.updateCheck.failed': "Couldn't check for updates ({status}).",
 
   // Licence activity API

@@ -1,3 +1,4 @@
+using Common.Entities.UserOrgs;
 using Microsoft.Graph;
 using Microsoft.Graph.Models;
 using System;
@@ -31,6 +32,15 @@ namespace Tests.UnitTests.FakeLoaderClasses
         /// </summary>
         public string SimulatedNewDeltaToken { get; set; } = "fake-new-delta";
         public bool ThrowOnCommitDeltaToken { get; set; }
+
+        /// <summary>
+        /// When true, LoadAllActiveUsers behaves like a /users/delta read that stopped before its last page:
+        /// it still returns the fake users, but reaches no deltaLink, so no new delta token is buffered and
+        /// <see cref="LastLoadReachedDeltaLink"/> is false.
+        /// </summary>
+        public bool SimulateIncompleteDeltaRead { get; set; }
+
+        public bool LastLoadReachedDeltaLink { get; private set; }
 
         /// <summary>
         /// When non-null AND the delta provider already has a token (i.e. this is
@@ -88,7 +98,7 @@ namespace Tests.UnitTests.FakeLoaderClasses
         /// Replaces the fake Graph state for a subsequent import run while keeping
         /// the same loader (and therefore the same delta provider) so tests can
         /// simulate persistent-delta-token scenarios such as a customer running
-        /// against Redis.
+        /// against the state table.
         /// </summary>
         public void SetFakeState(
             List<GraphUser> fakeUsers,
@@ -111,9 +121,11 @@ namespace Tests.UnitTests.FakeLoaderClasses
         public async Task<List<GraphUser>> LoadAllActiveUsers()
         {
             // Simulate GraphUserLoader behavior: buffer the new delta token in
-            // memory; only CommitDeltaTokenAsync persists it.
-            _pendingDeltaToken = SimulatedNewDeltaToken;
-            _hasPendingDeltaToken = true;
+            // memory; only CommitDeltaTokenAsync persists it. An incomplete read
+            // never reached a deltaLink, so there is nothing to buffer.
+            LastLoadReachedDeltaLink = !SimulateIncompleteDeltaRead;
+            _hasPendingDeltaToken = LastLoadReachedDeltaLink;
+            _pendingDeltaToken = _hasPendingDeltaToken ? SimulatedNewDeltaToken : null;
 
             // Simulate Graph delta behaviour: when a delta token is already
             // persisted and the test has supplied a delta-only subset, return
@@ -161,7 +173,7 @@ namespace Tests.UnitTests.FakeLoaderClasses
             return Task.FromResult<List<LicenseDetails>>(null);
         }
 
-        public async Task CommitDeltaTokenAsync()
+        public async Task<bool> CommitDeltaTokenAsync()
         {
             if (_hasPendingDeltaToken)
             {
@@ -173,7 +185,10 @@ namespace Tests.UnitTests.FakeLoaderClasses
                 await _deltaProvider.SetDeltaToken(_pendingDeltaToken);
                 _pendingDeltaToken = null;
                 _hasPendingDeltaToken = false;
+                return true;
             }
+
+            return false;
         }
     }
 

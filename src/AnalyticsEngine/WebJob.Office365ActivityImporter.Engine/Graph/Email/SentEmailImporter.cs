@@ -213,7 +213,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
 
         /// <summary>
         /// Pure decision logic for the no-mailbox negative cache, factored out so it can be unit tested
-        /// without Redis or a database (mirrors <see cref="ImportCadenceGate"/>).
+        /// without storage or a database (mirrors <see cref="ImportCadenceGate"/>).
         /// </summary>
         /// <param name="previous">The skip list as loaded at the start of the run.</param>
         /// <param name="discoveredNoMailbox">UPNs that returned a Graph 404 during this run.</param>
