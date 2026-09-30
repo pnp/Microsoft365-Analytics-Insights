@@ -51,6 +51,21 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public void SuiteThatIncludesTheCopilotSeat_IsRecognised()
+        {
+            // Microsoft 365 E7 is not Copilot-branded, but it carries every Microsoft 365 Copilot service
+            // plan. Missing it counted its holders as unlicensed, so they could be recommended for a
+            // Copilot licence they already hold.
+            Assert.IsTrue(CopilotLicenceClassifier.IsCopilotSeat("MICROSOFT_365_E7", "Microsoft 365 E7"));
+            Assert.IsTrue(CopilotLicenceClassifier.IsCopilotSeat("Microsoft_365_E7", "Microsoft_365_E7"),
+                "Matching is by part number and case-insensitive, so it must not depend on the CSV naming the SKU.");
+
+            // ...without sweeping in the suites that do not include it.
+            Assert.IsFalse(CopilotLicenceClassifier.IsCopilotSeat("SPE_E5", "Microsoft 365 E5"));
+            Assert.IsFalse(CopilotLicenceClassifier.IsCopilotSeat("SPE_E3", "Microsoft 365 E3"));
+        }
+
+        [TestMethod]
         public void FutureCopilotSeatSku_IsRecognisedByPrefix()
         {
             // A SKU newer than the licensing CSV shipped in this build has no display name, so the

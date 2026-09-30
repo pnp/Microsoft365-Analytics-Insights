@@ -258,6 +258,68 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                     new SqlParameter("@refreshedUtc", refreshedUtc),
                     new SqlParameter("@id", capacity.LicenceTypeId));
             }
+
+            await ZeroCapacityLeftBehindByRenamesAsync(db, skuLicenseTypes, capacityByLicenceType.Select(c => c.LicenceTypeId).ToList(), refreshedUtc);
+        }
+
+        /// <summary>
+        /// Zeroes the capacity of licence types that a current SKU has moved away from.
+        /// </summary>
+        /// <remarks>
+        /// Licence types are filed by display name, so when a product's name changes - or a SKU gains a
+        /// name for the first time, as every SKU a licensing-CSV refresh adds does - the next import files
+        /// it under a new licence type, and the old one keeps the capacity it was last given. Copilot
+        /// Adoption sums purchased seats across every Copilot seat type, so that stale figure would count
+        /// the same seats twice: a tenant upgrading with Microsoft 365 E7, previously filed under its part
+        /// number, would see its E7 seats purchased twice and all of the old copy reported as unassigned.
+        /// Graph lists no subscription for the old licence type any more, so zero is its true value, not
+        /// unknown - and unknown would blank the purchased-seat total.
+        /// </remarks>
+        private async Task ZeroCapacityLeftBehindByRenamesAsync(
+            AnalyticsEntitiesContext db,
+            List<KeyValuePair<SubscribedSku, LicenseType>> skuLicenseTypes,
+            List<int> currentLicenceTypeIds,
+            DateTime refreshedUtc)
+        {
+            var currentSkuPartNumbers = skuLicenseTypes
+                .Select(pair => pair.Key.SkuPartNumber)
+                .Where(sku => !string.IsNullOrWhiteSpace(sku))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+            if (currentSkuPartNumbers.Count == 0 || currentLicenceTypeIds.Count == 0)
+            {
+                return;
+            }
+
+            var parameters = new List<SqlParameter> { new SqlParameter("@refreshedUtc", refreshedUtc) };
+            var skuNames = new List<string>();
+            for (var i = 0; i < currentSkuPartNumbers.Count; i++)
+            {
+                skuNames.Add("@sku" + i);
+                parameters.Add(new SqlParameter("@sku" + i, currentSkuPartNumbers[i]));
+            }
+
+            var idNames = new List<string>();
+            for (var i = 0; i < currentLicenceTypeIds.Count; i++)
+            {
+                idNames.Add("@id" + i);
+                parameters.Add(new SqlParameter("@id" + i, currentLicenceTypeIds[i]));
+            }
+
+            // Only rows not already zero, so the log line means something and a steady state writes nothing.
+            var zeroed = await db.Database.ExecuteSqlCommandAsync(
+                "UPDATE dbo.license_types " +
+                "SET prepaid_enabled_units = 0, prepaid_warning_units = 0, prepaid_suspended_units = 0, subscribed_sku_refreshed_utc = @refreshedUtc " +
+                $"WHERE sku_id IN ({string.Join(", ", skuNames)}) AND id NOT IN ({string.Join(", ", idNames)}) " +
+                "AND (prepaid_enabled_units IS NULL OR prepaid_enabled_units <> 0 " +
+                "OR prepaid_warning_units IS NULL OR prepaid_warning_units <> 0 " +
+                "OR prepaid_suspended_units IS NULL OR prepaid_suspended_units <> 0)",
+                parameters.ToArray());
+
+            if (zeroed > 0)
+            {
+                _logger.LogInformation($"User import - set purchased capacity to zero on {zeroed.ToString("N0")} licence type(s) whose SKU is now filed under a renamed licence type, so its seats are not counted twice.");
+            }
         }
 
         public static async Task MarkSubscribedSkuCapacityUnavailableAsync(AnalyticsEntitiesContext db, AnalyticsLogger logger)

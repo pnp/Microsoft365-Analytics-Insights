@@ -1,6 +1,9 @@
 using Common.Entities.CopilotAdoption;
+using CsvHelper;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System;
+using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using WebJob.Office365ActivityImporter.Engine.Graph;
@@ -144,14 +147,74 @@ namespace Tests.UnitTests
                 .ToArray();
 
             CollectionAssert.AreEqual(
-                new[] { "M365_Copilot", "Microsoft_365_Copilot", "Microsoft_365_Copilot_EDU" },
+                new[] { "M365_Copilot", "Microsoft_365_Copilot", "Microsoft_365_Copilot_EDU", "MICROSOFT_365_E7" },
                 seats,
                 StringComparer.OrdinalIgnoreCase,
                 $"The shipped licensing CSV now classifies these SKUs as Microsoft 365 Copilot seats: {string.Join(", ", seats)}. " +
                 "Check each one really is a Copilot seat. If it is not, exclude it in CopilotLicenceClassifier; if it is, add it here.");
         }
 
+        [TestMethod]
+        public void ShippedCsv_EverySkuCarryingTheCopilotSeatIsCounted()
+        {
+            // The CSV lists the service plans in every SKU. One that carries every plan of the standalone
+            // Microsoft 365 Copilot SKU gives its holder a Copilot seat, whatever it is called. Microsoft
+            // 365 E7 is a suite rather than a Copilot-branded SKU, and was missed for exactly that
+            // reason - so the part-number and name rules are checked against what each SKU contains.
+            var plansBySku = ShippedServicePlansBySku();
+            var seatPlans = plansBySku["Microsoft_365_Copilot"];
+            Assert.IsTrue(seatPlans.Count > 0, "The standalone Microsoft 365 Copilot SKU should list its service plans.");
+
+            var resolver = new OfficeLicenseNameResolver();
+            var carriesSeatButNotCounted = plansBySku
+                .Where(sku => seatPlans.IsSubsetOf(sku.Value))
+                .Select(sku => sku.Key)
+                .Where(sku => !CopilotLicenceClassifier.IsCopilotSeat(sku, resolver.GetDisplayNameFor(sku)))
+                .OrderBy(sku => sku, StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+
+            // Microsoft_Copilot_for_Sales carries every seat plan as well, but CopilotLicenceClassifier
+            // excludes it (ExcludedSkuPrefixes) as a separate add-on. It is listed here so that stays a
+            // visible decision rather than an accident.
+            CollectionAssert.AreEqual(
+                new[] { "Microsoft_Copilot_for_Sales" },
+                carriesSeatButNotCounted,
+                StringComparer.OrdinalIgnoreCase,
+                $"These SKUs carry every Microsoft 365 Copilot service plan but are not counted as seats: {string.Join(", ", carriesSeatButNotCounted)}. " +
+                "Count them in CopilotLicenceClassifier.SeatSkuPrefixes, or record here why not.");
+        }
+
         #endregion
+
+        /// <summary>
+        /// Service-plan ids per SKU part number, read from the CSV embedded in the importer. Part numbers
+        /// are normalised the way the resolver normalises them.
+        /// </summary>
+        private static Dictionary<string, HashSet<string>> ShippedServicePlansBySku()
+        {
+            var plansBySku = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
+
+            using (var stream = typeof(OfficeLicenseNameResolver).Assembly.GetManifestResourceStream(OfficeLicenseNameResolver.RESOURCE_NAME))
+            using (var reader = new StreamReader(stream))
+            using (var csv = new CsvReader(reader, CultureInfo.InvariantCulture))
+            {
+                csv.Read();
+                csv.ReadHeader();
+                while (csv.Read())
+                {
+                    var sku = new string(csv.GetField("String_Id").Trim().Select(c => char.IsWhiteSpace(c) ? ' ' : c).ToArray());
+                    if (!plansBySku.TryGetValue(sku, out var plans))
+                    {
+                        plans = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                        plansBySku.Add(sku, plans);
+                    }
+
+                    plans.Add(csv.GetField("Service_Plan_Id").Trim());
+                }
+            }
+
+            return plansBySku;
+        }
 
         private static OfficeLicenseNameResolver Resolver(params string[] rows)
         {

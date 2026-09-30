@@ -403,6 +403,89 @@ namespace Tests.UnitTests
             }
         }
 
+        /// <summary>
+        /// Licence types are filed by display name, so a SKU whose name changes - including one that gains
+        /// a name for the first time when the licensing CSV is refreshed, as Microsoft 365 E7 does - moves
+        /// to a new licence type, and the old one keeps the capacity it was last given. Copilot Adoption
+        /// sums purchased seats across every Copilot seat type, so both copies would be counted.
+        /// </summary>
+        [TestMethod]
+        public async Task UserLicenseRefresh_LicenceTypeLeftBehindByARename_HasItsCapacityZeroed()
+        {
+            var tick = DateTime.Now.Ticks;
+            var upn = $"renamedsku{tick}@test.com";
+            var skuPartNumber = $"CONTOSO_RENAMED_{tick}";
+            var unrelatedSkuPartNumber = $"CONTOSO_UNRELATED_{tick}";
+            var newName = $"Contoso Renamed Suite {tick}";
+            await RemoveTestUsers(upn);
+
+            var skuId = Guid.NewGuid();
+            var skus = new List<SubscribedSku>
+            {
+                new SubscribedSku
+                {
+                    SkuId = skuId,
+                    SkuPartNumber = skuPartNumber,
+                    PrepaidUnits = new LicenseUnitsDetail { Enabled = 50, Warning = 0, Suspended = 0 },
+                },
+            };
+
+            try
+            {
+                using (var db = new AnalyticsEntitiesContext())
+                {
+                    await EnsureSubscribedSkuCapacityColumns(db);
+                    var dbUser = await InsertUser(db, upn);
+
+                    // What an earlier build left: the SKU filed under its part number, because the CSV had
+                    // no name for it, with the capacity it was last given - and an unrelated licence type
+                    // that must not be touched.
+                    db.LicenseTypes.Add(new LicenseType { Name = skuPartNumber, SKUID = skuPartNumber });
+                    db.LicenseTypes.Add(new LicenseType { Name = unrelatedSkuPartNumber, SKUID = unrelatedSkuPartNumber });
+                    await db.SaveChangesAsync();
+                    await db.Database.ExecuteSqlCommandAsync(
+                        @"UPDATE dbo.license_types
+                          SET prepaid_enabled_units = CASE WHEN sku_id = @sku THEN 50 ELSE 7 END,
+                              prepaid_warning_units = 0, prepaid_suspended_units = 0, subscribed_sku_refreshed_utc = '2026-09-01'
+                          WHERE sku_id IN (@sku, @unrelated)",
+                        new Microsoft.Data.SqlClient.SqlParameter("@sku", skuPartNumber),
+                        new Microsoft.Data.SqlClient.SqlParameter("@unrelated", unrelatedSkuPartNumber));
+
+                    var loader = new FakeUserMetadataLoader(null, skus,
+                        new Dictionary<Guid, List<SkuUser>> { { skuId, new List<SkuUser> { new SkuUser { UserPrincipalName = upn } } } });
+
+                    await new UserLicenseProcessor(
+                            AnalyticsLogger.ConsoleOnlyTracer(),
+                            loader,
+                            new UserMetadataCache(db),
+                            new FixedLicenseNameResolver(newName))
+                        .ProcessSKUsForAllUsers(skus, new List<Common.Entities.User> { dbUser }, db);
+
+                    Assert.AreEqual(50, await PurchasedUnits(db, newName),
+                        "The SKU's capacity belongs to the licence type it is filed under now.");
+                    Assert.AreEqual(0, await PurchasedUnits(db, skuPartNumber),
+                        "The licence type it was filed under before must not count the same seats a second time.");
+                    Assert.AreEqual(7, await PurchasedUnits(db, unrelatedSkuPartNumber),
+                        "A licence type that belongs to no current SKU must be left alone.");
+                }
+            }
+            finally
+            {
+                await RemoveTestUsers(upn);
+                await RemoveTestLicences(skuPartNumber, unrelatedSkuPartNumber);
+            }
+        }
+
+        /// <summary>Purchased units on the named licence type; -3 when they are unknown (NULL).</summary>
+        private static Task<int> PurchasedUnits(AnalyticsEntitiesContext db, string licenceName)
+        {
+            return db.Database.SqlQuery<int>(
+                @"SELECT ISNULL(prepaid_enabled_units, -1) + ISNULL(prepaid_warning_units, -1) + ISNULL(prepaid_suspended_units, -1)
+                  FROM dbo.license_types
+                  WHERE name = @name",
+                new Microsoft.Data.SqlClient.SqlParameter("@name", licenceName)).SingleAsync();
+        }
+
         private static Task EnsureSubscribedSkuCapacityColumns(AnalyticsEntitiesContext db)
         {
             return db.Database.ExecuteSqlCommandAsync(
