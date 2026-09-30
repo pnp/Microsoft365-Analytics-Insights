@@ -27,7 +27,6 @@ namespace App.ControlPanel.Frames
             installSolutionControl1.CancelRequested += InstallSolutionControl1_CancelRequested;
             tabs.Selecting += Tabs_Selecting;
             azureBaseConfigControl1.OnNeedAppRegistrationCredentials = () => GetConfigFromGUI().InstallerAccount;
-            azureBaseConfigControl1.AzureLocationChanged += (s, region) => azureStorageConfigControl1.AzureRegion = region;
             networkingConfigControl1.OnNeedAzureCredentials = () =>
             {
                 var config = GetConfigFromGUI();
@@ -107,7 +106,6 @@ namespace App.ControlPanel.Frames
                 SQLEntraDatabaseUsers = azureStorageConfigControl1.SqlDatabaseUsers,
                 ServiceBusName = azureStorageConfigControl1.ServiceBusName,
                 ServiceBusEnabled = azureStorageConfigControl1.ServiceBusEnabled,
-                RedisName = azureStorageConfigControl1.RedisName,
                 AllowTelemetry = installSolutionControl1.AllowTelemetry,
                 SolutionConfig = importJobSettingsSelection.Config,
                 TasksConfig = installSolutionControl1.TasksConfig,
@@ -194,12 +192,6 @@ namespace App.ControlPanel.Frames
             azureStorageConfigControl1.SqlAuthMode = config.SqlAuthMode;
             azureStorageConfigControl1.SqlDatabaseUsers = config.SQLEntraDatabaseUsers;
             azureStorageConfigControl1.StorageAccount = config.StorageAccountName;
-            // Take the region from the picker rather than the raw config: the picker rejects a value that is
-            // not a known Azure region (it falls back to its "no region" placeholder), and the preview label
-            // must agree with what the Azure tab actually shows. Set explicitly because SelectedIndexChanged
-            // does not fire when the assignment leaves the selection unchanged.
-            azureStorageConfigControl1.AzureRegion = azureBaseConfigControl1.AzureLocationString;
-            azureStorageConfigControl1.RedisName = config.RedisName;
             azureStorageConfigControl1.ServiceBusName = config.ServiceBusName;
             azureStorageConfigControl1.ServiceBusEnabled = config.ServiceBusEnabled;
 

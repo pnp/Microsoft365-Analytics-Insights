@@ -64,7 +64,6 @@
   "SQLServerAdminUsername": "sqladmin",
   "CognitiveServicesEnabled": true,
   "CognitiveServiceName": "analyticsdev",
-  "RedisName": "contosoanalyticsdev",
   "DownloadLatestStable": false,
   "SQLServerAdminPasswordHash": "bWb2P9OabASOCAgmB1eauKMrcdoYYIi+mJHxdzn3Po0avR80oFI/EVSEoVOAogWluIuSvd+2w3D5kte22asgiy9l8dhLJRLGjn6aBzOaTEkWWAtrgrC49GwNsbJ/hpuS",
   "AppInsightsName": "contosoanalyticsdev",

@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { flushSync } from 'react-dom';
 
 /**
@@ -186,7 +186,11 @@ export function usePrintAllRows<Row>({
     latest.current = { total, loadedRows, loadPage };
   });
 
-  useEffect(() => {
+  // A layout effect, not a passive one, so the list is registered in the same commit that puts its rows
+  // on the page: whenever the rows can be seen, a print will find the list. A passive effect runs a
+  // scheduler task later, and a print requested in between printed only the page on screen - which is
+  // how a test that waited for the rows and then printed failed on a busy CI runner.
+  useLayoutEffect(() => {
     if (!enabled) return undefined;
 
     return registerPrintParticipant({

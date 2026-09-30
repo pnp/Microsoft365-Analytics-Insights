@@ -16,7 +16,7 @@ namespace Web.AnalyticsWeb.Controllers
             var auth = await base.GetCachedUserAccessTokenAsync();
             if (auth == null || string.IsNullOrEmpty(auth.RefreshToken))
             {
-                // No usable token (e.g. signed in before token capture, or no Redis fallback).
+                // No usable token (e.g. a session that started before the refresh token was captured).
                 return Unauthorized();
             }
 
@@ -30,8 +30,8 @@ namespace Web.AnalyticsWeb.Controllers
             }
             catch
             {
-                // Fall back to a stored access token if we happen to have one (Redis path); otherwise
-                // signal the SPA to re-authenticate.
+                // Fall back to a carried access token if we happen to have one; otherwise signal
+                // the SPA to re-authenticate.
                 if (!string.IsNullOrEmpty(auth.AccessToken))
                 {
                     return Ok(new JSonToken(auth));

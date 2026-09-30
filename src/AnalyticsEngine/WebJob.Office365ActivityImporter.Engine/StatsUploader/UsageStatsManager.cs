@@ -58,7 +58,7 @@ namespace WebJob.Office365ActivityImporter.Engine.StatsUploader
                         }
                         else
                         {
-                            _logger.LogInformation($"{LOG_PREFIX}no last telemetry date found in redis - uploading new report now");
+                            _logger.LogInformation($"{LOG_PREFIX}no last telemetry upload date recorded - uploading new report now");
                         }
 
                         var latestStats = await _statsBuilder.LoadUsageStatsModel(lastSettings);

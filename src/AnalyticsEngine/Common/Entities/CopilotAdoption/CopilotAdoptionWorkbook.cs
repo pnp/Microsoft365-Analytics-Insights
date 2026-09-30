@@ -91,17 +91,23 @@ namespace Common.Entities.CopilotAdoption
             }
         }
 
-        /// <summary>File name carrying the period and the run date, so two snapshots never collide.</summary>
+        /// <summary>
+        /// File name carrying the period and the run date, so two snapshots never collide - and saying
+        /// when the file holds a filtered population, because a file name survives forwarding where the
+        /// cover sheet's warning may never be opened.
+        /// </summary>
         public static string FileName(CopilotAdoptionSummary summary)
         {
             var generated = summary?.GeneratedUtc ?? DateTime.UtcNow;
             var windowDays = summary?.WindowDays ?? 0;
+            var narrowed = !string.IsNullOrWhiteSpace(summary?.UserFilterDescription) ? "-filtered" : string.Empty;
 
             return string.Format(
                 CultureInfo.InvariantCulture,
-                "copilot-adoption-{0}d-{1:yyyy-MM-dd}.xlsx",
+                "copilot-adoption-{0}d{2}-{1:yyyy-MM-dd}.xlsx",
                 windowDays,
-                generated);
+                generated,
+                narrowed);
         }
 
         #region Report metadata
@@ -117,45 +123,64 @@ namespace Common.Entities.CopilotAdoption
             var sheet = workbook.AddSheet("Report");
             sheet.SetColumnWidths(42, 34, 60);
 
-            sheet.AddTitle(string.IsNullOrWhiteSpace(summary.ScopedEmailDomain)
-                ? "Microsoft 365 Copilot - adoption report"
-                : "Microsoft 365 Copilot - adoption report for " + summary.ScopedEmailDomain);
+            var hasDomain = !string.IsNullOrWhiteSpace(summary.ScopedEmailDomain);
+            var hasFilter = !string.IsNullOrWhiteSpace(summary.UserFilterDescription);
+
+            sheet.AddTitle(hasDomain
+                ? "Microsoft 365 Copilot - adoption report for " + summary.ScopedEmailDomain
+                : hasFilter
+                    ? "Microsoft 365 Copilot - adoption report (filtered)"
+                    : "Microsoft 365 Copilot - adoption report");
             sheet.AddBlankRow();
 
             // A spreadsheet outlives the screen it was exported from and gets forwarded without that
             // context. A file narrowed to one of several organisations in a tenant has to say so on its
             // own first sheet, or it will be read - and quoted in a licence negotiation - as the whole
             // tenant's position.
-            if (!string.IsNullOrWhiteSpace(summary.ScopedEmailDomain))
+            if (hasDomain || hasFilter)
             {
+                var narrowedTo = hasDomain && hasFilter
+                    ? "NARROWED TO ONE EMAIL DOMAIN: " + summary.ScopedEmailDomain + ", AND FILTERED TO PEOPLE WHERE: "
+                      + summary.UserFilterDescription + ". Every figure in this workbook describes those people only"
+                    : hasDomain
+                        ? "NARROWED TO ONE EMAIL DOMAIN: " + summary.ScopedEmailDomain + ". Every figure in this "
+                          + "workbook describes the people on that domain only"
+                        : "FILTERED TO PEOPLE WHERE: " + summary.UserFilterDescription + ". Every figure in this "
+                          + "workbook describes those people only";
+
                 sheet.AddRow(XlsxCell.Wrapped(
-                    "NARROWED TO ONE EMAIL DOMAIN: " + summary.ScopedEmailDomain + ". Every figure in this "
-                    + "workbook describes the people on that domain only, and must not be quoted as a "
-                    + "tenant-wide figure."
+                    narrowedTo
+                    + ", and must not be quoted as a tenant-wide figure."
                     + (summary.UnscopedSections.Count > 0
                         ? " The following sections could not be narrowed and remain TENANT-WIDE, because they "
                           + "come from totals that carry no per-person detail: "
                           + DescribeUnscopedSections(summary.UnscopedSections) + "."
                         : string.Empty)));
+
+                // A condition on an organisation type deleted or disabled since the filter was built
+                // matches nobody. Said here, because otherwise a file showing zero people reads as a
+                // measured empty population rather than as a filter that could not be applied.
+                var unknown = summary.UserFilter?.UnknownDimensions ?? new List<string>();
+                if (unknown.Count > 0)
+                {
+                    sheet.AddRow(XlsxCell.Wrapped(
+                        "THE FILTER NAMES ATTRIBUTES THAT NO LONGER EXIST: " + string.Join(", ", unknown)
+                        + ". An organisation type deleted or disabled after the filter was built matches nobody, "
+                        + "so any figure that depends on those conditions describes nobody rather than a measured "
+                        + "population. Remove the conditions, or re-create the organisation type, and export again."));
+                }
+
                 sheet.AddBlankRow();
             }
 
             sheet.AddHeaderRow("Property", "Value", "Notes");
             AddMeta(sheet, "Product build", BuildConstants.BuildLabel, BuildLabelNote);
-            AddMeta(sheet, "Population", string.IsNullOrWhiteSpace(summary.ScopedEmailDomain)
-                    ? "Whole tenant"
-                    : "Email domain " + summary.ScopedEmailDomain,
-                string.IsNullOrWhiteSpace(summary.ScopedEmailDomain)
-                    ? "Every Copilot seat holder the analysis could see."
-                    : "Only the people whose sign-in name is on this domain. Sections listed as tenant-wide above are the exception.");
+            AddMeta(sheet, "Population", PopulationLabel(summary), PopulationNote(summary));
             AddMeta(sheet, "Generated (UTC)", summary.GeneratedUtc,
                 "Take a snapshot before an enablement programme and another afterwards; the two files are directly comparable.");
             AddMeta(sheet, "Period covered", $"{summary.WindowDays} days",
                 "All 'this period' figures use this window.");
-            AddMeta(sheet, "Users analysed", summary.ScoredUsers,
-                summary.ScoredUsers < summary.LicensedUsers
-                    ? $"Of {summary.LicensedUsers:N0} licences. Rates in this workbook are of the analysed users only."
-                    : "Every licensed user was analysed.");
+            AddMeta(sheet, "Users analysed", summary.ScoredUsers, UsersAnalysedReportNote(summary));
             AddMeta(sheet, "From (UTC)", summary.FromUtc, string.Empty);
             AddMeta(sheet, "To (UTC)", summary.ToUtc, string.Empty);
             AddMeta(sheet, "History window", $"{summary.Options.HistoryDays} days",
@@ -241,6 +266,49 @@ namespace Common.Entities.CopilotAdoption
             sheet.AddRow(name, value, XlsxCell.Wrapped(notes));
         }
 
+        /// <summary>
+        /// How many licence holders a filtered view selects that the capped licensed-user analysis never
+        /// reached - the count its <see cref="CopilotAdoptionWarningKeys.ScopedLicensedUsersNotAnalysed"/>
+        /// warning carries - or 0.
+        /// </summary>
+        private static int LicenceHoldersNotAnalysed(CopilotAdoptionSummary summary)
+        {
+            var detail = summary.WarningDetails?.FirstOrDefault(d => d.Key == CopilotAdoptionWarningKeys.ScopedLicensedUsersNotAnalysed);
+            object count;
+            return detail?.Values != null && detail.Values.TryGetValue("count", out count) && count != null
+                ? Convert.ToInt32(count, CultureInfo.InvariantCulture)
+                : 0;
+        }
+
+        /// <summary>
+        /// The Report sheet's note on how many users were analysed: all of them, a subset, or all of a slice -
+        /// and which slice. The first sheet is the one read on its own, so it must agree with the view's
+        /// warnings and with the Headline figures sheet rather than claim the whole tenant was covered.
+        /// </summary>
+        private static string UsersAnalysedReportNote(CopilotAdoptionSummary summary)
+        {
+            var notAnalysedInView = LicenceHoldersNotAnalysed(summary);
+            if (notAnalysedInView > 0)
+            {
+                return $"Fewer than the licence holders this filter selects: {notAnalysedInView:N0} more are beyond the "
+                    + "analysis limit. Rates in this workbook are of the analysed users only.";
+            }
+
+            if (summary.ScoredUsers < summary.LicensedUsers)
+            {
+                return $"Of {summary.LicensedUsers:N0} licences. Rates in this workbook are of the analysed users only.";
+            }
+
+            if (!string.IsNullOrWhiteSpace(summary.UserFilterDescription))
+            {
+                return "Every licensed user matching the filter was analysed - not the whole tenant.";
+            }
+
+            return string.IsNullOrWhiteSpace(summary.ScopedEmailDomain)
+                ? "Every licensed user was analysed."
+                : "Every licensed user on " + summary.ScopedEmailDomain + " was analysed - not the whole tenant.";
+        }
+
         private static string YesNo(bool value)
         {
             return value ? "Yes" : "No";
@@ -275,20 +343,35 @@ namespace Common.Entities.CopilotAdoption
 
             var first = sheet.CurrentRow + 1;
 
+            // A filtered view can select licence holders the capped licensed-user analysis never reached -
+            // its scopedLicensedUsersNotAnalysed warning says how many. Every figure below leaves them out,
+            // so neither the seat count nor "users analysed" may present the view as complete.
+            var notAnalysedInView = LicenceHoldersNotAnalysed(summary);
+
             AddMeta(sheet, "Copilot licences", summary.LicensedUsers,
-                "Users holding at least one licence classified as a Microsoft 365 Copilot licence. The assigned-seat count.");
+                "Users holding at least one licence classified as a Microsoft 365 Copilot licence. The assigned-seat count."
+                + (notAnalysedInView > 0
+                    ? $" In this filtered view it counts only the licence holders the analysis reached: {notAnalysedInView:N0} "
+                      + "more that the filter selects are beyond the analysis limit and are not counted here."
+                    : string.Empty));
             AddMeta(sheet, "Purchased Copilot seats", summary.PurchasedCopilotSeats.HasValue ? (object)summary.PurchasedCopilotSeats.Value : "Unknown",
                 "Purchased seats from Graph subscribedSkus prepaidUnits for the SKUs classified as Copilot seats. Unknown means subscribedSkus was unavailable or the permission is missing - deliberately not zero.");
             AddMeta(sheet, "Unassigned Copilot seats", summary.UnassignedCopilotSeats.HasValue ? (object)summary.UnassignedCopilotSeats.Value : "Unknown",
                 "Purchased minus assigned, per Copilot SKU. A seat nobody holds, as distinct from a seat somebody holds but does not use - the two need different decisions, so they are never merged.");
             AddMeta(sheet, "Users analysed", summary.ScoredUsers,
-                summary.ScoredUsers < summary.LicensedUsers
+                notAnalysedInView > 0
+                    ? $"FEWER THAN THE LICENCE HOLDERS THIS FILTER SELECTS: {notAnalysedInView:N0} more are beyond the "
+                      + "analysis limit. Every rate below is of the users analysed, not of everyone the filter selects."
+                    : summary.ScoredUsers < summary.LicensedUsers
                     ? "FEWER THAN THE SEAT COUNT. Every rate below is of these users, not of the whole tenant, "
                       + "and must not be quoted as a tenant-wide figure."
-                    : string.IsNullOrWhiteSpace(summary.ScopedEmailDomain)
-                        ? "Every licensed user was analysed, so the rates below are tenant-wide."
-                        : "Every licensed user on " + summary.ScopedEmailDomain + " was analysed. The rates below "
-                          + "describe that domain, NOT the whole tenant.");
+                    : !string.IsNullOrWhiteSpace(summary.UserFilterDescription)
+                        ? "Every licensed user matching the filter was analysed. The rates below describe those "
+                          + "people, NOT the whole tenant."
+                        : string.IsNullOrWhiteSpace(summary.ScopedEmailDomain)
+                            ? "Every licensed user was analysed, so the rates below are tenant-wide."
+                            : "Every licensed user on " + summary.ScopedEmailDomain + " was analysed. The rates below "
+                              + "describe that domain, NOT the whole tenant.");
             AddMeta(sheet, "Active this period", summary.ActiveUsers,
                 "Used Copilot at least once. A deliberately low bar - one interaction counts the same as fifty.");
             AddMeta(sheet, "Habitual users", summary.HabitualUsers,
@@ -680,6 +763,54 @@ namespace Common.Entities.CopilotAdoption
                 case CopilotAdoptionUnscopedSections.CoworkCredits: return "the Cowork credit balance";
                 default: return section;
             }
+        }
+
+        /// <summary>The cover sheet's "Population" value: whose figures this file holds.</summary>
+        private static string PopulationLabel(CopilotAdoptionSummary summary)
+        {
+            var hasDomain = !string.IsNullOrWhiteSpace(summary.ScopedEmailDomain);
+            var hasFilter = !string.IsNullOrWhiteSpace(summary.UserFilterDescription);
+
+            if (hasDomain && hasFilter)
+            {
+                return "Email domain " + summary.ScopedEmailDomain + ", people where " + summary.UserFilterDescription;
+            }
+
+            if (hasDomain) return "Email domain " + summary.ScopedEmailDomain;
+            if (hasFilter) return "People where " + summary.UserFilterDescription;
+            return "Whole tenant";
+        }
+
+        private static string PopulationNote(CopilotAdoptionSummary summary)
+        {
+            var hasDomain = !string.IsNullOrWhiteSpace(summary.ScopedEmailDomain);
+            var hasFilter = !string.IsNullOrWhiteSpace(summary.UserFilterDescription);
+
+            if (!hasDomain && !hasFilter) return "Every Copilot seat holder the analysis could see.";
+
+            // The licence holders the filter selects include any the capped analysis never reached - its
+            // scopedLicensedUsersNotAnalysed warning counts them - or this row and "Users analysed" below
+            // would disagree about how many people are in the filter.
+            var notAnalysedInView = LicenceHoldersNotAnalysed(summary);
+            var of = summary.UnscopedLicensedUsers.HasValue
+                ? string.Format(
+                    CultureInfo.InvariantCulture,
+                    " {0:N0} of the tenant's {1:N0} Copilot licence holders are in it.",
+                    summary.LicensedUsers + notAnalysedInView,
+                    summary.UnscopedLicensedUsers.Value)
+                  + (notAnalysedInView > 0
+                      ? string.Format(
+                          CultureInfo.InvariantCulture,
+                          " {0:N0} of them are beyond the analysis limit and are left out of every figure.",
+                          notAnalysedInView)
+                      : string.Empty)
+                : string.Empty;
+
+            return (hasFilter
+                    ? "Only the people matching the filter, judged on their Entra ID attributes and custom organisations as last imported."
+                    : "Only the people whose sign-in name is on this domain.")
+                + of
+                + " Sections listed as tenant-wide above are the exception.";
         }
 
         /// <summary>
@@ -1729,9 +1860,13 @@ namespace Common.Entities.CopilotAdoption
 
         /// <summary>
         /// A licence estimate under the model's assumptions, recomputed from the published volumes exactly
-        /// as the portal recomputes it - see <see cref="RestateCowork"/>.
+        /// as the portal recomputes it - see <see cref="RestateCowork"/>. Given the cohort the estimate was
+        /// published for, because that decides how its assumptions name the people in it.
         /// </summary>
-        private static LicenceValueEstimate RestateLicence(LicenceValueEstimate estimate, CopilotAdoptionOptions model)
+        private static LicenceValueEstimate RestateLicence(
+            LicenceValueEstimate estimate,
+            CopilotAdoptionOptions model,
+            LicenceEstimateCohort cohort = LicenceEstimateCohort.Recommended)
         {
             if (estimate == null || estimate.CohortUsers <= 0)
             {
@@ -1744,7 +1879,8 @@ namespace Common.Entities.CopilotAdoption
                 estimate.AddressableMailThreads,
                 estimate.AddressableDocuments,
                 model,
-                estimate.CandidatesCapped);
+                estimate.CandidatesCapped,
+                cohort);
         }
 
         private static void AddEstimateRow(XlsxSheet sheet, string measure, double first, double second, string notes)
@@ -1752,25 +1888,43 @@ namespace Common.Entities.CopilotAdoption
             sheet.AddRow(measure, XlsxCell.Number(first), XlsxCell.Number(second), XlsxCell.Wrapped(notes));
         }
 
+        /// <summary>A row of three cohorts' figures - the licence estimate's.</summary>
+        private static void AddEstimateRow(XlsxSheet sheet, string measure, double first, double second, double third, string notes)
+        {
+            sheet.AddRow(measure, XlsxCell.Number(first), XlsxCell.Number(second), XlsxCell.Number(third), XlsxCell.Wrapped(notes));
+        }
+
         /// <summary>An assumption applies to both cohorts alike, so it is written once per column, unformatted.</summary>
         private static void AddAssumptionRow(XlsxSheet sheet, string measure, double value, string notes)
         {
-            sheet.AddRow(measure, value, value, XlsxCell.Wrapped(notes));
+            AddAssumptionRow(sheet, measure, value, 2, notes);
+        }
+
+        /// <summary>An assumption written once for each of <paramref name="cohorts"/> columns, unformatted.</summary>
+        private static void AddAssumptionRow(XlsxSheet sheet, string measure, double value, int cohorts, string notes)
+        {
+            var cells = new List<object> { measure };
+            for (var i = 0; i < cohorts; i++)
+            {
+                cells.Add(value);
+            }
+            cells.Add(XlsxCell.Wrapped(notes));
+            sheet.AddRow(cells.ToArray());
         }
 
         /// <summary>
-        /// Both cohorts' assumptions as one list. They differ only in the sentence naming how many people
-        /// the volumes were observed for, so each sentence is written once, in order, with the second
-        /// cohort's version beside the first where they differ.
+        /// Every cohort's assumptions as one list. They differ only in the sentence naming how many people
+        /// the volumes were observed for, so each sentence is written once, in order, with the other
+        /// cohorts' versions beside the first where they differ.
         /// </summary>
-        private static IEnumerable<string> MergeAssumptions(IList<string> first, IList<string> second)
+        private static IEnumerable<string> MergeAssumptions(params IList<string>[] cohorts)
         {
             var written = new HashSet<string>(StringComparer.Ordinal);
-            var count = Math.Max(first?.Count ?? 0, second?.Count ?? 0);
+            var count = cohorts.Max(list => list?.Count ?? 0);
 
             for (var i = 0; i < count; i++)
             {
-                foreach (var list in new[] { first, second })
+                foreach (var list in cohorts)
                 {
                     if (list == null || i >= list.Count) continue;
                     if (written.Add(list[i])) yield return list[i];
@@ -1843,9 +1997,14 @@ namespace Common.Entities.CopilotAdoption
         /// The modelled licence estimate, on its own sheet beside the candidate list it sizes.
         ///
         /// <para>The time Microsoft 365 Copilot could give back to the people recommended for a licence,
-        /// with the candidates already using Copilot Chat beside them. Separated from every measured
-        /// figure for the same reason as the Cowork estimate: the volumes are observed, the hours are an
-        /// assumption, and the sheet states its assumptions at the top.</para>
+        /// with the candidates already using Copilot Chat and every licence candidate beside them.
+        /// Separated from every measured figure for the same reason as the Cowork estimate: the volumes are
+        /// observed, the hours are an assumption, and the sheet states its assumptions at the top.</para>
+        ///
+        /// <para><b>Every candidate, not only the recommended ones.</b> The portal lets a reader model
+        /// every candidate instead of the recommended ones, so the workbook carries both - and is written
+        /// whenever either has anybody in it. On a tenant where nobody uses Microsoft 365 heavily enough to
+        /// be recommended, the every-candidate column is the only one with a figure in it.</para>
         ///
         /// <para>This is where the Copilot minutes per meeting, email and document are applied, and the
         /// only place: they are evidenced by published studies of Microsoft 365 Copilot, the largest of
@@ -1860,7 +2019,8 @@ namespace Common.Entities.CopilotAdoption
         {
             var recommended = RestateLicence(summary.LicenceOpportunityEstimate, model);
             var chatUsers = RestateLicence(summary.LicenceChatUsersEstimate, model);
-            if (recommended.CohortUsers == 0) return;
+            var allCandidates = RestateLicence(summary.LicenceAllCandidatesEstimate, model, LicenceEstimateCohort.AllCandidates);
+            if (recommended.CohortUsers == 0 && allCandidates.CohortUsers == 0) return;
 
             // Customised only by the figures this sheet uses: a reader who changed the Cowork figures has
             // changed the Cowork estimate, not this one.
@@ -1871,15 +2031,15 @@ namespace Common.Entities.CopilotAdoption
                     || CopilotAdoptionScoring.TimeSavedLowerBoundRatio(model) != CopilotAdoptionScoring.TimeSavedLowerBoundRatio(configured));
 
             var sheet = workbook.AddSheet("Licence estimate (modelled)");
-            sheet.SetColumnWidths(46, 18, 22, 62);
+            sheet.SetColumnWidths(46, 18, 22, 20, 62);
 
             sheet.AddTitle("Potential time back from licensing - MODELLED, NOT MEASURED");
             sheet.AddRow(XlsxCell.Wrapped(
                 "This product does not and cannot measure time saved. The volumes below are observed from "
-                + "Microsoft's usage reports for the people recommended for a Microsoft 365 Copilot licence; the "
-                + "hours are those volumes multiplied by the minutes-saved assumptions listed with them. Treat "
-                + "this as a way to size a licence purchase, not as a result, and never quote the hours without "
-                + "the assumptions underneath them."));
+                + "Microsoft's usage reports for the people recommended for a Microsoft 365 Copilot licence, and "
+                + "for every licence candidate beside them; the hours are those volumes multiplied by the "
+                + "minutes-saved assumptions listed with them. Treat this as a way to size a licence purchase, "
+                + "not as a result, and never quote the hours without the assumptions underneath them."));
             sheet.AddRow(XlsxCell.Wrapped(
                 "Each minutes-saved default is derived from Microsoft's published Copilot credits and checked "
                 + "against published studies of Microsoft 365 Copilot - the largest of which randomised who "
@@ -1898,13 +2058,16 @@ namespace Common.Entities.CopilotAdoption
                   + "their own figures before exporting."));
             sheet.AddBlankRow();
 
-            sheet.AddHeaderRow("Measure", "Recommended for a licence", "Already using Copilot Chat", "What it means");
+            sheet.AddHeaderRow("Measure", "Recommended for a licence", "Already using Copilot Chat", "Every licence candidate", "What it means");
 
-            AddEstimateRow(sheet, "People covered", recommended.CohortUsers, chatUsers.CohortUsers,
+            AddEstimateRow(sheet, "People covered", recommended.CohortUsers, chatUsers.CohortUsers, allCandidates.CohortUsers,
                 "Recommended: every unlicensed person recommended for a licence - proven demand or a "
                 + "workload-inferred business case. Already using Copilot Chat: the recommended candidates with "
-                + "Copilot Chat use this period, the strongest part of the case because the demand is observed."
-                + (recommended.CandidatesCapped
+                + "Copilot Chat use this period, the strongest part of the case because the demand is observed. "
+                + "Every licence candidate: everyone without a licence who used Microsoft 365 or Copilot Chat this "
+                + "period, recommended or not - the potential if all of them were licensed, not the purchase "
+                + "the list recommends."
+                + (recommended.CandidatesCapped || allCandidates.CandidatesCapped
                     ? $" TRUNCATED: the candidate list reached its {configured.MaxOpportunityCandidates:N0}-candidate "
                       + "limit, so people beyond it are not counted and these figures are a floor."
                     : string.Empty));
@@ -1912,11 +2075,14 @@ namespace Common.Entities.CopilotAdoption
             // ---- Observed work ----
             sheet.AddBlankRow();
             AddSectionRow(sheet, "OBSERVED WORK");
-            AddEstimateRow(sheet, "Meetings a month (observed)", recommended.AddressableMeetings, chatUsers.AddressableMeetings,
+            AddEstimateRow(sheet, "Meetings a month (observed)",
+                recommended.AddressableMeetings, chatUsers.AddressableMeetings, allCandidates.AddressableMeetings,
                 "OBSERVED. Teams meetings attended across the cohort, from Microsoft's Teams usage report.");
-            AddEstimateRow(sheet, "Emails a month (observed)", recommended.AddressableMailThreads, chatUsers.AddressableMailThreads,
+            AddEstimateRow(sheet, "Emails a month (observed)",
+                recommended.AddressableMailThreads, chatUsers.AddressableMailThreads, allCandidates.AddressableMailThreads,
                 "OBSERVED. Emails sent and read across the cohort, from Microsoft's Outlook usage report.");
-            AddEstimateRow(sheet, "Document touches a month (observed)", recommended.AddressableDocuments, chatUsers.AddressableDocuments,
+            AddEstimateRow(sheet, "Document touches a month (observed)",
+                recommended.AddressableDocuments, chatUsers.AddressableDocuments, allCandidates.AddressableDocuments,
                 "OBSERVED. SharePoint and OneDrive files viewed or edited across the cohort.");
 
             // ---- Time saved ----
@@ -1925,38 +2091,43 @@ namespace Common.Entities.CopilotAdoption
             // Plain numbers rather than XlsxCell.Number: that style is the whole-number "#,##0", and
             // half a minute per email would be displayed as 1.
             AddAssumptionRow(sheet, "Minutes saved per meeting (assumption)",
-                Math.Max(0d, model.CopilotMinutesSavedPerMeeting),
+                Math.Max(0d, model.CopilotMinutesSavedPerMeeting), 3,
                 "ASSUMPTION. Preparation, notes, recap and follow-up Copilot takes off each meeting.");
             AddAssumptionRow(sheet, "Minutes saved per email (assumption)",
-                Math.Max(0d, model.CopilotMinutesSavedPerMailThread),
+                Math.Max(0d, model.CopilotMinutesSavedPerMailThread), 3,
                 "ASSUMPTION. Averaged over every email sent or read - triage, thread summaries and drafted replies.");
             AddAssumptionRow(sheet, "Minutes saved per document (assumption)",
-                Math.Max(0d, model.CopilotMinutesSavedPerDocument),
+                Math.Max(0d, model.CopilotMinutesSavedPerDocument), 3,
                 "ASSUMPTION. Drafting, summarising and revising, averaged over every document viewed or edited.");
 
             var recommendedByActivity = CopilotAdoptionScoring.LicenceHoursByActivity(recommended, model);
             var chatByActivity = CopilotAdoptionScoring.LicenceHoursByActivity(chatUsers, model);
+            var allByActivity = CopilotAdoptionScoring.LicenceHoursByActivity(allCandidates, model);
 
-            AddEstimateRow(sheet, "Hours a month - meetings", recommendedByActivity[0], chatByActivity[0],
+            AddEstimateRow(sheet, "Hours a month - meetings", recommendedByActivity[0], chatByActivity[0], allByActivity[0],
                 "MODELLED. Meetings a month x minutes saved per meeting.");
-            AddEstimateRow(sheet, "Hours a month - email", recommendedByActivity[1], chatByActivity[1],
+            AddEstimateRow(sheet, "Hours a month - email", recommendedByActivity[1], chatByActivity[1], allByActivity[1],
                 "MODELLED. Emails a month x minutes saved per email.");
-            AddEstimateRow(sheet, "Hours a month - documents", recommendedByActivity[2], chatByActivity[2],
+            AddEstimateRow(sheet, "Hours a month - documents", recommendedByActivity[2], chatByActivity[2], allByActivity[2],
                 "MODELLED. Document touches a month x minutes saved per document.");
+            var lowerBound = XlsxCell.Percent(CopilotAdoptionScoring.TimeSavedLowerBoundRatio(model));
             sheet.AddRow(
                 "Lower bound (share of every assumption)",
-                XlsxCell.Percent(CopilotAdoptionScoring.TimeSavedLowerBoundRatio(model)),
-                XlsxCell.Percent(CopilotAdoptionScoring.TimeSavedLowerBoundRatio(model)),
+                lowerBound,
+                lowerBound,
+                lowerBound,
                 XlsxCell.Wrapped("ASSUMPTION. The conservative end applies this share of every minute above."));
-            AddEstimateRow(sheet, "Modelled hours a month (low)", recommended.HoursPerMonthLow, chatUsers.HoursPerMonthLow,
+            AddEstimateRow(sheet, "Modelled hours a month (low)",
+                recommended.HoursPerMonthLow, chatUsers.HoursPerMonthLow, allCandidates.HoursPerMonthLow,
                 "MODELLED. The conservative end.");
-            AddEstimateRow(sheet, "Modelled hours a month (high)", recommended.HoursPerMonthHigh, chatUsers.HoursPerMonthHigh,
+            AddEstimateRow(sheet, "Modelled hours a month (high)",
+                recommended.HoursPerMonthHigh, chatUsers.HoursPerMonthHigh, allCandidates.HoursPerMonthHigh,
                 "MODELLED. The full assumption - the three activity rows add up to it. Quote the range, never a "
                 + "single figure.");
 
             sheet.AddBlankRow();
             sheet.AddTitle("Assumptions");
-            foreach (var assumption in MergeAssumptions(recommended.Assumptions, chatUsers.Assumptions))
+            foreach (var assumption in MergeAssumptions(recommended.Assumptions, chatUsers.Assumptions, allCandidates.Assumptions))
             {
                 sheet.AddRow(XlsxCell.Wrapped(assumption));
             }

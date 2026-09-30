@@ -146,7 +146,6 @@ export interface ComponentsSection extends HealthSectionBase {
 export interface ConfigSection extends HealthSectionBase {
   enabledImports: string[];
   sqlServer: string | null;
-  redisHost: string | null;
   serviceBusEndpoint: string | null;
   cognitiveEndpoint: string | null;
   webAppUrl: string | null;

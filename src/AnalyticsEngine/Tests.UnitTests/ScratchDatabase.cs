@@ -33,12 +33,62 @@ namespace Tests.UnitTests
         }
 
         /// <summary>Creates an empty database on the same server as the unit-test database.</summary>
-        public static ScratchDatabase Create(string purpose)
+        /// <param name="purpose">A word for the database's name, so a leftover one says what made it.</param>
+        /// <param name="collation">
+        /// The database's collation, or <c>null</c> for the server's. Given to test SQL that must work on a
+        /// database whose collation is not the server's - and so not tempdb's.
+        /// </param>
+        public static ScratchDatabase Create(string purpose, string collation = null)
         {
+            if (collation != null && !Regex.IsMatch(collation, "^[A-Za-z0-9_]+$"))
+            {
+                throw new ArgumentException("Not a collation name.", nameof(collation));
+            }
+
             // Read the connection string straight from configuration rather than constructing an
             // AnalyticsEntitiesContext: in a DEBUG build that context's initializer migrates the
             // shared unit-test database to the latest schema as a side effect, and these tests only
             // need the server details.
+            var master = MasterConnectionString();
+            var configured = AnalyticsConfig.ConnectionStrings["SPOInsightsEntities"];
+
+            // Unique per test run so parallel or repeated runs never collide. Well within SQL
+            // Server's 128-character identifier limit, so no truncation is needed.
+            var name = $"UT_{purpose}_{Guid.NewGuid():N}";
+
+            var scratch = new SqlConnectionStringBuilder(configured.ConnectionString) { InitialCatalog = name };
+            if (scratch.DataSource.IndexOf("(localdb)", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                scratch.TrustServerCertificate = true;
+            }
+
+            var database = new ScratchDatabase(name, master, scratch.ConnectionString);
+            ExecuteOn(master, collation == null ? $"CREATE DATABASE [{name}];" : $"CREATE DATABASE [{name}] COLLATE {collation};");
+            return database;
+        }
+
+        /// <summary>
+        /// A collation the test server does not use - and therefore tempdb does not either - for SQL that
+        /// must not depend on the two matching. Case- and accent-insensitive like the default, so nothing
+        /// but the collation's name differs.
+        /// </summary>
+        public static string CollationUnlikeTheServers()
+        {
+            string serverCollation;
+            using (var connection = new SqlConnection(MasterConnectionString()))
+            using (var cmd = new SqlCommand("SELECT CONVERT(nvarchar(128), SERVERPROPERTY('Collation'));", connection))
+            {
+                connection.Open();
+                serverCollation = (string)cmd.ExecuteScalar();
+            }
+
+            return string.Equals(serverCollation, "Latin1_General_100_CI_AS", StringComparison.OrdinalIgnoreCase)
+                ? "SQL_Latin1_General_CP1_CI_AS"
+                : "Latin1_General_100_CI_AS";
+        }
+
+        private static string MasterConnectionString()
+        {
             var configured = AnalyticsConfig.ConnectionStrings["SPOInsightsEntities"];
             if (configured == null)
             {
@@ -46,21 +96,13 @@ namespace Tests.UnitTests
                     "The 'SPOInsightsEntities' connection string is missing, so no server is available to create a scratch database on.");
             }
 
-            // Unique per test run so parallel or repeated runs never collide. Well within SQL
-            // Server's 128-character identifier limit, so no truncation is needed.
-            var name = $"UT_{purpose}_{Guid.NewGuid():N}";
-
             var master = new SqlConnectionStringBuilder(configured.ConnectionString) { InitialCatalog = "master" };
-            var scratch = new SqlConnectionStringBuilder(configured.ConnectionString) { InitialCatalog = name };
             if (master.DataSource.IndexOf("(localdb)", StringComparison.OrdinalIgnoreCase) >= 0)
             {
                 master.TrustServerCertificate = true;
-                scratch.TrustServerCertificate = true;
             }
 
-            var database = new ScratchDatabase(name, master.ConnectionString, scratch.ConnectionString);
-            ExecuteOn(master.ConnectionString, $"CREATE DATABASE [{name}];");
-            return database;
+            return master.ConnectionString;
         }
 
         public void Execute(string sql) => ExecuteOn(ConnectionString, sql);

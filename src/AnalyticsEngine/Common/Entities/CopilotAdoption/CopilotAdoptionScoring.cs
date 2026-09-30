@@ -1218,6 +1218,30 @@ namespace Common.Entities.CopilotAdoption
         #region Cowork readiness
 
         /// <summary>
+        /// Whether a set of Cowork signals can be scored: there are none, or at least one of them has a
+        /// licensed-user row to take its Copilot fluency from.
+        /// </summary>
+        /// <remarks>
+        /// Not "are there any licensed-user rows": the licensed-user and Cowork queries keep different people
+        /// past their caps, so a slice can hold licensed rows only for people Cowork never reached and Cowork
+        /// signals only for people the licensed query never reached. Scored anyway, every row would read a
+        /// fluency of 0 it does not have. The one test the summary (<c>FinaliseCowork</c>) and the row and
+        /// export endpoints (<c>CopilotAdoptionScopeFilter.FilterRows</c>) both make, so they cannot disagree.
+        /// </remarks>
+        public static bool CoworkCanBeScored(
+            IReadOnlyCollection<CoworkReadinessSignalRow> signals,
+            IEnumerable<LicensedUserAdoptionRow> licensed)
+        {
+            if (signals == null || signals.Count == 0)
+            {
+                return true;
+            }
+
+            var licensedIds = new HashSet<int>((licensed ?? Enumerable.Empty<LicensedUserAdoptionRow>()).Select(u => u.UserId));
+            return signals.Any(s => licensedIds.Contains(s.UserId));
+        }
+
+        /// <summary>
         /// Scores a Copilot seat holder for Microsoft 365 Copilot Cowork readiness.
         ///
         /// <para>Cowork is an agentic delegation layer: you describe an outcome and it plans and runs
@@ -2048,18 +2072,21 @@ namespace Common.Entities.CopilotAdoption
         /// </summary>
         /// <param name="candidates">
         /// The candidates the estimate covers: every recommended candidate for
-        /// <see cref="CopilotAdoptionSummary.LicenceOpportunityEstimate"/>, or those already using Copilot
-        /// Chat for <see cref="CopilotAdoptionSummary.LicenceChatUsersEstimate"/>.
+        /// <see cref="CopilotAdoptionSummary.LicenceOpportunityEstimate"/>, those already using Copilot
+        /// Chat for <see cref="CopilotAdoptionSummary.LicenceChatUsersEstimate"/>, or every candidate for
+        /// <see cref="CopilotAdoptionSummary.LicenceAllCandidatesEstimate"/>.
         /// </param>
         /// <param name="options">Tuning, including the Copilot minutes-saved assumptions.</param>
         /// <param name="candidatesCapped">
         /// True when the candidate query hit <see cref="CopilotAdoptionOptions.MaxOpportunityCandidates"/>,
         /// so the estimate is a floor rather than a total - and says so.
         /// </param>
+        /// <param name="cohort">Who <paramref name="candidates"/> are, so the assumptions name them correctly.</param>
         public static LicenceValueEstimate EstimateLicenceValue(
             IReadOnlyCollection<LicenceOpportunityRow> candidates,
             CopilotAdoptionOptions options = null,
-            bool candidatesCapped = false)
+            bool candidatesCapped = false,
+            LicenceEstimateCohort cohort = LicenceEstimateCohort.Recommended)
         {
             var o = options ?? CopilotAdoptionOptions.Default;
 
@@ -2081,7 +2108,7 @@ namespace Common.Entities.CopilotAdoption
                 documents += row.FilesViewedOrEdited * workingDaysPerMonth;
             }
 
-            return ModelLicenceValue(candidates.Count, meetings, mail, documents, o, candidatesCapped);
+            return ModelLicenceValue(candidates.Count, meetings, mail, documents, o, candidatesCapped, cohort);
         }
 
         /// <summary>
@@ -2103,13 +2130,18 @@ namespace Common.Entities.CopilotAdoption
         /// Copilot - the largest of which randomised who received a licence, which is exactly the decision
         /// this figure sizes.</para>
         /// </summary>
+        /// <param name="cohort">
+        /// Who the volumes were observed for. Changes only how the assumptions name them - so an estimate
+        /// restated under a reader's own figures has to be given the cohort it was published for.
+        /// </param>
         public static LicenceValueEstimate ModelLicenceValue(
             int cohortUsers,
             double meetingsPerMonth,
             double mailPerMonth,
             double documentsPerMonth,
             CopilotAdoptionOptions options = null,
-            bool candidatesCapped = false)
+            bool candidatesCapped = false,
+            LicenceEstimateCohort cohort = LicenceEstimateCohort.Recommended)
         {
             var o = options ?? CopilotAdoptionOptions.Default;
             var licenceEstimate = new LicenceValueEstimate { CandidatesCapped = candidatesCapped };
@@ -2141,10 +2173,22 @@ namespace Common.Entities.CopilotAdoption
                 $"Assumes Microsoft 365 Copilot saves {Num(meetingMinutes)} minutes per meeting, "
                 + $"{Num(emailMinutes)} per email and {Num(documentMinutes)} per document.");
 
-            licenceEstimate.Assumptions.Add(
-                $"Volumes are observed from Microsoft's usage reports for {cohortUsers:N0} recommended licence "
-                + $"candidate{Plural(cohortUsers)}, restated over {Num(WorkingDaysPerMonth(o))} working days a "
-                + "month.");
+            // One sentence per cohort, each with its own catalog entry in the portal.
+            if (cohort == LicenceEstimateCohort.AllCandidates)
+            {
+                licenceEstimate.Assumptions.Add(
+                    $"Volumes are observed from Microsoft's usage reports for {cohortUsers:N0} licence "
+                    + $"candidate{Plural(cohortUsers)} - everyone without a licence who used Microsoft 365 or "
+                    + "Copilot Chat in the period, recommended or not - "
+                    + $"restated over {Num(WorkingDaysPerMonth(o))} working days a month.");
+            }
+            else
+            {
+                licenceEstimate.Assumptions.Add(
+                    $"Volumes are observed from Microsoft's usage reports for {cohortUsers:N0} recommended licence "
+                    + $"candidate{Plural(cohortUsers)}, restated over {Num(WorkingDaysPerMonth(o))} working days a "
+                    + "month.");
+            }
 
             licenceEstimate.Assumptions.Add(
                 "Candidates already using Copilot Chat without a licence may be realising part of this "

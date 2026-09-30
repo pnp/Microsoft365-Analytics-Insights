@@ -59,7 +59,6 @@ namespace Tests.UnitTests
                 AppServiceWebAppName = NAME,
                 CognitiveServicesEnabled = false,
                 KeyVaultName = NAME,
-                RedisName = NAME,
                 StorageAccountName = NAME,
                 SQLServerDatabaseName = NAME,
                 SQLServerName = NAME,
@@ -97,6 +96,88 @@ namespace Tests.UnitTests
             Assert.IsNotNull(configInvalidPassword);
             Assert.IsFalse(configInvalidPassword.DecryptedOk);
 
+        }
+
+        [TestMethod]
+        public void LegacyRedisConfigPropertiesLoadAndAreNotReserialized()
+        {
+            const string legacyJson = @"{
+                ""ResourceGroupName"": ""ContosoAnalytics"",
+                ""StorageAccountName"": ""contosoanalytics"",
+                ""SQLServerName"": ""contoso-sql"",
+                ""SQLServerDatabaseName"": ""Analytics"",
+                ""RedisName"": ""contoso-redis"",
+                ""NetworkConfig"": {
+                    ""CustomEndpointNames"": {
+                        ""Redis"": ""pe-contoso-redis"",
+                        ""Storage"": ""pe-contoso-storage""
+                    }
+                },
+                ""ConfigSchemaVersion"": ""2.6.0""
+            }";
+
+            var result = SolutionInstallConfig.LoadFromJson(legacyJson, "synthetic-password");
+            Assert.IsNotNull(result.Config);
+
+            var serialized = result.Config.ToJson("synthetic-password");
+            Assert.IsFalse(serialized.Contains("RedisName"), "Removed RedisName must not be written back to saved configs.");
+            Assert.IsFalse(serialized.Contains(@"""Redis"""), "Removed CustomEndpointNames.Redis must not be written back to saved configs.");
+            StringAssert.Contains(serialized, "pe-contoso-storage");
+        }
+
+        [TestMethod]
+        public void NewConfigSchemaVersionIsThree()
+        {
+            Assert.AreEqual(new Version(3, 0, 0), new SolutionInstallConfig().ConfigSchemaVersion);
+            Assert.AreEqual(new Version(3, 0, 0), BaseSolutionInstallConfig.CurrentConfigSchemaVersion);
+        }
+
+        [TestMethod]
+        public void AReSavedOlderConfig_IsStampedWithTheCurrentSchemaVersion()
+        {
+            const string legacyJson = @"{
+                ""ResourceGroupName"": ""ContosoAnalytics"",
+                ""RedisName"": ""contoso-redis"",
+                ""ConfigSchemaVersion"": ""2.6.0""
+            }";
+
+            var config = SolutionInstallConfig.LoadFromJson(legacyJson, "synthetic-password").Config;
+            Assert.AreEqual(new Version(2, 6, 0), config.ConfigSchemaVersion, "A loaded file reports the version it was saved with.");
+
+            var saved = Newtonsoft.Json.Linq.JObject.Parse(config.ToJson("synthetic-password"));
+
+            Assert.AreEqual("3.0.0", (string)saved["ConfigSchemaVersion"],
+                "Saved again it no longer has RedisName - it is a 3.0.0 config and the file must say so, not keep claiming 2.6.0.");
+            Assert.IsNull(saved["RedisName"]);
+            Assert.AreEqual(new Version(3, 0, 0), config.ConfigSchemaVersion, "The in-memory config matches what was written.");
+        }
+
+        [TestMethod]
+        public void LeftoverRedisWarningFiltersResourceTypesAndNamesResourceGroup()
+        {
+            var warnings = LeftoverRedisResourceWarning.BuildWarnings(
+                new[]
+                {
+                    new RedisResourceWarningInfo("contoso-classic-cache", "Microsoft.Cache/redis"),
+                    new RedisResourceWarningInfo("contoso-managed-cache", "Microsoft.Cache/redisEnterprise"),
+                    new RedisResourceWarningInfo("contoso-storage", "Microsoft.Storage/storageAccounts"),
+                },
+                "ContosoAnalytics");
+
+            Assert.AreEqual(2, warnings.Count);
+            StringAssert.Contains(warnings[0], "contoso-classic-cache");
+            StringAssert.Contains(warnings[0], "Microsoft.Cache/redis");
+            StringAssert.Contains(warnings[0], "ContosoAnalytics");
+            StringAssert.Contains(warnings[0], "Azure Table storage");
+            StringAssert.Contains(warnings[1], "contoso-managed-cache");
+            StringAssert.Contains(warnings[1], "Microsoft.Cache/redisEnterprise");
+        }
+
+        [TestMethod]
+        public void LeftoverRedisWarningReturnsNoWarningsForEmptyInput()
+        {
+            Assert.AreEqual(0, LeftoverRedisResourceWarning.BuildWarnings(Array.Empty<RedisResourceWarningInfo>(), "ContosoAnalytics").Count);
+            Assert.AreEqual(0, LeftoverRedisResourceWarning.BuildWarnings(null, "ContosoAnalytics").Count);
         }
 
         [TestMethod]
@@ -463,8 +544,6 @@ namespace Tests.UnitTests
                 SQLServerName = "mysqlsvr",
                 StorageAccountName = "mystorage",
                 AppServiceWebAppName = "myapp",
-                RedisName = "mycache",
-                AzureLocationName = "westeurope",
                 ServiceBusName = "mysb",
                 ServiceBusEnabled = true,
                 CognitiveServiceName = "mycog",
@@ -478,8 +557,6 @@ namespace Tests.UnitTests
             CollectionAssert.Contains(fqdns, "mystorage.blob.core.windows.net");
             CollectionAssert.Contains(fqdns, "mystorage.table.core.windows.net");
             CollectionAssert.Contains(fqdns, "myapp.azurewebsites.net");
-            // Azure Managed Redis is what the installer deploys, so it is the primary candidate.
-            CollectionAssert.Contains(fqdns, "mycache.westeurope.redis.azure.net");
             CollectionAssert.Contains(fqdns, "mysb.servicebus.windows.net");
             CollectionAssert.Contains(fqdns, "mycog.cognitiveservices.azure.com");
         }
@@ -550,106 +627,20 @@ namespace Tests.UnitTests
         [TestMethod]
         public void BuildResourceDnsTargetsSingleResourceHasCorrectLabelAndFqdn()
         {
-            var config = new SolutionInstallConfig { RedisName = "mycache", AzureLocationName = "westeurope" };
+            var config = new SolutionInstallConfig { KeyVaultName = "myvault" };
 
             var targets = SolutionInstallVerifier.BuildResourceDnsTargets(config);
 
             Assert.AreEqual(1, targets.Count);
-            Assert.AreEqual("Redis cache", targets.Single().Label);
-            Assert.AreEqual("mycache.westeurope.redis.azure.net", targets.Single().Fqdn);
-        }
-
-        #region Redis DNS candidates (issue #325)
-
-        [TestMethod]
-        public void BuildRedisDnsTargetOffersManagedRedisFirstThenClassic()
-        {
-            // Before the resource exists in ARM, the verifier cannot know which Redis kind will be present:
-            // the installer provisions Azure Managed Redis, but reuses a pre-existing classic cache of the
-            // same name if one exists. Both must be offered or one healthy cache kind is reported as broken.
-            var target = SolutionInstallVerifier.BuildRedisDnsTarget("mycache", "westeurope");
-
-            Assert.AreEqual("Redis cache", target.Label);
-            CollectionAssert.AreEqual(
-                new[] { "mycache.westeurope.redis.azure.net", "mycache.redis.cache.windows.net" },
-                target.Fqdns.ToArray());
-            Assert.AreEqual("mycache.westeurope.redis.azure.net", target.Fqdn, "Managed Redis must be the primary candidate.");
-            Assert.IsTrue(target.PrivateNetworkResolutionFailureIsWarning,
-                "Redis DNS misses on private-endpoint deployments should be advisory, not hard errors.");
-        }
-
-        [TestMethod]
-        public void BuildRedisDnsTargetUsesArmHostNameWhenKnown()
-        {
-            var target = SolutionInstallVerifier.BuildRedisDnsTarget(
-                "mycache",
-                "westeurope",
-                "mycache.actual.redis.azure.net");
-
-            CollectionAssert.AreEqual(new[] { "mycache.actual.redis.azure.net" }, target.Fqdns.ToArray());
-            Assert.AreEqual("mycache.actual.redis.azure.net", target.Fqdn);
-            StringAssert.Contains(target.FailureHint, "existing Azure resource");
-            Assert.IsTrue(target.PrivateNetworkResolutionFailureIsWarning,
-                "A Redis private-endpoint DNS miss from the installer host is not by itself an install blocker.");
-        }
-
-        [TestMethod]
-        public void BuildRedisDnsTargetFallsBackToClassicOnlyWhenRegionMissing()
-        {
-            // An older saved config may have no region. Guessing one would produce a hostname that can never
-            // resolve, so only the region-free classic name is offered.
-            foreach (var noRegion in new[] { null, "", "   " })
-            {
-                var target = SolutionInstallVerifier.BuildRedisDnsTarget("mycache", noRegion);
-                CollectionAssert.AreEqual(new[] { "mycache.redis.cache.windows.net" }, target.Fqdns.ToArray(),
-                    $"Region '{noRegion ?? "<null>"}' should fall back to classic only.");
-            }
-        }
-
-        [TestMethod]
-        public void BuildRedisDnsTargetIgnoresNoRegionSelectedPlaceholder()
-        {
-            // The region combo stores "---" when nothing is picked; that must never be baked into a hostname.
-            var target = SolutionInstallVerifier.BuildRedisDnsTarget("mycache", "---");
-
-            CollectionAssert.AreEqual(new[] { "mycache.redis.cache.windows.net" }, target.Fqdns.ToArray());
-        }
-
-        [TestMethod]
-        public void BuildRedisDnsTargetNormalisesDisplayNameRegions()
-        {
-            // AzureLocationName is free text on the config: a display name ("West Europe") is the short name
-            // once spaces are stripped and case is normalised.
-            var target = SolutionInstallVerifier.BuildRedisDnsTarget("mycache", " West Europe ");
-
-            Assert.AreEqual("mycache.westeurope.redis.azure.net", target.Fqdn);
-        }
-
-        [TestMethod]
-        public void BuildRedisDnsTargetTrimsNameAndReturnsNullWhenUnnamed()
-        {
-            Assert.AreEqual("mycache.uksouth.redis.azure.net",
-                SolutionInstallVerifier.BuildRedisDnsTarget("  mycache  ", "uksouth").Fqdn);
-
-            Assert.IsNull(SolutionInstallVerifier.BuildRedisDnsTarget(null, "uksouth"));
-            Assert.IsNull(SolutionInstallVerifier.BuildRedisDnsTarget("   ", "uksouth"));
-        }
-
-        [TestMethod]
-        public void BuildResourceDnsTargetsExcludesRedisWhenUnnamedEvenWithRegion()
-        {
-            var config = new SolutionInstallConfig { AzureLocationName = "westeurope", KeyVaultName = "myvault" };
-
-            CollectionAssert.DoesNotContain(
-                SolutionInstallVerifier.BuildResourceDnsTargets(config).Select(t => t.Label).ToList(),
-                "Redis cache");
+            Assert.AreEqual("Key Vault", targets.Single().Label);
+            Assert.AreEqual("myvault.vault.azure.net", targets.Single().Fqdn);
         }
 
         [TestMethod]
         public void ResourceDnsTargetRejectsEmptyCandidateList()
         {
-            Assert.ThrowsException<ArgumentException>(() => new ResourceDnsTarget("Redis cache", new List<string>()));
-            Assert.ThrowsException<ArgumentException>(() => new ResourceDnsTarget("Redis cache", (List<string>)null));
+            Assert.ThrowsException<ArgumentException>(() => new ResourceDnsTarget("Key Vault", new List<string>()));
+            Assert.ThrowsException<ArgumentException>(() => new ResourceDnsTarget("Key Vault", (List<string>)null));
         }
 
         [TestMethod]
@@ -664,6 +655,9 @@ namespace Tests.UnitTests
             StringAssert.Contains(result.Message, "selected virtual networks and IP addresses");
             StringAssert.Contains(result.Message, "same Azure region");
             StringAssert.Contains(result.Message, "IP allow-list rules do not apply");
+            StringAssert.Contains(result.Message, "runtime state",
+                "The same Table endpoint now holds the runtime state, so the warning must not read as 'only the checkpoint degrades'.");
+            StringAssert.Contains(result.Message, "user import");
         }
 
         [TestMethod]
@@ -677,6 +671,7 @@ namespace Tests.UnitTests
             Assert.IsTrue(result.Warns);
             StringAssert.Contains(result.Message, "public network access is Disabled");
             StringAssert.Contains(result.Message, "Enabled from all networks");
+            StringAssert.Contains(result.Message, "runtime state");
         }
 
         [TestMethod]
@@ -703,42 +698,6 @@ namespace Tests.UnitTests
             StringAssert.Contains(result.Message, "private-endpoint");
         }
 
-        [TestMethod]
-        public void BuildRedisDnsTargetProducesManagedCandidateForEveryOfferedAzureRegion()
-        {
-            // The region picker is populated straight from AzurePublicCloudEnumerator, so every value it can
-            // produce must survive normalisation. If a future Azure.Core adds a region short name containing
-            // a character the normaliser rejects, that region would silently lose its Managed Redis candidate
-            // and the #325 false ERROR would come back for those customers only - exactly the kind of
-            // regression that never gets noticed in testing.
-            var regions = AzurePublicCloudEnumerator.GetAzureLocations();
-
-            Assert.IsTrue(regions.Count > 0, "No Azure regions enumerated - the picker would be empty.");
-
-            foreach (var region in regions)
-            {
-                var target = SolutionInstallVerifier.BuildRedisDnsTarget("mycache", region.Name);
-
-                Assert.AreEqual(2, target.Fqdns.Count,
-                    $"Region '{region.Name}' produced no Azure Managed Redis candidate.");
-                Assert.AreEqual($"mycache.{region.Name.ToLowerInvariant().Replace(" ", string.Empty)}.redis.azure.net",
-                    target.Fqdn, $"Wrong Managed Redis FQDN for region '{region.Name}'.");
-            }
-        }
-
-        [TestMethod]
-        public void BuildRedisDnsTargetAlwaysExplainsWhichRegionWasAssumed()
-        {
-            // The managed FQDN is region-qualified from config, not from ARM, so a cache that lives in a
-            // different region fails both candidates. The hint has to say so or the admin has nothing to go on.
-            var withRegion = SolutionInstallVerifier.BuildRedisDnsTarget("mycache", "westeurope");
-            StringAssert.Contains(withRegion.FailureHint, "westeurope");
-
-            var withoutRegion = SolutionInstallVerifier.BuildRedisDnsTarget("mycache", null);
-            StringAssert.Contains(withoutRegion.FailureHint, "No Azure region is configured");
-        }
-
-        #endregion
 
         [TestMethod]
         public void TransportFailureDetectorDetectsDnsAggregateException()

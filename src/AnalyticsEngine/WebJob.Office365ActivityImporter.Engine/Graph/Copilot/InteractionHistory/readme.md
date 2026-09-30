@@ -204,7 +204,7 @@ but it is still personal usage data and should not be kept forever.
   different windows, that turn gets no latency rather than a wrong one. Pairing across batches would need a
   lookup of persisted prompts by `requestId`; the index exists for it.
 * **No distributed lock.** The cadence gate assumes a single web-job instance. If the importer is ever scaled
-  out, two instances could both pass the gate; a lease (Redis `SET NX` or `sp_getapplock`) would be needed.
+  out, two instances could both pass the gate; a lease (an Azure Table row claimed with an ETag, or `sp_getapplock`) would be needed.
 * **No reports yet.** The data is imported and queryable, but no Reports API endpoint or UI page has been
   added for it.
 

@@ -114,7 +114,6 @@ export const common = {
   'common.serverPlaceholder.notStated': '(not stated)',
   'common.serverPlaceholder.none': '(none)',
   'common.serverPlaceholder.disabled': '(disabled)',
-  'common.serverPlaceholder.redisNotConfigured': '(not configured - Teams deep analytics disabled)',
 } as const;
 
 export default common;

@@ -23,9 +23,9 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
     public class AgentCostImportPhase
     {
         /// <summary>
-        /// Cadence key for the Copilot Studio credit import. Stored unprefixed in Redis db 0 like the Graph
-        /// ones, so it can be cleared by hand with e.g. <c>redis-cli DEL CopilotStudioCreditsLastImported</c>
-        /// to force a re-import on the next cycle.
+        /// Cadence key for the Copilot Studio credit import. A row key in the ImportSchedule partition of the
+        /// AnalyticsState Azure Table, like the Graph ones, so it can be deleted by hand (e.g. in Azure Storage
+        /// Explorer) to force a re-import on the next cycle.
         /// </summary>
         public const string CopilotStudioCreditsLastImportedKey = "CopilotStudioCreditsLastImported";
 
@@ -196,8 +196,9 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
                 await _lastRunStore.SetLastRunUtc(cadenceKey, _clock.UtcNow);
                 _logger.LogWarning($"{description} was refused, and retrying cannot fix that, so it will wait for the "
                     + "normal interval rather than re-asking every cycle. Fix the permission (see the error above); "
-                    + "the retry then happens on the next scheduled run. To force it sooner: where Redis is configured, "
-                    + $"delete the Redis key '{cadenceKey}' (restarting the web-job does not clear it); without Redis "
+                    + "the retry then happens on the next scheduled run. To force it sooner: where Storage is configured, "
+                    + $"delete the row '{cadenceKey}' (partition 'ImportSchedule') from the 'AnalyticsState' table in the "
+                    + "solution's storage account (restarting the web-job does not clear it); without Storage "
                     + "the time is held in memory and a restart of the web-job clears it.");
                 return;
             }

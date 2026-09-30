@@ -35,25 +35,26 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
     }
 
     /// <summary>
-    /// Redis-based delta token store for per-user keys.
+    /// Durable per-user delta token store over the runtime state store (the <see cref="Common.Entities.State.StatePartitions.SentEmails"/>
+    /// partition of the state table), one row per mailbox.
     /// </summary>
-    public class RedisDeltaTokenStore : IDeltaTokenStore
+    public class PersistedDeltaTokenStore : IDeltaTokenStore
     {
-        private readonly Common.Entities.Redis.CacheConnectionManager _cacheConnectionManager;
+        private readonly Common.Entities.State.IKeyValueStore _store;
 
-        public RedisDeltaTokenStore(string redisConnectionString, string tenantId = null, string clientId = null, string clientSecret = null)
+        public PersistedDeltaTokenStore(Common.Entities.State.IKeyValueStore store)
         {
-            _cacheConnectionManager = Common.Entities.Redis.CacheConnectionManager.GetConnectionManager(redisConnectionString, tenantId: tenantId, clientId: clientId, clientSecret: clientSecret);
+            _store = store ?? throw new System.ArgumentNullException(nameof(store));
         }
 
         public async Task<string> GetDeltaToken(string key)
         {
-            return await _cacheConnectionManager.GetString(key);
+            return await _store.GetStringAsync(key);
         }
 
         public async Task SetDeltaToken(string key, string deltaToken)
         {
-            await _cacheConnectionManager.SetString(key, deltaToken);
+            await _store.SetStringAsync(key, deltaToken);
         }
     }
 }

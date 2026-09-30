@@ -7,7 +7,7 @@ namespace Tests.UnitTests
 {
     /// <summary>
     /// Covers the import cadence gate (issue #161) - the decision logic that daily-gates the
-    /// non-fresh Graph imports, and the in-memory last-run store fallback used when Redis is absent.
+    /// non-fresh Graph imports, and the in-memory last-run store fallback used when no Storage connection string is configured.
     /// </summary>
     [TestClass]
     public class ImportCadenceTests

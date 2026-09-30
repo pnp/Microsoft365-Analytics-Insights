@@ -57,6 +57,7 @@ import { copilotAdoptionWarningText, isLicenceOpportunityWarning, opportunityRat
 import LicenceTimeSavedHero from './LicenceTimeSavedHero';
 import LicenceTimeSavedModel from './LicenceTimeSavedModel';
 import { useTimeSavedAssumptions } from './coworkTimeSaved';
+import { useTimeSavedCohorts } from './timeSavedCohort';
 
 const PAGE_SIZE = 50;
 
@@ -164,9 +165,6 @@ const useStyles = makeStyles({
 
 const DEFAULT_FILTERS: OpportunityFilters = {
   search: '',
-  department: '',
-  country: '',
-  emailDomain: '',
   recommendedOnly: false,
   existingCopilotUsersOnly: false,
   sortBy: DEFAULT_SORT_BY,
@@ -181,32 +179,32 @@ const DEFAULT_FILTERS: OpportunityFilters = {
  * evidence of demand rather than an inference from general Microsoft 365 activity - so it is
  * surfaced as its own column and its own filter rather than being buried in the score.
  *
- * Above the list sits the time a licence could give back to the people it recommends: the figure a
- * licence purchase is justified with, and the only place the Copilot minutes are applied. Its working
- * and the published evidence behind it are one section away.
+ * Above the list sits the time a licence could give back to the people it recommends - or, at the
+ * reader's choice, to every candidate on it: the figure a licence purchase is justified with, and the
+ * only place the Copilot minutes are applied. Its working and the published evidence behind it are
+ * one section away.
  */
 export default function OpportunitiesPanel({
   windowDays,
   summary,
-  filterOptions,
   options,
   guidanceLinks,
   seatLicenceTypeIds,
-  emailDomain,
+  userFilter,
 }: {
   windowDays: number;
   /** The analysis the licence estimate is published on, and whose assumptions the reader can change. */
   summary: CopilotAdoptionSummary;
-  filterOptions: AdoptionFilterOptions | null;
   /** The weights and targets actually used, so the score explanation quotes them rather than guessing. */
   options: CopilotAdoptionOptions;
   guidanceLinks?: AdoptionGuidanceLink[];
   seatLicenceTypeIds?: number[];
   /**
-   * The page-wide email-domain filter, applied to this list too so it can never describe a
-   * different population from the rest of the report.
+   * The page-wide user filter in its wire form - Entra ID attributes, email domain and custom
+   * organisations - applied to this list too so it can never describe a different population from
+   * the rest of the report, and kept by every reset below.
    */
-  emailDomain?: string | null;
+  userFilter?: string | null;
 }) {
   const styles = useStyles();
   const table = useAdoptionTableStyles();
@@ -230,20 +228,20 @@ export default function OpportunitiesPanel({
 
   const [filters, setFilters] = useState<OpportunityFilters>({
     ...DEFAULT_FILTERS,
-    emailDomain: emailDomain ?? '',
+    userFilter: userFilter ?? '',
   });
 
   /**
-   * Resets the panel's own filters while KEEPING the page-wide email-domain scope.
+   * Resets the panel's own filters while KEEPING the page-wide user filter.
    *
-   * The domain is not one of this panel's filters - it is the population the whole report is
-   * describing, and the banner at the top of the page says so. Clearing it here would silently
-   * widen the list back to the whole tenant while the page still claimed to be showing one
-   * organisation, and the CSV export built from the same state would follow it.
+   * That filter is not one of this panel's - it is the population the whole report is describing,
+   * and the banner at the top of the page says so. Clearing it here would silently widen the list
+   * back to the whole tenant while the page still claimed to be showing one organisation, and the
+   * CSV export built from the same state would follow it.
    */
   const clearPanelFilters = () => {
     setSearchDraft('');
-    setFilters({ ...DEFAULT_FILTERS, emailDomain: emailDomain ?? '' });
+    setFilters({ ...DEFAULT_FILTERS, userFilter: userFilter ?? '' });
   };
   const [searchDraft, setSearchDraft] = useState('');
   const [page, setPage] = useState(0);
@@ -254,6 +252,7 @@ export default function OpportunitiesPanel({
   const { isExpanded, toggle: toggleRow, resetRows, expandAll, collapseAll, allExpanded } = useRowExpansion();
 
   const timeSaved = useTimeSavedAssumptions(summary);
+  const { cohorts, setCohort } = useTimeSavedCohorts();
   const [section, setSection] = useState<OpportunitySection>('candidates');
   // Requests, not flags: each click must act again, including a second click on a section that is
   // already open - which is exactly when a plain setSection() changes nothing the reader can see.
@@ -269,6 +268,23 @@ export default function OpportunitiesPanel({
   const showRecommended = () => {
     setSearchDraft('');
     setFilters((f) => ({ ...f, recommendedOnly: true }));
+    setSection('candidates');
+    setSectionRevealRequest((n) => n + 1);
+  };
+
+  /**
+   * Shows exactly the people the headline counts when it models everyone: every candidate, with each
+   * filter that would narrow the list lifted. The page-wide user filter stays - it is the population
+   * the headline was modelled for.
+   */
+  const showAllCandidates = () => {
+    setSearchDraft('');
+    setFilters((f) => ({
+      ...f,
+      search: '',
+      recommendedOnly: false,
+      existingCopilotUsersOnly: false,
+    }));
     setSection('candidates');
     setSectionRevealRequest((n) => n + 1);
   };
@@ -328,8 +344,13 @@ export default function OpportunitiesPanel({
   const totalPages = data ? Math.max(1, Math.ceil(data.total / PAGE_SIZE)) : 1;
 
   // With a licence estimate the tab is sectioned, and a list in the section that is not showing is
-  // not printed - so it must not hold the printout up, or refuse it for being long.
-  const sectioned = (summary?.licenceOpportunityEstimate?.cohortUsers ?? 0) > 0;
+  // not printed - so it must not hold the printout up, or refuse it for being long. Either cohort
+  // counts: when nobody is recommended, every candidate is modelled instead.
+  const sectioned =
+    (summary?.licenceOpportunityEstimate?.cohortUsers ?? 0) > 0 ||
+    (summary?.licenceAllCandidatesEstimate?.cohortUsers ?? 0) > 0;
+  // The candidate query stopped at its tenant-wide cap, so people ranked below it were never listed.
+  const candidatesCapped = summary?.licenceOpportunityEstimate?.candidatesCapped ?? false;
   const printRows = usePrintAllRows<LicenceOpportunityRow>({
     enabled: (!sectioned || section === 'candidates') && !loading && data !== null,
     total: data?.total ?? 0,
@@ -341,10 +362,11 @@ export default function OpportunitiesPanel({
 
   const filtersActive =
     filters.search !== '' ||
-    filters.department !== '' ||
-    filters.country !== '' ||
     filters.recommendedOnly ||
     filters.existingCopilotUsersOnly;
+  // The page-wide filter narrows the list before this panel's own filters apply, so an empty list under
+  // it says nothing about the rest of the tenant.
+  const pageScoped = filters.userFilter !== '';
 
   // Only the warnings that explain an empty or thin candidate list. The page header already carries
   // the full set, and repeating all of them here would bury the one that answers "why is this empty?".
@@ -370,19 +392,6 @@ export default function OpportunitiesPanel({
         <Button size="small" onClick={() => setFilters((f) => ({ ...f, search: searchDraft }))}>
           {t('copilotAdoptionUsers.common.search')}
         </Button>
-
-        <Select
-          value={filters.department}
-          aria-label={t('copilotAdoptionUsers.opportunities.filterDepartmentAria')}
-          onChange={(_e: any, d: any) => setFilters((f) => ({ ...f, department: d.value }))}
-        >
-          <option value="">{t('copilotAdoptionUsers.common.allDepartments')}</option>
-          {(filterOptions?.departments ?? []).map((dept) => (
-            <option key={dept} value={dept}>
-              {dept}
-            </option>
-          ))}
-        </Select>
 
         <Checkbox
           label={t('copilotAdoptionUsers.opportunities.recommendedOnly')}
@@ -424,10 +433,6 @@ export default function OpportunitiesPanel({
       <PrintedFilters
         filters={[
           printedSearch(t, filters.search),
-          {
-            label: t('copilotAdoptionUsers.common.department'),
-            value: filters.department || t('copilotAdoptionUsers.common.allDepartments'),
-          },
           filters.recommendedOnly && { value: t('copilotAdoptionUsers.opportunities.recommendedOnly') },
           filters.existingCopilotUsersOnly && { value: t('copilotAdoptionUsers.opportunities.alreadyUsingFilter') },
         ]}
@@ -485,7 +490,11 @@ export default function OpportunitiesPanel({
           ) : (
             <>
               <Text weight="semibold" block>
-                {t('copilotAdoptionUsers.opportunities.noneQualified')}
+                {t(candidatesCapped
+                  ? 'copilotAdoptionUsers.opportunities.noneQualifiedCapped'
+                  : pageScoped
+                    ? 'copilotAdoptionUsers.opportunities.noneQualifiedInView'
+                    : 'copilotAdoptionUsers.opportunities.noneQualified')}
               </Text>
               <Text size={200} block className={styles.muted}>
                 {tNode('copilotAdoptionUsers.opportunities.emptyIntro', {
@@ -781,9 +790,23 @@ export default function OpportunitiesPanel({
     </Card>
   );
 
-  // No estimate - nobody recommended, or no Microsoft 365 usage reports to model from - means no
-  // headline and nothing to show the working for: the list alone, exactly as before.
-  if (!((summary?.licenceOpportunityEstimate?.cohortUsers ?? 0) > 0)) return list;
+  // No estimate - no candidates, or no Microsoft 365 usage reports to model from - means no headline
+  // and nothing to show the working for: the list alone, exactly as before. Nobody recommended is no
+  // longer that case: every candidate is modelled instead, and the headline says so. Except that the
+  // headline is the only place the candidate cap was said: a view whose people all ranked below the
+  // tenant-wide cut-off would otherwise read as "nobody qualifies", when nobody below it was ranked.
+  if (!sectioned) {
+    return candidatesCapped ? (
+      <div>
+        <MessageBar intent="warning" style={{ marginBottom: '12px' }}>
+          <MessageBarBody>
+            {t('copilotAdoptionUsers.opportunities.cappedNotice', { cap: formatCount(options.maxOpportunityCandidates) })}
+          </MessageBarBody>
+        </MessageBar>
+        {list}
+      </div>
+    ) : list;
+  }
 
   return (
     <div>
@@ -792,8 +815,11 @@ export default function OpportunitiesPanel({
         summary={summary}
         options={options}
         timeSaved={timeSaved}
+        cohort={cohorts.licence}
+        onCohortChange={(cohort) => setCohort('licence', cohort)}
         onAdjust={adjustAssumptions}
         onShowRecommended={showRecommended}
+        onShowAll={showAllCandidates}
       />
 
       <div className={styles.sectionNav} data-print="hide" ref={sectionNavRef}>
@@ -820,6 +846,7 @@ export default function OpportunitiesPanel({
           summary={summary}
           options={options}
           timeSaved={timeSaved}
+          cohort={cohorts.licence}
           focusRequest={assumptionFocusRequest}
         />
       </div>

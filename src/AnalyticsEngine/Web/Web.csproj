@@ -32,8 +32,11 @@
   </ItemGroup>
 
   <ItemGroup>
+    <PackageReference Include="Azure.Data.Tables" Version="12.12.0" />
+    <PackageReference Include="Azure.Messaging.ServiceBus" Version="7.20.2" />
     <PackageReference Include="Microsoft.Data.SqlClient" Version="6.1.4" />
     <PackageReference Include="Microsoft.EntityFramework.SqlServer" Version="6.5.2" />
+    <PackageReference Include="Microsoft.Identity.Client" Version="4.88.0" />
     <!-- 4.0.0, not 3.16.0: that version was never published, so NuGet silently resolved up to 4.0.0
          and warned (NU1603). Pinning what is actually used makes the build reproducible - a floating
          resolution is one package publish away from changing the auth stack underneath us. -->
@@ -62,11 +65,11 @@
     <PackageReference Include="System.Threading.Tasks.Dataflow" Version="10.0.11" />
   </ItemGroup>
 
+  <!-- No reference to App.ControlPanel.Engine or WebJob.Office365ActivityImporter.Engine: as on dev
+       (#657), the web app needs neither, and the call-notification types it uses live in Common.Entities.Calls. -->
   <ItemGroup>
-    <ProjectReference Include="..\App.ControlPanel.Engine\App.ControlPanel.Engine.csproj" />
     <ProjectReference Include="..\Common\DataUtils\DataUtils.csproj" />
     <ProjectReference Include="..\Common\Entities\Entities.csproj" />
-    <ProjectReference Include="..\WebJob.Office365ActivityImporter.Engine\WebJob.Office365ActivityImporter.Engine.csproj" />
   </ItemGroup>
 
   <!-- Node version guard, shared with the other npm consumers in the repo. -->

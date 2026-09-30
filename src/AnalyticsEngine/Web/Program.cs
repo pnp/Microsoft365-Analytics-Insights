@@ -1,10 +1,9 @@
 using Common.Entities.Config;
 using Common.Entities.Models;
-using Common.Entities.Redis;
-using Common.Entities.Redis.Auth;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Authentication.OpenIdConnect;
 using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -16,17 +15,15 @@ using Web.AnalyticsWeb;
 
 var builder = WebApplication.CreateBuilder(args);
 
+// The Copilot Adoption endpoints take the user filter on the query string (the CSV and Excel exports are
+// plain links). The System.Web build lifted the host's query-string limit to 16 KB in Web.Template.config
+// so the portal, not the host, explains an over-long filter; Kestrel's request line defaults to 8 KB.
+builder.WebHost.ConfigureKestrel(options => options.Limits.MaxRequestLineSize = 16 * 1024);
+
 // The product's own configuration object, still read from the App Service / config file exactly as
 // it was under System.Web. Constructed once here so a misconfigured deployment fails at startup
 // rather than on the first request.
 var appConfig = new AppConfig();
-
-// Redis is optional for the web app. When it isn't configured we can't persist the user's refresh
-// token, so Teams deep analytics can't be enabled - but sign-in must still work.
-// TryGetConnectionManager returns null (instead of throwing) in that case.
-var redisConManager = CacheConnectionManager.TryGetConnectionManager(
-    appConfig.ConnectionStrings.RedisConnectionString, logger: null,
-    tenantId: appConfig.TenantGUID.ToString(), clientId: appConfig.ClientID, clientSecret: appConfig.ClientSecret);
 
 const string GraphScopes = "https://graph.microsoft.com/Team.ReadBasic.All https://graph.microsoft.com/ChannelMessage.Read.All";
 
@@ -86,12 +83,12 @@ builder.Services.AddAuthentication(options =>
 
         // When Entra redirects back with an auth code, redeem it for tokens and stash the refresh
         // token in the (encrypted, httpOnly) auth cookie so the SPA can get a Graph token via
-        // SiteTokenAPI without Redis. When Redis IS configured we also store the token there for the
-        // importer's Teams deep-analytics.
+        // SiteTokenAPI. Nothing is stored server-side: authorising a Team for deep analytics copies the
+        // token into the state table explicitly (TeamsAuthAPIController), and only for the Teams the
+        // admin chooses.
         OnAuthorizationCodeReceived = async context =>
         {
             var identity = (ClaimsIdentity)context.Principal.Identity;
-            var signedInUser = new ClaimsPrincipal(identity);
 
             var authToken = await RefreshOAuthToken.GetAccessToken(
                 context.ProtocolMessage.Code, $"openid email profile offline_access {GraphScopes}",
@@ -103,13 +100,6 @@ builder.Services.AddAuthentication(options =>
             if (authToken != null && !string.IsNullOrEmpty(authToken.RefreshToken))
             {
                 identity.AddClaim(new Claim(GraphTokenClaims.RefreshToken, authToken.RefreshToken));
-            }
-
-            // Teams deep analytics needs the refresh token in Redis for the importer. Without Redis
-            // we simply skip this; sign-in and the rest of the app still work.
-            if (redisConManager != null && authToken != null)
-            {
-                await redisConManager.SaveToken(signedInUser, authToken);
             }
 
             // Supply the redeemed tokens for validation without redeeming the code a second time.
@@ -156,5 +146,17 @@ app.UseAuthorization();
 // RouteConfig, and a fallback that serves the portal page through HomeController (not from disk,
 // which would skip the build-label substitution). See PortalHosting.
 app.MapPortalRoutes();
+
+// Global.asax's Application_Start / Application_End, re-homed on the ASP.NET Core host lifetime.
+// Resume any user organisation CSV import the previous process was running when it stopped (in the
+// background; it never throws), and drain the telemetry pipelines on shutdown - the Copilot Adoption
+// HostStopping stage is what separates "recycled under a run" from "the run hung" (issue #441).
+app.Lifetime.ApplicationStarted.Register(Web.AnalyticsWeb.Controllers.UserOrgAPIController.ResumeInterruptedImportsAfterStartup);
+app.Lifetime.ApplicationStopping.Register(() =>
+{
+    Web.AnalyticsWeb.Models.LicenceActivity.LicenceActivityTelemetry.Shutdown();
+    Web.AnalyticsWeb.Models.UserOrgs.UserOrgImportAppInsights.Shutdown();
+    Web.AnalyticsWeb.Models.CopilotAdoption.CopilotAdoptionTelemetryHost.Shutdown("ApplicationStopping");
+});
 
 app.Run();

@@ -625,6 +625,72 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public void Workbook_DoesNotClaimAFilteredViewWasFullyAnalysedWhenItsLicenceHoldersWereBeyondTheCap()
+        {
+            // The licensed-user analysis stops at its cap by user id, and a filter can select people past it.
+            // The view's own warning says how many; the headline sheet said "every licensed user matching the
+            // filter was analysed" beside it.
+            var analysis = SyntheticAnalysis();
+            var summary = analysis.Summary;
+            summary.UserFilterDescription = "Department is Sales";
+            summary.ScoredUsers = summary.LicensedUsers;
+            CopilotAdoptionWarnings.Add(
+                summary,
+                CopilotAdoptionWarningKeys.ScopedLicensedUsersNotAnalysed,
+                new Dictionary<string, object> { { "count", 12 }, { "maxUsers", 50000 } });
+
+            var cells = SheetCells(CopilotAdoptionWorkbook.Build(analysis), "Headline figures");
+
+            Assert.IsFalse(cells.Any(c => c.Contains("Every licensed user matching the filter was analysed")));
+            Assert.IsTrue(cells.Any(c => c.StartsWith("FEWER THAN THE LICENCE HOLDERS THIS FILTER SELECTS: 12 more")));
+            Assert.IsTrue(cells.Any(c => c.Contains("it counts only the licence holders the analysis reached: 12 more")));
+
+            // And the first sheet, which is the one read on its own.
+            var report = SheetCells(CopilotAdoptionWorkbook.Build(analysis), "Report");
+            Assert.IsFalse(report.Any(c => c.StartsWith("Every licensed user")), "The cover sheet must not claim a complete analysis either.");
+            Assert.IsTrue(report.Any(c => c.StartsWith("Fewer than the licence holders this filter selects: 12 more")));
+
+            // Nor may its Population row count only the analysed people as the filter's members.
+            summary.UnscopedLicensedUsers = summary.LicensedUsers + 500;
+            var population = SheetCells(CopilotAdoptionWorkbook.Build(analysis), "Report")
+                .Single(c => c.StartsWith("Only the people matching the filter"));
+            StringAssert.Contains(population, string.Format(
+                CultureInfo.InvariantCulture,
+                " {0:N0} of the tenant's {1:N0} Copilot licence holders are in it. 12 of them are beyond the analysis limit",
+                summary.LicensedUsers + 12,
+                summary.LicensedUsers + 500));
+        }
+
+        [TestMethod]
+        public void Workbook_StillSaysAFilteredViewWasFullyAnalysedWhenItWas()
+        {
+            var analysis = SyntheticAnalysis();
+            analysis.Summary.UserFilterDescription = "Department is Sales";
+            analysis.Summary.ScoredUsers = analysis.Summary.LicensedUsers;
+
+            var cells = SheetCells(CopilotAdoptionWorkbook.Build(analysis), "Headline figures");
+
+            Assert.IsTrue(cells.Any(c => c.StartsWith("Every licensed user matching the filter was analysed")));
+            Assert.IsFalse(cells.Any(c => c.Contains("beyond the analysis limit")));
+
+            // Complete, but of the filter's people - which the cover sheet says rather than implying the tenant.
+            var report = SheetCells(CopilotAdoptionWorkbook.Build(analysis), "Report");
+            Assert.IsTrue(report.Contains("Every licensed user matching the filter was analysed - not the whole tenant."));
+            Assert.IsFalse(report.Contains("Every licensed user was analysed."));
+        }
+
+        [TestMethod]
+        public void Workbook_CoverSheetSaysEveryoneWasAnalysedOnlyForTheWholeTenant()
+        {
+            var analysis = SyntheticAnalysis();
+            analysis.Summary.ScoredUsers = analysis.Summary.LicensedUsers;
+
+            var report = SheetCells(CopilotAdoptionWorkbook.Build(analysis), "Report");
+
+            Assert.IsTrue(report.Contains("Every licensed user was analysed."));
+        }
+
+        [TestMethod]
         public void Workbook_IncludesTheAccountabilityRollup()
         {
             var text = SheetText(CopilotAdoptionWorkbook.Build(SyntheticAnalysis()));
@@ -790,7 +856,7 @@ namespace Tests.UnitTests
             var cells = SheetCells(bytes, "Licence estimate (modelled)");
             foreach (var expected in new[]
             {
-                "Recommended for a licence", "Already using Copilot Chat", "People covered",
+                "Recommended for a licence", "Already using Copilot Chat", "Every licence candidate", "People covered",
                 "Meetings a month (observed)", "Emails a month (observed)", "Document touches a month (observed)",
                 "Minutes saved per meeting (assumption)", "Minutes saved per email (assumption)",
                 "Minutes saved per document (assumption)", "Hours a month - meetings", "Hours a month - email",
@@ -802,9 +868,14 @@ namespace Tests.UnitTests
 
             var recommended = analysis.Summary.LicenceOpportunityEstimate;
             var chatUsers = analysis.Summary.LicenceChatUsersEstimate;
+            var allCandidates = analysis.Summary.LicenceAllCandidatesEstimate;
             Assert.AreEqual(2, recommended.CohortUsers, "The synthetic analysis recommends two candidates.");
             Assert.AreEqual(1, chatUsers.CohortUsers, "Only one of them already uses Copilot Chat.");
+            Assert.AreEqual(2, allCandidates.CohortUsers, "Both of its candidates are recommended.");
             AssertFollowedBy(cells, "People covered", "2");
+            var covered = cells.IndexOf("People covered");
+            Assert.AreEqual("1", cells[covered + 2], "The second column is the candidates already using Copilot Chat.");
+            Assert.AreEqual("2", cells[covered + 3], "The third column is every licence candidate.");
             CollectionAssert.Contains(cells, recommended.HoursPerMonthHigh.ToString(CultureInfo.InvariantCulture));
             Assert.IsTrue(cells.Any(c => c.StartsWith("Assumptions: the product defaults", StringComparison.Ordinal)));
             Assert.IsTrue(cells.Any(c => c.StartsWith("Assumes Microsoft 365 Copilot saves", StringComparison.Ordinal)),
@@ -812,7 +883,7 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
-        public void Workbook_WritesNoLicenceEstimate_WhenNobodyIsRecommended()
+        public void Workbook_WritesNoLicenceEstimate_WhenThereAreNoCandidates()
         {
             var analysis = SyntheticAnalysis();
             analysis.Opportunities.Clear();
@@ -822,6 +893,58 @@ namespace Tests.UnitTests
                 WorkbookSheetNames(CopilotAdoptionWorkbook.Build(analysis)),
                 "Licence estimate (modelled)",
                 "An empty cohort is not a finding, and must not be written as a modelled zero.");
+        }
+
+        /// <summary>
+        /// The customer the portal's "all candidates" option exists for: nobody uses Microsoft 365 heavily
+        /// enough to be recommended. The portal still models every candidate, so the workbook downloaded
+        /// from it has to carry the same figure - it used to leave the licence estimate out altogether.
+        /// </summary>
+        [TestMethod]
+        public void Workbook_LicenceEstimateModelsEveryCandidate_WhenNobodyIsRecommended()
+        {
+            var analysis = SyntheticAnalysis();
+            analysis.Opportunities.Clear();
+            analysis.Opportunities.Add(CopilotAdoptionScoring.ScoreOpportunity(
+                new UnlicensedUserSignalRow
+                {
+                    UserId = 5100,
+                    UserPrincipalName = "light.user@contoso.com",
+                    Department = GreekDepartment,
+                    TeamsMessages = 4,
+                    TeamsMeetings = 1,
+                    EmailsSent = 2,
+                    EmailsRead = 5,
+                    FilesViewedOrEdited = 1,
+                },
+                analysis.Summary.Options));
+            new CopilotAdoptionService().FinaliseSummary(analysis);
+
+            Assert.AreEqual(0, analysis.Summary.RecommendedForLicence, "The fixture must recommend nobody.");
+            var allCandidates = analysis.Summary.LicenceAllCandidatesEstimate;
+            Assert.AreEqual(1, allCandidates.CohortUsers);
+            Assert.IsTrue(allCandidates.HoursPerMonthHigh > 0, "The fixture must model some time.");
+
+            var bytes = CopilotAdoptionWorkbook.Build(analysis);
+            CollectionAssert.Contains(WorkbookSheetNames(bytes), "Licence estimate (modelled)",
+                "Nobody recommended must no longer mean no licence estimate: every candidate is still modelled.");
+
+            var cells = SheetCells(bytes, "Licence estimate (modelled)");
+            var covered = cells.IndexOf("People covered");
+            Assert.AreEqual("0", cells[covered + 1], "Nobody is recommended.");
+            Assert.AreEqual("0", cells[covered + 2], "So nobody recommended already uses Copilot Chat.");
+            Assert.AreEqual("1", cells[covered + 3], "Every licence candidate.");
+
+            var high = cells.IndexOf("Modelled hours a month (high)");
+            Assert.AreEqual(allCandidates.HoursPerMonthHigh.ToString(CultureInfo.InvariantCulture), cells[high + 3]);
+            var low = cells.IndexOf("Modelled hours a month (low)");
+            Assert.AreEqual(allCandidates.HoursPerMonthLow.ToString(CultureInfo.InvariantCulture), cells[low + 3]);
+
+            Assert.IsTrue(cells.Any(c => c.Contains(
+                    "licence candidate - everyone without a licence who used Microsoft 365 or Copilot Chat in the period, recommended or not -")),
+                "The assumptions must describe every candidate as such, not as recommended.");
+            Assert.IsFalse(cells.Any(c => c.Contains("recommended licence candidate")),
+                "Nobody is recommended, so no assumption may describe the volumes as the recommended people's.");
         }
 
         /// <summary>

@@ -34,7 +34,7 @@ const status = (over: Partial<SystemStatus> = {}): SystemStatus => ({
   callWebhookExpiry: null,
   callWebhookStatusDetail: null,
   webAppConfigSQL: null,
-  webAppConfigRedis: null,
+  webAppConfigStorage: null,
   webAppConfigCognitive: null,
   cognitiveServiceEnabled: false,
   webAppConfigServiceBus: null,

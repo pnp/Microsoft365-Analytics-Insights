@@ -1,14 +1,10 @@
-using Azure.Identity;
 using Common.Entities;
 using Common.Entities.Installer;
 using DataUtils;
-using Microsoft.Azure.Cosmos;
 using Microsoft.Extensions.Logging;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using Newtonsoft.Json;
-using Common.Entities.Config;
 using System;
-using System.Configuration;
 using System.Data.Entity;
 using System.Linq;
 using System.Net;
@@ -46,70 +42,7 @@ namespace Tests.UnitTests
         }
 
         /// <summary>
-        /// Test the service adaptor here, just to make sure it works in the API as this project is part of DevOps pipeline.
-        /// </summary>
-        public async Task UsageStatsCosmosTelemetrySaveAdaptorTests()
-        {
-            var cosmosTestConfig = new TestConfig();
-            if (!cosmosTestConfig.IsValid)
-            {
-                Assert.Fail("Invalid config for Cosmos DB");
-            }
-
-            var config = new Common.Entities.Config.AppConfig();
-            var cosmosClient = new CosmosClient(cosmosTestConfig.CosmosConnectionString, new ClientSecretCredential(config.TenantGUID.ToString(), config.ClientID, config.ClientSecret));
-            var a = new CosmosTelemetrySaveAdaptor(cosmosClient, cosmosTestConfig);
-
-            var tenantId = Guid.NewGuid();
-
-            var model = AnonUsageStatsModelLoader.Load(tenantId, new BaseSolutionInstallConfig());
-
-            // Not saved yet, so should be null
-            var result = await a.LoadCurrentRecordByClientId(model);
-            Assert.IsNull(result);
-
-            await a.Init();
-            await a.Init();     // Should be idempotent
-            await a.SaveOrUpdate(model);
-
-            try
-            {
-                await a.SaveOrUpdate(model);
-            }
-            catch (CosmosException ex) when (ex.StatusCode == System.Net.HttpStatusCode.Conflict)
-            {
-                // Expected. We're uploading the same stats twice
-            }
-
-            // We've saved now so should be something
-            result = await a.LoadCurrentRecordByClientId(model);
-            Assert.IsNotNull(result);
-            Assert.AreEqual(result.AnonClientId, model.AnonClientId);
-
-            // Clean up
-            var db = cosmosClient.GetDatabase(cosmosTestConfig.DatabaseName);
-            await db.DeleteAsync();
-        }
-
-        class TestConfig : IStatsServiceCosmosConfig
-        {
-            public TestConfig()
-            {
-                this.CosmosConnectionString = AnalyticsConfig.AppSettings.Get("CosmosDb");
-                this.ContainerNameCurrent = AnalyticsConfig.AppSettings.Get("CosmosDbTestContainerCurrent");
-                this.ContainerNameHistory = AnalyticsConfig.AppSettings.Get("CosmosDbTestContainerHistory");
-                this.DatabaseName = AnalyticsConfig.AppSettings.Get("CosmosDbTestDatabaseName");
-            }
-            public bool IsValid => !string.IsNullOrEmpty(CosmosConnectionString) && !string.IsNullOrEmpty(DatabaseName) &&
-                !string.IsNullOrEmpty(ContainerNameHistory) && !string.IsNullOrEmpty(ContainerNameCurrent);
-            public string CosmosConnectionString { get; set; }
-            public string DatabaseName { get; set; }
-            public string ContainerNameHistory { get; set; }
-            public string ContainerNameCurrent { get; set; }
-        }
-
-        /// <summary>
-        /// Use real adaptor. Fake data in redis & SQL to get new stats set.
+        /// Use real adaptors. Fake data in the state store & SQL to get new stats set.
         /// </summary>
         [TestMethod]
         public async Task UsageStatsReporterRealTests()
@@ -118,13 +51,14 @@ namespace Tests.UnitTests
             var logger = AnalyticsLogger.ConsoleOnlyTracer();
             using (var db = new AnalyticsEntitiesContext())
             {
-                // Fake "last uploaded". Also test
+                // Fake "last uploaded". Also test the round trip through the persisted loader - the production
+                // class, over an in-memory state store so the test needs no Azure Storage.
                 var randoDate = DateTime.UtcNow.AddYears(-12);
                 var sqlStatsAdaptor = new SqlUsageStatsBuilder(db, logger, tenantId);
-                var redisDatesAdaptor = new RedisStatsDatesLoader(new Common.Entities.Config.AppConfig());
+                var statsDatesAdaptor = new PersistedStatsDatesLoader(new Common.Entities.State.InMemoryKeyValueStore());
 
-                await redisDatesAdaptor.RegisterLastUploadDt(randoDate);
-                var randoDateResult = await redisDatesAdaptor.GetLastUploadDt();
+                await statsDatesAdaptor.RegisterLastUploadDt(randoDate);
+                var randoDateResult = await statsDatesAdaptor.GetLastUploadDt();
                 Assert.IsTrue(randoDateResult.HasValue && randoDateResult.Value == randoDate);
 
                 // Clear out config. Stats should fail
@@ -132,7 +66,7 @@ namespace Tests.UnitTests
                 await db.SaveChangesAsync();
 
                 // Do everything for real except actually upload stats
-                var r = new UsageStatsManager(sqlStatsAdaptor, redisDatesAdaptor, new FakeStatsUploader(logger, false), logger);
+                var r = new UsageStatsManager(sqlStatsAdaptor, statsDatesAdaptor, new FakeStatsUploader(logger, false), logger);
 
                 var result = await r.ProcessAndUploadStats();   // Won't work because no config saved in DB
                 Assert.IsFalse(result);

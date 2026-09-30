@@ -15,6 +15,19 @@ const errors: Record<keyof typeof en, string> = {
   'errors.userLookup.unknownCategory': "Categoría desconocida '{category}'.",
   'errors.userLookup.categoryNoDrilldown': "La categoría '{category}' no admite el desglose.",
 
+  // User organisations API
+  'errors.userOrgs.requestFailed': 'La solicitud ha fallado ({status})',
+  'errors.userFilter.dimensionsFailed': 'No se han podido cargar los atributos para filtrar ({status}).',
+  'errors.userFilter.valuesFailed': 'No se han podido cargar los valores de este atributo ({status}).',
+  'errors.userOrgs.fileUnreadable': 'No se ha podido leer el archivo.',
+  'errors.userOrgs.importNotStarted': 'No se ha podido iniciar la importaci\u00f3n.',
+  'errors.userOrgs.saveFailed': 'No se ha podido guardar el tipo de organizaci\u00f3n.',
+  'errors.userOrgs.loadFailed': 'No se han podido cargar los tipos de organizaci\u00f3n.',
+  'errors.userOrgs.deleteFailed': 'No se ha podido eliminar el tipo de organizaci\u00f3n.',
+  'errors.userOrgs.testFailed': 'No se ha podido probar el atributo.',
+  'errors.userOrgs.network':
+    'No se ha podido contactar con el servidor. Compruebe la conexi\u00f3n y vuelva a intentarlo. Si eligi\u00f3 un archivo, vuelva a elegirlo por si ha cambiado en el disco.',
+
   // Agent costs API
   'errors.agentCosts.availabilityFailed': 'No se ha podido cargar la disponibilidad de costes de agentes ({status}).',
   'errors.agentCosts.summaryFailed': 'No se ha podido cargar el resumen de costes de agentes ({status}).',
@@ -54,6 +67,14 @@ const errors: Record<keyof typeof en, string> = {
   'errors.profiling.statusFailed': 'No se ha podido cargar el estado de generación de perfiles ({status}).',
   'errors.profiling.traceLogsFailed': 'No se han podido cargar los registros de seguimiento de generación de perfiles ({status}).',
   'errors.systemStatus.loadFailed': 'No se ha podido cargar el estado del sistema ({status}).',
+  'errors.userImportCheckpoint.loadFailed':
+    'No se ha podido cargar el punto de control de la importación de usuarios ({status}).',
+  'errors.userImportCheckpoint.clearFailed':
+    'No se ha podido borrar el punto de control de la importación de usuarios ({status}).',
+  'errors.userImportCheckpoint.storageUnavailable':
+    'No se ha podido conectar con Azure Table Storage, donde se guarda el punto de control. Compruebe que esta aplicación web puede conectarse a la cuenta de almacenamiento de la solución y que su identidad en tiempo de ejecución puede leer y escribir tablas, y vuelva a intentarlo.',
+  'errors.userImportCheckpoint.storageNotConfigured':
+    'Azure Storage no está configurado en esta implementación, así que no hay ningún punto de control que borrar.',
   'errors.updateCheck.failed': 'No se han podido buscar actualizaciones ({status}).',
 
   // Licence activity API

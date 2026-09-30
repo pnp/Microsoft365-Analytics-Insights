@@ -1,4 +1,5 @@
 using Common.Entities.Config;
+using Common.Entities.State;
 using DataUtils;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System;
@@ -74,7 +75,7 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
-        public async Task RedisDeltaProvider_ReadUnavailableWithCommittedToken_UsesSafeFallbackOnlyAfterCommit()
+        public async Task PersistedDeltaProvider_ReadUnavailableWithCommittedToken_UsesSafeFallbackOnlyAfterCommit()
         {
             var store = new FakeStringValueStore();
             var provider = BuildDeltaProvider(store, tenantSeed: 1);
@@ -88,7 +89,7 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
-        public async Task RedisDeltaProvider_ReadUnavailableWithNoSafeFallback_DefersInsteadOfInventingMiss()
+        public async Task PersistedDeltaProvider_ReadUnavailableWithNoSafeFallback_DefersInsteadOfInventingMiss()
         {
             var store = new FakeStringValueStore { ThrowOnGet = true };
             var provider = BuildDeltaProvider(store, tenantSeed: 2);
@@ -99,18 +100,18 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
-        public async Task RedisDeltaProvider_ConfirmedMissingKey_ReturnsNullForExplicitFullEnumerationPath()
+        public async Task PersistedDeltaProvider_ConfirmedMissingKey_ReturnsNullForExplicitFullEnumerationPath()
         {
             var store = new FakeStringValueStore();
             var provider = BuildDeltaProvider(store, tenantSeed: 3);
 
             var token = await provider.GetDeltaToken();
 
-            Assert.IsNull(token, "A successful Redis read with no value remains the deliberate first-run/full-load path.");
+            Assert.IsNull(token, "A successful state-store read with no value remains the deliberate first-run/full-load path.");
         }
 
         [TestMethod]
-        public async Task RedisDeltaProvider_WriteFailureSurfacesAndDoesNotCreateFallbackCheckpoint()
+        public async Task PersistedDeltaProvider_WriteFailureSurfacesAndDoesNotCreateFallbackCheckpoint()
         {
             var store = new FakeStringValueStore { ThrowOnSet = true };
             var provider = BuildDeltaProvider(store, tenantSeed: 4);
@@ -123,7 +124,7 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
-        public async Task RedisDeltaProvider_StoreRecovers_ResumesPersistedCheckpointWithoutOperatorAction()
+        public async Task PersistedDeltaProvider_StoreRecovers_ResumesPersistedCheckpointWithoutOperatorAction()
         {
             var store = new FakeStringValueStore();
             var provider = BuildDeltaProvider(store, tenantSeed: 5);
@@ -138,7 +139,7 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
-        public async Task RedisDeltaProvider_MultipleSyntheticScopes_DoNotReuseCheckpoints()
+        public async Task PersistedDeltaProvider_MultipleSyntheticScopes_DoNotReuseCheckpoints()
         {
             var store = new FakeStringValueStore();
             var first = BuildDeltaProvider(store, tenantSeed: 6);
@@ -151,10 +152,10 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
-        public async Task RedisDeltaProvider_CancellationDuringBackoff_StopsWithoutFurtherAttempts()
+        public async Task PersistedDeltaProvider_CancellationDuringBackoff_StopsWithoutFurtherAttempts()
         {
             var store = new FakeStringValueStore { ThrowOnGet = true };
-            var provider = new RedisProcessDeltaValueProvider(
+            var provider = new PersistedDeltaValueProvider(
                 BuildConfig(8),
                 AnalyticsLogger.ConsoleOnlyTracer(),
                 store,
@@ -165,7 +166,7 @@ namespace Tests.UnitTests
                 await Assert.ThrowsExceptionAsync<TaskCanceledException>(() => provider.GetDeltaToken(cts.Token));
             }
 
-            Assert.AreEqual(1, store.GetAttempts, "Cancellation during Redis retry backoff must stop promptly instead of waiting for the bounded delay.");
+            Assert.AreEqual(1, store.GetAttempts, "Cancellation during state-store retry backoff must stop promptly instead of waiting for the bounded delay.");
         }
 
         private static HttpClient BuildBoundedClient(SequenceHttpHandler terminal, int timeoutRetryCount, int perRequestMs, int totalBudgetMs)
@@ -187,8 +188,8 @@ namespace Tests.UnitTests
             return new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
         }
 
-        private static RedisProcessDeltaValueProvider BuildDeltaProvider(FakeStringValueStore store, int tenantSeed)
-            => new RedisProcessDeltaValueProvider(
+        private static PersistedDeltaValueProvider BuildDeltaProvider(FakeStringValueStore store, int tenantSeed)
+            => new PersistedDeltaValueProvider(
                 BuildConfig(tenantSeed),
                 AnalyticsLogger.ConsoleOnlyTracer(),
                 store,
@@ -221,31 +222,37 @@ namespace Tests.UnitTests
             }
         }
 
-        private sealed class FakeStringValueStore : IStringValueStore
+        private sealed class FakeStringValueStore : IKeyValueStore
         {
             private readonly Dictionary<string, string> _values = new Dictionary<string, string>(StringComparer.Ordinal);
             public bool ThrowOnGet { get; set; }
             public bool ThrowOnSet { get; set; }
             public int GetAttempts { get; private set; }
 
-            public Task<string> GetString(string key)
+            public string Description => "fake state store";
+
+            public Task<string> GetStringAsync(string key, CancellationToken cancellationToken = default)
             {
                 GetAttempts++;
-                if (ThrowOnGet) throw new InvalidOperationException("synthetic Redis outage");
+                if (ThrowOnGet) throw new InvalidOperationException("synthetic state store outage");
                 return Task.FromResult(_values.TryGetValue(key, out var value) ? value : null);
             }
 
-            public Task SetString(string key, string value)
+            public Task SetStringAsync(string key, string value, TimeSpan? timeToLive = null, CancellationToken cancellationToken = default)
             {
-                if (ThrowOnSet) throw new InvalidOperationException("synthetic Redis write outage");
+                if (ThrowOnSet) throw new InvalidOperationException("synthetic state store write outage");
                 _values[key] = value;
                 return Task.CompletedTask;
             }
 
-            public Task DeleteString(string key)
+            public Task<bool> DeleteAsync(string key, CancellationToken cancellationToken = default)
             {
-                _values.Remove(key);
-                return Task.CompletedTask;
+                return Task.FromResult(_values.Remove(key));
+            }
+
+            public Task<bool> ExistsAsync(string key, CancellationToken cancellationToken = default)
+            {
+                return Task.FromResult(_values.ContainsKey(key));
             }
         }
     }

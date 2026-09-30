@@ -166,10 +166,10 @@ resource web 'Microsoft.App/containerApps@2024-03-01' = {
             { name: 'WebAppURL', value: 'https://${webFqdn}' }
             { name: 'ImportJobSettings', value: importJobSettings }
             { name: 'ConnectionStrings__SPOInsightsEntities', value: sqlConnectionString }
-            // AppConnectionStrings refuses to start without a Storage connection string, although the
-            // portal never uses one (only the importer's blob checkpoint does). The storage emulator's
-            // well-known placeholder satisfies it without pointing at anything real.
-            { name: 'ConnectionStrings__Storage', value: 'UseDevelopmentStorage=true' }
+            // No Storage connection string: without one the portal keeps its runtime state (Teams
+            // tokens, the user-import checkpoint, org import change logs) in memory. A placeholder such
+            // as UseDevelopmentStorage=true would now be used, and point every state read at an
+            // emulator that is not there.
             // Container Apps terminates TLS and forwards plain HTTP. Without this the OpenID Connect
             // handler builds an http:// redirect URI, which Entra ID rejects.
             { name: 'ASPNETCORE_FORWARDEDHEADERS_ENABLED', value: 'true' }

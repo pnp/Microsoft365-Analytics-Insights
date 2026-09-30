@@ -85,6 +85,8 @@ namespace Tests.FakeDataGen.Demo
                 using (var process = Process.GetCurrentProcess()) summary.PeakWorkingSetBytes = process.PeakWorkingSet64;
                 Console.WriteLine($"{summary.Status}: {summary.TotalRows:N0} source rows; {summary.CompletedProfileWeeks} complete profiling weeks; {stopwatch.Elapsed.TotalSeconds:F1}s.");
                 Console.WriteLine("Cohorts: " + string.Join(", ", summary.Cohorts.Select(p => p.Key + "=" + p.Value)));
+                Console.WriteLine($"User organisations: {summary.UserOrgTypes:N0} types, {summary.UserOrgValues:N0} values; assignments "
+                    + string.Join(", ", summary.UserOrgAssignments.Select(p => p.Key + "=" + p.Value)));
                 Console.WriteLine("Copilot audit bands (latest 28 audit days, real scorer): " + string.Join(", ", summary.AdoptionBands.Select(p => p.Key + "=" + p.Value)));
                 Console.WriteLine("Fingerprint: " + summary.Fingerprint);
                 if (options.Preview) Console.WriteLine("Preview only: no database or weekly profiles were written.");

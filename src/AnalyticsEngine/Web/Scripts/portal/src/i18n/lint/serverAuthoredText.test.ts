@@ -16,6 +16,8 @@ import { SERVER_PLACEHOLDER_KEYS, serverPlaceholderText } from '../../components
 import { TEAMS_MEETING_BUCKET_LABEL_KEYS, TEAMS_SEGMENT_TEXT_KEYS } from '../../components/teamsExplorer/teamsShared';
 import { WEB_ACTIVITY_AVAILABILITY_REASON_KEYS } from '../../components/webActivity/AvailabilityBar';
 import { USER_DATA_WORKLOADS_BY_FLAG } from '../../components/userlookup/CategoryRow';
+import { USER_ORG_MESSAGE_KEYS } from '../../components/userOrgs/userOrgShared';
+import { BLOCKING_KEYS, CSV_DELIMITER_KEYS, ROW_PROBLEM_KEYS } from '../../components/userOrgs/CsvImportPanel';
 import { ACCOUNTABILITY_DIMENSION_TEXT, ACCOUNTABILITY_EMPTY_SEGMENT_KEYS } from '../../pages/CopilotAdoptionPage';
 import { ENABLED_IMPORT_LABELS_BY_SETTING_PROPERTY } from '../../pages/InsightsOverviewPage';
 import { OFFICE_PLATFORM_LABEL_KEYS } from '../../pages/ReportsPage';
@@ -615,6 +617,8 @@ const TIME_SAVED_ASSUMPTION_SPECS: TimeSavedAssumptionSpec[] = [
     requiredFacts: {
       saves: ['assumptions.meetingMinutes', 'assumptions.emailMinutes', 'assumptions.documentMinutes'],
       volumes: ['projection.cohortUsers', 'projection.workingDaysPerMonth'],
+      // The same sentence for every licence candidate, recommended or not - the "all candidates" cohort.
+      volumesAll: ['projection.cohortUsers', 'projection.workingDaysPerMonth'],
       chatUsers: [],
       // The cap the list reached - rendered only when it did.
       capped: ['maxCandidates'],
@@ -807,6 +811,117 @@ describe('User data lookup category labels', () => {
       .filter((key) => !known.has(key));
 
     expect([...new Set(orphans)], 'These user lookup category catalog entries are not in UserDataLookupRules.').toEqual([]);
+  });
+});
+
+/**
+ * User organisation messages are sent as codes from UserOrgMessageCodes, with the server's English as
+ * a fallback. The SPA words each code from USER_ORG_MESSAGE_KEYS; an unmapped code would show that
+ * English to a Spanish reader with every other check green.
+ */
+const USER_ORG_MESSAGE_CODES = join(process.cwd(), '..', '..', '..', 'Common', 'Entities', 'UserOrgs', 'UserOrgMessageCodes.cs');
+const USER_ORG_ADMIN_SERVICE = join(process.cwd(), '..', '..', 'Models', 'UserOrgs', 'UserOrgAdminService.cs');
+const USER_ORG_CONTROLLER = join(process.cwd(), '..', '..', 'Controllers', 'UserOrgAPIController.cs');
+const USER_ORG_CSV_PARSER = join(process.cwd(), '..', '..', '..', 'Common', 'Entities', 'UserOrgs', 'UserOrgCsvParser.cs');
+
+function userOrgMessageCodes(): string[] {
+  const source = readFileSync(USER_ORG_MESSAGE_CODES, 'utf8');
+  return [...source.matchAll(/public\s+const\s+string\s+\w+\s*=\s*"([^"]+)";/g)].map((m) => m[1]);
+}
+
+describe('User organisation server messages', () => {
+  it('finds the file that defines them', () => {
+    expect(() => readFileSync(USER_ORG_MESSAGE_CODES, 'utf8')).not.toThrow();
+    expect(userOrgMessageCodes().length).toBeGreaterThanOrEqual(30);
+  });
+
+  it('words every code the server can send, and nothing it cannot', () => {
+    const server = sortedUnique(userOrgMessageCodes());
+    const mapped = sortedUnique(Object.keys(USER_ORG_MESSAGE_KEYS));
+
+    expect(
+      {
+        missing: server.filter((code) => !mapped.includes(code)),
+        orphans: mapped.filter((code) => !server.includes(code)),
+      },
+      'UserOrgMessageCodes and USER_ORG_MESSAGE_KEYS must be an exact two-way match.',
+    ).toEqual({ missing: [], orphans: [] });
+  });
+
+  it('maps each code to its own catalogue entry', () => {
+    const wrong = Object.entries(USER_ORG_MESSAGE_KEYS)
+      .filter(([code, key]) => key !== `userOrgs.message.${code}` || !(key in EN_CATALOG))
+      .map(([code, key]) => `${code} -> ${key}`);
+    const orphanKeys = catalogKeys('userOrgs.message.').filter(
+      (key) => !Object.values(USER_ORG_MESSAGE_KEYS).includes(key as never),
+    );
+
+    expect({ wrong, orphanKeys }).toEqual({ wrong: [], orphanKeys: [] });
+  });
+
+  it('sends a code with every error the controller answers', () => {
+    // A reply without a code keeps the portal's own "Request failed (500)", because the page cannot word
+    // server English it does not recognise - so a sentence the controller writes without one is wasted
+    // on every reader, and only an English one could have read it.
+    const source = readFileSync(USER_ORG_CONTROLLER, 'utf8');
+    const literal = String.raw`\$?"(?:[^"\\]|\\.)*"`;
+    const coded = new RegExp(
+      String.raw`new ApiErrorModel\(\s*(?:${literal}|ex\.Message)\s*,\s*(?:UserOrg\w+Codes\.\w+|ex\.Code)\s*\)`,
+      'g',
+    );
+    const errors = [...source.matchAll(/new ApiErrorModel\(/g)].length;
+    expect(errors).toBeGreaterThanOrEqual(9);
+    expect([...source.matchAll(coded)].length, 'an ApiErrorModel sent without a code').toBe(errors);
+    expect(
+      [...source.matchAll(/\bContent\s*\(/g)].length,
+      'a UserOrgAPIController Content(...) reply that is not an ApiErrorModel',
+    ).toBe([...source.matchAll(/\bContent\s*\(\s*HttpStatusCode\.\w+,\s*new ApiErrorModel\(/g)].length);
+
+    const notFound = [...source.matchAll(/new UserOrgNotFoundException\(/g)].length;
+    expect(notFound).toBeGreaterThanOrEqual(5);
+    expect(
+      [...source.matchAll(/new UserOrgNotFoundException\(\s*"(?:[^"\\]|\\.)*"\s*,\s*UserOrgMessageCodes\.\w+\s*\)/g)].length,
+      'a UserOrgNotFoundException thrown without a code',
+    ).toBe(notFound);
+  });
+
+  it('words every CSV separator the server can name, and nothing it cannot', () => {
+    // DescribeDelimiter sends a token, not a word, so "semicolon" is never shown to a Spanish reader.
+    const body = /static string DescribeDelimiter\(char delimiter\)\s*\{([\s\S]*?)\n        \}/.exec(
+      readFileSync(USER_ORG_ADMIN_SERVICE, 'utf8'),
+    )?.[1];
+    expect(body, 'UserOrgAdminService.DescribeDelimiter was not found.').toBeTruthy();
+
+    const server = sortedUnique([...(body ?? '').matchAll(/return\s+"([^"]+)";/g)].map((m) => m[1]));
+    expect(server.length).toBeGreaterThanOrEqual(4);
+    expect(sortedUnique(Object.keys(CSV_DELIMITER_KEYS))).toEqual(server);
+
+    const wrong = Object.entries(CSV_DELIMITER_KEYS)
+      .filter(([token, key]) => key !== `userOrgs.csv.delimiter.${token}` || !(key in EN_CATALOG))
+      .map(([token, key]) => `${token} -> ${key}`);
+    expect(wrong).toEqual([]);
+  });
+
+  it('words every CSV row problem and every refused-file reason the server can send, and nothing it cannot', () => {
+    // A code the page does not know falls back to the server's English reason - the one sentence a
+    // Spanish reader then sees in English, with every other check green.
+    const parser = readFileSync(USER_ORG_CSV_PARSER, 'utf8');
+    for (const [className, keys, prefix] of [
+      ['UserOrgCsvProblemCodes', ROW_PROBLEM_KEYS, 'userOrgs.csv.problem.'],
+      ['UserOrgCsvBlockingCodes', BLOCKING_KEYS, 'userOrgs.csv.blocking.'],
+    ] as const) {
+      const body = new RegExp(`public static class ${className}\\s*\\{([\\s\\S]*?)\\n    \\}`).exec(parser)?.[1];
+      expect(body, `${className} was not found.`).toBeTruthy();
+
+      const server = sortedUnique([...(body ?? '').matchAll(/public\s+const\s+string\s+\w+\s*=\s*"([^"]+)";/g)].map((m) => m[1]));
+      expect(server.length, className).toBeGreaterThanOrEqual(4);
+      expect(sortedUnique(Object.keys(keys)), className).toEqual(server);
+
+      const wrong = Object.entries(keys)
+        .filter(([code, key]) => key !== `${prefix}${code}` || !(key in EN_CATALOG))
+        .map(([code, key]) => `${code} -> ${key}`);
+      expect(wrong, className).toEqual([]);
+    }
   });
 });
 
@@ -1811,7 +1926,7 @@ describe('Service Configuration update-check errors', () => {
 });
 
 describe('Teams authorisation server errors', () => {
-  it('keeps the Redis prerequisite error aligned with the SPA catalog entry', () => {
+  it('keeps the Azure Storage prerequisite error aligned with the SPA catalog entry', () => {
     const source = readFileSync(join(process.cwd(), '..', '..', 'Controllers', 'TeamsAuthAPIController.cs'), 'utf8');
     // Every ApiErrorModel the controller builds, literals joined: teamAuthErrorText matches the sentence
     // exactly, so text appended on the server, or a second sentence, would reach a Spanish reader in English.
@@ -1819,7 +1934,7 @@ describe('Teams authorisation server errors', () => {
     const sentences = [...source.matchAll(/new ApiErrorModel\(\s*((?:"(?:[^"\\]|\\.)*"\s*\+?\s*)+)\)/g)]
       .map((m) => [...m[1].matchAll(/"((?:[^"\\]|\\.)*)"/g)].map((part) => csharpStringLiteralValue(part[1])).join(''));
     expect(sentences.length, 'an ApiErrorModel whose message is not literal text').toBe(opened);
-    expect(sentences).toEqual([EN_CATALOG['admin.teams.teamList.redisNotConfigured']]);
+    expect(sentences).toEqual([EN_CATALOG['admin.teams.teamList.storageNotConfigured']]);
     // A reply carrying text some other way (an anonymous { message }) would skip the check above.
     // net10: ASP.NET Core writes Web API 2's `Content(HttpStatusCode.X, body)` as
     // `StatusCode((int)HttpStatusCode.X, body)`, the same status and body. Both spellings are read here:

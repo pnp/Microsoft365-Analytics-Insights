@@ -21,7 +21,7 @@ namespace Tests.UnitTests
     /// Coverage for <see cref="DatabaseUpgradeInfo.EnsureOrgURLs(IOrgUrlStore)"/> and the org URL
     /// normalisation rule behind it (issue #380).
     ///
-    /// These run entirely in memory - no SQL Server, no Graph, no Redis - because the data access now
+    /// These run entirely in memory - no SQL Server, no Graph, no Azure Storage - because the data access now
     /// sits behind <see cref="IOrgUrlStore"/>. The parameterised insert itself is proved separately by
     /// <see cref="OrgUrlStoreSqlIntegrationTests"/>, which needs a real database.
     /// </summary>

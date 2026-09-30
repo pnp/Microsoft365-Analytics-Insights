@@ -243,7 +243,6 @@ namespace App.ControlPanel.Engine
             ("sql connection", "Sql"),
             ("storage account", "Storage"),
             ("storage-account", "Storage"),
-            ("redis", "Redis"),
             ("cognitive service", "Cognitive"),
             ("text analytics", "Cognitive"),
             ("language analytics", "Cognitive"),

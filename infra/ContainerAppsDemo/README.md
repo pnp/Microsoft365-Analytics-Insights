@@ -223,8 +223,9 @@ that at midnight UTC.
 ## Differences from a real deployment
 
 - **No importers.** Nothing reads Microsoft 365. Pages that report on import runs or on components the
-  demo does not deploy - Redis, Service Bus, App Insights, AI Language - show them as not configured.
-  Teams deep analytics needs Redis and stays unavailable.
+  demo does not deploy - Storage, Service Bus, App Insights, AI Language - show them as not configured.
+  With no Storage account the portal keeps its runtime state (Teams authorisations, the user-import
+  checkpoint) in memory, so it resets whenever the container restarts.
 - **Cold starts.** With `minReplicas: 0` the portal stops after a few idle minutes; the next visit waits
   for it to start and signs in again, because the keys protecting sign-in cookies live in the
   container. A paused database adds about a minute to the first request after it pauses.

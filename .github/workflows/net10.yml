@@ -54,13 +54,11 @@ env:
   TenantDomain: ${{ secrets.APP_TENANTDOMAIN }}
   CognitiveEndpoint: ${{ secrets.APP_COGNITIVEENDPOINT }}
   CognitiveKey: ${{ secrets.APP_COGNITIVEKEY }}
-  CosmosDbTestContainerCurrent: stats
-  CosmosDbTestContainerHistory: history
-  CosmosDbTestDatabaseName: UnitTestDevOps
-  CosmosDb: ${{ secrets.APP_COSMOSDB }}
-  ConnectionStrings__Redis: "localhost:6379,abortConnect=False"
   ConnectionStrings__ServiceBus: ${{ secrets.CONNECTIONSTRINGS_SERVICEBUS }}
-  ConnectionStrings__Storage: ${{ secrets.CONNECTIONSTRINGS_STORAGE }}
+  # The Azurite emulator started below, not a real account: runtime state lives in its tables, so every
+  # run starts from an empty store, as it did with the per-run Redis container this replaced (#673).
+  ConnectionStrings__Storage: "UseDevelopmentStorage=true"
+  REQUIRE_AZURITE: "true"
 
 jobs:
   # ---------------------------------------------------------------------------------------------
@@ -159,7 +157,6 @@ jobs:
             -e ClientID=00000000-0000-0000-0000-000000000000 -e ClientSecret=unused \
             -e TenantGUID=00000000-0000-0000-0000-000000000000 -e WebAppURL=https://portal.contoso.example \
             -e 'ConnectionStrings__SPOInsightsEntities=Server=tcp:contoso.database.windows.net;Database=ContosoDemo_Ci;Authentication=Active Directory Managed Identity' \
-            -e 'ConnectionStrings__Storage=UseDevelopmentStorage=true' \
             m365analytics-demo:ci
           asset=$(docker exec portal sh -c 'ls /app/web/wwwroot/assets/*.js | head -n 1 | xargs basename')
           for attempt in $(seq 1 30); do
@@ -242,15 +239,32 @@ jobs:
             exit 1
           }
 
-      - name: Start Redis
+      - name: Start Azurite (Table service)
+        # As on dev (#673): runtime state (Common.Entities.State) lives in Azure Table storage, which the
+        # tests reach through the Azurite emulator as "UseDevelopmentStorage=true" (the Storage connection
+        # string above). REQUIRE_AZURITE turns "emulator not reachable" into a failure of those tests.
+        # Visual Studio's bundled azurite.exe starts in seconds; the pinned npm install is only a fallback.
         shell: pwsh
         run: |
-          $ProgressPreference = 'SilentlyContinue'
-          Invoke-WebRequest -Uri "https://github.com/tporadowski/redis/releases/download/v5.0.14.1/Redis-x64-5.0.14.1.zip" -OutFile "$env:RUNNER_TEMP\redis.zip"
-          Expand-Archive "$env:RUNNER_TEMP\redis.zip" -DestinationPath "$env:RUNNER_TEMP\redis"
-          Start-Process -FilePath "$env:RUNNER_TEMP\redis\redis-server.exe" -WindowStyle Hidden
-          Start-Sleep -Seconds 3
-          & "$env:RUNNER_TEMP\redis\redis-cli.exe" ping
+          $data = Join-Path $env:RUNNER_TEMP 'azurite'
+          New-Item -ItemType Directory -Force -Path $data | Out-Null
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+          $vs = if (Test-Path $vswhere) { & $vswhere -latest -products * -property installationPath } else { $null }
+          $azurite = if ($vs) { Join-Path $vs 'Common7\IDE\Extensions\Microsoft\Azure Storage Emulator\azurite.exe' } else { $null }
+          if ($azurite -and (Test-Path $azurite)) {
+            "Using the Azurite bundled with Visual Studio: $azurite (version $(& $azurite --version))"
+          } else {
+            "Visual Studio's Azurite was not found on this image; installing azurite@3.37.0 from npm instead."
+            npm install --global azurite@3.37.0 --no-audit --no-fund
+            $azurite = (Get-Command azurite-table.cmd -ErrorAction Stop).Source
+          }
+          Start-Process -FilePath $azurite -ArgumentList @('--silent', '--location', $data, '--tableHost', '127.0.0.1', '--tablePort', '10002', '--skipApiVersionCheck') -WindowStyle Hidden
+          $deadline = (Get-Date).AddSeconds(60)
+          while ($true) {
+            try { $probe = [System.Net.Sockets.TcpClient]::new(); $probe.Connect('127.0.0.1', 10002); $probe.Dispose(); break }
+            catch { if ((Get-Date) -gt $deadline) { throw "Azurite did not start listening on 127.0.0.1:10002." }; Start-Sleep -Seconds 2 }
+          }
+          "Azurite Table service is listening on 127.0.0.1:10002."
 
       # Hard gate, unlike the full suite below. These classes assert invariants that need no service
       # or credential, so a failure is always a real regression and must fail the job. Without this

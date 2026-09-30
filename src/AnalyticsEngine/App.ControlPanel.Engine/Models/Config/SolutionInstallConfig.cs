@@ -106,7 +106,6 @@ namespace App.ControlPanel.Engine
             c.SQLServerDatabaseName = string.Empty;
             c.SQLServerName = string.Empty;
             c.CognitiveServiceName = string.Empty;
-            c.RedisName = string.Empty;
             c.CognitiveServicesEnabled = true;
             c.ServiceBusEnabled = true;
             c.ServiceBusName = string.Empty;
@@ -229,6 +228,11 @@ namespace App.ControlPanel.Engine
             this.RuntimeAccountOffice365.EncryptSecretToHashProperty(password);
             this.InstallerAccount.EncryptSecretToHashProperty(password);
 
+            // What is written is this build's schema, whichever version the config was loaded from: without this, a 2.x
+            // file re-saved without its removed properties would still say 2.x - in the file and in the config_states
+            // row the installer records (SqlInstallerTasks.RegisterConfigAndStatus uses this too).
+            this.ConfigSchemaVersion = CurrentConfigSchemaVersion;
+
             return JsonConvert.SerializeObject(this);
         }
 
@@ -322,20 +326,6 @@ namespace App.ControlPanel.Engine
                     {
                         errs.Add("Enter valid Cognitive Services name.");
                     }
-                }
-            }
-
-            // Redis
-            if (string.IsNullOrWhiteSpace(this.RedisName))
-            {
-                errs.Add("Provide a redis service name.");
-            }
-            else
-            {
-                bool isValidName = IsRegexExComplaint(this.RedisName, @"^[-\w\._\(\)]+$", false);
-                if (!isValidName)
-                {
-                    errs.Add("Enter valid redis service name.");
                 }
             }
 

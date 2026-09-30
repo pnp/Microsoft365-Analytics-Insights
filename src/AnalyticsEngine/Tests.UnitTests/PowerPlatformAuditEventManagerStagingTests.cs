@@ -16,7 +16,7 @@ namespace Tests.UnitTests
     /// before the <c>IPowerPlatformStagingWriter</c> seam existed they could only be checked against a
     /// live database.
     ///
-    /// Runs with zero SQL Server, Graph, Redis or Service Bus.
+    /// Runs with zero SQL Server, Graph, Azure Storage or Service Bus.
     /// </summary>
     [TestClass]
     public class PowerPlatformAuditEventManagerStagingTests

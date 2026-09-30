@@ -162,7 +162,7 @@ namespace CloudInstallEngine.Azure.InstallTasks
                     {
                         _logger.LogWarning($"Failed to configure VNet integration for App Service: {ex.Message}. " +
                             $"Ensure the integration subnet '{vnetSubnetId}' exists and is delegated to Microsoft.Web/serverFarms. " +
-                            $"Without VNet integration, the App Service will use public outbound IPs and Redis must allow public access with firewall rules.");
+                            $"Without VNet integration, the App Service will use public outbound IPs to reach public Azure PaaS endpoints.");
                     }
                 }
                 else

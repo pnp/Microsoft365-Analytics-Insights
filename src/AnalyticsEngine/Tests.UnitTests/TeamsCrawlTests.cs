@@ -1,4 +1,3 @@
-using Common.Entities.Redis.Teams;
 using DataUtils;
 using Microsoft.Graph.Models;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
@@ -13,7 +12,7 @@ namespace Tests.UnitTests
 {
     /// <summary>
     /// First unit coverage for the Teams import (issue #377). Everything here runs with no Graph, no
-    /// Redis and no SQL: the crawl's decisions are now behind pure rules and ports.
+    /// storage and no SQL: the crawl's decisions are now behind pure rules and ports.
     /// </summary>
     [TestClass]
     public class TeamsCrawlTests
@@ -229,7 +228,7 @@ namespace Tests.UnitTests
                 .ReturningNoToken("channel-2");
 
             var store = new InMemoryTeamChannelDeltaTokenStore();
-            await store.SetDeltaToken("team-1", "channel-2", new TeamsRedisManager.TeamChannelDeltaTokenInfo { Token = "previous-delta-2" });
+            await store.SetDeltaToken("team-1", "channel-2", new TeamChannelDeltaTokenInfo { Token = "previous2" });
 
             var crawler = new TeamsChannelCrawler(source);
             await CrawlPersistAndCommitTokens(
@@ -242,7 +241,7 @@ namespace Tests.UnitTests
             CollectionAssert.AreEqual(new[] { "channel-1", "channel-2" }, source.ChannelsRead.ToArray(),
                 "Every channel in the team must be crawled, in order.");
             Assert.AreEqual("delta-1", (await store.GetDeltaToken("team-1", "channel-1"))?.Token);
-            Assert.AreEqual("previous-delta-2", (await store.GetDeltaToken("team-1", "channel-2"))?.Token,
+            Assert.AreEqual("previous2", (await store.GetDeltaToken("team-1", "channel-2"))?.Token,
                 "A read that returned no delta token must not overwrite the token already stored.");
         }
 
@@ -261,7 +260,7 @@ namespace Tests.UnitTests
                 .ReturningRootMessages(channel.Id, DeltaLink("delta-after-partial-replies"), completed: true, rootMessage)
                 .ReturningReplies(rootMessage.Id, completed: false, Msg("reply-kept", AfterToken));
             var store = new InMemoryTeamChannelDeltaTokenStore();
-            await store.SetDeltaToken("team-1", channel.Id, new TeamsRedisManager.TeamChannelDeltaTokenInfo
+            await store.SetDeltaToken("team-1", channel.Id, new TeamChannelDeltaTokenInfo
             {
                 Token = "previous-delta",
                 LastUpdated = DeltaTokenWrittenAt
@@ -322,7 +321,7 @@ namespace Tests.UnitTests
             var pageReader = new FakeChannelMessagesPageReader()
                 .ReturningRootMessages(channel.Id, DeltaLink("delta-after-partial-roots"), completed: false, Msg("root-1", AfterToken));
             var store = new InMemoryTeamChannelDeltaTokenStore();
-            await store.SetDeltaToken("team-1", channel.Id, new TeamsRedisManager.TeamChannelDeltaTokenInfo
+            await store.SetDeltaToken("team-1", channel.Id, new TeamChannelDeltaTokenInfo
             {
                 Token = "previous-delta",
                 LastUpdated = DeltaTokenWrittenAt
@@ -475,10 +474,10 @@ namespace Tests.UnitTests
 
             public List<string> SetCalls { get; } = new List<string>();
 
-            public Task<TeamsRedisManager.TeamChannelDeltaTokenInfo> GetDeltaToken(string teamId, string channelId)
+            public Task<TeamChannelDeltaTokenInfo> GetDeltaToken(string teamId, string channelId)
                 => _inner.GetDeltaToken(teamId, channelId);
 
-            public Task SetDeltaToken(string teamId, string channelId, TeamsRedisManager.TeamChannelDeltaTokenInfo deltaTokenInfo)
+            public Task SetDeltaToken(string teamId, string channelId, TeamChannelDeltaTokenInfo deltaTokenInfo)
             {
                 SetCalls.Add($"{teamId}/{channelId}");
                 return _inner.SetDeltaToken(teamId, channelId, deltaTokenInfo);
@@ -493,14 +492,14 @@ namespace Tests.UnitTests
 
         private class DelegatingChannelMessagesSourceLoader : IChannelMessagesSourceLoader
         {
-            private readonly Func<ChannelWithReactions, string, Task<TeamsRedisManager.TeamChannelDeltaTokenInfo>> _load;
+            private readonly Func<ChannelWithReactions, string, Task<TeamChannelDeltaTokenInfo>> _load;
 
-            public DelegatingChannelMessagesSourceLoader(Func<ChannelWithReactions, string, Task<TeamsRedisManager.TeamChannelDeltaTokenInfo>> load)
+            public DelegatingChannelMessagesSourceLoader(Func<ChannelWithReactions, string, Task<TeamChannelDeltaTokenInfo>> load)
             {
                 _load = load;
             }
 
-            public Task<TeamsRedisManager.TeamChannelDeltaTokenInfo> LoadMessagesAndReactions(ChannelWithReactions channel, string teamId)
+            public Task<TeamChannelDeltaTokenInfo> LoadMessagesAndReactions(ChannelWithReactions channel, string teamId)
                 => _load(channel, teamId);
         }
 
@@ -543,7 +542,7 @@ namespace Tests.UnitTests
             public Task<ChannelRootMessagesPageResult> LoadRootMessages(
                 string teamId,
                 string channelId,
-                TeamsRedisManager.TeamChannelDeltaTokenInfo channelDeltaInfo)
+                TeamChannelDeltaTokenInfo channelDeltaInfo)
             {
                 _rootMessagesByChannelId.TryGetValue(channelId, out var result);
                 return Task.FromResult(result);

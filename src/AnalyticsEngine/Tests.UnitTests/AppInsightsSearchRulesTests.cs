@@ -6,7 +6,7 @@ namespace Tests.UnitTests
 {
     /// <summary>
     /// Coverage for the search-term staging rules extracted from SearchesSaveExtension (issue #369).
-    /// Runs with zero SQL Server, Graph, Redis or Service Bus dependency.
+    /// Runs with zero SQL Server, Graph, Azure Storage or Service Bus dependency.
     /// </summary>
     [TestClass]
     public class AppInsightsSearchRulesTests
