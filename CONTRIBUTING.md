@@ -40,8 +40,8 @@ This is a Windows-based .NET Framework solution. To build it you will need:
   [`.nvmrc`](.nvmrc); see [Node.js version](#nodejs-version) below.
 * A SQL Server **LocalDB** instance for running the unit tests.
 
-A full end-to-end run also needs Azure resources (Azure SQL, App Service, Redis,
-and others). See the
+A full end-to-end run also needs Azure resources (Azure SQL, App Service, a storage
+account, and others). See the
 [Architecture & costs](https://github.com/pnp/Microsoft365-Analytics-Insights/wiki/Architecture%20and%20Costs)
 and
 [Prerequisites](https://github.com/pnp/Microsoft365-Analytics-Insights/wiki/Prerequisites)
