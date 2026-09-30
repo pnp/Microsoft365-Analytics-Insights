@@ -5,6 +5,7 @@ using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System;
 using System.Linq;
 using System.Net.Sockets;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace Tests.UnitTests
@@ -166,6 +167,28 @@ namespace Tests.UnitTests
 
             var remaining = _table.Query<TableEntity>(e => e.PartitionKey == partition).Select(e => e.RowKey).ToList();
             CollectionAssert.AreEquivalent(new[] { "no-ttl" }, remaining);
+        }
+
+        [TestMethod]
+        public async Task APurgeNeverDeletesAValueRewrittenAfterItFoundItExpired()
+        {
+            var now = new DateTimeOffset(2026, 9, 1, 0, 0, 0, TimeSpan.Zero);
+            var partition = "Test" + Guid.NewGuid().ToString("N");
+            var store = new AzureTableKeyValueStore(_table ?? Skip(), partition, () => now);
+            await store.SetStringAsync("rewritten", "stale result", TimeSpan.FromDays(1));
+            await store.SetStringAsync("expired", "stale result", TimeSpan.FromDays(1));
+
+            now = now.AddDays(2);
+            var found = await store.FindExpiredAsync(100, CancellationToken.None);
+            Assert.AreEqual(2, found.Count);
+
+            // Between the purge's query and its delete, another Teams worker caches a fresh result for the same text.
+            await store.SetStringAsync("rewritten", "fresh result", TimeSpan.FromDays(1));
+
+            Assert.AreEqual(1, await store.DeleteUnlessChangedAsync(found, CancellationToken.None));
+            Assert.AreEqual("fresh result", await store.GetStringAsync("rewritten"), "The purge must not delete a value written after it looked.");
+            var remaining = _table.Query<TableEntity>(e => e.PartitionKey == partition).Select(e => e.RowKey).ToList();
+            CollectionAssert.AreEquivalent(new[] { "rewritten" }, remaining, "The unchanged expired row in the same batch is still deleted.");
         }
 
         [TestMethod]

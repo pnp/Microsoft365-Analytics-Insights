@@ -176,12 +176,20 @@ namespace Common.Entities.State
 
         /// <summary>
         /// Deletes up to <paramref name="maxToDelete"/> values in this partition whose time-to-live has passed. Values
-        /// written without a TTL are never touched. Returns how many were deleted.
+        /// written without a TTL are never touched, and neither is a value rewritten after this purge found it expired.
+        /// Returns how many were deleted.
         /// </summary>
         public async Task<int> PurgeExpiredAsync(int maxToDelete = 10000, CancellationToken cancellationToken = default)
         {
             if (maxToDelete <= 0) return 0;
 
+            var expired = await FindExpiredAsync(maxToDelete, cancellationToken).ConfigureAwait(false);
+            return await DeleteUnlessChangedAsync(expired, cancellationToken).ConfigureAwait(false);
+        }
+
+        /// <summary>Up to <paramref name="maxToFind"/> rows in this partition whose time-to-live has passed, with their ETags.</summary>
+        internal async Task<List<TableEntity>> FindExpiredAsync(int maxToFind, CancellationToken cancellationToken)
+        {
             var table = await _getTable(cancellationToken).ConfigureAwait(false);
 
             // The property name is literal text: CreateQueryFilter quotes every interpolated hole as an OData VALUE.
@@ -192,9 +200,9 @@ namespace Common.Entities.State
                 cancellationToken: cancellationToken).AsPages().GetAsyncEnumerator(cancellationToken);
             try
             {
-                while (expired.Count < maxToDelete && await pages.MoveNextAsync().ConfigureAwait(false))
+                while (expired.Count < maxToFind && await pages.MoveNextAsync().ConfigureAwait(false))
                 {
-                    expired.AddRange(pages.Current.Values.Take(maxToDelete - expired.Count));
+                    expired.AddRange(pages.Current.Values.Take(maxToFind - expired.Count));
                 }
             }
             finally
@@ -202,20 +210,46 @@ namespace Common.Entities.State
                 await pages.DisposeAsync().ConfigureAwait(false);
             }
 
+            return expired;
+        }
+
+        /// <summary>
+        /// Deletes each of <paramref name="expired"/> only if it is unchanged since it was found - its ETag still matches -
+        /// and returns how many were deleted. A value rewritten meanwhile (a fresh result another worker has just cached)
+        /// has a new ETag and is kept, as is a row something else already deleted; the rest of its batch is still deleted.
+        /// </summary>
+        internal async Task<int> DeleteUnlessChangedAsync(IReadOnlyList<TableEntity> expired, CancellationToken cancellationToken)
+        {
+            var table = await _getTable(cancellationToken).ConfigureAwait(false);
+
             var deleted = 0;
             for (var i = 0; i < expired.Count; i += MaxTransactionSize)
             {
-                var batch = expired.GetRange(i, Math.Min(MaxTransactionSize, expired.Count - i))
-                    .Select(e => new TableTransactionAction(TableTransactionActionType.Delete, e, ETag.All))
-                    .ToList();
-                try
+                var batch = new List<TableTransactionAction>();
+                for (var j = i; j < Math.Min(i + MaxTransactionSize, expired.Count); j++)
                 {
-                    await table.SubmitTransactionAsync(batch, cancellationToken).ConfigureAwait(false);
-                    deleted += batch.Count;
+                    batch.Add(new TableTransactionAction(TableTransactionActionType.Delete, expired[j], expired[j].ETag));
                 }
-                catch (TableTransactionFailedException)
+
+                while (batch.Count > 0)
                 {
-                    // One row in the batch went away (or was rewritten) meanwhile; the next purge picks up the rest.
+                    try
+                    {
+                        await table.SubmitTransactionAsync(batch, cancellationToken).ConfigureAwait(false);
+                        deleted += batch.Count;
+                        break;
+                    }
+                    catch (TableTransactionFailedException ex) when (ex.FailedTransactionActionIndex.HasValue
+                        && ex.FailedTransactionActionIndex.Value >= 0 && ex.FailedTransactionActionIndex.Value < batch.Count)
+                    {
+                        // A transaction is all-or-nothing: leave out the row that changed or went away, and delete the rest.
+                        batch.RemoveAt(ex.FailedTransactionActionIndex.Value);
+                    }
+                    catch (TableTransactionFailedException)
+                    {
+                        // No failing row named: skip this batch. Those rows read as missing anyway, and the next purge retries.
+                        break;
+                    }
                 }
             }
 
