@@ -47,8 +47,66 @@ namespace Web.AnalyticsWeb.Models.UserDataLookup
                     .Include(u => u.LicenseLookups.Select(l => l.License))
                     .FirstOrDefaultAsync(u => u.UserPrincipalName == upn);
 
-                return user == null ? null : BuildProfile(user);
+                if (user == null)
+                {
+                    return null;
+                }
+
+                var profile = BuildProfile(user);
+                profile.Orgs = await LoadOrgsAsync(db, user.ID).ConfigureAwait(false);
+                return profile;
             }
+        }
+
+        /// <summary>
+        /// Loads the user's configured organisation values.
+        /// </summary>
+        /// <remarks>
+        /// Raw SQL and its own try/catch, because the <c>user_org_*</c> tables are not part of the EF
+        /// model and are created by a migration the database may not have yet - the web-jobs
+        /// deliberately do not migrate. A deployment that has not upgraded should see the rest of the
+        /// user profile exactly as before, not a broken page.
+        /// </remarks>
+        private static async Task<List<UserOrgValueModel>> LoadOrgsAsync(AnalyticsEntitiesContext db, int userId)
+        {
+            const string sql = @"
+SELECT t.name AS OrgTypeName, v.name AS Value
+FROM dbo.user_org_assignments a
+JOIN dbo.user_org_types t ON t.id = a.org_type_id
+JOIN dbo.user_org_values v ON v.id = a.org_value_id
+WHERE a.user_id = @userId
+ORDER BY t.name;";
+
+            try
+            {
+                var rows = await db.Database
+                    .SqlQuery<UserOrgValueModel>(sql, new Microsoft.Data.SqlClient.SqlParameter("@userId", userId))
+                    .ToListAsync()
+                    .ConfigureAwait(false);
+                return rows;
+            }
+            catch (Exception ex) when (IsMissingTable(ex))
+            {
+                // No user_org tables on this database yet. Organisations are simply not shown. Anything
+                // else - a timeout, a permission, a deadlock - is a fault and is reported as one, rather
+                // than shown as a person who belongs to no organisation.
+                return new List<UserOrgValueModel>();
+            }
+        }
+
+        /// <summary>SQL error 208, "Invalid object name": the database predates the user organisation tables.</summary>
+        private static bool IsMissingTable(Exception ex)
+        {
+            for (var current = ex; current != null; current = current.InnerException)
+            {
+                var sql = current as Microsoft.Data.SqlClient.SqlException;
+                if (sql != null && sql.Number == 208)
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         public async Task<int?> GetUserIdAsync(string upn)

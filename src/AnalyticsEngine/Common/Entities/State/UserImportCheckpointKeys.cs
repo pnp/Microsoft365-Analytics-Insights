@@ -87,9 +87,37 @@ namespace Common.Entities.State
         }
 
         /// <summary>
-        /// The key recording which <c>UserGroupsFilter</c> a tenant's stored <c>/users/delta</c> token was taken
-        /// under, as <see cref="Common.Entities.Config.UserGroupsFilterModel.Fingerprint"/> (empty or absent: no filter).
+        /// The key of a tenant's stored <c>/users/delta</c> token when the import also reads organisation attributes
+        /// from Entra: <see cref="DeltaToken(Guid)"/> followed by the selection's qualifier.
         /// </summary>
+        /// <param name="tenantId">The tenant.</param>
+        /// <param name="orgAttributeQualifier">
+        /// <see cref="UserOrgs.GraphUserOrgSelection.DeltaKeyQualifier"/>. Empty or <c>null</c> - no Entra organisation
+        /// types configured - gives exactly <see cref="DeltaToken(Guid)"/>, so a deployment that never uses the feature
+        /// keeps its token on upgrade.
+        /// </param>
+        /// <remarks>
+        /// Graph freezes <c>$select</c> for the life of a token, so a token minted without an organisation attribute
+        /// must never be resumed by a request that asks for one. The importer reads and writes this key, and the web
+        /// portal's User import page reports and clears it, so both work out the qualifier the same way, from the
+        /// enabled Entra organisation types.
+        /// </remarks>
+        public static string DeltaToken(Guid tenantId, string orgAttributeQualifier)
+        {
+            return DeltaToken(tenantId) + (orgAttributeQualifier ?? string.Empty);
+        }
+
+        /// <summary>
+        /// The key recording which <c>UserGroupsFilter</c> the stored <c>/users/delta</c> token under
+        /// <see cref="DeltaToken(Guid, string)"/> was taken under, as
+        /// <see cref="Common.Entities.Config.UserGroupsFilterModel.Fingerprint"/> (empty or absent: no filter).
+        /// </summary>
+        /// <param name="tenantId">The tenant.</param>
+        /// <param name="orgAttributeQualifier">
+        /// The qualifier of the token it describes, exactly as for <see cref="DeltaToken(Guid, string)"/>: each token
+        /// has its own record, because a token kept for one organisation-attribute selection is resumed when that
+        /// selection comes back and must be judged by the filter it was taken under.
+        /// </param>
         /// <remarks>
         /// A delta token only returns people who have changed since it was taken. While a filter is set, everyone
         /// outside it is left out of the users table, so when the filter is removed or changed those people would
@@ -97,9 +125,9 @@ namespace Common.Entities.State
         /// filter and, when they differ, discards the token so the next read covers the whole directory.
         /// Versioned with the token it describes.
         /// </remarks>
-        public static string DeltaTokenUserScope(Guid tenantId)
+        public static string DeltaTokenUserScope(Guid tenantId, string orgAttributeQualifier)
         {
-            return $"UserDeltaCodeScope-{tenantId}-{GraphUserDeltaQuery.SelectVersion}";
+            return $"UserDeltaCodeScope-{tenantId}-{GraphUserDeltaQuery.SelectVersion}" + (orgAttributeQualifier ?? string.Empty);
         }
 
         /// <summary>

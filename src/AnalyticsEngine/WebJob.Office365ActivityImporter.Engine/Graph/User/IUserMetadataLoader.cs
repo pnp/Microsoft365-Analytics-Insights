@@ -1,3 +1,4 @@
+using Common.Entities.UserOrgs;
 using Microsoft.Graph;
 using Microsoft.Graph.Models;
 using System.Collections.Generic;
@@ -14,6 +15,38 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         /// Gets the delta value provider used by this loader
         /// </summary>
         IDeltaValueProvider DeltaValueProvider { get; }
+
+        /// <summary>
+        /// Declares which user-org attributes this import cycle should also read from Graph.
+        /// </summary>
+        /// <remarks>
+        /// Must be called before <see cref="LoadAllActiveUsers"/>. The implementation derives both the
+        /// <c>$select</c> and the delta-token cache key from the same selection, so that a token minted
+        /// under one set of properties is never reused under another - Graph freezes <c>$select</c> for
+        /// the life of a token, so reusing one would silently return the old property set forever.
+        /// </remarks>
+        void SetOrgSelection(GraphUserOrgSelection orgSelection);
+
+        /// <summary>
+        /// Forgets every stored delta token this cycle could resume from, so the next load reads every
+        /// user again: the one under the current selection's key, and the unqualified one the
+        /// without-organisations fallback switches to. Call after <see cref="SetOrgSelection"/>.
+        /// </summary>
+        /// <remarks>
+        /// For a database with no users - a new install or a rebuilt database - against a cache that kept
+        /// its tokens. Clearing only the key in force at the time missed whichever of the two the load
+        /// then used, and a delta from a token minted for the old database returns only what changed
+        /// since, so everyone else would never be imported.
+        /// </remarks>
+        Task ClearStoredDeltaTokensAsync();
+
+        /// <summary>
+        /// Whether Graph rejected the configured org attributes during this cycle, so the load fell back
+        /// to reading users without them. Org values must not be written when this is <c>true</c>: the
+        /// response carries no org properties, so every user would look as though their value had been
+        /// cleared.
+        /// </summary>
+        bool OrgSelectionWasRejected { get; }
 
         /// <summary>
         /// Loads all active users from the external source

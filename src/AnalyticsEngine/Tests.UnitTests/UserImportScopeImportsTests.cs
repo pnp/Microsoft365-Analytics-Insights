@@ -1,6 +1,7 @@
 using Common.Entities;
 using Common.Entities.Config;
 using Common.Entities.Models;
+using Common.Entities.UserOrgs;
 using Common.Entities.UserScope;
 using DbUser = Common.Entities.User;
 using DataUtils;
@@ -700,6 +701,106 @@ namespace Tests.UnitTests
             {
                 await DeleteUsersAsync(token);
             }
+        }
+
+        /// <summary>
+        /// Each stored delta token is judged by the filter it was taken under. A token kept for one set of Entra
+        /// organisation attributes is resumed when that set is configured again - so if the filter changed meanwhile,
+        /// and the full read that the change started never finished, resuming it would never return the people the
+        /// new filter lets in.
+        /// </summary>
+        [TestMethod]
+        public async Task UserDirectory_TokenKeptForAnotherOrgSelection_IsJudgedByTheFilterItWasTakenUnder()
+        {
+            var token = Guid.NewGuid().ToString("N");
+            var pilot = DirectoryUser(Guid.NewGuid().ToString(), $"pilot-{token}@contoso.local");
+            var newcomer = DirectoryUser(Guid.NewGuid().ToString(), $"newcomer-{token}@contoso.local");
+            var loader = new FakeUserMetadataLoader(new List<GraphUser> { pilot, newcomer }) { DeltaUsersOverride = new List<GraphUser>() };
+            var marker = new InMemoryUserImportScopeMarkerStore();
+            var orgTypes = new SwitchableEntraOrgType();
+            var pilotOnly = new FixedUserImportScopeProvider(TestUserScopes.OfMembers((pilot.Id, pilot.UserPrincipalName, pilot.Mail)),
+                filter: new UserGroupsFilterModel("Copilot pilot"));
+            var widened = new FixedUserImportScopeProvider(TestUserScopes.OfMembers((pilot.Id, pilot.UserPrincipalName, pilot.Mail), (newcomer.Id, newcomer.UserPrincipalName, newcomer.Mail)),
+                filter: new UserGroupsFilterModel("Copilot pilot;Copilot wave 2"));
+
+            // No last-run store, so the daily catch-up for missing members is off: only the filter records decide.
+            Task<bool> Import(IUserImportScopeProvider scope) => new UserMetadataUpdater(AnalyticsLogger.ConsoleOnlyTracer(), new AppConfig(), loader,
+                    DefaultAnalyticsDbContextFactory.Instance, null, orgTypes, new NoOrgAssignments())
+                .WithUserScope(scope, lastRunStore: null, scopeMarkerStore: marker)
+                .InsertAndUpdateDatabaseFromExternalUsers();
+
+            try
+            {
+                orgTypes.Attribute = "extensionAttribute1";
+                Assert.IsTrue(await Import(pilotOnly), "A full read under the pilot-only filter, whose token is kept.");
+
+                // The filter widens while another attribute is configured, and the full read that starts never finishes.
+                orgTypes.Attribute = "extensionAttribute2";
+                loader.SetFakeState(new List<GraphUser> { pilot }, null, null);
+                loader.SimulateIncompleteDeltaRead = true;
+                Assert.IsFalse(await Import(widened));
+
+                // The first attribute is configured again: its kept token was taken under the pilot-only filter.
+                orgTypes.Attribute = "extensionAttribute1";
+                loader.SetFakeState(new List<GraphUser> { pilot, newcomer }, null, null);
+                loader.SimulateIncompleteDeltaRead = false;
+                Assert.IsTrue(await Import(widened));
+
+                Assert.IsTrue((await UsersNamedLikeAsync(token)).Any(u => u.UserPrincipalName == newcomer.UserPrincipalName),
+                    "The kept token is discarded and the directory read in full, so the newcomer is added.");
+                Assert.AreEqual(new UserGroupsFilterModel("Copilot pilot;Copilot wave 2").Fingerprint,
+                    marker.Fingerprints[GraphUserOrgSelection.FromTypes(orgTypes.Current()).DeltaKeyQualifier]);
+            }
+            finally
+            {
+                await DeleteUsersAsync(token);
+            }
+        }
+
+        /// <summary>One enabled Entra organisation type, whose attribute a test can change between imports.</summary>
+        private sealed class SwitchableEntraOrgType : IUserOrgTypeStore
+        {
+            public string Attribute { get; set; }
+
+            public IReadOnlyList<UserOrgType> Current() => new[]
+            {
+                new UserOrgType { Id = 1, Name = "Business unit", SourceKind = UserOrgSourceKind.EntraAttribute, EntraAttributeName = Attribute, IsEnabled = true },
+            };
+
+            public Task<IReadOnlyList<UserOrgType>> GetEnabledEntraTypesAsync(CancellationToken cancellationToken = default(CancellationToken)) => Task.FromResult(Current());
+
+            public Task<IReadOnlyList<UserOrgType>> GetAllAsync(CancellationToken cancellationToken = default(CancellationToken)) => Task.FromResult(Current());
+
+            public Task<UserOrgType> GetAsync(int id, CancellationToken cancellationToken = default(CancellationToken)) => Task.FromResult(Current().FirstOrDefault(t => t.Id == id));
+
+            public Task<IReadOnlyList<UserOrgTypeSummary>> GetSummariesAsync(CancellationToken cancellationToken = default(CancellationToken))
+                => Task.FromResult<IReadOnlyList<UserOrgTypeSummary>>(Current().Select(t => new UserOrgTypeSummary { Type = t }).ToList());
+
+            public Task<int> CreateAsync(UserOrgType type, CancellationToken cancellationToken = default(CancellationToken)) => Task.FromResult(0);
+
+            public Task UpdateAsync(UserOrgType type, bool clearAssignments, bool bumpGeneration, CancellationToken cancellationToken = default(CancellationToken),
+                int? expectedGeneration = null, int? expectedRevision = null, int? confirmedDiscardCount = null) => Task.CompletedTask;
+
+            public Task DeleteAsync(int id, CancellationToken cancellationToken = default(CancellationToken), int? expectedRevision = null) => Task.CompletedTask;
+
+            public Task<int> RecordEntraRefreshAsync(IReadOnlyDictionary<int, int> expectedGenerations, DateTime refreshedUtc, CancellationToken cancellationToken = default(CancellationToken))
+                => Task.FromResult(expectedGenerations.Count);
+
+            public Task<int> RecordListValuedAsync(IReadOnlyDictionary<int, int> expectedGenerations, CancellationToken cancellationToken = default(CancellationToken))
+                => Task.FromResult(expectedGenerations.Count);
+        }
+
+        /// <summary>Accepts organisation values without storing them: these tests are about which users are read.</summary>
+        private sealed class NoOrgAssignments : IUserOrgAssignmentStore
+        {
+            public Task<UserOrgMergeResult> MergeAsync(IReadOnlyList<UserOrgAssignmentUpdate> updates, UserOrgSourceKind? expectedSourceKind = null,
+                IReadOnlyDictionary<int, int> expectedGenerations = null, CancellationToken cancellationToken = default(CancellationToken))
+                => Task.FromResult(new UserOrgMergeResult { Applied = updates.Count });
+
+            public Task<IReadOnlyList<UserOrgValueForUser>> GetForUserAsync(int userId, CancellationToken cancellationToken = default(CancellationToken))
+                => Task.FromResult<IReadOnlyList<UserOrgValueForUser>>(new UserOrgValueForUser[0]);
+
+            public Task<int> ClearAllForTypeAsync(int orgTypeId, CancellationToken cancellationToken = default(CancellationToken)) => Task.FromResult(0);
         }
 
         #endregion

@@ -1,3 +1,4 @@
+using Common.Entities.UserFilters;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -7,19 +8,22 @@ namespace Common.Entities.CopilotAdoption
     /// <summary>
     /// Which slice of the tenant a Copilot adoption result describes.
     ///
-    /// <para>Today the only axis is the email domain - i.e. which of the organisations sharing this
-    /// tenant is being looked at. It is a type rather than a bare string so that adding a second axis
-    /// later does not mean changing the signature of every endpoint again.</para>
+    /// <para>Two axes, both optional and combined with AND: the email domain - which of the
+    /// organisations sharing this tenant is being looked at - and a <see cref="CompiledUserFilter"/> over
+    /// the people themselves: their Entra ID attributes and the custom organisations an admin has
+    /// defined. It is a type rather than a pair of parameters so that adding a third axis later does not
+    /// mean changing the signature of every endpoint again.</para>
     /// </summary>
     public class CopilotAdoptionScope
     {
-        private CopilotAdoptionScope(string emailDomain)
+        private CopilotAdoptionScope(string emailDomain, CompiledUserFilter userFilter)
         {
             EmailDomain = emailDomain;
+            UserFilter = userFilter;
         }
 
         /// <summary>The whole tenant - no narrowing at all.</summary>
-        public static readonly CopilotAdoptionScope WholeTenant = new CopilotAdoptionScope(null);
+        public static readonly CopilotAdoptionScope WholeTenant = new CopilotAdoptionScope(null, null);
 
         /// <summary>
         /// The domain every figure is narrowed to, already normalised by
@@ -27,8 +31,11 @@ namespace Common.Entities.CopilotAdoption
         /// </summary>
         public string EmailDomain { get; }
 
+        /// <summary>The user filter every figure is narrowed by, or <c>null</c> for none.</summary>
+        public CompiledUserFilter UserFilter { get; }
+
         /// <summary>True when this scope actually narrows anything.</summary>
-        public bool IsNarrowed => !string.IsNullOrWhiteSpace(EmailDomain);
+        public bool IsNarrowed => !string.IsNullOrWhiteSpace(EmailDomain) || UserFilter != null;
 
         /// <summary>
         /// Builds a scope from a caller-supplied domain. Anything blank, or that does not normalise to
@@ -37,16 +44,58 @@ namespace Common.Entities.CopilotAdoption
         /// </summary>
         public static CopilotAdoptionScope ForEmailDomain(string emailDomain)
         {
+            return Create(emailDomain, null);
+        }
+
+        /// <summary>
+        /// Builds a scope from a caller-supplied domain and an already-compiled user filter, either of
+        /// which may be absent. A person is in scope when they match both.
+        /// </summary>
+        public static CopilotAdoptionScope Create(string emailDomain, CompiledUserFilter userFilter)
+        {
             var normalised = CopilotAdoptionEmailDomain.Normalise(emailDomain);
 
-            return string.IsNullOrWhiteSpace(normalised)
-                ? WholeTenant
-                : new CopilotAdoptionScope(normalised);
+            if (string.IsNullOrWhiteSpace(normalised) && userFilter == null) return WholeTenant;
+
+            return new CopilotAdoptionScope(string.IsNullOrWhiteSpace(normalised) ? null : normalised, userFilter);
+        }
+
+        /// <summary>
+        /// Whether one row's person is in scope. The domain is the row's own, derived by the analysis;
+        /// the user filter is evaluated by user id against the directory snapshot it was compiled with.
+        /// </summary>
+        public bool Includes(int userId, string rowEmailDomain)
+        {
+            if (!string.IsNullOrWhiteSpace(EmailDomain)
+                && !string.Equals(CopilotAdoptionEmailDomain.Label(rowEmailDomain), EmailDomain, StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+
+            return UserFilter == null || UserFilter.Matches(userId);
+        }
+
+        /// <summary>
+        /// Whether a person the analysis holds no row for would be in scope, where the scope can tell. A user
+        /// filter carries the directory, which knows the person's attributes and email domain alike; an email
+        /// domain on its own has nothing to look a missing person up in, so that answers <c>null</c>.
+        /// </summary>
+        public bool? IncludesFromDirectory(int userId)
+        {
+            if (UserFilter == null) return null;
+            if (!UserFilter.Matches(userId)) return false;
+
+            return string.IsNullOrWhiteSpace(EmailDomain)
+                || string.Equals(
+                    CopilotAdoptionEmailDomain.Label(UserFilter.EmailDomainOf(userId)),
+                    EmailDomain,
+                    StringComparison.OrdinalIgnoreCase);
         }
     }
 
     /// <summary>
-    /// Names of the sections that stay tenant-wide when a result is narrowed to one email domain.
+    /// Names of the sections that stay tenant-wide when a result is narrowed to one email domain or by
+    /// a user filter.
     ///
     /// <para>Compile-time constants, published in
     /// <see cref="CopilotAdoptionSummary.UnscopedSections"/> so the UI can badge each one. Never
@@ -81,15 +130,16 @@ namespace Common.Entities.CopilotAdoption
     }
 
     /// <summary>
-    /// Narrows a completed analysis to one email domain.
+    /// Narrows a completed analysis to a <see cref="CopilotAdoptionScope"/>: one email domain, a user
+    /// filter over Entra ID attributes and custom organisations, or both.
     ///
     /// <para><b>Why it works this way.</b> The expensive part of this feature is the SQL, and it is
-    /// cached once per (window, licence override). Re-running it per domain would multiply the load on
-    /// a database the importer is already sharing, for a report whose slowest queries are measured in
-    /// minutes. So the domain filter is applied <i>after</i> the fact: the per-user rows are filtered in
-    /// memory and the summary is rebuilt from them with the same
+    /// cached once per (window, licence override). Re-running it per domain or per filter would multiply
+    /// the load on a database the importer is already sharing, for a report whose slowest queries are
+    /// measured in minutes. So the scope is applied <i>after</i> the fact: the per-user rows are filtered
+    /// in memory and the summary is rebuilt from them with the same
     /// <see cref="CopilotAdoptionService.FinaliseSummary"/> the tenant-wide summary was built with.
-    /// One scoring implementation, so a domain view can never disagree with the tenant view about how a
+    /// One scoring implementation, so a filtered view can never disagree with the tenant view about how a
     /// number is calculated.</para>
     ///
     /// <para><b>What cannot be narrowed.</b> Several sections come from aggregate queries that return no
@@ -116,8 +166,9 @@ namespace Common.Entities.CopilotAdoption
             if (analysis == null) throw new ArgumentNullException(nameof(analysis));
             if (scope == null || !scope.IsNarrowed) return analysis;
 
-            var domain = scope.EmailDomain;
             var tenant = analysis.Summary ?? new CopilotAdoptionSummary();
+            var licensedUsers = Narrow(analysis.LicensedUsers, u => u.UserId, u => u.EmailDomain, scope);
+            var coworkSignals = Narrow(analysis.CoworkSignals, s => s.UserId, s => s.EmailDomain, scope);
 
             return new CopilotAdoptionAnalysis
             {
@@ -133,13 +184,28 @@ namespace Common.Entities.CopilotAdoption
                 Sql = analysis.Sql,
                 Agents = analysis.Agents,
 
-                LicensedUsers = Narrow(analysis.LicensedUsers, u => u.EmailDomain, domain),
-                Opportunities = Narrow(analysis.Opportunities, o => o.EmailDomain, domain),
+                LicensedUsers = licensedUsers,
+                // Like the opportunity cap below: the licensed-user query's cap was applied to the whole
+                // tenant, so a slice of it is just as short of the people past it.
+                LicensedUsersCapped = analysis.LicensedUsersCapped,
+                Opportunities = Narrow(analysis.Opportunities, o => o.UserId, o => o.EmailDomain, scope),
                 // The cap is applied to the tenant-wide ranking, so a narrowed list inherits it.
                 OpportunitiesCapped = analysis.OpportunitiesCapped,
-                CoworkReadiness = Narrow(analysis.CoworkReadiness, c => c.EmailDomain, domain),
-                CoworkSignals = Narrow(analysis.CoworkSignals, s => s.EmailDomain, domain),
-                UnlicensedUsers = Narrow(analysis.UnlicensedUsers, u => u.EmailDomain, domain),
+                // Withheld when no Cowork signal in the slice has a licensed-user row, which is exactly when
+                // its summary says the tab cannot be scored (FinaliseCowork, through the same test): every
+                // row here was scored against a fluency of 0 it does not have. The row and export endpoints
+                // read this list directly, so it has to agree with the summary here, not only there.
+                CoworkReadiness = CopilotAdoptionScoring.CoworkCanBeScored(coworkSignals, licensedUsers)
+                    ? Narrow(analysis.CoworkReadiness, c => c.UserId, c => c.EmailDomain, scope)
+                    : new List<CoworkReadinessRow>(),
+                CoworkSignals = coworkSignals,
+                // Only a complete assessment can vouch for an empty slice. When the Cowork query hit its
+                // row cap, the people a slice selects may simply have been cut off, and "0 candidates"
+                // would be a claim about people nobody assessed - so that case is flagged separately and
+                // explained rather than shown as zero or as a missing import.
+                CoworkAssessedForWholePopulation = tenant.CoworkReadinessAvailable && !CoworkCapped(analysis, tenant),
+                CoworkAssessmentCapped = tenant.CoworkReadinessAvailable && CoworkCapped(analysis, tenant),
+                UnlicensedUsers = Narrow(analysis.UnlicensedUsers, u => u.UserId, u => u.EmailDomain, scope),
             };
         }
 
@@ -160,6 +226,15 @@ namespace Common.Entities.CopilotAdoption
             return new CopilotAdoptionSummary
             {
                 ScopedEmailDomain = scope.EmailDomain,
+
+                // Echoed, like the domain, so the page states which population it is showing rather
+                // than assuming the request it sent is the one that was applied.
+                UserFilter = scope.UserFilter?.ToEcho(),
+                UserFilterDescription = scope.UserFilter?.DescribeInEnglish(),
+
+                // The tenant-wide seat count, so a narrowed page can say "312 of 4,210 licence holders"
+                // - the proportion is what tells a reader whether the slice is representative.
+                UnscopedLicensedUsers = tenant.LicensedUsers,
 
                 // When the analysis ran, over what period, and with which licence types counted as a
                 // seat. Identical for every slice of it.
@@ -229,8 +304,46 @@ namespace Common.Entities.CopilotAdoption
 
             ScopeSeatLicenceTypes(scoped);
             CarryUnscopedSections(tenant, scoped.Summary);
+            WarnOfSeatHoldersNotAnalysed(analysis, scope, scoped.Summary);
 
             return scoped;
+        }
+
+        /// <summary>
+        /// Says how many licence holders this view selects that the analysis never covered, when its
+        /// licensed-user query stopped at its row cap.
+        /// </summary>
+        /// <remarks>
+        /// <para>The cap follows internal user id, so it cuts the newest user records first, and a custom
+        /// organisation - a new joiners' programme, a subsidiary onboarded last year - can be made largely or
+        /// entirely of them. Narrowed from the capped rows alone, such a view reads as nobody, beside a
+        /// tenant-wide warning that cannot say how much of this one view is missing. So the people the cap
+        /// left out are counted against the scope too, through the user filter's directory.</para>
+        /// <para>Only a scope with a user filter can: an email domain on its own has no directory to look a
+        /// person without a row up in, and the tenant-wide warning already covers that case as before.</para>
+        /// </remarks>
+        private static void WarnOfSeatHoldersNotAnalysed(
+            CopilotAdoptionAnalysis analysis, CopilotAdoptionScope scope, CopilotAdoptionSummary scoped)
+        {
+            var notAnalysed = analysis.LicensedUsersNotAnalysed;
+            if (notAnalysed == null || notAnalysed.Count == 0 || scope.UserFilter == null) return;
+
+            var inScope = 0;
+            foreach (var userId in notAnalysed)
+            {
+                if (scope.IncludesFromDirectory(userId) == true) inScope++;
+            }
+
+            if (inScope == 0) return;
+
+            CopilotAdoptionWarnings.Add(
+                scoped,
+                CopilotAdoptionWarningKeys.ScopedLicensedUsersNotAnalysed,
+                new Dictionary<string, object>
+                {
+                    { "count", inScope },
+                    { "maxUsers", scoped.Options?.MaxLicensedUsersScored ?? CopilotAdoptionOptions.Default.MaxLicensedUsersScored },
+                });
         }
 
         /// <summary>
@@ -319,13 +432,17 @@ namespace Common.Entities.CopilotAdoption
             }
         }
 
-        private static List<T> Narrow<T>(List<T> rows, Func<T, string> domainOf, string domain)
+        private static bool CoworkCapped(CopilotAdoptionAnalysis analysis, CopilotAdoptionSummary tenant)
+        {
+            return (analysis.CoworkSignals?.Count ?? 0) >= (tenant.Options?.MaxCoworkUsersScored ?? int.MaxValue);
+        }
+
+        private static List<T> Narrow<T>(List<T> rows, Func<T, int> userIdOf, Func<T, string> domainOf, CopilotAdoptionScope scope)
         {
             if (rows == null) return new List<T>();
 
             return rows
-                .Where(r => string.Equals(
-                    CopilotAdoptionEmailDomain.Label(domainOf(r)), domain, StringComparison.OrdinalIgnoreCase))
+                .Where(r => scope.Includes(userIdOf(r), domainOf(r)))
                 .ToList();
         }
     }

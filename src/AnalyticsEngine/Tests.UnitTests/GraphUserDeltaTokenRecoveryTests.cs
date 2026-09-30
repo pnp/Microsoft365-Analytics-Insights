@@ -1,6 +1,7 @@
 using Common.Entities;
 using Common.Entities.Config;
 using Common.Entities.State;
+using Common.Entities.UserOrgs;
 using DataUtils;
 using Microsoft.ApplicationInsights;
 using Microsoft.ApplicationInsights.Channel;
@@ -815,6 +816,17 @@ namespace Tests.UnitTests
                 Token = null;
                 return Task.CompletedTask;
             }
+
+            /// <summary>
+            /// The last qualifier the loader set. Not recorded in <see cref="Calls"/>: these tests configure no organisation
+            /// attributes, so the key never moves, and the call order they pin is about the token alone.
+            /// </summary>
+            public string KeyQualifier { get; private set; } = string.Empty;
+
+            public void SetKeyQualifier(string qualifier)
+            {
+                KeyQualifier = qualifier ?? string.Empty;
+            }
         }
 
         /// <summary>Stands in for the runtime state table behind <see cref="PersistedDeltaValueProvider"/>.</summary>
@@ -872,6 +884,9 @@ namespace Tests.UnitTests
 
             public IDeltaValueProvider DeltaValueProvider => _graph.DeltaValueProvider;
             public bool LastLoadReachedDeltaLink => _graph.LastLoadReachedDeltaLink;
+            public void SetOrgSelection(GraphUserOrgSelection orgSelection) => _graph.SetOrgSelection(orgSelection);
+            public Task ClearStoredDeltaTokensAsync() => _graph.ClearStoredDeltaTokensAsync();
+            public bool OrgSelectionWasRejected => _graph.OrgSelectionWasRejected;
             public Task<List<GraphUser>> LoadAllActiveUsers() => _graph.LoadAllActiveUsers();
             public Task<bool> CommitDeltaTokenAsync() => _graph.CommitDeltaTokenAsync();
             public Task<List<SubscribedSku>> LoadTenantSkus()

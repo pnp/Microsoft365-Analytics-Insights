@@ -756,7 +756,7 @@ namespace Common.Entities.CopilotAdoption
             {
                 foreach (var row in rows)
                 {
-                    row.EmailDomain = CopilotAdoptionEmailDomain.From(row.UserPrincipalName);
+                    row.EmailDomain = CopilotAdoptionEmailDomain.From(row.UserPrincipalName, row.Mail);
                 }
 
                 analysis.UnlicensedUsers = rows;
@@ -946,6 +946,11 @@ namespace Common.Entities.CopilotAdoption
                     {
                         { "maxUsers", _options.MaxLicensedUsersScored },
                     });
+
+                // Who the cap left out, from the uncapped assignments, so a filtered view can say how
+                // many of its own people are missing rather than showing them as nobody.
+                analysis.LicensedUsersNotAnalysed = NotAnalysed(assignmentsByUser.Keys, rows.Select(r => r.UserId));
+                analysis.LicensedUsersCapped = true;
             }
 
             foreach (var row in rows)
@@ -972,6 +977,13 @@ namespace Common.Entities.CopilotAdoption
             {
                 summary.LicensedUsers = analysis.LicensedUsers.Count;
             }
+        }
+
+        /// <summary>The seat holders a capped licensed-user query did not return, in the order given.</summary>
+        internal static int[] NotAnalysed(IEnumerable<int> seatHolders, IEnumerable<int> analysed)
+        {
+            var covered = new HashSet<int>(analysed);
+            return seatHolders.Where(id => !covered.Contains(id)).ToArray();
         }
 
         private async Task BuildUsageByAppAsync(
@@ -1638,11 +1650,15 @@ namespace Common.Entities.CopilotAdoption
             // for a seat - the figure a licence purchase is justified with, and the only place the Copilot
             // minutes are applied. Modelled only when the Microsoft 365 usage reports supplied the volumes
             // it multiplies: without them every candidate has zero meetings, emails and documents, and
-            // "0 hours" would read as a finding about the candidates rather than as a missing import.
+            // "0 hours" would read as a finding about the candidates rather than as a missing import. The
+            // candidate cap is kept either way: it is a fact about the list, not about the figure, and this
+            // estimate is where the portal reads it - without it a tenant with no usage reports, and every
+            // filtered view of it, said nothing about the cap, and a view whose candidates all ranked below
+            // the tenant-wide cut-off read as "nobody in this tenant qualifies".
             var volumesObserved = summary.DataSources?.M365UsageReportsAvailable ?? false;
             summary.LicenceOpportunityEstimate = volumesObserved
                 ? CopilotAdoptionScoring.EstimateLicenceValue(recommended, _options, analysis.OpportunitiesCapped)
-                : new LicenceValueEstimate();
+                : new LicenceValueEstimate { CandidatesCapped = analysis.OpportunitiesCapped };
 
             // Beside it, the candidates already using Copilot Chat without a licence: the same definition
             // as the list's "Already using Copilot" filter, so a reader can bring up exactly these people.
@@ -1651,7 +1667,7 @@ namespace Common.Entities.CopilotAdoption
                     recommended.Where(o => o.UnlicensedCopilotInteractions > 0).ToList(),
                     _options,
                     analysis.OpportunitiesCapped)
-                : new LicenceValueEstimate();
+                : new LicenceValueEstimate { CandidatesCapped = analysis.OpportunitiesCapped };
 
             // And every candidate, recommended or not - the portal's "all users" option. Recommended stays
             // the default, but when nobody uses Microsoft 365 heavily enough to be recommended it is empty,
@@ -2068,9 +2084,34 @@ namespace Common.Entities.CopilotAdoption
 
             if (signals.Count == 0)
             {
+                if (analysis.CoworkAssessedForWholePopulation)
+                {
+                    // A slice of an analysis whose Cowork assessment ran, with nobody in it to assess - a
+                    // guest-only filter, or a department with no seat holders. That is a finding (zero),
+                    // not a fault, so it is published as zeros rather than as "unavailable", which would
+                    // send the reader off to check imports that are working.
+                    PublishEmptyCowork(summary);
+                    return;
+                }
+
                 // Left explicitly unavailable rather than published as a set of zeros. "0 prime candidates"
                 // is a finding; "this analysis did not run" is a fault, and the tab has to tell them apart.
                 summary.CoworkReadinessAvailable = false;
+
+                // A slice of an assessment that stopped at its row cap: unknown, and said so - otherwise
+                // the unavailable card would send the reader to check imports that are working. The cap
+                // quoted is the one the tenant assessment ran with, which the seeded summary carries.
+                if (analysis.CoworkAssessmentCapped)
+                {
+                    CopilotAdoptionWarnings.Add(
+                        summary,
+                        CopilotAdoptionWarningKeys.CoworkSliceNotAssessed,
+                        new Dictionary<string, object>
+                        {
+                            { "maxUsers", summary.Options?.MaxCoworkUsersScored ?? _options.MaxCoworkUsersScored },
+                        });
+                }
+
                 return;
             }
 
@@ -2078,10 +2119,14 @@ namespace Common.Entities.CopilotAdoption
             // rather than recalculated, so the two tabs cannot disagree about the same person.
             var licensed = analysis.LicensedUsers ?? new List<LicensedUserAdoptionRow>();
 
-            if (licensed.Count == 0)
+            // Scorable only when somebody the Cowork assessment reached has a licensed-user row to take
+            // fluency from - not merely when there are licensed-user rows: a slice of a capped analysis can
+            // hold older seat holders only the licensed query reached and newer ones only Cowork reached,
+            // with nobody in both. The row endpoints make the same test (CopilotAdoptionScopeFilter.FilterRows).
+            if (!CopilotAdoptionScoring.CoworkCanBeScored(signals, licensed))
             {
-                // Cowork signals exist but the licensed-user analysis produced nothing. That combination
-                // cannot occur naturally - CoworkReadinessSql semi-joins to seat holders, so signals imply
+                // Cowork signals exist but none of them has a licensed-user row. Uncapped, that cannot
+                // occur naturally - CoworkReadinessSql semi-joins to seat holders, so signals imply
                 // seat holders - which means the licensed-user step failed and SafeAsync degraded it to a
                 // warning. Publishing anyway would score every one of these people at zero fluency and band
                 // them "build fluency first": an unavailable input rendered as a measured verdict of "not
@@ -2092,6 +2137,29 @@ namespace Common.Entities.CopilotAdoption
                 // what tells the tab's own diagnostic channel that the fault was upstream rather than the
                 // missing usage-report import its unavailable card would otherwise blame.
                 summary.CoworkReadinessAvailable = false;
+
+                // Nothing to publish, so no rows either: a slice arrives here carrying the tenant's rows
+                // for its people, scored against a fluency of 0, and they must not outlive this verdict.
+                analysis.CoworkReadiness = new List<CoworkReadinessRow>();
+
+                // Except in an analysis whose licensed-user query stopped at its cap: the two queries keep
+                // different people past their caps - the licensed one by user id, Cowork by coordination
+                // load - so a view made up of the newest user records can hold Cowork signals and no
+                // licensed-user row for any of them, with both queries complete. Still unavailable, for the
+                // same reason, but blamed on the cap rather than on a failure nobody can find.
+                if (analysis.LicensedUsersCapped)
+                {
+                    CopilotAdoptionWarnings.Add(
+                        summary,
+                        CopilotAdoptionWarningKeys.CoworkSliceBeyondLicensedCap,
+                        new Dictionary<string, object>
+                        {
+                            { "total", signals.Count },
+                            { "maxLicensed", summary.Options?.MaxLicensedUsersScored ?? _options.MaxLicensedUsersScored },
+                        });
+                    return;
+                }
+
                 CopilotAdoptionWarnings.Add(summary, CopilotAdoptionWarningKeys.CoworkFluencyMissingAll);
                 return;
             }
@@ -2151,6 +2219,19 @@ namespace Common.Entities.CopilotAdoption
                     });
             }
 
+            // An assessment that stopped at its row cap left out the seat holders with the least
+            // coordination load, so every count on the tab describes the ones it reached - in the tenant
+            // view, and in any slice of it, whose own signals are fewer than the cap however many it lost.
+            // An empty slice has already been answered with CoworkSliceNotAssessed above.
+            var maxCowork = summary.Options?.MaxCoworkUsersScored ?? _options.MaxCoworkUsersScored;
+            if (signals.Count >= maxCowork || analysis.CoworkAssessmentCapped)
+            {
+                CopilotAdoptionWarnings.Add(
+                    summary,
+                    CopilotAdoptionWarningKeys.CoworkReadinessCapped,
+                    new Dictionary<string, object> { { "maxUsers", maxCowork } });
+            }
+
             // Ordered so the people to act on are first: recommended before not, then by the strength of
             // the case. The CSV export inherits this, so a truncated read of it is still the right people.
             analysis.CoworkReadiness = rows
@@ -2203,6 +2284,31 @@ namespace Common.Entities.CopilotAdoption
             summary.CoworkFullRolloutEstimate = activityObserved
                 ? CopilotAdoptionScoring.EstimateCoworkValue(rows, _options, coworkReportPeriodDays, coworkTaskRate)
                 : new CoworkValueEstimate();
+        }
+
+        /// <summary>
+        /// The Cowork figures for a slice with nobody to assess: available, every count zero, every tier
+        /// listed at zero, and empty estimates - the same shapes a populated slice publishes, so the tab
+        /// renders "nobody here" rather than a missing section.
+        /// </summary>
+        private void PublishEmptyCowork(CopilotAdoptionSummary summary)
+        {
+            var none = new List<CoworkReadinessRow>();
+
+            summary.CoworkReadinessAvailable = true;
+            summary.CoworkScoredUsers = 0;
+            summary.CoworkEstablishedUsers = 0;
+            summary.CoworkTriallingUsers = 0;
+            summary.CoworkPrimeCandidates = 0;
+            summary.CoworkBuildFluencyFirst = 0;
+            summary.CoworkRecommendedForPolicy = 0;
+            summary.CoworkAverageCoordinationLoad = 0;
+            summary.CoworkAverageFluency = 0;
+            summary.CoworkTiers = BuildCoworkTiers(none);
+            summary.CoworkByDepartment = new List<CoworkSegmentRow>();
+            summary.CoworkQuadrant = new List<CoworkQuadrantPoint>();
+            summary.CoworkValueEstimate = new CoworkValueEstimate();
+            summary.CoworkFullRolloutEstimate = new CoworkValueEstimate();
         }
 
         /// <summary>

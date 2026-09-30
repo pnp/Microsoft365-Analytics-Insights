@@ -72,17 +72,30 @@ namespace Tests.UnitTests.FakeLoaderClasses
 
     /// <summary>
     /// In-memory <see cref="WebJob.Office365ActivityImporter.Engine.Graph.IUserImportScopeMarkerStore"/>: which
-    /// <c>UserGroupsFilter</c> the stored delta token was taken under.
+    /// <c>UserGroupsFilter</c> each stored delta token was taken under, by the token's organisation-attribute qualifier.
     /// </summary>
     public class InMemoryUserImportScopeMarkerStore : WebJob.Office365ActivityImporter.Engine.Graph.IUserImportScopeMarkerStore
     {
-        public string Fingerprint { get; set; }
+        /// <summary>Each token's record, by qualifier: "" is the unqualified token's.</summary>
+        public Dictionary<string, string> Fingerprints { get; } = new Dictionary<string, string>(StringComparer.Ordinal);
 
-        public Task<string> GetFingerprintAsync() => Task.FromResult(Fingerprint);
+        /// <summary>The unqualified token's record - the only one while no Entra organisation types are configured.</summary>
+        public string Fingerprint => Fingerprints.TryGetValue(string.Empty, out var fingerprint) ? fingerprint : null;
 
-        public Task SetFingerprintAsync(string fingerprint)
+        public Task<string> GetFingerprintAsync(string orgAttributeQualifier)
+            => Task.FromResult(Fingerprints.TryGetValue(orgAttributeQualifier ?? string.Empty, out var fingerprint) ? fingerprint : null);
+
+        public Task SetFingerprintAsync(string orgAttributeQualifier, string fingerprint)
         {
-            Fingerprint = string.IsNullOrEmpty(fingerprint) ? null : fingerprint;
+            var key = orgAttributeQualifier ?? string.Empty;
+            if (string.IsNullOrEmpty(fingerprint))
+            {
+                Fingerprints.Remove(key);
+            }
+            else
+            {
+                Fingerprints[key] = fingerprint;
+            }
             return Task.CompletedTask;
         }
     }

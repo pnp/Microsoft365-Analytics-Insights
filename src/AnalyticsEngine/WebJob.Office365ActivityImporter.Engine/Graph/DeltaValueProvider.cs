@@ -1,5 +1,6 @@
 using Common.Entities.Config;
 using Common.Entities.State;
+using Common.Entities.UserOrgs;
 using DataUtils;
 using System;
 using System.Runtime.ExceptionServices;
@@ -16,6 +17,21 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         Task<string> GetDeltaToken(CancellationToken cancellationToken = default);
         Task SetDeltaToken(string deltaToken, CancellationToken cancellationToken = default);
         Task ClearDeltaToken(CancellationToken cancellationToken = default);
+
+        /// <summary>
+        /// Qualifies the cache key so a stored token is only ever reused for the <c>$select</c> it was
+        /// minted under.
+        /// </summary>
+        /// <param name="qualifier">
+        /// <see cref="GraphUserOrgSelection.DeltaKeyQualifier"/>. Empty or <c>null</c> restores the
+        /// unqualified key, which is what a deployment with no Entra org types uses.
+        /// </param>
+        /// <remarks>
+        /// Set by <see cref="GraphUserLoader"/> alone, from the same
+        /// <see cref="GraphUserOrgSelection"/> it builds the request URL from, so the key and the
+        /// selection cannot drift apart. Nothing else should call this.
+        /// </remarks>
+        void SetKeyQualifier(string qualifier);
     }
 
     public sealed class DeltaTokenUnavailableException : Exception
@@ -42,10 +58,17 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
     /// <summary>
     /// In-process delta token provider. Used when no Storage connection string is configured.
     /// </summary>
+    /// <remarks>
+    /// Lives for one import cycle: <see cref="User.UserMetadataUpdater"/> builds a new one each time the
+    /// user metadata section runs, so a deployment without Storage enumerates every user every cycle, as it
+    /// always has, and nothing here carries a token from one cycle into the next. The key qualifier below
+    /// therefore only has to keep one cycle's attempts apart - the org-carrying request and its fallback.
+    /// </remarks>
     public class InProcessDeltaValueProvider : IDeltaValueProvider
     {
         private readonly AnalyticsLogger _logger;
         private string _deltaToken;
+        private string _keyQualifier = string.Empty;
         public InProcessDeltaValueProvider(DataUtils.AnalyticsLogger logger)
         {
             _logger = logger;
@@ -79,6 +102,32 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             _logger.LogInformation($"Setting in-memory delta token.");
             _deltaToken = deltaToken;
             return Task.CompletedTask;
+        }
+
+        /// <summary>
+        /// Drops the buffered token when the selection changes.
+        /// </summary>
+        /// <remarks>
+        /// The persisted provider gets this for free by keying on the qualifier, but this one holds a single
+        /// token in a field. Without discarding it, a deployment with no Storage would keep reusing a
+        /// token minted under the previous <c>$select</c> and the newly configured org attribute would
+        /// never arrive for users who did not otherwise change.
+        /// </remarks>
+        public void SetKeyQualifier(string qualifier)
+        {
+            var normalised = string.IsNullOrEmpty(qualifier) ? string.Empty : qualifier;
+            if (normalised == _keyQualifier)
+            {
+                return;
+            }
+
+            _keyQualifier = normalised;
+            if (!string.IsNullOrEmpty(_deltaToken))
+            {
+                _logger.LogWarning(
+                    "User import - the configured org attributes changed, so the in-memory delta token has been discarded. The next import will enumerate every user once so the new attribute is populated.");
+                _deltaToken = null;
+            }
         }
     }
 
@@ -203,27 +252,57 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         }
 
         /// <summary>
-        /// Row key of this tenant's stored user delta token. Defined in <see cref="UserImportCheckpointKeys"/>,
-        /// which the web portal's User import page also reads, so the two can never disagree about it.
+        /// Row key of this tenant's stored user delta token, qualified by the organisation attributes this cycle
+        /// reads. Defined in <see cref="UserImportCheckpointKeys"/>, which the web portal's User import page also
+        /// reads, so the two can never disagree about it.
         /// </summary>
         string GetUserDeltaTokenKey()
         {
-            return UserImportCheckpointKeys.DeltaToken(_appConfig.TenantGUID);
+            return UserImportCheckpointKeys.DeltaToken(_appConfig.TenantGUID, _keyQualifier);
+        }
+
+        /// <summary>
+        /// Extra qualifier covering the runtime-configured user-org attributes.
+        /// </summary>
+        /// <remarks>
+        /// Empty by default and empty whenever no Entra org types are configured, so the key is
+        /// byte-identical to the one this product has always used. That is deliberate: qualifying it
+        /// unconditionally would discard every existing customer's delta token on upgrade and make the
+        /// next import a full enumeration of the whole tenant, for a feature they may never turn on.
+        /// </remarks>
+        private string _keyQualifier = string.Empty;
+
+        public void SetKeyQualifier(string qualifier)
+        {
+            var normalised = string.IsNullOrEmpty(qualifier) ? string.Empty : qualifier;
+            if (normalised == _keyQualifier)
+            {
+                return;
+            }
+
+            _keyQualifier = normalised;
+
+            // The in-process safety net holds the last token this process committed, and it is returned
+            // when the state store cannot be read. That token was minted under the PREVIOUS selection, so
+            // keeping it across a qualifier change would hand a later cycle a token for a different query -
+            // exactly what qualifying the key exists to prevent, arriving through the outage path.
+            _lastKnownCommittedDeltaToken = null;
         }
     }
 
     /// <summary>
-    /// Remembers which <c>UserGroupsFilter</c> the stored <c>/users/delta</c> checkpoint was taken under, so the user
+    /// Remembers which <c>UserGroupsFilter</c> each stored <c>/users/delta</c> checkpoint was taken under, so the user
     /// import can tell that the filter has changed since - even after a restart, which changing it causes. See
     /// <see cref="UserImportCheckpointKeys.DeltaTokenUserScope"/>.
     /// </summary>
     public interface IUserImportScopeMarkerStore
     {
+        /// <param name="orgAttributeQualifier">The token's <see cref="GraphUserOrgSelection.DeltaKeyQualifier"/>.</param>
         /// <returns>The stored <see cref="UserGroupsFilterModel.Fingerprint"/>, or null when there is none.</returns>
-        Task<string> GetFingerprintAsync();
+        Task<string> GetFingerprintAsync(string orgAttributeQualifier);
 
         /// <summary>Records <paramref name="fingerprint"/>; an empty one (no filter) removes the record.</summary>
-        Task SetFingerprintAsync(string fingerprint);
+        Task SetFingerprintAsync(string orgAttributeQualifier, string fingerprint);
     }
 
     /// <summary>
@@ -234,25 +313,27 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
     public sealed class PersistedUserImportScopeMarkerStore : IUserImportScopeMarkerStore
     {
         private readonly IKeyValueStore _store;
-        private readonly string _key;
+        private readonly Guid _tenantId;
 
         public PersistedUserImportScopeMarkerStore(IKeyValueStore store, Guid tenantId)
         {
             _store = store ?? throw new ArgumentNullException(nameof(store));
-            _key = UserImportCheckpointKeys.DeltaTokenUserScope(tenantId);
+            _tenantId = tenantId;
         }
 
-        public Task<string> GetFingerprintAsync() => _store.GetStringAsync(_key);
+        public Task<string> GetFingerprintAsync(string orgAttributeQualifier)
+            => _store.GetStringAsync(UserImportCheckpointKeys.DeltaTokenUserScope(_tenantId, orgAttributeQualifier));
 
-        public async Task SetFingerprintAsync(string fingerprint)
+        public async Task SetFingerprintAsync(string orgAttributeQualifier, string fingerprint)
         {
+            var key = UserImportCheckpointKeys.DeltaTokenUserScope(_tenantId, orgAttributeQualifier);
             if (string.IsNullOrEmpty(fingerprint))
             {
-                await _store.DeleteAsync(_key).ConfigureAwait(false);
+                await _store.DeleteAsync(key).ConfigureAwait(false);
             }
             else
             {
-                await _store.SetStringAsync(_key, fingerprint).ConfigureAwait(false);
+                await _store.SetStringAsync(key, fingerprint).ConfigureAwait(false);
             }
         }
     }

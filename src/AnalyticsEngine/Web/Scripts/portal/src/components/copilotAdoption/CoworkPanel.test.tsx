@@ -162,7 +162,7 @@ function page(rows: CoworkReadinessRow[]): CoworkReadinessPage {
 
 function render(s: CopilotAdoptionSummary) {
   return renderWithProvider(
-    <CoworkPanel windowDays={28} summary={s} filterOptions={null} options={s.options} />,
+    <CoworkPanel windowDays={28} summary={s} options={s.options} />,
   );
 }
 
@@ -249,6 +249,27 @@ describe('CoworkPanel', () => {
 
     expect(screen.getByText(/could not be assessed/)).toBeTruthy();
     expect(screen.getAllByText(/usage report/i).length).toBeGreaterThan(0);
+    expect(fetchCowork).not.toHaveBeenCalled();
+  });
+
+  it('explains a filtered slice the capped assessment never reached, instead of blaming an import', () => {
+    // A filter on a tenant whose Cowork assessment stopped at its row cap can select only people
+    // who were cut off. Unknown, not zero - and not a missing import either. (In English the page
+    // shows the server's own sentence; the Spanish catalog entry is checked by the i18n gates.)
+    render(
+      summary({
+        coworkReadinessAvailable: false,
+        warnings: [
+          'Cowork readiness scores at most 50,000 seat holders, ranked by coordination load (when the Copilot audit log is imported, anyone it shows already using Cowork is taken first), and this tenant reached that limit. Nobody in this filtered population made the list, so there is nothing to show here. This is NOT a missing import: the Cowork assessment ran. Widen the filter, or read the Cowork tab for the whole tenant.',
+        ],
+        warningDetails: [{ key: 'coworkSliceNotAssessed', values: { maxUsers: 50000 } }],
+      }),
+    );
+
+    expect(screen.getByText(/could not be assessed/)).toBeTruthy();
+    expect(screen.getByText(/scores at most 50,000 seat holders/)).toBeTruthy();
+    expect(screen.getByText(/NOT a missing import/)).toBeTruthy();
+    expect(screen.queryByText(/usage report/i)).toBeNull();
     expect(fetchCowork).not.toHaveBeenCalled();
   });
 
@@ -948,20 +969,23 @@ describe('CoworkPanel headline actions', () => {
   });
 });
 
-describe('CoworkPanel email-domain scope', () => {
+describe('CoworkPanel page-wide scope', () => {
+  // The page-wide user filter - here an email domain, the condition the old domain drop-down used
+  // to set - in the wire form the page hands every panel.
+  const FABRIKAM = '[{"d":"emailDomain","v":["fabrikam.com"]}]';
+
   beforeEach(() => {
     fetchCowork.mockReset();
     fetchCowork.mockResolvedValue(page([]));
   });
 
-  it('asks the server for the domain the page is narrowed to', async () => {
+  it('asks the server for the people the page is narrowed to', async () => {
     renderWithProvider(
       <CoworkPanel
         windowDays={28}
         summary={summary({})}
-        filterOptions={null}
         options={summary({}).options}
-        emailDomain="fabrikam.com"
+        userFilter={FABRIKAM}
       />,
     );
 
@@ -969,22 +993,22 @@ describe('CoworkPanel email-domain scope', () => {
 
     const call = fetchCowork.mock.calls[0];
     expect(call[0]).toBe(28);
-    expect((call[1] as { emailDomain: string }).emailDomain).toBe('fabrikam.com');
+    expect((call[1] as { userFilter: string }).userFilter).toBe(FABRIKAM);
   });
 
-  it('keeps the page-wide domain when the panel filters are cleared', async () => {
-    // The domain is not one of this panel's filters - it is the population the whole report is
-    // describing. Clearing it here would silently widen the list (and the spending-policy CSV built
-    // from the same state) back to the whole tenant while the page still named one organisation.
+  it('keeps the page-wide filter when the panel filters are cleared', async () => {
+    // The page-wide filter is not one of this panel's filters - it is the population the whole
+    // report is describing. Clearing it here would silently widen the list (and the spending-policy
+    // CSV built from the same state) back to the whole tenant while the page still named one
+    // organisation.
     const user = userEvent.setup();
 
     renderWithProvider(
       <CoworkPanel
         windowDays={28}
         summary={summary({})}
-        filterOptions={null}
         options={summary({}).options}
-        emailDomain="fabrikam.com"
+        userFilter={FABRIKAM}
       />,
     );
 
@@ -996,7 +1020,7 @@ describe('CoworkPanel email-domain scope', () => {
 
     await waitFor(() => expect(fetchCowork).toHaveBeenCalled());
     for (const call of fetchCowork.mock.calls) {
-      expect((call[1] as { emailDomain: string }).emailDomain).toBe('fabrikam.com');
+      expect((call[1] as { userFilter: string }).userFilter).toBe(FABRIKAM);
     }
   });
 });
@@ -1160,7 +1184,7 @@ describe('CoworkPanel printing', { timeout: 30000 }, () => {
     const printedFilters = () => people.querySelector('[data-print="only"]')?.textContent;
 
     expect(printedFilters()).toBe(
-      'Filters: Verdict: All verdicts \u00b7 Department: All departments \u00b7 Sorted by: Most coordination load',
+      'Filters: Verdict: All verdicts \u00b7 Sorted by: Most coordination load',
     );
 
     await user.selectOptions(
@@ -1172,7 +1196,7 @@ describe('CoworkPanel printing', { timeout: 30000 }, () => {
 
     await waitFor(() =>
       expect(printedFilters()).toBe(
-        'Filters: Search: \u201cfinance\u201d \u00b7 Verdict: Prime candidate \u00b7 Department: All departments'
+        'Filters: Search: \u201cfinance\u201d \u00b7 Verdict: Prime candidate'
           + ' \u00b7 Sorted by: Most coordination load \u00b7 Already using Cowork',
       ),
     );

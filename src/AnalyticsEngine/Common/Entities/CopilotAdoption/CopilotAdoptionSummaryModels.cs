@@ -1,5 +1,6 @@
 ﻿using Common.Entities.Copilot;
 using Common.Entities.AgentCosts;
+using Common.Entities.UserFilters;
 using Newtonsoft.Json;
 using System;
 using System.Collections.Generic;
@@ -879,6 +880,32 @@ namespace Common.Entities.CopilotAdoption
         public string ScopedEmailDomain { get; set; }
 
         /// <summary>
+        /// The user filter this whole summary was narrowed by - Entra ID attributes and custom
+        /// organisations - or <c>null</c> when none was applied.
+        /// </summary>
+        /// <remarks>
+        /// Echoed back for the same reason as <see cref="ScopedEmailDomain"/>. Carries the normalised
+        /// clauses and how many people in the directory match, never a sentence: the page writes the
+        /// description in the reader's language.
+        /// </remarks>
+        [JsonProperty("userFilter")]
+        public UserFilterEcho UserFilter { get; set; }
+
+        /// <summary>
+        /// The applied user filter in plain English, for the Excel workbook's cover sheet. Not sent to
+        /// the browser, which writes its own description in the reader's language.
+        /// </summary>
+        [JsonIgnore]
+        public string UserFilterDescription { get; set; }
+
+        /// <summary>
+        /// The tenant-wide Copilot seat count, set only when this summary is narrowed, so a page can say
+        /// how much of the tenant the narrowed figures cover.
+        /// </summary>
+        [JsonProperty("unscopedLicensedUsers")]
+        public int? UnscopedLicensedUsers { get; set; }
+
+        /// <summary>
         /// Sections that stayed tenant-wide when <see cref="ScopedEmailDomain"/> is set, because they
         /// come from aggregate queries that carry no per-user identity to filter on.
         /// </summary>
@@ -1147,6 +1174,7 @@ namespace Common.Entities.CopilotAdoption
         public const string UnlicensedUsageCapped = "unlicensedUsageCapped";
         public const string LicensedUserDetailCapped = "licensedUserDetailCapped";
         public const string LicensedUsersSubset = "licensedUsersSubset";
+        public const string ScopedLicensedUsersNotAnalysed = "scopedLicensedUsersNotAnalysed";
         public const string LicenceOpportunitiesNoSources = "licenceOpportunitiesNoSources";
         public const string LicenceCandidatesAuditOnly = "licenceCandidatesAuditOnly";
         public const string CoworkReadinessNoSources = "coworkReadinessNoSources";
@@ -1160,6 +1188,9 @@ namespace Common.Entities.CopilotAdoption
         public const string SkuSeatMismatch = "skuSeatMismatch";
         public const string CoworkFluencyMissingAll = "coworkFluencyMissingAll";
         public const string CoworkFluencyPartial = "coworkFluencyPartial";
+        public const string CoworkSliceNotAssessed = "coworkSliceNotAssessed";
+        public const string CoworkReadinessCapped = "coworkReadinessCapped";
+        public const string CoworkSliceBeyondLicensedCap = "coworkSliceBeyondLicensedCap";
         public const string CouldNotLoad = "couldNotLoad";
         public const string ReclaimCaveat = "copilotAdoption.server.reclaimCaveat";
     }
@@ -1178,6 +1209,7 @@ namespace Common.Entities.CopilotAdoption
             { CopilotAdoptionWarningKeys.UnlicensedUsageCapped, "Unlicensed Copilot usage was capped at {maxUsers} users, so those figures are a floor rather than a total." },
             { CopilotAdoptionWarningKeys.LicensedUserDetailCapped, "Only the first {maxUsers} licensed users were analysed. The figures below therefore describe that subset, not the whole tenant. The subset is ordered by internal user id for reproducibility, so the oldest user records are over-represented and the newest user records are excluded first." },
             { CopilotAdoptionWarningKeys.LicensedUsersSubset, "This tenant holds {licensedUsers} Copilot licences, but only {scoredUsers} users could be analysed in one pass. Every rate and breakdown below describes those {scoredUsers} users, not the whole tenant - they are not tenant-wide figures and must not be quoted as such. Because the drill-down query is ordered by internal user id, the oldest user records are over-represented and the newest joiners or newly onboarded subsidiaries are excluded first; the subset is reproducible, but not representative." },
+            { CopilotAdoptionWarningKeys.ScopedLicensedUsersNotAnalysed, "The analysis covers only the first {maxUsers} of this tenant's Copilot licence holders, and this view selects licence holders beyond that limit ({count} of them), so every figure below leaves them out. The limit follows internal user id, so it is the newest user records that are missed, and a filtered view can be made up largely or entirely of them. Treat these figures as a partial count of this view, not as its total." },
             { CopilotAdoptionWarningKeys.LicenceOpportunitiesNoSources, "Licence opportunities need either the Copilot audit import or the Microsoft 365 usage reports. Neither has data, so no candidates can be identified." },
             { CopilotAdoptionWarningKeys.LicenceCandidatesAuditOnly, "The Microsoft 365 usage reports are not available, so licence candidates are ranked only on unlicensed Copilot Chat use. Heavy Microsoft 365 users who have never tried Copilot will not appear." },
             { CopilotAdoptionWarningKeys.CoworkReadinessNoSources, "Cowork readiness needs the Cowork usage report, the Copilot audit import or the Microsoft 365 usage reports. None has data for this period, so no readiness assessment is possible." },
@@ -1191,6 +1223,9 @@ namespace Common.Entities.CopilotAdoption
             { CopilotAdoptionWarningKeys.SkuSeatMismatch, "Purchased and assigned Copilot seats disagree for {skuName}: Graph reports {purchased} purchased but {assigned} assigned, so unassigned seats are shown as Unknown rather than zero." },
             { CopilotAdoptionWarningKeys.CoworkFluencyMissingAll, "Cowork readiness was measured, but the licensed-user analysis it takes Copilot fluency from did not complete, so the tab could not be scored. This is NOT a missing usage report import - the Cowork signals imported fine. Check the Health page and re-run." },
             { CopilotAdoptionWarningKeys.CoworkFluencyPartial, "Cowork readiness: {withoutFluency} of {total} seat holders were scored without a Copilot fluency figure, because they fall outside the {maxLicensed}-row licensed-user analysis this tab joins against. Their fluency reads as 0 rather than as unknown, so they band lower than they should - most will show as \"build fluency first\". Treat the tier of those rows as unreliable; the rest of the tab is unaffected." },
+            { CopilotAdoptionWarningKeys.CoworkSliceNotAssessed, "Cowork readiness scores at most {maxUsers} seat holders, ranked by coordination load (when the Copilot audit log is imported, anyone it shows already using Cowork is taken first), and this tenant reached that limit. Nobody in this filtered population made the list, so there is nothing to show here. This is NOT a missing import: the Cowork assessment ran. Widen the filter, or read the Cowork tab for the whole tenant." },
+            { CopilotAdoptionWarningKeys.CoworkReadinessCapped, "Cowork readiness scores at most {maxUsers} seat holders, ranked by coordination load (when the Copilot audit log is imported, anyone it shows already using Cowork is taken first), and this tenant reached that limit. Every count on this tab describes the seat holders who made the list, not all of them; those left out are the ones with the least coordination load, who are the least likely Cowork candidates." },
+            { CopilotAdoptionWarningKeys.CoworkSliceBeyondLicensedCap, "Cowork readiness can't be scored for this view: every seat holder in it that the Cowork assessment reached ({total}) falls outside the {maxLicensed}-row licensed-user analysis this tab takes Copilot fluency from. That limit follows internal user id, so it is the newest user records that are missed, and a filtered view can be made up entirely of them. This is NOT a failed import or query - both ran. Read the Cowork tab for the whole tenant, or widen the filter." },
             { CopilotAdoptionWarningKeys.CouldNotLoad, "Could not load {description}: {message}" },
         };
 

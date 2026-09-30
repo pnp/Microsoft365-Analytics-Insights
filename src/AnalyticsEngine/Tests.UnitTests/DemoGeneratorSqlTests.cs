@@ -43,6 +43,14 @@ JOIN dbo.audit_events a ON a.id=c.event_id WHERE a.user_id<>c.user_id OR a.time_
                     Assert.AreEqual(0L, Scalar(connection, @"SELECT COUNT_BIG(*) FROM dbo.audit_events
 WHERE DATEDIFF(day,'19000101',time_stamp)%7 IN (5,6);"));
                     Assert.AreEqual(1L, Scalar(connection, "SELECT COUNT_BIG(*) FROM dbo.user_state_or_province WHERE name=N'Αττική';"));
+                    Assert.AreEqual(3L, Scalar(connection, "SELECT COUNT_BIG(*) FROM dbo.user_org_types WHERE source_kind=2 AND is_enabled=1 AND last_refreshed_utc='2026-09-01';"));
+                    Assert.AreEqual(31L, Scalar(connection, "SELECT COUNT_BIG(*) FROM dbo.user_org_values;"));
+                    Assert.AreEqual(80L, Scalar(connection, "SELECT COUNT_BIG(*) FROM dbo.user_org_assignments;"));
+                    Assert.IsTrue(Scalar(connection, "SELECT COUNT_BIG(*) FROM dbo.user_org_values WHERE name LIKE N'%Αθήνα%';") > 0);
+                    Assert.AreEqual(0L, Scalar(connection, @"SELECT COUNT_BIG(*) FROM (
+SELECT user_id,org_type_id FROM dbo.user_org_assignments GROUP BY user_id,org_type_id HAVING COUNT_BIG(*)>1) d;"));
+                    Assert.AreEqual(0L, Scalar(connection, @"SELECT COUNT_BIG(*) FROM dbo.user_org_assignments a
+JOIN dbo.user_org_values v ON v.id=a.org_value_id WHERE v.org_type_id<>a.org_type_id;"));
                     Assert.AreEqual((long)DemoWebCatalogue.UnicodeUrlCount,
                         Scalar(connection, "SELECT COUNT_BIG(*) FROM dbo.urls WHERE full_url LIKE N'%Καλημέρα%';"));
                     Assert.AreEqual(0L, Scalar(connection, @"SELECT COUNT_BIG(*) FROM (

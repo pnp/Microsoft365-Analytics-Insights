@@ -108,7 +108,7 @@ const EMPTY_PAGE: LicenceOpportunityPage = { total: 0, skip: 0, take: 50, rows: 
  */
 async function renderPanel(s: CopilotAdoptionSummary, language?: 'en' | 'es') {
   const result = renderWithProvider(
-    <OpportunitiesPanel windowDays={28} summary={s} filterOptions={null} options={s.options} />,
+    <OpportunitiesPanel windowDays={28} summary={s} options={s.options} />,
     language ? { language } : undefined,
   );
   await waitFor(() => expect(fetchOpportunities).toHaveBeenCalled());
@@ -240,6 +240,37 @@ describe('OpportunitiesPanel licence headline', () => {
     expect(screen.queryByText('Modelled, not measured')).toBeNull();
     expect(screen.queryByRole('tab', { name: 'Time saved' })).toBeNull();
     expect(screen.getByRole('checkbox', { name: 'Recommended only' })).toBeTruthy();
+  });
+
+  it('still says the candidate list was capped when this view has nobody on it', async () => {
+    // A filtered view whose people all ranked below the tenant-wide cut-off gets no headline, and the
+    // headline was the only place the cap was said - so the list read "nobody in this tenant qualifies".
+    await renderPanel(summary({
+      licenceOpportunityEstimate: { ...RECOMMENDED, cohortUsers: 0, candidatesCapped: true },
+      licenceChatUsersEstimate: undefined,
+    }));
+
+    expect(await screen.findByText(
+      'The candidate list reached its 50,000-candidate limit for the whole tenant, so candidates ranked below it were never listed. People in this view who would qualify may be among them.',
+    )).toBeTruthy();
+    expect(screen.getByText('No candidate who made the ranked list is in this view for the selected period.')).toBeTruthy();
+    expect(screen.queryByText(/Nobody in this tenant qualifies/)).toBeNull();
+  });
+
+  it('says nobody qualifies only when the list was complete', async () => {
+    await renderPanel(summary({ licenceOpportunityEstimate: { ...RECOMMENDED, cohortUsers: 0 }, licenceChatUsersEstimate: undefined }));
+
+    expect(await screen.findByText('Nobody in this tenant qualifies as a licence candidate for the selected period.')).toBeTruthy();
+    expect(screen.queryByText(/candidate limit/)).toBeNull();
+  });
+
+  it('says nobody in the view qualifies, not nobody in the tenant, under a page-wide filter', async () => {
+    // Only the people the page filter selects were searched; the rest of the tenant may hold candidates.
+    const s = summary({ licenceOpportunityEstimate: { ...RECOMMENDED, cohortUsers: 0 }, licenceChatUsersEstimate: undefined });
+    renderWithProvider(<OpportunitiesPanel windowDays={28} summary={s} options={s.options} userFilter="d:department~Sales" />);
+
+    expect(await screen.findByText('Nobody in this view qualifies as a licence candidate for the selected period.')).toBeTruthy();
+    expect(screen.queryByText(/Nobody in this tenant qualifies/)).toBeNull();
   });
 
   it('reads in Spanish', async () => {
@@ -706,19 +737,18 @@ describe('OpportunitiesPanel printing', { timeout: 30000 }, () => {
     const list = candidates();
 
     for (const control of [
-      within(list).getByRole('combobox', { name: 'Filter candidates by department' }),
       within(list).getByRole('checkbox', { name: 'Recommended only' }),
       within(list).getByRole('button', { name: 'Expand all' }),
       within(list).getByRole('button', { name: 'Next' }),
     ]) {
       expect(control.closest('[data-print="hide"]')).not.toBeNull();
     }
+    // Who the list is about is the page-wide filter's job; the list has no department filter of its own.
+    expect(within(list).queryByRole('combobox', { name: /department/i })).not.toBeInTheDocument();
 
     await user.click(within(list).getByRole('checkbox', { name: 'Recommended only' }));
     await waitFor(() =>
-      expect(list.querySelector('[data-print="only"]')?.textContent).toBe(
-        'Filters: Department: All departments \u00b7 Recommended only',
-      ),
+      expect(list.querySelector('[data-print="only"]')?.textContent).toBe('Filters: Recommended only'),
     );
   });
 });

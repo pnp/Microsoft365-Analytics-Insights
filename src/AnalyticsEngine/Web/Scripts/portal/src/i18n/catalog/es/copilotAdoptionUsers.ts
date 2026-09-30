@@ -10,7 +10,6 @@ const copilotAdoptionUsers: Record<keyof typeof en, string> = {
   // Shared table and filter controls
   'copilotAdoptionUsers.common.searchPlaceholder': 'Buscar por nombre, correo electrónico, departamento, puesto o responsable',
   'copilotAdoptionUsers.common.search': 'Buscar',
-  'copilotAdoptionUsers.common.allDepartments': 'Todos los departamentos',
   'copilotAdoptionUsers.common.refresh': 'Actualizar',
   'copilotAdoptionUsers.common.exportCsv': 'Exportar CSV',
   'copilotAdoptionUsers.common.user': 'Usuario',
@@ -33,7 +32,6 @@ const copilotAdoptionUsers: Record<keyof typeof en, string> = {
   'copilotAdoptionUsers.licensed.probableReclaim': 'Recuperación probable',
   'copilotAdoptionUsers.licensed.reviewBeforeReclaim': 'Revisar antes de recuperar',
   'copilotAdoptionUsers.licensed.excludedFromReclaim': 'Excluido de la recuperación',
-  'copilotAdoptionUsers.licensed.filterDepartmentAria': 'Filtrar por departamento',
   'copilotAdoptionUsers.licensed.coworkUsersOnly': 'Solo usuarios de Cowork',
   'copilotAdoptionUsers.licensed.disabledOnlyTooltip': 'Cuentas deshabilitadas que siguen ocupando una licencia de Copilot: las licencias más claras para recuperar.',
   'copilotAdoptionUsers.licensed.disabledAccountsOnly': 'Solo cuentas deshabilitadas',
@@ -116,7 +114,6 @@ const copilotAdoptionUsers: Record<keyof typeof en, string> = {
 
   // Opportunities panel
   'copilotAdoptionUsers.opportunities.searchAria': 'Buscar candidatos a licencia',
-  'copilotAdoptionUsers.opportunities.filterDepartmentAria': 'Filtrar candidatos por departamento',
   'copilotAdoptionUsers.opportunities.recommendedOnly': 'Solo recomendados',
   'copilotAdoptionUsers.opportunities.sections.ariaLabel': 'Secciones de oportunidades de licencia',
   'copilotAdoptionUsers.opportunities.sections.candidates': 'Candidatos',
@@ -131,6 +128,10 @@ const copilotAdoptionUsers: Record<keyof typeof en, string> = {
   'copilotAdoptionUsers.opportunities.candidatesFoundNoMatches': 'Se encontraron {count} candidatos en este periodo, pero ninguno coincide.',
   'copilotAdoptionUsers.opportunities.clearFilters': 'Borrar filtros',
   'copilotAdoptionUsers.opportunities.noneQualified': 'Nadie en este inquilino cumple los requisitos como candidato a licencia para el periodo seleccionado.',
+  'copilotAdoptionUsers.opportunities.noneQualifiedInView': 'Nadie en esta vista cumple los requisitos como candidato a licencia para el periodo seleccionado.',
+  'copilotAdoptionUsers.opportunities.noneQualifiedCapped': 'Ningún candidato de la lista clasificada está en esta vista para el periodo seleccionado.',
+  'copilotAdoptionUsers.opportunities.cappedNotice':
+    'La lista de candidatos alcanzó su límite de {cap} candidatos para todo el inquilino, por lo que los candidatos clasificados por debajo nunca se incluyeron. Entre ellos puede haber personas de esta vista que cumplirían los requisitos.',
   'copilotAdoptionUsers.opportunities.emptyIntro': 'Un usuario aparece aquí cuando se cumplen {count} las condiciones siguientes. Es una lista reducida para un puesto de pago, no un listado de directorio, así que se deja fuera deliberadamente a los usuarios sin ninguna actividad registrada: no hay un caso de negocio que defender para ellos.',
   'copilotAdoptionUsers.opportunities.emptyIntroAll': 'todas',
   'copilotAdoptionUsers.opportunities.emptySkuRequirement': 'No tiene ninguna de las SKU clasificadas como licencia de Copilot.',
