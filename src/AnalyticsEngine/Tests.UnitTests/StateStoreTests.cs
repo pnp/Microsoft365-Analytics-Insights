@@ -5,6 +5,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using Newtonsoft.Json;
 using System;
+using System.Configuration;
 using System.Linq;
 using System.Runtime.Serialization;
 using System.Text;
@@ -263,6 +264,34 @@ namespace Tests.UnitTests
         {
             Assert.IsFalse(StateStore.IsConfigured(null));
             Assert.IsNull(StateStore.TryOpen(null, StatePartitions.ImportSchedule));
+        }
+
+        [TestMethod]
+        public void AConfigWithNoStorageConnectionStringAtAll_StartsWithInMemoryState_AsOneWithNoRedisDid()
+        {
+            const string Sql = "Data Source=(localdb)\\MSSQLLocalDB;Initial Catalog=ContosoAnalytics;Integrated Security=true";
+            var strings = new AppConnectionStrings(name => name == "SPOInsightsEntities" ? Sql : null);
+
+            Assert.AreEqual(Sql, strings.DatabaseConnectionString);
+            Assert.IsNull(strings.StorageConnectionString, "A missing Storage connection string must not stop the web app or WebJobs starting.");
+            Assert.IsNull(strings.ServiceBusConnectionString);
+
+            var config = (AppConfig)FormatterServices.GetUninitializedObject(typeof(AppConfig));
+            config.ConnectionStrings = strings;
+            Assert.IsFalse(StateStore.IsConfigured(config));
+            Assert.IsNull(StateStore.TryOpen(config, StatePartitions.UserImport), "No store, so the caller keeps its state in memory.");
+        }
+
+        [TestMethod]
+        public void AConfiguredStorageConnectionString_IsRead_AndTheDatabaseOneIsStillRequired()
+        {
+            var strings = new AppConnectionStrings(name =>
+                name == "SPOInsightsEntities" ? "Data Source=(localdb)\\MSSQLLocalDB" :
+                name == "Storage" ? FakeStorage :
+                null);
+            Assert.AreEqual(FakeStorage, strings.StorageConnectionString);
+
+            Assert.ThrowsException<ConfigurationErrorsException>(() => new AppConnectionStrings(name => null));
         }
 
         [TestMethod]
