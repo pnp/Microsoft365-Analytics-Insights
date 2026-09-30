@@ -1,16 +1,15 @@
 using Common.Entities;
 using Common.Entities.Config;
-using Common.Entities.Redis;
+using Common.Entities.State;
 using DataUtils;
 using Microsoft.Extensions.Logging;
-using StackExchange.Redis;
 using System;
 using System.Globalization;
 using System.Threading.Tasks;
 
 namespace Web.AnalyticsWeb.Models.UserImport
 {
-    /// <summary>The Redis operations the User import page needs, as a port so its rules can be tested without Redis.</summary>
+    /// <summary>The storage operations the User import page needs, as a port so its rules can be tested without Azure Storage.</summary>
     internal interface IUserImportCheckpointStore
     {
         Task<bool> KeyExistsAsync(string key);
@@ -21,27 +20,33 @@ namespace Web.AnalyticsWeb.Models.UserImport
         Task<bool> DeleteKeyAsync(string key);
     }
 
-    internal sealed class RedisUserImportCheckpointStore : IUserImportCheckpointStore
+    /// <summary>
+    /// The User import page's keys in the runtime state table: the delta token in the
+    /// <see cref="StatePartitions.UserImport"/> partition, the last-completed stamp in
+    /// <see cref="StatePartitions.ImportSchedule"/> - the same partitions the importer writes them to.
+    /// </summary>
+    internal sealed class StateTableUserImportCheckpointStore : IUserImportCheckpointStore
     {
-        private readonly IDatabase _database;
+        private readonly IKeyValueStore _checkpoints;
+        private readonly IKeyValueStore _schedule;
 
-        internal RedisUserImportCheckpointStore(IDatabase database)
+        internal StateTableUserImportCheckpointStore(IKeyValueStore checkpoints, IKeyValueStore schedule)
         {
-            _database = database ?? throw new ArgumentNullException(nameof(database));
+            _checkpoints = checkpoints ?? throw new ArgumentNullException(nameof(checkpoints));
+            _schedule = schedule ?? throw new ArgumentNullException(nameof(schedule));
         }
 
-        public Task<bool> KeyExistsAsync(string key) => _database.KeyExistsAsync(key);
+        public Task<bool> KeyExistsAsync(string key) => StoreFor(key).ExistsAsync(key);
 
-        public async Task<string> GetStringAsync(string key)
-        {
-            var value = await _database.StringGetAsync(key);
-            return value.HasValue ? value.ToString() : null;
-        }
+        public Task<string> GetStringAsync(string key) => StoreFor(key).GetStringAsync(key);
 
-        public Task<bool> DeleteKeyAsync(string key) => _database.KeyDeleteAsync(key);
+        public Task<bool> DeleteKeyAsync(string key) => StoreFor(key).DeleteAsync(key);
+
+        private IKeyValueStore StoreFor(string key)
+            => string.Equals(key, UserImportCheckpointKeys.LastCompleted, StringComparison.Ordinal) ? _schedule : _checkpoints;
     }
 
-    /// <summary>Redis is configured but could not be reached, or failed the request.</summary>
+    /// <summary>Storage is configured but could not be reached, or failed the request.</summary>
     public sealed class UserImportCheckpointUnavailableException : Exception
     {
         public UserImportCheckpointUnavailableException(string message, Exception innerException) : base(message, innerException)
@@ -54,7 +59,7 @@ namespace Web.AnalyticsWeb.Models.UserImport
     /// stored checkpoint (its <c>/users/delta</c> token), and clearing it so the next run reads every user again.
     /// </summary>
     /// <remarks>
-    /// This is the in-product version of the manual workaround for issue #664 - deleting the Redis key by hand.
+    /// This is the in-product version of the manual workaround for issue #664 - deleting the stored token by hand.
     /// The key names come from <see cref="UserImportCheckpointKeys"/>, the same definitions the importer uses, so
     /// the page cannot clear a key the importer no longer reads. The token itself is never read, only tested for
     /// existence, so it cannot reach the browser or a log.
@@ -77,7 +82,7 @@ namespace Web.AnalyticsWeb.Models.UserImport
         private readonly int _intervalHours;
         private readonly ILogger _logger;
 
-        /// <param name="openStore">Opens the Redis store; null when Redis is not configured. May throw when Redis can't be reached.</param>
+        /// <param name="openStore">Opens the state store; null when no Storage connection string is configured. May throw when storage can't be reached.</param>
         internal UserImportCheckpointService(Guid tenantId, Func<IUserImportCheckpointStore> openStore, ImportTaskSettings importSettings, int intervalHours, ILogger logger)
         {
             _tenantId = tenantId;
@@ -87,21 +92,19 @@ namespace Web.AnalyticsWeb.Models.UserImport
             _logger = logger;
         }
 
-        internal bool RedisConfigured => _openStore != null;
+        internal bool StorageConfigured => _openStore != null;
 
         /// <summary>The service for this deployment, from the same app settings the importer reads.</summary>
         internal static UserImportCheckpointService ForThisDeployment()
         {
             var config = new AppConfig();
-            var connectionString = config.ConnectionStrings?.RedisConnectionString;
 
             Func<IUserImportCheckpointStore> openStore = null;
-            if (!string.IsNullOrWhiteSpace(connectionString))
+            if (StateStore.IsConfigured(config))
             {
-                openStore = () => new RedisUserImportCheckpointStore(
-                    CacheConnectionManager.TryGetConnectionManager(connectionString,
-                        tenantId: config.TenantGUID.ToString(), clientId: config.ClientID, clientSecret: config.ClientSecret)
-                    .GetDatabase());
+                openStore = () => new StateTableUserImportCheckpointStore(
+                    StateStore.TryOpen(config, StatePartitions.UserImport),
+                    StateStore.TryOpen(config, StatePartitions.ImportSchedule));
             }
 
             return new UserImportCheckpointService(config.TenantGUID, openStore, config.ImportJobSettings,
@@ -112,13 +115,15 @@ namespace Web.AnalyticsWeb.Models.UserImport
         {
             var status = new UserImportCheckpointStatus
             {
-                RedisConfigured = RedisConfigured,
+                StorageConfigured = StorageConfigured,
                 UserImportEnabled = _importSettings?.GraphUsersMetadata,
+                CheckpointTable = StateStore.TableName,
+                CheckpointPartition = StatePartitions.UserImport,
                 CheckpointKey = UserImportCheckpointKeys.DeltaToken(_tenantId),
                 IntervalHours = _intervalHours,
             };
 
-            if (!RedisConfigured)
+            if (!StorageConfigured)
             {
                 return status;
             }
@@ -139,9 +144,9 @@ namespace Web.AnalyticsWeb.Models.UserImport
         /// </summary>
         internal async Task<UserImportCheckpointClearResult> ClearAsync(bool runOnNextCycle)
         {
-            if (!RedisConfigured)
+            if (!StorageConfigured)
             {
-                throw new InvalidOperationException("Redis is not configured, so the user import never stores a checkpoint and there is nothing to clear.");
+                throw new InvalidOperationException("Azure Storage is not configured, so the user import never stores a checkpoint and there is nothing to clear.");
             }
 
             var result = new UserImportCheckpointClearResult();
@@ -175,14 +180,14 @@ namespace Web.AnalyticsWeb.Models.UserImport
             }
             catch (Exception ex) when (!(ex is OperationCanceledException))
             {
-                _logger?.LogError(ex, $"User import checkpoint - couldn't {operation} it in Azure Cache for Redis: {ex.Message}");
-                throw new UserImportCheckpointUnavailableException($"Couldn't {operation} the user import checkpoint in Azure Cache for Redis.", ex);
+                _logger?.LogError(ex, $"User import checkpoint - couldn't {operation} it in Azure Table storage ('{StateStore.TableName}' table): {ex.Message}");
+                throw new UserImportCheckpointUnavailableException($"Couldn't {operation} the user import checkpoint in Azure Table storage.", ex);
             }
         }
 
         /// <summary>
         /// Reads the importer's last-completed stamp with the same rules as its own reader
-        /// (<c>RedisImportLastRunStore.GetLastRunUtc</c>): round-trip format, returned as UTC; anything else is "not recorded".
+        /// (<c>PersistedImportLastRunStore.GetLastRunUtc</c>): round-trip format, returned as UTC; anything else is "not recorded".
         /// </summary>
         internal static DateTime? ParseLastCompleted(string raw)
         {

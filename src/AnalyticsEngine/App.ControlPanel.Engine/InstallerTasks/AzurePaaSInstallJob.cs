@@ -17,6 +17,7 @@ using Common.Entities.Installer;
 using Microsoft.Extensions.Logging;
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading.Tasks;
 
 namespace App.ControlPanel.Engine.InstallerTasks
@@ -46,7 +47,6 @@ namespace App.ControlPanel.Engine.InstallerTasks
 
         private readonly AppServicePlanTask _appServicePlanTask;
         private readonly AppServiceWebsiteTask _appServiceWebsiteTask;
-        private readonly RedisInstallTask _redisTask;
         private readonly ServiceBusNamespaceInstallTask _serviceBusNamespaceInstallTask;
         private readonly ServiceBusQueueWithPolicyInstallTask _serviceBusQueueWithPolicyInstallTask;
         private readonly StorageAccountInstallTask _storageAccountInstallTask;
@@ -74,7 +74,7 @@ namespace App.ControlPanel.Engine.InstallerTasks
 
             if (!allowPublicAccess)
             {
-                logger.LogWarning("Public network access will be disabled on Azure PaaS resources (SQL, Storage, Key Vault, Redis, Service Bus, App Service, Automation, Cognitive Services). " +
+                logger.LogWarning("Public network access will be disabled on Azure PaaS resources (SQL, Storage, Key Vault, Service Bus, App Service, Automation, Cognitive Services). " +
                     "If this installer is NOT running on a machine connected to the private network (VNet, peered network, VPN/ExpressRoute, or Azure Bastion-attached host), the following steps will fail: " +
                     "Key Vault secret upload (appsecret), SQL connectivity test and database initialization, and the App Service warm-up request. " +
                     "These failures are non-fatal — the resources are still created and configured — but you must re-run the installer from inside the private network (or temporarily re-enable public access on Key Vault and SQL) to complete those steps.");
@@ -82,6 +82,7 @@ namespace App.ControlPanel.Engine.InstallerTasks
 
             _rgCreateTask = new GetOrCreateResourceGroupTask(TaskConfig.GetConfigForName(config.ResourceGroupName), logger, Location, tagDic, subscription);
             this.AddTask(_rgCreateTask);
+            this.AddTask(new LeftoverRedisResourceWarningTask(logger));
 
             // Performance levels - enforce higher tiers when VNet/private endpoints are needed
             var appPerfTier = AppServicePlanTask.PERF_TIER_BASIC1;
@@ -94,7 +95,6 @@ namespace App.ControlPanel.Engine.InstallerTasks
             }
 
             // VNet integration requires certain minimum SKUs:
-            // - Redis: Standard (Basic does not support VNet/PE)
             // - Service Bus: Premium (private endpoints require Premium SKU)
             // - SQL: S0+ recommended (Basic works for PE but S0 for production)
             // - App Service: Basic+ (B1 supports VNet integration)
@@ -155,34 +155,6 @@ namespace App.ControlPanel.Engine.InstallerTasks
             else
             {
                 this.AddTask(_sqlServerTask, _sqlDatabaseTask);
-            }
-
-
-            // Redis - enforce Standard SKU for VNet
-            _redisTask = new RedisInstallTask(TaskConfig.GetConfigForName(config.RedisName), logger, Location, tagDic, vnetEnabled, allowPublicAccess);
-
-            // Redis access policy assignment for data-plane RBAC access (required when key-based auth is disabled)
-            var redisAccessPolicyConfig = TaskConfig.GetConfigForName(config.RedisName)
-                .AddSetting(RedisAccessPolicyAssignmentTask.CONFIG_KEY_CLIENT_ID, config.RuntimeAccountOffice365.ClientId)
-                .AddSetting(RedisAccessPolicyAssignmentTask.CONFIG_KEY_CLIENT_SECRET, config.RuntimeAccountOffice365.Secret)
-                .AddSetting(RedisAccessPolicyAssignmentTask.CONFIG_KEY_TENANT_ID, config.RuntimeAccountOffice365.DirectoryId)
-                .AddSetting(RedisAccessPolicyAssignmentTask.CONFIG_KEY_INSTALLER_CLIENT_ID, config.InstallerAccount.ClientId)
-                .AddSetting(RedisAccessPolicyAssignmentTask.CONFIG_KEY_INSTALLER_CLIENT_SECRET, config.InstallerAccount.Secret)
-                .AddSetting(RedisAccessPolicyAssignmentTask.CONFIG_KEY_INSTALLER_TENANT_ID, config.InstallerAccount.DirectoryId);
-            var _redisAccessPolicyTask = new RedisAccessPolicyAssignmentTask(redisAccessPolicyConfig, logger, Location, tagDic);
-
-            if (!vnetEnabled && allowPublicAccess)
-            {
-                // Only add firewall rules when not using private endpoints and public access is enabled.
-                // With public access disabled, Azure rejects firewall rule edits with 'DenyPublicEndpointEnabled'.
-                var redisFirewallConfig = TaskConfig.GetConfigForName(config.RedisName)
-                    .AddSetting(RedisFirewallConfigTask.CONFIG_KEY_APP_SERVICE_NAME, config.AppServiceWebAppName);
-                var _redisFirewallTask = new RedisFirewallConfigTask(redisFirewallConfig, logger, Location);
-                this.AddTask(_redisTask, _redisAccessPolicyTask, _redisFirewallTask);
-            }
-            else
-            {
-                this.AddTask(_redisTask, _redisAccessPolicyTask);
             }
 
             // Key vault
@@ -347,35 +319,18 @@ namespace App.ControlPanel.Engine.InstallerTasks
                     "sites", subnetId, logger, tagDic);
                 if (deployDns) AddPrivateDnsZoneTask("privatelink.azurewebsites.net", vnetId, appPeName, logger, tagDic);
 
-                // Redis - Managed Redis is created with a new private endpoint and DNS zone here.
-                // If RedisInstallTask detected and reused a pre-existing legacy classic
-                // Azure Cache for Redis, RedisPrivateEndpointInstallTask / RedisPrivateDnsZoneInstallTask
-                // will log a warning and skip — the legacy resource retains its own networking.
-                // The Private Link group ID, target resource ID, and DNS zone name are NOT hardcoded
-                // here: the Redis-aware wrappers derive them from RedisInstallTask.LastResult at
-                // execution time, so the values always match the Redis kind we actually got.
-                var redisPeName = peNames.GetNameOrDefault(peNames.Redis, $"pe-{config.RedisName}-redis");
-                var redisPeConfig = TaskConfig.GetConfigForName(redisPeName)
-                    .AddSetting(PrivateEndpointInstallTask.CONFIG_KEY_SUBNET_ID, subnetId);
-                this.AddTask(new RedisPrivateEndpointInstallTask(redisPeConfig, logger, Location, tagDic, _redisTask));
-                if (deployDns)
-                {
-                    var redisDnsConfig = TaskConfig.NoConfig
-                        .AddSetting(PrivateDnsZoneInstallTask.CONFIG_KEY_VNET_ID, vnetId)
-                        .AddSetting(PrivateDnsZoneInstallTask.CONFIG_KEY_PE_NAME, redisPeName);
-                    this.AddTask(new RedisPrivateDnsZoneInstallTask(redisDnsConfig, logger, Location, tagDic, _redisTask));
-                }
-
                 // Storage
                 var storagePeName = peNames.GetNameOrDefault(peNames.Storage, $"pe-{config.StorageAccountName}-blob");
                 AddPrivateEndpointTask(storagePeName, $"/subscriptions/{subId}/resourceGroups/{rgName}/providers/Microsoft.Storage/storageAccounts/{config.StorageAccountName}",
                     "blob", subnetId, logger, tagDic);
                 if (deployDns) AddPrivateDnsZoneTask("privatelink.blob.core.windows.net", vnetId, storagePeName, logger, tagDic);
 
-                // Storage - table sub-resource. The audit-import blob checkpoint (ProcessedBlobStoreFactory /
-                // AzureTableProcessedBlobStore) uses Azure Table storage; without its own private endpoint the
-                // table endpoint is unreachable on private deployments (403 AuthorizationFailure) and the
-                // importer silently falls back to a non-durable in-memory checkpoint.
+                // Storage - table sub-resource. The runtime state table (Common.Entities.State: import schedule, delta
+                // tokens, Teams authorisation tokens) and the audit-import blob checkpoint (ProcessedBlobStoreFactory /
+                // AzureTableProcessedBlobStore) both use Azure Table storage; without its own private endpoint the table
+                // endpoint is unreachable on private deployments (403 AuthorizationFailure), so the user import is deferred
+                // every cycle and the checkpoint falls back to a non-durable in-memory store. Installers before build 1716
+                // did not create this endpoint, so re-running the installer is what adds it to an older private deployment.
                 var storageTablePeName = peNames.GetNameOrDefault(peNames.StorageTable, $"pe-{config.StorageAccountName}-table");
                 AddPrivateEndpointTask(storageTablePeName, $"/subscriptions/{subId}/resourceGroups/{rgName}/providers/Microsoft.Storage/storageAccounts/{config.StorageAccountName}",
                     "table", subnetId, logger, tagDic);
@@ -663,7 +618,6 @@ namespace App.ControlPanel.Engine.InstallerTasks
         {
             AuthMethod = _sqlAuthDecision != null ? _sqlAuthDecision.Method : SqlConnectionAuthMethod.SqlLogin
         };
-        public RedisInstallResult Redis => GetTaskResult<RedisInstallResult>(_redisTask);
         public StorageAccountResource Storage => GetTaskResult<StorageAccountResource>(_storageAccountInstallTask);
         public AppInsightsInfo AppInsights => GetTaskResult<AppInsightsInfo>(_appInsightsInstallTask);
         public CognitiveServicesInfo CognitiveServicesInfo => _cognitiveServicesInstallTask != null ? GetTaskResult<CognitiveServicesInfo>(_cognitiveServicesInstallTask) : new CognitiveServicesInfo();
@@ -671,5 +625,86 @@ namespace App.ControlPanel.Engine.InstallerTasks
         public KeyVaultResource KeyVault => GetTaskResult<KeyVaultResource>(_keyVaultTask);
         public VirtualNetworkResource VNet => _vnetInstallTask != null ? GetTaskResult<VirtualNetworkResource>(_vnetInstallTask) : null;
         public string HybridWorkerGroupName => _hybridWorkerGroupName;
+    }
+
+    public class LeftoverRedisResourceWarningTask : BaseInstallTask
+    {
+        public LeftoverRedisResourceWarningTask(ILogger logger) : base(TaskConfig.NoConfig, logger)
+        {
+        }
+
+        public override string TaskName => "warn about unused Redis resources";
+        public override bool IsCritical => false;
+
+        public override Task<object> ExecuteTask(object contextArg)
+        {
+            var resourceGroup = contextArg as ResourceGroupResource;
+            if (resourceGroup == null)
+            {
+                _logger.LogWarning("Could not check for unused Azure Cache for Redis resources: the resource group was not available.");
+                return Task.FromResult(contextArg);
+            }
+
+            try
+            {
+                var resources = resourceGroup
+                    .GetGenericResources(filter: LeftoverRedisResourceWarning.ResourceTypeFilter)
+                    .Select(r => new RedisResourceWarningInfo(r.Data.Name, r.Data.ResourceType.ToString()));
+
+                foreach (var warning in LeftoverRedisResourceWarning.BuildWarnings(resources, resourceGroup.Data.Name))
+                {
+                    _logger.LogWarning(warning);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning($"Could not check for unused Azure Cache for Redis resources in resource group '{resourceGroup.Data.Name}': {ex.Message}");
+            }
+
+            return Task.FromResult(contextArg);
+        }
+    }
+
+    public static class LeftoverRedisResourceWarning
+    {
+        public const string ClassicRedisResourceType = "Microsoft.Cache/redis";
+        public const string ManagedRedisResourceType = "Microsoft.Cache/redisEnterprise";
+        public const string ResourceTypeFilter = "resourceType eq 'Microsoft.Cache/redis' or resourceType eq 'Microsoft.Cache/redisEnterprise'";
+
+        public static IReadOnlyList<string> BuildWarnings(IEnumerable<RedisResourceWarningInfo> resources, string resourceGroupName)
+        {
+            if (resources == null)
+            {
+                return Array.Empty<string>();
+            }
+
+            return resources
+                .Where(r => r != null && IsUnusedRedisResourceType(r.ResourceType))
+                .Select(r => BuildWarning(r.Name, r.ResourceType, resourceGroupName))
+                .ToList();
+        }
+
+        public static bool IsUnusedRedisResourceType(string resourceType)
+        {
+            return string.Equals(resourceType, ClassicRedisResourceType, StringComparison.OrdinalIgnoreCase)
+                || string.Equals(resourceType, ManagedRedisResourceType, StringComparison.OrdinalIgnoreCase);
+        }
+
+        public static string BuildWarning(string resourceName, string resourceType, string resourceGroupName)
+        {
+            return $"Azure Cache for Redis '{resourceName}' ({resourceType}) in resource group '{resourceGroupName}' is no longer used by Microsoft 365 Analytics & Insights - runtime state is now kept in Azure Table storage in the solution's storage account. Delete it to stop paying for it, together with its private endpoint and private DNS zone (privatelink.redis.cache.windows.net / privatelink.redis.azure.net) if you created them for this solution.";
+        }
+    }
+
+    public sealed class RedisResourceWarningInfo
+    {
+        public RedisResourceWarningInfo(string name, string resourceType)
+        {
+            Name = name;
+            ResourceType = resourceType;
+        }
+
+        public string Name { get; }
+        public string ResourceType { get; }
     }
 }

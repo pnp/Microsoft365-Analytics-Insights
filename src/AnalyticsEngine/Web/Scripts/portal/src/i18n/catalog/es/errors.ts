@@ -58,10 +58,10 @@ const errors: Record<keyof typeof en, string> = {
     'No se ha podido cargar el punto de control de la importación de usuarios ({status}).',
   'errors.userImportCheckpoint.clearFailed':
     'No se ha podido borrar el punto de control de la importación de usuarios ({status}).',
-  'errors.userImportCheckpoint.redisUnavailable':
-    'No se ha podido conectar con Azure Cache for Redis, donde se guarda el punto de control. Compruebe que la caché está en ejecución y que esta aplicación web puede conectarse a ella, y vuelva a intentarlo.',
-  'errors.userImportCheckpoint.redisNotConfigured':
-    'Azure Cache for Redis no está configurado en esta implementación, así que no hay ningún punto de control que borrar.',
+  'errors.userImportCheckpoint.storageUnavailable':
+    'No se ha podido conectar con Azure Table Storage, donde se guarda el punto de control. Compruebe que esta aplicación web puede conectarse a la cuenta de almacenamiento de la solución y que su identidad en tiempo de ejecución puede leer y escribir tablas, y vuelva a intentarlo.',
+  'errors.userImportCheckpoint.storageNotConfigured':
+    'Azure Storage no está configurado en esta implementación, así que no hay ningún punto de control que borrar.',
   'errors.updateCheck.failed': 'No se han podido buscar actualizaciones ({status}).',
 
   // Licence activity API

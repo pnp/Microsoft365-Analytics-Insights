@@ -43,7 +43,6 @@ namespace App.ControlPanel.Frames.InstallWizard
             {
                 SqlServer = txtPeSql.Text.Trim(),
                 AppService = txtPeApp.Text.Trim(),
-                Redis = txtPeRedis.Text.Trim(),
                 Storage = txtPeStorage.Text.Trim(),
                 StorageTable = txtPeStorageTable.Text.Trim(),
                 KeyVault = txtPeKeyVault.Text.Trim(),
@@ -58,7 +57,6 @@ namespace App.ControlPanel.Frames.InstallWizard
             if (names == null) return;
             txtPeSql.Text = names.SqlServer ?? string.Empty;
             txtPeApp.Text = names.AppService ?? string.Empty;
-            txtPeRedis.Text = names.Redis ?? string.Empty;
             txtPeStorage.Text = names.Storage ?? string.Empty;
             txtPeStorageTable.Text = names.StorageTable ?? string.Empty;
             txtPeKeyVault.Text = names.KeyVault ?? string.Empty;

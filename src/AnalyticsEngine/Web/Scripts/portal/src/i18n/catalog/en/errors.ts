@@ -62,10 +62,10 @@ export const errors = {
   'errors.systemStatus.loadFailed': "Couldn't load system status ({status}).",
   'errors.userImportCheckpoint.loadFailed': "Couldn't load the user import checkpoint ({status}).",
   'errors.userImportCheckpoint.clearFailed': "Couldn't clear the user import checkpoint ({status}).",
-  'errors.userImportCheckpoint.redisUnavailable':
-    "Couldn't reach Azure Cache for Redis, where the checkpoint is kept. Check that the cache is running and that this web app can connect to it, then try again.",
-  'errors.userImportCheckpoint.redisNotConfigured':
-    "Azure Cache for Redis isn't configured for this deployment, so there is no checkpoint to clear.",
+  'errors.userImportCheckpoint.storageUnavailable':
+    "Couldn't reach Azure Table storage, where the checkpoint is kept. Check that this web app can reach the solution's storage account and that its runtime identity can read and write tables, then try again.",
+  'errors.userImportCheckpoint.storageNotConfigured':
+    "Azure Storage isn't configured for this deployment, so there is no checkpoint to clear.",
   'errors.updateCheck.failed': "Couldn't check for updates ({status}).",
 
   // Licence activity API

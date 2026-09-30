@@ -19,7 +19,7 @@ namespace Tests.UnitTests
     /// Coverage for the Copilot adaptation rules that issue #367 freed from the SQL dependency - the
     /// context-priority order, agent-metadata-only mode and the null-record guard.
     ///
-    /// These run with zero SQL Server, Graph, Redis or Service Bus: the manager now takes an
+    /// These run with zero SQL Server, Graph, Azure Storage or Service Bus: the manager now takes an
     /// <c>ICopilotStagingWriter</c>, so an in-memory writer captures what would have been staged.
     /// The pre-existing CopilotTests suite still covers the SQL merge end to end.
     /// </summary>

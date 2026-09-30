@@ -31,9 +31,9 @@ describe('userImportCheckpointApi', () => {
   });
 
   it('reads the status with a GET', async () => {
-    mockedFetch.mockResolvedValue(jsonResponse({ redisConfigured: true, checkpointStored: false }, 200));
+    mockedFetch.mockResolvedValue(jsonResponse({ storageConfigured: true, checkpointStored: false }, 200));
 
-    await expect(fetchUserImportCheckpoint()).resolves.toMatchObject({ redisConfigured: true, checkpointStored: false });
+    await expect(fetchUserImportCheckpoint()).resolves.toMatchObject({ storageConfigured: true, checkpointStored: false });
     expect(mockedFetch.mock.calls[0][0]).toMatch(/\/api\/UserImportCheckpoint$/);
     expect(mockedFetch.mock.calls[0][1]?.method).toBe('GET');
   });
@@ -41,16 +41,16 @@ describe('userImportCheckpointApi', () => {
   it("turns the server's error code into a sentence in the reader's language", async () => {
     await loadCatalog('es');
     setActiveLanguage('es');
-    mockedFetch.mockResolvedValue(jsonResponse({ code: 'redisUnavailable' }, 503));
+    mockedFetch.mockResolvedValue(jsonResponse({ code: 'storageUnavailable' }, 503));
 
-    await expect(fetchUserImportCheckpoint()).rejects.toThrow('No se ha podido conectar con Azure Cache for Redis');
+    await expect(fetchUserImportCheckpoint()).rejects.toThrow('No se ha podido conectar con Azure Table Storage');
   });
 
-  it('explains a deployment with no Redis', async () => {
-    mockedFetch.mockResolvedValue(jsonResponse({ code: 'redisNotConfigured' }, 409));
+  it('explains a deployment with no Azure Storage', async () => {
+    mockedFetch.mockResolvedValue(jsonResponse({ code: 'storageNotConfigured' }, 409));
 
     await expect(clearUserImportCheckpoint(true)).rejects.toThrow(
-      "Azure Cache for Redis isn't configured for this deployment, so there is no checkpoint to clear.",
+      "Azure Storage isn't configured for this deployment, so there is no checkpoint to clear.",
     );
   });
 

@@ -1,6 +1,5 @@
 using Common.Entities;
 using Common.Entities.Config;
-using Common.Entities.Redis;
 using System;
 using System.Collections.Generic;
 using System.Data.Entity;
@@ -29,9 +28,7 @@ namespace Web.AnalyticsWeb.Controllers
             using (var db = new AnalyticsEntitiesContext())
             {
                 var appConfig = new AppConfig();
-                // Redis is optional for the web app, so tolerate it not being configured.
-                var cache = CacheConnectionManager.TryGetConnectionManager(appConfig.ConnectionStrings.RedisConnectionString, tenantId: appConfig.TenantGUID.ToString(), clientId: appConfig.ClientID, clientSecret: appConfig.ClientSecret);
-                var s = await SystemStatus.LoadFrom(db, cache);
+                var s = await SystemStatus.LoadFrom(db);
 
                 var imports = appConfig.ImportJobSettings;
 
@@ -48,7 +45,7 @@ namespace Web.AnalyticsWeb.Controllers
                     CallWebhookExpiry = s.CallWebhookExpiry,
                     CallWebhookStatusDetail = s.CallWebhookStatusDetail,
                     WebAppConfigSQL = s.WebAppConfigSQL,
-                    WebAppConfigRedis = s.WebAppConfigRedis,
+                    WebAppConfigStorage = s.WebAppConfigStorage,
                     WebAppConfigCognitive = s.WebAppConfigCognitive,
                     CognitiveServiceEnabled = s.CognitiveServiceEnabled,
                     WebAppConfigServiceBus = s.WebAppConfigServiceBus,

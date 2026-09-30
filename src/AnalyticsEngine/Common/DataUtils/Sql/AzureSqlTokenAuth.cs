@@ -20,7 +20,7 @@ namespace DataUtils.Sql
     /// <para>
     /// Everything here is opt-in and inferred from the connection string, so existing deployments -
     /// which still carry <c>user id</c> / <c>password</c> - keep using SQL authentication untouched.
-    /// This mirrors how Redis, Service Bus, Storage and Azure AI Language already prefer RBAC in this
+    /// This mirrors how Service Bus, Storage and Azure AI Language already prefer RBAC in this
     /// solution while falling back to key/secret auth. See issue #117.
     /// </para>
     /// </summary>
@@ -72,7 +72,7 @@ namespace DataUtils.Sql
         /// Deliberately NOT <see cref="DefaultAzureCredential"/>: it probes a long chain of sources
         /// (Visual Studio, Azure CLI, Azure PowerShell, developer tooling) which is slow, unpredictable
         /// on a server, and can silently authenticate as the wrong identity. The rest of this solution
-        /// has the same rule for Redis/Storage/Service Bus RBAC.
+        /// has the same rule for Storage/Service Bus RBAC.
         /// </remarks>
         public static TokenCredential Credential
         {

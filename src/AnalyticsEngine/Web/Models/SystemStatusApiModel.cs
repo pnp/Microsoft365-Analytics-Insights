@@ -89,8 +89,9 @@ namespace Web.AnalyticsWeb.Models
         [JsonProperty("webAppConfigSQL")]
         public string WebAppConfigSQL { get; set; }
 
-        [JsonProperty("webAppConfigRedis")]
-        public string WebAppConfigRedis { get; set; }
+        /// <summary>The storage account holding the runtime state table; the account name only. Null when not configured.</summary>
+        [JsonProperty("webAppConfigStorage")]
+        public string WebAppConfigStorage { get; set; }
 
         [JsonProperty("webAppConfigCognitive")]
         public string WebAppConfigCognitive { get; set; }

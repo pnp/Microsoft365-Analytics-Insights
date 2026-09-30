@@ -205,7 +205,6 @@
             this.azureStorageConfigControl1.Location = new System.Drawing.Point(3, 3);
             this.azureStorageConfigControl1.Margin = new System.Windows.Forms.Padding(4, 5, 4, 5);
             this.azureStorageConfigControl1.Name = "azureStorageConfigControl1";
-            this.azureStorageConfigControl1.RedisName = "";
             this.azureStorageConfigControl1.ServiceBusName = "";
             this.azureStorageConfigControl1.ServiceBusEnabled = true;
             this.azureStorageConfigControl1.Size = new System.Drawing.Size(632, 537);

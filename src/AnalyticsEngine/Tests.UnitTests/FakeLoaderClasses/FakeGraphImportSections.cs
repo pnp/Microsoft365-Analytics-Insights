@@ -10,7 +10,7 @@ namespace UnitTests.FakeLoaderClasses
 {
     /// <summary>
     /// A Graph import section that records whether it ran and answers however the test tells it to.
-    /// Lets the <c>GraphImporter</c> orchestration loop be driven with zero SQL Server, Graph, Redis or
+    /// Lets the <c>GraphImporter</c> orchestration loop be driven with zero SQL Server, Graph, Azure Storage or
     /// Service Bus (issue #376).
     /// </summary>
     public class FakeGraphImportSection : IGraphImportSection
@@ -101,8 +101,8 @@ namespace UnitTests.FakeLoaderClasses
     /// <see cref="IImportLastRunStore"/> that records every read and write, so a test can assert not just
     /// the resulting state but that the orchestrator wrote (or did not write) at all.
     ///
-    /// Set <see cref="ReadsAlwaysReturnNull"/> to reproduce the documented Redis fail-open contract: a
-    /// <c>RedisImportLastRunStore</c> whose backing cache is unreachable returns null from a read and
+    /// Set <see cref="ReadsAlwaysReturnNull"/> to reproduce the documented state-store fail-open contract: a
+    /// <c>PersistedImportLastRunStore</c> whose backing table is unreachable returns null from a read and
     /// swallows a write, so the section runs rather than being skipped by a cache blip.
     /// </summary>
     public class RecordingImportLastRunStore : IImportLastRunStore

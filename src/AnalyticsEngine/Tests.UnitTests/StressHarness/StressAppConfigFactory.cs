@@ -38,7 +38,6 @@ namespace Tests.UnitTests.StressHarness
 
             var connStrings = (AppConnectionStrings)System.Runtime.Serialization.FormatterServices.GetUninitializedObject(typeof(AppConnectionStrings));
             connStrings.DatabaseConnectionString = databaseConnectionString;
-            connStrings.RedisConnectionString = "fake:6380,******";
             connStrings.ServiceBusConnectionString = "Endpoint=sb://fake.servicebus.windows.net/;SharedAccessKeyName=fake;SharedAccessKey=fake";
             // Empty so the blob-checkpoint factory deterministically selects the in-memory store (there is no
             // real Azure Table in the load test).

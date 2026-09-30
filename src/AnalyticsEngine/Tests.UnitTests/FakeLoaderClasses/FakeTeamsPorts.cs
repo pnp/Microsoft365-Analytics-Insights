@@ -1,4 +1,3 @@
-using Common.Entities.Redis.Teams;
 using Microsoft.Graph.Models;
 using System;
 using System.Collections.Generic;
@@ -62,13 +61,13 @@ namespace UnitTests.FakeLoaderClasses
 
     /// <summary>
     /// In-memory <see cref="IChannelMessagesSourceLoader"/>. Returns a scripted delta token (or throws)
-    /// per channel id, so <see cref="TeamsChannelCrawler"/> can be tested with no Graph and no Redis.
+    /// per channel id, so <see cref="TeamsChannelCrawler"/> can be tested with no Graph and no storage.
     /// See issue #377.
     /// </summary>
     public class FakeChannelMessagesSourceLoader : IChannelMessagesSourceLoader
     {
-        private readonly Dictionary<string, TeamsRedisManager.TeamChannelDeltaTokenInfo> _tokensByChannelId
-            = new Dictionary<string, TeamsRedisManager.TeamChannelDeltaTokenInfo>(StringComparer.Ordinal);
+        private readonly Dictionary<string, TeamChannelDeltaTokenInfo> _tokensByChannelId
+            = new Dictionary<string, TeamChannelDeltaTokenInfo>(StringComparer.Ordinal);
 
         private readonly HashSet<string> _failingChannelIds = new HashSet<string>(StringComparer.Ordinal);
 
@@ -79,7 +78,7 @@ namespace UnitTests.FakeLoaderClasses
         /// <summary>Script a channel read that returns a new delta token.</summary>
         public FakeChannelMessagesSourceLoader ReturningToken(string channelId, string token)
         {
-            _tokensByChannelId[channelId] = new TeamsRedisManager.TeamChannelDeltaTokenInfo { Token = token, LastUpdated = DateTime.Now };
+            _tokensByChannelId[channelId] = new TeamChannelDeltaTokenInfo { Token = token, LastUpdated = DateTime.Now };
             return this;
         }
 
@@ -97,13 +96,13 @@ namespace UnitTests.FakeLoaderClasses
             return this;
         }
 
-        public Task<TeamsRedisManager.TeamChannelDeltaTokenInfo> LoadMessagesAndReactions(ChannelWithReactions channel, string teamId)
+        public Task<TeamChannelDeltaTokenInfo> LoadMessagesAndReactions(ChannelWithReactions channel, string teamId)
         {
             ChannelsRead.Add(channel.Id);
 
             if (_failingChannelIds.Contains(channel.Id))
             {
-                return Task.FromException<TeamsRedisManager.TeamChannelDeltaTokenInfo>(
+                return Task.FromException<TeamChannelDeltaTokenInfo>(
                     new ChannelMessagesReadException(new InvalidOperationException("simulated expired user token")));
             }
 

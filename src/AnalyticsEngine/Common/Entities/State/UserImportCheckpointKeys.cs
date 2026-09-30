@@ -1,6 +1,6 @@
 using System;
 
-namespace Common.Entities.Redis
+namespace Common.Entities.State
 {
     /// <summary>
     /// The <c>/users/delta</c> query this product tracks users with, and the version stamp that pins it.
@@ -12,7 +12,7 @@ namespace Common.Entities.Redis
     /// breaking change for existing deployments unless the stored token is invalidated with it.
     ///
     /// <para>
-    /// <see cref="SelectVersion"/> is part of the delta-token cache key, so bumping it discards the
+    /// <see cref="SelectVersion"/> is part of the delta-token key, so bumping it discards the
     /// stored token and the next import performs one full enumeration under the new selection. That is
     /// the only thing that makes a newly selected property arrive for users who have not otherwise
     /// changed - and those are the overwhelming majority on an established tenant.
@@ -33,7 +33,7 @@ namespace Common.Entities.Redis
     /// </remarks>
     public static class GraphUserDeltaQuery
     {
-        /// <summary>Bump whenever <see cref="Select"/> changes. Part of the delta-token cache key.</summary>
+        /// <summary>Bump whenever <see cref="Select"/> changes. Part of the delta-token key.</summary>
         public const string SelectVersion = "v2";
 
         /// <summary>
@@ -54,9 +54,11 @@ namespace Common.Entities.Redis
     }
 
     /// <summary>
-    /// The Redis keys that hold the Graph user import's progress. The importer writes them; the web portal's
-    /// Administration &gt; User import page reads them and can clear them. Both are stored unprefixed in Redis
-    /// database 0, so an operator can also find them with the cache's console.
+    /// The keys that hold the Graph user import's progress. The importer writes them; the web portal's
+    /// Administration &gt; User import page reads them and can clear them. Both live in the
+    /// <see cref="StateStore.TableName"/> Azure Table - the delta token in the <see cref="StatePartitions.UserImport"/>
+    /// partition, the last-completed stamp in <see cref="StatePartitions.ImportSchedule"/> - with the key as the row
+    /// key, so an operator can also find them in Azure Storage Explorer or the portal's Storage browser.
     /// </summary>
     public static class UserImportCheckpointKeys
     {
@@ -75,7 +77,8 @@ namespace Common.Entities.Redis
         /// <para>
         /// The format is load-bearing: changing it orphans every stored token, so every deployment reads its
         /// whole directory again on upgrade. The tenant id is written in the default <c>Guid</c> format -
-        /// lower case, with hyphens.
+        /// lower case, with hyphens. (The format is unchanged from when this was a Redis key, but Redis
+        /// contents are not migrated, so the first user import after that upgrade reads every user once.)
         /// </para>
         /// </remarks>
         public static string DeltaToken(Guid tenantId)

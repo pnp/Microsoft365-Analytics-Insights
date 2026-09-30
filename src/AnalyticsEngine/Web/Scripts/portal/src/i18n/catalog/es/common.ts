@@ -106,7 +106,6 @@ const common: Record<keyof typeof en, string> = {
   'common.serverPlaceholder.notStated': '(sin indicar)',
   'common.serverPlaceholder.none': '(ninguno)',
   'common.serverPlaceholder.disabled': '(deshabilitado)',
-  'common.serverPlaceholder.redisNotConfigured': '(no configurado: análisis profundos de Teams deshabilitados)',
 };
 
 export default common;

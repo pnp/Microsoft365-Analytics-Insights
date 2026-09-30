@@ -27,7 +27,7 @@ const admin: Record<keyof typeof en, string> = {
     'Sus Teams se mostrarán aquí cuando el sitio pueda obtener un token de Graph para su sesión.',
   'admin.teamsPermissions.title': 'Conceder acceso de equipo a Microsoft 365 Advanced Analytics Engine',
   'admin.teamsPermissions.tokenNote':
-    'Nota: los tokens se almacenan de forma segura en una caché temporal de Redis y nadie puede acceder a ellos.',
+    'Nota: los tokens de autorización se almacenan en la propia cuenta de Azure Storage de esta solución y nunca se muestran en el portal.',
   'admin.teamsPermissions.yourTeamsDescription':
     'Estos son todos los Teams a los que tiene acceso. Seleccione los Teams que desea habilitar para análisis detallados y continúe.',
   'admin.teamsPermissions.yourTeamsTitle': 'Sus Teams - {displayName}',
@@ -43,7 +43,7 @@ const admin: Record<keyof typeof en, string> = {
   'admin.teams.teamList.columnTeamName': 'Nombre del equipo',
   'admin.teams.teamList.saveSuccess':
     'Los Teams seleccionados se han habilitado correctamente para análisis detallados. Los metadatos adicionales pueden tardar varias horas en aparecer en los informes.',
-  'admin.teams.teamList.redisNotConfigured': 'No se pueden habilitar los análisis detallados de Teams porque Redis no está configurado en esta implementación. Añada una cadena de conexión de Redis para poder almacenar los tokens de autorización de Teams.',
+  'admin.teams.teamList.storageNotConfigured': 'No se pueden habilitar los análisis detallados de Teams porque Azure Storage no está configurado en esta implementación. Añada una cadena de conexión de Storage para poder almacenar los tokens de autorización de Teams.',
   'admin.teams.teamList.unexpectedApiResponse':
     'Respuesta inesperada de la API. Compruebe el registro de JS para obtener más detalles.',
   'admin.teams.teamListItem.authorised': 'Autorizado',
@@ -262,7 +262,9 @@ const admin: Record<keyof typeof en, string> = {
   'admin.serviceConfiguration.azureResources.cognitiveServicesEndpoint': 'Punto de conexión de Cognitive Services',
   'admin.serviceConfiguration.azureResources.description':
     'Estos son los recursos que esta implementación está configurada para usar:',
-  'admin.serviceConfiguration.azureResources.redisSslEndpoint': 'Punto de conexión SSL de Redis',
+  'admin.serviceConfiguration.azureResources.storageAccount': 'Cuenta de almacenamiento',
+  'admin.serviceConfiguration.azureResources.storageNotConfigured':
+    'No configurada: el estado en tiempo de ejecución solo se guarda en memoria',
   'admin.serviceConfiguration.azureResources.title': 'Recursos de Azure',
   'admin.serviceConfiguration.azureResources.webAppUrl': 'URL de la aplicación web',
 
@@ -374,13 +376,15 @@ const admin: Record<keyof typeof en, string> = {
   'admin.userImport.state.importDisabled': 'Desactivada (GraphUsersMetadata)',
   'admin.userImport.state.importUnknown': 'Desconocido: no se pudo leer la configuración de importación',
   'admin.userImport.state.storageLabel': 'Dónde se guarda el punto de control',
-  'admin.userImport.state.storageRedis': 'En Azure Cache for Redis',
+  'admin.userImport.state.storageTable':
+    'En Azure Table Storage: la tabla {table} de la cuenta de almacenamiento de esta solución',
   'admin.userImport.state.storageNone':
-    'En ningún sitio: Azure Cache for Redis no está configurado, así que cada ejecución lee todos los usuarios',
+    'En ningún sitio: Azure Storage no está configurado, así que cada ejecución lee todos los usuarios',
   'admin.userImport.state.checkpointLabel': 'Punto de control guardado',
   'admin.userImport.state.checkpointPresent': 'Sí: la próxima ejecución solo lee lo que ha cambiado',
   'admin.userImport.state.checkpointAbsent': 'Ninguno: la próxima ejecución lee todos los usuarios',
-  'admin.userImport.state.keyLabel': 'Clave de Redis',
+  'admin.userImport.state.partitionLabel': 'Partición',
+  'admin.userImport.state.keyLabel': 'Clave de fila',
   'admin.userImport.state.lastCompletedLabel': 'Última finalización',
   'admin.userImport.state.lastCompletedNone': 'No registrada',
   'admin.userImport.state.intervalLabel': 'Frecuencia',
@@ -390,8 +394,8 @@ const admin: Record<keyof typeof en, string> = {
   'admin.userImport.clear.description':
     'Borre el punto de control cuando los datos de los usuarios en los informes parezcan desactualizados, o después de que la importación de usuarios haya estado desactivada o fallando durante semanas. La siguiente ejecución leerá entonces todos los usuarios, igual que en una instalación nueva. No se elimina nada de la base de datos.',
   'admin.userImport.clear.cost': 'En un inquilino grande, una lectura completa tarda mucho más que una ejecución normal.',
-  'admin.userImport.clear.noRedis':
-    'No hay nada que borrar: sin Azure Cache for Redis el punto de control nunca se guarda, y cada ejecución ya lee todos los usuarios.',
+  'admin.userImport.clear.noStorage':
+    'No hay nada que borrar: sin Azure Storage el punto de control nunca se guarda, y cada ejecución ya lee todos los usuarios.',
   'admin.userImport.clear.importOff':
     'La importación de usuarios está desactivada, así que nada lee los usuarios hasta que se vuelva a activar. Si borra ahora el punto de control, esa primera ejecución leerá todos los usuarios.',
   'admin.userImport.clear.runOnNextCycle': 'Ejecutar la importación de usuarios en el próximo ciclo de importación',

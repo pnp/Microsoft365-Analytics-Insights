@@ -12,7 +12,7 @@ namespace Tests.UnitTests
     /// <see cref="ActivityReportsCadenceGate"/> (the once-a-day throttle on the activity/usage-report phase,
     /// previously an inline <c>DateTime.Now</c> subtraction in <c>GraphImporter</c>).
     ///
-    /// Zero SQL Server, Graph, Redis and Service Bus, and no environment variables are read or written -
+    /// Zero SQL Server, Graph, Azure Storage and Service Bus, and no environment variables are read or written -
     /// the raw value is passed in, so these tests cannot disturb a parallel test host's environment.
     /// </summary>
     [TestClass]
@@ -163,7 +163,7 @@ namespace Tests.UnitTests
             // The same instant in all three kinds the gate accepts. `Local` is what both ISingleDateStore
             // implementations actually produce (each stamps DateTime.Now). `Utc` and `Unspecified` reach the
             // gate only from a value the standard composition did not write - a Z-suffixed or an offset-less
-            // Redis string, or a custom ISingleDateStore. An offset-less string is a bare local wall-clock
+            // state-table string, or a custom ISingleDateStore. An offset-less string is a bare local wall-clock
             // reading, which is why ToUniversalTime() treating Unspecified as local is the right reading.
             //
             // Note SpecifyKind(lastUtc, Unspecified).ToLocalTime() would NOT do: ToLocalTime treats
