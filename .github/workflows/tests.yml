@@ -180,7 +180,9 @@ jobs:
         if: needs.setup_tests.outputs.run_dotnet == 'true'
         shell: pwsh
         run: |
-          npm install --global azurite@3 --no-audit --no-fund
+          # Exact version, like every `uses:` in this repo is pinned: this job holds the tenant secrets, so it must not
+          # pull whatever azurite 3.x (and its dependency tree) is newest on the day. 3.37.0 needs Node >= 22 (.nvmrc).
+          npm install --global azurite@3.37.0 --no-audit --no-fund
           $data = Join-Path $env:RUNNER_TEMP 'azurite'
           New-Item -ItemType Directory -Force -Path $data | Out-Null
           $azurite = (Get-Command azurite-table.cmd -ErrorAction Stop).Source
