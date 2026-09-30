@@ -69,7 +69,7 @@ namespace Tests.UnitTests.FakeLoaderClasses
         /// Replaces the fake Graph state for a subsequent import run while keeping
         /// the same loader (and therefore the same delta provider) so tests can
         /// simulate persistent-delta-token scenarios such as a customer running
-        /// against Redis.
+        /// against the state table.
         /// </summary>
         public void SetFakeState(
             List<GraphUser> fakeUsers,

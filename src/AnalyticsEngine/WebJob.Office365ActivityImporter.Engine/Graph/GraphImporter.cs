@@ -23,7 +23,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
     /// Orchestrates the Graph import: selects the enabled sections, applies the per-section cadence gate and
     /// records the last-run time. It does not build any of them - composition lives behind
     /// <see cref="IGraphImportSectionFactory"/> (issue #376), which is what makes this loop testable with fake
-    /// sections and no SQL Server, Graph, Redis or Service Bus.
+    /// sections and no SQL Server, Graph, Azure Storage or Service Bus.
     /// </summary>
     public class GraphImporter : AbstractApiLoader
     {
@@ -82,7 +82,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
 
         /// <summary>
         /// Orchestration-only constructor: the sections are supplied, so nothing here touches Graph, SQL or
-        /// Redis. Separate from the production constructor rather than another optional parameter on it,
+        /// Azure Storage. Separate from the production constructor rather than another optional parameter on it,
         /// because a trailing optional argument is baked in by the calling compiler and so is binary-breaking
         /// for already-compiled callers.
         ///
@@ -104,10 +104,10 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
 
         /// <summary>
         /// Runs a "non-fresh" Graph import section at most once per <paramref name="intervalHours"/>.
-        /// The last-run timestamp is persisted via <see cref="IImportLastRunStore"/> (Redis when
-        /// configured, otherwise in-memory) so the gate survives the per-cycle recreation of this
+        /// The last-run timestamp is persisted via <see cref="IImportLastRunStore"/> (the runtime state table when a
+        /// Storage connection string is configured, otherwise in-memory) so the gate survives the per-cycle recreation of this
         /// importer. An interval of 0 disables the gate (runs every cycle); <c>ForceGraphMetadataImport</c>
-        /// bypasses it for one run. Redis failures are fail-open (the section still runs).
+        /// bypasses it for one run. Store failures are fail-open (the section still runs).
         ///
         /// The section reports success itself instead of throwing. Returning false records the section as not
         /// done, so the cadence gate lets it retry next cycle, without an exception unwinding out of
@@ -122,7 +122,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             {
                 _logger.LogInformation($"Skipping {sectionName}: ran recently ({lastRun:u} UTC). " +
                     $"Next run after {lastRun?.AddHours(intervalHours):u} UTC (interval {intervalHours}h). " +
-                    $"Set ForceGraphMetadataImport=true or clear the '{key}' cache key to override.");
+                    $"Set ForceGraphMetadataImport=true, or delete the '{key}' row (partition '{Common.Entities.State.StatePartitions.ImportSchedule}') " +
+                    $"from the '{Common.Entities.State.StateStore.TableName}' table, to override.");
                 return;
             }
 
@@ -215,7 +216,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         /// </summary>
         /// <remarks>
         /// Deliberately does NOT fall back to the phase-level marker when a per-report stamp is absent. That
-        /// marker is an unversioned Redis key that predates the strict-paging fixes (#285 / #310); an older
+        /// marker is an unversioned key that predates the strict-paging fixes (#285 / #310); an older
         /// build could write it after a report had saved a partial day, and skipping a partially-stored date
         /// loses rows permanently once Graph's ~28-day retention passes. One extra full download per report on
         /// the first upgraded cycle is a bounded, one-off cost.
@@ -328,7 +329,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
 
             // Throttle the whole activity/usage-report phase (all daily loaders + the weekly SharePoint sites
             // loader) to run at most once a day. The store is injected so it survives across import cycles:
-            // Redis when configured, otherwise an in-memory fallback (see ActivityReportsLastImportedStoreFactory).
+            // the runtime state table when Storage is configured, otherwise an in-memory fallback (see ActivityReportsLastImportedStoreFactory).
             // When no store is supplied (e.g. unit tests) we don't throttle and always import.
             DateTime? lastImportedDate = null;
             var lastImportedStore = _activityReportsLastImportedStore;

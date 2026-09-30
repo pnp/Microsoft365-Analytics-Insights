@@ -11,8 +11,8 @@ const baseUrl = (): string => `${window.location.origin}/api/UserImportCheckpoin
  * Object.prototype. Anything unrecognised gets the generic message with the HTTP status.
  */
 const ERROR_CODE_KEYS = new Map<string, TranslationKey>([
-  ['redisUnavailable', 'errors.userImportCheckpoint.redisUnavailable'],
-  ['redisNotConfigured', 'errors.userImportCheckpoint.redisNotConfigured'],
+  ['storageUnavailable', 'errors.userImportCheckpoint.storageUnavailable'],
+  ['storageNotConfigured', 'errors.userImportCheckpoint.storageNotConfigured'],
 ]);
 
 async function failure(response: Response, fallbackKey: TranslationKey): Promise<Error> {

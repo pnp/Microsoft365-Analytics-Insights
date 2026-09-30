@@ -38,7 +38,7 @@ namespace CloudInstallEngine.Azure.InstallTasks
         /// enforce TLS 1.2 minimum..." and re-PUT the namespace forever - while sending
         /// <c>minimumTlsVersion: ""</c>, so TLS 1.2 was never actually enforced either.
         ///
-        /// The sibling Storage, Redis and App Service SDKs do not share the quirk, so only this task
+        /// The sibling Storage and App Service SDKs do not share the quirk, so only this task
         /// was affected. ServiceBusNamespaceInstallTaskTests pins the value so an SDK upgrade (or a
         /// well-meaning rename back to Tls1_2) can't silently reintroduce the bug.
         /// </remarks>

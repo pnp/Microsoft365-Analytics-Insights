@@ -7,7 +7,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
     /// <summary>
     /// Pure decision logic for "of everything Graph returned for a channel, what is actually new since
     /// the last delta read?". Extracted from <c>ChannelWithReactions.CalculateAndSetNewMessagesAndReactions</c>
-    /// so the rule can be unit tested without Graph or Redis. See issue #377.
+    /// so the rule can be unit tested without Graph or storage. See issue #377.
     ///
     /// Why this is not simply "everything the delta returned": a delta response also re-serves the
     /// unchanged parent of a thread whose reply changed, and re-serves a message whose only change was

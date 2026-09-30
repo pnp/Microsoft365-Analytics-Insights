@@ -57,7 +57,7 @@ namespace App.ControlPanel.Engine
             {
                 ct.ThrowIfCancellationRequested();
                 log.LogInformation("=== Phase: Azure backend resources ===");
-                // Get/create AppService + SQL + Redis. Binaries installed post-create.
+                // Get/create AppService + SQL and supporting Azure resources. Binaries installed post-create.
                 var azureBackeEndCreationJob = new AzurePaaSInstallJob(log, Config, azureSub);
                 azureBackeEndCreationJob.CancellationToken = ct;
                 await azureBackeEndCreationJob.Install();
@@ -91,7 +91,6 @@ namespace App.ControlPanel.Engine
                     azureBackeEndCreationJob.Storage,
                     azureBackeEndCreationJob.CreatedAutomationAccount,
                     azureBackeEndCreationJob.AppInsights,
-                    azureBackeEndCreationJob.Redis,
                     azureBackeEndCreationJob.CognitiveServicesInfo,
                     azureBackeEndCreationJob.KeyVault,
                     azureBackeEndCreationJob.SBQueueWithConnectionString?.ConnectionString, azureBackeEndCreationJob.Subscription,
@@ -197,7 +196,7 @@ namespace App.ControlPanel.Engine
         private async Task<bool> WarmupAppServiceSite(ILogger log, string adminSiteUrl, CancellationToken ct = default(CancellationToken))
         {
             // Cold-start App Service occasionally needs >2 minutes when binaries were just deployed
-            // and the app warms up alongside the SQL/Redis private-endpoint resolution. Keep the
+            // and the app warms up alongside SQL/private-endpoint resolution. Keep the
             // overall budget generous and the per-request timeout short enough that a single hung
             // request (e.g. VNet integration not yet propagated) can't eat the whole window.
             const int totalWarmupSeconds = 180;

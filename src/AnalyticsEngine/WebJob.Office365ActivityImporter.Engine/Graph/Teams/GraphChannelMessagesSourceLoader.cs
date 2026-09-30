@@ -1,5 +1,4 @@
 using Common.Entities.Models;
-using Common.Entities.Redis.Teams;
 using Microsoft.Extensions.Logging;
 using Microsoft.Graph;
 using Microsoft.Graph.Models.ODataErrors;
@@ -30,9 +29,9 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         }
 
-        public async Task<TeamsRedisManager.TeamChannelDeltaTokenInfo> LoadMessagesAndReactions(ChannelWithReactions channel, string teamId)
+        public async Task<TeamChannelDeltaTokenInfo> LoadMessagesAndReactions(ChannelWithReactions channel, string teamId)
         {
-            TeamsRedisManager.TeamChannelDeltaTokenInfo channelDeltaInfo = null;
+            TeamChannelDeltaTokenInfo channelDeltaInfo = null;
 
             // Try and get user-delegated channel stats
             if (_refreshToken != null)

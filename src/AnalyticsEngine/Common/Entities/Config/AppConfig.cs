@@ -307,7 +307,7 @@ namespace Common.Entities.Config
         /// Only a fallback: <see cref="DataUtils.Sql.AzureSqlTokenAuth"/> prefers the App Service's own
         /// system-assigned managed identity, which is the identity the installer grants database access
         /// to. This covers hosts with no managed identity (a hybrid runbook worker, an on-premises job)
-        /// and mirrors how Redis / Storage / Service Bus already fall back to the runtime principal.
+        /// and mirrors how Storage / Service Bus / Azure AI Language already fall back to the runtime principal.
         /// Registered with SetCredentialIfNotSet so it never displaces a credential a caller chose
         /// deliberately - notably the installer's own principal during a schema upgrade.
         /// </remarks>

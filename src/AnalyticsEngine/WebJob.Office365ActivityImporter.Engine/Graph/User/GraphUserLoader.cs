@@ -8,7 +8,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
-using GraphUserDeltaQuery = Common.Entities.Redis.GraphUserDeltaQuery;
+using GraphUserDeltaQuery = Common.Entities.State.GraphUserDeltaQuery;
 
 namespace WebJob.Office365ActivityImporter.Engine.Graph
 {
@@ -73,7 +73,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
 
                 try
                 {
-                    // ClearDeltaToken rather than overwriting the key: the Redis store also forgets its in-process
+                    // ClearDeltaToken rather than overwriting the key: the persisted store also forgets its in-process
                     // fallback copy, which would otherwise hand the dead token back the next time a read fails.
                     await _deltaValueProvider.ClearDeltaToken();
                 }
@@ -213,9 +213,9 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             {
                 // This run continued from a stored checkpoint. If that checkpoint has gone since, it was cleared
                 // while the run was in progress - by an admin on the web portal's User import page, or by hand in
-                // Redis - to ask for a full re-read. Saving this run's token would quietly undo that request, so
+                // the state table - to ask for a full re-read. Saving this run's token would quietly undo that request, so
                 // it is withheld and the next run reads the full user list, as the clear intended. A failed read
-                // here falls back to the checkpoint this run started from, so a Redis blip still saves as before.
+                // here falls back to the checkpoint this run started from, so a storage blip still saves as before.
                 var stored = await _deltaValueProvider.GetDeltaToken();
                 if (string.IsNullOrEmpty(stored))
                 {

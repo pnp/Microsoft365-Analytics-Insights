@@ -32,15 +32,15 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Sections
     /// client / caches (which the old code also built unconditionally at the top of the method) and the
     /// section descriptors. Everything else is built inside a section's <c>RunAsync</c>, exactly as before -
     /// so a disabled or gated-off section still constructs nothing. That is load-bearing for the sent-email
-    /// section, whose <see cref="RedisDeltaTokenStore"/> opens a Redis connection.
+    /// section, whose <see cref="PersistedDeltaTokenStore"/> opens the runtime state table.
     /// </summary>
     public class ProductionGraphImportSectionFactory : IGraphImportSectionFactory
     {
         // Keys for the per-section "last run" timestamps used to daily-gate the non-fresh Graph imports.
-        // Stored verbatim (unprefixed) in Redis db 0, so they can be cleared manually with e.g.
-        // `redis-cli DEL GraphUsersMetadataLastImported`. The user import's key is shared with the web portal's
-        // User import page, which clears it to make the import run on the next cycle.
-        public const string GraphUsersMetadataLastImportedKey = Common.Entities.Redis.UserImportCheckpointKeys.LastCompleted;
+        // Stored verbatim as row keys in the ImportSchedule partition of the AnalyticsState Azure Table, so they can be
+        // cleared by hand (delete the row) to make that import run on the next cycle. The user import's key is shared
+        // with the web portal's User import page, which clears it for the same reason.
+        public const string GraphUsersMetadataLastImportedKey = Common.Entities.State.UserImportCheckpointKeys.LastCompleted;
         public const string GraphTeamsLastImportedKey = "GraphTeamsLastImported";
         public const string GraphCopilotUsageReportsLastImportedKey = "GraphCopilotUsageReportsLastImported";
         public const string GraphCopilotUsageReportUserCountTrendLastImportedKey = GraphCopilotUsageReportsLastImportedKey + ":UserCountTrend";
@@ -181,9 +181,11 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Sections
                     async () =>
                     {
                         IDeltaTokenStore deltaTokenStore;
-                        if (!string.IsNullOrEmpty(_settings.ConnectionStrings.RedisConnectionString))
+                        var sentEmailStateStore = Common.Entities.State.StateStore.TryOpen(
+                            _settings, Common.Entities.State.StatePartitions.SentEmails, _logger);
+                        if (sentEmailStateStore != null)
                         {
-                            deltaTokenStore = new RedisDeltaTokenStore(_settings.ConnectionStrings.RedisConnectionString, tenantId: _settings.TenantGUID.ToString(), clientId: _settings.ClientID, clientSecret: _settings.ClientSecret);
+                            deltaTokenStore = new PersistedDeltaTokenStore(sentEmailStateStore);
                         }
                         else
                         {
@@ -405,7 +407,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Sections
                     {
                         _logger.LogInformation($"Skipping {report.Description}: ran recently ({lastRun:u} UTC). " +
                             $"Next run after {lastRun?.AddHours(_intervalHours):u} UTC (interval {_intervalHours}h). " +
-                            $"Set ForceGraphMetadataImport=true or clear the '{report.CadenceKey}' cache key to override.");
+                            $"Set ForceGraphMetadataImport=true, or delete the '{report.CadenceKey}' row (partition '{Common.Entities.State.StatePartitions.ImportSchedule}') " +
+                            $"from the '{Common.Entities.State.StateStore.TableName}' table, to override.");
                         continue;
                     }
 

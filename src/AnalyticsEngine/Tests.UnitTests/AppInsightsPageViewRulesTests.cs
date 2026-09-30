@@ -12,7 +12,7 @@ namespace Tests.UnitTests
     /// Coverage for the page-view staging rules extracted from PageViewsSaveExtension (issue #369) -
     /// de-duplication by page-request id and the org URL in-scope filter, plus the counts that were
     /// previously local variables only ever written to a log line.
-    /// Runs with zero SQL Server, Graph, Redis or Service Bus dependency.
+    /// Runs with zero SQL Server, Graph, Azure Storage or Service Bus dependency.
     /// </summary>
     [TestClass]
     public class AppInsightsPageViewRulesTests

@@ -8,7 +8,7 @@ namespace Tests.UnitTests
 {
     /// <summary>
     /// Coverage for the click staging rules extracted from PageClicksSaveExtension (issue #369).
-    /// Runs with zero SQL Server, Graph, Redis or Service Bus dependency.
+    /// Runs with zero SQL Server, Graph, Azure Storage or Service Bus dependency.
     /// </summary>
     [TestClass]
     public class AppInsightsClickRulesTests

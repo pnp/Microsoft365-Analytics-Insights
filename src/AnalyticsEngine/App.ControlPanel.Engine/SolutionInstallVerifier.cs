@@ -5,8 +5,6 @@ using Azure;
 using Azure.Identity;
 using Azure.ResourceManager;
 using Azure.ResourceManager.KeyVault;
-using Azure.ResourceManager.Redis;
-using Azure.ResourceManager.RedisEnterprise;
 using Azure.ResourceManager.AppService;
 using Azure.ResourceManager.Storage;
 using CloudInstallEngine.Azure;
@@ -593,17 +591,6 @@ namespace App.ControlPanel.Engine
         private const string DNS_SUFFIX_STORAGE_TABLE = ".table.core.windows.net";
         private const string DNS_SUFFIX_APP_SERVICE = ".azurewebsites.net";
 
-        /// <summary>
-        /// Public DNS suffix for Azure Managed Redis (Redis Enterprise), which the installer provisions
-        /// by default. The full name is region-qualified: <c>&lt;name&gt;.&lt;region&gt;.redis.azure.net</c>.
-        /// </summary>
-        private const string DNS_SUFFIX_REDIS_MANAGED = ".redis.azure.net";
-
-        /// <summary>
-        /// Public DNS suffix for legacy classic Azure Cache for Redis. Only relevant when the installer
-        /// detects and reuses a pre-existing classic cache (see <c>RedisInstallTask</c>).
-        /// </summary>
-        private const string DNS_SUFFIX_REDIS_CLASSIC = ".redis.cache.windows.net";
         private const string DNS_SUFFIX_SERVICE_BUS = ".servicebus.windows.net";
         private const string DNS_SUFFIX_COGNITIVE = ".cognitiveservices.azure.com";
 
@@ -635,7 +622,7 @@ namespace App.ControlPanel.Engine
                     $"Installation will fail until DNS / network / proxy connectivity is fixed on this machine.");
             }
 
-            var targets = BuildResourceDnsTargets(Config, TryGetRedisHostNameFromArm(testRg));
+            var targets = BuildResourceDnsTargets(Config);
             if (targets.Count == 0)
             {
                 _logger.LogInformation("No named Azure resources configured to DNS-check.");
@@ -646,9 +633,8 @@ namespace App.ControlPanel.Engine
 
             foreach (var target in targets)
             {
-                // A target can carry more than one candidate hostname (Redis, where the same configured
-                // name is either Azure Managed Redis or a reused legacy classic cache). Resolving any one
-                // of them proves the resource is reachable, so only report a failure when all of them fail.
+                // A target can carry more than one candidate hostname. Resolving any one of them proves
+                // the resource is reachable, so only report a failure when all of them fail.
                 var (ok, resolvedHost, failureDetail) = await TryResolveAnyHost(target.Fqdns);
                 if (ok)
                 {
@@ -723,7 +709,7 @@ namespace App.ControlPanel.Engine
             }
             catch (RequestFailedException ex) when (ex.Status == 404)
             {
-                _logger.LogInformation($"Storage account '{Config.StorageAccountName}' does not exist yet; skipping checkpoint firewall check.");
+                _logger.LogInformation($"Storage account '{Config.StorageAccountName}' does not exist yet; skipping the storage firewall check.");
             }
             catch (Exception ex)
             {
@@ -737,7 +723,7 @@ namespace App.ControlPanel.Engine
             if (privateEndpointInstall)
             {
                 return StorageCheckpointFirewallEvaluation.Pass(
-                    "Storage checkpoint firewall check skipped: private-endpoint/VNet deployments are expected to restrict public storage access.");
+                    "Storage firewall check skipped: private-endpoint/VNet deployments are expected to restrict public storage access.");
             }
 
             var publicAccessDisabled = string.Equals(publicNetworkAccess, "Disabled", StringComparison.OrdinalIgnoreCase);
@@ -746,7 +732,7 @@ namespace App.ControlPanel.Engine
             if (!publicAccessDisabled && !defaultDeny)
             {
                 return StorageCheckpointFirewallEvaluation.Pass(
-                    "Storage checkpoint firewall check passed: public storage access is enabled and the storage firewall default action is not Deny.");
+                    "Storage firewall check passed: public storage access is enabled and the storage firewall default action is not Deny.");
             }
 
             var reason = publicAccessDisabled
@@ -758,7 +744,9 @@ namespace App.ControlPanel.Engine
             }
 
             return StorageCheckpointFirewallEvaluation.Warn(
-                $"Storage account network rules will block the audit blob checkpoint because {reason}. " +
+                $"Storage account network rules will block the importer's Table storage because {reason}. " +
+                "That Table endpoint holds the importer's runtime state (import schedule, delta tokens, Teams authorisation tokens) " +
+                "as well as the audit blob checkpoint, so the Graph user import (and the Graph imports after it) would be deferred every cycle and Teams deep analytics could not be authorised. " +
                 "On a public install the importer App Service reaches the storage account's Table endpoint from the same Azure region, " +
                 "so storage IP allow-list rules do not apply to that traffic. Use 'Enabled from all networks' for a public install, " +
                 "or use VNet integration with a Microsoft.Storage service endpoint / the private-endpoint deployment for stricter networking.");
@@ -769,7 +757,7 @@ namespace App.ControlPanel.Engine
         /// enabled and has a name configured. Pure string logic so it is unit-testable without any network
         /// access.
         /// </summary>
-        public static List<ResourceDnsTarget> BuildResourceDnsTargets(SolutionInstallConfig config, string redisHostNameFromArm = null)
+        public static List<ResourceDnsTarget> BuildResourceDnsTargets(SolutionInstallConfig config)
         {
             var targets = new List<ResourceDnsTarget>();
             if (config == null) return targets;
@@ -790,12 +778,6 @@ namespace App.ControlPanel.Engine
             Add("Storage account (table)", config.StorageAccountName, DNS_SUFFIX_STORAGE_TABLE);
             Add("App Service", config.AppServiceWebAppName, DNS_SUFFIX_APP_SERVICE);
 
-            var redisTarget = BuildRedisDnsTarget(config.RedisName, config.AzureLocationName, redisHostNameFromArm);
-            if (redisTarget != null)
-            {
-                targets.Add(redisTarget);
-            }
-
             if (config.ServiceBusEnabled)
             {
                 Add("Service Bus", config.ServiceBusName, DNS_SUFFIX_SERVICE_BUS);
@@ -808,118 +790,11 @@ namespace App.ControlPanel.Engine
             return targets;
         }
 
-        /// <summary>
-        /// Build the Redis DNS target. When ARM has reported the deployed cache hostname, use that exact
-        /// hostname: it is the same value the installer writes into the runtime Redis connection string and
-        /// avoids reconstructing a name from suffix guesses. Before the cache exists, fall back to the two
-        /// possible hostnames for a current Managed Redis deployment and a reused legacy classic cache.
-        /// Returns null when no cache name is configured.
-        /// </summary>
-        public static ResourceDnsTarget BuildRedisDnsTarget(string redisName, string azureLocationName, string hostNameFromArm = null)
-        {
-            if (string.IsNullOrWhiteSpace(redisName)) return null;
-
-            var name = redisName.Trim();
-
-            if (!string.IsNullOrWhiteSpace(hostNameFromArm))
-            {
-                return new ResourceDnsTarget(
-                    "Redis cache",
-                    hostNameFromArm.Trim(),
-                    "The Redis hostname was read from the existing Azure resource.",
-                    privateNetworkResolutionFailureIsWarning: true);
-            }
-
-            var candidates = new List<string>();
-
-            // Managed Redis first: it is what a current install deploys, so it is the name that should be
-            // reported when neither resolves. Needs the region, which older configs may not have.
-            var region = NormaliseAzureRegionForDns(azureLocationName);
-            if (region != null)
-            {
-                candidates.Add($"{name}.{region}{DNS_SUFFIX_REDIS_MANAGED}");
-            }
-
-            candidates.Add(name + DNS_SUFFIX_REDIS_CLASSIC);
-
-            // The managed name is region-qualified and the region is taken from this config, not from ARM. An
-            // existing cache that lives in a different region than the config now says would fail both
-            // candidates, so name that possibility rather than leaving the admin to guess.
-            var hint = region != null
-                ? $"The Azure Managed Redis hostname is built from the configured region '{region}'; " +
-                  $"if the cache exists in a different region, correct the region on the Azure tab."
-                : "No Azure region is configured, so only the legacy classic cache hostname could be checked. " +
-                  "Select the Azure region to also check the Azure Managed Redis hostname.";
-
-            return new ResourceDnsTarget("Redis cache", candidates, hint, privateNetworkResolutionFailureIsWarning: true);
-        }
-
-        /// <summary>
-        /// If the configured Redis resource already exists, read its actual public hostname from ARM. This
-        /// mirrors <c>RedisInstallTask</c>: a pre-existing classic cache wins over Managed Redis because the
-        /// installer reuses it instead of provisioning a replacement.
-        /// </summary>
-        string TryGetRedisHostNameFromArm(ResourceGroupResource testRg)
-        {
-            if (testRg == null || string.IsNullOrWhiteSpace(Config?.RedisName))
-            {
-                return null;
-            }
-
-            var redisName = Config.RedisName.Trim();
-
-            try
-            {
-                var classic = testRg.GetAllRedis().AsEnumerable().Where(c => c.Data.Name == redisName).SingleOrDefault();
-                if (!string.IsNullOrWhiteSpace(classic?.Data?.HostName))
-                {
-                    return classic.Data.HostName;
-                }
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning($"Could not read classic Redis cache hostname from ARM for '{redisName}': {ex.Message}");
-            }
-
-            try
-            {
-                var managed = testRg.GetRedisEnterpriseClusters().AsEnumerable().Where(c => c.Data.Name == redisName).SingleOrDefault();
-                if (!string.IsNullOrWhiteSpace(managed?.Data?.HostName))
-                {
-                    return managed.Data.HostName;
-                }
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning($"Could not read Azure Managed Redis hostname from ARM for '{redisName}': {ex.Message}");
-            }
-
-            return null;
-        }
-
-        /// <summary>
-        /// Turn a configured Azure location into the region segment of an Azure Managed Redis FQDN, or null
-        /// when it cannot be one. <c>AzureLocationName</c> normally holds the short name already
-        /// (<c>westeurope</c>), but it is a free-text string on the config: it can hold the display name
-        /// ("West Europe" - same value once spaces are stripped), the installer's "no region selected"
-        /// placeholder, or nothing at all on an older config.
-        /// </summary>
-        static string NormaliseAzureRegionForDns(string azureLocationName)
-        {
-            if (string.IsNullOrWhiteSpace(azureLocationName)) return null;
-
-            var normalised = azureLocationName.Trim().Replace(" ", string.Empty).ToLowerInvariant();
-
-            // Every Azure region short name is lowercase alphanumeric (westeurope, uksouth, eastus2). Anything
-            // else - notably the "---" placeholder - is not a region and must not be baked into a hostname.
-            return System.Text.RegularExpressions.Regex.IsMatch(normalised, "^[a-z0-9]+$") ? normalised : null;
-        }
 
         /// <summary>
         /// Resolve the first host name that resolves out of <paramref name="hosts"/>. Returns
         /// (true, the host that resolved, null) on success, and (false, null, detail) when none resolve -
-        /// where detail lists every candidate tried and why each failed, e.g.
-        /// <c>'a.redis.azure.net' (No such host is known), 'a.redis.cache.windows.net' (No such host is known)</c>.
+        /// where detail lists every candidate tried and why each failed.
         /// Reporting only the last candidate's error would hide, say, a timeout on the name that actually
         /// matters behind an NXDOMAIN on the legacy fallback. Never throws.
         /// </summary>
@@ -1673,8 +1548,6 @@ namespace App.ControlPanel.Engine
     /// <summary>
     /// A configured Azure resource and the public hostname(s) that must resolve for the installer / runtime
     /// to reach it. Built by <see cref="SolutionInstallVerifier.BuildResourceDnsTargets"/>.
-    /// Most resources have exactly one candidate; Redis has two because the same configured name is either
-    /// Azure Managed Redis or a reused legacy classic cache, and the config does not record which.
     /// </summary>
     public class ResourceDnsTarget
     {

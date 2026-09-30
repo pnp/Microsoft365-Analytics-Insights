@@ -1,5 +1,3 @@
-using Common.Entities.Redis;
-using Common.Entities.Redis.Teams;
 using DataUtils;
 using Microsoft.Extensions.Logging;
 using Microsoft.Graph;
@@ -22,14 +20,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
         private readonly ILogger _logger;
 
         /// <summary>
-        /// Production constructor: delta tokens are cached in Redis.
-        /// </summary>
-        public ChannelMessagesLoader(GraphServiceClient client, CacheConnectionManager cacheConnectionManager, ILogger logger)
-            : this(client, new RedisTeamChannelDeltaTokenStore(cacheConnectionManager, logger), logger) { }
-
-        /// <summary>
-        /// Constructor taking the delta-token store as a port, so the token handling can be exercised
-        /// without Redis. See issue #377.
+        /// Production constructor. The delta-token store is a port (the runtime state table in production), so the token
+        /// handling can be exercised without Graph or storage. See issue #377.
         /// </summary>
         public ChannelMessagesLoader(GraphServiceClient client, ITeamChannelDeltaTokenStore deltaTokenStore, ILogger logger)
             : this(new GraphChannelMessagesPageReader(client), deltaTokenStore, logger) { }
@@ -44,14 +36,14 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
         /// <summary>
         /// Load message & replies for a channel. Uses cached delta code if found for message loading
         /// </summary>
-        public async Task<TeamsRedisManager.TeamChannelDeltaTokenInfo> LoadTeamMessagesAndReplies(ChannelWithReactions channel, string teamId)
+        public async Task<TeamChannelDeltaTokenInfo> LoadTeamMessagesAndReplies(ChannelWithReactions channel, string teamId)
         {
             if (string.IsNullOrEmpty(teamId)) throw new ArgumentException($"'{nameof(teamId)}' cannot be null or empty", nameof(teamId));
 
             var channelDeltaInfo = await _deltaTokenStore.GetDeltaToken(teamId, channel.Id);
 
             var rootMsgs = new List<ChatMessage>();
-            TeamsRedisManager.TeamChannelDeltaTokenInfo newDelta = null;
+            TeamChannelDeltaTokenInfo newDelta = null;
             var channelReadComplete = true;
 
             ChannelRootMessagesPageResult rootMessagesResult = null;
@@ -81,7 +73,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
 
                 if (!string.IsNullOrEmpty(rootMessagesResult.Deltalink))
                 {
-                    newDelta = new TeamsRedisManager.TeamChannelDeltaTokenInfo
+                    newDelta = new TeamChannelDeltaTokenInfo
                     {
                         Token = StringUtils.ExtractCodeFromGraphUrl(rootMessagesResult.Deltalink),
                         LastUpdated = DateTime.Now
@@ -144,7 +136,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
             public List<ChatMessage> NewMessages { get; set; }
             public List<ChatMessageReaction> NewReactions { get; set; }
 
-            public TeamsRedisManager.TeamChannelDeltaTokenInfo DeltaInfo { get; set; }
+            public TeamChannelDeltaTokenInfo DeltaInfo { get; set; }
         }
     }
 
@@ -153,7 +145,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
         Task<ChannelRootMessagesPageResult> LoadRootMessages(
             string teamId,
             string channelId,
-            TeamsRedisManager.TeamChannelDeltaTokenInfo channelDeltaInfo);
+            TeamChannelDeltaTokenInfo channelDeltaInfo);
 
         Task<ChannelRepliesPageResult> LoadReplies(string teamId, string channelId, string messageId);
     }
@@ -186,7 +178,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
         public async Task<ChannelRootMessagesPageResult> LoadRootMessages(
             string teamId,
             string channelId,
-            TeamsRedisManager.TeamChannelDeltaTokenInfo channelDeltaInfo)
+            TeamChannelDeltaTokenInfo channelDeltaInfo)
         {
             // v5+ removed QueryOption / $deltatoken support on the typed Delta request builder. To
             // keep using the SDK serialiser for ChatMessage we construct the full URL ourselves

@@ -53,8 +53,6 @@ namespace App.ControlPanel.Frames.InstallWizard
             this.txtPeSql = new System.Windows.Forms.TextBox();
             this.lblPeApp = new System.Windows.Forms.Label();
             this.txtPeApp = new System.Windows.Forms.TextBox();
-            this.lblPeRedis = new System.Windows.Forms.Label();
-            this.txtPeRedis = new System.Windows.Forms.TextBox();
             this.lblPeStorage = new System.Windows.Forms.Label();
             this.txtPeStorage = new System.Windows.Forms.TextBox();
             this.lblPeKeyVault = new System.Windows.Forms.Label();
@@ -281,7 +279,7 @@ namespace App.ControlPanel.Frames.InstallWizard
             this.lblAllowPublicAccessHelp.Name = "lblAllowPublicAccessHelp";
             this.lblAllowPublicAccessHelp.Size = new System.Drawing.Size(550, 42);
             this.lblAllowPublicAccessHelp.TabIndex = 36;
-            this.lblAllowPublicAccessHelp.Text = "Uncheck to disable public access on SQL, Storage, Key Vault, Redis, Service Bus, App Service,\r\nAutomation, and Cognitive Services. Log Analytics and Application Insights always stay public —\r\nconfigure Azure Monitor Private Link Scope (AMPLS) manually if private access is required.";
+            this.lblAllowPublicAccessHelp.Text = "Uncheck to disable public access on SQL, Storage, Key Vault, Service Bus, App Service,\r\nAutomation, and Cognitive Services. Log Analytics and Application Insights always stay public —\r\nconfigure Azure Monitor Private Link Scope (AMPLS) manually if private access is required.";
             // 
             // grpEndpointNames
             // 
@@ -290,8 +288,6 @@ namespace App.ControlPanel.Frames.InstallWizard
             this.grpEndpointNames.Controls.Add(this.txtPeSql);
             this.grpEndpointNames.Controls.Add(this.lblPeApp);
             this.grpEndpointNames.Controls.Add(this.txtPeApp);
-            this.grpEndpointNames.Controls.Add(this.lblPeRedis);
-            this.grpEndpointNames.Controls.Add(this.txtPeRedis);
             this.grpEndpointNames.Controls.Add(this.lblPeStorage);
             this.grpEndpointNames.Controls.Add(this.txtPeStorage);
             this.grpEndpointNames.Controls.Add(this.lblPeKeyVault);
@@ -306,7 +302,7 @@ namespace App.ControlPanel.Frames.InstallWizard
             this.grpEndpointNames.Controls.Add(this.txtPeStorageTable);
             this.grpEndpointNames.Location = new System.Drawing.Point(15, 210);
             this.grpEndpointNames.Name = "grpEndpointNames";
-            this.grpEndpointNames.Size = new System.Drawing.Size(570, 172);
+            this.grpEndpointNames.Size = new System.Drawing.Size(570, 145);
             this.grpEndpointNames.TabIndex = 10;
             this.grpEndpointNames.TabStop = false;
             this.grpEndpointNames.Text = "Private Endpoint Names (optional — leave blank for defaults)";
@@ -352,21 +348,9 @@ namespace App.ControlPanel.Frames.InstallWizard
             this.txtPeApp.Size = new System.Drawing.Size(185, 20);
             this.txtPeApp.TabIndex = 4;
             // 
-            // lblPeRedis
+
             // 
-            this.lblPeRedis.AutoSize = true;
-            this.lblPeRedis.Location = new System.Drawing.Point(10, 148);
-            this.lblPeRedis.Name = "lblPeRedis";
-            this.lblPeRedis.Size = new System.Drawing.Size(38, 13);
-            this.lblPeRedis.TabIndex = 17;
-            this.lblPeRedis.Text = "Redis:";
-            // 
-            // txtPeRedis
-            // 
-            this.txtPeRedis.Location = new System.Drawing.Point(85, 145);
-            this.txtPeRedis.Name = "txtPeRedis";
-            this.txtPeRedis.Size = new System.Drawing.Size(185, 20);
-            this.txtPeRedis.TabIndex = 18;
+
             // 
             // lblPeStorage
             // 
@@ -467,7 +451,7 @@ namespace App.ControlPanel.Frames.InstallWizard
             // lblHybridWorkerVm
             // 
             this.lblHybridWorkerVm.AutoSize = true;
-            this.lblHybridWorkerVm.Location = new System.Drawing.Point(15, 394);
+            this.lblHybridWorkerVm.Location = new System.Drawing.Point(15, 367);
             this.lblHybridWorkerVm.Name = "lblHybridWorkerVm";
             this.lblHybridWorkerVm.Size = new System.Drawing.Size(140, 13);
             this.lblHybridWorkerVm.TabIndex = 17;
@@ -475,14 +459,14 @@ namespace App.ControlPanel.Frames.InstallWizard
             // 
             // txtHybridWorkerVm
             // 
-            this.txtHybridWorkerVm.Location = new System.Drawing.Point(160, 391);
+            this.txtHybridWorkerVm.Location = new System.Drawing.Point(160, 364);
             this.txtHybridWorkerVm.Name = "txtHybridWorkerVm";
             this.txtHybridWorkerVm.Size = new System.Drawing.Size(340, 20);
             this.txtHybridWorkerVm.TabIndex = 18;
             // 
             // btnBrowseVm
             // 
-            this.btnBrowseVm.Location = new System.Drawing.Point(506, 389);
+            this.btnBrowseVm.Location = new System.Drawing.Point(506, 362);
             this.btnBrowseVm.Name = "btnBrowseVm";
             this.btnBrowseVm.Size = new System.Drawing.Size(75, 23);
             this.btnBrowseVm.TabIndex = 19;
@@ -493,7 +477,7 @@ namespace App.ControlPanel.Frames.InstallWizard
             // lblHybridWorkerVmHelp
             // 
             this.lblHybridWorkerVmHelp.ForeColor = System.Drawing.SystemColors.GrayText;
-            this.lblHybridWorkerVmHelp.Location = new System.Drawing.Point(157, 414);
+            this.lblHybridWorkerVmHelp.Location = new System.Drawing.Point(157, 387);
             this.lblHybridWorkerVmHelp.Name = "lblHybridWorkerVmHelp";
             this.lblHybridWorkerVmHelp.Size = new System.Drawing.Size(430, 42);
             this.lblHybridWorkerVmHelp.TabIndex = 20;
@@ -502,12 +486,11 @@ namespace App.ControlPanel.Frames.InstallWizard
             // lblSkuWarning
             // 
             this.lblSkuWarning.ForeColor = System.Drawing.Color.DarkOrange;
-            this.lblSkuWarning.Location = new System.Drawing.Point(15, 464);
+            this.lblSkuWarning.Location = new System.Drawing.Point(15, 437);
             this.lblSkuWarning.Name = "lblSkuWarning";
             this.lblSkuWarning.Size = new System.Drawing.Size(570, 90);
             this.lblSkuWarning.TabIndex = 21;
             this.lblSkuWarning.Text = "Note: Enabling private VNet will automatically upgrade certain resource SKUs to support private endpoints:\r\n" +
-                "  • Redis Cache: Basic → Standard\r\n" +
                 "  • Service Bus: Basic → Premium (private endpoints require Premium)\r\n" +
                 "  • SQL Database: Basic → S2\r\n" +
                 "These upgrades may increase Azure costs.";
@@ -555,8 +538,6 @@ namespace App.ControlPanel.Frames.InstallWizard
         private System.Windows.Forms.TextBox txtPeSql;
         private System.Windows.Forms.Label lblPeApp;
         private System.Windows.Forms.TextBox txtPeApp;
-        private System.Windows.Forms.Label lblPeRedis;
-        private System.Windows.Forms.TextBox txtPeRedis;
         private System.Windows.Forms.Label lblPeStorage;
         private System.Windows.Forms.TextBox txtPeStorage;
         private System.Windows.Forms.Label lblPeKeyVault;

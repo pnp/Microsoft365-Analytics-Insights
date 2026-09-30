@@ -19,11 +19,11 @@ namespace Web.AnalyticsWeb.Controllers
     [RoutePrefix("api/UserImportCheckpoint")]
     public class UserImportCheckpointAPIController : ApiController
     {
-        /// <summary>Redis is configured but could not be reached.</summary>
-        internal const string RedisUnavailableCode = "redisUnavailable";
+        /// <summary>Storage is configured but could not be reached.</summary>
+        internal const string StorageUnavailableCode = "storageUnavailable";
 
-        /// <summary>There is no Redis, so there is no checkpoint to clear.</summary>
-        internal const string RedisNotConfiguredCode = "redisNotConfigured";
+        /// <summary>There is no Storage connection string, so there is no checkpoint to clear.</summary>
+        internal const string StorageNotConfiguredCode = "storageNotConfigured";
 
         private readonly Func<UserImportCheckpointService> _createService;
 
@@ -48,7 +48,7 @@ namespace Web.AnalyticsWeb.Controllers
             }
             catch (UserImportCheckpointUnavailableException)
             {
-                return Failure(HttpStatusCode.ServiceUnavailable, RedisUnavailableCode);
+                return Failure(HttpStatusCode.ServiceUnavailable, StorageUnavailableCode);
             }
         }
 
@@ -59,9 +59,9 @@ namespace Web.AnalyticsWeb.Controllers
         public async Task<IHttpActionResult> Clear([FromBody] UserImportCheckpointClearRequest request)
         {
             var service = _createService();
-            if (!service.RedisConfigured)
+            if (!service.StorageConfigured)
             {
-                return Failure(HttpStatusCode.Conflict, RedisNotConfiguredCode);
+                return Failure(HttpStatusCode.Conflict, StorageNotConfiguredCode);
             }
 
             try
@@ -70,7 +70,7 @@ namespace Web.AnalyticsWeb.Controllers
             }
             catch (UserImportCheckpointUnavailableException)
             {
-                return Failure(HttpStatusCode.ServiceUnavailable, RedisUnavailableCode);
+                return Failure(HttpStatusCode.ServiceUnavailable, StorageUnavailableCode);
             }
         }
 

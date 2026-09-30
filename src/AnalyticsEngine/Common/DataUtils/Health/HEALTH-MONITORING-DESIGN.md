@@ -20,7 +20,7 @@ Application Insights pipeline (no new sink):
 
 - **`HealthCheck`** custom event — one per check per cycle:
   - `Component` — one of `DataUtils.Health.HealthComponent` (`Sql`, `ActivityApi`, `Graph`, `KeyVault`,
-    `Redis`, `ServiceBus`, `Credential`, `Dns`).
+    `ServiceBus`, `Credential`, `Dns`, `BlobCheckpoint`).
   - `Status` — one of `DataUtils.Health.HealthStatus` (`Healthy` | `Degraded` | `Unhealthy`).
   - `Detail` — optional free-text reason. **Must not contain secrets or customer data.**
   - `DaysToExpiry` — numeric, `Credential` only.
@@ -71,7 +71,7 @@ Beyond the telemetry primitive, this work now also ships the **Phase-2 surfacing
   - **Component health** — populated **today** for the two proactive checks the web app can run itself: the
     runtime **credential expiry** (certificate `NotAfter` → days-to-expiry; a client secret's expiry isn't
     visible at runtime) and the **Service Bus** Teams-calls queue depth / dead-letter count. SQL, Activity
-    API, Graph, Key Vault, Redis and DNS fill in as the runtime `HealthCheck` emitter lands.
+    API, Graph, Key Vault and DNS fill in as the runtime `HealthCheck` emitter lands.
   - **Data overview** — **scale-safe**: approximate row counts per workload (from
     `sys.dm_db_partition_stats`, so a 200k-user tenant is never hit with `COUNT(*)` on fact tables),
     last-24 h / last-7 d volume on the indexed audit + hits tables, newest audit/hit freshness, and DB size.
@@ -126,10 +126,11 @@ is to **reuse them, not duplicate them**:
   proactive secret/cert **expiry warning** (`DaysToExpiry`); Graph/Activity API permission loss (403 /
   consent revoked); tenant usage-report anonymisation turned on.
 - **D. Data store & dependency health** — SQL reachable **+ schema/migration version == expected**, SQL
-  capacity (full/read-only, DTU/vCore %, storage %), Redis reachable, Service Bus reachable +
-  dead-letter depth, Key Vault reachable, Storage reachable.
+  capacity (full/read-only, DTU/vCore %, storage %), Service Bus reachable + dead-letter depth, Key Vault
+  reachable, Storage reachable (blobs, and the Table service that holds the audit blob checkpoint and the
+  runtime state table `AnalyticsState`).
 - **E. Capacity / performance KPIs** — App Service Plan CPU/memory, SQL DTU/vCore + storage growth,
-  Redis server load, Service Bus throttling.
+  Service Bus throttling.
 - **F. Safety net** — spike in App Insights `exceptions` rate as a **general health probe**. Every
   web-job logs unhandled/handled errors through `AnalyticsLogger.TrackException` into the same App
   Insights instance, so a rising `exceptions` count is a cheap catch-all for failures that no specific
@@ -223,7 +224,6 @@ Configuration") and the runtime heartbeat call the same code, each emitting the 
 | `VerifyKeyVaultDataPlaneAccess` | Key Vault read | `HealthCheck{Component=KeyVault}` |
 | `VerifyResourceDnsResolution` | DNS/endpoint reachability | `HealthCheck{Component=Dns}` |
 | (new) | Credential days-to-expiry from KV secret/cert attributes | `HealthCheck{Component=Credential, DaysToExpiry=n}` |
-| (new) | Redis ping | `HealthCheck{Component=Redis}` |
 | (new) | Service Bus reachability + dead-letter depth | `HealthCheck{Component=ServiceBus}` |
 
 ## Proposed default "ships-by-default" alert set
@@ -274,7 +274,7 @@ configured at install).
   Delivers the originally-requested items. *(This PR lands the Phase-1 telemetry primitive.)*
 - **Phase 2:** the central health dashboard tab in the web app (exceptions overview + last-confirmed
   import cycles + component-health + data-freshness cards) **— delivered, see "Also delivered" above** — plus
-  the remaining dependency checks (Redis, Service Bus dead-letter, Key Vault), data-freshness alerts,
+  the remaining dependency checks (Service Bus dead-letter, Key Vault), data-freshness alerts,
   web-app availability test, `SystemStatus` health page.
 - **Phase 3:** Azure workbook/portal dashboard, richer overridable thresholds, extra notification
   channels (Teams/webhook/ITSM), tenant report-anonymisation re-check, cost/quota anomaly alerts.

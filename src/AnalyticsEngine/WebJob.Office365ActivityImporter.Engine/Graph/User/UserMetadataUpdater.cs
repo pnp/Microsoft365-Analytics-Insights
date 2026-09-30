@@ -1,6 +1,7 @@
 ﻿using Azure.Core;
 using Common.Entities;
 using Common.Entities.Config;
+using Common.Entities.State;
 using Common.Entities.UserScope;
 using DataUtils;
 using Microsoft.Graph;
@@ -56,15 +57,16 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             _userScopeProvider = userScopeProvider;
             _lastRunStore = lastRunStore;
             IDeltaValueProvider deltaProvider = null;
-            if (!string.IsNullOrEmpty(settings.ConnectionStrings.RedisConnectionString))
+            var deltaTokenStore = StateStore.TryOpen(settings, StatePartitions.UserImport, logger);
+            if (deltaTokenStore != null)
             {
-                deltaProvider = new RedisProcessDeltaValueProvider(settings, logger);
-                _scopeMarkerStore = new RedisUserImportScopeMarkerStore(settings);
-                logger.LogInformation($"User import - using Redis for delta token cache.");
+                deltaProvider = new PersistedDeltaValueProvider(settings, logger, deltaTokenStore);
+                _scopeMarkerStore = new PersistedUserImportScopeMarkerStore(deltaTokenStore, settings.TenantGUID);
+                logger.LogInformation($"User import - persisting the delta token in {deltaTokenStore.Description}.");
             }
             else
             {
-                logger.LogInformation($"User import - no redis found configured, using in-process cache for delta token.");
+                logger.LogInformation($"User import - no Storage connection string configured, using in-process cache for delta token.");
                 deltaProvider = new InProcessDeltaValueProvider(logger);
             }
 
@@ -114,7 +116,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         /// </summary>
         /// <param name="scopeMarkerStore">
         /// Where the filter the stored delta token was taken under is recorded, so a changed filter triggers a full
-        /// read. Null when the token does not outlive the import (see <see cref="RedisUserImportScopeMarkerStore"/>).
+        /// read. Null when the token does not outlive the import (see <see cref="PersistedUserImportScopeMarkerStore"/>).
         /// </param>
         public UserMetadataUpdater WithUserScope(IUserImportScopeProvider userScopeProvider, IImportLastRunStore lastRunStore,
             IUserImportScopeMarkerStore scopeMarkerStore = null)
@@ -312,7 +314,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 // population - not just the users returned by the current Graph
                 // delta - otherwise users whose only change in Graph is a licence
                 // assignment will never have their user_license_type_lookups
-                // rows refreshed. With a persisted delta token (e.g. Redis) this
+                // rows refreshed. With a persisted delta token (the state table) this
                 // causes licence counts to drift downward run after run until
                 // they no longer match the tenant's actual licence assignments.
                 // When SKUs are not available the per-user path inside
@@ -378,7 +380,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 // for the supplied users against the per-SKU Graph queries; any
                 // user not in the supplied list keeps their stale rows forever and
                 // any new licence assignment for them is never written. When the
-                // delta token is persisted (Redis) the delta response shrinks to
+                // delta token is persisted (the state table) the delta response shrinks to
                 // only users with metadata changes, so scoping the licence refresh
                 // to delta users causes the tenant-wide licence counts to drift
                 // downward over time.

@@ -1,7 +1,6 @@
 using Common.Entities;
 using Common.Entities.Config;
 using Common.Entities.Entities;
-using Common.Entities.Redis.Teams;
 using Common.Entities.Teams;
 using Microsoft.Extensions.Logging;
 using Microsoft.Graph;
@@ -163,9 +162,9 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
                 return null;
             }
 
-            if (this.PendingChannelDeltaTokenCommits.Count > 0 && teamTokenManager.CacheConnectionManager != null)
+            if (this.PendingChannelDeltaTokenCommits.Count > 0 && teamTokenManager.ChannelDeltaTokenStore != null)
             {
-                var deltaTokenStore = new RedisTeamChannelDeltaTokenStore(teamTokenManager.CacheConnectionManager, logger);
+                var deltaTokenStore = teamTokenManager.ChannelDeltaTokenStore;
                 await TeamChannelDeltaTokenCommitter.CommitPendingTokens(deltaTokenStore, this.Id, this.PendingChannelDeltaTokenCommits);
             }
 
@@ -251,10 +250,10 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
             foreach (var channel in fullTeam.Channels)
             {
                 var dbChannel = await db.TeamChannels.Where(c => c.GraphID == channel.Id).SingleOrDefaultAsync();
-                if (dbChannel == null && teamTokenManager.CacheConnectionManager != null)
+                if (dbChannel == null && teamTokenManager.ChannelDeltaTokenStore != null)
                 {
                     // Clear delta cache if new channel in DB. Mainly for debug reasons but also if there's no channel, we need to make sure we ignore any delta code (just in case)
-                    await teamTokenManager.CacheConnectionManager.RemoveTeamChannelDeltaToken(fullTeam.Id, channel.Id, logger);
+                    await teamTokenManager.ChannelDeltaTokenStore.RemoveDeltaToken(fullTeam.Id, channel.Id);
                 }
                 var tabsPage = await context.GraphClient.Teams[teamId].Channels[channel.Id].Tabs.GetAsync(rc =>
                 {
@@ -277,13 +276,13 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
                 var pendingDeltaTokenCommits = new List<TeamChannelDeltaTokenCommit>();
                 try
                 {
-                    fullTeam.PendingChannelDeltaTokenCommits = await fullTeam.Channels.PopulateNewMessagesAndReactions(team, teamRefreshOAuthToken, teamTokenManager.CacheConnectionManager, logger, pendingDeltaTokenCommits);
+                    fullTeam.PendingChannelDeltaTokenCommits = await fullTeam.Channels.PopulateNewMessagesAndReactions(team, teamRefreshOAuthToken, teamTokenManager.ChannelDeltaTokenStore, logger, pendingDeltaTokenCommits);
                 }
                 catch (ChannelMessagesReadException ex)
                 {
                     fullTeam.PendingChannelDeltaTokenCommits = pendingDeltaTokenCommits;
                     logger.LogError(ex, $"Couldn't get channel messages via cached token. '{ex.Message}'. Deleting token.");
-                    await teamTokenManager.CacheConnectionManager.RemoveTeamAuthToken(team.Id);
+                    await teamTokenManager.TokenStore.RemoveRefreshTokenAsync(team.Id);
                     teamRefreshOAuthToken = null;
                 }
 

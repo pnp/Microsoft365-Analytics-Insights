@@ -145,7 +145,7 @@ export const health = {
 
   // Component health panel
   'health.components.title': 'Component health',
-  'health.components.description': 'Latest health per component. The runtime credential (expiry) and Service Bus (Teams calls queue) checks run here today; SQL, Activity API, Graph, Key Vault, Redis and DNS fill in as the runtime HealthCheck emitter (a later phase) lands.',
+  'health.components.description': 'Latest health per component. The runtime credential (expiry) and Service Bus (Teams calls queue) checks run here today; SQL, Activity API, Graph, Key Vault and DNS fill in as the runtime HealthCheck emitter (a later phase) lands.',
   'health.components.loadError': "Couldn't load component health: {error}",
   'health.components.ariaLabel': 'Component health',
   'health.components.columnComponent': 'Component',

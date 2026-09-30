@@ -7,7 +7,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
     /// Walks a Team's channels, reading each one's new messages/reactions and storing the delta token
     /// that makes the next read incremental. Extracted from
     /// <c>TeamChannelExtensions.PopulateNewMessagesAndReactions</c> so the crawl can be tested with no
-    /// Graph and no Redis. See issue #377.
+    /// Graph and no storage. See issue #377.
     /// </summary>
     public class TeamsChannelCrawler
     {

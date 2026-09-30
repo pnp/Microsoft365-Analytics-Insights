@@ -1,4 +1,3 @@
-using Common.Entities.Redis.Teams;
 using System.Threading.Tasks;
 
 namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
@@ -21,6 +20,6 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
         /// The user-delegated token was rejected. The caller treats this as "the cached token is bad",
         /// deletes it and retries next cycle.
         /// </exception>
-        Task<TeamsRedisManager.TeamChannelDeltaTokenInfo> LoadMessagesAndReactions(ChannelWithReactions channel, string teamId);
+        Task<TeamChannelDeltaTokenInfo> LoadMessagesAndReactions(ChannelWithReactions channel, string teamId);
     }
 }

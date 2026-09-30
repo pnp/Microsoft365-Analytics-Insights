@@ -385,6 +385,8 @@
     <Compile Include="FakeLoaderClasses\FakeActivitySubscriptionManager.cs" />
     <Compile Include="GraphUsageReportImportTests.cs" />
     <Compile Include="SingleDateStoreTests.cs" />
+    <Compile Include="StateStoreAzuriteTests.cs" />
+    <Compile Include="StateStoreTests.cs" />
     <Compile Include="AutoThrottleHttpClientTests.cs" />
     <Compile Include="CallsImportTests.cs" />
     <Compile Include="GraphImportTests.cs" />

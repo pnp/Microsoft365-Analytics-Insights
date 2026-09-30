@@ -125,7 +125,7 @@ namespace Tests.UnitTests
 
         private static void AssertGated(IGraphImportSection section, string expectedKey, int expectedIntervalHours)
         {
-            Assert.AreEqual(expectedKey, section.CadenceKey, $"{section.Name} must keep its Redis cadence key - operators clear these by hand.");
+            Assert.AreEqual(expectedKey, section.CadenceKey, $"{section.Name} must keep its cadence key - operators clear these rows by hand.");
             Assert.AreEqual(expectedIntervalHours, section.IntervalHours, $"{section.Name} is reading the wrong interval setting.");
         }
 

@@ -39,7 +39,11 @@ namespace Common.Entities.Installer
         //          administrator per SQL server, so handing out data access by reassigning the
         //          administrator evicts the installer's service principal and breaks the next schema
         //          upgrade. See issue #117.
-        const string CONFIG_VERSION = "2.6.0";
+        //          2.6.0 -> 3.0.0 BREAKING: removed RedisName and NetworkConfig.CustomEndpointNames.Redis
+        //          because the solution no longer uses Azure Cache for Redis; runtime state moved to Azure
+        //          Table storage in the existing storage account. Older configs still load; the properties
+        //          are simply ignored.
+        const string CONFIG_VERSION = "3.0.0";
 
         public BaseSolutionInstallConfig()
         {
@@ -144,8 +148,6 @@ namespace Common.Entities.Installer
         public bool CognitiveServicesEnabled { get; set; } = true;
         public string CognitiveServiceName { get; set; } = string.Empty;
 
-        public string RedisName { get; set; } = string.Empty;
-
         public bool DownloadLatestStable { get; set; } = true;
 
         /// <summary>
@@ -170,6 +172,17 @@ namespace Common.Entities.Installer
         [Newtonsoft.Json.JsonProperty("ConfigSchemaVersion")]
         public string ConfigSchemaVersionString { get; set; } = string.Empty;
 
+        /// <summary>
+        /// The schema version this build writes (<c>CONFIG_VERSION</c>). Every config the installer saves is stamped with
+        /// it, whatever version the file was loaded from: a re-saved file has this build's shape - a 2.x config loses its
+        /// removed Redis properties, for example - so it must not keep claiming its old version.
+        /// </summary>
+        public static Version CurrentConfigSchemaVersion => new Version(CONFIG_VERSION);
+
+        /// <summary>
+        /// The schema version of this config: the version its file was saved with when it was loaded from one (so an
+        /// older file reports its own version until it is saved again), otherwise <see cref="CurrentConfigSchemaVersion"/>.
+        /// </summary>
         [Newtonsoft.Json.JsonIgnore]
         public Version ConfigSchemaVersion
         {
@@ -307,7 +320,6 @@ namespace Common.Entities.Installer
     {
         public string SqlServer { get; set; } = string.Empty;
         public string AppService { get; set; } = string.Empty;
-        public string Redis { get; set; } = string.Empty;
         public string Storage { get; set; } = string.Empty;
         public string StorageTable { get; set; } = string.Empty;
         public string KeyVault { get; set; } = string.Empty;

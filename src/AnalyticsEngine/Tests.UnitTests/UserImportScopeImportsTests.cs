@@ -468,7 +468,7 @@ namespace Tests.UnitTests
             var graph = new GraphServiceClient(new HttpClient(handler), new BearerTokenAuthenticationProvider("test-token"));
             var context = new TeamsLoadContext(graph) { UserScope = TestUserScopes.OfMembers((pilotId, pilotUpn, pilotUpn)) };
             var config = new AppConfig();
-            config.ConnectionStrings.RedisConnectionString = null;     // no channel-message read: this is about people
+            config.ConnectionStrings.StorageConnectionString = null;     // no stored Teams tokens, so no channel-message read: this is about people
 
             O365Team team;
             using (var db = new AnalyticsEntitiesContext())

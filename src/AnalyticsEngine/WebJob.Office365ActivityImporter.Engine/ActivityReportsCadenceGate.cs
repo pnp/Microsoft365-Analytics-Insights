@@ -4,13 +4,13 @@ namespace WebJob.Office365ActivityImporter.Engine
 {
     /// <summary>
     /// Pure decision logic for the once-a-day throttle on the activity/usage-report phase, factored out so it
-    /// can be unit tested without Redis (issue #376). The sibling of <see cref="ImportCadenceGate"/>, which
+    /// can be unit tested without any store (issue #376). The sibling of <see cref="ImportCadenceGate"/>, which
     /// gates the per-section Graph imports.
     ///
     /// <para>
     /// <b>Why this takes a UTC "now" while the stored timestamp may be local.</b> Both
     /// <see cref="ISingleDateStore"/> implementations stamp <c>DateTime.Now</c> - <c>InMemorySingleDateStore</c>
-    /// stores it directly, and <c>RedisSingleDateLoader</c> round-trips it through <c>"o"</c> format, which
+    /// stores it directly, and <c>KeyValueSingleDateStore</c> round-trips it through <c>"o"</c> format, which
     /// keeps the offset - so <paramref name="lastImported"/> comes back with <see cref="DateTimeKind.Local"/>.
     /// The original comparison was <c>DateTime.Now.Subtract(lastImported) &gt; minWait</c>: local minus local.
     /// That is right in the ordinary case and wrong across a daylight-saving transition, where subtracting two
@@ -22,7 +22,7 @@ namespace WebJob.Office365ActivityImporter.Engine
     /// and lets the caller supply the clock (<see cref="DataUtils.IClock"/>) instead of reading wall time.
     /// <see cref="DateTime.ToUniversalTime"/> is a no-op on a <see cref="DateTimeKind.Utc"/> value and treats
     /// <see cref="DateTimeKind.Unspecified"/> as local - which is exactly how the previous expression treated
-    /// an offset-less value parsed out of Redis.
+    /// an offset-less value parsed out of the state store.
     /// </para>
     /// </summary>
     public static class ActivityReportsCadenceGate

@@ -39,9 +39,20 @@ This is a Windows-based .NET Framework solution. To build it you will need:
   (`src/SPO/AITracker`). The major is pinned repo-wide in
   [`.nvmrc`](.nvmrc); see [Node.js version](#nodejs-version) below.
 * A SQL Server **LocalDB** instance for running the unit tests.
+* **Azurite**, the Azure Storage emulator, listening for the Table service on
+  `127.0.0.1:10002`. The sample debug configs in `deploy/Debug Config Files` set
+  `Storage` to `UseDevelopmentStorage=true`, and the importer and web app keep
+  their runtime state (import checkpoints, delta tokens, Teams authorisation
+  tokens) in that account's `AnalyticsState` table. Visual Studio ships it
+  (`Common7\IDE\Extensions\Microsoft\Azure Storage Emulator\azurite.exe`), or
+  run `npm install -g azurite`. Without Azurite running, every state read fails,
+  so the Graph user import - and the Graph imports after it - are deferred on
+  every cycle, and the `StateStoreAzuriteTests` report Inconclusive. To run
+  without it, leave `Storage` empty instead: state is then kept in memory and
+  resets whenever the process restarts.
 
-A full end-to-end run also needs Azure resources (Azure SQL, App Service, Redis,
-and others). See the
+A full end-to-end run also needs Azure resources (Azure SQL, App Service, a storage
+account, and others). See the
 [Architecture & costs](https://github.com/pnp/Microsoft365-Analytics-Insights/wiki/Architecture%20and%20Costs)
 and
 [Prerequisites](https://github.com/pnp/Microsoft365-Analytics-Insights/wiki/Prerequisites)
