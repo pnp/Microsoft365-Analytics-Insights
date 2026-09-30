@@ -710,7 +710,7 @@ namespace App.ControlPanel.Engine
             }
             catch (RequestFailedException ex) when (ex.Status == 404)
             {
-                _logger.LogInformation($"Storage account '{Config.StorageAccountName}' does not exist yet; skipping checkpoint firewall check.");
+                _logger.LogInformation($"Storage account '{Config.StorageAccountName}' does not exist yet; skipping the storage firewall check.");
             }
             catch (Exception ex)
             {
@@ -724,7 +724,7 @@ namespace App.ControlPanel.Engine
             if (privateEndpointInstall)
             {
                 return StorageCheckpointFirewallEvaluation.Pass(
-                    "Storage checkpoint firewall check skipped: private-endpoint/VNet deployments are expected to restrict public storage access.");
+                    "Storage firewall check skipped: private-endpoint/VNet deployments are expected to restrict public storage access.");
             }
 
             var publicAccessDisabled = string.Equals(publicNetworkAccess, "Disabled", StringComparison.OrdinalIgnoreCase);
@@ -733,7 +733,7 @@ namespace App.ControlPanel.Engine
             if (!publicAccessDisabled && !defaultDeny)
             {
                 return StorageCheckpointFirewallEvaluation.Pass(
-                    "Storage checkpoint firewall check passed: public storage access is enabled and the storage firewall default action is not Deny.");
+                    "Storage firewall check passed: public storage access is enabled and the storage firewall default action is not Deny.");
             }
 
             var reason = publicAccessDisabled
@@ -745,7 +745,9 @@ namespace App.ControlPanel.Engine
             }
 
             return StorageCheckpointFirewallEvaluation.Warn(
-                $"Storage account network rules will block the audit blob checkpoint because {reason}. " +
+                $"Storage account network rules will block the importer's Table storage because {reason}. " +
+                "That Table endpoint holds the importer's runtime state (import schedule, delta tokens, Teams authorisation tokens) " +
+                "as well as the audit blob checkpoint, so the Graph user import (and the Graph imports after it) would be deferred every cycle and Teams deep analytics could not be authorised. " +
                 "On a public install the importer App Service reaches the storage account's Table endpoint from the same Azure region, " +
                 "so storage IP allow-list rules do not apply to that traffic. Use 'Enabled from all networks' for a public install, " +
                 "or use VNet integration with a Microsoft.Storage service endpoint / the private-endpoint deployment for stricter networking.");

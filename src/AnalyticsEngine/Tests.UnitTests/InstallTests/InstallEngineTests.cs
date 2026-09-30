@@ -615,6 +615,68 @@ namespace Tests.UnitTests
             Assert.AreEqual("myvault.vault.azure.net", targets.Single().Fqdn);
         }
 
+        [TestMethod]
+        public void ResourceDnsTargetRejectsEmptyCandidateList()
+        {
+            Assert.ThrowsException<ArgumentException>(() => new ResourceDnsTarget("Key Vault", new List<string>()));
+            Assert.ThrowsException<ArgumentException>(() => new ResourceDnsTarget("Key Vault", (List<string>)null));
+        }
+
+        [TestMethod]
+        public void StorageCheckpointFirewall_PublicInstallWithDefaultDenyWarns()
+        {
+            var result = SolutionInstallVerifier.EvaluateStorageCheckpointFirewall(
+                privateEndpointInstall: false,
+                publicNetworkAccess: "Enabled",
+                defaultAction: "Deny");
+
+            Assert.IsTrue(result.Warns);
+            StringAssert.Contains(result.Message, "selected virtual networks and IP addresses");
+            StringAssert.Contains(result.Message, "same Azure region");
+            StringAssert.Contains(result.Message, "IP allow-list rules do not apply");
+            StringAssert.Contains(result.Message, "runtime state",
+                "The same Table endpoint now holds the runtime state, so the warning must not read as 'only the checkpoint degrades'.");
+            StringAssert.Contains(result.Message, "user import");
+        }
+
+        [TestMethod]
+        public void StorageCheckpointFirewall_PublicInstallWithPublicAccessDisabledWarns()
+        {
+            var result = SolutionInstallVerifier.EvaluateStorageCheckpointFirewall(
+                privateEndpointInstall: false,
+                publicNetworkAccess: "Disabled",
+                defaultAction: "Allow");
+
+            Assert.IsTrue(result.Warns);
+            StringAssert.Contains(result.Message, "public network access is Disabled");
+            StringAssert.Contains(result.Message, "Enabled from all networks");
+            StringAssert.Contains(result.Message, "runtime state");
+        }
+
+        [TestMethod]
+        public void StorageCheckpointFirewall_PublicInstallWithAllowAndEnabledPasses()
+        {
+            var result = SolutionInstallVerifier.EvaluateStorageCheckpointFirewall(
+                privateEndpointInstall: false,
+                publicNetworkAccess: "Enabled",
+                defaultAction: "Allow");
+
+            Assert.IsFalse(result.Warns);
+            StringAssert.Contains(result.Message, "check passed");
+        }
+
+        [TestMethod]
+        public void StorageCheckpointFirewall_PrivateEndpointInstallDoesNotWarnAboutDeny()
+        {
+            var result = SolutionInstallVerifier.EvaluateStorageCheckpointFirewall(
+                privateEndpointInstall: true,
+                publicNetworkAccess: "Disabled",
+                defaultAction: "Deny");
+
+            Assert.IsFalse(result.Warns);
+            StringAssert.Contains(result.Message, "private-endpoint");
+        }
+
 
         [TestMethod]
         public void TransportFailureDetectorDetectsDnsAggregateException()

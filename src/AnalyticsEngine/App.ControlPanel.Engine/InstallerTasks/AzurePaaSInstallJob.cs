@@ -325,10 +325,12 @@ namespace App.ControlPanel.Engine.InstallerTasks
                     "blob", subnetId, logger, tagDic);
                 if (deployDns) AddPrivateDnsZoneTask("privatelink.blob.core.windows.net", vnetId, storagePeName, logger, tagDic);
 
-                // Storage - table sub-resource. The audit-import blob checkpoint (ProcessedBlobStoreFactory /
-                // AzureTableProcessedBlobStore) uses Azure Table storage; without its own private endpoint the
-                // table endpoint is unreachable on private deployments (403 AuthorizationFailure) and the
-                // importer silently falls back to a non-durable in-memory checkpoint.
+                // Storage - table sub-resource. The runtime state table (Common.Entities.State: import schedule, delta
+                // tokens, Teams authorisation tokens) and the audit-import blob checkpoint (ProcessedBlobStoreFactory /
+                // AzureTableProcessedBlobStore) both use Azure Table storage; without its own private endpoint the table
+                // endpoint is unreachable on private deployments (403 AuthorizationFailure), so the user import is deferred
+                // every cycle and the checkpoint falls back to a non-durable in-memory store. Installers before build 1716
+                // did not create this endpoint, so re-running the installer is what adds it to an older private deployment.
                 var storageTablePeName = peNames.GetNameOrDefault(peNames.StorageTable, $"pe-{config.StorageAccountName}-table");
                 AddPrivateEndpointTask(storageTablePeName, $"/subscriptions/{subId}/resourceGroups/{rgName}/providers/Microsoft.Storage/storageAccounts/{config.StorageAccountName}",
                     "table", subnetId, logger, tagDic);
