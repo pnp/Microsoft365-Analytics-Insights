@@ -123,7 +123,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             {
                 _logger.LogInformation($"Skipping {sectionName}: ran recently ({lastRun:u} UTC). " +
                     $"Next run after {lastRun?.AddHours(intervalHours):u} UTC (interval {intervalHours}h). " +
-                    $"Set ForceGraphMetadataImport=true or clear the '{key}' cache key to override.");
+                    $"Set ForceGraphMetadataImport=true, or delete the '{key}' row (partition '{Common.Entities.State.StatePartitions.ImportSchedule}') " +
+                    $"from the '{Common.Entities.State.StateStore.TableName}' table, to override.");
                 return;
             }
 

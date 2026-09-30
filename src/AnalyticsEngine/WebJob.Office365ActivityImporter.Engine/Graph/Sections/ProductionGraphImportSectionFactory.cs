@@ -397,7 +397,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Sections
                     {
                         _logger.LogInformation($"Skipping {report.Description}: ran recently ({lastRun:u} UTC). " +
                             $"Next run after {lastRun?.AddHours(_intervalHours):u} UTC (interval {_intervalHours}h). " +
-                            $"Set ForceGraphMetadataImport=true or clear the '{report.CadenceKey}' cache key to override.");
+                            $"Set ForceGraphMetadataImport=true, or delete the '{report.CadenceKey}' row (partition '{Common.Entities.State.StatePartitions.ImportSchedule}') " +
+                            $"from the '{Common.Entities.State.StateStore.TableName}' table, to override.");
                         continue;
                     }
 
