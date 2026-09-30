@@ -1,4 +1,3 @@
-using Common.Entities.Redis.Teams;
 using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
@@ -11,14 +10,14 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
     /// </summary>
     public class TeamChannelDeltaTokenCommit
     {
-        public TeamChannelDeltaTokenCommit(string channelId, TeamsRedisManager.TeamChannelDeltaTokenInfo deltaTokenInfo)
+        public TeamChannelDeltaTokenCommit(string channelId, TeamChannelDeltaTokenInfo deltaTokenInfo)
         {
             ChannelId = channelId ?? throw new ArgumentNullException(nameof(channelId));
             DeltaTokenInfo = deltaTokenInfo ?? throw new ArgumentNullException(nameof(deltaTokenInfo));
         }
 
         public string ChannelId { get; }
-        public TeamsRedisManager.TeamChannelDeltaTokenInfo DeltaTokenInfo { get; }
+        public TeamChannelDeltaTokenInfo DeltaTokenInfo { get; }
     }
 
     public static class TeamChannelDeltaTokenCommitter

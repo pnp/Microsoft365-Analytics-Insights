@@ -278,7 +278,6 @@ namespace Web.AnalyticsWeb.Models.Health
             try
             {
                 section.SqlServer = SafeSqlServer(config);
-                section.RedisHost = string.IsNullOrWhiteSpace(config.ConnectionStrings?.RedisConnectionString) ? "(not configured)" : "(configured)";
                 section.ServiceBusEndpoint = string.IsNullOrWhiteSpace(config.ConnectionStrings?.ServiceBusConnectionString) ? "(not configured)" : "(configured)";
                 section.CognitiveEndpoint = string.IsNullOrWhiteSpace(config.CognitiveEndpoint) ? "(not configured)" : config.CognitiveEndpoint;
                 section.WebAppUrl = config.WebAppURL;

@@ -50,9 +50,14 @@ env:
   TenantDomain: ${{ secrets.APP_TENANTDOMAIN }}
   CognitiveEndpoint: ${{ secrets.APP_COGNITIVEENDPOINT }}
   CognitiveKey: ${{ secrets.APP_COGNITIVEKEY}}
-  redis: "localhost:6379,abortConnect=False"
   ServiceBus: ${{ secrets.CONNECTIONSTRINGS_SERVICEBUS }}
-  Storage: ${{ secrets.CONNECTIONSTRINGS_STORAGE }}
+  # The tests' Storage account is the Azurite emulator started below, not a real storage account. Runtime state
+  # (Common.Entities.State: delta tokens, Teams tokens, import-schedule dates, the cognitive cache) lives in that
+  # account's tables, so every run starts from an empty store - as it did with the per-run Redis container this
+  # replaced - and no run can read, or leave behind, state from another run or from a concurrent pull request.
+  Storage: "UseDevelopmentStorage=true"
+  # Fail (rather than skip as Inconclusive) the Azure Table state-store integration tests if Azurite is not running.
+  REQUIRE_AZURITE: "true"
 
 jobs:
   setup_tests:
@@ -166,16 +171,26 @@ jobs:
         uses: devops-actions/variable-substitution@452ffbbfb1c26fd5d9aaf24faffb59c5084257e9 # v2.0.0
         with:
           files: '${{ env.Solution_Directory }}\App.Release.config'
-      - name: Start Redis
+      - name: Start Azurite (Table service)
+        # The runtime state store (Common.Entities.State.AzureTableKeyValueStore) is integration-tested against a
+        # real Table service. Azurite is the local emulator; StateStoreAzuriteTests talk to it through
+        # "UseDevelopmentStorage=true", and REQUIRE_AZURITE turns "emulator not reachable" into a failure here
+        # (locally, without Azurite, those tests report Inconclusive instead). It is also the Storage account every
+        # other test sees (see the Storage env var above).
         if: needs.setup_tests.outputs.run_dotnet == 'true'
         shell: pwsh
         run: |
-          $ProgressPreference = 'SilentlyContinue'
-          Invoke-WebRequest -Uri "https://github.com/tporadowski/redis/releases/download/v5.0.14.1/Redis-x64-5.0.14.1.zip" -OutFile "$env:RUNNER_TEMP\redis.zip"
-          Expand-Archive "$env:RUNNER_TEMP\redis.zip" -DestinationPath "$env:RUNNER_TEMP\redis"
-          Start-Process -FilePath "$env:RUNNER_TEMP\redis\redis-server.exe" -WindowStyle Hidden
-          Start-Sleep -Seconds 3
-          & "$env:RUNNER_TEMP\redis\redis-cli.exe" ping
+          npm install --global azurite@3 --no-audit --no-fund
+          $data = Join-Path $env:RUNNER_TEMP 'azurite'
+          New-Item -ItemType Directory -Force -Path $data | Out-Null
+          $azurite = (Get-Command azurite-table.cmd -ErrorAction Stop).Source
+          Start-Process -FilePath $azurite -ArgumentList @('--silent', '--location', $data, '--tableHost', '127.0.0.1', '--tablePort', '10002', '--skipApiVersionCheck') -WindowStyle Hidden
+          $deadline = (Get-Date).AddSeconds(60)
+          while ($true) {
+            try { $probe = [System.Net.Sockets.TcpClient]::new(); $probe.Connect('127.0.0.1', 10002); $probe.Dispose(); break }
+            catch { if ((Get-Date) -gt $deadline) { throw "Azurite did not start listening on 127.0.0.1:10002." }; Start-Sleep -Seconds 2 }
+          }
+          "Azurite Table service is listening on 127.0.0.1:10002."
       - name: Restore the application
         if: needs.setup_tests.outputs.run_dotnet == 'true'
         run: msbuild ${{ env.Solution_Directory }} -t:Restore `

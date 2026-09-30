@@ -407,8 +407,10 @@ export default function ServiceConfigurationPage() {
                 <TableCell className={styles.value}>{status.webAppConfigSQL}</TableCell>
               </TableRow>
               <TableRow>
-                <TableCell className={styles.label}>{t('admin.serviceConfiguration.azureResources.redisSslEndpoint')}</TableCell>
-                <TableCell className={styles.value}>{serverPlaceholderText(t, status.webAppConfigRedis)}</TableCell>
+                <TableCell className={styles.label}>{t('admin.serviceConfiguration.azureResources.storageAccount')}</TableCell>
+                <TableCell className={styles.value}>
+                  {status.webAppConfigStorage ?? t('admin.serviceConfiguration.azureResources.storageNotConfigured')}
+                </TableCell>
               </TableRow>
               <TableRow>
                 <TableCell className={styles.label}>{t('admin.serviceConfiguration.azureResources.cognitiveServicesEndpoint')}</TableCell>

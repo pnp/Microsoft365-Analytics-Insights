@@ -20,9 +20,6 @@
         /// <summary>Key Vault data-plane read.</summary>
         KeyVault,
 
-        /// <summary>Azure Cache for Redis reachability.</summary>
-        Redis,
-
         /// <summary>Service Bus (Teams call records) reachability / dead-letter depth.</summary>
         ServiceBus,
 

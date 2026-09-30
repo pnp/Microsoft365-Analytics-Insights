@@ -5,13 +5,17 @@
  * reads in the reader's language. The checkpoint's value never leaves the server - only whether one is stored.
  */
 export interface UserImportCheckpointStatus {
-  /** Without Redis the checkpoint is never saved, so every user import reads every user. */
-  redisConfigured: boolean;
+  /** Without a Storage connection string the checkpoint is never saved, so every user import reads every user. */
+  storageConfigured: boolean;
   /** The `GraphUsersMetadata` import switch; null when the import settings couldn't be read. */
   userImportEnabled: boolean | null;
   /** Whether a `/users/delta` token is stored. */
   checkpointStored: boolean;
-  /** The Redis key that holds the checkpoint. Data, so it is shown verbatim, never translated. */
+  /** The Azure Table that holds the checkpoint, in the solution's storage account. Data: shown verbatim, never translated. */
+  checkpointTable: string;
+  /** The partition of that table that holds the checkpoint. Data: shown verbatim, never translated. */
+  checkpointPartition: string;
+  /** The row key that holds the checkpoint. Data, so it is shown verbatim, never translated. */
   checkpointKey: string;
   /** ISO 8601 UTC time the user import last completed, or null when none is recorded. */
   lastCompletedUtc: string | null;

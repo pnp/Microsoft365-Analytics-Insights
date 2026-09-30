@@ -10,9 +10,9 @@ namespace Web.AnalyticsWeb.Models.UserImport
     /// </summary>
     public sealed class UserImportCheckpointStatus
     {
-        /// <summary>Whether a Redis connection string is configured. Without Redis the checkpoint is never saved.</summary>
-        [JsonProperty("redisConfigured")]
-        public bool RedisConfigured { get; set; }
+        /// <summary>Whether a Storage connection string is configured. Without it the checkpoint is never saved.</summary>
+        [JsonProperty("storageConfigured")]
+        public bool StorageConfigured { get; set; }
 
         /// <summary>Whether the Graph user import (<c>GraphUsersMetadata</c>) is switched on; null when the import settings can't be read.</summary>
         [JsonProperty("userImportEnabled")]
@@ -22,7 +22,15 @@ namespace Web.AnalyticsWeb.Models.UserImport
         [JsonProperty("checkpointStored")]
         public bool CheckpointStored { get; set; }
 
-        /// <summary>The Redis key that holds the checkpoint, so an operator can match it to the documentation.</summary>
+        /// <summary>The Azure Table that holds the checkpoint, in the solution's storage account. Data: shown verbatim.</summary>
+        [JsonProperty("checkpointTable")]
+        public string CheckpointTable { get; set; }
+
+        /// <summary>The partition of <see cref="CheckpointTable"/> that holds the checkpoint. Data: shown verbatim.</summary>
+        [JsonProperty("checkpointPartition")]
+        public string CheckpointPartition { get; set; }
+
+        /// <summary>The row key that holds the checkpoint, so an operator can match it to the documentation.</summary>
         [JsonProperty("checkpointKey")]
         public string CheckpointKey { get; set; }
 

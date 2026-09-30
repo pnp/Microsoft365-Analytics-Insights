@@ -124,14 +124,19 @@ function StateCard({ status }: { status: UserImportCheckpointStatus }) {
         <TableBody>
           <StateRow label={t('admin.userImport.state.importLabel')}>{importText}</StateRow>
           <StateRow label={t('admin.userImport.state.storageLabel')}>
-            {status.redisConfigured ? t('admin.userImport.state.storageRedis') : t('admin.userImport.state.storageNone')}
+            {status.storageConfigured
+              ? t('admin.userImport.state.storageTable', { table: status.checkpointTable })
+              : t('admin.userImport.state.storageNone')}
           </StateRow>
-          {status.redisConfigured && (
+          {status.storageConfigured && (
             <>
               <StateRow label={t('admin.userImport.state.checkpointLabel')}>
                 {status.checkpointStored
                   ? t('admin.userImport.state.checkpointPresent')
                   : t('admin.userImport.state.checkpointAbsent')}
+              </StateRow>
+              <StateRow label={t('admin.userImport.state.partitionLabel')}>
+                <code className={styles.key}>{status.checkpointPartition}</code>
               </StateRow>
               <StateRow label={t('admin.userImport.state.keyLabel')}>
                 <code className={styles.key}>{status.checkpointKey}</code>
@@ -165,7 +170,7 @@ interface ClearOutcome {
  *
  * The Graph user import saves a checkpoint - a `/users/delta` token - so each run reads only what changed. This
  * page shows whether one is stored and clears it, so the next run reads every user again: the in-product version
- * of deleting the Redis key by hand. Clearing is a POST through `apiFetch`, which the server's same-origin check
+ * of deleting the stored token by hand. Clearing is a POST through `apiFetch`, which the server's same-origin check
  * requires, and a confirmation comes first because a full read of a large tenant is expensive.
  */
 export default function UserImportPage() {
@@ -277,9 +282,9 @@ export default function UserImportPage() {
                 {t('admin.userImport.clear.cost')}
               </Text>
 
-              {!status.redisConfigured ? (
+              {!status.storageConfigured ? (
                 <MessageBar intent="info">
-                  <MessageBarBody>{t('admin.userImport.clear.noRedis')}</MessageBarBody>
+                  <MessageBarBody>{t('admin.userImport.clear.noStorage')}</MessageBarBody>
                 </MessageBar>
               ) : (
                 <>

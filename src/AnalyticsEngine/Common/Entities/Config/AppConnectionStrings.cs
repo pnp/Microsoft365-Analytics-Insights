@@ -54,10 +54,6 @@ namespace Common.Entities.Config
             }
             this.DatabaseConnectionString = dbConnectionString.ConnectionString;
 
-            var redisConnectionString = ConfigurationManager.ConnectionStrings["Redis"];
-            // Redis can now be null
-            this.RedisConnectionString = redisConnectionString?.ConnectionString;
-
             var sb = ConfigurationManager.ConnectionStrings["ServiceBus"];
             // Service Bus is optional: only the Teams calls import needs it.
             this.ServiceBusConnectionString = sb?.ConnectionString;
@@ -78,11 +74,13 @@ namespace Common.Entities.Config
         // Compat with Copilot Feedback Bot
         public string SQL => DatabaseConnectionString;
 
-        public string RedisConnectionString { get; set; } = null;
-
         public string ServiceBusConnectionString { get; set; } = null;
 
 
+        /// <summary>
+        /// The solution's storage account. Besides blobs, its Table service holds the runtime state (import checkpoints,
+        /// delta tokens, schedule stamps and Teams authorisation tokens) - see <see cref="State.StateStore"/>.
+        /// </summary>
         public string StorageConnectionString { get; set; } = null;
     }
 }

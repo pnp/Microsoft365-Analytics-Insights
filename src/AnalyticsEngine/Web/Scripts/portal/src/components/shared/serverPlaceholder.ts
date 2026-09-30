@@ -38,7 +38,6 @@ export const SERVER_PLACEHOLDER_KEYS: readonly TranslationKey[] = [
   'common.serverPlaceholder.notStated',
   'common.serverPlaceholder.none',
   'common.serverPlaceholder.disabled',
-  'common.serverPlaceholder.redisNotConfigured',
 ];
 
 const KEY_BY_SERVER_TEXT: ReadonlyMap<string, TranslationKey> = new Map(

@@ -4,7 +4,7 @@ using AnalyticsWeb::Web.AnalyticsWeb;
 using AnalyticsWeb::Web.AnalyticsWeb.Controllers;
 using AnalyticsWeb::Web.AnalyticsWeb.Models.UserImport;
 using Common.Entities;
-using Common.Entities.Redis;
+using Common.Entities.State;
 using Microsoft.Extensions.Logging;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using Newtonsoft.Json;
@@ -30,7 +30,7 @@ namespace Tests.UnitTests
     /// <summary>
     /// The web portal's Administration &gt; User import page (issue #664): it reports whether the Graph user import
     /// has a stored checkpoint, and clears it so the next run reads every user again - the in-product version of
-    /// deleting the Redis key by hand.
+    /// deleting the stored token by hand.
     ///
     /// Clearing is the portal's first action that changes state, so these tests pin its safety as well as its
     /// behaviour: it only runs for a signed-in admin, only from the portal's own scripts (a signed-in admin's
@@ -68,13 +68,13 @@ namespace Tests.UnitTests
         #region What the page is told
 
         [TestMethod]
-        public async Task Status_WithoutRedis_SaysSo_AndNeverTouchesAStore()
+        public async Task Status_WithoutStorage_SaysSo_AndNeverTouchesAStore()
         {
             var service = NewService(store: null, importSettings: new ImportTaskSettings { GraphUsersMetadata = true }, intervalHours: 24);
 
             var status = await service.GetStatusAsync();
 
-            Assert.IsFalse(status.RedisConfigured);
+            Assert.IsFalse(status.StorageConfigured);
             Assert.IsFalse(status.CheckpointStored);
             Assert.IsNull(status.LastCompletedUtc);
             Assert.AreEqual(CheckpointKey, status.CheckpointKey);
@@ -103,7 +103,7 @@ namespace Tests.UnitTests
         {
             var status = await NewService(new InMemoryCheckpointStore(), importSettings: null).GetStatusAsync();
 
-            Assert.IsTrue(status.RedisConfigured);
+            Assert.IsTrue(status.StorageConfigured);
             Assert.IsFalse(status.CheckpointStored);
             Assert.IsNull(status.LastCompletedUtc);
             Assert.IsNull(status.UserImportEnabled, "Unreadable import settings are unknown, not 'off'.");
@@ -115,6 +115,43 @@ namespace Tests.UnitTests
         public void LastCompleted_ThatCannotBeRead_IsNotRecorded(string raw)
         {
             Assert.IsNull(UserImportCheckpointService.ParseLastCompleted(raw));
+        }
+
+        [TestMethod]
+        public async Task Status_NamesTheTableAndPartitionThatHoldTheCheckpoint()
+        {
+            var status = await NewService(new InMemoryCheckpointStore()).GetStatusAsync();
+
+            Assert.AreEqual(StateStore.TableName, status.CheckpointTable);
+            Assert.AreEqual(StatePartitions.UserImport, status.CheckpointPartition);
+            Assert.AreEqual("AnalyticsState", status.CheckpointTable, "Documented in the wiki - operators look for it by name.");
+            Assert.AreEqual("UserImport", status.CheckpointPartition, "Documented in the wiki - operators look for it by name.");
+        }
+
+        [TestMethod]
+        public async Task StateTableStore_ReadsAndClearsEachKeyInThePartitionTheImporterWritesItTo()
+        {
+            // The importer keeps the delta token in the UserImport partition and its cadence stamp in ImportSchedule
+            // (Program.cs / UserMetadataUpdater). Reading either from the wrong partition would report "nothing stored"
+            // and clear nothing.
+            var checkpoints = new InMemoryKeyValueStore();
+            var schedule = new InMemoryKeyValueStore();
+            await checkpoints.SetStringAsync(CheckpointKey, TokenValue);
+            await schedule.SetStringAsync(UserImportCheckpointKeys.LastCompleted, StampValue);
+
+            var service = new UserImportCheckpointService(TenantId,
+                () => new StateTableUserImportCheckpointStore(checkpoints, schedule),
+                new ImportTaskSettings { GraphUsersMetadata = true }, 24, null);
+
+            var status = await service.GetStatusAsync();
+            Assert.IsTrue(status.CheckpointStored);
+            Assert.AreEqual(new DateTime(2026, 9, 1, 10, 0, 0, DateTimeKind.Utc), status.LastCompletedUtc);
+
+            var cleared = await service.ClearAsync(runOnNextCycle: true);
+            Assert.IsTrue(cleared.CheckpointCleared);
+            Assert.IsTrue(cleared.LastCompletedCleared);
+            Assert.AreEqual(0, checkpoints.Count, "The delta token row is gone.");
+            Assert.AreEqual(0, schedule.Count, "The last-completed row is gone.");
         }
 
         #endregion
@@ -165,13 +202,13 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
-        public async Task Clear_WithoutRedis_IsRefused()
+        public async Task Clear_WithoutStorage_IsRefused()
         {
             await Assert.ThrowsExceptionAsync<InvalidOperationException>(() => NewService(store: null).ClearAsync(runOnNextCycle: true));
         }
 
         [TestMethod]
-        public async Task AnUnreachableRedis_IsReportedAsUnavailable_ForBothReadingAndClearing()
+        public async Task UnreachableStorage_IsReportedAsUnavailable_ForBothReadingAndClearing()
         {
             var broken = new InMemoryCheckpointStore { Throw = true };
             await Assert.ThrowsExceptionAsync<UserImportCheckpointUnavailableException>(() => NewService(broken).GetStatusAsync());
@@ -179,7 +216,7 @@ namespace Tests.UnitTests
 
             // Failing to connect at all surfaces from the store factory rather than from a call.
             var unreachable = new UserImportCheckpointService(TenantId,
-                () => throw new InvalidOperationException("synthetic Redis connection failure"), null, 24, null);
+                () => throw new InvalidOperationException("synthetic storage connection failure"), null, 24, null);
             await Assert.ThrowsExceptionAsync<UserImportCheckpointUnavailableException>(() => unreachable.GetStatusAsync());
         }
 
@@ -198,9 +235,11 @@ namespace Tests.UnitTests
 
                 Assert.AreEqual(HttpStatusCode.OK, response.StatusCode, body);
                 var json = JObject.Parse(body);
-                Assert.AreEqual(true, (bool)json["redisConfigured"]);
+                Assert.AreEqual(true, (bool)json["storageConfigured"]);
                 Assert.AreEqual(true, (bool)json["checkpointStored"]);
                 Assert.AreEqual(CheckpointKey, (string)json["checkpointKey"]);
+                Assert.AreEqual("AnalyticsState", (string)json["checkpointTable"]);
+                Assert.AreEqual("UserImport", (string)json["checkpointPartition"]);
                 StringAssert.Contains(body, "\"lastCompletedUtc\":\"2026-09-01T10:00:00Z\"", "The SPA parses an ISO UTC timestamp.");
                 Assert.IsFalse(body.Contains(TokenValue));
             }
@@ -313,19 +352,19 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
-        public async Task Clear_WithoutRedis_AnswersWithAStableCode()
+        public async Task Clear_WithoutStorage_AnswersWithAStableCode()
         {
             using (var host = new CheckpointHost(NewService(store: null)))
             using (var request = PortalClear(runOnNextCycle: true))
             using (var response = await host.Client.SendAsync(request))
             {
                 Assert.AreEqual(HttpStatusCode.Conflict, response.StatusCode);
-                Assert.AreEqual("redisNotConfigured", (string)JObject.Parse(await response.Content.ReadAsStringAsync())["code"]);
+                Assert.AreEqual("storageNotConfigured", (string)JObject.Parse(await response.Content.ReadAsStringAsync())["code"]);
             }
         }
 
         [TestMethod]
-        public async Task AnUnreachableRedis_AnswersWithAStableCode_AndNoServerText()
+        public async Task UnreachableStorage_AnswersWithAStableCode_AndNoServerText()
         {
             using (var host = new CheckpointHost(NewService(new InMemoryCheckpointStore { Throw = true })))
             {
@@ -333,7 +372,7 @@ namespace Tests.UnitTests
                 {
                     Assert.AreEqual(HttpStatusCode.ServiceUnavailable, response.StatusCode);
                     var json = JObject.Parse(await response.Content.ReadAsStringAsync());
-                    Assert.AreEqual("redisUnavailable", (string)json["code"]);
+                    Assert.AreEqual("storageUnavailable", (string)json["code"]);
                     Assert.AreEqual(1, json.Properties().Count(), "The page writes the sentence; the server sends only the code.");
                 }
 
@@ -341,7 +380,7 @@ namespace Tests.UnitTests
                 using (var response = await host.Client.SendAsync(request))
                 {
                     Assert.AreEqual(HttpStatusCode.ServiceUnavailable, response.StatusCode);
-                    Assert.AreEqual("redisUnavailable", (string)JObject.Parse(await response.Content.ReadAsStringAsync())["code"]);
+                    Assert.AreEqual("storageUnavailable", (string)JObject.Parse(await response.Content.ReadAsStringAsync())["code"]);
                 }
             }
         }
@@ -458,7 +497,7 @@ namespace Tests.UnitTests
 
             private void ThrowIfBroken()
             {
-                if (Throw) throw new InvalidOperationException("synthetic Redis outage");
+                if (Throw) throw new InvalidOperationException("synthetic storage outage");
             }
         }
 

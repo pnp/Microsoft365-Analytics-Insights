@@ -1,4 +1,4 @@
-using Common.Entities.Redis;
+using Common.Entities.State;
 using Microsoft.Extensions.Logging;
 using Newtonsoft.Json;
 using System;
@@ -42,8 +42,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
     }
 
     /// <summary>
-    /// In-memory skip list, used when Redis isn't configured. The cache still works for the lifetime of
-    /// the WebJob process (which runs many import cycles), and resets on restart - so a restart is itself
+    /// In-memory skip list, used when no Storage connection string is configured. The cache still works for the lifetime
+    /// of the WebJob process (which runs many import cycles), and resets on restart - so a restart is itself
     /// a way to force an immediate re-check of every mailbox.
     /// </summary>
     public class InMemorySentEmailMailboxSkipList : ISentEmailMailboxSkipList
@@ -78,20 +78,25 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
     }
 
     /// <summary>
-    /// Redis-backed skip list, so the negative cache survives WebJob restarts and is shared between the
-    /// importer instances. Reads and writes are <b>fail-open</b>: a Redis outage yields an empty skip list
-    /// (so every mailbox is checked, exactly like the legacy behaviour) rather than failing the import.
+    /// Durable skip list in the runtime state store (the <see cref="StatePartitions.SentEmails"/> partition of the
+    /// state table), so the negative cache survives WebJob restarts. Reads and writes are <b>fail-open</b>: a storage
+    /// outage yields an empty skip list (so every mailbox is checked, exactly like the legacy behaviour) rather than
+    /// failing the import.
     /// </summary>
-    public class RedisSentEmailMailboxSkipList : ISentEmailMailboxSkipList
+    /// <remarks>
+    /// The whole set is one row. On a large tenant it can outgrow a single text column; the store then keeps it
+    /// compressed, still in one row, so a read never sees half of an update.
+    /// </remarks>
+    public class PersistedSentEmailMailboxSkipList : ISentEmailMailboxSkipList
     {
         internal const string CacheKey = "SentEmailNoMailboxUsers";
 
-        private readonly CacheConnectionManager _cacheConnectionManager;
+        private readonly IKeyValueStore _store;
         private readonly ILogger _logger;
 
-        public RedisSentEmailMailboxSkipList(string redisConnectionString, ILogger logger, string tenantId = null, string clientId = null, string clientSecret = null)
+        public PersistedSentEmailMailboxSkipList(IKeyValueStore store, ILogger logger)
         {
-            _cacheConnectionManager = CacheConnectionManager.GetConnectionManager(redisConnectionString, tenantId: tenantId, clientId: clientId, clientSecret: clientSecret);
+            _store = store ?? throw new ArgumentNullException(nameof(store));
             _logger = logger;
         }
 
@@ -99,7 +104,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
         {
             try
             {
-                var raw = await _cacheConnectionManager.GetString(CacheKey);
+                var raw = await _store.GetStringAsync(CacheKey);
                 if (string.IsNullOrEmpty(raw))
                     return MailboxSkipList.Empty();
 
@@ -107,7 +112,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
             }
             catch (Exception ex)
             {
-                _logger?.LogWarning($"Sent emails: could not read the no-mailbox skip list from Redis ({ex.Message}); " +
+                _logger?.LogWarning($"Sent emails: could not read the no-mailbox skip list from the state store ({ex.Message}); " +
                     "every mailbox will be checked this cycle.");
                 return MailboxSkipList.Empty();
             }
@@ -117,11 +122,11 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
         {
             try
             {
-                await _cacheConnectionManager.SetString(CacheKey, JsonConvert.SerializeObject(skipList));
+                await _store.SetStringAsync(CacheKey, JsonConvert.SerializeObject(skipList));
             }
             catch (Exception ex)
             {
-                _logger?.LogWarning($"Sent emails: could not save the no-mailbox skip list to Redis ({ex.Message}); " +
+                _logger?.LogWarning($"Sent emails: could not save the no-mailbox skip list to the state store ({ex.Message}); " +
                     "mailbox-less users will be re-checked next cycle.");
             }
         }

@@ -4,7 +4,7 @@ using System.Threading.Tasks;
 namespace WebJob.Office365ActivityImporter.Engine.StatsUploader
 {
     /// <summary>
-    /// In-memory fallback for <see cref="IStatsDatesLoader"/>. Used when Redis is not configured —
+    /// In-memory fallback for <see cref="IStatsDatesLoader"/>. Used when no Storage connection string is configured —
     /// the importer still uploads stats, but the "last uploaded" timestamp lives only for the
     /// lifetime of this instance.
     ///

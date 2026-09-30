@@ -1,6 +1,6 @@
 using Common.Entities;
 using Common.Entities.Config;
-using Common.Entities.Redis;
+using Common.Entities.State;
 using DataUtils;
 using Microsoft.ApplicationInsights;
 using Microsoft.ApplicationInsights.Channel;
@@ -30,7 +30,7 @@ namespace Tests.UnitTests
     /// is not supported."). Lenient paging turned that into an empty page 1, the loader could not tell "the read
     /// failed" from "nothing changed", there was no new token to commit, and the section reported success - so
     /// every later run replayed the same dead token, read 0 users, and new Entra users and changes to existing
-    /// ones stopped arriving until somebody deleted the Redis key by hand.
+    /// ones stopped arriving until somebody deleted the stored token by hand.
     ///
     /// These tests pin the fix: a token Graph rejects is discarded and the full user list is read again in the
     /// same run, once; every other failure keeps the token; and a read that never reached its
@@ -309,11 +309,11 @@ namespace Tests.UnitTests
         [TestMethod]
         public async Task RejectedToken_ThatCannotBeDeleted_EndsTheRunIncomplete_WithoutAFullRead()
         {
-            var redis = new FakeStringValueStore();
-            var provider = NewRedisProvider(redis);
+            var stateStore = new FakeStringValueStore();
+            var provider = NewPersistedProvider(stateStore);
             await provider.SetDeltaToken(StoredToken);
-            redis.ThrowOnDelete = true;
-            var writesBefore = redis.SetCalls;
+            stateStore.ThrowOnDelete = true;
+            var writesBefore = stateStore.SetCalls;
 
             var logger = new CapturingLogger();
             var handler = new ScriptedGraphHandler().Then(HttpStatusCode.BadRequest, UnsupportedQueryBody);
@@ -325,23 +325,23 @@ namespace Tests.UnitTests
                 var users = await loader.LoadAllActiveUsers();
 
                 Assert.AreEqual(1, handler.Requests.Count, "No full read when the dead token could not be discarded.");
-                Assert.AreEqual(3, redis.DeleteAttempts, "The store's own bounded retries are used first.");
+                Assert.AreEqual(3, stateStore.DeleteAttempts, "The store's own bounded retries are used first.");
                 Assert.AreEqual(0, users.Count);
                 Assert.IsFalse(loader.LastLoadReachedDeltaLink, "The run must be reported incomplete.");
                 Assert.IsTrue(logger.Messages(LogLevel.Error).Any(m => m.Contains("couldn't discard the rejected /users/delta token")));
 
                 await loader.CommitDeltaTokenAsync();
-                Assert.AreEqual(writesBefore, redis.SetCalls, "Nothing is saved.");
+                Assert.AreEqual(writesBefore, stateStore.SetCalls, "Nothing is saved.");
             }
         }
 
         [TestMethod]
-        public async Task Recovery_AlsoForgetsTheRedisStoresInProcessCopy_SoTheDeadTokenCannotComeBack()
+        public async Task Recovery_AlsoForgetsThePersistedStoresInProcessCopy_SoTheDeadTokenCannotComeBack()
         {
-            // #494 keeps the last committed token in memory for when a Redis read fails. Had the recovery only
-            // overwritten the key, that copy would hand the rejected token straight back on the next Redis blip.
-            var redis = new FakeStringValueStore();
-            var provider = NewRedisProvider(redis);
+            // #494 keeps the last committed token in memory for when a state-store read fails. Had the recovery only
+            // overwritten the key, that copy would hand the rejected token straight back on the next storage blip.
+            var stateStore = new FakeStringValueStore();
+            var provider = NewPersistedProvider(stateStore);
             await provider.SetDeltaToken(StoredToken);
 
             var logger = new CapturingLogger();
@@ -355,11 +355,11 @@ namespace Tests.UnitTests
                 await new GraphUserLoader(client, provider, logger, null).LoadAllActiveUsers();
             }
 
-            Assert.AreEqual(0, redis.Count, "The rejected token was deleted from Redis.");
+            Assert.AreEqual(0, stateStore.Count, "The rejected token was deleted from the state store.");
 
-            redis.ThrowOnGet = true;
+            stateStore.ThrowOnGet = true;
             await Assert.ThrowsExceptionAsync<DeltaTokenUnavailableException>(() => provider.GetDeltaToken(),
-                "With the key deleted and Redis unreadable, the provider must defer the import - not return the token Graph rejected.");
+                "With the key deleted and the state store unreadable, the provider must defer the import - not return the token Graph rejected.");
         }
 
         #endregion
@@ -427,10 +427,10 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
-        public async Task ARedisBlipAtCommitTime_StillSavesTheNewCheckpoint()
+        public async Task AStorageBlipAtCommitTime_StillSavesTheNewCheckpoint()
         {
-            var redis = new FakeStringValueStore();
-            var provider = NewRedisProvider(redis);
+            var stateStore = new FakeStringValueStore();
+            var provider = NewPersistedProvider(stateStore);
             await provider.SetDeltaToken(StoredToken);
 
             var logger = new CapturingLogger();
@@ -441,20 +441,20 @@ namespace Tests.UnitTests
                 var loader = new GraphUserLoader(client, provider, logger, null);
                 await loader.LoadAllActiveUsers();
 
-                redis.ThrowOnGet = true;
+                stateStore.ThrowOnGet = true;
                 Assert.IsTrue(await loader.CommitDeltaTokenAsync(),
                     "An unreadable store is not a cleared one: the read falls back to the checkpoint this run started from, so it saves as it always did.");
             }
 
-            redis.ThrowOnGet = false;
+            stateStore.ThrowOnGet = false;
             Assert.AreEqual(FreshToken, await provider.GetDeltaToken());
         }
 
         [TestMethod]
         public async Task TheKeyTheWebPortalDeletes_IsTheOneTheImporterChecksBeforeSaving()
         {
-            var redis = new FakeStringValueStore();
-            var provider = NewRedisProvider(redis);
+            var stateStore = new FakeStringValueStore();
+            var provider = NewPersistedProvider(stateStore);
             await provider.SetDeltaToken(StoredToken);
 
             var logger = new CapturingLogger();
@@ -466,12 +466,12 @@ namespace Tests.UnitTests
                 await loader.LoadAllActiveUsers();
 
                 // Exactly the key the Administration > User import page deletes.
-                await redis.DeleteString(UserImportCheckpointKeys.DeltaToken(Guid.Empty));
+                await stateStore.DeleteAsync(UserImportCheckpointKeys.DeltaToken(Guid.Empty));
 
                 Assert.IsFalse(await loader.CommitDeltaTokenAsync());
             }
 
-            Assert.AreEqual(0, redis.Count, "The portal's clear must survive a run that was already in progress.");
+            Assert.AreEqual(0, stateStore.Count, "The portal's clear must survive a run that was already in progress.");
         }
 
         #endregion
@@ -677,13 +677,13 @@ namespace Tests.UnitTests
         private static GraphUser NewGraphUser(string upn)
             => new GraphUser { Id = Guid.NewGuid().ToString(), UserPrincipalName = upn, AccountEnabled = true, Mail = upn };
 
-        private static RedisProcessDeltaValueProvider NewRedisProvider(FakeStringValueStore store)
+        private static PersistedDeltaValueProvider NewPersistedProvider(FakeStringValueStore store)
         {
             var config = (AppConfig)FormatterServices.GetUninitializedObject(typeof(AppConfig));
             config.TenantGUID = Guid.Empty;
             config.ConnectionStrings = new AppConnectionStrings();
 
-            return new RedisProcessDeltaValueProvider(config, AnalyticsLogger.ConsoleOnlyTracer(), store, new DeltaTokenStoreRetryOptions(3, TimeSpan.Zero));
+            return new PersistedDeltaValueProvider(config, AnalyticsLogger.ConsoleOnlyTracer(), store, new DeltaTokenStoreRetryOptions(3, TimeSpan.Zero));
         }
 
         private static TelemetryConfiguration NewTelemetryConfiguration(RecordingTelemetryChannel channel)
@@ -817,8 +817,8 @@ namespace Tests.UnitTests
             }
         }
 
-        /// <summary>Stands in for Redis behind <see cref="RedisProcessDeltaValueProvider"/>.</summary>
-        private sealed class FakeStringValueStore : IStringValueStore
+        /// <summary>Stands in for the runtime state table behind <see cref="PersistedDeltaValueProvider"/>.</summary>
+        private sealed class FakeStringValueStore : IKeyValueStore
         {
             private readonly Dictionary<string, string> _values = new Dictionary<string, string>(StringComparer.Ordinal);
 
@@ -828,25 +828,31 @@ namespace Tests.UnitTests
             public int SetCalls { get; private set; }
             public int Count => _values.Count;
 
-            public Task<string> GetString(string key)
+            public string Description => "fake state store";
+
+            public Task<string> GetStringAsync(string key, CancellationToken cancellationToken = default)
             {
-                if (ThrowOnGet) throw new InvalidOperationException("synthetic Redis outage");
+                if (ThrowOnGet) throw new InvalidOperationException("synthetic state store outage");
                 return Task.FromResult(_values.TryGetValue(key, out var value) ? value : null);
             }
 
-            public Task SetString(string key, string value)
+            public Task SetStringAsync(string key, string value, TimeSpan? timeToLive = null, CancellationToken cancellationToken = default)
             {
                 SetCalls++;
                 _values[key] = value;
                 return Task.CompletedTask;
             }
 
-            public Task DeleteString(string key)
+            public Task<bool> DeleteAsync(string key, CancellationToken cancellationToken = default)
             {
                 DeleteAttempts++;
-                if (ThrowOnDelete) throw new InvalidOperationException("synthetic Redis outage");
-                _values.Remove(key);
-                return Task.CompletedTask;
+                if (ThrowOnDelete) throw new InvalidOperationException("synthetic state store outage");
+                return Task.FromResult(_values.Remove(key));
+            }
+
+            public Task<bool> ExistsAsync(string key, CancellationToken cancellationToken = default)
+            {
+                return Task.FromResult(_values.ContainsKey(key));
             }
         }
 

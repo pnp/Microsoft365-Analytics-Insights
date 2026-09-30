@@ -1,8 +1,8 @@
 using Common.Entities.Config;
+using Common.Entities.State;
 using Microsoft.Extensions.Logging;
 using System;
 using System.Collections.Concurrent;
-using System.Collections.Generic;
 using System.Threading.Tasks;
 
 namespace WebJob.Office365ActivityImporter.Engine
@@ -47,8 +47,8 @@ namespace WebJob.Office365ActivityImporter.Engine
     }
 
     /// <summary>
-    /// In-memory fallback used when Redis is not configured; lives only for the life of the WebJob process.
-    /// Must be constructed ONCE outside the per-cycle loop, exactly like <see cref="InMemorySingleDateStore"/>.
+    /// In-memory fallback used when no Storage connection string is configured; lives only for the life of the WebJob
+    /// process. Must be constructed ONCE outside the per-cycle loop, exactly like <see cref="InMemorySingleDateStore"/>.
     /// </summary>
     public class InMemoryReportCompletionStore : IReportCompletionStore, IReportAttemptScheduleStore
     {
@@ -96,11 +96,11 @@ namespace WebJob.Office365ActivityImporter.Engine
     }
 
     /// <summary>
-    /// Redis-backed <see cref="IReportCompletionStore"/>, so per-report completion survives a WebJob restart
-    /// (which is the whole point - an in-memory stamp would be lost on every restart and the skip list would
-    /// be empty again).
+    /// Durable <see cref="IReportCompletionStore"/> in the runtime state store (<see cref="StatePartitions.ImportSchedule"/>),
+    /// so per-report completion survives a WebJob restart (which is the whole point - an in-memory stamp would be lost on
+    /// every restart and the skip list would be empty again).
     /// </summary>
-    public class RedisReportCompletionStore : IReportCompletionStore, IReportAttemptScheduleStore
+    public class PersistedReportCompletionStore : IReportCompletionStore, IReportAttemptScheduleStore
     {
         /// <summary>
         /// Prefix for the per-report keys. Deliberately distinct from the phase-level
@@ -109,33 +109,16 @@ namespace WebJob.Office365ActivityImporter.Engine
         internal const string KeyPrefix = "UserActivityReportLastImported:";
         internal const string NextAttemptKeyPrefix = "UserActivityReportNextAttemptUtc:";
 
-        private readonly ConcurrentDictionary<string, RedisSingleDateLoader> _loaders =
-            new ConcurrentDictionary<string, RedisSingleDateLoader>(StringComparer.OrdinalIgnoreCase);
+        private readonly IKeyValueStore _store;
 
-        private readonly string _redisConnectionString;
-        private readonly string _tenantId;
-        private readonly string _clientId;
-        private readonly string _clientSecret;
-
-        public RedisReportCompletionStore(string redisConnectionString, string tenantId = null, string clientId = null, string clientSecret = null)
+        public PersistedReportCompletionStore(IKeyValueStore store)
         {
-            _redisConnectionString = redisConnectionString;
-            _tenantId = tenantId;
-            _clientId = clientId;
-            _clientSecret = clientSecret;
+            _store = store ?? throw new ArgumentNullException(nameof(store));
         }
 
-        private RedisSingleDateLoader LoaderFor(string reportKey)
-        {
-            return _loaders.GetOrAdd(reportKey,
-                k => new RedisSingleDateLoader(_redisConnectionString, KeyPrefix + k, _tenantId, _clientId, _clientSecret));
-        }
+        private KeyValueSingleDateStore LoaderFor(string reportKey) => new KeyValueSingleDateStore(_store, KeyPrefix + reportKey);
 
-        private RedisSingleDateLoader NextAttemptLoaderFor(string reportKey)
-        {
-            return _loaders.GetOrAdd(NextAttemptKeyPrefix + reportKey,
-                k => new RedisSingleDateLoader(_redisConnectionString, k, _tenantId, _clientId, _clientSecret));
-        }
+        private KeyValueSingleDateStore NextAttemptLoaderFor(string reportKey) => new KeyValueSingleDateStore(_store, NextAttemptKeyPrefix + reportKey);
 
         public Task<DateTime?> GetLastSuccessAsync(string reportKey) => LoaderFor(reportKey).GetLastDT();
 
@@ -152,22 +135,22 @@ namespace WebJob.Office365ActivityImporter.Engine
     }
 
     /// <summary>
-    /// Builds the <see cref="IReportCompletionStore"/> for per-report completion stamps: Redis when
-    /// configured (durable across restarts), otherwise in-memory for the life of this process. Mirrors
-    /// <see cref="ActivityReportsLastImportedStoreFactory"/>.
+    /// Builds the <see cref="IReportCompletionStore"/> for per-report completion stamps: the runtime state table when a
+    /// Storage connection string is configured (durable across restarts), otherwise in-memory for the life of this
+    /// process. Mirrors <see cref="ActivityReportsLastImportedStoreFactory"/>.
     /// </summary>
     public static class ReportCompletionStoreFactory
     {
         public static IReportCompletionStore Create(AppConfig config, ILogger logger)
         {
-            var redisConn = config?.ConnectionStrings?.RedisConnectionString;
-            if (!string.IsNullOrEmpty(redisConn))
+            var store = StateStore.TryOpen(config, StatePartitions.ImportSchedule, logger);
+            if (store != null)
             {
-                return new RedisReportCompletionStore(redisConn, config.TenantGUID.ToString(), config.ClientID, config.ClientSecret);
+                return new PersistedReportCompletionStore(store);
             }
 
             logger?.LogInformation(
-                "No Redis connection string configured - per-report usage-report completion is tracked in memory only, "
+                "No Storage connection string configured - per-report usage-report completion is tracked in memory only, "
                 + "so the finalized-date skip list resets each time the WebJob process restarts.");
             return new InMemoryReportCompletionStore();
         }

@@ -3,8 +3,6 @@ using Azure.AI.TextAnalytics;
 using Common.Entities;
 using Common.Entities.Config;
 using Common.Entities.Models;
-using Common.Entities.Redis;
-using Common.Entities.Redis.Teams;
 using Common.Entities.Teams;
 using DataUtils;
 using Microsoft.Extensions.Logging;
@@ -46,13 +44,13 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
         /// <summary>
         /// Sets the "Messages" prop on each channel by reading each channel messages.
         /// The crawl itself lives in <see cref="TeamsChannelCrawler"/> so it can be tested without
-        /// Graph or Redis; this overload wires up the production adapters.
+        /// Graph or storage; this overload wires up the production adapters.
         /// </summary>
         public static async Task<List<TeamChannelDeltaTokenCommit>> PopulateNewMessagesAndReactions(this List<ChannelWithReactions> channels, Team team, RefreshOAuthToken refreshToken,
-            CacheConnectionManager cacheConnectionManager, ILogger logger, List<TeamChannelDeltaTokenCommit> pendingDeltaTokenCommits = null)
+            ITeamChannelDeltaTokenStore deltaTokenStore, ILogger logger, List<TeamChannelDeltaTokenCommit> pendingDeltaTokenCommits = null)
         {
             // Nothing to crawl: return before building any adapter, so a team with no channels - or one
-            // we hold no user token for - still touches neither Redis, the logger nor team.Id, exactly
+            // we hold no user token for - still touches neither the token store, the logger nor team.Id, exactly
             // as the original per-channel loop did (it read messages only when a token was present, and
             // saved a delta token only when one came back).
             if (channels.Count == 0 || refreshToken == null)
@@ -60,7 +58,6 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
                 return pendingDeltaTokenCommits ?? new List<TeamChannelDeltaTokenCommit>();
             }
 
-            var deltaTokenStore = new RedisTeamChannelDeltaTokenStore(cacheConnectionManager, logger);
             var messagesSource = new GraphChannelMessagesSourceLoader(refreshToken, deltaTokenStore, logger);
 
             return await new TeamsChannelCrawler(messagesSource).PopulateNewMessagesAndReactions(channels, team.Id, pendingDeltaTokenCommits);

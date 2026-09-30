@@ -25,7 +25,7 @@ export const admin = {
     'Your Teams will be listed here once the site can get a Graph token for your session.',
   'admin.teamsPermissions.title': 'Grant Team Access to the Microsoft 365 Advanced Analytics Engine',
   'admin.teamsPermissions.tokenNote':
-    "Note: tokens are securely stored in a temporary Redis cache & aren't accessible to anyone.",
+    "Note: authorisation tokens are stored in this solution's own Azure Storage account and are never shown in the portal.",
   'admin.teamsPermissions.yourTeamsDescription':
     'Here are all the Teams you have access to. Select which Teams you want to enable for deep analytics and continue.',
   'admin.teamsPermissions.yourTeamsTitle': 'Your Teams - {displayName}',
@@ -41,7 +41,7 @@ export const admin = {
   'admin.teams.teamList.columnTeamName': 'Team Name',
   'admin.teams.teamList.saveSuccess':
     'Selected Teams enabled for deep analytics successfully. It may take several hours before the extra metadata appears in any reports.',
-  'admin.teams.teamList.redisNotConfigured': "Teams deep analytics can't be enabled because Redis is not configured for this deployment. Add a Redis connection string so Teams authorisation tokens can be stored.",
+  'admin.teams.teamList.storageNotConfigured': "Teams deep analytics can't be enabled because Azure Storage is not configured for this deployment. Add a Storage connection string so Teams authorisation tokens can be stored.",
   'admin.teams.teamList.unexpectedApiResponse': 'Unexpected response from API. Check JS log for more details.',
   'admin.teams.teamListItem.authorised': 'Authorised',
   'admin.teams.teamListItem.notAuthorised': 'Not authorised',
@@ -258,7 +258,8 @@ export const admin = {
   'admin.serviceConfiguration.azureResources.cognitiveServicesEndpoint': 'Cognitive Services Endpoint',
   'admin.serviceConfiguration.azureResources.description':
     'These are the resources this deployment is configured to use:',
-  'admin.serviceConfiguration.azureResources.redisSslEndpoint': 'Redis SSL Endpoint',
+  'admin.serviceConfiguration.azureResources.storageAccount': 'Storage account',
+  'admin.serviceConfiguration.azureResources.storageNotConfigured': 'Not configured - runtime state is kept in memory only',
   'admin.serviceConfiguration.azureResources.title': 'Azure resources',
   'admin.serviceConfiguration.azureResources.webAppUrl': 'Web app URL',
 
@@ -367,13 +368,14 @@ export const admin = {
   'admin.userImport.state.importDisabled': 'Switched off (GraphUsersMetadata)',
   'admin.userImport.state.importUnknown': "Unknown - the import settings couldn't be read",
   'admin.userImport.state.storageLabel': 'Where the checkpoint is kept',
-  'admin.userImport.state.storageRedis': 'In Azure Cache for Redis',
+  'admin.userImport.state.storageTable': "In Azure Table storage: the {table} table in this solution's storage account",
   'admin.userImport.state.storageNone':
-    "Nowhere - Azure Cache for Redis isn't configured, so every run reads every user",
+    "Nowhere - Azure Storage isn't configured, so every run reads every user",
   'admin.userImport.state.checkpointLabel': 'Stored checkpoint',
   'admin.userImport.state.checkpointPresent': 'Yes - the next run reads only what has changed',
   'admin.userImport.state.checkpointAbsent': 'None - the next run reads every user',
-  'admin.userImport.state.keyLabel': 'Redis key',
+  'admin.userImport.state.partitionLabel': 'Partition',
+  'admin.userImport.state.keyLabel': 'Row key',
   'admin.userImport.state.lastCompletedLabel': 'Last completed',
   'admin.userImport.state.lastCompletedNone': 'Not recorded',
   'admin.userImport.state.intervalLabel': 'Runs',
@@ -383,8 +385,8 @@ export const admin = {
   'admin.userImport.clear.description':
     'Clear the checkpoint when user details in the reports look out of date, or after the user import has been switched off or failing for weeks. The next run then reads every user, exactly as a first install does. Nothing is deleted from the database.',
   'admin.userImport.clear.cost': 'On a large tenant, a full read takes much longer than a normal run.',
-  'admin.userImport.clear.noRedis':
-    'There is nothing to clear: without Azure Cache for Redis the checkpoint is never saved, and every run already reads every user.',
+  'admin.userImport.clear.noStorage':
+    'There is nothing to clear: without Azure Storage the checkpoint is never saved, and every run already reads every user.',
   'admin.userImport.clear.importOff':
     'The user import is switched off, so nothing reads the users until it is switched back on. Clearing the checkpoint now makes that first run read every user.',
   'admin.userImport.clear.runOnNextCycle': 'Run the user import on the next import cycle',

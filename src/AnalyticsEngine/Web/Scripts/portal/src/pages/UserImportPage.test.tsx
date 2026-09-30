@@ -16,9 +16,11 @@ vi.mock('../api/userImportCheckpointApi', () => ({
 const KEY = 'UserDeltaCode-00000000-0000-0000-0000-000000000000-v2';
 
 const status = (over: Partial<UserImportCheckpointStatus> = {}): UserImportCheckpointStatus => ({
-  redisConfigured: true,
+  storageConfigured: true,
   userImportEnabled: true,
   checkpointStored: true,
+  checkpointTable: 'AnalyticsState',
+  checkpointPartition: 'UserImport',
   checkpointKey: KEY,
   lastCompletedUtc: '2026-09-01T10:00:00Z',
   intervalHours: 24,
@@ -45,8 +47,9 @@ describe('UserImportPage', () => {
     renderWithProvider(<UserImportPage />);
 
     expect(await screen.findByText('Yes - the next run reads only what has changed')).toBeInTheDocument();
-    expect(screen.getByText('In Azure Cache for Redis')).toBeInTheDocument();
-    // The key is data, shown verbatim so it can be matched to the documentation.
+    expect(screen.getByText("In Azure Table storage: the AnalyticsState table in this solution's storage account")).toBeInTheDocument();
+    // The partition and key are data, shown verbatim so they can be matched to the documentation.
+    expect(screen.getByText('UserImport')).toBeInTheDocument();
     expect(screen.getByText(KEY)).toBeInTheDocument();
     expect(screen.getByText(/10:00:00 UTC/)).toBeInTheDocument();
     expect(screen.getByText('At most once every 24 h')).toBeInTheDocument();
@@ -96,12 +99,12 @@ describe('UserImportPage', () => {
   });
 
   it('keeps the dialog open and says why when clearing fails', async () => {
-    mockClear.mockRejectedValue(new Error("Couldn't reach Azure Cache for Redis, where the checkpoint is kept."));
+    mockClear.mockRejectedValue(new Error("Couldn't reach Azure Table storage, where the checkpoint is kept."));
     renderWithProvider(<UserImportPage />);
 
     await openAndConfirmClear();
 
-    expect(await screen.findByText("Couldn't reach Azure Cache for Redis, where the checkpoint is kept.")).toBeInTheDocument();
+    expect(await screen.findByText("Couldn't reach Azure Table storage, where the checkpoint is kept.")).toBeInTheDocument();
     expect(screen.getByText('Clear the user import checkpoint?')).toBeInTheDocument();
     expect(screen.queryByText(/Checkpoint cleared/)).not.toBeInTheDocument();
   });
@@ -121,12 +124,12 @@ describe('UserImportPage', () => {
     ).toBeInTheDocument();
   });
 
-  it('explains there is nothing to clear without Redis, and offers no button', async () => {
-    mockFetch.mockResolvedValue(status({ redisConfigured: false, checkpointStored: false, lastCompletedUtc: null }));
+  it('explains there is nothing to clear without Azure Storage, and offers no button', async () => {
+    mockFetch.mockResolvedValue(status({ storageConfigured: false, checkpointStored: false, lastCompletedUtc: null }));
     renderWithProvider(<UserImportPage />);
 
     expect(await screen.findByText(/There is nothing to clear/)).toBeInTheDocument();
-    expect(screen.getByText("Nowhere - Azure Cache for Redis isn't configured, so every run reads every user")).toBeInTheDocument();
+    expect(screen.getByText("Nowhere - Azure Storage isn't configured, so every run reads every user")).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Clear checkpoint...' })).not.toBeInTheDocument();
     expect(screen.queryByText(KEY)).not.toBeInTheDocument();
   });
