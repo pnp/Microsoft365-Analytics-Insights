@@ -63,7 +63,11 @@ namespace Web.AnalyticsWeb.Controllers
         {
         }
 
-        public UserOrgAPIController(Func<UserOrgAdminService> serviceFactory, Func<UserOrgMembershipService> membershipFactory)
+        // net10: internal, not public. ASP.NET Core's controller activator (ActivatorUtilities) refuses a type
+        // with more than one public constructor it could call - every /api/UserOrg request would fail with
+        // "Multiple constructors accepting all given argument types" - so the parameterless one must be the only
+        // public constructor. Tests reach this one through InternalsVisibleTo. See ControllerActivationTests.
+        internal UserOrgAPIController(Func<UserOrgAdminService> serviceFactory, Func<UserOrgMembershipService> membershipFactory)
             : this(serviceFactory, membershipFactory, null)
         {
         }
