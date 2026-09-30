@@ -87,6 +87,27 @@ namespace Common.Entities.State
         }
 
         /// <summary>
+        /// The key of a tenant's stored <c>/users/delta</c> token when the import also reads organisation attributes
+        /// from Entra: <see cref="DeltaToken(Guid)"/> followed by the selection's qualifier.
+        /// </summary>
+        /// <param name="tenantId">The tenant.</param>
+        /// <param name="orgAttributeQualifier">
+        /// <see cref="UserOrgs.GraphUserOrgSelection.DeltaKeyQualifier"/>. Empty or <c>null</c> - no Entra organisation
+        /// types configured - gives exactly <see cref="DeltaToken(Guid)"/>, so a deployment that never uses the feature
+        /// keeps its token on upgrade.
+        /// </param>
+        /// <remarks>
+        /// Graph freezes <c>$select</c> for the life of a token, so a token minted without an organisation attribute
+        /// must never be resumed by a request that asks for one. The importer reads and writes this key, and the web
+        /// portal's User import page reports and clears it, so both work out the qualifier the same way, from the
+        /// enabled Entra organisation types.
+        /// </remarks>
+        public static string DeltaToken(Guid tenantId, string orgAttributeQualifier)
+        {
+            return DeltaToken(tenantId) + (orgAttributeQualifier ?? string.Empty);
+        }
+
+        /// <summary>
         /// When the user import last completed, in round-trip ("o") UTC format. The importer's cadence gate
         /// reads it to run the import at most once per <c>GraphMetadataImportIntervalHours</c>, so deleting it
         /// makes the import run on the next cycle.

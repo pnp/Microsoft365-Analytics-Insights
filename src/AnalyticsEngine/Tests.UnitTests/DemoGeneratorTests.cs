@@ -158,6 +158,68 @@ namespace Tests.UnitTests
                 "The parent organisation should still be the largest population.");
         }
 
+        [TestMethod]
+        public void UserOrganisations_AreDeterministicCorrelatedAndLeaveNotSetSegments()
+        {
+            var options = DemoOptions.Parse(new[] { "--preview", "--users", "4000", "--days", "35",
+                "--as-of", "2026-09-01", "--areas", "directory" }, DateTime.UtcNow);
+            var first = Generate(options, t => t == DemoTables.Users || t == DemoTables.UserOrgTypes
+                || t == DemoTables.UserOrgValues || t == DemoTables.UserOrgAssignments);
+            var second = Generate(options, t => t == DemoTables.UserOrgTypes
+                || t == DemoTables.UserOrgValues || t == DemoTables.UserOrgAssignments);
+
+            CollectionAssert.AreEqual(
+                first.For(DemoTables.UserOrgTypes).Select(r => string.Join("|", r.Select(v => v ?? "<null>"))).ToArray(),
+                second.For(DemoTables.UserOrgTypes).Select(r => string.Join("|", r.Select(v => v ?? "<null>"))).ToArray());
+            CollectionAssert.AreEqual(
+                first.For(DemoTables.UserOrgValues).Select(r => string.Join("|", r.Select(v => v ?? "<null>"))).ToArray(),
+                second.For(DemoTables.UserOrgValues).Select(r => string.Join("|", r.Select(v => v ?? "<null>"))).ToArray());
+            CollectionAssert.AreEqual(
+                first.For(DemoTables.UserOrgAssignments).Select(r => string.Join("|", r.Select(v => v ?? "<null>"))).ToArray(),
+                second.For(DemoTables.UserOrgAssignments).Select(r => string.Join("|", r.Select(v => v ?? "<null>"))).ToArray());
+
+            Assert.AreEqual(3, first.For(DemoTables.UserOrgTypes).Count);
+            Assert.IsTrue(first.For(DemoTables.UserOrgValues).Count >= 15);
+            Assert.IsTrue(first.For(DemoTables.UserOrgValues).Any(r => ((string)r[Col(DemoTables.UserOrgValues, "name")]).Contains("Αθήνα")));
+
+            foreach (var row in first.For(DemoTables.UserOrgTypes))
+            {
+                Assert.AreEqual(DemoUserOrganisations.CsvUploadSourceKind, row[Col(DemoTables.UserOrgTypes, "source_kind")]);
+                Assert.AreEqual(true, row[Col(DemoTables.UserOrgTypes, "is_enabled")]);
+                Assert.AreEqual(options.AsOf, row[Col(DemoTables.UserOrgTypes, "last_refreshed_utc")]);
+            }
+
+            var duplicateSlots = first.For(DemoTables.UserOrgAssignments)
+                .GroupBy(r => ((int)r[Col(DemoTables.UserOrgAssignments, "user_id")],
+                               (int)r[Col(DemoTables.UserOrgAssignments, "org_type_id")]))
+                .Where(g => g.Count() > 1).ToArray();
+            Assert.AreEqual(0, duplicateSlots.Length, "Each user can have at most one value per org type.");
+
+            foreach (var type in DemoUserOrganisations.Types)
+            {
+                int assigned = first.For(DemoTables.UserOrgAssignments)
+                    .Count(r => (int)r[Col(DemoTables.UserOrgAssignments, "org_type_id")] == type.Id);
+                double missing = 1.0 - assigned / (double)options.Users;
+                Assert.IsTrue(missing >= 0.03 && missing <= 0.17,
+                    $"{type.Name} should leave a realistic not-set segment; missing={missing:P1}.");
+            }
+
+            var valueById = first.For(DemoTables.UserOrgValues)
+                .ToDictionary(r => (int)r[Col(DemoTables.UserOrgValues, "id")],
+                    r => (string)r[Col(DemoTables.UserOrgValues, "name")]);
+            var usersById = first.For(DemoTables.Users).ToDictionary(r => (int)r[Col(DemoTables.Users, "id")]);
+            var businessUnitAssignments = first.For(DemoTables.UserOrgAssignments)
+                .Where(r => (int)r[Col(DemoTables.UserOrgAssignments, "org_type_id")] == 2).ToArray();
+            Assert.IsTrue(businessUnitAssignments.Any(r =>
+                ((string)usersById[(int)r[Col(DemoTables.UserOrgAssignments, "user_id")]][Col(DemoTables.Users, "user_name")])
+                    .EndsWith("@fabrikam.example", StringComparison.Ordinal)
+                && valueById[(int)r[Col(DemoTables.UserOrgAssignments, "org_value_id")]] == "Fabrikam Services"));
+            Assert.IsTrue(businessUnitAssignments.Any(r =>
+                ((string)usersById[(int)r[Col(DemoTables.UserOrgAssignments, "user_id")]][Col(DemoTables.Users, "user_name")])
+                    .EndsWith("@tailspintoys.example", StringComparison.Ordinal)
+                && valueById[(int)r[Col(DemoTables.UserOrgAssignments, "org_value_id")]] == "Tailspin Consumer"));
+        }
+
         /// <summary>
         /// Domain is drawn conditionally on the cohort so the acquired businesses skew towards the idle
         /// end - that is what gives the demo a story worth looking at rather than four identical rows.

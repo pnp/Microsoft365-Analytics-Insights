@@ -15,6 +15,14 @@ namespace Common.Entities.CopilotAdoption
         /// </summary>
         public string UserPrincipalName { get; set; }
 
+        /// <summary>
+        /// Selected for the same reason: the domain is derived from the UPN and, when that is the
+        /// tenant's own <c>onmicrosoft.com</c> suffix, from the mail address - exactly as for every other
+        /// population and for the page-wide user filter, so a person is counted under the domain the
+        /// filter would find them under.
+        /// </summary>
+        public string Mail { get; set; }
+
         /// <summary>The organisation this person belongs to. See <see cref="CopilotAdoptionEmailDomain"/>.</summary>
         public string EmailDomain { get; set; }
 

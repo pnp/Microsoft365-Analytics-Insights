@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useInRouterContext, useSearchParams } from 'react-router-dom';
 import {
   makeStyles,
   tokens,
@@ -86,6 +87,26 @@ import {
   useTimeSavedCohorts,
   type TimeSavedCohorts,
 } from '../components/copilotAdoption/timeSavedCohort';
+import UserFilterBar from '../components/userFilter/UserFilterBar';
+import UserFilterPrintSummary from '../components/userFilter/UserFilterPrintSummary';
+import {
+  describeClause,
+  describeUserFilter,
+  dimensionLabel,
+  joinConditions,
+} from '../components/userFilter/describeUserFilter';
+import { useUserFilterDimensions } from '../components/userFilter/useUserFilterDimensions';
+import {
+  EMAIL_DOMAIN_DIMENSION,
+  fitsLimits,
+  isEmptyFilter,
+  parseUserFilter,
+  serializeUserFilter,
+  singleValueFor,
+  withDimensionValue,
+} from '../components/userFilter/userFilterModel';
+import { notify } from '../components/toast';
+import { EMPTY_USER_FILTER, type UserFilter, type UserFilterDimension } from '../types/userFilter';
 
 const WINDOW_OPTIONS: { value: number; labelKey: TranslationKey }[] = [
   { value: 7, labelKey: 'copilotAdoption.page.window.last7Days' },
@@ -331,8 +352,53 @@ function SectionHead({ index, title, blurb }: { index: number; title: string; bl
  * the segment breakdowns show absolute counts next to percentages, and the "How these numbers are
  * calculated" tab spells out the formula and the exact SKUs that were counted as Copilot seats -
  * because the first question anyone asks about a number like this is "where did that come from?".
+ *
+ * Inside the portal the page keeps its user filter in the address (`?filter=`), so a filtered view
+ * is a link that can be bookmarked or sent to a colleague. Rendered outside a router - in a test -
+ * it simply holds the filter in state.
  */
 export default function CopilotAdoptionPage() {
+  return useInRouterContext() ? <RoutedCopilotAdoptionPage /> : <CopilotAdoptionView />;
+}
+
+/** The URL parameter the page's user filter is kept in, in its wire form. */
+export const USER_FILTER_URL_PARAM = 'filter';
+
+function RoutedCopilotAdoptionPage() {
+  const [params, setParams] = useSearchParams();
+  // The address is the source of truth: opening a different ?filter= link while already on the page
+  // changes the location without remounting it, and the page must follow.
+  const raw = params.get(USER_FILTER_URL_PARAM);
+  const userFilter = useMemo(() => parseUserFilter(raw), [raw]);
+
+  const onUserFilterChange = useCallback(
+    (filter: UserFilter) => {
+      setParams(
+        (current) => {
+          const next = new URLSearchParams(current);
+          const serialized = serializeUserFilter(filter);
+          if (serialized) next.set(USER_FILTER_URL_PARAM, serialized);
+          else next.delete(USER_FILTER_URL_PARAM);
+          return next;
+        },
+        // Replaced, not pushed: every condition added would otherwise be a Back-button stop.
+        { replace: true },
+      );
+    },
+    [setParams],
+  );
+
+  return <CopilotAdoptionView userFilter={userFilter} onUserFilterChange={onUserFilterChange} />;
+}
+
+function CopilotAdoptionView({
+  userFilter: controlledFilter,
+  onUserFilterChange,
+}: {
+  /** The filter, when something outside owns it - the address. Held in state here otherwise. */
+  userFilter?: UserFilter;
+  onUserFilterChange?: (filter: UserFilter) => void;
+}) {
   const styles = useStyles();
   const t = useT();
   const tNode = useTNode();
@@ -340,13 +406,36 @@ export default function CopilotAdoptionPage() {
   const [availability, setAvailability] = useState<CopilotAdoptionAvailability | null>(null);
   const [availabilityError, setAvailabilityError] = useState<string | null>(null);
   const [windowDays, setWindowDays] = useState(28);
-  // The email domain every visual on the page is narrowed to, or null for the whole tenant.
+  // Who every visual on the page describes: conditions on people's Entra ID attributes and custom
+  // organisations - email domain included - or no conditions for the whole tenant.
   //
-  // A page-wide filter rather than a per-panel one: a tenant carrying several verified domains is
-  // usually several companies, and "how is the business we acquired doing" is a question about the
-  // whole report, not about one table. The server re-scores the cached analysis for the domain, so
-  // the figures are recomputed rather than merely hidden.
-  const [emailDomain, setEmailDomain] = useState<string | null>(null);
+  // A page-wide filter rather than a per-panel one: "how is the business we acquired doing" or "how
+  // is the EMEA sales organisation doing" is a question about the whole report, not about one table.
+  // The server re-scores the cached analysis for the people the filter matches, so the figures are
+  // recomputed rather than merely hidden.
+  const [ownFilter, setOwnFilter] = useState<UserFilter>(EMPTY_USER_FILTER);
+  const userFilter = controlledFilter ?? ownFilter;
+  const setUserFilter = useCallback(
+    (next: UserFilter) => {
+      if (controlledFilter === undefined) setOwnFilter(next);
+      onUserFilterChange?.(next);
+    },
+    [controlledFilter, onUserFilterChange],
+  );
+  const userFilterParam = serializeUserFilter(userFilter);
+  const userFilterScope = userFilterParam ?? '';
+  const selectedEmailDomain = singleValueFor(userFilter, EMAIL_DOMAIN_DIMENSION);
+  const selectEmailDomain = (domain: string | null) => {
+    const next = withDimensionValue(userFilter, EMAIL_DOMAIN_DIMENSION, domain);
+    // Adding the domain to every OR group can take a long filter past what the server accepts.
+    // Refused here with the reason, rather than sent and answered with an error page.
+    if (!fitsLimits(next)) {
+      notify(t('userFilter.editor.tooLong'), 'warning');
+      return;
+    }
+    setUserFilter(next);
+  };
+  const { list: filterDimensions } = useUserFilterDimensions();
   const [tab, setTab] = useState<AdoptionTab>('executive');
   // Set when the user drills through from the enablement plan, so the licensed-user list they land
   // on is pre-filtered to exactly the group the plan counted. Cleared when they choose a tab
@@ -390,14 +479,14 @@ export default function CopilotAdoptionPage() {
     // scope loads kept the Excel button pointing at one population and enabled against another -
     // and if the new request then failed, the page went on rendering the previous organisation's
     // figures underneath a heading naming the newly selected one.
-    const scopeKey = `${windowDays}::${emailDomain ?? ''}`;
+    const scopeKey = `${windowDays}::${userFilterScope}`;
     if (lastSummaryScope.current !== scopeKey) {
       setSummary(null);
     }
     setSummaryLoading(true);
     setSummaryError(null);
 
-    fetchAdoptionSummary(windowDays, undefined, controller.signal, emailDomain)
+    fetchAdoptionSummary(windowDays, undefined, controller.signal, null, userFilterScope || null)
       .then((s) => {
         if (!cancelled) {
           lastSummaryScope.current = scopeKey;
@@ -415,8 +504,8 @@ export default function CopilotAdoptionPage() {
     // The filter lists and the SQL come from the same cached analysis, so these are cheap follow-ups
     // rather than extra work. Their failure is not worth surfacing - the page works without them.
     //
-    // Deliberately NOT narrowed by emailDomain: this is the list the domain filter is chosen FROM,
-    // so narrowing it would leave the current selection as the only option and strand the user on it.
+    // Deliberately NOT narrowed by the user filter: these are the lists the per-table filters are
+    // chosen FROM, so narrowing them would strand the reader on whatever the filter left.
     fetchAdoptionFilters(windowDays, undefined, controller.signal)
       .then((f) => {
         if (!cancelled) setFilterOptions(f);
@@ -436,7 +525,7 @@ export default function CopilotAdoptionPage() {
       // changed or the page unmounted.
       controller.abort();
     };
-  }, [availability, windowDays, emailDomain]);
+  }, [availability, windowDays, userFilterScope]);
 
   const onTabSelect: SelectTabEventHandler = (_e: unknown, data: { value: unknown }) => {
     setDrillAction(undefined);
@@ -485,25 +574,6 @@ export default function CopilotAdoptionPage() {
             ))}
           </Select>
 
-          {/* Only offered once more than one domain exists. On a single-domain tenant the control
-              would be a drop-down with exactly one real choice, which reads as a missing feature. */}
-          {availability?.available && (filterOptions?.emailDomains?.length ?? 0) > 1 && (
-            <>
-              <Text size={200} className={styles.muted}>{t('copilotAdoption.page.controls.emailDomainLabel')}</Text>
-              <Select
-                value={emailDomain ?? ''}
-                onChange={(_e: unknown, d: { value: string }) => setEmailDomain(d.value || null)}
-                aria-label={t('copilotAdoption.page.controls.emailDomainAria')}
-              >
-                <option value="">{t('copilotAdoption.page.controls.allDomainsOption')}</option>
-                {(filterOptions?.emailDomains ?? []).map((d) => (
-                  <option key={d} value={d}>
-                    {d}
-                  </option>
-                ))}
-              </Select>
-            </>
-          )}
           {availability?.available && (
             <PrintButton
               tooltip={t('copilotAdoption.page.controls.printTooltip', {
@@ -528,7 +598,11 @@ export default function CopilotAdoptionPage() {
                 appearance="primary"
                 icon={<ArrowDownload16Regular />}
                 as="a"
-                href={summary ? workbookExportUrl(windowDays, undefined, emailDomain, timeSavedExportParams(timeSaved)) : undefined}
+                href={
+                  summary
+                    ? workbookExportUrl(windowDays, undefined, null, timeSavedExportParams(timeSaved), userFilterParam)
+                    : undefined
+                }
                 disabled={!summary}
               >{t('copilotAdoption.page.controls.excelReport')}</Button>
             </Tooltip>
@@ -546,10 +620,17 @@ export default function CopilotAdoptionPage() {
               : t('copilotAdoption.page.print.lastDays', { v0: windowDays })}
             {summary && <> {t('copilotAdoption.page.print.dateRange', { v0: formatDate(summary.fromUtc), v1: formatDate(summary.toUtc) })}</>}
             {' \u00b7 '}
-            {emailDomain ?? t('copilotAdoption.page.print.allEmailDomains')}
+            {isEmptyFilter(userFilter) ? t('copilotAdoption.page.print.everyone') : t('copilotAdoption.page.print.filtered')}
             {summary && <> · {t('copilotAdoption.page.print.generatedDate', { v0: formatDate(summary.generatedUtc) })}</>}
           </Text>
         </div>
+      )}
+
+      {availability?.available && (
+        <>
+          <UserFilterBar filter={userFilter} onChange={setUserFilter} echoNames={summary?.userFilter?.dimensionNames} />
+          <UserFilterPrintSummary filter={userFilter} echo={summary?.userFilter} dimensions={filterDimensions?.dimensions} />
+        </>
       )}
 
       {availabilityError && (
@@ -622,32 +703,19 @@ export default function CopilotAdoptionPage() {
                 />
               )}
 
-              {/* Stated on screen, every time. A dashboard silently showing one subsidiary is the
-                  fastest way to get a licence decision wrong, and the domain drop-down is easy to
-                  miss once the page has scrolled. */}
-              {summary.scopedEmailDomain && (
-                <MessageBar intent="info">
-                  <MessageBarBody>
-                    {tNode('copilotAdoption.page.scopeBanner.message', {
-                      scope: <strong>{t('copilotAdoption.page.scopeBanner.scope', { domain: summary.scopedEmailDomain })}</strong>,
-                      unscoped:
-                        (summary.unscopedSections?.length ?? 0) > 0
-                          ? ` ${t('copilotAdoption.page.scopeBanner.unscopedSections', {
-                              v0: describeUnscopedSections(t, summary.unscopedSections ?? []),
-                            })}`
-                          : '',
-                      link: (
-                        <Link onClick={() => setEmailDomain(null)} data-print="hide">
-                          {t('copilotAdoption.page.scopeBanner.showAllDomains')}
-                        </Link>
-                      ),
-                    })}
-                  </MessageBarBody>
-                </MessageBar>
+              {/* Stated on screen, every time. A dashboard silently showing one subsidiary - or one
+                  department - is the fastest way to get a licence decision wrong, and the filter bar
+                  is easy to miss once the page has scrolled. */}
+              {isNarrowed(summary) && (
+                <FilterBanner
+                  summary={summary}
+                  dimensions={filterDimensions?.dimensions}
+                  onClear={() => setUserFilter(EMPTY_USER_FILTER)}
+                />
               )}
 
               {tab === 'executive' &&
-                (summary.licensedUsers === 0 && !summary.figuresIncomplete && !summary.scopedEmailDomain ? (
+                (summary.licensedUsers === 0 && !summary.figuresIncomplete && !isNarrowed(summary) ? (
                   // Only a GENUINE zero means "nothing set up yet". When the licence queries timed out the
                   // count also degrades to zero, and showing the first-run screen then tells a tenant with
                   // thousands of seats that it has none at all.
@@ -664,8 +732,8 @@ export default function CopilotAdoptionPage() {
                     onShowLicensedDetails={showLicensedDetails}
                     onShowOpportunityDetails={showOpportunityDetails}
                     onOpenTab={openTab}
-                    selectedEmailDomain={emailDomain}
-                    onSelectEmailDomain={setEmailDomain}
+                    selectedEmailDomain={selectedEmailDomain}
+                    onSelectEmailDomain={selectEmailDomain}
                   />
                 ))}
 
@@ -675,21 +743,21 @@ export default function CopilotAdoptionPage() {
                   sql={sql}
                   onDrillToAction={drillToAction}
                   onOpenTab={openTab}
-                  selectedEmailDomain={emailDomain}
-                  onSelectEmailDomain={setEmailDomain}
+                  selectedEmailDomain={selectedEmailDomain}
+                  onSelectEmailDomain={selectEmailDomain}
                 />
               )}
 
               {tab === 'licensed' && (
                 <LicensedUsersPanel
-                  key={`${drillAction ?? 'all'}::${emailDomain ?? 'all'}`}
+                  key={`${drillAction ?? 'all'}::${userFilterScope}`}
                   windowDays={windowDays}
                   filterOptions={filterOptions}
                   actionPlan={summary.actionPlan}
                   options={summary.options}
                   dataSources={summary.dataSources}
                   initialAction={drillAction}
-                  emailDomain={emailDomain}
+                  userFilter={userFilterParam}
                 />
               )}
 
@@ -714,24 +782,22 @@ export default function CopilotAdoptionPage() {
 
               {tab === 'cowork' && (
                 <CoworkPanel
-                  key={emailDomain ?? 'all'}
+                  key={userFilterScope || 'all'}
                   windowDays={windowDays}
                   summary={summary}
-                  filterOptions={filterOptions}
                   options={summary.options}
-                  emailDomain={emailDomain}
+                  userFilter={userFilterParam}
                 />
               )}
 
               {tab === 'opportunities' && (
                 <OpportunitiesPanel
-                  key={emailDomain ?? 'all'}
+                  key={userFilterScope || 'all'}
                   windowDays={windowDays}
                   summary={summary}
-                  filterOptions={filterOptions}
                   options={summary.options}
                   guidanceLinks={summary.guidanceLinks}
-                  emailDomain={emailDomain}
+                  userFilter={userFilterParam}
                 />
               )}
 
@@ -752,6 +818,79 @@ export default function CopilotAdoptionPage() {
  * quite different causes applies. Zero licensed users is nearly always one of three things, so say
  * which three and what to do about each.
  */
+
+/** Whether a summary describes fewer people than the whole tenant. */
+function isNarrowed(summary: CopilotAdoptionSummary): boolean {
+  return !!summary.scopedEmailDomain || !!summary.userFilter;
+}
+
+/**
+ * States above the figures which people they describe, in the reader's language, from what the
+ * server says it applied rather than from what the page asked for.
+ *
+ * Says how much of the tenant that is ("312 of 4,210 licence holders"), because the proportion is what
+ * tells a reader whether a slice is representative, and names the sections that could not be narrowed
+ * so nobody compares a tenant-wide chart with the filtered figures beside it.
+ */
+function FilterBanner({
+  summary,
+  dimensions,
+  onClear,
+}: {
+  summary: CopilotAdoptionSummary;
+  dimensions?: UserFilterDimension[] | null;
+  onClear: () => void;
+}) {
+  const t = useT();
+  const tNode = useTNode();
+  const echo = summary.userFilter;
+
+  const parts: string[] = [];
+  if (summary.scopedEmailDomain) {
+    parts.push(
+      describeClause(
+        t,
+        { join: 'and', dimension: EMAIL_DOMAIN_DIMENSION, operator: 'is', values: [summary.scopedEmailDomain], includeNotSet: false },
+        dimensionLabel(t, EMAIL_DOMAIN_DIMENSION),
+      ),
+    );
+  }
+  if (echo && echo.clauses.length > 0) {
+    parts.push(describeUserFilter(t, { clauses: echo.clauses }, { dimensions, names: echo.dimensionNames }));
+  }
+
+  const coverage =
+    summary.unscopedLicensedUsers !== undefined && summary.unscopedLicensedUsers !== null
+      ? t('copilotAdoption.page.filterBanner.coverage', {
+          licensed: formatCount(summary.licensedUsers),
+          total: formatCount(summary.unscopedLicensedUsers),
+        })
+      : t('copilotAdoption.page.filterBanner.coverageNoTotal');
+
+  return (
+    <MessageBar intent="info" layout="multiline">
+      <MessageBarBody>
+        {tNode('copilotAdoption.page.filterBanner.message', {
+          heading: <strong>{t('copilotAdoption.page.filterBanner.heading')}</strong>,
+          description: joinConditions(t, parts, 'and'),
+          coverage,
+          unscoped:
+            (summary.unscopedSections?.length ?? 0) > 0
+              ? ` ${t('copilotAdoption.page.scopeBanner.unscopedSections', {
+                  v0: describeUnscopedSections(t, summary.unscopedSections ?? []),
+                })}`
+              : '',
+          unknown: (echo?.unknownDimensions?.length ?? 0) > 0 ? ` ${t('userFilter.print.unknown')}` : '',
+          link: (
+            <Link onClick={onClear} data-print="hide">
+              {t('copilotAdoption.page.filterBanner.clear')}
+            </Link>
+          ),
+        })}
+      </MessageBarBody>
+    </MessageBar>
+  );
+}
 
 function FirstRunState({ summary }: { summary: CopilotAdoptionSummary }) {
   const styles = useStyles();

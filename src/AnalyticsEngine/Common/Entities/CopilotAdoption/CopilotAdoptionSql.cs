@@ -1619,6 +1619,9 @@ namespace Common.Entities.CopilotAdoption
                 // licensed one. The users join below already exists for the department lookup, so this
                 // column is free.
                 "       u.user_name AS UserPrincipalName,\r\n" +
+                // The domain falls back to mail when the UPN is on the tenant's default suffix - the same
+                // derivation as every other population and the page-wide user filter.
+                "       u.mail AS Mail,\r\n" +
                 "       ISNULL(NULLIF(LTRIM(RTRIM(dept.name)), ''), '') AS Department,\r\n" +
                 "       t.Interactions AS Interactions,\r\n" +
                 "       ISNULL(d.ActiveDays, 0) AS ActiveDays,\r\n" +

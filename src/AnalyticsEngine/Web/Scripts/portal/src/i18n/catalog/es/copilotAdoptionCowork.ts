@@ -255,8 +255,6 @@ const copilotAdoptionCowork: Record<keyof typeof en, string> = {
   'copilotAdoptionCowork.filters.searchPlaceholder': 'Buscar nombre, correo electrónico, departamento, puesto o responsable',
   'copilotAdoptionCowork.filters.searchAria': 'Buscar candidatos para Cowork',
   'copilotAdoptionCowork.filters.searchButton': 'Buscar',
-  'copilotAdoptionCowork.filters.departmentAria': 'Filtrar candidatos para Cowork por departamento',
-  'copilotAdoptionCowork.filters.allDepartments': 'Todos los departamentos',
   'copilotAdoptionCowork.filters.tierAria': 'Filtrar candidatos para Cowork por veredicto',
   'copilotAdoptionCowork.filters.allVerdicts': 'Todos los veredictos',
   'copilotAdoptionCowork.filters.sortAria': 'Ordenar candidatos para Cowork',

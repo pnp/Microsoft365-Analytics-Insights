@@ -5,6 +5,7 @@
 // components render them with no new charting code.
 
 import type { ReportCategory, ReportSeries } from './reports';
+import type { UserFilterEcho } from './userFilter';
 
 /** Which parts of the adoption tool this deployment can show. */
 export interface CopilotAdoptionAvailability {
@@ -489,11 +490,19 @@ export interface CopilotAdoptionSummary {
   scopedEmailDomain: string | null;
 
   /**
-   * Sections that stayed tenant-wide while `scopedEmailDomain` is set, because they come from
-   * aggregate queries carrying no per-user identity. Values are the constants in
+   * Sections that stayed tenant-wide while `scopedEmailDomain` or `userFilter` is set, because they
+   * come from aggregate queries carrying no per-user identity. Values are the constants in
    * {@link UNSCOPED_SECTIONS}; render each as a "tenant-wide" badge rather than hiding it.
    */
   unscopedSections: string[];
+  /**
+   * The user filter every figure above was narrowed by - Entra ID attributes and custom
+   * organisations - echoed back by the server, or null/absent for none. Optional so a server that
+   * predates the filter still type-checks.
+   */
+  userFilter?: UserFilterEcho | null;
+  /** The tenant-wide Copilot seat count, sent only when the summary is narrowed. */
+  unscopedLicensedUsers?: number | null;
   accountabilityDimension: string | null;
   accountabilityDimensionLabel: string | null;
   accountabilityRollup: AccountabilityRollupRow[];
@@ -689,15 +698,13 @@ export interface LicensedUserFilters {
   bands: AdoptionBand[];
   /** Recommended-action codes to restrict to. Drives the drill-through from the enablement plan. */
   actions: string[];
-  department: string;
-  country: string;
   /**
-   * The email domain the list is narrowed to. Empty means the whole tenant.
-   *
-   * Held on the filter object rather than passed separately so the list, its CSV export and the
-   * summary above it can never drift apart about which population they describe.
+   * The page-wide user filter in its wire form (`serializeUserFilter`), or empty for none - who the
+   * list is about, from Entra ID attributes, email domain and custom organisations alike. Held on the
+   * filter object rather than passed separately so the list, its CSV export and the summary above it
+   * can never drift apart about which population they describe.
    */
-  emailDomain: string;
+  userFilter?: string;
   reclaimEligibility: string;
   coworkOnly: boolean;
   disabledOnly: boolean;
@@ -708,10 +715,8 @@ export interface LicensedUserFilters {
 /** Filter/sort state for the licence-opportunity list. */
 export interface OpportunityFilters {
   search: string;
-  department: string;
-  country: string;
-  /** The email domain the list is narrowed to. Empty means the whole tenant. */
-  emailDomain: string;
+  /** The page-wide user filter in its wire form, or empty for none. */
+  userFilter?: string;
   recommendedOnly: boolean;
   existingCopilotUsersOnly: boolean;
   sortBy: string;
@@ -940,10 +945,8 @@ export interface CoworkReadinessPage {
 export interface CoworkFilters {
   search: string;
   tiers: CoworkTier[];
-  department: string;
-  country: string;
-  /** The email domain the list is narrowed to. Empty means the whole tenant. */
-  emailDomain: string;
+  /** The page-wide user filter in its wire form, or empty for none. */
+  userFilter?: string;
   recommendedOnly: boolean;
   coworkUsersOnly: boolean;
   sortBy: string;

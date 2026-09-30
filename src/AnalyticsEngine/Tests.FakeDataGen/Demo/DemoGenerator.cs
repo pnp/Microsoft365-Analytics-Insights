@@ -32,7 +32,10 @@ namespace Tests.FakeDataGen.Demo
         /// table and filter appear, since both correctly hide themselves below two domains.
         /// </summary>
         public Dictionary<string, int> EmailDomains { get; } = new Dictionary<string, int>(StringComparer.Ordinal);
+        public Dictionary<string, int> UserOrgAssignments { get; } = new Dictionary<string, int>(StringComparer.Ordinal);
         public Dictionary<string, int> CurrentSkuMembers { get; } = new Dictionary<string, int>(StringComparer.Ordinal);
+        public int UserOrgTypes { get; set; }
+        public int UserOrgValues { get; set; }
         public int CompletedProfileWeeks { get; set; }
     }
 
@@ -89,6 +92,10 @@ namespace Tests.FakeDataGen.Demo
             _agentCosts = new DemoAgentCosts(_options, destination);
             progress?.Invoke("Writing synthetic dimensions, users and current licence assignments...");
             WriteDimensions();
+            var userOrganisations = new DemoUserOrganisations(_options.Seed);
+            userOrganisations.WriteDefinitions(_sink, _options.AsOf);
+            summary.UserOrgTypes = DemoUserOrganisations.Types.Length;
+            summary.UserOrgValues = userOrganisations.ValueCount;
             _sink.Flush();
             var managers = new Dictionary<string, int>(StringComparer.Ordinal);
             for (int id = 1; id <= _options.Users; id++)
@@ -106,6 +113,7 @@ namespace Tests.FakeDataGen.Demo
                     Lookup(DemoTables.Offices, p.OfficeLocation), Lookup(DemoTables.UsageLocations, p.UsageLocation), manager);
                 foreach (var sku in _population.Skus)
                     if (sku.Includes(id, _options.Users)) _sink.Write(DemoTables.Assignments, id, sku.Id);
+                userOrganisations.WriteAssignments(_sink, user, _options.AsOf, summary.UserOrgAssignments);
                 Increment(summary.Cohorts, user.Cohort.ToString());
                 Increment(summary.EmailDomains, user.Domain);
             }

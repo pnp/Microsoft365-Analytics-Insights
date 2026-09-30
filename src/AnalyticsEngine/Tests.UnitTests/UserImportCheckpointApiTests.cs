@@ -442,13 +442,125 @@ namespace Tests.UnitTests
 
         #endregion
 
+        #region User organisations move the importer's key
+
+        private const string OrgQualifier = "-o0123456789abcdef";
+
+        private static string QualifiedCheckpointKey => UserImportCheckpointKeys.DeltaToken(TenantId, OrgQualifier);
+
+        [TestMethod]
+        public void QualifiedCheckpointKey_IsTheUnqualifiedKeyFollowedByTheQualifier()
+        {
+            Assert.AreEqual("UserDeltaCode-00000000-0000-0000-0000-000000000000-v2-o0123456789abcdef", QualifiedCheckpointKey);
+            Assert.AreEqual(CheckpointKey, UserImportCheckpointKeys.DeltaToken(TenantId, null), "No Entra organisation types: the key existing deployments already store.");
+            Assert.AreEqual(CheckpointKey, UserImportCheckpointKeys.DeltaToken(TenantId, string.Empty));
+        }
+
+        [TestMethod]
+        public async Task Status_WithEntraOrganisationTypes_ReportsTheKeyTheImporterActuallyUses()
+        {
+            // With Entra organisation types configured the importer keeps its token under a qualified key, so a page that
+            // looked only at the unqualified one would say nothing is stored while the importer kept resuming.
+            var store = new InMemoryCheckpointStore();
+            store.Values[QualifiedCheckpointKey] = TokenValue;
+
+            var status = await NewService(store, orgKeyQualifier: () => Task.FromResult(OrgQualifier)).GetStatusAsync();
+
+            Assert.IsTrue(status.CheckpointStored);
+            Assert.AreEqual(QualifiedCheckpointKey, status.CheckpointKey);
+            CollectionAssert.DoesNotContain(store.StringReads, QualifiedCheckpointKey, "The token's value is never loaded - only tested for existence.");
+        }
+
+        [TestMethod]
+        public async Task Status_WithEntraOrganisationTypes_CountsTheFallbackKeyAsACheckpoint()
+        {
+            // When Graph rejects the organisation attributes the importer resumes from the unqualified key instead.
+            var store = StoreWithCheckpointAndStamp();
+
+            var status = await NewService(store, orgKeyQualifier: () => Task.FromResult(OrgQualifier)).GetStatusAsync();
+
+            Assert.IsTrue(status.CheckpointStored);
+            Assert.AreEqual(QualifiedCheckpointKey, status.CheckpointKey);
+        }
+
+        [TestMethod]
+        public async Task Clear_WithEntraOrganisationTypes_DeletesTheQualifiedKeyAndTheFallback()
+        {
+            // Either one left behind is a checkpoint the next run would resume from instead of reading every user.
+            var store = StoreWithCheckpointAndStamp();
+            store.Values[QualifiedCheckpointKey] = TokenValue;
+
+            var result = await NewService(store, orgKeyQualifier: () => Task.FromResult(OrgQualifier)).ClearAsync(runOnNextCycle: false);
+
+            Assert.IsTrue(result.CheckpointCleared);
+            Assert.IsFalse(store.Values.ContainsKey(QualifiedCheckpointKey));
+            Assert.IsFalse(store.Values.ContainsKey(CheckpointKey));
+            Assert.IsTrue(store.Values.ContainsKey(UserImportCheckpointKeys.LastCompleted), "The import then runs when its interval next allows.");
+        }
+
+        [TestMethod]
+        public async Task OrganisationTypesThatCannotBeRead_MeanTheUnqualifiedKey_NotABrokenPage()
+        {
+            // A database that is not upgraded yet has no organisation tables, and the importer then uses the unqualified key.
+            var store = StoreWithCheckpointAndStamp();
+            var logger = new CapturingLogger();
+            Func<Task<string>> unreadable = () => { throw new InvalidOperationException("synthetic: the organisation tables do not exist yet"); };
+
+            var status = await NewService(store, logger: logger, orgKeyQualifier: unreadable).GetStatusAsync();
+            var result = await NewService(store, orgKeyQualifier: unreadable).ClearAsync(runOnNextCycle: false);
+
+            Assert.IsTrue(status.CheckpointStored);
+            Assert.AreEqual(CheckpointKey, status.CheckpointKey);
+            Assert.IsTrue(result.CheckpointCleared);
+            Assert.IsFalse(store.Values.ContainsKey(CheckpointKey));
+            StringAssert.Contains(logger.Messages(LogLevel.Warning).Single(), "couldn't read the configured user organisation types");
+        }
+
+        [TestMethod]
+        public async Task ThePageAndTheImporterAgreeOnTheQualifiedKey()
+        {
+            // The importer writes through PersistedDeltaValueProvider, the page works the key out from the same enabled
+            // types. If the two drift apart, the page reports and clears a key the importer never reads.
+            var types = new[]
+            {
+                new Common.Entities.UserOrgs.UserOrgType
+                {
+                    Id = 7,
+                    Name = "Cost centre",
+                    EntraAttributeName = "extensionAttribute3",
+                    SourceGeneration = 2,
+                    CreatedUtc = new DateTime(2026, 9, 1, 0, 0, 0, DateTimeKind.Utc),
+                },
+            };
+            var qualifier = Common.Entities.UserOrgs.GraphUserOrgSelection.FromTypes(types).DeltaKeyQualifier;
+            Assert.AreNotEqual(string.Empty, qualifier);
+
+            var config = (Common.Entities.Config.AppConfig)System.Runtime.Serialization.FormatterServices.GetUninitializedObject(typeof(Common.Entities.Config.AppConfig));
+            config.TenantGUID = TenantId;
+            config.ConnectionStrings = new Common.Entities.Config.AppConnectionStrings();
+            var table = new InMemoryKeyValueStore();
+            var importer = new WebJob.Office365ActivityImporter.Engine.Graph.PersistedDeltaValueProvider(config, DataUtils.AnalyticsLogger.ConsoleOnlyTracer(), table);
+            importer.SetKeyQualifier(qualifier);
+            await importer.SetDeltaToken(TokenValue);
+
+            var page = new InMemoryCheckpointStore();
+            page.Values[UserImportCheckpointKeys.DeltaToken(TenantId, qualifier)] = TokenValue;
+            var status = await NewService(page, orgKeyQualifier: () => Task.FromResult(qualifier)).GetStatusAsync();
+
+            Assert.IsTrue(await table.ExistsAsync(status.CheckpointKey), "The importer stored its token under the key the page reports.");
+            Assert.IsFalse(await table.ExistsAsync(CheckpointKey));
+        }
+
+        #endregion
+
         #region Helpers
 
-        private static UserImportCheckpointService NewService(InMemoryCheckpointStore store, ImportTaskSettings importSettings = null, int intervalHours = 24, ILogger logger = null)
+        private static UserImportCheckpointService NewService(InMemoryCheckpointStore store, ImportTaskSettings importSettings = null, int intervalHours = 24, ILogger logger = null,
+            Func<Task<string>> orgKeyQualifier = null)
         {
             return new UserImportCheckpointService(TenantId,
                 store == null ? (Func<IUserImportCheckpointStore>)null : () => store,
-                importSettings, intervalHours, logger);
+                importSettings, intervalHours, logger, orgKeyQualifier);
         }
 
         private static InMemoryCheckpointStore StoreWithCheckpointAndStamp()
