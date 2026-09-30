@@ -1,4 +1,5 @@
 using Azure;
+using Azure.Core;
 using Azure.Data.Tables;
 using Azure.Identity;
 using Microsoft.Extensions.Logging;
@@ -10,17 +11,27 @@ using System.Threading.Tasks;
 namespace Common.Entities.State
 {
     /// <summary>
-    /// Builds an Azure Table <see cref="TableClient"/> that works against both classic shared-key storage accounts and
-    /// accounts with shared-key access disabled (<c>allowSharedKeyAccess = false</c>), which require RBAC / Entra ID.
-    /// Shared by the runtime state store (<see cref="StateStore"/>) and the audit-import blob checkpoint.
+    /// Builds an Azure Table <see cref="TableClient"/> the way the solution authenticates to every Azure service that takes
+    /// either a key or Entra ID: use the connection string as it is when it carries credentials; if the storage account
+    /// denies them, retry with RBAC; and when it carries none, use RBAC directly. Shared by the runtime state store
+    /// (<see cref="StateStore"/>) and the audit-import blob checkpoint.
     /// </summary>
     /// <remarks>
-    /// A storage account hardened with <c>allowSharedKeyAccess = false</c> - increasingly the default under enterprise
-    /// governance policy and the Azure security baseline - rejects a connection-string (shared key) client with
-    /// <c>403 KeyBasedAuthenticationNotPermitted</c>. Per the repo convention for Entra ID fallbacks (Azure AI Language,
-    /// Service Bus, Azure SQL) we then authenticate with a <see cref="ClientSecretCredential"/> built from the runtime
-    /// service principal - never <c>DefaultAzureCredential</c> or managed identity - so behaviour is identical in the
-    /// web-jobs, the web app, the installer tests and unit tests.
+    /// <list type="number">
+    /// <item><description><b>Credentials in the connection string</b> - an <c>AccountKey</c> (what the installer writes) or a
+    /// <c>SharedAccessSignature</c> - are used as they are.</description></item>
+    /// <item><description><b>Access denied</b> - any HTTP 401/403, whatever the reason: shared-key access disabled on the
+    /// account (<c>KeyBasedAuthenticationNotPermitted</c>, increasingly the default under enterprise governance policy), a
+    /// rotated or wrong key (<c>AuthenticationFailed</c>), an expired SAS - is retried with RBAC. So are credentials that
+    /// can't be parsed.</description></item>
+    /// <item><description><b>No credentials in the connection string</b> (only <c>AccountName</c> or <c>TableEndpoint</c>):
+    /// RBAC directly.</description></item>
+    /// </list>
+    /// RBAC means a <see cref="ClientSecretCredential"/> for the runtime service principal - never
+    /// <c>DefaultAzureCredential</c> or managed identity - exactly as Azure AI Language (<c>CognitiveServicesClient</c>) and,
+    /// before it was removed, Redis authenticated. Anything that is not an access problem (DNS, timeouts, 5xx) is thrown as
+    /// it is: other credentials would not help. The storage emulator (<c>UseDevelopmentStorage=true</c>) has no Entra ID, so
+    /// it only ever uses the connection string.
     /// <para>
     /// Data-plane RBAC on the Table service needs the <b>Storage Table Data Contributor</b> role;
     /// <c>Storage Blob Data Contributor</c> does NOT cover Table storage. The installer assigns it in
@@ -37,17 +48,17 @@ namespace Common.Entities.State
         };
 
         /// <summary>
-        /// Builds a <see cref="TableClient"/> for <paramref name="tableName"/> and ensures the table exists. Shared key is
-        /// preferred when the connection string carries an <c>AccountKey</c>; if the account rejects it because key auth
-        /// is disabled, the call is retried with the runtime service principal. Throws when no usable authentication is
-        /// available or the service can't be reached.
+        /// Builds a <see cref="TableClient"/> for <paramref name="tableName"/> and ensures the table exists: with the
+        /// connection string's own credentials when it has them, falling back to the runtime service principal when the
+        /// account denies them, and with the service principal directly when it has none. Throws when no usable
+        /// authentication is available or the service can't be reached.
         /// </summary>
         /// <param name="purpose">What the table is for, e.g. "blob checkpoint table". Used in log and error messages only.</param>
         public static TableClient CreateAndEnsureTable(string storageConnectionString, string tableName,
             string tenantId, string clientId, string clientSecret, ILogger logger, string purpose)
         {
             return CreateAndEnsureTableAsync(storageConnectionString, tableName, tenantId, clientId, clientSecret, logger, purpose,
-                    CancellationToken.None, synchronous: true)
+                    CancellationToken.None, synchronous: true, clientOptions: null, createCredential: null)
                 .GetAwaiter().GetResult();
         }
 
@@ -57,12 +68,18 @@ namespace Common.Entities.State
             CancellationToken cancellationToken = default)
         {
             return CreateAndEnsureTableAsync(storageConnectionString, tableName, tenantId, clientId, clientSecret, logger, purpose,
-                cancellationToken, synchronous: false);
+                cancellationToken, synchronous: false, clientOptions: null, createCredential: null);
         }
 
-        private static async Task<TableClient> CreateAndEnsureTableAsync(string storageConnectionString, string tableName,
+        /// <summary>
+        /// <see cref="CreateAndEnsureTableAsync(string, string, string, string, string, ILogger, string, CancellationToken)"/>
+        /// with the HTTP pipeline options and the RBAC credential supplied by the caller, so tests can see which credential
+        /// each request carried without a network or a tenant. <c>null</c> means the production defaults.
+        /// </summary>
+        internal static async Task<TableClient> CreateAndEnsureTableAsync(string storageConnectionString, string tableName,
             string tenantId, string clientId, string clientSecret, ILogger logger, string purpose,
-            CancellationToken cancellationToken, bool synchronous)
+            CancellationToken cancellationToken, bool synchronous, TableClientOptions clientOptions,
+            Func<string, string, string, TokenCredential> createCredential)
         {
             if (string.IsNullOrWhiteSpace(storageConnectionString))
                 throw new ArgumentException("A storage connection string is required.", nameof(storageConnectionString));
@@ -73,7 +90,7 @@ namespace Common.Entities.State
 
             // Azurite / the storage emulator has no Entra ID identity at all, so there is nothing to fall back to.
             if (IsDevelopmentStorage(storageConnectionString))
-                return await CreateFromConnectionStringAsync(storageConnectionString, tableName, cancellationToken, synchronous).ConfigureAwait(false);
+                return await CreateFromConnectionStringAsync(storageConnectionString, tableName, clientOptions, cancellationToken, synchronous).ConfigureAwait(false);
 
             var endpoint = GetTableEndpoint(storageConnectionString);
             var canUseRbac = endpoint != null
@@ -81,16 +98,31 @@ namespace Common.Entities.State
                 && !string.IsNullOrWhiteSpace(clientId)
                 && !string.IsNullOrWhiteSpace(clientSecret);
 
-            if (HasAccountKey(storageConnectionString))
+            if (HasCredentials(storageConnectionString))
             {
                 try
                 {
-                    return await CreateFromConnectionStringAsync(storageConnectionString, tableName, cancellationToken, synchronous).ConfigureAwait(false);
+                    return await CreateFromConnectionStringAsync(storageConnectionString, tableName, clientOptions, cancellationToken, synchronous).ConfigureAwait(false);
                 }
-                catch (RequestFailedException ex) when (IsKeyAuthDisabled(ex) && canUseRbac)
+                catch (RequestFailedException ex) when (IsAccessDenied(ex) && canUseRbac)
                 {
-                    logger?.LogInformation($"Azure Table storage ({purpose}): shared-key access is disabled on the storage account ({ex.ErrorCode}); " +
-                        "retrying with RBAC/Entra ID using the runtime service principal.");
+                    var denial = $"HTTP {ex.Status} {ex.ErrorCode ?? "UnknownError"}";
+                    if (IsKeyAuthDisabled(ex))
+                    {
+                        logger?.LogInformation($"Azure Table storage ({purpose}): shared-key access is disabled on the storage account ({denial}); " +
+                            "using RBAC/Entra ID with the runtime service principal.");
+                    }
+                    else
+                    {
+                        logger?.LogWarning($"Azure Table storage ({purpose}): the storage account denied the Storage connection string's credentials ({denial}); " +
+                            "retrying with RBAC/Entra ID using the runtime service principal. If the account key was rotated, update the Storage connection string.");
+                    }
+                }
+                catch (Exception ex) when (IsUnusableConnectionString(ex) && canUseRbac)
+                {
+                    // The type only: the message of a parse failure can quote the connection string, key included.
+                    logger?.LogWarning($"Azure Table storage ({purpose}): the credentials in the Storage connection string can't be used ({ex.GetType().Name}); " +
+                        "using RBAC/Entra ID with the runtime service principal.");
                 }
             }
 
@@ -99,16 +131,29 @@ namespace Common.Entities.State
                 throw new InvalidOperationException(BuildNoRbacMessage(endpoint, storageConnectionString, purpose));
             }
 
-            var rbacClient = new TableClient(endpoint, tableName, new ClientSecretCredential(tenantId, clientId, clientSecret));
+            var credential = createCredential != null
+                ? createCredential(tenantId, clientId, clientSecret)
+                : new ClientSecretCredential(tenantId, clientId, clientSecret);
+            var rbacClient = clientOptions == null
+                ? new TableClient(endpoint, tableName, credential)
+                : new TableClient(endpoint, tableName, credential, clientOptions);
             await EnsureTableAsync(rbacClient, cancellationToken, synchronous).ConfigureAwait(false);
             return rbacClient;
+        }
+
+        /// <summary>
+        /// True when the storage account refused the request's credentials - HTTP 401 or 403, whatever the error code - which
+        /// different credentials (RBAC) may get past.
+        /// </summary>
+        public static bool IsAccessDenied(RequestFailedException ex)
+        {
+            return ex != null && (ex.Status == 401 || ex.Status == 403);
         }
 
         /// <summary>True when the storage account rejected the request because account-key auth is turned off.</summary>
         public static bool IsKeyAuthDisabled(RequestFailedException ex)
         {
-            if (ex == null) return false;
-            if (ex.Status != 401 && ex.Status != 403) return false;
+            if (!IsAccessDenied(ex)) return false;
             return ex.ErrorCode != null && KeyAuthDisabledCodes.Contains(ex.ErrorCode);
         }
 
@@ -117,6 +162,27 @@ namespace Common.Entities.State
         {
             var parts = Parse(storageConnectionString);
             return parts.TryGetValue("AccountKey", out var key) && !string.IsNullOrWhiteSpace(key);
+        }
+
+        /// <summary>
+        /// True when the connection string carries credentials of its own - an <c>AccountKey</c> or a
+        /// <c>SharedAccessSignature</c> - and so is tried as it is before RBAC.
+        /// </summary>
+        public static bool HasCredentials(string storageConnectionString)
+        {
+            if (HasAccountKey(storageConnectionString)) return true;
+
+            var parts = Parse(storageConnectionString);
+            return parts.TryGetValue("SharedAccessSignature", out var sas) && !string.IsNullOrWhiteSpace(sas);
+        }
+
+        /// <summary>
+        /// Failures that mean the connection string itself can't be used - e.g. an <c>AccountKey</c> that is not base64 - as
+        /// opposed to a service that refused it.
+        /// </summary>
+        private static bool IsUnusableConnectionString(Exception ex)
+        {
+            return ex is FormatException || ex is ArgumentException || ex is InvalidOperationException;
         }
 
         /// <summary>True for the local storage emulator, which has no Entra ID identity.</summary>
@@ -169,9 +235,11 @@ namespace Common.Entities.State
         }
 
         private static async Task<TableClient> CreateFromConnectionStringAsync(string storageConnectionString, string tableName,
-            CancellationToken cancellationToken, bool synchronous)
+            TableClientOptions clientOptions, CancellationToken cancellationToken, bool synchronous)
         {
-            var client = new TableClient(storageConnectionString, tableName);
+            var client = clientOptions == null
+                ? new TableClient(storageConnectionString, tableName)
+                : new TableClient(storageConnectionString, tableName, clientOptions);
             await EnsureTableAsync(client, cancellationToken, synchronous).ConfigureAwait(false);
             return client;
         }
@@ -190,13 +258,13 @@ namespace Common.Entities.State
 
         private static string BuildNoRbacMessage(Uri endpoint, string storageConnectionString, string purpose)
         {
-            if (!HasAccountKey(storageConnectionString) && endpoint == null)
-                return "The storage connection string contains neither an AccountKey nor an AccountName/TableEndpoint, " +
-                       $"so neither shared-key nor RBAC authentication can be used for the {purpose}.";
+            if (!HasCredentials(storageConnectionString) && endpoint == null)
+                return "The storage connection string contains neither credentials (an AccountKey or a SharedAccessSignature) nor an AccountName/TableEndpoint, " +
+                       $"so neither the connection string nor RBAC can be used for the {purpose}.";
 
-            return "Shared-key access is unavailable on the storage account and the runtime service principal " +
+            return "The storage account can't be reached with the Storage connection string's own credentials and the runtime service principal " +
                    $"(tenant id / client id / client secret) is not configured, so the {purpose} cannot " +
-                   "be authenticated. Configure the runtime account, or re-enable shared-key access on the account.";
+                   "be authenticated. Configure the runtime account, or give the Storage connection string working credentials.";
         }
 
         /// <summary>

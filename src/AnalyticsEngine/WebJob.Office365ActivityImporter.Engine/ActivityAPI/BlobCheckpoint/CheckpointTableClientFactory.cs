@@ -13,9 +13,9 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.BlobCheckpoint
     /// </summary>
     /// <remarks>
     /// A thin facade over <see cref="StorageTableClientFactory"/>, which the runtime state table
-    /// (<see cref="StateStore"/>) shares, so both tables authenticate the same way: shared key when the account allows
-    /// it, otherwise the runtime service principal via <see cref="Azure.Identity.ClientSecretCredential"/> - never
-    /// <c>DefaultAzureCredential</c> or managed identity.
+    /// (<see cref="StateStore"/>) shares, so both tables authenticate the same way: the Storage connection string's own
+    /// credentials when it has them, the runtime service principal (<see cref="Azure.Identity.ClientSecretCredential"/>,
+    /// never <c>DefaultAzureCredential</c> or managed identity) when the account denies them or there are none.
     /// <para>
     /// Data-plane RBAC on the Table service needs the <b>Storage Table Data Contributor</b> role;
     /// <c>Storage Blob Data Contributor</c> does NOT cover Table storage. The installer assigns it in
@@ -27,10 +27,10 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.BlobCheckpoint
         private const string Purpose = "blob checkpoint table";
 
         /// <summary>
-        /// Builds a <see cref="TableClient"/> for <paramref name="tableName"/> and ensures the table exists.
-        /// Shared key is preferred when the connection string carries an <c>AccountKey</c>; if the account
-        /// rejects it because key auth is disabled, the call is retried with the runtime service principal.
-        /// Throws when no usable authentication is available, so the caller can fall back to the in-memory store.
+        /// Builds a <see cref="TableClient"/> for <paramref name="tableName"/> and ensures the table exists: with the
+        /// connection string's own credentials when it has them, retried with the runtime service principal when the account
+        /// denies them, and with the service principal directly when it has none. Throws when no usable authentication is
+        /// available, so the caller can fall back to the in-memory store.
         /// </summary>
         public static TableClient CreateAndEnsureTable(string storageConnectionString, string tableName,
             string tenantId, string clientId, string clientSecret, ILogger logger)

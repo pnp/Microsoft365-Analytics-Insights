@@ -1,3 +1,6 @@
+using Azure;
+using Azure.Core;
+using Azure.Core.Pipeline;
 using Azure.Data.Tables;
 using Common.Entities.Config;
 using Common.Entities.State;
@@ -5,8 +8,11 @@ using Microsoft.Extensions.Logging;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using Newtonsoft.Json;
 using System;
+using System.Collections.Generic;
 using System.Configuration;
 using System.Linq;
+using System.Net;
+using System.Net.Http;
 using System.Runtime.Serialization;
 using System.Text;
 using System.Threading;
@@ -320,6 +326,281 @@ namespace Tests.UnitTests
                 StorageTableClientFactory.GetAccountName("TableEndpoint=https://contosoanalytics.table.core.windows.net/;SharedAccessSignature=sv=fake"));
             Assert.IsNull(StorageTableClientFactory.GetAccountName(null));
             Assert.IsFalse(StorageTableClientFactory.GetAccountName(FakeStorage).Contains("FAKE"));
+        }
+
+        #endregion
+
+        #region Authentication: the connection string as it is, RBAC when access is denied or there are no credentials
+
+        // The rule every service with a key-or-Entra choice follows (Azure AI Language, and Redis before it): credentials in
+        // the connection string are used as they are; if the service denies them, retry with RBAC; with none, RBAC directly.
+        // These drive the SDK's real HTTP pipeline against a scripted Table service and a fake service principal, and assert
+        // which credential each request carried - no network, no tenant.
+
+        private const string RuntimeAppId = "contoso-runtime-app";
+        private static readonly string SyntheticAccountKey = Convert.ToBase64String(Encoding.UTF8.GetBytes("synthetic Contoso account key for unit tests"));
+        private static string KeyConnectionString =>
+            "DefaultEndpointsProtocol=https;AccountName=contosoanalytics;AccountKey=" + SyntheticAccountKey + ";EndpointSuffix=core.windows.net";
+        private const string SasConnectionString =
+            "TableEndpoint=https://contosoanalytics.table.core.windows.net/;SharedAccessSignature=sv=2019-02-02&ss=t&srt=o&sp=rwdlacu&se=2099-01-01T00:00:00Z&sig=fake";
+        private const string AccountNameOnlyConnectionString = "DefaultEndpointsProtocol=https;AccountName=contosoanalytics;EndpointSuffix=core.windows.net";
+
+        [TestMethod]
+        public async Task AConnectionStringWithAKey_IsUsedAsIs()
+        {
+            var service = new ScriptedTableService(credential => credential == "SharedKey" ? ScriptedTableService.Created() : ScriptedTableService.Refused(HttpStatusCode.Forbidden, "AuthorizationPermissionMismatch"));
+            var principalsUsed = new List<string>();
+
+            await OpenTable(KeyConnectionString, service, principalsUsed);
+
+            CollectionAssert.AreEqual(new[] { "SharedKey" }, service.Credentials);
+            Assert.AreEqual(0, principalsUsed.Count, "The service principal is not used while the connection string works.");
+        }
+
+        [DataTestMethod]
+        [DataRow(403, "KeyBasedAuthenticationNotPermitted")] // shared-key access switched off on the account
+        [DataRow(403, "AuthenticationFailed")]               // a rotated or wrong account key
+        [DataRow(403, "AuthorizationFailure")]               // any other 403
+        [DataRow(401, "InvalidAuthenticationInfo")]          // and a 401
+        public async Task AccessDeniedToTheConnectionString_IsRetriedWithRbac(int status, string errorCode)
+        {
+            var service = new ScriptedTableService(credential => credential == "Bearer" ? ScriptedTableService.Created() : ScriptedTableService.Refused((HttpStatusCode)status, errorCode));
+            var principalsUsed = new List<string>();
+            var logger = new RecordingLogger();
+
+            var table = await OpenTable(KeyConnectionString, service, principalsUsed, logger);
+
+            CollectionAssert.AreEqual(new[] { "SharedKey", "Bearer" }, service.Credentials);
+            Assert.AreEqual("contosoanalytics.table.core.windows.net", service.Hosts.Last(), "RBAC goes to the account's own Table endpoint.");
+            CollectionAssert.AreEqual(new[] { RuntimeAppId }, principalsUsed, "RBAC uses the runtime service principal.");
+            Assert.AreEqual(StateStore.TableName, table.Name);
+            StringAssert.Contains(logger.Entries.Single().Message, errorCode, "The log says why the connection string was not enough.");
+        }
+
+        [TestMethod]
+        public async Task ASasConnectionString_IsUsedAsIs_AndRetriedWithRbacWhenDenied()
+        {
+            var accepted = new ScriptedTableService(credential => credential == "Sas" ? ScriptedTableService.Created() : ScriptedTableService.Refused(HttpStatusCode.Forbidden, "AuthorizationPermissionMismatch"));
+            await OpenTable(SasConnectionString, accepted, new List<string>());
+            CollectionAssert.AreEqual(new[] { "Sas" }, accepted.Credentials);
+
+            var expired = new ScriptedTableService(credential => credential == "Bearer" ? ScriptedTableService.Created() : ScriptedTableService.Refused(HttpStatusCode.Forbidden, "AuthenticationFailed"));
+            await OpenTable(SasConnectionString, expired, new List<string>());
+            CollectionAssert.AreEqual(new[] { "Sas", "Bearer" }, expired.Credentials);
+        }
+
+        [TestMethod]
+        public async Task AConnectionStringWithNoCredentials_UsesRbacDirectly()
+        {
+            var service = new ScriptedTableService(credential => credential == "Bearer" ? ScriptedTableService.Created() : ScriptedTableService.Refused(HttpStatusCode.Forbidden, "AuthenticationFailed"));
+            var principalsUsed = new List<string>();
+
+            await OpenTable(AccountNameOnlyConnectionString, service, principalsUsed);
+
+            CollectionAssert.AreEqual(new[] { "Bearer" }, service.Credentials);
+            CollectionAssert.AreEqual(new[] { RuntimeAppId }, principalsUsed);
+        }
+
+        [TestMethod]
+        public async Task AConnectionStringWhoseKeyCannotBeUsed_UsesRbac()
+        {
+            var service = new ScriptedTableService(credential => credential == "Bearer" ? ScriptedTableService.Created() : ScriptedTableService.Refused(HttpStatusCode.Forbidden, "AuthenticationFailed"));
+
+            await OpenTable("DefaultEndpointsProtocol=https;AccountName=contosoanalytics;AccountKey=not-base64!;EndpointSuffix=core.windows.net",
+                service, new List<string>());
+
+            CollectionAssert.AreEqual(new[] { "Bearer" }, service.Credentials);
+        }
+
+        [TestMethod]
+        public async Task AFailureThatIsNotAnAccessProblem_IsNotRetriedWithRbac()
+        {
+            var service = new ScriptedTableService(_ => ScriptedTableService.Refused(HttpStatusCode.ServiceUnavailable, "ServerBusy"));
+            var principalsUsed = new List<string>();
+
+            var ex = await Assert.ThrowsExceptionAsync<RequestFailedException>(() => OpenTable(KeyConnectionString, service, principalsUsed));
+
+            Assert.AreEqual(503, ex.Status);
+            CollectionAssert.AreEqual(new[] { "SharedKey" }, service.Credentials, "Other credentials would not help a busy service.");
+            Assert.AreEqual(0, principalsUsed.Count);
+        }
+
+        [TestMethod]
+        public async Task AccessDeniedWithNoServicePrincipal_ThrowsTheConnectionStringsError()
+        {
+            var service = new ScriptedTableService(_ => ScriptedTableService.Refused(HttpStatusCode.Forbidden, "AuthenticationFailed"));
+
+            var ex = await Assert.ThrowsExceptionAsync<RequestFailedException>(() =>
+                OpenTable(KeyConnectionString, service, new List<string>(), withServicePrincipal: false));
+
+            Assert.AreEqual("AuthenticationFailed", ex.ErrorCode);
+            CollectionAssert.AreEqual(new[] { "SharedKey" }, service.Credentials);
+        }
+
+        [TestMethod]
+        public async Task WhenRbacIsDeniedToo_TheRbacErrorIsThrown()
+        {
+            var service = new ScriptedTableService(credential => credential == "Bearer"
+                ? ScriptedTableService.Refused(HttpStatusCode.Forbidden, "AuthorizationPermissionMismatch")
+                : ScriptedTableService.Refused(HttpStatusCode.Forbidden, "AuthenticationFailed"));
+
+            var ex = await Assert.ThrowsExceptionAsync<RequestFailedException>(() => OpenTable(KeyConnectionString, service, new List<string>()));
+
+            Assert.AreEqual("AuthorizationPermissionMismatch", ex.ErrorCode,
+                "The error names what RBAC is missing (the Storage Table Data Contributor role); the connection string's failure was logged before the retry.");
+            CollectionAssert.AreEqual(new[] { "SharedKey", "Bearer" }, service.Credentials);
+        }
+
+        [TestMethod]
+        public async Task AClientTheAccountStartsRefusing_IsDropped_SoTheNextOperationOpensTheTableAgain()
+        {
+            // The first client is accepted, then refused - shared-key access switched off, or the key rotated, while the
+            // WebJob is running. Opening the table again gives the second: in production, the RBAC client.
+            var refused = false;
+            var first = new TableClient(KeyConnectionString, StateStore.TableName, OptionsFor(new ScriptedTableService(_ => refused
+                ? ScriptedTableService.Refused(HttpStatusCode.Forbidden, "KeyBasedAuthenticationNotPermitted")
+                : ScriptedTableService.NotFound())));
+            var second = new TableClient(new Uri("https://contosoanalytics.table.core.windows.net"), StateStore.TableName, new FakeServicePrincipal(),
+                OptionsFor(new ScriptedTableService(_ => ScriptedTableService.NotFound())));
+            var toOpen = new Queue<TableClient>(new[] { first, second });
+            var opens = 0;
+            var table = new StateStore.LazyTableClient(_ => { opens++; return Task.FromResult(toOpen.Dequeue()); });
+            var store = StateStore.Open(table, StatePartitions.UserImport);
+
+            Assert.IsNull(await store.GetStringAsync("some-key"));
+            refused = true;
+            await Assert.ThrowsExceptionAsync<RequestFailedException>(() => store.GetStringAsync("some-key"));
+            Assert.IsNull(await store.GetStringAsync("some-key"), "The next operation opened the table again rather than reusing the refused client.");
+
+            Assert.AreEqual(2, opens);
+        }
+
+        [TestMethod]
+        public async Task AFailureThatIsNotAnAccessProblem_KeepsTheClient()
+        {
+            var client = new TableClient(KeyConnectionString, StateStore.TableName, OptionsFor(new ScriptedTableService(_ =>
+                ScriptedTableService.Refused(HttpStatusCode.ServiceUnavailable, "ServerBusy"))));
+            var opens = 0;
+            var table = new StateStore.LazyTableClient(_ => { opens++; return Task.FromResult(client); });
+            var store = StateStore.Open(table, StatePartitions.UserImport);
+
+            await Assert.ThrowsExceptionAsync<RequestFailedException>(() => store.GetStringAsync("some-key"));
+            await Assert.ThrowsExceptionAsync<RequestFailedException>(() => store.GetStringAsync("some-key"));
+
+            Assert.AreEqual(1, opens, "A busy service is no reason to open the table again.");
+        }
+
+        [TestMethod]
+        public async Task DroppingAClientThatWasAlreadyReplaced_KeepsTheReplacement()
+        {
+            var endpoint = new Uri("https://contosoanalytics.table.core.windows.net");
+            var a = new TableClient(endpoint, StateStore.TableName, new FakeServicePrincipal());
+            var b = new TableClient(endpoint, StateStore.TableName, new FakeServicePrincipal());
+            var toOpen = new Queue<TableClient>(new[] { a, b });
+            var table = new StateStore.LazyTableClient(_ => Task.FromResult(toOpen.Dequeue()));
+
+            Assert.AreSame(a, await table.GetAsync(CancellationToken.None));
+            table.Invalidate(a);
+            Assert.AreSame(b, await table.GetAsync(CancellationToken.None));
+
+            // A late report about the old client, from an operation that started before the swap.
+            table.Invalidate(a);
+            Assert.AreSame(b, await table.GetAsync(CancellationToken.None));
+        }
+
+        private static Task<TableClient> OpenTable(string connectionString, ScriptedTableService service, List<string> principalsUsed,
+            ILogger logger = null, bool withServicePrincipal = true)
+        {
+            return StorageTableClientFactory.CreateAndEnsureTableAsync(connectionString, StateStore.TableName,
+                withServicePrincipal ? Guid.Empty.ToString() : null,
+                withServicePrincipal ? RuntimeAppId : null,
+                withServicePrincipal ? "s" : null,
+                logger, "runtime state table", CancellationToken.None, synchronous: false, OptionsFor(service),
+                (tenantId, clientId, clientSecret) =>
+                {
+                    principalsUsed.Add(clientId);
+                    return new FakeServicePrincipal();
+                });
+        }
+
+        private static TableClientOptions OptionsFor(ScriptedTableService service)
+        {
+            var options = new TableClientOptions { Transport = new HttpClientTransport(new HttpClient(service)) };
+            options.Retry.MaxRetries = 0;
+            return options;
+        }
+
+        /// <summary>
+        /// The Table service behind the SDK's real pipeline: answers every request from a script, keyed by the kind of
+        /// credential the request carried - "SharedKey", "Sas", "Bearer" or "None" - and records them.
+        /// </summary>
+        private sealed class ScriptedTableService : HttpMessageHandler
+        {
+            private readonly Func<string, HttpResponseMessage> _answer;
+
+            public ScriptedTableService(Func<string, HttpResponseMessage> answer)
+            {
+                _answer = answer;
+            }
+
+            public List<string> Credentials { get; } = new List<string>();
+
+            public List<string> Hosts { get; } = new List<string>();
+
+            protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+            {
+                var credential = CredentialOf(request);
+                lock (Credentials)
+                {
+                    Credentials.Add(credential);
+                    Hosts.Add(request.RequestUri.Host);
+                }
+                return Task.FromResult(_answer(credential));
+            }
+
+            private static string CredentialOf(HttpRequestMessage request)
+            {
+                if (request.Headers.TryGetValues("Authorization", out var values))
+                {
+                    var value = values.First();
+                    if (value.StartsWith("Bearer ", StringComparison.Ordinal)) return "Bearer";
+                    if (value.StartsWith("SharedKey", StringComparison.Ordinal)) return "SharedKey";
+                    return "Other";
+                }
+
+                return request.RequestUri.Query.Contains("sig=") ? "Sas" : "None";
+            }
+
+            /// <summary>The answer to a table create: created (or, for an entity request, done).</summary>
+            public static HttpResponseMessage Created() => new HttpResponseMessage(HttpStatusCode.NoContent);
+
+            public static HttpResponseMessage NotFound() => Refused(HttpStatusCode.NotFound, "ResourceNotFound");
+
+            public static HttpResponseMessage Refused(HttpStatusCode status, string errorCode)
+            {
+                var response = new HttpResponseMessage(status)
+                {
+                    Content = new StringContent(
+                        "{\"odata.error\":{\"code\":\"" + errorCode + "\",\"message\":{\"lang\":\"en-US\",\"value\":\"Scripted failure.\"}}}",
+                        Encoding.UTF8, "application/json"),
+                };
+                response.Headers.Add("x-ms-error-code", errorCode);
+                return response;
+            }
+        }
+
+        /// <summary>The runtime service principal, without Entra ID: hands out a token that only the scripted service sees.</summary>
+        private sealed class FakeServicePrincipal : TokenCredential
+        {
+            public override AccessToken GetToken(TokenRequestContext requestContext, CancellationToken cancellationToken)
+            {
+                return new AccessToken("scripted", DateTimeOffset.UtcNow.AddHours(1));
+            }
+
+            public override ValueTask<AccessToken> GetTokenAsync(TokenRequestContext requestContext, CancellationToken cancellationToken)
+            {
+                return new ValueTask<AccessToken>(GetToken(requestContext, cancellationToken));
+            }
         }
 
         #endregion

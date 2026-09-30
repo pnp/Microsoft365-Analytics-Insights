@@ -14,10 +14,13 @@ namespace Common.Entities.State
     /// </summary>
     /// <remarks>
     /// <para>
-    /// The table is created on first use. Access uses the storage account key when the connection string has one and
-    /// the account allows shared-key access, otherwise the runtime service principal, which the installer grants
-    /// <b>Storage Table Data Contributor</b>. On a private-endpoint deployment it goes through the storage account's
-    /// existing <c>table</c> private endpoint - the same path as the audit-import blob checkpoint table.
+    /// The table is created on first use. Access follows the same rule as every service that takes either a key or Entra
+    /// ID: the Storage connection string's own credentials (the account key the installer writes, or a SAS) are used as
+    /// they are; if the account denies them - shared-key access disabled, a rotated key - the runtime service principal is
+    /// used instead (RBAC, which the installer grants as <b>Storage Table Data Contributor</b>); and with no credentials in
+    /// the connection string, RBAC directly. See <see cref="StorageTableClientFactory"/>. On a private-endpoint deployment
+    /// it goes through the storage account's <c>table</c> private endpoint - the same path as the audit-import blob
+    /// checkpoint table.
     /// </para>
     /// <para>
     /// Every kind of state has its own partition (<see cref="StatePartitions"/>), so an operator can find, audit or
@@ -56,14 +59,25 @@ namespace Common.Entities.State
             var table = Tables.GetOrAdd(connectionString + "|" + clientId, _ => new LazyTableClient(ct =>
                 StorageTableClientFactory.CreateAndEnsureTableAsync(connectionString, TableName, tenantId, clientId, clientSecret, logger, Purpose, ct)));
 
-            return new AzureTableKeyValueStore(table.GetAsync, TableName, partition);
+            return Open(table, partition);
+        }
+
+        /// <summary>
+        /// The store for <paramref name="partition"/> over <paramref name="table"/>, which drops a client the storage account
+        /// refuses so the next operation opens the table again.
+        /// </summary>
+        internal static AzureTableKeyValueStore Open(LazyTableClient table, string partition)
+        {
+            return new AzureTableKeyValueStore(table.GetAsync, TableName, partition, onAccessDenied: table.Invalidate);
         }
 
         /// <summary>
         /// Opens the table once and keeps the client. A failed open is not cached, so a storage blip at start-up heals on
-        /// the next operation instead of pinning the process to a dead client.
+        /// the next operation instead of pinning the process to a dead client. A client the storage account later refuses
+        /// (<see cref="Invalidate"/>) is dropped too, so the next operation opens the table again with the same rule - the
+        /// connection string's credentials first, RBAC when they are denied.
         /// </summary>
-        private sealed class LazyTableClient
+        internal sealed class LazyTableClient
         {
             private readonly Func<CancellationToken, Task<TableClient>> _open;
             private readonly SemaphoreSlim _gate = new SemaphoreSlim(1, 1);
@@ -91,6 +105,19 @@ namespace Common.Entities.State
                 finally
                 {
                     _gate.Release();
+                }
+            }
+
+            /// <summary>
+            /// Forgets <paramref name="refused"/> if it is still the cached client: the storage account denied it access (a
+            /// rotated key, shared-key access switched off, a role assignment removed), so the next operation opens the
+            /// table again instead of failing until the process restarts. A client opened since is kept.
+            /// </summary>
+            public void Invalidate(TableClient refused)
+            {
+                if (refused != null)
+                {
+                    Interlocked.CompareExchange(ref _client, null, refused);
                 }
             }
         }

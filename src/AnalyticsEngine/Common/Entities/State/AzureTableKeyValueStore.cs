@@ -64,6 +64,7 @@ namespace Common.Entities.State
         private const int MaxTransactionSize = 100;
 
         private readonly Func<CancellationToken, Task<TableClient>> _getTable;
+        private readonly Action<TableClient> _onAccessDenied;
         private readonly string _tableName;
         private readonly string _partitionKey;
         private readonly Func<DateTimeOffset> _utcNow;
@@ -75,12 +76,17 @@ namespace Common.Entities.State
         }
 
         /// <param name="getTable">Opens (and creates, first time) the table. Called per operation; expected to cache.</param>
+        /// <param name="onAccessDenied">
+        /// Told which client the storage account refused (HTTP 401/403), so the opener can drop it and the next operation opens
+        /// the table again - the connection string first, then RBAC - instead of reusing it until the process restarts.
+        /// </param>
         internal AzureTableKeyValueStore(Func<CancellationToken, Task<TableClient>> getTable, string tableName, string partitionKey,
-            Func<DateTimeOffset> utcNow = null)
+            Func<DateTimeOffset> utcNow = null, Action<TableClient> onAccessDenied = null)
         {
             if (string.IsNullOrEmpty(partitionKey)) throw new ArgumentException("A partition key is required.", nameof(partitionKey));
 
             _getTable = getTable ?? throw new ArgumentNullException(nameof(getTable));
+            _onAccessDenied = onAccessDenied;
             _tableName = tableName;
             _partitionKey = partitionKey;
             _utcNow = utcNow ?? (() => DateTimeOffset.UtcNow);
@@ -97,26 +103,46 @@ namespace Common.Entities.State
 
         public string Description => $"Azure Table '{_tableName}', partition '{_partitionKey}'";
 
+        /// <summary>
+        /// Runs <paramref name="operation"/> against the table. When the storage account denies the client access - a rotated
+        /// key, shared-key access switched off, a role assignment removed - the opener is told before the error is rethrown,
+        /// so the next operation opens the table again and retries with RBAC.
+        /// </summary>
+        private async Task<T> RunAsync<T>(Func<TableClient, Task<T>> operation, CancellationToken cancellationToken)
+        {
+            var table = await _getTable(cancellationToken).ConfigureAwait(false);
+            try
+            {
+                return await operation(table).ConfigureAwait(false);
+            }
+            catch (RequestFailedException ex) when (_onAccessDenied != null && StorageTableClientFactory.IsAccessDenied(ex))
+            {
+                _onAccessDenied(table);
+                throw;
+            }
+        }
+
         public async Task<string> GetStringAsync(string key, CancellationToken cancellationToken = default)
         {
             var rowKey = ToRowKey(key);
-            var table = await _getTable(cancellationToken).ConfigureAwait(false);
-
-            var response = await table.GetEntityIfExistsAsync<TableEntity>(_partitionKey, rowKey, cancellationToken: cancellationToken)
-                .ConfigureAwait(false);
-            if (!response.HasValue)
+            return await RunAsync<string>(async table =>
             {
-                return null;
-            }
+                var response = await table.GetEntityIfExistsAsync<TableEntity>(_partitionKey, rowKey, cancellationToken: cancellationToken)
+                    .ConfigureAwait(false);
+                if (!response.HasValue)
+                {
+                    return null;
+                }
 
-            var entity = response.Value;
-            if (IsExpired(entity))
-            {
-                await TryDeleteExpiredAsync(table, entity, cancellationToken).ConfigureAwait(false);
-                return null;
-            }
+                var entity = response.Value;
+                if (IsExpired(entity))
+                {
+                    await TryDeleteExpiredAsync(table, entity, cancellationToken).ConfigureAwait(false);
+                    return null;
+                }
 
-            return DecodeValue(entity, key);
+                return DecodeValue(entity, key);
+            }, cancellationToken).ConfigureAwait(false);
         }
 
         public async Task SetStringAsync(string key, string value, TimeSpan? timeToLive = null, CancellationToken cancellationToken = default)
@@ -137,41 +163,45 @@ namespace Common.Entities.State
                 entity[ExpiresProperty] = _utcNow() + timeToLive.Value;
             }
 
-            var table = await _getTable(cancellationToken).ConfigureAwait(false);
-
-            // Replace, not merge: a value that shrinks from compressed chunks back to plain text must not leave the old
-            // chunks behind, and a value written without a TTL must lose any previous expiry.
-            await table.UpsertEntityAsync(entity, TableUpdateMode.Replace, cancellationToken).ConfigureAwait(false);
+            await RunAsync(async table =>
+            {
+                // Replace, not merge: a value that shrinks from compressed chunks back to plain text must not leave the old
+                // chunks behind, and a value written without a TTL must lose any previous expiry.
+                await table.UpsertEntityAsync(entity, TableUpdateMode.Replace, cancellationToken).ConfigureAwait(false);
+                return true;
+            }, cancellationToken).ConfigureAwait(false);
         }
 
         public async Task<bool> DeleteAsync(string key, CancellationToken cancellationToken = default)
         {
             var rowKey = ToRowKey(key);
-            var table = await _getTable(cancellationToken).ConfigureAwait(false);
-
-            try
+            return await RunAsync(async table =>
             {
-                var response = await table.DeleteEntityAsync(_partitionKey, rowKey, ETag.All, cancellationToken).ConfigureAwait(false);
+                try
+                {
+                    var response = await table.DeleteEntityAsync(_partitionKey, rowKey, ETag.All, cancellationToken).ConfigureAwait(false);
 
-                // The SDK answers a delete of a missing entity with the service's 404 rather than an exception.
-                return response == null || response.Status != 404;
-            }
-            catch (RequestFailedException ex) when (ex.Status == 404)
-            {
-                return false;
-            }
+                    // The SDK answers a delete of a missing entity with the service's 404 rather than an exception.
+                    return response == null || response.Status != 404;
+                }
+                catch (RequestFailedException ex) when (ex.Status == 404)
+                {
+                    return false;
+                }
+            }, cancellationToken).ConfigureAwait(false);
         }
 
         public async Task<bool> ExistsAsync(string key, CancellationToken cancellationToken = default)
         {
             var rowKey = ToRowKey(key);
-            var table = await _getTable(cancellationToken).ConfigureAwait(false);
+            return await RunAsync(async table =>
+            {
+                // Select only the expiry: the value itself (a delta token, a refresh token) is never read to answer this.
+                var response = await table.GetEntityIfExistsAsync<TableEntity>(_partitionKey, rowKey, new[] { ExpiresProperty }, cancellationToken)
+                    .ConfigureAwait(false);
 
-            // Select only the expiry: the value itself (a delta token, a refresh token) is never read to answer this.
-            var response = await table.GetEntityIfExistsAsync<TableEntity>(_partitionKey, rowKey, new[] { ExpiresProperty }, cancellationToken)
-                .ConfigureAwait(false);
-
-            return response.HasValue && !IsExpired(response.Value);
+                return response.HasValue && !IsExpired(response.Value);
+            }, cancellationToken).ConfigureAwait(false);
         }
 
         /// <summary>
@@ -188,29 +218,30 @@ namespace Common.Entities.State
         }
 
         /// <summary>Up to <paramref name="maxToFind"/> rows in this partition whose time-to-live has passed, with their ETags.</summary>
-        internal async Task<List<TableEntity>> FindExpiredAsync(int maxToFind, CancellationToken cancellationToken)
+        internal Task<List<TableEntity>> FindExpiredAsync(int maxToFind, CancellationToken cancellationToken)
         {
-            var table = await _getTable(cancellationToken).ConfigureAwait(false);
-
-            // The property name is literal text: CreateQueryFilter quotes every interpolated hole as an OData VALUE.
-            var filter = TableClient.CreateQueryFilter($"PartitionKey eq {_partitionKey} and ExpiresUtc le {_utcNow()}");
-
-            var expired = new List<TableEntity>();
-            var pages = table.QueryAsync<TableEntity>(filter, maxPerPage: 1000, select: new[] { "PartitionKey", "RowKey" },
-                cancellationToken: cancellationToken).AsPages().GetAsyncEnumerator(cancellationToken);
-            try
+            return RunAsync(async table =>
             {
-                while (expired.Count < maxToFind && await pages.MoveNextAsync().ConfigureAwait(false))
+                // The property name is literal text: CreateQueryFilter quotes every interpolated hole as an OData VALUE.
+                var filter = TableClient.CreateQueryFilter($"PartitionKey eq {_partitionKey} and ExpiresUtc le {_utcNow()}");
+
+                var expired = new List<TableEntity>();
+                var pages = table.QueryAsync<TableEntity>(filter, maxPerPage: 1000, select: new[] { "PartitionKey", "RowKey" },
+                    cancellationToken: cancellationToken).AsPages().GetAsyncEnumerator(cancellationToken);
+                try
                 {
-                    expired.AddRange(pages.Current.Values.Take(maxToFind - expired.Count));
+                    while (expired.Count < maxToFind && await pages.MoveNextAsync().ConfigureAwait(false))
+                    {
+                        expired.AddRange(pages.Current.Values.Take(maxToFind - expired.Count));
+                    }
                 }
-            }
-            finally
-            {
-                await pages.DisposeAsync().ConfigureAwait(false);
-            }
+                finally
+                {
+                    await pages.DisposeAsync().ConfigureAwait(false);
+                }
 
-            return expired;
+                return expired;
+            }, cancellationToken);
         }
 
         /// <summary>
@@ -218,10 +249,13 @@ namespace Common.Entities.State
         /// and returns how many were deleted. A value rewritten meanwhile (a fresh result another worker has just cached)
         /// has a new ETag and is kept, as is a row something else already deleted; the rest of its batch is still deleted.
         /// </summary>
-        internal async Task<int> DeleteUnlessChangedAsync(IReadOnlyList<TableEntity> expired, CancellationToken cancellationToken)
+        internal Task<int> DeleteUnlessChangedAsync(IReadOnlyList<TableEntity> expired, CancellationToken cancellationToken)
         {
-            var table = await _getTable(cancellationToken).ConfigureAwait(false);
+            return RunAsync(table => DeleteUnlessChangedAsync(table, expired, cancellationToken), cancellationToken);
+        }
 
+        private static async Task<int> DeleteUnlessChangedAsync(TableClient table, IReadOnlyList<TableEntity> expired, CancellationToken cancellationToken)
+        {
             var deleted = 0;
             for (var i = 0; i < expired.Count; i += MaxTransactionSize)
             {
