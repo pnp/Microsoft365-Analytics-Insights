@@ -177,15 +177,26 @@ jobs:
         # "UseDevelopmentStorage=true", and REQUIRE_AZURITE turns "emulator not reachable" into a failure here
         # (locally, without Azurite, those tests report Inconclusive instead). It is also the Storage account every
         # other test sees (see the Storage env var above).
+        #
+        # Use the azurite.exe that Visual Studio's Azure development workload ships on the runner image: it starts in
+        # seconds and installs nothing. An npm install of azurite took 7-14 minutes on this required check and
+        # resolved ~450 caret-range dependencies at run time in a job that holds the tenant secrets. The pinned npm
+        # install is only a fallback, for the day the image stops shipping it.
         if: needs.setup_tests.outputs.run_dotnet == 'true'
         shell: pwsh
         run: |
-          # Exact version, like every `uses:` in this repo is pinned: this job holds the tenant secrets, so it must not
-          # pull whatever azurite 3.x (and its dependency tree) is newest on the day. 3.37.0 needs Node >= 22 (.nvmrc).
-          npm install --global azurite@3.37.0 --no-audit --no-fund
           $data = Join-Path $env:RUNNER_TEMP 'azurite'
           New-Item -ItemType Directory -Force -Path $data | Out-Null
-          $azurite = (Get-Command azurite-table.cmd -ErrorAction Stop).Source
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+          $vs = if (Test-Path $vswhere) { & $vswhere -latest -products * -property installationPath } else { $null }
+          $azurite = if ($vs) { Join-Path $vs 'Common7\IDE\Extensions\Microsoft\Azure Storage Emulator\azurite.exe' } else { $null }
+          if ($azurite -and (Test-Path $azurite)) {
+            "Using the Azurite bundled with Visual Studio: $azurite (version $(& $azurite --version))"
+          } else {
+            "Visual Studio's Azurite was not found on this image; installing azurite@3.37.0 from npm instead."
+            npm install --global azurite@3.37.0 --no-audit --no-fund
+            $azurite = (Get-Command azurite-table.cmd -ErrorAction Stop).Source
+          }
           Start-Process -FilePath $azurite -ArgumentList @('--silent', '--location', $data, '--tableHost', '127.0.0.1', '--tablePort', '10002', '--skipApiVersionCheck') -WindowStyle Hidden
           $deadline = (Get-Date).AddSeconds(60)
           while ($true) {
