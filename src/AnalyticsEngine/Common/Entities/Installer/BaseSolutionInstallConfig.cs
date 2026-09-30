@@ -172,6 +172,17 @@ namespace Common.Entities.Installer
         [Newtonsoft.Json.JsonProperty("ConfigSchemaVersion")]
         public string ConfigSchemaVersionString { get; set; } = string.Empty;
 
+        /// <summary>
+        /// The schema version this build writes (<c>CONFIG_VERSION</c>). Every config the installer saves is stamped with
+        /// it, whatever version the file was loaded from: a re-saved file has this build's shape - a 2.x config loses its
+        /// removed Redis properties, for example - so it must not keep claiming its old version.
+        /// </summary>
+        public static Version CurrentConfigSchemaVersion => new Version(CONFIG_VERSION);
+
+        /// <summary>
+        /// The schema version of this config: the version its file was saved with when it was loaded from one (so an
+        /// older file reports its own version until it is saved again), otherwise <see cref="CurrentConfigSchemaVersion"/>.
+        /// </summary>
         [Newtonsoft.Json.JsonIgnore]
         public Version ConfigSchemaVersion
         {

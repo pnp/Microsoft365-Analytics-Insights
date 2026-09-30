@@ -216,6 +216,11 @@ namespace App.ControlPanel.Engine
             this.RuntimeAccountOffice365.EncryptSecretToHashProperty(password);
             this.InstallerAccount.EncryptSecretToHashProperty(password);
 
+            // What is written is this build's schema, whichever version the config was loaded from: without this, a 2.x
+            // file re-saved without its removed properties would still say 2.x - in the file and in the config_states
+            // row the installer records (SqlInstallerTasks.RegisterConfigAndStatus uses this too).
+            this.ConfigSchemaVersion = CurrentConfigSchemaVersion;
+
             return JsonConvert.SerializeObject(this);
         }
 

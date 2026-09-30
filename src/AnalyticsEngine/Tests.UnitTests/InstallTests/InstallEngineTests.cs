@@ -129,6 +129,27 @@ namespace Tests.UnitTests
         public void NewConfigSchemaVersionIsThree()
         {
             Assert.AreEqual(new Version(3, 0, 0), new SolutionInstallConfig().ConfigSchemaVersion);
+            Assert.AreEqual(new Version(3, 0, 0), BaseSolutionInstallConfig.CurrentConfigSchemaVersion);
+        }
+
+        [TestMethod]
+        public void AReSavedOlderConfig_IsStampedWithTheCurrentSchemaVersion()
+        {
+            const string legacyJson = @"{
+                ""ResourceGroupName"": ""ContosoAnalytics"",
+                ""RedisName"": ""contoso-redis"",
+                ""ConfigSchemaVersion"": ""2.6.0""
+            }";
+
+            var config = SolutionInstallConfig.LoadFromJson(legacyJson, "synthetic-password").Config;
+            Assert.AreEqual(new Version(2, 6, 0), config.ConfigSchemaVersion, "A loaded file reports the version it was saved with.");
+
+            var saved = Newtonsoft.Json.Linq.JObject.Parse(config.ToJson("synthetic-password"));
+
+            Assert.AreEqual("3.0.0", (string)saved["ConfigSchemaVersion"],
+                "Saved again it no longer has RedisName - it is a 3.0.0 config and the file must say so, not keep claiming 2.6.0.");
+            Assert.IsNull(saved["RedisName"]);
+            Assert.AreEqual(new Version(3, 0, 0), config.ConfigSchemaVersion, "The in-memory config matches what was written.");
         }
 
         [TestMethod]
