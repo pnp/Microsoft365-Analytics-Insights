@@ -1,4 +1,4 @@
-using Common.Entities.Config;
+using Common.Entities.UserScope;
 using Microsoft.Extensions.Logging;
 using System;
 using System.Collections.Concurrent;
@@ -7,7 +7,6 @@ using System.Threading;
 using System.Threading.Tasks;
 using WebJob.Office365ActivityImporter.Engine.ActivityAPI.Rules;
 using WebJob.Office365ActivityImporter.Engine.Entities;
-using WebJob.Office365ActivityImporter.Engine.Graph.User;
 using WebJob.Office365ActivityImporter.Engine.Properties;
 
 namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Persistence
@@ -97,22 +96,24 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Persistence
         public const int StagingInsertsPerThread = 10000;
 
         private readonly AuditFilterConfig _filterConfig;
-        private readonly UserGroupsCache _userGroupsCache;
-        private readonly UserGroupsFilterModel _userGroupsFilter;
+        private readonly UserImportScope _userScope;
         private readonly ILogger _logger;
 
+        // Cached so the per-event scope check allocates nothing: the rules take a Func<string, Task<bool>>.
+        private static readonly Task<bool> InScopeTask = Task.FromResult(true);
+        private static readonly Task<bool> OutOfScopeTask = Task.FromResult(false);
+
         /// <remarks>
-        /// Deliberately no null guards: the manager did not validate these either, and it dereferences them
-        /// during the save. Adding an <c>ArgumentNullException</c> here would move a
+        /// Deliberately no null guards on the filter config: the manager did not validate it either, and it
+        /// dereferences it during the save. Adding an <c>ArgumentNullException</c> here would move a
         /// <c>NullReferenceException</c> raised mid-save to a different exception raised at construction -
         /// an operator-visible change, not an extraction.
         /// </remarks>
-        public ActivityStagingPass(AuditFilterConfig filterConfig, UserGroupsCache userGroupsCache,
-            UserGroupsFilterModel userGroupsFilter, ILogger logger)
+        /// <param name="userScope">The <c>UserGroupsFilter</c> scope for this cycle; null means unfiltered.</param>
+        public ActivityStagingPass(AuditFilterConfig filterConfig, UserImportScope userScope, ILogger logger)
         {
             _filterConfig = filterConfig;
-            _userGroupsCache = userGroupsCache;
-            _userGroupsFilter = userGroupsFilter;
+            _userScope = userScope ?? UserImportScope.Unfiltered;
             _logger = logger;
         }
 
@@ -149,7 +150,7 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Persistence
             // cache capturing lambdas, so building them per event would allocate three delegates for every
             // one of the batch's events.
             Func<AbstractAuditLogContent, bool> urlInScope = log => _filterConfig.InScope(log);
-            Func<string, Task<bool>> userInGroupsFilter = upn => _userGroupsCache.IsInGroupsFilter(upn, _userGroupsFilter);
+            Func<string, Task<bool>> userInGroupsFilter = upn => _userScope.IsInScope(upn) ? InScopeTask : OutOfScopeTask;
             Action<AbstractAuditLogContent> stageRow = log => batch.AddRow(new AuditLogTempEntity(log, log.UserId));
 
             try
@@ -169,10 +170,6 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Persistence
                     if (!decision.IsDuplicate)
                     {
                         var result = decision.Result;
-                        if (result == SaveResultEnum.UserOutOfScope)
-                        {
-                            _logger.LogInformation($"Skipping activity report for user '{abtractLog.UserId}' - not in user groups filter");
-                        }
 
                         // Update stats
                         if (result == SaveResultEnum.Imported)
@@ -188,6 +185,13 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Persistence
                 }
                 swDedup.Stop();
                 stats.SaveDedupMs = swDedup.Elapsed.TotalMilliseconds;
+
+                // One line per batch rather than one per event: with the scope check now a hash lookup, a line per
+                // skipped event would be the most expensive thing this loop did on a tenant scoped to a pilot group.
+                if (stats.UsersOutOfScope > 0)
+                {
+                    _logger.LogInformation($"Skipped {stats.UsersOutOfScope:N0} audit event(s) by people outside UserGroupsFilter.");
+                }
 
                 // Merge data
 #if DEBUG

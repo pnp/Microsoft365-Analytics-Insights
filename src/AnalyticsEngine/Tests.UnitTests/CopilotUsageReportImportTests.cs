@@ -396,8 +396,7 @@ namespace Tests.UnitTests
             var rows = await new CoworkUsageUserDetailLoader(
                     source,
                     AnalyticsLogger.ConsoleOnlyTracer(),
-                    userGroupsCache: null,
-                    userGroupsFilter: null,
+                    userScope: null,
                     persistence: persistence)
                 .LoadAndSaveAsync(new CopilotReportRequest(CopilotReportNames.CoworkUsageUserDetail, "D28"));
 
@@ -422,8 +421,7 @@ namespace Tests.UnitTests
             var rows = await new CoworkUsageUserDetailLoader(
                     source,
                     AnalyticsLogger.ConsoleOnlyTracer(),
-                    userGroupsCache: null,
-                    userGroupsFilter: null,
+                    userScope: null,
                     persistence: persistence)
                 .LoadAndSaveAsync(new CopilotReportRequest(CopilotReportNames.CoworkUsageUserDetail, "D28"));
 
@@ -445,13 +443,64 @@ namespace Tests.UnitTests
             await Assert.ThrowsExceptionAsync<GraphHttpException>(() => new CoworkUsageUserDetailLoader(
                     source,
                     AnalyticsLogger.ConsoleOnlyTracer(),
-                    userGroupsCache: null,
-                    userGroupsFilter: null,
+                    userScope: null,
                     persistence: persistence)
                 .LoadAndSaveAsync(new CopilotReportRequest(CopilotReportNames.CoworkUsageUserDetail, "D28")));
 
             Assert.AreEqual(1, persistence.ImportLogs.Count);
             Assert.IsFalse(persistence.ImportLogs[0].Error.StartsWith("Report not available:", StringComparison.Ordinal));
+        }
+
+        [TestMethod]
+        public async Task CoworkLoader_UnderUserGroupsFilter_SavesOnlyPeopleInScope()
+        {
+            var csv = string.Join("\r\n",
+                "Report Refresh Date,User Principal Name,Total tasks,Scheduled tasks,User-initiated tasks,Active days,Last activity date,Retained Cowork user,Report Period",
+                "2026-09-15,pilot@contoso.onmicrosoft.com,40,10,30,12,2026-09-14,Yes,28",
+                "2026-09-15,outsider@contoso.onmicrosoft.com,8,2,6,3,2026-09-13,No,28");
+            var persistence = new FakeCoworkUsagePersistenceManager();
+
+            await new CoworkUsageUserDetailLoader(
+                    new FakeCopilotReportSource(CopilotReportCsvParser.Parse(CopilotReportNames.CoworkUsageUserDetail, csv)),
+                    AnalyticsLogger.ConsoleOnlyTracer(),
+                    userScope: FakeLoaderClasses.TestUserScopes.Of("pilot@contoso.onmicrosoft.com"),
+                    persistence: persistence)
+                .LoadAndSaveAsync(new CopilotReportRequest(CopilotReportNames.CoworkUsageUserDetail, "D28"));
+
+            Assert.AreEqual("pilot@contoso.onmicrosoft.com", persistence.UpsertRequests.Single().Single().UserPrincipalName,
+                "The outsider's Cowork tasks are not stored.");
+        }
+
+        [TestMethod]
+        public async Task UserDetailLoader_UnderUserGroupsFilter_WritesOnlyPeopleInScope()
+        {
+            var logger = AnalyticsLogger.ConsoleOnlyTracer();
+            var reportDate = new DateTime(2031, 3, 24);
+            var pilotUpn = $"copilot.test.{Guid.NewGuid():N}@contoso.onmicrosoft.com";
+            var outsiderUpn = $"copilot.test.{Guid.NewGuid():N}@contoso.onmicrosoft.com";
+            var report = UserDetailReport(reportDate, pilotUpn, 28, 10, 2);
+            report.AddRange(UserDetailReport(reportDate, outsiderUpn, 28, 20, 4));
+
+            using (var db = new AnalyticsEntitiesContext())
+            {
+                var pilot = await SeedUserAsync(db, pilotUpn);
+                var outsider = await SeedUserAsync(db, outsiderUpn);
+
+                var written = await new CopilotUsageUserDetailLoader(new FakeCopilotReportSource(report), logger,
+                        FakeLoaderClasses.TestUserScopes.Of(pilotUpn))
+                    .LoadAndSaveAsync(db, "D28");
+
+                var stored = await db.CopilotUsageUserActivityLogs
+                    .Where(r => (r.UserID == pilot.ID || r.UserID == outsider.ID) && r.Date == reportDate)
+                    .ToListAsync();
+                db.CopilotUsageUserActivityLogs.RemoveRange(stored);
+                db.users.Remove(pilot);
+                db.users.Remove(outsider);
+                await db.SaveChangesAsync();
+
+                Assert.AreEqual(1, written);
+                Assert.AreEqual(pilot.ID, stored.Single().UserID, "Only the person in scope has Copilot usage stored.");
+            }
         }
 
         [TestMethod]

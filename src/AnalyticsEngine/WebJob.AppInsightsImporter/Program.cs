@@ -6,6 +6,7 @@
 
 using Common.Entities;
 using Common.Entities.Config;
+using Common.Entities.UserScope;
 using DataUtils;
 using Microsoft.Extensions.Logging;
 using System;
@@ -110,12 +111,18 @@ namespace WebJob.AppInsightsImporter
 
             try
             {
+                // UserGroupsFilter, shared across cycles: the resolved scope (and the last good one to fall back on), and
+                // how far this process has read - see AppInsightsScanWatermark.
+                var userScopeProvider = UserImportScopeProvider.CreateForGraph(config, logger);
+                var scanWatermark = new Engine.AppInsightsScanWatermark();
+
                 while (runAgain)
                 {
                     var importCycleTimer = new JobTimer(logger, Process.GetCurrentProcess().ProcessName);
                     importCycleTimer.Start();
 
-                    var importer = new Engine.AppInsightsImporter(config, logger);
+                    var userScope = userScopeProvider.GetScopeForCycleAsync().GetAwaiter().GetResult();
+                    var importer = new Engine.AppInsightsImporter(config, logger, userScope: userScope, scanWatermark: scanWatermark);
                     if (daysBeforeReadOverride > 0)
                     {
                         importer.ImportAndSave(saveRestResponses, daysBeforeReadOverride).Wait();

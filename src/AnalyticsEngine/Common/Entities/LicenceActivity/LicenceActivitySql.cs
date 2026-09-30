@@ -1265,8 +1265,8 @@ BEGIN
     -- positive-only shape would leave every inactive person Unknown, which reads as ""we could not
     -- tell"" when in fact we can.
     --
-    -- Skipped when a group filter scopes the usage-report import: the user import is NOT filtered,
-    -- so absence would then mean ""never looked at"" rather than ""did nothing"".
+    -- Skipped when a group filter scopes the imports: the users table can still hold people outside it
+    -- (imported before the filter was set), so absence could mean ""never looked at"" rather than ""did nothing"".
     IF @groupFiltered = 0
     BEGIN
         INSERT #Scores

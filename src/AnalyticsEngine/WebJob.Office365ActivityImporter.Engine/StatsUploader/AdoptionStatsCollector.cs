@@ -224,7 +224,8 @@ namespace WebJob.Office365ActivityImporter.Engine.StatsUploader
                 CopilotUsageReports = settings.GraphCopilotUsageReports,
                 CopilotAudit = settings.Copilot,
                 CopilotInteractions = settings.CopilotInteractionHistory,
-                UsageReportsGroupFiltered = !string.IsNullOrWhiteSpace(_config.UserGroupsFilter),
+                // A match-everything filter ('*') narrows nothing, so it is not a group filter.
+                UsageReportsGroupFiltered = new Common.Entities.Config.UserGroupsFilterModel(_config.UserGroupsFilter).IsNarrowing,
                 NowUtc = DateTime.UtcNow,
             };
 

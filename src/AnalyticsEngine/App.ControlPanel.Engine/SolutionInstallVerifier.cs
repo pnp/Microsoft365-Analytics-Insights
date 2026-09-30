@@ -30,7 +30,6 @@ using WebJob.Office365ActivityImporter.Engine;
 using WebJob.Office365ActivityImporter.Engine.ActivityAPI;
 using WebJob.Office365ActivityImporter.Engine.Graph.Copilot.InteractionHistory;
 using WebJob.Office365ActivityImporter.Engine.Graph.UsageReports;
-using WebJob.Office365ActivityImporter.Engine.Graph.User;
 using static App.ControlPanel.Engine.Models.AutodetectedSqlDetails;
 
 namespace App.ControlPanel.Engine
@@ -1151,8 +1150,7 @@ namespace App.ControlPanel.Engine
             var manualGraphClient = new WebJob.Office365ActivityImporter.Engine.Graph.ManualGraphCallClient(auth, logger);
 
             var teamsUserUsageLoader = new TeamsUserUsageLoader(manualGraphClient,
-                new NoUsersHaveGroupsUserGroupsCache(_logger),
-                new Common.Entities.Config.UserGroupsFilterModel(string.Empty),
+                Common.Entities.UserScope.UserImportScope.Unfiltered,
                 logger);
 
             // Usage reports. Both toggles read Microsoft 365 usage reports via Reports.Read.All, so verify the
@@ -1199,7 +1197,8 @@ namespace App.ControlPanel.Engine
                     "Directory.Read.All",
                     "Graph user group membership import",
                     "Microsoft Graph",
-                    "the per-user memberOf calls used for group filters will fail at runtime.");
+                    "directory reads made by the user import will fail at runtime, including reading the members of the " +
+                    "groups named in UserGroupsFilter (every import then fails open and imports everyone).");
 
                 await VerifyRequiredTokenPermission(
                     auth,

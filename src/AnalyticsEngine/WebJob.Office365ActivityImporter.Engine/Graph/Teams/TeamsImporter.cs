@@ -17,7 +17,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
         private TeamsFinder _teamsFinder;
         private TeamsLoadContext _context;
 
-        public TeamsImporter(AnalyticsLogger logger, AppConfig settings, GraphServiceClient graphServiceClient) : base(logger, settings)
+        /// <param name="userScope">The <c>UserGroupsFilter</c> scope for this crawl; null means unfiltered.</param>
+        public TeamsImporter(AnalyticsLogger logger, AppConfig settings, GraphServiceClient graphServiceClient, Common.Entities.UserScope.UserImportScope userScope = null) : base(logger, settings)
         {
             if (logger is null)
             {
@@ -34,7 +35,10 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
                 throw new ArgumentNullException(nameof(graphServiceClient));
             }
 
-            _context = new TeamsLoadContext(graphServiceClient);
+            _context = new TeamsLoadContext(graphServiceClient)
+            {
+                UserScope = userScope ?? Common.Entities.UserScope.UserImportScope.Unfiltered
+            };
             _teamsFinder = new TeamsFinder(logger, settings, graphServiceClient);
         }
 

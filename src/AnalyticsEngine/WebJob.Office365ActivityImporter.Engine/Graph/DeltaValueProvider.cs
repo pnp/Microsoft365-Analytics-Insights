@@ -225,5 +225,46 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             return UserImportCheckpointKeys.DeltaToken(_appConfig.TenantGUID);
         }
     }
+
+    /// <summary>
+    /// Remembers which <c>UserGroupsFilter</c> the stored <c>/users/delta</c> checkpoint was taken under, so the user
+    /// import can tell that the filter has changed since - even after a restart, which changing it causes. See
+    /// <see cref="UserImportCheckpointKeys.DeltaTokenUserScope"/>.
+    /// </summary>
+    public interface IUserImportScopeMarkerStore
+    {
+        /// <returns>The stored <see cref="UserGroupsFilterModel.Fingerprint"/>, or null when there is none.</returns>
+        Task<string> GetFingerprintAsync();
+
+        /// <summary>Records <paramref name="fingerprint"/>; an empty one (no filter) removes the record.</summary>
+        Task SetFingerprintAsync(string fingerprint);
+    }
+
+    /// <summary>
+    /// The Redis record, kept beside the delta token it describes. Only needed where the token itself is kept in
+    /// Redis: an in-process token does not outlive the import that read it, so it can never be stale.
+    /// </summary>
+    public sealed class RedisUserImportScopeMarkerStore : IUserImportScopeMarkerStore
+    {
+        private readonly IStringValueStore _store;
+        private readonly string _key;
+
+        public RedisUserImportScopeMarkerStore(AppConfig appConfig)
+            : this(new CacheConnectionStringValueStore(CacheConnectionManager.GetConnectionManager(appConfig.ConnectionStrings.RedisConnectionString,
+                tenantId: appConfig.TenantGUID.ToString(), clientId: appConfig.ClientID, clientSecret: appConfig.ClientSecret)), appConfig.TenantGUID)
+        {
+        }
+
+        internal RedisUserImportScopeMarkerStore(IStringValueStore store, Guid tenantId)
+        {
+            _store = store ?? throw new ArgumentNullException(nameof(store));
+            _key = UserImportCheckpointKeys.DeltaTokenUserScope(tenantId);
+        }
+
+        public Task<string> GetFingerprintAsync() => _store.GetString(_key);
+
+        public Task SetFingerprintAsync(string fingerprint)
+            => string.IsNullOrEmpty(fingerprint) ? _store.DeleteString(_key) : _store.SetString(_key, fingerprint);
+    }
 }
 

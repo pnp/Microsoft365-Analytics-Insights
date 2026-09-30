@@ -52,5 +52,27 @@ namespace Tests.UnitTests
             Assert.IsTrue(filter.Matches("MyTestGroup"));
             Assert.IsFalse(filter.Matches("RandomGroup"));
         }
+
+        [TestMethod]
+        public void Fingerprint_IsTheSameForTheSameGroups_WhateverTheOrderCaseOrSpacing()
+        {
+            var fingerprint = new UserGroupsFilterModel("Copilot pilot;Καλημέρα κόσμε*").Fingerprint;
+
+            StringAssert.StartsWith(fingerprint, "sha256:");
+            Assert.AreEqual(fingerprint, new UserGroupsFilterModel(" καλημέρα κόσμε* ; COPILOT PILOT ;").Fingerprint);
+            Assert.AreEqual(fingerprint, new UserGroupsFilterModel("Copilot pilot;Καλημέρα κόσμε*;copilot pilot").Fingerprint);
+            Assert.AreNotEqual(fingerprint, new UserGroupsFilterModel("Copilot pilot").Fingerprint);
+            Assert.AreNotEqual(fingerprint, new UserGroupsFilterModel("Copilot pilot;Καλημέρα*").Fingerprint);
+        }
+
+        [TestMethod]
+        public void Fingerprint_IsEmpty_WhenTheFilterNarrowsNothing()
+        {
+            Assert.AreEqual(string.Empty, new UserGroupsFilterModel(null).Fingerprint);
+            Assert.AreEqual(string.Empty, new UserGroupsFilterModel(" ; ").Fingerprint);
+            Assert.AreEqual(string.Empty, new UserGroupsFilterModel("*").Fingerprint);
+            Assert.AreEqual(string.Empty, new UserGroupsFilterModel("Copilot pilot;**").Fingerprint,
+                "A pattern that matches every group makes the whole filter match everyone.");
+        }
     }
 }

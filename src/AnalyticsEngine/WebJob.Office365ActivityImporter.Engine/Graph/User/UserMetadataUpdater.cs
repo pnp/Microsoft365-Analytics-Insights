@@ -1,6 +1,7 @@
 ﻿using Azure.Core;
 using Common.Entities;
 using Common.Entities.Config;
+using Common.Entities.UserScope;
 using DataUtils;
 using Microsoft.Graph;
 using Microsoft.Graph.Models;
@@ -27,15 +28,38 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         private UserInsertProcessor _insertProcessor;
         private UserLicenseProcessor _licenseProcessor;
         private UserDataMapper _dataMapper;
+        private IUserImportScopeProvider _userScopeProvider;
+        private IImportLastRunStore _lastRunStore;
+        private IUserImportScopeMarkerStore _scopeMarkerStore;
 
-        public UserMetadataUpdater(AnalyticsLogger logger, AppConfig settings, TokenCredential creds, ManualGraphCallClient manualGraphCallClient, IClock clock = null)
+        /// <summary>
+        /// Cadence key for the full re-read that picks up people who joined the <c>UserGroupsFilter</c> groups after
+        /// the directory was last read in full. Stored in the process-lifetime last-run store, like the section gates.
+        /// </summary>
+        public const string ScopeCatchUpLastRunKey = "UserImportScopeCatchUpLastRun";
+
+        /// <summary>At most one scope catch-up re-read per this many hours.</summary>
+        public const int ScopeCatchUpIntervalHours = 24;
+
+        /// <param name="userScopeProvider">
+        /// The process-lifetime <c>UserGroupsFilter</c> scope: only people in it are written to the users table.
+        /// Null means unfiltered.
+        /// </param>
+        /// <param name="lastRunStore">
+        /// Process-lifetime store that rate-limits the scope catch-up re-read. Without one no catch-up is attempted.
+        /// </param>
+        public UserMetadataUpdater(AnalyticsLogger logger, AppConfig settings, TokenCredential creds, ManualGraphCallClient manualGraphCallClient, IClock clock = null,
+            IUserImportScopeProvider userScopeProvider = null, IImportLastRunStore lastRunStore = null)
             : base(logger, settings)
         {
             _clock = clock ?? SystemClock.Instance;
+            _userScopeProvider = userScopeProvider;
+            _lastRunStore = lastRunStore;
             IDeltaValueProvider deltaProvider = null;
             if (!string.IsNullOrEmpty(settings.ConnectionStrings.RedisConnectionString))
             {
                 deltaProvider = new RedisProcessDeltaValueProvider(settings, logger);
+                _scopeMarkerStore = new RedisUserImportScopeMarkerStore(settings);
                 logger.LogInformation($"User import - using Redis for delta token cache.");
             }
             else
@@ -84,6 +108,23 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
 
         public IUserMetadataLoader UserLoader => _userLoader;
 
+        /// <summary>
+        /// Applies <c>UserGroupsFilter</c> to this updater: only people in the scope are written, and people who
+        /// joined its groups after the directory was last read in full are caught up by an occasional full re-read.
+        /// </summary>
+        /// <param name="scopeMarkerStore">
+        /// Where the filter the stored delta token was taken under is recorded, so a changed filter triggers a full
+        /// read. Null when the token does not outlive the import (see <see cref="RedisUserImportScopeMarkerStore"/>).
+        /// </param>
+        public UserMetadataUpdater WithUserScope(IUserImportScopeProvider userScopeProvider, IImportLastRunStore lastRunStore,
+            IUserImportScopeMarkerStore scopeMarkerStore = null)
+        {
+            _userScopeProvider = userScopeProvider;
+            _lastRunStore = lastRunStore;
+            _scopeMarkerStore = scopeMarkerStore;
+            return this;
+        }
+
         #endregion
 
         /// <summary>
@@ -109,19 +150,42 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 _dataMapper = new UserDataMapper(_logger, _userMetaCache, new SqlUserLookupStore(db), _clock);
                 var importCycleLastUpdatedUtc = _clock.UtcNow;
 
+                // UserGroupsFilter: only people in the scope are written to the users table - their metadata, manager
+                // link and licences. Everyone else is left out entirely.
+                var userScope = _userScopeProvider == null ? UserImportScope.Unfiltered : await _userScopeProvider.GetScopeAsync();
+                _dataMapper.UserScope = userScope;
+
                 _logger.LogInformation($"{DateTime.Now.ToShortTimeString()} User import - start");
 
                 // If we have no active users, assume new install so clear delta key
                 var activeUserCount = await db.users.Where(u => u.AccountEnabled.HasValue && u.AccountEnabled.Value == true).CountAsync();
+                var deltaTokenCleared = false;
                 if (activeUserCount == 0)
                 {
                     await _userLoader.DeltaValueProvider.ClearDeltaToken();
+                    deltaTokenCleared = true;
+                }
+
+                // A stored delta token only returns people who changed since it was taken, so one taken under a
+                // different UserGroupsFilter would never return the people the new filter lets in.
+                deltaTokenCleared |= await ClearDeltaTokenIfUserScopeChangedAsync(alreadyCleared: deltaTokenCleared);
+
+                if (!deltaTokenCleared && userScope.IsFiltered)
+                {
+                    await ClearDeltaTokenForScopeCatchUpIfDueAsync(db, userScope);
                 }
 
                 // Load from Graph & update delta code once done
                 var allActiveGraphUsers = await _userLoader.LoadAllActiveUsers();
                 var deltaReadCompleted = _userLoader.LastLoadReachedDeltaLink;
                 _logger.LogInformation($"User import - loaded {allActiveGraphUsers.Count.ToString("N0")} users from Graph");
+
+                if (userScope.IsFiltered)
+                {
+                    var readFromGraph = allActiveGraphUsers.Count;
+                    allActiveGraphUsers = SelectGraphUsersInScope(allActiveGraphUsers, userScope);
+                    _logger.LogInformation($"User import - {allActiveGraphUsers.Count:N0} of the {readFromGraph:N0} users read are in UserGroupsFilter; only they are written.");
+                }
 
                 // Pre-build dictionary for O(1) graph user lookups by AAD ID (avoids O(n) scans per user in manager resolution)
                 _dataMapper.SetGraphUserLookup(allActiveGraphUsers);
@@ -144,9 +208,15 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 var dbUsersByUpn = new Dictionary<string, Common.Entities.User>(allDbUsers.Count, StringComparer.OrdinalIgnoreCase);
                 var dbUsersByAadId = new Dictionary<string, Common.Entities.User>(allDbUsers.Count, StringComparer.OrdinalIgnoreCase);
 
-                // Single pass to populate both dictionaries
+                // Single pass to populate both dictionaries. Under UserGroupsFilter, people outside the scope are left
+                // out: these maps are also where managers are resolved, and a manager outside the scope must resolve
+                // to no manager rather than to their (still unpurged) row.
                 foreach (var user in allDbUsers)
                 {
+                    if (userScope.IsFiltered && !IsDbUserInScope(user, userScope))
+                    {
+                        continue;
+                    }
                     if (!string.IsNullOrEmpty(user.UserPrincipalName))
                     {
                         dbUsersByUpn[user.UserPrincipalName] = user;
@@ -331,7 +401,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                     {
                         foreach (var u in allDbUsers)
                         {
-                            if (u.ID > 0)
+                            // Licences are directory metadata too: not refreshed for anyone outside UserGroupsFilter.
+                            if (u.ID > 0 && (!userScope.IsFiltered || IsDbUserInScope(u, userScope)))
                             {
                                 combinedById[u.ID] = u;
                             }
@@ -423,6 +494,126 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 allDbUsers?.Clear();
 
                 return cycleCompleted;
+            }
+        }
+
+        /// <summary>The Graph users in the <c>UserGroupsFilter</c> scope, matched on object id, UPN or mail.</summary>
+        internal static List<GraphUser> SelectGraphUsersInScope(List<GraphUser> graphUsers, UserImportScope userScope)
+        {
+            if (graphUsers == null || userScope == null || !userScope.IsFiltered)
+            {
+                return graphUsers;
+            }
+            return graphUsers.Where(u => u != null && userScope.IsAnyInScope(u.Id, u.UserPrincipalName, u.Mail)).ToList();
+        }
+
+        /// <summary>True when a users-table row belongs to someone in the <c>UserGroupsFilter</c> scope.</summary>
+        internal static bool IsDbUserInScope(Common.Entities.User user, UserImportScope userScope)
+            => user != null && userScope.IsAnyInScope(user.AzureAdId, user.UserPrincipalName, user.Mail);
+
+        /// <summary>
+        /// Discards the stored <c>/users/delta</c> token when it was taken under a different <c>UserGroupsFilter</c>
+        /// from the one set now, so this cycle reads the whole directory (filtered to the new scope as always).
+        /// </summary>
+        /// <remarks>
+        /// A token only returns people who changed after it was taken, and while a filter is set everyone outside it
+        /// is left out of the users table. So once the filter is removed or changed, the people it newly lets in would
+        /// never be imported unless they happened to change. Changing the setting restarts the web job, which is why
+        /// the filter the token belongs to is stored beside it rather than remembered in memory.
+        /// </remarks>
+        /// <returns>True when the token was discarded (or already had been) because the filter changed.</returns>
+        private async Task<bool> ClearDeltaTokenIfUserScopeChangedAsync(bool alreadyCleared)
+        {
+            if (_scopeMarkerStore == null)
+            {
+                return false;
+            }
+
+            var fingerprint = (_userScopeProvider?.Filter ?? new UserGroupsFilterModel()).Fingerprint;
+            try
+            {
+                var stored = await _scopeMarkerStore.GetFingerprintAsync() ?? string.Empty;
+                if (string.Equals(stored, fingerprint, StringComparison.Ordinal))
+                {
+                    return false;
+                }
+
+                if (!alreadyCleared)
+                {
+                    _logger.LogInformation("User import - UserGroupsFilter has changed since the stored /users/delta checkpoint was taken, and an " +
+                        "incremental read would never return the people it now includes who have not changed since. Reading the full user list this cycle.");
+                    await _userLoader.DeltaValueProvider.ClearDeltaToken();
+                }
+
+                // Recorded now rather than once the read completes: with the token gone, every cycle reads the full
+                // list until one completes, whatever this record says.
+                await _scopeMarkerStore.SetFingerprintAsync(fingerprint);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning($"User import - could not check whether UserGroupsFilter has changed since the last full read of the directory ({ex.Message}). " +
+                    "Will check again next cycle.");
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// People added to the <c>UserGroupsFilter</c> groups after the directory was last read in full are never
+        /// returned by an incremental <c>/users/delta</c> read - their user object did not change, only the group did -
+        /// so they would never reach the users table. When any enabled member is missing from it, discard the delta
+        /// token so this cycle reads the full user list (filtered to the scope as always). Rate-limited to once per
+        /// <see cref="ScopeCatchUpIntervalHours"/>, so a member who can never be imported cannot cause a full read
+        /// every cycle.
+        /// </summary>
+        private async Task ClearDeltaTokenForScopeCatchUpIfDueAsync(AnalyticsEntitiesContext db, UserImportScope userScope)
+        {
+            if (_lastRunStore == null || userScope.EnabledMemberObjectIds.Count == 0)
+            {
+                return;
+            }
+
+            try
+            {
+                if (string.IsNullOrEmpty(await _userLoader.DeltaValueProvider.GetDeltaToken()))
+                {
+                    return;     // Already reading the full list.
+                }
+
+                var knownObjectIds = new HashSet<Guid>();
+                foreach (var id in await db.users.Where(u => u.AzureAdId != null && u.AzureAdId != "").Select(u => u.AzureAdId).ToListAsync())
+                {
+                    if (Guid.TryParse(id, out var objectId))
+                    {
+                        knownObjectIds.Add(objectId);
+                    }
+                }
+
+                var missing = userScope.EnabledMemberObjectIds.Count(id => !knownObjectIds.Contains(id));
+                if (missing == 0)
+                {
+                    return;
+                }
+
+                var lastCatchUp = await _lastRunStore.GetLastRunUtc(ScopeCatchUpLastRunKey);
+                if (!ImportCadenceGate.ShouldRun(lastCatchUp, ScopeCatchUpIntervalHours, force: false, nowUtc: _clock.UtcNow))
+                {
+                    _logger.LogInformation($"User import - {missing:N0} enabled member(s) of the UserGroupsFilter group(s) are not in the users table yet. " +
+                        $"The next full re-read to add them is due after {lastCatchUp?.AddHours(ScopeCatchUpIntervalHours):u} UTC.");
+                    return;
+                }
+
+                _logger.LogInformation($"User import - {missing:N0} enabled member(s) of the UserGroupsFilter group(s) are not in the users table - usually " +
+                    "people added to the group(s) since the directory was last read in full, whom an incremental read never returns. " +
+                    "Reading the full user list this cycle to add them.");
+                await _userLoader.DeltaValueProvider.ClearDeltaToken();
+                await _lastRunStore.SetLastRunUtc(ScopeCatchUpLastRunKey, _clock.UtcNow);
+            }
+            catch (Exception ex)
+            {
+                // A missed catch-up only delays adding new members; it must not stop the import.
+                _logger.LogWarning($"User import - could not check for UserGroupsFilter members missing from the users table ({ex.Message}). " +
+                    "Will check again next cycle.");
             }
         }
 

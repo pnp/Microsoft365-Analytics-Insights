@@ -16,7 +16,6 @@ using WebJob.Office365ActivityImporter.Engine.Entities.Serialisation.UsageReport
 using WebJob.Office365ActivityImporter.Engine.Graph;
 using WebJob.Office365ActivityImporter.Engine.Graph.UsageReports;
 using WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Aggregate;
-using WebJob.Office365ActivityImporter.Engine.Graph.User;
 
 namespace Tests.UnitTests
 {
@@ -98,10 +97,10 @@ namespace Tests.UnitTests
             await graphAppIndentityOAuthContext.InitClientCredential();
 
             var graphClient = new Microsoft.Graph.GraphServiceClient(graphAppIndentityOAuthContext.Creds);
-            var graphImporter = new GraphImporter(logger, new NoUsersHaveGroupsUserGroupsCache(logger), graphAppIndentityOAuthContext, graphClient, authConfig, lastRunStore: new InMemoryImportLastRunStore());
+            var graphImporter = new GraphImporter(logger, null, graphAppIndentityOAuthContext, graphClient, authConfig, lastRunStore: new InMemoryImportLastRunStore());
 
             await graphImporter.GetAndSaveActivityReportsMultiThreaded(1, new ManualGraphCallClient(graphAppIndentityOAuthContext, logger),
-                new NoUsersHaveGroupsUserGroupsCache(logger), new UserGroupsFilterModel());
+                Common.Entities.UserScope.UserImportScope.Unfiltered);
         }
 
         [TestMethod]
@@ -377,7 +376,7 @@ namespace Tests.UnitTests
         /// </summary>
         private class TestableTeamsUserUsageLoader : TeamsUserUsageLoader
         {
-            public TestableTeamsUserUsageLoader(ILogger logger) : base(null, null, null, logger) { }
+            public TestableTeamsUserUsageLoader(ILogger logger) : base(null, null, logger) { }
 
             public GlobalTeamsUserUsageLog Populate(TeamsUserActivityUserDetail page)
             {

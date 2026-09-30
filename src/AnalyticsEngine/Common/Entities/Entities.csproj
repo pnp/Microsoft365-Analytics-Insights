@@ -143,6 +143,10 @@
     <Compile Include="Copilot\CopilotAccessedResourceTaxonomy.cs" />
     <Compile Include="Config\ImportConfig.cs" />
     <Compile Include="Config\UserGroupsFilterModel.cs" />
+    <Compile Include="UserScope\GroupDirectoryReader.cs" />
+    <Compile Include="UserScope\GroupMembershipResolver.cs" />
+    <Compile Include="UserScope\UserImportScope.cs" />
+    <Compile Include="UserScope\UserImportScopeProvider.cs" />
     <Compile Include="Entities\AuditLog\CopilotEvents.cs" />
     <Compile Include="Entities\AuditLog\DlpEvents.cs" />
     <Compile Include="Entities\Copilot\CopilotInteractionHistory.cs" />

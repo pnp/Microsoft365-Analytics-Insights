@@ -166,8 +166,11 @@ namespace UnitTests.FakeLoaderClasses
             return this;
         }
 
-        public Task SaveOrReplaceCallRecord(CallRecordDTO call)
+        public List<Common.Entities.UserScope.UserImportScope> ScopesUsed { get; } = new List<Common.Entities.UserScope.UserImportScope>();
+
+        public Task SaveOrReplaceCallRecord(CallRecordDTO call, Common.Entities.UserScope.UserImportScope userScope)
         {
+            ScopesUsed.Add(userScope);
             if (_saveFailure != null) return Task.FromException(_saveFailure);
 
             Saved.Add(call);

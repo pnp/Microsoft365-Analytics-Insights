@@ -1,6 +1,7 @@
 using Azure.Core;
 using Common.Entities;
 using Common.Entities.Entities.Teams;
+using Common.Entities.UserScope;
 using Microsoft.Extensions.Logging;
 using Microsoft.Graph;
 using Microsoft.Graph.Models;
@@ -8,12 +9,47 @@ using Microsoft.Graph.Models.ODataErrors;
 using Newtonsoft.Json;
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using WebJob.Office365ActivityImporter.Engine.Graph;
 
 namespace WebJob.Office365ActivityImporter.Engine.Entities.Serialisation
 {
+    /// <summary>
+    /// Which Teams calls <c>UserGroupsFilter</c> lets through: a call is kept when anyone on it - the organiser or a
+    /// session participant - is in the scope, and skipped when nobody is.
+    /// </summary>
+    public static class CallRecordScopeRules
+    {
+        /// <summary>The organiser and every session caller/callee that has an email address.</summary>
+        public static IEnumerable<string> ParticipantEmails(CallRecordDTO call)
+        {
+            if (call == null)
+            {
+                yield break;
+            }
+            if (!string.IsNullOrEmpty(call.OrganizerEmail))
+            {
+                yield return call.OrganizerEmail;
+            }
+            foreach (var session in call.Sessions ?? new List<CallSessionDTO>())
+            {
+                if (session?.Caller?.HaveUserEmail == true) yield return session.Caller.UserEmailAddress;
+                if (session?.Callee?.HaveUserEmail == true) yield return session.Callee.UserEmailAddress;
+            }
+        }
+
+        public static bool AnyParticipantInScope(CallRecordDTO call, UserImportScope scope)
+        {
+            if (scope == null || !scope.IsFiltered)
+            {
+                return true;
+            }
+            return ParticipantEmails(call).Any(scope.IsInScope);
+        }
+    }
+
     // https://docs.microsoft.com/en-us/graph/api/resources/callrecords-callrecord?view=graph-rest-beta
     public class CallRecordDTO : BaseCallRecordDTOWithModalities
     {
@@ -57,7 +93,9 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities.Serialisation
         /// <summary>
         /// Debug testing method
         /// </summary>
-        public static async Task<CallRecord> SaveNewCallToDB(string callId, ManualGraphCallClient manualClient, TokenCredential graphServiceClientAuthenticationProvider, ILogger logger, string thisTenantId)
+        /// <param name="userScope">The <c>UserGroupsFilter</c> scope to apply; null means unfiltered.</param>
+        public static async Task<CallRecord> SaveNewCallToDB(string callId, ManualGraphCallClient manualClient, TokenCredential graphServiceClientAuthenticationProvider, ILogger logger, string thisTenantId,
+            UserImportScope userScope = null)
         {
             var teamsLoadContext = new TeamsLoadContext(new GraphServiceClient(graphServiceClientAuthenticationProvider));
 
@@ -65,17 +103,31 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities.Serialisation
 
             logger.LogInformation($"Response payload from Graph:\n{newCall.JsonText}");
 
+            var scope = userScope ?? UserImportScope.Unfiltered;
+            if (!CallRecordScopeRules.AnyParticipantInScope(newCall, scope))
+            {
+                logger.LogInformation("Nobody on this call is in UserGroupsFilter, so it is not saved.");
+                return null;
+            }
+
             logger.LogInformation("\nSaving call to SQL...");
             using (var db = new AnalyticsEntitiesContext())
             {
-                return await newCall.SaveOrReplaceCallRecord(new TeamsAndCallsDBLookupManager(db), logger);
+                return await newCall.SaveOrReplaceCallRecord(new TeamsAndCallsDBLookupManager(db), logger, scope);
             }
         }
 
         static SemaphoreSlim saveCallRecordSemaphoreSlim = new SemaphoreSlim(1, 1);
 
-        public async Task<CallRecord> SaveOrReplaceCallRecord(TeamsAndCallsDBLookupManager context, ILogger logger)
+        /// <param name="userScope">
+        /// The <c>UserGroupsFilter</c> scope. People on the call who are outside it are stored as the anonymous
+        /// "Unknown User" and none of their feedback is kept, so the call still counts for the in-scope people on it
+        /// without recording who else was there. Null means unfiltered.
+        /// </param>
+        public async Task<CallRecord> SaveOrReplaceCallRecord(TeamsAndCallsDBLookupManager context, ILogger logger, UserImportScope userScope = null)
         {
+            var scope = userScope ?? UserImportScope.Unfiltered;
+
             // Make sure we only save call records one at a time
             await saveCallRecordSemaphoreSlim.WaitAsync();
 
@@ -101,14 +153,18 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities.Serialisation
 
                         if (saveSession)
                         {
-                            var otherPerson = await GetOtherUser(session, context, this.OrganizerEmail);
+                            // Decided on the real identities, before anyone is anonymised: two different people
+                            // outside the scope are both "Unknown User", and neither is the organiser.
+                            var otherPersonEmail = GetOtherUserEmail(session, this.OrganizerEmail);
 
-                            if (otherPerson.UserPrincipalName.ToLower() == this.OrganizerEmail?.ToLower())
+                            if (string.Equals(otherPersonEmail, this.OrganizerEmail, StringComparison.OrdinalIgnoreCase))
                             {
                                 // Session is for the organiser. Ignore
                             }
                             else
                             {
+                                var otherPerson = await GetUserForStorage(context, otherPersonEmail, scope);
+
                                 // Session is unique. Add to DB
                                 var dbSession = new CallSession()
                                 {
@@ -130,8 +186,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities.Serialisation
                                 }
 
                                 // Add feedback from either
-                                AddFeedbackIfUnique(session.Callee, otherPerson, call, feedbackList);
-                                AddFeedbackIfUnique(session.Caller, otherPerson, call, feedbackList);
+                                AddFeedbackIfUnique(session.Callee, otherPerson, call, feedbackList, scope);
+                                AddFeedbackIfUnique(session.Caller, otherPerson, call, feedbackList, scope);
 
                                 // Save failure info
                                 if (session.FailureInfo != null)
@@ -154,7 +210,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities.Serialisation
                     call.CallType = await context.GetOrCreateCallType(this.CallType);
                     call.StartDateTime = this.StartDateTime;
                     call.EndDateTime = this.EndDateTime;
-                    call.Organizer = await context.GetOrCreateUser(this.OrganizerEmail, false);
+                    call.Organizer = await GetUserForStorage(context, this.OrganizerEmail, scope);
                     call.GraphID = this.GraphCallID;
 
                     // Save
@@ -173,7 +229,21 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities.Serialisation
             }
         }
 
-        private async Task<Common.Entities.User> GetOtherUser(CallSessionDTO session, TeamsAndCallsDBLookupManager context, string organiserEmail)
+        /// <summary>
+        /// The database user to record for <paramref name="email"/>: the person themselves when they are in the
+        /// <c>UserGroupsFilter</c> scope, otherwise the anonymous "Unknown User".
+        /// </summary>
+        private static Task<Common.Entities.User> GetUserForStorage(TeamsAndCallsDBLookupManager context, string email, UserImportScope scope)
+        {
+            return scope.IsInScope(email)
+                ? context.GetOrCreateUser(email, false)
+                : context.GetOrCreateUnknownUser(false);
+        }
+
+        /// <summary>
+        /// The email address of the session participant who is not the organiser.
+        /// </summary>
+        internal static string GetOtherUserEmail(CallSessionDTO session, string organiserEmail)
         {
             if (string.IsNullOrEmpty(organiserEmail))
             {
@@ -184,11 +254,11 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities.Serialisation
             {
                 if (session.Callee.HaveUserEmail)
                 {
-                    return await context.GetOrCreateUser(session.Callee.UserEmailAddress, false);
+                    return session.Callee.UserEmailAddress;
                 }
                 else if (session.Caller.HaveUserEmail)
                 {
-                    return await context.GetOrCreateUser(session.Caller.UserEmailAddress, false);
+                    return session.Caller.UserEmailAddress;
                 }
                 else
                 {
@@ -198,13 +268,13 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities.Serialisation
             else
             {
                 // Have human caller & callee. Find the one that's not the organiser
-                if (session.Caller.UserEmailAddress.ToLower() == organiserEmail.ToLower())
+                if (string.Equals(session.Caller.UserEmailAddress, organiserEmail, StringComparison.OrdinalIgnoreCase))
                 {
-                    return await context.GetOrCreateUser(session.Callee.UserEmailAddress, false);
+                    return session.Callee.UserEmailAddress;
                 }
-                else if (session.Callee.UserEmailAddress.ToLower() == organiserEmail.ToLower())
+                else if (string.Equals(session.Callee.UserEmailAddress, organiserEmail, StringComparison.OrdinalIgnoreCase))
                 {
-                    return await context.GetOrCreateUser(session.Caller.UserEmailAddress, false);
+                    return session.Caller.UserEmailAddress;
                 }
                 else
                 {
@@ -213,10 +283,14 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities.Serialisation
             }
         }
 
+        /// <remarks>
+        /// Feedback is written by the endpoint's own user, so it is kept only when that user is in the
+        /// <c>UserGroupsFilter</c> scope: the rating and free text of someone outside it are never stored.
+        /// </remarks>
         private void AddFeedbackIfUnique(ParticipantEndpointDTO userEndpointContext, Common.Entities.User userLookup, CallRecord relatedCall,
-            Dictionary<Common.Entities.User, CallFeedback> feedbackList)
+            Dictionary<Common.Entities.User, CallFeedback> feedbackList, UserImportScope scope)
         {
-            if (userEndpointContext.Feedback != null && !feedbackList.ContainsKey(userLookup))
+            if (userEndpointContext.Feedback != null && !feedbackList.ContainsKey(userLookup) && scope.IsInScope(userEndpointContext.UserEmailAddress))
             {
                 var dbFeedback = new CallFeedback()
                 {

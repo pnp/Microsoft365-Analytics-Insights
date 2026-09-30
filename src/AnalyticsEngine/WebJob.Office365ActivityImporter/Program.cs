@@ -9,6 +9,7 @@ using Common.Entities;
 using Common.Entities.Config;
 using Common.Entities.Installer;
 using Common.Entities.Redis;
+using Common.Entities.UserScope;
 using DataUtils;
 using Microsoft.Extensions.Logging;
 using Newtonsoft.Json;
@@ -86,6 +87,12 @@ namespace WebJob.Office365ActivityImporter
             // Create new telemetry client with AppInsights key
             var logger = new AnalyticsLogger(configuredSettings.AppInsightsConnectionString, "Office365ActivityImporter");
 
+            // The UserGroupsFilter scope, shared by every import in this process - the Graph sections, the audit
+            // import, the calls queue and the agent-cost import - so they all apply the same resolution and the
+            // groups are read once per refresh interval, not once per import. Process-lifetime for the same reason
+            // as the stores below: it also remembers the last good scope to fall back on if a refresh fails.
+            var userScopeProvider = UserImportScopeProvider.CreateForGraph(configuredSettings, logger);
+
             // Apply the SQL-commit concurrency cap (aggressiveness preset) process-wide BEFORE any
             // InsertBatch import runs, so commits don't burst the shared SQL tier at the legacy 20
             // threads (issue #161 / PR #162 - easing SQL Server CPU/DTU spikes on commit).
@@ -129,7 +136,8 @@ namespace WebJob.Office365ActivityImporter
                         var newCall = await Engine.Entities.Serialisation.CallRecordDTO.SaveNewCallToDB(
                             nextArg,
                             new Engine.Graph.ManualGraphCallClient(auth, logger),
-                            auth.Creds, logger, configuredSettings.TenantGUID.ToString());
+                            auth.Creds, logger, configuredSettings.TenantGUID.ToString(),
+                            await userScopeProvider.GetScopeAsync());
 
                         ConsoleApp.BombOut(false);
                     }
@@ -266,7 +274,12 @@ namespace WebJob.Office365ActivityImporter
                 var importCycleTelemetryScope = logger.BeginOperationScope(Guid.NewGuid().ToString("N"));
                 var importCycleTimer = new JobTimer(logger, Process.GetCurrentProcess().ProcessName);
                 importCycleTimer.Start();
-                var tasks = new ProgramTasks(logger, configuredSettings, activityReportsLastImportedStore, graphLastRunStore, sentEmailMailboxSkipList, reportCompletionStore);
+
+                // States which users this cycle's imports cover - including when a filter matches no group or is
+                // failing open - every cycle, not only when the scope is refreshed.
+                await userScopeProvider.GetScopeForCycleAsync();
+
+                var tasks = new ProgramTasks(logger, configuredSettings, activityReportsLastImportedStore, graphLastRunStore, sentEmailMailboxSkipList, reportCompletionStore, userScopeProvider);
 
                 // Start listening for SB messages & register notifications web-hook with Graph 
                 if (webHookUrl != null && configuredSettings.ImportJobSettings.Calls)
@@ -281,7 +294,7 @@ namespace WebJob.Office365ActivityImporter
                         {
                             if (callQueueProcessor == null)
                             {
-                                var newProcessor = new CallQueueProcessor(configuredSettings, configuredSettings.TenantGUID.ToString());
+                                var newProcessor = new CallQueueProcessor(configuredSettings, configuredSettings.TenantGUID.ToString(), userScopeProvider);
                                 await newProcessor.Init();
                                 callQueueProcessor = newProcessor;
                             }

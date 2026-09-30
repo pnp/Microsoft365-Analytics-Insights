@@ -1,6 +1,7 @@
 using Common.Entities;
 using Common.Entities.Config;
 using Common.Entities.Entities.Copilot;
+using Common.Entities.UserScope;
 using DataUtils;
 using Microsoft.Extensions.Logging;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
@@ -10,10 +11,10 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
+using Tests.UnitTests.FakeLoaderClasses;
 using WebJob.Office365ActivityImporter.Engine;
 using WebJob.Office365ActivityImporter.Engine.Graph;
 using WebJob.Office365ActivityImporter.Engine.Graph.Copilot.InteractionHistory;
-using WebJob.Office365ActivityImporter.Engine.Graph.User;
 
 namespace Tests.UnitTests
 {
@@ -479,14 +480,14 @@ namespace Tests.UnitTests
         [TestMethod]
         public async Task PilotGroupResolver_ReturnsNothingForAnEmptyFilter()
         {
-            var resolver = new GraphPilotGroupMemberResolver(
-                new ManualGraphCallClient(new System.Net.Http.HttpClientHandler(), AnalyticsLogger.ConsoleOnlyTracer()),
-                AnalyticsLogger.ConsoleOnlyTracer());
+            var provider = new FixedUserImportScopeProvider(UserImportScope.Unfiltered);
+            var resolver = new UserImportScopePilotGroupMemberResolver(provider);
 
             // No filter means no pilot group; it must never be read as "everyone".
             var resolution = await resolver.GetMemberUpnsAsync(new UserGroupsFilterModel(string.Empty));
             Assert.AreEqual(0, resolution.MemberUpns.Count);
             Assert.IsFalse(resolution.IsIncomplete, "An empty filter is a complete answer, not a failure.");
+            Assert.AreEqual(0, provider.ResolutionRequests, "No filter needs no directory read.");
         }
 
         [TestMethod]
@@ -494,11 +495,9 @@ namespace Tests.UnitTests
         {
             // '*' matches every group. Expanding it would page the whole directory and every group's
             // membership only to conclude "everyone" - millions of calls on a large tenant (issue #297).
-            // The resolver must refuse it outright rather than start enumerating. No HTTP handler is
-            // usable here, so any Graph call at all would throw rather than return.
-            var resolver = new GraphPilotGroupMemberResolver(
-                new ManualGraphCallClient(new System.Net.Http.HttpClientHandler(), AnalyticsLogger.ConsoleOnlyTracer()),
-                AnalyticsLogger.ConsoleOnlyTracer());
+            // The resolver must refuse it outright rather than start enumerating.
+            var provider = new FixedUserImportScopeProvider(UserImportScope.Unfiltered);
+            var resolver = new UserImportScopePilotGroupMemberResolver(provider);
 
             foreach (var matchAll in new[] { "*", "**", " * " })
             {
@@ -510,6 +509,52 @@ namespace Tests.UnitTests
                 StringAssert.Contains(resolution.IncompleteReason, "every group",
                     "The reason must tell the admin why their filter was refused.");
             }
+            Assert.AreEqual(0, provider.ResolutionRequests, "A match-all filter must never reach the directory.");
+        }
+
+        [TestMethod]
+        public async Task PilotGroupResolver_UsesTheSharedResolutionWhenItResolved()
+        {
+            var members = new UserScopeMembers();
+            members.Add(Guid.NewGuid().ToString(), "pilot1@contoso.com", "pilot1@contoso.com");
+            members.Add(Guid.NewGuid().ToString(), "pilot2@contoso.com", null);
+            var resolved = UserImportScopeResolution.Resolved(members,
+                new List<ResolvedGroup> { new ResolvedGroup("g1", "Copilot Pilot", new List<string> { "Copilot Pilot" }, 2) },
+                new List<string>(), DateTime.UtcNow);
+            var provider = new FixedUserImportScopeProvider(UserImportScope.ForMembers(members, "test"), resolved);
+
+            var resolution = await new UserImportScopePilotGroupMemberResolver(provider)
+                .GetMemberUpnsAsync(new UserGroupsFilterModel("Copilot Pilot"));
+
+            Assert.IsFalse(resolution.IsIncomplete);
+            CollectionAssert.AreEquivalent(new[] { "pilot1@contoso.com", "pilot2@contoso.com" }, resolution.MemberUpns.ToList());
+            Assert.IsTrue(resolution.MemberUpns.Contains("PILOT1@CONTOSO.COM"),
+                "Membership matching must be case-insensitive to line up with SQL Server's collation.");
+        }
+
+        /// <summary>
+        /// Every other import fails OPEN when the groups cannot be resolved: it reuses the last good scope, and
+        /// failing that imports everyone. This one must not. Widening it reads every enabled user's prompt history and,
+        /// with Cognitive Services configured, sends their prompt text to Azure AI Language.
+        /// </summary>
+        [TestMethod]
+        public async Task PilotGroupResolver_FailsClosed_WhenTheSharedScopeIsUnavailable()
+        {
+            var partial = new UserScopeMembers();
+            partial.Add(Guid.NewGuid().ToString(), "pilot1@contoso.com", null);
+            var unavailable = UserImportScopeResolution.Unavailable(partial, null, "the members of group 'Copilot Pilot' could not be read", DateTime.UtcNow);
+
+            // The provider's fail-open view is "everyone" - exactly what this import must never use.
+            var provider = new FixedUserImportScopeProvider(UserImportScope.Everyone("failing open"), unavailable);
+
+            var resolution = await new UserImportScopePilotGroupMemberResolver(provider)
+                .GetMemberUpnsAsync(new UserGroupsFilterModel("Copilot Pilot"));
+
+            Assert.AreEqual(0, provider.ScopeRequests, "The fail-open view must never be consulted.");
+            Assert.IsTrue(resolution.IsIncomplete, "An incomplete scope is reported as a failure, not as a quiet no-op.");
+            StringAssert.Contains(resolution.IncompleteReason, "could not be read");
+            CollectionAssert.AreEquivalent(new[] { "pilot1@contoso.com" }, resolution.MemberUpns.ToList(),
+                "Only the members actually read are in scope - never more.");
         }
 
         [TestMethod]

@@ -13,7 +13,6 @@ using WebJob.Office365ActivityImporter.Engine;
 using WebJob.Office365ActivityImporter.Engine.ActivityAPI;
 using WebJob.Office365ActivityImporter.Engine.ActivityAPI.BlobCheckpoint;
 using WebJob.Office365ActivityImporter.Engine.Entities;
-using WebJob.Office365ActivityImporter.Engine.Graph.User;
 
 namespace Tests.UnitTests.StressHarness
 {
@@ -124,7 +123,7 @@ namespace Tests.UnitTests.StressHarness
             log($"  Whitelist rules loaded: {spFilter.OrgUrlConfigs.Count}");
 
             var realManager = new ActivityReportSqlPersistenceManager(
-                spFilter, new NoUsersHaveGroupsUserGroupsCache(logger), logger, appConfig, data.MaxConcurrentSaves, data.UsePerBatchDedupCache);
+                spFilter, Common.Entities.UserScope.UserImportScope.Unfiltered, logger, appConfig, data.MaxConcurrentSaves, data.UsePerBatchDedupCache);
             var countingManager = new CountingActivityReportPersistenceManager(realManager);
             log($"  Dedup cache mode: {(data.UsePerBatchDedupCache ? "PER-BATCH (legacy: rebuilt every save)" : "PER-CYCLE (built once, reused)")}");
 

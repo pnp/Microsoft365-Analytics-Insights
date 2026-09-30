@@ -1,10 +1,9 @@
 using Common.Entities.ActivityReports;
-using Common.Entities.Config;
 using Common.Entities.LookupCaches;
+using Common.Entities.UserScope;
 using Microsoft.Extensions.Logging;
 using System.Threading.Tasks;
 using WebJob.Office365ActivityImporter.Engine.Entities.Serialisation.UsageReports;
-using WebJob.Office365ActivityImporter.Engine.Graph.User;
 
 namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
 {
@@ -15,18 +14,23 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
         where TReportDbType : AbstractUsageActivityLog, new()
         where TUserActivityUserDetail : AbstractActivityRecord<Common.Entities.User>
     {
-        private readonly UserGroupsCache _graphUserGroupsCache;
-        private readonly UserGroupsFilterModel _userGroupsFilterModel;
+        private readonly UserImportScope _userScope;
 
-        internal AbstractUserDailyActivityLoader(ManualGraphCallClient client, UserGroupsCache graphUserGroupsCache, UserGroupsFilterModel userGroupsFilterModel, ILogger logger) : base(client, logger)
+        /// <param name="userScope">
+        /// The <c>UserGroupsFilter</c> scope for this cycle. Null means unfiltered, which is what every row passes.
+        /// </param>
+        internal AbstractUserDailyActivityLoader(ManualGraphCallClient client, UserImportScope userScope, ILogger logger) : base(client, logger)
         {
-            _graphUserGroupsCache = graphUserGroupsCache;
-            _userGroupsFilterModel = userGroupsFilterModel;
+            _userScope = userScope ?? UserImportScope.Unfiltered;
         }
 
-        protected override async Task<bool> IdInScope(string upn)
+        /// <summary>
+        /// A hash lookup against the scope resolved for this cycle. It used to be a Graph <c>memberOf</c> call per
+        /// user, which let a user through whenever Graph could not answer.
+        /// </summary>
+        protected override Task<bool> IdInScope(string upn)
         {
-            return await _graphUserGroupsCache.IsInGroupsFilter(upn, _userGroupsFilterModel);
+            return Task.FromResult(_userScope.IsInScope(upn));
         }
     }
 }
