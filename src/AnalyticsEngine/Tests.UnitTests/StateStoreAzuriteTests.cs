@@ -126,6 +126,26 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public async Task ANoMailboxListTooLargeForOneRow_RoundTripsThroughTheTableService()
+        {
+            var store = NewStore();
+            var upns = StateStoreTests.SyntheticUpns(250000, seed: 5);
+            var logger = new FakeLoaderClasses.RecordingLogger();
+            var persisted = new WebJob.Office365ActivityImporter.Engine.Graph.Email.PersistedSentEmailMailboxSkipList(store, logger);
+
+            await persisted.SaveAsync(new WebJob.Office365ActivityImporter.Engine.Graph.Email.MailboxSkipList
+            {
+                GeneratedUtc = new DateTime(2026, 9, 1, 0, 0, 0, DateTimeKind.Utc),
+                Upns = upns,
+            });
+            var loaded = await persisted.LoadAsync();
+
+            Assert.AreEqual(0, logger.Entries.Count, "The service rejected part of the list: " + string.Join("; ", logger.Entries.Select(e => e.Message)));
+            Assert.AreEqual(upns.Count, loaded.Upns.Count);
+            Assert.IsTrue(loaded.UpnSet.SetEquals(upns));
+        }
+
+        [TestMethod]
         public async Task ExpiredValues_ReadAsMissing_AreDeletedWhenMet_AndPurged()
         {
             var now = new DateTimeOffset(2026, 9, 1, 0, 0, 0, TimeSpan.Zero);

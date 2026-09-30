@@ -113,9 +113,10 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
-        public void ALargeTenantsNoMailboxList_IsCompressedIntoOneEntity_AndRoundTrips()
+        public void ALargeCompressibleValue_IsCompressedIntoOneEntity_AndRoundTrips()
         {
-            // 60,000 synthetic UPNs - far past the 32,000 characters one string column holds.
+            // 60,000 numbered UPNs - far past the 32,000 characters one string column holds, but so regular that gzip
+            // fits them in one row. (Real no-mailbox lists compress far less; PersistedSentEmailMailboxSkipList pages them.)
             var skipList = new MailboxSkipList
             {
                 GeneratedUtc = new DateTime(2026, 9, 1, 0, 0, 0, DateTimeKind.Utc),
@@ -406,6 +407,89 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public async Task ANoMailboxListTooLargeForOneRow_IsSplitIntoPagesThatEachFitARow_AndRoundTrips()
+        {
+            // Guests and unlicensed accounts have no mailbox, so a 200,000-user tenant can have this many.
+            var upns = SyntheticUpns(250000, seed: 1);
+            var wholeList = JsonConvert.SerializeObject(upns.OrderBy(u => u, StringComparer.OrdinalIgnoreCase));
+            Assert.ThrowsException<InvalidOperationException>(() => AzureTableKeyValueStore.EncodeValue(new TableEntity("p", "r"), "k", wholeList),
+                "The list must be one that a single row cannot hold, or this test proves nothing about paging.");
+
+            var state = new InMemoryKeyValueStore();
+            var logger = new RecordingLogger();
+            var persisted = new PersistedSentEmailMailboxSkipList(state, logger);
+            var generated = new DateTime(2026, 9, 1, 0, 0, 0, DateTimeKind.Utc);
+
+            await persisted.SaveAsync(new MailboxSkipList { GeneratedUtc = generated, Upns = upns });
+
+            var pageCount = (upns.Count + PersistedSentEmailMailboxSkipList.MaxUpnsPerPage - 1) / PersistedSentEmailMailboxSkipList.MaxUpnsPerPage;
+            for (var p = 0; p < pageCount; p++)
+            {
+                var page = await state.GetStringAsync(PersistedSentEmailMailboxSkipList.PageKey(p));
+                Assert.IsNotNull(page, $"page {p}");
+                AzureTableKeyValueStore.EncodeValue(new TableEntity("p", "r"), PersistedSentEmailMailboxSkipList.PageKey(p), page);
+            }
+            Assert.IsFalse(await state.ExistsAsync(PersistedSentEmailMailboxSkipList.PageKey(pageCount)));
+
+            var loaded = await persisted.LoadAsync();
+
+            Assert.AreEqual(0, logger.Entries.Count, string.Join("; ", logger.Entries.Select(e => e.Message)));
+            Assert.AreEqual(upns.Count, loaded.Upns.Count);
+            Assert.IsTrue(loaded.UpnSet.SetEquals(upns));
+            Assert.AreEqual(generated, loaded.GeneratedUtc.Value.ToUniversalTime());
+        }
+
+        [TestMethod]
+        public async Task ASmallerNoMailboxList_RemovesThePagesItNoLongerNeeds()
+        {
+            var state = new InMemoryKeyValueStore();
+            var persisted = new PersistedSentEmailMailboxSkipList(state, new RecordingLogger());
+            var generated = new DateTime(2026, 9, 1, 0, 0, 0, DateTimeKind.Utc);
+
+            await persisted.SaveAsync(new MailboxSkipList { GeneratedUtc = generated, Upns = SyntheticUpns(25000, seed: 2) });
+            Assert.IsTrue(await state.ExistsAsync(PersistedSentEmailMailboxSkipList.PageKey(2)), "25,000 UPNs need three pages.");
+
+            await persisted.SaveAsync(new MailboxSkipList { GeneratedUtc = generated, Upns = { "a@contoso.com", "A@CONTOSO.COM" } });
+
+            Assert.IsFalse(await state.ExistsAsync(PersistedSentEmailMailboxSkipList.PageKey(1)));
+            Assert.IsFalse(await state.ExistsAsync(PersistedSentEmailMailboxSkipList.PageKey(2)));
+            CollectionAssert.AreEqual(new[] { "a@contoso.com" }, (await persisted.LoadAsync()).Upns,
+                "UPNs are case-insensitive, so the two spellings are one user.");
+        }
+
+        [TestMethod]
+        public async Task AnEmptyNoMailboxList_StillRemembersWhenItWasSwept()
+        {
+            var state = new InMemoryKeyValueStore();
+            var persisted = new PersistedSentEmailMailboxSkipList(state, new RecordingLogger());
+            var generated = new DateTime(2026, 9, 1, 0, 0, 0, DateTimeKind.Utc);
+
+            await persisted.SaveAsync(new MailboxSkipList { GeneratedUtc = generated });
+            var loaded = await persisted.LoadAsync();
+
+            Assert.AreEqual(0, loaded.Upns.Count);
+            Assert.AreEqual(generated, loaded.GeneratedUtc.Value.ToUniversalTime(),
+                "Without the sweep time, every cycle would be a full sweep of every mailbox.");
+            Assert.IsFalse(await state.ExistsAsync(PersistedSentEmailMailboxSkipList.PageKey(0)));
+        }
+
+        [TestMethod]
+        public async Task ANoMailboxListWithAMissingPage_ReadsAsEmpty_SoEveryMailboxIsChecked()
+        {
+            var state = new InMemoryKeyValueStore();
+            await new PersistedSentEmailMailboxSkipList(state, new RecordingLogger()).SaveAsync(
+                new MailboxSkipList { GeneratedUtc = new DateTime(2026, 9, 1, 0, 0, 0, DateTimeKind.Utc), Upns = SyntheticUpns(25000, seed: 3) });
+            await state.DeleteAsync(PersistedSentEmailMailboxSkipList.PageKey(1));
+
+            var logger = new RecordingLogger();
+            var loaded = await new PersistedSentEmailMailboxSkipList(state, logger).LoadAsync();
+
+            Assert.AreEqual(0, loaded.Upns.Count);
+            Assert.IsNull(loaded.GeneratedUtc, "No sweep time, so the next run is a full sweep that rebuilds the list.");
+            StringAssert.Contains(logger.Entries.Single(e => e.Level == LogLevel.Warning).Message, "page 2 of 3 is missing");
+        }
+
+        [TestMethod]
         public async Task ImportCadenceStamps_RoundTripAsUtc_AndAnOutageNeverSkipsAnImport()
         {
             var store = new PersistedImportLastRunStore(new InMemoryKeyValueStore(), new RecordingLogger());
@@ -476,6 +560,24 @@ namespace Tests.UnitTests
                 sb.Append((char)random.Next(0x21, 0x7F));
             }
             return sb.ToString();
+        }
+
+        /// <summary>
+        /// Distinct synthetic UPNs that compress like real ones rather than like a numbered sequence (which gzip
+        /// shrinks far more than any real directory): random names and numbers, one in ten a guest.
+        /// </summary>
+        internal static System.Collections.Generic.List<string> SyntheticUpns(int count, int seed)
+        {
+            var first = new[] { "alex", "sam", "maria", "jose", "li", "wei", "anna", "john", "fatima", "omar", "chen", "yuki", "olga", "ivan", "sara", "david", "laura", "pablo", "nina", "raj" };
+            var last = new[] { "smith", "garcia", "muller", "rossi", "wang", "kim", "nguyen", "silva", "kowalski", "novak", "johansson", "martin", "bernard", "dubois", "lopez", "schmidt", "weber", "meyer", "wagner", "becker" };
+            var random = new Random(seed);
+            var upns = new System.Collections.Generic.HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            while (upns.Count < count)
+            {
+                var name = $"{first[random.Next(first.Length)]}.{last[random.Next(last.Length)]}{random.Next(1, 999999)}";
+                upns.Add(random.Next(10) == 0 ? $"{name}_fabrikam.com#EXT#@contoso.onmicrosoft.com" : $"{name}@contoso.onmicrosoft.com");
+            }
+            return upns.ToList();
         }
 
         /// <summary>A store whose every operation fails, like an unreachable storage account.</summary>
