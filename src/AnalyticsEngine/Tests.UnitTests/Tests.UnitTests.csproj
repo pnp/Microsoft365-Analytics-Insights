@@ -88,6 +88,7 @@
     <Compile Include="InstallTests\ManagedIdentityPlannerTests.cs" />
     <Compile Include="UserImportCaseSensitivityTests.cs" />
     <Compile Include="UserLicenseRefreshTests.cs" />
+    <Compile Include="OfficeLicenseNameResolverTests.cs" />
     <Compile Include="FakeLoaderClasses\FakeUserPipelinePorts.cs" />
     <Compile Include="UserBulkUpdateRulesTests.cs" />
     <Compile Include="UserImportCommitPolicyTests.cs" />

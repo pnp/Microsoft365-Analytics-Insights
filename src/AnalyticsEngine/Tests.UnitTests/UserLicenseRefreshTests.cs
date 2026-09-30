@@ -562,6 +562,63 @@ namespace Tests.UnitTests
             }
         }
 
+        /// <summary>
+        /// <c>license_types.name</c> is <c>[MaxLength(100)]</c> and a few of Microsoft's own product
+        /// names are longer (the GCC High and DoD Power Pages capacity packs). Every tenant SKU is
+        /// resolved and then saved together, so one such name would fail validation and abort the
+        /// licence refresh for the whole tenant, every cycle.
+        /// </summary>
+        [TestMethod]
+        public async Task UserLicenseProcessor_OverLongProductName_IsTruncatedAndFoundAgainNextCycle()
+        {
+            var skuPartNumber = $"LONG_NAME_TEST_SKU_{Guid.NewGuid():N}";
+
+            // Unique text first, so the part that survives truncation cannot collide with another run.
+            var longName = $"{Guid.NewGuid():N} Contoso Pages authenticated users T3 min 1,000 units - 100 users/per site/month capacity pack";
+            Assert.IsTrue(longName.Length > UserLicenseProcessor.LicenceTypeNameMaxLength, "The test name must be over-long.");
+
+            try
+            {
+                int savedId;
+                using (var db = new AnalyticsEntitiesContext())
+                {
+                    var processor = new UserLicenseProcessor(
+                        AnalyticsLogger.ConsoleOnlyTracer(),
+                        new FakeUserMetadataLoader(null, null, null),
+                        new UserMetadataCache(db),
+                        new FixedLicenseNameResolver(longName));
+
+                    var licence = await processor.GetLicenseType(skuPartNumber);
+                    await db.SaveChangesAsync();
+
+                    Assert.AreEqual(UserLicenseProcessor.LicenceTypeNameMaxLength, licence.Name.Length);
+                    StringAssert.StartsWith(licence.Name, longName.Substring(0, 50));
+                    StringAssert.EndsWith(licence.Name, "...", "Truncation should be visible, not silent.");
+                    Assert.AreEqual(skuPartNumber, licence.SKUID);
+                    savedId = licence.ID;
+                }
+
+                // The next cycle starts with an empty cache and must find that row by its stored name,
+                // not try to insert a second one.
+                using (var db = new AnalyticsEntitiesContext())
+                {
+                    var processor = new UserLicenseProcessor(
+                        AnalyticsLogger.ConsoleOnlyTracer(),
+                        new FakeUserMetadataLoader(null, null, null),
+                        new UserMetadataCache(db),
+                        new FixedLicenseNameResolver(longName));
+
+                    var licence = await processor.GetLicenseType(skuPartNumber);
+
+                    Assert.AreEqual(savedId, licence.ID, "The truncated name must also be the cache key.");
+                }
+            }
+            finally
+            {
+                await RemoveTestLicences(skuPartNumber);
+            }
+        }
+
         [TestMethod]
         public async Task UserLicenseProcessor_ProductionConstructor_StillResolvesSkuNames()
         {

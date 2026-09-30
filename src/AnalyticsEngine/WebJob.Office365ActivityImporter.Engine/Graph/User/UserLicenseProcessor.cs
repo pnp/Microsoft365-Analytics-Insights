@@ -394,6 +394,11 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         }
 
         /// <summary>
+        /// Width of <c>license_types.name</c>: <see cref="AbstractEFEntityWithName.Name"/> is <c>[MaxLength(100)]</c>.
+        /// </summary>
+        internal const int LicenceTypeNameMaxLength = 100;
+
+        /// <summary>
         /// Get or create license type from SKU part number
         /// </summary>
         public async Task<LicenseType> GetLicenseType(string skuPartNumber)
@@ -406,6 +411,13 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 // Set display name as SKU ID
                 productName = skuPartNumber;
             }
+
+            // Some of Microsoft's product names are longer than the column (the GCC High and DoD Power
+            // Pages capacity packs run to 105 characters). One of those would fail validation on the
+            // SaveChanges that follows and abort the licence refresh for the whole tenant, every cycle.
+            // Truncate before the name is used as the cache key as well: the cache finds existing rows
+            // by name, so a key longer than the stored name would never find its row again.
+            productName = StringUtils.EnsureMaxLength(productName, LicenceTypeNameMaxLength);
 
             var thisLicense = await _userMetaCache.LicenseTypeCache.GetOrCreateNewResource(productName,
                 new LicenseType

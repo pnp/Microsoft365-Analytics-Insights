@@ -27,9 +27,9 @@ namespace WebJob.Office365ActivityImporter.Engine.StatsUploader
     /// </summary>
     public class EmbeddedCsvSkuAllowList : ISkuAllowList
     {
-        // Both positive AND negative answers are memoised. OfficeLicenseNameResolver rescans its whole
-        // record list on every call, lower-casing each id as it goes, so an uncached miss is the
-        // expensive case - and on a tenant with unusual SKUs, misses are exactly what repeat.
+        // Both positive AND negative answers are memoised, so each distinct part number reaches the
+        // resolver once however often it is asked about. The embedded resolver is a dictionary lookup,
+        // but an injected one need not be cheap.
         private readonly ConcurrentDictionary<string, bool> _answers =
             new ConcurrentDictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
 
@@ -49,8 +49,8 @@ namespace WebJob.Office365ActivityImporter.Engine.StatsUploader
 
         public bool IsPublished(string skuPartNumber)
         {
-            // Guarded here because OfficeLicenseNameResolver.GetDisplayNameFor calls id.ToLower()
-            // without a null check and would throw.
+            // Guarded here because ConcurrentDictionary rejects a null key, and a blank part number is
+            // never a published SKU.
             if (string.IsNullOrWhiteSpace(skuPartNumber)) return false;
 
             return _answers.GetOrAdd(skuPartNumber, sku => _resolver.GetDisplayNameFor(sku) != null);

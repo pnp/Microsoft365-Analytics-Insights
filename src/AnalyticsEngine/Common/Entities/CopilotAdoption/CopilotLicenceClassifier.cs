@@ -59,6 +59,7 @@ namespace Common.Entities.CopilotAdoption
         {
             "MICROSOFT_COPILOT_FOR_SALES",  // Microsoft 365 Copilot for Sales - a separate add-on
             "MICROSOFT_VIVA_SALES",         // Microsoft Sales Copilot (the former name of the above)
+            "MICROSOFT_COPILOT_FOR_FINANCE", // Microsoft 365 Copilot for Finance (Preview) trial - no Copilot seat plans
             "MICROSOFT_COPILOT_STUDIO",     // Copilot Studio - an authoring tool, not a Copilot seat
             "COPILOT_STUDIO",
             "POWER_VIRTUAL_AGENTS",         // Copilot Studio's previous name
@@ -72,7 +73,7 @@ namespace Common.Entities.CopilotAdoption
         /// </summary>
         private static readonly string[] ExcludedNameWords = new[]
         {
-            "studio", "sales", "virtual agent", "github", "security", "dynamics", "power ", "bot",
+            "studio", "sales", "finance", "virtual agent", "github", "security", "dynamics", "power ", "bot",
         };
 
         /// <summary>
