@@ -149,9 +149,8 @@ namespace CloudInstallEngine.Azure.InstallTasks
             }
             else if (zoneGroupDecision.Action == ZoneGroupAction.Recreate)
             {
-                // Reconcile: if the existing zone group references a different (wrong) private DNS zone
-                // (e.g. an older installer pointed the PE at 'privatelink.redisenterprise.cache.azure.net'
-                // instead of 'privatelink.redis.azure.net'), recreate it. Without this, the bad config is
+                // Reconcile: if the existing zone group references a different (wrong) private DNS zone,
+                // recreate it. Without this, the bad config is
                 // sticky: A records never auto-register into the right zone and VNet-integrated clients
                 // keep resolving the public IP.
                 var existingSummary = zoneGroupDecision.ExistingGroup.PrivateDnsZoneIds.Count == 0

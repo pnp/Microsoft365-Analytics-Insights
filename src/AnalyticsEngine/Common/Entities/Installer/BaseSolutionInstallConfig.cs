@@ -39,7 +39,11 @@ namespace Common.Entities.Installer
         //          administrator per SQL server, so handing out data access by reassigning the
         //          administrator evicts the installer's service principal and breaks the next schema
         //          upgrade. See issue #117.
-        const string CONFIG_VERSION = "2.6.0";
+        //          2.6.0 -> 3.0.0 BREAKING: removed RedisName and NetworkConfig.CustomEndpointNames.Redis
+        //          because the solution no longer uses Azure Cache for Redis; runtime state moved to Azure
+        //          Table storage in the existing storage account. Older configs still load; the properties
+        //          are simply ignored.
+        const string CONFIG_VERSION = "3.0.0";
 
         public BaseSolutionInstallConfig()
         {
@@ -143,8 +147,6 @@ namespace Common.Entities.Installer
 
         public bool CognitiveServicesEnabled { get; set; } = true;
         public string CognitiveServiceName { get; set; } = string.Empty;
-
-        public string RedisName { get; set; } = string.Empty;
 
         public bool DownloadLatestStable { get; set; } = true;
 
@@ -307,7 +309,6 @@ namespace Common.Entities.Installer
     {
         public string SqlServer { get; set; } = string.Empty;
         public string AppService { get; set; } = string.Empty;
-        public string Redis { get; set; } = string.Empty;
         public string Storage { get; set; } = string.Empty;
         public string StorageTable { get; set; } = string.Empty;
         public string KeyVault { get; set; } = string.Empty;

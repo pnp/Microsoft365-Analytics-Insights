@@ -104,7 +104,6 @@ namespace App.ControlPanel.Engine
             c.SQLServerDatabaseName = string.Empty;
             c.SQLServerName = string.Empty;
             c.CognitiveServiceName = string.Empty;
-            c.RedisName = string.Empty;
             c.CognitiveServicesEnabled = true;
             c.ServiceBusEnabled = true;
             c.ServiceBusName = string.Empty;
@@ -310,20 +309,6 @@ namespace App.ControlPanel.Engine
                     {
                         errs.Add("Enter valid Cognitive Services name.");
                     }
-                }
-            }
-
-            // Redis
-            if (string.IsNullOrWhiteSpace(this.RedisName))
-            {
-                errs.Add("Provide a redis service name.");
-            }
-            else
-            {
-                bool isValidName = IsRegexExComplaint(this.RedisName, @"^[-\w\._\(\)]+$", false);
-                if (!isValidName)
-                {
-                    errs.Add("Enter valid redis service name.");
                 }
             }
 
