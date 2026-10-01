@@ -56,7 +56,8 @@ const globalFilter = {
   'globalFilter.viewer.phrase.manager': 'the viewer’s manager',
   'globalFilter.viewer.hint.own':
     'Choose “Viewer’s own value” to show each reader the people who share theirs: each manager their own department, for example.',
-  'globalFilter.viewer.hint.userName': 'Choose “The viewer” to show each reader only their own figures.',
+  'globalFilter.viewer.hint.userName':
+    'Choose “The viewer” to show each reader only their own figures. Readers without the See PII permission are shown no reports under such a filter.',
   'globalFilter.viewer.hint.manager':
     '“The viewer” shows each reader their direct reports. “The viewer’s manager” shows them everyone who shares their manager.',
   'globalFilter.viewer.hint.managementChain':
@@ -116,7 +117,7 @@ const globalFilter = {
   'globalFilter.admin.conditions.note':
     'People must match these conditions to appear in any report. Conditions joined by AND must all match; OR starts another group, and matching any one group is enough.',
   'globalFilter.admin.conditions.privacyNote':
-    'Readers without the See PII permission never see the sign-in names a condition uses. While the filter leaves such a reader fewer than {minimum} people, other than just themselves, they are shown no reports.',
+    'Readers without the See PII permission never see the sign-in names a condition uses, and are shown no reports while the filter leaves them fewer than {minimum} people - even when the only person left is themselves.',
   'globalFilter.admin.preview.heading': 'What you would see',
   'globalFilter.admin.preview.note':
     'The filter applies to portal administrators too, so this is what your own reports would show once it is saved.',

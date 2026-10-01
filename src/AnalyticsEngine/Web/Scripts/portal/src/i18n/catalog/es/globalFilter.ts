@@ -51,7 +51,8 @@ const globalFilter: Record<keyof typeof en, string> = {
   'globalFilter.viewer.phrase.manager': 'la persona responsable del lector',
   'globalFilter.viewer.hint.own':
     'Elija «Valor propio del lector» para mostrar a cada lector las personas que comparten el suyo: a cada responsable su propio departamento, por ejemplo.',
-  'globalFilter.viewer.hint.userName': 'Elija «El propio lector» para mostrar a cada lector solo sus propias cifras.',
+  'globalFilter.viewer.hint.userName':
+    'Elija «El propio lector» para mostrar a cada lector solo sus propias cifras. A los lectores sin el permiso Ver PII no se les muestra ningún informe con un filtro así.',
   'globalFilter.viewer.hint.manager':
     '«El propio lector» muestra a cada lector sus subordinados directos. «El responsable del lector» le muestra a todos los que comparten su responsable.',
   'globalFilter.viewer.hint.managementChain':
@@ -111,7 +112,7 @@ const globalFilter: Record<keyof typeof en, string> = {
   'globalFilter.admin.conditions.note':
     'Las personas deben cumplir estas condiciones para aparecer en cualquier informe. Las condiciones unidas por Y deben cumplirse todas; O inicia otro grupo, y basta con cumplir uno de los grupos.',
   'globalFilter.admin.conditions.privacyNote':
-    'Los lectores sin el permiso Ver PII nunca ven los nombres de inicio de sesión que usa una condición. Mientras el filtro les deje menos de {minimum} personas, salvo cuando solo incluye a la propia persona lectora, no se les muestra ningún informe.',
+    'Los lectores sin el permiso Ver PII nunca ven los nombres de inicio de sesión que usa una condición, y no se les muestra ningún informe mientras el filtro les deje menos de {minimum} personas, aunque la única persona que quede sea la propia persona lectora.',
   'globalFilter.admin.preview.heading': 'Lo que vería usted',
   'globalFilter.admin.preview.note':
     'El filtro también se aplica a los administradores del portal, así que esto es lo que mostrarían sus propios informes una vez guardado.',

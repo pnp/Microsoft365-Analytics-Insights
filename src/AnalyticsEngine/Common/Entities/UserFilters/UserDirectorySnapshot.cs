@@ -159,7 +159,7 @@ namespace Common.Entities.UserFilters
         private readonly int[] _managerRowByManagerValue;
         private readonly Lazy<ReportsIndex> _reports;
         private readonly Lazy<int[]> _rowByUserNameValue;
-        private readonly Lazy<bool[]> _rowHasObjectId;
+        private readonly bool[] _rowHasObjectId;
 
         internal UserDirectorySnapshot(
             DateTime loadedUtc,
@@ -169,7 +169,8 @@ namespace Common.Entities.UserFilters
             int[] managerRowByRow,
             int[] managerRowByManagerValue,
             List<UserDirectoryDimension> dimensions,
-            Dictionary<Guid, int> rowByObjectId = null)
+            Dictionary<Guid, int> rowByObjectId = null,
+            bool[] rowHasObjectId = null)
         {
             LoadedUtc = loadedUtc;
             _userIdByRow = userIdByRow;
@@ -181,12 +182,10 @@ namespace Common.Entities.UserFilters
             Dimensions = dimensions.AsReadOnly();
             _reports = new Lazy<ReportsIndex>(() => ReportsIndex.Build(_managerRowByRow), System.Threading.LazyThreadSafetyMode.ExecutionAndPublication);
             _rowByUserNameValue = new Lazy<int[]>(BuildRowByUserNameValue, System.Threading.LazyThreadSafetyMode.ExecutionAndPublication);
-            _rowHasObjectId = new Lazy<bool[]>(() =>
-            {
-                var has = new bool[_userIdByRow.Length];
-                foreach (var objectRow in _rowByObjectId.Values) has[objectRow] = true;
-                return has;
-            }, System.Threading.LazyThreadSafetyMode.ExecutionAndPublication);
+
+            // Every row that records an object id, not only the one the object-id lookup kept: a stale
+            // duplicate carrying the same id is still somebody's account, never a sign-in-name stand-in.
+            _rowHasObjectId = rowHasObjectId ?? new bool[userIdByRow.Length];
         }
 
         public DateTime LoadedUtc { get; }
@@ -248,7 +247,7 @@ namespace Common.Entities.UserFilters
             if (found < 0) return false;
 
             // The token's object id is not in the directory, so a row recorded under any object id is not this person.
-            if (hasObjectId && _rowHasObjectId.Value[found]) return false;
+            if (hasObjectId && _rowHasObjectId[found]) return false;
 
             row = found;
             return true;
@@ -461,6 +460,7 @@ namespace Common.Entities.UserFilters
         private readonly List<int> _userIds = new List<int>();
         private readonly Dictionary<int, int> _rowByUserId = new Dictionary<int, int>();
         private readonly Dictionary<Guid, int> _rowByObjectId = new Dictionary<Guid, int>();
+        private readonly List<bool> _hasObjectIdByRow = new List<bool>();
         private readonly List<string> _upnByRow = new List<string>();
         private readonly List<int?> _managerIdByRow = new List<int?>();
         private readonly Dictionary<string, ColumnBuilder> _text = new Dictionary<string, ColumnBuilder>(StringComparer.Ordinal);
@@ -483,11 +483,13 @@ namespace Common.Entities.UserFilters
 
             // The first person recorded under an object id keeps it: the id is unique in Entra, so a
             // second row carrying it is a stale duplicate, and one answer must win deterministically.
-            if (Guid.TryParse(entry.EntraObjectId?.Trim(), out var objectId) && objectId != Guid.Empty
-                && !_rowByObjectId.ContainsKey(objectId))
+            var hasObjectId = Guid.TryParse(entry.EntraObjectId?.Trim(), out var objectId) && objectId != Guid.Empty;
+            if (hasObjectId && !_rowByObjectId.ContainsKey(objectId))
             {
                 _rowByObjectId.Add(objectId, _userIds.Count);
             }
+
+            _hasObjectIdByRow.Add(hasObjectId);
 
             _userIds.Add(entry.UserId);
             _upnByRow.Add(entry.UserPrincipalName);
@@ -634,7 +636,8 @@ namespace Common.Entities.UserFilters
                 managerRowByRow,
                 managerRowByValue,
                 dimensions,
-                new Dictionary<Guid, int>(_rowByObjectId));
+                new Dictionary<Guid, int>(_rowByObjectId),
+                _hasObjectIdByRow.ToArray());
         }
 
         /// <summary>

@@ -219,6 +219,23 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public void TryFindPerson_RefusesASignInNameOnAStaleDuplicateOfAnotherAccount()
+        {
+            var builder = new UserDirectorySnapshotBuilder();
+            builder.AddUser(new UserDirectoryEntry { UserId = 1, UserPrincipalName = "current@contoso.com", EntraObjectId = RepObjectId });
+            // A stale duplicate carrying the same object id under an older address: the object-id lookup keeps
+            // the first row, but this one is still that account's, never a stand-in for whoever holds its name.
+            builder.AddUser(new UserDirectoryEntry { UserId = 2, UserPrincipalName = "previous@contoso.com", EntraObjectId = RepObjectId });
+            var snapshot = builder.Build(new DateTime(2026, 9, 1, 8, 0, 0, DateTimeKind.Utc));
+
+            Assert.IsFalse(snapshot.TryFindPerson(new Guid("00000000-0000-0000-0000-0000000000ff"), "previous@contoso.com", out _));
+            Assert.IsTrue(snapshot.TryFindPerson(null, "previous@contoso.com", out var byName), "With no object id in the token, the name still finds it.");
+            Assert.AreEqual(2, snapshot.UserIdAt(byName));
+            Assert.IsTrue(snapshot.TryFindPerson(new Guid(RepObjectId), null, out var byObjectId));
+            Assert.AreEqual(1, snapshot.UserIdAt(byObjectId));
+        }
+
+        [TestMethod]
         public void TryFindPerson_RefusesASignInNameRecordedUnderAnotherAccount()
         {
             // Rep's row is recorded under RepObjectId. A token carrying a different object id but rep's sign-in name

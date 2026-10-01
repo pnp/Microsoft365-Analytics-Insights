@@ -150,6 +150,23 @@ function LiveGlobalFilterProvider({ children }: { children: ReactNode }) {
     void load(false);
   }, [location.pathname, load]);
 
+  // Every remount the cookie causes - a switch in this tab, or one made in another - goes through here. When
+  // the read that should confirm it fails, the reports still follow the cookie: the server honours it for an
+  // administrator, and only an administrator's cookie is acted on. So the bar follows it too, rather than go
+  // on describing the view from before; the status stays 'error' until a read succeeds.
+  const remountForCookie = useCallback(
+    async (bypassed: boolean) => {
+      const outcome = await load(true);
+      if (outcome !== 'error' || readGlobalFilterBypassCookie() !== bypassed) return;
+      setState((previous) =>
+        previous.effective?.canBypass && previous.effective.active
+          ? { ...previous, effective: { ...previous.effective, bypassed, applied: !bypassed } }
+          : previous,
+      );
+    },
+    [load],
+  );
+
   // The switch-off cookie is the browser's, not this tab's: switching the filter off in one tab changes what
   // every other tab's reports return. So when a tab comes back into view, a cookie that no longer agrees with
   // what it last read means its figures and its bar no longer match - read again and remount. Only while a
@@ -161,7 +178,8 @@ function LiveGlobalFilterProvider({ children }: { children: ReactNode }) {
       if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
       const current = effectiveRef.current;
       if (!current?.canBypass || !current.active || inFlight.current) return;
-      if (readGlobalFilterBypassCookie() !== current.bypassed) void load(true);
+      const cookie = readGlobalFilterBypassCookie();
+      if (cookie !== current.bypassed) void remountForCookie(cookie);
     };
     window.addEventListener('focus', check);
     document.addEventListener('visibilitychange', check);
@@ -169,7 +187,7 @@ function LiveGlobalFilterProvider({ children }: { children: ReactNode }) {
       window.removeEventListener('focus', check);
       document.removeEventListener('visibilitychange', check);
     };
-  }, [load]);
+  }, [remountForCookie]);
 
   useEffect(
     () => () => {
@@ -191,22 +209,12 @@ function LiveGlobalFilterProvider({ children }: { children: ReactNode }) {
       writeGlobalFilterBypassCookie(bypassed);
       try {
         // Remount whatever the answer: the cookie has changed, so every report's figures have too.
-        const outcome = await load(true);
-        if (outcome === 'error' && readGlobalFilterBypassCookie() === bypassed) {
-          // The reports now follow the cookie - the server honours it for an administrator, and only an
-          // administrator is offered the switch - so the bar must too, rather than keep describing the view
-          // from before it. The status stays 'error' until a read succeeds.
-          setState((previous) =>
-            previous.effective?.canBypass && previous.effective.active
-              ? { ...previous, effective: { ...previous.effective, bypassed, applied: !bypassed } }
-              : previous,
-          );
-        }
+        await remountForCookie(bypassed);
       } finally {
         setSwitching(false);
       }
     },
-    [load],
+    [remountForCookie],
   );
 
   const contextValue = useMemo<GlobalFilterContextValue>(

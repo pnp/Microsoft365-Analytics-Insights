@@ -127,6 +127,22 @@ describe('GlobalFilterProvider', () => {
     expect(fetchEffectiveGlobalFilter).toHaveBeenCalledTimes(2);
   });
 
+  it('follows the cookie another tab set even when the read that should confirm it fails', async () => {
+    vi.mocked(fetchEffectiveGlobalFilter).mockResolvedValueOnce(effective());
+    renderProvider();
+    await waitFor(() => expect(screen.getByTestId('state')).toHaveTextContent('ready:0:1:false'));
+
+    document.cookie = `${GLOBAL_FILTER_BYPASS_COOKIE}=1; path=/`;
+    vi.mocked(fetchEffectiveGlobalFilter).mockRejectedValueOnce(new Error('offline'));
+    act(() => {
+      window.dispatchEvent(new Event('focus'));
+    });
+
+    // The remounted reports are unfiltered, so the bar must not keep the filtered pills.
+    await waitFor(() => expect(screen.getByTestId('state')).toHaveTextContent('error:1:1:true'));
+    expect(context.effective?.applied).toBe(false);
+  });
+
   it('does not read again on focus for a reader, or while no filter is defined', async () => {
     document.cookie = `${GLOBAL_FILTER_BYPASS_COOKIE}=1; path=/`;
     vi.mocked(fetchEffectiveGlobalFilter).mockResolvedValueOnce(effective({ active: false, applied: false }));

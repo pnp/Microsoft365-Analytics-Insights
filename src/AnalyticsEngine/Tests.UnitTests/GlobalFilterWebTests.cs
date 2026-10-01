@@ -174,21 +174,23 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
-        public async Task ReaderWithoutSeePii_MaySeeOnlyTheirOwnFigures_WhenTheirObjectIdFindsThem()
+        public async Task ReaderWithoutSeePii_IsRefusedEvenOnlyTheirOwnFigures()
         {
-            // "Only my own figures" - the editor's own suggestion for the user name.
+            // "Only my own figures" leaves one person. The user import moves a row to whoever holds its sign-in
+            // name now, so a reused address carries its former holder's activity - even into a row the
+            // reader's own object id finds. One person's record is See PII's to show, whoever that may be.
             var resolver = Resolver(new MemoryStore("[{\"d\":\"userName\",\"v\":[],\"vu\":\"userName\"}]"));
             var engineer = PrincipalWithObjectId("engineer@contoso.com", "00000000-0000-0000-0000-000000000005");
 
-            var scope = await resolver.ResolveAsync(Request(), engineer, null, CancellationToken.None);
-            CollectionAssert.AreEqual(new[] { 5 }, scope.Sql.UserIds.ToArray(), "Their own record is not guarded from them.");
+            var refusal = await RefusalOf(() => resolver.ResolveAsync(Request(), engineer, null, CancellationToken.None));
+            Assert.AreEqual(HttpStatusCode.Forbidden, refusal.Item1);
 
             var effective = Body<GlobalFilterEffectiveModel>(await Controller(resolver, engineer).Effective(CancellationToken.None));
-            Assert.IsFalse(effective.TooFewPeople);
+            Assert.IsTrue(effective.TooFewPeople, "The bar says why.");
 
-            // Found by sign-in name only, the row might be a former holder of the address, so it is not assumed theirs.
-            var byNameOnly = await RefusalOf(() => resolver.ResolveAsync(Request(), Reader("rep@contoso.com"), null, CancellationToken.None));
-            Assert.AreEqual(HttpStatusCode.Forbidden, byNameOnly.Item1);
+            var withPii = await resolver.ResolveAsync(
+                Request(), PrincipalWithObjectId("engineer@contoso.com", "00000000-0000-0000-0000-000000000005", PortalRoles.SeePii), null, CancellationToken.None);
+            CollectionAssert.AreEqual(new[] { 5 }, withPii.Sql.UserIds.ToArray());
         }
 
         [TestMethod]

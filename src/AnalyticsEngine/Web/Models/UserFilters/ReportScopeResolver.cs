@@ -52,32 +52,17 @@ namespace Web.AnalyticsWeb.Models.UserFilters
         /// <summary>
         /// True when the filter applies, the signed-in person lacks See PII, and it leaves them a handful of
         /// people - enough to turn every figure into a few individuals' records - so their reports are refused.
-        /// None at all is not refused: an empty report shows nobody's activity. Nor is the reader alone - "only my
-        /// own figures" - since nobody's record is shown but their own (<see cref="OnlyTheViewer"/>).
+        /// None at all is not refused: an empty report shows nobody's activity.
         /// </summary>
+        /// <remarks>
+        /// A scope of the reader alone ("only my own figures") is a handful too, and is refused the same way.
+        /// Their directory row is not certainly only their own history: the user import matches people by
+        /// sign-in name and moves a row to whoever holds that name now, so a reused address carries its former
+        /// holder's activity with it - and a row found by the reader's own object id can still hold it.
+        /// </remarks>
         public bool TooFewPeople =>
             Applied && !SeesIndividuals && Compiled != null
-            && Compiled.MatchedPeople > 0 && Compiled.MatchedPeople < ReportScopeResolver.MinimumPeopleWithoutSeePii
-            && !OnlyTheViewer;
-
-        /// <summary>
-        /// The directory's user id for the signed-in person, when it holds them; <c>null</c> otherwise.
-        /// </summary>
-        public int? ViewerUserId { get; set; }
-
-        /// <summary>
-        /// True when the signed-in person was found by their Entra object id rather than by sign-in name, so
-        /// the directory row is certainly theirs - not a former holder of the same address.
-        /// </summary>
-        public bool ViewerFoundByObjectId { get; set; }
-
-        /// <summary>
-        /// True when the only person the filter leaves is the signed-in person themselves, found by object id:
-        /// their own record, which See PII does not guard from them.
-        /// </summary>
-        public bool OnlyTheViewer =>
-            Compiled != null && Compiled.MatchedPeople == 1
-            && ViewerFoundByObjectId && ViewerUserId.HasValue && Compiled.Matches(ViewerUserId.Value);
+            && Compiled.MatchedPeople > 0 && Compiled.MatchedPeople < ReportScopeResolver.MinimumPeopleWithoutSeePii;
 
         /// <summary>The filter in plain English for the server's own artefacts, or <c>null</c> when it does not apply.</summary>
         public string DescribeInEnglish()
@@ -415,15 +400,10 @@ namespace Web.AnalyticsWeb.Models.UserFilters
         private void Evaluate(GlobalFilterApplication global, GlobalFilterDefinition definition, UserDirectorySnapshot snapshot, IPrincipal principal)
         {
             int? viewerRow = null;
-            var objectId = PortalViewer.ObjectIdOf(principal);
-            var byObjectId = snapshot.TryFindPerson(objectId, null, out var row);
-            if (byObjectId || snapshot.TryFindPerson(objectId, PortalViewer.UserPrincipalNameOf(principal), out row))
+            if (snapshot.TryFindPerson(PortalViewer.ObjectIdOf(principal), PortalViewer.UserPrincipalNameOf(principal), out var row))
             {
                 viewerRow = row;
             }
-
-            global.ViewerUserId = viewerRow.HasValue ? snapshot.UserIdAt(viewerRow.Value) : (int?)null;
-            global.ViewerFoundByObjectId = byObjectId;
 
             global.Resolved = GlobalFilterResolver.Resolve(definition, snapshot, viewerRow);
             global.Compiled = Compile(global.Resolved, snapshot);

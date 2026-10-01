@@ -337,9 +337,10 @@ with or without See PII.
   filter that leaves such a reader **1 to 4 people** (`ReportScopeResolver.MinimumPeopleWithoutSeePii`,
   the same floor as `CopilotAdoptionOptions.MinSeatsPerSegment`) turns every figure into a few
   individuals' records, so their reports are refused with the portal's own See PII `403`, and the bar
-  says why (`tooFewPeople`). None at all is not refused: an empty report shows nobody's activity. Nor
-  is the reader alone - "only my own figures" - when their Entra object id finds them (`OnlyTheViewer`):
-  it is their own record. The floor bounds **the people the filter admits from the directory**, not the
+  says why (`tooFewPeople`). None at all is not refused: an empty report shows nobody's activity. The
+  reader alone - "only my own figures" - is refused too: the user import moves a directory row to
+  whoever holds its sign-in name now, so a reused address carries its former holder's activity with
+  it. The floor bounds **the people the filter admits from the directory**, not the
   people a given report has rows for nor the groups a report breaks them into: a department, country or
   adoption breakdown can still show a group smaller than five, exactly as it can with no filter.
 - **What stays tenant-wide**, and says so beside the figures: the Overview page's data counts, Teams

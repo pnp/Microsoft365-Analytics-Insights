@@ -296,11 +296,7 @@ namespace Common.Entities.CopilotAdoption
                 // Cloned when a scoring pass is going to follow, because that pass writes this
                 // domain's idle-seat count onto each SKU and sharing the list would write it straight
                 // into the cached tenant-wide analysis every other caller is reading.
-                SeatLicenceTypes = cloneSeatLicenceTypes
-                    ? (tenant.SeatLicenceTypes ?? new List<LicenceTypeClassification>())
-                        .Select(l => l.Clone())
-                        .ToList()
-                    : tenant.SeatLicenceTypes,
+                SeatLicenceTypes = SeatLicenceTypesFor(tenant, scope, cloneSeatLicenceTypes),
 
                 // Which imports supplied data, which queries failed, and how long each step took. All
                 // statements about the analysis run, not about the population.
@@ -393,6 +389,27 @@ namespace Common.Entities.CopilotAdoption
                     { "count", inScope },
                     { "maxUsers", scoped.Options?.MaxLicensedUsersScored ?? CopilotAdoptionOptions.Default.MaxLicensedUsersScored },
                 });
+        }
+
+        /// <summary>
+        /// The licence types a narrowed summary lists.
+        /// </summary>
+        /// <remarks>
+        /// Under the administrator's global filter, only the Copilot seat types. No other type's assignment
+        /// count can be narrowed - a user row carries its Copilot seats only (see
+        /// <see cref="ScopeSeatLicenceTypes"/>) - and its assigned, purchased and unassigned counts all describe
+        /// the whole tenant, which is what that filter keeps a restricted reader from reading. Narrowed by an
+        /// email domain or by the reader's own filter, every type is listed, the others tenant-wide, as before.
+        /// </remarks>
+        private static List<LicenceTypeClassification> SeatLicenceTypesFor(
+            CopilotAdoptionSummary tenant, CopilotAdoptionScope scope, bool clone)
+        {
+            if (scope.Restriction == null && !clone) return tenant.SeatLicenceTypes;
+
+            IEnumerable<LicenceTypeClassification> listed = tenant.SeatLicenceTypes ?? new List<LicenceTypeClassification>();
+            if (scope.Restriction != null) listed = listed.Where(l => l.IsCopilotSeat);
+
+            return clone ? listed.Select(l => l.Clone()).ToList() : listed.ToList();
         }
 
         /// <summary>
