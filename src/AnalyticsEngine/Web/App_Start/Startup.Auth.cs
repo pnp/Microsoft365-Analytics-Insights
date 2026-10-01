@@ -1,5 +1,6 @@
 ﻿using Common.Entities.Config;
 using Common.Entities.Models;
+using DataUtils;
 using Microsoft.IdentityModel.Protocols.OpenIdConnect;
 using Microsoft.Owin;
 using Microsoft.Owin.Infrastructure;
@@ -7,7 +8,7 @@ using Microsoft.Owin.Security;
 using Microsoft.Owin.Security.Cookies;
 using Microsoft.Owin.Security.OpenIdConnect;
 using Owin;
-using System.Security.Claims;
+using System;
 using System.Threading.Tasks;
 
 namespace Web.AnalyticsWeb
@@ -21,33 +22,72 @@ namespace Web.AnalyticsWeb
         /// </summary>
         public const string SessionExpiredHeader = "X-Auth-Session-Expired";
 
+        /// <summary>Application Insights operation name for Teams connection failures.</summary>
+        internal const string TeamsConnectionTelemetryContext = "Web Teams connection";
+
         public void ConfigureAuth(IAppBuilder app)
         {
             var config = new AppConfig();
 
+            // One logger for the life of the app: each AnalyticsLogger builds its own TelemetryClient.
+            var teamsConnectionLog = new Lazy<AnalyticsLogger>(
+                () => new AnalyticsLogger(config.AppInsightsConnectionString, TeamsConnectionTelemetryContext));
+
+            var tokenCapture = new DelegatedGraphTokenCapture(
+                redeemCode: (code, scopes) => RefreshOAuthToken.GetAccessToken(code, scopes, config),
+                report: (message, exception) => ReportTeamsConnectionFailure(teamsConnectionLog.Value, message, exception));
+
+            ConfigureAuth(app, CreateOpenIdConnectOptions(
+                config.ClientID, config.Authority, config.WebAppURL, tokenCapture, app.GetDefaultCookieManager()));
+        }
+
+        /// <summary>
+        /// Adds the cookie and OIDC middleware. Separate from <see cref="ConfigureAuth(IAppBuilder)"/> so a test can
+        /// run the real middleware in-process with options it controls.
+        /// </summary>
+        internal static void ConfigureAuth(IAppBuilder app, OpenIdConnectAuthenticationOptions openIdConnectOptions)
+        {
             app.SetDefaultSignInAsAuthenticationType(CookieAuthenticationDefaults.AuthenticationType);
 
             app.UseCookieAuthentication(new CookieAuthenticationOptions());
 
-            const string graphScopes = "https://graph.microsoft.com/Team.ReadBasic.All https://graph.microsoft.com/ChannelMessage.Read.All";
+            app.UseOpenIdConnectAuthentication(openIdConnectOptions);
+        }
 
-            app.UseOpenIdConnectAuthentication(
-                new OpenIdConnectAuthenticationOptions
+        internal static OpenIdConnectAuthenticationOptions CreateOpenIdConnectOptions(
+            string clientId,
+            string authority,
+            string webAppUrl,
+            DelegatedGraphTokenCapture tokenCapture,
+            ICookieManager cookieManager)
+        {
+            return new OpenIdConnectAuthenticationOptions
+            {
+                ClientId = clientId,
+                Authority = authority,
+                PostLogoutRedirectUri = webAppUrl,
+                RedirectUri = webAppUrl,
+
+                // Signing in asks for OpenID Connect's own scopes and nothing else, so an optional feature's
+                // permissions can never stop anyone using the portal (issue #670). The delegated Teams
+                // permissions are asked for only by the Teams connection: see RedirectToIdentityProvider.
+                Scope = DelegatedGraphConsent.SignInScopes,
+                ResponseType = "code id_token",
+                TokenValidationParameters = new Microsoft.IdentityModel.Tokens.TokenValidationParameters
                 {
-                    ClientId = config.ClientID,
-                    Authority = config.Authority,
-                    PostLogoutRedirectUri = config.WebAppURL,
-                    RedirectUri = config.WebAppURL,
-                    Scope = $"openid email profile offline_access {graphScopes}",
-                    ResponseType = "code id_token",
-                    TokenValidationParameters = new Microsoft.IdentityModel.Tokens.TokenValidationParameters
+                    ValidateIssuer = true
+                },
+                // Stops the cancelled API challenges below leaving orphan nonce cookies behind.
+                CookieManager = new ApiSafeCookieManager(cookieManager),
+                Notifications = new OpenIdConnectAuthenticationNotifications()
+                {
+                    RedirectToIdentityProvider = context =>
                     {
-                        ValidateIssuer = true
-                    },
-                    // Stops the cancelled API challenges below leaving orphan nonce cookies behind.
-                    CookieManager = new ApiSafeCookieManager(app.GetDefaultCookieManager()),
-                    Notifications = new OpenIdConnectAuthenticationNotifications()
-                    {
+                        if (context.ProtocolMessage.RequestType != OpenIdConnectRequestType.Authentication)
+                        {
+                            return Task.CompletedTask;
+                        }
+
                         // An expired session must not turn an API call into a sign-in redirect.
                         //
                         // The OIDC middleware runs in Active mode, so it converts the 401 from an [Authorize]'d
@@ -57,48 +97,78 @@ namespace Web.AnalyticsWeb
                         // portal just breaks with no hint that the user simply needs to sign in again.
                         //
                         // For API requests we therefore suppress the redirect and leave the plain 401 in place.
-                        RedirectToIdentityProvider = context =>
+                        if (IsApiRequest(context.OwinContext.Request))
                         {
-                            if (context.ProtocolMessage.RequestType == OpenIdConnectRequestType.Authentication
-                                && IsApiRequest(context.OwinContext.Request))
-                            {
-                                context.HandleResponse();
-                                context.OwinContext.Response.StatusCode = 401;
+                            context.HandleResponse();
+                            context.OwinContext.Response.StatusCode = 401;
 
-                                // Only flag it as an expired session when there is genuinely no signed-in user.
-                                // A 401 raised by a controller while the user IS signed in (SiteTokenAPI having
-                                // no Graph refresh token) must not bounce them through a pointless sign-in.
-                                var signedIn = context.OwinContext.Authentication?.User?.Identity?.IsAuthenticated == true;
-                                if (!signedIn)
-                                {
-                                    context.OwinContext.Response.Headers[SessionExpiredHeader] = "true";
-                                }
+                            // Only flag it as an expired session when there is genuinely no signed-in user.
+                            // A 401 raised by a controller while the user IS signed in (SiteTokenAPI having
+                            // no Graph refresh token) must not bounce them through a pointless sign-in.
+                            var signedIn = context.OwinContext.Authentication?.User?.Identity?.IsAuthenticated == true;
+                            if (!signedIn)
+                            {
+                                context.OwinContext.Response.Headers[SessionExpiredHeader] = "true";
                             }
 
                             return Task.CompletedTask;
-                        },
+                        }
 
-                        // When AAD redirects back with an auth code, redeem it for tokens and stash
-                        // the refresh token in the (encrypted, httpOnly) auth cookie so the SPA can
-                        // get a Graph token via SiteTokenAPI. Nothing is stored server-side: authorising
-                        // a Team for deep analytics copies the token into the state table explicitly
-                        // (TeamsAuthAPIController), and only for the Teams the admin chooses.
-                        AuthorizationCodeReceived = async (context) =>
+                        // The Teams connection (AccountController.ConnectTeams) is the only request that asks
+                        // for the delegated Teams permissions. Its challenge is marked, and the same marker
+                        // comes back on the callback inside the protected state.
+                        var challenge = context.OwinContext.Authentication?.AuthenticationResponseChallenge;
+                        if (DelegatedGraphConsent.IsTeamsConnect(challenge?.Properties))
                         {
-                            var identity = context.AuthenticationTicket.Identity;
+                            context.ProtocolMessage.Scope = DelegatedGraphConsent.TeamsConnectScopes;
 
-                            var authToken = await RefreshOAuthToken.GetAccessToken(context.Code, $"openid email profile offline_access {graphScopes}", config);
-
-                            // Persist the refresh token in the auth cookie (claim). SiteTokenAPI uses
-                            // it to mint fresh access tokens for the SPA. The access token itself isn't
-                            // stored (it's short-lived and would bloat the cookie).
-                            if (authToken != null && !string.IsNullOrEmpty(authToken.RefreshToken))
+                            var loginHint = DelegatedGraphConsent.LoginHintFor(context.OwinContext.Authentication.User);
+                            if (loginHint != null)
                             {
-                                identity.AddClaim(new Claim(GraphTokenClaims.RefreshToken, authToken.RefreshToken));
+                                context.ProtocolMessage.LoginHint = loginHint;
                             }
                         }
-                    }
-                });
+
+                        return Task.CompletedTask;
+                    },
+
+                    // A sign-in redeems nothing. A Teams connection redeems the code for the Teams scopes and
+                    // keeps the refresh token in the encrypted, httpOnly auth cookie. TeamsAuthAPI copies it
+                    // into TeamsTokenStore only for Teams the admin selects. Neither path can throw here:
+                    // see DelegatedGraphTokenCapture.
+                    AuthorizationCodeReceived = context =>
+                        tokenCapture.OnAuthorizationCodeReceivedAsync(context.AuthenticationTicket, context.Code),
+
+                    // Entra ID refusing a Teams connection (consent missing, prompt declined) sends the admin
+                    // back to the Teams permissions page, still signed in. Any other failure keeps Katana's
+                    // default handling.
+                    AuthenticationFailed = context =>
+                    {
+                        var returnUri = tokenCapture.OnAuthenticationFailed(
+                            context.ProtocolMessage, context.Exception, context.Options.StateDataFormat);
+                        if (returnUri != null)
+                        {
+                            context.HandleResponse();
+                            context.Response.Redirect(returnUri);
+                        }
+
+                        return Task.CompletedTask;
+                    },
+                }
+            };
+        }
+
+        /// <summary>
+        /// Records a failed Teams connection. A warning rather than an error: the portal kept working, and the
+        /// likeliest cause is a tenant decision (no consent for an optional feature) rather than a fault.
+        /// </summary>
+        private static void ReportTeamsConnectionFailure(AnalyticsLogger logger, string message, Exception exception)
+        {
+            logger.LogWarning(message);
+            if (exception != null)
+            {
+                logger.TrackException(exception);
+            }
         }
 
         /// <summary>
@@ -151,8 +221,9 @@ namespace Web.AnalyticsWeb
         /// cannot un-write the cookie. Without this, every suppressed API challenge would leave an orphan
         /// <c>OpenIdConnect.nonce.*</c> cookie behind that nothing ever consumes (they live ~15 minutes).
         /// A page firing several parallel API calls would drop several per attempt, and because the auth cookie
-        /// on this site already carries the Graph refresh token, the accumulated Cookie header can grow past
-        /// IIS/proxy limits - turning a recoverable "please sign in again" into a 400 Request Too Large that
+        /// on this site can also carry a Graph refresh token (once an admin connects Microsoft Teams), the
+        /// accumulated Cookie header can grow past IIS/proxy limits - turning a recoverable "please sign in
+        /// again" into a 400 Request Too Large that
         /// the user cannot get out of without clearing cookies.
         ///
         /// The only cookie the middleware writes on a challenge is that nonce, and for API requests the

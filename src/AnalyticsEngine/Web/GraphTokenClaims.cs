@@ -6,7 +6,10 @@ namespace Web.AnalyticsWeb
     /// </summary>
     public static class GraphTokenClaims
     {
-        /// <summary>The OAuth refresh token, captured during the OIDC sign-in redirect.</summary>
+        /// <summary>
+        /// The OAuth refresh token, captured when the admin connects Microsoft Teams on the Teams permissions page
+        /// (<c>AccountController.ConnectTeams</c>). A plain sign-in doesn't capture one (issue #670).
+        /// </summary>
         public const string RefreshToken = "urn:aa:graph_refresh_token";
     }
 }

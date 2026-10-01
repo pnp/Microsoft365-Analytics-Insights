@@ -12,8 +12,24 @@ export const fetchMsGraph = async (url: string, accessToken: string) => {
     },
   });
 
+  // A rejected token or a missing permission comes back as a JSON error body. Reading that as data made the
+  // Teams permissions page say "No Teams found" instead of reporting that the call failed.
+  if (!response.ok) {
+    throw new GraphRequestError(response.status);
+  }
+
   return response.json();
 };
+
+/** A Graph call answered with an HTTP error. Callers show their own translated message; this carries the status. */
+export class GraphRequestError extends Error {
+  readonly status: number;
+
+  constructor(status: number) {
+    super(String(status));
+    this.status = status;
+  }
+}
 
 export const GRAPH_ENDPOINTS = {
   ME: 'https://graph.microsoft.com/v1.0/me',
