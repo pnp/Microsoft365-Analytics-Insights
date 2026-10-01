@@ -382,6 +382,7 @@ describe('CopilotAdoptionPage without See PII', () => {
     renderWithProvider(<CopilotAdoptionPage />, { access: { administration: false, seePii: false } });
 
     expect(await screen.findByRole('tab', { name: 'Analyst view' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Add filter' })).not.toBeInTheDocument();
     expect(screen.queryByRole('tab', { name: 'Licensed users' })).not.toBeInTheDocument();
     expect(screen.getByRole('tab', { name: 'Cowork' })).toBeInTheDocument();
     expect(screen.getByRole('tab', { name: 'Licence opportunities' })).toBeInTheDocument();

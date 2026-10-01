@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Security.Cryptography;
+using System.Threading;
 
 namespace Common.Entities.UserScope
 {
@@ -18,6 +20,7 @@ namespace Common.Entities.UserScope
         private readonly HashSet<Guid> _objectIds = new HashSet<Guid>();
         private readonly HashSet<Guid> _disabledObjectIds = new HashSet<Guid>();
         private readonly HashSet<string> _userPrincipalNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        private string _enabledMembershipFingerprint;
 
         // Only mail addresses that differ from the member's UPN, so the common case costs one string, not two.
         private readonly HashSet<string> _otherAddresses = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -35,6 +38,37 @@ namespace Common.Entities.UserScope
         public IReadOnlyCollection<Guid> EnabledObjectIds =>
             _disabledObjectIds.Count == 0 ? (IReadOnlyCollection<Guid>)_objectIds : _objectIds.Where(id => !_disabledObjectIds.Contains(id)).ToList();
 
+        /// <summary>
+        /// Stable fingerprint of the enabled member object ids. A Graph user delta does not report group-membership
+        /// changes, so the user import records this beside its delta token and forces a full read when it changes.
+        /// </summary>
+        public string EnabledMembershipFingerprint
+        {
+            get
+            {
+                var cached = Volatile.Read(ref _enabledMembershipFingerprint);
+                if (cached != null)
+                {
+                    return cached;
+                }
+
+                var ids = EnabledObjectIds.ToList();
+                ids.Sort();
+                using (var sha = SHA256.Create())
+                {
+                    foreach (var id in ids)
+                    {
+                        var bytes = id.ToByteArray();
+                        sha.TransformBlock(bytes, 0, bytes.Length, bytes, 0);
+                    }
+                    sha.TransformFinalBlock(Array.Empty<byte>(), 0, 0);
+                    var computed = "sha256:" + BitConverter.ToString(sha.Hash).Replace("-", string.Empty).ToLowerInvariant();
+                    Interlocked.CompareExchange(ref _enabledMembershipFingerprint, computed, null);
+                }
+                return _enabledMembershipFingerprint;
+            }
+        }
+
         /// <summary>Adds a member. Returns false when the member was already present.</summary>
         public bool Add(string objectId, string userPrincipalName, string mail, bool accountEnabled = true)
         {
@@ -45,9 +79,14 @@ namespace Common.Entities.UserScope
             if (Guid.TryParse(objectId, out var id) && id != Guid.Empty)
             {
                 isNew = _objectIds.Add(id);
+                var enabledMembershipChanged = isNew;
                 if (!accountEnabled)
                 {
-                    _disabledObjectIds.Add(id);
+                    enabledMembershipChanged |= _disabledObjectIds.Add(id);
+                }
+                if (enabledMembershipChanged)
+                {
+                    _enabledMembershipFingerprint = null;
                 }
             }
             else
@@ -163,6 +202,11 @@ namespace Common.Entities.UserScope
 
         /// <summary>The Entra object ids of the people in scope whose account is enabled; empty when unfiltered.</summary>
         public IReadOnlyCollection<Guid> EnabledMemberObjectIds => _members?.EnabledObjectIds ?? (IReadOnlyCollection<Guid>)Array.Empty<Guid>();
+
+        /// <summary>
+        /// Stable fingerprint of <see cref="EnabledMemberObjectIds"/>, or null when the scope is unfiltered.
+        /// </summary>
+        public string EnabledMembershipFingerprint => _members?.EnabledMembershipFingerprint;
 
         /// <summary>A sentence for logs saying what this scope is and where it came from.</summary>
         public string Description { get; }

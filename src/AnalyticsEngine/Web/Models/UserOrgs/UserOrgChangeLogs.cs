@@ -103,9 +103,7 @@ namespace Web.AnalyticsWeb.Models.UserOrgs
                     var client = UserOrgChangeLogTableFactory.CreateAndEnsureTable(
                         connectionString,
                         TableStorageUserOrgChangeLog.TableName,
-                        config.TenantGUID == Guid.Empty ? null : config.TenantGUID.ToString(),
-                        config.ClientID,
-                        config.ClientSecret);
+                        config);
 
                     TableStorageUserOrgChangeLog created = null;
                     created = new TableStorageUserOrgChangeLog(

@@ -82,6 +82,11 @@ namespace Tests.UnitTests.FakeLoaderClasses
         /// <summary>The unqualified token's record - the only one while no Entra organisation types are configured.</summary>
         public string Fingerprint => Fingerprints.TryGetValue(string.Empty, out var fingerprint) ? fingerprint : null;
 
+        public Dictionary<string, string> MembershipFingerprints { get; } = new Dictionary<string, string>(StringComparer.Ordinal);
+
+        public string MembershipFingerprint =>
+            MembershipFingerprints.TryGetValue(string.Empty, out var fingerprint) ? fingerprint : null;
+
         public Task<string> GetFingerprintAsync(string orgAttributeQualifier)
             => Task.FromResult(Fingerprints.TryGetValue(orgAttributeQualifier ?? string.Empty, out var fingerprint) ? fingerprint : null);
 
@@ -95,6 +100,23 @@ namespace Tests.UnitTests.FakeLoaderClasses
             else
             {
                 Fingerprints[key] = fingerprint;
+            }
+            return Task.CompletedTask;
+        }
+
+        public Task<string> GetMembershipFingerprintAsync(string orgAttributeQualifier)
+            => Task.FromResult(MembershipFingerprints.TryGetValue(orgAttributeQualifier ?? string.Empty, out var fingerprint) ? fingerprint : null);
+
+        public Task SetMembershipFingerprintAsync(string orgAttributeQualifier, string fingerprint)
+        {
+            var key = orgAttributeQualifier ?? string.Empty;
+            if (string.IsNullOrEmpty(fingerprint))
+            {
+                MembershipFingerprints.Remove(key);
+            }
+            else
+            {
+                MembershipFingerprints[key] = fingerprint;
             }
             return Task.CompletedTask;
         }

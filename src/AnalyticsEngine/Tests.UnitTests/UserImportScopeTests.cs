@@ -74,6 +74,25 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public void EnabledMembershipFingerprint_IsOrderIndependent_AndIgnoresDisabledMembers()
+        {
+            var first = new UserScopeMembers();
+            first.Add(BobId, "bob@contoso.com", null);
+            first.Add(CarolId, "carol@contoso.com", null, accountEnabled: false);
+            first.Add(AliceId, "alice@contoso.com", null);
+
+            var reordered = new UserScopeMembers();
+            reordered.Add(AliceId, "alice@contoso.com", null);
+            reordered.Add(BobId, "bob@contoso.com", null);
+
+            Assert.AreEqual(first.EnabledMembershipFingerprint, reordered.EnabledMembershipFingerprint);
+
+            reordered.Add(CarolId, "carol@contoso.com", null);
+            Assert.AreNotEqual(first.EnabledMembershipFingerprint, reordered.EnabledMembershipFingerprint,
+                "Enabling or adding a member must invalidate a delta checkpoint taken for the old membership.");
+        }
+
+        [TestMethod]
         public void IsNarrowing_OnlyForAFilterThatActuallyRestricts()
         {
             Assert.IsFalse(new UserGroupsFilterModel(null).IsNarrowing);
