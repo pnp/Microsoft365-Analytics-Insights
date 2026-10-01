@@ -6,6 +6,7 @@ using System.Threading.Tasks;
 using System.Web.Http;
 using Web.AnalyticsWeb.Models;
 using Web.AnalyticsWeb.Models.UserFilters;
+using Web.AnalyticsWeb.Security;
 
 namespace Web.AnalyticsWeb.Controllers
 {
@@ -22,6 +23,7 @@ namespace Web.AnalyticsWeb.Controllers
     /// values never touches the database after the snapshot is loaded.</para>
     /// </remarks>
     [Authorize]
+    [RequirePortalPermission(PortalPermission.SeePii)]
     [RoutePrefix("api/UserFilter")]
     public class UserFilterAPIController : ApiController
     {

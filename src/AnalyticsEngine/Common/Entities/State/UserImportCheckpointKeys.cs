@@ -131,6 +131,20 @@ namespace Common.Entities.State
         }
 
         /// <summary>
+        /// The enabled group-membership fingerprint that was current when the delta token under
+        /// <see cref="DeltaToken(Guid, string)"/> was produced by a full directory read.
+        /// </summary>
+        /// <remarks>
+        /// Group membership changes are not user-object changes and therefore do not appear in <c>/users/delta</c>.
+        /// Comparing this marker with the resolved membership lets the importer discard a token when somebody enters
+        /// scope, even if an old row for that person already exists in <c>dbo.users</c>.
+        /// </remarks>
+        public static string DeltaTokenUserScopeMembers(Guid tenantId, string orgAttributeQualifier)
+        {
+            return $"UserDeltaCodeScopeMembers-{tenantId}-{GraphUserDeltaQuery.SelectVersion}" + (orgAttributeQualifier ?? string.Empty);
+        }
+
+        /// <summary>
         /// When the user import last completed, in round-trip ("o") UTC format. The importer's cadence gate
         /// reads it to run the import at most once per <c>GraphMetadataImportIntervalHours</c>, so deleting it
         /// makes the import run on the next cycle.

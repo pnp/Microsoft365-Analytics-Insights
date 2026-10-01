@@ -55,13 +55,20 @@ export interface UserFilterDimensionsState {
   reload: () => void;
 }
 
-export function useUserFilterDimensions(): UserFilterDimensionsState {
-  const [list, setList] = useState<UserFilterDimensionList | null>(cached?.list ?? null);
-  const [loading, setLoading] = useState(!cached);
+export function useUserFilterDimensions(enabled = true): UserFilterDimensionsState {
+  const [list, setList] = useState<UserFilterDimensionList | null>(enabled ? cached?.list ?? null : null);
+  const [loading, setLoading] = useState(enabled && !cached);
   const [error, setError] = useState<string | null>(null);
   const [attempt, setAttempt] = useState(0);
 
   useEffect(() => {
+    if (!enabled) {
+      setList(null);
+      setLoading(false);
+      setError(null);
+      return;
+    }
+
     let cancelled = false;
     setLoading(true);
     setError(null);
@@ -80,7 +87,7 @@ export function useUserFilterDimensions(): UserFilterDimensionsState {
     return () => {
       cancelled = true;
     };
-  }, [attempt]);
+  }, [attempt, enabled]);
 
   const reload = useCallback(() => setAttempt((a) => a + 1), []);
 

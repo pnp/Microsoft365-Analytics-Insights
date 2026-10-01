@@ -405,6 +405,7 @@ function CopilotAdoptionView({
   const t = useT();
   const tNode = useTNode();
   const access = usePortalAccess();
+  const canSeePii = access.seePii;
 
   const [availability, setAvailability] = useState<CopilotAdoptionAvailability | null>(null);
   const [availabilityError, setAvailabilityError] = useState<string | null>(null);
@@ -417,7 +418,8 @@ function CopilotAdoptionView({
   // The server re-scores the cached analysis for the people the filter matches, so the figures are
   // recomputed rather than merely hidden.
   const [ownFilter, setOwnFilter] = useState<UserFilter>(EMPTY_USER_FILTER);
-  const userFilter = controlledFilter ?? ownFilter;
+  const requestedUserFilter = controlledFilter ?? ownFilter;
+  const userFilter = canSeePii ? requestedUserFilter : EMPTY_USER_FILTER;
   const setUserFilter = useCallback(
     (next: UserFilter) => {
       if (controlledFilter === undefined) setOwnFilter(next);
@@ -438,9 +440,8 @@ function CopilotAdoptionView({
     }
     setUserFilter(next);
   };
-  const { list: filterDimensions } = useUserFilterDimensions();
+  const { list: filterDimensions } = useUserFilterDimensions(canSeePii);
   const [tab, setTab] = useState<AdoptionTab>('executive');
-  const canSeePii = access.seePii;
   // The licensed-user list is nothing but named people. The Cowork and opportunities tabs keep their
   // aggregate sections for a reader without See PII and hide only their lists (see those panels).
   const visibleTabs = (Object.keys(TAB_LABEL_KEYS) as AdoptionTab[]).filter((value) => canSeePii || value !== 'licensed');
@@ -639,7 +640,7 @@ function CopilotAdoptionView({
         </div>
       )}
 
-      {availability?.available && (
+      {availability?.available && canSeePii && (
         <>
           <UserFilterBar filter={userFilter} onChange={setUserFilter} echoNames={summary?.userFilter?.dimensionNames} />
           <UserFilterPrintSummary filter={userFilter} echo={summary?.userFilter} dimensions={filterDimensions?.dimensions} />
@@ -746,7 +747,7 @@ function CopilotAdoptionView({
                     onShowOpportunityDetails={showOpportunityDetails}
                     onOpenTab={openTab}
                     selectedEmailDomain={selectedEmailDomain}
-                    onSelectEmailDomain={selectEmailDomain}
+                    onSelectEmailDomain={canSeePii ? selectEmailDomain : undefined}
                     canSeePii={canSeePii}
                   />
                 ))}
@@ -758,7 +759,7 @@ function CopilotAdoptionView({
                   onDrillToAction={canSeePii ? drillToAction : undefined}
                   onOpenTab={openTab}
                   selectedEmailDomain={selectedEmailDomain}
-                  onSelectEmailDomain={selectEmailDomain}
+                  onSelectEmailDomain={canSeePii ? selectEmailDomain : undefined}
                   canSeePii={canSeePii}
                 />
               )}

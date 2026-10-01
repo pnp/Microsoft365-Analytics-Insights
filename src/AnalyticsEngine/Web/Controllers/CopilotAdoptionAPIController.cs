@@ -46,9 +46,10 @@ namespace Web.AnalyticsWeb.Controllers
     ///   match the summary it was exported from.</item>
     ///   <item>Concurrent first-hits share one execution (the cache holds the <see cref="Task{T}"/>),
     ///   so a page refresh during a slow analysis cannot start a second full scan of the audit history.</item>
-    ///   <item>Per-person lists and their CSV exports need the portal's See PII permission; the summary
-    ///   and the workbook are served to everyone, without the parts that name a person for a reader
-    ///   who lacks it (#661). The shared cached analysis is never edited for one reader.</item>
+    ///   <item>Per-person lists, their CSV exports and any population-narrowing filter need the portal's
+    ///   See PII permission. The tenant-wide summary and workbook are served to everyone, without the
+    ///   parts that name a person for a reader who lacks it (#661). The shared cached analysis is never
+    ///   edited for one reader.</item>
     /// </list>
     /// </summary>
     [Authorize]
@@ -444,6 +445,8 @@ namespace Web.AnalyticsWeb.Controllers
             CancellationToken cancellationToken = default(CancellationToken))
         {
             if (!TryParseUserFilter(userFilter, out var filter, out var filterError)) return InvalidFilter(filterError);
+            var permissionDenied = ScopePermissionDenied(emailDomain, filter);
+            if (permissionDenied != null) return ResponseMessage(permissionDenied);
 
             var analysis = await TryGetScopedSummaryAsync(
                 windowDays, seatLicenceTypeIds, emailDomain, filter, FirstResponseBudget, cancellationToken);
@@ -453,6 +456,20 @@ namespace Web.AnalyticsWeb.Controllers
 
         /// <summary>Whether the caller holds the portal's See PII permission (#661).</summary>
         private bool CanSeeIndividuals() => PortalAccess.Evaluate(Request, User).SeePii;
+
+        /// <summary>
+        /// Refuses a population-narrowing scope for a reader who cannot see individual data. Even when the
+        /// response names nobody, a filter that selects one known person turns every aggregate into that
+        /// person's licence and activity record.
+        /// </summary>
+        private HttpResponseMessage ScopePermissionDenied(string emailDomain, UserFilterExpression userFilter)
+        {
+            var narrowed = CopilotAdoptionEmailDomain.Normalise(emailDomain) != null
+                || (userFilter != null && !userFilter.IsEmpty);
+            return narrowed && !CanSeeIndividuals()
+                ? PortalPermissionDenied.Response(Request, PortalPermission.SeePii)
+                : null;
+        }
 
         /// <summary>
         /// Every licence type in the tenant and whether it was counted as a Copilot seat.
@@ -911,6 +928,8 @@ namespace Web.AnalyticsWeb.Controllers
             CancellationToken cancellationToken = default(CancellationToken))
         {
             if (!TryParseUserFilter(userFilter, out var filter, out var filterError)) return InvalidFilterResponse(filterError);
+            var permissionDenied = ScopePermissionDenied(emailDomain, filter);
+            if (permissionDenied != null) return permissionDenied;
 
             // Exports are <a href> downloads, not fetch() calls: a browser will not retry a 202, it
             // would just render the JSON body as the "file". So an export WAITS - but only up to
