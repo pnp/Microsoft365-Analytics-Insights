@@ -164,6 +164,12 @@ namespace Tests.UnitTests
             ["UserOrgAPIController.GetValues"] = Admin,
             ["UserOrgAPIController.GetMembers"] = Admin,
 
+            ["UserScopeAPIController.Get"] = Admin,
+            ["UserScopeAPIController.Refresh"] = Admin,
+            ["UserScopeAPIController.StartPurge"] = Admin,
+            ["UserScopeAPIController.GetPurge"] = Admin,
+            ["UserScopeAPIController.CancelPurge"] = Admin,
+
             ["WebActivityAPIController.Availability"] = Any,
             ["WebActivityAPIController.Overview"] = Any,
             ["WebActivityAPIController.Visits"] = Any,
@@ -573,6 +579,11 @@ namespace Tests.UnitTests
             (HttpMethod.Get, "api/UserOrg/jobs/1/changes", "administration"),
             (HttpMethod.Get, "api/UserOrg/types/1/values", "administration"),
             (HttpMethod.Get, "api/UserOrg/types/1/values/1/members", "administration"),
+            (HttpMethod.Get, "api/UserScope", "administration"),
+            (HttpMethod.Post, "api/UserScope/refresh", "administration"),
+            (HttpMethod.Post, "api/UserScope/purge", "administration"),
+            (HttpMethod.Get, "api/UserScope/purge/1", "administration"),
+            (HttpMethod.Post, "api/UserScope/purge/1/cancel", "administration"),
 
             (HttpMethod.Get, "api/CopilotAdoption/licensed-users", "seePii"),
             (HttpMethod.Get, "api/CopilotAdoption/licensed-users/export", "seePii"),

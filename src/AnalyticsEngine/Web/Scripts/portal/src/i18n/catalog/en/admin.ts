@@ -413,6 +413,141 @@ export const admin = {
   'admin.userImport.result.cleared': 'Checkpoint cleared. The next user import reads every user.',
   'admin.userImport.result.nothingStored':
     'There was no stored checkpoint, so the next user import reads every user anyway.',
+
+  // User scope: import filter resolution and purge of people outside that scope.
+  'admin.userScope.title': 'User scope',
+  'admin.userScope.description':
+    'UserGroupsFilter limits every import to direct members of named Microsoft Entra ID groups. This page shows the resolved scope and removes stored analytics data for people outside it.',
+  'admin.userScope.loading': 'Loading the user scope...',
+  'admin.userScope.loadFailed': "Couldn't load the user scope.",
+  'admin.userScope.refreshFailed': "Couldn't refresh the user scope.",
+  'admin.userScope.pollFailed': "Couldn't load the purge progress.",
+  'admin.userScope.refreshing': 'Refreshing...',
+  'admin.userScope.refreshSucceeded': 'User scope refreshed from Microsoft Graph.',
+  'admin.userScope.filter.title': 'Filter',
+  'admin.userScope.filter.ariaLabel': 'User scope filter',
+  'admin.userScope.filter.unfiltered':
+    'No UserGroupsFilter is set, or it is blank or *, so every import covers everyone and there is nothing to purge.',
+  'admin.userScope.filter.patterns': 'Configured patterns',
+  'admin.userScope.filter.noPatterns': 'None',
+  'admin.userScope.filter.resolution': 'Resolution',
+  'admin.userScope.filter.statusUnfiltered': 'Not filtered',
+  'admin.userScope.filter.statusResolved': 'Resolved',
+  'admin.userScope.filter.statusUnavailable': 'Unavailable',
+  'admin.userScope.filter.resolvedUtc': 'Resolved',
+  'admin.userScope.filter.peopleInScope': 'People in scope',
+  'admin.userScope.filter.unavailableImportsContinue':
+    'Imports carry on with the last good group list, or with everyone if no list has ever resolved, until the filter resolves again.',
+  'admin.userScope.filter.matchedNoGroup':
+    'The filter resolved but no group matched it, so nobody is in scope and nothing about anyone is imported.',
+  'admin.userScope.filter.unmatchedPatterns': 'These configured patterns matched no group:',
+  'admin.userScope.failure.directoryRead':
+    'Microsoft Graph could not read the groups for the filter (HTTP {status}). Check the runtime app registration and Graph connectivity.',
+  'admin.userScope.failure.directoryReadForbidden':
+    'Microsoft Graph returned 403 when reading the groups. The runtime app registration is missing Group.Read.All.',
+  'admin.userScope.failure.budgetExhausted':
+    'The group resolver stopped because it reached its safety budget. Narrow the configured patterns, then refresh.',
+  'admin.userScope.failure.clientUnavailable':
+    'The Microsoft Graph client is unavailable in this web app instance. Check the runtime configuration and try again.',
+  'admin.userScope.failure.unexpected':
+    'An unexpected error stopped the group resolver. Check the web application logs, then refresh.',
+  'admin.userScope.groups.title': 'Groups',
+  'admin.userScope.groups.ariaLabel': 'Resolved user-scope groups',
+  'admin.userScope.groups.name': 'Group',
+  'admin.userScope.groups.objectId': 'Object id',
+  'admin.userScope.groups.members': 'Direct user members',
+  'admin.userScope.groups.patterns': 'Matched patterns',
+  'admin.userScope.database.title': 'People in the database',
+  'admin.userScope.database.ariaLabel': 'People in the database',
+  'admin.userScope.database.total': 'Total users',
+  'admin.userScope.database.inScope': 'Inside the scope',
+  'admin.userScope.database.outOfScope': 'Outside the scope',
+  'admin.userScope.purge.title': 'Purge people outside the scope',
+  'admin.userScope.purge.intro':
+    'The purge removes analytics data for every database user who is outside the resolved scope. It never touches people inside the scope or tenant-wide aggregates.',
+  'admin.userScope.purge.deleteList':
+    'Deletes their audit-log events and Copilot details; web sessions, page views, clicks and searches; page comments and likes; sent-email records; Teams ownership, membership and reactions; Microsoft 365, Copilot and Cowork usage rows; Copilot interaction-history statistics; licence assignments, Copilot Studio per-user credits and Copilot reclaim exclusions; then their user record.',
+  'admin.userScope.purge.anonymiseList':
+    'Anonymises instead of deleting where other people depend on them: Teams calls show the anonymous Unknown User and lose their feedback; calls with nobody in scope left are deleted; Power App and flow shares stay without the recipient; people they managed stay without a manager.',
+  'admin.userScope.purge.operationalList':
+    'Runs asynchronously in small batches while importers keep running. If new data arrives for someone during the purge, that person is kept and counted as skipped; running the purge again removes them.',
+  'admin.userScope.purge.restartDurable':
+    'If the web app restarts, the purge starts again by itself and finishes, unless UserGroupsFilter was changed, in which case it stops.',
+  'admin.userScope.purge.restartMemory':
+    "This web app keeps the purge's progress in its own memory, because no Azure Storage connection is configured. If the web app restarts, a running purge stops: start it again to finish it. With more than one web app instance, only the instance running the purge shows its progress.",
+  'admin.userScope.purge.irreversible': 'This cannot be undone.',
+  'admin.userScope.purge.button': 'Purge {count} people...',
+  'admin.userScope.purge.startFailed': "Couldn't start the purge.",
+  'admin.userScope.unavailable.notFiltered':
+    'No filter is configured, so everyone is in scope and there is nothing to purge.',
+  'admin.userScope.unavailable.scopeUnavailable':
+    'The configured scope is unavailable. Resolve the groups before starting a purge.',
+  'admin.userScope.unavailable.scopeEmpty':
+    'The configured filter contains nobody. Start a purge only after the scope resolves to at least one person.',
+  'admin.userScope.unavailable.nothingToPurge': 'There are no database users outside the scope.',
+  'admin.userScope.unavailable.jobActive': 'A purge is already running.',
+  'admin.userScope.unavailable.storageUnavailable':
+    "Purging is unavailable because Azure Table storage, where purges keep their progress, can't be reached. Check that this web app can reach the solution's storage account, then refresh.",
+  'admin.userScope.confirm.title': 'Purge people outside the scope?',
+  'admin.userScope.confirm.acknowledge':
+    'I understand that this permanently deletes everything stored about these {count} people and cannot be undone',
+  'admin.userScope.confirm.start': 'Start purge',
+  'admin.userScope.confirm.starting': 'Starting...',
+  'admin.userScope.progress.title': 'Purge progress',
+  'admin.userScope.progress.ariaLabel': 'User-scope purge progress',
+  'admin.userScope.progress.phase': '{phase}: {completed} of {total} steps complete',
+  'admin.userScope.progress.peopleFound': 'People found outside scope',
+  'admin.userScope.progress.peopleRemoved': 'People removed',
+  'admin.userScope.progress.peopleSkipped': 'People skipped',
+  'admin.userScope.progress.requestedBy': 'Requested by',
+  'admin.userScope.progress.started': 'Started',
+  'admin.userScope.progress.updated': 'Updated',
+  'admin.userScope.progress.completed': 'Completed',
+  'admin.userScope.progress.skippedWarning':
+    'These people were kept because new data about them arrived during the purge. Running the purge again removes them.',
+  'admin.userScope.progress.cancelRequested': 'The purge is stopping after the current batch.',
+  'admin.userScope.progress.cancelFailed': "Couldn't stop the purge.",
+  'admin.userScope.progress.rowsAffected': 'Rows affected by table or column',
+  'admin.userScope.progress.table': 'Table or column',
+  'admin.userScope.progress.rows': 'Rows',
+  'admin.userScope.progress.rowsHelp':
+    'A table name counts rows deleted. A table.column name counts rows kept but changed in place: the person is replaced by the anonymous Unknown User, or the link to them is cleared.',
+  'admin.userScope.progress.stopHelp':
+    'Stopping only prevents later batches. What has already been removed stays removed.',
+  'admin.userScope.progress.stop': 'Stop purge',
+  'admin.userScope.progress.stopping': 'Stopping...',
+  'admin.userScope.state.queued': 'The purge is queued.',
+  'admin.userScope.state.running': 'The purge is running.',
+  'admin.userScope.state.completed': 'The purge completed.',
+  'admin.userScope.state.failed': 'The purge failed.',
+  'admin.userScope.state.cancelled': 'The purge was stopped.',
+  'admin.userScope.phase.snapshot': 'Finding people outside scope',
+  'admin.userScope.phase.auditEvents': 'Audit-log events',
+  'admin.userScope.phase.webActivity': 'Web traffic',
+  'admin.userScope.phase.calls': 'Teams calls',
+  'admin.userScope.phase.pageComments': 'Page comments and likes',
+  'admin.userScope.phase.sentEmails': 'Sent emails',
+  'admin.userScope.phase.teams': 'Teams membership and reactions',
+  'admin.userScope.phase.usageReports': 'Usage reports',
+  'admin.userScope.phase.copilotInteractions': 'Copilot interaction history',
+  'admin.userScope.phase.licencesAndCredits': 'Licences and credits',
+  'admin.userScope.phase.sharedWith': 'Power App and flow shares',
+  'admin.userScope.phase.managers': 'Manager links',
+  'admin.userScope.phase.users': 'User records',
+  'admin.userScope.phase.done': 'Done',
+  'admin.userScope.jobError.scopeUnavailable':
+    'The purge stopped because the user scope became unavailable.',
+  'admin.userScope.jobError.scopeEmpty':
+    'The purge stopped because the user scope resolved to nobody.',
+  'admin.userScope.jobError.filterChanged':
+    'The purge removed nobody because UserGroupsFilter changed after the purge was confirmed. Check the filter and start the purge again.',
+  'admin.userScope.jobError.filterChangedWhileRunning':
+    'The purge stopped because UserGroupsFilter changed while it was running. What it had already removed stays removed, and nobody else was removed. Check the filter and start the purge again to see who is outside it now.',
+  'admin.userScope.jobError.databaseError':
+    'The purge stopped because the analytics database returned an error.',
+  'admin.userScope.jobError.stateUnavailable':
+    "The purge stopped because it couldn't save its progress to Azure Table storage. What it removed stays removed; start it again to finish it.",
+  'admin.userScope.jobError.unexpected': 'The purge stopped because of an unexpected error.',
 } as const;
 
 export default admin;

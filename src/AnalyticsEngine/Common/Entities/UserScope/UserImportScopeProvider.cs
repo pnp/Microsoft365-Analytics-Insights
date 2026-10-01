@@ -297,7 +297,8 @@ namespace Common.Entities.UserScope
             }
 
             public Task<UserImportScopeResolution> ResolveAsync(UserGroupsFilterModel filter)
-                => Task.FromResult(UserImportScopeResolution.Unavailable(null, null, _reason, DateTime.UtcNow));
+                => Task.FromResult(UserImportScopeResolution.Unavailable(null, null, _reason, DateTime.UtcNow,
+                    UserImportScopeFailureKind.ClientUnavailable));
         }
     }
 

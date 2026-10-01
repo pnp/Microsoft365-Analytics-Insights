@@ -79,6 +79,29 @@ export const errors = {
     "Couldn't reach Azure Table storage, where the checkpoint is kept. Check that this web app can reach the solution's storage account and that its runtime identity can read and write tables, then try again.",
   'errors.userImportCheckpoint.storageNotConfigured':
     "Azure Storage isn't configured for this deployment, so there is no checkpoint to clear.",
+  'errors.userScope.loadFailed': "Couldn't load the user scope ({status}).",
+  'errors.userScope.refreshFailed': "Couldn't refresh the user scope from Microsoft Graph ({status}).",
+  'errors.userScope.startFailed': "Couldn't start the user-scope purge ({status}).",
+  'errors.userScope.pollFailed': "Couldn't load the purge progress ({status}).",
+  'errors.userScope.cancelFailed': "Couldn't stop the purge ({status}).",
+  'errors.userScope.acknowledgementRequired':
+    'Tick the acknowledgement before starting the purge.',
+  'errors.userScope.scopeNotFiltered':
+    'UserGroupsFilter is not limiting imports, so there is no out-of-scope population to purge.',
+  'errors.userScope.scopeUnavailable':
+    "The user scope is unavailable. Resolve the configured groups before starting a purge.",
+  'errors.userScope.scopeEmpty':
+    'The configured filter currently contains nobody, so the purge is blocked until the scope resolves to at least one person.',
+  'errors.userScope.nothingToPurge':
+    'There are no database users outside the current scope.',
+  'errors.userScope.purgeAlreadyRunning':
+    'A user-scope purge is already running. Wait for it to finish or stop it before starting another.',
+  'errors.userScope.jobNotFound': 'That purge job no longer exists.',
+  'errors.userScope.jobNotActive': 'That purge job is no longer running.',
+  'errors.userScope.databaseUnavailable':
+    'The analytics database is unavailable. Check the database connection and try again.',
+  'errors.userScope.storageUnavailable':
+    "Couldn't reach Azure Table storage, where purges keep their progress. Check that this web app can reach the solution's storage account and that its runtime identity can read and write tables, then try again.",
   'errors.updateCheck.failed': "Couldn't check for updates ({status}).",
 
   // Licence activity API

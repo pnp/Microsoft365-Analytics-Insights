@@ -446,6 +446,8 @@
     <Compile Include="UserGroupsFilterModelTests.cs" />
     <Compile Include="UserImportScopeTests.cs" />
     <Compile Include="UserImportScopeImportsTests.cs" />
+    <Compile Include="UserScopeApiTests.cs" />
+    <Compile Include="UserScopePurgeTests.cs" />
     <Compile Include="SiteIdToUrlCacheTests.cs" />
     <Compile Include="DailyActivityLoaderTests.cs" />
     <Compile Include="SharePointSiteUsageStoreTests.cs" />

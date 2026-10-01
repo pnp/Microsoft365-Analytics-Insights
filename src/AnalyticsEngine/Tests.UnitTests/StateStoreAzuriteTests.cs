@@ -1,6 +1,7 @@
 using Azure;
 using Azure.Data.Tables;
 using Common.Entities.State;
+using Common.Entities.UserScope.Purge;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System;
 using System.Linq;
@@ -230,6 +231,33 @@ namespace Tests.UnitTests
         private static AzureTableKeyValueStore NewStore()
         {
             return new AzureTableKeyValueStore(_table ?? Skip(), "Test" + Guid.NewGuid().ToString("N"));
+        }
+
+        /// <summary>
+        /// The User scope purge's records in a real table: a record with its per-table counts, which purge is the latest,
+        /// and a stop request under a key of its own.
+        /// </summary>
+        [TestMethod]
+        public async Task UserScopePurgeRecords_RoundTripThroughTheTable()
+        {
+            var state = new UserScopePurgeStateStore(NewStore(), isDurable: true);
+            Assert.IsTrue(state.IsDurable);
+
+            var job = await state.CreateAsync("admin@contoso.local", "fingerprint", 5);
+            job.State = UserScopePurgeStates.Running;
+            job.RowsAffected["call_sessions.attendee_user_id"] = 2;
+            job.RowsAffected["audit_events"] = 1234;
+            await state.SaveAsync(job);
+
+            var latest = await state.GetLatestAsync();
+            Assert.AreEqual(job.Id, latest.Id);
+            Assert.AreEqual(UserScopePurgeStates.Running, latest.State);
+            Assert.AreEqual(2L, latest.RowsAffected["call_sessions.attendee_user_id"]);
+            Assert.AreEqual(1234L, latest.RowsAffected["audit_events"]);
+            Assert.IsFalse(latest.CancelRequested);
+
+            Assert.IsTrue(await state.RequestCancelAsync(job.Id));
+            Assert.IsTrue((await state.GetAsync(job.Id)).CancelRequested);
         }
 
         private static TableClient Skip()

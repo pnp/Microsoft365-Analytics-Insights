@@ -18,6 +18,10 @@ namespace Web.AnalyticsWeb
             RouteConfig.RegisterRoutes(RouteTable.Routes);
             GlobalConfiguration.Configure(WebApiConfig.Register);
 
+            // Starts again a User scope purge the previous process was running, when purge records are kept in Azure
+            // Table storage (in memory there is nothing to resume). In the background, and it never fails start-up.
+            Models.UserScope.UserScopePurgeRunner.Instance.ResumeInterrupted();
+
             // Picks up any user organisation CSV import the previous process was running when it was
             // recycled. In the background, and it never throws.
             Controllers.UserOrgAPIController.ResumeInterruptedImportsAfterStartup();
