@@ -25,6 +25,25 @@ namespace Web.AnalyticsWeb.Controllers
             }
         }
 
+        /// <summary>
+        /// Asks Entra ID for the delegated Teams permissions that Teams deep analytics needs (issue #670).
+        /// </summary>
+        /// <remarks>
+        /// Signing in no longer requests these, so a tenant that hasn't granted them - often because it doesn't use
+        /// Teams deep analytics - can still use the portal. The Teams permissions page links here when the site has
+        /// no Graph token for the admin. This re-runs the OIDC challenge with the Teams scopes. The callback redeems
+        /// the code for them (<see cref="DelegatedGraphTokenCapture"/>) and returns to the Teams permissions page,
+        /// with an outcome key if Entra ID said no. The return address is fixed, so this can't be used as an open
+        /// redirect.
+        /// </remarks>
+        [Authorize]
+        public void ConnectTeams()
+        {
+            HttpContext.GetOwinContext().Authentication.Challenge(
+                DelegatedGraphConsent.CreateTeamsConnectProperties(),
+                OpenIdConnectAuthenticationDefaults.AuthenticationType);
+        }
+
         public void SignOut()
         {
             string callbackUrl = Url.Action("SignOutCallback", "Account", routeValues: null, protocol: Request.Url.Scheme);

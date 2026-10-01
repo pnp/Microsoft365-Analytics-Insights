@@ -380,8 +380,8 @@ namespace Web.AnalyticsWeb.Controllers
         /// <c>Identity.Name</c> is the ID token's <c>unique_name</c> - the user principal name - not the
         /// display name: sign-in uses the v1 endpoint (<c>AppConfig.Authority</c>) with the default name
         /// claim, and the JWT handler maps only <c>unique_name</c> to it, leaving <c>name</c> unmapped. So
-        /// two administrators who share a display name are still two owners. The product already relies on
-        /// it being per user: each signed-in user's refresh token is cached under it (ClaimsRedisManager).
+        /// two administrators who share a display name are still two owners. That is the stable per-admin
+        /// identity used by the draft ownership check below.
         /// </remarks>
         private string CurrentAdministrator => User?.Identity?.Name ?? "unknown";
 

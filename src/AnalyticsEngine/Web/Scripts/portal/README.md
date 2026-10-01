@@ -47,17 +47,39 @@ the two cannot drift — adding a page means adding one entry to `ROUTES`.
 ## Authentication
 
 The user signs in via the server's Azure AD (OIDC) redirect, which gates the `[Authorize]`'d
-host action. During that redirect the server captures the OAuth **refresh token** into the
-encrypted, httpOnly auth cookie. The SPA then gets a fresh Graph **access token** from
-`api/SiteTokenAPI` (which mints one from the cookie's refresh token). Nothing about the
-signed-in admin's token is stored server-side; only authorising a Team for deep analytics copies
-that refresh token into the runtime state table, for the importer to read that Team's channels.
+host action. Signing in asks for `openid email profile` only — nothing that needs consent beyond
+signing in — so an optional feature's permissions can never lock anyone out of the portal
+(issue #670: it used to redeem every sign-in's code for the Teams scopes, and a tenant that hadn't
+granted them got a server error instead of the portal).
+
+The only page that needs the admin's own Microsoft Graph token is **Teams permissions** (Teams deep
+analytics), and it asks for the delegated `Team.ReadBasic.All` and `ChannelMessage.Read.All`
+permissions **on demand**. When the site has no Graph token for the session, the page offers
+*Connect to Microsoft Teams*: a full-page navigation to `/Account/ConnectTeams`, which re-runs the
+OIDC challenge marked as a Teams connection. The callback redeems the authorisation code for the
+Teams scopes and captures the OAuth **refresh token** into the encrypted, httpOnly auth cookie.
+If Entra ID refuses — no admin consent, or the prompt was declined — the admin comes back to the
+page still signed in, with an outcome key
+(`?teamsConnect=consent_required|access_denied|failed&teamsConnectError=AADSTS…`) that
+`src/auth/teamsConnect.ts` turns into translated guidance. The server half is
+`App_Start/DelegatedGraphConsent.cs`, and `src/i18n/lint/serverAuthoredText.test.ts` keeps the two
+in step.
+
+The SPA then gets a fresh Graph **access token** from `api/SiteTokenAPI` (which mints one from the
+cookie's refresh token). Nothing about the signed-in admin's token is stored server-side.
+`TeamsAuthAPIController.Put` copies that refresh token into the `TeamsAuth` partition of the
+`AnalyticsState` Azure Table only for each Team the admin explicitly authorises, so the importer
+can read that Team's channels. When there is no refresh token, or the one in the cookie no longer
+works (expired, revoked, or blocked by a sign-in-frequency policy), `SiteTokenAPI` answers `401`
+and the page offers the Teams connection again. It never falls back to a carried access token:
+that short-lived token would normally already be expired, so Graph would reject it and the page
+could only say "No Teams found".
 
 There is **no client-side sign-in**. A client-side MSAL fallback used to exist for when
 `SiteTokenAPI` returned no token, but it was pinned to a hard-coded app registration that no
 longer resolves (`AADSTS5000224`), so it could not sign anyone in — it only replaced a clear
 failure with an opaque popup error, while adding `@azure/msal-browser` to the initial bundle for
-every page. The Teams permissions page now explains what to do instead when no token is available.
+every page. The Teams permissions page offers the Teams connection instead when no token is available.
 
 ### Expired sessions
 
@@ -82,7 +104,7 @@ so a session that can't be re-established fails loudly instead of looping.
 The header matters: a bare 401 is **not** enough to conclude the session is gone. `SiteTokenAPI`
 returns 401 to mean "you are signed in, but I have no Graph refresh token for you" — the server
 only sets the header when there is genuinely no authenticated user, so that case still shows the
-Teams page's specific message instead of bouncing through a pointless sign-in.
+Teams page's *Connect to Microsoft Teams* prompt instead of bouncing through a pointless sign-in.
 
 Graph access tokens are fetched at the point of use (`src/auth/siteToken.ts`), never cached on a
 page, because they only last about an hour and the pages that need them are ones an admin leaves

@@ -8,9 +8,9 @@ namespace Web.AnalyticsWeb.Controllers
     public class BaseAPIController : ApiController
     {
         /// <summary>
-        /// Gets the signed-in admin's Graph token: the refresh token captured into the encrypted auth
-        /// cookie during the OIDC sign-in redirect. Returns <c>null</c> when the cookie doesn't carry one
-        /// (e.g. a session that started before it was captured) - callers answer 401 and the SPA signs in again.
+        /// Gets the signed-in admin's Graph token: the refresh token captured into the encrypted auth cookie
+        /// by the on-demand Microsoft Teams connection. Returns <c>null</c> when the cookie does not carry one;
+        /// callers answer 401 and the Teams page offers the connection.
         /// </summary>
         public Task<RefreshOAuthToken> GetCachedUserAccessTokenAsync()
         {

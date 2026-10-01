@@ -13,6 +13,15 @@ export const admin = {
   'admin.common.yes': 'Yes',
 
   // Teams permissions.
+  'admin.teamsPermissions.connect.button': 'Connect to Microsoft Teams',
+  'admin.teamsPermissions.connect.errorCode': 'Microsoft Entra ID error code: {code}',
+  'admin.teamsPermissions.connect.outcome.access_denied':
+    "The request for the Teams permissions was cancelled or declined, so nothing was connected. If Microsoft Entra ID said an administrator's approval is needed, ask an Entra ID administrator to grant admin consent for the delegated Teams permissions on the runtime app registration. Then select Connect to Microsoft Teams again.",
+  'admin.teamsPermissions.connect.outcome.consent_required':
+    "Microsoft Entra ID hasn't granted the delegated Teams permissions this page needs (Team.ReadBasic.All and ChannelMessage.Read.All). An Entra ID administrator needs to add them to the runtime app registration as delegated Microsoft Graph permissions and grant admin consent for them. Then select Connect to Microsoft Teams again. Nothing else in the portal needs these permissions.",
+  'admin.teamsPermissions.connect.outcome.failed':
+    "The portal couldn't get the Teams permissions for your account. The details are in the web app's Application Insights, under the operation name Web Teams connection. Select Connect to Microsoft Teams to try again.",
+  'admin.teamsPermissions.connect.outcomeTitle': "Microsoft Teams isn't connected",
   'admin.teamsPermissions.description':
     'This page is so you can authorise deep analytics for a Team. This will allow Microsoft 365 Advanced Analytics and Insights to read messages for anonymous statistical reporting purposes only.',
   'admin.teamsPermissions.errors.fetchGraphProfile': 'Unable to fetch Graph profile.',
@@ -20,9 +29,9 @@ export const admin = {
   'admin.teamsPermissions.loadingTeams': 'Loading your Teams...',
   'admin.teamsPermissions.noTeamsFound': 'No Teams found for your account.',
   'admin.teamsPermissions.noTokenMessage':
-    "The site couldn't get a Microsoft Graph token for your session, so your Teams can't be listed. This usually means the sign-in that captured your refresh token has expired or predates it - sign out and sign in again. If it keeps happening, check that the runtime app registration has the delegated Teams permissions and that the site's reply URL is registered.",
+    "To list your Teams, the portal reads them through Microsoft Graph on your behalf, using the delegated permissions Team.ReadBasic.All and ChannelMessage.Read.All. It doesn't ask for these when you sign in, so that the rest of the portal works even where they haven't been granted. Select Connect to Microsoft Teams to continue: you'll go to Microsoft Entra ID and come straight back here.",
   'admin.teamsPermissions.noTokenTeamsPlaceholder':
-    'Your Teams will be listed here once the site can get a Graph token for your session.',
+    "Your Teams will be listed here once you've connected to Microsoft Teams.",
   'admin.teamsPermissions.title': 'Grant Team Access to the Microsoft 365 Advanced Analytics Engine',
   'admin.teamsPermissions.tokenNote':
     "Note: authorisation tokens are stored in this solution's own Azure Storage account and are never shown in the portal.",

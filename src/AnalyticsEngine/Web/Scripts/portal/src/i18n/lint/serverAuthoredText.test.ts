@@ -13,6 +13,13 @@ import {
   translateHealthReasonText,
 } from '../../components/health/healthShared';
 import { SERVER_PLACEHOLDER_KEYS, serverPlaceholderText } from '../../components/shared/serverPlaceholder';
+import {
+  TEAMS_CONNECT_ERROR_PARAM,
+  TEAMS_CONNECT_OUTCOME_KEYS,
+  TEAMS_CONNECT_OUTCOME_PARAM,
+  TEAMS_CONNECT_URL,
+} from '../../auth/teamsConnect';
+import { routesForArea } from '../../navigation';
 import { TEAMS_MEETING_BUCKET_LABEL_KEYS, TEAMS_SEGMENT_TEXT_KEYS } from '../../components/teamsExplorer/teamsShared';
 import { WEB_ACTIVITY_AVAILABILITY_REASON_KEYS } from '../../components/webActivity/AvailabilityBar';
 import { USER_DATA_WORKLOADS_BY_FLAG } from '../../components/userlookup/CategoryRow';
@@ -2406,5 +2413,73 @@ describe('API error-code drift checks', () => {
       expect(catalogKey, `Missing SPA map entry for Agent Costs error code '${code}'`).toBeTruthy();
       expect(EN_CATALOG[catalogKey], `English catalog for Agent Costs error code '${code}' must match the server`).toBe(message);
     }
+  });
+});
+
+/**
+ * The Teams connection (issue #670) returns to the Teams permissions page with an outcome KEY in the
+ * query string, never text: the server can't write a sentence in the reader's language, so the SPA
+ * maps each key to a catalog entry. The keys, the parameter names, the route it returns to and the
+ * endpoint that starts it are therefore a contract between `App_Start/DelegatedGraphConsent.cs`
+ * (and `AccountController.ConnectTeams`) and `src/auth/teamsConnect.ts`. Nothing else checks it: a
+ * renamed key would quietly show every admin the generic "couldn't connect" text instead of "an
+ * administrator must grant consent", and a renamed parameter would show nothing at all.
+ */
+const DELEGATED_GRAPH_CONSENT = join(process.cwd(), '..', '..', 'App_Start', 'DelegatedGraphConsent.cs');
+const ACCOUNT_CONTROLLER = join(process.cwd(), '..', '..', 'Controllers', 'AccountController.cs');
+const TEAMS_CONNECT_OUTCOME_PREFIX = 'admin.teamsPermissions.connect.outcome.';
+
+function delegatedGraphConsentConstant(name: string): string {
+  const source = readFileSync(DELEGATED_GRAPH_CONSENT, 'utf8');
+  const match = new RegExp(`public const string ${name}\\s*=\\s*"([^"]*)"`).exec(source);
+  expect(match, `Could not find DelegatedGraphConsent.${name}`).not.toBeNull();
+  return match![1];
+}
+
+function teamsConnectOutcomeKeys(): string[] {
+  const source = readFileSync(DELEGATED_GRAPH_CONSENT, 'utf8');
+  // Outcome* constants, but not OutcomeParameter, the name of the query parameter that carries them.
+  return sortedUnique(
+    [...source.matchAll(/public const string Outcome(?!Parameter\b)\w+\s*=\s*"([^"]+)"/g)].map((m) => m[1]),
+  );
+}
+
+describe('Teams connection outcomes', () => {
+  it('finds the outcomes the server can send', () => {
+    expect(teamsConnectOutcomeKeys()).toEqual(['access_denied', 'consent_required', 'failed']);
+  });
+
+  it('translates every outcome the server can send, and nothing else', () => {
+    const serverKeys = teamsConnectOutcomeKeys();
+
+    expect(
+      sortedUnique(Object.keys(TEAMS_CONNECT_OUTCOME_KEYS)),
+      'src/auth/teamsConnect.ts must map exactly the outcome keys DelegatedGraphConsent.cs can send',
+    ).toEqual(serverKeys);
+
+    for (const [key, catalogKey] of Object.entries(TEAMS_CONNECT_OUTCOME_KEYS)) {
+      expect(catalogKey).toBe(`${TEAMS_CONNECT_OUTCOME_PREFIX}${key}`);
+      expect(catalogKey in EN_CATALOG, `${catalogKey} has no catalog entry`).toBe(true);
+    }
+
+    const orphans = catalogKeys(TEAMS_CONNECT_OUTCOME_PREFIX)
+      .map((key) => key.slice(TEAMS_CONNECT_OUTCOME_PREFIX.length))
+      .filter((key) => !serverKeys.includes(key));
+    expect(orphans, 'catalog entries for outcomes DelegatedGraphConsent.cs no longer sends').toEqual([]);
+  });
+
+  it('reads the query parameters the server writes, on the route it returns to', () => {
+    expect(delegatedGraphConsentConstant('OutcomeParameter')).toBe(TEAMS_CONNECT_OUTCOME_PARAM);
+    expect(delegatedGraphConsentConstant('ErrorCodeParameter')).toBe(TEAMS_CONNECT_ERROR_PARAM);
+
+    const route = delegatedGraphConsentConstant('TeamsPermissionsRoute');
+    expect(route.startsWith('/#/'), 'the portal is hash-routed').toBe(true);
+    expect(routesForArea('admin').map((r) => r.path)).toContain(route.slice(2));
+  });
+
+  it('starts the connection at the action that issues it', () => {
+    // RouteConfig maps "Account/{action}" to AccountController.
+    expect(TEAMS_CONNECT_URL).toBe('/Account/ConnectTeams');
+    expect(readFileSync(ACCOUNT_CONTROLLER, 'utf8')).toMatch(/public\s+void\s+ConnectTeams\s*\(\s*\)/);
   });
 });

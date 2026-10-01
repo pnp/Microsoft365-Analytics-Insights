@@ -63,7 +63,7 @@ namespace Web.AnalyticsWeb.Controllers
                     "Add a Storage connection string so Teams authorisation tokens can be stored."));
             }
 
-            // The refresh token captured into the auth cookie at sign-in (Startup.ConfigureAuth)
+            // The admin's own delegated token, captured when they connected Microsoft Teams (AccountController.ConnectTeams).
             var auth = await base.GetCachedUserAccessTokenAsync();
             if (auth == null || string.IsNullOrEmpty(auth.RefreshToken))
             {

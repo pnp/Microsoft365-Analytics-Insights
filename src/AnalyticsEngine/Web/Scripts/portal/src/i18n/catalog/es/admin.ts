@@ -15,6 +15,15 @@ const admin: Record<keyof typeof en, string> = {
   'admin.common.yes': 'Sí',
 
   // Teams permissions.
+  'admin.teamsPermissions.connect.button': 'Conectar con Microsoft Teams',
+  'admin.teamsPermissions.connect.errorCode': 'Código de error de Microsoft Entra ID: {code}',
+  'admin.teamsPermissions.connect.outcome.access_denied':
+    'La solicitud de los permisos de Teams se canceló o se rechazó, por lo que no se ha conectado nada. Si Microsoft Entra ID indicó que se necesita la aprobación de un administrador, pida a un administrador de Entra ID que conceda el consentimiento de administrador para los permisos delegados de Teams en el registro de aplicación en tiempo de ejecución. Después, seleccione Conectar con Microsoft Teams de nuevo.',
+  'admin.teamsPermissions.connect.outcome.consent_required':
+    'Microsoft Entra ID no ha concedido los permisos delegados de Teams que necesita esta página (Team.ReadBasic.All y ChannelMessage.Read.All). Un administrador de Entra ID debe añadirlos al registro de aplicación en tiempo de ejecución como permisos delegados de Microsoft Graph y conceder el consentimiento de administrador para ellos. Después, seleccione Conectar con Microsoft Teams de nuevo. Ninguna otra parte del portal necesita estos permisos.',
+  'admin.teamsPermissions.connect.outcome.failed':
+    'El portal no pudo obtener los permisos de Teams para su cuenta. Encontrará los detalles en Application Insights de la aplicación web, con el nombre de operación Web Teams connection. Seleccione Conectar con Microsoft Teams para volver a intentarlo.',
+  'admin.teamsPermissions.connect.outcomeTitle': 'Microsoft Teams no está conectado',
   'admin.teamsPermissions.description':
     'Esta página permite autorizar análisis detallados para un equipo. Esto permitirá a Microsoft 365 Advanced Analytics and Insights leer mensajes únicamente con fines de informes estadísticos anónimos.',
   'admin.teamsPermissions.errors.fetchGraphProfile': 'No se pudo obtener el perfil de Graph.',
@@ -22,9 +31,9 @@ const admin: Record<keyof typeof en, string> = {
   'admin.teamsPermissions.loadingTeams': 'Cargando sus Teams...',
   'admin.teamsPermissions.noTeamsFound': 'No se encontraron Teams para su cuenta.',
   'admin.teamsPermissions.noTokenMessage':
-    'El sitio no pudo obtener un token de Microsoft Graph para su sesión, por lo que no se pueden enumerar sus Teams. Esto normalmente significa que el inicio de sesión que capturó el token de actualización ha expirado o es anterior a este cambio: cierre la sesión e iníciela de nuevo. Si sigue ocurriendo, compruebe que el registro de aplicación en tiempo de ejecución tiene los permisos delegados de Teams y que la URL de respuesta del sitio está registrada.',
+    'Para enumerar sus Teams, el portal los lee a través de Microsoft Graph en su nombre, con los permisos delegados Team.ReadBasic.All y ChannelMessage.Read.All. No los solicita al iniciar sesión, para que el resto del portal funcione aunque no se hayan concedido. Seleccione Conectar con Microsoft Teams para continuar: irá a Microsoft Entra ID y volverá directamente aquí.',
   'admin.teamsPermissions.noTokenTeamsPlaceholder':
-    'Sus Teams se mostrarán aquí cuando el sitio pueda obtener un token de Graph para su sesión.',
+    'Sus Teams se mostrarán aquí cuando se haya conectado con Microsoft Teams.',
   'admin.teamsPermissions.title': 'Conceder acceso de equipo a Microsoft 365 Advanced Analytics Engine',
   'admin.teamsPermissions.tokenNote':
     'Nota: los tokens de autorización se almacenan en la propia cuenta de Azure Storage de esta solución y nunca se muestran en el portal.',
