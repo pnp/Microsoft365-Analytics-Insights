@@ -1,19 +1,19 @@
 using Common.Entities;
 using Common.Entities.Config;
+using Common.Entities.UserScope;
 using Common.Entities.Entities.Teams;
 using Microsoft.Extensions.Logging;
 using System;
 using System.Data.Entity;
 using WebJob.Office365ActivityImporter.Engine.Entities.Serialisation.UsageReports;
-using WebJob.Office365ActivityImporter.Engine.Graph.User;
 
 namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
 {
     // https://learn.microsoft.com/en-us/graph/api/reportroot-getm365appuserdetail?view=graph-rest-beta
     public class AppPlatformUserActivityLoader : AbstractUserDailyActivityLoader<AppPlatformUserActivityLog, AppPlatformUserActivityDetail>
     {
-        public AppPlatformUserActivityLoader(ManualGraphCallClient client, UserGroupsCache userGroupsCache, UserGroupsFilterModel userGroupsFilterModel, ILogger logger)
-            : base(client, userGroupsCache, userGroupsFilterModel, logger)
+        public AppPlatformUserActivityLoader(ManualGraphCallClient client, UserImportScope userScope, ILogger logger)
+            : base(client, userScope, logger)
         {
         }
 

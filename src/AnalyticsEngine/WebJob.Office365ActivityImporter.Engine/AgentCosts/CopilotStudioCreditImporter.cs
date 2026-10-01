@@ -1,5 +1,6 @@
 using Common.Entities.Config;
 using Common.Entities.Entities.AgentCosts;
+using Common.Entities.UserScope;
 using DataUtils;
 using Microsoft.Extensions.Logging;
 using System;
@@ -37,6 +38,12 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
         private readonly AgentCostUserResolver _userResolver;
 
         /// <summary>
+        /// The <c>UserGroupsFilter</c> scope. Per-user credit rows for anyone outside it are not stored; the per-agent
+        /// and capacity figures, which carry no identities, stay tenant-wide. Null means unfiltered.
+        /// </summary>
+        private readonly IUserImportScopeProvider _userScopeProvider;
+
+        /// <summary>
         /// Stops a broken or looping continuation token from paging for ever. A tenant's daily consumption is
         /// a few thousand rows at most, and the page size is 5000, so this is far above any real response.
         /// </summary>
@@ -48,13 +55,15 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
             IAgentCostStore store,
             int trailingWindowDays = AppConfig.DefaultCopilotStudioCreditsTrailingWindowDays,
             IClock clock = null,
-            AgentCostUserResolver userResolver = null)
+            AgentCostUserResolver userResolver = null,
+            IUserImportScopeProvider userScopeProvider = null)
         {
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
             _source = source ?? throw new ArgumentNullException(nameof(source));
             _store = store ?? throw new ArgumentNullException(nameof(store));
             _clock = clock ?? SystemClock.Instance;
             _userResolver = userResolver;
+            _userScopeProvider = userScopeProvider;
             _trailingWindowDays = trailingWindowDays > 0
                 ? Math.Min(trailingWindowDays, AppConfig.MaxCopilotStudioCreditsTrailingWindowDays)
                 : AppConfig.DefaultCopilotStudioCreditsTrailingWindowDays;
@@ -380,9 +389,11 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
             try
             {
                 var environmentNames = await _source.GetEnvironmentNamesAsync();
+                var userScope = _userScopeProvider == null ? UserImportScope.Unfiltered : await _userScopeProvider.GetScopeAsync();
 
                 var mapped = new List<CopilotStudioCreditUserDaily>();
                 var rowsRead = 0;
+                var rowsOutOfScope = 0;
                 var routeAvailable = true;
 
                 // One request per day, for the same reason as the per-agent read: the documented parameters
@@ -434,7 +445,10 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
 
                     if (routeAvailable)
                     {
-                        mapped.AddRange(MapUserRows(dayRows, day, environmentNames, _clock.UtcNow));
+                        // UserGroupsFilter: the API identifies people by Entra object id, which the scope matches directly.
+                        var inScopeRows = SelectRowsInScope(dayRows, userScope);
+                        rowsOutOfScope += dayRows.Count - inScopeRows.Count;
+                        mapped.AddRange(MapUserRows(inScopeRows, day, environmentNames, _clock.UtcNow));
                     }
                 }
 
@@ -444,6 +458,11 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
                         + "licensing API. Per-agent figures are unaffected.");
                     await SafeSaveLogAsync(log);
                     return new AgentCostImportOutcome(log);
+                }
+
+                if (rowsOutOfScope > 0)
+                {
+                    _logger.LogInformation($"Copilot Studio per-user credits: {rowsOutOfScope:N0} row(s) for people outside UserGroupsFilter were not stored.");
                 }
 
                 log.RowsRead = rowsRead;
@@ -534,6 +553,19 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
             {
                 _logger.LogWarning($"Copilot Studio per-user credits: could not re-attribute older rows ({ex.Message}).");
             }
+        }
+
+        /// <summary>
+        /// The per-user rows that may be stored under <c>UserGroupsFilter</c>: those whose Entra object id belongs to
+        /// someone in the scope.
+        /// </summary>
+        internal static List<CopilotStudioUserCreditRow> SelectRowsInScope(List<CopilotStudioUserCreditRow> rows, UserImportScope userScope)
+        {
+            if (rows == null || userScope == null || !userScope.IsFiltered)
+            {
+                return rows ?? new List<CopilotStudioUserCreditRow>();
+            }
+            return rows.Where(r => r != null && userScope.IsInScope(r.UserId)).ToList();
         }
 
         /// <summary>

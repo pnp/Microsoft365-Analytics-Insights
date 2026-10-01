@@ -1135,6 +1135,30 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public async Task CreditImporter_PerUserRowsOfPeopleOutsideUserGroupsFilter_AreNotStored()
+        {
+            // The licensing API names people by Entra object id; the per-agent and capacity figures carry nobody.
+            const string pilotId = "bbbbbbbb-0000-0000-0000-000000000001";
+            const string outsiderId = "bbbbbbbb-0000-0000-0000-000000000002";
+            var source = new UserCreditSource();
+            source.PagesByDay[new DateTime(2026, 9, 9)] = new CopilotStudioUserCreditPage(new[]
+            {
+                new CopilotStudioUserCreditRow { UserId = pilotId, EnvironmentId = "env-1", Consumed = 5m },
+                new CopilotStudioUserCreditRow { UserId = outsiderId, EnvironmentId = "env-1", Consumed = 7m },
+            }, null);
+            var store = new RecordingAgentCostStore();
+            var clock = new FixedClock(new DateTime(2026, 9, 9, 6, 0, 0, DateTimeKind.Utc));
+            var scope = FakeLoaderClasses.TestUserScopes.OfMembers((pilotId, "pilot@contoso.com", "pilot@contoso.com"));
+
+            var outcome = await new CopilotStudioCreditImporter(Logger, source, store, 1, clock,
+                userScopeProvider: FakeLoaderClasses.TestUserScopes.Provider(scope)).ImportUserCreditsAsync();
+
+            Assert.IsTrue(outcome.Succeeded);
+            Assert.AreEqual(2, outcome.Log.RowsRead, "Both rows are read...");
+            Assert.AreEqual(5m, store.UserCredits.Single().BilledCredits, "...but only the credits of the person in scope are stored.");
+        }
+
+        [TestMethod]
         public void ImportOutcome_SeparatesRefusedFromTransient()
         {
             var refused = new AgentCostImportOutcome(new AgentCostImportLog { Error = "403" }, isAuthorisationFailure: true);

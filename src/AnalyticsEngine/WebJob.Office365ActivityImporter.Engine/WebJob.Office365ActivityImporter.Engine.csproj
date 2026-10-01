@@ -164,7 +164,7 @@
     <Compile Include="Graph\Copilot\InteractionHistory\AiInteractionModels.cs" />
     <Compile Include="Graph\Copilot\InteractionHistory\CopilotInteractionHistoryImporter.cs" />
     <Compile Include="Graph\Copilot\InteractionHistory\GraphAiInteractionSourceLoader.cs" />
-    <Compile Include="Graph\Copilot\InteractionHistory\GraphPilotGroupMemberResolver.cs" />
+    <Compile Include="Graph\Copilot\InteractionHistory\UserImportScopePilotGroupMemberResolver.cs" />
     <Compile Include="Graph\Copilot\InteractionHistory\IAiInteractionSourceLoader.cs" />
     <Compile Include="Graph\Copilot\InteractionHistory\InteractionCognitiveEnricher.cs" />
     <Compile Include="Graph\Copilot\InteractionHistory\InteractionStatsExtractor.cs" />
@@ -256,7 +256,6 @@
     <Compile Include="Graph\UsageReports\YammerDeviceUsageLoader.cs" />
     <Compile Include="Graph\UsageReports\YammerUserUsageLoader.cs" />
     <Compile Include="Graph\UsageReports\TeamsUserUsageLoader.cs" />
-    <Compile Include="Graph\User\GraphUserGroupsCache.cs" />
     <Compile Include="Graph\User\GraphUserLoader.cs" />
     <Compile Include="Graph\User\IUserBulkUpdateWriter.cs" />
     <Compile Include="Graph\User\IOfficeLicenseNameResolver.cs" />
@@ -275,7 +274,6 @@
     <Compile Include="Graph\User\Rules\UserOrgMappingRules.cs" />
     <Compile Include="Graph\User\UserDataMapper.cs" />
     <Compile Include="Graph\User\UserGraphResponse.cs" />
-    <Compile Include="Graph\User\UserGroupsCache.cs" />
     <Compile Include="Graph\User\UserInsertProcessor.cs" />
     <Compile Include="Graph\User\UserLicenseAssignmentDelta.cs" />
     <Compile Include="Graph\User\UserLicenseProcessor.cs" />

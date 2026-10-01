@@ -108,6 +108,29 @@ namespace Common.Entities.State
         }
 
         /// <summary>
+        /// The key recording which <c>UserGroupsFilter</c> the stored <c>/users/delta</c> token under
+        /// <see cref="DeltaToken(Guid, string)"/> was taken under, as
+        /// <see cref="Common.Entities.Config.UserGroupsFilterModel.Fingerprint"/> (empty or absent: no filter).
+        /// </summary>
+        /// <param name="tenantId">The tenant.</param>
+        /// <param name="orgAttributeQualifier">
+        /// The qualifier of the token it describes, exactly as for <see cref="DeltaToken(Guid, string)"/>: each token
+        /// has its own record, because a token kept for one organisation-attribute selection is resumed when that
+        /// selection comes back and must be judged by the filter it was taken under.
+        /// </param>
+        /// <remarks>
+        /// A delta token only returns people who have changed since it was taken. While a filter is set, everyone
+        /// outside it is left out of the users table, so when the filter is removed or changed those people would
+        /// never be imported unless they happened to change. The importer compares this value with the current
+        /// filter and, when they differ, discards the token so the next read covers the whole directory.
+        /// Versioned with the token it describes.
+        /// </remarks>
+        public static string DeltaTokenUserScope(Guid tenantId, string orgAttributeQualifier)
+        {
+            return $"UserDeltaCodeScope-{tenantId}-{GraphUserDeltaQuery.SelectVersion}" + (orgAttributeQualifier ?? string.Empty);
+        }
+
+        /// <summary>
         /// When the user import last completed, in round-trip ("o") UTC format. The importer's cadence gate
         /// reads it to run the import at most once per <c>GraphMetadataImportIntervalHours</c>, so deleting it
         /// makes the import run on the next cycle.

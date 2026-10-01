@@ -82,6 +82,30 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
         {
             return (newSince == null || (newSince.HasValue && reaction.CreatedDateTime > newSince.Value));
         }
+
+        /// <summary>
+        /// Removes the messages and reactions of people outside <c>UserGroupsFilter</c> from a channel, returning how
+        /// many were removed. A message or reaction with no user identity - posted by an app or a bot - cannot be
+        /// attributed to anyone in the scope, so it is removed too when the scope is filtered.
+        /// </summary>
+        public static int RestrictToUserScope(ChannelWithReactions channel, Common.Entities.UserScope.UserImportScope userScope)
+        {
+            if (channel == null || userScope == null || !userScope.IsFiltered)
+            {
+                return 0;
+            }
+
+            var removed = 0;
+            if (channel.Messages != null)
+            {
+                removed += channel.Messages.RemoveAll(m => !userScope.IsInScope(m?.From?.User?.Id));
+            }
+            if (channel.Reactions != null)
+            {
+                removed += channel.Reactions.RemoveAll(r => !userScope.IsInScope(r?.User?.User?.Id));
+            }
+            return removed;
+        }
     }
 
     /// <summary>

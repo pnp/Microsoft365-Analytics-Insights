@@ -6,7 +6,6 @@ using System.Data.Entity;
 using WebJob.Office365ActivityImporter.Engine.Entities.Serialisation.UsageReports;
 using WebJob.Office365ActivityImporter.Engine.Graph;
 using WebJob.Office365ActivityImporter.Engine.Graph.UsageReports;
-using WebJob.Office365ActivityImporter.Engine.Graph.User;
 
 namespace Tests.UnitTests.FakeLoaderClasses
 {
@@ -34,7 +33,7 @@ namespace Tests.UnitTests.FakeLoaderClasses
         : AbstractUserDailyActivityLoader<TablelessUsageActivityLog, OutlookUserActivityUserDetail>
     {
         public TablelessDailyActivityLoader(ILogger logger)
-            : base(null, null, new UserGroupsFilterModel(null), logger)
+            : base(null, null, logger)
         {
         }
 

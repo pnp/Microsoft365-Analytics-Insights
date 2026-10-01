@@ -17,6 +17,12 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         private readonly UserMetadataCache _userMetaCache;
         private readonly ManagerPrefetchCache _managerPrefetch;
         private readonly IClock _clock;
+
+        /// <summary>
+        /// The <c>UserGroupsFilter</c> scope for this import. A manager outside it is not stored: the user's manager
+        /// link is cleared rather than pointing at, or creating, a record of someone the import must not keep.
+        /// </summary>
+        internal Common.Entities.UserScope.UserImportScope UserScope { get; set; } = Common.Entities.UserScope.UserImportScope.Unfiltered;
         private Dictionary<string, GraphUser> _graphUsersByAadId;
 
         /// <summary>
@@ -233,6 +239,14 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             Dictionary<string, Common.Entities.User> dbUsersByAadId = null,
             List<Common.Entities.User> allDbUsers = null)
         {
+            if (managerAadId != null && !UserScope.IsInScope(managerAadId))
+            {
+                // The manager is outside UserGroupsFilter, so they are not in the users table and must not be added.
+                dbUser.Manager = null;
+                dbUser.ManagerId = null;
+                return;
+            }
+
             if (managerAadId != null)
             {
                 // Try getting manager from DB using dictionary lookup if available

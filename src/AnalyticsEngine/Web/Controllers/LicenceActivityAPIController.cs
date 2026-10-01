@@ -185,7 +185,8 @@ namespace Web.AnalyticsWeb.Controllers
                 UserMetadata = settings.GraphUsersMetadata, UsageReports = settings.GraphUsageReports,
                 CopilotUsageReports = settings.GraphCopilotUsageReports, CopilotAudit = settings.Copilot,
                 CopilotInteractions = settings.CopilotInteractionHistory,
-                UsageReportsGroupFiltered = !string.IsNullOrWhiteSpace(config.UserGroupsFilter),
+                // A match-everything filter ('*') narrows nothing, so it is not a group filter.
+                UsageReportsGroupFiltered = new Common.Entities.Config.UserGroupsFilterModel(config.UserGroupsFilter).IsNarrowing,
                 NowUtc = DateTime.UtcNow
             };
             string scope;

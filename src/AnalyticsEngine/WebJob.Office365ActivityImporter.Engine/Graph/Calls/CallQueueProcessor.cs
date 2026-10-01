@@ -3,6 +3,7 @@ using Azure.Messaging.ServiceBus;
 using Common.Entities;
 using Common.Entities.Config;
 using Common.Entities.Models;
+using Common.Entities.UserScope;
 using DataUtils;
 using DataUtils.Http;
 using Microsoft.Extensions.Logging;
@@ -32,6 +33,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
         private string _thisTenantId = null;
         private CallRecordImporter _callRecordImporter;
         private bool _isInitialised = false;
+        private readonly IUserImportScopeProvider _userScopeProvider;
 
         public ServiceBusClient ServiceBusClient => _sbClient;
 
@@ -40,10 +42,15 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
         /// the lifetime of the process: the Service Bus listener has to survive across import cycles.
         /// (This replaces a process-wide static singleton - see issue #378.)
         /// </summary>
-        public CallQueueProcessor(AppConfig config, string thisTenantId)
+        /// <param name="userScopeProvider">
+        /// The process's shared <c>UserGroupsFilter</c> scope. When null the processor builds its own from
+        /// <paramref name="config"/>, so the filter is applied either way.
+        /// </param>
+        public CallQueueProcessor(AppConfig config, string thisTenantId, IUserImportScopeProvider userScopeProvider = null)
         {
             // Use seperate telemetry context from rest of the importer
             _logger = new AnalyticsLogger(config.AppInsightsConnectionString, "Office365CallsImporter");
+            _userScopeProvider = userScopeProvider ?? UserImportScopeProvider.CreateForGraph(config, _logger);
 
             _auth = new GraphAppIndentityOAuthContext(_logger, config.ClientID, config.TenantGUID.ToString(), config.ClientSecret, config.KeyVaultUrl, config.UseClientCertificate);
             this._thisTenantId = thisTenantId;
@@ -106,7 +113,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
             _callRecordImporter = new CallRecordImporter(
                 new GraphCallRecordSourceLoader(graphCallClient, teamsLoadContext, _logger, _thisTenantId),
                 new SqlCallRecordPersistenceManager(_logger),
-                _logger);
+                _logger,
+                _userScopeProvider);
 
             _isInitialised = true;
         }

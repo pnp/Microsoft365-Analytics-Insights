@@ -328,7 +328,7 @@
     <Compile Include="FakeLoaderClasses\InMemoryCopilotUsagePersistenceManager.cs" />
     <Compile Include="FakeLoaderClasses\FakeAggregateWeeklyUsageReportLoader.cs" />
     <Compile Include="FakeLoaderClasses\FakeSpoGraphClient.cs" />
-    <Compile Include="FakeLoaderClasses\MockUserGroupsCache.cs" />
+    <Compile Include="FakeLoaderClasses\TestUserScopes.cs" />
     <Compile Include="LookupCacheBatchProcessingTests.cs" />
     <Compile Include="OutlookUserActivityLoaderTests.cs" />
     <Compile Include="PageExitEventValidationTests.cs" />
@@ -351,7 +351,6 @@
     <Compile Include="ReportsAPIControllerTests.cs" />
     <Compile Include="SimplePropsDicTests.cs" />
     <Compile Include="PageUpdateEventListParseTests.cs" />
-    <Compile Include="UserGroupsCacheTtlTests.cs" />
     <Compile Include="TestsAppConfig.cs" />
     <Compile Include="UsageStatsTests.cs" />
     <Compile Include="AppInsightsQueryTableTests.cs" />
@@ -438,8 +437,9 @@
     <Compile Include="TeamsTests.cs" />
     <Compile Include="RetireUnusedAuditYammerStreamTablesMigrationTests.cs" />
     <Compile Include="UserDataLookupTests.cs" />
-    <Compile Include="UserGroupsCacheTests.cs" />
     <Compile Include="UserGroupsFilterModelTests.cs" />
+    <Compile Include="UserImportScopeTests.cs" />
+    <Compile Include="UserImportScopeImportsTests.cs" />
     <Compile Include="SiteIdToUrlCacheTests.cs" />
     <Compile Include="DailyActivityLoaderTests.cs" />
     <Compile Include="SharePointSiteUsageStoreTests.cs" />
