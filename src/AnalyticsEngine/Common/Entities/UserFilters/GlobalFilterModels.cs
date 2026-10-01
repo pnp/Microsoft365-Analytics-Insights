@@ -40,6 +40,28 @@ namespace Common.Entities.UserFilters
         /// <summary>True when the condition needed a value the signed-in person does not have, so it matches nobody.</summary>
         [JsonProperty("unresolved")]
         public bool Unresolved { get; set; }
+
+        /// <summary>
+        /// How many of the administrator's fixed values were withheld because they name people - sign-in names
+        /// on a user-name, manager or management-chain condition - and the caller lacks See PII. Zero otherwise.
+        /// </summary>
+        [JsonProperty("hiddenValues")]
+        public int HiddenValues { get; set; }
+
+        /// <summary>
+        /// True when <see cref="ViewerValue"/> was withheld for the same reason: the condition resolved for the
+        /// caller (it is not <see cref="Unresolved"/>), but the value it resolved to is a person's sign-in name.
+        /// </summary>
+        [JsonProperty("viewerValueHidden")]
+        public bool ViewerValueHidden { get; set; }
+
+        /// <summary>A copy, with its own list of values.</summary>
+        internal GlobalFilterClauseModel Copy()
+        {
+            var copy = (GlobalFilterClauseModel)MemberwiseClone();
+            copy.Values = new List<string>(Values ?? new List<string>());
+            return copy;
+        }
     }
 
     /// <summary>
@@ -127,6 +149,45 @@ namespace Common.Entities.UserFilters
                 ViewerAttribute = c.ViewerAttribute,
             }).ToList();
         }
+
+        /// <summary>
+        /// Whether a dimension's values are people: sign-in names. A reader without See PII is never shown
+        /// them - the same rule as the rest of the portal (#661, #680).
+        /// </summary>
+        public static bool NamesPeople(string dimension)
+        {
+            return string.Equals(dimension, UserFilterDimensions.UserName, StringComparison.Ordinal)
+                || string.Equals(dimension, UserFilterDimensions.Manager, StringComparison.Ordinal)
+                || string.Equals(dimension, UserFilterDimensions.ManagementChain, StringComparison.Ordinal);
+        }
+
+        /// <summary>
+        /// This echo without the values that name people, for a caller who lacks See PII: an administrator's
+        /// fixed sign-in names become a count, and a viewer value that is a sign-in name - the caller's own, or
+        /// their manager's - is withheld but marked as resolved. Never modifies this instance.
+        /// </summary>
+        public GlobalFilterEcho WithoutPeople()
+        {
+            var copy = (GlobalFilterEcho)MemberwiseClone();
+            copy.Clauses = Clauses.Select(c =>
+            {
+                var clause = c.Copy();
+                if (NamesPeople(clause.Dimension) && clause.Values.Count > 0)
+                {
+                    clause.HiddenValues = clause.Values.Count;
+                    clause.Values = new List<string>();
+                }
+
+                if (clause.ViewerValue != null && clause.ViewerAttribute != null && NamesPeople(clause.ViewerAttribute))
+                {
+                    clause.ViewerValue = null;
+                    clause.ViewerValueHidden = true;
+                }
+
+                return clause;
+            }).ToList();
+            return copy;
+        }
     }
 
     /// <summary>
@@ -135,7 +196,11 @@ namespace Common.Entities.UserFilters
     /// </summary>
     public static class GlobalFilterDescriber
     {
-        public static string Describe(ResolvedGlobalFilter resolved, Func<string, string> dimensionName)
+        /// <param name="hidePeople">
+        /// True for a reader without See PII: sign-in names - an administrator's chosen people, or the viewer's own
+        /// or their manager's - are not written out (<see cref="GlobalFilterEcho.NamesPeople"/>).
+        /// </param>
+        public static string Describe(ResolvedGlobalFilter resolved, Func<string, string> dimensionName, bool hidePeople = false)
         {
             if (resolved == null || resolved.Definition.IsEmpty) return "Everyone";
 
@@ -148,11 +213,51 @@ namespace Common.Entities.UserFilters
                 var dimension = name(clause.Source.Clause.Dimension);
                 groups[groups.Count - 1].Add(clause.Unresolved
                     ? dimension + " is the viewer's own " + name(clause.Source.ViewerAttribute) + ", which the directory does not hold for them (matches nobody)"
-                    : UserFilterDescriber.DescribeClause(clause.Effective, dimension));
+                    : hidePeople && GlobalFilterEcho.NamesPeople(clause.Source.Clause.Dimension)
+                        ? DescribeWithoutPeople(clause, dimension)
+                        : UserFilterDescriber.DescribeClause(clause.Effective, dimension));
             }
 
             var parts = groups.Select(g => string.Join(" and ", g)).ToList();
             return parts.Count == 1 ? parts[0] : string.Join(" or ", parts.Select(p => "(" + p + ")"));
+        }
+
+        /// <summary>A condition on people, with the people it names counted rather than listed.</summary>
+        private static string DescribeWithoutPeople(ResolvedGlobalFilterClause resolved, string dimension)
+        {
+            var clause = resolved.Source.Clause;
+            var named = clause.Values.Count;
+            var parts = new List<string>();
+
+            if (named > 0)
+            {
+                parts.Add(clause.IsTextMatch
+                    ? (named == 1 ? "a search term" : "one of " + named + " search terms")
+                    : (named == 1 ? "a named person" : "one of " + named + " named people"));
+            }
+
+            if (resolved.Source.UsesViewer)
+            {
+                parts.Add(string.Equals(resolved.Source.ViewerAttribute, UserFilterDimensions.Manager, StringComparison.Ordinal)
+                    ? "the viewer's manager"
+                    : "the viewer");
+            }
+
+            if (clause.IncludeNotSet) parts.Add(string.Equals(clause.Dimension, UserFilterDimensions.ManagementChain, StringComparison.Ordinal) ? "(no manager)" : "not set");
+
+            var list = string.Join(" or ", parts);
+            if (string.Equals(clause.Dimension, UserFilterDimensions.ManagementChain, StringComparison.Ordinal))
+            {
+                return dimension + (clause.IsNegated ? " does not include " : " includes ") + list;
+            }
+
+            switch (clause.Operator)
+            {
+                case UserFilterOperator.IsNot: return dimension + " is not " + list;
+                case UserFilterOperator.Contains: return dimension + " contains " + list;
+                case UserFilterOperator.NotContains: return dimension + " does not contain " + list;
+                default: return dimension + " is " + list;
+            }
         }
     }
 }

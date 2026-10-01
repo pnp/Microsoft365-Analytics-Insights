@@ -13,7 +13,7 @@ import {
   tokens,
 } from '@fluentui/react-components';
 import { ArrowClockwise16Regular, Info16Regular, LockClosed16Regular, LockOpen16Regular, Warning16Regular } from '@fluentui/react-icons';
-import { formatNumber, useT } from '../../i18n';
+import { formatNumber, plural, useT } from '../../i18n';
 import { usePortalAccess } from '../../access';
 import type { GlobalFilterClauseEcho, GlobalFilterEcho } from '../../types/globalFilter';
 import { dimensionLabel, operatorShortLabel, type DimensionNameSource } from '../userFilter/describeUserFilter';
@@ -199,6 +199,8 @@ export default function GlobalFilterBar({ note }: GlobalFilterBarProps) {
       switching={switching}
       onSwitchOff={() => void setBypassed(true)}
       editLink={editLink}
+      tooFewPeople={effective.tooFewPeople === true}
+      minimumPeople={effective.minimumPeople ?? 0}
     />
   );
 }
@@ -210,6 +212,8 @@ function LockedFilter({
   switching,
   onSwitchOff,
   editLink,
+  tooFewPeople,
+  minimumPeople,
 }: {
   echo: GlobalFilterEcho;
   note?: string;
@@ -217,6 +221,8 @@ function LockedFilter({
   switching: boolean;
   onSwitchOff: () => void;
   editLink: ReactNode;
+  tooFewPeople: boolean;
+  minimumPeople: number;
 }) {
   const styles = useStyles();
   const t = useT();
@@ -320,6 +326,16 @@ function LockedFilter({
         {nobody && (
           <MessageBar intent="warning">
             <MessageBarBody>{t('globalFilter.bar.matchesNobody')}</MessageBarBody>
+          </MessageBar>
+        )}
+        {tooFewPeople && (
+          <MessageBar intent="warning">
+            <MessageBarBody>
+              {t(plural(echo.matchedPeople, 'globalFilter.bar.tooFewPeople.one', 'globalFilter.bar.tooFewPeople.other'), {
+                matched: formatNumber(echo.matchedPeople),
+                minimum: formatNumber(minimumPeople),
+              })}
+            </MessageBarBody>
           </MessageBar>
         )}
         {echo.unknownDimensions.length > 0 && (

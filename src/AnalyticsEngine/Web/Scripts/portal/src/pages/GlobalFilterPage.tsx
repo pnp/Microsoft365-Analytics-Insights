@@ -246,6 +246,11 @@ export default function GlobalFilterPage() {
           <Card className={styles.card}>
             <Subtitle2>{t('globalFilter.admin.conditions.heading')}</Subtitle2>
             <Text size={200} className={styles.muted}>{t('globalFilter.admin.conditions.note')}</Text>
+            {admin.minimumPeopleWithoutSeePii !== undefined && (
+              <Text size={200} className={styles.muted}>
+                {t('globalFilter.admin.conditions.privacyNote', { minimum: formatNumber(admin.minimumPeopleWithoutSeePii) })}
+              </Text>
+            )}
 
             {dimensionsError && (
               <MessageBar intent="warning">

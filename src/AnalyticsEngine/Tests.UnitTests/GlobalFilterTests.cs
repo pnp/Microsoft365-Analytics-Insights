@@ -203,6 +203,21 @@ namespace Tests.UnitTests
             Assert.IsFalse(snapshot.TryFindPerson(Guid.Empty, null, out _));
         }
 
+        [TestMethod]
+        public void TryFindPerson_RefusesASignInNameRecordedUnderAnotherAccount()
+        {
+            // Rep's row is recorded under RepObjectId. A token carrying a different object id but rep's sign-in name
+            // is another account - a new starter given a leaver's address before the next import - not rep.
+            var snapshot = Snapshot();
+
+            Assert.IsFalse(snapshot.TryFindPerson(new Guid("00000000-0000-0000-0000-0000000000ff"), "rep@contoso.com", out var row));
+            Assert.AreEqual(-1, row);
+
+            // Without an object id in the token, the name is all there is to go on.
+            Assert.IsTrue(snapshot.TryFindPerson(null, "rep@contoso.com", out var byName));
+            Assert.AreEqual(SalesRep, snapshot.UserIdAt(byName));
+        }
+
         #endregion
 
         #region Narrowing a report
@@ -317,6 +332,50 @@ namespace Tests.UnitTests
             Assert.AreEqual("Sales", echo.Clauses[0].ViewerValue);
             Assert.AreEqual(0, echo.Clauses[0].Values.Count);
             Assert.IsFalse(echo.Clauses[0].Unresolved);
+        }
+
+        [TestMethod]
+        public void Echo_WithoutPeople_CountsNamedPeopleAndWithholdsTheViewersOwnSignInName()
+        {
+            var snapshot = Snapshot();
+            var resolved = Resolve(GlobalFilterCodec.Parse(
+                "[{\"d\":\"userName\",\"v\":[\"ceo@contoso.com\",\"engineer@contoso.com\"]},"
+                + "{\"j\":\"or\",\"d\":\"manager\",\"v\":[],\"vu\":\"manager\"},"
+                + "{\"j\":\"or\",\"d\":\"department\",\"v\":[\"Engineering\"],\"vu\":\"department\"}]"), snapshot, SalesRep);
+            var echo = GlobalFilterEcho.From(resolved, Compile(resolved, snapshot), snapshot);
+
+            var hidden = echo.WithoutPeople();
+
+            Assert.AreEqual(0, hidden.Clauses[0].Values.Count);
+            Assert.AreEqual(2, hidden.Clauses[0].HiddenValues);
+            Assert.IsNull(hidden.Clauses[1].ViewerValue);
+            Assert.IsTrue(hidden.Clauses[1].ViewerValueHidden);
+            CollectionAssert.AreEqual(new[] { "Engineering" }, hidden.Clauses[2].Values.ToArray(), "Departments are not people.");
+            Assert.AreEqual("Sales", hidden.Clauses[2].ViewerValue);
+            Assert.AreEqual(echo.MatchedPeople, hidden.MatchedPeople);
+
+            // The original is untouched: it may be someone else's echo.
+            Assert.AreEqual(2, echo.Clauses[0].Values.Count);
+            Assert.AreEqual("director@contoso.com", echo.Clauses[1].ViewerValue);
+        }
+
+        [TestMethod]
+        public void Describer_WithoutPeople_NamesNobody()
+        {
+            var snapshot = Snapshot();
+            var resolved = Resolve(GlobalFilterCodec.Parse(
+                "[{\"d\":\"userName\",\"v\":[\"ceo@contoso.com\",\"engineer@contoso.com\"]},"
+                + "{\"j\":\"or\",\"d\":\"manager\",\"v\":[],\"vu\":\"manager\"},"
+                + "{\"j\":\"or\",\"d\":\"managementChain\",\"v\":[],\"vu\":\"userName\"}]"), snapshot, SalesRep);
+
+            var withNames = GlobalFilterDescriber.Describe(resolved, null);
+            StringAssert.Contains(withNames, "director@contoso.com");
+
+            var withoutNames = GlobalFilterDescriber.Describe(resolved, null, hidePeople: true);
+            Assert.IsFalse(withoutNames.Contains("@"), withoutNames);
+            StringAssert.Contains(withoutNames, "one of 2 named people");
+            StringAssert.Contains(withoutNames, "the viewer's manager");
+            StringAssert.Contains(withoutNames, "includes the viewer");
         }
 
         [TestMethod]

@@ -79,6 +79,51 @@ describe('the global filter, read to the person it applies to', () => {
   });
 });
 
+describe('the global filter, read to someone who may not see who it names', () => {
+  it('says whose value it is, and how many people, but never who', async () => {
+    const t = await translator('en');
+
+    expect(describeGlobalClause(t, echo('userName', [], { viewerAttribute: 'userName', viewerValueHidden: true }), 'reader')).toBe(
+      'User name is you',
+    );
+    expect(
+      describeGlobalClause(
+        t,
+        echo('manager', [], { hiddenValues: 2, viewerAttribute: 'manager', viewerValueHidden: true }),
+        'reader',
+      ),
+    ).toBe('Manager is 2 named people or your manager');
+    expect(
+      describeGlobalClause(t, echo('managementChain', [], { viewerAttribute: 'userName', viewerValueHidden: true }), 'reader'),
+    ).toBe('Management chain includes you');
+    expect(describeGlobalClause(t, echo('userName', [], { operator: 'contains', hiddenValues: 1 }), 'reader')).toBe(
+      'User name contains 1 search term',
+    );
+    expect(globalPillValues(t, echo('manager', [], { hiddenValues: 3 }), 'reader')).toBe('3 named people');
+  });
+
+  it('does not mistake a withheld value for a missing one', async () => {
+    const t = await translator('en');
+    const withheld = echo('manager', [], { viewerAttribute: 'manager', viewerValueHidden: true });
+
+    expect(describeGlobalClause(t, withheld, 'reader')).not.toContain('matches nobody');
+    expect(globalPillValues(t, withheld, 'reader')).toBe('your manager');
+  });
+
+  it('is translated, counts included', async () => {
+    const t = await translator('es');
+
+    expect(
+      describeGlobalClause(
+        t,
+        echo('manager', [], { hiddenValues: 12345, viewerAttribute: 'manager', viewerValueHidden: true }),
+        'reader',
+      ),
+    ).toBe('Responsable es 12.345 personas concretas o su responsable');
+    expect(globalPillValues(t, echo('userName', [], { hiddenValues: 1 }), 'reader')).toBe('1 persona concreta');
+  });
+});
+
 describe('the global filter, as the administrator wrote it', () => {
   it('names the viewer rather than anyone in particular', async () => {
     const t = await translator('en');

@@ -46,13 +46,12 @@ namespace Common.Entities.LicenceActivity
         [JsonIgnore]
         public Func<int, bool> PeopleScope { get; private set; }
 
-        /// <summary>A stable identity for <see cref="PeopleScope"/>, so cached figures are never shared across scopes. Null for everyone.</summary>
+        /// <summary>
+        /// A stable identity for <see cref="PeopleScope"/>, so cached figures are never shared across scopes: the hash
+        /// of the people it admits, so it survives a re-read of the directory that changes nobody. Null for everyone.
+        /// </summary>
         [JsonIgnore]
         public string PeopleScopeKey { get; private set; }
-
-        /// <summary>The administrator's global filter in plain English, for the workbook. Null when none applies.</summary>
-        [JsonIgnore]
-        public string PeopleScopeDescription { get; private set; }
 
         private LicenceActivityQuery() { }
 
@@ -97,17 +96,16 @@ namespace Common.Entities.LicenceActivity
             int licenceTypeId, string workload, string search, string sort, string direction,
             int top, int page, int pageSize, DateTime nowUtc) =>
             Create(From, To, nowUtc, DepartmentId, CountryId, licenceTypeId, workload, search, sort, direction, top, page, pageSize)
-                .WithPeopleScope(PeopleScope, PeopleScopeKey, PeopleScopeDescription);
+                .WithPeopleScope(PeopleScope, PeopleScopeKey);
 
         /// <summary>
         /// This query narrowed to the people <paramref name="scope"/> admits as well. A null scope is everyone.
         /// </summary>
-        public LicenceActivityQuery WithPeopleScope(Func<int, bool> scope, string key, string description = null)
+        public LicenceActivityQuery WithPeopleScope(Func<int, bool> scope, string key)
         {
             var copy = (LicenceActivityQuery)MemberwiseClone();
             copy.PeopleScope = scope;
             copy.PeopleScopeKey = scope == null ? null : (key ?? throw new ArgumentNullException(nameof(key)));
-            copy.PeopleScopeDescription = scope == null ? null : description;
             return copy;
         }
 

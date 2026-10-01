@@ -23,6 +23,7 @@ using GlobalFilterState = AnalyticsWeb::Web.AnalyticsWeb.Models.UserFilters.Glob
 using IGlobalFilterProvider = AnalyticsWeb::Web.AnalyticsWeb.Models.UserFilters.IGlobalFilterProvider;
 using IUserDirectorySource = AnalyticsWeb::Web.AnalyticsWeb.Models.UserFilters.IUserDirectorySource;
 using PortalAccessPolicy = AnalyticsWeb::Web.AnalyticsWeb.Security.PortalAccessPolicy;
+using PortalPermissionDeniedModel = AnalyticsWeb::Web.AnalyticsWeb.Security.PortalPermissionDeniedModel;
 using PortalRoles = AnalyticsWeb::Web.AnalyticsWeb.Security.PortalRoles;
 using ReportScopeResolver = AnalyticsWeb::Web.AnalyticsWeb.Models.UserFilters.ReportScopeResolver;
 using UserFilterAPIController = AnalyticsWeb::Web.AnalyticsWeb.Controllers.UserFilterAPIController;
@@ -47,7 +48,7 @@ namespace Tests.UnitTests
             var resolver = Resolver(new MemoryStore(MyDepartment));
             var userFilter = UserFilterCodec.Parse("[{\"d\":\"manager\",\"v\":[\"director@contoso.com\"]}]");
 
-            var scope = await resolver.ResolveAsync(Request(), Reader("rep@contoso.com"), userFilter, CancellationToken.None);
+            var scope = await resolver.ResolveAsync(Request(), PiiReader("rep@contoso.com"), userFilter, CancellationToken.None);
 
             Assert.IsTrue(scope.IsRestricted);
             CollectionAssert.AreEqual(new[] { 3, 4 }, scope.Sql.UserIds.ToArray());
@@ -96,7 +97,7 @@ namespace Tests.UnitTests
         {
             var resolver = Resolver(new MemoryStore(MyDepartment));
 
-            var reader = await resolver.ResolveAsync(Request(bypass: true), Reader("rep@contoso.com"), null, CancellationToken.None);
+            var reader = await resolver.ResolveAsync(Request(bypass: true), PiiReader("rep@contoso.com"), null, CancellationToken.None);
             Assert.IsTrue(reader.IsRestricted, "A reader cannot switch the filter off by setting the cookie themselves.");
 
             var admin = await resolver.ResolveAsync(Request(bypass: true), Admin("rep@contoso.com"), null, CancellationToken.None);
@@ -141,6 +142,103 @@ namespace Tests.UnitTests
 
             Assert.AreEqual(HttpStatusCode.ServiceUnavailable, refusal.Item1);
             Assert.AreEqual("filterDirectoryUnavailable", refusal.Item2);
+        }
+
+        #endregion
+
+        #region Readers without See PII (#680)
+
+        [TestMethod]
+        public async Task ReaderWithoutSeePii_IsRefusedAScopeOfAHandfulOfPeople_ButNotOneOfNobody()
+        {
+            var resolver = Resolver(new MemoryStore(MyDepartment));
+
+            // Rep's department holds three people: under the floor of five.
+            var refused = await StatusOf(() => resolver.ResolveAsync(Request(), Reader("rep@contoso.com"), null, CancellationToken.None));
+            Assert.AreEqual(HttpStatusCode.Forbidden, refused.Item1);
+            StringAssert.Contains(refused.Item2, PortalPermissionDeniedModel.ErrorCode);
+            StringAssert.Contains(refused.Item2, "seePii", "Refused with the portal's own See PII refusal, so the page says which permission would show it.");
+
+            // The same scope for a reader who may see individuals.
+            var allowed = await resolver.ResolveAsync(Request(), PiiReader("rep@contoso.com"), null, CancellationToken.None);
+            Assert.AreEqual(3, allowed.Sql.Count);
+
+            // Nobody at all is an empty report, which shows nobody's activity.
+            var nobody = await resolver.ResolveAsync(Request(), Reader("stranger@contoso.com"), null, CancellationToken.None);
+            Assert.AreEqual(0, nobody.Sql.Count);
+
+            // An administrator who switched the filter off has no scope to be too small.
+            var adminWithoutPii = Principal("rep@contoso.com", PortalRoles.Administration);
+            var bypassed = await resolver.ResolveAsync(Request(bypass: true), adminWithoutPii, null, CancellationToken.None);
+            Assert.IsFalse(bypassed.IsRestricted);
+        }
+
+        [TestMethod]
+        public async Task ReaderWithoutSeePii_IsNotRefusedAScopeOfFiveOrMore()
+        {
+            const string fiveNamed =
+                "[{\"d\":\"userName\",\"v\":[\"ceo@contoso.com\",\"director@contoso.com\",\"rep@contoso.com\",\"peer@contoso.com\",\"engineer@contoso.com\"]}]";
+            var resolver = Resolver(new MemoryStore(fiveNamed));
+
+            var scope = await resolver.ResolveAsync(Request(), Reader("rep@contoso.com"), null, CancellationToken.None);
+
+            Assert.AreEqual(5, scope.Sql.Count);
+        }
+
+        [TestMethod]
+        public async Task Effective_WithholdsSignInNamesFromAReaderWithoutSeePii()
+        {
+            const string people =
+                "[{\"d\":\"userName\",\"v\":[\"ceo@contoso.com\",\"director@contoso.com\",\"rep@contoso.com\",\"peer@contoso.com\",\"engineer@contoso.com\"]},"
+                + "{\"j\":\"or\",\"d\":\"manager\",\"v\":[],\"vu\":\"manager\"},"
+                + "{\"j\":\"or\",\"d\":\"department\",\"v\":[],\"vu\":\"department\"}]";
+            var resolver = Resolver(new MemoryStore(people));
+
+            var reader = Body<GlobalFilterEffectiveModel>(await Controller(resolver, Reader("rep@contoso.com")).Effective(CancellationToken.None));
+            var json = Newtonsoft.Json.JsonConvert.SerializeObject(reader);
+            Assert.IsFalse(json.Contains("@contoso.com"), "No sign-in name may reach a reader without See PII: " + json);
+
+            var named = reader.Filter.Clauses[0];
+            Assert.AreEqual(0, named.Values.Count);
+            Assert.AreEqual(5, named.HiddenValues);
+
+            var manager = reader.Filter.Clauses[1];
+            Assert.IsNull(manager.ViewerValue);
+            Assert.IsTrue(manager.ViewerValueHidden);
+            Assert.IsFalse(manager.Unresolved, "Withheld is not the same as missing: the condition still matches people.");
+
+            Assert.AreEqual("Sales", reader.Filter.Clauses[2].ViewerValue, "A department is not a person, so it is shown.");
+
+            // The editor, and a reader with See PII, see the names.
+            var withPii = Body<GlobalFilterEffectiveModel>(await Controller(resolver, PiiReader("rep@contoso.com")).Effective(CancellationToken.None));
+            Assert.AreEqual(5, withPii.Filter.Clauses[0].Values.Count);
+            Assert.AreEqual("director@contoso.com", withPii.Filter.Clauses[1].ViewerValue);
+        }
+
+        [TestMethod]
+        public async Task Effective_SaysWhenTheFilterLeavesAReaderWithoutSeePiiTooFewPeople()
+        {
+            var resolver = Resolver(new MemoryStore(MyDepartment));
+
+            var reader = Body<GlobalFilterEffectiveModel>(await Controller(resolver, Reader("rep@contoso.com")).Effective(CancellationToken.None));
+            Assert.IsTrue(reader.TooFewPeople);
+            Assert.AreEqual(5, reader.MinimumPeople);
+
+            var withPii = Body<GlobalFilterEffectiveModel>(await Controller(resolver, PiiReader("rep@contoso.com")).Effective(CancellationToken.None));
+            Assert.IsFalse(withPii.TooFewPeople);
+        }
+
+        [TestMethod]
+        public async Task Resolve_CompilesTheFilterOncePerDirectoryRead_ForReadersItTreatsAlike()
+        {
+            var resolver = Resolver(new MemoryStore(MyDepartment));
+
+            var rep = await resolver.ResolveAsync(Request(), PiiReader("rep@contoso.com"), null, CancellationToken.None);
+            var peer = await resolver.ResolveAsync(Request(), PiiReader("peer@contoso.com"), null, CancellationToken.None);
+            var engineer = await resolver.ResolveAsync(Request(), PiiReader("engineer@contoso.com"), null, CancellationToken.None);
+
+            Assert.AreSame(rep.Restriction, peer.Restriction, "Two people in the same department resolve the filter alike.");
+            Assert.AreNotSame(rep.Restriction, engineer.Restriction);
         }
 
         #endregion
@@ -210,7 +308,7 @@ namespace Tests.UnitTests
             Assert.AreEqual(MyDepartment, store.Record.FilterJson);
             Assert.AreEqual("rep@contoso.com", store.Record.ModifiedBy);
 
-            var after = await resolver.ResolveAsync(Request(), Reader("rep@contoso.com"), null, CancellationToken.None);
+            var after = await resolver.ResolveAsync(Request(), PiiReader("rep@contoso.com"), null, CancellationToken.None);
             Assert.IsTrue(after.IsRestricted, "The process that saved the filter applies it from the next request.");
         }
 
@@ -382,7 +480,7 @@ namespace Tests.UnitTests
 
         private static ClaimsPrincipal PrincipalWithObjectId(string upn, string objectId)
         {
-            var principal = Principal(upn);
+            var principal = Principal(upn, PortalRoles.SeePii);
             ((ClaimsIdentity)principal.Identity).AddClaim(new Claim("oid", objectId));
             return principal;
         }
@@ -411,6 +509,22 @@ namespace Tests.UnitTests
             {
                 var body = (ex.Response.Content as ObjectContent)?.Value as ApiErrorModel;
                 return Tuple.Create(ex.Response.StatusCode, body?.Code);
+            }
+
+            throw new AssertFailedException("The request was answered rather than refused.");
+        }
+
+        /// <summary>The status and raw body of a refusal, whatever shape its body takes.</summary>
+        private static async Task<Tuple<HttpStatusCode, string>> StatusOf(Func<Task> action)
+        {
+            try
+            {
+                await action();
+            }
+            catch (HttpResponseException ex)
+            {
+                var body = ex.Response.Content == null ? string.Empty : await ex.Response.Content.ReadAsStringAsync();
+                return Tuple.Create(ex.Response.StatusCode, body);
             }
 
             throw new AssertFailedException("The request was answered rather than refused.");

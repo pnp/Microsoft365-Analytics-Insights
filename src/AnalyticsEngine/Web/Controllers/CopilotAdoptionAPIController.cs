@@ -472,6 +472,10 @@ namespace Web.AnalyticsWeb.Controllers
         /// Exposed deliberately: Microsoft ships new Copilot SKUs faster than any shipped classification
         /// list can track, so an admin has to be able to see what the tool decided - and override it -
         /// rather than discover from a wrong headline number that a SKU was missed.
+        ///
+        /// Under the administrator's global filter the assigned and idle counts are the narrowed ones the
+        /// summary shows, not the tenant's: a reader limited to one department must not be able to read the
+        /// whole tenant's per-licence counts here instead.
         /// </summary>
         // GET: api/CopilotAdoption/licence-types
         [HttpGet]
@@ -481,7 +485,8 @@ namespace Web.AnalyticsWeb.Controllers
             string seatLicenceTypeIds = null,
             CancellationToken cancellationToken = default(CancellationToken))
         {
-            var analysis = await TryGetAnalysisAsync(windowDays, seatLicenceTypeIds, cancellationToken);
+            var analysis = await TryGetScopedSummaryAsync(
+                windowDays, seatLicenceTypeIds, null, UserFilterExpression.Empty, FirstResponseBudget, cancellationToken);
             if (analysis == null) return StillBuilding(windowDays, seatLicenceTypeIds);
             return Ok(analysis.Summary.SeatLicenceTypes);
         }

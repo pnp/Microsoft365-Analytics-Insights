@@ -1,4 +1,4 @@
-import type { TFunction, TranslationKey } from '../../i18n';
+import { formatNumber, plural, type TFunction, type TranslationKey } from '../../i18n';
 import type { GlobalFilterClause, GlobalFilterClauseEcho } from '../../types/globalFilter';
 import {
   describeClause,
@@ -53,6 +53,16 @@ const UNRESOLVED_KEYS: Record<ViewerKind, TranslationKey> = {
   manager: 'globalFilter.reader.unresolved.manager',
 };
 
+/**
+ * The reader's own value when it is a sign-in name and they lack See PII: the server withholds the name, so
+ * the condition says whose it is instead - "you", "your manager".
+ */
+const READER_HIDDEN_KEYS: Record<ViewerKind, TranslationKey> = {
+  own: 'globalFilter.reader.hidden.own',
+  self: 'globalFilter.reader.hidden.self',
+  manager: 'globalFilter.reader.hidden.manager',
+};
+
 function isEcho(clause: GlobalFilterClause | GlobalFilterClauseEcho): clause is GlobalFilterClauseEcho {
   return 'unresolved' in clause;
 }
@@ -60,6 +70,24 @@ function isEcho(clause: GlobalFilterClause | GlobalFilterClauseEcho): clause is 
 /** True when the condition matches nobody for this reader, because it needed a value they do not have. */
 export function isUnresolved(clause: GlobalFilterClause | GlobalFilterClauseEcho): boolean {
   return isEcho(clause) && clause.unresolved;
+}
+
+/** True when the reader's value resolved but the server withheld it - see {@link READER_HIDDEN_KEYS}. */
+function viewerValueHidden(clause: GlobalFilterClause | GlobalFilterClauseEcho): boolean {
+  return isEcho(clause) && clause.viewerValueHidden === true;
+}
+
+/**
+ * The administrator's values the server withheld from this reader, as one phrase: "3 named people", or for a
+ * text search "2 search terms". Null when nothing was withheld.
+ */
+function hiddenValuesPhrase(t: TFunction, clause: GlobalFilterClause | GlobalFilterClauseEcho): string | null {
+  const count = isEcho(clause) ? clause.hiddenValues ?? 0 : 0;
+  if (count <= 0) return null;
+  const keys: [TranslationKey, TranslationKey] = isTextOperator(clause.operator)
+    ? ['globalFilter.reader.hiddenTerms.one', 'globalFilter.reader.hiddenTerms.other']
+    : ['globalFilter.reader.hiddenPeople.one', 'globalFilter.reader.hiddenPeople.other'];
+  return t(plural(count, keys[0], keys[1]), { count: formatNumber(count) });
 }
 
 /**
@@ -78,7 +106,9 @@ export function viewerPhrase(
   if (perspective === 'definition' || !isEcho(clause)) {
     return t(form === 'label' ? VIEWER_OPTION_KEYS[kind] : VIEWER_PHRASE_KEYS[kind]);
   }
-  if (clause.unresolved || !clause.viewerValue) return null;
+  if (clause.unresolved) return null;
+  if (viewerValueHidden(clause)) return t(READER_HIDDEN_KEYS[kind]);
+  if (!clause.viewerValue) return null;
   return t(READER_VALUE_KEYS[kind], { value: valueLabel(t, clause.dimension, clause.viewerValue) });
 }
 
@@ -91,12 +121,19 @@ export function describeGlobalClause(
 ): string {
   const label = dimensionLabel(t, clause.dimension, source);
 
-  if (perspective === 'reader' && clause.viewerAttribute && isEcho(clause) && (clause.unresolved || !clause.viewerValue)) {
+  if (
+    perspective === 'reader' &&
+    clause.viewerAttribute &&
+    isEcho(clause) &&
+    (clause.unresolved || (!clause.viewerValue && !viewerValueHidden(clause)))
+  ) {
     return t(UNRESOLVED_KEYS[viewerKind(clause.viewerAttribute)], { dimension: label });
   }
 
-  const phrase = viewerPhrase(t, clause, perspective);
-  return describeClause(t, clause, label, phrase ? [phrase] : []);
+  const phrases = [hiddenValuesPhrase(t, clause), viewerPhrase(t, clause, perspective)].filter(
+    (phrase): phrase is string => phrase !== null,
+  );
+  return describeClause(t, clause, label, phrases);
 }
 
 /** The filter as AND-groups of condition phrases, in evaluation order. */
@@ -148,11 +185,13 @@ export function globalPillValues(
   if (perspective === 'reader' && isUnresolved(clause)) return t('globalFilter.pill.unresolved');
 
   const phrase = viewerPhrase(t, clause, perspective, 'sentence');
+  const hidden = hiddenValuesPhrase(t, clause);
   const labels = [
     ...(clause.includeNotSet ? [t('userFilter.editor.notSet')] : []),
     ...clause.values.map((v) =>
       isTextOperator(clause.operator) ? t('userFilter.describe.quoted', { term: v }) : valueLabel(t, clause.dimension, v),
     ),
+    ...(hidden ? [hidden] : []),
     ...(phrase ? [phrase] : []),
   ];
 

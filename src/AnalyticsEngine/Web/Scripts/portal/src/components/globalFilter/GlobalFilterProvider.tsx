@@ -58,6 +58,14 @@ export function writeGlobalFilterBypassCookie(bypassed: boolean): void {
   document.cookie = parts.join('; ');
 }
 
+/** Whether the switch-off cookie is set, the way the server reads it. */
+export function readGlobalFilterBypassCookie(): boolean {
+  if (typeof document === 'undefined') return false;
+  return document.cookie
+    .split(';')
+    .some((pair) => pair.trim() === `${GLOBAL_FILTER_BYPASS_COOKIE}=1`);
+}
+
 /** Whether the figures a reader is shown would differ between two answers. */
 function viewChanged(before: GlobalFilterEffective | null, after: GlobalFilterEffective): boolean {
   if (!before) return false;
@@ -139,6 +147,27 @@ function LiveGlobalFilterProvider({ children }: { children: ReactNode }) {
     if (inFlight.current || Date.now() - loadedAt.current < STALE_AFTER_MS) return;
     void load(false);
   }, [location.pathname, load]);
+
+  // The switch-off cookie is the browser's, not this tab's: switching the filter off in one tab changes what
+  // every other tab's reports return. So when a tab comes back into view, a cookie that no longer agrees with
+  // what it last read means its figures and its bar no longer match - read again and remount. Only while a
+  // filter is defined: with none, the server reports it "not switched off" whatever the cookie says.
+  const effectiveRef = useRef<GlobalFilterEffective | null>(null);
+  effectiveRef.current = state.effective;
+  useEffect(() => {
+    const check = () => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+      const current = effectiveRef.current;
+      if (!current?.canBypass || !current.active || inFlight.current) return;
+      if (readGlobalFilterBypassCookie() !== current.bypassed) void load(true);
+    };
+    window.addEventListener('focus', check);
+    document.addEventListener('visibilitychange', check);
+    return () => {
+      window.removeEventListener('focus', check);
+      document.removeEventListener('visibilitychange', check);
+    };
+  }, [load]);
 
   useEffect(
     () => () => {

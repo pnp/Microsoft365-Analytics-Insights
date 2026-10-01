@@ -328,6 +328,14 @@ with or without See PII.
   `ReportScopeError`. A condition needing a value the viewer does not have - or a viewer the directory
   does not hold - matches **nobody**, whatever its operator, and the bar says why. Activity that cannot
   be linked to a person in the directory is not counted while a filter applies.
+- **Readers without See PII** are never shown who a condition names. In the echo (`api/GlobalFilter/effective`
+  and every report's) and in the Excel descriptions, the sign-in names on a user name, manager or
+  management chain condition become a count (`hiddenValues`), and a viewer value that is a sign-in name -
+  their own, their manager's - is withheld (`viewerValueHidden`) and read as "you" / "your manager". A
+  filter that leaves such a reader **1 to 4 people** (`ReportScopeResolver.MinimumPeopleWithoutSeePii`,
+  the same floor as `CopilotAdoptionOptions.MinSeatsPerSegment`) turns every figure into a few
+  individuals' records, so their reports are refused with the portal's own See PII `403`, and the bar
+  says why (`tooFewPeople`). None at all is not refused: an empty report shows nobody's activity.
 - **What stays tenant-wide**, and says so beside the figures: the Overview page's data counts, Teams
   team-level figures (collaboration and conversations), agent and Azure cost figures, and the Copilot
   Adoption sections already marked as tenant-wide.
@@ -335,7 +343,9 @@ with or without See PII.
   for their own view from the bar, which sets the session cookie `GlobalFilterBypass=1`; the server
   honours it only for a caller holding the Administration permission, and exports follow it because it
   is a cookie. `GlobalFilterProvider` remounts the Insights pages (`viewKey`) whenever the switch or the
-  filter changes, so no figures from before the change sit under a bar describing after it.
+  filter changes, so no figures from before the change sit under a bar describing after it. The cookie is
+  the browser's, not the tab's, so a tab coming back into view reads the filter again when the cookie no
+  longer agrees with what it last read - switched off or on in another tab.
 - **Not a security boundary without roles.** With `EnforcePortalRoles=false` everyone who can sign in is
   an administrator and can switch the filter off; the editor warns about this.
 - **Where it is kept:** one row in `dbo.portal_global_filters` (migration

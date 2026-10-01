@@ -73,9 +73,10 @@ namespace Web.AnalyticsWeb.Controllers
                 if (!context.Sources.UserMetadata) return MissingMetadata();
 
                 // The administrator's global filter narrows every figure - and is part of the cache key, so
-                // two readers it treats differently never share an overview.
+                // two readers it treats differently never share an overview. Keyed on the hash of the people it
+                // admits, not on when the directory was read, so a re-read that changes nobody keeps the figures.
                 var scope = await _scopes.ResolveAsync(Request, User, null, cancellationToken).ConfigureAwait(false);
-                if (scope.IsRestricted) query = query.WithPeopleScope(scope.Includes, scope.Key, scope.Global?.DescribeInEnglish());
+                if (scope.IsRestricted) query = query.WithPeopleScope(scope.Includes, scope.Sql.Key);
 
                 var task = _overviews.GetAsync(context.Scope, query.CacheKey(), async (diagnostics, lifetime) =>
                 {
@@ -132,12 +133,14 @@ namespace Web.AnalyticsWeb.Controllers
                 var overview = _overviews.Find(context.Scope, overviewId);
                 // Likewise the people scope: figures prepared for someone the global filter treats differently
                 // - or before it changed - are not exported to this reader.
-                await RequireSamePeopleScopeAsync(overview, CancellationToken.None).ConfigureAwait(false);
+                var scope = await RequireSamePeopleScopeAsync(overview, CancellationToken.None).ConfigureAwait(false);
                 var users = usersId == null ? null : _users.Find(context.Scope, usersId);
                 if (users != null && users.OverviewId != overviewId)
                     return Reply(HttpStatusCode.Conflict, Error("summaryUsersMismatch", "The summary and the user list are no longer from the same set of figures. Refresh the report before exporting."));
                 var response = Request.CreateResponse(HttpStatusCode.OK);
-                response.Content = new ByteArrayContent(LicenceActivityWorkbook.Build(overview, users));
+                // The filter is described for this reader, not taken from the cached overview: it may have been
+                // built for someone allowed to see the sign-in names in it.
+                response.Content = new ByteArrayContent(LicenceActivityWorkbook.Build(overview, users, scope.Global?.DescribeInEnglish()));
                 response.Content.Headers.ContentType = new MediaTypeHeaderValue("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
                 response.Content.Headers.ContentDisposition = new ContentDispositionHeaderValue("attachment")
                 {
@@ -150,14 +153,16 @@ namespace Web.AnalyticsWeb.Controllers
         /// <summary>
         /// Refuses figures held for a different people scope from the one that applies to this request now -
         /// prepared for a reader the global filter treats differently, or before the filter or the directory
-        /// changed. Answered as expired figures, which the page already handles by refreshing the report.
+        /// changed who it admits. Answered as expired figures, which the page already handles by refreshing the
+        /// report. Returns the scope that applies now.
         /// </summary>
-        private async Task RequireSamePeopleScopeAsync(LicenceActivityOverview overview, CancellationToken cancellationToken)
+        private async Task<ReportScope> RequireSamePeopleScopeAsync(LicenceActivityOverview overview, CancellationToken cancellationToken)
         {
             var scope = await _scopes.ResolveAsync(Request, User, null, cancellationToken).ConfigureAwait(false);
-            var current = scope.IsRestricted ? scope.Key : null;
+            var current = scope.IsRestricted ? scope.Sql.Key : null;
             if (!string.Equals(overview?.Query?.PeopleScopeKey, current, StringComparison.Ordinal))
                 throw new LicenceActivityExpiredException();
+            return scope;
         }
 
         private async Task<IHttpActionResult> ExecuteAsync(Func<Task<IHttpActionResult>> action)

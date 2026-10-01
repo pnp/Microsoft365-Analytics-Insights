@@ -38,6 +38,17 @@ namespace Web.AnalyticsWeb.Models.UserFilters
         [JsonProperty("invalid")]
         public bool Invalid { get; set; }
 
+        /// <summary>
+        /// True when the filter leaves this reader, who lacks See PII, fewer than <see cref="MinimumPeople"/>
+        /// people - so their reports are refused with the See PII permission message.
+        /// </summary>
+        [JsonProperty("tooFewPeople")]
+        public bool TooFewPeople { get; set; }
+
+        /// <summary>The fewest people the filter may leave a reader without See PII, other than none.</summary>
+        [JsonProperty("minimumPeople")]
+        public int MinimumPeople { get; set; } = ReportScopeResolver.MinimumPeopleWithoutSeePii;
+
         internal static GlobalFilterEffectiveModel From(GlobalFilterApplication global, bool canBypass)
         {
             if (global == null) return new GlobalFilterEffectiveModel { CanBypass = canBypass };
@@ -51,6 +62,7 @@ namespace Web.AnalyticsWeb.Models.UserFilters
                 Revision = global.Revision,
                 Filter = global.Echo,
                 Invalid = global.Resolved == null,
+                TooFewPeople = global.TooFewPeople,
             };
         }
     }
@@ -91,6 +103,13 @@ namespace Web.AnalyticsWeb.Models.UserFilters
         /// <summary>True when the stored filter cannot be read by this version - reports are refused until it is replaced.</summary>
         [JsonProperty("invalid")]
         public bool Invalid { get; set; }
+
+        /// <summary>
+        /// The fewest people the filter may leave a reader without See PII, other than none: below it, that
+        /// reader's reports are refused. Sent so the editor can say so without keeping its own copy of the number.
+        /// </summary>
+        [JsonProperty("minimumPeopleWithoutSeePii")]
+        public int MinimumPeopleWithoutSeePii { get; set; } = ReportScopeResolver.MinimumPeopleWithoutSeePii;
     }
 
     /// <summary>The body of <c>POST api/GlobalFilter</c>.</summary>

@@ -29,6 +29,13 @@ export interface GlobalFilterClauseEcho extends GlobalFilterClause {
   viewerValue: string | null;
   /** True when the condition needed a value the reader does not have, so it matches nobody. */
   unresolved: boolean;
+  /**
+   * How many of the administrator's values were withheld because they are sign-in names and the reader lacks
+   * See PII. Absent or zero when nothing was withheld.
+   */
+  hiddenValues?: number;
+  /** True when `viewerValue` was withheld for the same reason: it resolved, but names a person. */
+  viewerValueHidden?: boolean;
 }
 
 /** The global filter as it applies to the signed-in reader. */
@@ -60,6 +67,13 @@ export interface GlobalFilterEffective {
   filter: GlobalFilterEcho | null;
   /** True when the stored filter cannot be read by this version: reports are refused until it is fixed. */
   invalid: boolean;
+  /**
+   * True when the filter leaves this reader, who lacks See PII, fewer than `minimumPeople` people - so their
+   * reports are refused with the See PII permission message.
+   */
+  tooFewPeople?: boolean;
+  /** The fewest people the filter may leave a reader without See PII, other than none. */
+  minimumPeople?: number;
 }
 
 /** `GET api/GlobalFilter`: the definition, for the administrator's editor. */
@@ -79,4 +93,6 @@ export interface GlobalFilterAdmin {
   rolesEnforced: boolean;
   /** True when the stored filter cannot be read by this version. */
   invalid: boolean;
+  /** The fewest people the filter may leave a reader without See PII before their reports are refused. */
+  minimumPeopleWithoutSeePii?: number;
 }

@@ -26,6 +26,10 @@ const globalFilter: Record<keyof typeof en, string> = {
   'globalFilter.bar.viewerNotFound':
     'Algunas de estas condiciones dependen de sus propios datos y usted no figura en el directorio de usuarios que usan los informes, por lo que no las cumple nadie. Los informes no mostrarán a nadie hasta que se importe su cuenta.',
   'globalFilter.bar.matchesNobody': 'Este filtro no lo cumple nadie en su caso, por lo que los informes estarán vacíos.',
+  'globalFilter.bar.tooFewPeople.one':
+    'Este filtro le deja {matched} persona. Los informes sobre menos de {minimum} personas muestran la actividad de personas concretas, lo que requiere el permiso Ver PII, por lo que no se le muestran. Consulte a un administrador del portal si los necesita.',
+  'globalFilter.bar.tooFewPeople.other':
+    'Este filtro le deja {matched} personas. Los informes sobre menos de {minimum} personas muestran la actividad de personas concretas, lo que requiere el permiso Ver PII, por lo que no se le muestran. Consulte a un administrador del portal si los necesita.',
   'globalFilter.bar.unknownDimension':
     'Una condición hace referencia a un tipo de organización que ya no existe, por lo que esa condición no la cumple nadie.',
 
@@ -62,6 +66,13 @@ const globalFilter: Record<keyof typeof en, string> = {
     '{dimension} debe coincidir con usted, pero no figura en el directorio que usan los informes, por lo que esta condición no la cumple nadie',
   'globalFilter.reader.unresolved.manager':
     '{dimension} debe coincidir con su responsable, que no consta para usted, por lo que esta condición no la cumple nadie',
+  'globalFilter.reader.hidden.own': 'su propio valor',
+  'globalFilter.reader.hidden.self': 'usted',
+  'globalFilter.reader.hidden.manager': 'su responsable',
+  'globalFilter.reader.hiddenPeople.one': '{count} persona concreta',
+  'globalFilter.reader.hiddenPeople.other': '{count} personas concretas',
+  'globalFilter.reader.hiddenTerms.one': '{count} término de búsqueda',
+  'globalFilter.reader.hiddenTerms.other': '{count} términos de búsqueda',
 
   'globalFilter.print.heading': 'Filtro establecido por un administrador del portal',
   'globalFilter.print.description': 'Solo las personas que cumplen: {description}.',
@@ -99,6 +110,8 @@ const globalFilter: Record<keyof typeof en, string> = {
   'globalFilter.admin.conditions.heading': 'Condiciones',
   'globalFilter.admin.conditions.note':
     'Las personas deben cumplir estas condiciones para aparecer en cualquier informe. Las condiciones unidas por Y deben cumplirse todas; O inicia otro grupo, y basta con cumplir uno de los grupos.',
+  'globalFilter.admin.conditions.privacyNote':
+    'Los lectores sin el permiso Ver PII nunca ven los nombres de inicio de sesión que usa una condición, y no se les muestra ningún informe mientras el filtro les deje menos de {minimum} personas.',
   'globalFilter.admin.preview.heading': 'Lo que vería usted',
   'globalFilter.admin.preview.note':
     'El filtro también se aplica a los administradores del portal, así que esto es lo que mostrarían sus propios informes una vez guardado.',

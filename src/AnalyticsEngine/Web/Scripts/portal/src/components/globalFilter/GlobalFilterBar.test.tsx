@@ -137,6 +137,28 @@ describe('GlobalFilterBar', () => {
     expect(screen.getByText('This filter matches nobody for you, so the reports will be empty.')).toBeVisible();
   });
 
+  it('tells a reader without See PII why a filter that leaves them a handful of people shows no reports', () => {
+    renderBar(
+      {
+        effective: effective({
+          tooFewPeople: true,
+          minimumPeople: 5,
+          filter: echo([clause('manager', [], { viewerAttribute: 'manager', viewerValueHidden: true })], { matchedPeople: 3 }),
+        }),
+      },
+      { access: { administration: false, seePii: false } },
+    );
+
+    // Whose value it is, never whose name.
+    expect(screen.getByText('your manager')).toBeVisible();
+    expect(screen.getByText(/^This filter leaves you 3 people\. Reports about fewer than 5 people/)).toBeVisible();
+  });
+
+  it('does not warn about a small scope the reader may see', () => {
+    renderBar({ effective: effective({ filter: echo([clause('department', ['Sales'])], { matchedPeople: 3 }) }) });
+    expect(screen.queryByText(/This filter leaves you/)).not.toBeInTheDocument();
+  });
+
   it('explains that reports are refused while the stored filter cannot be read', () => {
     renderBar({ effective: effective({ invalid: true, filter: null }) });
     expect(screen.getByText(/can’t be read by this version of the portal, so reports aren’t available/)).toBeVisible();

@@ -159,6 +159,7 @@ namespace Common.Entities.UserFilters
         private readonly int[] _managerRowByManagerValue;
         private readonly Lazy<ReportsIndex> _reports;
         private readonly Lazy<int[]> _rowByUserNameValue;
+        private readonly Lazy<bool[]> _rowHasObjectId;
 
         internal UserDirectorySnapshot(
             DateTime loadedUtc,
@@ -180,6 +181,12 @@ namespace Common.Entities.UserFilters
             Dimensions = dimensions.AsReadOnly();
             _reports = new Lazy<ReportsIndex>(() => ReportsIndex.Build(_managerRowByRow), System.Threading.LazyThreadSafetyMode.ExecutionAndPublication);
             _rowByUserNameValue = new Lazy<int[]>(BuildRowByUserNameValue, System.Threading.LazyThreadSafetyMode.ExecutionAndPublication);
+            _rowHasObjectId = new Lazy<bool[]>(() =>
+            {
+                var has = new bool[_userIdByRow.Length];
+                foreach (var objectRow in _rowByObjectId.Values) has[objectRow] = true;
+                return has;
+            }, System.Threading.LazyThreadSafetyMode.ExecutionAndPublication);
         }
 
         public DateTime LoadedUtc { get; }
@@ -214,15 +221,19 @@ namespace Common.Entities.UserFilters
         /// failing that by their sign-in name. False when the directory does not hold them.
         /// </summary>
         /// <remarks>
-        /// The object id comes first because it is the one identifier a token and the directory always
+        /// <para>The object id comes first because it is the one identifier a token and the directory always
         /// agree on: a guest's token carries their home address, never the <c>#EXT#</c> sign-in name the
         /// directory stores, and a sign-in name can be changed. The name is the fallback for a person the
-        /// user import has not yet recorded an object id for.
+        /// user import has not yet recorded an object id for.</para>
+        /// <para>Only for such a person. A row found by name that is recorded under a <i>different</i> object id
+        /// belongs to another account - a leaver whose sign-in name was given to a new starter before the next
+        /// import - and resolving the new starter as that row would hand them the leaver's department, manager
+        /// and organisation for every condition on the viewer. They are treated as not in the directory yet.</para>
         /// </remarks>
         public bool TryFindPerson(Guid? entraObjectId, string userPrincipalName, out int row)
         {
-            if (entraObjectId.HasValue && entraObjectId.Value != Guid.Empty
-                && _rowByObjectId.TryGetValue(entraObjectId.Value, out row))
+            var hasObjectId = entraObjectId.HasValue && entraObjectId.Value != Guid.Empty;
+            if (hasObjectId && _rowByObjectId.TryGetValue(entraObjectId.Value, out row))
             {
                 return true;
             }
@@ -233,8 +244,14 @@ namespace Common.Entities.UserFilters
             var index = Column(UserFilterDimensions.UserName)?.IndexOf(userPrincipalName) ?? -1;
             if (index < 0) return false;
 
-            row = _rowByUserNameValue.Value[index];
-            return row >= 0;
+            var found = _rowByUserNameValue.Value[index];
+            if (found < 0) return false;
+
+            // The token's object id is not in the directory, so a row recorded under any object id is not this person.
+            if (hasObjectId && _rowHasObjectId.Value[found]) return false;
+
+            row = found;
+            return true;
         }
 
         /// <summary>

@@ -324,7 +324,7 @@ CREATE TABLE dbo.__MigrationHistory (
             return result.Content;
         }
 
-        /// <summary>Three people in Sales and one elsewhere - only the ids matter to the SQL.</summary>
+        /// <summary>Five people in Sales - the fewest a reader without See PII may be shown - and one elsewhere.</summary>
         private sealed class Directory : IUserDirectorySource
         {
             private readonly UserDirectorySnapshot _snapshot;
@@ -335,6 +335,8 @@ CREATE TABLE dbo.__MigrationHistory (
                 builder.AddUser(new UserDirectoryEntry { UserId = 1, UserPrincipalName = "director@contoso.com", Department = "Sales" });
                 builder.AddUser(new UserDirectoryEntry { UserId = 2, UserPrincipalName = "rep@contoso.com", Department = "Sales" });
                 builder.AddUser(new UserDirectoryEntry { UserId = 3, UserPrincipalName = "peer@contoso.com", Department = "Sales" });
+                builder.AddUser(new UserDirectoryEntry { UserId = 5, UserPrincipalName = "analyst@contoso.com", Department = "Sales" });
+                builder.AddUser(new UserDirectoryEntry { UserId = 6, UserPrincipalName = "planner@contoso.com", Department = "Sales" });
                 builder.AddUser(new UserDirectoryEntry { UserId = 4, UserPrincipalName = "engineer@contoso.com", Department = "Engineering" });
                 _snapshot = builder.Build(new DateTime(2026, 9, 1, 8, 0, 0, DateTimeKind.Utc));
             }

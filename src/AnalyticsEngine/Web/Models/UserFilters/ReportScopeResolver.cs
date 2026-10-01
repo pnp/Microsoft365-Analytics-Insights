@@ -1,10 +1,12 @@
 using Common.Entities.UserFilters;
 using System;
+using System.Collections.Concurrent;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Net.Http.Formatting;
 using System.Net.Http.Headers;
+using System.Runtime.CompilerServices;
 using System.Security.Claims;
 using System.Security.Principal;
 using System.Text;
@@ -37,14 +39,30 @@ namespace Web.AnalyticsWeb.Models.UserFilters
         /// <summary>What the page shows: the conditions with the signed-in person's own values filled in.</summary>
         public GlobalFilterEcho Echo { get; set; }
 
+        /// <summary>
+        /// True when the signed-in person holds See PII. Without it, the values that name people are withheld
+        /// from <see cref="Echo"/> and <see cref="DescribeInEnglish"/>, and a scope of fewer than
+        /// <see cref="ReportScopeResolver.MinimumPeopleWithoutSeePii"/> people is refused (#680).
+        /// </summary>
+        public bool SeesIndividuals { get; set; }
+
         /// <summary>True when the filter narrows this request.</summary>
         public bool Applied => Defined && !Bypassed;
+
+        /// <summary>
+        /// True when the filter applies, the signed-in person lacks See PII, and it leaves them a handful of
+        /// people - enough to turn every figure into a few individuals' records - so their reports are refused.
+        /// None at all is not refused: an empty report shows nobody's activity.
+        /// </summary>
+        public bool TooFewPeople =>
+            Applied && !SeesIndividuals && Compiled != null
+            && Compiled.MatchedPeople > 0 && Compiled.MatchedPeople < ReportScopeResolver.MinimumPeopleWithoutSeePii;
 
         /// <summary>The filter in plain English for the server's own artefacts, or <c>null</c> when it does not apply.</summary>
         public string DescribeInEnglish()
         {
             if (!Applied || Resolved == null || Compiled == null) return null;
-            return GlobalFilterDescriber.Describe(Resolved, Compiled.EnglishDimensionName);
+            return GlobalFilterDescriber.Describe(Resolved, Compiled.EnglishDimensionName, hidePeople: !SeesIndividuals);
         }
     }
 
@@ -201,6 +219,18 @@ namespace Web.AnalyticsWeb.Models.UserFilters
             response.Headers.CacheControl = new CacheControlHeaderValue { NoStore = true, Private = true };
             return new HttpResponseException(response);
         }
+
+        /// <summary>
+        /// The refusal for a reader without See PII whose scope is too small to be an aggregate: the portal's own
+        /// permission refusal, so the page says which permission would show the report, exactly as it does when
+        /// such a reader narrows a report themselves (#680).
+        /// </summary>
+        internal static HttpResponseException TooFewPeople(HttpRequestMessage request)
+        {
+            return new HttpResponseException(request == null
+                ? new HttpResponseMessage(HttpStatusCode.Forbidden)
+                : PortalPermissionDenied.Response(request, PortalPermission.SeePii));
+        }
     }
 
     /// <summary>
@@ -226,8 +256,33 @@ namespace Web.AnalyticsWeb.Models.UserFilters
         /// <summary>The cookie an administrator's portal sets to see reports without the global filter.</summary>
         internal const string BypassCookie = "GlobalFilterBypass";
 
+        /// <summary>
+        /// The fewest people a global filter may leave a reader without See PII, other than none. Below it the
+        /// figures are a few individuals' records - one manager's two reports, say - which is what See PII
+        /// exists to guard (#661, #680), so those reports are refused rather than shown. The same floor as
+        /// <see cref="Common.Entities.CopilotAdoption.CopilotAdoptionOptions.MinSeatsPerSegment"/>, which keeps the
+        /// portal's breakdowns too large to single anyone out.
+        /// </summary>
+        internal const int MinimumPeopleWithoutSeePii = 5;
+
+        /// <summary>
+        /// How many compiled global filters are kept per directory read. Each is one flag per person (about
+        /// 200 KB at 200,000 people); a filter that resolves differently per manager can produce many, so the
+        /// set is bounded and simply started again when full.
+        /// </summary>
+        private const int MaxCompiledPerSnapshot = 64;
+
         public static readonly ReportScopeResolver Default =
             new ReportScopeResolver(CachedGlobalFilterProvider.Default, CachedUserDirectorySource.Default);
+
+        /// <summary>
+        /// Compiled filters by directory read and resolved filter. Compiling walks the whole directory - once per
+        /// condition, and once per distinct value for a text search - so it is done once per read for every set of
+        /// readers the filter treats alike, not on every report request. Held weakly by the snapshot, so the
+        /// entries go when the directory is next read and the old snapshot is collected.
+        /// </summary>
+        private readonly ConditionalWeakTable<UserDirectorySnapshot, ConcurrentDictionary<string, CompiledUserFilter>> _compiled =
+            new ConditionalWeakTable<UserDirectorySnapshot, ConcurrentDictionary<string, CompiledUserFilter>>();
 
         public ReportScopeResolver(IGlobalFilterProvider filters, IUserDirectorySource directory)
         {
@@ -246,7 +301,8 @@ namespace Web.AnalyticsWeb.Models.UserFilters
             HttpRequestMessage request, IPrincipal principal, UserFilterExpression userFilter, CancellationToken cancellationToken)
         {
             var state = await ReadFilterAsync(request, cancellationToken).ConfigureAwait(false);
-            var canBypass = PortalAccess.Evaluate(request, principal).Administration;
+            var access = PortalAccess.Evaluate(request, principal);
+            var canBypass = access.Administration;
             var bypassed = state.IsDefined && canBypass && BypassRequested(request);
 
             var applyGlobal = state.IsDefined && !bypassed;
@@ -259,6 +315,7 @@ namespace Web.AnalyticsWeb.Models.UserFilters
                     Bypassed = bypassed,
                     CanBypass = canBypass,
                     Revision = state.Record.Revision,
+                    SeesIndividuals = access.SeePii,
                 }
                 : null;
 
@@ -279,6 +336,9 @@ namespace Web.AnalyticsWeb.Models.UserFilters
             {
                 Evaluate(global, state.Definition, snapshot, principal);
                 restriction = global.Compiled;
+
+                // Refused rather than narrowed to a handful of people the reader may not see individually.
+                if (global.TooFewPeople) throw ReportScopeFailure.TooFewPeople(request);
             }
 
             var compiledUser = applyUser ? UserFilterCompiler.Compile(userFilter, snapshot) : null;
@@ -300,13 +360,15 @@ namespace Web.AnalyticsWeb.Models.UserFilters
             var state = await ReadFilterAsync(request, cancellationToken).ConfigureAwait(false);
             if (!state.IsDefined) return null;
 
-            var canBypass = PortalAccess.Evaluate(request, principal).Administration;
+            var access = PortalAccess.Evaluate(request, principal);
+            var canBypass = access.Administration;
             var global = new GlobalFilterApplication
             {
                 Defined = true,
                 Bypassed = canBypass && BypassRequested(request),
                 CanBypass = canBypass,
                 Revision = state.Record.Revision,
+                SeesIndividuals = access.SeePii,
             };
 
             if (state.ParseError != null) return global;
@@ -317,10 +379,11 @@ namespace Web.AnalyticsWeb.Models.UserFilters
         }
 
         /// <summary>A draft definition evaluated for the signed-in person - the administration page's preview.</summary>
+        /// <remarks>Only an administrator with See PII may preview (the endpoint requires both), so nothing is withheld.</remarks>
         public async Task<GlobalFilterApplication> PreviewAsync(
             HttpRequestMessage request, IPrincipal principal, GlobalFilterDefinition draft, CancellationToken cancellationToken)
         {
-            var global = new GlobalFilterApplication { Defined = draft != null && !draft.IsEmpty, CanBypass = true };
+            var global = new GlobalFilterApplication { Defined = draft != null && !draft.IsEmpty, CanBypass = true, SeesIndividuals = true };
             if (!global.Defined) return global;
 
             var snapshot = await ReadDirectoryAsync(request, cancellationToken).ConfigureAwait(false);
@@ -328,7 +391,7 @@ namespace Web.AnalyticsWeb.Models.UserFilters
             return global;
         }
 
-        private static void Evaluate(GlobalFilterApplication global, GlobalFilterDefinition definition, UserDirectorySnapshot snapshot, IPrincipal principal)
+        private void Evaluate(GlobalFilterApplication global, GlobalFilterDefinition definition, UserDirectorySnapshot snapshot, IPrincipal principal)
         {
             int? viewerRow = null;
             if (snapshot.TryFindPerson(PortalViewer.ObjectIdOf(principal), PortalViewer.UserPrincipalNameOf(principal), out var row))
@@ -337,8 +400,22 @@ namespace Web.AnalyticsWeb.Models.UserFilters
             }
 
             global.Resolved = GlobalFilterResolver.Resolve(definition, snapshot, viewerRow);
-            global.Compiled = UserFilterCompiler.Compile(global.Resolved.Expression, snapshot);
-            global.Echo = GlobalFilterEcho.From(global.Resolved, global.Compiled, snapshot);
+            global.Compiled = Compile(global.Resolved, snapshot);
+
+            var echo = GlobalFilterEcho.From(global.Resolved, global.Compiled, snapshot);
+            global.Echo = global.SeesIndividuals ? echo : echo.WithoutPeople();
+        }
+
+        /// <summary>The resolved filter compiled against <paramref name="snapshot"/>, shared by every request it resolves alike for.</summary>
+        private CompiledUserFilter Compile(ResolvedGlobalFilter resolved, UserDirectorySnapshot snapshot)
+        {
+            var bySnapshot = _compiled.GetValue(snapshot, _ => new ConcurrentDictionary<string, CompiledUserFilter>(StringComparer.Ordinal));
+            if (bySnapshot.TryGetValue(resolved.Key, out var compiled)) return compiled;
+
+            compiled = UserFilterCompiler.Compile(resolved.Expression, snapshot);
+            if (bySnapshot.Count >= MaxCompiledPerSnapshot) bySnapshot.Clear();
+            bySnapshot[resolved.Key] = compiled;
+            return compiled;
         }
 
         private async Task<GlobalFilterState> ReadFilterAsync(HttpRequestMessage request, CancellationToken cancellationToken)

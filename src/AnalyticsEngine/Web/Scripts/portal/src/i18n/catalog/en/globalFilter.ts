@@ -31,6 +31,10 @@ const globalFilter = {
   'globalFilter.bar.viewerNotFound':
     'Some of these conditions depend on your own details, and you aren’t in the user directory the reports use, so they match nobody. The reports will show no one until your account has been imported.',
   'globalFilter.bar.matchesNobody': 'This filter matches nobody for you, so the reports will be empty.',
+  'globalFilter.bar.tooFewPeople.one':
+    'This filter leaves you {matched} person. Reports about fewer than {minimum} people show individuals’ activity, which needs the See PII permission, so they aren’t shown to you. Ask a portal administrator if you need them.',
+  'globalFilter.bar.tooFewPeople.other':
+    'This filter leaves you {matched} people. Reports about fewer than {minimum} people show individuals’ activity, which needs the See PII permission, so they aren’t shown to you. Ask a portal administrator if you need them.',
   'globalFilter.bar.unknownDimension':
     'A condition refers to an organisation type that no longer exists, so that condition matches nobody.',
 
@@ -67,6 +71,14 @@ const globalFilter = {
     '{dimension} must match you, but you aren’t in the directory the reports use, so this condition matches nobody',
   'globalFilter.reader.unresolved.manager':
     '{dimension} must match your manager, who isn’t recorded for you, so this condition matches nobody',
+  // Sign-in names withheld from a reader without See PII: whose value it is, or how many people, never who.
+  'globalFilter.reader.hidden.own': 'your own value',
+  'globalFilter.reader.hidden.self': 'you',
+  'globalFilter.reader.hidden.manager': 'your manager',
+  'globalFilter.reader.hiddenPeople.one': '{count} named person',
+  'globalFilter.reader.hiddenPeople.other': '{count} named people',
+  'globalFilter.reader.hiddenTerms.one': '{count} search term',
+  'globalFilter.reader.hiddenTerms.other': '{count} search terms',
 
   'globalFilter.print.heading': 'Filter set by a portal administrator',
   'globalFilter.print.description': 'Only people where {description}.',
@@ -103,6 +115,8 @@ const globalFilter = {
   'globalFilter.admin.conditions.heading': 'Conditions',
   'globalFilter.admin.conditions.note':
     'People must match these conditions to appear in any report. Conditions joined by AND must all match; OR starts another group, and matching any one group is enough.',
+  'globalFilter.admin.conditions.privacyNote':
+    'Readers without the See PII permission never see the sign-in names a condition uses, and are shown no reports while the filter leaves them fewer than {minimum} people.',
   'globalFilter.admin.preview.heading': 'What you would see',
   'globalFilter.admin.preview.note':
     'The filter applies to portal administrators too, so this is what your own reports would show once it is saved.',
