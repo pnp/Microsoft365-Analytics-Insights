@@ -110,12 +110,13 @@ namespace Common.Entities.UserScope
             {
                 // Defensive: the loaders below record failures on the budget rather than throwing, so this is
                 // only reachable through a bug. It still must not escape, or an import would crash on it.
-                return UserImportScopeResolution.Unavailable(members, Summaries(groups), $"{ex.GetType().Name}: {ex.Message}", _clock.UtcNow);
+                return UserImportScopeResolution.Unavailable(members, Summaries(groups), $"{ex.GetType().Name}: {ex.Message}", _clock.UtcNow,
+                    UserImportScopeFailureKind.Unexpected);
             }
 
             if (budget.Exhausted)
             {
-                return UserImportScopeResolution.Unavailable(members, Summaries(groups), budget.Reason, _clock.UtcNow);
+                return UserImportScopeResolution.Unavailable(members, Summaries(groups), budget.Reason, _clock.UtcNow, budget.Kind, budget.HttpStatus);
             }
 
             return UserImportScopeResolution.Resolved(members, Summaries(groups), unmatchedPatterns, _clock.UtcNow);
@@ -230,7 +231,7 @@ namespace Common.Entities.UserScope
             }
             catch (Exception ex)
             {
-                budget.Stop($"the group with object id '{groupId}' could not be read ({Describe(ex)})");
+                budget.Stop($"the group with object id '{groupId}' could not be read ({Describe(ex)})", ex);
                 return null;
             }
         }
@@ -264,7 +265,7 @@ namespace Common.Entities.UserScope
             }
             catch (Exception ex)
             {
-                budget.Stop($"the group named '{displayName}' could not be looked up ({Describe(ex)})");
+                budget.Stop($"the group named '{displayName}' could not be looked up ({Describe(ex)})", ex);
                 return new List<DirectoryGroup>();
             }
         }
@@ -286,7 +287,8 @@ namespace Common.Entities.UserScope
                 {
                     budget.Stop($"group discovery stopped after {_maxGroupPages} pages while expanding the wildcard " +
                         $"pattern(s) '{string.Join(";", wildcardPatterns)}', so groups beyond that point were not considered. " +
-                        "Name the group exactly, or use its object id, to resolve it without enumerating the directory");
+                        "Name the group exactly, or use its object id, to resolve it without enumerating the directory",
+                        UserImportScopeFailureKind.BudgetExhausted);
                     break;
                 }
 
@@ -302,7 +304,7 @@ namespace Common.Entities.UserScope
                 }
                 catch (Exception ex)
                 {
-                    budget.Stop($"group discovery failed ({Describe(ex)})");
+                    budget.Stop($"group discovery failed ({Describe(ex)})", ex);
                     break;
                 }
 
@@ -346,7 +348,8 @@ namespace Common.Entities.UserScope
                 if (++pages > _maxMemberPagesPerGroup)
                 {
                     budget.Stop($"reading the members of '{group.DisplayName}' stopped after {_maxMemberPagesPerGroup} pages " +
-                        $"(about {_maxMemberPagesPerGroup * GraphGroupDirectoryReader.PageSize:N0} people)");
+                        $"(about {_maxMemberPagesPerGroup * GraphGroupDirectoryReader.PageSize:N0} people)",
+                        UserImportScopeFailureKind.BudgetExhausted);
                     return read;
                 }
 
@@ -362,7 +365,7 @@ namespace Common.Entities.UserScope
                 }
                 catch (Exception ex)
                 {
-                    budget.Stop($"the members of group '{group.DisplayName}' could not be read ({Describe(ex)})");
+                    budget.Stop($"the members of group '{group.DisplayName}' could not be read ({Describe(ex)})", ex);
                     return read;
                 }
 
@@ -402,6 +405,12 @@ namespace Common.Entities.UserScope
             /// <summary>Why resolution stopped early, or null while it is still complete.</summary>
             public string Reason { get; private set; }
 
+            /// <summary>The kind of the first stop; meaningful only once <see cref="Exhausted"/>.</summary>
+            public UserImportScopeFailureKind Kind { get; private set; } = UserImportScopeFailureKind.Unexpected;
+
+            /// <summary>The Graph HTTP status behind the first stop, when it was a failed read.</summary>
+            public int? HttpStatus { get; private set; }
+
             public bool Exhausted => Reason != null;
 
             /// <summary>Takes one call from the budget; false (and stopped) when none are left.</summary>
@@ -414,20 +423,28 @@ namespace Common.Entities.UserScope
                 if (--_remaining < 0)
                 {
                     Stop($"the budget of {_total:N0} Graph calls for resolving UserGroupsFilter was used up. Narrow the " +
-                         "filter, or name groups exactly or by object id so they resolve without enumerating the directory");
+                         "filter, or name groups exactly or by object id so they resolve without enumerating the directory",
+                         UserImportScopeFailureKind.BudgetExhausted);
                     return false;
                 }
                 return true;
             }
 
             /// <summary>Records the first reason resolution stopped; later ones are consequences of it.</summary>
-            public void Stop(string reason)
+            public void Stop(string reason, UserImportScopeFailureKind kind, int? httpStatus = null)
             {
                 if (Reason == null)
                 {
                     Reason = reason;
+                    Kind = kind;
+                    HttpStatus = httpStatus;
                 }
             }
+
+            /// <summary>Records a failed Graph read as the reason resolution stopped.</summary>
+            public void Stop(string reason, Exception cause)
+                => Stop(reason, UserImportScopeFailureKind.DirectoryRead,
+                    cause is DirectoryReadException read ? (int)read.StatusCode : (int?)null);
         }
     }
 }

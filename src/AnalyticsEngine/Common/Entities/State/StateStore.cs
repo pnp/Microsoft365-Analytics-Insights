@@ -149,5 +149,12 @@ namespace Common.Entities.State
 
         /// <summary>Azure AI Language results for Teams messages, kept for a day so the same text is not analysed twice.</summary>
         public const string CognitiveCache = "CognitiveCache";
+
+        /// <summary>
+        /// Purges of data about people outside <c>UserGroupsFilter</c>, from the portal's Administration &gt; User scope page:
+        /// each purge's record (progress, counts, who started it), which purge is the latest, and stop requests. A finished
+        /// purge's record expires after 90 days. Never the list of people a purge removes, which exists only while it runs.
+        /// </summary>
+        public const string UserScopePurge = "UserScopePurge";
     }
 }

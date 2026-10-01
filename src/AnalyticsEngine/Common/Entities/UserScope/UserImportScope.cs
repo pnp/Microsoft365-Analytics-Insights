@@ -221,6 +221,22 @@ namespace Common.Entities.UserScope
         Unavailable
     }
 
+    /// <summary>Why a resolution is <see cref="UserImportScopeStatus.Unavailable"/>, as a fact a caller can act on.</summary>
+    public enum UserImportScopeFailureKind
+    {
+        /// <summary>Reading a group or its members from Microsoft Graph failed (see the HTTP status, when there is one).</summary>
+        DirectoryRead,
+
+        /// <summary>The call budget for one resolution ran out before every matched group had been read.</summary>
+        BudgetExhausted,
+
+        /// <summary>No Graph client could be created, typically because the app registration settings are incomplete.</summary>
+        ClientUnavailable,
+
+        /// <summary>Anything else.</summary>
+        Unexpected
+    }
+
     /// <summary>One Entra ID group the filter matched.</summary>
     public sealed class ResolvedGroup
     {
@@ -249,7 +265,8 @@ namespace Common.Entities.UserScope
         private static readonly IReadOnlyList<string> NoPatterns = new List<string>();
 
         private UserImportScopeResolution(UserImportScopeStatus status, UserScopeMembers members, IReadOnlyList<ResolvedGroup> groups,
-            IReadOnlyList<string> unmatchedPatterns, string reason, DateTime resolvedUtc)
+            IReadOnlyList<string> unmatchedPatterns, string reason, DateTime resolvedUtc,
+            UserImportScopeFailureKind? failureKind = null, int? failureHttpStatus = null)
         {
             Status = status;
             Members = members;
@@ -257,6 +274,8 @@ namespace Common.Entities.UserScope
             UnmatchedPatterns = unmatchedPatterns ?? NoPatterns;
             Reason = reason;
             ResolvedUtc = resolvedUtc;
+            FailureKind = failureKind;
+            FailureHttpStatus = failureHttpStatus;
         }
 
         public UserImportScopeStatus Status { get; }
@@ -279,6 +298,15 @@ namespace Common.Entities.UserScope
         /// <summary>Why resolution is <see cref="UserImportScopeStatus.Unavailable"/>; otherwise null.</summary>
         public string Reason { get; }
 
+        /// <summary>
+        /// The kind of failure behind <see cref="Reason"/>, for callers that must describe it in their own words;
+        /// null unless <see cref="UserImportScopeStatus.Unavailable"/>.
+        /// </summary>
+        public UserImportScopeFailureKind? FailureKind { get; }
+
+        /// <summary>The HTTP status Microsoft Graph answered with, when that is what failed (403: a missing permission).</summary>
+        public int? FailureHttpStatus { get; }
+
         public DateTime ResolvedUtc { get; }
 
         /// <summary>Resolved completely, but no Entra ID group matched the filter - so nobody is in scope.</summary>
@@ -293,8 +321,9 @@ namespace Common.Entities.UserScope
                 groups, unmatchedPatterns, null, nowUtc);
 
         public static UserImportScopeResolution Unavailable(UserScopeMembers partialMembers, IReadOnlyList<ResolvedGroup> groups,
-            string reason, DateTime nowUtc)
+            string reason, DateTime nowUtc, UserImportScopeFailureKind failureKind = UserImportScopeFailureKind.Unexpected, int? httpStatus = null)
             => new UserImportScopeResolution(UserImportScopeStatus.Unavailable, partialMembers ?? new UserScopeMembers(),
-                groups, null, string.IsNullOrWhiteSpace(reason) ? "the group membership could not be read" : reason, nowUtc);
+                groups, null, string.IsNullOrWhiteSpace(reason) ? "the group membership could not be read" : reason, nowUtc,
+                failureKind, httpStatus);
     }
 }

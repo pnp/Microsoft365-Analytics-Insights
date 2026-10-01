@@ -147,6 +147,11 @@
     <Compile Include="UserScope\GroupMembershipResolver.cs" />
     <Compile Include="UserScope\UserImportScope.cs" />
     <Compile Include="UserScope\UserImportScopeProvider.cs" />
+    <Compile Include="UserScope\Purge\UserScopePurgeDatabase.cs" />
+    <Compile Include="UserScope\Purge\UserScopePurgeEngine.cs" />
+    <Compile Include="UserScope\Purge\UserScopePurgeModels.cs" />
+    <Compile Include="UserScope\Purge\UserScopePurgePlan.cs" />
+    <Compile Include="UserScope\Purge\UserScopePurgeStateStore.cs" />
     <Compile Include="Entities\AuditLog\CopilotEvents.cs" />
     <Compile Include="Entities\AuditLog\DlpEvents.cs" />
     <Compile Include="Entities\Copilot\CopilotInteractionHistory.cs" />

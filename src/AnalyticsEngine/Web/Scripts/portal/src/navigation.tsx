@@ -10,6 +10,7 @@ import {
   Money20Regular,
   Organization20Regular,
   PeopleCommunity20Regular,
+  PeopleAudience20Regular,
   PeopleSync20Regular,
   PeopleTeam20Regular,
   Pulse20Regular,
@@ -36,6 +37,7 @@ const TeamsPermissionsPage = lazyWithReload(() => import('./pages/TeamsPermissio
 const UserLookupPage = lazyWithReload(() => import('./pages/UserLookupPage'));
 const UserOrgsPage = lazyWithReload(() => import('./pages/UserOrgsPage'));
 const UserImportPage = lazyWithReload(() => import('./pages/UserImportPage'));
+const UserScopePage = lazyWithReload(() => import('./pages/UserScopePage'));
 const ProfilingStatusPage = lazyWithReload(() => import('./pages/ProfilingStatusPage'));
 const InstallLogPage = lazyWithReload(() => import('./pages/InstallLogPage'));
 const HealthPage = lazyWithReload(() => import('./pages/HealthPage'));
@@ -207,6 +209,14 @@ export const ROUTES: PortalRoute[] = [
     groupKey: 'app.navGroup.manage',
     icon: <PeopleSync20Regular />,
     element: <UserImportPage />,
+  },
+  {
+    area: 'admin',
+    path: '/admin/user-scope',
+    labelKey: 'app.route.userScope',
+    groupKey: 'app.navGroup.manage',
+    icon: <PeopleAudience20Regular />,
+    element: <UserScopePage />,
   },
   {
     area: 'admin',

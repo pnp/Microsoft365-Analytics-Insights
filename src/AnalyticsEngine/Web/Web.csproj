@@ -277,6 +277,7 @@
     <Compile Include="Controllers\PortalAccessAPIController.cs" />
     <Compile Include="Security\PortalPermissions.cs" />
     <Compile Include="Security\RequirePortalPermissionAttribute.cs" />
+    <Compile Include="Controllers\UserScopeAPIController.cs" />
     <Compile Include="Global.asax.cs">
       <DependentUpon>Global.asax</DependentUpon>
     </Compile>
@@ -311,6 +312,8 @@
     <Compile Include="Models\UserDataLookup\UserDataLookupService.cs" />
     <Compile Include="Models\UserImport\UserImportCheckpointModels.cs" />
     <Compile Include="Models\UserImport\UserImportCheckpointService.cs" />
+    <Compile Include="Models\UserScope\UserScopeModels.cs" />
+    <Compile Include="Models\UserScope\UserScopeService.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
     <Compile Include="Startup.cs" />
     <Compile Include="GraphTokenClaims.cs" />

@@ -75,6 +75,28 @@ const errors: Record<keyof typeof en, string> = {
     'No se ha podido conectar con Azure Table Storage, donde se guarda el punto de control. Compruebe que esta aplicación web puede conectarse a la cuenta de almacenamiento de la solución y que su identidad en tiempo de ejecución puede leer y escribir tablas, y vuelva a intentarlo.',
   'errors.userImportCheckpoint.storageNotConfigured':
     'Azure Storage no está configurado en esta implementación, así que no hay ningún punto de control que borrar.',
+  'errors.userScope.loadFailed': 'No se ha podido cargar el ámbito de usuarios ({status}).',
+  'errors.userScope.refreshFailed':
+    'No se ha podido actualizar el ámbito de usuarios desde Microsoft Graph ({status}).',
+  'errors.userScope.startFailed': 'No se ha podido iniciar la purga del ámbito de usuarios ({status}).',
+  'errors.userScope.pollFailed': 'No se ha podido cargar el progreso de la purga ({status}).',
+  'errors.userScope.cancelFailed': 'No se ha podido detener la purga ({status}).',
+  'errors.userScope.acknowledgementRequired': 'Marque la confirmación antes de iniciar la purga.',
+  'errors.userScope.scopeNotFiltered':
+    'UserGroupsFilter no está limitando las importaciones, así que no hay población fuera de ámbito que purgar.',
+  'errors.userScope.scopeUnavailable':
+    'El ámbito de usuarios no está disponible. Resuelva los grupos configurados antes de iniciar una purga.',
+  'errors.userScope.scopeEmpty':
+    'El filtro configurado no contiene actualmente a nadie, así que la purga está bloqueada hasta que el ámbito se resuelva con al menos una persona.',
+  'errors.userScope.nothingToPurge': 'No hay usuarios de la base de datos fuera del ámbito actual.',
+  'errors.userScope.purgeAlreadyRunning':
+    'Ya se está ejecutando una purga del ámbito de usuarios. Espere a que termine o deténgala antes de iniciar otra.',
+  'errors.userScope.jobNotFound': 'Ese trabajo de purga ya no existe.',
+  'errors.userScope.jobNotActive': 'Ese trabajo de purga ya no se está ejecutando.',
+  'errors.userScope.databaseUnavailable':
+    'La base de datos de análisis no está disponible. Compruebe la conexión de base de datos y vuelva a intentarlo.',
+  'errors.userScope.storageUnavailable':
+    'No se ha podido conectar con Azure Table Storage, donde las purgas guardan su progreso. Compruebe que esta aplicación web puede conectarse a la cuenta de almacenamiento de la solución y que su identidad en tiempo de ejecución puede leer y escribir tablas, y vuelva a intentarlo.',
   'errors.updateCheck.failed': 'No se han podido buscar actualizaciones ({status}).',
 
   // Licence activity API
