@@ -43,6 +43,13 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         /// <summary>At most one scope catch-up re-read per this many hours.</summary>
         public const int ScopeCatchUpIntervalHours = 24;
 
+        private enum ScopeCatchUpDecision
+        {
+            None,
+            FullReadAlreadyPending,
+            MembershipCatchUpRequested,
+        }
+
         /// <summary>
         /// Reads the admin-configured org types. Injectable so the org step can be exercised without a
         /// database; built from the configured SQL connection string otherwise.
@@ -248,17 +255,21 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 // different UserGroupsFilter would never return the people the new filter lets in.
                 deltaTokenCleared |= await ClearDeltaTokenIfUserScopeChangedAsync(orgSelection.DeltaKeyQualifier, alreadyCleared: deltaTokenCleared);
 
-                var scopeCatchUpRequested = false;
+                var scopeCatchUpDecision = ScopeCatchUpDecision.None;
                 if (!deltaTokenCleared && userScope.IsFiltered)
                 {
-                    scopeCatchUpRequested = await ClearDeltaTokenForScopeCatchUpIfDueAsync(db, userScope, orgSelection.DeltaKeyQualifier);
-                    deltaTokenCleared |= scopeCatchUpRequested;
+                    scopeCatchUpDecision = await ClearDeltaTokenForScopeCatchUpIfDueAsync(
+                        db, userScope, orgSelection.DeltaKeyQualifier);
+                    deltaTokenCleared |= scopeCatchUpDecision == ScopeCatchUpDecision.MembershipCatchUpRequested;
                 }
 
                 // The membership marker is advanced only after a successful FULL read. Advancing it after an
                 // incremental read would forget a membership change while the newly in-scope person's user object
                 // remained behind the stored delta checkpoint.
-                var readingFullDirectory = string.IsNullOrEmpty(await _userLoader.DeltaValueProvider.GetDeltaToken());
+                var readingFullDirectory = deltaTokenCleared
+                    || scopeCatchUpDecision == ScopeCatchUpDecision.FullReadAlreadyPending;
+                var scopeCatchUpRequested =
+                    scopeCatchUpDecision == ScopeCatchUpDecision.MembershipCatchUpRequested;
 
                 // Load from Graph & update delta code once done
                 var allActiveGraphUsers = await _userLoader.LoadAllActiveUsers();
@@ -669,12 +680,12 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         /// delta tokens when it changed. This deliberately does not use "does a users-table row exist?" as the marker:
         /// an existing row may carry metadata from before the person entered scope and needs the same catch-up.
         /// </summary>
-        private async Task<bool> ClearDeltaTokenForScopeCatchUpIfDueAsync(
+        private async Task<ScopeCatchUpDecision> ClearDeltaTokenForScopeCatchUpIfDueAsync(
             AnalyticsEntitiesContext db, UserImportScope userScope, string orgAttributeQualifier)
         {
             if (_lastRunStore == null)
             {
-                return false;
+                return ScopeCatchUpDecision.None;
             }
 
             try
@@ -682,7 +693,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 // The token this cycle would resume: the provider is keyed by the org selection already.
                 if (string.IsNullOrEmpty(await _userLoader.DeltaValueProvider.GetDeltaToken()))
                 {
-                    return false;     // Already reading the full list.
+                    return ScopeCatchUpDecision.FullReadAlreadyPending;
                 }
 
                 if (_scopeMarkerStore != null)
@@ -691,7 +702,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                     var stored = await _scopeMarkerStore.GetMembershipFingerprintAsync(orgAttributeQualifier);
                     if (string.Equals(stored, current, StringComparison.Ordinal))
                     {
-                        return false;
+                        return ScopeCatchUpDecision.None;
                     }
 
                     // No marker means this build has just introduced membership tracking. Read once immediately:
@@ -703,7 +714,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                         {
                             _logger.LogInformation("User import - enabled membership of the UserGroupsFilter group(s) has changed since the last full directory read. " +
                                 $"The next catch-up read is due after {lastMembershipCatchUp?.AddHours(ScopeCatchUpIntervalHours):u} UTC.");
-                            return false;
+                            return ScopeCatchUpDecision.None;
                         }
                     }
 
@@ -711,7 +722,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                         ? "User import - no membership marker exists for the stored /users/delta checkpoint. Reading the full user list once so every current UserGroupsFilter member has current metadata."
                         : "User import - enabled membership of the UserGroupsFilter group(s) changed after the stored /users/delta checkpoint was taken. Reading the full user list this cycle.");
                     await _userLoader.ClearStoredDeltaTokensAsync();
-                    return true;
+                    return ScopeCatchUpDecision.MembershipCatchUpRequested;
                 }
 
                 // Non-persisted/test loaders have no marker store. Retain the old missing-row check as a best-effort
@@ -728,7 +739,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 var missing = userScope.EnabledMemberObjectIds.Count(id => !knownObjectIds.Contains(id));
                 if (missing == 0)
                 {
-                    return false;
+                    return ScopeCatchUpDecision.None;
                 }
 
                 var lastCatchUp = await _lastRunStore.GetLastRunUtc(ScopeCatchUpLastRunKey);
@@ -736,7 +747,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 {
                     _logger.LogInformation($"User import - {missing:N0} enabled member(s) of the UserGroupsFilter group(s) are not in the users table yet. " +
                         $"The next full re-read to add them is due after {lastCatchUp?.AddHours(ScopeCatchUpIntervalHours):u} UTC.");
-                    return false;
+                    return ScopeCatchUpDecision.None;
                 }
 
                 _logger.LogInformation($"User import - {missing:N0} enabled member(s) of the UserGroupsFilter group(s) are not in the users table - usually " +
@@ -744,14 +755,14 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                     "Reading the full user list this cycle to add them.");
                 await _userLoader.ClearStoredDeltaTokensAsync();
                 await _lastRunStore.SetLastRunUtc(ScopeCatchUpLastRunKey, _clock.UtcNow);
-                return true;
+                return ScopeCatchUpDecision.MembershipCatchUpRequested;
             }
             catch (Exception ex)
             {
                 // A missed catch-up only delays adding new members; it must not stop the import.
                 _logger.LogWarning($"User import - could not check for UserGroupsFilter members missing from the users table ({ex.Message}). " +
                     "Will check again next cycle.");
-                return false;
+                return ScopeCatchUpDecision.None;
             }
         }
 
