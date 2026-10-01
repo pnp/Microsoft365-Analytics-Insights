@@ -62,7 +62,7 @@ namespace Tests.UnitTests
         public async Task Resolve_RecognisesTheReaderByObjectIdBeforeSignInName()
         {
             var resolver = Resolver(new MemoryStore(MyDepartment));
-            var reader = PrincipalWithObjectId("someone-else@contoso.com", "00000000-0000-0000-0000-000000000005");
+            var reader = PrincipalWithObjectId("someone-else@contoso.com", "00000000-0000-0000-0000-000000000005", PortalRoles.SeePii);
 
             var scope = await resolver.ResolveAsync(Request(), reader, null, CancellationToken.None);
 
@@ -171,6 +171,36 @@ namespace Tests.UnitTests
             var adminWithoutPii = Principal("rep@contoso.com", PortalRoles.Administration);
             var bypassed = await resolver.ResolveAsync(Request(bypass: true), adminWithoutPii, null, CancellationToken.None);
             Assert.IsFalse(bypassed.IsRestricted);
+        }
+
+        [TestMethod]
+        public async Task ReaderWithoutSeePii_MaySeeOnlyTheirOwnFigures_WhenTheirObjectIdFindsThem()
+        {
+            // "Only my own figures" - the editor's own suggestion for the user name.
+            var resolver = Resolver(new MemoryStore("[{\"d\":\"userName\",\"v\":[],\"vu\":\"userName\"}]"));
+            var engineer = PrincipalWithObjectId("engineer@contoso.com", "00000000-0000-0000-0000-000000000005");
+
+            var scope = await resolver.ResolveAsync(Request(), engineer, null, CancellationToken.None);
+            CollectionAssert.AreEqual(new[] { 5 }, scope.Sql.UserIds.ToArray(), "Their own record is not guarded from them.");
+
+            var effective = Body<GlobalFilterEffectiveModel>(await Controller(resolver, engineer).Effective(CancellationToken.None));
+            Assert.IsFalse(effective.TooFewPeople);
+
+            // Found by sign-in name only, the row might be a former holder of the address, so it is not assumed theirs.
+            var byNameOnly = await RefusalOf(() => resolver.ResolveAsync(Request(), Reader("rep@contoso.com"), null, CancellationToken.None));
+            Assert.AreEqual(HttpStatusCode.Forbidden, byNameOnly.Item1);
+        }
+
+        [TestMethod]
+        public async Task ReaderWithoutSeePii_IsRefusedTheirOwnFiguresAlongsideAnotherPersons()
+        {
+            var resolver = Resolver(new MemoryStore(
+                "[{\"d\":\"userName\",\"v\":[\"ceo@contoso.com\"],\"vu\":\"userName\"}]"));
+            var engineer = PrincipalWithObjectId("engineer@contoso.com", "00000000-0000-0000-0000-000000000005");
+
+            var refusal = await RefusalOf(() => resolver.ResolveAsync(Request(), engineer, null, CancellationToken.None));
+
+            Assert.AreEqual(HttpStatusCode.Forbidden, refusal.Item1, "Two people, one of them someone else, is a handful.");
         }
 
         [TestMethod]
@@ -478,9 +508,9 @@ namespace Tests.UnitTests
             return new ClaimsPrincipal(identity);
         }
 
-        private static ClaimsPrincipal PrincipalWithObjectId(string upn, string objectId)
+        private static ClaimsPrincipal PrincipalWithObjectId(string upn, string objectId, params string[] roles)
         {
-            var principal = Principal(upn, PortalRoles.SeePii);
+            var principal = Principal(upn, roles);
             ((ClaimsIdentity)principal.Identity).AddClaim(new Claim("oid", objectId));
             return principal;
         }

@@ -162,11 +162,15 @@ namespace Common.Entities.UserFilters
         /// key would refuse a duplicate rather than let it through. Measured at 200,000 ids the sort it added
         /// was a sixth of the cost of filling the table.
         /// </remarks>
-        internal const string Prelude =
+        internal const string Prelude = CreateUsersTable + FillUsersTable;
+
+        private const string CreateUsersTable =
             "SET NOCOUNT ON;\r\n"
             + "IF OBJECT_ID(N'tempdb.." + UsersTable + "') IS NOT NULL DROP TABLE " + UsersTable + ";\r\n"
-            + "CREATE TABLE " + UsersTable + " (user_id int NOT NULL PRIMARY KEY);\r\n"
-            + "INSERT INTO " + UsersTable + " (user_id) SELECT CAST([value] AS int) FROM OPENJSON(@" + ParameterName + ");\r\n";
+            + "CREATE TABLE " + UsersTable + " (user_id int NOT NULL PRIMARY KEY);\r\n";
+
+        private const string FillUsersTable =
+            "INSERT INTO " + UsersTable + " (user_id) SELECT CAST([value] AS int) FROM OPENJSON(@" + ParameterName + ");\r\n";
 
         /// <summary>True when the statement carries at least one scope marker.</summary>
         public static bool HasMarkers(string sql)
@@ -222,6 +226,29 @@ namespace Common.Entities.UserFilters
             builder.Append(sql, position, sql.Length - position);
 
             return usesUsers ? Prelude + builder : builder.ToString();
+        }
+
+        /// <summary>
+        /// Creates the scope's temporary table for a session that then runs several statements with
+        /// <see cref="ApplyInSession"/>, so the ids are sent and indexed once per request rather than once per
+        /// statement. Run it on a connection the caller keeps open, and WITHOUT parameters: a parameterised
+        /// command runs inside <c>sp_executesql</c>, and a temporary table created there ends with it.
+        /// </summary>
+        public static string SessionCreateSql => CreateUsersTable;
+
+        /// <summary>Fills the table <see cref="SessionCreateSql"/> created. Run it with <see cref="CreateParameter"/>.</summary>
+        public static string SessionFillSql => FillUsersTable;
+
+        /// <summary>
+        /// <see cref="Apply"/> for a statement run on a session whose scope table <see cref="SessionCreateSql"/>
+        /// and <see cref="SessionFillSql"/> have prepared: the markers are applied the same way - and a statement
+        /// without one is refused the same way - but the table is not filled again, so the statement takes no
+        /// scope parameter.
+        /// </summary>
+        public static string ApplyInSession(string sql, ReportUserScope scope)
+        {
+            var applied = Apply(sql, scope);
+            return applied.StartsWith(Prelude, StringComparison.Ordinal) ? applied.Substring(Prelude.Length) : applied;
         }
 
         /// <summary>

@@ -1819,7 +1819,6 @@ const SERVER_PLACEHOLDER_LITERAL = /(?:N?'|")(\([A-Za-z][A-Za-z \-]*\))(?:'|")/g
 
 /** Parenthesised literals in those files that never reach a page, and why. */
 const NOT_DISPLAYED_PLACEHOLDERS: Record<string, string> = {
-  '(all)': 'a cache-key fragment in ReportsAPIController, never returned',
   '(Any app)': 'the Office apps matrix ranking sentinel, filtered out before the rows are returned',
 };
 

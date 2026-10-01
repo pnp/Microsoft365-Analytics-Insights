@@ -116,7 +116,7 @@ const globalFilter = {
   'globalFilter.admin.conditions.note':
     'People must match these conditions to appear in any report. Conditions joined by AND must all match; OR starts another group, and matching any one group is enough.',
   'globalFilter.admin.conditions.privacyNote':
-    'Readers without the See PII permission never see the sign-in names a condition uses, and are shown no reports while the filter leaves them fewer than {minimum} people.',
+    'Readers without the See PII permission never see the sign-in names a condition uses. While the filter leaves such a reader fewer than {minimum} people, other than just themselves, they are shown no reports.',
   'globalFilter.admin.preview.heading': 'What you would see',
   'globalFilter.admin.preview.note':
     'The filter applies to portal administrators too, so this is what your own reports would show once it is saved.',

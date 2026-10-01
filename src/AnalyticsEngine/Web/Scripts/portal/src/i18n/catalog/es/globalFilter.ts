@@ -111,7 +111,7 @@ const globalFilter: Record<keyof typeof en, string> = {
   'globalFilter.admin.conditions.note':
     'Las personas deben cumplir estas condiciones para aparecer en cualquier informe. Las condiciones unidas por Y deben cumplirse todas; O inicia otro grupo, y basta con cumplir uno de los grupos.',
   'globalFilter.admin.conditions.privacyNote':
-    'Los lectores sin el permiso Ver PII nunca ven los nombres de inicio de sesión que usa una condición, y no se les muestra ningún informe mientras el filtro les deje menos de {minimum} personas.',
+    'Los lectores sin el permiso Ver PII nunca ven los nombres de inicio de sesión que usa una condición. Mientras el filtro les deje menos de {minimum} personas, salvo cuando solo incluye a la propia persona lectora, no se les muestra ningún informe.',
   'globalFilter.admin.preview.heading': 'Lo que vería usted',
   'globalFilter.admin.preview.note':
     'El filtro también se aplica a los administradores del portal, así que esto es lo que mostrarían sus propios informes una vez guardado.',

@@ -2,6 +2,7 @@ extern alias AnalyticsWeb;
 
 using Common.Entities;
 using Common.Entities.Entities.AuditLog;
+using Common.Entities.UserFilters;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System;
 using System.Data.Entity.Migrations;
@@ -10,6 +11,8 @@ using System.Linq;
 using System.Threading.Tasks;
 using Configuration = Common.Entities.Migrations.Configuration;
 using DlpAPIController = AnalyticsWeb::Web.AnalyticsWeb.Controllers.DlpAPIController;
+using DlpImpactRow = AnalyticsWeb::Web.AnalyticsWeb.Models.Dlp.DlpImpactRow;
+using DlpSummary = AnalyticsWeb::Web.AnalyticsWeb.Models.Dlp.DlpSummary;
 
 namespace Tests.UnitTests
 {
@@ -270,6 +273,152 @@ namespace Tests.UnitTests
             Assert.AreEqual(7, DlpAPIController.SnapWindow(1));
             Assert.AreEqual(28, DlpAPIController.SnapWindow(30));
             Assert.AreEqual(180, DlpAPIController.SnapWindow(100000));
+        }
+
+        /// <summary>
+        /// Under the administrator's global filter every figure is narrowed in SQL, statement by statement. A
+        /// scope holding everyone must give exactly the unfiltered summary; one person, only theirs; nobody,
+        /// nothing.
+        /// </summary>
+        /// <remarks>
+        /// Seeded 40-41 days back and read over 90 days, so neither this test nor the 28-day one above sees the
+        /// other's rows in its assertions, whichever runs first.
+        /// </remarks>
+        [TestMethod]
+        public async Task ScopedSummary_NarrowsEveryFigureInSql_AndMatchesTheUnfilteredSummaryForEveryone()
+        {
+            var now = DateTime.UtcNow;
+            int grace;
+
+            using (var db = new AnalyticsEntitiesContext(_connectionString, true, false))
+            {
+                var operation = new EventOperation { Name = "CopilotInteractionUnderAScope" };
+                db.event_operations.Add(operation);
+                var graceUser = new User { UserPrincipalName = "grace@contoso.com" };
+                var alanUser = new User { UserPrincipalName = "alan@contoso.com" };
+                db.users.Add(graceUser);
+                db.users.Add(alanUser);
+                var graceAgent = new CopilotAgent { AgentID = "CopilotStudio.Declarative.finance", Name = "Contoso Finance Agent" };
+                var alanAgent = new CopilotAgent { AgentID = "CopilotStudio.Declarative.engineering", Name = "Contoso Engineering Agent" };
+                db.CopilotAgents.Add(graceAgent);
+                db.CopilotAgents.Add(alanAgent);
+                var gracePolicy = new DlpPolicy { PolicyId = "pol-finance", Name = "Protect Καλημέρα κόσμε" };
+                var alanPolicy = new DlpPolicy { PolicyId = "pol-engineering", Name = "Protect source code" };
+                db.dlp_policies.Add(gracePolicy);
+                db.dlp_policies.Add(alanPolicy);
+                var label = new SensitivityLabel { LabelId = "00000000-0000-0000-0000-00000000c002" };
+                db.SensitivityLabels.Add(label);
+                db.SaveChanges();
+                grace = graceUser.ID;
+
+                void Interaction(User user, CopilotAgent agent, DlpPolicy policy, bool blocked, int daysAgo, bool alsoOnDlpAll)
+                {
+                    var eventId = Guid.NewGuid();
+                    db.AuditEventsCommon.Add(new CommonAuditEvent { Id = eventId, TimeStamp = now.AddDays(-daysAgo), User = user, Operation = operation });
+                    db.CopilotChats.Add(new CopilotChat { EventID = eventId, Agent = agent, UserId = user.ID, TimeStampUtc = now.AddDays(-daysAgo) });
+                    db.SaveChanges();
+
+                    db.copilot_dlp_events.Add(new CopilotDlpEvent { ChatId = eventId, DlpPolicyId = policy.ID, SensitivityLabelId = label.ID, IsBlocked = blocked });
+                    if (alsoOnDlpAll)
+                    {
+                        db.dlp_rule_matches.Add(new DlpRuleMatch { EventId = eventId, DlpPolicyId = policy.ID, IsBlocked = blocked });
+                    }
+
+                    db.SaveChanges();
+                }
+
+                Interaction(graceUser, graceAgent, gracePolicy, blocked: true, daysAgo: 41, alsoOnDlpAll: false);
+                Interaction(graceUser, graceAgent, gracePolicy, blocked: false, daysAgo: 41, alsoOnDlpAll: false);
+                Interaction(graceUser, graceAgent, gracePolicy, blocked: true, daysAgo: 40, alsoOnDlpAll: true);
+                Interaction(alanUser, alanAgent, alanPolicy, blocked: false, daysAgo: 40, alsoOnDlpAll: true);
+            }
+
+            int[] everyoneIds;
+            using (var db = new AnalyticsEntitiesContext(_connectionString, true, false))
+            {
+                everyoneIds = db.users.Select(u => u.ID).ToArray();
+            }
+
+            var unfiltered = await NewController().BuildSummaryAsync(90);
+            var everyone = await NewController().BuildSummaryAsync(90, scope: ReportUserScope.ForUsers(everyoneIds));
+            AssertSameFigures(unfiltered, everyone);
+
+            var onlyGrace = await NewController().BuildSummaryAsync(90, scope: ReportUserScope.ForUsers(new[] { grace }));
+            Assert.AreEqual(2, onlyGrace.CopilotBlockedCount);
+            Assert.AreEqual(1, onlyGrace.CopilotAuditedCount);
+            Assert.AreEqual(1, onlyGrace.UsersImpacted);
+            Assert.AreEqual(1, onlyGrace.AgentsImpacted);
+            Assert.AreEqual(1, onlyGrace.PoliciesInvolved);
+
+            var financeAgent = onlyGrace.TopAgents.Single();
+            Assert.AreEqual("Contoso Finance Agent", financeAgent.Name);
+            Assert.AreEqual(2, financeAgent.BlockedCount);
+            Assert.AreEqual(1, financeAgent.AuditedCount);
+            Assert.AreEqual(1, financeAgent.UsersAffected);
+            Assert.AreEqual("Protect Καλημέρα κόσμε", financeAgent.Policies.Single().Name, "Tenant text survives the SQL path.");
+            Assert.AreEqual(2, financeAgent.Policies.Single().BlockedCount);
+
+            Assert.AreEqual("Protect Καλημέρα κόσμε", onlyGrace.TopPolicies.Single().Name);
+            Assert.AreEqual(3, onlyGrace.TopSensitivityLabels.Single().BlockedCount + onlyGrace.TopSensitivityLabels.Single().AuditedCount);
+            Assert.AreEqual("grace@contoso.com", onlyGrace.TopUsers.Single().Name);
+            Assert.AreEqual(grace.ToString(System.Globalization.CultureInfo.InvariantCulture), onlyGrace.TopUsers.Single().Id);
+            Assert.AreEqual(2, onlyGrace.TopUsers.Single().BlockedCount);
+            CollectionAssert.AreEqual(
+                new[] { 2, 1 },
+                onlyGrace.Trend.Select(t => t.BlockedCount + t.AuditedCount).ToArray(),
+                "Two matches 41 days ago, one 40 days ago, oldest first.");
+
+            Assert.AreEqual(1, onlyGrace.TenantBlockedCount);
+            Assert.AreEqual(0, onlyGrace.TenantAuditedCount, "Alan's audited DLP.All match is outside the scope.");
+            Assert.AreEqual("Protect Καλημέρα κόσμε", onlyGrace.TenantTopPolicies.Single().Name);
+            Assert.IsNull(onlyGrace.TenantTopPolicies.Single().UsersAffected);
+
+            var nobody = await NewController().BuildSummaryAsync(90, scope: ReportUserScope.ForUsers(new int[0]));
+            Assert.AreEqual(0, nobody.CopilotBlockedCount + nobody.CopilotAuditedCount + nobody.TenantBlockedCount + nobody.TenantAuditedCount);
+            Assert.AreEqual(0, nobody.UsersImpacted + nobody.AgentsImpacted + nobody.PoliciesInvolved);
+            Assert.AreEqual(
+                0,
+                nobody.TopAgents.Count + nobody.TopPolicies.Count + nobody.TopSensitivityLabels.Count
+                + nobody.TopUsers.Count + nobody.Trend.Count + nobody.TenantTopPolicies.Count);
+
+            // A reader without See PII still gets no people, filtered or not.
+            var aggregateOnly = await NewController().BuildSummaryAsync(90, includeIndividuals: false, scope: ReportUserScope.ForUsers(new[] { grace }));
+            Assert.AreEqual(0, aggregateOnly.TopUsers.Count);
+            Assert.AreEqual(1, aggregateOnly.UsersImpacted);
+        }
+
+        private static void AssertSameFigures(DlpSummary expected, DlpSummary actual)
+        {
+            Assert.AreEqual(expected.CopilotBlockedCount, actual.CopilotBlockedCount, "CopilotBlockedCount");
+            Assert.AreEqual(expected.CopilotAuditedCount, actual.CopilotAuditedCount, "CopilotAuditedCount");
+            Assert.AreEqual(expected.UsersImpacted, actual.UsersImpacted, "UsersImpacted");
+            Assert.AreEqual(expected.AgentsImpacted, actual.AgentsImpacted, "AgentsImpacted");
+            Assert.AreEqual(expected.PoliciesInvolved, actual.PoliciesInvolved, "PoliciesInvolved");
+            Assert.AreEqual(expected.TenantBlockedCount, actual.TenantBlockedCount, "TenantBlockedCount");
+            Assert.AreEqual(expected.TenantAuditedCount, actual.TenantAuditedCount, "TenantAuditedCount");
+
+            // Equal rows can rank in either order in the unfiltered SQL, so the tables are compared as sets.
+            CollectionAssert.AreEquivalent(expected.TopAgents.Select(Describe).ToList(), actual.TopAgents.Select(Describe).ToList(), "TopAgents");
+            CollectionAssert.AreEquivalent(expected.TopPolicies.Select(Describe).ToList(), actual.TopPolicies.Select(Describe).ToList(), "TopPolicies");
+            CollectionAssert.AreEquivalent(
+                expected.TopSensitivityLabels.Select(Describe).ToList(), actual.TopSensitivityLabels.Select(Describe).ToList(), "TopSensitivityLabels");
+            CollectionAssert.AreEquivalent(expected.TopUsers.Select(Describe).ToList(), actual.TopUsers.Select(Describe).ToList(), "TopUsers");
+            CollectionAssert.AreEquivalent(
+                expected.TenantTopPolicies.Select(Describe).ToList(), actual.TenantTopPolicies.Select(Describe).ToList(), "TenantTopPolicies");
+            CollectionAssert.AreEqual(
+                expected.Trend.Select(p => $"{p.Date:yyyy-MM-dd}|{p.BlockedCount}|{p.AuditedCount}").ToList(),
+                actual.Trend.Select(p => $"{p.Date:yyyy-MM-dd}|{p.BlockedCount}|{p.AuditedCount}").ToList(),
+                "Trend");
+        }
+
+        private static string Describe(DlpImpactRow row)
+        {
+            var policies = row.Policies == null
+                ? "-"
+                : string.Join(";", row.Policies
+                    .Select(p => $"{p.Id}:{p.Name}:{p.BlockedCount}:{p.AuditedCount}")
+                    .OrderBy(s => s, StringComparer.Ordinal));
+            return $"{row.Id}|{row.Name}|{row.BlockedCount}|{row.AuditedCount}|{row.UsersAffected}|{policies}";
         }
     }
 }

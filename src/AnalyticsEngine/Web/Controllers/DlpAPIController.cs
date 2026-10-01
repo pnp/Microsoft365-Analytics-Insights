@@ -1,5 +1,8 @@
 using Common.Entities;
 using Common.Entities.Config;
+using Common.Entities.UserFilters;
+using DataUtils.Sql;
+using Microsoft.Data.SqlClient;
 using System;
 using System.Collections.Generic;
 using System.Data.Entity;
@@ -124,23 +127,23 @@ namespace Web.AnalyticsWeb.Controllers
             return Ok(await BuildSummaryAsync(
                 days,
                 includeIndividuals: PortalAccess.Evaluate(Request, User).SeePii,
-                inScope: scope.IsRestricted ? (Func<int, bool>)scope.Includes : null));
+                scope: scope.IsRestricted ? scope.Sql : null));
         }
 
         /// <summary>
         /// The query work behind <see cref="Summary"/>, separated so it can be executed against a real
         /// database in tests without an ASP.NET request pipeline.
         /// </summary>
-        /// <param name="inScope">
+        /// <param name="scope">
         /// The people the summary may describe - the administrator's global filter - or <c>null</c> for
-        /// everyone. Narrowed through <see cref="BuildScopedSummaryAsync"/>; with no filter the summary is
-        /// built exactly as before.
+        /// everyone. Narrowed in SQL through <see cref="BuildScopedSummaryAsync"/>; with no filter the summary
+        /// is built exactly as before.
         /// </param>
-        internal async Task<DlpSummary> BuildSummaryAsync(int days, bool includeIndividuals = true, Func<int, bool> inScope = null)
+        internal async Task<DlpSummary> BuildSummaryAsync(int days, bool includeIndividuals = true, ReportUserScope scope = null)
         {
-            if (inScope != null)
+            if (scope != null && scope.IsRestricted)
             {
-                return await BuildScopedSummaryAsync(days, includeIndividuals, inScope);
+                return await BuildScopedSummaryAsync(days, includeIndividuals, scope);
             }
 
             var windowDays = SnapWindow(days);
@@ -295,37 +298,164 @@ namespace Web.AnalyticsWeb.Controllers
             public int Users { get; set; }
         }
 
-        /// <summary>
-        /// One grouped fact for the narrowed summary: a dimension value, one person, blocked or not, and how
-        /// many matches. Small by construction - bounded by people x values, never by interactions.
-        /// </summary>
-        private sealed class ScopedFact
+        /// <summary>The narrowed summary's whole-window Copilot figures.</summary>
+        private sealed class ScopedTotalsRow
         {
-            public int? DbId { get; set; }
-            public string Id { get; set; }
-            public string Name { get; set; }
-            public string PolicyId { get; set; }
-            public string PolicyName { get; set; }
-            public DateTime? Day { get; set; }
-            public int UserId { get; set; }
-            public bool IsBlocked { get; set; }
-            public int Count { get; set; }
+            public int Blocked { get; set; }
+            public int Audited { get; set; }
+            public int UsersImpacted { get; set; }
+            public int AgentsImpacted { get; set; }
+            public int PoliciesInvolved { get; set; }
         }
+
+        /// <summary>One person's matches, for the narrowed top-users table.</summary>
+        private sealed class ScopedUserRow
+        {
+            public int UserId { get; set; }
+            public int Blocked { get; set; }
+            public int Audited { get; set; }
+        }
+
+        /// <summary>One day of the narrowed trend.</summary>
+        private sealed class ScopedDayRow
+        {
+            public DateTime Day { get; set; }
+            public int Blocked { get; set; }
+            public int Audited { get; set; }
+        }
+
+        /// <summary>One (agent, policy) pair of the narrowed agent breakdown.</summary>
+        private sealed class ScopedAgentPolicyRow
+        {
+            public string AgentId { get; set; }
+            public string PolicyId { get; set; }
+            public string Name { get; set; }
+            public int Blocked { get; set; }
+            public int Audited { get; set; }
+        }
+
+        /// <summary>The narrowed DLP.All totals.</summary>
+        private sealed class ScopedTenantTotalsRow
+        {
+            public int Blocked { get; set; }
+            public int Audited { get; set; }
+        }
+
+        // The narrowed summary's statements. Each is the unfiltered summary's aggregate with the scope marker
+        // on the person the match belongs to - the Copilot interaction's user, the DLP.All audit event's user -
+        // so the narrowing happens in SQL, before anything is grouped or returned. A match with no user cannot
+        // be attributed to anyone, so it is left out, as under every other report's filter.
+
+        internal const string ScopedTotalsSql = @"
+SELECT ISNULL(SUM(CASE WHEN e.is_blocked = 1 THEN 1 ELSE 0 END), 0) AS Blocked,
+       ISNULL(SUM(CASE WHEN e.is_blocked = 0 THEN 1 ELSE 0 END), 0) AS Audited,
+       COUNT(DISTINCT CASE WHEN e.is_blocked = 1 THEN c.user_id END) AS UsersImpacted,
+       COUNT(DISTINCT CASE WHEN e.is_blocked = 1 THEN c.agent_id END) AS AgentsImpacted,
+       COUNT(DISTINCT e.dlp_policy_id) AS PoliciesInvolved
+FROM dbo.copilot_dlp_events AS e
+INNER JOIN dbo.copilot_chats AS c ON c.event_id = e.copilot_chat_id
+WHERE c.time_stamp >= @from AND c.time_stamp <= @to AND c.user_id IS NOT NULL/*scope: AND c.user_id IN {scopeUsers}*/;";
+
+        internal const string ScopedAgentsSql = @"
+SELECT a.agent_id AS Id, a.name AS Name,
+       SUM(CASE WHEN e.is_blocked = 1 THEN 1 ELSE 0 END) AS Blocked,
+       SUM(CASE WHEN e.is_blocked = 0 THEN 1 ELSE 0 END) AS Audited,
+       COUNT(DISTINCT c.user_id) AS Users
+FROM dbo.copilot_dlp_events AS e
+INNER JOIN dbo.copilot_chats AS c ON c.event_id = e.copilot_chat_id
+INNER JOIN dbo.copilot_agents AS a ON a.id = c.agent_id
+WHERE c.time_stamp >= @from AND c.time_stamp <= @to AND c.user_id IS NOT NULL/*scope: AND c.user_id IN {scopeUsers}*/
+GROUP BY a.agent_id, a.name;";
+
+        /// <summary>The policies that affected each of the ranked agents; <c>{agentIds}</c> becomes their parameters.</summary>
+        internal const string ScopedAgentPoliciesSql = @"
+SELECT a.agent_id AS AgentId, p.policy_id AS PolicyId, p.name AS Name,
+       SUM(CASE WHEN e.is_blocked = 1 THEN 1 ELSE 0 END) AS Blocked,
+       SUM(CASE WHEN e.is_blocked = 0 THEN 1 ELSE 0 END) AS Audited
+FROM dbo.copilot_dlp_events AS e
+INNER JOIN dbo.copilot_chats AS c ON c.event_id = e.copilot_chat_id
+INNER JOIN dbo.copilot_agents AS a ON a.id = c.agent_id
+INNER JOIN dbo.dlp_policies AS p ON p.id = e.dlp_policy_id
+WHERE c.time_stamp >= @from AND c.time_stamp <= @to AND c.user_id IS NOT NULL/*scope: AND c.user_id IN {scopeUsers}*/
+  AND a.agent_id IN ({agentIds})
+GROUP BY a.agent_id, p.policy_id, p.name;";
+
+        internal const string ScopedPoliciesSql = @"
+SELECT p.policy_id AS Id, p.name AS Name,
+       SUM(CASE WHEN e.is_blocked = 1 THEN 1 ELSE 0 END) AS Blocked,
+       SUM(CASE WHEN e.is_blocked = 0 THEN 1 ELSE 0 END) AS Audited,
+       COUNT(DISTINCT c.user_id) AS Users
+FROM dbo.copilot_dlp_events AS e
+INNER JOIN dbo.copilot_chats AS c ON c.event_id = e.copilot_chat_id
+INNER JOIN dbo.dlp_policies AS p ON p.id = e.dlp_policy_id
+WHERE c.time_stamp >= @from AND c.time_stamp <= @to AND c.user_id IS NOT NULL/*scope: AND c.user_id IN {scopeUsers}*/
+GROUP BY p.policy_id, p.name;";
+
+        internal const string ScopedLabelsSql = @"
+SELECT l.label_id AS Id, l.label_id AS Name,
+       SUM(CASE WHEN e.is_blocked = 1 THEN 1 ELSE 0 END) AS Blocked,
+       SUM(CASE WHEN e.is_blocked = 0 THEN 1 ELSE 0 END) AS Audited,
+       COUNT(DISTINCT c.user_id) AS Users
+FROM dbo.copilot_dlp_events AS e
+INNER JOIN dbo.copilot_chats AS c ON c.event_id = e.copilot_chat_id
+INNER JOIN dbo.sensitivity_labels AS l ON l.id = e.sensitivity_label_id
+WHERE c.time_stamp >= @from AND c.time_stamp <= @to AND c.user_id IS NOT NULL/*scope: AND c.user_id IN {scopeUsers}*/
+GROUP BY l.label_id;";
+
+        internal const string ScopedTopUsersSql = @"
+SELECT TOP (@top) c.user_id AS UserId,
+       SUM(CASE WHEN e.is_blocked = 1 THEN 1 ELSE 0 END) AS Blocked,
+       SUM(CASE WHEN e.is_blocked = 0 THEN 1 ELSE 0 END) AS Audited
+FROM dbo.copilot_dlp_events AS e
+INNER JOIN dbo.copilot_chats AS c ON c.event_id = e.copilot_chat_id
+WHERE c.time_stamp >= @from AND c.time_stamp <= @to AND c.user_id IS NOT NULL/*scope: AND c.user_id IN {scopeUsers}*/
+GROUP BY c.user_id
+ORDER BY Blocked DESC, Audited DESC, c.user_id;";
+
+        internal const string ScopedTrendSql = @"
+SELECT CAST(CAST(c.time_stamp AS date) AS datetime2) AS [Day],
+       SUM(CASE WHEN e.is_blocked = 1 THEN 1 ELSE 0 END) AS Blocked,
+       SUM(CASE WHEN e.is_blocked = 0 THEN 1 ELSE 0 END) AS Audited
+FROM dbo.copilot_dlp_events AS e
+INNER JOIN dbo.copilot_chats AS c ON c.event_id = e.copilot_chat_id
+WHERE c.time_stamp >= @from AND c.time_stamp <= @to AND c.user_id IS NOT NULL/*scope: AND c.user_id IN {scopeUsers}*/
+GROUP BY CAST(c.time_stamp AS date)
+ORDER BY [Day];";
+
+        internal const string ScopedTenantTotalsSql = @"
+SELECT ISNULL(SUM(CASE WHEN m.is_blocked = 1 THEN 1 ELSE 0 END), 0) AS Blocked,
+       ISNULL(SUM(CASE WHEN m.is_blocked = 0 THEN 1 ELSE 0 END), 0) AS Audited
+FROM dbo.dlp_rule_matches AS m
+INNER JOIN dbo.audit_events AS ae ON ae.id = m.event_id
+WHERE ae.time_stamp >= @from AND ae.time_stamp <= @to AND ae.user_id IS NOT NULL/*scope: AND ae.user_id IN {scopeUsers}*/;";
+
+        internal const string ScopedTenantPoliciesSql = @"
+SELECT p.policy_id AS Id, p.name AS Name,
+       SUM(CASE WHEN m.is_blocked = 1 THEN 1 ELSE 0 END) AS Blocked,
+       SUM(CASE WHEN m.is_blocked = 0 THEN 1 ELSE 0 END) AS Audited,
+       0 AS Users
+FROM dbo.dlp_rule_matches AS m
+INNER JOIN dbo.audit_events AS ae ON ae.id = m.event_id
+INNER JOIN dbo.dlp_policies AS p ON p.id = m.dlp_policy_id
+WHERE ae.time_stamp >= @from AND ae.time_stamp <= @to AND ae.user_id IS NOT NULL/*scope: AND ae.user_id IN {scopeUsers}*/
+GROUP BY p.policy_id, p.name;";
 
         /// <summary>
         /// The summary narrowed to the people the administrator's global filter leaves this reader seeing.
         /// </summary>
         /// <remarks>
-        /// <para><b>Same figures, narrowed.</b> Every figure and ranking is the one <see cref="BuildSummaryAsync"/>
-        /// computes, with the same ordering, from facts grouped in SQL by dimension, person and outcome and
-        /// then filtered to the scope in memory. The scope is a set of up to hundreds of thousands of user
-        /// ids, which EF cannot send to SQL Server as a parameter - and an <c>IN</c> list that size is a query
-        /// SQL Server may refuse to compile. Grouping by person first keeps every result small: it is bounded
-        /// by the people and values involved, not by the number of interactions.</para>
+        /// <para><b>Narrowed in SQL.</b> Every figure and ranking is the one <see cref="BuildSummaryAsync"/>
+        /// computes, from the same tables, with the scope applied in each statement's WHERE clause - the same
+        /// marker and temporary table every other SQL report uses (<see cref="ReportScopeSql"/>). Nothing per
+        /// person or per interaction comes back: each statement returns one row, one per day, or one per agent,
+        /// policy or label, so a filter covering most of a 200,000-person tenant costs what the unfiltered
+        /// summary does, not a row per person and value.</para>
+        /// <para><b>One session.</b> The scope's ids are sent and indexed once, on a connection held open for
+        /// every statement, rather than once per statement.</para>
         /// <para><b>Fails closed.</b> A match with no user cannot be attributed to anyone, so a filtered summary
         /// leaves it out - the same rule as every other report under a filter.</para>
         /// </remarks>
-        private async Task<DlpSummary> BuildScopedSummaryAsync(int days, bool includeIndividuals, Func<int, bool> inScope)
+        private async Task<DlpSummary> BuildScopedSummaryAsync(int days, bool includeIndividuals, ReportUserScope scope)
         {
             var windowDays = SnapWindow(days);
             var toUtc = DateTime.UtcNow;
@@ -333,92 +463,61 @@ namespace Web.AnalyticsWeb.Controllers
 
             using (var db = _contextFactory.Create())
             {
+                // Opened here, not by EF, so the temporary table lives for every statement below. Created by a
+                // command with no parameters, which runs as a plain batch: one with parameters runs inside
+                // sp_executesql, and a temporary table created there is gone when it returns.
+                await AzureSqlTokenAuth.OpenAsync(db.Database.Connection);
+                await db.Database.ExecuteSqlCommandAsync(TransactionalBehavior.DoNotEnsureTransaction, ReportScopeSql.SessionCreateSql);
+                await db.Database.ExecuteSqlCommandAsync(
+                    TransactionalBehavior.DoNotEnsureTransaction, ReportScopeSql.SessionFillSql, ReportScopeSql.CreateParameter(scope));
+
+                Task<List<T>> QueryAsync<T>(string sql, params SqlParameter[] extra)
+                {
+                    var parameters = new object[] { new SqlParameter("@from", fromUtc), new SqlParameter("@to", toUtc) }
+                        .Concat(extra)
+                        .ToArray();
+                    return db.Database.SqlQuery<T>(ReportScopeSql.ApplyInSession(sql, scope), parameters).ToListAsync();
+                }
+
                 var summary = new DlpSummary { FromUtc = fromUtc, ToUtc = toUtc };
 
-                var events = db.copilot_dlp_events
-                    .Where(e => e.RelatedChat.TimeStampUtc >= fromUtc && e.RelatedChat.TimeStampUtc <= toUtc
-                                && e.RelatedChat.UserId != null);
+                var totals = (await QueryAsync<ScopedTotalsRow>(ScopedTotalsSql)).Single();
+                summary.CopilotBlockedCount = totals.Blocked;
+                summary.CopilotAuditedCount = totals.Audited;
+                summary.UsersImpacted = totals.UsersImpacted;
+                summary.AgentsImpacted = totals.AgentsImpacted;
+                summary.PoliciesInvolved = totals.PoliciesInvolved;
 
-                var perUser = InScope(await events
-                    .GroupBy(e => new { e.RelatedChat.UserId, e.IsBlocked })
-                    .Select(g => new ScopedFact { UserId = g.Key.UserId.Value, IsBlocked = g.Key.IsBlocked, Count = g.Count() })
-                    .ToListAsync(), inScope);
+                summary.TopAgents = Rank(await QueryAsync<RankProjection>(ScopedAgentsSql), countUsers: true);
 
-                summary.CopilotBlockedCount = perUser.Where(f => f.IsBlocked).Sum(f => f.Count);
-                summary.CopilotAuditedCount = perUser.Where(f => !f.IsBlocked).Sum(f => f.Count);
-                summary.UsersImpacted = perUser.Where(f => f.IsBlocked).Select(f => f.UserId).Distinct().Count();
+                // Which policies affected each ranked agent - the same cross-tab as the unfiltered summary's,
+                // counted over the matches of people in scope only.
+                var agentIds = summary.TopAgents.Select(a => a.Id).Where(id => !string.IsNullOrEmpty(id)).ToList();
+                if (agentIds.Count > 0)
+                {
+                    var agentParameters = agentIds
+                        .Select((id, i) => new SqlParameter("@agent" + i.ToString(CultureInfo.InvariantCulture), id))
+                        .ToArray();
+                    var breakdown = await QueryAsync<ScopedAgentPolicyRow>(
+                        ScopedAgentPoliciesSql.Replace("{agentIds}", string.Join(", ", agentParameters.Select(p => p.ParameterName))),
+                        agentParameters);
 
-                var agents = InScope(await events
-                    .Where(e => e.RelatedChat.AgentId != null)
-                    .GroupBy(e => new
+                    AttachPolicies(summary.TopAgents, breakdown.Select(r => new PolicyBreakdownRow
                     {
-                        e.RelatedChat.AgentId,
-                        Id = e.RelatedChat.Agent.AgentID,
-                        e.RelatedChat.Agent.Name,
-                        e.RelatedChat.UserId,
-                        e.IsBlocked,
-                    })
-                    .Select(g => new ScopedFact
-                    {
-                        DbId = g.Key.AgentId,
-                        Id = g.Key.Id,
-                        Name = g.Key.Name,
-                        UserId = g.Key.UserId.Value,
-                        IsBlocked = g.Key.IsBlocked,
-                        Count = g.Count(),
-                    })
-                    .ToListAsync(), inScope);
+                        Key = r.AgentId,
+                        PolicyId = r.PolicyId,
+                        Name = r.Name,
+                        Blocked = r.Blocked,
+                        Audited = r.Audited,
+                    }));
+                }
 
-                summary.AgentsImpacted = agents.Where(f => f.IsBlocked).Select(f => f.DbId).Distinct().Count();
-                summary.TopAgents = Rank(agents, countUsers: true);
-                await AttachScopedAgentPolicyBreakdownAsync(events, summary.TopAgents, inScope);
-
-                var policies = InScope(await events
-                    .Where(e => e.DlpPolicyId != null)
-                    .GroupBy(e => new { e.DlpPolicyId, Id = e.Policy.PolicyId, e.Policy.Name, e.RelatedChat.UserId, e.IsBlocked })
-                    .Select(g => new ScopedFact
-                    {
-                        DbId = g.Key.DlpPolicyId,
-                        Id = g.Key.Id,
-                        Name = g.Key.Name,
-                        UserId = g.Key.UserId.Value,
-                        IsBlocked = g.Key.IsBlocked,
-                        Count = g.Count(),
-                    })
-                    .ToListAsync(), inScope);
-
-                summary.PoliciesInvolved = policies.Select(f => f.DbId).Distinct().Count();
-                summary.TopPolicies = Rank(policies, countUsers: true);
-
-                var labels = InScope(await events
-                    .Where(e => e.SensitivityLabelId != null)
-                    .GroupBy(e => new { e.SensitivityLabel.LabelId, e.RelatedChat.UserId, e.IsBlocked })
-                    .Select(g => new ScopedFact
-                    {
-                        Id = g.Key.LabelId,
-                        Name = g.Key.LabelId,
-                        UserId = g.Key.UserId.Value,
-                        IsBlocked = g.Key.IsBlocked,
-                        Count = g.Count(),
-                    })
-                    .ToListAsync(), inScope);
-
-                summary.TopSensitivityLabels = Rank(labels, countUsers: true);
+                summary.TopPolicies = Rank(await QueryAsync<RankProjection>(ScopedPoliciesSql), countUsers: true);
+                summary.TopSensitivityLabels = Rank(await QueryAsync<RankProjection>(ScopedLabelsSql), countUsers: true);
 
                 if (includeIndividuals)
                 {
-                    var ranked = perUser
-                        .GroupBy(f => f.UserId)
-                        .Select(g => new
-                        {
-                            UserId = g.Key,
-                            Blocked = g.Where(f => f.IsBlocked).Sum(f => f.Count),
-                            Audited = g.Where(f => !f.IsBlocked).Sum(f => f.Count),
-                        })
-                        .OrderByDescending(r => r.Blocked).ThenByDescending(r => r.Audited).ThenBy(r => r.UserId)
-                        .Take(TopN)
-                        .ToList();
-
+                    var ranked = await QueryAsync<ScopedUserRow>(ScopedTopUsersSql, new SqlParameter("@top", TopN));
                     var ids = ranked.Select(r => r.UserId).ToList();
                     var names = ids.Count == 0
                         ? new Dictionary<int, string>()
@@ -433,130 +532,38 @@ namespace Web.AnalyticsWeb.Controllers
                     }).ToList(), countUsers: false);
 
                     // Every person listed is in scope, so their own breakdown needs no further narrowing.
+                    var events = db.copilot_dlp_events
+                        .Where(e => e.RelatedChat.TimeStampUtc >= fromUtc && e.RelatedChat.TimeStampUtc <= toUtc
+                                    && e.RelatedChat.UserId != null);
                     await AttachUserPolicyBreakdownAsync(events, summary.TopUsers);
                 }
 
-                var daily = InScope(await events
-                    .GroupBy(e => new { Day = DbFunctions.TruncateTime(e.RelatedChat.TimeStampUtc), e.RelatedChat.UserId, e.IsBlocked })
-                    .Select(g => new ScopedFact { Day = g.Key.Day, UserId = g.Key.UserId.Value, IsBlocked = g.Key.IsBlocked, Count = g.Count() })
-                    .ToListAsync(), inScope);
-
-                summary.Trend = daily
-                    .Where(f => f.Day.HasValue)
-                    .GroupBy(f => f.Day.Value)
-                    .OrderBy(g => g.Key)
-                    .Select(g => new DlpTrendPoint
-                    {
-                        Date = g.Key,
-                        BlockedCount = g.Where(f => f.IsBlocked).Sum(f => f.Count),
-                        AuditedCount = g.Where(f => !f.IsBlocked).Sum(f => f.Count),
-                    })
+                summary.Trend = (await QueryAsync<ScopedDayRow>(ScopedTrendSql))
+                    .OrderBy(d => d.Day)
+                    .Select(d => new DlpTrendPoint { Date = d.Day, BlockedCount = d.Blocked, AuditedCount = d.Audited })
                     .ToList();
 
                 // Tenant-wide DLP.All activity, narrowed the same way through the audit event's user. Separate
-                // query, separate fields, never joined to the Copilot figures above.
-                var tenantMatches = db.dlp_rule_matches
-                    .Where(m => m.AuditEvent.TimeStamp >= fromUtc && m.AuditEvent.TimeStamp <= toUtc
-                                && m.AuditEvent.UserId != null);
-
-                var tenantPerUser = InScope(await tenantMatches
-                    .GroupBy(m => new { m.AuditEvent.UserId, m.IsBlocked })
-                    .Select(g => new ScopedFact { UserId = g.Key.UserId.Value, IsBlocked = g.Key.IsBlocked, Count = g.Count() })
-                    .ToListAsync(), inScope);
-
-                summary.TenantBlockedCount = tenantPerUser.Where(f => f.IsBlocked).Sum(f => f.Count);
-                summary.TenantAuditedCount = tenantPerUser.Where(f => !f.IsBlocked).Sum(f => f.Count);
-
-                var tenantPolicies = InScope(await tenantMatches
-                    .Where(m => m.DlpPolicyId != null)
-                    .GroupBy(m => new { Id = m.Policy.PolicyId, m.Policy.Name, m.AuditEvent.UserId, m.IsBlocked })
-                    .Select(g => new ScopedFact
-                    {
-                        Id = g.Key.Id,
-                        Name = g.Key.Name,
-                        UserId = g.Key.UserId.Value,
-                        IsBlocked = g.Key.IsBlocked,
-                        Count = g.Count(),
-                    })
-                    .ToListAsync(), inScope);
-
-                summary.TenantTopPolicies = Rank(tenantPolicies, countUsers: false);
+                // statements, separate fields, never joined to the Copilot figures above.
+                var tenant = (await QueryAsync<ScopedTenantTotalsRow>(ScopedTenantTotalsSql)).Single();
+                summary.TenantBlockedCount = tenant.Blocked;
+                summary.TenantAuditedCount = tenant.Audited;
+                summary.TenantTopPolicies = Rank(await QueryAsync<RankProjection>(ScopedTenantPoliciesSql), countUsers: false);
 
                 return summary;
             }
         }
 
-        private static List<ScopedFact> InScope(List<ScopedFact> facts, Func<int, bool> inScope)
+        /// <summary>
+        /// The narrowed equivalent of a ranked query: every agent, policy or label's figures - grouped in SQL,
+        /// so one row each - ranked by blocked, then audited, then id, so equal rows always come in the same order.
+        /// </summary>
+        private static List<DlpImpactRow> Rank(List<RankProjection> rows, bool countUsers)
         {
-            return facts.Where(f => inScope(f.UserId)).ToList();
-        }
-
-        /// <summary>The narrowed equivalent of a ranked SQL query: the top values by blocked, then audited.</summary>
-        private static List<DlpImpactRow> Rank(List<ScopedFact> facts, bool countUsers)
-        {
-            return ToRows(facts
-                .GroupBy(f => new { f.Id, f.Name })
-                .Select(g => new RankProjection
-                {
-                    Id = g.Key.Id,
-                    Name = g.Key.Name,
-                    Blocked = g.Where(f => f.IsBlocked).Sum(f => f.Count),
-                    Audited = g.Where(f => !f.IsBlocked).Sum(f => f.Count),
-                    Users = g.Select(f => f.UserId).Distinct().Count(),
-                })
+            return ToRows(rows
                 .OrderByDescending(r => r.Blocked).ThenByDescending(r => r.Audited).ThenBy(r => r.Id, StringComparer.Ordinal)
                 .Take(TopN)
                 .ToList(), countUsers);
-        }
-
-        /// <summary>
-        /// <see cref="AttachAgentPolicyBreakdownAsync"/> for a narrowed summary: an agent's policies, counted
-        /// over the matches of people in scope only.
-        /// </summary>
-        private static async Task AttachScopedAgentPolicyBreakdownAsync(
-            IQueryable<Common.Entities.Entities.AuditLog.CopilotDlpEvent> events,
-            List<DlpImpactRow> agents,
-            Func<int, bool> inScope)
-        {
-            var agentIds = agents.Select(a => a.Id).Where(id => !string.IsNullOrEmpty(id)).ToList();
-            if (agentIds.Count == 0)
-            {
-                return;
-            }
-
-            var facts = InScope(await events
-                .Where(e => e.RelatedChat.AgentId != null
-                            && e.DlpPolicyId != null
-                            && agentIds.Contains(e.RelatedChat.Agent.AgentID))
-                .GroupBy(e => new
-                {
-                    AgentId = e.RelatedChat.Agent.AgentID,
-                    PolicyId = e.Policy.PolicyId,
-                    e.Policy.Name,
-                    e.RelatedChat.UserId,
-                    e.IsBlocked,
-                })
-                .Select(g => new ScopedFact
-                {
-                    Id = g.Key.AgentId,
-                    PolicyId = g.Key.PolicyId,
-                    PolicyName = g.Key.Name,
-                    UserId = g.Key.UserId.Value,
-                    IsBlocked = g.Key.IsBlocked,
-                    Count = g.Count(),
-                })
-                .ToListAsync(), inScope);
-
-            AttachPolicies(agents, facts
-                .GroupBy(f => new { f.Id, f.PolicyId, f.PolicyName })
-                .Select(g => new PolicyBreakdownRow
-                {
-                    Key = g.Key.Id,
-                    PolicyId = g.Key.PolicyId,
-                    Name = g.Key.PolicyName,
-                    Blocked = g.Where(f => f.IsBlocked).Sum(f => f.Count),
-                    Audited = g.Where(f => !f.IsBlocked).Sum(f => f.Count),
-                }));
         }
 
         /// <summary>One (subject, policy) pair with its counts, before it is attached to a ranked row.</summary>
