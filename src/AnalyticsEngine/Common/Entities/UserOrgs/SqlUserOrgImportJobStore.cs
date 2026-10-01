@@ -1279,9 +1279,19 @@ DELETE FROM dbo.user_org_import_changes WHERE job_id = @jobId;";
                 {
                     // The connection is going away regardless, and the lock with it.
                 }
-                finally
+
+                try
                 {
                     tx?.Dispose();
+                }
+                catch (Exception)
+                {
+                    // SqlTransaction.Dispose tries to roll back too. After a killed lease session that
+                    // can repeat the same closed-connection exception caught above; cleanup must not
+                    // turn the shipper's LeaseLost result into an unrelated failure.
+                }
+                finally
+                {
                     connection?.Dispose();
                 }
             }
