@@ -69,7 +69,7 @@ namespace Tests.UnitTests
             Assert.IsFalse(scope.IsInScope((string)null));
             Assert.IsFalse(scope.IsInScope(string.Empty));
             Assert.IsFalse(scope.IsInScope("   "));
-            Assert.IsFalse(scope.IsAnyInScope(null, "", "someone@else.com"));
+            Assert.IsFalse(scope.IsAnyInScope(null, "", "outsider@contoso.invalid"));
             Assert.IsTrue(scope.IsAnyInScope(null, "alice@contoso.com"));
         }
 
