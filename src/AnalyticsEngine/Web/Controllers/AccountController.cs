@@ -3,6 +3,7 @@ using Microsoft.Owin.Security.Cookies;
 using Microsoft.Owin.Security.OpenIdConnect;
 using System.Web;
 using System.Web.Mvc;
+using Web.AnalyticsWeb.Security;
 
 namespace Web.AnalyticsWeb.Controllers
 {
@@ -37,6 +38,7 @@ namespace Web.AnalyticsWeb.Controllers
         /// redirect.
         /// </remarks>
         [Authorize]
+        [RequirePortalMvcPermission(PortalPermission.Administration)]
         public void ConnectTeams()
         {
             HttpContext.GetOwinContext().Authentication.Challenge(

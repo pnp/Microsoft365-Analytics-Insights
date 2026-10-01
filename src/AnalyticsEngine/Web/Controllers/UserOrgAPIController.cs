@@ -13,6 +13,7 @@ using System.Web.Http;
 using Web.AnalyticsWeb.Models;
 using Web.AnalyticsWeb.Models.UserFilters;
 using Web.AnalyticsWeb.Models.UserOrgs;
+using Web.AnalyticsWeb.Security;
 
 namespace Web.AnalyticsWeb.Controllers
 {
@@ -39,6 +40,7 @@ namespace Web.AnalyticsWeb.Controllers
     /// </para>
     /// </remarks>
     [Authorize]
+    [RequirePortalPermission(PortalPermission.Administration)]
     [RoutePrefix("api/UserOrg")]
     public class UserOrgAPIController : ApiController
     {

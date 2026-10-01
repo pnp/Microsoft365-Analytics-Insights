@@ -24,7 +24,9 @@ using System.Security.Principal;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Web;
 using System.Web.Http;
+using System.Web.Routing;
 using System.Xml.Linq;
 using AdoptionCache = AnalyticsWeb::Web.AnalyticsWeb.Models.CopilotAdoption.ICopilotAdoptionAnalysisCache;
 using AdoptionCoordinator = AnalyticsWeb::Web.AnalyticsWeb.Models.CopilotAdoption.CopilotAdoptionAnalysisCoordinator;
@@ -140,6 +142,27 @@ namespace Tests.UnitTests
 
             ["UserDataLookupAPIController.Summary"] = AdminAndPii,
             ["UserDataLookupAPIController.Detail"] = AdminAndPii,
+
+            // Aggregate dimensions and value counts drive the report-wide filter for every insights reader.
+            ["UserFilterAPIController.Dimensions"] = Any,
+            ["UserFilterAPIController.Values"] = Any,
+
+            ["UserImportCheckpointAPIController.Get"] = Admin,
+            ["UserImportCheckpointAPIController.Clear"] = Admin,
+
+            ["UserOrgAPIController.GetTypes"] = Admin,
+            ["UserOrgAPIController.CreateType"] = Admin,
+            ["UserOrgAPIController.UpdateType"] = Admin,
+            ["UserOrgAPIController.DeleteType"] = Admin,
+            ["UserOrgAPIController.TestEntra"] = Admin,
+            ["UserOrgAPIController.GetAttributes"] = Admin,
+            ["UserOrgAPIController.PreviewCsv"] = Admin,
+            ["UserOrgAPIController.ImportCsv"] = Admin,
+            ["UserOrgAPIController.GetJob"] = Admin,
+            ["UserOrgAPIController.GetImports"] = Admin,
+            ["UserOrgAPIController.GetChanges"] = Admin,
+            ["UserOrgAPIController.GetValues"] = Admin,
+            ["UserOrgAPIController.GetMembers"] = Admin,
 
             ["WebActivityAPIController.Availability"] = Any,
             ["WebActivityAPIController.Overview"] = Any,
@@ -418,6 +441,63 @@ namespace Tests.UnitTests
             }
         }
 
+        [TestMethod]
+        public void ConnectTeams_MvcActionRequiresAdministration()
+        {
+            var action = typeof(AccountController).GetMethod(nameof(AccountController.ConnectTeams));
+            var filter = action.GetCustomAttributes(typeof(RequirePortalMvcPermissionAttribute), true)
+                .Cast<RequirePortalMvcPermissionAttribute>()
+                .Single();
+            Assert.AreEqual(PortalPermission.Administration, filter.Permission);
+
+            var denied = ConnectTeamsAuthorization(PortalTestHost.SignedIn(), PortalAccessPolicy.Enforcing);
+            filter.OnAuthorization(denied);
+            Assert.AreEqual((int)HttpStatusCode.Forbidden, denied.HttpContext.Response.StatusCode);
+            Assert.IsInstanceOfType(denied.Result, typeof(System.Web.Mvc.ContentResult));
+            StringAssert.Contains(((System.Web.Mvc.ContentResult)denied.Result).Content, PortalRoles.Administration);
+
+            var allowed = ConnectTeamsAuthorization(
+                PortalTestHost.SignedIn(PortalRoles.Administration),
+                PortalAccessPolicy.Enforcing);
+            filter.OnAuthorization(allowed);
+            Assert.IsNull(allowed.Result, "An administrator must reach the OIDC challenge.");
+
+            var compatibilityMode = ConnectTeamsAuthorization(
+                PortalTestHost.SignedIn(),
+                PortalAccessPolicy.NotEnforcing);
+            filter.OnAuthorization(compatibilityMode);
+            Assert.IsNull(compatibilityMode.Result, "EnforcePortalRoles=false must preserve the pre-role behaviour.");
+
+            var anonymous = ConnectTeamsAuthorization(PortalTestHost.Anonymous(), PortalAccessPolicy.Enforcing);
+            filter.OnAuthorization(anonymous);
+            Assert.IsInstanceOfType(anonymous.Result, typeof(System.Web.Mvc.HttpUnauthorizedResult));
+        }
+
+        private static System.Web.Mvc.AuthorizationContext ConnectTeamsAuthorization(
+            IPrincipal principal,
+            PortalAccessPolicy policy)
+        {
+            var raw = new HttpContext(
+                new HttpRequest("", "https://contoso.invalid/Account/ConnectTeams", ""),
+                new HttpResponse(new StringWriter()))
+            {
+                User = principal,
+            };
+            raw.Items[typeof(PortalAccessPolicy)] = policy;
+
+            var controller = new AccountController();
+            var controllerDescriptor = new System.Web.Mvc.ReflectedControllerDescriptor(typeof(AccountController));
+            var actionDescriptor = new System.Web.Mvc.ReflectedActionDescriptor(
+                typeof(AccountController).GetMethod(nameof(AccountController.ConnectTeams)),
+                nameof(AccountController.ConnectTeams),
+                controllerDescriptor);
+            var controllerContext = new System.Web.Mvc.ControllerContext(
+                new HttpContextWrapper(raw),
+                new RouteData(),
+                controller);
+            return new System.Web.Mvc.AuthorizationContext(controllerContext, actionDescriptor);
+        }
+
         private static PortalTestHost ProbeHost(IPrincipal principal, PortalAccessPolicy policy = null) =>
             new PortalTestHost(
                 new[] { typeof(ProbeController), typeof(AdminProbeController) },
@@ -478,6 +558,21 @@ namespace Tests.UnitTests
             (HttpMethod.Post, "api/SiteTokenAPI", "administration"),
             (HttpMethod.Post, "api/TeamsAuthAPI", "administration"),
             (HttpMethod.Put, "api/TeamsAuthAPI", "administration"),
+            (HttpMethod.Get, "api/UserImportCheckpoint", "administration"),
+            (HttpMethod.Post, "api/UserImportCheckpoint/clear", "administration"),
+            (HttpMethod.Get, "api/UserOrg/types", "administration"),
+            (HttpMethod.Post, "api/UserOrg/types", "administration"),
+            (HttpMethod.Put, "api/UserOrg/types/1", "administration"),
+            (HttpMethod.Delete, "api/UserOrg/types/1", "administration"),
+            (HttpMethod.Post, "api/UserOrg/test-entra", "administration"),
+            (HttpMethod.Get, "api/UserOrg/attributes", "administration"),
+            (HttpMethod.Post, "api/UserOrg/preview-csv?orgTypeId=1", "administration"),
+            (HttpMethod.Post, "api/UserOrg/import-csv?orgTypeId=1&mode=replace", "administration"),
+            (HttpMethod.Get, "api/UserOrg/jobs/1", "administration"),
+            (HttpMethod.Get, "api/UserOrg/types/1/imports", "administration"),
+            (HttpMethod.Get, "api/UserOrg/jobs/1/changes", "administration"),
+            (HttpMethod.Get, "api/UserOrg/types/1/values", "administration"),
+            (HttpMethod.Get, "api/UserOrg/types/1/values/1/members", "administration"),
 
             (HttpMethod.Get, "api/CopilotAdoption/licensed-users", "seePii"),
             (HttpMethod.Get, "api/CopilotAdoption/licensed-users/export", "seePii"),
