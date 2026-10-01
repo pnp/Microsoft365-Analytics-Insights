@@ -413,7 +413,7 @@ namespace Tests.UnitTests
         public async Task UserLicenseRefresh_LicenceTypeLeftBehindByARename_HasItsCapacityZeroed()
         {
             var tick = DateTime.Now.Ticks;
-            var upn = $"renamedsku{tick}@test.com";
+            var upn = $"renamedsku{tick}@contoso.com";
             var skuPartNumber = $"CONTOSO_RENAMED_{tick}";
             var unrelatedSkuPartNumber = $"CONTOSO_UNRELATED_{tick}";
             var newName = $"Contoso Renamed Suite {tick}";
