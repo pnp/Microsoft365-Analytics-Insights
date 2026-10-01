@@ -14,6 +14,13 @@ namespace Common.Entities.UserFilters
 
         public string Mail { get; set; }
 
+        /// <summary>
+        /// The person's Entra ID object id (<c>dbo.users.azure_ad_id</c>), or <c>null</c> when the user
+        /// import has not recorded one. Used to recognise the person signed in to the portal, whose token
+        /// carries the same id - more reliably than the sign-in name, which a guest's token does not carry.
+        /// </summary>
+        public string EntraObjectId { get; set; }
+
         public bool? AccountEnabled { get; set; }
 
         /// <summary>The manager's <c>dbo.users.id</c>, or <c>null</c> when the person has none.</summary>
@@ -146,10 +153,12 @@ namespace Common.Entities.UserFilters
     {
         private readonly int[] _userIdByRow;
         private readonly Dictionary<int, int> _rowByUserId;
+        private readonly Dictionary<Guid, int> _rowByObjectId;
         private readonly Dictionary<string, UserDirectoryColumn> _columns;
         private readonly int[] _managerRowByRow;
         private readonly int[] _managerRowByManagerValue;
         private readonly Lazy<ReportsIndex> _reports;
+        private readonly Lazy<int[]> _rowByUserNameValue;
 
         internal UserDirectorySnapshot(
             DateTime loadedUtc,
@@ -158,16 +167,19 @@ namespace Common.Entities.UserFilters
             Dictionary<string, UserDirectoryColumn> columns,
             int[] managerRowByRow,
             int[] managerRowByManagerValue,
-            List<UserDirectoryDimension> dimensions)
+            List<UserDirectoryDimension> dimensions,
+            Dictionary<Guid, int> rowByObjectId = null)
         {
             LoadedUtc = loadedUtc;
             _userIdByRow = userIdByRow;
             _rowByUserId = rowByUserId;
+            _rowByObjectId = rowByObjectId ?? new Dictionary<Guid, int>();
             _columns = columns;
             _managerRowByRow = managerRowByRow;
             _managerRowByManagerValue = managerRowByManagerValue;
             Dimensions = dimensions.AsReadOnly();
             _reports = new Lazy<ReportsIndex>(() => ReportsIndex.Build(_managerRowByRow), System.Threading.LazyThreadSafetyMode.ExecutionAndPublication);
+            _rowByUserNameValue = new Lazy<int[]>(BuildRowByUserNameValue, System.Threading.LazyThreadSafetyMode.ExecutionAndPublication);
         }
 
         public DateTime LoadedUtc { get; }
@@ -195,6 +207,71 @@ namespace Common.Entities.UserFilters
         public string DimensionName(string key)
         {
             return Dimensions.FirstOrDefault(d => string.Equals(d.Key, key, StringComparison.Ordinal))?.Name;
+        }
+
+        /// <summary>
+        /// Finds a person - in practice the one signed in to the portal - by their Entra object id, and
+        /// failing that by their sign-in name. False when the directory does not hold them.
+        /// </summary>
+        /// <remarks>
+        /// The object id comes first because it is the one identifier a token and the directory always
+        /// agree on: a guest's token carries their home address, never the <c>#EXT#</c> sign-in name the
+        /// directory stores, and a sign-in name can be changed. The name is the fallback for a person the
+        /// user import has not yet recorded an object id for.
+        /// </remarks>
+        public bool TryFindPerson(Guid? entraObjectId, string userPrincipalName, out int row)
+        {
+            if (entraObjectId.HasValue && entraObjectId.Value != Guid.Empty
+                && _rowByObjectId.TryGetValue(entraObjectId.Value, out row))
+            {
+                return true;
+            }
+
+            row = -1;
+            if (string.IsNullOrWhiteSpace(userPrincipalName)) return false;
+
+            var index = Column(UserFilterDimensions.UserName)?.IndexOf(userPrincipalName) ?? -1;
+            if (index < 0) return false;
+
+            row = _rowByUserNameValue.Value[index];
+            return row >= 0;
+        }
+
+        /// <summary>
+        /// One person's own value for a dimension - their department, their manager's sign-in name, the
+        /// cost centre an administrator assigned them - or <c>null</c> when they have none.
+        /// </summary>
+        /// <remarks>
+        /// Not defined for the management chain, which is a position in the hierarchy rather than a value
+        /// a person holds; the chain beneath someone is reached through their sign-in name instead.
+        /// </remarks>
+        public string ValueOf(string dimension, int row)
+        {
+            if (row < 0 || row >= PeopleCount) return null;
+
+            var column = Column(dimension);
+            if (column?.ValueByRow == null) return null;
+
+            var index = column.ValueByRow[row];
+            return index < 0 ? null : column.Values[index];
+        }
+
+        /// <summary>The first row holding each sign-in name, by index into that column's values.</summary>
+        private int[] BuildRowByUserNameValue()
+        {
+            var column = Column(UserFilterDimensions.UserName);
+            if (column == null) return new int[0];
+
+            var rows = new int[column.Values.Count];
+            for (var i = 0; i < rows.Length; i++) rows[i] = -1;
+
+            for (var row = 0; row < column.ValueByRow.Length; row++)
+            {
+                var index = column.ValueByRow[row];
+                if (index >= 0 && rows[index] < 0) rows[index] = row;
+            }
+
+            return rows;
         }
 
         /// <summary>
@@ -265,6 +342,49 @@ namespace Common.Entities.UserFilters
         /// <summary>Whether a row has a manager at all - the management chain's "not set".</summary>
         internal bool HasManager(int row) => _managerRowByRow[row] >= 0;
 
+        /// <summary>
+        /// For each value of the management chain - each manager - how many of the included rows report to
+        /// them at any level. The restricted counterpart of the chain's own organisation sizes, for a picker
+        /// that may only describe the people a reader can see.
+        /// </summary>
+        /// <remarks>
+        /// Walks up from each included row, so the cost is the included people times the depth of the
+        /// hierarchy. A per-walk stamp stops a cycle (A reports to B, B to A) from looping, and counts each
+        /// manager once per included person, exactly as <see cref="RowsReportingTo"/> would select them.
+        /// </remarks>
+        internal int[] ChainCountsFor(Func<int, bool> includedRow)
+        {
+            var valueByManagerRow = new int[PeopleCount];
+            for (var i = 0; i < valueByManagerRow.Length; i++) valueByManagerRow[i] = -1;
+            for (var value = 0; value < _managerRowByManagerValue.Length; value++)
+            {
+                var managerRow = _managerRowByManagerValue[value];
+                if (managerRow >= 0) valueByManagerRow[managerRow] = value;
+            }
+
+            var counts = new int[_managerRowByManagerValue.Length];
+            var stamp = new int[PeopleCount];
+            var walk = 0;
+
+            for (var row = 0; row < PeopleCount; row++)
+            {
+                if (!includedRow(row)) continue;
+
+                walk++;
+                stamp[row] = walk;
+                var current = _managerRowByRow[row];
+                while (current >= 0 && stamp[current] != walk)
+                {
+                    stamp[current] = walk;
+                    var value = valueByManagerRow[current];
+                    if (value >= 0) counts[value]++;
+                    current = _managerRowByRow[current];
+                }
+            }
+
+            return counts;
+        }
+
         /// <summary>The reverse of the manager column: each row's direct reports, in compressed rows.</summary>
         private sealed class ReportsIndex
         {
@@ -323,6 +443,7 @@ namespace Common.Entities.UserFilters
 
         private readonly List<int> _userIds = new List<int>();
         private readonly Dictionary<int, int> _rowByUserId = new Dictionary<int, int>();
+        private readonly Dictionary<Guid, int> _rowByObjectId = new Dictionary<Guid, int>();
         private readonly List<string> _upnByRow = new List<string>();
         private readonly List<int?> _managerIdByRow = new List<int?>();
         private readonly Dictionary<string, ColumnBuilder> _text = new Dictionary<string, ColumnBuilder>(StringComparer.Ordinal);
@@ -342,6 +463,15 @@ namespace Common.Entities.UserFilters
             if (_rowByUserId.ContainsKey(entry.UserId)) return;
 
             _rowByUserId.Add(entry.UserId, _userIds.Count);
+
+            // The first person recorded under an object id keeps it: the id is unique in Entra, so a
+            // second row carrying it is a stale duplicate, and one answer must win deterministically.
+            if (Guid.TryParse(entry.EntraObjectId?.Trim(), out var objectId) && objectId != Guid.Empty
+                && !_rowByObjectId.ContainsKey(objectId))
+            {
+                _rowByObjectId.Add(objectId, _userIds.Count);
+            }
+
             _userIds.Add(entry.UserId);
             _upnByRow.Add(entry.UserPrincipalName);
             _managerIdByRow.Add(entry.ManagerUserId);
@@ -486,7 +616,8 @@ namespace Common.Entities.UserFilters
                 columns,
                 managerRowByRow,
                 managerRowByValue,
-                dimensions);
+                dimensions,
+                new Dictionary<Guid, int>(_rowByObjectId));
         }
 
         /// <summary>

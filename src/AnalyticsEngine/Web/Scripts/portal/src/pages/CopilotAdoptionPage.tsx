@@ -90,6 +90,8 @@ import {
 } from '../components/copilotAdoption/timeSavedCohort';
 import UserFilterBar from '../components/userFilter/UserFilterBar';
 import UserFilterPrintSummary from '../components/userFilter/UserFilterPrintSummary';
+import GlobalFilterBar from '../components/globalFilter/GlobalFilterBar';
+import { describeGlobalFilter } from '../components/globalFilter/describeGlobalFilter';
 import {
   describeClause,
   describeUserFilter,
@@ -634,16 +636,28 @@ function CopilotAdoptionView({
               : t('copilotAdoption.page.print.lastDays', { v0: windowDays })}
             {summary && <> {t('copilotAdoption.page.print.dateRange', { v0: formatDate(summary.fromUtc), v1: formatDate(summary.toUtc) })}</>}
             {' \u00b7 '}
-            {isEmptyFilter(userFilter) ? t('copilotAdoption.page.print.everyone') : t('copilotAdoption.page.print.filtered')}
+            {isEmptyFilter(userFilter) && !summary?.globalFilter
+              ? t('copilotAdoption.page.print.everyone')
+              : t('copilotAdoption.page.print.filtered')}
             {summary && <> · {t('copilotAdoption.page.print.generatedDate', { v0: formatDate(summary.generatedUtc) })}</>}
           </Text>
         </div>
       )}
 
+      {/* The administrator's conditions sit directly above the reader's own, so the two read as one
+          filter in two parts: the locked half and the half the reader controls. Shown to every reader:
+          it narrows their figures whether or not they may add a filter of their own. */}
+      <GlobalFilterBar />
+
       {availability?.available && canSeePii && (
         <>
           <UserFilterBar filter={userFilter} onChange={setUserFilter} echoNames={summary?.userFilter?.dimensionNames} />
-          <UserFilterPrintSummary filter={userFilter} echo={summary?.userFilter} dimensions={filterDimensions?.dimensions} />
+          <UserFilterPrintSummary
+            filter={userFilter}
+            echo={summary?.userFilter}
+            dimensions={filterDimensions?.dimensions}
+            withinGlobalFilter={!!summary?.globalFilter}
+          />
         </>
       )}
 
@@ -841,7 +855,7 @@ function CopilotAdoptionView({
 
 /** Whether a summary describes fewer people than the whole tenant. */
 function isNarrowed(summary: CopilotAdoptionSummary): boolean {
-  return !!summary.scopedEmailDomain || !!summary.userFilter;
+  return !!summary.scopedEmailDomain || !!summary.userFilter || !!summary.globalFilter;
 }
 
 /**
@@ -864,8 +878,18 @@ function FilterBanner({
   const t = useT();
   const tNode = useTNode();
   const echo = summary.userFilter;
+  const global = summary.globalFilter;
 
   const parts: string[] = [];
+  // The administrator's conditions first, and said to be theirs: the reader cannot clear them, so the
+  // banner must not make them look like part of the filter its "Clear filter" link removes.
+  if (global && global.clauses.length > 0) {
+    parts.push(
+      t('globalFilter.banner.setByAdmin', {
+        description: describeGlobalFilter(t, global.clauses, 'reader', { dimensions, names: global.dimensionNames }),
+      }),
+    );
+  }
   if (summary.scopedEmailDomain) {
     parts.push(
       describeClause(
@@ -900,12 +924,19 @@ function FilterBanner({
                   v0: describeUnscopedSections(t, summary.unscopedSections ?? []),
                 })}`
               : '',
-          unknown: (echo?.unknownDimensions?.length ?? 0) > 0 ? ` ${t('userFilter.print.unknown')}` : '',
-          link: (
-            <Link onClick={onClear} data-print="hide">
-              {t('copilotAdoption.page.filterBanner.clear')}
-            </Link>
-          ),
+          unknown:
+            (echo?.unknownDimensions?.length ?? 0) > 0 || (global?.unknownDimensions?.length ?? 0) > 0
+              ? ` ${t('userFilter.print.unknown')}`
+              : '',
+          // Only the reader's own narrowing can be cleared; the administrator's stays whatever they click.
+          link:
+            echo || summary.scopedEmailDomain ? (
+              <Link onClick={onClear} data-print="hide">
+                {t('copilotAdoption.page.filterBanner.clear')}
+              </Link>
+            ) : (
+              ''
+            ),
         })}
       </MessageBarBody>
     </MessageBar>

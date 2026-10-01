@@ -361,6 +361,8 @@ namespace Common.Entities.LicenceActivity
                 throw new ArgumentException("The overview date range does not match this licence activity read model.", nameof(overview));
             if (overview.Query.DepartmentId != query.DepartmentId || overview.Query.CountryId != query.CountryId)
                 throw new ArgumentException("The user query must use the overview's exact demographic scope.", nameof(query));
+            if (!string.Equals(overview.Query.PeopleScopeKey, query.PeopleScopeKey, StringComparison.Ordinal))
+                throw new ArgumentException("The user query must use the overview's exact people scope.", nameof(query));
         }
 
         private List<DemographicAccumulator> BuildDemographics(
@@ -649,7 +651,8 @@ namespace Common.Entities.LicenceActivity
 
         private static bool InCohort(DirectoryEntry user, LicenceActivityQuery query) =>
             (!query.DepartmentId.HasValue || user.DepartmentId == query.DepartmentId.Value)
-            && (!query.CountryId.HasValue || user.CountryId == query.CountryId.Value);
+            && (!query.CountryId.HasValue || user.CountryId == query.CountryId.Value)
+            && (query.PeopleScope == null || query.PeopleScope(user.UserId));
 
         private static bool MatchesSearch(DirectoryEntry user, string search)
         {

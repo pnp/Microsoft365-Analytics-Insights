@@ -24,6 +24,7 @@ import Spinner from '../components/Spinner';
 import { formatNumber, useT, type TFunction, type TranslationKey } from '../i18n';
 import { usePortalAccess } from '../access';
 import PiiHiddenNote from '../components/shared/PiiHiddenNote';
+import GlobalFilterBar from '../components/globalFilter/GlobalFilterBar';
 
 const WINDOWS = [
   { days: 7, labelKey: 'dlp.period.last7Days' },
@@ -307,6 +308,8 @@ export default function DlpPage() {
       <Body1 block className={styles.intro}>
         {t('dlp.intro')}
       </Body1>
+
+      <GlobalFilterBar />
 
       {error && (
         <MessageBar intent="error" style={{ marginTop: '12px' }}>

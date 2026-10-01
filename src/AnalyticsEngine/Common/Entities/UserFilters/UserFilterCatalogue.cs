@@ -194,5 +194,152 @@ namespace Common.Entities.UserFilters
             var index = column.IndexOf(value);
             return index >= 0 ? column.PeoplePerValue[index] : 0;
         }
+
+        /// <summary>
+        /// <see cref="ListDimensions(UserDirectorySnapshot)"/> counted over only the people
+        /// <paramref name="restriction"/> matches - the administrator's global filter, for a reader it
+        /// applies to. <c>null</c> lists the whole directory.
+        /// </summary>
+        /// <remarks>
+        /// Evaluated against the directory the restriction was compiled with, never another read of it, so
+        /// the counts and the people they count always come from the same moment.
+        /// </remarks>
+        public static UserFilterDimensionList ListDimensions(UserDirectorySnapshot snapshot, CompiledUserFilter restriction)
+        {
+            if (restriction == null) return ListDimensions(snapshot);
+
+            var directory = restriction.Snapshot;
+            var list = new UserFilterDimensionList
+            {
+                People = restriction.MatchedPeople,
+                LoadedUtc = directory.LoadedUtc,
+            };
+
+            foreach (var d in directory.Dimensions)
+            {
+                var counts = RestrictedCounts(directory, d.Key, restriction, out var withValue, out _);
+                list.Dimensions.Add(new UserFilterDimensionModel
+                {
+                    Key = d.Key,
+                    Kind = d.Kind == UserFilterDimensionKind.Entra ? "entra" : "custom",
+                    Name = d.Name,
+                    OrgTypeId = d.OrgTypeId,
+                    DistinctValues = counts.Count(c => c > 0),
+                    PeopleWithValue = withValue,
+                    SupportsTextMatch = UserFilterDimensions.SupportsTextMatch(d.Key),
+                    FixedValues = UserFilterDimensions.HasFixedValues(d.Key),
+                });
+            }
+
+            return list;
+        }
+
+        /// <summary>
+        /// <see cref="ListValues(UserDirectorySnapshot, string, string, int)"/> listing only the values held
+        /// by people <paramref name="restriction"/> matches, each counted over those people. A value only
+        /// people outside the restriction hold is not offered at all: offering it would name a department -
+        /// or, for the user name, a person - the reader may not see, and choosing it would select nobody.
+        /// </summary>
+        public static UserFilterValuePage ListValues(
+            UserDirectorySnapshot snapshot, string dimension, string search, int take, CompiledUserFilter restriction)
+        {
+            if (restriction == null) return ListValues(snapshot, dimension, search, take);
+
+            var directory = restriction.Snapshot;
+            var column = directory.Column(dimension);
+            if (column == null) return null;
+
+            var term = (search ?? string.Empty).Trim();
+            if (term.Length > MaxSearchLength) term = term.Substring(0, MaxSearchLength);
+
+            var size = take <= 0 ? DefaultTake : Math.Min(take, MaxTake);
+            var counts = RestrictedCounts(directory, dimension, restriction, out _, out var withoutValue);
+            var fixedValues = UserFilterDimensions.FixedValues(dimension);
+
+            if (fixedValues != null)
+            {
+                // Product tokens keep their natural order and are always offered, as unrestricted.
+                var tokens = fixedValues
+                    .Where(t => term.Length == 0 || t.IndexOf(term, StringComparison.OrdinalIgnoreCase) >= 0)
+                    .Select(t =>
+                    {
+                        var index = column.IndexOf(t);
+                        return new UserFilterValueModel { Value = t, People = index >= 0 ? counts[index] : 0 };
+                    })
+                    .ToList();
+
+                return new UserFilterValuePage
+                {
+                    Dimension = dimension,
+                    Values = tokens.Take(size).ToList(),
+                    TotalMatching = tokens.Count,
+                    Truncated = tokens.Count > size,
+                    PeopleWithoutValue = withoutValue,
+                };
+            }
+
+            var matching = Enumerable.Range(0, column.Values.Count)
+                .Where(i => counts[i] > 0
+                            && (term.Length == 0 || column.Values[i].IndexOf(term, StringComparison.OrdinalIgnoreCase) >= 0))
+                .OrderByDescending(i => counts[i])
+                .ThenBy(i => column.Values[i], StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            return new UserFilterValuePage
+            {
+                Dimension = dimension,
+                Values = matching.Take(size).Select(i => new UserFilterValueModel { Value = column.Values[i], People = counts[i] }).ToList(),
+                TotalMatching = matching.Count,
+                Truncated = matching.Count > size,
+                PeopleWithoutValue = withoutValue,
+            };
+        }
+
+        /// <summary>
+        /// How many matched people hold each of a dimension's values, and how many matched people hold any
+        /// value or none. For the management chain a value is a manager, counted by the matched people who
+        /// report to them at any level.
+        /// </summary>
+        private static int[] RestrictedCounts(
+            UserDirectorySnapshot directory, string dimension, CompiledUserFilter restriction,
+            out int withValue, out int withoutValue)
+        {
+            withValue = 0;
+            withoutValue = 0;
+
+            var column = directory.Column(dimension);
+            if (column == null) return new int[0];
+
+            if (column.ValueByRow == null)
+            {
+                for (var row = 0; row < directory.PeopleCount; row++)
+                {
+                    if (!restriction.MatchesRow(row)) continue;
+                    if (directory.HasManager(row)) withValue++;
+                    else withoutValue++;
+                }
+
+                return directory.ChainCountsFor(restriction.MatchesRow);
+            }
+
+            var counts = new int[column.Values.Count];
+            for (var row = 0; row < directory.PeopleCount; row++)
+            {
+                if (!restriction.MatchesRow(row)) continue;
+
+                var index = column.ValueByRow[row];
+                if (index >= 0)
+                {
+                    counts[index]++;
+                    withValue++;
+                }
+                else
+                {
+                    withoutValue++;
+                }
+            }
+
+            return counts;
+        }
     }
 }

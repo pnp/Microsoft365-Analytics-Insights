@@ -64,6 +64,12 @@ namespace Common.Entities.UserFilters
             return _snapshot.TryGetRow(userId, out var row) && _matchedRows[row];
         }
 
+        /// <summary>The directory the filter was resolved against.</summary>
+        public UserDirectorySnapshot Snapshot => _snapshot;
+
+        /// <summary>Whether the person at a snapshot row matches - for work that walks the directory itself.</summary>
+        internal bool MatchesRow(int row) => _matchedRows[row];
+
         /// <summary>
         /// A person's email domain as the directory derived it - with the same
         /// <c>CopilotAdoptionEmailDomain.From</c> a report's rows use - or <c>null</c> when they have none or
@@ -101,11 +107,47 @@ namespace Common.Entities.UserFilters
         /// <summary>What the API echoes back, so the page can say which population it is showing.</summary>
         public UserFilterEcho ToEcho()
         {
+            return ToEcho(null);
+        }
+
+        /// <summary>
+        /// The echo, counted within an administrator's global filter: how many of the people the reader may
+        /// see match, out of those they may see. Without this the counts would be taken over the whole
+        /// directory, telling a reader limited to one department how many people match their filter in
+        /// every other department.
+        /// </summary>
+        /// <param name="within">The global filter's restriction, or <c>null</c> for none.</param>
+        public UserFilterEcho ToEcho(CompiledUserFilter within)
+        {
             var names = new Dictionary<string, string>(StringComparer.Ordinal);
             foreach (var key in Expression.Dimensions)
             {
                 var name = UserFilterDimensions.IsEntra(key) ? null : _snapshot.DimensionName(key);
                 if (name != null) names[key] = name;
+            }
+
+            var matched = MatchedPeople;
+            var directory = DirectoryPeople;
+            if (within != null)
+            {
+                directory = within.MatchedPeople;
+                matched = 0;
+                if (ReferenceEquals(within._snapshot, _snapshot))
+                {
+                    for (var row = 0; row < _matchedRows.Length; row++)
+                    {
+                        if (_matchedRows[row] && within._matchedRows[row]) matched++;
+                    }
+                }
+                else
+                {
+                    // Resolved against different reads of the directory - never the case for one request, but
+                    // rows are only comparable within one snapshot, so match by user id instead.
+                    for (var row = 0; row < _matchedRows.Length; row++)
+                    {
+                        if (_matchedRows[row] && within.Matches(_snapshot.UserIdAt(row))) matched++;
+                    }
+                }
             }
 
             return new UserFilterEcho
@@ -118,8 +160,8 @@ namespace Common.Entities.UserFilters
                     Values = c.Values.ToList(),
                     IncludeNotSet = c.IncludeNotSet,
                 }).ToList(),
-                MatchedPeople = MatchedPeople,
-                DirectoryPeople = DirectoryPeople,
+                MatchedPeople = matched,
+                DirectoryPeople = directory,
                 UnknownDimensions = UnknownDimensions.ToList(),
                 DimensionNames = names,
             };

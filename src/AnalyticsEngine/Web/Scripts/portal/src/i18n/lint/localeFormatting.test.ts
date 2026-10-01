@@ -140,7 +140,9 @@ export function findAmbientLocaleFormatting(sourceText: string, fileName: string
 }
 
 describe('Locale-aware formatting', () => {
-  it('formats every number and date through the portal language, not the browser locale', () => {
+  // Parses every source file with the TypeScript compiler, like the untranslated-text check, and has
+  // reached the default 5s timeout in a full parallel run of the suite.
+  it('formats every number and date through the portal language, not the browser locale', { timeout: 30000 }, () => {
     const offenders: string[] = [];
     for (const file of sourceFiles(SRC)) {
       const rel = relative(SRC, file).split(sep).join('/');

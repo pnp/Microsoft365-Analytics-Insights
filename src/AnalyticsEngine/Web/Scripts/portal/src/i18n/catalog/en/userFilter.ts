@@ -118,6 +118,7 @@ const userFilter = {
 
   'userFilter.print.heading': 'Who this report covers',
   'userFilter.print.everyone': 'Everyone. No filter is applied.',
+  'userFilter.print.everyoneWithinGlobal': 'Everyone the administrator’s filter above allows. No further filter is applied.',
   'userFilter.print.single': 'Only people where {condition}.',
   'userFilter.print.all': 'Only people who match all of these:',
   'userFilter.print.any': 'People who match any one of these groups:',

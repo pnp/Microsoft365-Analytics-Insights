@@ -109,6 +109,7 @@ const userFilter: Record<keyof typeof en, string> = {
 
   'userFilter.print.heading': 'A quién incluye este informe',
   'userFilter.print.everyone': 'A todos. No se aplica ningún filtro.',
+  'userFilter.print.everyoneWithinGlobal': 'A todos los que permite el filtro del administrador indicado arriba. No se aplica ningún otro filtro.',
   'userFilter.print.single': 'Solo las personas que cumplen: {condition}.',
   'userFilter.print.all': 'Solo las personas que cumplen todas estas condiciones:',
   'userFilter.print.any': 'Las personas que cumplen cualquiera de estos grupos:',

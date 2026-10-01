@@ -6,6 +6,7 @@
 
 import type { ReportCategory, ReportSeries } from './reports';
 import type { UserFilterEcho } from './userFilter';
+import type { GlobalFilterEcho } from './globalFilter';
 
 /** Which parts of the adoption tool this deployment can show. */
 export interface CopilotAdoptionAvailability {
@@ -501,6 +502,11 @@ export interface CopilotAdoptionSummary {
    * predates the filter still type-checks.
    */
   userFilter?: UserFilterEcho | null;
+  /**
+   * The administrator's global report filter as it applied to this reader - echoed apart from their own
+   * filter, so the page shows it locked. Null/absent when none applied.
+   */
+  globalFilter?: GlobalFilterEcho | null;
   /** The tenant-wide Copilot seat count, sent only when the summary is narrowed. */
   unscopedLicensedUsers?: number | null;
   accountabilityDimension: string | null;

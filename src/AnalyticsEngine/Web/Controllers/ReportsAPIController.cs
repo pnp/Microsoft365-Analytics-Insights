@@ -1,14 +1,17 @@
 using Common.Entities;
 using Common.Entities.Config;
+using Common.Entities.UserFilters;
 using System;
 using System.Collections.Generic;
 using System.Data.Entity;
 using Microsoft.Data.SqlClient;
 using System.Linq;
 using System.Runtime.Caching;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Web.Http;
 using Web.AnalyticsWeb.Models;
+using Web.AnalyticsWeb.Models.UserFilters;
 
 namespace Web.AnalyticsWeb.Controllers
 {
@@ -79,6 +82,51 @@ namespace Web.AnalyticsWeb.Controllers
         // real window drives the plan. Do not reintroduce a join hint without re-measuring.
         internal const string CopilotAuditNaturalJoin =
             "INNER JOIN dbo.audit_events AS au ON c.event_id = au.id";
+
+        // Scope markers: where each chart is narrowed to the people the administrator's global filter leaves
+        // the reader seeing. Comments, removed when no filter applies, so every query is then exactly what it
+        // was (see Common.Entities.UserFilters.ReportScopeSql). Activity belongs to the person who did it: the
+        // audit event's user, the mailbox owner, the call's organiser, the page view's visitor.
+        internal const string AuditUserScope = "/*scope: AND au.user_id IN {scopeUsers}*/";
+        internal const string InteractionUserScope = "/*scope: AND i.user_id IN {scopeUsers}*/";
+        private const string UsageActivityScope = "/*scope: AND activity.user_id IN {scopeUsers}*/";
+        private const string HitsTableScope =
+            "/*scope: AND EXISTS (SELECT 1 FROM dbo.sessions AS scope_s WHERE scope_s.id = hits.session_id AND scope_s.user_id IN {scopeUsers})*/";
+        private const string VisitorSessionScope = "/*scope: AND s.user_id IN {scopeUsers}*/";
+        private const string CallOrganiserScope = "/*scope: AND organizer_id IN {scopeUsers}*/";
+        private const string MailboxScope = "/*scope: AND user_id IN {scopeUsers}*/";
+
+        /// <summary>
+        /// The people this area's charts are narrowed to, for the request being answered. Set by
+        /// <see cref="AreaAsync"/> for its own asynchronous flow and read by every query runner, so a chart
+        /// definition cannot run a query that escapes it.
+        /// </summary>
+        private static readonly AsyncLocal<ReportUserScope> AreaScope = new AsyncLocal<ReportUserScope>();
+
+        private static ReportUserScope CurrentScope => AreaScope.Value ?? ReportUserScope.Everyone;
+
+        /// <summary>
+        /// A chart's query narrowed to <see cref="CurrentScope"/>. Throws
+        /// <see cref="ReportScopeNotAppliedException"/> for a query with no scope marker under a filter; every
+        /// runner calls this inside its own error handling, so that becomes the chart's error rather than
+        /// figures for people outside the scope.
+        /// </summary>
+        private static string Scoped(string body) => ReportScopeSql.Apply(body, CurrentScope);
+
+        /// <summary>A query's parameters, with the scope's added when a filter applies.</summary>
+        private static object[] ScopedParameters(params SqlParameter[] parameters) =>
+            ReportScopeSql.WithScope(parameters, CurrentScope);
+
+        private readonly ReportScopeResolver _scopes;
+
+        public ReportsAPIController() : this(ReportScopeResolver.Default)
+        {
+        }
+
+        internal ReportsAPIController(ReportScopeResolver scopes)
+        {
+            _scopes = scopes ?? throw new ArgumentNullException(nameof(scopes));
+        }
 
         // GET: api/Reports/areas
         // Which report areas are available, based on the enabled imports.
@@ -179,10 +227,19 @@ namespace Web.AnalyticsWeb.Controllers
                 cacheKey += $"::top={topAgents}::agent={normalizedAgentName ?? "(all)"}";
             }
 
+            // The administrator's global filter, resolved for this reader and enforced here whatever the page
+            // sends. Part of the cache key, so two readers it treats differently never share an area.
+            var scope = await _scopes.ResolveAsync(Request, User, null, CancellationToken.None);
+            var userScope = scope.IsRestricted ? scope.Sql : ReportUserScope.Everyone;
+            if (userScope.IsRestricted) cacheKey += "::scope=" + userScope.Key;
+
             if (MemoryCache.Default.Get(cacheKey) is ReportAreaData cached)
             {
                 return Ok(cached);
             }
+
+            // Every chart task below inherits this, and every query runner reads it.
+            AreaScope.Value = userScope;
 
             // Monday-aligned window: the first week is the Monday on/before "months ago", and every
             // SQL bucket is Monday-aligned too, so the spine and the data line up exactly.
@@ -254,7 +311,7 @@ namespace Web.AnalyticsWeb.Controllers
         {
             var join = "FROM dbo.copilot_chats AS c "
                 + SelectCopilotAuditJoin(from, hasAgentFilter: false)
-                + " WHERE au.time_stamp >= @from";
+                + " WHERE au.time_stamp >= @from" + AuditUserScope;
 
             var wb = WeekBucket("au.time_stamp");
 
@@ -390,7 +447,7 @@ namespace Web.AnalyticsWeb.Controllers
                 "FROM dbo.copilot_interaction_keywords AS ck\r\n" +
                 "INNER JOIN dbo.keywords AS k ON k.id = ck.keyword_id\r\n" +
                 "INNER JOIN dbo.copilot_interactions AS i ON i.id = ck.interaction_id\r\n" +
-                "WHERE i.created_utc >= @from\r\n" +
+                "WHERE i.created_utc >= @from" + InteractionUserScope + "\r\n" +
                 "GROUP BY k.[name] ORDER BY Value DESC\r\n" +
                 "OPTION (RECOMPILE);";
         }
@@ -407,7 +464,7 @@ namespace Web.AnalyticsWeb.Controllers
             return
                 $"SELECT {wb} AS WeekStart, AVG(i.sentiment_score) AS Value\r\n" +
                 "FROM dbo.copilot_interactions AS i\r\n" +
-                "WHERE i.created_utc >= @from AND i.sentiment_score IS NOT NULL\r\n" +
+                "WHERE i.created_utc >= @from AND i.sentiment_score IS NOT NULL" + InteractionUserScope + "\r\n" +
                 $"GROUP BY {wb} ORDER BY WeekStart\r\n" +
                 "OPTION (RECOMPILE);";
         }
@@ -419,7 +476,7 @@ namespace Web.AnalyticsWeb.Controllers
                 $"SELECT TOP {top} l.[name] AS Label, CAST(COUNT_BIG(*) AS float) AS Value\r\n" +
                 "FROM dbo.copilot_interactions AS i\r\n" +
                 "INNER JOIN dbo.languages AS l ON l.id = i.language_id\r\n" +
-                "WHERE i.created_utc >= @from AND i.language_id IS NOT NULL\r\n" +
+                "WHERE i.created_utc >= @from AND i.language_id IS NOT NULL" + InteractionUserScope + "\r\n" +
                 "GROUP BY l.[name] ORDER BY Value DESC\r\n" +
                 "OPTION (RECOMPILE);";
         }
@@ -431,7 +488,7 @@ namespace Web.AnalyticsWeb.Controllers
                 $"SELECT {wb} AS WeekStart, CAST(COUNT(DISTINCT au.user_id) AS float) AS Value\r\n" +
                 "FROM dbo.copilot_chats AS c "
                 + SelectCopilotAuditJoin(from, hasAgentFilter: false, today)
-                + " WHERE au.time_stamp >= @from\r\n" +
+                + " WHERE au.time_stamp >= @from" + AuditUserScope + "\r\n" +
                 $"GROUP BY {wb} ORDER BY WeekStart\r\n" +
                 "OPTION (RECOMPILE);";
         }
@@ -470,7 +527,7 @@ namespace Web.AnalyticsWeb.Controllers
                 "    FROM dbo.copilot_chats AS c\r\n" +
                 "    " + auditJoin + "\r\n" +
                 "    JOIN EligibleAgents AS eligible ON c.agent_id = eligible.id\r\n" +
-                "    WHERE au.time_stamp >= @from\r\n" +
+                "    WHERE au.time_stamp >= @from" + AuditUserScope + "\r\n" +
                 $"    GROUP BY c.agent_id, {wb}\r\n" +
                 "),\r\n" +
                 "AgentWeeksWithTotals AS (\r\n" +
@@ -560,7 +617,7 @@ namespace Web.AnalyticsWeb.Controllers
                     $"LEFT JOIN {w.Table} AS activity\r\n" +
                     "    ON activity.[date] = weeks.SnapshotDate\r\n" +
                     "   AND activity.last_activity_date >= weeks.WeekStart\r\n" +
-                    "   AND activity.last_activity_date < DATEADD(DAY, 7, weeks.WeekStart)\r\n" +
+                    "   AND activity.last_activity_date < DATEADD(DAY, 7, weeks.WeekStart)" + UsageActivityScope + "\r\n" +
                     "GROUP BY weeks.WeekStart\r\n" +
                     "ORDER BY weeks.WeekStart\r\n" +
                     // The recursion is bounded by the @through predicate above, so no arbitrary
@@ -580,7 +637,7 @@ namespace Web.AnalyticsWeb.Controllers
         // what makes an audit event a SharePoint one; audit_events also holds other workloads).
         private static List<Task<ReportChart>> SpoAuditCharts(DateTime from, List<DateTime> weekSpine)
         {
-            const string join = "FROM dbo.audit_events AS au JOIN dbo.event_meta_sharepoint AS sp ON au.id = sp.event_id WHERE au.time_stamp >= @from";
+            const string join = "FROM dbo.audit_events AS au JOIN dbo.event_meta_sharepoint AS sp ON au.id = sp.event_id WHERE au.time_stamp >= @from" + AuditUserScope;
 
             var wb = WeekBucket("au.time_stamp");
             var ops =
@@ -596,7 +653,7 @@ namespace Web.AnalyticsWeb.Controllers
                 "    SELECT TOP 10 au.operation_id, COUNT_BIG(*) AS Operations\r\n" +
                 "    FROM dbo.audit_events AS au\r\n" +
                 "    JOIN dbo.event_meta_sharepoint AS sp ON au.id = sp.event_id\r\n" +
-                "    WHERE au.time_stamp >= @from\r\n" +
+                "    WHERE au.time_stamp >= @from" + AuditUserScope + "\r\n" +
                 "    GROUP BY au.operation_id\r\n" +
                 "    ORDER BY Operations DESC\r\n" +
                 ")\r\n" +
@@ -621,13 +678,13 @@ namespace Web.AnalyticsWeb.Controllers
             var wbHits = WeekBucket("hit_timestamp");
             var views =
                 $"SELECT {wbHits} AS WeekStart, CAST(COUNT(*) AS float) AS Value\r\n" +
-                "FROM dbo.hits WHERE hit_timestamp >= @from\r\n" +
+                "FROM dbo.hits WHERE hit_timestamp >= @from" + HitsTableScope + "\r\n" +
                 $"GROUP BY {wbHits} ORDER BY WeekStart;";
 
             var wbH = WeekBucket("h.hit_timestamp");
             var visitors =
                 $"SELECT {wbH} AS WeekStart, CAST(COUNT(DISTINCT s.user_id) AS float) AS Value\r\n" +
-                "FROM dbo.hits AS h JOIN dbo.sessions AS s ON h.session_id = s.id WHERE h.hit_timestamp >= @from\r\n" +
+                "FROM dbo.hits AS h JOIN dbo.sessions AS s ON h.session_id = s.id WHERE h.hit_timestamp >= @from" + VisitorSessionScope + "\r\n" +
                 $"GROUP BY {wbH} ORDER BY WeekStart;";
 
             return new List<Task<ReportChart>>
@@ -644,12 +701,12 @@ namespace Web.AnalyticsWeb.Controllers
             var wb = WeekBucket("[start]");
             var calls =
                 $"SELECT {wb} AS WeekStart, CAST(COUNT(*) AS float) AS Value\r\n" +
-                "FROM dbo.call_records WHERE [start] >= @from\r\n" +
+                "FROM dbo.call_records WHERE [start] >= @from" + CallOrganiserScope + "\r\n" +
                 $"GROUP BY {wb} ORDER BY WeekStart;";
 
             var minutes =
                 $"SELECT {wb} AS WeekStart, CAST(SUM(CAST(DATEDIFF(SECOND, [start], [end]) AS bigint)) / 60.0 AS float) AS Value\r\n" +
-                "FROM dbo.call_records WHERE [start] >= @from\r\n" +
+                "FROM dbo.call_records WHERE [start] >= @from" + CallOrganiserScope + "\r\n" +
                 $"GROUP BY {wb} ORDER BY WeekStart;";
 
             return new List<Task<ReportChart>>
@@ -666,7 +723,7 @@ namespace Web.AnalyticsWeb.Controllers
             var wb = WeekBucket("sent_date");
             var emails =
                 $"SELECT {wb} AS WeekStart, CAST(COUNT(*) AS float) AS Value\r\n" +
-                "FROM dbo.sent_emails WHERE sent_date >= @from\r\n" +
+                "FROM dbo.sent_emails WHERE sent_date >= @from" + MailboxScope + "\r\n" +
                 $"GROUP BY {wb} ORDER BY WeekStart;";
 
             return new List<Task<ReportChart>>
@@ -986,12 +1043,13 @@ namespace Web.AnalyticsWeb.Controllers
                 db.Database.CommandTimeout = queryTimeoutSecs;
                 return await db.Database
                     .SqlQuery<NamedWeekValueRow>(
-                        body,
-                        new SqlParameter("@from", from),
-                        new SqlParameter("@agentName", System.Data.SqlDbType.NVarChar, 100)
-                        {
-                            Value = (object)agentName ?? DBNull.Value,
-                        })
+                        Scoped(body),
+                        ScopedParameters(
+                            new SqlParameter("@from", from),
+                            new SqlParameter("@agentName", System.Data.SqlDbType.NVarChar, 100)
+                            {
+                                Value = (object)agentName ?? DBNull.Value,
+                            }))
                     .ToListAsync();
             }
         }
@@ -1016,7 +1074,7 @@ namespace Web.AnalyticsWeb.Controllers
                 {
                     db.Database.CommandTimeout = QueryTimeoutSecs;
                     var rows = await db.Database
-                        .SqlQuery<CategoryRow>(body, new SqlParameter("@from", from))
+                        .SqlQuery<CategoryRow>(Scoped(body), ScopedParameters(new SqlParameter("@from", from)))
                         .ToListAsync();
                     chart.Categories = rows
                         .Select(r => new ReportCategory { Label = r.Label, Value = r.Value })
@@ -1043,7 +1101,7 @@ namespace Web.AnalyticsWeb.Controllers
             {
                 db.Database.CommandTimeout = QueryTimeoutSecs;
                 return await db.Database
-                    .SqlQuery<WeekValueRow>(body, new SqlParameter("@from", from))
+                    .SqlQuery<WeekValueRow>(Scoped(body), ScopedParameters(new SqlParameter("@from", from)))
                     .ToListAsync();
             }
         }
@@ -1060,10 +1118,11 @@ namespace Web.AnalyticsWeb.Controllers
                 db.Database.CommandTimeout = QueryTimeoutSecs;
                 return await db.Database
                     .SqlQuery<WeekValueRow>(
-                        body,
-                        DateParameter("@from", from),
-                        DateParameter("@through", through),
-                        DateParameter("@settled", settled))
+                        Scoped(body),
+                        ScopedParameters(
+                            DateParameter("@from", from),
+                            DateParameter("@through", through),
+                            DateParameter("@settled", settled)))
                     .ToListAsync();
             }
         }
@@ -1158,18 +1217,22 @@ namespace Web.AnalyticsWeb.Controllers
         /// Wraps the executed query body with a runnable <c>DECLARE @from</c> so the SQL shown in the
         /// popover can be pasted straight into SSMS. The executed query uses a SqlParameter, not this
         /// string, so there is no injection surface (the body is built from compile-time constants).
+        /// Under the administrator's global filter it shows the narrowed statement that actually ran.
         /// </summary>
         private static string DisplaySql(string body, DateTime from)
         {
-            return $"DECLARE @from datetime = '{from:yyyy-MM-dd}';\r\n" + body;
+            var scoped = DisplayBody(body);
+            return $"DECLARE @from datetime = '{from:yyyy-MM-dd}';\r\n" + ScopeDeclarations(scoped) + scoped;
         }
 
         private static string DisplaySql(string body, DateTime from, DateTime through, DateTime settled)
         {
+            var scoped = DisplayBody(body);
             return $"DECLARE @from date = '{from:yyyy-MM-dd}';\r\n" +
                    $"DECLARE @through date = '{through:yyyy-MM-dd}';\r\n" +
                    $"DECLARE @settled date = '{settled:yyyy-MM-dd}';\r\n" +
-                   body;
+                   ScopeDeclarations(scoped) +
+                   scoped;
         }
 
         private static string DisplaySql(string body, DateTime from, string agentName)
@@ -1177,9 +1240,34 @@ namespace Web.AnalyticsWeb.Controllers
             var agentNameSql = agentName == null
                 ? "NULL"
                 : $"N'{agentName.Replace("'", "''")}'";
+            var scoped = DisplayBody(body);
             return $"DECLARE @from datetime = '{from:yyyy-MM-dd}';\r\n" +
                    $"DECLARE @agentName nvarchar(100) = {agentNameSql};\r\n" +
-                   body;
+                   ScopeDeclarations(scoped) +
+                   scoped;
+        }
+
+        /// <summary>
+        /// The body as it runs under the current scope. Never throws: this is only the text shown beside a
+        /// chart, and a query that cannot be narrowed is refused - with its error - by the runner itself.
+        /// </summary>
+        private static string DisplayBody(string body)
+        {
+            try
+            {
+                return Scoped(body);
+            }
+            catch (ReportScopeNotAppliedException)
+            {
+                return body;
+            }
+        }
+
+        /// <summary>The scope's declarations, for a statement that uses it - none for a tenant-wide one.</summary>
+        private static string ScopeDeclarations(string scopedBody)
+        {
+            var lines = ReportScopeSql.DescribeScope(CurrentScope, scopedBody).ToList();
+            return lines.Count == 0 ? string.Empty : string.Join("\r\n", lines) + "\r\n";
         }
 
         /// <summary>EF wraps SQL errors; the innermost message (the SqlException) is the useful one.</summary>

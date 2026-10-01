@@ -3,6 +3,7 @@ using Common.Entities.Entities;
 using Common.Entities.Entities.Teams;
 using Common.Entities.Teams;
 using Common.Entities.TeamsExplorer;
+using Common.Entities.UserFilters;
 using Microsoft.Data.SqlClient;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System;
@@ -660,6 +661,59 @@ namespace Tests.UnitTests
             Assert.AreEqual(2, adoption.Lifecycle.NewUsers);
             Assert.AreEqual(0, adoption.Lifecycle.ReturningUsers);
             Assert.AreEqual(0, adoption.Lifecycle.LapsedUsers);
+        }
+
+        /// <summary>
+        /// Under a restricted scope - the administrator's global filter, or a reader's own - every section
+        /// must still execute, the figures about people must narrow, and the team-level figures, which are
+        /// tenant-wide by design, must not claim to be narrowed. The markers' SQL exists only under a scope,
+        /// so this is the one test that runs it.
+        /// </summary>
+        [TestMethod]
+        public async Task UnderARestrictedScope_EverySectionRunsAndNarrowsThePeopleFigures()
+        {
+            int ada;
+            using (var connection = new SqlConnection(_connectionString))
+            using (var command = connection.CreateCommand())
+            {
+                connection.Open();
+                command.CommandText = "SELECT id FROM dbo.users WHERE user_name = 'ada@contoso.com'";
+                ada = Convert.ToInt32(command.ExecuteScalar());
+            }
+
+            var store = NewStore();
+            var query = NewQuery().WithUserScope(ReportUserScope.ForUsers(new[] { ada }));
+
+            var overview = await store.GetOverviewAsync(query, new TeamsExplorerSources());
+            var meetings = await store.GetMeetingsAsync(query);
+            var collaboration = await store.GetCollaborationAsync(query);
+            var sections = new TeamsExplorerSection[]
+            {
+                overview,
+                await store.GetAdoptionAsync(query),
+                meetings,
+                collaboration,
+                await store.GetConversationsAsync(query, true),
+                await store.GetPeopleAsync(query),
+            };
+
+            var failed = sections.SelectMany(s => s.Queries).Where(q => q.Error != null).ToList();
+            Assert.AreEqual(0, failed.Count, string.Join(" | ", failed.Select(q => $"{q.Key}: {q.Error}")));
+
+            Assert.AreEqual(1, overview.Kpis.ActiveUsers);
+            Assert.AreEqual(1, overview.Kpis.KnownUsers, "Reach is measured against the people in scope.");
+
+            // Ada organised the group call. Grace's late-night one-to-one is outside the scope, and so is
+            // Grace as an attendee of Ada's call.
+            Assert.AreEqual(1, meetings.Kpis.Calls);
+            Assert.AreEqual(1, meetings.Kpis.GroupCalls);
+            Assert.AreEqual(0, meetings.Kpis.PeerToPeerCalls);
+            Assert.AreEqual(1, meetings.Kpis.Attendees);
+
+            Assert.IsTrue(overview.Queries.Any(q => q.Sql.Contains("DECLARE @scopeUsers")));
+            Assert.IsFalse(
+                collaboration.Queries.Any(q => q.Sql.Contains("DECLARE @scopeUsers")),
+                "Team-level figures are tenant-wide by design and must not claim to be narrowed.");
         }
 
         #endregion

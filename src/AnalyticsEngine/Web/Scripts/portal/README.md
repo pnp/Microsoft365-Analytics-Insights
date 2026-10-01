@@ -33,6 +33,7 @@ each other's tooling. The area switcher sits in the header; each area has its ow
 | `#/admin/teams-permissions` | **Teams permissions** | Authorise / de-authorise Teams for deep analytics (stores a delegated refresh token per Team in the `TeamsAuth` partition of the `AnalyticsState` Azure Table in the solution's storage account). Ported from the original app. |
 | `#/admin/user-lookup` | **User data lookup** | Enter a user's UPN to see all of their data held in SQL: profile, per-category record counts (broken down by workload, including Copilot and Power Platform; each row has a **SQL** button to view & copy the query behind its count), drill-down to recent rows, and which **import workloads** are enabled (so a legitimate 0 count is explained). |
 | `#/admin/user-import` | **User import** | Whether the Graph user import has a stored checkpoint (its `/users/delta` token, kept in the `UserImport` partition of the `AnalyticsState` Azure Table), where it is kept, when the import last completed and how often it runs - and a confirmed **Clear checkpoint** action so the next run reads every user again, optionally on the next import cycle. The in-product version of deleting the stored token by hand (issue #664). The token itself never reaches the browser. |
+| `#/admin/global-filter` | **Report filter** | The administrator's global report filter: conditions every Insights report applies for everyone, on top of their own filters, optionally compared with the viewer's own attributes. Previews the draft against the administrator's own account before saving. Needs See PII as well as Administration. See [The administrator's global filter](#the-administrators-global-filter). |
 | `#/admin/configuration` | **Service configuration** | What this deployment is pointed at: SQL, the storage account (which holds the runtime state table), Cognitive Services and Service Bus, plus the Teams calls import state and the Graph call webhook (with a live validation POST to test it). |
 
 Routing uses `HashRouter`, so the whole SPA is served by a single MVC action and no IIS /
@@ -154,7 +155,8 @@ auth cookie, so a token in the request body would be ignored.
 | `o365AnalyticsProfilingStatusAPI` | `api/ProfilingStatus` | Profiling data freshness + paged `profiling.TraceLogs` for the Profiling page. |
 | `o365AnalyticsReportsAPI` | `api/Reports` | Lite in-app reports: enabled areas (`/areas`) + weekly usage charts per area (`/copilot`, `/usage`, `/office-apps`, `/spo-audit`, `/web-traffic`, `/calls`, `/emails`). |
 | `o365AnalyticsCopilotAdoptionAPI` | `api/CopilotAdoption` | Copilot licence adoption: availability, executive summary, licensed-user and licence-opportunity lists, and their CSV exports. Every endpoint takes the page-wide `userFilter` - see [The user filter](#the-user-filter). |
-| _(none - origin-relative)_ | `api/UserFilter` | The user filter's picker: which attributes can be filtered on (`/dimensions`) and each one's values, largest first (`/values?dimension=&search=&take=`). |
+| _(none - origin-relative)_ | `api/UserFilter` | The user filter's picker: which attributes can be filtered on (`/dimensions`) and each one's values, largest first (`/values?dimension=&search=&take=`). For a reader the global filter applies to, both are counted within it. |
+| _(none - origin-relative)_ | `api/GlobalFilter` | The administrator's global filter: `GET /effective` (how it applies to the signed-in reader, for the bar on every Insights page); and, for administrators with See PII, `GET` the definition, `POST` a new one (`{ filter, revision }`) and `POST /preview` a draft. The two POSTs are state-changing calls, so they go through `apiFetch` (see below). |
 | _(none - origin-relative)_ | `api/TeamsExplorer` | Teams Explorer: source availability, and one endpoint per tab (`/overview`, `/adoption`, `/meetings`, `/collaboration`, `/conversations`, `/people`) plus `/export/{section}` CSVs. |
 | _(none - origin-relative)_ | `api/WebActivity` | SharePoint web activity: source availability, and one endpoint per tab (`/overview`, `/visits`, `/pages`, `/journeys`, `/geography`, `/search`, `/technology`) plus `/export/{section}` CSVs. |
 | _(none - origin-relative)_ | `api/UserImportCheckpoint` | User import checkpoint: `GET` its state; `POST /clear` (body `{ "runOnNextCycle": bool }`) deletes it. The only state-changing call the portal makes to its own API, so the server requires the `X-Requested-With` header `apiFetch` sends (see below). |
@@ -293,6 +295,61 @@ To adopt it in another report: render `UserFilterBar`, send `serializeUserFilter
 request and export, and on the server parse it with `UserFilterCodec.Parse`, compile it with
 `UserFilterCompiler.Compile(expression, await directory.GetAsync())`, and keep the rows whose user id
 `Matches`.
+
+## The administrator's global filter
+
+A portal administrator can set conditions that **every report in Insights** applies for everyone who
+opens it, on top of any filter the reader adds - on the **Report filter** page
+(`#/admin/global-filter`). Readers see the conditions as locked pills above their own filter, on every
+Insights page, and cannot change or remove them. Editing the filter needs **See PII** as well as
+Administration, as the reader's own filter does: its value picker lists people, and a filter that
+selects one person turns every report into that person's record (#680). It applies to every reader,
+with or without See PII.
+
+- **Same conditions as the user filter**, with one more kind of value: **the viewer's own**. A
+  condition can compare an attribute with the value the person viewing holds - "Department is the
+  viewer's own value" shows each manager their own department, with one filter for everyone. The
+  comparisons offered are deliberately few (`GlobalFilterViewerAttributes.AllowedFor`, mirrored by
+  `viewerAttributesFor`): most attributes compare with the viewer's value of the same attribute; the
+  user name with the viewer ("only my own figures"); the manager and management chain with the viewer
+  ("my team", "my organisation") or the viewer's manager ("my peers"). Text searches cannot use it.
+- **Enforced by the server, never by the page.** `ReportScopeResolver` resolves the filter for the
+  signed-in person (found by Entra object id, then sign-in name) on every report request, whatever the
+  page sends. In-memory reports (Copilot Adoption, Licence activity, the DLP and agent-cost people lists)
+  keep only rows whose user it `Includes`. SQL reports carry a comment marker on each statement -
+  `/*scope: AND x.user_id IN {scopeUsers}*/` - which `ReportScopeSql.Apply` removes when nothing is
+  filtered (the statement is byte for byte what it was) and uncomments when something is, against a
+  temporary table filled from one JSON parameter. A statement that is tenant-wide by design says so
+  with `/*scope:none*/`; a statement with no marker is **refused** under a filter rather than run
+  unfiltered.
+- **Fails closed.** A filter that cannot be read, cannot be parsed, or cannot be evaluated because the
+  directory is unavailable refuses the report with a `503` and a code (`globalFilterUnavailable`,
+  `globalFilterInvalid`, `filterDirectoryUnavailable`), which `apiFetch` turns into a translated
+  `ReportScopeError`. A condition needing a value the viewer does not have - or a viewer the directory
+  does not hold - matches **nobody**, whatever its operator, and the bar says why. Activity that cannot
+  be linked to a person in the directory is not counted while a filter applies.
+- **What stays tenant-wide**, and says so beside the figures: the Overview page's data counts, Teams
+  team-level figures (collaboration and conversations), agent and Azure cost figures, and the Copilot
+  Adoption sections already marked as tenant-wide.
+- **Administrators** see the filter applied too, so they see what everyone sees. They can switch it off
+  for their own view from the bar, which sets the session cookie `GlobalFilterBypass=1`; the server
+  honours it only for a caller holding the Administration permission, and exports follow it because it
+  is a cookie. `GlobalFilterProvider` remounts the Insights pages (`viewKey`) whenever the switch or the
+  filter changes, so no figures from before the change sit under a bar describing after it.
+- **Not a security boundary without roles.** With `EnforcePortalRoles=false` everyone who can sign in is
+  an administrator and can switch the filter off; the editor warns about this.
+- **Where it is kept:** one row in `dbo.portal_global_filters` (migration
+  `202610011330001_PortalGlobalFilter`, with its manual upgrade script). Each web process caches it for
+  a minute, and a save is refused (`409`) if someone else saved since the editor opened it. Every save
+  is recorded in Application Insights as a `GlobalFilterChanged` event with who made it.
+- **Where it lives:** `src/components/globalFilter` - `GlobalFilterBar` (the locked pills),
+  `GlobalFilterEditor` (the editor, reusing `UserFilterClauseEditor` with its `viewer` options),
+  `GlobalFilterProvider` (the reader's view of it), `describeGlobalFilter` and `globalFilterModel` (the
+  `vu` wire format of `GlobalFilterCodec`); `src/pages/GlobalFilterPage.tsx`.
+
+A new Insights page must render `<GlobalFilterBar />` - `insightsCoverage.test.ts` fails otherwise - and
+its endpoints must resolve the scope with `ReportScopeResolver.ResolveAsync` and narrow every statement:
+a marker on each SQL statement, or `scope.Includes(userId)` on rows held in memory.
 
 ## Languages
 

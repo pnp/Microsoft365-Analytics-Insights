@@ -134,9 +134,12 @@ function orList(values: string[]): string {
  * Worded so it never reads as a double negative: "is not" combined with "not set" becomes "is set and
  * is not". The server's English description (`UserFilterDescriber`) follows the same rules, so the
  * Excel workbook and the page say the same thing.
+ *
+ * `extraPhrases` are values already worded by the caller - the administrator's global filter adds "the
+ * viewer's own value" this way - and are listed after the condition's own values.
  */
-export function describeClause(t: TFunction, clause: UserFilterClause, label: string): string {
-  const values = valuePhrases(t, clause);
+export function describeClause(t: TFunction, clause: UserFilterClause, label: string, extraPhrases: readonly string[] = []): string {
+  const values = [...valuePhrases(t, clause), ...extraPhrases];
 
   if (clause.dimension === MANAGEMENT_CHAIN_DIMENSION) {
     const list = orList(values.length > 0 ? values : [t('userFilter.describe.notSet')]);

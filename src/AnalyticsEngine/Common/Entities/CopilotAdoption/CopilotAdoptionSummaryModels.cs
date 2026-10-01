@@ -928,6 +928,18 @@ namespace Common.Entities.CopilotAdoption
         public string UserFilterDescription { get; set; }
 
         /// <summary>
+        /// The administrator's global filter this whole summary was ALSO narrowed by, resolved for the
+        /// reader, or <c>null</c> when none applied. Echoed apart from <see cref="UserFilter"/> because the
+        /// page shows it apart - locked, where the reader's own conditions can be edited.
+        /// </summary>
+        [JsonProperty("globalFilter")]
+        public GlobalFilterEcho GlobalFilter { get; set; }
+
+        /// <summary>The applied global filter in plain English, for the Excel workbook's cover sheet. Not sent to the browser.</summary>
+        [JsonIgnore]
+        public string GlobalFilterDescription { get; set; }
+
+        /// <summary>
         /// The tenant-wide Copilot seat count, set only when this summary is narrowed, so a page can say
         /// how much of the tenant the narrowed figures cover.
         /// </summary>
