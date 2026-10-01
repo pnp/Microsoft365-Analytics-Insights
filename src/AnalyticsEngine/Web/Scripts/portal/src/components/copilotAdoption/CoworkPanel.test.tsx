@@ -969,6 +969,32 @@ describe('CoworkPanel headline actions', () => {
   });
 });
 
+describe('CoworkPanel without See PII', () => {
+  beforeEach(() => {
+    fetchCowork.mockReset();
+    fetchCowork.mockResolvedValue(page([row({})]));
+    resetTimeSavedStore();
+  });
+
+  it('keeps the estimate, readiness and rollout, but never asks for or shows the people', async () => {
+    const user = userEvent.setup();
+    const s = withEstimates();
+    renderWithProvider(<CoworkPanel windowDays={28} summary={s} filterOptions={null} options={s.options} canSeePii={false} />);
+
+    // The headline still leads - it is modelled from totals - but offers no list to open.
+    expect(screen.getByRole('tab', { name: /Time saved/, selected: true })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'See the 40 people to enable' })).toBeNull();
+
+    const readiness = await openSection(user, /Readiness/);
+    expect(within(readiness).getByText('Established')).toBeTruthy();
+
+    const people = await openSection(user, /People to enable/);
+    expect(within(people).getByText('Individual details are hidden')).toBeTruthy();
+    expect(within(people).queryByText('aisha.rahman@contoso.com')).toBeNull();
+    expect(fetchCowork).not.toHaveBeenCalled();
+  });
+});
+
 describe('CoworkPanel page-wide scope', () => {
   // The page-wide user filter - here an email domain, the condition the old domain drop-down used
   // to set - in the wire form the page hands every panel.

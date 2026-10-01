@@ -29,6 +29,9 @@ namespace Tests.UnitTests.FakeLoaderClasses
         /// </summary>
         public HashSet<DateTime> DaysThatFailToDownload { get; } = new HashSet<DateTime>();
 
+        /// <summary>Who viewed the page, by (day, row index). Null leaves page views anonymous.</summary>
+        public Func<DateTime, int, string> PageViewUsername { get; set; }
+
         public Task<PageViewCollection> GetPageViewsAsync(DateTime forDateUtc, bool saveRestResponses)
         {
             PageViewDaysRequested.Add(forDateUtc);
@@ -45,7 +48,7 @@ namespace Tests.UnitTests.FakeLoaderClasses
             var count = PageViewCountByDay.TryGetValue(forDateUtc, out var c) ? c : 0;
             for (var i = 0; i < count; i++)
             {
-                result.Rows.Add(new PageViewAppInsightsQueryResult { AppInsightsTimestamp = forDateUtc.AddMinutes(i) });
+                result.Rows.Add(new PageViewAppInsightsQueryResult { AppInsightsTimestamp = forDateUtc.AddMinutes(i), Username = PageViewUsername?.Invoke(forDateUtc, i) });
             }
             return Task.FromResult(result);
         }

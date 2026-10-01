@@ -289,5 +289,77 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             _lastKnownCommittedDeltaToken = null;
         }
     }
-}
 
+    /// <summary>
+    /// Remembers which <c>UserGroupsFilter</c> each stored <c>/users/delta</c> checkpoint was taken under, so the user
+    /// import can tell that the filter has changed since - even after a restart, which changing it causes. See
+    /// <see cref="UserImportCheckpointKeys.DeltaTokenUserScope"/>.
+    /// </summary>
+    public interface IUserImportScopeMarkerStore
+    {
+        /// <param name="orgAttributeQualifier">The token's <see cref="GraphUserOrgSelection.DeltaKeyQualifier"/>.</param>
+        /// <returns>The stored <see cref="UserGroupsFilterModel.Fingerprint"/>, or null when there is none.</returns>
+        Task<string> GetFingerprintAsync(string orgAttributeQualifier);
+
+        /// <summary>Records <paramref name="fingerprint"/>; an empty one (no filter) removes the record.</summary>
+        Task SetFingerprintAsync(string orgAttributeQualifier, string fingerprint);
+
+        /// <returns>
+        /// The enabled-member fingerprint recorded after the token's last successful full read, or null when none
+        /// has been recorded.
+        /// </returns>
+        Task<string> GetMembershipFingerprintAsync(string orgAttributeQualifier);
+
+        /// <summary>Records the enabled-member fingerprint; null or empty removes the record.</summary>
+        Task SetMembershipFingerprintAsync(string orgAttributeQualifier, string fingerprint);
+    }
+
+    /// <summary>
+    /// The record, kept in the runtime state store beside the delta token it describes (the
+    /// <see cref="StatePartitions.UserImport"/> partition). Only needed where the token itself is persisted: an in-process
+    /// token does not outlive the import that read it, so it can never be stale.
+    /// </summary>
+    public sealed class PersistedUserImportScopeMarkerStore : IUserImportScopeMarkerStore
+    {
+        private readonly IKeyValueStore _store;
+        private readonly Guid _tenantId;
+
+        public PersistedUserImportScopeMarkerStore(IKeyValueStore store, Guid tenantId)
+        {
+            _store = store ?? throw new ArgumentNullException(nameof(store));
+            _tenantId = tenantId;
+        }
+
+        public Task<string> GetFingerprintAsync(string orgAttributeQualifier)
+            => _store.GetStringAsync(UserImportCheckpointKeys.DeltaTokenUserScope(_tenantId, orgAttributeQualifier));
+
+        public async Task SetFingerprintAsync(string orgAttributeQualifier, string fingerprint)
+        {
+            var key = UserImportCheckpointKeys.DeltaTokenUserScope(_tenantId, orgAttributeQualifier);
+            if (string.IsNullOrEmpty(fingerprint))
+            {
+                await _store.DeleteAsync(key).ConfigureAwait(false);
+            }
+            else
+            {
+                await _store.SetStringAsync(key, fingerprint).ConfigureAwait(false);
+            }
+        }
+
+        public Task<string> GetMembershipFingerprintAsync(string orgAttributeQualifier)
+            => _store.GetStringAsync(UserImportCheckpointKeys.DeltaTokenUserScopeMembers(_tenantId, orgAttributeQualifier));
+
+        public async Task SetMembershipFingerprintAsync(string orgAttributeQualifier, string fingerprint)
+        {
+            var key = UserImportCheckpointKeys.DeltaTokenUserScopeMembers(_tenantId, orgAttributeQualifier);
+            if (string.IsNullOrEmpty(fingerprint))
+            {
+                await _store.DeleteAsync(key).ConfigureAwait(false);
+            }
+            else
+            {
+                await _store.SetStringAsync(key, fingerprint).ConfigureAwait(false);
+            }
+        }
+    }
+}

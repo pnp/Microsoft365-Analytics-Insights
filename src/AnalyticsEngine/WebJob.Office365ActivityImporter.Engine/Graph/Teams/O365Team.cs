@@ -187,9 +187,14 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
                 rc.QueryParameters.Expand = new[] { "Owners" };
             });
 
-            // Add owners
+            // Add owners. Owners outside UserGroupsFilter are skipped before their Graph lookup, so they are never stored.
             foreach (var groupOwner in parentGroupFull.Owners)
             {
+                if (!context.UserScope.IsInScope(groupOwner.Id))
+                {
+                    continue;
+                }
+
                 var graphUser = await context.UserCache.GetResource(groupOwner.Id);
                 if (graphUser != null)
                 {
@@ -208,6 +213,12 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
 
             foreach (var member in members)
             {
+                // Membership of people outside UserGroupsFilter is not recorded.
+                if (!context.UserScope.IsInScope(member.Id))
+                {
+                    continue;
+                }
+
                 // Multiple accounts can appear in users table if they have several logins on several domains. Pick 1st one
                 var dbUser = await db.users.Where(u => u.AzureAdId == member.Id).FirstOrDefaultAsync();
                 if (dbUser == null)
@@ -277,6 +288,22 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
 
                 fullTeam.HasRefreshToken = true;
                 fullTeam.LastRefreshed = DateTime.Now;
+            }
+
+            // UserGroupsFilter: drop messages and reactions by people outside the scope before anything reads them,
+            // so their text never reaches the channel statistics (or Cognitive Services) and their reactions are
+            // never resolved or stored. The delta tokens are unaffected - those messages were still read.
+            if (context.UserScope.IsFiltered)
+            {
+                var removed = 0;
+                foreach (var channel in fullTeam.Channels)
+                {
+                    removed += ChannelMessageScopeRules.RestrictToUserScope(channel, context.UserScope);
+                }
+                if (removed > 0)
+                {
+                    logger.LogInformation($"Team '{fullTeam.DisplayName}': left out {removed:N0} channel message(s) and reaction(s) by people outside UserGroupsFilter.");
+                }
             }
 
             // Load reactions + users from messages found

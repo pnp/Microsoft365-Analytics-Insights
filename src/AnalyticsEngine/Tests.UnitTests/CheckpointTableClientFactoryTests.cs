@@ -195,14 +195,19 @@ namespace Tests.UnitTests
             config.DaysBeforeNowToDownload = 7;
             config.ConnectionStrings = (AppConnectionStrings)System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(typeof(AppConnectionStrings));
             config.ConnectionStrings.StorageConnectionString = SharedKeyConnStr;
+            AppConfig passedConfig = null;
 
             var store = ProcessedBlobStoreFactory.Create(
                 config,
                 logger,
-                (conn, retention, log, tenantId, clientId, clientSecret) =>
-                    throw new RequestFailedException(403, "This request is not authorized to perform this operation.", "AuthorizationFailure", null));
+                (conn, retention, log, runtimeConfig) =>
+                {
+                    passedConfig = runtimeConfig;
+                    throw new RequestFailedException(403, "This request is not authorized to perform this operation.", "AuthorizationFailure", null);
+                });
 
             Assert.IsInstanceOfType(store, typeof(InMemoryProcessedBlobStore));
+            Assert.AreSame(config, passedConfig, "The checkpoint path needs the complete runtime config so certificate mode is not reduced to an empty client secret.");
             var error = logger.Entries.Single(e => e.Level == Microsoft.Extensions.Logging.LogLevel.Error);
             StringAssert.Contains(error.Message, "Storage firewall/network rules");
             StringAssert.Contains(error.Message, "HTTP 403 AuthorizationFailure");

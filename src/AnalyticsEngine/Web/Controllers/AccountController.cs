@@ -1,8 +1,9 @@
 ﻿using Microsoft.AspNetCore.Authentication;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Authentication.OpenIdConnect;
 using Microsoft.AspNetCore.Mvc;
-using System.Threading.Tasks;
+using Web.AnalyticsWeb.Security;
 
 namespace Web.AnalyticsWeb.Controllers
 {
@@ -26,6 +27,22 @@ namespace Web.AnalyticsWeb.Controllers
 
             return Challenge(
                 new AuthenticationProperties { RedirectUri = "/" },
+                OpenIdConnectDefaults.AuthenticationScheme);
+        }
+
+        /// <summary>
+        /// Asks Entra ID for the delegated Teams permissions that Teams deep analytics needs (issue #670).
+        /// </summary>
+        /// <remarks>
+        /// Ordinary sign-in no longer requests these scopes. This marked challenge returns only to the
+        /// Teams permissions page, so it cannot be used as an open redirect.
+        /// </remarks>
+        [Authorize]
+        [RequirePortalPermission(PortalPermission.Administration)]
+        public IActionResult ConnectTeams()
+        {
+            return Challenge(
+                DelegatedGraphConsent.CreateTeamsConnectProperties(),
                 OpenIdConnectDefaults.AuthenticationScheme);
         }
 

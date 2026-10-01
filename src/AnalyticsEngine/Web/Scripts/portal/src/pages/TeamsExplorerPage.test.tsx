@@ -7,6 +7,7 @@ import type {
   TeamsCollaboration,
   TeamsMeetings,
   TeamsOverview,
+  TeamsPeople,
   TeamsWindow,
 } from '../types/teamsExplorer';
 
@@ -146,6 +147,40 @@ const collaboration = (over: Partial<TeamsCollaboration> = {}): TeamsCollaborati
   ...over,
 });
 
+const people = (over: Partial<TeamsPeople> = {}): TeamsPeople => ({
+  window: window28,
+  queries: [],
+  namesObfuscated: false,
+  champions: [{
+    userPrincipalName: 'champion@contoso.com',
+    department: 'Πωλήσεις',
+    activeDays: 18,
+    channelMessages: 40,
+    privateMessages: 90,
+    meetingsOrganised: 6,
+    meetingsAttended: 20,
+    callsHosted: 3,
+    callsAttended: 8,
+    segment: 'Power',
+    lastActivity: '2026-03-19T00:00:00Z',
+  }],
+  dormant: [{
+    userPrincipalName: 'dormant@contoso.com',
+    department: 'Πωλήσεις',
+    activeDays: 0,
+    channelMessages: 0,
+    privateMessages: 0,
+    meetingsOrganised: 0,
+    meetingsAttended: 0,
+    callsHosted: 0,
+    callsAttended: 0,
+    segment: 'Dormant',
+    lastActivity: null,
+  }],
+  championsByDepartment: [{ name: 'Πωλήσεις', count: 9, sharePct: null }],
+  ...over,
+});
+
 beforeEach(() => {
   vi.clearAllMocks();
   mockAvailability.mockResolvedValue(availability());
@@ -279,5 +314,59 @@ describe('TeamsExplorerPage', () => {
     expect(
       await screen.findByText(/None of the Teams imports are switched on/),
     ).toBeInTheDocument();
+  });
+
+  it('shows a reader without See PII the power users per department but nobody by name', async () => {
+    mockMeetings.mockResolvedValue(meetings({
+      topOrganisers: [{ name: 'organiser@contoso.com', count: 4, sharePct: null }],
+      topAttendees: [{ name: 'attendee@contoso.com', count: 9, sharePct: null }],
+    }));
+    mockPeople.mockResolvedValue(people());
+
+    renderWithProvider(<TeamsExplorerPage />, { access: { administration: true, seePii: false } });
+    await screen.findByText('Teams reach');
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Meetings & calls' }));
+    expect(await screen.findByText('Attendee hours')).toBeInTheDocument();
+    expect(screen.getByText('Individual details are hidden')).toBeInTheDocument();
+    expect(screen.queryByText('Top organisers')).not.toBeInTheDocument();
+    expect(screen.queryByText('Top attendees')).not.toBeInTheDocument();
+
+    // Power users per department is a count, so it stays; the lists that name people give way to the note.
+    fireEvent.click(screen.getByRole('tab', { name: 'People' }));
+    expect(await screen.findByText('Where the champions are')).toBeInTheDocument();
+    expect(screen.getByText('Πωλήσεις')).toBeInTheDocument();
+    expect(screen.getByText('Individual details are hidden')).toBeInTheDocument();
+    expect(screen.queryByText('Teams champions')).not.toBeInTheDocument();
+    expect(screen.queryByText('Dormant users')).not.toBeInTheDocument();
+    expect(screen.queryByText('champion@contoso.com')).not.toBeInTheDocument();
+    expect(screen.queryByText('dormant@contoso.com')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Export CSV' })).not.toBeInTheDocument();
+  });
+
+  it('still shows the named people and the leaderboards to a reader with See PII', async () => {
+    mockPeople.mockResolvedValue(people());
+    renderWithProvider(<TeamsExplorerPage />, { access: { administration: false, seePii: true } });
+    await screen.findByText('Teams reach');
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Meetings & calls' }));
+    expect(await screen.findByText('Top organisers')).toBeInTheDocument();
+    expect(screen.queryByText('Individual details are hidden')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('tab', { name: 'People' }));
+    expect(await screen.findByText('champion@contoso.com')).toBeInTheDocument();
+    expect(screen.getByText('Teams champions')).toBeInTheDocument();
+    expect(screen.getAllByRole('button', { name: 'Export CSV' })).toHaveLength(2);
+    expect(screen.queryByText('Individual details are hidden')).not.toBeInTheDocument();
+  });
+
+  it('never tells a reader with See PII the names are hidden while the People tab loads', async () => {
+    mockPeople.mockReturnValue(new Promise(() => {}));
+    renderWithProvider(<TeamsExplorerPage />, { access: { administration: false, seePii: true } });
+    await screen.findByText('Teams reach');
+
+    fireEvent.click(screen.getByRole('tab', { name: 'People' }));
+    await waitFor(() => expect(mockPeople).toHaveBeenCalled());
+    expect(screen.queryByText('Individual details are hidden')).not.toBeInTheDocument();
   });
 });

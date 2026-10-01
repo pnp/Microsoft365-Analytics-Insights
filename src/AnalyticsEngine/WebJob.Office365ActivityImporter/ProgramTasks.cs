@@ -1,5 +1,6 @@
 using Common.Entities;
 using Common.Entities.Config;
+using Common.Entities.UserScope;
 using DataUtils;
 using DataUtils.Http;
 using Microsoft.Extensions.Logging;
@@ -15,7 +16,6 @@ using WebJob.Office365ActivityImporter.Engine.AgentCosts;
 using WebJob.Office365ActivityImporter.Engine.Graph;
 using WebJob.Office365ActivityImporter.Engine.Graph.Calls;
 using WebJob.Office365ActivityImporter.Engine.Graph.Email;
-using WebJob.Office365ActivityImporter.Engine.Graph.User;
 
 namespace WebJob.Office365ActivityImporter
 {
@@ -30,7 +30,7 @@ namespace WebJob.Office365ActivityImporter
         private readonly AnalyticsLogger _logger;
         private readonly AppConfig _settings;
         private ManualGraphCallClient _manualGraphCallClient = null;
-        private GraphUserGroupsCache _graphUserGroupsCache = null;
+        private readonly IUserImportScopeProvider _userScopeProvider;
         private readonly ISingleDateStore _activityReportsLastImportedStore;
         // Per-report completion stamps. Like the store above this MUST be process-lifetime: a fresh instance
         // per cycle would always look "never completed" and empty the finalized-date skip list every run.
@@ -43,7 +43,13 @@ namespace WebJob.Office365ActivityImporter
         {
         }
 
-        public ProgramTasks(AnalyticsLogger logger, AppConfig settings, ISingleDateStore activityReportsLastImportedStore, IImportLastRunStore graphLastRunStore, ISentEmailMailboxSkipList sentEmailMailboxSkipList, IReportCompletionStore reportCompletionStore)
+        /// <param name="userScopeProvider">
+        /// The process-lifetime <c>UserGroupsFilter</c> scope. It must outlive the cycle, like the stores: a provider
+        /// created per cycle would re-read the groups every cycle and could never fall back to the last good scope.
+        /// When null, one is built for this instance.
+        /// </param>
+        public ProgramTasks(AnalyticsLogger logger, AppConfig settings, ISingleDateStore activityReportsLastImportedStore, IImportLastRunStore graphLastRunStore, ISentEmailMailboxSkipList sentEmailMailboxSkipList, IReportCompletionStore reportCompletionStore,
+            IUserImportScopeProvider userScopeProvider = null)
         {
             _graphAppIndentityOAuthContext = new GraphAppIndentityOAuthContext(logger, settings.ClientID, settings.TenantGUID.ToString(), settings.ClientSecret, settings.KeyVaultUrl, settings.UseClientCertificate);
             _logger = logger;
@@ -52,6 +58,7 @@ namespace WebJob.Office365ActivityImporter
             _graphLastRunStore = graphLastRunStore;
             _sentEmailMailboxSkipList = sentEmailMailboxSkipList;
             _reportCompletionStore = reportCompletionStore;
+            _userScopeProvider = userScopeProvider ?? UserImportScopeProvider.CreateForGraph(settings, logger);
         }
 
         /// <summary>
@@ -81,7 +88,7 @@ namespace WebJob.Office365ActivityImporter
 
             await InitAuth();
 
-            var graphReader = new GraphImporter(_logger, _graphUserGroupsCache, _graphAppIndentityOAuthContext, _graphClient, _settings, _activityReportsLastImportedStore, _graphLastRunStore, _sentEmailMailboxSkipList, clock: null, reportCompletionStore: _reportCompletionStore);
+            var graphReader = new GraphImporter(_logger, _userScopeProvider, _graphAppIndentityOAuthContext, _graphClient, _settings, _activityReportsLastImportedStore, _graphLastRunStore, _sentEmailMailboxSkipList, clock: null, reportCompletionStore: _reportCompletionStore);
 
             try
             {
@@ -114,7 +121,6 @@ namespace WebJob.Office365ActivityImporter
             await _graphAppIndentityOAuthContext.InitClientCredential();
             _graphClient = GraphServiceClientFactory.CreateForGraphImport(_graphAppIndentityOAuthContext.Creds, _logger);
             _manualGraphCallClient = new ManualGraphCallClient(_graphAppIndentityOAuthContext, _logger);
-            _graphUserGroupsCache = new GraphUserGroupsCache(_manualGraphCallClient, _logger);
 
 
             _isInitialized = true;
@@ -175,7 +181,9 @@ namespace WebJob.Office365ActivityImporter
                             userResolver: new AgentCostUserResolver(
                                 new SqlAgentCostUserLinkStore(DefaultAnalyticsDbContextFactory.Instance, _logger),
                                 _manualGraphCallClient == null ? null : new GraphEntraUserLookup(_manualGraphCallClient, _logger),
-                                _logger));
+                                _logger),
+                            // Per-user credits for anyone outside UserGroupsFilter are not stored.
+                            userScopeProvider: _userScopeProvider);
                     },
                     azureCostImporterFactory: () =>
                     {
@@ -265,7 +273,9 @@ namespace WebJob.Office365ActivityImporter
                     _logger.LogWarning($"Activity import: per-batch dedup cache ENABLED ({ImportRuntimeOptions.PerBatchDedupCacheEnvVariable}) - reverts the per-cycle cache optimisation; expect slower saves on large tables.");
                 }
 
-                var sqlAdaptor = new ActivityReportSqlPersistenceManager(spFilterList, _graphUserGroupsCache, _logger, _settings, maxConcurrentSaves, usePerBatchDedupCache);
+                // Audit events by anyone outside UserGroupsFilter are not staged. The scope is the one shared with the
+                // other imports in this process, resolved at most once per refresh interval.
+                var sqlAdaptor = new ActivityReportSqlPersistenceManager(spFilterList, await _userScopeProvider.GetScopeAsync(), _logger, _settings, maxConcurrentSaves, usePerBatchDedupCache);
                 try
                 {
                     var stats = await importer.LoadReportsAndSave(sqlAdaptor);

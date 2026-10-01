@@ -192,7 +192,7 @@ namespace Tests.UnitTests
         {
             // The other half: a normal loader must reach the inspector with its own schema-qualified name.
             var inspector = new FakeUsageReportStorageInspector(hasLeadingDateIndex: false);
-            var loader = new OutlookUserActivityLoader(null, null, new UserGroupsFilterModel(null), NullLogger.Instance)
+            var loader = new OutlookUserActivityLoader(null, null, NullLogger.Instance)
             {
                 StorageInspector = inspector
             };

@@ -43,6 +43,9 @@ namespace Tests.UnitTests
             // Operators find and delete these rows by name, so the common keys must stay readable.
             Assert.AreEqual("GraphUsersMetadataLastImported", AzureTableKeyValueStore.ToRowKey(UserImportCheckpointKeys.LastCompleted));
             Assert.AreEqual("UserDeltaCode-00000000-0000-0000-0000-000000000000-v2", AzureTableKeyValueStore.ToRowKey(UserImportCheckpointKeys.DeltaToken(Guid.Empty)));
+            Assert.AreEqual(
+                "UserDeltaCodeScopeMembers-00000000-0000-0000-0000-000000000000-v2",
+                AzureTableKeyValueStore.ToRowKey(UserImportCheckpointKeys.DeltaTokenUserScopeMembers(Guid.Empty, string.Empty)));
             Assert.AreEqual("UserActivityReportLastImported:TeamsUserUsageLoader", AzureTableKeyValueStore.ToRowKey("UserActivityReportLastImported:TeamsUserUsageLoader"));
             Assert.AreEqual("SentEmails-alex.wilber@contoso.com", AzureTableKeyValueStore.ToRowKey("SentEmails-alex.wilber@contoso.com"));
         }
@@ -402,6 +405,44 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public async Task CertificateMode_WithNoClientSecret_UsesTheRuntimeCertificateCredential()
+        {
+            var service = new ScriptedTableService(credential => credential == "Bearer"
+                ? ScriptedTableService.Created()
+                : ScriptedTableService.Refused(HttpStatusCode.Forbidden, "AuthenticationFailed"));
+            var principalsUsed = new List<string>();
+            var certificateModes = new List<bool>();
+
+            await OpenTable(AccountNameOnlyConnectionString, service, principalsUsed,
+                useClientCertificate: true, certificateModes: certificateModes);
+
+            CollectionAssert.AreEqual(new[] { "Bearer" }, service.Credentials);
+            CollectionAssert.AreEqual(new[] { RuntimeAppId }, principalsUsed);
+            CollectionAssert.AreEqual(new[] { true }, certificateModes);
+        }
+
+        [TestMethod]
+        public void TableClientCacheKey_SeparatesTenantsAndAuthenticationModes()
+        {
+            var config = Config(AccountNameOnlyConnectionString);
+            config.TenantGUID = Guid.Parse("00000000-0000-0000-0000-000000000001");
+            config.ClientID = RuntimeAppId;
+            config.ClientSecret = "synthetic-secret";
+
+            var secretKey = StateStore.TableCacheKey(AccountNameOnlyConnectionString, config);
+            config.UseClientCertificate = true;
+            config.KeyVaultUrl = "https://contoso.vault.azure.net/";
+            config.ClientSecret = null;
+            var certificateKey = StateStore.TableCacheKey(AccountNameOnlyConnectionString, config);
+            config.TenantGUID = Guid.Parse("00000000-0000-0000-0000-000000000002");
+            var otherTenantKey = StateStore.TableCacheKey(AccountNameOnlyConnectionString, config);
+
+            Assert.AreNotEqual(secretKey, certificateKey);
+            Assert.AreNotEqual(certificateKey, otherTenantKey);
+            Assert.IsFalse(secretKey.Contains("synthetic-secret"), "Cache keys must not retain credentials.");
+        }
+
+        [TestMethod]
         public async Task AConnectionStringWhoseKeyCannotBeUsed_UsesRbac()
         {
             var service = new ScriptedTableService(credential => credential == "Bearer" ? ScriptedTableService.Created() : ScriptedTableService.Refused(HttpStatusCode.Forbidden, "AuthenticationFailed"));
@@ -509,17 +550,21 @@ namespace Tests.UnitTests
         }
 
         private static Task<TableClient> OpenTable(string connectionString, ScriptedTableService service, List<string> principalsUsed,
-            ILogger logger = null, bool withServicePrincipal = true)
+            ILogger logger = null, bool withServicePrincipal = true, bool useClientCertificate = false,
+            List<bool> certificateModes = null)
         {
             return StorageTableClientFactory.CreateAndEnsureTableAsync(connectionString, StateStore.TableName,
                 withServicePrincipal ? Guid.Empty.ToString() : null,
                 withServicePrincipal ? RuntimeAppId : null,
-                withServicePrincipal ? "s" : null,
-                logger, "runtime state table", CancellationToken.None, synchronous: false, OptionsFor(service),
-                (tenantId, clientId, clientSecret) =>
+                withServicePrincipal && !useClientCertificate ? "s" : null,
+                withServicePrincipal && useClientCertificate ? "https://contoso.vault.azure.net/" : null,
+                useClientCertificate,
+                logger, "runtime state table", CancellationToken.None, false, OptionsFor(service),
+                (tenantId, clientId, clientSecret, keyVaultUrl, certificateMode) =>
                 {
                     principalsUsed.Add(clientId);
-                    return new FakeServicePrincipal();
+                    certificateModes?.Add(certificateMode);
+                    return Task.FromResult<TokenCredential>(new FakeServicePrincipal());
                 });
         }
 

@@ -10,6 +10,7 @@ using System.Threading.Tasks;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Web.AnalyticsWeb.Models.Dlp;
+using Web.AnalyticsWeb.Security;
 
 namespace Web.AnalyticsWeb.Controllers
 {
@@ -104,21 +105,23 @@ namespace Web.AnalyticsWeb.Controllers
         }
 
         /// <summary>
-        /// The whole page in one call: KPIs, the ranked tables and the trend.
+        /// The whole page in one call: KPIs, the ranked tables and the trend. The "top users" table names
+        /// people, so a reader without the portal's See PII permission gets it empty (#661) - and the query
+        /// behind it is not run for them at all.
         /// </summary>
         // GET: api/Dlp/summary?days=28
         [HttpGet]
         [Route("summary")]
         public async Task<IActionResult> Summary(int days = 28)
         {
-            return Ok(await BuildSummaryAsync(days));
+            return Ok(await BuildSummaryAsync(days, includeIndividuals: PortalAccess.Evaluate(Request, User).SeePii));
         }
 
         /// <summary>
         /// The query work behind <see cref="Summary"/>, separated so it can be executed against a real
         /// database in tests without an ASP.NET request pipeline.
         /// </summary>
-        internal async Task<DlpSummary> BuildSummaryAsync(int days)
+        internal async Task<DlpSummary> BuildSummaryAsync(int days, bool includeIndividuals = true)
         {
             var windowDays = SnapWindow(days);
             var toUtc = DateTime.UtcNow;
@@ -194,22 +197,25 @@ namespace Web.AnalyticsWeb.Controllers
 
                 // copilot_chats carries only the user's integer id (there is no User navigation on it),
                 // so the UPN is joined in here. The grouping is still done in SQL.
-                summary.TopUsers = ToRows(await (from e in events
-                                                 where e.RelatedChat.UserId != null
-                                                 join u in db.users on e.RelatedChat.UserId equals u.ID
-                                                 group e by new { Id = u.ID, u.UserPrincipalName } into g
-                                                 select new RankProjection
-                                                 {
-                                                     Id = SqlFunctions.StringConvert((double)g.Key.Id),
-                                                     Name = g.Key.UserPrincipalName,
-                                                     Blocked = g.Count(e => e.IsBlocked),
-                                                     Audited = g.Count(e => !e.IsBlocked),
-                                                 })
-                                          .OrderByDescending(r => r.Blocked).ThenByDescending(r => r.Audited)
-                                          .Take(TopN).ToListAsync(), countUsers: false);
+                if (includeIndividuals)
+                {
+                    summary.TopUsers = ToRows(await (from e in events
+                                                     where e.RelatedChat.UserId != null
+                                                     join u in db.users on e.RelatedChat.UserId equals u.ID
+                                                     group e by new { Id = u.ID, u.UserPrincipalName } into g
+                                                     select new RankProjection
+                                                     {
+                                                         Id = SqlFunctions.StringConvert((double)g.Key.Id),
+                                                         Name = g.Key.UserPrincipalName,
+                                                         Blocked = g.Count(e => e.IsBlocked),
+                                                         Audited = g.Count(e => !e.IsBlocked),
+                                                     })
+                                              .OrderByDescending(r => r.Blocked).ThenByDescending(r => r.Audited)
+                                              .Take(TopN).ToListAsync(), countUsers: false);
 
-                // "Which policies blocked THIS person", the same cross-tab as the agents table.
-                await AttachUserPolicyBreakdownAsync(events, summary.TopUsers);
+                    // "Which policies blocked THIS person", the same cross-tab as the agents table.
+                    await AttachUserPolicyBreakdownAsync(events, summary.TopUsers);
+                }
 
                 // Grouped by date part in SQL so the trend is one aggregate query rather than pulling
                 // every matching row back to group in memory.

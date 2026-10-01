@@ -39,7 +39,7 @@ namespace Tests.UnitTests
 
             return new GraphImporter(
                 DataUtils.AnalyticsLogger.ConsoleOnlyTracer(),
-                userGroupsCache: null,
+                userScopeProvider: null,
                 graphAppIndentityOAuthContext: null,
                 graphClient: null,
                 settings: settings,

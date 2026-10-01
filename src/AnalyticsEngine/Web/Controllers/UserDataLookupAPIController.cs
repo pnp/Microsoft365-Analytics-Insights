@@ -6,6 +6,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Web.AnalyticsWeb.Models;
 using Web.AnalyticsWeb.Models.UserDataLookup;
+using Web.AnalyticsWeb.Security;
 
 namespace Web.AnalyticsWeb.Controllers
 {
@@ -17,8 +18,13 @@ namespace Web.AnalyticsWeb.Controllers
     /// Model binding and the HTTP result only - the validation, category mapping and shaping live in
     /// <see cref="IUserDataLookupService"/>, and the EF queries in <see cref="SqlUserDataLookupQuery"/>,
     /// so both are testable without a database or an ASP.NET pipeline (issue #379).
+    ///
+    /// Needs both permissions: it is an Administration page, and everything it returns is about one
+    /// named person (#660, #661).
     /// </remarks>
     [Authorize]
+    [RequirePortalPermission(PortalPermission.Administration)]
+    [RequirePortalPermission(PortalPermission.SeePii)]
     [Route("api/UserDataLookup")]
     public class UserDataLookupAPIController  : ControllerBase
     {

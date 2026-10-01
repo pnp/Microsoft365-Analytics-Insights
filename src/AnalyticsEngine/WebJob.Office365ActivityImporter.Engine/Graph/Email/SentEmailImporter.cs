@@ -1,6 +1,7 @@
 using Common.Entities;
 using Common.Entities.Config;
 using Common.Entities.Entities.Email;
+using Common.Entities.UserScope;
 using DataUtils;
 using DataUtils.Sql;
 using Microsoft.Extensions.Logging;
@@ -52,6 +53,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
         private readonly int _graphLoadParallelism;
         private readonly ISentEmailMailboxSkipList _mailboxSkipList;
         private readonly int _noMailboxRetryHours;
+        private readonly IUserImportScopeProvider _userScopeProvider;
 
         // UPNs discovered during this run to have no mailbox at all (Graph 404). Concurrent because the
         // Graph load phase populates it from parallel worker threads.
@@ -87,7 +89,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
             int graphLoadParallelism = DefaultGraphLoadParallelism,
             ISentEmailMailboxSkipList mailboxSkipList = null,
             int noMailboxRetryHours = 0,
-            ISentEmailDeltaTokenCommitter deltaTokenCommitter = null)
+            ISentEmailDeltaTokenCommitter deltaTokenCommitter = null,
+            IUserImportScopeProvider userScopeProvider = null)
             : base(logger, settings)
         {
             _sourceLoader = sourceLoader ?? throw new ArgumentNullException(nameof(sourceLoader));
@@ -98,6 +101,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
             _graphLoadParallelism = graphLoadParallelism > 0 ? graphLoadParallelism : DefaultGraphLoadParallelism;
             _mailboxSkipList = mailboxSkipList;
             _noMailboxRetryHours = noMailboxRetryHours;
+            _userScopeProvider = userScopeProvider;
         }
 
         /// <summary>
@@ -139,6 +143,23 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
             {
                 _logger.LogWarning("No users found with email addresses to scan for sent items.");
                 return;
+            }
+
+            // UserGroupsFilter: never read the mailbox of someone outside the scope. Filtered here, before the
+            // mailbox skip list and the chunking, so an out-of-scope mailbox costs no Graph call and its message
+            // bodies are never sent for sentiment scoring.
+            var userScope = _userScopeProvider == null ? UserImportScope.Unfiltered : await _userScopeProvider.GetScopeAsync();
+            if (userScope.IsFiltered)
+            {
+                var allUsersWithMail = users.Count;
+                users = SelectUsersInScope(users, userScope);
+                _logger.LogInformation($"Sent emails: {users.Count:N0} of {allUsersWithMail:N0} users with a mail address are in UserGroupsFilter; " +
+                    "the other mailboxes are not read.");
+                if (users.Count == 0)
+                {
+                    _logger.LogWarning("Sent emails: no user with a mail address is in UserGroupsFilter, so there is nothing to import.");
+                    return;
+                }
             }
 
             // Users with no Exchange mailbox (unlicensed, on-premises, inactive, or guest accounts) 404 on
@@ -903,6 +924,19 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
                     .OrderBy(u => u.ID)
                     .ToListAsync();
             }
+        }
+
+        /// <summary>
+        /// The users whose mailbox may be read: matched on UPN, mail address or Entra object id, so a user whose UPN
+        /// was renamed since they were imported is still recognised by their object id.
+        /// </summary>
+        internal static List<Common.Entities.User> SelectUsersInScope(List<Common.Entities.User> users, UserImportScope userScope)
+        {
+            if (userScope == null || !userScope.IsFiltered)
+            {
+                return users;
+            }
+            return users.Where(u => userScope.IsAnyInScope(u.UserPrincipalName, u.Mail, u.AzureAdId)).ToList();
         }
 
         private void LogRunSummary(TimeSpan elapsed)

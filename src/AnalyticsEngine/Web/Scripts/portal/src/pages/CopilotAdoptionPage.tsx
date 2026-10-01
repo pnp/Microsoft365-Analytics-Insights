@@ -61,6 +61,7 @@ import PrintButton from '../components/shared/PrintButton';
 import { PRINT_ROW_LIMIT } from '../components/shared/printPreparation';
 import { serverPlaceholderText } from '../components/shared/serverPlaceholder';
 import DismissibleWarnings from '../components/shared/DismissibleWarnings';
+import PiiHiddenNote from '../components/shared/PiiHiddenNote';
 import { SegmentTable, BAND_COLOUR_LIST } from '../components/copilotAdoption/adoptionShared';
 import { KpiGrid, formatCount, formatDate, formatPct, weightSharePct } from '../components/shared/KpiGrid';
 import type { KpiDefinition } from '../components/shared/KpiGrid';
@@ -107,6 +108,7 @@ import {
 } from '../components/userFilter/userFilterModel';
 import { notify } from '../components/toast';
 import { EMPTY_USER_FILTER, type UserFilter, type UserFilterDimension } from '../types/userFilter';
+import { usePortalAccess } from '../access';
 
 const WINDOW_OPTIONS: { value: number; labelKey: TranslationKey }[] = [
   { value: 7, labelKey: 'copilotAdoption.page.window.last7Days' },
@@ -402,6 +404,8 @@ function CopilotAdoptionView({
   const styles = useStyles();
   const t = useT();
   const tNode = useTNode();
+  const access = usePortalAccess();
+  const canSeePii = access.seePii;
 
   const [availability, setAvailability] = useState<CopilotAdoptionAvailability | null>(null);
   const [availabilityError, setAvailabilityError] = useState<string | null>(null);
@@ -414,7 +418,8 @@ function CopilotAdoptionView({
   // The server re-scores the cached analysis for the people the filter matches, so the figures are
   // recomputed rather than merely hidden.
   const [ownFilter, setOwnFilter] = useState<UserFilter>(EMPTY_USER_FILTER);
-  const userFilter = controlledFilter ?? ownFilter;
+  const requestedUserFilter = controlledFilter ?? ownFilter;
+  const userFilter = canSeePii ? requestedUserFilter : EMPTY_USER_FILTER;
   const setUserFilter = useCallback(
     (next: UserFilter) => {
       if (controlledFilter === undefined) setOwnFilter(next);
@@ -435,8 +440,11 @@ function CopilotAdoptionView({
     }
     setUserFilter(next);
   };
-  const { list: filterDimensions } = useUserFilterDimensions();
+  const { list: filterDimensions } = useUserFilterDimensions(canSeePii);
   const [tab, setTab] = useState<AdoptionTab>('executive');
+  // The licensed-user list is nothing but named people. The Cowork and opportunities tabs keep their
+  // aggregate sections for a reader without See PII and hide only their lists (see those panels).
+  const visibleTabs = (Object.keys(TAB_LABEL_KEYS) as AdoptionTab[]).filter((value) => canSeePii || value !== 'licensed');
   // Set when the user drills through from the enablement plan, so the licensed-user list they land
   // on is pre-filtered to exactly the group the plan counted. Cleared when they choose a tab
   // themselves - otherwise a filter they never asked for reappears every time they come back.
@@ -532,6 +540,12 @@ function CopilotAdoptionView({
     setTab(data.value as AdoptionTab);
   };
 
+  useEffect(() => {
+    if (!canSeePii && tab === 'licensed') {
+      setTab('executive');
+    }
+  }, [canSeePii, tab]);
+
   const drillToAction = (code: string) => {
     setDrillAction(code);
     setTab('licensed');
@@ -587,7 +601,7 @@ function CopilotAdoptionView({
               relationship="description"
               content={
                 summary
-                  ? t('copilotAdoption.page.controls.excelTooltipReady')
+                  ? t(canSeePii ? 'copilotAdoption.page.controls.excelTooltipReady' : 'copilotAdoption.page.controls.excelTooltipReadyNoPii')
                   : t('copilotAdoption.page.controls.excelTooltipLoading')
               }
             >
@@ -626,7 +640,7 @@ function CopilotAdoptionView({
         </div>
       )}
 
-      {availability?.available && (
+      {availability?.available && canSeePii && (
         <>
           <UserFilterBar filter={userFilter} onChange={setUserFilter} echoNames={summary?.userFilter?.dimensionNames} />
           <UserFilterPrintSummary filter={userFilter} echo={summary?.userFilter} dimensions={filterDimensions?.dimensions} />
@@ -658,7 +672,7 @@ function CopilotAdoptionView({
 
           <div className={styles.subTabs} data-print="hide">
             <TabList selectedValue={tab} onTabSelect={onTabSelect}>
-              {(Object.keys(TAB_LABEL_KEYS) as AdoptionTab[]).map((value) => (
+              {visibleTabs.map((value) => (
                 <Tab key={value} value={value}>
                   {t(TAB_LABEL_KEYS[value])}
                 </Tab>
@@ -728,12 +742,13 @@ function CopilotAdoptionView({
                 ) : (
                   <ExecutiveTab
                     summary={summary}
-                    onDrillToAction={drillToAction}
+                    onDrillToAction={canSeePii ? drillToAction : undefined}
                     onShowLicensedDetails={showLicensedDetails}
                     onShowOpportunityDetails={showOpportunityDetails}
                     onOpenTab={openTab}
                     selectedEmailDomain={selectedEmailDomain}
-                    onSelectEmailDomain={selectEmailDomain}
+                    onSelectEmailDomain={canSeePii ? selectEmailDomain : undefined}
+                    canSeePii={canSeePii}
                   />
                 ))}
 
@@ -741,24 +756,27 @@ function CopilotAdoptionView({
                 <AnalystTab
                   summary={summary}
                   sql={sql}
-                  onDrillToAction={drillToAction}
+                  onDrillToAction={canSeePii ? drillToAction : undefined}
                   onOpenTab={openTab}
                   selectedEmailDomain={selectedEmailDomain}
-                  onSelectEmailDomain={selectEmailDomain}
+                  onSelectEmailDomain={canSeePii ? selectEmailDomain : undefined}
+                  canSeePii={canSeePii}
                 />
               )}
 
               {tab === 'licensed' && (
-                <LicensedUsersPanel
-                  key={`${drillAction ?? 'all'}::${userFilterScope}`}
-                  windowDays={windowDays}
-                  filterOptions={filterOptions}
-                  actionPlan={summary.actionPlan}
-                  options={summary.options}
-                  dataSources={summary.dataSources}
-                  initialAction={drillAction}
-                  userFilter={userFilterParam}
-                />
+                canSeePii ? (
+                  <LicensedUsersPanel
+                    key={`${drillAction ?? 'all'}::${userFilterScope}`}
+                    windowDays={windowDays}
+                    filterOptions={filterOptions}
+                    actionPlan={summary.actionPlan}
+                    options={summary.options}
+                    dataSources={summary.dataSources}
+                    initialAction={drillAction}
+                    userFilter={userFilterParam}
+                  />
+                ) : <PiiHiddenNote />
               )}
 
               {tab === 'unlicensed' && (
@@ -787,6 +805,7 @@ function CopilotAdoptionView({
                   summary={summary}
                   options={summary.options}
                   userFilter={userFilterParam}
+                  canSeePii={canSeePii}
                 />
               )}
 
@@ -798,6 +817,7 @@ function CopilotAdoptionView({
                   options={summary.options}
                   guidanceLinks={summary.guidanceLinks}
                   userFilter={userFilterParam}
+                  canSeePii={canSeePii}
                 />
               )}
 
@@ -947,6 +967,7 @@ function ExecutiveTab({
   onOpenTab,
   selectedEmailDomain,
   onSelectEmailDomain,
+  canSeePii,
 }: {
   summary: CopilotAdoptionSummary;
   onDrillToAction?: (code: string) => void;
@@ -955,6 +976,7 @@ function ExecutiveTab({
   onOpenTab?: (tab: AdoptionTab) => void;
   selectedEmailDomain?: string | null;
   onSelectEmailDomain?: (domain: string | null) => void;
+  canSeePii: boolean;
 }) {
   const styles = useStyles();
   const t = useT();
@@ -1001,13 +1023,16 @@ function ExecutiveTab({
               sublabel={t('copilotAdoption.page.gauge.establishedOrChampion', { count: formatCount(summary.habitualUsers) })}
             />
           </div>
-          {/* Drill-through into another tab. On paper there is no other tab to drill into. */}
-          <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginTop: '12px' }} data-print="hide">
-            <Button appearance="secondary" onClick={onShowLicensedDetails}>{t('copilotAdoption.page.reviewLicensedUsers')}</Button>
-            {summary.recommendedForLicence > 0 && (
-              <Button appearance="secondary" onClick={onShowOpportunityDetails}>{t('copilotAdoption.page.reviewLicenceCandidates')}</Button>
-            )}
-          </div>
+          {/* Drill-through into another tab. On paper there is no other tab to drill into. Both lists
+              name people, so a reader without the See PII permission has nothing to drill into. */}
+          {canSeePii && (
+            <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginTop: '12px' }} data-print="hide">
+              <Button appearance="secondary" onClick={onShowLicensedDetails}>{t('copilotAdoption.page.reviewLicensedUsers')}</Button>
+              {summary.recommendedForLicence > 0 && (
+                <Button appearance="secondary" onClick={onShowOpportunityDetails}>{t('copilotAdoption.page.reviewLicenceCandidates')}</Button>
+              )}
+            </div>
+          )}
         </Card>
 
         <Card>
@@ -1250,6 +1275,7 @@ function AnalystTab({
   onOpenTab,
   selectedEmailDomain,
   onSelectEmailDomain,
+  canSeePii,
 }: {
   summary: CopilotAdoptionSummary;
   sql: Record<string, string> | null;
@@ -1257,6 +1283,7 @@ function AnalystTab({
   onOpenTab?: (tab: AdoptionTab) => void;
   selectedEmailDomain?: string | null;
   onSelectEmailDomain?: (domain: string | null) => void;
+  canSeePii: boolean;
 }) {
   const styles = useStyles();
   const t = useT();
@@ -1439,10 +1466,17 @@ function AnalystTab({
           />
         </div>
         <div className={styles.cardBody}>
-          <AccountabilityRollupTable
-            rows={summary.accountabilityRollup}
-            segmentLabel={accountabilityCopy.label}
-          />
+          {canSeePii || summary.accountabilityDimension !== 'directManager' ? (
+            <AccountabilityRollupTable
+              rows={summary.accountabilityRollup}
+              segmentLabel={accountabilityCopy.label}
+            />
+          ) : (
+            // Grouped by direct manager, every row is labelled with a manager's sign-in name. The server
+            // sends none of them to a reader without the See PII permission; say so rather than showing
+            // an empty table that reads as "no groups".
+            <PiiHiddenNote />
+          )}
         </div>
       </Card>
 

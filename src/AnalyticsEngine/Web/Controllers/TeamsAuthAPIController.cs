@@ -7,16 +7,24 @@ using System.Threading.Tasks;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Web.AnalyticsWeb.Models;
+using Web.AnalyticsWeb.Security;
 
 namespace Web.AnalyticsWeb.Controllers
 {
+    /// <summary>
+    /// Reads and sets which Teams the importer holds a delegated token for - the Teams permissions page
+    /// in the Administration area.
+    /// </summary>
     [Authorize]
+    [RequirePortalPermission(PortalPermission.Administration)]
+    [Route("api/TeamsAuthAPI")]
     public class TeamsAuthAPIController : BaseAPIController
     {
         /// <summary>
         /// Gets auth status for a list of TeamIDs
         /// </summary>
         // POST: api/TeamsAuthAPI
+        [HttpPost]
         public async Task<List<TeamAuthStatusResponse>> Post([FromBody] List<string> teamIds)
         {
             var response = new List<TeamAuthStatusResponse>();
@@ -47,6 +55,7 @@ namespace Web.AnalyticsWeb.Controllers
         /// Upload refresh token for a Team ID
         /// </summary>
         // PUT: api/TeamsAuthAPI
+        [HttpPut]
         public async Task<IActionResult> Put([FromBody] AuthTeamRequest authTeamData)
         {
             if (authTeamData == null)
@@ -64,7 +73,7 @@ namespace Web.AnalyticsWeb.Controllers
                     "Add a Storage connection string so Teams authorisation tokens can be stored."));
             }
 
-            // The refresh token captured into the auth cookie at sign-in (Startup.ConfigureAuth)
+            // The admin's own delegated token, captured when they connected Microsoft Teams (AccountController.ConnectTeams).
             var auth = await base.GetCachedUserAccessTokenAsync();
             if (auth == null || string.IsNullOrEmpty(auth.RefreshToken))
             {

@@ -2,6 +2,8 @@ using Azure;
 using Azure.Core;
 using Azure.Data.Tables;
 using Azure.Identity;
+using Common.Entities.Config;
+using DataUtils;
 using Microsoft.Extensions.Logging;
 using System;
 using System.Collections.Generic;
@@ -14,7 +16,7 @@ namespace Common.Entities.State
     /// Builds an Azure Table <see cref="TableClient"/> the way the solution authenticates to every Azure service that takes
     /// either a key or Entra ID: use the connection string as it is when it carries credentials; if the storage account
     /// denies them, retry with RBAC; and when it carries none, use RBAC directly. Shared by the runtime state store
-    /// (<see cref="StateStore"/>) and the audit-import blob checkpoint.
+    /// (<see cref="StateStore"/>), the audit-import blob checkpoint and the user-organisation change log.
     /// </summary>
     /// <remarks>
     /// <list type="number">
@@ -27,11 +29,10 @@ namespace Common.Entities.State
     /// <item><description><b>No credentials in the connection string</b> (only <c>AccountName</c> or <c>TableEndpoint</c>):
     /// RBAC directly.</description></item>
     /// </list>
-    /// RBAC means a <see cref="ClientSecretCredential"/> for the runtime service principal - never
-    /// <c>DefaultAzureCredential</c> or managed identity - exactly as Azure AI Language (<c>CognitiveServicesClient</c>) and,
-    /// before it was removed, Redis authenticated. Anything that is not an access problem (DNS, timeouts, 5xx) is thrown as
-    /// it is: other credentials would not help. The storage emulator (<c>UseDevelopmentStorage=true</c>) has no Entra ID, so
-    /// it only ever uses the connection string.
+    /// RBAC means the runtime service principal, authenticated with its configured client certificate or client secret -
+    /// never the host's managed identity. Anything that is not an access problem (DNS, timeouts, 5xx) is thrown as it is:
+    /// other credentials would not help. The storage emulator (<c>UseDevelopmentStorage=true</c>) has no Entra ID, so it
+    /// only ever uses the connection string.
     /// <para>
     /// Data-plane RBAC on the Table service needs the <b>Storage Table Data Contributor</b> role;
     /// <c>Storage Blob Data Contributor</c> does NOT cover Table storage. The installer assigns it in
@@ -55,10 +56,11 @@ namespace Common.Entities.State
         /// </summary>
         /// <param name="purpose">What the table is for, e.g. "blob checkpoint table". Used in log and error messages only.</param>
         public static TableClient CreateAndEnsureTable(string storageConnectionString, string tableName,
-            string tenantId, string clientId, string clientSecret, ILogger logger, string purpose)
+            string tenantId, string clientId, string clientSecret, ILogger logger, string purpose,
+            TableClientOptions clientOptions = null)
         {
-            return CreateAndEnsureTableAsync(storageConnectionString, tableName, tenantId, clientId, clientSecret, logger, purpose,
-                    CancellationToken.None, synchronous: true, clientOptions: null, createCredential: null)
+            return CreateAndEnsureTableAsync(storageConnectionString, tableName, tenantId, clientId, clientSecret,
+                    null, false, logger, purpose, CancellationToken.None, true, clientOptions, null)
                 .GetAwaiter().GetResult();
         }
 
@@ -67,8 +69,34 @@ namespace Common.Entities.State
             string tenantId, string clientId, string clientSecret, ILogger logger, string purpose,
             CancellationToken cancellationToken = default)
         {
-            return CreateAndEnsureTableAsync(storageConnectionString, tableName, tenantId, clientId, clientSecret, logger, purpose,
-                cancellationToken, synchronous: false, clientOptions: null, createCredential: null);
+            return CreateAndEnsureTableAsync(storageConnectionString, tableName, tenantId, clientId, clientSecret,
+                null, false, logger, purpose, cancellationToken, false, null, null);
+        }
+
+        /// <summary>
+        /// Opens a table with the runtime identity in <paramref name="config"/>, honoring either certificate or
+        /// client-secret authentication when RBAC is needed.
+        /// </summary>
+        public static TableClient CreateAndEnsureTable(string storageConnectionString, string tableName,
+            AppConfig config, ILogger logger, string purpose, TableClientOptions clientOptions = null)
+        {
+            if (config == null) throw new ArgumentNullException(nameof(config));
+            var tenantId = config.TenantGUID == Guid.Empty ? null : config.TenantGUID.ToString();
+            return CreateAndEnsureTableAsync(storageConnectionString, tableName, tenantId, config.ClientID,
+                    config.ClientSecret, config.KeyVaultUrl, config.UseClientCertificate, logger, purpose,
+                    CancellationToken.None, true, clientOptions, null)
+                .GetAwaiter().GetResult();
+        }
+
+        /// <inheritdoc cref="CreateAndEnsureTable(string, string, AppConfig, ILogger, string, TableClientOptions)"/>
+        public static Task<TableClient> CreateAndEnsureTableAsync(string storageConnectionString, string tableName,
+            AppConfig config, ILogger logger, string purpose, CancellationToken cancellationToken = default)
+        {
+            if (config == null) throw new ArgumentNullException(nameof(config));
+            var tenantId = config.TenantGUID == Guid.Empty ? null : config.TenantGUID.ToString();
+            return CreateAndEnsureTableAsync(storageConnectionString, tableName, tenantId, config.ClientID,
+                config.ClientSecret, config.KeyVaultUrl, config.UseClientCertificate, logger, purpose,
+                cancellationToken, false, null, null);
         }
 
         /// <summary>
@@ -77,9 +105,10 @@ namespace Common.Entities.State
         /// each request carried without a network or a tenant. <c>null</c> means the production defaults.
         /// </summary>
         internal static async Task<TableClient> CreateAndEnsureTableAsync(string storageConnectionString, string tableName,
-            string tenantId, string clientId, string clientSecret, ILogger logger, string purpose,
+            string tenantId, string clientId, string clientSecret, string keyVaultUrl, bool useClientCertificate,
+            ILogger logger, string purpose,
             CancellationToken cancellationToken, bool synchronous, TableClientOptions clientOptions,
-            Func<string, string, string, TokenCredential> createCredential)
+            Func<string, string, string, string, bool, Task<TokenCredential>> createCredential)
         {
             if (string.IsNullOrWhiteSpace(storageConnectionString))
                 throw new ArgumentException("A storage connection string is required.", nameof(storageConnectionString));
@@ -96,7 +125,9 @@ namespace Common.Entities.State
             var canUseRbac = endpoint != null
                 && !string.IsNullOrWhiteSpace(tenantId)
                 && !string.IsNullOrWhiteSpace(clientId)
-                && !string.IsNullOrWhiteSpace(clientSecret);
+                && (useClientCertificate
+                    ? !string.IsNullOrWhiteSpace(keyVaultUrl)
+                    : !string.IsNullOrWhiteSpace(clientSecret));
 
             if (HasCredentials(storageConnectionString))
             {
@@ -128,12 +159,14 @@ namespace Common.Entities.State
 
             if (!canUseRbac)
             {
-                throw new InvalidOperationException(BuildNoRbacMessage(endpoint, storageConnectionString, purpose));
+                throw new InvalidOperationException(BuildNoRbacMessage(
+                    endpoint, storageConnectionString, purpose, useClientCertificate));
             }
 
             var credential = createCredential != null
-                ? createCredential(tenantId, clientId, clientSecret)
-                : new ClientSecretCredential(tenantId, clientId, clientSecret);
+                ? await createCredential(tenantId, clientId, clientSecret, keyVaultUrl, useClientCertificate).ConfigureAwait(false)
+                : await CreateRuntimeCredentialAsync(
+                    tenantId, clientId, clientSecret, keyVaultUrl, useClientCertificate, logger).ConfigureAwait(false);
             var rbacClient = clientOptions == null
                 ? new TableClient(endpoint, tableName, credential)
                 : new TableClient(endpoint, tableName, credential, clientOptions);
@@ -256,14 +289,32 @@ namespace Common.Entities.State
             }
         }
 
-        private static string BuildNoRbacMessage(Uri endpoint, string storageConnectionString, string purpose)
+        private static async Task<TokenCredential> CreateRuntimeCredentialAsync(
+            string tenantId, string clientId, string clientSecret, string keyVaultUrl,
+            bool useClientCertificate, ILogger logger)
+        {
+            if (!useClientCertificate)
+            {
+                return new ClientSecretCredential(tenantId, clientId, clientSecret);
+            }
+
+            var certificate = await AuthHelper.RetrieveKeyVaultCertificate(
+                AuthHelper.CertificateName, keyVaultUrl, logger ?? AnalyticsLogger.ConsoleOnlyTracer()).ConfigureAwait(false);
+            return new ClientCertificateCredential(tenantId, clientId, certificate);
+        }
+
+        private static string BuildNoRbacMessage(
+            Uri endpoint, string storageConnectionString, string purpose, bool useClientCertificate)
         {
             if (!HasCredentials(storageConnectionString) && endpoint == null)
                 return "The storage connection string contains neither credentials (an AccountKey or a SharedAccessSignature) nor an AccountName/TableEndpoint, " +
                        $"so neither the connection string nor RBAC can be used for the {purpose}.";
 
+            var identitySettings = useClientCertificate
+                ? "tenant id / client id / Key Vault URL for client-certificate authentication"
+                : "tenant id / client id / client secret";
             return "The storage account can't be reached with the Storage connection string's own credentials and the runtime service principal " +
-                   $"(tenant id / client id / client secret) is not configured, so the {purpose} cannot " +
+                   $"({identitySettings}) is not configured, so the {purpose} cannot " +
                    "be authenticated. Configure the runtime account, or give the Storage connection string working credentials.";
         }
 

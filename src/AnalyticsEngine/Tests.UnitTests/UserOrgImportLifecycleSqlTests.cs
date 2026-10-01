@@ -253,12 +253,25 @@ DELETE FROM dbo.users;");
         [TestMethod]
         public async Task PreviewingAgainReplacesTheSameAdminsEarlierDraft()
         {
-            // Previewing a file five times must not leave five copies of every UPN in it.
+            // Previewing a file five times must not leave five copies of every UPN in it. Give both
+            // requests the same timestamp: Windows and SQL clocks can return the same value for two
+            // quick requests, which is what made this test (and the real preview) intermittent.
             var typeId = await NewType();
-            var first = await Draft(typeId, Admin, new UserOrgStagedRow(2, "a@contoso.com", "X"));
-            var colleagues = await Draft(typeId, "colleague@contoso.com", new UserOrgStagedRow(2, "a@contoso.com", "Y"));
+            var type = await _types.GetAsync(typeId);
+            var requested = DateTime.UtcNow;
+            Func<string, string, Task<int>> draftFor = (startedBy, value) => _jobs.CreateDraftAsync(
+                new UserOrgImportJob
+                {
+                    OrgTypeId = typeId,
+                    StartedBy = startedBy,
+                    QueuedUtc = requested,
+                    ExpectedGeneration = type.SourceGeneration,
+                },
+                new[] { new UserOrgStagedRow(2, "a@contoso.com", value) });
 
-            var second = await Draft(typeId, Admin, new UserOrgStagedRow(2, "a@contoso.com", "Z"));
+            var first = await draftFor(Admin, "X");
+            var colleagues = await draftFor("colleague@contoso.com", "Y");
+            var second = await draftFor(Admin, "Z");
 
             Assert.IsNull(await _jobs.GetJobAsync(first));
             Assert.AreEqual(0, Count($"SELECT COUNT(*) FROM dbo.user_org_import_staging WHERE job_id = {first}"));

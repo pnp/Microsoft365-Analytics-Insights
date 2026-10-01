@@ -176,6 +176,14 @@ describe('DlpPage', () => {
     expect(screen.queryByText('Policies affecting Contoso HR Agent')).not.toBeInTheDocument();
   });
 
+  it('hides the per-person table without See PII', async () => {
+    renderWithProvider(<DlpPage />, { access: { administration: false, seePii: false } });
+
+    expect(await screen.findByText('Contoso HR Agent')).toBeInTheDocument();
+    expect(screen.queryByText('ada@contoso.com')).not.toBeInTheDocument();
+    expect(screen.getByText('Individual details are hidden')).toBeInTheDocument();
+  });
+
   it('does not offer an expander for an agent with no policy breakdown', async () => {
     mockSummary.mockResolvedValue(
       summary({

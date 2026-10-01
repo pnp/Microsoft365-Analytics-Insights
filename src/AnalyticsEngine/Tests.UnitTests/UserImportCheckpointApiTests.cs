@@ -3,6 +3,7 @@ extern alias AnalyticsWeb;
 using AnalyticsWeb::Web.AnalyticsWeb;
 using AnalyticsWeb::Web.AnalyticsWeb.Controllers;
 using AnalyticsWeb::Web.AnalyticsWeb.Models.UserImport;
+using AnalyticsWeb::Web.AnalyticsWeb.Security;
 using Common.Entities;
 using Common.Entities.State;
 using Microsoft.Extensions.Logging;
@@ -358,6 +359,36 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public async Task SignedInReaderWithoutAdministration_CannotReadOrClearTheCheckpoint()
+        {
+            var store = StoreWithCheckpointAndStamp();
+            Func<IPrincipal> ordinaryReader = () =>
+            {
+                var identity = new ClaimsIdentity("synthetic-reader");
+                identity.AddClaim(new Claim(ClaimTypes.NameIdentifier, "synthetic-insights-reader"));
+                return new ClaimsPrincipal(identity);
+            };
+
+            using (var host = new CheckpointHost(NewService(store), ordinaryReader))
+            {
+                using (var get = await host.Client.GetAsync("api/UserImportCheckpoint"))
+                {
+                    Assert.AreEqual(HttpStatusCode.Forbidden, get.StatusCode);
+                    Assert.AreEqual("administration", (string)JObject.Parse(await get.Content.ReadAsStringAsync())["permission"]);
+                }
+
+                using (var request = PortalClear(runOnNextCycle: true))
+                using (var clear = await host.Client.SendAsync(request))
+                {
+                    Assert.AreEqual(HttpStatusCode.Forbidden, clear.StatusCode);
+                    Assert.AreEqual("administration", (string)JObject.Parse(await clear.Content.ReadAsStringAsync())["permission"]);
+                }
+            }
+
+            Assert.AreEqual(2, store.Values.Count, "A reader without Administration must not change the importer's state.");
+        }
+
+        [TestMethod]
         public async Task Clear_WithoutStorage_AnswersWithAStableCode()
         {
             using (var host = new CheckpointHost(NewService(store: null)))
@@ -433,6 +464,10 @@ namespace Tests.UnitTests
 #else
             Assert.IsNotNull(typeof(UserImportCheckpointAPIController).GetCustomAttribute<Microsoft.AspNetCore.Authorization.AuthorizeAttribute>());
 #endif
+            var permission = typeof(UserImportCheckpointAPIController)
+                .GetCustomAttribute<RequirePortalPermissionAttribute>();
+            Assert.IsNotNull(permission);
+            Assert.AreEqual(PortalPermission.Administration, permission.Permission);
         }
 
         #endregion
@@ -641,6 +676,7 @@ namespace Tests.UnitTests
                 _configuration.Services.Replace(typeof(IHttpControllerTypeResolver), new ControllerTypes());
                 _configuration.Services.Replace(typeof(IHttpControllerActivator), new ControllerActivator(() => new UserImportCheckpointAPIController(() => service)));
                 _configuration.MessageHandlers.Add(new PrincipalHandler(principal ?? Administrator));
+                _configuration.Properties[typeof(PortalAccessPolicy)] = PortalAccessPolicy.Enforcing;
                 _configuration.MapHttpAttributeRoutes();
                 _server = new HttpServer(_configuration);
                 Client = new HttpClient(_server) { BaseAddress = new Uri("http://localhost/") };
@@ -652,6 +688,7 @@ namespace Tests.UnitTests
             {
                 var identity = new ClaimsIdentity("synthetic-admin");
                 identity.AddClaim(new Claim(ClaimTypes.NameIdentifier, "synthetic-administrator"));
+                identity.AddClaim(new Claim("roles", PortalRoles.Administration));
                 return new ClaimsPrincipal(identity);
             }
 

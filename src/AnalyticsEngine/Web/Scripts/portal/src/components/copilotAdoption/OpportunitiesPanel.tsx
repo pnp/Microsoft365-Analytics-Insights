@@ -51,6 +51,7 @@ import {
   useRowExpansion,
 } from './adoptionShared';
 import { usePrintAllRows } from '../shared/printPreparation';
+import PiiHiddenNote from '../shared/PiiHiddenNote';
 import { formatCount, formatDate } from '../shared/KpiGrid';
 import { useT, useTNode } from '../../i18n';
 import { copilotAdoptionWarningText, isLicenceOpportunityWarning, opportunityRationale, opportunityTierLabel } from './serverText';
@@ -191,6 +192,7 @@ export default function OpportunitiesPanel({
   guidanceLinks,
   seatLicenceTypeIds,
   userFilter,
+  canSeePii = true,
 }: {
   windowDays: number;
   /** The analysis the licence estimate is published on, and whose assumptions the reader can change. */
@@ -205,6 +207,11 @@ export default function OpportunitiesPanel({
    * the rest of the report, and kept by every reset below.
    */
   userFilter?: string | null;
+  /**
+   * False for a reader without the See PII permission: the licence estimate stays, the candidate list
+   * is replaced by a note and never requested (the server would refuse it).
+   */
+  canSeePii?: boolean;
 }) {
   const styles = useStyles();
   const table = useAdoptionTableStyles();
@@ -253,7 +260,8 @@ export default function OpportunitiesPanel({
 
   const timeSaved = useTimeSavedAssumptions(summary);
   const { cohorts, setCohort } = useTimeSavedCohorts();
-  const [section, setSection] = useState<OpportunitySection>('candidates');
+  // A reader without the See PII permission has no candidate list, so the estimate is what opens.
+  const [section, setSection] = useState<OpportunitySection>(canSeePii ? 'candidates' : 'timeSaved');
   // Requests, not flags: each click must act again, including a second click on a section that is
   // already open - which is exactly when a plain setSection() changes nothing the reader can see.
   const [assumptionFocusRequest, setAssumptionFocusRequest] = useState(0);
@@ -303,6 +311,12 @@ export default function OpportunitiesPanel({
   useEffect(() => resetRows(), [filters, windowDays, page, resetRows]);
 
   useEffect(() => {
+    // The candidates are refused for a reader without the See PII permission, so never ask.
+    if (!canSeePii) {
+      setLoading(false);
+      return undefined;
+    }
+
     let cancelled = false;
     const controller = new AbortController();
     setLoading(true);
@@ -326,7 +340,7 @@ export default function OpportunitiesPanel({
       // a bare `cancelled` flag would only suppress the state update and leave the loop running.
       controller.abort();
     };
-  }, [windowDays, filters, page, seatLicenceTypeIds, reloadKey, t]);
+  }, [canSeePii, windowDays, filters, page, seatLicenceTypeIds, reloadKey, t]);
 
   /**
    * Applies a column-header sort. The effect above already resets the page whenever `filters`
@@ -352,7 +366,7 @@ export default function OpportunitiesPanel({
   // The candidate query stopped at its tenant-wide cap, so people ranked below it were never listed.
   const candidatesCapped = summary?.licenceOpportunityEstimate?.candidatesCapped ?? false;
   const printRows = usePrintAllRows<LicenceOpportunityRow>({
-    enabled: (!sectioned || section === 'candidates') && !loading && data !== null,
+    enabled: canSeePii && (!sectioned || section === 'candidates') && !loading && data !== null,
     total: data?.total ?? 0,
     loadedRows: data?.rows.length ?? 0,
     loadPage: (skip, take, signal) =>
@@ -375,7 +389,7 @@ export default function OpportunitiesPanel({
     .filter(({ detail }) => isLicenceOpportunityWarning(detail));
   const unlicensedGuidance = (guidanceLinks ?? []).filter((l) => l.actionCode === 'unlicensed');
 
-  const list = (
+  const list = !canSeePii ? <PiiHiddenNote /> : (
     <Card>
       {/* Chrome: nothing here can be used on paper. What it is set to is printed below instead. */}
       <div className={styles.filters} data-print="hide">
@@ -818,8 +832,8 @@ export default function OpportunitiesPanel({
         cohort={cohorts.licence}
         onCohortChange={(cohort) => setCohort('licence', cohort)}
         onAdjust={adjustAssumptions}
-        onShowRecommended={showRecommended}
-        onShowAll={showAllCandidates}
+        onShowRecommended={canSeePii ? showRecommended : undefined}
+        onShowAll={canSeePii ? showAllCandidates : undefined}
       />
 
       <div className={styles.sectionNav} data-print="hide" ref={sectionNavRef}>

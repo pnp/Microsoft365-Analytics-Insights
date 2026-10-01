@@ -14,7 +14,6 @@ using WebJob.Office365ActivityImporter.Engine.Graph;
 using WebJob.Office365ActivityImporter.Engine.Graph.Copilot.InteractionHistory;
 using WebJob.Office365ActivityImporter.Engine.Graph.UsageReports;
 using WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Copilot;
-using WebJob.Office365ActivityImporter.Engine.Graph.User;
 
 namespace Tests.UnitTests
 {
@@ -365,8 +364,7 @@ namespace Tests.UnitTests
             using (var handler = new StubHandler(HttpStatusCode.Forbidden, Forbidden))
             using (var client = new ManualGraphCallClient(handler, NullLogger.Instance))
             {
-                var loader = new OutlookUserActivityLoader(client, new NoUsersHaveGroupsUserGroupsCache(NullLogger.Instance),
-                    new UserGroupsFilterModel(string.Empty), NullLogger.Instance);
+                var loader = new OutlookUserActivityLoader(client, Common.Entities.UserScope.UserImportScope.Unfiltered, NullLogger.Instance);
 
                 var ex = await Assert.ThrowsExceptionAsync<GraphHttpException>(
                     () => loader.PopulateLoadedReportPagesFromGraph(1));

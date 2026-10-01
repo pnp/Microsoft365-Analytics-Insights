@@ -11,7 +11,6 @@ using System.Linq;
 using System.Threading.Tasks;
 using WebJob.Office365ActivityImporter.Engine.Entities.Serialisation.UsageReports;
 using WebJob.Office365ActivityImporter.Engine.Graph.UsageReports;
-using WebJob.Office365ActivityImporter.Engine.Graph.User;
 
 namespace Tests.UnitTests
 {
@@ -29,8 +28,8 @@ namespace Tests.UnitTests
                 db.Configuration.LazyLoadingEnabled = false;
 
                 // Prepare loader (ManualGraphCallClient not needed because we will inject data directly)
-                var groupsCache = new NoUsersHaveGroupsUserGroupsCache(logger);
-                var loader = new OutlookUserActivityLoader(null, groupsCache, new UserGroupsFilterModel("FakeGroup1;FakeGroup2"), logger);
+                var groupsCache = Common.Entities.UserScope.UserImportScope.Unfiltered;
+                var loader = new OutlookUserActivityLoader(null, groupsCache, logger);
 
                 // Fake single-day activity page for a unique user
                 var testDate = DateTime.UtcNow.Date.AddDays(-2); // Use date unlikely to be current day to avoid partial real data
@@ -116,8 +115,8 @@ namespace Tests.UnitTests
             {
                 db.Configuration.LazyLoadingEnabled = false;
 
-                var groupsCache = new NoUsersHaveGroupsUserGroupsCache(logger);
-                var loader = new OutlookUserActivityLoader(null, groupsCache, new UserGroupsFilterModel("FakeGroup1;FakeGroup2"), logger);
+                var groupsCache = Common.Entities.UserScope.UserImportScope.Unfiltered;
+                var loader = new OutlookUserActivityLoader(null, groupsCache, logger);
                 loader.SaveBatchSize = 2;   // force several batches for the five rows below (2 + 2 + 1)
 
                 var testDate = DateTime.UtcNow.Date.AddDays(-3);
@@ -173,8 +172,8 @@ namespace Tests.UnitTests
             {
                 db.Configuration.LazyLoadingEnabled = false;
 
-                var groupsCache = new NoUsersHaveGroupsUserGroupsCache(logger);
-                var loader = new OutlookUserActivityLoader(null, groupsCache, new UserGroupsFilterModel("FakeGroup1;FakeGroup2"), logger);
+                var groupsCache = Common.Entities.UserScope.UserImportScope.Unfiltered;
+                var loader = new OutlookUserActivityLoader(null, groupsCache, logger);
 
                 var testDate = DateTime.UtcNow.Date.AddDays(-4);
                 var runId = DateTime.UtcNow.Ticks;
@@ -230,8 +229,8 @@ namespace Tests.UnitTests
             {
                 db.Configuration.LazyLoadingEnabled = false;
 
-                var groupsCache = new NoUsersHaveGroupsUserGroupsCache(logger);
-                var loader = new OutlookUserActivityLoader(null, groupsCache, new UserGroupsFilterModel("FakeGroup1;FakeGroup2"), logger)
+                var groupsCache = Common.Entities.UserScope.UserImportScope.Unfiltered;
+                var loader = new OutlookUserActivityLoader(null, groupsCache, logger)
                 {
                     RefreshableRecentDays = 3
                 };
@@ -278,13 +277,12 @@ namespace Tests.UnitTests
         public async Task FinalizedDateLookup_DetectsIndexedAndUnindexedTables()
         {
             var logger = AnalyticsLogger.ConsoleOnlyTracer();
-            var groupsCache = new NoUsersHaveGroupsUserGroupsCache(logger);
-            var filter = new UserGroupsFilterModel("FakeGroup1;FakeGroup2");
+            var groupsCache = Common.Entities.UserScope.UserImportScope.Unfiltered;
 
             using (var db = new AnalyticsEntitiesContext())
             {
-                var indexedLoader = new OutlookUserActivityLoader(null, groupsCache, filter, logger);
-                var unindexedLoader = new OneDriveUsageLoader(null, groupsCache, filter, logger);
+                var indexedLoader = new OutlookUserActivityLoader(null, groupsCache, logger);
+                var unindexedLoader = new OneDriveUsageLoader(null, groupsCache, logger);
 
                 Assert.IsTrue(
                     await indexedLoader.HasLeadingDateIndexAsync(db),
@@ -299,11 +297,10 @@ namespace Tests.UnitTests
         public async Task GetFinalizedStoredDatesToSkipAsync_NoCompletedImportSkipsNothing()
         {
             var logger = AnalyticsLogger.ConsoleOnlyTracer();
-            var groupsCache = new NoUsersHaveGroupsUserGroupsCache(logger);
+            var groupsCache = Common.Entities.UserScope.UserImportScope.Unfiltered;
             var loader = new OutlookUserActivityLoader(
                 null,
                 groupsCache,
-                new UserGroupsFilterModel("FakeGroup1;FakeGroup2"),
                 logger);
 
             using (var db = new AnalyticsEntitiesContext())
@@ -326,9 +323,9 @@ namespace Tests.UnitTests
         public async Task PopulateLoadedReportPagesFromGraph_SkipsFinalizedDates_WithoutCallingGraph()
         {
             var logger = AnalyticsLogger.ConsoleOnlyTracer();
-            var groupsCache = new NoUsersHaveGroupsUserGroupsCache(logger);
+            var groupsCache = Common.Entities.UserScope.UserImportScope.Unfiltered;
 
-            var loader = new RecordingOutlookLoader(groupsCache, new UserGroupsFilterModel("FakeGroup1;FakeGroup2"), logger,
+            var loader = new RecordingOutlookLoader(groupsCache, logger,
                 date => new List<OutlookUserActivityUserDetail>
                 {
                     new OutlookUserActivityUserDetail { UserPrincipalName = $"u_{date:yyyyMMdd}@unit.test", LastActivityDateString = date.ToString("yyyy-MM-dd") }
@@ -358,9 +355,9 @@ namespace Tests.UnitTests
             public List<DateTime> RequestedDates { get; } = new List<DateTime>();
             private readonly Func<DateTime, List<OutlookUserActivityUserDetail>> _dataForDate;
 
-            public RecordingOutlookLoader(UserGroupsCache groupsCache, UserGroupsFilterModel filter, ILogger logger,
+            public RecordingOutlookLoader(Common.Entities.UserScope.UserImportScope groupsCache, ILogger logger,
                 Func<DateTime, List<OutlookUserActivityUserDetail>> dataForDate)
-                : base(null, groupsCache, filter, logger)
+                : base(null, groupsCache, logger)
             {
                 _dataForDate = dataForDate;
             }

@@ -464,7 +464,8 @@ namespace DataUtils
             CopilotAdoptionLifecycle,
             LicenceActivityLifecycle,
             UsageReportSaveStage,
-            UserOrgCsvImport
+            UserOrgCsvImport,
+            UserScopePurge
         }
 
         private static bool TryMarkExceptionAsTracked(Exception ex)

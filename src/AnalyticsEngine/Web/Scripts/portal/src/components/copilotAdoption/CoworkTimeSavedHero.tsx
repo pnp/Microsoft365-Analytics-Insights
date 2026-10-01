@@ -134,8 +134,10 @@ export default function CoworkTimeSavedHero({
   cohort: TimeSavedCohort;
   onCohortChange: (cohort: TimeSavedCohort) => void;
   onAdjust: () => void;
-  onShowPeople: () => void;
-  onShowAll: () => void;
+  /** Opens the people section. Omitted for a reader without the See PII permission, who has no list to open. */
+  onShowPeople?: () => void;
+  /** Opens every seat holder represented by the all-users cohort. Omitted without See PII. */
+  onShowAll?: () => void;
 }) {
   const styles = useStyles();
   const t = useT();
@@ -371,7 +373,8 @@ export default function CoworkTimeSavedHero({
             {t('copilotAdoptionTimeSaved.hero.adjust')}
           </Button>
           {everyone ? (
-            <Button appearance="secondary" size="small" icon={<ArrowRight16Regular />} iconPosition="after" onClick={onShowAll}>
+            onShowAll && (
+              <Button appearance="secondary" size="small" icon={<ArrowRight16Regular />} iconPosition="after" onClick={onShowAll}>
               {t(
                 plural(
                   headline.cohortUsers,
@@ -380,9 +383,10 @@ export default function CoworkTimeSavedHero({
                 ),
                 { users: formatCount(headline.cohortUsers) },
               )}
-            </Button>
+              </Button>
+            )
           ) : (
-            readyUsers > 0 && (
+            readyUsers > 0 && onShowPeople && (
               <Button appearance="secondary" size="small" icon={<ArrowRight16Regular />} iconPosition="after" onClick={onShowPeople}>
                 {t(
                   plural(

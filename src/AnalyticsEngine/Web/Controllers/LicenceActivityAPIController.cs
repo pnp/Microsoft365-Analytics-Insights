@@ -12,9 +12,15 @@ using System.Threading.Tasks;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Web.AnalyticsWeb.Models.LicenceActivity;
+using Web.AnalyticsWeb.Security;
 
 namespace Web.AnalyticsWeb.Controllers
 {
+    /// <summary>
+    /// The Licence activity report. The overview and its totals-only workbook are for every signed-in
+    /// reader; the people holding a licence, and a workbook that includes them, need the portal's See PII
+    /// permission (#661).
+    /// </summary>
     [Authorize]
     [Route("api/LicenceActivity")]
     public sealed class LicenceActivityAPIController  : ControllerBase
@@ -76,6 +82,7 @@ namespace Web.AnalyticsWeb.Controllers
             });
 
         [HttpGet, Route("users")]
+        [RequirePortalPermission(PortalPermission.SeePii)]
         public Task<IActionResult> Users(
             string overviewId, int licenceTypeId, string workload = "teams", int top = 10, string search = null,
             string sort = "upn", string direction = "asc", int page = 1, int pageSize = 50,
@@ -103,6 +110,12 @@ namespace Web.AnalyticsWeb.Controllers
         public Task<IActionResult> Export(string overviewId, string usersId = null) =>
             ExecuteAsync(() =>
             {
+                // The totals-only workbook is for everyone. Asking for the people as well is asking for
+                // exactly what api/LicenceActivity/users refuses, so it is refused the same way - checked
+                // on every export rather than trusted from when the user list was loaded, so a snapshot
+                // taken while the permission was held cannot be exported after it is withdrawn.
+                if (usersId != null && !PortalAccess.Evaluate(Request, User).SeePii)
+                    return Task.FromResult(PortalPermissionDenied.Result(Request, PortalPermission.SeePii));
                 var context = _context();
                 if (!context.Sources.UserMetadata) return Task.FromResult(MissingMetadata());
                 var overview = _overviews.Find(context.Scope, overviewId);
@@ -184,7 +197,8 @@ namespace Web.AnalyticsWeb.Controllers
                 UserMetadata = settings.GraphUsersMetadata, UsageReports = settings.GraphUsageReports,
                 CopilotUsageReports = settings.GraphCopilotUsageReports, CopilotAudit = settings.Copilot,
                 CopilotInteractions = settings.CopilotInteractionHistory,
-                UsageReportsGroupFiltered = !string.IsNullOrWhiteSpace(config.UserGroupsFilter),
+                // A match-everything filter ('*') narrows nothing, so it is not a group filter.
+                UsageReportsGroupFiltered = new Common.Entities.Config.UserGroupsFilterModel(config.UserGroupsFilter).IsNarrowing,
                 NowUtc = DateTime.UtcNow
             };
             string scope;

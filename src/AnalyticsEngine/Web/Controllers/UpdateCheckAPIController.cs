@@ -2,6 +2,7 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Web.AnalyticsWeb.Models.UpdateCheck;
+using Web.AnalyticsWeb.Security;
 
 namespace Web.AnalyticsWeb.Controllers
 {
@@ -14,6 +15,7 @@ namespace Web.AnalyticsWeb.Controllers
     /// GitHub's anonymous rate limit, which the installer also depends on.
     /// </remarks>
     [Authorize]
+    [RequirePortalPermission(PortalPermission.Administration)]
     [Route("api/UpdateCheck")]
     public class UpdateCheckAPIController  : ControllerBase
     {

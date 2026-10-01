@@ -9,6 +9,7 @@ using System.Threading.Tasks;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Web.AnalyticsWeb.Models;
+using Web.AnalyticsWeb.Security;
 
 namespace Web.AnalyticsWeb.Controllers
 {
@@ -23,6 +24,7 @@ namespace Web.AnalyticsWeb.Controllers
     /// request: that "table doesn't exist" state IS the diagnostic an admin is looking for.
     /// </summary>
     [Authorize]
+    [RequirePortalPermission(PortalPermission.Administration)]
     [Route("api/ProfilingStatus")]
     public class ProfilingStatusAPIController  : ControllerBase
     {

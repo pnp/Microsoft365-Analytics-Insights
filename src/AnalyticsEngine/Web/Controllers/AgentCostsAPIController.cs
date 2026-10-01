@@ -8,6 +8,7 @@ using System.Net;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Web.AnalyticsWeb.Security;
 
 namespace Web.AnalyticsWeb.Controllers
 {
@@ -151,13 +152,15 @@ namespace Web.AnalyticsWeb.Controllers
             });
 
         /// <summary>
-        /// The biggest per-user credit consumers in the window.
+        /// The biggest per-user credit consumers in the window. Needs the portal's See PII permission (#661):
+        /// every row is a named person.
         /// </summary>
         /// <remarks>
         /// Only Copilot Studio has this. Azure spend is resource-scoped and carries no user identity on any
         /// Cost Management surface, so there is no equivalent endpoint for it and there cannot be one.
         /// </remarks>
         [HttpGet, Route("users")]
+        [RequirePortalPermission(PortalPermission.SeePii)]
         public Task<IActionResult> Users(string from = null, string to = null, string environmentId = null, int top = 20)
             => Execute(async () =>
             {

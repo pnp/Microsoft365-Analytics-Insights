@@ -44,13 +44,13 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         }
 
-        public async Task SaveOrReplaceCallRecord(CallRecordDTO call)
+        public async Task SaveOrReplaceCallRecord(CallRecordDTO call, Common.Entities.UserScope.UserImportScope userScope)
         {
             if (call is null) throw new ArgumentNullException(nameof(call));
 
             using (var db = new AnalyticsEntitiesContext())
             {
-                await call.SaveOrReplaceCallRecord(new TeamsAndCallsDBLookupManager(db), _logger);
+                await call.SaveOrReplaceCallRecord(new TeamsAndCallsDBLookupManager(db), _logger, userScope);
             }
         }
     }

@@ -18,7 +18,7 @@ using WebJob.Office365ActivityImporter.Engine.ActivityAPI.Persistence;
 using WebJob.Office365ActivityImporter.Engine.ActivityAPI.Rules;
 using WebJob.Office365ActivityImporter.Engine.Entities;
 using WebJob.Office365ActivityImporter.Engine.Entities.Serialisation;
-using WebJob.Office365ActivityImporter.Engine.Graph.User;
+using Common.Entities.UserScope;
 
 namespace WebJob.Office365ActivityImporter.Engine
 {
@@ -70,8 +70,12 @@ namespace WebJob.Office365ActivityImporter.Engine
         // The lifecycle itself lives in ActivityImportCacheProvider.
         private readonly bool _usePerBatchDedupCache;
 
-        public ActivityReportSqlPersistenceManager(AuditFilterConfig filterConfig, UserGroupsCache userGroupsCache, ILogger logger, AppConfig appConfig, int maxConcurrentSaves = 1, bool usePerBatchDedupCache = false)
-            : this(filterConfig, userGroupsCache, logger, appConfig, maxConcurrentSaves, usePerBatchDedupCache, null)
+        /// <param name="userScope">
+        /// The <c>UserGroupsFilter</c> scope for this cycle: audit events by anyone outside it are not staged. Null
+        /// means unfiltered.
+        /// </param>
+        public ActivityReportSqlPersistenceManager(AuditFilterConfig filterConfig, UserImportScope userScope, ILogger logger, AppConfig appConfig, int maxConcurrentSaves = 1, bool usePerBatchDedupCache = false)
+            : this(filterConfig, userScope, logger, appConfig, maxConcurrentSaves, usePerBatchDedupCache, null)
         {
         }
 
@@ -81,8 +85,8 @@ namespace WebJob.Office365ActivityImporter.Engine
         /// compiler, so widening the existing constructor would be a binary-breaking change for any already
         /// compiled caller.
         /// </summary>
-        public ActivityReportSqlPersistenceManager(AuditFilterConfig filterConfig, UserGroupsCache userGroupsCache, ILogger logger, AppConfig appConfig, int maxConcurrentSaves, bool usePerBatchDedupCache, IClock clock)
-            : this(filterConfig, userGroupsCache, logger, appConfig, maxConcurrentSaves, usePerBatchDedupCache, clock, null, null, null, null)
+        public ActivityReportSqlPersistenceManager(AuditFilterConfig filterConfig, UserImportScope userScope, ILogger logger, AppConfig appConfig, int maxConcurrentSaves, bool usePerBatchDedupCache, IClock clock)
+            : this(filterConfig, userScope, logger, appConfig, maxConcurrentSaves, usePerBatchDedupCache, clock, null, null, null, null)
         {
         }
 
@@ -94,14 +98,14 @@ namespace WebJob.Office365ActivityImporter.Engine
         /// A <c>null</c> collaborator means "build the production adapter", constructed in the body rather
         /// than in a chained constructor initialiser. That is deliberate ordering-insurance: a chained
         /// <c>: this(new SqlThing(appConfig...), ...)</c> evaluates the adapter's constructor <i>before</i>
-        /// this body's <c>new UserGroupsFilterModel(appConfig.UserGroupsFilter)</c>. It makes no difference
+        /// this body's <c>ActivityStagingPass</c>. It makes no difference
         /// today - neither adapter that is handed <c>appConfig</c> (<see cref="GraphCopilotMetadataLoaderFactory"/>
         /// and <see cref="SaveSessionFactory"/>) validates or dereferences it in its constructor, so a null
         /// <c>appConfig</c> still raises the same <see cref="NullReferenceException"/> at the same point
         /// either way - but it means adding such a guard later cannot silently change which exception an
         /// existing caller sees.
         /// </summary>
-        internal ActivityReportSqlPersistenceManager(AuditFilterConfig filterConfig, UserGroupsCache userGroupsCache, ILogger logger, AppConfig appConfig,
+        internal ActivityReportSqlPersistenceManager(AuditFilterConfig filterConfig, UserImportScope userScope, ILogger logger, AppConfig appConfig,
             int maxConcurrentSaves, bool usePerBatchDedupCache, IClock clock,
             IActivityImportCacheProvider cacheProvider, IActivityStagingWriter stagingWriter,
             ICopilotMetadataLoaderFactory copilotMetadataLoaderFactory, ISaveSessionFactory saveSessionFactory)
@@ -109,7 +113,6 @@ namespace WebJob.Office365ActivityImporter.Engine
             _logger = logger;
             _appConfig = appConfig;
             _clock = clock ?? SystemClock.Instance;
-            var userGroupsFilter = new UserGroupsFilterModel(appConfig.UserGroupsFilter);
             _maxConcurrentSaves = ActivitySaveConcurrencyPolicy.NormaliseMaxConcurrentSaves(maxConcurrentSaves);
             _usePerBatchDedupCache = usePerBatchDedupCache;
             if (ActivitySaveConcurrencyPolicy.UseShardedStaging(_maxConcurrentSaves))
@@ -117,7 +120,7 @@ namespace WebJob.Office365ActivityImporter.Engine
                 _saveConcurrencyGate = new SemaphoreSlim(_maxConcurrentSaves, _maxConcurrentSaves);
             }
 
-            _stagingPass = new ActivityStagingPass(filterConfig, userGroupsCache, userGroupsFilter, logger);
+            _stagingPass = new ActivityStagingPass(filterConfig, userScope, logger);
             _cacheProvider = cacheProvider ?? new ActivityImportCacheProvider(SqlActivityImportCacheLoader.Instance, logger);
             _stagingWriter = stagingWriter ?? new SqlActivityStagingWriter(logger);
             _copilotPrewarmer = new CopilotMetadataPrewarmer(

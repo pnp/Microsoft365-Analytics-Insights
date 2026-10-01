@@ -2,6 +2,7 @@ extern alias AnalyticsWeb;
 using AnalyticsWeb::Web.AnalyticsWeb;
 using AnalyticsWeb::Web.AnalyticsWeb.Controllers;
 using AnalyticsWeb::Web.AnalyticsWeb.Models.LicenceActivity;
+using AnalyticsWeb::Web.AnalyticsWeb.Security;
 using Common.Entities.LicenceActivity;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Builder;
@@ -121,6 +122,8 @@ namespace Tests.UnitTests
         {
             var identity = new ClaimsIdentity(TestScheme);
             identity.AddClaim(new Claim(ClaimTypes.NameIdentifier, "synthetic-administrator"));
+            identity.AddClaim(new Claim("roles", PortalRoles.Administration));
+            identity.AddClaim(new Claim("roles", PortalRoles.SeePii));
             return new ClaimsPrincipal(identity);
         }
 

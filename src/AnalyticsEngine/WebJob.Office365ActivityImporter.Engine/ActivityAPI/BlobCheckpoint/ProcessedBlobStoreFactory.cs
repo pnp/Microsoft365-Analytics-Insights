@@ -17,7 +17,7 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.BlobCheckpoint
     public static class ProcessedBlobStoreFactory
     {
         public static IProcessedBlobStore Create(AppConfig config, ILogger logger,
-            Func<string, TimeSpan, ILogger, string, string, string, IProcessedBlobStore> createAzureStore = null)
+            Func<string, TimeSpan, ILogger, AppConfig, IProcessedBlobStore> createAzureStore = null)
         {
             // Retain checkpoint entries a little longer than the API lookback window - a blob older than
             // that can never be re-listed, so it is safe to forget (keeps the store bounded).
@@ -29,10 +29,9 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.BlobCheckpoint
             {
                 try
                 {
-                    var tenantId = config.TenantGUID == Guid.Empty ? null : config.TenantGUID.ToString();
-                    var storeFactory = createAzureStore ?? ((conn, ret, log, tid, cid, secret) =>
-                        new AzureTableProcessedBlobStore(conn, ret, log, tid, cid, secret));
-                    var store = storeFactory(storageConn, retention, logger, tenantId, config.ClientID, config.ClientSecret);
+                    var storeFactory = createAzureStore ?? ((conn, ret, log, runtimeConfig) =>
+                        new AzureTableProcessedBlobStore(conn, ret, log, runtimeConfig));
+                    var store = storeFactory(storageConn, retention, logger, config);
                     logger?.LogInformation("Blob checkpoint: durable Azure Table store initialised (processed blobs persist across restarts).");
                     (logger as AnalyticsLogger)?.TrackHealthCheck(HealthComponent.BlobCheckpoint, HealthStatus.Healthy,
                         "Durable Azure Table checkpoint active.",

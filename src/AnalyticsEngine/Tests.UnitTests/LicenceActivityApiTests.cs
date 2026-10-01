@@ -2,6 +2,7 @@ extern alias AnalyticsWeb;
 
 using AnalyticsWeb::Web.AnalyticsWeb.Controllers;
 using AnalyticsWeb::Web.AnalyticsWeb.Models.LicenceActivity;
+using AnalyticsWeb::Web.AnalyticsWeb.Security;
 using Common.Entities.LicenceActivity;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using Newtonsoft.Json.Linq;
@@ -22,24 +23,40 @@ namespace Tests.UnitTests
     public class LicenceActivityApiTests
     {
         [TestMethod]
-        public async Task AnonymousRequestsAreDenied_ButEverySignedInReaderSeesTheWholeReport()
+        public async Task AnonymousRequestsAreDenied_AndIndividualsNeedTheSeePiiPermission()
         {
             using (var app = new Harness())
             {
                 app.Principal = new GenericPrincipal(new GenericIdentity(string.Empty), new string[0]);
                 Assert.AreEqual(HttpStatusCode.Unauthorized, (await app.Client.GetAsync("api/LicenceActivity/availability")).StatusCode);
+
+                // A reader holding no app role gets every aggregate. This test used to pin the opposite
+                // decision - "everyone who can open the portal sees everything this report knows" - and
+                // changed deliberately with the portal's See PII permission (#661).
                 app.Principal = SignedIn();
                 var availability = await app.Json("api/LicenceActivity/availability");
                 Assert.AreEqual(true, (bool)availability["available"]);
-                Assert.IsNull(availability["canViewUsers"], "The report has no second permission level to advertise.");
+                Assert.IsNull(availability["canViewUsers"], "The SPA learns permissions from api/PortalAccess, not from each report.");
                 var overview = await app.Json("api/LicenceActivity/overview");
                 Assert.IsNotNull(overview["snapshotId"]);
+                Assert.AreEqual(HttpStatusCode.OK,
+                    (await app.Client.GetAsync("api/LicenceActivity/export?overviewId=" + overview["snapshotId"])).StatusCode,
+                    "The totals-only workbook names nobody.");
 
-                // A reader holding no application role at all still gets the per-person list: everyone
-                // who can open the portal sees everything this report knows.
-                var users = await app.Client.GetAsync("api/LicenceActivity/users?overviewId=" + overview["snapshotId"] + "&licenceTypeId=1");
-                Assert.AreEqual(HttpStatusCode.OK, users.StatusCode);
+                var refused = await app.Client.GetAsync("api/LicenceActivity/users?overviewId=" + overview["snapshotId"] + "&licenceTypeId=1");
+                Assert.AreEqual(HttpStatusCode.Forbidden, refused.StatusCode);
+                Assert.AreEqual("portalPermissionRequired", (string)JObject.Parse(await refused.Content.ReadAsStringAsync())["code"]);
+                Assert.AreEqual(0, app.Store.UserCalls, "A refused request must not load the people.");
+
+                app.Principal = SignedIn(PortalRoles.SeePii);
+                var users = await app.Json("api/LicenceActivity/users?overviewId=" + overview["snapshotId"] + "&licenceTypeId=1");
                 Assert.AreEqual(1, app.Store.UserCalls);
+
+                // The permission is re-checked on export, so a user list loaded while it was held cannot be
+                // exported once it has gone.
+                app.Principal = SignedIn();
+                var export = await app.Client.GetAsync("api/LicenceActivity/export?overviewId=" + overview["snapshotId"] + "&usersId=" + users["snapshotId"]);
+                Assert.AreEqual(HttpStatusCode.Forbidden, export.StatusCode);
             }
         }
 
@@ -205,7 +222,8 @@ namespace Tests.UnitTests
         {
             private readonly LicenceActivityHttpHost _host;
             internal DateTime Now = LicenceActivityTests.Now;
-            internal IPrincipal Principal = SignedIn();
+            // The report's full reader. Tests of what a reader WITHOUT the permission sees set SignedIn().
+            internal IPrincipal Principal = SignedIn(PortalRoles.SeePii);
             internal readonly FakeStore Store = new FakeStore();
             internal readonly LicenceActivitySources Sources = new LicenceActivitySources
             {

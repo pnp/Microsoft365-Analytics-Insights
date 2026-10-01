@@ -52,14 +52,22 @@ namespace Common.Entities.State
             if (!IsConfigured(config)) return null;
 
             var connectionString = config.ConnectionStrings.StorageConnectionString;
-            var tenantId = config.TenantGUID == Guid.Empty ? null : config.TenantGUID.ToString();
-            var clientId = config.ClientID;
-            var clientSecret = config.ClientSecret;
-
-            var table = Tables.GetOrAdd(connectionString + "|" + clientId, _ => new LazyTableClient(ct =>
-                StorageTableClientFactory.CreateAndEnsureTableAsync(connectionString, TableName, tenantId, clientId, clientSecret, logger, Purpose, ct)));
+            var table = Tables.GetOrAdd(TableCacheKey(connectionString, config), _ => new LazyTableClient(ct =>
+                StorageTableClientFactory.CreateAndEnsureTableAsync(connectionString, TableName, config, logger, Purpose, ct)));
 
             return Open(table, partition);
+        }
+
+        /// <summary>
+        /// Separates cached clients by tenant, runtime app and authentication mode. In particular, certificate mode
+        /// must never reuse a client created for a stale client secret (or vice versa).
+        /// </summary>
+        internal static string TableCacheKey(string connectionString, AppConfig config)
+        {
+            var mode = config.UseClientCertificate
+                ? "certificate|" + (config.KeyVaultUrl ?? string.Empty)
+                : "client-secret";
+            return connectionString + "|" + config.TenantGUID + "|" + (config.ClientID ?? string.Empty) + "|" + mode;
         }
 
         /// <summary>
@@ -149,5 +157,12 @@ namespace Common.Entities.State
 
         /// <summary>Azure AI Language results for Teams messages, kept for a day so the same text is not analysed twice.</summary>
         public const string CognitiveCache = "CognitiveCache";
+
+        /// <summary>
+        /// Purges of data about people outside <c>UserGroupsFilter</c>, from the portal's Administration &gt; User scope page:
+        /// each purge's record (progress, counts, who started it), which purge is the latest, and stop requests. A finished
+        /// purge's record expires after 90 days. Never the list of people a purge removes, which exists only while it runs.
+        /// </summary>
+        public const string UserScopePurge = "UserScopePurge";
     }
 }

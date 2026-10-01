@@ -6,6 +6,7 @@ using System.Threading.Tasks;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Web.AnalyticsWeb.Models;
+using Web.AnalyticsWeb.Security;
 
 namespace Web.AnalyticsWeb.Controllers
 {
@@ -14,6 +15,7 @@ namespace Web.AnalyticsWeb.Controllers
     /// <c>sys_configs</c> table). The most recent entry is the current configuration.
     /// </summary>
     [Authorize]
+    [RequirePortalPermission(PortalPermission.Administration)]
     [Route("api/InstallLog")]
     public class InstallLogAPIController  : ControllerBase
     {

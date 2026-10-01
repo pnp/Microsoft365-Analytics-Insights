@@ -19,6 +19,12 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         }
         public GraphServiceClient GraphClient { get; set; }
         public UserLookupCache UserCache { get; set; }
+
+        /// <summary>
+        /// The <c>UserGroupsFilter</c> scope for this crawl. People outside it are not stored as owners or members,
+        /// their reactions are not stored, and their channel messages are left out of the channel statistics.
+        /// </summary>
+        public Common.Entities.UserScope.UserImportScope UserScope { get; set; } = Common.Entities.UserScope.UserImportScope.Unfiltered;
     }
 
     /// <summary>

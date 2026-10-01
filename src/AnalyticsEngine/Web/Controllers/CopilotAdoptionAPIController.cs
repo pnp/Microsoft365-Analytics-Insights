@@ -21,6 +21,7 @@ using Microsoft.AspNetCore.Mvc.Filters;
 using Web.AnalyticsWeb.Models;
 using Web.AnalyticsWeb.Models.CopilotAdoption;
 using Web.AnalyticsWeb.Models.UserFilters;
+using Web.AnalyticsWeb.Security;
 
 namespace Web.AnalyticsWeb.Controllers
 {
@@ -48,6 +49,10 @@ namespace Web.AnalyticsWeb.Controllers
     ///   match the summary it was exported from.</item>
     ///   <item>Concurrent first-hits share one execution (the cache holds the <see cref="Task{T}"/>),
     ///   so a page refresh during a slow analysis cannot start a second full scan of the audit history.</item>
+    ///   <item>Per-person lists, their CSV exports and any population-narrowing filter need the portal's
+    ///   See PII permission. The tenant-wide summary and workbook are served to everyone, without the
+    ///   parts that name a person for a reader who lacks it (#661). The shared cached analysis is never
+    ///   edited for one reader.</item>
     /// </list>
     /// </summary>
     [Authorize]
@@ -446,11 +451,30 @@ namespace Web.AnalyticsWeb.Controllers
             CancellationToken cancellationToken = default(CancellationToken))
         {
             if (!TryParseUserFilter(userFilter, out var filter, out var filterError)) return InvalidFilter(filterError);
+            var permissionDenied = ScopePermissionDenied(emailDomain, filter);
+            if (permissionDenied != null) return permissionDenied;
 
             var analysis = await TryGetScopedSummaryAsync(
                 windowDays, seatLicenceTypeIds, emailDomain, filter, FirstResponseBudget, cancellationToken);
             if (analysis == null) return StillBuilding(windowDays, seatLicenceTypeIds);
-            return Ok(analysis.Summary);
+            return Ok(CanSeeIndividuals() ? analysis.Summary : analysis.Summary.WithoutIndividualData());
+        }
+
+        /// <summary>Whether the caller holds the portal's See PII permission (#661).</summary>
+        private bool CanSeeIndividuals() => PortalAccess.Evaluate(Request, User).SeePii;
+
+        /// <summary>
+        /// Refuses a population-narrowing scope for a reader who cannot see individual data. Even when the
+        /// response names nobody, a filter that selects one known person turns every aggregate into that
+        /// person's licence and activity record.
+        /// </summary>
+        private IActionResult ScopePermissionDenied(string emailDomain, UserFilterExpression userFilter)
+        {
+            var narrowed = CopilotAdoptionEmailDomain.Normalise(emailDomain) != null
+                || (userFilter != null && !userFilter.IsEmpty);
+            return narrowed && !CanSeeIndividuals()
+                ? PortalPermissionDenied.Result(Request, PortalPermission.SeePii)
+                : null;
         }
 
         /// <summary>
@@ -552,6 +576,7 @@ namespace Web.AnalyticsWeb.Controllers
         // GET: api/CopilotAdoption/licensed-users?windowDays=28&skip=0&take=50
         [HttpGet]
         [Route("licensed-users")]
+        [RequirePortalPermission(PortalPermission.SeePii)]
         public async Task<IActionResult> LicensedUsers(
             int windowDays = 28,
             string seatLicenceTypeIds = null,
@@ -601,6 +626,7 @@ namespace Web.AnalyticsWeb.Controllers
         // GET: api/CopilotAdoption/licensed-users/export
         [HttpGet]
         [Route("licensed-users/export")]
+        [RequirePortalPermission(PortalPermission.SeePii)]
         public async Task<IActionResult> ExportLicensedUsers(
             int windowDays = 28,
             string seatLicenceTypeIds = null,
@@ -677,6 +703,7 @@ namespace Web.AnalyticsWeb.Controllers
         // GET: api/CopilotAdoption/opportunities?windowDays=28&skip=0&take=50
         [HttpGet]
         [Route("opportunities")]
+        [RequirePortalPermission(PortalPermission.SeePii)]
         public async Task<IActionResult> Opportunities(
             int windowDays = 28,
             string seatLicenceTypeIds = null,
@@ -718,6 +745,7 @@ namespace Web.AnalyticsWeb.Controllers
         // GET: api/CopilotAdoption/opportunities/export
         [HttpGet]
         [Route("opportunities/export")]
+        [RequirePortalPermission(PortalPermission.SeePii)]
         public async Task<IActionResult> ExportOpportunities(
             int windowDays = 28,
             string seatLicenceTypeIds = null,
@@ -769,6 +797,7 @@ namespace Web.AnalyticsWeb.Controllers
         // GET: api/CopilotAdoption/cowork?windowDays=28&skip=0&take=50
         [HttpGet]
         [Route("cowork")]
+        [RequirePortalPermission(PortalPermission.SeePii)]
         public async Task<IActionResult> Cowork(
             int windowDays = 28,
             string seatLicenceTypeIds = null,
@@ -818,6 +847,7 @@ namespace Web.AnalyticsWeb.Controllers
         // GET: api/CopilotAdoption/cowork/export
         [HttpGet]
         [Route("cowork/export")]
+        [RequirePortalPermission(PortalPermission.SeePii)]
         public async Task<IActionResult> ExportCowork(
             int windowDays = 28,
             string seatLicenceTypeIds = null,
@@ -904,6 +934,8 @@ namespace Web.AnalyticsWeb.Controllers
             CancellationToken cancellationToken = default(CancellationToken))
         {
             if (!TryParseUserFilter(userFilter, out var filter, out var filterError)) return InvalidFilterResponse(filterError);
+            var permissionDenied = ScopePermissionDenied(emailDomain, filter);
+            if (permissionDenied != null) return permissionDenied;
 
             // Exports are <a href> downloads, not fetch() calls: a browser will not retry a 202, it
             // would just render the JSON body as the "file". So an export WAITS - but only up to
@@ -924,7 +956,8 @@ namespace Web.AnalyticsWeb.Controllers
             byte[] bytes;
             try
             {
-                bytes = CopilotAdoptionWorkbook.Build(analysis, timeSaved.Any ? timeSaved : null);
+                bytes = CopilotAdoptionWorkbook.Build(
+                    analysis, timeSaved.Any ? timeSaved : null, includeIndividualData: CanSeeIndividuals());
             }
             catch (Exception ex)
             {

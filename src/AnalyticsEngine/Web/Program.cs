@@ -25,8 +25,6 @@ builder.WebHost.ConfigureKestrel(options => options.Limits.MaxRequestLineSize = 
 // rather than on the first request.
 var appConfig = new AppConfig();
 
-const string GraphScopes = "https://graph.microsoft.com/Team.ReadBasic.All https://graph.microsoft.com/ChannelMessage.Read.All";
-
 builder.Services.AddAuthentication(options =>
 {
     options.DefaultScheme = CookieAuthenticationDefaults.AuthenticationScheme;
@@ -40,11 +38,12 @@ builder.Services.AddAuthentication(options =>
     // Match the v2 token endpoint used by RefreshOAuthToken with v2 discovery and issuer metadata.
     options.Authority = $"{appConfig.Authority}/v2.0";
     options.SignedOutRedirectUri = appConfig.WebAppURL;
-    options.ResponseType = OpenIdConnectResponseType.CodeIdToken;
+    options.ResponseType = OpenIdConnectResponseType.Code;
+    options.UsePkce = true;
     options.TokenValidationParameters.ValidateIssuer = true;
 
     options.Scope.Clear();
-    foreach (var scope in $"openid email profile offline_access {GraphScopes}".Split(' ', StringSplitOptions.RemoveEmptyEntries))
+    foreach (var scope in DelegatedGraphConsent.SignInScopes.Split(' ', StringSplitOptions.RemoveEmptyEntries))
     {
         options.Scope.Add(scope);
     }
@@ -62,6 +61,14 @@ builder.Services.AddAuthentication(options =>
         // For API requests we therefore suppress the redirect and leave the plain 401 in place.
         OnRedirectToIdentityProvider = context =>
         {
+            if (DelegatedGraphConsent.IsTeamsConnect(context.Properties))
+            {
+                DelegatedGraphConsent.ConfigureChallenge(
+                    context.Properties,
+                    context.ProtocolMessage,
+                    context.HttpContext.User);
+            }
+
             if (context.ProtocolMessage.RequestType == OpenIdConnectRequestType.Authentication
                 && AuthRequestRules.IsApiRequest(context.Request))
             {
@@ -81,30 +88,36 @@ builder.Services.AddAuthentication(options =>
             return Task.CompletedTask;
         },
 
-        // When Entra redirects back with an auth code, redeem it for tokens and stash the refresh
-        // token in the (encrypted, httpOnly) auth cookie so the SPA can get a Graph token via
-        // SiteTokenAPI. Nothing is stored server-side: authorising a Team for deep analytics copies the
-        // token into the state table explicitly (TeamsAuthAPIController), and only for the Teams the
-        // admin chooses.
-        OnAuthorizationCodeReceived = async context =>
+        // The OIDC handler redeems the marked Teams challenge. Carry its refresh token only until the
+        // principal has been validated, then put it in the encrypted, httpOnly cookie claim.
+        OnTokenResponseReceived = context =>
         {
-            var identity = (ClaimsIdentity)context.Principal.Identity;
-
-            var authToken = await RefreshOAuthToken.GetAccessToken(
-                context.ProtocolMessage.Code, $"openid email profile offline_access {GraphScopes}",
-                context.TokenEndpointRequest.RedirectUri, appConfig);
-
-            // Persist the refresh token in the auth cookie (claim). SiteTokenAPI uses it to mint
-            // fresh access tokens for the SPA. The access token itself isn't stored (it's short-lived
-            // and would bloat the cookie).
-            if (authToken != null && !string.IsNullOrEmpty(authToken.RefreshToken))
+            DelegatedGraphConsent.CaptureRefreshToken(context.Properties, context.TokenEndpointResponse);
+            return Task.CompletedTask;
+        },
+        OnTokenValidated = context =>
+        {
+            DelegatedGraphConsent.CompleteTokenValidation(context.Properties, context.Principal);
+            return Task.CompletedTask;
+        },
+        OnRemoteFailure = context =>
+        {
+            if (!DelegatedGraphConsent.IsTeamsConnect(context.Properties))
             {
-                identity.AddClaim(new Claim(GraphTokenClaims.RefreshToken, authToken.RefreshToken));
+                return Task.CompletedTask;
             }
 
-            // Supply the redeemed tokens for validation without redeeming the code a second time.
-            context.HandleCodeRedemption(authToken.AccessToken, authToken.IdToken);
-        }
+            var error = context.Request.Query["error"].ToString();
+            var description = context.Request.Query["error_description"].ToString();
+            var exception = context.Failure ?? new InvalidOperationException("The OpenID Connect request failed.");
+            if (!string.IsNullOrEmpty(error)) exception.Data["error"] = error;
+            if (!string.IsNullOrEmpty(description)) exception.Data["error_description"] = description;
+
+            var failure = DelegatedGraphConsent.DescribeAuthorizationFailure(null, exception);
+            context.HandleResponse();
+            context.Response.Redirect(DelegatedGraphConsent.FailureReturnUri(failure));
+            return Task.CompletedTask;
+        },
     };
 });
 
@@ -151,7 +164,9 @@ app.MapPortalRoutes();
 // Resume any user organisation CSV import the previous process was running when it stopped (in the
 // background; it never throws), and drain the telemetry pipelines on shutdown - the Copilot Adoption
 // HostStopping stage is what separates "recycled under a run" from "the run hung" (issue #441).
+Web.AnalyticsWeb.Models.UserScope.UserScopePurgeRunner.ConfigureHostStopping(app.Lifetime.ApplicationStopping);
 app.Lifetime.ApplicationStarted.Register(Web.AnalyticsWeb.Controllers.UserOrgAPIController.ResumeInterruptedImportsAfterStartup);
+app.Lifetime.ApplicationStarted.Register(Web.AnalyticsWeb.Models.UserScope.UserScopePurgeRunner.Instance.ResumeInterrupted);
 app.Lifetime.ApplicationStopping.Register(() =>
 {
     Web.AnalyticsWeb.Models.LicenceActivity.LicenceActivityTelemetry.Shutdown();

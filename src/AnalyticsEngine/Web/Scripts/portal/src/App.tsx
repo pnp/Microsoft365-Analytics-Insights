@@ -7,7 +7,10 @@ import {
   TabList,
   Text,
   Button,
+  Card,
   Hamburger,
+  MessageBar,
+  MessageBarBody,
   NavDrawer,
   NavDrawerBody,
   NavItem,
@@ -18,9 +21,20 @@ import {
 import { SignOut20Regular } from '@fluentui/react-icons';
 import { AppToaster } from './components/toast';
 import Spinner from './components/Spinner';
-import { AREAS, DEFAULT_PATH, ROUTES, areaForPath, groupedRoutesForArea } from './navigation';
+import {
+  AREAS,
+  DEFAULT_PATH,
+  ROUTES,
+  areaForPath,
+  groupedRoutesForArea,
+  missingPermission,
+  visibleAreas,
+  visibleRoutesForArea,
+  type PortalRoute,
+} from './navigation';
 import { PRODUCT_NAME, REPOSITORY_URL, printedBuildText } from './product';
 import { LanguageSwitcher, useT } from './i18n';
+import { roleForPermission, usePortalAccess, type PortalPermission } from './access';
 
 const useStyles = makeStyles({
   header: {
@@ -73,6 +87,14 @@ const useStyles = makeStyles({
     maxWidth: '1120px',
     marginInline: 'auto',
   },
+  shellMessage: {
+    marginBottom: '16px',
+  },
+  denied: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '8px',
+  },
 });
 
 /**
@@ -105,6 +127,34 @@ function currentRoutePath(committedPath: string): string {
   return path.startsWith('/') ? path : `/${path}`;
 }
 
+function permissionName(permission: PortalPermission, t: ReturnType<typeof useT>): string {
+  return t(permission === 'administration' ? 'access.permission.administration.name' : 'access.permission.seePii.name');
+}
+
+function AccessDeniedPanel({ permission }: { permission: PortalPermission }) {
+  const styles = useStyles();
+  const t = useT();
+  const access = usePortalAccess();
+  const role = roleForPermission(access, permission);
+  return (
+    <Card className={styles.denied}>
+      <Text weight="semibold" size={500}>{t('access.denied.title')}</Text>
+      <Text>{t('access.denied.body', { permission: permissionName(permission, t), role })}</Text>
+      <Text size={200}>
+        {access.applicationId
+          ? t('access.denied.applicationId', { applicationId: access.applicationId })
+          : t('access.denied.applicationUnknown')}
+      </Text>
+    </Card>
+  );
+}
+
+function RouteElement({ route }: { route: PortalRoute }) {
+  const access = usePortalAccess();
+  const permission = missingPermission(route, access);
+  return permission ? <AccessDeniedPanel permission={permission} /> : route.element;
+}
+
 /**
  * App shell: an Office 365-style brand header, an area switcher (Insights / Administration) and a
  * per-area left nav. Uses HashRouter so the whole SPA is served by a single MVC action (no IIS /
@@ -124,11 +174,17 @@ export default function App() {
   const location = useLocation();
   const navigate = useNavigate();
   const t = useT();
+  const access = usePortalAccess();
   const [navOpen, setNavOpen] = useState(true);
   const build = printedBuildText();
 
   const currentArea = areaForPath(location.pathname);
-  const navGroups = groupedRoutesForArea(currentArea);
+  const areas = visibleAreas(access);
+  // A bookmarked address in an area this user cannot see still needs a way out, so the navigation
+  // falls back to the first area they can see while the page itself explains what is missing.
+  const navArea = areas.some((a) => a.id === currentArea) ? currentArea : (areas[0]?.id ?? currentArea);
+  const navGroups = groupedRoutesForArea(navArea, visibleRoutesForArea(navArea, access));
+  const inAdministration = currentArea === 'admin';
 
   const goTo = useCallback(
     (target: string) => {
@@ -142,7 +198,7 @@ export default function App() {
   );
 
   const onAreaSelect: SelectTabEventHandler = (_event: unknown, data: { value: unknown }) => {
-    const area = AREAS.find((a) => a.id === data.value);
+    const area = areas.find((a) => a.id === data.value);
     // TabList fires for the already-selected tab too, and re-navigating would bounce the user off
     // the page they are reading back to the area's home page. Compare against where history
     // actually is, so a tab click during an in-flight navigation is not discarded.
@@ -150,31 +206,51 @@ export default function App() {
     if (area && area.id !== liveArea) goTo(area.homePath);
   };
 
+  const header = (
+    <header className={styles.header} data-print="hide">
+      <Text size={400} className={styles.brand}>
+        {/* The product's own name. Microsoft does not translate it, and neither do we: a
+            customer searching for it, or matching it against their licence, needs the same
+            string in every language. */}
+        Microsoft 365 Advanced Analytics
+      </Text>
+      <div className={styles.headerActions}>
+        <LanguageSwitcher />
+        <Button
+          appearance="transparent"
+          className={styles.signOut}
+          icon={<SignOut20Regular />}
+          onClick={() => {
+            // Server-side OIDC sign-out (full page navigation, not a SPA route).
+            window.location.href = '/Account/SignOut';
+          }}
+        >
+          {t('app.signOut')}
+        </Button>
+      </div>
+    </header>
+  );
+
+  if (access.status === 'loading') {
+    // No area switcher or navigation until the user's permissions are known, so the Administration
+    // tab never flashes up for someone who cannot open it.
+    return (
+      <>
+        <AppToaster />
+        {header}
+        <main className={styles.content}>
+          <div className={styles.contentInner} style={{ textAlign: 'center', padding: '32px' }}>
+            <Spinner size={80} label={t('access.loading')} />
+          </div>
+        </main>
+      </>
+    );
+  }
+
   return (
     <>
       <AppToaster />
-      <header className={styles.header} data-print="hide">
-        <Text size={400} className={styles.brand}>
-          {/* The product's own name. Microsoft does not translate it, and neither do we: a
-              customer searching for it, or matching it against their licence, needs the same
-              string in every language. */}
-          Microsoft 365 Advanced Analytics
-        </Text>
-        <div className={styles.headerActions}>
-          <LanguageSwitcher />
-          <Button
-            appearance="transparent"
-            className={styles.signOut}
-            icon={<SignOut20Regular />}
-            onClick={() => {
-              // Server-side OIDC sign-out (full page navigation, not a SPA route).
-              window.location.href = '/Account/SignOut';
-            }}
-          >
-            {t('app.signOut')}
-          </Button>
-        </div>
-      </header>
+      {header}
 
       <div className={styles.areaBar} data-print="hide">
         <Tooltip
@@ -184,7 +260,7 @@ export default function App() {
           <Hamburger onClick={() => setNavOpen(!navOpen)} />
         </Tooltip>
         <TabList selectedValue={currentArea} onTabSelect={onAreaSelect} size="large">
-          {AREAS.map((area) => (
+          {areas.map((area) => (
             <Tab key={area.id} value={area.id}>
               {t(area.labelKey)}
             </Tab>
@@ -211,7 +287,7 @@ export default function App() {
                   selectedValue={location.pathname}
                   onNavItemSelect={(_event: unknown, data: { value: unknown }) => goTo(String(data.value))}
                   aria-label={t('app.nav.ariaLabel', {
-                    area: t(AREAS.find((a) => a.id === currentArea)?.labelKey ?? AREAS[0].labelKey),
+                    area: t(AREAS.find((a) => a.id === navArea)?.labelKey ?? AREAS[0].labelKey),
                   })}
                 >
                   <NavDrawerBody>
@@ -230,6 +306,16 @@ export default function App() {
 
                 <main className={styles.content} data-print="content">
                   <div className={styles.contentInner} data-print="content">
+                    {access.status === 'error' && (
+                      <MessageBar intent="warning" className={styles.shellMessage}>
+                        <MessageBarBody>{t('access.checkFailed')}</MessageBarBody>
+                      </MessageBar>
+                    )}
+                    {!access.enforced && inAdministration && (
+                      <MessageBar intent="warning" className={styles.shellMessage}>
+                        <MessageBarBody>{t('access.enforcementOff')}</MessageBarBody>
+                      </MessageBar>
+                    )}
                     <Suspense
                       fallback={
                         <div style={{ textAlign: 'center', padding: '32px' }}>
@@ -240,7 +326,7 @@ export default function App() {
                       <Routes>
                         <Route path="/" element={<Navigate to={DEFAULT_PATH} replace />} />
                         {ROUTES.map((route) => (
-                          <Route key={route.path} path={route.path} element={route.element} />
+                          <Route key={route.path} path={route.path} element={<RouteElement route={route} />} />
                         ))}
                         <Route path="*" element={<Navigate to={DEFAULT_PATH} replace />} />
                       </Routes>
