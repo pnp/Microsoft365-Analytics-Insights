@@ -260,7 +260,7 @@ namespace Tests.UnitTests
         [TestMethod]
         public void SkuAllowList_NullIsNotPublishedAndDoesNotThrow()
         {
-            // OfficeLicenseNameResolver.GetDisplayNameFor calls id.ToLower() unguarded.
+            // The stub throws on null, as a resolver is entitled to, so this proves the allow-list's own guard.
             var allowList = new EmbeddedCsvSkuAllowList(new StubResolver("ENTERPRISEPACK"));
 
             Assert.IsFalse(allowList.IsPublished(null));
@@ -275,6 +275,8 @@ namespace Tests.UnitTests
             var allowList = new EmbeddedCsvSkuAllowList();
 
             Assert.IsTrue(allowList.IsPublished("ENTERPRISEPACK"));
+            Assert.IsTrue(allowList.IsPublished("O365_w/o Teams Bundle_M3"),
+                "Microsoft's CSV has non-breaking spaces in this part number; it is still a published SKU.");
             Assert.IsFalse(allowList.IsPublished(ResellerSku));
         }
 
@@ -657,7 +659,7 @@ namespace Tests.UnitTests
 
             public string GetDisplayNameFor(string id)
             {
-                if (id == null) throw new ArgumentNullException(nameof(id), "The real resolver throws here too.");
+                if (id == null) throw new ArgumentNullException(nameof(id), "The allow-list must not pass a resolver null.");
                 return _published.Contains(id) ? "Some Microsoft Product" : null;
             }
         }
