@@ -51,6 +51,21 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public void Codec_RefusesAnythingAfterTheFilter_RatherThanReadingOnlyItsFirstArray()
+        {
+            // The first array is empty - "no filter" - so stopping there would run every report unrestricted.
+            Assert.ThrowsException<UserFilterFormatException>(() =>
+                GlobalFilterCodec.Parse("[][{\"d\":\"department\",\"v\":[\"Sales\"]}]"));
+            Assert.ThrowsException<UserFilterFormatException>(() =>
+                GlobalFilterCodec.Parse("[{\"d\":\"department\",\"v\":[\"Sales\"]}] true"));
+            Assert.ThrowsException<UserFilterFormatException>(() => UserFilterCodec.Parse("[] [{\"d\":\"department\",\"v\":[\"Sales\"]}]"));
+
+            // Whitespace and a comment after it are still one filter.
+            Assert.AreEqual(1, GlobalFilterCodec.Parse("[{\"d\":\"department\",\"v\":[\"Sales\"]}]  \r\n").Clauses.Count);
+            Assert.AreEqual(1, GlobalFilterCodec.Parse("[{\"d\":\"department\",\"v\":[\"Sales\"]}] /* note */").Clauses.Count);
+        }
+
+        [TestMethod]
         public void Codec_RefusesComparisonsTheEditorNeverOffers()
         {
             // Text search on the viewer's own value.
@@ -376,6 +391,18 @@ namespace Tests.UnitTests
             StringAssert.Contains(withoutNames, "one of 2 named people");
             StringAssert.Contains(withoutNames, "the viewer's manager");
             StringAssert.Contains(withoutNames, "includes the viewer");
+        }
+
+        [TestMethod]
+        public void Picker_ManagementChainCountsAreWorkedOutOncePerCompiledFilter()
+        {
+            var snapshot = Snapshot();
+            var compiled = Compile(Resolve(GlobalFilterCodec.Parse("[{\"d\":\"department\",\"v\":[\"Sales\"]}]"), snapshot, SalesRep), snapshot);
+
+            // Walking every matched person's chain costs the hierarchy's depth per person; the picker asks for it
+            // on every load, so it is kept with the compiled filter the resolver shares.
+            Assert.AreSame(compiled.ChainCounts, compiled.ChainCounts);
+            CollectionAssert.AreEqual(snapshot.ChainCountsFor(compiled.MatchesRow), compiled.ChainCounts);
         }
 
         [TestMethod]

@@ -319,7 +319,7 @@ namespace Common.Entities.UserFilters
                     else withoutValue++;
                 }
 
-                return directory.ChainCountsFor(restriction.MatchesRow);
+                return restriction.ChainCounts;
             }
 
             var counts = new int[column.Values.Count];

@@ -319,7 +319,9 @@ with or without See PII.
   keep only rows whose user it `Includes`. SQL reports carry a comment marker on each statement -
   `/*scope: AND x.user_id IN {scopeUsers}*/` - which `ReportScopeSql.Apply` removes when nothing is
   filtered (the statement is byte for byte what it was) and uncomments when something is, against a
-  temporary table filled from one JSON parameter. A statement that is tenant-wide by design says so
+  temporary table filled from one JSON parameter. Filling it uses `OPENJSON`, so it needs database
+  compatibility level 130 or later - which the Copilot and Power Platform imports already require
+  (`OPENJSON`, `STRING_SPLIT`). A statement that is tenant-wide by design says so
   with `/*scope:none*/`; a statement with no marker is **refused** under a filter rather than run
   unfiltered.
 - **Fails closed.** A filter that cannot be read, cannot be parsed, or cannot be evaluated because the

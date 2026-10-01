@@ -194,7 +194,7 @@ namespace Common.Entities.SpoWebActivity
                 MinimumViews,
                 NowUtc.Date);
 
-            return UserScope.IsRestricted ? key + "::scope=" + UserScope.Key : key;
+            return key + "::scope=" + (UserScope.IsRestricted ? UserScope.Key : "all");
         }
 
         /// <summary>True when <paramref name="days"/> is one of the offered windows.</summary>

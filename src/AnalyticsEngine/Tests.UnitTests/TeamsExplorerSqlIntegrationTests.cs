@@ -710,6 +710,12 @@ namespace Tests.UnitTests
             Assert.AreEqual(0, meetings.Kpis.PeerToPeerCalls);
             Assert.AreEqual(1, meetings.Kpis.Attendees);
 
+            // Attendee-hours and presence are about the people attending, so Grace's late half-hour in Ada's
+            // call counts in neither. The call's size still includes her: it was a two-person meeting.
+            Assert.AreEqual(1.0, meetings.Kpis.AttendeeHours, 0.001);
+            Assert.AreEqual(100.0, meetings.Kpis.AttendeeEngagementPct, 0.01);
+            Assert.AreEqual(2.0, meetings.Kpis.MeanAttendees, 0.001);
+
             Assert.IsTrue(overview.Queries.Any(q => q.Sql.Contains("DECLARE @scopeUsers")));
             Assert.IsFalse(
                 collaboration.Queries.Any(q => q.Sql.Contains("DECLARE @scopeUsers")),

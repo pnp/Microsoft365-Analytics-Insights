@@ -113,19 +113,24 @@ BEGIN
     RETURN;
 END
 
+-- What this save wrote, captured inside the transaction: a SELECT after the COMMIT could read a later save's
+-- revision, and an editor handed that revision could then overwrite the later save without a conflict.
+DECLARE @saved TABLE (revision int NOT NULL, modified_utc datetime2(7) NULL, modified_by nvarchar(256) NULL);
+
 IF @current IS NULL
     INSERT INTO dbo.portal_global_filters (id, filter_json, revision, modified_utc, modified_by)
+    OUTPUT inserted.revision, inserted.modified_utc, inserted.modified_by INTO @saved
     VALUES (1, @filterJson, 1, SYSUTCDATETIME(), @modifiedBy);
 ELSE
     UPDATE dbo.portal_global_filters
     SET filter_json = @filterJson, revision = revision + 1, modified_utc = SYSUTCDATETIME(), modified_by = @modifiedBy
+    OUTPUT inserted.revision, inserted.modified_utc, inserted.modified_by INTO @saved
     WHERE id = 1;
 
 COMMIT TRANSACTION;
 
 SELECT CAST(1 AS bit) AS available, CAST(1 AS bit) AS saved, revision, modified_utc, modified_by
-FROM dbo.portal_global_filters
-WHERE id = 1;";
+FROM @saved;";
 
         private readonly string _connectionString;
 

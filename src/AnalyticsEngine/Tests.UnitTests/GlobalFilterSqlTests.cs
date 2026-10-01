@@ -107,6 +107,45 @@ namespace Tests.UnitTests
             }
         }
 
+        [TestMethod]
+        public async Task Store_ASaveReportsTheRevisionItWrote_EvenWhenAnotherSaveFollowsAtOnce()
+        {
+            using (var db = ScratchDatabase.Create("gfstore"))
+            {
+                db.Execute(PortalGlobalFilter.Up_Sql);
+                var store = GlobalFilterStores.Create(db.ConnectionString);
+
+                for (var revision = 0; revision < 40; revision += 2)
+                {
+                    var next = revision + 1;
+
+                    // The follower saves over the revision the leader is about to write, as soon as it exists. Told
+                    // the follower's revision instead of its own, the leader's editor could later overwrite the
+                    // follower's filter without a conflict.
+                    var follower = Task.Run(async () =>
+                    {
+                        var until = DateTime.UtcNow.AddSeconds(30);
+                        while (DateTime.UtcNow < until)
+                        {
+                            var saved = await store.SaveAsync("[]", next, "follower@contoso.com", CancellationToken.None);
+                            if (saved != null) return saved;
+                        }
+
+                        throw new TimeoutException("The leader's save never landed.");
+                    });
+
+                    var leader = await store.SaveAsync(
+                        "[{\"d\":\"department\",\"v\":[\"Sales\"]}]", revision, "leader@contoso.com", CancellationToken.None);
+                    var followed = await follower;
+
+                    Assert.AreEqual(next, leader.Revision, "The leader is told the revision it wrote, not the follower's.");
+                    Assert.AreEqual("leader@contoso.com", leader.ModifiedBy);
+                    Assert.AreEqual(next + 1, followed.Revision);
+                    Assert.AreEqual("follower@contoso.com", followed.ModifiedBy);
+                }
+            }
+        }
+
         #endregion
 
         #region The by-hand upgrade

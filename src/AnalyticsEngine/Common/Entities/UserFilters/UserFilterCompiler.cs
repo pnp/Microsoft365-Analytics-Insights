@@ -18,6 +18,7 @@ namespace Common.Entities.UserFilters
     {
         private readonly UserDirectorySnapshot _snapshot;
         private readonly bool[] _matchedRows;
+        private readonly Lazy<int[]> _chainCounts;
 
         internal CompiledUserFilter(
             UserFilterExpression expression,
@@ -30,6 +31,9 @@ namespace Common.Entities.UserFilters
             _matchedRows = matchedRows;
             UnknownDimensions = unknownDimensions;
             MatchedPeople = matchedRows.Count(m => m);
+            _chainCounts = new Lazy<int[]>(
+                () => snapshot.ChainCountsFor(row => matchedRows[row]),
+                System.Threading.LazyThreadSafetyMode.ExecutionAndPublication);
         }
 
         public UserFilterExpression Expression { get; }
@@ -69,6 +73,14 @@ namespace Common.Entities.UserFilters
 
         /// <summary>Whether the person at a snapshot row matches - for work that walks the directory itself.</summary>
         internal bool MatchesRow(int row) => _matchedRows[row];
+
+        /// <summary>
+        /// For each manager, how many matched people report to them at any level - the management chain's
+        /// counts within this filter. Walking every matched person's chain costs the depth of the hierarchy per
+        /// person, so it is done once for the compiled filter, which the global filter's resolver shares across
+        /// requests for a directory read, rather than on every picker request. Read-only: never modify it.
+        /// </summary>
+        internal int[] ChainCounts => _chainCounts.Value;
 
         /// <summary>
         /// A person's email domain as the directory derived it - with the same

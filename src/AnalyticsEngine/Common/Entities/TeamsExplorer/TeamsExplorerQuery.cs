@@ -197,7 +197,7 @@ namespace Common.Entities.TeamsExplorer
                 Top,
                 NowUtc.Date);
 
-            return UserScope.IsRestricted ? key + "::scope=" + UserScope.Key : key;
+            return key + "::scope=" + (UserScope.IsRestricted ? UserScope.Key : "all");
         }
     }
 }

@@ -221,17 +221,20 @@ namespace Web.AnalyticsWeb.Controllers
                 ? null
                 : trimmedAgentName.Substring(0, Math.Min(trimmedAgentName.Length, 100));
 
-            var cacheKey = CacheKeyPrefix + area + "::" + months;
-            if (area == "copilot-agents")
-            {
-                cacheKey += $"::top={topAgents}::agent={normalizedAgentName ?? "(all)"}";
-            }
-
             // The administrator's global filter, resolved for this reader and enforced here whatever the page
             // sends. Part of the cache key, so two readers it treats differently never share an area.
             var scope = await _scopes.ResolveAsync(Request, User, null, CancellationToken.None);
             var userScope = scope.IsRestricted ? scope.Sql : ReportUserScope.Everyone;
-            if (userScope.IsRestricted) cacheKey += "::scope=" + userScope.Key;
+
+            // The scope is always in the key, and comes before the only free text in it - the agent name - so
+            // no agent name can spell out another reader's scope and be served, or seed, their figures.
+            var cacheKey = CacheKeyPrefix + area + "::" + months + "::scope=" + (userScope.IsRestricted ? userScope.Key : "all");
+            if (area == "copilot-agents")
+            {
+                cacheKey += normalizedAgentName == null
+                    ? $"::top={topAgents}::all-agents"
+                    : $"::top={topAgents}::agent={normalizedAgentName}";
+            }
 
             if (MemoryCache.Default.Get(cacheKey) is ReportAreaData cached)
             {

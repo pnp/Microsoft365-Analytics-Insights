@@ -101,6 +101,21 @@ namespace Common.Entities.TeamsExplorer
         public const string AttendeeScope = "/*scope: AND s.attendee_user_id IN {scopeUsers}*/";
 
         /// <summary>
+        /// Joins <c>dbo.call_sessions</c>, aliased <c>s</c>, to the people in scope as <c>scope_attendees</c> -
+        /// for an aggregate that keeps every attendance of a call in one figure (its size) while another
+        /// figure, wrapped in <see cref="InScopeAttendeeOpen"/> and <see cref="InScopeAttendeeClose"/>, counts
+        /// only the attendances of people in scope. A subquery cannot sit inside an aggregate, so the join.
+        /// </summary>
+        public const string AttendeeScopeJoin =
+            "/*scope:\r\n        LEFT JOIN {scopeUsers} AS scope_attendees ON scope_attendees.user_id = s.attendee_user_id*/";
+
+        /// <summary>Opens an expression that counts only the attendances of people in scope - see <see cref="AttendeeScopeJoin"/>.</summary>
+        public const string InScopeAttendeeOpen = "/*scope:CASE WHEN scope_attendees.user_id IS NULL THEN 0 ELSE */";
+
+        /// <summary>Closes <see cref="InScopeAttendeeOpen"/>.</summary>
+        public const string InScopeAttendeeClose = "/*scope: END*/";
+
+        /// <summary>
         /// Marks a statement about teams and channels, which no people filter can narrow. Run unchanged
         /// under a scope; the page labels the section tenant-wide.
         /// </summary>
@@ -392,9 +407,9 @@ PerCall AS (
     LEFT JOIN (
         SELECT s.call_record_id,
                COUNT_BIG(*) AS Attendees,
-               SUM(CAST(DATEDIFF(SECOND, s.[start], s.[end]) AS bigint)) AS AttendeeSeconds
+               SUM({InScopeAttendeeOpen}CAST(DATEDIFF(SECOND, s.[start], s.[end]) AS bigint){InScopeAttendeeClose}) AS AttendeeSeconds
         FROM dbo.call_sessions AS s
-        INNER JOIN Calls AS k2 ON k2.id = s.call_record_id
+        INNER JOIN Calls AS k2 ON k2.id = s.call_record_id{AttendeeScopeJoin}
         GROUP BY s.call_record_id
     ) AS s ON s.call_record_id = k.id
 )
@@ -426,7 +441,7 @@ SELECT
                    END AS Engagement
             FROM dbo.call_sessions AS s
             INNER JOIN dbo.call_records AS c3 ON c3.id = s.call_record_id
-            WHERE c3.[start] >= @from AND c3.[start] < @to{CallScopeAs("c3")}
+            WHERE c3.[start] >= @from AND c3.[start] < @to{CallScopeAs("c3")}{AttendeeScope}
         ) AS e
     ) AS AttendeeEngagement
 FROM PerCall AS p

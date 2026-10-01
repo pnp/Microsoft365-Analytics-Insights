@@ -118,24 +118,26 @@ function LiveGlobalFilterProvider({ children }: { children: ReactNode }) {
   const inFlight = useRef<AbortController | null>(null);
   const location = useLocation();
 
-  const load = useCallback(async (remount: boolean) => {
+  const load = useCallback(async (remount: boolean): Promise<'ready' | 'error' | 'aborted'> => {
     inFlight.current?.abort();
     const controller = new AbortController();
     inFlight.current = controller;
 
     try {
       const next = await fetchEffectiveGlobalFilter(controller.signal);
-      if (controller.signal.aborted) return;
+      if (controller.signal.aborted) return 'aborted';
       loadedAt.current = Date.now();
       setState((previous) => ({
         status: 'ready',
         effective: next,
         viewKey: previous.viewKey + (remount || viewChanged(previous.effective, next) ? 1 : 0),
       }));
+      return 'ready';
     } catch {
-      if (controller.signal.aborted) return;
+      if (controller.signal.aborted) return 'aborted';
       // What was known stays shown: a failed refresh does not mean the filter went away.
       setState((previous) => ({ ...previous, status: 'error', viewKey: previous.viewKey + (remount ? 1 : 0) }));
+      return 'error';
     } finally {
       if (inFlight.current === controller) inFlight.current = null;
     }
@@ -179,7 +181,9 @@ function LiveGlobalFilterProvider({ children }: { children: ReactNode }) {
     [],
   );
 
-  const refresh = useCallback(() => load(false), [load]);
+  const refresh = useCallback(async () => {
+    await load(false);
+  }, [load]);
 
   const setBypassed = useCallback(
     async (bypassed: boolean) => {
@@ -187,7 +191,17 @@ function LiveGlobalFilterProvider({ children }: { children: ReactNode }) {
       writeGlobalFilterBypassCookie(bypassed);
       try {
         // Remount whatever the answer: the cookie has changed, so every report's figures have too.
-        await load(true);
+        const outcome = await load(true);
+        if (outcome === 'error' && readGlobalFilterBypassCookie() === bypassed) {
+          // The reports now follow the cookie - the server honours it for an administrator, and only an
+          // administrator is offered the switch - so the bar must too, rather than keep describing the view
+          // from before it. The status stays 'error' until a read succeeds.
+          setState((previous) =>
+            previous.effective?.canBypass && previous.effective.active
+              ? { ...previous, effective: { ...previous.effective, bypassed, applied: !bypassed } }
+              : previous,
+          );
+        }
       } finally {
         setSwitching(false);
       }

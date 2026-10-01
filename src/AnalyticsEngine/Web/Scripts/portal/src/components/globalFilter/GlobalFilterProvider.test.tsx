@@ -72,7 +72,7 @@ describe('GlobalFilterProvider', () => {
     expect(screen.getByTestId('state')).toHaveTextContent('ready:2:1:false');
   });
 
-  it('remounts the reports even when the answer after a switch fails, because the cookie has changed', async () => {
+  it('remounts the reports even when the answer after a switch fails, and describes what the cookie now asks for', async () => {
     vi.mocked(fetchEffectiveGlobalFilter).mockResolvedValueOnce(effective());
     renderProvider();
     await waitFor(() => expect(screen.getByTestId('state')).toHaveTextContent('ready:0:1:false'));
@@ -80,8 +80,15 @@ describe('GlobalFilterProvider', () => {
     vi.mocked(fetchEffectiveGlobalFilter).mockRejectedValueOnce(new Error('offline'));
     await act(() => context.setBypassed(true));
 
-    // What was known stays known; only the status says the refresh failed.
-    expect(screen.getByTestId('state')).toHaveTextContent('error:1:1:false');
+    // The reports follow the cookie, which the server honours for an administrator, so the bar must not go on
+    // describing the filtered view; the status still says the read failed.
+    expect(screen.getByTestId('state')).toHaveTextContent('error:1:1:true');
+    expect(context.effective?.applied).toBe(false);
+
+    vi.mocked(fetchEffectiveGlobalFilter).mockRejectedValueOnce(new Error('offline'));
+    await act(() => context.setBypassed(false));
+    expect(screen.getByTestId('state')).toHaveTextContent('error:2:1:false');
+    expect(context.effective?.applied).toBe(true);
   });
 
   it('remounts the reports when an administrator replaced the filter, and not when nothing changed', async () => {

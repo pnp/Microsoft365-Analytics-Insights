@@ -113,6 +113,16 @@ namespace Common.Entities.UserFilters
                     reader.DateParseHandling = DateParseHandling.None;
                     reader.MaxDepth = 8;
                     root = JToken.ReadFrom(reader);
+
+                    // One document and nothing after it: "[][...]" is not the empty filter its first array is.
+                    // Newtonsoft throws on further content; a trailing comment is all that can still be read.
+                    while (reader.Read())
+                    {
+                        if (reader.TokenType != JsonToken.Comment)
+                        {
+                            throw new UserFilterFormatException("The filter must be a single JSON array of clauses.");
+                        }
+                    }
                 }
             }
             catch (JsonException ex)
