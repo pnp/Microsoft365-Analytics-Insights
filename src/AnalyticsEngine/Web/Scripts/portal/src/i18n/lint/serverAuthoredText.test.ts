@@ -29,6 +29,7 @@ import { ACCOUNTABILITY_DIMENSION_TEXT, ACCOUNTABILITY_EMPTY_SEGMENT_KEYS } from
 import { ENABLED_IMPORT_LABELS_BY_SETTING_PROPERTY } from '../../pages/InsightsOverviewPage';
 import { OFFICE_PLATFORM_LABEL_KEYS } from '../../pages/ReportsPage';
 import { WORKLOADS } from '../../types/licenceActivity';
+import { PORTAL_PERMISSION_ERROR_CODE } from '../../access';
 
 function sortedUnique(values: string[]): string[] {
   return [...new Set(values)].sort((a, b) => a.localeCompare(b));
@@ -100,6 +101,24 @@ function expectServerLabelsCoveredBySpaMap(serverLabels: string[], spaMap: Recor
     `${context}: the C# labels and SPA translation map must be an exact two-way match.`,
   ).toEqual({ missing: [], orphans: [], wrongCatalogValue: [] });
 }
+
+const PORTAL_PERMISSIONS = join(process.cwd(), '..', '..', 'Security', 'PortalPermissions.cs');
+
+function csharpStringConstant(source: string, name: string): string {
+  const match = source.match(new RegExp(`const\\s+string\\s+${name}\\s*=\\s*"([^"]*)"`));
+  expect(match, `Could not find PortalPermissions.${name}`).not.toBeNull();
+  return match![1];
+}
+
+describe('API error-code drift checks', () => {
+  it('keeps the portal permission 403 code and fallback messages aligned with the SPA catalog', () => {
+    const source = readFileSync(PORTAL_PERMISSIONS, 'utf8');
+
+    expect(PORTAL_PERMISSION_ERROR_CODE).toBe(csharpStringConstant(source, 'ErrorCode'));
+    expect(EN_CATALOG['access.permissionRequired.administration']).toBe(csharpStringConstant(source, 'AdministrationMessage'));
+    expect(EN_CATALOG['access.permissionRequired.seePii']).toBe(csharpStringConstant(source, 'SeePiiMessage'));
+  });
+});
 
 /**
  * The overview tiles are named by the server, so their translations are checked against the server.

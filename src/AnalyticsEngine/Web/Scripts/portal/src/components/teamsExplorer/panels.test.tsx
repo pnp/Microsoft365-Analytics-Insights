@@ -95,6 +95,7 @@ describe('PeoplePanel', () => {
         onExportChampions={noop}
         onExportDormant={noop}
         exporting={false}
+        showPii
       />,
     );
 
@@ -110,6 +111,7 @@ describe('PeoplePanel', () => {
         onExportChampions={noop}
         onExportDormant={noop}
         exporting={false}
+        showPii
       />,
     );
 
@@ -126,6 +128,7 @@ describe('PeoplePanel', () => {
         onExportChampions={noop}
         onExportDormant={noop}
         exporting={false}
+        showPii
       />,
     );
 

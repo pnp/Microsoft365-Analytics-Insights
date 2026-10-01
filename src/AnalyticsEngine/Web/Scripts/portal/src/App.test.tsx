@@ -8,6 +8,7 @@ import App from './App';
 import { routesForArea } from './navigation';
 import { fetchAvailability } from './api/licenceActivityApi';
 import { fetchReportAreas } from './api/reportsApi';
+import type { PortalAccessProviderValue } from './access';
 
 // Every test here mounts the whole app shell (Fluent header, TabList and NavDrawer) and then waits
 // for a lazily-imported page chunk. In jsdom that is slow, and under a full parallel run it has
@@ -40,7 +41,7 @@ function LocationLog({ log }: { log: string[] }) {
  * as the current route. Replacing (not pushing) the entry also means a Back press in one test
  * cannot walk into another test's history.
  */
-const renderAt = (path: string) => {
+const renderAt = (path: string, access?: PortalAccessProviderValue) => {
   window.history.replaceState(null, '', `#${path}`);
   const log: string[] = [];
   renderWithProvider(
@@ -48,6 +49,7 @@ const renderAt = (path: string) => {
       <LocationLog log={log} />
       <App />
     </HashRouter>,
+    access ? { access } : undefined,
   );
   return log;
 };
@@ -61,7 +63,7 @@ beforeEach(() => {
     available: false, minimumDays: 7, maximumDays: 180, messages: [],
   });
   vi.mocked(fetchReportAreas).mockResolvedValue({
-    copilot: false, usage: false, spoAudit: false, webTraffic: false, calls: false, emails: false,
+    copilot: false, usage: false, spoAudit: false, webTraffic: false, calls: false, emails: false, officeApps: false,
   });
 });
 
@@ -333,5 +335,68 @@ describe('Printed footer', () => {
     // The report has to be *inside* the same table, or there is nothing for the footer to reserve
     // space on each page of.
     expect(screen.getByRole('main').closest('[data-print="shell"]')).toBe(shell);
+  });
+});
+
+/**
+ * The Administration permission (#660) in the shell: the tab, a deep link, the loading state and
+ * the warning an administrator sees when role checks are switched off.
+ */
+describe('Portal permissions in the shell', () => {
+  it('hides the Administration tab without the Administration permission', async () => {
+    renderAt('/insights/overview', { administration: false, seePii: false });
+
+    await screen.findByLabelText('Insights navigation');
+
+    expect(screen.queryByRole('tab', { name: 'Administration' })).not.toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'Insights' })).toBeInTheDocument();
+  });
+
+  it('shows the Administration tab to a user holding the permission', async () => {
+    renderAt('/insights/overview', { administration: true, seePii: false });
+
+    await screen.findByLabelText('Insights navigation');
+
+    expect(screen.getByRole('tab', { name: 'Administration' })).toBeInTheDocument();
+  });
+
+  it('answers a forbidden deep link with an explanation, not a redirect or a broken page', async () => {
+    const log = renderAt('/admin/health', { administration: false, seePii: false, applicationId: '00000000-0000-0000-0000-000000000000' });
+
+    expect(await screen.findByText('You do not have access to this page')).toBeVisible();
+    expect(screen.getByText(/Portal.Administration/)).toBeVisible();
+    expect(screen.getByText(/00000000-0000-0000-0000-000000000000/)).toBeVisible();
+    expect(log[log.length - 1]).toBe('/admin/health');
+    // A way out: the navigation of an area the user can see, not an empty rail.
+    expect(within(screen.getByLabelText('Insights navigation')).getByText('Reports')).toBeVisible();
+  });
+
+  it('names See PII as what is missing on User data lookup for an administrator without it', async () => {
+    renderAt('/admin/user-lookup', { administration: true, seePii: false });
+
+    expect(await screen.findByText('You do not have access to this page')).toBeVisible();
+    expect(screen.getByText(/Portal.SeePII/)).toBeVisible();
+    expect(within(screen.getByLabelText('Administration navigation')).queryByText('User data lookup')).not.toBeInTheDocument();
+  });
+
+  it('shows the shell loading state without rendering any navigation', () => {
+    renderAt('/admin/health', { status: 'loading', administration: false, seePii: false });
+
+    expect(screen.getByText('Checking your portal permissions...')).toBeVisible();
+    expect(screen.queryByRole('tab', { name: 'Administration' })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Administration navigation')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Insights navigation')).not.toBeInTheDocument();
+  });
+
+  it('says so when permissions could not be checked', async () => {
+    renderAt('/insights/licence-activity', { status: 'error', administration: false, seePii: false });
+
+    expect(await screen.findByText(/Portal permissions could not be checked/)).toBeVisible();
+  });
+
+  it('warns administrators when role enforcement is switched off', async () => {
+    renderAt('/admin/health', { administration: true, seePii: true, enforced: false });
+
+    expect(await screen.findByText(/Role checks are switched off/)).toBeVisible();
   });
 });

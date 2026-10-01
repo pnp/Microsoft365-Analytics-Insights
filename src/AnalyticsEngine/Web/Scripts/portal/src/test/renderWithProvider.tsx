@@ -2,6 +2,7 @@ import type { ReactElement } from 'react';
 import { render, type RenderOptions, type RenderResult } from '@testing-library/react';
 import { FluentProvider, webLightTheme } from '@fluentui/react-components';
 import { I18nProvider, type Language } from '../i18n';
+import { ALL_GRANTED_PORTAL_ACCESS, PortalAccessProvider, type PortalAccessProviderValue } from '../access';
 
 export interface PortalRenderOptions extends RenderOptions {
   /**
@@ -9,6 +10,8 @@ export interface PortalRenderOptions extends RenderOptions {
    * to care that the portal is translated - only the tests that are *about* translation do.
    */
   language?: Language;
+  /** Portal access to render with. Defaults to all granted so existing tests keep their old shape. */
+  access?: PortalAccessProviderValue;
 }
 
 /**
@@ -23,11 +26,13 @@ export interface PortalRenderOptions extends RenderOptions {
  * with, and a suite that passes in London and fails in Madrid is worse than no suite at all.
  */
 export function renderWithProvider(ui: ReactElement, options?: PortalRenderOptions): RenderResult {
-  const { language = 'en', ...renderOptions } = options ?? {};
+  const { language = 'en', access = ALL_GRANTED_PORTAL_ACCESS, ...renderOptions } = options ?? {};
   return render(ui, {
     wrapper: ({ children }) => (
       <FluentProvider theme={webLightTheme}>
-        <I18nProvider initialLanguage={language}>{children}</I18nProvider>
+        <I18nProvider initialLanguage={language}>
+          <PortalAccessProvider value={access}>{children}</PortalAccessProvider>
+        </I18nProvider>
       </FluentProvider>
     ),
     ...renderOptions,

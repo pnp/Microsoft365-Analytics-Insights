@@ -320,3 +320,91 @@ describe('CopilotAdoptionPage accountability roll-up', () => {
     expect(screen.queryByText('(no department)')).not.toBeInTheDocument();
   });
 });
+
+describe('CopilotAdoptionPage without See PII', () => {
+  beforeEach(() => {
+    fetchAdoptionAvailability.mockReset();
+    fetchAdoptionSummary.mockReset();
+    fetchAdoptionFilters.mockReset();
+    fetchAdoptionSql.mockReset();
+
+    fetchAdoptionAvailability.mockResolvedValue({
+      available: true,
+      copilotAuditImportEnabled: false,
+      copilotUsageReportImportEnabled: false,
+      userMetadataImportEnabled: false,
+      m365UsageReportImportEnabled: false,
+      messages: [],
+    } as CopilotAdoptionAvailability);
+    fetchAdoptionFilters.mockResolvedValue(null);
+    fetchAdoptionSql.mockResolvedValue(null);
+  });
+
+  function managerRollup(): CopilotAdoptionSummary {
+    const summary = incompleteSummary();
+    summary.figuresIncomplete = false;
+    summary.warnings = [];
+    summary.incompleteReasons = [];
+    summary.licensedUsers = 6;
+    summary.scoredUsers = 6;
+    summary.accountabilityDimension = 'directManager';
+    summary.accountabilityDimensionLabel = 'Direct manager';
+    summary.accountabilityRollup = [{
+      segment: 'manager@contoso.com',
+      emptySegmentKey: null,
+      licensedUsers: 6,
+      activeUsers: 3,
+      habitualUsers: 1,
+      neverUsedUsers: 3,
+      adoptionRatePct: 50,
+      averageAdoptionScore: 30,
+      reclaimableSeats: 1,
+      reclaimCertainSeats: 0,
+      reclaimProbableSeats: 1,
+      reclaimReviewSeats: 0,
+      reclaimExcludedUsers: 0,
+      reclaimUsers: 1,
+      reengageUsers: 1,
+      coachUsers: 1,
+      broadenUsers: 0,
+      growUsers: 0,
+      sustainUsers: 0,
+      advocateUsers: 0,
+      reviewUsers: 0,
+      excludedUsers: 0,
+      opportunityUsers: 3,
+    }];
+    return summary;
+  }
+
+  it('offers no licensed-user list, but keeps the tabs whose aggregates it can still show', async () => {
+    fetchAdoptionSummary.mockResolvedValue(managerRollup());
+    renderWithProvider(<CopilotAdoptionPage />, { access: { administration: false, seePii: false } });
+
+    expect(await screen.findByRole('tab', { name: 'Analyst view' })).toBeInTheDocument();
+    expect(screen.queryByRole('tab', { name: 'Licensed users' })).not.toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'Cowork' })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'Licence opportunities' })).toBeInTheDocument();
+  });
+
+  it('replaces a roll-up of named managers with the note, rather than an empty table', async () => {
+    fetchAdoptionSummary.mockResolvedValue(managerRollup());
+    renderWithProvider(<CopilotAdoptionPage />, { access: { administration: false, seePii: false } });
+
+    fireEvent.click(await screen.findByRole('tab', { name: 'Analyst view' }));
+
+    await waitFor(() => expect(screen.getByText('Accountability roll-up')).toBeInTheDocument());
+    expect(screen.getByText('Individual details are hidden')).toBeInTheDocument();
+    expect(screen.queryByText('manager@contoso.com')).not.toBeInTheDocument();
+  });
+
+  it('shows the same roll-up to a reader who holds See PII', async () => {
+    fetchAdoptionSummary.mockResolvedValue(managerRollup());
+    renderWithProvider(<CopilotAdoptionPage />, { access: { administration: false, seePii: true } });
+
+    fireEvent.click(await screen.findByRole('tab', { name: 'Analyst view' }));
+
+    expect(await screen.findByText('manager@contoso.com')).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'Licensed users' })).toBeInTheDocument();
+  });
+});

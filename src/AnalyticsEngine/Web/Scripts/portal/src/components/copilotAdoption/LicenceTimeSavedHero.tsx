@@ -114,8 +114,10 @@ export default function LicenceTimeSavedHero({
   cohort: TimeSavedCohort;
   onCohortChange: (cohort: TimeSavedCohort) => void;
   onAdjust: () => void;
-  onShowRecommended: () => void;
-  onShowAll: () => void;
+  /** Opens the candidate list. Omitted for a reader without the See PII permission, who has no list to open. */
+  onShowRecommended?: () => void;
+  /** Opens every candidate represented by the all-candidates cohort. Omitted without See PII. */
+  onShowAll?: () => void;
 }) {
   const styles = useStyles();
   const t = useT();
@@ -356,7 +358,8 @@ export default function LicenceTimeSavedHero({
             {t('copilotAdoptionTimeSaved.hero.adjust')}
           </Button>
           {everyone ? (
-            <Button appearance="secondary" size="small" icon={<ArrowRight16Regular />} iconPosition="after" onClick={onShowAll}>
+            onShowAll && (
+              <Button appearance="secondary" size="small" icon={<ArrowRight16Regular />} iconPosition="after" onClick={onShowAll}>
               {t(
                 plural(
                   headline.cohortUsers,
@@ -365,9 +368,10 @@ export default function LicenceTimeSavedHero({
                 ),
                 { users: formatCount(headline.cohortUsers) },
               )}
-            </Button>
+              </Button>
+            )
           ) : (
-            summary.recommendedForLicence > 0 && (
+            summary.recommendedForLicence > 0 && onShowRecommended && (
               <Button appearance="secondary" size="small" icon={<ArrowRight16Regular />} iconPosition="after" onClick={onShowRecommended}>
                 {t(
                   plural(

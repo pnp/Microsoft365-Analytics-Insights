@@ -44,6 +44,8 @@ import {
   DEMOGRAPHIC_OPTION_CAP,
   type DemographicCatalogue,
 } from '../components/licenceActivity/demographicOptions';
+import { usePortalAccess } from '../access';
+import PiiHiddenNote from '../components/shared/PiiHiddenNote';
 
 const useStyles = makeStyles({
   header: {
@@ -150,6 +152,8 @@ type LaTab = 'overview' | 'byService' | 'byDemographic' | 'people';
 export default function LicenceActivityPage() {
   const styles = useStyles();
   const t = useT();
+  const access = usePortalAccess();
+  const canSeePii = access.seePii;
 
   const [availability, setAvailability] = useState<LicenceActivityAvailability | null>(null);
   const [availabilityError, setAvailabilityError] = useState<unknown>(null);
@@ -190,6 +194,10 @@ export default function LicenceActivityPage() {
   // change - an admin reading the People tab stays on it when they widen the window.
   const [tab, setTab] = useState<LaTab>('overview');
   const onTabSelect: SelectTabEventHandler = (_e: unknown, data: { value: unknown }) => setTab(data.value as LaTab);
+
+  useEffect(() => {
+    if (!canSeePii && tab === 'people') setTab('overview');
+  }, [canSeePii, tab]);
 
   const overviewSeqRef = useRef(0);
 
@@ -309,7 +317,7 @@ export default function LicenceActivityPage() {
 
   // Attach the current user list to the export whenever the reader is looking at a licence's list;
   // otherwise the workbook is totals-only.
-  const exportUsersId = selectedLicence ? usersId ?? undefined : undefined;
+  const exportUsersId = canSeePii && selectedLicence ? usersId ?? undefined : undefined;
 
   const onExport = async (): Promise<void> => {
     if (!overview || overviewLoading) return;
@@ -528,9 +536,11 @@ export default function LicenceActivityPage() {
                 <Tab id="la-tab-byDemographic" value="byDemographic" aria-controls="la-panel-byDemographic">
                   {t('licenceActivity.page.tabByDemographic')}
                 </Tab>
-                <Tab id="la-tab-people" value="people" aria-controls="la-panel-people">
-                  {t('licenceActivity.page.tabPeople')}
-                </Tab>
+                {canSeePii && (
+                  <Tab id="la-tab-people" value="people" aria-controls="la-panel-people">
+                    {t('licenceActivity.page.tabPeople')}
+                  </Tab>
+                )}
               </TabList>
 
               {/* Overview: the headline figures plus the assignments table, which doubles as the
@@ -653,7 +663,12 @@ export default function LicenceActivityPage() {
                       {t('licenceActivity.page.peopleSubtitle')}
                     </Text>
                   </div>
-                  {selectedLicence ? (
+                  {/* The panel stays mounted while hidden, so without the See PII permission the
+                      drill-down must not be rendered at all - it would request the people as soon as
+                      a licence was selected, and the server refuses them. */}
+                  {!canSeePii ? (
+                    <PiiHiddenNote />
+                  ) : selectedLicence ? (
                     <>
                       <SelectedLicenceBar
                         licences={overview.licences}

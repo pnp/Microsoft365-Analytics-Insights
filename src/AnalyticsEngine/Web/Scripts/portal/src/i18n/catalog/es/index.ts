@@ -20,6 +20,7 @@ import health from './health';
 import admin from './admin';
 import userOrgs from './userOrgs';
 import userFilter from './userFilter';
+import access from './access';
 
 /**
  * Every Spanish module, as one object - and, because this is the only file `loadCatalog`
@@ -58,6 +59,7 @@ export const ES_MODULES = {
   admin,
   userOrgs,
   userFilter,
+  access,
 } as const;
 
 export default ES_MODULES as unknown as Record<string, Catalog>;

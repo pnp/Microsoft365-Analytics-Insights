@@ -69,6 +69,7 @@ interface Pointer {
    * Omitted means "always relevant".
    */
   needsAnyOf?: string[];
+  requiresAdministration?: boolean;
 }
 
 /**
@@ -123,6 +124,7 @@ const POINTERS: Pointer[] = [
     blurbKey: 'overview.whereToNext.teamsPermissions.blurb',
     icon: <PeopleTeam20Regular />,
     needsAnyOf: ['teams'],
+    requiresAdministration: true,
   },
   {
     key: 'health',
@@ -130,6 +132,7 @@ const POINTERS: Pointer[] = [
     titleKey: 'overview.whereToNext.health.title',
     blurbKey: 'overview.whereToNext.health.blurb',
     icon: <Pulse20Regular />,
+    requiresAdministration: true,
   },
   {
     key: 'configuration',
@@ -137,22 +140,25 @@ const POINTERS: Pointer[] = [
     titleKey: 'overview.whereToNext.configuration.title',
     blurbKey: 'overview.whereToNext.configuration.blurb',
     icon: <Settings20Regular />,
+    requiresAdministration: true,
   },
 ];
 
 /** The pointers worth showing, given the figures this deployment actually returns. */
-export function visiblePointers(availableKeys: readonly string[]): Pointer[] {
+export function visiblePointers(availableKeys: readonly string[], canAdmin = true): Pointer[] {
   const available = new Set(availableKeys);
-  return POINTERS.filter((p) => !p.needsAnyOf || p.needsAnyOf.some((k) => available.has(k)));
+  return POINTERS.filter((p) =>
+    (!p.requiresAdministration || canAdmin)
+    && (!p.needsAnyOf || p.needsAnyOf.some((k) => available.has(k))));
 }
 
 /**
  * "What else is in here?" - a short, clickable tour of the portal for someone who has just landed on it.
  */
-export default function WhereToNext({ availableKeys }: { availableKeys: readonly string[] }) {
+export default function WhereToNext({ availableKeys, canAdmin = true }: { availableKeys: readonly string[]; canAdmin?: boolean }) {
   const t = useT();
   const styles = useStyles();
-  const pointers = visiblePointers(availableKeys);
+  const pointers = visiblePointers(availableKeys, canAdmin);
 
   return (
     <div className={styles.grid}>

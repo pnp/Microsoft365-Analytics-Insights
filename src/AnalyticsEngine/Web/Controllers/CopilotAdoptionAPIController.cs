@@ -18,6 +18,7 @@ using System.Web.Http;
 using Web.AnalyticsWeb.Models;
 using Web.AnalyticsWeb.Models.CopilotAdoption;
 using Web.AnalyticsWeb.Models.UserFilters;
+using Web.AnalyticsWeb.Security;
 
 namespace Web.AnalyticsWeb.Controllers
 {
@@ -45,6 +46,9 @@ namespace Web.AnalyticsWeb.Controllers
     ///   match the summary it was exported from.</item>
     ///   <item>Concurrent first-hits share one execution (the cache holds the <see cref="Task{T}"/>),
     ///   so a page refresh during a slow analysis cannot start a second full scan of the audit history.</item>
+    ///   <item>Per-person lists and their CSV exports need the portal's See PII permission; the summary
+    ///   and the workbook are served to everyone, without the parts that name a person for a reader
+    ///   who lacks it (#661). The shared cached analysis is never edited for one reader.</item>
     /// </list>
     /// </summary>
     [Authorize]
@@ -444,8 +448,11 @@ namespace Web.AnalyticsWeb.Controllers
             var analysis = await TryGetScopedSummaryAsync(
                 windowDays, seatLicenceTypeIds, emailDomain, filter, FirstResponseBudget, cancellationToken);
             if (analysis == null) return StillBuilding(windowDays, seatLicenceTypeIds);
-            return Ok(analysis.Summary);
+            return Ok(CanSeeIndividuals() ? analysis.Summary : analysis.Summary.WithoutIndividualData());
         }
+
+        /// <summary>Whether the caller holds the portal's See PII permission (#661).</summary>
+        private bool CanSeeIndividuals() => PortalAccess.Evaluate(Request, User).SeePii;
 
         /// <summary>
         /// Every licence type in the tenant and whether it was counted as a Copilot seat.
@@ -546,6 +553,7 @@ namespace Web.AnalyticsWeb.Controllers
         // GET: api/CopilotAdoption/licensed-users?windowDays=28&skip=0&take=50
         [HttpGet]
         [Route("licensed-users")]
+        [RequirePortalPermission(PortalPermission.SeePii)]
         public async Task<IHttpActionResult> LicensedUsers(
             int windowDays = 28,
             string seatLicenceTypeIds = null,
@@ -595,6 +603,7 @@ namespace Web.AnalyticsWeb.Controllers
         // GET: api/CopilotAdoption/licensed-users/export
         [HttpGet]
         [Route("licensed-users/export")]
+        [RequirePortalPermission(PortalPermission.SeePii)]
         public async Task<HttpResponseMessage> ExportLicensedUsers(
             int windowDays = 28,
             string seatLicenceTypeIds = null,
@@ -671,6 +680,7 @@ namespace Web.AnalyticsWeb.Controllers
         // GET: api/CopilotAdoption/opportunities?windowDays=28&skip=0&take=50
         [HttpGet]
         [Route("opportunities")]
+        [RequirePortalPermission(PortalPermission.SeePii)]
         public async Task<IHttpActionResult> Opportunities(
             int windowDays = 28,
             string seatLicenceTypeIds = null,
@@ -712,6 +722,7 @@ namespace Web.AnalyticsWeb.Controllers
         // GET: api/CopilotAdoption/opportunities/export
         [HttpGet]
         [Route("opportunities/export")]
+        [RequirePortalPermission(PortalPermission.SeePii)]
         public async Task<HttpResponseMessage> ExportOpportunities(
             int windowDays = 28,
             string seatLicenceTypeIds = null,
@@ -763,6 +774,7 @@ namespace Web.AnalyticsWeb.Controllers
         // GET: api/CopilotAdoption/cowork?windowDays=28&skip=0&take=50
         [HttpGet]
         [Route("cowork")]
+        [RequirePortalPermission(PortalPermission.SeePii)]
         public async Task<IHttpActionResult> Cowork(
             int windowDays = 28,
             string seatLicenceTypeIds = null,
@@ -812,6 +824,7 @@ namespace Web.AnalyticsWeb.Controllers
         // GET: api/CopilotAdoption/cowork/export
         [HttpGet]
         [Route("cowork/export")]
+        [RequirePortalPermission(PortalPermission.SeePii)]
         public async Task<HttpResponseMessage> ExportCowork(
             int windowDays = 28,
             string seatLicenceTypeIds = null,
@@ -918,7 +931,8 @@ namespace Web.AnalyticsWeb.Controllers
             byte[] bytes;
             try
             {
-                bytes = CopilotAdoptionWorkbook.Build(analysis, timeSaved.Any ? timeSaved : null);
+                bytes = CopilotAdoptionWorkbook.Build(
+                    analysis, timeSaved.Any ? timeSaved : null, includeIndividualData: CanSeeIndividuals());
             }
             catch (Exception ex)
             {

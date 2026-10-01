@@ -3,6 +3,7 @@ using System.Net;
 using System.Threading.Tasks;
 using System.Web.Http;
 using Web.AnalyticsWeb.Models.UserImport;
+using Web.AnalyticsWeb.Security;
 
 namespace Web.AnalyticsWeb.Controllers
 {
@@ -16,6 +17,7 @@ namespace Web.AnalyticsWeb.Controllers
     /// Failures are answered with a stable error code and no text; the page writes the sentence.
     /// </remarks>
     [Authorize]
+    [RequirePortalPermission(PortalPermission.Administration)]
     [RoutePrefix("api/UserImportCheckpoint")]
     public class UserImportCheckpointAPIController : ApiController
     {

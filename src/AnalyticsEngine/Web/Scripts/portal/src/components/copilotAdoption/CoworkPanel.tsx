@@ -69,6 +69,7 @@ import CoworkTimeSavedModel from './CoworkTimeSavedModel';
 import { useTimeSavedAssumptions } from './coworkTimeSaved';
 import { useTimeSavedCohorts } from './timeSavedCohort';
 import { copilotAdoptionWarningText, coworkRationaleText, coworkTierLabel, isCoworkWarning } from './serverText';
+import PiiHiddenNote from '../shared/PiiHiddenNote';
 
 const PAGE_SIZE = 50;
 
@@ -343,6 +344,7 @@ export default function CoworkPanel({
   options,
   seatLicenceTypeIds,
   userFilter,
+  canSeePii = true,
 }: {
   windowDays: number;
   summary: CopilotAdoptionSummary;
@@ -354,6 +356,12 @@ export default function CoworkPanel({
    * the rest of the report, and kept by every reset below.
    */
   userFilter?: string | null;
+  /**
+   * False for a reader without the See PII permission: the time saved, readiness and rollout sections
+   * are all aggregates and stay, but the people section - the spending-policy list - is replaced by a
+   * note, and the list is never requested (the server would refuse it).
+   */
+  canSeePii?: boolean;
 }) {
   const styles = useStyles();
   const table = useAdoptionTableStyles();
@@ -412,7 +420,8 @@ export default function CoworkPanel({
     // anyway would put a pointless round trip behind an explanatory message the user is already
     // reading. The guard lives here rather than around the early return below because hooks run
     // unconditionally - returning early does not stop an effect that has already been declared.
-    if (!available) {
+    // The same goes for a reader without the See PII permission: the list is refused for them.
+    if (!available || !canSeePii) {
       setLoading(false);
       return undefined;
     }
@@ -439,7 +448,7 @@ export default function CoworkPanel({
       // These requests poll while the analysis is building, so cleanup has to actually stop them.
       controller.abort();
     };
-  }, [available, windowDays, filters, page, seatLicenceTypeIds, reloadKey, t]);
+  }, [available, canSeePii, windowDays, filters, page, seatLicenceTypeIds, reloadKey, t]);
 
   const sortValue = `${filters.sortBy}:${filters.sortDesc ? 'desc' : 'asc'}`;
   const exportUrl = useMemo(
@@ -453,7 +462,7 @@ export default function CoworkPanel({
   // while the people section is the one showing: a hidden section is not printed, so its list must
   // not hold the printout up or refuse it for being long.
   const printRows = usePrintAllRows<CoworkReadinessRow>({
-    enabled: available && section === 'people' && !loading && data !== null,
+    enabled: available && canSeePii && section === 'people' && !loading && data !== null,
     total: data?.total ?? 0,
     loadedRows: data?.rows.length ?? 0,
     loadPage: (skip, take, signal) => fetchCowork(windowDays, filters, skip, take, seatLicenceTypeIds, signal),
@@ -538,11 +547,13 @@ export default function CoworkPanel({
         cohort={cohorts.cowork}
         onCohortChange={(cohort) => setCohort('cowork', cohort)}
         onAdjust={adjustAssumptions}
-        onShowPeople={() => showPeople({ recommendedOnly: true, tiers: [] })}
+        onShowPeople={canSeePii ? () => showPeople({ recommendedOnly: true, tiers: [] }) : undefined}
         // Every seat holder the headline models: each filter that would narrow the list lifted, and the
         // page-wide user filter kept - it is the population the headline was modelled for.
-        onShowAll={() =>
-          showPeople({ search: '', recommendedOnly: false, coworkUsersOnly: false, tiers: [] })
+        onShowAll={
+          canSeePii
+            ? () => showPeople({ search: '', recommendedOnly: false, coworkUsersOnly: false, tiers: [] })
+            : undefined
         }
       />
 
@@ -621,9 +632,11 @@ export default function CoworkPanel({
             );
           })}
         </div>
-        <Text size={100} className={styles.muted} data-print="hide">
-          {t('copilotAdoptionCowork.tiers.openInstruction')}
-        </Text>
+        {canSeePii && (
+          <Text size={100} className={styles.muted} data-print="hide">
+            {t('copilotAdoptionCowork.tiers.openInstruction')}
+          </Text>
+        )}
       </Card>
 
       {/* ---------- The quadrant ---------- */}
@@ -785,6 +798,7 @@ export default function CoworkPanel({
 
       {/* ---------- People: the spending-policy list ---------- */}
       <div role="tabpanel" aria-label={t('copilotAdoptionCowork.sections.people')} hidden={section !== 'people'}>
+      {!canSeePii ? <PiiHiddenNote /> : (
       <Card>
         <Text weight="semibold" block>
           {t('copilotAdoptionCowork.intro.title')}
@@ -1306,6 +1320,7 @@ export default function CoworkPanel({
         )}
         {!loading && data && <PartialPrintNote shownRows={rows.length} totalRows={data.total} />}
       </Card>
+      )}
       </div>
     </div>
   );

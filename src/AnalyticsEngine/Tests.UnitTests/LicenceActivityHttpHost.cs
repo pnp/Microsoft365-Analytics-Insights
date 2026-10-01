@@ -2,6 +2,7 @@ extern alias AnalyticsWeb;
 
 using AnalyticsWeb::Web.AnalyticsWeb.Controllers;
 using AnalyticsWeb::Web.AnalyticsWeb.Models.LicenceActivity;
+using AnalyticsWeb::Web.AnalyticsWeb.Security;
 using Common.Entities.LicenceActivity;
 using System;
 using System.Collections.Generic;
@@ -34,6 +35,8 @@ namespace Tests.UnitTests
                 utcNow, id => new LicenceActivityRunDiagnostics(id, item => { diagnostic?.Invoke(item); return true; }),
                 reportFailure: (id, ex) => { });
             _configuration = new HttpConfiguration();
+            // Pinned rather than read from the test App.config, so these tests mean the same thing wherever they run.
+            _configuration.Properties[typeof(PortalAccessPolicy)] = PortalAccessPolicy.Enforcing;
             _configuration.Services.Replace(typeof(IHttpControllerTypeResolver), new ControllerTypes());
             _configuration.Services.Replace(typeof(IHttpControllerActivator), new ControllerActivator(() =>
                 new LicenceActivityAPIController(() => new LicenceActivityRequestContext("synthetic-scope", sources, store), overview, users)));
@@ -48,6 +51,8 @@ namespace Tests.UnitTests
         {
             var identity = new ClaimsIdentity("synthetic-load-test");
             identity.AddClaim(new Claim(ClaimTypes.NameIdentifier, "synthetic-administrator"));
+            // The load tests exercise the per-person paths, which need the See PII permission.
+            identity.AddClaim(new Claim("roles", PortalRoles.SeePii));
             return new ClaimsPrincipal(identity);
         }
 

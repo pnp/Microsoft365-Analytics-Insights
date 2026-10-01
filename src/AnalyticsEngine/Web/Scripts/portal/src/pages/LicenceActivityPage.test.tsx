@@ -253,8 +253,8 @@ describe('LicenceActivityPage - availability', () => {
   });
 });
 
-describe('LicenceActivityPage - everyone sees the whole report', () => {
-  it('shows the totals AND the per-person list to every reader, with no second permission level', async () => {
+describe('LicenceActivityPage - who sees the people', () => {
+  it('shows the totals AND the per-person list to a reader holding See PII', async () => {
     mockAvailability.mockResolvedValue(availability());
     renderWithProvider(<LicenceActivityPage />);
 
@@ -264,13 +264,32 @@ describe('LicenceActivityPage - everyone sees the whole report', () => {
     expect(screen.getAllByText(/Μηχανικοί/).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/Ελλάδα/).length).toBeGreaterThan(0);
 
-    // The per-person list is part of the same report - it is not gated behind an extra role, and the
-    // page must never tell a reader to go and ask for one.
+    // With the portal's See PII permission the per-person list is part of the same report, and nothing
+    // on the page mentions the report's old, removed role.
     expect(await screen.findByText('People holding this licence')).toBeInTheDocument();
     expect((await screen.findAllByText('ada@contoso.com')).length).toBeGreaterThan(0);
     expect(mockUsers).toHaveBeenCalled();
     expect(screen.queryByText(/ReadUsers/)).not.toBeInTheDocument();
     expect(screen.queryByText(/aggregate view/i)).not.toBeInTheDocument();
+  });
+
+  it('shows a reader without See PII every total but never asks for, shows or exports the people', async () => {
+    mockAvailability.mockResolvedValue(availability());
+    renderWithProvider(<LicenceActivityPage />, { access: { administration: true, seePii: false } });
+
+    expect(await screen.findByText('Licence assignments')).toBeInTheDocument();
+    expect(await screen.findByText('Activity by service')).toBeInTheDocument();
+    expect(screen.queryByRole('tab', { name: 'People' })).not.toBeInTheDocument();
+
+    const exportBtn = await screen.findByRole('button', { name: /Export to Excel/i });
+    await waitFor(() => expect(exportBtn).toBeEnabled());
+    fireEvent.click(exportBtn);
+    await waitFor(() => expect(mockDownload).toHaveBeenCalledWith({ overviewId: 'ov1', usersId: undefined }));
+
+    // The drill-down panel stays mounted while hidden, so this is the check that matters: the people
+    // were never requested - the server would refuse them - and never reached the page.
+    expect(mockUsers).not.toHaveBeenCalled();
+    expect(screen.queryByText('ada@contoso.com')).not.toBeInTheDocument();
   });
 
   it('keeps the people list on screen through a transient users failure', async () => {

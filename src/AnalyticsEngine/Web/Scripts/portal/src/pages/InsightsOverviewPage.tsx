@@ -13,12 +13,13 @@ import { useT, type TFunction, type TranslationKey } from '../i18n';
 import { buildLabelText } from '../product';
 import { fetchSystemStatus } from '../api/systemStatusApi';
 import { fetchHealthData, fetchHealthSummary } from '../api/healthApi';
-import type { SystemStatus } from '../types/systemStatus';
+import type { SystemStatusInsights } from '../types/systemStatus';
 import type { DataOverviewSection, HealthSummary } from '../types/health';
 import DataKpiTiles from '../components/overview/DataKpiTiles';
 import HealthSnapshot from '../components/overview/HealthSnapshot';
 import WhereToNext from '../components/overview/WhereToNext';
 import Spinner from '../components/Spinner';
+import { usePortalAccess } from '../access';
 
 const useStyles = makeStyles({
   header: {
@@ -112,8 +113,11 @@ export function enabledImportLabelText(t: TFunction, serverLabel: string): strin
  */
 export default function InsightsOverviewPage() {
   const t = useT();
+  const access = usePortalAccess();
   const styles = useStyles();
-  const [status, setStatus] = useState<SystemStatus | null>(null);
+  // Only the Insights half of api/SystemStatus: a reader without the Administration permission is sent
+  // nothing else, so this page must never come to depend on the admin fields.
+  const [status, setStatus] = useState<SystemStatusInsights | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [health, setHealth] = useState<HealthSummary | null>(null);
@@ -138,6 +142,11 @@ export default function InsightsOverviewPage() {
   }, []);
 
   useEffect(() => {
+    if (!access.administration) {
+      setHealth(null);
+      setHealthError(null);
+      return;
+    }
     let cancelled = false;
     // Best-effort only - a slow or failing health roll-up must not degrade the landing page.
     fetchHealthSummary()
@@ -150,9 +159,13 @@ export default function InsightsOverviewPage() {
     return () => {
       cancelled = true;
     };
-  }, [t]);
+  }, [t, access.administration]);
 
   useEffect(() => {
+    if (!access.administration) {
+      setDataSection(null);
+      return;
+    }
     let cancelled = false;
     // The heavy one. Silently omitted on failure/timeout - see the note above.
     fetchHealthData()
@@ -165,7 +178,7 @@ export default function InsightsOverviewPage() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [access.administration]);
 
   const counts = useMemo(() => status?.dataCounts ?? [], [status]);
   const countKeys = useMemo(() => counts.map((c) => c.key), [counts]);
@@ -215,8 +228,14 @@ export default function InsightsOverviewPage() {
           {counts.length === 0 ? (
             <MessageBar intent="info">
               <MessageBarBody>
-                {t('overview.page.noImportsPrefix')}{' '}
-                <a href="#/admin/health">{t('overview.page.serviceHealthLink')}</a>.
+                {access.administration ? (
+                  <>
+                    {t('overview.page.noImportsPrefix')}{' '}
+                    <a href="#/admin/health">{t('overview.page.serviceHealthLink')}</a>.
+                  </>
+                ) : (
+                  t('overview.page.noImportsAskAdmin')
+                )}
               </MessageBarBody>
             </MessageBar>
           ) : (
@@ -226,7 +245,13 @@ export default function InsightsOverviewPage() {
                 <div className={styles.banner}>
                   <MessageBar intent="warning">
                     <MessageBarBody>
-                      {t('overview.page.zeroFiguresPrefix')} <a href="#/admin/health">{t('overview.page.serviceHealthLink')}</a> {t('overview.page.zeroFiguresSuffix')}
+                      {access.administration ? (
+                        <>
+                          {t('overview.page.zeroFiguresPrefix')} <a href="#/admin/health">{t('overview.page.serviceHealthLink')}</a> {t('overview.page.zeroFiguresSuffix')}
+                        </>
+                      ) : (
+                        t('overview.page.zeroFiguresAskAdmin')
+                      )}
                     </MessageBarBody>
                   </MessageBar>
                 </div>
@@ -248,15 +273,17 @@ export default function InsightsOverviewPage() {
           )}
         </section>
 
-        <section>
-          <HealthSnapshot
-            summary={health}
-            summaryError={healthError}
-            data={dataSection}
-            showAuditFreshness={countKeys.includes('auditEvents')}
-            showWebFreshness={countKeys.includes('webHits')}
-          />
-        </section>
+        {access.administration && (
+          <section>
+            <HealthSnapshot
+              summary={health}
+              summaryError={healthError}
+              data={dataSection}
+              showAuditFreshness={countKeys.includes('auditEvents')}
+              showWebFreshness={countKeys.includes('webHits')}
+            />
+          </section>
+        )}
 
         <section>
           <div className={styles.sectionHeading}>
@@ -265,7 +292,7 @@ export default function InsightsOverviewPage() {
               {t('overview.page.whereToNextNote')}
             </Text>
           </div>
-          <WhereToNext availableKeys={countKeys} />
+          <WhereToNext availableKeys={countKeys} canAdmin={access.administration} />
         </section>
       </div>
     </div>

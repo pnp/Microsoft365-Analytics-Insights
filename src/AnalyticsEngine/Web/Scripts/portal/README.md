@@ -44,6 +44,35 @@ the two cannot drift — adding a page means adding one entry to `ROUTES`.
 > The pre-split routes (`#/home`, `#/reports`, `#/teams`, `#/health`, ...) are **not**
 > redirected. Anything unrecognised falls back to the Insights overview.
 
+## Permissions
+
+The portal reads `GET /api/PortalAccess` once at startup through `PortalAccessProvider`.
+Components use `usePortalAccess()` to check the two app-role permissions:
+
+| Permission | Wire name | Entra app role |
+| --- | --- | --- |
+| Administration | `administration` | `Portal.Administration` |
+| See PII | `seePii` | `Portal.SeePII` |
+
+`src/navigation.tsx` has a `requires` field for areas and routes. New administration pages must
+live in the `admin` area so they inherit `administration`; a route that exposes individual people
+adds `requires: 'seePii'`. New per-person UI inside an aggregate page must check `seePii`, avoid
+calling the per-person endpoint without it, and render the shared `PiiHiddenNote` instead.
+
+The server enforces both permissions on its own (see *Portal permissions* in
+`src/AnalyticsEngine/.github/copilot-instructions.md`); the portal's job is to not offer what the
+server would refuse. So:
+
+- **It fails closed.** Until `/api/PortalAccess` answers, the shell shows only a spinner; if it cannot
+  be read, the portal behaves as if neither permission is held and says so.
+- **A refusal is an error, not an empty result.** `apiFetch` turns the server's
+  `403 { code: 'portalPermissionRequired' }` into a `PortalPermissionError` carrying a translated
+  message, so a call the page should not have made fails loudly rather than rendering "no data".
+- **Tests default to all granted.** `renderWithProvider` wraps the tree in a `PortalAccessProvider`
+  holding both permissions, so existing tests see the whole portal; a test of a restricted view
+  passes `{ access: { administration: false, seePii: false } }`. Fields left out of `access` are
+  treated as not held.
+
 ## Authentication
 
 The user signs in via the server's Azure AD (OIDC) redirect, which gates the `[Authorize]`'d

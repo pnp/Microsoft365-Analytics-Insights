@@ -51,6 +51,7 @@ const copilotAdoption: Record<keyof typeof en, string> = {
   'copilotAdoption.page.errors.checkAvailability': 'No se pudo comprobar la disponibilidad de la adopción de Copilot.',
   'copilotAdoption.page.errors.loadSummary': 'No se pudo cargar el resumen de adopción.',
   'copilotAdoption.page.controls.excelTooltipReady': 'Todo el informe (cada cifra, tabla y gráfico) como libro de Excel con gráficos activos y editables. Ejecútelo antes y después de un programa de habilitación para comparar de forma equivalente.',
+  'copilotAdoption.page.controls.excelTooltipReadyNoPii': 'El informe agregado, sin hojas por persona, como libro de Excel con gráficos activos y editables. Ejecútelo antes y después de un programa de habilitación para comparar de forma equivalente.',
   'copilotAdoption.page.controls.excelTooltipLoading': 'Disponible cuando el análisis termine de cargarse.',
 
 

@@ -6,10 +6,16 @@ using System.Net;
 using System.Threading.Tasks;
 using System.Web.Http;
 using Web.AnalyticsWeb.Models;
+using Web.AnalyticsWeb.Security;
 
 namespace Web.AnalyticsWeb.Controllers
 {
+    /// <summary>
+    /// Reads and sets which Teams the importer holds a delegated token for - the Teams permissions page
+    /// in the Administration area.
+    /// </summary>
     [Authorize]
+    [RequirePortalPermission(PortalPermission.Administration)]
     public class TeamsAuthAPIController : BaseAPIController
     {
         /// <summary>
