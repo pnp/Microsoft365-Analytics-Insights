@@ -680,17 +680,29 @@ SET NOCOUNT ON;
 -- away the draft of the file on screen.
 DECLARE @requested DATETIME2 = COALESCE(@requestedUtc, SYSUTCDATETIME());
 
--- Throw away what nobody will import: drafts past their lifetime, and this admin's earlier previews of
--- files for the same type. Previewing a file five times must not leave five copies of every UPN in it.
-DELETE FROM dbo.user_org_import_jobs
-WHERE status = 6
-  AND (queued_utc < DATEADD(SECOND, -@draftLifetimeSecs, SYSUTCDATETIME())
-       OR (org_type_id = @orgTypeId AND started_by = @startedBy AND queued_utc < @requested));
-
+-- Insert first so the identity can break exact timestamp ties. Windows and SQL clocks can return
+-- the same value for two quick previews; in that case the later draft to reach this transaction wins.
+DECLARE @inserted TABLE (id INT NOT NULL);
 INSERT INTO dbo.user_org_import_jobs
     (org_type_id, mode, status, file_name, started_by, queued_utc, rows_total, rows_invalid, expected_generation)
-OUTPUT INSERTED.id
-VALUES (@orgTypeId, 2, 6, @fileName, @startedBy, @requested, @rowsTotal, @rowsInvalid, @expectedGeneration);";
+OUTPUT INSERTED.id INTO @inserted
+VALUES (@orgTypeId, 2, 6, @fileName, @startedBy, @requested, @rowsTotal, @rowsInvalid, @expectedGeneration);
+
+DECLARE @draftId INT = (SELECT id FROM @inserted);
+
+-- Throw away what nobody will import: drafts past their lifetime, and this admin's earlier previews of
+-- files for the same type. Previewing a file five times must not leave five copies of every UPN in it.
+-- A genuinely older request that finishes late has an earlier queued_utc and cannot remove a newer
+-- request. Only indistinguishable clock ties fall back to identity order.
+DELETE FROM dbo.user_org_import_jobs
+WHERE id <> @draftId
+  AND status = 6
+  AND (queued_utc < DATEADD(SECOND, -@draftLifetimeSecs, SYSUTCDATETIME())
+       OR (org_type_id = @orgTypeId
+           AND started_by = @startedBy
+           AND (queued_utc < @requested OR (queued_utc = @requested AND id < @draftId))));
+
+SELECT @draftId;";
 
             using (var connection = await OpenAsync(cancellationToken).ConfigureAwait(false))
             using (var tx = connection.BeginTransaction())
