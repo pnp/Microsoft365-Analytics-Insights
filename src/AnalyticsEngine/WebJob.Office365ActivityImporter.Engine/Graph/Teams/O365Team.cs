@@ -1,7 +1,6 @@
 using Common.Entities;
 using Common.Entities.Config;
 using Common.Entities.Entities;
-using Common.Entities.Redis.Teams;
 using Common.Entities.Teams;
 using Microsoft.Extensions.Logging;
 using Microsoft.Graph;
@@ -163,9 +162,9 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
                 return null;
             }
 
-            if (this.PendingChannelDeltaTokenCommits.Count > 0 && teamTokenManager.CacheConnectionManager != null)
+            if (this.PendingChannelDeltaTokenCommits.Count > 0 && teamTokenManager.ChannelDeltaTokenStore != null)
             {
-                var deltaTokenStore = new RedisTeamChannelDeltaTokenStore(teamTokenManager.CacheConnectionManager, logger);
+                var deltaTokenStore = teamTokenManager.ChannelDeltaTokenStore;
                 await TeamChannelDeltaTokenCommitter.CommitPendingTokens(deltaTokenStore, this.Id, this.PendingChannelDeltaTokenCommits);
             }
 
@@ -188,9 +187,14 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
                 rc.QueryParameters.Expand = new[] { "Owners" };
             });
 
-            // Add owners
+            // Add owners. Owners outside UserGroupsFilter are skipped before their Graph lookup, so they are never stored.
             foreach (var groupOwner in parentGroupFull.Owners)
             {
+                if (!context.UserScope.IsInScope(groupOwner.Id))
+                {
+                    continue;
+                }
+
                 var graphUser = await context.UserCache.GetResource(groupOwner.Id);
                 if (graphUser != null)
                 {
@@ -209,6 +213,12 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
 
             foreach (var member in members)
             {
+                // Membership of people outside UserGroupsFilter is not recorded.
+                if (!context.UserScope.IsInScope(member.Id))
+                {
+                    continue;
+                }
+
                 // Multiple accounts can appear in users table if they have several logins on several domains. Pick 1st one
                 var dbUser = await db.users.Where(u => u.AzureAdId == member.Id).FirstOrDefaultAsync();
                 if (dbUser == null)
@@ -240,10 +250,10 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
             foreach (var channel in fullTeam.Channels)
             {
                 var dbChannel = await db.TeamChannels.Where(c => c.GraphID == channel.Id).SingleOrDefaultAsync();
-                if (dbChannel == null && teamTokenManager.CacheConnectionManager != null)
+                if (dbChannel == null && teamTokenManager.ChannelDeltaTokenStore != null)
                 {
                     // Clear delta cache if new channel in DB. Mainly for debug reasons but also if there's no channel, we need to make sure we ignore any delta code (just in case)
-                    await teamTokenManager.CacheConnectionManager.RemoveTeamChannelDeltaToken(fullTeam.Id, channel.Id, logger);
+                    await teamTokenManager.ChannelDeltaTokenStore.RemoveDeltaToken(fullTeam.Id, channel.Id);
                 }
                 var tabsPage = await context.GraphClient.Teams[teamId].Channels[channel.Id].Tabs.GetAsync(rc =>
                 {
@@ -266,18 +276,34 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
                 var pendingDeltaTokenCommits = new List<TeamChannelDeltaTokenCommit>();
                 try
                 {
-                    fullTeam.PendingChannelDeltaTokenCommits = await fullTeam.Channels.PopulateNewMessagesAndReactions(team, teamRefreshOAuthToken, teamTokenManager.CacheConnectionManager, logger, pendingDeltaTokenCommits);
+                    fullTeam.PendingChannelDeltaTokenCommits = await fullTeam.Channels.PopulateNewMessagesAndReactions(team, teamRefreshOAuthToken, teamTokenManager.ChannelDeltaTokenStore, logger, pendingDeltaTokenCommits);
                 }
                 catch (ChannelMessagesReadException ex)
                 {
                     fullTeam.PendingChannelDeltaTokenCommits = pendingDeltaTokenCommits;
                     logger.LogError(ex, $"Couldn't get channel messages via cached token. '{ex.Message}'. Deleting token.");
-                    await teamTokenManager.CacheConnectionManager.RemoveTeamAuthToken(team.Id);
+                    await teamTokenManager.TokenStore.RemoveRefreshTokenAsync(team.Id);
                     teamRefreshOAuthToken = null;
                 }
 
                 fullTeam.HasRefreshToken = true;
                 fullTeam.LastRefreshed = DateTime.Now;
+            }
+
+            // UserGroupsFilter: drop messages and reactions by people outside the scope before anything reads them,
+            // so their text never reaches the channel statistics (or Cognitive Services) and their reactions are
+            // never resolved or stored. The delta tokens are unaffected - those messages were still read.
+            if (context.UserScope.IsFiltered)
+            {
+                var removed = 0;
+                foreach (var channel in fullTeam.Channels)
+                {
+                    removed += ChannelMessageScopeRules.RestrictToUserScope(channel, context.UserScope);
+                }
+                if (removed > 0)
+                {
+                    logger.LogInformation($"Team '{fullTeam.DisplayName}': left out {removed:N0} channel message(s) and reaction(s) by people outside UserGroupsFilter.");
+                }
             }
 
             // Load reactions + users from messages found

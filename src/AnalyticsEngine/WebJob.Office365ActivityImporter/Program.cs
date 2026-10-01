@@ -8,7 +8,8 @@
 using Common.Entities;
 using Common.Entities.Config;
 using Common.Entities.Installer;
-using Common.Entities.Redis;
+using Common.Entities.State;
+using Common.Entities.UserScope;
 using DataUtils;
 using Microsoft.Extensions.Logging;
 using Newtonsoft.Json;
@@ -86,6 +87,12 @@ namespace WebJob.Office365ActivityImporter
             // Create new telemetry client with AppInsights key
             var logger = new AnalyticsLogger(configuredSettings.AppInsightsConnectionString, "Office365ActivityImporter");
 
+            // The UserGroupsFilter scope, shared by every import in this process - the Graph sections, the audit
+            // import, the calls queue and the agent-cost import - so they all apply the same resolution and the
+            // groups are read once per refresh interval, not once per import. Process-lifetime for the same reason
+            // as the stores below: it also remembers the last good scope to fall back on if a refresh fails.
+            var userScopeProvider = UserImportScopeProvider.CreateForGraph(configuredSettings, logger);
+
             // Apply the SQL-commit concurrency cap (aggressiveness preset) process-wide BEFORE any
             // InsertBatch import runs, so commits don't burst the shared SQL tier at the legacy 20
             // threads (issue #161 / PR #162 - easing SQL Server CPU/DTU spikes on commit).
@@ -129,7 +136,8 @@ namespace WebJob.Office365ActivityImporter
                         var newCall = await Engine.Entities.Serialisation.CallRecordDTO.SaveNewCallToDB(
                             nextArg,
                             new Engine.Graph.ManualGraphCallClient(auth, logger),
-                            auth.Creds, logger, configuredSettings.TenantGUID.ToString());
+                            auth.Creds, logger, configuredSettings.TenantGUID.ToString(),
+                            await userScopeProvider.GetScopeAsync());
 
                         ConsoleApp.BombOut(false);
                     }
@@ -180,23 +188,25 @@ namespace WebJob.Office365ActivityImporter
             // Stats-upload "last uploaded" tracker. Instantiated ONCE here, outside the import
             // cycle loop, because the in-memory fallback otherwise loses its last-upload timestamp
             // every cycle (defeating the 1-day MIN_WAIT throttle on UsageStatsManager and hammering
-            // the stats endpoint). Both loader implementations are cheap to construct and hold
-            // their own connection state, so creating them once is also fine for the Redis path.
+            // the stats endpoint). Both implementations are cheap to construct; the durable one opens
+            // the runtime state table lazily, on first use.
             IStatsDatesLoader statsDatesLoader;
-            if (!string.IsNullOrEmpty(configuredSettings.ConnectionStrings.RedisConnectionString))
+            var importScheduleStore = StateStore.TryOpen(configuredSettings, StatePartitions.ImportSchedule, logger);
+            if (importScheduleStore != null)
             {
-                statsDatesLoader = new RedisStatsDatesLoader(configuredSettings);
+                logger.LogInformation($"Runtime state (import schedule, checkpoints, delta tokens) is kept in Azure Table storage: table '{StateStore.TableName}'.");
+                statsDatesLoader = new PersistedStatsDatesLoader(importScheduleStore);
             }
             else
             {
-                logger.LogInformation("No Redis connection string configured - using in-memory throttle for stats upload (the MIN_WAIT window resets each time the WebJob process restarts).");
+                logger.LogInformation("No Storage connection string configured - using in-memory throttle for stats upload (the MIN_WAIT window resets each time the WebJob process restarts).");
                 statsDatesLoader = new InMemoryStatsDatesLoader();
             }
 
             // Activity/usage reports also run at most once a day. Like the stats throttle above, this needs a
-            // store that survives across cycles - Redis when configured, otherwise an in-memory fallback built
-            // ONCE here (a fresh per-cycle instance would always look "never imported" and re-run the multi-hour
-            // usage-report phase every cycle, even without Redis).
+            // store that survives across cycles - the state table when Storage is configured, otherwise an in-memory
+            // fallback built ONCE here (a fresh per-cycle instance would always look "never imported" and re-run the
+            // multi-hour usage-report phase every cycle).
             ISingleDateStore activityReportsLastImportedStore = ActivityReportsLastImportedStoreFactory.Create(configuredSettings, logger);
 
             // Per-report completion stamps, feeding the finalized-date skip list. Also created ONCE here for
@@ -206,30 +216,17 @@ namespace WebJob.Office365ActivityImporter
 
             // Cadence-gate store for the non-fresh Graph imports (user metadata, user apps, Teams).
             // Created ONCE here, outside the cycle loop, so the in-memory fallback retains its "last run"
-            // timestamps across cycles (mirrors statsDatesLoader above). Redis when configured (gate also
-            // survives WebJob restarts); otherwise in-memory (resets on restart). Reads/writes are
-            // fail-open so a Redis blip never skips an import.
+            // timestamps across cycles (mirrors statsDatesLoader above). The state table when Storage is
+            // configured (gate also survives WebJob restarts); otherwise in-memory (resets on restart).
+            // Reads/writes are fail-open so a storage blip never skips an import.
             IImportLastRunStore graphLastRunStore;
-            if (!string.IsNullOrEmpty(configuredSettings.ConnectionStrings.RedisConnectionString))
+            if (importScheduleStore != null)
             {
-                try
-                {
-                    var cache = CacheConnectionManager.GetConnectionManager(
-                        configuredSettings.ConnectionStrings.RedisConnectionString,
-                        tenantId: configuredSettings.TenantGUID.ToString(),
-                        clientId: configuredSettings.ClientID,
-                        clientSecret: configuredSettings.ClientSecret);
-                    graphLastRunStore = new RedisImportLastRunStore(cache, logger);
-                }
-                catch (Exception ex)
-                {
-                    logger.LogWarning($"Could not connect to Redis for import cadence gating ({ex.Message}); using in-memory fallback (the gate resets when the WebJob restarts).");
-                    graphLastRunStore = new InMemoryImportLastRunStore();
-                }
+                graphLastRunStore = new PersistedImportLastRunStore(importScheduleStore, logger);
             }
             else
             {
-                logger.LogInformation("No Redis configured - using in-memory import cadence gating (resets when the WebJob restarts).");
+                logger.LogInformation("No Storage connection string configured - using in-memory import cadence gating (resets when the WebJob restarts).");
                 graphLastRunStore = new InMemoryImportLastRunStore();
             }
 
@@ -237,14 +234,10 @@ namespace WebJob.Office365ActivityImporter
             // ONCE here so the in-memory fallback survives across cycles - a per-cycle instance would
             // always start empty and re-check (and 404 on) every mailbox-less user every 10 minutes.
             ISentEmailMailboxSkipList sentEmailMailboxSkipList;
-            if (!string.IsNullOrEmpty(configuredSettings.ConnectionStrings.RedisConnectionString))
+            var sentEmailStateStore = StateStore.TryOpen(configuredSettings, StatePartitions.SentEmails, logger);
+            if (sentEmailStateStore != null)
             {
-                sentEmailMailboxSkipList = new RedisSentEmailMailboxSkipList(
-                    configuredSettings.ConnectionStrings.RedisConnectionString,
-                    logger,
-                    tenantId: configuredSettings.TenantGUID.ToString(),
-                    clientId: configuredSettings.ClientID,
-                    clientSecret: configuredSettings.ClientSecret);
+                sentEmailMailboxSkipList = new PersistedSentEmailMailboxSkipList(sentEmailStateStore, logger);
             }
             else
             {
@@ -266,7 +259,12 @@ namespace WebJob.Office365ActivityImporter
                 var importCycleTelemetryScope = logger.BeginOperationScope(Guid.NewGuid().ToString("N"));
                 var importCycleTimer = new JobTimer(logger, Process.GetCurrentProcess().ProcessName);
                 importCycleTimer.Start();
-                var tasks = new ProgramTasks(logger, configuredSettings, activityReportsLastImportedStore, graphLastRunStore, sentEmailMailboxSkipList, reportCompletionStore);
+
+                // States which users this cycle's imports cover - including when a filter matches no group or is
+                // failing open - every cycle, not only when the scope is refreshed.
+                await userScopeProvider.GetScopeForCycleAsync();
+
+                var tasks = new ProgramTasks(logger, configuredSettings, activityReportsLastImportedStore, graphLastRunStore, sentEmailMailboxSkipList, reportCompletionStore, userScopeProvider);
 
                 // Start listening for SB messages & register notifications web-hook with Graph 
                 if (webHookUrl != null && configuredSettings.ImportJobSettings.Calls)
@@ -281,7 +279,7 @@ namespace WebJob.Office365ActivityImporter
                         {
                             if (callQueueProcessor == null)
                             {
-                                var newProcessor = new CallQueueProcessor(configuredSettings, configuredSettings.TenantGUID.ToString());
+                                var newProcessor = new CallQueueProcessor(configuredSettings, configuredSettings.TenantGUID.ToString(), userScopeProvider);
                                 await newProcessor.Init();
                                 callQueueProcessor = newProcessor;
                             }
@@ -380,7 +378,7 @@ namespace WebJob.Office365ActivityImporter
                 {
                     // Anonymised Copilot/licence adoption metrics ride along with the deployment stats.
                     // The collector does its own availability and weekly-cadence gating and fails soft,
-                    // so on most cycles this costs a single Redis read. It reuses graphLastRunStore -
+                    // so on most cycles this costs a single state-table read. It reuses graphLastRunStore -
                     // hoisted outside this loop - so the in-memory fallback keeps its cadence stamp
                     // across cycles rather than re-running the analysis every time.
                     var adoptionStatsCollector = new AdoptionStatsCollector(configuredSettings, graphLastRunStore, logger);

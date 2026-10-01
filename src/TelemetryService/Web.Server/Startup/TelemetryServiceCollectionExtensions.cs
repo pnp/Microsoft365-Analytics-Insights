@@ -3,6 +3,7 @@ using Microsoft.Azure.Cosmos;
 using UsageReporting;
 using Web.Config;
 using Web.Dashboard;
+using Web.Storage;
 
 namespace Web.Startup
 {

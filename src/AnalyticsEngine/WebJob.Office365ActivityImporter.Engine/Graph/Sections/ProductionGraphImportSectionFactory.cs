@@ -1,6 +1,7 @@
 ﻿using Common.Entities;
 using Common.Entities.Config;
 using Common.Entities.Entities.UsageReports;
+using Common.Entities.UserScope;
 using DataUtils;
 using Microsoft.Extensions.Logging;
 using Microsoft.Graph;
@@ -12,7 +13,6 @@ using WebJob.Office365ActivityImporter.Engine.Graph.Copilot.InteractionHistory;
 using WebJob.Office365ActivityImporter.Engine.Graph.Email;
 using WebJob.Office365ActivityImporter.Engine.Graph.Teams;
 using WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Copilot;
-using WebJob.Office365ActivityImporter.Engine.Graph.User;
 
 namespace WebJob.Office365ActivityImporter.Engine.Graph.Sections
 {
@@ -21,8 +21,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Sections
     /// <c>GraphImporter.GetAndSaveActivityReportsMultiThreaded</c>, which stays where it is because it is a
     /// public entry point with its own test coverage; the factory only wires it in as a section.
     /// </summary>
-    public delegate Task<bool> ActivityReportsImport(int daysBackMax, ManualGraphCallClient client,
-        UserGroupsCache userGroupsCache, UserGroupsFilterModel userGroupsFilterModel);
+    public delegate Task<bool> ActivityReportsImport(int daysBackMax, ManualGraphCallClient client, UserImportScope userScope);
 
     /// <summary>
     /// The production composition root for the Graph import (issue #376). Every collaborator that
@@ -33,14 +32,15 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Sections
     /// client / caches (which the old code also built unconditionally at the top of the method) and the
     /// section descriptors. Everything else is built inside a section's <c>RunAsync</c>, exactly as before -
     /// so a disabled or gated-off section still constructs nothing. That is load-bearing for the sent-email
-    /// section, whose <see cref="RedisDeltaTokenStore"/> opens a Redis connection.
+    /// section, whose <see cref="PersistedDeltaTokenStore"/> opens the runtime state table.
     /// </summary>
     public class ProductionGraphImportSectionFactory : IGraphImportSectionFactory
     {
         // Keys for the per-section "last run" timestamps used to daily-gate the non-fresh Graph imports.
-        // Stored verbatim (unprefixed) in Redis db 0, so they can be cleared manually with e.g.
-        // `redis-cli DEL GraphUsersMetadataLastImported`.
-        public const string GraphUsersMetadataLastImportedKey = "GraphUsersMetadataLastImported";
+        // Stored verbatim as row keys in the ImportSchedule partition of the AnalyticsState Azure Table, so they can be
+        // cleared by hand (delete the row) to make that import run on the next cycle. The user import's key is shared
+        // with the web portal's User import page, which clears it for the same reason.
+        public const string GraphUsersMetadataLastImportedKey = Common.Entities.State.UserImportCheckpointKeys.LastCompleted;
         public const string GraphTeamsLastImportedKey = "GraphTeamsLastImported";
         public const string GraphCopilotUsageReportsLastImportedKey = "GraphCopilotUsageReportsLastImported";
         public const string GraphCopilotUsageReportUserCountTrendLastImportedKey = GraphCopilotUsageReportsLastImportedKey + ":UserCountTrend";
@@ -58,6 +58,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Sections
         private readonly IClock _clock;
         private readonly IImportLastRunStore _lastRunStore;
         private readonly ActivityReportsImport _activityReportsImport;
+        private readonly IUserImportScopeProvider _userScopeProvider;
 
         public ProductionGraphImportSectionFactory(
             AnalyticsLogger logger,
@@ -68,7 +69,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Sections
             ActivityReportsImport activityReportsImport,
             IAnalyticsDbContextFactory dbContextFactory,
             IClock clock,
-            IImportLastRunStore lastRunStore = null)
+            IImportLastRunStore lastRunStore = null,
+            IUserImportScopeProvider userScopeProvider = null)
         {
             // Deliberately no null guards on logger/settings: GraphImporter's own constructor never had them,
             // and adding them here would move the failure from an NRE inside the import to an
@@ -84,6 +86,10 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Sections
             _dbContextFactory = dbContextFactory ?? DefaultAnalyticsDbContextFactory.Instance;
             _clock = clock ?? SystemClock.Instance;
             _lastRunStore = lastRunStore ?? new InMemoryImportLastRunStore();
+
+            // Unfiltered when none is supplied, which is what every caller that predates UserGroupsFilter being
+            // applied everywhere expects. Production passes the web job's process-lifetime provider.
+            _userScopeProvider = userScopeProvider ?? UserImportScopeProvider.Unfiltered();
         }
 
         /// <summary>
@@ -97,10 +103,10 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Sections
         /// </param>
         public IReadOnlyList<IGraphImportSection> CreateSections(AppConfig settings)
         {
-            // Shared across sections and built unconditionally, exactly as before.
+            // Shared across sections and built unconditionally, exactly as before. The UserGroupsFilter scope is NOT
+            // built here: each section asks the process-lifetime provider when it runs, so every import in the process
+            // applies the same, cached resolution.
             var httpClient = new ManualGraphCallClient(_graphAppIndentityOAuthContext, _logger);
-            var userGroupsFilter = new UserGroupsFilterModel(_settings.UserGroupsFilter);
-            var graphUserGroupsCache = new GraphUserGroupsCache(httpClient, _logger);
 
             return new List<IGraphImportSection>
             {
@@ -112,10 +118,15 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Sections
                     s => s.GraphUsersMetadata,
                     async () =>
                     {
-                        // Update Graph users first
-                        var userUpdater = new UserMetadataUpdater(_logger, _settings, _graphAppIndentityOAuthContext.Creds, httpClient);
-                        await userUpdater.InsertAndUpdateDatabaseFromExternalUsers();
-                        return true;
+                        // Update Graph users first. Only people in the UserGroupsFilter scope are written.
+                        var userUpdater = new UserMetadataUpdater(_logger, _settings, _graphAppIndentityOAuthContext.Creds, httpClient,
+                            clock: _clock, userScopeProvider: _userScopeProvider, lastRunStore: _lastRunStore);
+
+                        // False when the /users/delta read did not complete (#664). The cadence gate is then not
+                        // stamped and no "finished section" event is sent, so the import is retried next cycle
+                        // rather than a failed read passing for a tenant in which nothing changed. Returning
+                        // instead of throwing also lets the sections after this one run.
+                        return await userUpdater.InsertAndUpdateDatabaseFromExternalUsers();
                     }),
 
                 // Not cadence-gated: the activity/usage-report phase owns its own once-a-day throttle via
@@ -125,7 +136,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Sections
                     "Skipping usage reports import",
                     s => s.GraphUsageReports,
                     // Global user activity report. Each thread creates own context.
-                    () => _activityReportsImport(settings.DaysBeforeNowToDownload, httpClient, graphUserGroupsCache, userGroupsFilter)),
+                    async () => await _activityReportsImport(settings.DaysBeforeNowToDownload, httpClient, await _userScopeProvider.GetScopeAsync())),
 
                 // Refreshed daily by default. Microsoft publishes these reports roughly 48 hours behind,
                 // so polling more often costs a full re-download and re-process of every licensed user
@@ -137,7 +148,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Sections
                     GraphCopilotUsageReportsLastImportedKey,
                     _settings.GraphCopilotUsageReportsIntervalHours,
                     s => s.GraphCopilotUsageReports,
-                    () => ImportCopilotUsageReports(httpClient, graphUserGroupsCache, userGroupsFilter)),
+                    () => ImportCopilotUsageReports(httpClient)),
 
                 DelegateGraphImportSection.Gated(
                     "Teams import",
@@ -147,7 +158,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Sections
                     s => s.GraphTeams,
                     async () =>
                     {
-                        var teamsImporter = new TeamsImporter(_logger, _settings, _graphClient);
+                        var teamsImporter = new TeamsImporter(_logger, _settings, _graphClient, await _userScopeProvider.GetScopeAsync());
 
                         // TeamsCrawlConfig is a detached POCO (two lists of ids), so the context is only
                         // needed for the load itself. It used to be created before the usage-report section
@@ -170,9 +181,11 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Sections
                     async () =>
                     {
                         IDeltaTokenStore deltaTokenStore;
-                        if (!string.IsNullOrEmpty(_settings.ConnectionStrings.RedisConnectionString))
+                        var sentEmailStateStore = Common.Entities.State.StateStore.TryOpen(
+                            _settings, Common.Entities.State.StatePartitions.SentEmails, _logger);
+                        if (sentEmailStateStore != null)
                         {
-                            deltaTokenStore = new RedisDeltaTokenStore(_settings.ConnectionStrings.RedisConnectionString, tenantId: _settings.TenantGUID.ToString(), clientId: _settings.ClientID, clientSecret: _settings.ClientSecret);
+                            deltaTokenStore = new PersistedDeltaTokenStore(sentEmailStateStore);
                         }
                         else
                         {
@@ -189,7 +202,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Sections
                             SentEmailSentimentScorerFactory.Create(_settings, _logger),
                             dbContextFactory: _dbContextFactory,
                             mailboxSkipList: _sentEmailMailboxSkipList,
-                            noMailboxRetryHours: _settings?.SentEmailNoMailboxRetryHours ?? 0);
+                            noMailboxRetryHours: _settings?.SentEmailNoMailboxRetryHours ?? 0,
+                            userScopeProvider: _userScopeProvider);
 
                         await sentEmailImporter.ImportSentEmails();
                         return true;
@@ -217,8 +231,10 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Sections
                             _settings,
                             new GraphAiInteractionSourceLoader(httpClient, _graphAppIndentityOAuthContext, _logger),
                             InteractionCognitiveEnricherFactory.Create(_settings, _logger),
-                            new GraphPilotGroupMemberResolver(httpClient, _logger),
-                            userGroupsFilter,
+                            // The shared scope, read FAIL-CLOSED: this import never widens when the groups cannot
+                            // be resolved, unlike every other import (see UserImportScopePilotGroupMemberResolver).
+                            new UserImportScopePilotGroupMemberResolver(_userScopeProvider),
+                            _userScopeProvider.Filter,
                             dbContextFactory: _dbContextFactory,
                             clock: _clock);
 
@@ -243,10 +259,11 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Sections
         /// must not take down the Teams and sent-email imports that run after this section. Each report also
         /// gets its own DbContext so a failed SaveChanges can't poison the next one.
         /// </summary>
-        private async Task<bool> ImportCopilotUsageReports(ManualGraphCallClient httpClient, UserGroupsCache userGroupsCache, UserGroupsFilterModel userGroupsFilterModel)
+        private async Task<bool> ImportCopilotUsageReports(ManualGraphCallClient httpClient)
         {
             // Same client, throttling and paging as every other Graph usage report in this solution.
             var reportSource = new GraphCopilotReportSource(httpClient, _logger);
+            var userScope = await _userScopeProvider.GetScopeAsync();
 
             var reportGate = new CopilotUsageReportCadenceRunner(
                 _logger,
@@ -291,14 +308,14 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Sections
                     "Copilot per-user usage detail",
                     GraphCopilotUsageReportUsageUserDetailLastImportedKey,
                     () => RunCopilotReport("Copilot per-user usage detail", db =>
-                        new CopilotUsageUserDetailLoader(reportSource, _logger, userGroupsCache, userGroupsFilterModel)
+                        new CopilotUsageUserDetailLoader(reportSource, _logger, userScope)
                             .LoadAndSaveAsync(db, CopilotReportRequest.DefaultRefreshPeriod))),
 
                 new CopilotUsageReportCadenceRunner.Report(
                     "Cowork per-user usage detail",
                     GraphCopilotUsageReportCoworkUsageUserDetailLastImportedKey,
                     () => RunCopilotReport("Cowork per-user usage detail", db =>
-                        new CoworkUsageUserDetailLoader(reportSource, _logger, userGroupsCache, userGroupsFilterModel)
+                        new CoworkUsageUserDetailLoader(reportSource, _logger, userScope)
                             .LoadAndSaveAsync(db, CopilotReportRequest.DefaultRefreshPeriod))),
             });
         }
@@ -390,7 +407,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Sections
                     {
                         _logger.LogInformation($"Skipping {report.Description}: ran recently ({lastRun:u} UTC). " +
                             $"Next run after {lastRun?.AddHours(_intervalHours):u} UTC (interval {_intervalHours}h). " +
-                            $"Set ForceGraphMetadataImport=true or clear the '{report.CadenceKey}' cache key to override.");
+                            $"Set ForceGraphMetadataImport=true, or delete the '{report.CadenceKey}' row (partition '{Common.Entities.State.StatePartitions.ImportSchedule}') " +
+                            $"from the '{Common.Entities.State.StateStore.TableName}' table, to override.");
                         continue;
                     }
 

@@ -14,8 +14,10 @@ import type { GraphAccessToken } from '../types/graphToken';
  * admin acts on it. The server mints a new one from the long-lived refresh token on every call, so
  * fetching at the point of use is both correct and cheap.
  *
- * Returns `null` when the site is signed in but has no Graph refresh token for this session (the
- * caller shows a "sign out and back in" message). A genuinely expired *site* session is handled by
+ * Returns `null` when the site is signed in but has no working Graph token for this session: the
+ * admin hasn't connected Microsoft Teams yet (signing in no longer captures one - issue #670), or
+ * the stored token has expired or been revoked. The caller then offers "Connect to Microsoft Teams"
+ * (`src/auth/teamsConnect.ts`). A genuinely expired *site* session is handled by
  * {@link apiFetch}, which re-authenticates instead of returning.
  */
 export async function fetchGraphToken(): Promise<GraphAccessToken | null> {

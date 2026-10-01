@@ -10,6 +10,12 @@ namespace Common.Entities.CopilotAdoption
     /// merely have the word "Copilot" in their name (Copilot Studio, Copilot for Sales, Sales Copilot,
     /// Power Virtual Agents...).
     ///
+    /// A licence that <i>includes</i> the seat counts too, whatever it is called. Microsoft 365 E7 is a
+    /// suite rather than a Copilot-branded SKU, but Microsoft's licensing reference lists every service
+    /// plan of the standalone Microsoft 365 Copilot SKU in it. Leaving it out counted E7 holders as
+    /// unlicensed: their Copilot use was reported as unlicensed demand, and they could be recommended
+    /// for a Copilot licence they already hold.
+    ///
     /// Why this needs to be more than a name match: the user import stores the SKU <i>part number</i> in
     /// <see cref="LicenseType.SKUID"/> and a friendly product name in <see cref="LicenseType.Name"/>,
     /// resolved from Microsoft's published licensing CSV. When Microsoft ships a SKU that is newer than
@@ -22,7 +28,8 @@ namespace Common.Entities.CopilotAdoption
     /// <list type="number">
     ///   <item>An explicit exclusion list of "Copilot-branded but not a Microsoft 365 Copilot licence" SKUs.</item>
     ///   <item>A prefix match on the SKU part number, which catches present and future variants
-    ///         (<c>M365_Copilot</c>, <c>Microsoft_365_Copilot</c>, <c>Microsoft_365_Copilot_EDU</c>, ...).</item>
+    ///         (<c>M365_Copilot</c>, <c>Microsoft_365_Copilot</c>, <c>Microsoft_365_Copilot_EDU</c>, ...)
+    ///         and suites that include the seat (<c>MICROSOFT_365_E7</c>).</item>
     ///   <item>A conservative display-name fallback for SKUs whose part number Microsoft renames.</item>
     /// </list>
     ///
@@ -34,7 +41,7 @@ namespace Common.Entities.CopilotAdoption
     public static class CopilotLicenceClassifier
     {
         /// <summary>
-        /// SKU part-number prefixes that identify a Microsoft 365 Copilot seat. Matched
+        /// SKU part-number prefixes that identify a licence carrying a Microsoft 365 Copilot seat. Matched
         /// case-insensitively, after <see cref="ExcludedSkuPrefixes"/> has had its say.
         ///
         /// Prefixes (not exact values) so variants Microsoft has not shipped yet - regional, education,
@@ -45,6 +52,7 @@ namespace Common.Entities.CopilotAdoption
         {
             "M365_COPILOT",             // e.g. M365_Copilot
             "MICROSOFT_365_COPILOT",    // e.g. Microsoft_365_Copilot, Microsoft_365_Copilot_EDU
+            "MICROSOFT_365_E7",         // Microsoft 365 E7 - a suite, but it carries every Copilot seat service plan
         };
 
         /// <summary>
@@ -59,6 +67,7 @@ namespace Common.Entities.CopilotAdoption
         {
             "MICROSOFT_COPILOT_FOR_SALES",  // Microsoft 365 Copilot for Sales - a separate add-on
             "MICROSOFT_VIVA_SALES",         // Microsoft Sales Copilot (the former name of the above)
+            "MICROSOFT_COPILOT_FOR_FINANCE", // Microsoft 365 Copilot for Finance (Preview) trial - no Copilot seat plans
             "MICROSOFT_COPILOT_STUDIO",     // Copilot Studio - an authoring tool, not a Copilot seat
             "COPILOT_STUDIO",
             "POWER_VIRTUAL_AGENTS",         // Copilot Studio's previous name
@@ -72,7 +81,7 @@ namespace Common.Entities.CopilotAdoption
         /// </summary>
         private static readonly string[] ExcludedNameWords = new[]
         {
-            "studio", "sales", "virtual agent", "github", "security", "dynamics", "power ", "bot",
+            "studio", "sales", "finance", "virtual agent", "github", "security", "dynamics", "power ", "bot",
         };
 
         /// <summary>

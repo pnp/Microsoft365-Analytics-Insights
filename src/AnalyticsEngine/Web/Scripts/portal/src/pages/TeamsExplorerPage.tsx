@@ -45,6 +45,7 @@ import type {
   TeamsPeople,
 } from '../types/teamsExplorer';
 import { useT, type TranslationKey } from '../i18n';
+import { usePortalAccess } from '../access';
 
 /** The windows the API accepts. Anything else is snapped server-side, so these must agree with it. */
 const WINDOWS: { days: number; labelKey: TranslationKey }[] = [
@@ -105,6 +106,8 @@ const useStyles = makeStyles({
 export default function TeamsExplorerPage() {
   const styles = useStyles();
   const t = useT();
+  const access = usePortalAccess();
+  const canSeePii = access.seePii;
 
   const [days, setDays] = useState(28);
   const [groupBy, setGroupBy] = useState<TeamsGrouping>('department');
@@ -316,7 +319,7 @@ export default function TeamsExplorerPage() {
         )}
 
         {selectedTab === 'meetings' && meetings && (
-          <MeetingsPanel data={meetings} callsAvailable={availability?.callsAvailable ?? true} />
+          <MeetingsPanel data={meetings} callsAvailable={availability?.callsAvailable ?? true} showPii={canSeePii} />
         )}
 
         {selectedTab === 'collaboration' && collaboration && (
@@ -339,6 +342,7 @@ export default function TeamsExplorerPage() {
             onExportChampions={() => runExport('people')}
             onExportDormant={() => runExport('dormant')}
             exporting={exporting}
+            showPii={canSeePii}
           />
         )}
       </div>

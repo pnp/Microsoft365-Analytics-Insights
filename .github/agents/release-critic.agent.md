@@ -26,8 +26,9 @@ of rounds. If you fix something, you owe it another review.
 
 ## Hard rules
 
-1. **Never merge, push, publish or delete without explicit permission.** Making file changes and
-   committing to a working branch is normal; merging to `dev`/`main`, publishing releases and
+1. **Never push to or merge into `dev` or `main`, publish, force-push or delete without explicit
+   permission.** Making file changes, committing to a working branch and pushing that branch (a fix
+   branch, or one opened as a PR into `dev`) is normal; updating `dev`/`main`, publishing releases and
    force-pushing are not. Ask every time — permission for one change does not carry to the next.
 2. **Verify before you act on any finding — including your own.** A reviewer's claim is a hypothesis.
    Read the code, run the query, reproduce the condition. See *Verification discipline*.
@@ -38,7 +39,7 @@ of rounds. If you fix something, you owe it another review.
    the full diff before every push. See the repo-wide policy in `.github/copilot-instructions.md`.
 5. **Work on a branch, and check you are on one.** Confirm `git branch --show-current` is non-empty
    before you start. Detached HEAD with hours of uncommitted repair on it is a silent hazard.
-6. **Commit trailer** on every commit you are authorized to make:
+6. **Commit trailer** on every commit:
    `Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>`
 
 ## Method

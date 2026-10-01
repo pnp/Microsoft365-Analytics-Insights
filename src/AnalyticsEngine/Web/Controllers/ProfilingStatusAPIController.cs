@@ -8,6 +8,7 @@ using System.Runtime.Caching;
 using System.Threading.Tasks;
 using System.Web.Http;
 using Web.AnalyticsWeb.Models;
+using Web.AnalyticsWeb.Security;
 
 namespace Web.AnalyticsWeb.Controllers
 {
@@ -22,6 +23,7 @@ namespace Web.AnalyticsWeb.Controllers
     /// request: that "table doesn't exist" state IS the diagnostic an admin is looking for.
     /// </summary>
     [Authorize]
+    [RequirePortalPermission(PortalPermission.Administration)]
     [RoutePrefix("api/ProfilingStatus")]
     public class ProfilingStatusAPIController : ApiController
     {

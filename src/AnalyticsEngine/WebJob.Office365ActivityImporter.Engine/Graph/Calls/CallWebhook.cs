@@ -1,4 +1,5 @@
 using Azure.Identity;
+using Common.Entities.Calls;
 using Common.Entities.Config;
 using DataUtils;
 using Microsoft.Extensions.Logging;
@@ -83,30 +84,13 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
         }
 
         /// <summary>
-        /// Read-only check of the current call-records webhook subscription, for status display
-        /// (e.g. the web homepage). Does NOT create or renew anything. Returns whether a matching
-        /// subscription currently exists and, if so, when it expires. Any Graph error is allowed to
-        /// propagate so the caller can surface it as an explicit "couldn't check" state.
+        /// Read-only check of the current call-records webhook subscription, for status display.
+        /// Does NOT create or renew anything. See <see cref="CallRecordSubscriptionStatus.ReadAsync"/>,
+        /// which the web app calls directly.
         /// </summary>
-        public async Task<CallRecordSubscriptionInfo> GetCallRecordsSubscriptionInfo(Uri webAppUrl)
+        public Task<CallRecordSubscriptionInfo> GetCallRecordsSubscriptionInfo(Uri webAppUrl)
         {
-            var matchingSubs = await _subscriptions.FindCallRecordSubscriptions(webAppUrl);
-
-            // If more than one matches (shouldn't normally happen), report the one that expires
-            // latest - that's the subscription keeping the webhook alive.
-            var current = CallSubscriptionRules.SelectCurrentForStatus(matchingSubs);
-
-            if (current == null)
-            {
-                return new CallRecordSubscriptionInfo { Exists = false };
-            }
-
-            return new CallRecordSubscriptionInfo
-            {
-                Exists = true,
-                SubscriptionId = current.Id,
-                ExpirationDateTime = current.ExpirationDateTime,
-            };
+            return CallRecordSubscriptionStatus.ReadAsync(_subscriptions, webAppUrl);
         }
 
         /// <summary>

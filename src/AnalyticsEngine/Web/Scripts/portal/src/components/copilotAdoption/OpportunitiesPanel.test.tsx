@@ -22,6 +22,7 @@ vi.mock('../../api/copilotAdoptionApi', () => ({
 // Imported after the mock so the panel picks up the stubbed module.
 const { default: OpportunitiesPanel } = await import('./OpportunitiesPanel');
 const { resetTimeSavedStore, TIME_SAVED_STORAGE_KEY } = await import('./coworkTimeSaved');
+const { resetTimeSavedCohortStore, TIME_SAVED_COHORT_STORAGE_KEY } = await import('./timeSavedCohort');
 
 // The product defaults for the Copilot minutes: 5 a meeting, half a minute an email and 1 a document,
 // with the conservative end at 50%. A 28-day month of 5-day weeks is 20 working days.
@@ -76,6 +77,19 @@ const CHAT_USERS: LicenceValueEstimate = {
   hoursPerMonthHigh: 76,
 };
 
+// Every licence candidate, recommended or not - the 10 above and 30 lighter users: 2,000 x 5 + 8,000
+// x 0.5 + 2,000 x 1 = 16,000 minutes = 267 hours, 133 at the conservative end. Over 40 people x 20
+// working days that is 20 minutes a day each, 10 at the conservative end.
+const ALL_CANDIDATES: LicenceValueEstimate = {
+  ...RECOMMENDED,
+  cohortUsers: 40,
+  addressableMeetings: 2000,
+  addressableMailThreads: 8000,
+  addressableDocuments: 2000,
+  hoursPerMonthLow: 133,
+  hoursPerMonthHigh: 267,
+};
+
 function summary(overrides: Partial<CopilotAdoptionSummary> = {}): CopilotAdoptionSummary {
   return {
     options: OPTIONS,
@@ -94,7 +108,7 @@ const EMPTY_PAGE: LicenceOpportunityPage = { total: 0, skip: 0, take: 50, rows: 
  */
 async function renderPanel(s: CopilotAdoptionSummary, language?: 'en' | 'es') {
   const result = renderWithProvider(
-    <OpportunitiesPanel windowDays={28} summary={s} filterOptions={null} options={s.options} />,
+    <OpportunitiesPanel windowDays={28} summary={s} options={s.options} />,
     language ? { language } : undefined,
   );
   await waitFor(() => expect(fetchOpportunities).toHaveBeenCalled());
@@ -116,6 +130,7 @@ beforeEach(() => {
   fetchOpportunities.mockReset();
   fetchOpportunities.mockResolvedValue(EMPTY_PAGE);
   resetTimeSavedStore();
+  resetTimeSavedCohortStore();
   scrollIntoView.mockReset();
   // jsdom implements no scrolling, so the call is recorded rather than performed.
   Element.prototype.scrollIntoView = scrollIntoView;
@@ -227,6 +242,37 @@ describe('OpportunitiesPanel licence headline', () => {
     expect(screen.getByRole('checkbox', { name: 'Recommended only' })).toBeTruthy();
   });
 
+  it('still says the candidate list was capped when this view has nobody on it', async () => {
+    // A filtered view whose people all ranked below the tenant-wide cut-off gets no headline, and the
+    // headline was the only place the cap was said - so the list read "nobody in this tenant qualifies".
+    await renderPanel(summary({
+      licenceOpportunityEstimate: { ...RECOMMENDED, cohortUsers: 0, candidatesCapped: true },
+      licenceChatUsersEstimate: undefined,
+    }));
+
+    expect(await screen.findByText(
+      'The candidate list reached its 50,000-candidate limit for the whole tenant, so candidates ranked below it were never listed. People in this view who would qualify may be among them.',
+    )).toBeTruthy();
+    expect(screen.getByText('No candidate who made the ranked list is in this view for the selected period.')).toBeTruthy();
+    expect(screen.queryByText(/Nobody in this tenant qualifies/)).toBeNull();
+  });
+
+  it('says nobody qualifies only when the list was complete', async () => {
+    await renderPanel(summary({ licenceOpportunityEstimate: { ...RECOMMENDED, cohortUsers: 0 }, licenceChatUsersEstimate: undefined }));
+
+    expect(await screen.findByText('Nobody in this tenant qualifies as a licence candidate for the selected period.')).toBeTruthy();
+    expect(screen.queryByText(/candidate limit/)).toBeNull();
+  });
+
+  it('says nobody in the view qualifies, not nobody in the tenant, under a page-wide filter', async () => {
+    // Only the people the page filter selects were searched; the rest of the tenant may hold candidates.
+    const s = summary({ licenceOpportunityEstimate: { ...RECOMMENDED, cohortUsers: 0 }, licenceChatUsersEstimate: undefined });
+    renderWithProvider(<OpportunitiesPanel windowDays={28} summary={s} options={s.options} userFilter="d:department~Sales" />);
+
+    expect(await screen.findByText('Nobody in this view qualifies as a licence candidate for the selected period.')).toBeTruthy();
+    expect(screen.queryByText(/Nobody in this tenant qualifies/)).toBeNull();
+  });
+
   it('reads in Spanish', async () => {
     await loadCatalog('es');
     await renderPanel(summary(), 'es');
@@ -236,6 +282,154 @@ describe('OpportunitiesPanel licence headline', () => {
     expect(within(hero).getByText('Respaldado por estudios publicados')).toBeTruthy();
     expect(within(hero).getByText('al mes de las 4 personas que ya usan Copilot Chat')).toBeTruthy();
     expect(screen.getByRole('tab', { name: 'Candidatos', selected: true })).toBeTruthy();
+  });
+});
+
+/**
+ * The option to model every licence candidate as well as the people recommended. Recommended stays
+ * the default - it is the purchase the list makes the case for - but on a tenant where nobody uses
+ * Microsoft 365 heavily enough to be recommended it is empty, and the headline used to vanish.
+ */
+describe('OpportunitiesPanel every licence candidate', () => {
+  const withAll = (overrides: Partial<CopilotAdoptionSummary> = {}) =>
+    summary({ licenceAllCandidatesEstimate: ALL_CANDIDATES, ...overrides });
+
+  const nobodyRecommended = () =>
+    withAll({
+      recommendedForLicence: 0,
+      licenceOpportunityEstimate: { ...RECOMMENDED, cohortUsers: 0, hoursPerMonthLow: 0, hoursPerMonthHigh: 0 },
+      licenceChatUsersEstimate: { ...CHAT_USERS, cohortUsers: 0, hoursPerMonthLow: 0, hoursPerMonthHigh: 0 },
+    });
+
+  it('leads with the people recommended, and offers every candidate beside them', async () => {
+    await renderPanel(withAll());
+
+    const hero = headline();
+    expect(within(hero).getByRole('radio', { name: 'Recommended for a licence (10)' })).toBeChecked();
+    expect(within(hero).getByRole('radio', { name: 'All candidates (40)' })).not.toBeChecked();
+    expect(within(hero).getByText('if the 10 people recommended for a licence were licensed')).toBeTruthy();
+    expect(within(hero).queryByText(/^Modelling every licence candidate/)).toBeNull();
+    expect(sessionStorage.getItem(TIME_SAVED_COHORT_STORAGE_KEY)).toBeNull();
+  });
+
+  it('models every candidate when chosen, with the recommended people beside them', async () => {
+    const user = userEvent.setup();
+    await renderPanel(withAll());
+
+    await user.click(within(headline()).getByRole('radio', { name: 'All candidates (40)' }));
+
+    const hero = headline('133\u2013267 hours a month');
+    expect(within(hero).getByText('if all 40 licence candidates were licensed')).toBeTruthy();
+    expect(within(hero).getByText(/^Modelling every licence candidate, not only the people recommended/)).toBeTruthy();
+    // The part of it the list stands behind, in place of the Chat users.
+    expect(within(hero).getByText('83\u2013165 h')).toBeTruthy();
+    expect(within(hero).getByText('a month from the 10 people recommended for a licence')).toBeTruthy();
+    expect(within(hero).queryByText('a month from the 4 people already using Copilot Chat')).toBeNull();
+    // 16,000 minutes over 40 people x 20 working days.
+    expect(within(hero).getByText('10\u201320 minutes')).toBeTruthy();
+    expect(within(hero).getByText('a working day, for each licence candidate')).toBeTruthy();
+    expect(JSON.parse(sessionStorage.getItem(TIME_SAVED_COHORT_STORAGE_KEY) ?? '{}')).toEqual({ licence: 'all' });
+
+    await user.click(within(hero).getByRole('radio', { name: 'Recommended for a licence (10)' }));
+    expect(headline()).toBeTruthy();
+    expect(sessionStorage.getItem(TIME_SAVED_COHORT_STORAGE_KEY)).toBeNull();
+  });
+
+  it('takes the working with it, and states the assumptions for every candidate', async () => {
+    const user = userEvent.setup();
+    await renderPanel(withAll());
+    await user.click(within(headline()).getByRole('radio', { name: 'All candidates (40)' }));
+
+    const model = await openTimeSaved(user);
+    expect(within(model).getByRole('radio', { name: 'All 40 licence candidates' })).toBeChecked();
+    expect(within(model).getByText('8,000')).toBeTruthy();
+    expect(
+      within(model).getByText(
+        "Volumes are observed from Microsoft's usage reports for 40 licence candidates - everyone without a licence who used Microsoft 365 or Copilot Chat in the period, recommended or not - restated over 20 working days a month.",
+      ),
+    ).toBeTruthy();
+    expect(within(model).getByText(/for every licence candidate, recommended or not;/)).toBeTruthy();
+    // The sense check describes the people the headline models.
+    expect(
+      within(model).getByText(/^Your assumptions give the average licence candidate 10\u201320 minutes a working day\./),
+    ).toBeTruthy();
+    expect(within(model).getByText('This model: the average licence candidate')).toBeTruthy();
+
+    // The Chat users can still be opened here, and the headline stays on the reader's choice.
+    await user.click(within(model).getByRole('radio', { name: 'The 4 people already using Copilot Chat' }));
+    expect(within(model).getByText('2,400')).toBeTruthy();
+    expect(headline('133\u2013267 hours a month')).toBeTruthy();
+  });
+
+  it('shows exactly the people it counts: every candidate, with the list\u2019s filters lifted', async () => {
+    const user = userEvent.setup();
+    await renderPanel(withAll());
+    await user.click(screen.getByRole('checkbox', { name: 'Recommended only' }));
+    await user.click(within(headline()).getByRole('radio', { name: 'All candidates (40)' }));
+    await openTimeSaved(user);
+    fetchOpportunities.mockClear();
+
+    await user.click(screen.getByRole('button', { name: 'See all 40 candidates' }));
+
+    expect(screen.getByRole('tab', { name: 'Candidates', selected: true })).toBeTruthy();
+    expect(screen.getByRole('checkbox', { name: 'Recommended only' })).not.toBeChecked();
+    expect(scrollIntoView).toHaveBeenCalled();
+    await waitFor(() => expect(fetchOpportunities).toHaveBeenCalled());
+    const filters = fetchOpportunities.mock.calls.at(-1)![1] as OpportunityFilters;
+    expect(filters.recommendedOnly).toBe(false);
+    expect(filters.existingCopilotUsersOnly).toBe(false);
+  });
+
+  /** The customer this exists for. */
+  it('models every candidate when nobody is recommended, and says why', async () => {
+    const user = userEvent.setup();
+    await renderPanel(nobodyRecommended());
+
+    const hero = headline('133\u2013267 hours a month');
+    expect(within(hero).getByText(/^Nobody is recommended for a licence in this period, so this models every licence candidate instead/)).toBeTruthy();
+    expect(within(hero).getByRole('radio', { name: 'Recommended for a licence (0)' })).toBeDisabled();
+    expect(within(hero).getByRole('radio', { name: 'All candidates (40)' })).toBeChecked();
+    expect(within(hero).getByText('if all 40 licence candidates were licensed')).toBeTruthy();
+    // No Chat-users figure for a recommended cohort that is empty, and no zero anywhere.
+    expect(within(hero).queryByText(/already using Copilot Chat/)).toBeNull();
+    expect(within(hero).queryByText(/^0\u2013/)).toBeNull();
+    // The reader did not choose this, so it is not remembered as their choice.
+    expect(sessionStorage.getItem(TIME_SAVED_COHORT_STORAGE_KEY)).toBeNull();
+
+    const model = await openTimeSaved(user);
+    expect(
+      within(model).getByText(
+        "Volumes are observed from Microsoft's usage reports for 40 licence candidates - everyone without a licence who used Microsoft 365 or Copilot Chat in the period, recommended or not - restated over 20 working days a month.",
+      ),
+    ).toBeTruthy();
+    // One cohort to show, so nothing to choose between.
+    expect(within(model).queryByRole('radiogroup')).toBeNull();
+  });
+
+  it('keeps the candidate list alone when there are no candidates to model either', async () => {
+    await renderPanel(
+      summary({
+        licenceOpportunityEstimate: { ...RECOMMENDED, cohortUsers: 0 },
+        licenceChatUsersEstimate: undefined,
+        licenceAllCandidatesEstimate: { ...ALL_CANDIDATES, cohortUsers: 0 },
+      }),
+    );
+
+    expect(screen.queryByText(/hours a month$/)).toBeNull();
+    expect(screen.queryByRole('tab', { name: 'Time saved' })).toBeNull();
+  });
+
+  it('reads in Spanish', async () => {
+    const user = userEvent.setup();
+    await loadCatalog('es');
+    await renderPanel(withAll(), 'es');
+
+    await user.click(await screen.findByRole('radio', { name: 'Todos los candidatos (40)' }));
+
+    const hero = await screen.findByRole('region', { name: '133\u2013267 horas al mes' });
+    expect(within(hero).getByText('si los 40 candidatos a una licencia la tuvieran')).toBeTruthy();
+    expect(within(hero).getByText('al mes de las 10 personas recomendadas para una licencia')).toBeTruthy();
+    expect(within(hero).getByText(/^Se modela a todos los candidatos a una licencia/)).toBeTruthy();
   });
 });
 
@@ -291,6 +485,38 @@ describe('OpportunitiesPanel sections and actions', () => {
 
     expect(scrollIntoView).toHaveBeenCalled();
     expect(screen.getByRole('spinbutton', { name: 'Minutes saved per meeting' })).toHaveFocus();
+  });
+});
+
+describe('OpportunitiesPanel without See PII', () => {
+  it('opens on the licence estimate, never asks for the candidates, and offers no list to open', async () => {
+    renderWithProvider(
+      <OpportunitiesPanel windowDays={28} summary={summary()} filterOptions={null} options={OPTIONS} canSeePii={false} />,
+    );
+
+    expect(screen.getByRole('tab', { name: 'Time saved', selected: true })).toBeTruthy();
+    expect(headline()).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'See the 10 people recommended' })).toBeNull();
+
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('tab', { name: 'Candidates' }));
+    expect(within(screen.getByRole('tabpanel', { name: 'Candidates' })).getByText('Individual details are hidden')).toBeTruthy();
+    expect(fetchOpportunities).not.toHaveBeenCalled();
+  });
+
+  it('shows only the note when there is no estimate to lead with', () => {
+    renderWithProvider(
+      <OpportunitiesPanel
+        windowDays={28}
+        summary={summary({ licenceOpportunityEstimate: { ...RECOMMENDED, cohortUsers: 0 }, licenceChatUsersEstimate: undefined })}
+        filterOptions={null}
+        options={OPTIONS}
+        canSeePii={false}
+      />,
+    );
+
+    expect(screen.getByText('Individual details are hidden')).toBeTruthy();
+    expect(fetchOpportunities).not.toHaveBeenCalled();
   });
 });
 
@@ -543,19 +769,18 @@ describe('OpportunitiesPanel printing', { timeout: 30000 }, () => {
     const list = candidates();
 
     for (const control of [
-      within(list).getByRole('combobox', { name: 'Filter candidates by department' }),
       within(list).getByRole('checkbox', { name: 'Recommended only' }),
       within(list).getByRole('button', { name: 'Expand all' }),
       within(list).getByRole('button', { name: 'Next' }),
     ]) {
       expect(control.closest('[data-print="hide"]')).not.toBeNull();
     }
+    // Who the list is about is the page-wide filter's job; the list has no department filter of its own.
+    expect(within(list).queryByRole('combobox', { name: /department/i })).not.toBeInTheDocument();
 
     await user.click(within(list).getByRole('checkbox', { name: 'Recommended only' }));
     await waitFor(() =>
-      expect(list.querySelector('[data-print="only"]')?.textContent).toBe(
-        'Filters: Department: All departments \u00b7 Recommended only',
-      ),
+      expect(list.querySelector('[data-print="only"]')?.textContent).toBe('Filters: Recommended only'),
     );
   });
 });

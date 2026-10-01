@@ -1,6 +1,5 @@
 using Common.Entities;
 using Common.Entities.Config;
-using Common.Entities.Redis;
 using System;
 using System.Collections.Generic;
 using System.Data.Entity;
@@ -10,6 +9,7 @@ using System.Threading.Tasks;
 using System.Web.Http;
 using Web.AnalyticsWeb.Models;
 using Web.AnalyticsWeb.Models.Health;
+using Web.AnalyticsWeb.Security;
 
 namespace Web.AnalyticsWeb.Controllers
 {
@@ -17,6 +17,12 @@ namespace Web.AnalyticsWeb.Controllers
     /// Serves the system-status data that used to be the server-rendered home page, now consumed
     /// by the SPA's Home page.
     /// </summary>
+    /// <remarks>
+    /// Shared by both areas: the Insights overview needs the record counts, and the Administration area's
+    /// Service configuration page needs the rest. A reader without the Administration permission gets the
+    /// counts only, and the admin detail - connection targets, the call-records webhook and its Graph
+    /// subscription - is never even loaded for them (#660).
+    /// </remarks>
     [Authorize]
     [RoutePrefix("api/SystemStatus")]
     public class SystemStatusAPIController : ApiController
@@ -26,14 +32,23 @@ namespace Web.AnalyticsWeb.Controllers
         [Route("")]
         public async Task<IHttpActionResult> Get()
         {
+            var administration = PortalAccess.Evaluate(Request, User).Administration;
+
             using (var db = new AnalyticsEntitiesContext())
             {
                 var appConfig = new AppConfig();
-                // Redis is optional for the web app, so tolerate it not being configured.
-                var cache = CacheConnectionManager.TryGetConnectionManager(appConfig.ConnectionStrings.RedisConnectionString, tenantId: appConfig.TenantGUID.ToString(), clientId: appConfig.ClientID, clientSecret: appConfig.ClientSecret);
-                var s = await SystemStatus.LoadFrom(db, cache);
-
                 var imports = appConfig.ImportJobSettings;
+
+                if (!administration)
+                {
+                    return Ok(SystemStatusApiModel.ForInsights(
+                        Common.Entities.BuildConstants.BuildLabel,
+                        await BuildDataCountsAsync(db, imports),
+                        HealthService.DescribeEnabledImports(imports),
+                        importSettingsKnown: imports != null));
+                }
+
+                var s = await SystemStatus.LoadFrom(db);
 
                 var model = new SystemStatusApiModel
                 {
@@ -48,7 +63,7 @@ namespace Web.AnalyticsWeb.Controllers
                     CallWebhookExpiry = s.CallWebhookExpiry,
                     CallWebhookStatusDetail = s.CallWebhookStatusDetail,
                     WebAppConfigSQL = s.WebAppConfigSQL,
-                    WebAppConfigRedis = s.WebAppConfigRedis,
+                    WebAppConfigStorage = s.WebAppConfigStorage,
                     WebAppConfigCognitive = s.WebAppConfigCognitive,
                     CognitiveServiceEnabled = s.CognitiveServiceEnabled,
                     WebAppConfigServiceBus = s.WebAppConfigServiceBus,

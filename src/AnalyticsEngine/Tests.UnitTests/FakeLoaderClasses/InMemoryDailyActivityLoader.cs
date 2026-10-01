@@ -49,7 +49,7 @@ namespace Tests.UnitTests.FakeLoaderClasses
         : AbstractUserDailyActivityLoader<FakeUserUsageActivityLog, FakeUserActivityDetail>
     {
         public InMemoryDailyActivityLoader(ILogger logger)
-            : base(null, new MockUserGroupsCache(null, logger), new UserGroupsFilterModel(null), logger)
+            : base(null, Common.Entities.UserScope.UserImportScope.Unfiltered, logger)
         {
         }
 

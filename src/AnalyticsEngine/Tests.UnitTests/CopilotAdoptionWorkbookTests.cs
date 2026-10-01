@@ -625,6 +625,72 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public void Workbook_DoesNotClaimAFilteredViewWasFullyAnalysedWhenItsLicenceHoldersWereBeyondTheCap()
+        {
+            // The licensed-user analysis stops at its cap by user id, and a filter can select people past it.
+            // The view's own warning says how many; the headline sheet said "every licensed user matching the
+            // filter was analysed" beside it.
+            var analysis = SyntheticAnalysis();
+            var summary = analysis.Summary;
+            summary.UserFilterDescription = "Department is Sales";
+            summary.ScoredUsers = summary.LicensedUsers;
+            CopilotAdoptionWarnings.Add(
+                summary,
+                CopilotAdoptionWarningKeys.ScopedLicensedUsersNotAnalysed,
+                new Dictionary<string, object> { { "count", 12 }, { "maxUsers", 50000 } });
+
+            var cells = SheetCells(CopilotAdoptionWorkbook.Build(analysis), "Headline figures");
+
+            Assert.IsFalse(cells.Any(c => c.Contains("Every licensed user matching the filter was analysed")));
+            Assert.IsTrue(cells.Any(c => c.StartsWith("FEWER THAN THE LICENCE HOLDERS THIS FILTER SELECTS: 12 more")));
+            Assert.IsTrue(cells.Any(c => c.Contains("it counts only the licence holders the analysis reached: 12 more")));
+
+            // And the first sheet, which is the one read on its own.
+            var report = SheetCells(CopilotAdoptionWorkbook.Build(analysis), "Report");
+            Assert.IsFalse(report.Any(c => c.StartsWith("Every licensed user")), "The cover sheet must not claim a complete analysis either.");
+            Assert.IsTrue(report.Any(c => c.StartsWith("Fewer than the licence holders this filter selects: 12 more")));
+
+            // Nor may its Population row count only the analysed people as the filter's members.
+            summary.UnscopedLicensedUsers = summary.LicensedUsers + 500;
+            var population = SheetCells(CopilotAdoptionWorkbook.Build(analysis), "Report")
+                .Single(c => c.StartsWith("Only the people matching the filter"));
+            StringAssert.Contains(population, string.Format(
+                CultureInfo.InvariantCulture,
+                " {0:N0} of the tenant's {1:N0} Copilot licence holders are in it. 12 of them are beyond the analysis limit",
+                summary.LicensedUsers + 12,
+                summary.LicensedUsers + 500));
+        }
+
+        [TestMethod]
+        public void Workbook_StillSaysAFilteredViewWasFullyAnalysedWhenItWas()
+        {
+            var analysis = SyntheticAnalysis();
+            analysis.Summary.UserFilterDescription = "Department is Sales";
+            analysis.Summary.ScoredUsers = analysis.Summary.LicensedUsers;
+
+            var cells = SheetCells(CopilotAdoptionWorkbook.Build(analysis), "Headline figures");
+
+            Assert.IsTrue(cells.Any(c => c.StartsWith("Every licensed user matching the filter was analysed")));
+            Assert.IsFalse(cells.Any(c => c.Contains("beyond the analysis limit")));
+
+            // Complete, but of the filter's people - which the cover sheet says rather than implying the tenant.
+            var report = SheetCells(CopilotAdoptionWorkbook.Build(analysis), "Report");
+            Assert.IsTrue(report.Contains("Every licensed user matching the filter was analysed - not the whole tenant."));
+            Assert.IsFalse(report.Contains("Every licensed user was analysed."));
+        }
+
+        [TestMethod]
+        public void Workbook_CoverSheetSaysEveryoneWasAnalysedOnlyForTheWholeTenant()
+        {
+            var analysis = SyntheticAnalysis();
+            analysis.Summary.ScoredUsers = analysis.Summary.LicensedUsers;
+
+            var report = SheetCells(CopilotAdoptionWorkbook.Build(analysis), "Report");
+
+            Assert.IsTrue(report.Contains("Every licensed user was analysed."));
+        }
+
+        [TestMethod]
         public void Workbook_IncludesTheAccountabilityRollup()
         {
             var text = SheetText(CopilotAdoptionWorkbook.Build(SyntheticAnalysis()));
@@ -632,6 +698,64 @@ namespace Tests.UnitTests
             StringAssert.Contains(text, "Accountability roll-up");
             StringAssert.Contains(text, "Action opportunity");
             StringAssert.Contains(text, "manager@contoso.com");
+        }
+
+        [TestMethod]
+        public void Workbook_WithoutIndividualData_NamesNobody_ButKeepsEveryAggregate()
+        {
+            // The workbook a reader without the portal's See PII permission downloads (#661). An export
+            // must never be less redacted than the screen it came from.
+            var analysis = SyntheticAnalysis();
+            var full = CopilotAdoptionWorkbook.Build(analysis);
+            var trimmed = CopilotAdoptionWorkbook.Build(analysis, includeIndividualData: false);
+
+            // The control: the fixture really does name people, so the absence below means something.
+            StringAssert.Contains(SheetText(full), "user1@contoso.com");
+            StringAssert.Contains(SheetText(full), "candidate@contoso.com");
+
+            var text = SheetText(trimmed);
+            Assert.IsFalse(text.Contains("@contoso.com"), "No sign-in name, email address or manager may reach this file.");
+
+            var names = WorkbookSheetNames(trimmed);
+            CollectionAssert.DoesNotContain(names, "Licensed users");
+            CollectionAssert.DoesNotContain(names, "Licence opportunities");
+            foreach (var aggregate in WorkbookSheetNames(full).Except(new[] { "Licensed users", "Licence opportunities" }))
+            {
+                CollectionAssert.Contains(names, aggregate, "Only the per-person sheets may be left out.");
+            }
+
+            // Cowork keeps its tiers and department order, and says where the named list went.
+            var cowork = SheetCells(trimmed, "Cowork readiness");
+            CollectionAssert.Contains(cowork, "Rollout order by department");
+            Assert.IsTrue(cowork.Any(c => c.Contains("needs the See PII permission")));
+
+            // The cover sheet says so, so a reader comparing it with a colleague's full export does not
+            // take the missing sheets for missing data.
+            Assert.IsTrue(SheetCells(trimmed, "Report").Any(c => c.Contains("not included (needs the See PII permission)")));
+            Assert.IsFalse(text.Contains("Accountability roll-up"), "The roll-up's rows are managers when it is grouped by manager.");
+
+            // The method sheet must not send the reader to a sheet this file leaves out...
+            var method = SheetCells(trimmed, "How this is calculated");
+            Assert.IsTrue(SheetCells(full, "How this is calculated").Any(c => c.Contains("'Licensed users' sheet on")),
+                "The control: the full file's method sheet does point at the per-user sheet.");
+            foreach (var omitted in new[] { "Licensed users", "Licence opportunities" })
+            {
+                Assert.IsFalse(method.Any(c => c.Contains(omitted + " sheet shows") || c.Contains("'" + omitted + "' sheet on")),
+                    "The method sheet points at the " + omitted + " sheet, which this file leaves out.");
+            }
+
+            // ...and what it says about comparing this file with a full export has to hold.
+            StringAssert.Contains(string.Join("\n", method), "accountabilityRollup.count");
+            var fullFacts = SheetCells(full, "Snapshot facts");
+            var trimmedFacts = SheetCells(trimmed, "Snapshot facts");
+            Assert.AreEqual(fullFacts.Count, trimmedFacts.Count, "Every Snapshot fact must still be there, in the same order.");
+            var rollupCountCell = fullFacts.IndexOf("accountabilityRollup.count") + 1;
+            Assert.AreNotEqual(0, rollupCountCell, "The roll-up's row count is missing from Snapshot facts.");
+            var differing = Enumerable.Range(0, fullFacts.Count).Where(i => fullFacts[i] != trimmedFacts[i]).ToList();
+            CollectionAssert.AreEqual(new List<int> { rollupCountCell }, differing,
+                "Only accountabilityRollup.count may differ from a full export, as the method sheet says.");
+
+            Assert.IsTrue(analysis.Summary.AccountabilityRollup.Count > 0, "The cached analysis must never be edited for one reader.");
         }
 
         [TestMethod]
@@ -790,7 +914,7 @@ namespace Tests.UnitTests
             var cells = SheetCells(bytes, "Licence estimate (modelled)");
             foreach (var expected in new[]
             {
-                "Recommended for a licence", "Already using Copilot Chat", "People covered",
+                "Recommended for a licence", "Already using Copilot Chat", "Every licence candidate", "People covered",
                 "Meetings a month (observed)", "Emails a month (observed)", "Document touches a month (observed)",
                 "Minutes saved per meeting (assumption)", "Minutes saved per email (assumption)",
                 "Minutes saved per document (assumption)", "Hours a month - meetings", "Hours a month - email",
@@ -802,9 +926,14 @@ namespace Tests.UnitTests
 
             var recommended = analysis.Summary.LicenceOpportunityEstimate;
             var chatUsers = analysis.Summary.LicenceChatUsersEstimate;
+            var allCandidates = analysis.Summary.LicenceAllCandidatesEstimate;
             Assert.AreEqual(2, recommended.CohortUsers, "The synthetic analysis recommends two candidates.");
             Assert.AreEqual(1, chatUsers.CohortUsers, "Only one of them already uses Copilot Chat.");
+            Assert.AreEqual(2, allCandidates.CohortUsers, "Both of its candidates are recommended.");
             AssertFollowedBy(cells, "People covered", "2");
+            var covered = cells.IndexOf("People covered");
+            Assert.AreEqual("1", cells[covered + 2], "The second column is the candidates already using Copilot Chat.");
+            Assert.AreEqual("2", cells[covered + 3], "The third column is every licence candidate.");
             CollectionAssert.Contains(cells, recommended.HoursPerMonthHigh.ToString(CultureInfo.InvariantCulture));
             Assert.IsTrue(cells.Any(c => c.StartsWith("Assumptions: the product defaults", StringComparison.Ordinal)));
             Assert.IsTrue(cells.Any(c => c.StartsWith("Assumes Microsoft 365 Copilot saves", StringComparison.Ordinal)),
@@ -812,7 +941,7 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
-        public void Workbook_WritesNoLicenceEstimate_WhenNobodyIsRecommended()
+        public void Workbook_WritesNoLicenceEstimate_WhenThereAreNoCandidates()
         {
             var analysis = SyntheticAnalysis();
             analysis.Opportunities.Clear();
@@ -822,6 +951,58 @@ namespace Tests.UnitTests
                 WorkbookSheetNames(CopilotAdoptionWorkbook.Build(analysis)),
                 "Licence estimate (modelled)",
                 "An empty cohort is not a finding, and must not be written as a modelled zero.");
+        }
+
+        /// <summary>
+        /// The customer the portal's "all candidates" option exists for: nobody uses Microsoft 365 heavily
+        /// enough to be recommended. The portal still models every candidate, so the workbook downloaded
+        /// from it has to carry the same figure - it used to leave the licence estimate out altogether.
+        /// </summary>
+        [TestMethod]
+        public void Workbook_LicenceEstimateModelsEveryCandidate_WhenNobodyIsRecommended()
+        {
+            var analysis = SyntheticAnalysis();
+            analysis.Opportunities.Clear();
+            analysis.Opportunities.Add(CopilotAdoptionScoring.ScoreOpportunity(
+                new UnlicensedUserSignalRow
+                {
+                    UserId = 5100,
+                    UserPrincipalName = "light.user@contoso.com",
+                    Department = GreekDepartment,
+                    TeamsMessages = 4,
+                    TeamsMeetings = 1,
+                    EmailsSent = 2,
+                    EmailsRead = 5,
+                    FilesViewedOrEdited = 1,
+                },
+                analysis.Summary.Options));
+            new CopilotAdoptionService().FinaliseSummary(analysis);
+
+            Assert.AreEqual(0, analysis.Summary.RecommendedForLicence, "The fixture must recommend nobody.");
+            var allCandidates = analysis.Summary.LicenceAllCandidatesEstimate;
+            Assert.AreEqual(1, allCandidates.CohortUsers);
+            Assert.IsTrue(allCandidates.HoursPerMonthHigh > 0, "The fixture must model some time.");
+
+            var bytes = CopilotAdoptionWorkbook.Build(analysis);
+            CollectionAssert.Contains(WorkbookSheetNames(bytes), "Licence estimate (modelled)",
+                "Nobody recommended must no longer mean no licence estimate: every candidate is still modelled.");
+
+            var cells = SheetCells(bytes, "Licence estimate (modelled)");
+            var covered = cells.IndexOf("People covered");
+            Assert.AreEqual("0", cells[covered + 1], "Nobody is recommended.");
+            Assert.AreEqual("0", cells[covered + 2], "So nobody recommended already uses Copilot Chat.");
+            Assert.AreEqual("1", cells[covered + 3], "Every licence candidate.");
+
+            var high = cells.IndexOf("Modelled hours a month (high)");
+            Assert.AreEqual(allCandidates.HoursPerMonthHigh.ToString(CultureInfo.InvariantCulture), cells[high + 3]);
+            var low = cells.IndexOf("Modelled hours a month (low)");
+            Assert.AreEqual(allCandidates.HoursPerMonthLow.ToString(CultureInfo.InvariantCulture), cells[low + 3]);
+
+            Assert.IsTrue(cells.Any(c => c.Contains(
+                    "licence candidate - everyone without a licence who used Microsoft 365 or Copilot Chat in the period, recommended or not -")),
+                "The assumptions must describe every candidate as such, not as recommended.");
+            Assert.IsFalse(cells.Any(c => c.Contains("recommended licence candidate")),
+                "Nobody is recommended, so no assumption may describe the volumes as the recommended people's.");
         }
 
         /// <summary>

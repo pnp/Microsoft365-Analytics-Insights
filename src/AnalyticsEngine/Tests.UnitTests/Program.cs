@@ -6,7 +6,6 @@ using System.Threading.Tasks;
 using Tests.UnitTests.FakeLoaderClasses;
 using WebJob.Office365ActivityImporter.Engine;
 using WebJob.Office365ActivityImporter.Engine.ActivityAPI;
-using WebJob.Office365ActivityImporter.Engine.Graph.User;
 
 namespace Tests.UnitTests
 {
@@ -37,7 +36,7 @@ namespace Tests.UnitTests
             var t = new JobTimer(logger, "Soyve");
             t.Start();
             Console.WriteLine("Saving data...");
-            await testLoader.LoadReportsAndSave(new ActivityReportSqlPersistenceManager(new AllowAllFilterConfig(), new NoUsersHaveGroupsUserGroupsCache(logger), logger, new AppConfig()));
+            await testLoader.LoadReportsAndSave(new ActivityReportSqlPersistenceManager(new AllowAllFilterConfig(), Common.Entities.UserScope.UserImportScope.Unfiltered, logger, new AppConfig()));
 
             t.StopAndPrintElapsed();
         }

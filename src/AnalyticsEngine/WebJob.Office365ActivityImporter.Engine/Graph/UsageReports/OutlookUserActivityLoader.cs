@@ -1,18 +1,18 @@
 using Common.Entities;
 using Common.Entities.Config;
+using Common.Entities.UserScope;
 using Common.Entities.Entities.Teams;
 using Microsoft.Extensions.Logging;
 using System;
 using System.Data.Entity;
 using WebJob.Office365ActivityImporter.Engine.Entities.Serialisation.UsageReports;
-using WebJob.Office365ActivityImporter.Engine.Graph.User;
 
 namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
 {
     public class OutlookUserActivityLoader : AbstractUserDailyActivityLoader<OutlookUsageActivityLog, OutlookUserActivityUserDetail>
     {
-        public OutlookUserActivityLoader(ManualGraphCallClient client, UserGroupsCache userGroupsCache, UserGroupsFilterModel userGroupsFilterModel, ILogger logger)
-            : base(client, userGroupsCache, userGroupsFilterModel, logger)
+        public OutlookUserActivityLoader(ManualGraphCallClient client, UserImportScope userScope, ILogger logger)
+            : base(client, userScope, logger)
         {
         }
         protected override void PopulateReportSpecificMetadata(OutlookUsageActivityLog todaysLog, OutlookUserActivityUserDetail userActivityReportPage)

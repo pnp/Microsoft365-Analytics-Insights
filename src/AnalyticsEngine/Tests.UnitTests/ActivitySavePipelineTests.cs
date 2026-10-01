@@ -2,6 +2,7 @@ using Common.Entities;
 using Common.Entities.Config;
 using Common.Entities.Entities;
 using Common.Entities.Entities.AuditLog;
+using Common.Entities.UserScope;
 using DataUtils;
 using Microsoft.Extensions.Logging;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
@@ -64,19 +65,14 @@ namespace Tests.UnitTests
         }
 
         /// <summary>
-        /// A groups cache + filter pair where <see cref="InScopeUpn"/> matches and <see cref="OutOfScopeUpn"/>
-        /// does not. Note UserGroupsCache treats "user has no groups at all" as a match, so the excluded user
-        /// must be given a non-matching group rather than none.
+        /// A <c>UserGroupsFilter</c> scope where <see cref="InScopeUpn"/> is a member and <see cref="OutOfScopeUpn"/>
+        /// is not.
         /// </summary>
-        private static MockUserGroupsCache GroupsCache()
-            => new MockUserGroupsCache(new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase)
-            {
-                { InScopeUpn, new List<string> { "Finance" } },
-                { OutOfScopeUpn, new List<string> { "Legal" } }
-            }, NullLoggerShim.Instance);
+        private static UserImportScope GroupsCache()
+            => TestUserScopes.Of(InScopeUpn);
 
         private static ActivityStagingPass PassFor(AuditFilterConfig filterConfig, ILogger logger)
-            => new ActivityStagingPass(filterConfig, GroupsCache(), new UserGroupsFilterModel("Finance"), logger);
+            => new ActivityStagingPass(filterConfig, GroupsCache(), logger);
 
         private sealed class SequenceActivityImportCacheProvider : IActivityImportCacheProvider
         {
@@ -137,20 +133,24 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
-        public async Task SavePipeline_UserOutsideGroupsFilter_LogsTheOperatorLineNamingTheUser()
+        public async Task SavePipeline_UsersOutsideGroupsFilter_AreCountedOnceNotLoggedOnePerEvent()
         {
             var logger = new RecordingLogger();
             var writer = new InMemoryActivityStagingWriter();
             var batch = writer.CreateBatch(null);
 
             await PassFor(new AllowAllFilterConfig(), logger).RunAsync(
-                SetOf(SpEvent(OutOfScopeUpn), SpEvent(InScopeUpn)),
+                SetOf(SpEvent(OutOfScopeUpn), SpEvent(OutOfScopeUpn), SpEvent(InScopeUpn)),
                 ActivityImportCache.GetEmptyCache(), batch, stagingTableName: null, mergeLock: null);
 
-            var skipLines = logger.Entries.Where(e => e.Message.StartsWith("Skipping activity report for user")).ToList();
-            Assert.AreEqual(1, skipLines.Count, "Exactly the one filtered user is reported.");
+            // One line per batch: with the scope check now a hash lookup, a line per skipped event would be the most
+            // expensive thing the pass did on a tenant scoped to a pilot group.
+            var skipLines = logger.Entries.Where(e => e.Message.Contains("outside UserGroupsFilter")).ToList();
+            Assert.AreEqual(1, skipLines.Count, "The skipped events are reported once, as a count.");
             Assert.AreEqual(LogLevel.Information, skipLines[0].Level);
-            Assert.AreEqual($"Skipping activity report for user '{OutOfScopeUpn}' - not in user groups filter", skipLines[0].Message);
+            Assert.AreEqual("Skipped 2 audit event(s) by people outside UserGroupsFilter.", skipLines[0].Message);
+            Assert.IsFalse(logger.Entries.Any(e => e.Message.Contains(OutOfScopeUpn)),
+                "Nobody outside the scope is named in the log.");
         }
 
         [TestMethod]

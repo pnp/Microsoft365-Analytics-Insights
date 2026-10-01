@@ -1,5 +1,5 @@
 /**
- * English text for the administration pages: service configuration, Teams permissions, user lookup, profiling and the install log.
+ * English text for the administration pages: service configuration, Teams permissions, user lookup, profiling, the install log and the user import checkpoint.
  *
  * Every key here must have a Spanish counterpart in `../es/admin.ts`; the type of that module
  * makes a missing one a build failure.
@@ -13,6 +13,15 @@ export const admin = {
   'admin.common.yes': 'Yes',
 
   // Teams permissions.
+  'admin.teamsPermissions.connect.button': 'Connect to Microsoft Teams',
+  'admin.teamsPermissions.connect.errorCode': 'Microsoft Entra ID error code: {code}',
+  'admin.teamsPermissions.connect.outcome.access_denied':
+    "The request for the Teams permissions was cancelled or declined, so nothing was connected. If Microsoft Entra ID said an administrator's approval is needed, ask an Entra ID administrator to grant admin consent for the delegated Teams permissions on the runtime app registration. Then select Connect to Microsoft Teams again.",
+  'admin.teamsPermissions.connect.outcome.consent_required':
+    "Microsoft Entra ID hasn't granted the delegated Teams permissions this page needs (Team.ReadBasic.All and ChannelMessage.Read.All). An Entra ID administrator needs to add them to the runtime app registration as delegated Microsoft Graph permissions and grant admin consent for them. Then select Connect to Microsoft Teams again. Nothing else in the portal needs these permissions.",
+  'admin.teamsPermissions.connect.outcome.failed':
+    "The portal couldn't get the Teams permissions for your account. The details are in the web app's Application Insights, under the operation name Web Teams connection. Select Connect to Microsoft Teams to try again.",
+  'admin.teamsPermissions.connect.outcomeTitle': "Microsoft Teams isn't connected",
   'admin.teamsPermissions.description':
     'This page is so you can authorise deep analytics for a Team. This will allow Microsoft 365 Advanced Analytics and Insights to read messages for anonymous statistical reporting purposes only.',
   'admin.teamsPermissions.errors.fetchGraphProfile': 'Unable to fetch Graph profile.',
@@ -20,12 +29,12 @@ export const admin = {
   'admin.teamsPermissions.loadingTeams': 'Loading your Teams...',
   'admin.teamsPermissions.noTeamsFound': 'No Teams found for your account.',
   'admin.teamsPermissions.noTokenMessage':
-    "The site couldn't get a Microsoft Graph token for your session, so your Teams can't be listed. This usually means the sign-in that captured your refresh token has expired or predates it - sign out and sign in again. If it keeps happening, check that the runtime app registration has the delegated Teams permissions and that the site's reply URL is registered.",
+    "To list your Teams, the portal reads them through Microsoft Graph on your behalf, using the delegated permissions Team.ReadBasic.All and ChannelMessage.Read.All. It doesn't ask for these when you sign in, so that the rest of the portal works even where they haven't been granted. Select Connect to Microsoft Teams to continue: you'll go to Microsoft Entra ID and come straight back here.",
   'admin.teamsPermissions.noTokenTeamsPlaceholder':
-    'Your Teams will be listed here once the site can get a Graph token for your session.',
+    "Your Teams will be listed here once you've connected to Microsoft Teams.",
   'admin.teamsPermissions.title': 'Grant Team Access to the Microsoft 365 Advanced Analytics Engine',
   'admin.teamsPermissions.tokenNote':
-    "Note: tokens are securely stored in a temporary Redis cache & aren't accessible to anyone.",
+    "Note: authorisation tokens are stored in this solution's own Azure Storage account and are never shown in the portal.",
   'admin.teamsPermissions.yourTeamsDescription':
     'Here are all the Teams you have access to. Select which Teams you want to enable for deep analytics and continue.',
   'admin.teamsPermissions.yourTeamsTitle': 'Your Teams - {displayName}',
@@ -41,7 +50,7 @@ export const admin = {
   'admin.teams.teamList.columnTeamName': 'Team Name',
   'admin.teams.teamList.saveSuccess':
     'Selected Teams enabled for deep analytics successfully. It may take several hours before the extra metadata appears in any reports.',
-  'admin.teams.teamList.redisNotConfigured': "Teams deep analytics can't be enabled because Redis is not configured for this deployment. Add a Redis connection string so Teams authorisation tokens can be stored.",
+  'admin.teams.teamList.storageNotConfigured': "Teams deep analytics can't be enabled because Azure Storage is not configured for this deployment. Add a Storage connection string so Teams authorisation tokens can be stored.",
   'admin.teams.teamList.unexpectedApiResponse': 'Unexpected response from API. Check JS log for more details.',
   'admin.teams.teamListItem.authorised': 'Authorised',
   'admin.teams.teamListItem.notAuthorised': 'Not authorised',
@@ -258,7 +267,8 @@ export const admin = {
   'admin.serviceConfiguration.azureResources.cognitiveServicesEndpoint': 'Cognitive Services Endpoint',
   'admin.serviceConfiguration.azureResources.description':
     'These are the resources this deployment is configured to use:',
-  'admin.serviceConfiguration.azureResources.redisSslEndpoint': 'Redis SSL Endpoint',
+  'admin.serviceConfiguration.azureResources.storageAccount': 'Storage account',
+  'admin.serviceConfiguration.azureResources.storageNotConfigured': 'Not configured - runtime state is kept in memory only',
   'admin.serviceConfiguration.azureResources.title': 'Azure resources',
   'admin.serviceConfiguration.azureResources.webAppUrl': 'Web app URL',
 
@@ -352,6 +362,192 @@ export const admin = {
   'admin.installLog.title': 'Install Log',
   'admin.installLog.viewConfig': 'View config',
   'admin.installLog.viewLog': 'View log',
+
+  // User import: the Graph user import's /users/delta checkpoint.
+  'admin.userImport.title': 'User import',
+  'admin.userImport.description':
+    'The user import keeps people and their details - department, job title, office, manager and licences - up to date from Microsoft Entra ID. After its first full read it saves a checkpoint (a Microsoft Graph delta token), so each later run reads only what has changed since.',
+  'admin.userImport.loading': 'Loading the user import checkpoint...',
+  'admin.userImport.loadFailed': "Couldn't load the user import checkpoint.",
+  'admin.userImport.clearFailed': "Couldn't clear the user import checkpoint.",
+  'admin.userImport.state.title': 'Current state',
+  'admin.userImport.state.ariaLabel': 'User import checkpoint',
+  'admin.userImport.state.importLabel': 'User import',
+  'admin.userImport.state.importEnabled': 'Switched on',
+  'admin.userImport.state.importDisabled': 'Switched off (GraphUsersMetadata)',
+  'admin.userImport.state.importUnknown': "Unknown - the import settings couldn't be read",
+  'admin.userImport.state.storageLabel': 'Where the checkpoint is kept',
+  'admin.userImport.state.storageTable': "In Azure Table storage: the {table} table in this solution's storage account",
+  'admin.userImport.state.storageNone':
+    "Nowhere - Azure Storage isn't configured, so every run reads every user",
+  'admin.userImport.state.checkpointLabel': 'Stored checkpoint',
+  'admin.userImport.state.checkpointPresent': 'Yes - the next run reads only what has changed',
+  'admin.userImport.state.checkpointAbsent': 'None - the next run reads every user',
+  'admin.userImport.state.partitionLabel': 'Partition',
+  'admin.userImport.state.keyLabel': 'Row key',
+  'admin.userImport.state.lastCompletedLabel': 'Last completed',
+  'admin.userImport.state.lastCompletedNone': 'Not recorded',
+  'admin.userImport.state.intervalLabel': 'Runs',
+  'admin.userImport.state.intervalHours': 'At most once every {hours} h',
+  'admin.userImport.state.everyCycle': 'On every import cycle',
+  'admin.userImport.clear.title': 'Read every user again',
+  'admin.userImport.clear.description':
+    'Clear the checkpoint when user details in the reports look out of date, or after the user import has been switched off or failing for weeks. The next run then reads every user, exactly as a first install does. Nothing is deleted from the database.',
+  'admin.userImport.clear.cost': 'On a large tenant, a full read takes much longer than a normal run.',
+  'admin.userImport.clear.noStorage':
+    'There is nothing to clear: without Azure Storage the checkpoint is never saved, and every run already reads every user.',
+  'admin.userImport.clear.importOff':
+    'The user import is switched off, so nothing reads the users until it is switched back on. Clearing the checkpoint now makes that first run read every user.',
+  'admin.userImport.clear.runOnNextCycle': 'Run the user import on the next import cycle',
+  'admin.userImport.clear.runOnNextCycleHint': 'Otherwise it waits until {hours} h after it last completed.',
+  'admin.userImport.clear.button': 'Clear checkpoint...',
+  'admin.userImport.confirm.title': 'Clear the user import checkpoint?',
+  'admin.userImport.confirm.body':
+    'The next user import reads every user from Microsoft Entra ID, instead of only what has changed.',
+  'admin.userImport.confirm.running':
+    "If a user import is running right now, it won't save its checkpoint when it finishes, so the full read still happens.",
+  'admin.userImport.confirm.clear': 'Clear checkpoint',
+  'admin.userImport.confirm.clearing': 'Clearing...',
+  'admin.userImport.schedule.nextCycle': 'It runs on the next import cycle.',
+  'admin.userImport.schedule.afterInterval': 'It runs once its {hours} h interval has passed.',
+  'admin.userImport.result.cleared': 'Checkpoint cleared. The next user import reads every user.',
+  'admin.userImport.result.nothingStored':
+    'There was no stored checkpoint, so the next user import reads every user anyway.',
+
+  // User scope: import filter resolution and purge of people outside that scope.
+  'admin.userScope.title': 'User scope',
+  'admin.userScope.description':
+    'UserGroupsFilter limits every import to direct members of named Microsoft Entra ID groups. This page shows the resolved scope and removes stored analytics data for people outside it.',
+  'admin.userScope.loading': 'Loading the user scope...',
+  'admin.userScope.loadFailed': "Couldn't load the user scope.",
+  'admin.userScope.refreshFailed': "Couldn't refresh the user scope.",
+  'admin.userScope.pollFailed': "Couldn't load the purge progress.",
+  'admin.userScope.refreshing': 'Refreshing...',
+  'admin.userScope.refreshSucceeded': 'User scope refreshed from Microsoft Graph.',
+  'admin.userScope.filter.title': 'Filter',
+  'admin.userScope.filter.ariaLabel': 'User scope filter',
+  'admin.userScope.filter.unfiltered':
+    'No UserGroupsFilter is set, or it is blank or *, so every import covers everyone and there is nothing to purge.',
+  'admin.userScope.filter.patterns': 'Configured patterns',
+  'admin.userScope.filter.noPatterns': 'None',
+  'admin.userScope.filter.resolution': 'Resolution',
+  'admin.userScope.filter.statusUnfiltered': 'Not filtered',
+  'admin.userScope.filter.statusResolved': 'Resolved',
+  'admin.userScope.filter.statusUnavailable': 'Unavailable',
+  'admin.userScope.filter.resolvedUtc': 'Resolved',
+  'admin.userScope.filter.peopleInScope': 'People in scope',
+  'admin.userScope.filter.unavailableImportsContinue':
+    'Imports carry on with the last good group list, or with everyone if no list has ever resolved, until the filter resolves again.',
+  'admin.userScope.filter.matchedNoGroup':
+    'The filter resolved but no group matched it, so nobody is in scope and nothing about anyone is imported.',
+  'admin.userScope.filter.unmatchedPatterns': 'These configured patterns matched no group:',
+  'admin.userScope.failure.directoryRead':
+    'Microsoft Graph could not read the groups for the filter (HTTP {status}). Check the runtime app registration and Graph connectivity.',
+  'admin.userScope.failure.directoryReadForbidden':
+    'Microsoft Graph returned 403 when reading the groups. The runtime app registration is missing Group.Read.All.',
+  'admin.userScope.failure.budgetExhausted':
+    'The group resolver stopped because it reached its safety budget. Narrow the configured patterns, then refresh.',
+  'admin.userScope.failure.clientUnavailable':
+    'The Microsoft Graph client is unavailable in this web app instance. Check the runtime configuration and try again.',
+  'admin.userScope.failure.unexpected':
+    'An unexpected error stopped the group resolver. Check the web application logs, then refresh.',
+  'admin.userScope.groups.title': 'Groups',
+  'admin.userScope.groups.ariaLabel': 'Resolved user-scope groups',
+  'admin.userScope.groups.name': 'Group',
+  'admin.userScope.groups.objectId': 'Object id',
+  'admin.userScope.groups.members': 'Direct user members',
+  'admin.userScope.groups.patterns': 'Matched patterns',
+  'admin.userScope.database.title': 'People in the database',
+  'admin.userScope.database.ariaLabel': 'People in the database',
+  'admin.userScope.database.total': 'Total users',
+  'admin.userScope.database.inScope': 'Inside the scope',
+  'admin.userScope.database.outOfScope': 'Outside the scope',
+  'admin.userScope.purge.title': 'Purge people outside the scope',
+  'admin.userScope.purge.intro':
+    'The purge removes analytics data for every database user who is outside the resolved scope. It never touches people inside the scope or tenant-wide aggregates.',
+  'admin.userScope.purge.deleteList':
+    'Deletes their audit-log events and Copilot details; web sessions, page views, clicks and searches; page comments and likes; sent-email records; Teams ownership, membership and reactions; Microsoft 365, Copilot and Cowork usage rows; Copilot interaction-history statistics; licence assignments, Copilot Studio per-user credits and Copilot reclaim exclusions; then their user record.',
+  'admin.userScope.purge.anonymiseList':
+    'Anonymises instead of deleting where other people depend on them: Teams calls show the anonymous Unknown User and lose their feedback; calls with nobody in scope left are deleted; Power App and flow shares stay without the recipient; people they managed stay without a manager.',
+  'admin.userScope.purge.operationalList':
+    'Runs asynchronously in small batches while importers keep running. If new data arrives for someone during the purge, that person is kept and counted as skipped; running the purge again removes them.',
+  'admin.userScope.purge.restartDurable':
+    'If the web app restarts, the purge starts again by itself and finishes, unless UserGroupsFilter was changed, in which case it stops.',
+  'admin.userScope.purge.restartMemory':
+    "This web app keeps the purge's progress in its own memory, because no Azure Storage connection is configured. If the web app restarts, a running purge stops: start it again to finish it. With more than one web app instance, only the instance running the purge shows its progress.",
+  'admin.userScope.purge.irreversible': 'This cannot be undone.',
+  'admin.userScope.purge.button': 'Purge {count} people...',
+  'admin.userScope.purge.startFailed': "Couldn't start the purge.",
+  'admin.userScope.unavailable.notFiltered':
+    'No filter is configured, so everyone is in scope and there is nothing to purge.',
+  'admin.userScope.unavailable.scopeUnavailable':
+    'The configured scope is unavailable. Resolve the groups before starting a purge.',
+  'admin.userScope.unavailable.scopeEmpty':
+    'The configured filter contains nobody. Start a purge only after the scope resolves to at least one person.',
+  'admin.userScope.unavailable.nothingToPurge': 'There are no database users outside the scope.',
+  'admin.userScope.unavailable.jobActive': 'A purge is already running.',
+  'admin.userScope.unavailable.storageUnavailable':
+    "Purging is unavailable because Azure Table storage, where purges keep their progress, can't be reached. Check that this web app can reach the solution's storage account, then refresh.",
+  'admin.userScope.confirm.title': 'Purge people outside the scope?',
+  'admin.userScope.confirm.acknowledge':
+    'I understand that this permanently deletes everything stored about these {count} people and cannot be undone',
+  'admin.userScope.confirm.start': 'Start purge',
+  'admin.userScope.confirm.starting': 'Starting...',
+  'admin.userScope.progress.title': 'Purge progress',
+  'admin.userScope.progress.ariaLabel': 'User-scope purge progress',
+  'admin.userScope.progress.phase': '{phase}: {completed} of {total} steps complete',
+  'admin.userScope.progress.peopleFound': 'People found outside scope',
+  'admin.userScope.progress.peopleRemoved': 'People removed',
+  'admin.userScope.progress.peopleSkipped': 'People skipped',
+  'admin.userScope.progress.requestedBy': 'Requested by',
+  'admin.userScope.progress.started': 'Started',
+  'admin.userScope.progress.updated': 'Updated',
+  'admin.userScope.progress.completed': 'Completed',
+  'admin.userScope.progress.skippedWarning':
+    'These people were kept because new data about them arrived during the purge. Running the purge again removes them.',
+  'admin.userScope.progress.cancelRequested': 'The purge is stopping after the current batch.',
+  'admin.userScope.progress.cancelFailed': "Couldn't stop the purge.",
+  'admin.userScope.progress.rowsAffected': 'Rows affected by table or column',
+  'admin.userScope.progress.table': 'Table or column',
+  'admin.userScope.progress.rows': 'Rows',
+  'admin.userScope.progress.rowsHelp':
+    'A table name counts rows deleted. A table.column name counts rows kept but changed in place: the person is replaced by the anonymous Unknown User, or the link to them is cleared.',
+  'admin.userScope.progress.stopHelp':
+    'Stopping only prevents later batches. What has already been removed stays removed.',
+  'admin.userScope.progress.stop': 'Stop purge',
+  'admin.userScope.progress.stopping': 'Stopping...',
+  'admin.userScope.state.queued': 'The purge is queued.',
+  'admin.userScope.state.running': 'The purge is running.',
+  'admin.userScope.state.completed': 'The purge completed.',
+  'admin.userScope.state.failed': 'The purge failed.',
+  'admin.userScope.state.cancelled': 'The purge was stopped.',
+  'admin.userScope.phase.snapshot': 'Finding people outside scope',
+  'admin.userScope.phase.auditEvents': 'Audit-log events',
+  'admin.userScope.phase.webActivity': 'Web traffic',
+  'admin.userScope.phase.calls': 'Teams calls',
+  'admin.userScope.phase.pageComments': 'Page comments and likes',
+  'admin.userScope.phase.sentEmails': 'Sent emails',
+  'admin.userScope.phase.teams': 'Teams membership and reactions',
+  'admin.userScope.phase.usageReports': 'Usage reports',
+  'admin.userScope.phase.copilotInteractions': 'Copilot interaction history',
+  'admin.userScope.phase.licencesAndCredits': 'Licences and credits',
+  'admin.userScope.phase.sharedWith': 'Power App and flow shares',
+  'admin.userScope.phase.managers': 'Manager links',
+  'admin.userScope.phase.users': 'User records',
+  'admin.userScope.phase.done': 'Done',
+  'admin.userScope.jobError.scopeUnavailable':
+    'The purge stopped because the user scope became unavailable.',
+  'admin.userScope.jobError.scopeEmpty':
+    'The purge stopped because the user scope resolved to nobody.',
+  'admin.userScope.jobError.filterChanged':
+    'The purge removed nobody because UserGroupsFilter changed after the purge was confirmed. Check the filter and start the purge again.',
+  'admin.userScope.jobError.filterChangedWhileRunning':
+    'The purge stopped because UserGroupsFilter changed while it was running. What it had already removed stays removed, and nobody else was removed. Check the filter and start the purge again to see who is outside it now.',
+  'admin.userScope.jobError.databaseError':
+    'The purge stopped because the analytics database returned an error.',
+  'admin.userScope.jobError.stateUnavailable':
+    "The purge stopped because it couldn't save its progress to Azure Table storage. What it removed stays removed; start it again to finish it.",
+  'admin.userScope.jobError.unexpected': 'The purge stopped because of an unexpected error.',
 } as const;
 
 export default admin;

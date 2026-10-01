@@ -39,7 +39,7 @@ namespace Tests.UnitTests
 
             return new GraphImporter(
                 DataUtils.AnalyticsLogger.ConsoleOnlyTracer(),
-                userGroupsCache: null,
+                userScopeProvider: null,
                 graphAppIndentityOAuthContext: null,
                 graphClient: null,
                 settings: settings,
@@ -142,14 +142,41 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
-        public void RedisKeysAreNamespacedAwayFromThePhaseLevelMarker()
+        public void PerReportKeysAreNamespacedAwayFromThePhaseLevelMarker()
         {
             // The phase marker lives at "UserActivityLastImported". A per-report key must not be able to
             // collide with it, or a report's stamp would disarm the once-a-day throttle (or vice versa).
-            const string phaseKey = "UserActivityLastImported";
-            var fullKey = RedisReportCompletionStore.KeyPrefix + ReportA;
+            const string phaseKey = ActivityReportsLastImportedStoreFactory.UserActivityLastImportedKey;
+            var fullKey = PersistedReportCompletionStore.KeyPrefix + ReportA;
 
+            Assert.AreEqual("UserActivityLastImported", phaseKey, "Operators clear this row by name - keep it stable.");
             Assert.IsFalse(fullKey.Equals(phaseKey, StringComparison.OrdinalIgnoreCase));
+        }
+
+        [TestMethod]
+        public async Task PersistedStore_RoundTripsCompletionAndNextAttemptPerReport_InTheSameStateStore()
+        {
+            // One ImportSchedule partition holds the phase marker and every per-report stamp; each report's keys
+            // must be independent of the other's, and a next-attempt time must come back as UTC.
+            var state = new Common.Entities.State.InMemoryKeyValueStore();
+            var store = new PersistedReportCompletionStore(state);
+
+            Assert.IsNull(await store.GetLastSuccessAsync(ReportA));
+            await store.SaveSuccessAsync(ReportA);
+            Assert.IsNotNull(await store.GetLastSuccessAsync(ReportA));
+            Assert.IsNull(await store.GetLastSuccessAsync(ReportB), "One report's stamp must not answer for another.");
+
+            var nextAttempt = new DateTime(2026, 1, 2, 3, 4, 5, DateTimeKind.Utc);
+            await store.SaveNextAttemptUtcAsync(ReportB, nextAttempt);
+            var readBack = await store.GetNextAttemptUtcAsync(ReportB);
+            Assert.AreEqual(nextAttempt, readBack.Value.ToUniversalTime());
+            Assert.IsNull(await store.GetNextAttemptUtcAsync(ReportA));
+
+            await store.ClearAsync(ReportA);
+            await store.ClearNextAttemptUtcAsync(ReportB);
+            Assert.IsNull(await store.GetLastSuccessAsync(ReportA));
+            Assert.IsNull(await store.GetNextAttemptUtcAsync(ReportB));
+            Assert.AreEqual(0, state.Count, "Clearing must delete the rows, not leave empty ones behind.");
         }
 
         #endregion
@@ -178,7 +205,7 @@ namespace Tests.UnitTests
         [TestMethod]
         public async Task TheLegacyPhaseMarkerIsNeverTrustedAsAPerReportCompletion()
         {
-            // The phase marker is an unversioned Redis key predating the strict-paging fixes (#285 / #310): an
+            // The phase marker is an unversioned key predating the strict-paging fixes (#285 / #310): an
             // older build could write it after a report had saved a PARTIAL day. Skipping a partially-stored
             // date loses those rows for good once Graph's ~28-day retention passes, so one extra full download
             // per report on the first upgraded cycle is the right trade.

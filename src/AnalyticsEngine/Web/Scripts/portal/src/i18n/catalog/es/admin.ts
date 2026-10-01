@@ -1,7 +1,7 @@
 import type { admin as en } from '../en/admin';
 
 /**
- * Spanish (es-ES) text for the administration pages: service configuration, Teams permissions, user lookup, profiling and the install log.
+ * Spanish (es-ES) text for the administration pages: service configuration, Teams permissions, user lookup, profiling, the install log and the user import checkpoint.
  *
  * Typed against the English module, so a key added there without a translation here fails the
  * build rather than reaching a customer as English text inside a Spanish page.
@@ -15,6 +15,15 @@ const admin: Record<keyof typeof en, string> = {
   'admin.common.yes': 'Sí',
 
   // Teams permissions.
+  'admin.teamsPermissions.connect.button': 'Conectar con Microsoft Teams',
+  'admin.teamsPermissions.connect.errorCode': 'Código de error de Microsoft Entra ID: {code}',
+  'admin.teamsPermissions.connect.outcome.access_denied':
+    'La solicitud de los permisos de Teams se canceló o se rechazó, por lo que no se ha conectado nada. Si Microsoft Entra ID indicó que se necesita la aprobación de un administrador, pida a un administrador de Entra ID que conceda el consentimiento de administrador para los permisos delegados de Teams en el registro de aplicación en tiempo de ejecución. Después, seleccione Conectar con Microsoft Teams de nuevo.',
+  'admin.teamsPermissions.connect.outcome.consent_required':
+    'Microsoft Entra ID no ha concedido los permisos delegados de Teams que necesita esta página (Team.ReadBasic.All y ChannelMessage.Read.All). Un administrador de Entra ID debe añadirlos al registro de aplicación en tiempo de ejecución como permisos delegados de Microsoft Graph y conceder el consentimiento de administrador para ellos. Después, seleccione Conectar con Microsoft Teams de nuevo. Ninguna otra parte del portal necesita estos permisos.',
+  'admin.teamsPermissions.connect.outcome.failed':
+    'El portal no pudo obtener los permisos de Teams para su cuenta. Encontrará los detalles en Application Insights de la aplicación web, con el nombre de operación Web Teams connection. Seleccione Conectar con Microsoft Teams para volver a intentarlo.',
+  'admin.teamsPermissions.connect.outcomeTitle': 'Microsoft Teams no está conectado',
   'admin.teamsPermissions.description':
     'Esta página permite autorizar análisis detallados para un equipo. Esto permitirá a Microsoft 365 Advanced Analytics and Insights leer mensajes únicamente con fines de informes estadísticos anónimos.',
   'admin.teamsPermissions.errors.fetchGraphProfile': 'No se pudo obtener el perfil de Graph.',
@@ -22,12 +31,12 @@ const admin: Record<keyof typeof en, string> = {
   'admin.teamsPermissions.loadingTeams': 'Cargando sus Teams...',
   'admin.teamsPermissions.noTeamsFound': 'No se encontraron Teams para su cuenta.',
   'admin.teamsPermissions.noTokenMessage':
-    'El sitio no pudo obtener un token de Microsoft Graph para su sesión, por lo que no se pueden enumerar sus Teams. Esto normalmente significa que el inicio de sesión que capturó el token de actualización ha expirado o es anterior a este cambio: cierre la sesión e iníciela de nuevo. Si sigue ocurriendo, compruebe que el registro de aplicación en tiempo de ejecución tiene los permisos delegados de Teams y que la URL de respuesta del sitio está registrada.',
+    'Para enumerar sus Teams, el portal los lee a través de Microsoft Graph en su nombre, con los permisos delegados Team.ReadBasic.All y ChannelMessage.Read.All. No los solicita al iniciar sesión, para que el resto del portal funcione aunque no se hayan concedido. Seleccione Conectar con Microsoft Teams para continuar: irá a Microsoft Entra ID y volverá directamente aquí.',
   'admin.teamsPermissions.noTokenTeamsPlaceholder':
-    'Sus Teams se mostrarán aquí cuando el sitio pueda obtener un token de Graph para su sesión.',
+    'Sus Teams se mostrarán aquí cuando se haya conectado con Microsoft Teams.',
   'admin.teamsPermissions.title': 'Conceder acceso de equipo a Microsoft 365 Advanced Analytics Engine',
   'admin.teamsPermissions.tokenNote':
-    'Nota: los tokens se almacenan de forma segura en una caché temporal de Redis y nadie puede acceder a ellos.',
+    'Nota: los tokens de autorización se almacenan en la propia cuenta de Azure Storage de esta solución y nunca se muestran en el portal.',
   'admin.teamsPermissions.yourTeamsDescription':
     'Estos son todos los Teams a los que tiene acceso. Seleccione los Teams que desea habilitar para análisis detallados y continúe.',
   'admin.teamsPermissions.yourTeamsTitle': 'Sus Teams - {displayName}',
@@ -43,7 +52,7 @@ const admin: Record<keyof typeof en, string> = {
   'admin.teams.teamList.columnTeamName': 'Nombre del equipo',
   'admin.teams.teamList.saveSuccess':
     'Los Teams seleccionados se han habilitado correctamente para análisis detallados. Los metadatos adicionales pueden tardar varias horas en aparecer en los informes.',
-  'admin.teams.teamList.redisNotConfigured': 'No se pueden habilitar los análisis detallados de Teams porque Redis no está configurado en esta implementación. Añada una cadena de conexión de Redis para poder almacenar los tokens de autorización de Teams.',
+  'admin.teams.teamList.storageNotConfigured': 'No se pueden habilitar los análisis detallados de Teams porque Azure Storage no está configurado en esta implementación. Añada una cadena de conexión de Storage para poder almacenar los tokens de autorización de Teams.',
   'admin.teams.teamList.unexpectedApiResponse':
     'Respuesta inesperada de la API. Compruebe el registro de JS para obtener más detalles.',
   'admin.teams.teamListItem.authorised': 'Autorizado',
@@ -262,7 +271,9 @@ const admin: Record<keyof typeof en, string> = {
   'admin.serviceConfiguration.azureResources.cognitiveServicesEndpoint': 'Punto de conexión de Cognitive Services',
   'admin.serviceConfiguration.azureResources.description':
     'Estos son los recursos que esta implementación está configurada para usar:',
-  'admin.serviceConfiguration.azureResources.redisSslEndpoint': 'Punto de conexión SSL de Redis',
+  'admin.serviceConfiguration.azureResources.storageAccount': 'Cuenta de almacenamiento',
+  'admin.serviceConfiguration.azureResources.storageNotConfigured':
+    'No configurada: el estado en tiempo de ejecución solo se guarda en memoria',
   'admin.serviceConfiguration.azureResources.title': 'Recursos de Azure',
   'admin.serviceConfiguration.azureResources.webAppUrl': 'URL de la aplicación web',
 
@@ -359,6 +370,194 @@ const admin: Record<keyof typeof en, string> = {
   'admin.installLog.title': 'Registro de instalación',
   'admin.installLog.viewConfig': 'Ver configuración',
   'admin.installLog.viewLog': 'Ver registro',
+
+  // User import: the Graph user import's /users/delta checkpoint.
+  'admin.userImport.title': 'Importación de usuarios',
+  'admin.userImport.description':
+    'La importación de usuarios mantiene al día a las personas y sus datos (departamento, puesto, oficina, responsable y licencias) a partir de Microsoft Entra ID. Tras su primera lectura completa guarda un punto de control (un token delta de Microsoft Graph), de modo que cada ejecución posterior solo lee lo que ha cambiado desde entonces.',
+  'admin.userImport.loading': 'Cargando el punto de control de la importación de usuarios...',
+  'admin.userImport.loadFailed': 'No se pudo cargar el punto de control de la importación de usuarios.',
+  'admin.userImport.clearFailed': 'No se pudo borrar el punto de control de la importación de usuarios.',
+  'admin.userImport.state.title': 'Estado actual',
+  'admin.userImport.state.ariaLabel': 'Punto de control de la importación de usuarios',
+  'admin.userImport.state.importLabel': 'Importación de usuarios',
+  'admin.userImport.state.importEnabled': 'Activada',
+  'admin.userImport.state.importDisabled': 'Desactivada (GraphUsersMetadata)',
+  'admin.userImport.state.importUnknown': 'Desconocido: no se pudo leer la configuración de importación',
+  'admin.userImport.state.storageLabel': 'Dónde se guarda el punto de control',
+  'admin.userImport.state.storageTable':
+    'En Azure Table Storage: la tabla {table} de la cuenta de almacenamiento de esta solución',
+  'admin.userImport.state.storageNone':
+    'En ningún sitio: Azure Storage no está configurado, así que cada ejecución lee todos los usuarios',
+  'admin.userImport.state.checkpointLabel': 'Punto de control guardado',
+  'admin.userImport.state.checkpointPresent': 'Sí: la próxima ejecución solo lee lo que ha cambiado',
+  'admin.userImport.state.checkpointAbsent': 'Ninguno: la próxima ejecución lee todos los usuarios',
+  'admin.userImport.state.partitionLabel': 'Partición',
+  'admin.userImport.state.keyLabel': 'Clave de fila',
+  'admin.userImport.state.lastCompletedLabel': 'Última finalización',
+  'admin.userImport.state.lastCompletedNone': 'No registrada',
+  'admin.userImport.state.intervalLabel': 'Frecuencia',
+  'admin.userImport.state.intervalHours': 'Como máximo una vez cada {hours} h',
+  'admin.userImport.state.everyCycle': 'En cada ciclo de importación',
+  'admin.userImport.clear.title': 'Volver a leer todos los usuarios',
+  'admin.userImport.clear.description':
+    'Borre el punto de control cuando los datos de los usuarios en los informes parezcan desactualizados, o después de que la importación de usuarios haya estado desactivada o fallando durante semanas. La siguiente ejecución leerá entonces todos los usuarios, igual que en una instalación nueva. No se elimina nada de la base de datos.',
+  'admin.userImport.clear.cost': 'En un inquilino grande, una lectura completa tarda mucho más que una ejecución normal.',
+  'admin.userImport.clear.noStorage':
+    'No hay nada que borrar: sin Azure Storage el punto de control nunca se guarda, y cada ejecución ya lee todos los usuarios.',
+  'admin.userImport.clear.importOff':
+    'La importación de usuarios está desactivada, así que nada lee los usuarios hasta que se vuelva a activar. Si borra ahora el punto de control, esa primera ejecución leerá todos los usuarios.',
+  'admin.userImport.clear.runOnNextCycle': 'Ejecutar la importación de usuarios en el próximo ciclo de importación',
+  'admin.userImport.clear.runOnNextCycleHint': 'Si no, espera hasta {hours} h después de su última finalización.',
+  'admin.userImport.clear.button': 'Borrar punto de control...',
+  'admin.userImport.confirm.title': '¿Borrar el punto de control de la importación de usuarios?',
+  'admin.userImport.confirm.body':
+    'La próxima importación de usuarios leerá todos los usuarios de Microsoft Entra ID, en lugar de solo lo que ha cambiado.',
+  'admin.userImport.confirm.running':
+    'Si ahora mismo se está ejecutando una importación de usuarios, no guardará su punto de control al terminar, así que la lectura completa se hará igualmente.',
+  'admin.userImport.confirm.clear': 'Borrar punto de control',
+  'admin.userImport.confirm.clearing': 'Borrando...',
+  'admin.userImport.schedule.nextCycle': 'Se ejecutará en el próximo ciclo de importación.',
+  'admin.userImport.schedule.afterInterval': 'Se ejecutará cuando haya pasado su intervalo de {hours} h.',
+  'admin.userImport.result.cleared':
+    'Punto de control borrado. La próxima importación de usuarios leerá todos los usuarios.',
+  'admin.userImport.result.nothingStored':
+    'No había ningún punto de control guardado, así que la próxima importación de usuarios leerá todos los usuarios de todos modos.',
+
+  // User scope: import filter resolution and purge of people outside that scope.
+  'admin.userScope.title': 'Ámbito de usuarios',
+  'admin.userScope.description':
+    'UserGroupsFilter limita cada importación a los miembros directos de grupos con nombre de Microsoft Entra ID. Esta página muestra el ámbito resuelto y elimina los datos de análisis almacenados para las personas que están fuera de él.',
+  'admin.userScope.loading': 'Cargando el ámbito de usuarios...',
+  'admin.userScope.loadFailed': 'No se pudo cargar el ámbito de usuarios.',
+  'admin.userScope.refreshFailed': 'No se pudo actualizar el ámbito de usuarios.',
+  'admin.userScope.pollFailed': 'No se pudo cargar el progreso de la purga.',
+  'admin.userScope.refreshing': 'Actualizando...',
+  'admin.userScope.refreshSucceeded': 'Ámbito de usuarios actualizado desde Microsoft Graph.',
+  'admin.userScope.filter.title': 'Filtro',
+  'admin.userScope.filter.ariaLabel': 'Filtro de ámbito de usuarios',
+  'admin.userScope.filter.unfiltered':
+    'No hay ningún UserGroupsFilter configurado, o está en blanco o es *, así que cada importación cubre a todos y no hay nada que purgar.',
+  'admin.userScope.filter.patterns': 'Patrones configurados',
+  'admin.userScope.filter.noPatterns': 'Ninguno',
+  'admin.userScope.filter.resolution': 'Resolución',
+  'admin.userScope.filter.statusUnfiltered': 'Sin filtro',
+  'admin.userScope.filter.statusResolved': 'Resuelto',
+  'admin.userScope.filter.statusUnavailable': 'No disponible',
+  'admin.userScope.filter.resolvedUtc': 'Resuelto',
+  'admin.userScope.filter.peopleInScope': 'Personas dentro del ámbito',
+  'admin.userScope.filter.unavailableImportsContinue':
+    'Las importaciones continúan con la última lista válida de grupos, o con todos si nunca se ha resuelto ninguna lista, hasta que el filtro vuelva a resolverse.',
+  'admin.userScope.filter.matchedNoGroup':
+    'El filtro se resolvió, pero ningún grupo coincidió con él, así que nadie está dentro del ámbito y no se importa nada sobre nadie.',
+  'admin.userScope.filter.unmatchedPatterns': 'Estos patrones configurados no coincidieron con ningún grupo:',
+  'admin.userScope.failure.directoryRead':
+    'Microsoft Graph no pudo leer los grupos del filtro (HTTP {status}). Compruebe el registro de aplicación en tiempo de ejecución y la conectividad de Graph.',
+  'admin.userScope.failure.directoryReadForbidden':
+    'Microsoft Graph devolvió 403 al leer los grupos. Al registro de aplicación en tiempo de ejecución le falta Group.Read.All.',
+  'admin.userScope.failure.budgetExhausted':
+    'El resolvedor de grupos se detuvo porque alcanzó su presupuesto de seguridad. Restrinja los patrones configurados y actualice.',
+  'admin.userScope.failure.clientUnavailable':
+    'El cliente de Microsoft Graph no está disponible en esta instancia de la aplicación web. Compruebe la configuración en tiempo de ejecución y vuelva a intentarlo.',
+  'admin.userScope.failure.unexpected':
+    'Un error inesperado detuvo el resolvedor de grupos. Compruebe los registros de la aplicación web y actualice.',
+  'admin.userScope.groups.title': 'Grupos',
+  'admin.userScope.groups.ariaLabel': 'Grupos resueltos del ámbito de usuarios',
+  'admin.userScope.groups.name': 'Grupo',
+  'admin.userScope.groups.objectId': 'Id. de objeto',
+  'admin.userScope.groups.members': 'Miembros usuarios directos',
+  'admin.userScope.groups.patterns': 'Patrones coincidentes',
+  'admin.userScope.database.title': 'Personas en la base de datos',
+  'admin.userScope.database.ariaLabel': 'Personas en la base de datos',
+  'admin.userScope.database.total': 'Usuarios totales',
+  'admin.userScope.database.inScope': 'Dentro del ámbito',
+  'admin.userScope.database.outOfScope': 'Fuera del ámbito',
+  'admin.userScope.purge.title': 'Purgar personas fuera del ámbito',
+  'admin.userScope.purge.intro':
+    'La purga elimina datos de análisis de cada usuario de la base de datos que está fuera del ámbito resuelto. Nunca toca a las personas dentro del ámbito ni los agregados de todo el inquilino.',
+  'admin.userScope.purge.deleteList':
+    'Elimina sus eventos de registro de auditoría y detalles de Copilot; sesiones web, vistas de página, clics y búsquedas; comentarios y Me gusta de páginas; registros de correos enviados; propiedad, pertenencia y reacciones de Teams; filas de uso de Microsoft 365, Copilot y Cowork; estadísticas del historial de interacciones de Copilot; asignaciones de licencias, créditos por usuario de Copilot Studio y exclusiones de recuperación de Copilot; y finalmente su registro de usuario.',
+  'admin.userScope.purge.anonymiseList':
+    'Anonimiza en vez de eliminar cuando otras personas dependen de ellas: las llamadas de Teams muestran el usuario anónimo Unknown User y pierden sus comentarios; las llamadas sin nadie dentro del ámbito se eliminan; los recursos compartidos de Power App y flujos se conservan sin destinatario; las personas que gestionaban se conservan sin responsable.',
+  'admin.userScope.purge.operationalList':
+    'Se ejecuta de forma asíncrona en pequeños lotes mientras los importadores siguen ejecutándose. Si llegan datos nuevos de alguien durante la purga, esa persona se conserva y se cuenta como omitida; ejecutar la purga de nuevo la elimina.',
+  'admin.userScope.purge.restartDurable':
+    'Si la aplicación web se reinicia, la purga vuelve a empezar por sí sola y termina, salvo que UserGroupsFilter haya cambiado, en cuyo caso se detiene.',
+  'admin.userScope.purge.restartMemory':
+    'Esta aplicación web guarda el progreso de la purga en su propia memoria, porque no hay ninguna conexión de Azure Storage configurada. Si la aplicación web se reinicia, una purga en curso se detiene: iníciela de nuevo para terminarla. Con más de una instancia de la aplicación web, solo la instancia que ejecuta la purga muestra su progreso.',
+  'admin.userScope.purge.irreversible': 'Esto no se puede deshacer.',
+  'admin.userScope.purge.button': 'Purgar {count} personas...',
+  'admin.userScope.purge.startFailed': 'No se pudo iniciar la purga.',
+  'admin.userScope.unavailable.notFiltered':
+    'No hay ningún filtro configurado, así que todos están dentro del ámbito y no hay nada que purgar.',
+  'admin.userScope.unavailable.scopeUnavailable':
+    'El ámbito configurado no está disponible. Resuelva los grupos antes de iniciar una purga.',
+  'admin.userScope.unavailable.scopeEmpty':
+    'El filtro configurado no contiene a nadie. Inicie una purga solo después de que el ámbito se resuelva con al menos una persona.',
+  'admin.userScope.unavailable.nothingToPurge': 'No hay usuarios de la base de datos fuera del ámbito.',
+  'admin.userScope.unavailable.jobActive': 'Ya se está ejecutando una purga.',
+  'admin.userScope.unavailable.storageUnavailable':
+    'La purga no está disponible porque no se puede conectar con Azure Table Storage, donde las purgas guardan su progreso. Compruebe que esta aplicación web puede conectarse a la cuenta de almacenamiento de la solución y, a continuación, actualice.',
+  'admin.userScope.confirm.title': '¿Purgar personas fuera del ámbito?',
+  'admin.userScope.confirm.acknowledge':
+    'Entiendo que esto elimina permanentemente todo lo almacenado sobre estas {count} personas y no se puede deshacer',
+  'admin.userScope.confirm.start': 'Iniciar purga',
+  'admin.userScope.confirm.starting': 'Iniciando...',
+  'admin.userScope.progress.title': 'Progreso de la purga',
+  'admin.userScope.progress.ariaLabel': 'Progreso de la purga del ámbito de usuarios',
+  'admin.userScope.progress.phase': '{phase}: {completed} de {total} pasos completados',
+  'admin.userScope.progress.peopleFound': 'Personas encontradas fuera del ámbito',
+  'admin.userScope.progress.peopleRemoved': 'Personas eliminadas',
+  'admin.userScope.progress.peopleSkipped': 'Personas omitidas',
+  'admin.userScope.progress.requestedBy': 'Solicitada por',
+  'admin.userScope.progress.started': 'Iniciada',
+  'admin.userScope.progress.updated': 'Actualizada',
+  'admin.userScope.progress.completed': 'Completada',
+  'admin.userScope.progress.skippedWarning':
+    'Estas personas se conservaron porque llegaron datos nuevos sobre ellas durante la purga. Ejecutar la purga de nuevo las elimina.',
+  'admin.userScope.progress.cancelRequested': 'La purga se detendrá después del lote actual.',
+  'admin.userScope.progress.cancelFailed': 'No se pudo detener la purga.',
+  'admin.userScope.progress.rowsAffected': 'Filas afectadas por tabla o columna',
+  'admin.userScope.progress.table': 'Tabla o columna',
+  'admin.userScope.progress.rows': 'Filas',
+  'admin.userScope.progress.rowsHelp':
+    'Un nombre de tabla cuenta las filas eliminadas. Un nombre tabla.columna cuenta las filas que se conservan pero se modifican: la persona se sustituye por el usuario anónimo Unknown User o se borra el vínculo con ella.',
+  'admin.userScope.progress.stopHelp':
+    'Detenerla solo evita los lotes posteriores. Lo que ya se ha eliminado permanece eliminado.',
+  'admin.userScope.progress.stop': 'Detener purga',
+  'admin.userScope.progress.stopping': 'Deteniendo...',
+  'admin.userScope.state.queued': 'La purga está en cola.',
+  'admin.userScope.state.running': 'La purga se está ejecutando.',
+  'admin.userScope.state.completed': 'La purga ha finalizado.',
+  'admin.userScope.state.failed': 'La purga ha fallado.',
+  'admin.userScope.state.cancelled': 'La purga se detuvo.',
+  'admin.userScope.phase.snapshot': 'Buscando personas fuera del ámbito',
+  'admin.userScope.phase.auditEvents': 'Eventos de registro de auditoría',
+  'admin.userScope.phase.webActivity': 'Tráfico web',
+  'admin.userScope.phase.calls': 'Llamadas de Teams',
+  'admin.userScope.phase.pageComments': 'Comentarios y Me gusta de páginas',
+  'admin.userScope.phase.sentEmails': 'Correos enviados',
+  'admin.userScope.phase.teams': 'Pertenencia y reacciones de Teams',
+  'admin.userScope.phase.usageReports': 'Informes de uso',
+  'admin.userScope.phase.copilotInteractions': 'Historial de interacciones de Copilot',
+  'admin.userScope.phase.licencesAndCredits': 'Licencias y créditos',
+  'admin.userScope.phase.sharedWith': 'Recursos compartidos de Power App y flujos',
+  'admin.userScope.phase.managers': 'Vínculos de responsables',
+  'admin.userScope.phase.users': 'Registros de usuario',
+  'admin.userScope.phase.done': 'Terminado',
+  'admin.userScope.jobError.scopeUnavailable':
+    'La purga se detuvo porque el ámbito de usuarios dejó de estar disponible.',
+  'admin.userScope.jobError.scopeEmpty':
+    'La purga se detuvo porque el ámbito de usuarios se resolvió sin nadie.',
+  'admin.userScope.jobError.filterChanged':
+    'La purga no eliminó a nadie porque UserGroupsFilter cambió después de confirmar la purga. Compruebe el filtro e inicie la purga de nuevo.',
+  'admin.userScope.jobError.filterChangedWhileRunning':
+    'La purga se detuvo porque UserGroupsFilter cambió mientras se ejecutaba. Lo que ya había eliminado permanece eliminado y no se eliminó a nadie más. Compruebe el filtro e inicie la purga de nuevo para ver quién queda fuera ahora.',
+  'admin.userScope.jobError.databaseError':
+    'La purga se detuvo porque la base de datos de análisis devolvió un error.',
+  'admin.userScope.jobError.stateUnavailable':
+    'La purga se detuvo porque no pudo guardar su progreso en Azure Table Storage. Lo que ya eliminó sigue eliminado; iníciela de nuevo para terminarla.',
+  'admin.userScope.jobError.unexpected': 'La purga se detuvo por un error inesperado.',
 };
 
 export default admin;

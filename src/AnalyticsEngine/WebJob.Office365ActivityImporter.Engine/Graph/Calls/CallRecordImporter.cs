@@ -1,4 +1,5 @@
 using Common.Entities.Models;
+using Common.Entities.UserScope;
 using Microsoft.Extensions.Logging;
 using System;
 using System.Threading.Tasks;
@@ -17,12 +18,18 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
         private readonly ICallRecordSourceLoader _source;
         private readonly ICallRecordPersistenceManager _store;
         private readonly ILogger _logger;
+        private readonly IUserImportScopeProvider _userScopeProvider;
 
-        public CallRecordImporter(ICallRecordSourceLoader source, ICallRecordPersistenceManager store, ILogger logger)
+        /// <param name="userScopeProvider">
+        /// The process-lifetime <c>UserGroupsFilter</c> scope. Null means unfiltered.
+        /// </param>
+        public CallRecordImporter(ICallRecordSourceLoader source, ICallRecordPersistenceManager store, ILogger logger,
+            IUserImportScopeProvider userScopeProvider = null)
         {
             _source = source ?? throw new ArgumentNullException(nameof(source));
             _store = store ?? throw new ArgumentNullException(nameof(store));
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+            _userScopeProvider = userScopeProvider;
         }
 
         /// <summary>
@@ -36,7 +43,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
         /// A call with no organiser email is deliberately NOT saved but IS reported as processed: the
         /// organiser is a required foreign key on the call record, and a call we can't resolve an
         /// organiser for will never become resolvable, so retrying it forever would block the queue.
-        /// This is pre-existing behaviour, preserved.
+        /// This is pre-existing behaviour, preserved. A call with nobody on it in the <c>UserGroupsFilter</c>
+        /// scope is handled the same way: processed, not saved.
         /// </remarks>
         public async Task<CallRecordDTO> ImportFromNotification(GraphChangeNotification change)
         {
@@ -56,7 +64,14 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
 
             if (!string.IsNullOrEmpty(callResponse.OrganizerEmail))
             {
-                await _store.SaveOrReplaceCallRecord(callResponse);
+                var userScope = _userScopeProvider == null ? UserImportScope.Unfiltered : await _userScopeProvider.GetScopeAsync();
+                if (!CallRecordScopeRules.AnyParticipantInScope(callResponse, userScope))
+                {
+                    _logger.LogInformation($"Call record '{callId}': nobody on the call is in UserGroupsFilter, so it is not saved.");
+                    return callResponse;
+                }
+
+                await _store.SaveOrReplaceCallRecord(callResponse, userScope);
             }
 
             return callResponse;

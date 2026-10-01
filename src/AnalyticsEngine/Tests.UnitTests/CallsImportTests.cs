@@ -1,4 +1,5 @@
 using Azure.Messaging.ServiceBus;
+using Common.Entities.Calls;
 using Common.Entities.Models;
 using Microsoft.Extensions.Logging;
 using Microsoft.Graph.Models.ODataErrors;
@@ -325,7 +326,7 @@ namespace Tests.UnitTests
                 new GraphChangeNotification { ClientState = "s", ResourceData = new ResourceData { Id = string.Empty } },
             };
 
-            await CallQueueProcessor.AddChangeMsgToQueue(changes, new CapturingLogger(), queue);
+            await CallNotificationDispatcher.AddChangeMsgToQueue(changes, new CapturingLogger(), queue);
 
             Assert.AreEqual(2, queue.SentMessages.Count);
 
@@ -354,7 +355,7 @@ namespace Tests.UnitTests
             };
 
             await Assert.ThrowsExceptionAsync<ServiceBusException>(() =>
-                CallQueueProcessor.AddChangeMsgToQueue(changes, new CapturingLogger(), queue));
+                CallNotificationDispatcher.AddChangeMsgToQueue(changes, new CapturingLogger(), queue));
 
             Assert.AreEqual(1, queue.SendAttempts);
         }

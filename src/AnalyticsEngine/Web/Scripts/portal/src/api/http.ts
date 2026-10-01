@@ -1,4 +1,8 @@
 import { translateActive } from '../i18n/runtime';
+import {
+  PORTAL_PERMISSION_ERROR_CODE,
+  type PortalPermission,
+} from '../access/types';
 
 /**
  * Shared fetch wrapper for the portal's calls to the site's own `[Authorize]`'d API.
@@ -92,6 +96,41 @@ export class SessionExpiredError extends Error {
   }
 }
 
+/** Thrown when the API says the current user lacks a portal app-role permission. */
+export class PortalPermissionError extends Error {
+  readonly permission: PortalPermission;
+  readonly role: string;
+
+  constructor(permission: PortalPermission, role: string) {
+    super(translateActive(permission === 'administration'
+      ? 'access.permissionRequired.administration'
+      : 'access.permissionRequired.seePii'));
+    this.name = 'PortalPermissionError';
+    this.permission = permission;
+    this.role = role;
+  }
+}
+
+async function portalPermissionError(response: Response): Promise<PortalPermissionError | null> {
+  if (response.status !== 403) return null;
+
+  try {
+    const body = (await response.clone().json()) as {
+      code?: unknown;
+      permission?: unknown;
+      role?: unknown;
+    } | null;
+    if (body?.code !== PORTAL_PERMISSION_ERROR_CODE) return null;
+    if (body.permission !== 'administration' && body.permission !== 'seePii') return null;
+    return new PortalPermissionError(
+      body.permission,
+      typeof body.role === 'string' && body.role.length > 0 ? body.role : '',
+    );
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Restores the route the user was on before an expired session bounced them through sign-in.
  * Called once from the app entry point, before the router reads the URL.
@@ -162,6 +201,10 @@ export async function apiFetch(input: string, init: RequestInit = {}): Promise<R
   if (!reauthNavigationStarted) {
     sessionRemove(REAUTH_FLAG);
   }
+
+  // After the guard above, deliberately: a permission refusal proves the session is healthy too.
+  const permissionError = await portalPermissionError(response);
+  if (permissionError) throw permissionError;
 
   return response;
 }

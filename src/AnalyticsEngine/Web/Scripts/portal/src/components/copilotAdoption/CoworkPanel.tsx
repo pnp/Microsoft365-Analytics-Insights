@@ -67,7 +67,9 @@ import CoworkQuadrant from './CoworkQuadrant';
 import CoworkTimeSavedHero from './CoworkTimeSavedHero';
 import CoworkTimeSavedModel from './CoworkTimeSavedModel';
 import { useTimeSavedAssumptions } from './coworkTimeSaved';
+import { useTimeSavedCohorts } from './timeSavedCohort';
 import { copilotAdoptionWarningText, coworkRationaleText, coworkTierLabel, isCoworkWarning } from './serverText';
+import PiiHiddenNote from '../shared/PiiHiddenNote';
 
 const PAGE_SIZE = 50;
 
@@ -291,9 +293,6 @@ const useStyles = makeStyles({
 const DEFAULT_FILTERS: CoworkFilters = {
   search: '',
   tiers: [],
-  department: '',
-  country: '',
-  emailDomain: '',
   recommendedOnly: false,
   coworkUsersOnly: false,
   sortBy: 'load',
@@ -342,42 +341,50 @@ function BasisBadge({ basis }: { basis: CoworkBasis }) {
 export default function CoworkPanel({
   windowDays,
   summary,
-  filterOptions,
   options,
   seatLicenceTypeIds,
-  emailDomain,
+  userFilter,
+  canSeePii = true,
 }: {
   windowDays: number;
   summary: CopilotAdoptionSummary;
-  filterOptions: AdoptionFilterOptions | null;
   options: CopilotAdoptionOptions;
   seatLicenceTypeIds?: number[];
   /**
-   * The page-wide email-domain filter, applied to this list too so it can never describe a
-   * different population from the rest of the report.
+   * The page-wide user filter in its wire form - Entra ID attributes, email domain and custom
+   * organisations - applied to this list too so it can never describe a different population from
+   * the rest of the report, and kept by every reset below.
    */
-  emailDomain?: string | null;
+  userFilter?: string | null;
+  /**
+   * False for a reader without the See PII permission: the time saved, readiness and rollout sections
+   * are all aggregates and stay, but the people section - the spending-policy list - is replaced by a
+   * note, and the list is never requested (the server would refuse it).
+   */
+  canSeePii?: boolean;
 }) {
   const styles = useStyles();
   const table = useAdoptionTableStyles();
   const t = useT();
   const tNode = useTNode();
 
-  const [filters, setFilters] = useState<CoworkFilters>({ ...DEFAULT_FILTERS, emailDomain: emailDomain ?? '' });
+  const [filters, setFilters] = useState<CoworkFilters>({
+    ...DEFAULT_FILTERS,
+    userFilter: userFilter ?? '',
+  });
 
   /**
-   * Resets the panel's own filters while KEEPING the page-wide email-domain scope.
+   * Resets the panel's own filters while KEEPING the page-wide user filter.
    *
-   * The domain is not one of this panel's filters - it is the population the whole report is
-   * describing, and the banner at the top of the page says so. Clearing it here would silently
-   * widen the list back to the whole tenant while the page still claimed to be showing one
-   * organisation, and the spending-policy CSV built from the same state would follow it - which on
-   * this tab means handing an admin a list of people to grant Cowork to who are not in the
-   * organisation they were looking at.
+   * That filter is not one of this panel's - it is the population the whole report is describing,
+   * and the banner at the top of the page says so. Clearing it here would silently widen the list
+   * back to the whole tenant while the page still claimed to be showing one organisation, and the
+   * spending-policy CSV built from the same state would follow it - which on this tab means handing
+   * an admin a list of people to grant Cowork to who are not in the organisation they were looking at.
    */
   const clearPanelFilters = () => {
     setSearchDraft('');
-    setFilters({ ...DEFAULT_FILTERS, emailDomain: emailDomain ?? '' });
+    setFilters({ ...DEFAULT_FILTERS, userFilter: userFilter ?? '' });
   };
   const [searchDraft, setSearchDraft] = useState('');
   const [page, setPage] = useState(0);
@@ -388,6 +395,7 @@ export default function CoworkPanel({
   const { isExpanded, toggle: toggleRow, resetRows, expandAll, collapseAll, allExpanded } = useRowExpansion();
   const [section, setSection] = useState<CoworkSection>('timeSaved');
   const timeSaved = useTimeSavedAssumptions(summary);
+  const { cohorts, setCohort } = useTimeSavedCohorts();
   // Requests, not flags: each click must act again, including a second click on a section that is
   // already open - which is exactly when a plain setSection() changes nothing the reader can see.
   const [assumptionFocusRequest, setAssumptionFocusRequest] = useState(0);
@@ -412,7 +420,8 @@ export default function CoworkPanel({
     // anyway would put a pointless round trip behind an explanatory message the user is already
     // reading. The guard lives here rather than around the early return below because hooks run
     // unconditionally - returning early does not stop an effect that has already been declared.
-    if (!available) {
+    // The same goes for a reader without the See PII permission: the list is refused for them.
+    if (!available || !canSeePii) {
       setLoading(false);
       return undefined;
     }
@@ -439,7 +448,7 @@ export default function CoworkPanel({
       // These requests poll while the analysis is building, so cleanup has to actually stop them.
       controller.abort();
     };
-  }, [available, windowDays, filters, page, seatLicenceTypeIds, reloadKey, t]);
+  }, [available, canSeePii, windowDays, filters, page, seatLicenceTypeIds, reloadKey, t]);
 
   const sortValue = `${filters.sortBy}:${filters.sortDesc ? 'desc' : 'asc'}`;
   const exportUrl = useMemo(
@@ -453,7 +462,7 @@ export default function CoworkPanel({
   // while the people section is the one showing: a hidden section is not printed, so its list must
   // not hold the printout up or refuse it for being long.
   const printRows = usePrintAllRows<CoworkReadinessRow>({
-    enabled: available && section === 'people' && !loading && data !== null,
+    enabled: available && canSeePii && section === 'people' && !loading && data !== null,
     total: data?.total ?? 0,
     loadedRows: data?.rows.length ?? 0,
     loadPage: (skip, take, signal) => fetchCowork(windowDays, filters, skip, take, seatLicenceTypeIds, signal),
@@ -535,8 +544,17 @@ export default function CoworkPanel({
         summary={summary}
         options={options}
         timeSaved={timeSaved}
+        cohort={cohorts.cowork}
+        onCohortChange={(cohort) => setCohort('cowork', cohort)}
         onAdjust={adjustAssumptions}
-        onShowPeople={() => showPeople({ recommendedOnly: true, tiers: [] })}
+        onShowPeople={canSeePii ? () => showPeople({ recommendedOnly: true, tiers: [] }) : undefined}
+        // Every seat holder the headline models: each filter that would narrow the list lifted, and the
+        // page-wide user filter kept - it is the population the headline was modelled for.
+        onShowAll={
+          canSeePii
+            ? () => showPeople({ search: '', recommendedOnly: false, coworkUsersOnly: false, tiers: [] })
+            : undefined
+        }
       />
 
       <div className={styles.sectionNav} data-print="hide" ref={sectionNavRef}>
@@ -570,6 +588,7 @@ export default function CoworkPanel({
           summary={summary}
           options={options}
           timeSaved={timeSaved}
+          cohort={cohorts.cowork}
           focusRequest={assumptionFocusRequest}
         />
       </div>
@@ -613,9 +632,11 @@ export default function CoworkPanel({
             );
           })}
         </div>
-        <Text size={100} className={styles.muted} data-print="hide">
-          {t('copilotAdoptionCowork.tiers.openInstruction')}
-        </Text>
+        {canSeePii && (
+          <Text size={100} className={styles.muted} data-print="hide">
+            {t('copilotAdoptionCowork.tiers.openInstruction')}
+          </Text>
+        )}
       </Card>
 
       {/* ---------- The quadrant ---------- */}
@@ -777,6 +798,7 @@ export default function CoworkPanel({
 
       {/* ---------- People: the spending-policy list ---------- */}
       <div role="tabpanel" aria-label={t('copilotAdoptionCowork.sections.people')} hidden={section !== 'people'}>
+      {!canSeePii ? <PiiHiddenNote /> : (
       <Card>
         <Text weight="semibold" block>
           {t('copilotAdoptionCowork.intro.title')}
@@ -823,19 +845,6 @@ export default function CoworkPanel({
             {summary.coworkTiers.map((tier) => (
               <option key={tier.code} value={tier.code}>
                 {coworkTierText(t, tier.code, 'label', tier.label, coworkRegularMinActiveDays)}
-              </option>
-            ))}
-          </Select>
-
-          <Select
-            value={filters.department}
-            aria-label={t('copilotAdoptionCowork.filters.departmentAria')}
-            onChange={(_e: any, d: any) => setFilters((f) => ({ ...f, department: d.value }))}
-          >
-            <option value="">{t('copilotAdoptionCowork.filters.allDepartments')}</option>
-            {(filterOptions?.departments ?? []).map((dept) => (
-              <option key={dept} value={dept}>
-                {dept}
               </option>
             ))}
           </Select>
@@ -912,10 +921,6 @@ export default function CoworkPanel({
               value: selectedTier
                 ? coworkTierText(t, selectedTier.code, 'label', selectedTier.label, coworkRegularMinActiveDays)
                 : t('copilotAdoptionCowork.filters.allVerdicts'),
-            },
-            {
-              label: t('copilotAdoptionCowork.table.department'),
-              value: filters.department || t('copilotAdoptionCowork.filters.allDepartments'),
             },
             sortOption && { label: t('copilotAdoption.shared.printedFilters.sortedBy'), value: t(sortOption.labelKey) },
             filters.recommendedOnly && { value: t('copilotAdoptionCowork.filters.policyListOnly') },
@@ -1315,6 +1320,7 @@ export default function CoworkPanel({
         )}
         {!loading && data && <PartialPrintNote shownRows={rows.length} totalRows={data.total} />}
       </Card>
+      )}
       </div>
     </div>
   );

@@ -8,7 +8,10 @@ import {
   Globe20Regular,
   Home20Regular,
   Money20Regular,
+  Organization20Regular,
   PeopleCommunity20Regular,
+  PeopleAudience20Regular,
+  PeopleSync20Regular,
   PeopleTeam20Regular,
   Pulse20Regular,
   Settings20Regular,
@@ -18,6 +21,7 @@ import {
 
 import { lazyWithReload } from './lazyWithReload';
 import type { TranslationKey } from './i18n';
+import { permissionGranted, type PortalAccessValue, type PortalPermission } from './access';
 
 // Code-split the pages so each route is a separate chunk (smaller initial load). lazyWithReload
 // recovers from a stale chunk after a rebuild/redeploy instead of leaving the route blank.
@@ -31,6 +35,9 @@ const LicenceActivityPage = lazyWithReload(() => import('./pages/LicenceActivity
 const DlpPage = lazyWithReload(() => import('./pages/DlpPage'));
 const TeamsPermissionsPage = lazyWithReload(() => import('./pages/TeamsPermissionsPage'));
 const UserLookupPage = lazyWithReload(() => import('./pages/UserLookupPage'));
+const UserOrgsPage = lazyWithReload(() => import('./pages/UserOrgsPage'));
+const UserImportPage = lazyWithReload(() => import('./pages/UserImportPage'));
+const UserScopePage = lazyWithReload(() => import('./pages/UserScopePage'));
 const ProfilingStatusPage = lazyWithReload(() => import('./pages/ProfilingStatusPage'));
 const InstallLogPage = lazyWithReload(() => import('./pages/InstallLogPage'));
 const HealthPage = lazyWithReload(() => import('./pages/HealthPage'));
@@ -53,11 +60,13 @@ export interface AreaDefinition {
   basePath: string;
   /** Where the area switcher lands when this area is selected. */
   homePath: string;
+  /** Permission needed to see this area. Omitted means every signed-in user may see it. */
+  requires?: PortalPermission;
 }
 
 export const AREAS: AreaDefinition[] = [
   { id: 'insights', labelKey: 'app.area.insights', basePath: '/insights', homePath: '/insights/overview' },
-  { id: 'admin', labelKey: 'app.area.admin', basePath: '/admin', homePath: '/admin/health' },
+  { id: 'admin', labelKey: 'app.area.admin', basePath: '/admin', homePath: '/admin/health', requires: 'administration' },
 ];
 
 /** The area the portal opens on. */
@@ -73,6 +82,8 @@ export interface PortalRoute {
   groupKey?: TranslationKey;
   icon: ReactElement;
   element: ReactElement;
+  /** Additional permission needed for this route. The area's requirement is checked too. */
+  requires?: PortalPermission;
 }
 
 /**
@@ -181,6 +192,31 @@ export const ROUTES: PortalRoute[] = [
     groupKey: 'app.navGroup.manage',
     icon: <DatabaseSearch20Regular />,
     element: <UserLookupPage />,
+    requires: 'seePii',
+  },
+  {
+    area: 'admin',
+    path: '/admin/user-orgs',
+    labelKey: 'app.route.userOrgs',
+    groupKey: 'app.navGroup.manage',
+    icon: <Organization20Regular />,
+    element: <UserOrgsPage />,
+  },
+  {
+    area: 'admin',
+    path: '/admin/user-import',
+    labelKey: 'app.route.userImport',
+    groupKey: 'app.navGroup.manage',
+    icon: <PeopleSync20Regular />,
+    element: <UserImportPage />,
+  },
+  {
+    area: 'admin',
+    path: '/admin/user-scope',
+    labelKey: 'app.route.userScope',
+    groupKey: 'app.navGroup.manage',
+    icon: <PeopleAudience20Regular />,
+    element: <UserScopePage />,
   },
   {
     area: 'admin',
@@ -202,13 +238,42 @@ export function routesForArea(area: AreaId): PortalRoute[] {
   return ROUTES.filter((r) => r.area === area);
 }
 
+function areaRequirement(area: AreaId): PortalPermission | undefined {
+  return AREAS.find((a) => a.id === area)?.requires;
+}
+
+/** Areas visible to the current user. */
+export function visibleAreas(access: Pick<PortalAccessValue, 'administration' | 'seePii'>): AreaDefinition[] {
+  return AREAS.filter((area) => !area.requires || permissionGranted(access, area.requires));
+}
+
+/** The first permission missing for a route, if any. */
+export function missingPermission(
+  route: PortalRoute,
+  access: Pick<PortalAccessValue, 'administration' | 'seePii'>,
+): PortalPermission | null {
+  const required = [areaRequirement(route.area), route.requires].filter(Boolean) as PortalPermission[];
+  return required.find((permission) => !permissionGranted(access, permission)) ?? null;
+}
+
+/** Routes belonging to an area that the current user may see. */
+export function visibleRoutesForArea(
+  area: AreaId,
+  access: Pick<PortalAccessValue, 'administration' | 'seePii'>,
+): PortalRoute[] {
+  return routesForArea(area).filter((route) => missingPermission(route, access) === null);
+}
+
 /**
  * An area's routes bucketed by their `groupKey` heading, preserving declaration order and keeping
  * ungrouped items (groupKey === undefined) in a single leading bucket.
  */
-export function groupedRoutesForArea(area: AreaId): { groupKey?: TranslationKey; routes: PortalRoute[] }[] {
+export function groupedRoutesForArea(
+  area: AreaId,
+  routes: PortalRoute[] = routesForArea(area),
+): { groupKey?: TranslationKey; routes: PortalRoute[] }[] {
   const buckets: { groupKey?: TranslationKey; routes: PortalRoute[] }[] = [];
-  for (const route of routesForArea(area)) {
+  for (const route of routes) {
     const last = buckets[buckets.length - 1];
     if (last && last.groupKey === route.groupKey) last.routes.push(route);
     else buckets.push({ groupKey: route.groupKey, routes: [route] });

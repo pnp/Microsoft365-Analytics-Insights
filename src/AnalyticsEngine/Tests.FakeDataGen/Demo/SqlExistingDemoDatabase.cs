@@ -252,6 +252,12 @@ WHERE f.parent_object_id=OBJECT_ID(@table);"))
                 {
                     var supplied = plan.Table.Columns[i];
                     var keys = plan.ForeignKeys.Where(f => f.Column == supplied.Name).ToArray();
+                    if (plan.Table == DemoTables.UserOrgAssignments
+                        && (supplied.Name == "org_type_id" || supplied.Name == "org_value_id"))
+                    {
+                        plan.IdentityReferences.Add(i, InheritedIdentityReference(plan, supplied.Name));
+                        continue;
+                    }
                     if (keys.Length == 0)
                     {
                         // Do not silently attach a logical ID to an existing row when a
@@ -305,6 +311,11 @@ WHERE f.parent_object_id=OBJECT_ID(@table);"))
                     case "item_type_id": return _plans[DemoTables.ItemTypes];
                 }
             }
+            if (plan.Table == DemoTables.UserOrgAssignments)
+            {
+                if (column == "org_type_id") return _plans[DemoTables.UserOrgTypes];
+                if (column == "org_value_id") return _plans[DemoTables.UserOrgValues];
+            }
             if (plan.Table != DemoTables.Chats || column != "user_id") return null;
             // The chat's denormalised user follows its shared-primary-key audit parent.
             var candidates = new HashSet<TablePlan>();
@@ -331,6 +342,11 @@ WHERE f.parent_object_id=OBJECT_ID(@table);"))
             {
                 case "copilot_ai_models":
                     return new[] { "name", "provider_name", "version" }
+                        .Select(name => plan.Table.Columns.ToList().FindIndex(c => c.Name == name)).ToArray();
+                case "user_org_types":
+                    column = "name"; break;
+                case "user_org_values":
+                    return new[] { "org_type_id", "name" }
                         .Select(name => plan.Table.Columns.ToList().FindIndex(c => c.Name == name)).ToArray();
                 case "license_types": column = "sku_id"; break;
                 case "copilot_agents": column = "agent_id"; break;

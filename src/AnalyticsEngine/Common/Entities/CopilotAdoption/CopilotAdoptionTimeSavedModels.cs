@@ -7,9 +7,10 @@ namespace Common.Entities.CopilotAdoption
 {
     /// <summary>
     /// The modelled licence estimate: the time a Microsoft 365 Copilot licence could give back to the
-    /// people recommended for one (<see cref="CopilotAdoptionSummary.LicenceOpportunityEstimate"/>), and
-    /// to the recommended candidates already using Copilot Chat without one
-    /// (<see cref="CopilotAdoptionSummary.LicenceChatUsersEstimate"/>).
+    /// people recommended for one (<see cref="CopilotAdoptionSummary.LicenceOpportunityEstimate"/>), to
+    /// the recommended candidates already using Copilot Chat without one
+    /// (<see cref="CopilotAdoptionSummary.LicenceChatUsersEstimate"/>), and to every licence candidate,
+    /// recommended or not (<see cref="CopilotAdoptionSummary.LicenceAllCandidatesEstimate"/>).
     ///
     /// <b>Every hour here is an assumption applied to observed volume, and none of it is measured.</b>
     /// The volumes (<see cref="AddressableMeetings"/> and its siblings) come from Microsoft's usage
@@ -34,7 +35,7 @@ namespace Common.Entities.CopilotAdoption
         [JsonProperty("isModelled")]
         public bool IsModelled { get; set; } = true;
 
-        /// <summary>Recommended licence candidates the estimate covers.</summary>
+        /// <summary>Licence candidates the estimate covers - see <see cref="LicenceEstimateCohort"/>.</summary>
         [JsonProperty("cohortUsers")]
         public int CohortUsers { get; set; }
 
@@ -83,6 +84,26 @@ namespace Common.Entities.CopilotAdoption
         /// </summary>
         [JsonProperty("assumptions")]
         public List<string> Assumptions { get; set; } = new List<string>();
+    }
+
+    /// <summary>
+    /// Which licence candidates a <see cref="LicenceValueEstimate"/> covers. It decides only how the
+    /// estimate's assumptions describe the people in it: the arithmetic is the same for every cohort.
+    /// </summary>
+    public enum LicenceEstimateCohort
+    {
+        /// <summary>
+        /// The people recommended for a licence, or a subset of them - the purchase the candidate list
+        /// makes the case for, and the default the portal leads with.
+        /// </summary>
+        Recommended,
+
+        /// <summary>
+        /// Every candidate the list ranked, recommended or not: everyone active in Copilot Chat or
+        /// Microsoft 365 in the period without a Copilot licence. The figure a reader can still size a
+        /// purchase with on a tenant where nobody uses Microsoft 365 heavily enough to be recommended.
+        /// </summary>
+        AllCandidates,
     }
 
     /// <summary>

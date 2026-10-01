@@ -29,7 +29,7 @@ type TeamListState = {
 };
 
 export const TEAMS_AUTH_ERROR_TEXT: Record<string, Parameters<TFunction>[0]> = Object.freeze({
-  [EN_CATALOG['admin.teams.teamList.redisNotConfigured']]: 'admin.teams.teamList.redisNotConfigured',
+  [EN_CATALOG['admin.teams.teamList.storageNotConfigured']]: 'admin.teams.teamList.storageNotConfigured',
 });
 
 export function teamAuthErrorText(t: TFunction, message: string | undefined): string {
@@ -265,7 +265,7 @@ class TeamListInner extends React.Component<TeamListInnerProps, TeamListState> {
     })
       .then(async (response) => {
         if (!response.ok) {
-          // Surface the server's reason (e.g. "Redis is not configured") when present.
+          // Surface the server's reason (e.g. "Azure Storage is not configured") when present.
           const serverMessage = await response
             .json()
             .then((b) => (b && typeof b.message === 'string' ? b.message : ''))

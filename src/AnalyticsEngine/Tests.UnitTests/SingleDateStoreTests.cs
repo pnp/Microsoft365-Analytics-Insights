@@ -1,7 +1,9 @@
 using Common.Entities.Config;
+using Common.Entities.State;
 using DataUtils;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System;
+using System.Runtime.Serialization;
 using System.Threading.Tasks;
 using WebJob.Office365ActivityImporter.Engine;
 
@@ -9,7 +11,8 @@ namespace Tests.UnitTests
 {
     /// <summary>
     /// Tests for the once-a-day throttle store that gates the whole activity/usage-report phase, and the
-    /// factory that picks Redis vs the in-memory fallback (used when no Redis connection string is configured).
+    /// factory that picks the durable state table vs the in-memory fallback (used when no Storage connection
+    /// string is configured).
     /// </summary>
     [TestClass]
     public class SingleDateStoreTests
@@ -66,17 +69,44 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
-        public void Factory_NoRedis_ReturnsInMemoryStore()
+        public void Factory_NoStorage_ReturnsInMemoryStore()
         {
-            var config = new AppConfig
-            {
-                ConnectionStrings = new AppConnectionStrings { RedisConnectionString = null }
-            };
+            var config = ConfigWithStorage(null);
 
             var store = ActivityReportsLastImportedStoreFactory.Create(config, AnalyticsLogger.ConsoleOnlyTracer());
 
             Assert.IsInstanceOfType(store, typeof(InMemorySingleDateStore),
-                "With no Redis configured the factory must fall back to the in-memory once-a-day throttle.");
+                "With no Storage configured the factory must fall back to the in-memory once-a-day throttle.");
+        }
+
+        [TestMethod]
+        public void Factory_WithStorage_ReturnsTheDurableStoreUnderTheOperatorFacingKey()
+        {
+            // Opening is lazy, so this never touches the (fake) account.
+            var config = ConfigWithStorage("DefaultEndpointsProtocol=https;AccountName=contosoanalytics;AccountKey=FAKEFAKEFAKE==;EndpointSuffix=core.windows.net");
+
+            var store = ActivityReportsLastImportedStoreFactory.Create(config, AnalyticsLogger.ConsoleOnlyTracer());
+
+            Assert.IsInstanceOfType(store, typeof(KeyValueSingleDateStore));
+            Assert.AreEqual("UserActivityLastImported", ((KeyValueSingleDateStore)store).Key,
+                "Operators delete this row by name to force the usage-report phase - keep it stable.");
+        }
+
+        [TestMethod]
+        public async Task KeyValueSingleDateStore_RoundTripsInRoundTripFormat_AndDeletes()
+        {
+            var state = new InMemoryKeyValueStore();
+            var store = new KeyValueSingleDateStore(state, "UserActivityLastImported");
+            var when = new DateTime(2026, 3, 29, 0, 30, 0, DateTimeKind.Utc);
+
+            await store.SaveDT(when);
+
+            Assert.AreEqual("2026-03-29T00:30:00.0000000Z", await state.GetStringAsync("UserActivityLastImported"),
+                "Stored in round-trip format, so the offset survives and the cadence gate compares instants.");
+            Assert.AreEqual(when, (await store.GetLastDT()).Value.ToUniversalTime());
+
+            await store.DeleteDt();
+            Assert.IsNull(await store.GetLastDT());
         }
 
         [TestMethod]
@@ -86,6 +116,14 @@ namespace Tests.UnitTests
             var store = ActivityReportsLastImportedStoreFactory.Create(null, AnalyticsLogger.ConsoleOnlyTracer());
 
             Assert.IsInstanceOfType(store, typeof(InMemorySingleDateStore));
+        }
+
+        private static AppConfig ConfigWithStorage(string storageConnectionString)
+        {
+            var config = (AppConfig)FormatterServices.GetUninitializedObject(typeof(AppConfig));
+            config.ConnectionStrings = (AppConnectionStrings)FormatterServices.GetUninitializedObject(typeof(AppConnectionStrings));
+            config.ConnectionStrings.StorageConnectionString = storageConnectionString;
+            return config;
         }
     }
 }

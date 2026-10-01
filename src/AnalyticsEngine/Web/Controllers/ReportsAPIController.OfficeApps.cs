@@ -237,8 +237,7 @@ namespace Web.AnalyticsWeb.Controllers
             // A filter of '*' matches every group, so it narrows nothing and the directory is still
             // the right denominator. Treating any non-empty value as a narrowing would suppress the
             // adoption chart on a deployment whose scope is in fact the whole tenant.
-            var groupFilter = new UserGroupsFilterModel(config.UserGroupsFilter);
-            var groupFiltered = groupFilter.Patterns.Count > 0 && !groupFilter.MatchesEverything;
+            var groupFiltered = new UserGroupsFilterModel(config.UserGroupsFilter).IsNarrowing;
 
             return new List<Task<ReportChart>>
             {
@@ -327,12 +326,12 @@ namespace Web.AnalyticsWeb.Controllers
         /// </summary>
         /// <remarks>
         /// Suppressed entirely when a user-groups filter is configured, and this is the important part.
-        /// The numerator comes from the activity import, which the loaders restrict to the configured
-        /// groups; the denominator comes from <c>dbo.users</c>, which the user-metadata import fills
-        /// from the whole directory. Divide one by the other on a group-filtered deployment and a
-        /// department where every single in-scope person uses Office can be reported at a few percent.
-        /// No correct denominator is available here, so the chart says so rather than printing a number
-        /// that is confidently wrong.
+        /// The numerator comes from the activity import, which is restricted to the configured groups; the
+        /// denominator comes from <c>dbo.users</c>. The user-metadata import applies the same filter, but
+        /// everyone it imported before the filter was set stays in that table until they are purged. Divide
+        /// one by the other on such a deployment and a department where every single in-scope person uses
+        /// Office can be reported at a few percent. The users table alone cannot say who is in scope, so the
+        /// chart says so rather than printing a number that may be confidently wrong.
         /// </remarks>
         private static Task<ReportChart> DepartmentAdoptionChart(DateTime from, bool groupFiltered)
         {
@@ -350,10 +349,11 @@ namespace Web.AnalyticsWeb.Controllers
                     Categories = new List<ReportCategory>(),
                     Sql = DisplaySql(DepartmentAdoptionRateQuery(), from),
                     Warning =
-                        "This deployment restricts the usage-report import to selected user groups, but directory "
-                        + "details are imported for everyone. The share of a department that uses Office would "
-                        + "therefore be divided by people the import was never asked to look at, understating every "
-                        + "department - so it is not shown. The counts in the other charts are unaffected.",
+                        "This deployment restricts its imports to selected user groups, but the directory data can "
+                        + "still include people outside them - anyone imported before the restriction was set. The "
+                        + "share of a department that uses Office would then be divided by people whose activity is "
+                        + "not imported, understating every department - so it is not shown. The counts in the other "
+                        + "charts are unaffected.",
                 });
             }
 

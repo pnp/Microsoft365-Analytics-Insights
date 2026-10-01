@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { screen } from '@testing-library/react';
+import { screen, waitFor } from '@testing-library/react';
 import { renderWithProvider } from '../test/renderWithProvider';
 import InsightsOverviewPage from './InsightsOverviewPage';
 import type { SystemStatus } from '../types/systemStatus';
@@ -34,7 +34,7 @@ const status = (over: Partial<SystemStatus> = {}): SystemStatus => ({
   callWebhookExpiry: null,
   callWebhookStatusDetail: null,
   webAppConfigSQL: null,
-  webAppConfigRedis: null,
+  webAppConfigStorage: null,
   webAppConfigCognitive: null,
   cognitiveServiceEnabled: false,
   webAppConfigServiceBus: null,
@@ -65,6 +65,7 @@ const dataSection = (over: Partial<DataOverviewSection> = {}): DataOverviewSecti
   sentEmailCount: 0,
   callRecordCount: 0,
   copilotChatCount: 0,
+  copilotUsageReportsIdentitiesConcealed: false,
   userCount: 1000,
   teamsBeingTrackedCount: 0,
   databaseSizeMb: 1024,
@@ -74,6 +75,8 @@ const dataSection = (over: Partial<DataOverviewSection> = {}): DataOverviewSecti
   hitsLast7d: 0,
   newestHitUtc: new Date(Date.now() - 5 * 60_000).toISOString(),
   newestAuditEventUtc: new Date(Date.now() - 5 * 60_000).toISOString(),
+  copilotUsageReportLastImportUtc: null,
+  copilotUsageReportErrors: [],
   countsError: null,
   recentVolumeError: null,
   dataError: null,
@@ -116,6 +119,16 @@ describe('InsightsOverviewPage', () => {
     expect(screen.getAllByText('Healthy').length).toBeGreaterThanOrEqual(2);
     expect(screen.getByText('Import liveness')).toBeInTheDocument();
     expect(screen.getByText('Degraded')).toBeInTheDocument();
+  });
+
+  it('does not call or show health APIs without Administration', async () => {
+    renderWithProvider(<InsightsOverviewPage />, { access: { administration: false, seePii: false } });
+
+    await waitFor(() => expect(mockStatus).toHaveBeenCalled());
+    expect(mockHealthSummary).not.toHaveBeenCalled();
+    expect(mockHealthData).not.toHaveBeenCalled();
+    expect(screen.queryByRole('heading', { name: 'System health' })).not.toBeInTheDocument();
+    expect(screen.queryByText('Service health')).not.toBeInTheDocument();
   });
 
   it('shows freshness and 24h volume for the workloads that are switched on', async () => {

@@ -1,6 +1,4 @@
 using Azure.AI.TextAnalytics;
-using Common.Entities.Config;
-using Common.Entities.Redis;
 using DataUtils;
 using Microsoft.Extensions.Logging;
 using Microsoft.Graph;
@@ -20,7 +18,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
         /// <summary>
         /// Loads Azure Cognitive data for a message
         /// </summary>
-        /// <returns>Stats and whether it was returned from redis or not</returns>
+        /// <returns>Stats and whether they came from the cognitive result cache or not</returns>
         public static async Task<(MessageCognitiveStats, bool)> LoadCognitiveStatsFromCacheOrAI(this ChatMessage msg, CognitiveServicesClient client, ILogger logger, ChannelWithReactions parentChannel)
         {
             var stats = new MessageCognitiveStats(parentChannel, msg.CreatedDateTime.Value.DateTime);
@@ -30,12 +28,11 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
             TeamsMessagesCognitiveStats results = null;
             var fromCache = false;
 
-            // Have we cached this language lookup in redis?
-            var appConfig = new AppConfig();
-            var redis = CacheConnectionManager.GetConnectionManager(appConfig.ConnectionStrings.RedisConnectionString, tenantId: appConfig.TenantGUID.ToString(), clientId: appConfig.ClientID, clientSecret: appConfig.ClientSecret);
+            // Have we analysed this exact text recently?
+            var cache = CognitiveResultCache.Default;
 
-            var redisKey = languageBatchInput.Select(i => i.Id + i.Text).Aggregate((a, b) => a + b);
-            var cachedResultsJson = await redis.GetStringCache(redisKey);
+            var cacheInput = languageBatchInput.Select(i => i.Id + i.Text).Aggregate((a, b) => a + b);
+            var cachedResultsJson = await cache.GetAsync(cacheInput, logger);
             if (!string.IsNullOrEmpty(cachedResultsJson))
             {
                 try
@@ -49,7 +46,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
                 }
             }
 
-            if (cachedResultsJson == null)
+            // Analyse unless a usable result came back: an unreadable cached entry is a miss, not a result.
+            if (results == null)
             {
                 var sentimentAndLang = await languageBatchInput.GetCognitiveDataStats(client, logger);
 
@@ -76,7 +74,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
                     SentimentAndLanguages = sentimentAndLang.Select(s => s.CognitiveStat).ToList(),
                     KeyPhrases = keyPhrasesResponses.Where(r => !r.HasError).SelectMany(k => k.KeyPhrases).ToList()
                 };
-                await redis.CacheStringOneDay(redisKey, JsonConvert.SerializeObject(results));
+                await cache.SetAsync(cacheInput, JsonConvert.SerializeObject(results), logger);
             }
 
             if (fromCache)

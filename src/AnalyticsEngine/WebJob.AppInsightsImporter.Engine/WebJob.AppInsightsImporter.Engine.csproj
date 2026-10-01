@@ -73,6 +73,7 @@
     <Compile Include="AppInsightsColumn.cs" />
     <Compile Include="AppInsightsImporter.cs" />
     <Compile Include="AppInsightsImportWindow.cs" />
+    <Compile Include="AppInsightsUserScope.cs" />
     <Compile Include="CustomEventSectionSaver.cs" />
     <Compile Include="Interfaces.cs" />
     <Compile Include="PageViewSaveResult.cs" />

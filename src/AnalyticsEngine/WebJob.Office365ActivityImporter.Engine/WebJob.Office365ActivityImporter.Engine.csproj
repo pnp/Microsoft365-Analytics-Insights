@@ -1,4 +1,4 @@
-﻿<?xml version="1.0" encoding="utf-8"?>
+<?xml version="1.0" encoding="utf-8"?>
 <Project ToolsVersion="15.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <Import Project="$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props" Condition="Exists('$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props')" />
   <PropertyGroup>
@@ -164,7 +164,7 @@
     <Compile Include="Graph\Copilot\InteractionHistory\AiInteractionModels.cs" />
     <Compile Include="Graph\Copilot\InteractionHistory\CopilotInteractionHistoryImporter.cs" />
     <Compile Include="Graph\Copilot\InteractionHistory\GraphAiInteractionSourceLoader.cs" />
-    <Compile Include="Graph\Copilot\InteractionHistory\GraphPilotGroupMemberResolver.cs" />
+    <Compile Include="Graph\Copilot\InteractionHistory\UserImportScopePilotGroupMemberResolver.cs" />
     <Compile Include="Graph\Copilot\InteractionHistory\IAiInteractionSourceLoader.cs" />
     <Compile Include="Graph\Copilot\InteractionHistory\InteractionCognitiveEnricher.cs" />
     <Compile Include="Graph\Copilot\InteractionHistory\InteractionStatsExtractor.cs" />
@@ -176,6 +176,7 @@
     <Compile Include="Graph\Email\SentEmailImporter.cs" />
     <Compile Include="Graph\Email\SentEmailMailboxSkipList.cs" />
     <Compile Include="Graph\Email\SentEmailSentimentScorer.cs" />
+    <Compile Include="Graph\GraphDeltaTokenRejection.cs" />
     <Compile Include="Graph\GraphHttpException.cs" />
     <Compile Include="Graph\GraphEndpointTemplate.cs" />
     <Compile Include="Graph\GraphResourceNotFoundException.cs" />
@@ -197,6 +198,7 @@
     <Compile Include="Graph\Teams\TeamChannelDeltaTokenStores.cs" />
     <Compile Include="Graph\Teams\TeamsChannelCrawler.cs" />
     <Compile Include="Graph\Teams\Extensions\ChatMessageListExtensions.cs" />
+    <Compile Include="Graph\Teams\Extensions\CognitiveResultCache.cs" />
     <Compile Include="Graph\Teams\Extensions\TeamsCognitiveExtensions.cs" />
     <Compile Include="Graph\Teams\TeamsCrawlConfig.cs" />
     <Compile Include="Graph\Teams\TeamsFinder.cs" />
@@ -210,14 +212,10 @@
     <Compile Include="Graph\Calls\CallQueueProcessor.cs" />
     <Compile Include="Graph\Calls\CallRecordAdapters.cs" />
     <Compile Include="Graph\Calls\CallRecordImporter.cs" />
-    <Compile Include="Graph\Calls\CallRecordSubscriptionInfo.cs" />
     <Compile Include="Graph\Calls\CallWebhook.cs" />
     <Compile Include="Graph\Calls\GraphCallRecordSubscriptionManager.cs" />
-    <Compile Include="Graph\Calls\ICallNotificationQueueSender.cs" />
     <Compile Include="Graph\Calls\ICallRecordPorts.cs" />
     <Compile Include="Graph\Calls\ICallRecordSubscriptionManager.cs" />
-    <Compile Include="Graph\Calls\Rules\CallNotificationRules.cs" />
-    <Compile Include="Graph\Calls\Rules\CallSubscriptionRules.cs" />
     <Compile Include="Graph\Teams\ChannelMessagesLoader.cs" />
     <Compile Include="Graph\Teams\Extensions\GraphUserExtensions.cs" />
     <Compile Include="Graph\Teams\Extensions\TeamChannelExtensions.cs" />
@@ -258,8 +256,6 @@
     <Compile Include="Graph\UsageReports\YammerDeviceUsageLoader.cs" />
     <Compile Include="Graph\UsageReports\YammerUserUsageLoader.cs" />
     <Compile Include="Graph\UsageReports\TeamsUserUsageLoader.cs" />
-    <Compile Include="Graph\UserActivityLastImportedRedisSingleDateLoader.cs" />
-    <Compile Include="Graph\User\GraphUserGroupsCache.cs" />
     <Compile Include="Graph\User\GraphUserLoader.cs" />
     <Compile Include="Graph\User\IUserBulkUpdateWriter.cs" />
     <Compile Include="Graph\User\IOfficeLicenseNameResolver.cs" />
@@ -275,9 +271,9 @@
     <Compile Include="Graph\User\SqlUserLookupStore.cs" />
     <Compile Include="Graph\User\UserBatchProcessor.cs" />
     <Compile Include="Graph\User\Rules\UserMetadataMappingRules.cs" />
+    <Compile Include="Graph\User\Rules\UserOrgMappingRules.cs" />
     <Compile Include="Graph\User\UserDataMapper.cs" />
     <Compile Include="Graph\User\UserGraphResponse.cs" />
-    <Compile Include="Graph\User\UserGroupsCache.cs" />
     <Compile Include="Graph\User\UserInsertProcessor.cs" />
     <Compile Include="Graph\User\UserLicenseAssignmentDelta.cs" />
     <Compile Include="Graph\User\UserLicenseProcessor.cs" />
@@ -291,7 +287,7 @@
       <DesignTime>True</DesignTime>
       <DependentUpon>Resources.resx</DependentUpon>
     </Compile>
-    <Compile Include="RedisSingleDateLoader.cs" />
+    <Compile Include="KeyValueSingleDateStore.cs" />
     <Compile Include="ReportCompletionStore.cs" />
     <Compile Include="SingleDateStore.cs" />
     <Compile Include="StatsUploader\AdoptionStatsCollector.cs" />
@@ -300,7 +296,7 @@
     <Compile Include="StatsUploader\BaseClasses.cs" />
     <Compile Include="StatsUploader\EmbeddedCsvSkuAllowList.cs" />
     <Compile Include="StatsUploader\InMemoryStatsDatesLoader.cs" />
-    <Compile Include="StatsUploader\RedisStatsDatesLoader.cs" />
+    <Compile Include="StatsUploader\PersistedStatsDatesLoader.cs" />
     <Compile Include="StatsUploader\UsageStatsManager.cs" />
     <Compile Include="StatsUploader\SqlUsageStatsBuilder.cs" />
     <Compile Include="StatsUploader\WebApiStatsUploader.cs" />

@@ -36,14 +36,14 @@ namespace Common.Entities.LicenceActivity
         public bool CopilotInteractions { get; set; }
 
         /// <summary>
-        /// True when <c>UserGroupsFilter</c> scopes the Microsoft 365 usage-report import to particular
-        /// Entra groups.
+        /// True when <c>UserGroupsFilter</c> scopes the imports to particular Entra groups.
         ///
-        /// This matters because the USER import is not filtered while the usage-report import is, so the
-        /// two populations differ. Normally a person with no rows across a fully imported week is proof
-        /// that they did nothing; under a group filter they may simply never have been looked at, and
-        /// reporting them as "No activity" would be a confident wrong answer. When this is set the
-        /// report falls back to leaving those people Unknown.
+        /// This matters because the users table can then hold people whose usage is not imported: the user
+        /// import applies the same filter, but everyone it imported before the filter was set stays until they
+        /// are purged. Normally a person with no rows across a fully imported week is proof that they did
+        /// nothing; under a group filter they may simply never have been looked at, and reporting them as
+        /// "No activity" would be a confident wrong answer. When this is set the report falls back to leaving
+        /// those people Unknown.
         /// </summary>
         public bool UsageReportsGroupFiltered { get; set; }
 
@@ -143,8 +143,9 @@ namespace Common.Entities.LicenceActivity
 
             public const string UsageReportsGroupFiltered =
                 "This deployment only collects Microsoft 365 usage for people in particular Entra groups, "
-                + "but it lists everyone who holds a licence. Anyone outside those groups is shown as "
-                + "Unknown rather than as doing nothing, because they were never measured.";
+                + "but its licence list can still include people outside them who were imported before the "
+                + "restriction was set. Anyone without recorded activity is shown as Unknown rather than as "
+                + "doing nothing, because they may never have been measured.";
 
             public const string RankingMethod =
                 "The most and least active lists rank people by how often they were active in the chosen service, "

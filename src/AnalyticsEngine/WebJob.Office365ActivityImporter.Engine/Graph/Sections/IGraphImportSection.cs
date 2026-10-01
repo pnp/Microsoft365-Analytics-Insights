@@ -11,11 +11,11 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Sections
     /// <see cref="GraphImporter"/> knows only how to select, gate and run sections, while everything about
     /// how a section is built - Graph clients, delta-token stores, DB contexts - lives behind
     /// <see cref="IGraphImportSectionFactory"/>. The orchestration loop is then testable with fake sections
-    /// and no SQL Server, Graph, Redis or Service Bus.
+    /// and no SQL Server, Graph, Azure Storage or Service Bus.
     ///
     /// A section is expected to be <b>cheap to construct</b>: everything it needs is built inside
     /// <see cref="RunAsync"/>, so a section that is disabled or gated off this cycle costs nothing. That
-    /// matters beyond tidiness - the sent-email section opens a Redis connection while building its delta
+    /// matters beyond tidiness - the sent-email section opens the runtime state table while building its delta
     /// token store, which must not happen on a cycle where the section does not run.
     /// </summary>
     public interface IGraphImportSection

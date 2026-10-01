@@ -30,9 +30,10 @@ each other's tooling. The area switcher sits in the header; each area has its ow
 | `#/admin/health` | **Service health** | System health: overview, import liveness, exceptions, component health, data overview and configuration, each lazily loaded from its own cached endpoint. |
 | `#/admin/install-log` | **Install log** | History of configurations applied to the solution (the `sys_configs` table): when, by whom, install messages, and the config JSON per entry. The most recent is the current configuration. |
 | `#/admin/profiling` | **Profiling** | Current state of the profiling data: earliest/latest dates for each compiled profiling table and the source activity tables that feed it (each with the **SQL** behind it), plus a paged view of the profiling runbooks' trace log (`profiling.TraceLogs`). Lets admins quickly check the runbooks have run, data is fresh, and spot errors. |
-| `#/admin/teams-permissions` | **Teams permissions** | Authorise / de-authorise Teams for deep analytics (stores a delegated refresh token in Redis). Ported from the original app. |
+| `#/admin/teams-permissions` | **Teams permissions** | Authorise / de-authorise Teams for deep analytics (stores a delegated refresh token per Team in the `TeamsAuth` partition of the `AnalyticsState` Azure Table in the solution's storage account). Ported from the original app. |
 | `#/admin/user-lookup` | **User data lookup** | Enter a user's UPN to see all of their data held in SQL: profile, per-category record counts (broken down by workload, including Copilot and Power Platform; each row has a **SQL** button to view & copy the query behind its count), drill-down to recent rows, and which **import workloads** are enabled (so a legitimate 0 count is explained). |
-| `#/admin/configuration` | **Service configuration** | What this deployment is pointed at: SQL, Redis, Cognitive Services and Service Bus, plus the Teams calls import state and the Graph call webhook (with a live validation POST to test it). |
+| `#/admin/user-import` | **User import** | Whether the Graph user import has a stored checkpoint (its `/users/delta` token, kept in the `UserImport` partition of the `AnalyticsState` Azure Table), where it is kept, when the import last completed and how often it runs - and a confirmed **Clear checkpoint** action so the next run reads every user again, optionally on the next import cycle. The in-product version of deleting the stored token by hand (issue #664). The token itself never reaches the browser. |
+| `#/admin/configuration` | **Service configuration** | What this deployment is pointed at: SQL, the storage account (which holds the runtime state table), Cognitive Services and Service Bus, plus the Teams calls import state and the Graph call webhook (with a live validation POST to test it). |
 
 Routing uses `HashRouter`, so the whole SPA is served by a single MVC action and no IIS /
 MVC route changes are needed to add pages.
@@ -43,20 +44,71 @@ the two cannot drift — adding a page means adding one entry to `ROUTES`.
 > The pre-split routes (`#/home`, `#/reports`, `#/teams`, `#/health`, ...) are **not**
 > redirected. Anything unrecognised falls back to the Insights overview.
 
+## Permissions
+
+The portal reads `GET /api/PortalAccess` once at startup through `PortalAccessProvider`.
+Components use `usePortalAccess()` to check the two app-role permissions:
+
+| Permission | Wire name | Entra app role |
+| --- | --- | --- |
+| Administration | `administration` | `Portal.Administration` |
+| See PII | `seePii` | `Portal.SeePII` |
+
+`src/navigation.tsx` has a `requires` field for areas and routes. New administration pages must
+live in the `admin` area so they inherit `administration`; a route that exposes individual people
+adds `requires: 'seePii'`. New per-person UI inside an aggregate page must check `seePii`, avoid
+calling the per-person endpoint without it, and render the shared `PiiHiddenNote` instead.
+
+The server enforces both permissions on its own (see *Portal permissions* in
+`src/AnalyticsEngine/.github/copilot-instructions.md`); the portal's job is to not offer what the
+server would refuse. So:
+
+- **It fails closed.** Until `/api/PortalAccess` answers, the shell shows only a spinner; if it cannot
+  be read, the portal behaves as if neither permission is held and says so.
+- **A refusal is an error, not an empty result.** `apiFetch` turns the server's
+  `403 { code: 'portalPermissionRequired' }` into a `PortalPermissionError` carrying a translated
+  message, so a call the page should not have made fails loudly rather than rendering "no data".
+- **Tests default to all granted.** `renderWithProvider` wraps the tree in a `PortalAccessProvider`
+  holding both permissions, so existing tests see the whole portal; a test of a restricted view
+  passes `{ access: { administration: false, seePii: false } }`. Fields left out of `access` are
+  treated as not held.
+
 ## Authentication
 
 The user signs in via the server's Azure AD (OIDC) redirect, which gates the `[Authorize]`'d
-host action. During that redirect the server captures the OAuth **refresh token** into the
-encrypted, httpOnly auth cookie. The SPA then gets a fresh Graph **access token** from
-`api/SiteTokenAPI` (which mints one from the cookie's refresh token). This works **without
-Redis** — Redis is only needed to persist Teams refresh tokens for the importer's deep
-analytics.
+host action. Signing in asks for `openid email profile` only — nothing that needs consent beyond
+signing in — so an optional feature's permissions can never lock anyone out of the portal
+(issue #670: it used to redeem every sign-in's code for the Teams scopes, and a tenant that hadn't
+granted them got a server error instead of the portal).
+
+The only page that needs the admin's own Microsoft Graph token is **Teams permissions** (Teams deep
+analytics), and it asks for the delegated `Team.ReadBasic.All` and `ChannelMessage.Read.All`
+permissions **on demand**. When the site has no Graph token for the session, the page offers
+*Connect to Microsoft Teams*: a full-page navigation to `/Account/ConnectTeams`, which re-runs the
+OIDC challenge marked as a Teams connection. The callback redeems the authorisation code for the
+Teams scopes and captures the OAuth **refresh token** into the encrypted, httpOnly auth cookie.
+If Entra ID refuses — no admin consent, or the prompt was declined — the admin comes back to the
+page still signed in, with an outcome key
+(`?teamsConnect=consent_required|access_denied|failed&teamsConnectError=AADSTS…`) that
+`src/auth/teamsConnect.ts` turns into translated guidance. The server half is
+`App_Start/DelegatedGraphConsent.cs`, and `src/i18n/lint/serverAuthoredText.test.ts` keeps the two
+in step.
+
+The SPA then gets a fresh Graph **access token** from `api/SiteTokenAPI` (which mints one from the
+cookie's refresh token). Nothing about the signed-in admin's token is stored server-side.
+`TeamsAuthAPIController.Put` copies that refresh token into the `TeamsAuth` partition of the
+`AnalyticsState` Azure Table only for each Team the admin explicitly authorises, so the importer
+can read that Team's channels. When there is no refresh token, or the one in the cookie no longer
+works (expired, revoked, or blocked by a sign-in-frequency policy), `SiteTokenAPI` answers `401`
+and the page offers the Teams connection again. It never falls back to a carried access token:
+that short-lived token would normally already be expired, so Graph would reject it and the page
+could only say "No Teams found".
 
 There is **no client-side sign-in**. A client-side MSAL fallback used to exist for when
 `SiteTokenAPI` returned no token, but it was pinned to a hard-coded app registration that no
 longer resolves (`AADSTS5000224`), so it could not sign anyone in — it only replaced a clear
 failure with an opaque popup error, while adding `@azure/msal-browser` to the initial bundle for
-every page. The Teams permissions page now explains what to do instead when no token is available.
+every page. The Teams permissions page offers the Teams connection instead when no token is available.
 
 ### Expired sessions
 
@@ -81,7 +133,7 @@ so a session that can't be re-established fails loudly instead of looping.
 The header matters: a bare 401 is **not** enough to conclude the session is gone. `SiteTokenAPI`
 returns 401 to mean "you are signed in, but I have no Graph refresh token for you" — the server
 only sets the header when there is genuinely no authenticated user, so that case still shows the
-Teams page's specific message instead of bouncing through a pointless sign-in.
+Teams page's *Connect to Microsoft Teams* prompt instead of bouncing through a pointless sign-in.
 
 Graph access tokens are fetched at the point of use (`src/auth/siteToken.ts`), never cached on a
 page, because they only last about an hour and the pages that need them are ones an admin leaves
@@ -101,9 +153,21 @@ auth cookie, so a token in the request body would be ignored.
 | `o365AnalyticsInstallLogAPI` | `api/InstallLog` | Install log (config history from `sys_configs`) for the Install Log page. |
 | `o365AnalyticsProfilingStatusAPI` | `api/ProfilingStatus` | Profiling data freshness + paged `profiling.TraceLogs` for the Profiling page. |
 | `o365AnalyticsReportsAPI` | `api/Reports` | Lite in-app reports: enabled areas (`/areas`) + weekly usage charts per area (`/copilot`, `/usage`, `/office-apps`, `/spo-audit`, `/web-traffic`, `/calls`, `/emails`). |
-| `o365AnalyticsCopilotAdoptionAPI` | `api/CopilotAdoption` | Copilot licence adoption: availability, executive summary, licensed-user and licence-opportunity lists, and their CSV exports. |
+| `o365AnalyticsCopilotAdoptionAPI` | `api/CopilotAdoption` | Copilot licence adoption: availability, executive summary, licensed-user and licence-opportunity lists, and their CSV exports. Every endpoint takes the page-wide `userFilter` - see [The user filter](#the-user-filter). |
+| _(none - origin-relative)_ | `api/UserFilter` | The user filter's picker: which attributes can be filtered on (`/dimensions`) and each one's values, largest first (`/values?dimension=&search=&take=`). |
 | _(none - origin-relative)_ | `api/TeamsExplorer` | Teams Explorer: source availability, and one endpoint per tab (`/overview`, `/adoption`, `/meetings`, `/collaboration`, `/conversations`, `/people`) plus `/export/{section}` CSVs. |
 | _(none - origin-relative)_ | `api/WebActivity` | SharePoint web activity: source availability, and one endpoint per tab (`/overview`, `/visits`, `/pages`, `/journeys`, `/geography`, `/search`, `/technology`) plus `/export/{section}` CSVs. |
+| _(none - origin-relative)_ | `api/UserImportCheckpoint` | User import checkpoint: `GET` its state; `POST /clear` (body `{ "runOnNextCycle": bool }`) deletes it. The only state-changing call the portal makes to its own API, so the server requires the `X-Requested-With` header `apiFetch` sends (see below). |
+
+### Calls that change something
+
+The site authenticates with a cookie, and a browser sends that cookie with a request whichever page started it,
+so an action that changes state is open to cross-site request forgery unless the server checks where the request
+came from. Such actions carry `RequireSameOriginXhrAttribute` (in the `Web` project): the request must have
+`X-Requested-With: XMLHttpRequest` - which `apiFetch` always sends, an HTML form cannot set, and another origin
+can only add after a CORS preflight that this site never grants with credentials - and, when the browser sends
+`Sec-Fetch-Site`, it must be `same-origin`. A refused request gets a bare `403`. Call such an action through
+`apiFetch`, never raw `fetch`, or it will be refused.
 
 `window.o365AnalyticsBuildLabel` is not an endpoint: it is the running build's label
 (`Common.Entities.BuildConstants.BuildLabel`, stamped as `Build <number>` by ci.yml), substituted
@@ -177,6 +241,58 @@ footer, so it costs nothing there.
 `src/printStyles.test.ts` asserts the stylesheet half - Vitest runs with `css: false`, so a
 component test can prove an attribute is present but never that it does anything. It also fails on
 any `data-print` value the stylesheet has never heard of.
+
+## The user filter
+
+One filter control narrows a whole report to the people it matches: their standard **Entra ID
+attributes** (user name, email domain, department, job title, company, office location, country or
+region, state or province, usage location, user type, account status, manager, management chain) and
+every enabled **custom organisation type** an administrator has defined on the *User organisations*
+page. It is shown as pills, the way Azure Monitor shows metric filters: `Department = Sales, Marketing`,
+`Cost centre ≠ CC-100`, `User name contains “smith”`.
+
+- **Operators:** *is* (=), *is not* (≠), and - on text attributes - *contains* / *does not contain*.
+  Every attribute except the user name and the management chain also offers **(not set)**. *Is not*
+  includes people with no value, so *is* and *is not* always divide the directory between them.
+- **User name** is the free-text search: it opens on *contains*, a term typed and never added with
+  Enter still counts when Apply is pressed, and Enter on an empty box applies - so a name search is
+  "smith", Enter, Enter. *Does not contain* leaves accounts out by pattern (`svc-`, `#EXT#`), and *is*
+  picks named people from a searchable list.
+- **Email domain** is the page's domain filter: the domain breakdown's **Filter** buttons add or
+  replace an email-domain condition, so it combines with everything else by AND / OR like any other.
+  The lists on the tabs have no department or domain drop-downs of their own - two department filters
+  combining by AND could contradict each other and leave an empty list nobody can explain.
+- **AND / OR:** the first condition needs neither; from the second on, a connector sits between the
+  pills. AND binds tighter than OR, exactly as in SQL, and the bar draws each OR-group in its own box
+  and reads the whole filter back in words, so nobody has to know the rule to read it. An existing
+  condition is edited under the pills, with its pill highlighted, so switching a connector while it is
+  open keeps the draft.
+- **Management chain** matches everyone who reports to a manager at any level (the manager
+  excluded). Custom organisations carry the organisation icon of the *User organisations* page;
+  Entra attributes carry a person icon.
+- **Where it lives:** `src/components/userFilter` - `UserFilterBar` (the pills),
+  `UserFilterClauseEditor` (property / operator / values), `UserFilterPrintSummary` (the paper
+  version), `describeUserFilter` (the words) and `userFilterModel` (the rules and the wire format).
+  None of it knows which report it narrows.
+- **Wire format:** `serializeUserFilter` produces the compact JSON `Common.Entities.UserFilters.UserFilterCodec`
+  reads - `[{"d":"department","v":["Sales"]},{"j":"or","d":"org:12","op":"isNot","v":["CC-1"],"n":true}]`
+  - passed as the `userFilter` query parameter. GET, because a report's CSV and Excel exports are
+  plain links. The portal refuses a filter over 6,000 encoded characters; `Web.Template.config` lifts
+  the host's 2,048-character query-string default for `api/CopilotAdoption`.
+- **On the server** the filter is evaluated in memory against a shared directory snapshot
+  (`IUserDirectorySource`, refreshed every few minutes and invalidated when an organisation type
+  changes), so changing a filter never re-runs a report's SQL. The response echoes the filter it
+  applied (`userFilter` on the adoption summary) and the page describes *that*, not what it asked for.
+- **On paper** the bar is hidden like every other control, and a **Who this report covers** block
+  states the filter in plain English - one sentence for one condition, a list for several, numbered
+  groups for OR - with how many people in the directory match.
+- **In the address:** the Copilot Adoption page keeps its filter in `?filter=`, so a filtered view is
+  a link that can be bookmarked or sent to a colleague.
+
+To adopt it in another report: render `UserFilterBar`, send `serializeUserFilter(filter)` with every
+request and export, and on the server parse it with `UserFilterCodec.Parse`, compile it with
+`UserFilterCompiler.Compile(expression, await directory.GetAsync())`, and keep the rows whose user id
+`Matches`.
 
 ## Languages
 

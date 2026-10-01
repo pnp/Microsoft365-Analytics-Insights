@@ -1,13 +1,13 @@
 using Common.Entities;
 using Common.Entities.Config;
 using Common.Entities.Entities.UsageReports;
+using Common.Entities.UserScope;
 using Microsoft.Extensions.Logging;
 using System;
 using System.Collections.Generic;
 using System.Data.Entity;
 using System.Linq;
 using System.Threading.Tasks;
-using WebJob.Office365ActivityImporter.Engine.Graph.User;
 
 namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Copilot
 {
@@ -33,8 +33,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Copilot
     {
         private readonly ICopilotReportSource _reportSource;
         private readonly ILogger _logger;
-        private readonly UserGroupsCache _userGroupsCache;
-        private readonly UserGroupsFilterModel _userGroupsFilter;
+        private readonly UserImportScope _userScope;
         private readonly ICopilotUsagePersistenceManager _persistence;
 
         /// <summary>
@@ -44,26 +43,23 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Copilot
         /// </summary>
         public int SaveBatchSize { get; set; } = 1000;
 
-        public CopilotUsageUserDetailLoader(ICopilotReportSource reportSource, ILogger logger,
-            UserGroupsCache userGroupsCache = null, UserGroupsFilterModel userGroupsFilter = null)
-            : this(reportSource, logger, userGroupsCache, userGroupsFilter, null)
+        public CopilotUsageUserDetailLoader(ICopilotReportSource reportSource, ILogger logger, UserImportScope userScope = null)
+            : this(reportSource, logger, userScope, null)
         {
         }
 
         /// <summary>
-        /// As above, with the write side supplied (issue #370). The original signature is kept as a
-        /// delegating overload rather than gaining an optional parameter, so no already-compiled caller
-        /// breaks. When <paramref name="persistence"/> is null the db-taking <c>LoadAndSaveAsync</c>
-        /// overloads build a <see cref="SqlCopilotUsagePersistenceManager"/> over the context they are given.
+        /// As above, with the write side supplied (issue #370). When <paramref name="persistence"/> is null the
+        /// db-taking <c>LoadAndSaveAsync</c> overloads build a <see cref="SqlCopilotUsagePersistenceManager"/> over the
+        /// context they are given.
         /// </summary>
+        /// <param name="userScope">The <c>UserGroupsFilter</c> scope for this cycle; null means unfiltered.</param>
         public CopilotUsageUserDetailLoader(ICopilotReportSource reportSource, ILogger logger,
-            UserGroupsCache userGroupsCache, UserGroupsFilterModel userGroupsFilter,
-            ICopilotUsagePersistenceManager persistence)
+            UserImportScope userScope, ICopilotUsagePersistenceManager persistence)
         {
             _reportSource = reportSource ?? throw new ArgumentNullException(nameof(reportSource));
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
-            _userGroupsCache = userGroupsCache;
-            _userGroupsFilter = userGroupsFilter;
+            _userScope = userScope ?? UserImportScope.Unfiltered;
             _persistence = persistence;
         }
 
@@ -242,29 +238,22 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Copilot
         }
 
         /// <summary>
-        /// Honours the configured Entra group filter, the same way the other per-user usage-report loaders do,
-        /// so a customer scoping analytics to a pilot group doesn't silently get the whole tenant here.
+        /// Honours <c>UserGroupsFilter</c>, the same way every other per-user import does, so a customer scoping
+        /// analytics to a pilot group doesn't silently get the whole tenant here. A hash lookup per row against the
+        /// scope resolved for this cycle - it used to be a Graph <c>memberOf</c> call per user.
         /// </summary>
-        private async Task<List<CopilotUsageUserDetailRow>> FilterToUsersInScope(List<CopilotUsageUserDetailRow> rows)
+        private Task<List<CopilotUsageUserDetailRow>> FilterToUsersInScope(List<CopilotUsageUserDetailRow> rows)
         {
-            if (_userGroupsCache == null || _userGroupsFilter == null || _userGroupsFilter.Patterns.Count == 0)
+            if (!_userScope.IsFiltered)
             {
-                return rows;
+                return Task.FromResult(rows);
             }
-
-            // With no filter configured this method isn't reached, so the cost below only lands on tenants that
-            // scoped analytics to specific groups. Those checks are one Graph /memberOf call per user the first
-            // time each is seen - the same thing every other per-user usage-report loader does, but this report
-            // is a single pass over every licensed user, so say out loud how many calls that is rather than
-            // letting an import quietly take hours.
-            _logger.LogWarning($"Copilot per-user report: a user group filter is configured, so up to {rows.Count.ToString("N0")} Entra group-membership lookups may be issued " +
-                "(one per user, cached for an hour). On a very large tenant this dominates the import time.");
 
             var inScope = new List<CopilotUsageUserDetailRow>(rows.Count);
             var skipped = 0;
             foreach (var row in rows)
             {
-                if (await _userGroupsCache.IsInGroupsFilter(row.UserPrincipalName, _userGroupsFilter))
+                if (_userScope.IsInScope(row.UserPrincipalName))
                 {
                     inScope.Add(row);
                 }
@@ -276,9 +265,9 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Copilot
 
             if (skipped > 0)
             {
-                _logger.LogInformation($"Copilot per-user report: skipped {skipped} user(s) outside the configured group filter.");
+                _logger.LogInformation($"Copilot per-user report: skipped {skipped:N0} user(s) outside UserGroupsFilter.");
             }
-            return inScope;
+            return Task.FromResult(inScope);
         }
 
         /// <summary>

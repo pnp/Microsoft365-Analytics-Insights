@@ -169,6 +169,18 @@ const copilotAdoptionCowork: Record<keyof typeof en, string> = {
   'copilotAdoptionCowork.timeSaved.hero.observed.users.one': 'Ya está ocurriendo: {users} persona usó Cowork en este periodo.',
   'copilotAdoptionCowork.timeSaved.hero.observed.users.other': 'Ya está ocurriendo: {users} personas usaron Cowork en este periodo.',
 
+  // Tiempo ahorrado: a quién modela el titular
+  'copilotAdoptionCowork.timeSaved.cohort.ready': 'Preparadas ahora ({users})',
+  'copilotAdoptionCowork.timeSaved.cohort.all': 'Todos los titulares de puesto de Copilot ({users})',
+  'copilotAdoptionCowork.timeSaved.hero.info.whatAll': 'El tiempo que Cowork podría devolver cada mes si todos los titulares de puesto de Copilot lo usaran, además de lo que ya ahorran sus licencias de Microsoft 365 Copilot, como un intervalo: el techo, no un objetivo. Es el valor de habilitar Cowork, que se paga con Copilot Credits. Ningún estudio lo ha medido, así que todas las cifras de aquí son hipótesis.',
+  'copilotAdoptionCowork.timeSaved.hero.allNotice': 'Se modela a todos los titulares de puesto de Copilot, no solo a las personas preparadas ahora: el techo, no un objetivo. Supone que las personas que aún no están preparadas encargan a Cowork la misma proporción de su trabajo que el resto, algo que probablemente no harían.',
+  'copilotAdoptionCowork.timeSaved.hero.noneReady': 'Nadie está preparado todavía para Cowork en este periodo, así que se modela a todos los titulares de puesto de Copilot: el techo, no un objetivo. Supone que las personas que aún no están preparadas encargan a Cowork la misma proporción de su trabajo que el resto, algo que probablemente no harían.',
+  'copilotAdoptionCowork.timeSaved.hero.ready.label.one': 'al mes de la {users} persona preparada ahora para Cowork',
+  'copilotAdoptionCowork.timeSaved.hero.ready.label.other': 'al mes de las {users} personas preparadas ahora para Cowork',
+  'copilotAdoptionCowork.timeSaved.hero.ready.hint': 'Donde empieza un despliegue: las personas que incluir primero en la directiva de consumo de Cowork.',
+  'copilotAdoptionCowork.timeSaved.hero.seeAll.one': 'Ver el {users} titular de puesto de Copilot',
+  'copilotAdoptionCowork.timeSaved.hero.seeAll.other': 'Ver los {users} titulares de puesto de Copilot',
+
   // Tiempo ahorrado: el modelo
   'copilotAdoptionCowork.timeSaved.model.title': 'Cómo funciona la estimación de Cowork',
   'copilotAdoptionCowork.timeSaved.model.intro': 'Dónde podría ahorrar tiempo Cowork a las personas que aún no lo usan, a partir del trabajo que ya hacen a mano. Para cada tipo de trabajo que Cowork puede asumir, el volumen procede de los informes de uso de Microsoft; cuánto de él encargarían las personas a Cowork, y los minutos que Cowork ahorraría en cada encargo además de Microsoft 365 Copilot, son hipótesis: ningún estudio ha medido ninguna de las dos cosas. Las tareas que ya figuran en el informe de uso de Cowork de Microsoft se cuentan tal como se registran. Cambie cualquier cifra de abajo y el titular, esta tabla y el tiempo recuperado con Cowork de la vista general se actualizan.',
@@ -243,8 +255,6 @@ const copilotAdoptionCowork: Record<keyof typeof en, string> = {
   'copilotAdoptionCowork.filters.searchPlaceholder': 'Buscar nombre, correo electrónico, departamento, puesto o responsable',
   'copilotAdoptionCowork.filters.searchAria': 'Buscar candidatos para Cowork',
   'copilotAdoptionCowork.filters.searchButton': 'Buscar',
-  'copilotAdoptionCowork.filters.departmentAria': 'Filtrar candidatos para Cowork por departamento',
-  'copilotAdoptionCowork.filters.allDepartments': 'Todos los departamentos',
   'copilotAdoptionCowork.filters.tierAria': 'Filtrar candidatos para Cowork por veredicto',
   'copilotAdoptionCowork.filters.allVerdicts': 'Todos los veredictos',
   'copilotAdoptionCowork.filters.sortAria': 'Ordenar candidatos para Cowork',

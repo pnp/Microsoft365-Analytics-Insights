@@ -1,5 +1,6 @@
 using Common.Entities;
 using Common.Entities.Config;
+using Common.Entities.UserScope;
 using DataUtils;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System;
@@ -7,6 +8,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
 using System.Threading.Tasks;
+using Tests.UnitTests.FakeLoaderClasses;
 using UnitTests.FakeLoaderClasses;
 using WebJob.Office365ActivityImporter.Engine.Graph;
 using WebJob.Office365ActivityImporter.Engine.Graph.Sections;
@@ -43,7 +45,8 @@ namespace Tests.UnitTests
             };
         }
 
-        private static ProductionGraphImportSectionFactory BuildFactory(AppConfig settings, ActivityReportsImport activityReports)
+        private static ProductionGraphImportSectionFactory BuildFactory(AppConfig settings, ActivityReportsImport activityReports,
+            IUserImportScopeProvider userScopeProvider = null)
         {
             return new ProductionGraphImportSectionFactory(
                 AnalyticsLogger.ConsoleOnlyTracer(),
@@ -53,12 +56,13 @@ namespace Tests.UnitTests
                 sentEmailMailboxSkipList: null,
                 activityReportsImport: activityReports,
                 dbContextFactory: null,
-                clock: null);
+                clock: null,
+                userScopeProvider: userScopeProvider);
         }
 
         private static ActivityReportsImport NeverCalled()
         {
-            return (days, client, cache, filter) => throw new AssertFailedException("The activity-report phase must not run while sections are merely being composed.");
+            return (days, client, scope) => throw new AssertFailedException("The activity-report phase must not run while sections are merely being composed.");
         }
 
         [TestMethod]
@@ -121,7 +125,7 @@ namespace Tests.UnitTests
 
         private static void AssertGated(IGraphImportSection section, string expectedKey, int expectedIntervalHours)
         {
-            Assert.AreEqual(expectedKey, section.CadenceKey, $"{section.Name} must keep its Redis cadence key - operators clear these by hand.");
+            Assert.AreEqual(expectedKey, section.CadenceKey, $"{section.Name} must keep its cadence key - operators clear these rows by hand.");
             Assert.AreEqual(expectedIntervalHours, section.IntervalHours, $"{section.Name} is reading the wrong interval setting.");
         }
 
@@ -162,24 +166,24 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
-        public async Task UsageReportSection_PassesTheDaysWindowAndTheConfiguredUserGroupsFilter()
+        public async Task UsageReportSection_PassesTheDaysWindowAndTheSharedUserScope()
         {
             // Guards the one place the section list reads the per-cycle settings ARGUMENT rather than the
-            // factory's own AppConfig, plus that the user-group filter is really built from configuration.
+            // factory's own AppConfig, plus that the usage reports apply the process's shared UserGroupsFilter scope.
             var fieldSettings = SettingsWithDistinctIntervals();
             var argumentSettings = SettingsWithDistinctIntervals();
             argumentSettings.DaysBeforeNowToDownload = 42;
-            argumentSettings.UserGroupsFilter = "ignored - the filter comes from the factory's settings";
 
             int observedDays = -1;
-            List<string> observedPatterns = null;
+            UserImportScope observedScope = null;
+            var sharedScope = TestUserScopes.Of("pilot@contoso.com");
 
-            var factory = BuildFactory(fieldSettings, (days, client, cache, filter) =>
+            var factory = BuildFactory(fieldSettings, (days, client, userScope) =>
             {
                 observedDays = days;
-                observedPatterns = filter.Patterns;
+                observedScope = userScope;
                 return Task.FromResult(true);
-            });
+            }, TestUserScopes.Provider(sharedScope));
 
             var usageReports = factory.CreateSections(argumentSettings).Single(s => s.Name == "Usage reports");
 
@@ -187,7 +191,18 @@ namespace Tests.UnitTests
 
             Assert.IsTrue(await usageReports.RunAsync());
             Assert.AreEqual(42, observedDays, "The days window comes from the settings passed to GetAndSaveAllGraphData.");
-            CollectionAssert.AreEqual(new[] { "Pilot Group", "Καλημέρα κόσμε" }, observedPatterns,
+            Assert.AreSame(sharedScope, observedScope,
+                "The usage reports apply the shared scope, so every import in the process uses the same resolution.");
+        }
+
+        [TestMethod]
+        public void ProductionScopeProvider_ParsesTheConfiguredFilter_IncludingNonLatinGroupNames()
+        {
+            // No credentials are configured here, so the provider cannot build a Graph client; it must still parse the
+            // filter (and fail open, with an error, when asked to resolve it) rather than throw at start-up.
+            var provider = UserImportScopeProvider.CreateForGraph(SettingsWithDistinctIntervals(), AnalyticsLogger.ConsoleOnlyTracer());
+
+            CollectionAssert.AreEqual(new[] { "Pilot Group", "Καλημέρα κόσμε" }, provider.Filter.Patterns,
                 "The user-group filter is parsed from configuration - including non-Latin group names.");
         }
 

@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useInRouterContext, useSearchParams } from 'react-router-dom';
 import {
   makeStyles,
   tokens,
@@ -60,6 +61,7 @@ import PrintButton from '../components/shared/PrintButton';
 import { PRINT_ROW_LIMIT } from '../components/shared/printPreparation';
 import { serverPlaceholderText } from '../components/shared/serverPlaceholder';
 import DismissibleWarnings from '../components/shared/DismissibleWarnings';
+import PiiHiddenNote from '../components/shared/PiiHiddenNote';
 import { SegmentTable, BAND_COLOUR_LIST } from '../components/copilotAdoption/adoptionShared';
 import { KpiGrid, formatCount, formatDate, formatPct, weightSharePct } from '../components/shared/KpiGrid';
 import type { KpiDefinition } from '../components/shared/KpiGrid';
@@ -81,6 +83,32 @@ import {
   useTimeSavedAssumptions,
   type TimeSavedAssumptions,
 } from '../components/copilotAdoption/coworkTimeSaved';
+import {
+  resolveTimeSavedCohort,
+  useTimeSavedCohorts,
+  type TimeSavedCohorts,
+} from '../components/copilotAdoption/timeSavedCohort';
+import UserFilterBar from '../components/userFilter/UserFilterBar';
+import UserFilterPrintSummary from '../components/userFilter/UserFilterPrintSummary';
+import {
+  describeClause,
+  describeUserFilter,
+  dimensionLabel,
+  joinConditions,
+} from '../components/userFilter/describeUserFilter';
+import { useUserFilterDimensions } from '../components/userFilter/useUserFilterDimensions';
+import {
+  EMAIL_DOMAIN_DIMENSION,
+  fitsLimits,
+  isEmptyFilter,
+  parseUserFilter,
+  serializeUserFilter,
+  singleValueFor,
+  withDimensionValue,
+} from '../components/userFilter/userFilterModel';
+import { notify } from '../components/toast';
+import { EMPTY_USER_FILTER, type UserFilter, type UserFilterDimension } from '../types/userFilter';
+import { usePortalAccess } from '../access';
 
 const WINDOW_OPTIONS: { value: number; labelKey: TranslationKey }[] = [
   { value: 7, labelKey: 'copilotAdoption.page.window.last7Days' },
@@ -326,23 +354,97 @@ function SectionHead({ index, title, blurb }: { index: number; title: string; bl
  * the segment breakdowns show absolute counts next to percentages, and the "How these numbers are
  * calculated" tab spells out the formula and the exact SKUs that were counted as Copilot seats -
  * because the first question anyone asks about a number like this is "where did that come from?".
+ *
+ * Inside the portal the page keeps its user filter in the address (`?filter=`), so a filtered view
+ * is a link that can be bookmarked or sent to a colleague. Rendered outside a router - in a test -
+ * it simply holds the filter in state.
  */
 export default function CopilotAdoptionPage() {
+  return useInRouterContext() ? <RoutedCopilotAdoptionPage /> : <CopilotAdoptionView />;
+}
+
+/** The URL parameter the page's user filter is kept in, in its wire form. */
+export const USER_FILTER_URL_PARAM = 'filter';
+
+function RoutedCopilotAdoptionPage() {
+  const [params, setParams] = useSearchParams();
+  // The address is the source of truth: opening a different ?filter= link while already on the page
+  // changes the location without remounting it, and the page must follow.
+  const raw = params.get(USER_FILTER_URL_PARAM);
+  const userFilter = useMemo(() => parseUserFilter(raw), [raw]);
+
+  const onUserFilterChange = useCallback(
+    (filter: UserFilter) => {
+      setParams(
+        (current) => {
+          const next = new URLSearchParams(current);
+          const serialized = serializeUserFilter(filter);
+          if (serialized) next.set(USER_FILTER_URL_PARAM, serialized);
+          else next.delete(USER_FILTER_URL_PARAM);
+          return next;
+        },
+        // Replaced, not pushed: every condition added would otherwise be a Back-button stop.
+        { replace: true },
+      );
+    },
+    [setParams],
+  );
+
+  return <CopilotAdoptionView userFilter={userFilter} onUserFilterChange={onUserFilterChange} />;
+}
+
+function CopilotAdoptionView({
+  userFilter: controlledFilter,
+  onUserFilterChange,
+}: {
+  /** The filter, when something outside owns it - the address. Held in state here otherwise. */
+  userFilter?: UserFilter;
+  onUserFilterChange?: (filter: UserFilter) => void;
+}) {
   const styles = useStyles();
   const t = useT();
   const tNode = useTNode();
+  const access = usePortalAccess();
+  const canSeePii = access.seePii;
 
   const [availability, setAvailability] = useState<CopilotAdoptionAvailability | null>(null);
   const [availabilityError, setAvailabilityError] = useState<string | null>(null);
   const [windowDays, setWindowDays] = useState(28);
-  // The email domain every visual on the page is narrowed to, or null for the whole tenant.
+  // Who every visual on the page describes: conditions on people's Entra ID attributes and custom
+  // organisations - email domain included - or no conditions for the whole tenant.
   //
-  // A page-wide filter rather than a per-panel one: a tenant carrying several verified domains is
-  // usually several companies, and "how is the business we acquired doing" is a question about the
-  // whole report, not about one table. The server re-scores the cached analysis for the domain, so
-  // the figures are recomputed rather than merely hidden.
-  const [emailDomain, setEmailDomain] = useState<string | null>(null);
+  // A page-wide filter rather than a per-panel one: "how is the business we acquired doing" or "how
+  // is the EMEA sales organisation doing" is a question about the whole report, not about one table.
+  // The server re-scores the cached analysis for the people the filter matches, so the figures are
+  // recomputed rather than merely hidden.
+  const [ownFilter, setOwnFilter] = useState<UserFilter>(EMPTY_USER_FILTER);
+  const requestedUserFilter = controlledFilter ?? ownFilter;
+  const userFilter = canSeePii ? requestedUserFilter : EMPTY_USER_FILTER;
+  const setUserFilter = useCallback(
+    (next: UserFilter) => {
+      if (controlledFilter === undefined) setOwnFilter(next);
+      onUserFilterChange?.(next);
+    },
+    [controlledFilter, onUserFilterChange],
+  );
+  const userFilterParam = serializeUserFilter(userFilter);
+  const userFilterScope = userFilterParam ?? '';
+  const selectedEmailDomain = singleValueFor(userFilter, EMAIL_DOMAIN_DIMENSION);
+  const selectEmailDomain = (domain: string | null) => {
+    const next = withDimensionValue(userFilter, EMAIL_DOMAIN_DIMENSION, domain);
+    // Adding the domain to every OR group can take a long filter past what the server accepts.
+    // Refused here with the reason, rather than sent and answered with an error page.
+    if (!fitsLimits(next)) {
+      notify(t('userFilter.editor.tooLong'), 'warning');
+      return;
+    }
+    setUserFilter(next);
+  };
+  const { list: filterDimensions } = useUserFilterDimensions(canSeePii);
   const [tab, setTab] = useState<AdoptionTab>('executive');
+  // The licensed-user list is nothing but named people. The Cowork and opportunities tabs keep their
+  // aggregate sections for a reader without See PII and hide only their lists (see those panels).
+  const visibleTabs = (Object.keys(TAB_LABEL_KEYS) as AdoptionTab[]).filter((value) => canSeePii || value !== 'licensed');
   // Set when the user drills through from the enablement plan, so the licensed-user list they land
   // on is pre-filtered to exactly the group the plan counted. Cleared when they choose a tab
   // themselves - otherwise a filter they never asked for reappears every time they come back.
@@ -385,14 +487,14 @@ export default function CopilotAdoptionPage() {
     // scope loads kept the Excel button pointing at one population and enabled against another -
     // and if the new request then failed, the page went on rendering the previous organisation's
     // figures underneath a heading naming the newly selected one.
-    const scopeKey = `${windowDays}::${emailDomain ?? ''}`;
+    const scopeKey = `${windowDays}::${userFilterScope}`;
     if (lastSummaryScope.current !== scopeKey) {
       setSummary(null);
     }
     setSummaryLoading(true);
     setSummaryError(null);
 
-    fetchAdoptionSummary(windowDays, undefined, controller.signal, emailDomain)
+    fetchAdoptionSummary(windowDays, undefined, controller.signal, null, userFilterScope || null)
       .then((s) => {
         if (!cancelled) {
           lastSummaryScope.current = scopeKey;
@@ -410,8 +512,8 @@ export default function CopilotAdoptionPage() {
     // The filter lists and the SQL come from the same cached analysis, so these are cheap follow-ups
     // rather than extra work. Their failure is not worth surfacing - the page works without them.
     //
-    // Deliberately NOT narrowed by emailDomain: this is the list the domain filter is chosen FROM,
-    // so narrowing it would leave the current selection as the only option and strand the user on it.
+    // Deliberately NOT narrowed by the user filter: these are the lists the per-table filters are
+    // chosen FROM, so narrowing them would strand the reader on whatever the filter left.
     fetchAdoptionFilters(windowDays, undefined, controller.signal)
       .then((f) => {
         if (!cancelled) setFilterOptions(f);
@@ -431,12 +533,18 @@ export default function CopilotAdoptionPage() {
       // changed or the page unmounted.
       controller.abort();
     };
-  }, [availability, windowDays, emailDomain]);
+  }, [availability, windowDays, userFilterScope]);
 
   const onTabSelect: SelectTabEventHandler = (_e: unknown, data: { value: unknown }) => {
     setDrillAction(undefined);
     setTab(data.value as AdoptionTab);
   };
+
+  useEffect(() => {
+    if (!canSeePii && tab === 'licensed') {
+      setTab('executive');
+    }
+  }, [canSeePii, tab]);
 
   const drillToAction = (code: string) => {
     setDrillAction(code);
@@ -480,25 +588,6 @@ export default function CopilotAdoptionPage() {
             ))}
           </Select>
 
-          {/* Only offered once more than one domain exists. On a single-domain tenant the control
-              would be a drop-down with exactly one real choice, which reads as a missing feature. */}
-          {availability?.available && (filterOptions?.emailDomains?.length ?? 0) > 1 && (
-            <>
-              <Text size={200} className={styles.muted}>{t('copilotAdoption.page.controls.emailDomainLabel')}</Text>
-              <Select
-                value={emailDomain ?? ''}
-                onChange={(_e: unknown, d: { value: string }) => setEmailDomain(d.value || null)}
-                aria-label={t('copilotAdoption.page.controls.emailDomainAria')}
-              >
-                <option value="">{t('copilotAdoption.page.controls.allDomainsOption')}</option>
-                {(filterOptions?.emailDomains ?? []).map((d) => (
-                  <option key={d} value={d}>
-                    {d}
-                  </option>
-                ))}
-              </Select>
-            </>
-          )}
           {availability?.available && (
             <PrintButton
               tooltip={t('copilotAdoption.page.controls.printTooltip', {
@@ -512,7 +601,7 @@ export default function CopilotAdoptionPage() {
               relationship="description"
               content={
                 summary
-                  ? t('copilotAdoption.page.controls.excelTooltipReady')
+                  ? t(canSeePii ? 'copilotAdoption.page.controls.excelTooltipReady' : 'copilotAdoption.page.controls.excelTooltipReadyNoPii')
                   : t('copilotAdoption.page.controls.excelTooltipLoading')
               }
             >
@@ -523,7 +612,11 @@ export default function CopilotAdoptionPage() {
                 appearance="primary"
                 icon={<ArrowDownload16Regular />}
                 as="a"
-                href={summary ? workbookExportUrl(windowDays, undefined, emailDomain, timeSavedExportParams(timeSaved)) : undefined}
+                href={
+                  summary
+                    ? workbookExportUrl(windowDays, undefined, null, timeSavedExportParams(timeSaved), userFilterParam)
+                    : undefined
+                }
                 disabled={!summary}
               >{t('copilotAdoption.page.controls.excelReport')}</Button>
             </Tooltip>
@@ -541,10 +634,17 @@ export default function CopilotAdoptionPage() {
               : t('copilotAdoption.page.print.lastDays', { v0: windowDays })}
             {summary && <> {t('copilotAdoption.page.print.dateRange', { v0: formatDate(summary.fromUtc), v1: formatDate(summary.toUtc) })}</>}
             {' \u00b7 '}
-            {emailDomain ?? t('copilotAdoption.page.print.allEmailDomains')}
+            {isEmptyFilter(userFilter) ? t('copilotAdoption.page.print.everyone') : t('copilotAdoption.page.print.filtered')}
             {summary && <> · {t('copilotAdoption.page.print.generatedDate', { v0: formatDate(summary.generatedUtc) })}</>}
           </Text>
         </div>
+      )}
+
+      {availability?.available && canSeePii && (
+        <>
+          <UserFilterBar filter={userFilter} onChange={setUserFilter} echoNames={summary?.userFilter?.dimensionNames} />
+          <UserFilterPrintSummary filter={userFilter} echo={summary?.userFilter} dimensions={filterDimensions?.dimensions} />
+        </>
       )}
 
       {availabilityError && (
@@ -572,7 +672,7 @@ export default function CopilotAdoptionPage() {
 
           <div className={styles.subTabs} data-print="hide">
             <TabList selectedValue={tab} onTabSelect={onTabSelect}>
-              {(Object.keys(TAB_LABEL_KEYS) as AdoptionTab[]).map((value) => (
+              {visibleTabs.map((value) => (
                 <Tab key={value} value={value}>
                   {t(TAB_LABEL_KEYS[value])}
                 </Tab>
@@ -617,32 +717,19 @@ export default function CopilotAdoptionPage() {
                 />
               )}
 
-              {/* Stated on screen, every time. A dashboard silently showing one subsidiary is the
-                  fastest way to get a licence decision wrong, and the domain drop-down is easy to
-                  miss once the page has scrolled. */}
-              {summary.scopedEmailDomain && (
-                <MessageBar intent="info">
-                  <MessageBarBody>
-                    {tNode('copilotAdoption.page.scopeBanner.message', {
-                      scope: <strong>{t('copilotAdoption.page.scopeBanner.scope', { domain: summary.scopedEmailDomain })}</strong>,
-                      unscoped:
-                        (summary.unscopedSections?.length ?? 0) > 0
-                          ? ` ${t('copilotAdoption.page.scopeBanner.unscopedSections', {
-                              v0: describeUnscopedSections(t, summary.unscopedSections ?? []),
-                            })}`
-                          : '',
-                      link: (
-                        <Link onClick={() => setEmailDomain(null)} data-print="hide">
-                          {t('copilotAdoption.page.scopeBanner.showAllDomains')}
-                        </Link>
-                      ),
-                    })}
-                  </MessageBarBody>
-                </MessageBar>
+              {/* Stated on screen, every time. A dashboard silently showing one subsidiary - or one
+                  department - is the fastest way to get a licence decision wrong, and the filter bar
+                  is easy to miss once the page has scrolled. */}
+              {isNarrowed(summary) && (
+                <FilterBanner
+                  summary={summary}
+                  dimensions={filterDimensions?.dimensions}
+                  onClear={() => setUserFilter(EMPTY_USER_FILTER)}
+                />
               )}
 
               {tab === 'executive' &&
-                (summary.licensedUsers === 0 && !summary.figuresIncomplete && !summary.scopedEmailDomain ? (
+                (summary.licensedUsers === 0 && !summary.figuresIncomplete && !isNarrowed(summary) ? (
                   // Only a GENUINE zero means "nothing set up yet". When the licence queries timed out the
                   // count also degrades to zero, and showing the first-run screen then tells a tenant with
                   // thousands of seats that it has none at all.
@@ -655,12 +742,13 @@ export default function CopilotAdoptionPage() {
                 ) : (
                   <ExecutiveTab
                     summary={summary}
-                    onDrillToAction={drillToAction}
+                    onDrillToAction={canSeePii ? drillToAction : undefined}
                     onShowLicensedDetails={showLicensedDetails}
                     onShowOpportunityDetails={showOpportunityDetails}
                     onOpenTab={openTab}
-                    selectedEmailDomain={emailDomain}
-                    onSelectEmailDomain={setEmailDomain}
+                    selectedEmailDomain={selectedEmailDomain}
+                    onSelectEmailDomain={canSeePii ? selectEmailDomain : undefined}
+                    canSeePii={canSeePii}
                   />
                 ))}
 
@@ -668,24 +756,27 @@ export default function CopilotAdoptionPage() {
                 <AnalystTab
                   summary={summary}
                   sql={sql}
-                  onDrillToAction={drillToAction}
+                  onDrillToAction={canSeePii ? drillToAction : undefined}
                   onOpenTab={openTab}
-                  selectedEmailDomain={emailDomain}
-                  onSelectEmailDomain={setEmailDomain}
+                  selectedEmailDomain={selectedEmailDomain}
+                  onSelectEmailDomain={canSeePii ? selectEmailDomain : undefined}
+                  canSeePii={canSeePii}
                 />
               )}
 
               {tab === 'licensed' && (
-                <LicensedUsersPanel
-                  key={`${drillAction ?? 'all'}::${emailDomain ?? 'all'}`}
-                  windowDays={windowDays}
-                  filterOptions={filterOptions}
-                  actionPlan={summary.actionPlan}
-                  options={summary.options}
-                  dataSources={summary.dataSources}
-                  initialAction={drillAction}
-                  emailDomain={emailDomain}
-                />
+                canSeePii ? (
+                  <LicensedUsersPanel
+                    key={`${drillAction ?? 'all'}::${userFilterScope}`}
+                    windowDays={windowDays}
+                    filterOptions={filterOptions}
+                    actionPlan={summary.actionPlan}
+                    options={summary.options}
+                    dataSources={summary.dataSources}
+                    initialAction={drillAction}
+                    userFilter={userFilterParam}
+                  />
+                ) : <PiiHiddenNote />
               )}
 
               {tab === 'unlicensed' && (
@@ -709,24 +800,24 @@ export default function CopilotAdoptionPage() {
 
               {tab === 'cowork' && (
                 <CoworkPanel
-                  key={emailDomain ?? 'all'}
+                  key={userFilterScope || 'all'}
                   windowDays={windowDays}
                   summary={summary}
-                  filterOptions={filterOptions}
                   options={summary.options}
-                  emailDomain={emailDomain}
+                  userFilter={userFilterParam}
+                  canSeePii={canSeePii}
                 />
               )}
 
               {tab === 'opportunities' && (
                 <OpportunitiesPanel
-                  key={emailDomain ?? 'all'}
+                  key={userFilterScope || 'all'}
                   windowDays={windowDays}
                   summary={summary}
-                  filterOptions={filterOptions}
                   options={summary.options}
                   guidanceLinks={summary.guidanceLinks}
-                  emailDomain={emailDomain}
+                  userFilter={userFilterParam}
+                  canSeePii={canSeePii}
                 />
               )}
 
@@ -747,6 +838,79 @@ export default function CopilotAdoptionPage() {
  * quite different causes applies. Zero licensed users is nearly always one of three things, so say
  * which three and what to do about each.
  */
+
+/** Whether a summary describes fewer people than the whole tenant. */
+function isNarrowed(summary: CopilotAdoptionSummary): boolean {
+  return !!summary.scopedEmailDomain || !!summary.userFilter;
+}
+
+/**
+ * States above the figures which people they describe, in the reader's language, from what the
+ * server says it applied rather than from what the page asked for.
+ *
+ * Says how much of the tenant that is ("312 of 4,210 licence holders"), because the proportion is what
+ * tells a reader whether a slice is representative, and names the sections that could not be narrowed
+ * so nobody compares a tenant-wide chart with the filtered figures beside it.
+ */
+function FilterBanner({
+  summary,
+  dimensions,
+  onClear,
+}: {
+  summary: CopilotAdoptionSummary;
+  dimensions?: UserFilterDimension[] | null;
+  onClear: () => void;
+}) {
+  const t = useT();
+  const tNode = useTNode();
+  const echo = summary.userFilter;
+
+  const parts: string[] = [];
+  if (summary.scopedEmailDomain) {
+    parts.push(
+      describeClause(
+        t,
+        { join: 'and', dimension: EMAIL_DOMAIN_DIMENSION, operator: 'is', values: [summary.scopedEmailDomain], includeNotSet: false },
+        dimensionLabel(t, EMAIL_DOMAIN_DIMENSION),
+      ),
+    );
+  }
+  if (echo && echo.clauses.length > 0) {
+    parts.push(describeUserFilter(t, { clauses: echo.clauses }, { dimensions, names: echo.dimensionNames }));
+  }
+
+  const coverage =
+    summary.unscopedLicensedUsers !== undefined && summary.unscopedLicensedUsers !== null
+      ? t('copilotAdoption.page.filterBanner.coverage', {
+          licensed: formatCount(summary.licensedUsers),
+          total: formatCount(summary.unscopedLicensedUsers),
+        })
+      : t('copilotAdoption.page.filterBanner.coverageNoTotal');
+
+  return (
+    <MessageBar intent="info" layout="multiline">
+      <MessageBarBody>
+        {tNode('copilotAdoption.page.filterBanner.message', {
+          heading: <strong>{t('copilotAdoption.page.filterBanner.heading')}</strong>,
+          description: joinConditions(t, parts, 'and'),
+          coverage,
+          unscoped:
+            (summary.unscopedSections?.length ?? 0) > 0
+              ? ` ${t('copilotAdoption.page.scopeBanner.unscopedSections', {
+                  v0: describeUnscopedSections(t, summary.unscopedSections ?? []),
+                })}`
+              : '',
+          unknown: (echo?.unknownDimensions?.length ?? 0) > 0 ? ` ${t('userFilter.print.unknown')}` : '',
+          link: (
+            <Link onClick={onClear} data-print="hide">
+              {t('copilotAdoption.page.filterBanner.clear')}
+            </Link>
+          ),
+        })}
+      </MessageBarBody>
+    </MessageBar>
+  );
+}
 
 function FirstRunState({ summary }: { summary: CopilotAdoptionSummary }) {
   const styles = useStyles();
@@ -803,6 +967,7 @@ function ExecutiveTab({
   onOpenTab,
   selectedEmailDomain,
   onSelectEmailDomain,
+  canSeePii,
 }: {
   summary: CopilotAdoptionSummary;
   onDrillToAction?: (code: string) => void;
@@ -811,12 +976,14 @@ function ExecutiveTab({
   onOpenTab?: (tab: AdoptionTab) => void;
   selectedEmailDomain?: string | null;
   onSelectEmailDomain?: (domain: string | null) => void;
+  canSeePii: boolean;
 }) {
   const styles = useStyles();
   const t = useT();
   const o = summary.options;
   const { assumptions: timeSavedAssumptions } = useTimeSavedAssumptions(summary);
-  const kpis = buildExecutiveKpis(summary, t, timeSavedAssumptions, onOpenTab);
+  const { cohorts: timeSavedCohorts } = useTimeSavedCohorts();
+  const kpis = buildExecutiveKpis(summary, t, timeSavedAssumptions, timeSavedCohorts, onOpenTab);
   return (
     <>
       <KpiGrid items={kpis} />
@@ -856,13 +1023,16 @@ function ExecutiveTab({
               sublabel={t('copilotAdoption.page.gauge.establishedOrChampion', { count: formatCount(summary.habitualUsers) })}
             />
           </div>
-          {/* Drill-through into another tab. On paper there is no other tab to drill into. */}
-          <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginTop: '12px' }} data-print="hide">
-            <Button appearance="secondary" onClick={onShowLicensedDetails}>{t('copilotAdoption.page.reviewLicensedUsers')}</Button>
-            {summary.recommendedForLicence > 0 && (
-              <Button appearance="secondary" onClick={onShowOpportunityDetails}>{t('copilotAdoption.page.reviewLicenceCandidates')}</Button>
-            )}
-          </div>
+          {/* Drill-through into another tab. On paper there is no other tab to drill into. Both lists
+              name people, so a reader without the See PII permission has nothing to drill into. */}
+          {canSeePii && (
+            <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginTop: '12px' }} data-print="hide">
+              <Button appearance="secondary" onClick={onShowLicensedDetails}>{t('copilotAdoption.page.reviewLicensedUsers')}</Button>
+              {summary.recommendedForLicence > 0 && (
+                <Button appearance="secondary" onClick={onShowOpportunityDetails}>{t('copilotAdoption.page.reviewLicenceCandidates')}</Button>
+              )}
+            </div>
+          )}
         </Card>
 
         <Card>
@@ -1105,6 +1275,7 @@ function AnalystTab({
   onOpenTab,
   selectedEmailDomain,
   onSelectEmailDomain,
+  canSeePii,
 }: {
   summary: CopilotAdoptionSummary;
   sql: Record<string, string> | null;
@@ -1112,11 +1283,13 @@ function AnalystTab({
   onOpenTab?: (tab: AdoptionTab) => void;
   selectedEmailDomain?: string | null;
   onSelectEmailDomain?: (domain: string | null) => void;
+  canSeePii: boolean;
 }) {
   const styles = useStyles();
   const t = useT();
   const { assumptions: timeSavedAssumptions } = useTimeSavedAssumptions(summary);
-  const kpis = buildKpis(summary, t, timeSavedAssumptions, onOpenTab);
+  const { cohorts: timeSavedCohorts } = useTimeSavedCohorts();
+  const kpis = buildKpis(summary, t, timeSavedAssumptions, timeSavedCohorts, onOpenTab);
   const o = summary.options;
   const accountabilityCopy = accountabilityDimensionCopy(summary, t);
 
@@ -1293,10 +1466,17 @@ function AnalystTab({
           />
         </div>
         <div className={styles.cardBody}>
-          <AccountabilityRollupTable
-            rows={summary.accountabilityRollup}
-            segmentLabel={accountabilityCopy.label}
-          />
+          {canSeePii || summary.accountabilityDimension !== 'directManager' ? (
+            <AccountabilityRollupTable
+              rows={summary.accountabilityRollup}
+              segmentLabel={accountabilityCopy.label}
+            />
+          ) : (
+            // Grouped by direct manager, every row is labelled with a manager's sign-in name. The server
+            // sends none of them to a reader without the See PII permission; say so rather than showing
+            // an empty table that reads as "no groups".
+            <PiiHiddenNote />
+          )}
         </div>
       </Card>
 
@@ -2254,6 +2434,7 @@ function buildExecutiveKpis(
   summary: CopilotAdoptionSummary,
   t: TFunction,
   timeSaved: TimeSavedAssumptions,
+  cohorts: TimeSavedCohorts,
   onOpenTab?: (tab: AdoptionTab) => void,
 ): KpiDefinition[] {
   const executiveKeys = new Set([
@@ -2266,7 +2447,7 @@ function buildExecutiveKpis(
     'licenceTimeSaved',
     'coworkTimeSaved',
   ]);
-  return buildKpis(summary, t, timeSaved, onOpenTab).filter((item) => executiveKeys.has(item.key));
+  return buildKpis(summary, t, timeSaved, cohorts, onOpenTab).filter((item) => executiveKeys.has(item.key));
 }
 
 /**
@@ -2279,17 +2460,20 @@ function buildExecutiveKpis(
  * different decisions on different evidence, and a sum would recreate the blended figure that let
  * Copilot's evidence stand behind Cowork's.
  *
- * Built from the same projections and assumptions as the tabs that explain them - the reader's own
- * for this session, or the product defaults - so the overview can never quote a model differently
- * from its tab. Each is badged and drawn as modelled, links to its tab, and is absent rather than a
- * modelled zero when there is nobody to model. The values use compact numbers where they are shorter
- * in the reader's language, so a seven-digit range still fits the tile and the "h" never wraps onto a
- * line of its own.
+ * Built from the same projections, assumptions and cohorts as the tabs that explain them - the
+ * reader's own for this session, or the product defaults - so the overview can never quote a model
+ * differently from its tab, or for different people: a reader who chose to model every licence
+ * candidate or every Copilot seat holder on a tab sees that figure here too, and so does a tenant
+ * where nobody is recommended. Each is badged and drawn as modelled, links to its tab, and is absent
+ * rather than a modelled zero when there is nobody to model. The values use compact numbers where they
+ * are shorter in the reader's language, so a seven-digit range still fits the tile and the "h" never
+ * wraps onto a line of its own.
  */
 function buildTimeSavedKpis(
   summary: CopilotAdoptionSummary,
   t: TFunction,
   assumptions: TimeSavedAssumptions,
+  cohorts: TimeSavedCohorts,
   onOpenTab?: (tab: AdoptionTab) => void,
 ): KpiDefinition[] {
   const o = summary.options;
@@ -2297,23 +2481,41 @@ function buildTimeSavedKpis(
   const percent = formatNumber(assumptions.conservativeRatio * 100, { maximumFractionDigits: 1 });
   const minutes = (value: number) => formatNumber(value, { maximumFractionDigits: 2 });
 
-  const licence = projectLicenceTimeSaved(summary.licenceOpportunityEstimate, assumptions, o);
-  if (licence) {
+  const licenceCohort = resolveTimeSavedCohort(
+    cohorts.licence,
+    projectLicenceTimeSaved(summary.licenceOpportunityEstimate, assumptions, o),
+    projectLicenceTimeSaved(summary.licenceAllCandidatesEstimate, assumptions, o),
+  );
+  if (licenceCohort) {
+    const licence = licenceCohort.projection;
+    const everyone = licenceCohort.cohort === 'all';
     items.push({
       key: 'licenceTimeSaved',
       label: t('copilotAdoption.page.kpi.licenceTimeSaved.label'),
       value: t('copilotAdoption.page.kpi.hoursValue', { range: compactHoursRange(t, licence.hoursLow, licence.hoursHigh) }),
-      hint: t(
-        plural(licence.cohortUsers, 'copilotAdoption.page.kpi.licenceTimeSaved.hint.one', 'copilotAdoption.page.kpi.licenceTimeSaved.hint.other'),
-        { users: formatCount(licence.cohortUsers) },
-      ),
+      // A capped list cannot say "all": every candidate past its limit is missing, so the figure is a floor.
+      hint: everyone
+        ? licence.candidatesCapped
+          ? t('copilotAdoption.page.kpi.licenceTimeSaved.hintAllCapped', { users: formatCount(licence.cohortUsers) })
+          : t(
+              plural(licence.cohortUsers, 'copilotAdoption.page.kpi.licenceTimeSaved.hintAll.one', 'copilotAdoption.page.kpi.licenceTimeSaved.hintAll.other'),
+              { users: formatCount(licence.cohortUsers) },
+            )
+        : t(
+            plural(licence.cohortUsers, 'copilotAdoption.page.kpi.licenceTimeSaved.hint.one', 'copilotAdoption.page.kpi.licenceTimeSaved.hint.other'),
+            { users: formatCount(licence.cohortUsers) },
+          ),
       tone: 'opportunity',
       modelledBadge: t('copilotAdoption.page.kpi.modelledBadge'),
       action: onOpenTab
         ? { label: t('copilotAdoption.page.kpi.licenceTimeSaved.open'), onClick: () => onOpenTab('opportunities') }
         : undefined,
       info: {
-        what: t('copilotAdoption.page.kpi.licenceTimeSaved.what'),
+        what: everyone
+          ? licence.candidatesCapped
+            ? t('copilotAdoption.page.kpi.licenceTimeSaved.whatAllCapped', { users: formatCount(licence.cohortUsers) })
+            : t('copilotAdoption.page.kpi.licenceTimeSaved.whatAll')
+          : t('copilotAdoption.page.kpi.licenceTimeSaved.what'),
         how: t('copilotAdoption.page.kpi.licenceTimeSaved.how'),
         formula: t('copilotAdoption.page.kpi.licenceTimeSaved.formula', {
           meeting: minutes(assumptions.meetingMinutes),
@@ -2327,24 +2529,30 @@ function buildTimeSavedKpis(
   }
 
   if (summary.coworkReadinessAvailable) {
-    // The people ready now lead, as on the Cowork tab: that is the spending-policy decision. When
-    // nobody is ready, the ceiling stands in - and says it is every seat holder, not the ready few.
-    const ready = projectCoworkTimeSaved(summary.coworkValueEstimate, assumptions, o);
-    const cowork = ready ?? projectCoworkTimeSaved(summary.coworkFullRolloutEstimate, assumptions, o);
-    if (cowork) {
+    // The people ready now lead, as on the Cowork tab: that is the spending-policy decision. When the
+    // reader chose every seat holder, or nobody is ready, the ceiling stands in - and says it is every
+    // seat holder, not the ready few.
+    const coworkCohort = resolveTimeSavedCohort(
+      cohorts.cowork,
+      projectCoworkTimeSaved(summary.coworkValueEstimate, assumptions, o),
+      projectCoworkTimeSaved(summary.coworkFullRolloutEstimate, assumptions, o),
+    );
+    if (coworkCohort) {
+      const cowork = coworkCohort.projection;
       items.push({
         key: 'coworkTimeSaved',
         label: t('copilotAdoption.page.kpi.coworkTimeSaved.label'),
         value: t('copilotAdoption.page.kpi.hoursValue', { range: compactHoursRange(t, cowork.hoursLow, cowork.hoursHigh) }),
-        hint: ready
-          ? t(
-              plural(ready.cohortUsers, 'copilotAdoption.page.kpi.coworkTimeSaved.hintReady.one', 'copilotAdoption.page.kpi.coworkTimeSaved.hintReady.other'),
-              { users: formatCount(ready.cohortUsers) },
-            )
-          : t(
-              plural(cowork.cohortUsers, 'copilotAdoption.page.kpi.coworkTimeSaved.hintCeiling.one', 'copilotAdoption.page.kpi.coworkTimeSaved.hintCeiling.other'),
-              { users: formatCount(cowork.cohortUsers) },
-            ),
+        hint:
+          coworkCohort.cohort === 'recommended'
+            ? t(
+                plural(cowork.cohortUsers, 'copilotAdoption.page.kpi.coworkTimeSaved.hintReady.one', 'copilotAdoption.page.kpi.coworkTimeSaved.hintReady.other'),
+                { users: formatCount(cowork.cohortUsers) },
+              )
+            : t(
+                plural(cowork.cohortUsers, 'copilotAdoption.page.kpi.coworkTimeSaved.hintCeiling.one', 'copilotAdoption.page.kpi.coworkTimeSaved.hintCeiling.other'),
+                { users: formatCount(cowork.cohortUsers) },
+              ),
         tone: 'opportunity',
         modelledBadge: t('copilotAdoption.page.kpi.modelledBadge'),
         action: onOpenTab
@@ -2374,6 +2582,7 @@ function buildKpis(
   summary: CopilotAdoptionSummary,
   t: TFunction,
   timeSaved: TimeSavedAssumptions,
+  cohorts: TimeSavedCohorts,
   onOpenTab?: (tab: AdoptionTab) => void,
 ): KpiDefinition[] {
   const o = summary.options;
@@ -2588,7 +2797,7 @@ function buildKpis(
   });
 
   // Last: a model follows the measurements it is built on, never leads them.
-  items.push(...buildTimeSavedKpis(summary, t, timeSaved, onOpenTab));
+  items.push(...buildTimeSavedKpis(summary, t, timeSaved, cohorts, onOpenTab));
 
   return items;
 }

@@ -6,8 +6,10 @@ installations (the AnalyticsEngine importer in
 `src/AnalyticsEngine/WebJob.Office365ActivityImporter`).
 
 > This is a **separate solution** from `AnalyticsEngine`. It only depends on
-> the shared `Common/UsageReporting` netstandard2.0 project (data contracts
-> + Cosmos save adaptor) so the wire format stays in sync.
+> the shared `Common/UsageReporting` netstandard2.0 project (data contracts)
+> so the wire format stays in sync. The Cosmos DB stores live here, in
+> `Web.Server/Storage/`, not in `UsageReporting`: that project also ships in the
+> importer, web site and installer packages, which never talk to Cosmos.
 
 > See [`LESSONS-LEARNED.md`](LESSONS-LEARNED.md) for operational gotchas that
 > have already cost real time — verifying what is actually deployed, querying
@@ -20,7 +22,7 @@ installations (the AnalyticsEngine importer in
 - Validates the BCrypt-signed payload against a shared `TelemetrySecret`.
 - Upserts the latest report into a Cosmos DB "current" container and appends
   a per-update row to a "history" container (see
-  [`CosmosTelemetrySaveAdaptor`](../AnalyticsEngine/Common/UsageReporting/CosmosTelemetrySaveAdaptor.cs)).
+  [`CosmosTelemetrySaveAdaptor`](Web.Server/Storage/CosmosTelemetrySaveAdaptor.cs)).
 - Exposes an Entra-protected read API + React dashboard that surfaces
   aggregate stats across all reporting installations.
 
@@ -28,9 +30,9 @@ installations (the AnalyticsEngine importer in
 
 | Project | What it is |
 | --- | --- |
-| `Web.Server/` | ASP.NET Core 10 host. Exposes `/api/Telemetry`. Serves the built SPA in production and proxies to Vite in development. |
+| `Web.Server/` | ASP.NET Core 10 host. Exposes `/api/Telemetry`. Serves the built SPA in production and proxies to Vite in development. Owns the Cosmos DB stores (`Storage/`). |
 | `web.client/` | React 19 + Vite SPA. Renders a minimal dashboard from the read API. |
-| `../AnalyticsEngine/Common/UsageReporting/` | Shared (netstandard2.0) data contracts + Cosmos adaptor. Also referenced by the importer. |
+| `../AnalyticsEngine/Common/UsageReporting/` | Shared (netstandard2.0) data contracts. Also referenced by the importer, so it must not take the Cosmos DB SDK. |
 
 ## Endpoints
 

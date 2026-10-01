@@ -1,3 +1,4 @@
+using Common.Entities.UserScope;
 using System.Threading.Tasks;
 using WebJob.Office365ActivityImporter.Engine.Entities.Serialisation;
 
@@ -23,8 +24,9 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
     public interface ICallRecordPersistenceManager
     {
         /// <summary>
-        /// Persist a call record, replacing any previously imported record with the same Graph id.
+        /// Persist a call record, replacing any previously imported record with the same Graph id. People outside
+        /// <paramref name="userScope"/> are stored as the anonymous "Unknown User".
         /// </summary>
-        Task SaveOrReplaceCallRecord(CallRecordDTO call);
+        Task SaveOrReplaceCallRecord(CallRecordDTO call, UserImportScope userScope);
     }
 }

@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
+using Common.Entities.Calls;
 using WebJob.Office365ActivityImporter.Engine.Entities.Serialisation;
 using WebJob.Office365ActivityImporter.Engine.Graph.Calls;
 
@@ -165,8 +166,11 @@ namespace UnitTests.FakeLoaderClasses
             return this;
         }
 
-        public Task SaveOrReplaceCallRecord(CallRecordDTO call)
+        public List<Common.Entities.UserScope.UserImportScope> ScopesUsed { get; } = new List<Common.Entities.UserScope.UserImportScope>();
+
+        public Task SaveOrReplaceCallRecord(CallRecordDTO call, Common.Entities.UserScope.UserImportScope userScope)
         {
+            ScopesUsed.Add(userScope);
             if (_saveFailure != null) return Task.FromException(_saveFailure);
 
             Saved.Add(call);

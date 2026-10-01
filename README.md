@@ -68,7 +68,7 @@ Some require extra configuration after install — see [Additional solutions](ht
 
 ## Architecture & running costs
 
-The engine runs on a handful of Azure components (App Service web-jobs + admin site, Azure SQL, Redis, optional Service Bus / Cognitive Services / Automation). A medium environment (~20,000 users, 1 year of data) is roughly **€170/month**, dominated by the App Service plan and SQL database — *indicative only; verify current pricing for your region and scale*.
+The engine runs on a handful of Azure components (App Service web-jobs + admin site, Azure SQL, a storage account, Key Vault, optional Service Bus / Cognitive Services / Automation). No cache service is needed: the little runtime state the importers keep (checkpoints, delta tokens, schedule stamps) lives in an Azure Table in the solution's own storage account. A medium environment (~20,000 users, 1 year of data) is roughly **€160-170/month**, dominated by the App Service plan and SQL database — *indicative only; verify current pricing for your region and scale*.
 
 Full breakdown: **[Architecture & costs](https://github.com/pnp/Microsoft365-Analytics-Insights/wiki/Architecture%20and%20Costs)**.
 

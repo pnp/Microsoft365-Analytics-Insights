@@ -14,7 +14,6 @@ using WebJob.Office365ActivityImporter.Engine.Graph;
 using WebJob.Office365ActivityImporter.Engine.Graph.Copilot.InteractionHistory;
 using WebJob.Office365ActivityImporter.Engine.Graph.UsageReports;
 using WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Copilot;
-using WebJob.Office365ActivityImporter.Engine.Graph.User;
 
 namespace Tests.UnitTests
 {
@@ -192,6 +191,55 @@ namespace Tests.UnitTests
             }
         }
 
+        /// <summary>
+        /// Issue #664: the optional observer lets a caller keep the lenient partial result and still act on the
+        /// failure - the user import uses it to recognise a delta token that Graph has rejected. It must not
+        /// change what the load returns.
+        /// </summary>
+        [TestMethod]
+        public async Task LenientPaging_TellsAnOptionalObserverWhichFailureStoppedItAndOnWhichPage()
+        {
+            using (var handler = new SequenceHandler(
+                Tuple.Create(HttpStatusCode.OK, PageWithNextLink("https://graph.microsoft.com/v1.0/anything?page=2")),
+                Tuple.Create(HttpStatusCode.Forbidden, Forbidden)))
+            using (var client = new ManualGraphCallClient(handler, NullLogger.Instance))
+            {
+                var failures = new List<Tuple<HttpRequestException, int>>();
+
+                var results = await client.LoadAllPagesPlusDeltaWithThrottleRetries<JObject>("https://graph.microsoft.com/v1.0/anything", NullLogger.Instance,
+                    deltaLink => Task.CompletedTask,
+                    onPageFailed: (ex, page) => failures.Add(Tuple.Create(ex, page)));
+
+                Assert.AreEqual(1, results.Count, "Still the lenient result: the rows from page 1.");
+                Assert.AreEqual(1, failures.Count);
+                Assert.AreEqual(2, failures[0].Item2, "Page 2 is the one that failed.");
+                Assert.AreEqual(HttpStatusCode.Forbidden, ((GraphHttpException)failures[0].Item1).StatusCode);
+            }
+        }
+
+        [TestMethod]
+        public async Task LenientPaging_Observer_IsNotCalledWhenEveryPageLoads_NorWhenStrictPagingThrows()
+        {
+            var calls = 0;
+
+            using (var handler = new StubHandler(HttpStatusCode.OK, "{\"value\":[]}"))
+            using (var client = new ManualGraphCallClient(handler, NullLogger.Instance))
+            {
+                await client.LoadAllPagesPlusDeltaWithThrottleRetries<JObject>("https://graph.microsoft.com/v1.0/anything", NullLogger.Instance,
+                    deltaLink => Task.CompletedTask, onPageFailed: (ex, page) => calls++);
+            }
+
+            using (var handler = new StubHandler(HttpStatusCode.Forbidden, Forbidden))
+            using (var client = new ManualGraphCallClient(handler, NullLogger.Instance))
+            {
+                await Assert.ThrowsExceptionAsync<GraphHttpException>(() =>
+                    client.LoadAllPagesPlusDeltaWithThrottleRetries<JObject>("https://graph.microsoft.com/v1.0/anything", NullLogger.Instance,
+                        deltaLink => Task.CompletedTask, throwOnNotFound: true, throwOnHttpError: true, onPageFailed: (ex, page) => calls++));
+            }
+
+            Assert.AreEqual(0, calls, "The observer only reports a failure that the lenient path swallowed.");
+        }
+
         #endregion
 
         #region The Copilot report source opts in
@@ -316,8 +364,7 @@ namespace Tests.UnitTests
             using (var handler = new StubHandler(HttpStatusCode.Forbidden, Forbidden))
             using (var client = new ManualGraphCallClient(handler, NullLogger.Instance))
             {
-                var loader = new OutlookUserActivityLoader(client, new NoUsersHaveGroupsUserGroupsCache(NullLogger.Instance),
-                    new UserGroupsFilterModel(string.Empty), NullLogger.Instance);
+                var loader = new OutlookUserActivityLoader(client, Common.Entities.UserScope.UserImportScope.Unfiltered, NullLogger.Instance);
 
                 var ex = await Assert.ThrowsExceptionAsync<GraphHttpException>(
                     () => loader.PopulateLoadedReportPagesFromGraph(1));

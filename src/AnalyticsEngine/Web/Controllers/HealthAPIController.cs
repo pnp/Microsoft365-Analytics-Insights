@@ -3,6 +3,7 @@ using System;
 using System.Threading.Tasks;
 using System.Web.Http;
 using Web.AnalyticsWeb.Models.Health;
+using Web.AnalyticsWeb.Security;
 
 namespace Web.AnalyticsWeb.Controllers
 {
@@ -13,8 +14,11 @@ namespace Web.AnalyticsWeb.Controllers
     /// degrades that one section instead of the whole page. Best-effort throughout: a data-source hiccup
     /// sets an error field on its section, never a non-200. Reuses the app's existing Entra credential +
     /// App Insights connection string - no new config. See HEALTH-MONITORING-DESIGN.md (#144).
+    /// Administration only, including the summary and data sections the Insights overview used to show
+    /// everyone: whether the service is healthy is the admin side of the portal (#660).
     /// </summary>
     [Authorize]
+    [RequirePortalPermission(PortalPermission.Administration)]
     [RoutePrefix("api/Health")]
     public class HealthAPIController : ApiController
     {

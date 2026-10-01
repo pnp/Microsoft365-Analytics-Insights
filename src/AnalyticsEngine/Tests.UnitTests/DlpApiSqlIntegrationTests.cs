@@ -235,6 +235,13 @@ namespace Tests.UnitTests
                 "DLP.All records carry no user attribution worth ranking, so this stays null.");
             Assert.IsNull(summary.TopPolicies.Single().Policies,
                 "Only agent rows carry a nested breakdown; a policy row nesting policies would be meaningless.");
+
+            // A reader without the portal's See PII permission gets every figure above except the people (#661).
+            var aggregateOnly = await NewController().BuildSummaryAsync(28, includeIndividuals: false);
+            Assert.AreEqual(0, aggregateOnly.TopUsers.Count, "The top-users rows are sign-in names.");
+            Assert.AreEqual(1, aggregateOnly.UsersImpacted, "How many people were affected names nobody.");
+            Assert.AreEqual("Contoso HR Agent", aggregateOnly.TopAgents.Single().Name);
+            Assert.AreEqual(1, aggregateOnly.TopAgents.Single().UsersAffected);
         }
 
         /// <summary>

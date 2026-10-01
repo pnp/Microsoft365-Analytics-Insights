@@ -1,4 +1,4 @@
-using Common.Entities.Redis;
+using Common.Entities.State;
 using Microsoft.Extensions.Logging;
 using System;
 using System.Collections.Concurrent;
@@ -24,7 +24,7 @@ namespace WebJob.Office365ActivityImporter.Engine
     }
 
     /// <summary>
-    /// Pure decision logic for the cadence gate, factored out so it can be unit tested without Redis.
+    /// Pure decision logic for the cadence gate, factored out so it can be unit tested without any store.
     /// </summary>
     public static class ImportCadenceGate
     {
@@ -45,19 +45,24 @@ namespace WebJob.Office365ActivityImporter.Engine
     }
 
     /// <summary>
-    /// Redis-backed <see cref="IImportLastRunStore"/>. Reads/writes are <b>fail-open</b>: if Redis is
-    /// unreachable, a read returns <c>null</c> (so the import still runs) and a write is swallowed
-    /// with a warning. This deliberately matches the legacy behaviour where these imports had no
-    /// Redis dependency at all - a cache blip must never skip an import.
+    /// Durable <see cref="IImportLastRunStore"/> over the runtime state store (the
+    /// <see cref="StatePartitions.ImportSchedule"/> partition of the <see cref="StateStore.TableName"/> Azure Table), so
+    /// the gate survives WebJob restarts. Reads/writes are <b>fail-open</b>: if the store is unreachable, a read returns
+    /// <c>null</c> (so the import still runs) and a write is swallowed with a warning. This deliberately matches the
+    /// legacy behaviour where these imports had no store dependency at all - a storage blip must never skip an import.
     /// </summary>
-    public class RedisImportLastRunStore : IImportLastRunStore
+    /// <remarks>
+    /// Each key is one row, holding the round-trip ("o") UTC timestamp in its <c>Value</c> column. Deleting a row makes
+    /// that import run on the next cycle.
+    /// </remarks>
+    public class PersistedImportLastRunStore : IImportLastRunStore
     {
-        private readonly CacheConnectionManager _cache;
+        private readonly IKeyValueStore _store;
         private readonly ILogger _logger;
 
-        public RedisImportLastRunStore(CacheConnectionManager cache, ILogger logger)
+        public PersistedImportLastRunStore(IKeyValueStore store, ILogger logger)
         {
-            _cache = cache ?? throw new ArgumentNullException(nameof(cache));
+            _store = store ?? throw new ArgumentNullException(nameof(store));
             _logger = logger;
         }
 
@@ -65,7 +70,7 @@ namespace WebJob.Office365ActivityImporter.Engine
         {
             try
             {
-                var raw = await _cache.GetString(key);
+                var raw = await _store.GetStringAsync(key);
                 if (!string.IsNullOrEmpty(raw)
                     && DateTime.TryParse(raw, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var dt))
                 {
@@ -75,7 +80,7 @@ namespace WebJob.Office365ActivityImporter.Engine
             }
             catch (Exception ex)
             {
-                _logger?.LogWarning($"Import cadence: Redis read failed for '{key}' ({ex.Message}); treating as not-yet-run so the import proceeds.");
+                _logger?.LogWarning($"Import cadence: state store read failed for '{key}' ({ex.Message}); treating as not-yet-run so the import proceeds.");
                 return null;
             }
         }
@@ -84,11 +89,11 @@ namespace WebJob.Office365ActivityImporter.Engine
         {
             try
             {
-                await _cache.SetString(key, whenUtc.ToUniversalTime().ToString("o", CultureInfo.InvariantCulture));
+                await _store.SetStringAsync(key, whenUtc.ToUniversalTime().ToString("o", CultureInfo.InvariantCulture));
             }
             catch (Exception ex)
             {
-                _logger?.LogWarning($"Import cadence: Redis write failed for '{key}' ({ex.Message}); the next cycle may re-run this import.");
+                _logger?.LogWarning($"Import cadence: state store write failed for '{key}' ({ex.Message}); the next cycle may re-run this import.");
             }
         }
 
@@ -96,17 +101,17 @@ namespace WebJob.Office365ActivityImporter.Engine
         {
             try
             {
-                await _cache.DeleteString(key);
+                await _store.DeleteAsync(key);
             }
             catch (Exception ex)
             {
-                _logger?.LogWarning($"Import cadence: Redis delete failed for '{key}' ({ex.Message}).");
+                _logger?.LogWarning($"Import cadence: state store delete failed for '{key}' ({ex.Message}).");
             }
         }
     }
 
     /// <summary>
-    /// In-memory <see cref="IImportLastRunStore"/> used when Redis is not configured. The gate still
+    /// In-memory <see cref="IImportLastRunStore"/> used when no Storage connection string is configured. The gate still
     /// works within a single WebJob process lifetime; the timestamps reset when the WebJob restarts
     /// (so a restart is itself a way to force a re-import).
     /// </summary>

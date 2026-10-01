@@ -1,43 +1,33 @@
-﻿using Common.Entities.Config;
-using Common.Entities.Models;
-using Common.Entities.Redis;
-using Common.Entities.Redis.Auth;
+﻿using Common.Entities.Models;
 using System.Security.Claims;
 using System.Threading.Tasks;
 using System.Web.Http;
 
 namespace Web.AnalyticsWeb.Controllers
 {
-    public class BaseAPIController : ApiController
+    /// <summary>
+    /// Shared plumbing for the controllers that need the signed-in user's Graph token. Abstract so Web API
+    /// never treats it as a controller of its own: it carries no <c>[Authorize]</c>, so anything it exposed
+    /// would have been reachable anonymously at <c>api/BaseAPI</c>.
+    /// </summary>
+    public abstract class BaseAPIController : ApiController
     {
         /// <summary>
-        /// Gets the signed-in admin's Graph token. Primary source is the encrypted auth cookie
-        /// (the refresh token captured during the OIDC sign-in redirect), which works without
-        /// Redis. Falls back to Redis for legacy deployments / cookies issued before this change.
-        /// Returns <c>null</c> when neither source has a token.
+        /// Gets the signed-in admin's Graph token: the refresh token captured into the encrypted auth cookie
+        /// by the on-demand Microsoft Teams connection. Returns <c>null</c> when the cookie does not carry one;
+        /// callers answer 401 and the Teams page offers the connection.
         /// </summary>
-        public async Task<RefreshOAuthToken> GetCachedUserAccessTokenAsync()
+        /// <remarks>
+        /// <c>[NonAction]</c> because Web API treats every public method of a controller as an action and
+        /// infers GET from the "Get" prefix: without it, <c>GET api/SiteTokenAPI</c> and
+        /// <c>GET api/TeamsAuthAPI</c> both answered with this method's result - the caller's long-lived
+        /// Graph refresh token, as JSON, to script. Pinned by
+        /// <c>PortalPermissionTests.NoGetRequest_HandsTheCallersRefreshTokenToScript</c> (#660).
+        /// </remarks>
+        [NonAction]
+        public Task<RefreshOAuthToken> GetCachedUserAccessTokenAsync()
         {
-            // Primary: token carried in the auth cookie (no Redis needed).
-            var fromCookie = GetUserTokenFromClaims();
-            if (fromCookie != null)
-            {
-                return fromCookie;
-            }
-
-            // Fallback: Redis (when configured).
-            var config = new AppConfig();
-            var redisConManager = CacheConnectionManager.TryGetConnectionManager(config.ConnectionStrings.RedisConnectionString, tenantId: config.TenantGUID.ToString(), clientId: config.ClientID, clientSecret: config.ClientSecret);
-            if (redisConManager == null)
-            {
-                // No cookie token and no Redis - callers treat this as "no token" and fall back to
-                // client-side auth where appropriate.
-                return null;
-            }
-
-            var authToken = await redisConManager.GetToken(ClaimsPrincipal.Current);
-
-            return authToken;
+            return Task.FromResult(GetUserTokenFromClaims());
         }
 
         /// <summary>

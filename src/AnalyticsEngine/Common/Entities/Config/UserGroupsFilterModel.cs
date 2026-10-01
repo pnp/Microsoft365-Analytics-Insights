@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.RegularExpressions;
 
 namespace Common.Entities.Config
@@ -39,6 +41,39 @@ namespace Common.Entities.Config
         /// caller can nearly always answer far more cheaply by not filtering at all (issue #297).
         /// </remarks>
         public bool MatchesEverything => Patterns.Any(p => p.Trim('*').Length == 0);
+
+        /// <summary>
+        /// True when the filter actually restricts which users are imported: at least one pattern, and none
+        /// of them a match-everything wildcard. Anything else (unset, blank, or <c>*</c>) scopes nothing.
+        /// </summary>
+        public bool IsNarrowing => Patterns.Count > 0 && !MatchesEverything;
+
+        /// <summary>
+        /// Identifies which groups this filter selects, whatever the order, case or spacing of its patterns; empty
+        /// when it narrows nothing. The user import stores it beside its <c>/users/delta</c> checkpoint, so it can
+        /// tell after a restart that the filter has changed since the checkpoint was taken.
+        /// </summary>
+        public string Fingerprint
+        {
+            get
+            {
+                if (!IsNarrowing)
+                {
+                    return string.Empty;
+                }
+
+                // Patterns match case-insensitively (see Matches), so "Pilot" and "pilot" are the same filter.
+                var canonical = string.Join("\n", Patterns
+                    .Select(p => p.ToLowerInvariant())
+                    .Distinct(StringComparer.Ordinal)
+                    .OrderBy(p => p, StringComparer.Ordinal));
+                using (var sha = SHA256.Create())
+                {
+                    var hash = sha.ComputeHash(Encoding.UTF8.GetBytes(canonical));
+                    return "sha256:" + BitConverter.ToString(hash).Replace("-", string.Empty).ToLowerInvariant();
+                }
+            }
+        }
 
         /// <summary>
         /// Checks if the given group name matches any filter pattern (supports * wildcard).

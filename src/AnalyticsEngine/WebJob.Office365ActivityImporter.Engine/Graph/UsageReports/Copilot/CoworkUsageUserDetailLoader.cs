@@ -11,7 +11,7 @@ using System.Data;
 using System.Linq;
 using System.Net;
 using System.Threading.Tasks;
-using WebJob.Office365ActivityImporter.Engine.Graph.User;
+using Common.Entities.UserScope;
 
 namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Copilot
 {
@@ -24,26 +24,23 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Copilot
     {
         private readonly ICopilotReportSource _reportSource;
         private readonly ILogger _logger;
-        private readonly UserGroupsCache _userGroupsCache;
-        private readonly UserGroupsFilterModel _userGroupsFilter;
+        private readonly UserImportScope _userScope;
         private readonly ICoworkUsagePersistenceManager _persistence;
 
         public int SaveBatchSize { get; set; } = 1000;
 
-        public CoworkUsageUserDetailLoader(ICopilotReportSource reportSource, ILogger logger,
-            UserGroupsCache userGroupsCache = null, UserGroupsFilterModel userGroupsFilter = null)
-            : this(reportSource, logger, userGroupsCache, userGroupsFilter, null)
+        public CoworkUsageUserDetailLoader(ICopilotReportSource reportSource, ILogger logger, UserImportScope userScope = null)
+            : this(reportSource, logger, userScope, null)
         {
         }
 
+        /// <param name="userScope">The <c>UserGroupsFilter</c> scope for this cycle; null means unfiltered.</param>
         public CoworkUsageUserDetailLoader(ICopilotReportSource reportSource, ILogger logger,
-            UserGroupsCache userGroupsCache, UserGroupsFilterModel userGroupsFilter,
-            ICoworkUsagePersistenceManager persistence)
+            UserImportScope userScope, ICoworkUsagePersistenceManager persistence)
         {
             _reportSource = reportSource ?? throw new ArgumentNullException(nameof(reportSource));
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
-            _userGroupsCache = userGroupsCache;
-            _userGroupsFilter = userGroupsFilter;
+            _userScope = userScope ?? UserImportScope.Unfiltered;
             _persistence = persistence;
         }
 
@@ -207,17 +204,21 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Copilot
             }
         }
 
-        private async Task<List<CoworkUsageUserDetailRow>> FilterToUsersInScope(List<CoworkUsageUserDetailRow> rows)
+        private Task<List<CoworkUsageUserDetailRow>> FilterToUsersInScope(List<CoworkUsageUserDetailRow> rows)
         {
-            if (_userGroupsCache == null || _userGroupsFilter == null || _userGroupsFilter.Patterns.Count == 0) return rows;
+            if (!_userScope.IsFiltered) return Task.FromResult(rows);
 
-            _logger.LogWarning($"Cowork usage report: a user group filter is configured, so up to {rows.Count:N0} Entra group-membership lookups may be issued.");
             var inScope = new List<CoworkUsageUserDetailRow>(rows.Count);
             foreach (var row in rows)
             {
-                if (await _userGroupsCache.IsInGroupsFilter(row.UserPrincipalName, _userGroupsFilter)) inScope.Add(row);
+                if (_userScope.IsInScope(row.UserPrincipalName)) inScope.Add(row);
             }
-            return inScope;
+
+            if (inScope.Count < rows.Count)
+            {
+                _logger.LogInformation($"Cowork usage report: skipped {rows.Count - inScope.Count:N0} user(s) outside UserGroupsFilter.");
+            }
+            return Task.FromResult(inScope);
         }
 
         private static string Truncate(string value, int maxLength)

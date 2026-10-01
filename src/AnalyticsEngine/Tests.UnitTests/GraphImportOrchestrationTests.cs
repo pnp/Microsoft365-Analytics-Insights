@@ -20,7 +20,7 @@ namespace Tests.UnitTests
     /// selection, per-section cadence gating, and the rule that the last-run timestamp is written only when
     /// the section actually succeeded.
     ///
-    /// None of these touch SQL Server, Graph, Redis or Service Bus - the sections are fakes, which is the
+    /// None of these touch SQL Server, Graph, Azure Storage or Service Bus - the sections are fakes, which is the
     /// whole point of lifting composition out into <see cref="IGraphImportSectionFactory"/>. Before this,
     /// the only way to find out whether the Teams import had been correctly skipped was to run a real import
     /// against a real tenant.
@@ -285,7 +285,7 @@ namespace Tests.UnitTests
         [TestMethod]
         public async Task GraphImporter_LastRunStoreReadsFailOpenToNull_SectionStillRuns()
         {
-            // RedisImportLastRunStore returns null when the cache is unreachable, deliberately, so a cache
+            // PersistedImportLastRunStore returns null when the table is unreachable, deliberately, so a storage
             // blip can never skip an import. This pins the orchestrator's half of that contract.
             var recentlyRan = FakeGraphImportSection.Gated("Gated section", FirstSectionCadence, 24);
             var workingStore = new RecordingImportLastRunStore().Seed(FirstSectionCadence, Now.AddMinutes(-1));

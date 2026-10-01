@@ -10,7 +10,9 @@ import {
   fetchLicensedUsers,
 } from '../api/copilotAdoptionApi';
 import { AdoptionBand, CopilotResourceTypeKind, type CopilotAdoptionOptions, type CopilotAdoptionSummary } from '../types/copilotAdoption';
+import type { UserFilterClause, UserFilterEcho } from '../types/userFilter';
 import { TIME_SAVED_STORAGE_KEY, resetTimeSavedStore } from '../components/copilotAdoption/coworkTimeSaved';
+import { TIME_SAVED_COHORT_STORAGE_KEY, resetTimeSavedCohortStore } from '../components/copilotAdoption/timeSavedCohort';
 import { loadCatalog } from '../i18n';
 
 vi.mock('../api/copilotAdoptionApi', async (importOriginal) => ({
@@ -21,6 +23,40 @@ vi.mock('../api/copilotAdoptionApi', async (importOriginal) => ({
   fetchAdoptionSummary: vi.fn(),
   fetchLicensedUsers: vi.fn(),
 }));
+
+vi.mock('../api/userFilterApi', () => ({
+  fetchUserFilterDimensions: vi.fn(async () => ({
+    people: 200,
+    loadedUtc: '2026-01-05T00:00:00Z',
+    dimensions: [
+      { key: 'department', kind: 'entra', name: null, orgTypeId: null, distinctValues: 3, peopleWithValue: 180, supportsTextMatch: true, fixedValues: false },
+      { key: 'emailDomain', kind: 'entra', name: null, orgTypeId: null, distinctValues: 2, peopleWithValue: 200, supportsTextMatch: true, fixedValues: false },
+      { key: 'org:4', kind: 'custom', name: 'Cost centre', orgTypeId: 4, distinctValues: 12, peopleWithValue: 150, supportsTextMatch: true, fixedValues: false },
+    ],
+  })),
+  fetchUserFilterValues: vi.fn(async () => ({ dimension: 'department', values: [], totalMatching: 0, truncated: false, peopleWithoutValue: 0 })),
+}));
+
+/** The filter the server says it applied, as it echoes it on a narrowed summary. */
+function echo(clauses: UserFilterClause[], matchedPeople = 40, dimensionNames: Record<string, string> = {}): UserFilterEcho {
+  return { clauses, matchedPeople, directoryPeople: 200, unknownDimensions: [], dimensionNames };
+}
+
+const FABRIKAM_ONLY: UserFilterClause = {
+  join: 'and',
+  dimension: 'emailDomain',
+  operator: 'is',
+  values: ['fabrikam.com'],
+  includeNotSet: false,
+};
+
+/** Narrows the report to one domain the way a reader does: from the domain table's own button. */
+async function filterToDomain(domain: string) {
+  const card = (await screen.findByText('Adoption by email domain')).closest('div')?.parentElement
+    ?.parentElement as HTMLElement;
+  const row = within(card).getByText(domain).closest('tr') as HTMLElement;
+  fireEvent.click(within(row).getByRole('button', { name: 'Filter' }));
+}
 
 const options: CopilotAdoptionOptions = {
   windowDays: 28,
@@ -397,19 +433,16 @@ describe('CopilotAdoptionPage email-domain filter', () => {
     expect(within(card).getByText('Licence candidates')).toBeVisible();
   });
 
-  it('offers the domain filter only when the tenant actually has more than one domain', async () => {
-    // On a single-domain tenant a drop-down with one real choice reads as a missing feature.
-    vi.mocked(fetchAdoptionFilters).mockResolvedValue({
-      emailDomains: ['contoso.com'],
-      departments: [],
-      countries: [],
-      bands: [],
-    });
-
+  it('narrows the whole report through the page-wide filter, not a separate domain drop-down', async () => {
+    // Email domain is one attribute of the single page-wide filter now, alongside department, country
+    // and every custom organisation. A second, domain-only control would be two answers to "who is
+    // this report about?" - and nothing stopping them disagreeing.
     await renderPage();
     await screen.findAllByText('Where we stand');
 
     expect(screen.queryByLabelText('Email domain')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Add filter' })).toBeVisible();
+    expect(screen.getByText('Showing everyone')).toBeVisible();
   });
 
   it('re-requests every figure from the server when a domain is chosen', async () => {
@@ -417,49 +450,64 @@ describe('CopilotAdoptionPage email-domain filter', () => {
     // this ever became a client-side filter the headline KPIs would keep describing the tenant.
     await renderPage();
 
-    const picker = await screen.findByLabelText('Email domain');
-    fireEvent.change(picker, { target: { value: 'fabrikam.com' } });
+    await filterToDomain('fabrikam.com');
 
     await waitFor(() =>
       expect(vi.mocked(fetchAdoptionSummary)).toHaveBeenCalledWith(
         28,
         undefined,
         expect.anything(),
-        'fabrikam.com',
+        null,
+        '[{"d":"emailDomain","v":["fabrikam.com"]}]',
       ),
     );
+    // ...and the choice shows up as a condition in the filter bar, where it can be edited or removed.
+    expect(await screen.findByRole('button', { name: 'Email domain is fabrikam.com' })).toBeVisible();
   });
 
   it('says on screen which population every figure describes, and names what stayed tenant-wide', async () => {
     vi.mocked(fetchAdoptionSummary).mockResolvedValue(
       summary({
-        scopedEmailDomain: 'fabrikam.com',
+        userFilter: echo([FABRIKAM_ONLY]),
+        unscopedLicensedUsers: 400,
         unscopedSections: ['usageByApp', 'weeklyTrend', 'agents'],
       }),
     );
 
     await renderPage();
 
-    expect(await screen.findByText(/Showing fabrikam.com only/)).toBeVisible();
-    expect(
-      screen.getByText(
-        /Copilot use by app \(licensed and unlicensed\), the weekly trend and the agent inventory stay tenant-wide/,
-      ),
-    ).toBeVisible();
+    const banner = (await screen.findByText('Filtered:')).parentElement as HTMLElement;
+    expect(banner).toBeVisible();
+    expect(banner.textContent).toContain('Email domain is fabrikam.com.');
+    expect(banner.textContent).toContain('cover 120 of the tenant’s 400 Copilot licence holders');
+    expect(banner.textContent).toMatch(
+      /Copilot use by app \(licensed and unlicensed\), the weekly trend and the agent inventory stay tenant-wide/,
+    );
   });
 
   it('lets the reader get back to the whole tenant from the banner', async () => {
-    vi.mocked(fetchAdoptionSummary).mockResolvedValue(summary({ scopedEmailDomain: 'fabrikam.com' }));
+    vi.mocked(fetchAdoptionSummary).mockResolvedValue(summary({ userFilter: echo([FABRIKAM_ONLY]) }));
 
     await renderPage();
+    await filterToDomain('fabrikam.com');
+    await waitFor(() =>
+      expect(vi.mocked(fetchAdoptionSummary)).toHaveBeenLastCalledWith(
+        28,
+        undefined,
+        expect.anything(),
+        null,
+        '[{"d":"emailDomain","v":["fabrikam.com"]}]',
+      ),
+    );
 
-    fireEvent.click(await screen.findByText('Show all domains'));
+    fireEvent.click(await screen.findByText('Clear filter'));
 
     await waitFor(() =>
       expect(vi.mocked(fetchAdoptionSummary)).toHaveBeenLastCalledWith(
         28,
         undefined,
         expect.anything(),
+        null,
         null,
       ),
     );
@@ -469,7 +517,7 @@ describe('CopilotAdoptionPage email-domain filter', () => {
     await renderPage();
     await screen.findAllByText('Where we stand');
 
-    expect(screen.queryByText(/Showing .* only/)).not.toBeInTheDocument();
+    expect(screen.queryByText('Filtered:')).not.toBeInTheDocument();
   });
 
   it('survives a server that does not send the domain fields at all', async () => {
@@ -493,7 +541,7 @@ describe('CopilotAdoptionPage domain-scope regressions', () => {
     // been imported" is both wrong and the opposite of the finding.
     vi.mocked(fetchAdoptionSummary).mockResolvedValue(
       summary({
-        scopedEmailDomain: 'northwind.example',
+        userFilter: echo([{ ...FABRIKAM_ONLY, values: ['northwind.example'] }]),
         licensedUsers: 0,
         scoredUsers: 0,
         activeUsers: 0,
@@ -504,7 +552,27 @@ describe('CopilotAdoptionPage domain-scope regressions', () => {
 
     await renderPage();
 
-    expect(await screen.findByText(/Showing northwind.example only/)).toBeVisible();
+    const banner = (await screen.findByText('Filtered:')).parentElement as HTMLElement;
+    expect(banner.textContent).toContain('Email domain is northwind.example.');
+    expect(screen.queryByText('No Copilot licences found')).not.toBeInTheDocument();
+  });
+
+  it('treats a filter that matches no seat holders the same way', async () => {
+    // "Department is Finance" on a tenant that never licensed Finance is a finding, not a
+    // misconfiguration - the first-run screen would tell the reader the opposite.
+    vi.mocked(fetchAdoptionSummary).mockResolvedValue(
+      summary({
+        userFilter: echo([{ join: 'and', dimension: 'department', operator: 'is', values: ['Finance'], includeNotSet: false }]),
+        licensedUsers: 0,
+        scoredUsers: 0,
+        activeUsers: 0,
+      }),
+    );
+
+    await renderPage();
+
+    const banner = (await screen.findByText('Filtered:')).parentElement as HTMLElement;
+    expect(banner.textContent).toContain('Department is Finance.');
     expect(screen.queryByText('No Copilot licences found')).not.toBeInTheDocument();
   });
 
@@ -590,9 +658,38 @@ describe('CopilotAdoptionPage printing', () => {
     expect(caption).not.toBeNull();
     expect(caption?.textContent).toContain('Executive view');
     expect(caption?.textContent).toContain('Last 28 days');
-    expect(caption?.textContent).toContain('All email domains');
+    expect(caption?.textContent).toContain('Everyone');
     // Dated, because a printout outlives the period it describes.
     expect(caption?.textContent).toContain('Generated');
+  });
+
+  it('says in plain words, on paper, who the report covers', async () => {
+    // Printouts go to executives. With the filter bar hidden like every other control, the sheet has
+    // to say who it is about in a sentence anyone can read - not in the bar's shorthand.
+    vi.mocked(fetchAdoptionSummary).mockResolvedValue(
+      summary({
+        userFilter: echo(
+          [
+            { join: 'and', dimension: 'department', operator: 'is', values: ['Sales', 'Marketing'], includeNotSet: false },
+            { join: 'and', dimension: 'org:4', operator: 'isNot', values: ['CC-100'], includeNotSet: false },
+          ],
+          37,
+          { 'org:4': 'Cost centre' },
+        ),
+      }),
+    );
+
+    await renderPage();
+    await screen.findAllByText('Where we stand');
+
+    const printed = Array.from(document.querySelectorAll('[data-print="only"]'))
+      .map((e) => e.textContent ?? '')
+      .join(' ');
+    expect(printed).toContain('Who this report covers');
+    expect(printed).toContain('Only people who match all of these:');
+    expect(printed).toContain('Department is Sales or Marketing');
+    expect(printed).toContain('Cost centre is not CC-100');
+    expect(printed).toContain('37 of the 200 people in the directory match this filter.');
   });
 
   it('follows the tab and the domain the reader actually chose', async () => {
@@ -600,12 +697,13 @@ describe('CopilotAdoptionPage printing', () => {
 
     fireEvent.click(screen.getByRole('tab', { name: 'Analyst view' }));
     expect(await screen.findByRole('tab', { name: 'Analyst view', selected: true })).toBeVisible();
-    fireEvent.change(await screen.findByLabelText('Email domain'), { target: { value: 'fabrikam.com' } });
+    await filterToDomain('fabrikam.com');
 
     await waitFor(() => {
       const caption = document.querySelector('[data-print="only"]');
       expect(caption?.textContent).toContain('Analyst view');
-      expect(caption?.textContent).toContain('fabrikam.com');
+      expect(caption?.textContent).toContain('Filtered');
+      expect(document.body.textContent).toContain('Only people where Email domain is fabrikam.com.');
     });
   });
 
@@ -688,9 +786,9 @@ describe('CopilotAdoptionPage data warnings', () => {
 
     const different = 'Copilot audit events stop three days before the end of the period.';
     vi.mocked(fetchAdoptionSummary).mockResolvedValue(
-      summary({ scopedEmailDomain: 'fabrikam.com', warnings: [different] }),
+      summary({ userFilter: echo([FABRIKAM_ONLY]), warnings: [different] }),
     );
-    fireEvent.change(await screen.findByLabelText('Email domain'), { target: { value: 'fabrikam.com' } });
+    await filterToDomain('fabrikam.com');
 
     expect(await screen.findByText(different)).toBeVisible();
     expect(screen.queryByRole('button', { name: /Show 1 data warning/ })).not.toBeInTheDocument();
@@ -864,7 +962,101 @@ describe('CopilotAdoptionPage modelled time saved', () => {
   const tile = async (label: string, timeout?: number) =>
     (await screen.findByText(label, undefined, timeout ? { timeout } : undefined)).closest('.fui-Card') as HTMLElement;
 
-  beforeEach(() => resetTimeSavedStore());
+  // Every licence candidate, recommended or not: the 9 recommended and 31 lighter users - 3,000
+  // meetings x 10 + 30,000 emails x 5 + 4,500 documents x 8 = 216,000 minutes = 3,600 hours, 1,800 at
+  // the conservative end.
+  const licenceAllCandidates = {
+    ...licenceEstimate,
+    cohortUsers: 40,
+    addressableMeetings: 3000,
+    addressableMailThreads: 30000,
+    addressableDocuments: 4500,
+    hoursPerMonthLow: 1800,
+    hoursPerMonthHigh: 3600,
+  };
+
+  beforeEach(() => {
+    resetTimeSavedStore();
+    resetTimeSavedCohortStore();
+  });
+
+  /**
+   * The tabs let the reader model every licence candidate, or every Copilot seat holder, instead of the
+   * people recommended. The overview must then quote the same people - or it would put one figure on
+   * the tile and another on the tab it links to.
+   */
+  it('quotes every licence candidate on the licensing tile when the reader chose to model them all', async () => {
+    sessionStorage.setItem(TIME_SAVED_COHORT_STORAGE_KEY, JSON.stringify({ licence: 'all' }));
+    vi.mocked(fetchAdoptionSummary).mockResolvedValue(withEstimate({ licenceAllCandidatesEstimate: licenceAllCandidates }));
+
+    await renderPage();
+
+    const licence = await tile('Time back from licensing');
+    expect(within(licence).getByText('1,800\u20133,600 h')).toBeVisible();
+    expect(within(licence).getByText('a month if all 40 licence candidates were licensed')).toBeVisible();
+    // The Cowork tile keeps its own choice: the people ready now.
+    expect(within(await tile('Time back from Cowork')).getByText('15\u201330 h')).toBeVisible();
+  });
+
+  it('quotes every Copilot seat holder on the Cowork tile when the reader chose to model them all', async () => {
+    sessionStorage.setItem(TIME_SAVED_COHORT_STORAGE_KEY, JSON.stringify({ cowork: 'all' }));
+    vi.mocked(fetchAdoptionSummary).mockResolvedValue(withEstimate({ licenceAllCandidatesEstimate: licenceAllCandidates }));
+
+    await renderPage();
+
+    const cowork = await tile('Time back from Cowork');
+    expect(within(cowork).getByText('75\u2013150 h')).toBeVisible();
+    expect(within(cowork).getByText('a month if all 100 Copilot seat holders used Cowork')).toBeVisible();
+    expect(within(await tile('Time back from licensing')).getByText('1,200\u20132,400 h')).toBeVisible();
+  });
+
+  /**
+   * The customer this exists for: nobody uses Microsoft 365 heavily enough to be recommended, and the
+   * licensing tile used to vanish. Every candidate stands in, and the tile says whose time it is.
+   */
+  it('models every licence candidate on the licensing tile when nobody is recommended', async () => {
+    vi.mocked(fetchAdoptionSummary).mockResolvedValue(
+      withEstimate({
+        recommendedForLicence: 0,
+        licenceOpportunityEstimate: { ...licenceEstimate, cohortUsers: 0, hoursPerMonthLow: 0, hoursPerMonthHigh: 0 },
+        licenceChatUsersEstimate: { ...licenceEstimate, cohortUsers: 0, hoursPerMonthLow: 0, hoursPerMonthHigh: 0 },
+        licenceAllCandidatesEstimate: licenceAllCandidates,
+      }),
+    );
+
+    await renderPage();
+
+    const licence = await tile('Time back from licensing');
+    expect(within(licence).getByText('1,800\u20133,600 h')).toBeVisible();
+    expect(within(licence).getByText('a month if all 40 licence candidates were licensed')).toBeVisible();
+    expect(within(licence).queryByText(/recommended people/)).toBeNull();
+  });
+
+  /**
+   * On a large tenant the candidate list stops at its limit, so "all N candidates" would present a floor
+   * as a total - the one surface that did not say so, while the tab and the Excel report both do.
+   */
+  it('calls a capped candidate list a floor on the tile rather than every candidate', async () => {
+    sessionStorage.setItem(TIME_SAVED_COHORT_STORAGE_KEY, JSON.stringify({ licence: 'all' }));
+    vi.mocked(fetchAdoptionSummary).mockResolvedValue(
+      withEstimate({ licenceAllCandidatesEstimate: { ...licenceAllCandidates, candidatesCapped: true } }),
+    );
+
+    await renderPage();
+
+    const licence = await tile('Time back from licensing');
+    expect(
+      within(licence).getByText('a month for the first 40 licence candidates - the list stopped at its limit, so treat this as a floor'),
+    ).toBeVisible();
+    expect(within(licence).queryByText(/if all 40 licence candidates/)).toBeNull();
+
+    // The definition behind the tile says the same, rather than "every licence candidate".
+    fireEvent.click(within(licence).getByRole('button', { name: /How "Time back from licensing" is calculated/ }));
+    expect(
+      await screen.findByText(/^The time Microsoft 365 Copilot could give back each month if the first 40 licence candidates on the list/),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/if every licence candidate/)).toBeNull();
+  });
 
   it('puts each modelled figure on a tile of its own, marked as modelled', async () => {
     vi.mocked(fetchAdoptionSummary).mockResolvedValue(withEstimate());

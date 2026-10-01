@@ -37,16 +37,18 @@ namespace Web.AnalyticsWeb.Models
     }
 
     /// <summary>
-    /// JSON shape returned by api/SystemStatus and rendered by the SPA's Home page. Mirrors the
-    /// fields the old server-rendered home page showed (kept deliberately flat / display-oriented).
+    /// The part of api/SystemStatus every signed-in reader gets: the Insights overview's record counts.
     /// </summary>
-    public class SystemStatusApiModel
+    /// <remarks>
+    /// A separate type rather than <see cref="SystemStatusApiModel"/> with the admin fields blanked, so the
+    /// admin fields are <i>absent</i> from a non-admin's reply rather than present as <c>false</c> - a
+    /// <c>hasValidConfig: false</c> would read as "this deployment is misconfigured" to anything that
+    /// looked at it (#660).
+    /// </remarks>
+    public class SystemStatusInsightsModel
     {
         [JsonProperty("buildLabel")]
         public string BuildLabel { get; set; }
-
-        [JsonProperty("hasValidConfig")]
-        public bool HasValidConfig { get; set; }
 
         /// <summary>
         /// Record counts for the main / interesting tables (home page overview). Only the figures that
@@ -69,6 +71,31 @@ namespace Web.AnalyticsWeb.Models
         /// </summary>
         [JsonProperty("importSettingsKnown")]
         public bool ImportSettingsKnown { get; set; }
+    }
+
+    /// <summary>
+    /// JSON shape returned by api/SystemStatus and rendered by the SPA's Home page. Mirrors the
+    /// fields the old server-rendered home page showed (kept deliberately flat / display-oriented).
+    /// Everything declared here, beyond <see cref="SystemStatusInsightsModel"/>, is for the
+    /// Administration area only.
+    /// </summary>
+    public class SystemStatusApiModel : SystemStatusInsightsModel
+    {
+        /// <summary>The reply for a reader without the Administration permission.</summary>
+        public static SystemStatusInsightsModel ForInsights(
+            string buildLabel, List<NamedCountModel> dataCounts, List<string> enabledImports, bool importSettingsKnown)
+        {
+            return new SystemStatusInsightsModel
+            {
+                BuildLabel = buildLabel,
+                DataCounts = dataCounts ?? new List<NamedCountModel>(),
+                EnabledImports = enabledImports ?? new List<string>(),
+                ImportSettingsKnown = importSettingsKnown,
+            };
+        }
+
+        [JsonProperty("hasValidConfig")]
+        public bool HasValidConfig { get; set; }
 
         [JsonProperty("webhookEndpointUrl")]
         public string WebhookEndpointUrl { get; set; }
@@ -89,8 +116,9 @@ namespace Web.AnalyticsWeb.Models
         [JsonProperty("webAppConfigSQL")]
         public string WebAppConfigSQL { get; set; }
 
-        [JsonProperty("webAppConfigRedis")]
-        public string WebAppConfigRedis { get; set; }
+        /// <summary>The storage account holding the runtime state table; the account name only. Null when not configured.</summary>
+        [JsonProperty("webAppConfigStorage")]
+        public string WebAppConfigStorage { get; set; }
 
         [JsonProperty("webAppConfigCognitive")]
         public string WebAppConfigCognitive { get; set; }

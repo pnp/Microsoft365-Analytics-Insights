@@ -1,6 +1,7 @@
 using System.Threading.Tasks;
 using System.Web.Http;
 using Web.AnalyticsWeb.Models.UpdateCheck;
+using Web.AnalyticsWeb.Security;
 
 namespace Web.AnalyticsWeb.Controllers
 {
@@ -13,6 +14,7 @@ namespace Web.AnalyticsWeb.Controllers
     /// GitHub's anonymous rate limit, which the installer also depends on.
     /// </remarks>
     [Authorize]
+    [RequirePortalPermission(PortalPermission.Administration)]
     [RoutePrefix("api/UpdateCheck")]
     public class UpdateCheckAPIController : ApiController
     {

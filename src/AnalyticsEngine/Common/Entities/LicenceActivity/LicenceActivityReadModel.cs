@@ -559,8 +559,9 @@ namespace Common.Entities.LicenceActivity
             // can be banded at all:
             //  - the Copilot usage report, a rolling per-person report that only ever lists people who
             //    hold a Copilot licence, so absence means "not licensed" rather than "did nothing";
-            //  - the Microsoft 365 usage reports WHEN a group filter scopes their import, because the
-            //    user import is not filtered and absence then means "never looked at".
+            //  - the Microsoft 365 usage reports WHEN a group filter scopes their import, because the users
+            //    table can still hold people imported before the filter was set, and for them absence
+            //    means "never looked at".
             var presenceGated = coverage.Source == LicenceActivitySql.CopilotReportSource
                 || (coverage.Source == LicenceActivitySql.M365ReportSource && _usageReportsGroupFiltered);
             if (presenceGated)

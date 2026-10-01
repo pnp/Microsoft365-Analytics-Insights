@@ -59,6 +59,48 @@ namespace Common.Entities.CopilotAdoption
         public List<CoworkReadinessSignalRow> CoworkSignals { get; set; } = new List<CoworkReadinessSignalRow>();
 
         /// <summary>
+        /// True when this analysis is a slice of one whose Cowork assessment ran, so an empty
+        /// <see cref="CoworkSignals"/> means "nobody in this slice", not "the assessment did not run".
+        /// </summary>
+        /// <remarks>
+        /// Without it a filter such as "User type is Guest" - Cowork is assessed for members only - would
+        /// empty the signals and the Cowork tab would tell an admin to check their imports, when the truth
+        /// is that the people they selected have no Cowork readiness to show.
+        /// </remarks>
+        public bool CoworkAssessedForWholePopulation { get; set; }
+
+        /// <summary>
+        /// True when this analysis is a slice of one whose Cowork assessment ran but stopped at
+        /// <see cref="CopilotAdoptionOptions.MaxCoworkUsersScored"/>, so an empty slice means "not
+        /// assessed" - neither a measured zero nor a missing import - and is explained as such.
+        /// </summary>
+        public bool CoworkAssessmentCapped { get; set; }
+
+        /// <summary>
+        /// The Copilot seat holders the licensed-user query did not return because it stopped at
+        /// <see cref="CopilotAdoptionOptions.MaxLicensedUsersScored"/>, or <c>null</c> when it did not stop
+        /// there.
+        /// </summary>
+        /// <remarks>
+        /// User ids only - a few hundred kilobytes even at 200,000 seats - taken from the licence
+        /// assignments, which are never capped. A filtered view counts the ones it would include and says
+        /// so. Without it, a filter made up of the newest user records - which the cap cuts first - reads as
+        /// nobody, beside a tenant-wide warning that cannot say how much of that one view is missing.
+        /// </remarks>
+        public IReadOnlyList<int> LicensedUsersNotAnalysed { get; set; }
+
+        /// <summary>
+        /// True when the licensed-user query stopped at <see cref="CopilotAdoptionOptions.MaxLicensedUsersScored"/>
+        /// - in the tenant analysis, and in every slice of it, which inherits the cap.
+        /// </summary>
+        /// <remarks>
+        /// The one fact a slice needs to tell "nobody in this view was analysed" from "the analysis did not
+        /// run": the Cowork tab takes each person's Copilot fluency from the licensed-user rows, and a view
+        /// made up entirely of seat holders past the cap has Cowork signals but no licensed-user row at all.
+        /// </remarks>
+        public bool LicensedUsersCapped { get; set; }
+
+        /// <summary>
         /// The queries that produced this analysis, keyed by a short name, for the SQL popover the rest
         /// of the admin site uses. Showing the working is part of the point: these numbers get quoted
         /// in licence negotiations, so an admin has to be able to verify them independently.

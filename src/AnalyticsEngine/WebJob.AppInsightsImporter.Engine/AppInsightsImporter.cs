@@ -1,6 +1,7 @@
 ﻿using Azure.Identity;
 using Common.Entities;
 using Common.Entities.Config;
+using Common.Entities.UserScope;
 using DataUtils;
 using Microsoft.Extensions.Logging;
 using System;
@@ -31,12 +32,23 @@ namespace WebJob.AppInsightsImporter.Engine
         private readonly IHitWatermarkStore _hitWatermarkStore;
         private readonly IAppInsightsDayPersistenceManager _persistence;
 
+        // UserGroupsFilter: who this cycle may import data about, and (process-lifetime) how far it has read.
+        private readonly UserImportScope _userScope;
+        private readonly AppInsightsScanWatermark _scanWatermark;
+
+        /// <param name="userScope">The <c>UserGroupsFilter</c> scope for this cycle; null means unfiltered.</param>
+        /// <param name="scanWatermark">
+        /// Process-lifetime record of how far the import has read, consulted only when the scope is filtered. See
+        /// <see cref="AppInsightsScanWatermark"/>.
+        /// </param>
         public AppInsightsImporter(AppConfig importConfig, AnalyticsLogger logger, IClock clock = null,
             IAppInsightsSourceLoader source = null,
             ISiteFilterLoader siteFilterLoader = null,
             IHitWatermarkStore hitWatermarkStore = null,
             IAppInsightsDayPersistenceManager persistence = null,
-            IAnalyticsDbContextFactory contextFactory = null)
+            IAnalyticsDbContextFactory contextFactory = null,
+            UserImportScope userScope = null,
+            AppInsightsScanWatermark scanWatermark = null)
         {
             _importConfig = importConfig;
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
@@ -46,6 +58,8 @@ namespace WebJob.AppInsightsImporter.Engine
             _siteFilterLoader = siteFilterLoader;
             _hitWatermarkStore = hitWatermarkStore;
             _persistence = persistence;
+            _userScope = userScope ?? UserImportScope.Unfiltered;
+            _scanWatermark = scanWatermark;
         }
 
         /// <summary>
@@ -92,6 +106,17 @@ namespace WebJob.AppInsightsImporter.Engine
 
             var newestHitTimestamp = await hitWatermarkStore.GetNewestHitTimestampUtcAsync();
             var effectiveNewestHitTimestamp = AppInsightsImportWindow.NormalizeStoredHitTimestampUtc(newestHitTimestamp);
+
+            // Under UserGroupsFilter the newest STORED hit stops moving whenever the people in scope stop browsing, so
+            // resume from how far this process has already READ when that is later. See AppInsightsScanWatermark.
+            var newestScanned = _userScope.IsFiltered ? _scanWatermark?.NewestScannedUtc : null;
+            if (!scanFromDateOverride.HasValue && newestScanned.HasValue
+                && (!effectiveNewestHitTimestamp.HasValue || newestScanned.Value > effectiveNewestHitTimestamp.Value))
+            {
+                _logger.LogInformation($"Resuming from {newestScanned.Value:O}, the newest page view already read this process; " +
+                    "later page views by people outside UserGroupsFilter are not stored, so the newest stored hit is older.");
+                effectiveNewestHitTimestamp = newestScanned;
+            }
             if (!scanFromDateOverride.HasValue && effectiveNewestHitTimestamp.HasValue && effectiveNewestHitTimestamp.Value > nowUtc)
             {
                 _logger.LogWarning($"App Insights hit watermark is in the future: newest stored hit_timestamp {effectiveNewestHitTimestamp.Value:O} is later than importer clock {nowUtc:O}. Using the importer clock as the watermark for this run so the import window does not walk backwards.");
@@ -200,6 +225,20 @@ namespace WebJob.AppInsightsImporter.Engine
                     _logger.LogInformation($"Hits range: {earliest.Timestamp:yyyy-MM-dd HH:mm:ss.ff} to {latest.Timestamp:yyyy-MM-dd HH:mm:ss.ff}");
                 }
 
+                // Newest page view READ for this day, before anything is filtered out: how far this day got.
+                var newestRead = pageViewsResult.Rows.Count > 0 ? pageViewsResult.Rows.Max(v => v.Timestamp) : (DateTime?)null;
+
+                // UserGroupsFilter: drop what people outside the scope did before anything is saved.
+                if (_userScope.IsFiltered)
+                {
+                    var removed = AppInsightsUserScopeRules.Apply(pageViewsResult, events, _userScope);
+                    if (removed.Total > 0)
+                    {
+                        _logger.LogInformation($"Left out data by people outside UserGroupsFilter: {removed.PageViewsRemoved:n0} page-view(s), " +
+                            $"{removed.EventsRemoved:n0} event(s), {removed.CommentsRemoved:n0} page comment(s) and {removed.LikesRemoved:n0} like(s).");
+                    }
+                }
+
                 if (pageViewsResult.Rows.Count > 0 || events.Rows.Count > 0)
                 {
                     // Save to DB
@@ -238,6 +277,12 @@ namespace WebJob.AppInsightsImporter.Engine
                 else
                 {
                     _logger.LogInformation($"Day {d:yyyy-MM-dd} completed in {dayTimer.Elapsed.TotalSeconds:N1}s - no new data.");
+                }
+
+                // The day is fully processed - saved, or nothing left to save - so the next cycle need not read it again.
+                if (_userScope.IsFiltered)
+                {
+                    _scanWatermark?.Advance(newestRead);
                 }
             }
 

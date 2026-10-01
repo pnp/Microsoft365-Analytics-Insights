@@ -1,3 +1,4 @@
+using Common.Entities.UserOrgs;
 using Microsoft.Graph;
 using Microsoft.Graph.Models;
 using System;
@@ -33,6 +34,15 @@ namespace Tests.UnitTests.FakeLoaderClasses
         public bool ThrowOnCommitDeltaToken { get; set; }
 
         /// <summary>
+        /// When true, LoadAllActiveUsers behaves like a /users/delta read that stopped before its last page:
+        /// it still returns the fake users, but reaches no deltaLink, so no new delta token is buffered and
+        /// <see cref="LastLoadReachedDeltaLink"/> is false.
+        /// </summary>
+        public bool SimulateIncompleteDeltaRead { get; set; }
+
+        public bool LastLoadReachedDeltaLink { get; private set; }
+
+        /// <summary>
         /// When non-null AND the delta provider already has a token (i.e. this is
         /// NOT the first run), LoadAllActiveUsers returns this list instead of the
         /// full fake-user list. Mirrors the real Graph behaviour where /users/delta
@@ -42,6 +52,34 @@ namespace Tests.UnitTests.FakeLoaderClasses
         /// even though their licence assignments in Graph have changed.
         /// </summary>
         public List<GraphUser> DeltaUsersOverride { get; set; }
+
+        /// <summary>The org selection the updater declared, so tests can assert what was requested.</summary>
+        public GraphUserOrgSelection OrgSelection { get; private set; } = GraphUserOrgSelection.None;
+
+        /// <summary>
+        /// Set by a test to simulate Graph rejecting the configured org attributes, which must stop org
+        /// values being written (an org-less response would otherwise read as "every value was cleared").
+        /// </summary>
+        public bool OrgSelectionWasRejected { get; set; }
+
+        public void SetOrgSelection(GraphUserOrgSelection orgSelection)
+        {
+            OrgSelection = orgSelection ?? GraphUserOrgSelection.None;
+            _deltaProvider.SetKeyQualifier(OrgSelection.DeltaKeyQualifier);
+        }
+
+        /// <summary>Mirrors <see cref="GraphUserLoader.ClearStoredDeltaTokensAsync"/>: this cycle's key, and the unqualified one.</summary>
+        public async Task ClearStoredDeltaTokensAsync()
+        {
+            await _deltaProvider.ClearDeltaToken();
+            var qualifier = OrgSelection.DeltaKeyQualifier;
+            if (!string.IsNullOrEmpty(qualifier))
+            {
+                _deltaProvider.SetKeyQualifier(GraphUserOrgSelection.None.DeltaKeyQualifier);
+                await _deltaProvider.ClearDeltaToken();
+                _deltaProvider.SetKeyQualifier(qualifier);
+            }
+        }
 
         public FakeUserMetadataLoader(
             List<GraphUser> fakeUsers = null,
@@ -60,7 +98,7 @@ namespace Tests.UnitTests.FakeLoaderClasses
         /// Replaces the fake Graph state for a subsequent import run while keeping
         /// the same loader (and therefore the same delta provider) so tests can
         /// simulate persistent-delta-token scenarios such as a customer running
-        /// against Redis.
+        /// against the state table.
         /// </summary>
         public void SetFakeState(
             List<GraphUser> fakeUsers,
@@ -83,9 +121,11 @@ namespace Tests.UnitTests.FakeLoaderClasses
         public async Task<List<GraphUser>> LoadAllActiveUsers()
         {
             // Simulate GraphUserLoader behavior: buffer the new delta token in
-            // memory; only CommitDeltaTokenAsync persists it.
-            _pendingDeltaToken = SimulatedNewDeltaToken;
-            _hasPendingDeltaToken = true;
+            // memory; only CommitDeltaTokenAsync persists it. An incomplete read
+            // never reached a deltaLink, so there is nothing to buffer.
+            LastLoadReachedDeltaLink = !SimulateIncompleteDeltaRead;
+            _hasPendingDeltaToken = LastLoadReachedDeltaLink;
+            _pendingDeltaToken = _hasPendingDeltaToken ? SimulatedNewDeltaToken : null;
 
             // Simulate Graph delta behaviour: when a delta token is already
             // persisted and the test has supplied a delta-only subset, return
@@ -133,7 +173,7 @@ namespace Tests.UnitTests.FakeLoaderClasses
             return Task.FromResult<List<LicenseDetails>>(null);
         }
 
-        public async Task CommitDeltaTokenAsync()
+        public async Task<bool> CommitDeltaTokenAsync()
         {
             if (_hasPendingDeltaToken)
             {
@@ -145,34 +185,60 @@ namespace Tests.UnitTests.FakeLoaderClasses
                 await _deltaProvider.SetDeltaToken(_pendingDeltaToken);
                 _pendingDeltaToken = null;
                 _hasPendingDeltaToken = false;
+                return true;
             }
+
+            return false;
         }
     }
 
     /// <summary>
     /// Fake implementation of IDeltaValueProvider for testing
     /// </summary>
+    /// <remarks>
+    /// Tokens are stored <b>per qualifier</b>, exactly as <c>RedisProcessDeltaValueProvider</c> stores
+    /// them under a per-qualifier cache key. A single shared field would be a materially different
+    /// thing, and it hid a production defect once: the fallback path switches to the unqualified key,
+    /// and with one field that key looked empty, so a test could not see that a real deployment still
+    /// has a token sitting there from before organisations were configured.
+    /// </remarks>
     public class FakeDeltaValueProvider : IDeltaValueProvider
     {
-        private string _deltaToken;
+        private readonly Dictionary<string, string> _tokensByQualifier =
+            new Dictionary<string, string>(StringComparer.Ordinal);
+
+        /// <summary>The qualifier most recently pushed in by the loader, so tests can assert on it.</summary>
+        public string KeyQualifier { get; private set; } = string.Empty;
+
+        public void SetKeyQualifier(string qualifier)
+        {
+            KeyQualifier = string.IsNullOrEmpty(qualifier) ? string.Empty : qualifier;
+        }
+
+        /// <summary>Seeds a token under a specific qualifier, to model a key written by an earlier cycle.</summary>
+        public void SeedToken(string qualifier, string token)
+        {
+            _tokensByQualifier[string.IsNullOrEmpty(qualifier) ? string.Empty : qualifier] = token;
+        }
 
         public Task ClearDeltaToken(CancellationToken cancellationToken = default)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            _deltaToken = null;
+            _tokensByQualifier.Remove(KeyQualifier);
             return Task.CompletedTask;
         }
 
         public Task<string> GetDeltaToken(CancellationToken cancellationToken = default)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            return Task.FromResult(_deltaToken);
+            string token;
+            return Task.FromResult(_tokensByQualifier.TryGetValue(KeyQualifier, out token) ? token : null);
         }
 
         public Task SetDeltaToken(string deltaToken, CancellationToken cancellationToken = default)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            _deltaToken = deltaToken;
+            _tokensByQualifier[KeyQualifier] = deltaToken;
             return Task.CompletedTask;
         }
     }

@@ -14,7 +14,7 @@ namespace Tests.UnitTests
     /// placeholder user per licensed account - around 200,000 on a large tenant - permanently polluting
     /// the users table and every report built on it, producing joins that are wrong rather than missing.
     ///
-    /// Runs with zero Graph, SQL Server, Redis or Service Bus dependency.
+    /// Runs with zero Graph, SQL Server, Azure Storage or Service Bus dependency.
     /// </summary>
     [TestClass]
     public class CopilotUsageReportPolicyTests

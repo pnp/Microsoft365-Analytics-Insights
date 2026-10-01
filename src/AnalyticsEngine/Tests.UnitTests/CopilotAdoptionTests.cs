@@ -51,6 +51,21 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public void SuiteThatIncludesTheCopilotSeat_IsRecognised()
+        {
+            // Microsoft 365 E7 is not Copilot-branded, but it carries every Microsoft 365 Copilot service
+            // plan. Missing it counted its holders as unlicensed, so they could be recommended for a
+            // Copilot licence they already hold.
+            Assert.IsTrue(CopilotLicenceClassifier.IsCopilotSeat("MICROSOFT_365_E7", "Microsoft 365 E7"));
+            Assert.IsTrue(CopilotLicenceClassifier.IsCopilotSeat("Microsoft_365_E7", "Microsoft_365_E7"),
+                "Matching is by part number and case-insensitive, so it must not depend on the CSV naming the SKU.");
+
+            // ...without sweeping in the suites that do not include it.
+            Assert.IsFalse(CopilotLicenceClassifier.IsCopilotSeat("SPE_E5", "Microsoft 365 E5"));
+            Assert.IsFalse(CopilotLicenceClassifier.IsCopilotSeat("SPE_E3", "Microsoft 365 E3"));
+        }
+
+        [TestMethod]
         public void FutureCopilotSeatSku_IsRecognisedByPrefix()
         {
             // A SKU newer than the licensing CSV shipped in this build has no display name, so the
@@ -69,6 +84,7 @@ namespace Tests.UnitTests
             // this number is used to argue about spend.
             Assert.IsFalse(CopilotLicenceClassifier.IsCopilotSeat("Microsoft_Copilot_for_Sales", "Microsoft 365 Copilot for Sales"));
             Assert.IsFalse(CopilotLicenceClassifier.IsCopilotSeat("Microsoft_Viva_Sales", "Microsoft Sales Copilot"));
+            Assert.IsFalse(CopilotLicenceClassifier.IsCopilotSeat("Microsoft_Copilot_for_Finance_trial", "Microsoft 365 Copilot for Finance (Preview)"));
             Assert.IsFalse(CopilotLicenceClassifier.IsCopilotSeat("Power_Virtual_Agents", "Microsoft Copilot Studio"));
             Assert.IsFalse(CopilotLicenceClassifier.IsCopilotSeat("VIRTUAL_AGENT_USL", "Microsoft Copilot Studio User License"));
             Assert.IsFalse(CopilotLicenceClassifier.IsCopilotSeat("CCIBOTS_PRIVPREV_VIRAL", "Microsoft Copilot Studio Viral Trial"));
@@ -92,6 +108,7 @@ namespace Tests.UnitTests
 
             // ...and the fallback must not swallow the other Copilot-branded products.
             Assert.IsFalse(CopilotLicenceClassifier.IsCopilotSeat("SOME_NEW_STEM", "Microsoft 365 Copilot Studio"));
+            Assert.IsFalse(CopilotLicenceClassifier.IsCopilotSeat("SOME_NEW_STEM", "Microsoft 365 Copilot for Finance"));
         }
 
 
@@ -2576,6 +2593,7 @@ namespace Tests.UnitTests
                 { CopilotAdoptionWarningKeys.UnlicensedUsageCapped, Case("Unlicensed Copilot usage was capped at 1,234 users, so those figures are a floor rather than a total.", "maxUsers", 1234) },
                 { CopilotAdoptionWarningKeys.LicensedUserDetailCapped, Case("Only the first 1,234 licensed users were analysed. The figures below therefore describe that subset, not the whole tenant. The subset is ordered by internal user id for reproducibility, so the oldest user records are over-represented and the newest user records are excluded first.", "maxUsers", 1234) },
                 { CopilotAdoptionWarningKeys.LicensedUsersSubset, Case("This tenant holds 5,000 Copilot licences, but only 1,234 users could be analysed in one pass. Every rate and breakdown below describes those 1,234 users, not the whole tenant - they are not tenant-wide figures and must not be quoted as such. Because the drill-down query is ordered by internal user id, the oldest user records are over-represented and the newest joiners or newly onboarded subsidiaries are excluded first; the subset is reproducible, but not representative.", "licensedUsers", 5000, "scoredUsers", 1234) },
+                { CopilotAdoptionWarningKeys.ScopedLicensedUsersNotAnalysed, Case("The analysis covers only the first 50,000 of this tenant's Copilot licence holders, and this view selects licence holders beyond that limit (1,234 of them), so every figure below leaves them out. The limit follows internal user id, so it is the newest user records that are missed, and a filtered view can be made up largely or entirely of them. Treat these figures as a partial count of this view, not as its total.", "count", 1234, "maxUsers", 50000) },
                 { CopilotAdoptionWarningKeys.LicenceOpportunitiesNoSources, Case("Licence opportunities need either the Copilot audit import or the Microsoft 365 usage reports. Neither has data, so no candidates can be identified.") },
                 { CopilotAdoptionWarningKeys.LicenceCandidatesAuditOnly, Case("The Microsoft 365 usage reports are not available, so licence candidates are ranked only on unlicensed Copilot Chat use. Heavy Microsoft 365 users who have never tried Copilot will not appear.") },
                 { CopilotAdoptionWarningKeys.CoworkReadinessNoSources, Case("Cowork readiness needs the Cowork usage report, the Copilot audit import or the Microsoft 365 usage reports. None has data for this period, so no readiness assessment is possible.") },
@@ -2589,6 +2607,9 @@ namespace Tests.UnitTests
                 { CopilotAdoptionWarningKeys.SkuSeatMismatch, Case("Purchased and assigned Copilot seats disagree for Contoso Copilot SKU: Graph reports 1,234 purchased but 1,200 assigned, so unassigned seats are shown as Unknown rather than zero.", "skuName", "Contoso Copilot SKU", "purchased", 1234, "assigned", 1200) },
                 { CopilotAdoptionWarningKeys.CoworkFluencyMissingAll, Case("Cowork readiness was measured, but the licensed-user analysis it takes Copilot fluency from did not complete, so the tab could not be scored. This is NOT a missing usage report import - the Cowork signals imported fine. Check the Health page and re-run.") },
                 { CopilotAdoptionWarningKeys.CoworkFluencyPartial, Case("Cowork readiness: 1,234 of 5,678 seat holders were scored without a Copilot fluency figure, because they fall outside the 2,000-row licensed-user analysis this tab joins against. Their fluency reads as 0 rather than as unknown, so they band lower than they should - most will show as \"build fluency first\". Treat the tier of those rows as unreliable; the rest of the tab is unaffected.", "withoutFluency", 1234, "total", 5678, "maxLicensed", 2000) },
+                { CopilotAdoptionWarningKeys.CoworkSliceNotAssessed, Case("Cowork readiness scores at most 50,000 seat holders, ranked by coordination load (when the Copilot audit log is imported, anyone it shows already using Cowork is taken first), and this tenant reached that limit. Nobody in this filtered population made the list, so there is nothing to show here. This is NOT a missing import: the Cowork assessment ran. Widen the filter, or read the Cowork tab for the whole tenant.", "maxUsers", 50000) },
+                { CopilotAdoptionWarningKeys.CoworkReadinessCapped, Case("Cowork readiness scores at most 50,000 seat holders, ranked by coordination load (when the Copilot audit log is imported, anyone it shows already using Cowork is taken first), and this tenant reached that limit. Every count on this tab describes the seat holders who made the list, not all of them; those left out are the ones with the least coordination load, who are the least likely Cowork candidates.", "maxUsers", 50000) },
+                { CopilotAdoptionWarningKeys.CoworkSliceBeyondLicensedCap, Case("Cowork readiness can't be scored for this view: every seat holder in it that the Cowork assessment reached (1,234) falls outside the 50,000-row licensed-user analysis this tab takes Copilot fluency from. That limit follows internal user id, so it is the newest user records that are missed, and a filtered view can be made up entirely of them. This is NOT a failed import or query - both ran. Read the Cowork tab for the whole tenant, or widen the filter.", "total", 1234, "maxLicensed", 50000) },
                 { CopilotAdoptionWarningKeys.CouldNotLoad, Case("Could not load licensed user detail: timeout", "description", "licensed user detail", "query", "LicensedUserDetail", "message", "timeout") },
             };
 

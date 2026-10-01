@@ -1,4 +1,4 @@
-﻿<?xml version="1.0" encoding="utf-8"?>
+<?xml version="1.0" encoding="utf-8"?>
 <Project ToolsVersion="15.0" DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <Import Project="$(MSBuildExtensionsPath32)\Microsoft\VisualStudio\v$(VisualStudioVersion)\WebApplications\Microsoft.WebApplication.targets" />
   <PropertyGroup>
@@ -34,6 +34,8 @@
     <Compile Include="LicenceActivityTests.cs" />
     <Compile Include="LicenceActivityApiTests.cs" />
     <Compile Include="LicenceActivityHttpHost.cs" />
+    <Compile Include="PortalPermissionTests.cs" />
+    <Compile Include="PortalTestHost.cs" />
     <Compile Include="LicenceActivityLoadTests.cs" />
     <Compile Include="LicenceActivitySqlFixture.cs" />
     <Compile Include="LicenceActivitySqlTests.cs" />
@@ -48,6 +50,23 @@
     <Compile Include="AppInsightsImporterOrchestrationTests.cs" />
     <Compile Include="CheckpointTableClientFactoryTests.cs" />
     <Compile Include="CopilotAuditLogContentSchemaTests.cs" />
+    <Compile Include="EntraOrgAttributeSpecTests.cs" />
+    <Compile Include="UserOrgRulesTests.cs" />
+    <Compile Include="UserOrgImportTests.cs" />
+    <Compile Include="UserOrgCsvTests.cs" />
+    <Compile Include="UserOrgImportFailureTests.cs" />
+    <Compile Include="UserOrgImportLifecycleSqlTests.cs" />
+    <Compile Include="UserOrgChangeLogTests.cs" />
+    <Compile Include="UserOrgCollationSqlTests.cs" />
+    <Compile Include="UserOrgGraphProbeTests.cs" />
+    <Compile Include="UserOrgMigrationScriptTests.cs" />
+    <Compile Include="UserOrgMembershipServiceTests.cs" />
+    <Compile Include="UserOrgStoreSqlTests.cs" />
+    <Compile Include="UserFilterCodecTests.cs" />
+    <Compile Include="UserFilterCompilerTests.cs" />
+    <Compile Include="UserFilterWebTests.cs" />
+    <Compile Include="SqlUserDirectoryLoaderTests.cs" />
+    <Compile Include="CopilotAdoptionUserFilterScopeTests.cs" />
     <Compile Include="CopilotEventManagerAccessedResourcesTests.cs" />
     <Compile Include="CopilotEventManagerEdgeCaseTests.cs" />
     <Compile Include="CopilotMetadataPrewarmerTests.cs" />
@@ -61,6 +80,8 @@
     <Compile Include="SentEmailImporterPipelineTests.cs" />
     <Compile Include="SentEmailImportTests.cs" />
     <Compile Include="GraphPagingFailureTests.cs" />
+    <Compile Include="GraphUserDeltaTokenRecoveryTests.cs" />
+    <Compile Include="UserImportCheckpointApiTests.cs" />
     <Compile Include="GraphExceptionTelemetryTests.cs" />
     <Compile Include="SentEmailMailboxSkipListTests.cs" />
     <Compile Include="InstallTests\VNetIntegrationTests.cs" />
@@ -69,6 +90,7 @@
     <Compile Include="InstallTests\ManagedIdentityPlannerTests.cs" />
     <Compile Include="UserImportCaseSensitivityTests.cs" />
     <Compile Include="UserLicenseRefreshTests.cs" />
+    <Compile Include="OfficeLicenseNameResolverTests.cs" />
     <Compile Include="FakeLoaderClasses\FakeUserPipelinePorts.cs" />
     <Compile Include="UserBulkUpdateRulesTests.cs" />
     <Compile Include="UserImportCommitPolicyTests.cs" />
@@ -129,6 +151,7 @@
     <Reference Include="System.Net" />
     <Reference Include="System.Net.Http.WebRequest" />
     <Reference Include="System.Numerics" />
+    <Reference Include="System.Runtime.Caching" />
     <Reference Include="System.Runtime.Serialization" />
     <Reference Include="System.Security" />
     <Reference Include="System.ServiceModel" />
@@ -209,6 +232,9 @@
     </Compile>
     <Compile Include="..\Tests.FakeDataGen\Demo\DemoTables.cs">
       <Link>DemoGenerator\DemoTables.cs</Link>
+    </Compile>
+    <Compile Include="..\Tests.FakeDataGen\Demo\DemoUserOrganisations.cs">
+      <Link>DemoGenerator\DemoUserOrganisations.cs</Link>
     </Compile>
     <Compile Include="..\Tests.FakeDataGen\Demo\DemoWebCatalogue.cs">
       <Link>DemoGenerator\DemoWebCatalogue.cs</Link>
@@ -306,7 +332,7 @@
     <Compile Include="FakeLoaderClasses\InMemoryCopilotUsagePersistenceManager.cs" />
     <Compile Include="FakeLoaderClasses\FakeAggregateWeeklyUsageReportLoader.cs" />
     <Compile Include="FakeLoaderClasses\FakeSpoGraphClient.cs" />
-    <Compile Include="FakeLoaderClasses\MockUserGroupsCache.cs" />
+    <Compile Include="FakeLoaderClasses\TestUserScopes.cs" />
     <Compile Include="LookupCacheBatchProcessingTests.cs" />
     <Compile Include="OutlookUserActivityLoaderTests.cs" />
     <Compile Include="PageExitEventValidationTests.cs" />
@@ -314,6 +340,8 @@
     <Compile Include="PowerPlatformAdminActivityRecordParseTests.cs" />
     <Compile Include="ProfilingStoredProcedureTests.cs" />
     <Compile Include="PortalBuildLabelTests.cs" />
+    <Compile Include="DelegatedGraphConsentTests.cs" />
+    <Compile Include="DelegatedGraphConsentPipelineTests.cs" />
     <Compile Include="CopilotAdoptionCoworkTests.cs" />
     <Compile Include="CopilotAdoptionEmailDomainTests.cs" />
     <Compile Include="CopilotAdoptionLicenceEstimateTests.cs" />
@@ -329,7 +357,6 @@
     <Compile Include="ReportsAPIControllerTests.cs" />
     <Compile Include="SimplePropsDicTests.cs" />
     <Compile Include="PageUpdateEventListParseTests.cs" />
-    <Compile Include="UserGroupsCacheTtlTests.cs" />
     <Compile Include="TestsAppConfig.cs" />
     <Compile Include="UsageStatsTests.cs" />
     <Compile Include="AppInsightsQueryTableTests.cs" />
@@ -384,9 +411,12 @@
     <Compile Include="FakeLoaderClasses\FakeActivitySubscriptionManager.cs" />
     <Compile Include="GraphUsageReportImportTests.cs" />
     <Compile Include="SingleDateStoreTests.cs" />
+    <Compile Include="StateStoreAzuriteTests.cs" />
+    <Compile Include="StateStoreTests.cs" />
     <Compile Include="AutoThrottleHttpClientTests.cs" />
     <Compile Include="CallsImportTests.cs" />
     <Compile Include="GraphImportTests.cs" />
+    <Compile Include="GraphRestCallRecordSubscriptionReaderTests.cs" />
     <Compile Include="ReportCompletionStoreTests.cs" />
     <Compile Include="TeamsCrawlTests.cs" />
     <Compile Include="InstallTests\FakeInstallClasses.cs" />
@@ -413,8 +443,11 @@
     <Compile Include="TeamsTests.cs" />
     <Compile Include="RetireUnusedAuditYammerStreamTablesMigrationTests.cs" />
     <Compile Include="UserDataLookupTests.cs" />
-    <Compile Include="UserGroupsCacheTests.cs" />
     <Compile Include="UserGroupsFilterModelTests.cs" />
+    <Compile Include="UserImportScopeTests.cs" />
+    <Compile Include="UserImportScopeImportsTests.cs" />
+    <Compile Include="UserScopeApiTests.cs" />
+    <Compile Include="UserScopePurgeTests.cs" />
     <Compile Include="SiteIdToUrlCacheTests.cs" />
     <Compile Include="DailyActivityLoaderTests.cs" />
     <Compile Include="SharePointSiteUsageStoreTests.cs" />
@@ -552,9 +585,6 @@
     <PackageReference Include="Microsoft.AspNet.WebApi">
       <Version>5.3.0</Version>
     </PackageReference>
-    <PackageReference Include="Microsoft.Azure.Cosmos">
-      <Version>3.62.1</Version>
-    </PackageReference>
     <PackageReference Include="Microsoft.Extensions.Configuration">
       <Version>10.0.11</Version>
     </PackageReference>
@@ -575,6 +605,11 @@
     </PackageReference>
     <PackageReference Include="Newtonsoft.Json">
       <Version>13.0.4</Version>
+    </PackageReference>
+    <!-- Used to arrive through the Cosmos DB SDK. Pinned so it matches the binding redirect in
+         App.Template.config, which the test platform's own assemblies rely on. -->
+    <PackageReference Include="System.Collections.Immutable">
+      <Version>1.7.0</Version>
     </PackageReference>
     <PackageReference Include="System.IdentityModel.Tokens.Jwt">
       <Version>8.22.0</Version>

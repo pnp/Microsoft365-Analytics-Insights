@@ -1,5 +1,6 @@
 using Azure;
 using Azure.Data.Tables;
+using Common.Entities.Config;
 using Microsoft.Extensions.Logging;
 using System;
 using System.Collections.Generic;
@@ -37,6 +38,18 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.BlobCheckpoint
         public AzureTableProcessedBlobStore(string storageConnectionString, TimeSpan retention, ILogger logger,
             string tenantId = null, string clientId = null, string clientSecret = null, string tableName = DefaultTableName)
             : this(CheckpointTableClientFactory.CreateAndEnsureTable(storageConnectionString, tableName, tenantId, clientId, clientSecret, logger),
+                   retention, logger)
+        {
+        }
+
+        /// <summary>
+        /// Production constructor that honors the configured runtime certificate as well as client-secret
+        /// authentication when the storage account requires RBAC.
+        /// </summary>
+        public AzureTableProcessedBlobStore(
+            string storageConnectionString, TimeSpan retention, ILogger logger, AppConfig config,
+            string tableName = DefaultTableName)
+            : this(CheckpointTableClientFactory.CreateAndEnsureTable(storageConnectionString, tableName, config, logger),
                    retention, logger)
         {
         }

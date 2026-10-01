@@ -145,7 +145,7 @@ const health: Record<keyof typeof en, string> = {
 
   // Component health panel
   'health.components.title': 'Estado de componentes',
-  'health.components.description': 'Estado más reciente por componente. Las comprobaciones de la credencial en tiempo de ejecución (expiración) y Service Bus (cola de llamadas de Teams) se ejecutan aquí actualmente; SQL, Activity API, Graph, Key Vault, Redis y DNS se rellenarán cuando llegue el emisor HealthCheck en tiempo de ejecución (una fase posterior).',
+  'health.components.description': 'Estado más reciente por componente. Las comprobaciones de la credencial en tiempo de ejecución (expiración) y Service Bus (cola de llamadas de Teams) se ejecutan aquí actualmente; SQL, Activity API, Graph, Key Vault y DNS se rellenarán cuando llegue el emisor HealthCheck en tiempo de ejecución (una fase posterior).',
   'health.components.loadError': 'No se pudo cargar el estado de componentes: {error}',
   'health.components.ariaLabel': 'Estado de componentes',
   'health.components.columnComponent': 'Componente',

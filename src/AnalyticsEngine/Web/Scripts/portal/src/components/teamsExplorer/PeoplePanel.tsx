@@ -15,6 +15,7 @@ import {
 } from '@fluentui/react-components';
 import { ArrowDownload16Regular } from '@fluentui/react-icons';
 import CategoryBarChart from '../charts/CategoryBarChart';
+import PiiHiddenNote from '../shared/PiiHiddenNote';
 import type { TeamsPeople, TeamsPersonRow } from '../../types/teamsExplorer';
 import { useT, useTNode, type TFunction } from '../../i18n';
 import {
@@ -61,6 +62,9 @@ const REPORTS_READ_ALL = 'Reports.Read.All';
  * Names individuals deliberately - a champions programme needs names, and so does an enablement
  * campaign. The privacy note is not decoration: this list is exportable, so whoever downloads it
  * should be reminded what they are about to email around.
+ *
+ * Without the See PII permission the two named lists give way to a note, and the power users per
+ * department - a count - stays. The API has already left the names out of what it sent.
  */
 export default function PeoplePanel({
   data,
@@ -68,12 +72,14 @@ export default function PeoplePanel({
   onExportChampions,
   onExportDormant,
   exporting,
+  showPii,
 }: {
   data: TeamsPeople;
   usageReportsAvailable: boolean;
   onExportChampions: () => void;
   onExportDormant: () => void;
   exporting: boolean;
+  showPii: boolean;
 }) {
   const styles = useStyles();
   const shared = useTeamsStyles();
@@ -97,7 +103,7 @@ export default function PeoplePanel({
     <div>
       <WindowNote window={data.window} includeUsage={false} />
 
-      {data.namesObfuscated && (
+      {showPii && data.namesObfuscated && (
         <MessageBar intent="warning" style={{ marginTop: '12px' }}>
           <MessageBarBody>
             {tNode('teamsExplorer.people.namesObfuscated', {
@@ -108,56 +114,62 @@ export default function PeoplePanel({
         </MessageBar>
       )}
 
-      <MessageBar intent="info" style={{ marginTop: '12px' }}>
-        <MessageBarBody>
-          {t('teamsExplorer.people.privacyNotice')}
-        </MessageBarBody>
-      </MessageBar>
+      {showPii && (
+        <MessageBar intent="info" style={{ marginTop: '12px' }}>
+          <MessageBarBody>
+            {t('teamsExplorer.people.privacyNotice')}
+          </MessageBarBody>
+        </MessageBar>
+      )}
 
       <div className={shared.stack}>
-        <SectionCard
-          title={t('teamsExplorer.people.champions.title')}
-          description={t('teamsExplorer.people.champions.description')}
-          query={queryFor(data.queries, 'people-champions')}
-          isEmpty={data.champions.length === 0}
-        >
-          <div className={styles.exportRow}>
-            <Button
-              appearance="subtle"
-              size="small"
-              icon={<ArrowDownload16Regular />}
-              onClick={onExportChampions}
-              disabled={exporting}
+        {showPii ? (
+          <>
+            <SectionCard
+              title={t('teamsExplorer.people.champions.title')}
+              description={t('teamsExplorer.people.champions.description')}
+              query={queryFor(data.queries, 'people-champions')}
+              isEmpty={data.champions.length === 0}
             >
-              {t('teamsExplorer.action.exportCsv')}
-            </Button>
-          </div>
-          <PeopleTable rows={data.champions} styles={styles} wrapClass={shared.tableWrap} t={t} />
-        </SectionCard>
+              <div className={styles.exportRow}>
+                <Button
+                  appearance="subtle"
+                  size="small"
+                  icon={<ArrowDownload16Regular />}
+                  onClick={onExportChampions}
+                  disabled={exporting}
+                >
+                  {t('teamsExplorer.action.exportCsv')}
+                </Button>
+              </div>
+              <PeopleTable rows={data.champions} styles={styles} wrapClass={shared.tableWrap} t={t} />
+            </SectionCard>
 
-        <SectionCard
-          title={t('teamsExplorer.people.dormant.title')}
-          description={t('teamsExplorer.people.dormant.description')}
-          query={queryFor(data.queries, 'people-dormant')}
-          isEmpty={data.dormant.length === 0}
-          emptyMessage={t('teamsExplorer.people.dormant.empty')}
-          note={
-            t('teamsExplorer.people.dormant.note')
-          }
-        >
-          <div className={styles.exportRow}>
-            <Button
-              appearance="subtle"
-              size="small"
-              icon={<ArrowDownload16Regular />}
-              onClick={onExportDormant}
-              disabled={exporting}
+            <SectionCard
+              title={t('teamsExplorer.people.dormant.title')}
+              description={t('teamsExplorer.people.dormant.description')}
+              query={queryFor(data.queries, 'people-dormant')}
+              isEmpty={data.dormant.length === 0}
+              emptyMessage={t('teamsExplorer.people.dormant.empty')}
+              note={
+                t('teamsExplorer.people.dormant.note')
+              }
             >
-              {t('teamsExplorer.action.exportCsv')}
-            </Button>
-          </div>
-          <PeopleTable rows={data.dormant} styles={styles} wrapClass={shared.tableWrap} t={t} />
-        </SectionCard>
+              <div className={styles.exportRow}>
+                <Button
+                  appearance="subtle"
+                  size="small"
+                  icon={<ArrowDownload16Regular />}
+                  onClick={onExportDormant}
+                  disabled={exporting}
+                >
+                  {t('teamsExplorer.action.exportCsv')}
+                </Button>
+              </div>
+              <PeopleTable rows={data.dormant} styles={styles} wrapClass={shared.tableWrap} t={t} />
+            </SectionCard>
+          </>
+        ) : <PiiHiddenNote />}
 
         <SectionCard
           title={t('teamsExplorer.people.championDepartments.title')}

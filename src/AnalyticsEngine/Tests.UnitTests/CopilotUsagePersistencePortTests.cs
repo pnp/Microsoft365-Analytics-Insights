@@ -85,7 +85,7 @@ namespace Tests.UnitTests
             => new CopilotUserCountReportLoader(new StubReportSource(report), NullLogger.Instance, persistence);
 
         private static CopilotUsageUserDetailLoader DetailLoader(List<JObject> report, ICopilotUsagePersistenceManager persistence)
-            => new CopilotUsageUserDetailLoader(new StubReportSource(report), NullLogger.Instance, null, null, persistence);
+            => new CopilotUsageUserDetailLoader(new StubReportSource(report), NullLogger.Instance, null, persistence);
 
         private static CopilotReportRequest TrendRequest() =>
             new CopilotReportRequest(CopilotReportNames.UserCountTrend, "D28", CopilotReportVersions.V2);

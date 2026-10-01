@@ -1,6 +1,7 @@
 using Common.Entities;
 using Common.Entities.ActivityReports;
 using Common.Entities.Config;
+using Common.Entities.UserScope;
 using DataUtils;
 using Microsoft.Extensions.Logging;
 using Microsoft.Graph;
@@ -15,7 +16,6 @@ using WebJob.Office365ActivityImporter.Engine.Graph.Email;
 using WebJob.Office365ActivityImporter.Engine.Graph.Sections;
 using WebJob.Office365ActivityImporter.Engine.Graph.UsageReports;
 using WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Aggregate;
-using WebJob.Office365ActivityImporter.Engine.Graph.User;
 
 namespace WebJob.Office365ActivityImporter.Engine.Graph
 {
@@ -23,7 +23,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
     /// Orchestrates the Graph import: selects the enabled sections, applies the per-section cadence gate and
     /// records the last-run time. It does not build any of them - composition lives behind
     /// <see cref="IGraphImportSectionFactory"/> (issue #376), which is what makes this loop testable with fake
-    /// sections and no SQL Server, Graph, Redis or Service Bus.
+    /// sections and no SQL Server, Graph, Azure Storage or Service Bus.
     /// </summary>
     public class GraphImporter : AbstractApiLoader
     {
@@ -44,20 +44,18 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
 
         /// <summary>
         /// Production constructor: builds the <see cref="ProductionGraphImportSectionFactory"/> that holds all
-        /// the section wiring. Kept at its original signature so no call site breaks.
+        /// the section wiring.
         /// </summary>
-        /// <param name="userGroupsCache">
-        /// Unused, and was unused before this change too - it was stored in a field that nothing read. The
-        /// usage-report and Copilot sections use a <c>GraphUserGroupsCache</c> the factory builds over its own
-        /// <c>ManualGraphCallClient</c>, which is not the same instance the caller passes here. Kept on the
-        /// signature so no call site breaks.
+        /// <param name="userScopeProvider">
+        /// The process-lifetime <c>UserGroupsFilter</c> scope, shared with every other import in the process so they
+        /// all apply the same scope. Null means unfiltered.
         /// </param>
-        public GraphImporter(AnalyticsLogger logger, UserGroupsCache userGroupsCache, GraphAppIndentityOAuthContext graphAppIndentityOAuthContext, GraphServiceClient graphClient, AppConfig settings, ISingleDateStore activityReportsLastImportedStore = null, IImportLastRunStore lastRunStore = null, ISentEmailMailboxSkipList sentEmailMailboxSkipList = null, IClock clock = null)
-            : this(logger, userGroupsCache, graphAppIndentityOAuthContext, graphClient, settings, activityReportsLastImportedStore, lastRunStore, sentEmailMailboxSkipList, reportCompletionStore: null, clock: clock)
+        public GraphImporter(AnalyticsLogger logger, IUserImportScopeProvider userScopeProvider, GraphAppIndentityOAuthContext graphAppIndentityOAuthContext, GraphServiceClient graphClient, AppConfig settings, ISingleDateStore activityReportsLastImportedStore = null, IImportLastRunStore lastRunStore = null, ISentEmailMailboxSkipList sentEmailMailboxSkipList = null, IClock clock = null)
+            : this(logger, userScopeProvider, graphAppIndentityOAuthContext, graphClient, settings, activityReportsLastImportedStore, lastRunStore, sentEmailMailboxSkipList, reportCompletionStore: null, clock: clock)
         {
         }
 
-        public GraphImporter(AnalyticsLogger logger, UserGroupsCache userGroupsCache, GraphAppIndentityOAuthContext graphAppIndentityOAuthContext, GraphServiceClient graphClient, AppConfig settings, ISingleDateStore activityReportsLastImportedStore, IImportLastRunStore lastRunStore, ISentEmailMailboxSkipList sentEmailMailboxSkipList, IClock clock, IReportCompletionStore reportCompletionStore)
+        public GraphImporter(AnalyticsLogger logger, IUserImportScopeProvider userScopeProvider, GraphAppIndentityOAuthContext graphAppIndentityOAuthContext, GraphServiceClient graphClient, AppConfig settings, ISingleDateStore activityReportsLastImportedStore, IImportLastRunStore lastRunStore, ISentEmailMailboxSkipList sentEmailMailboxSkipList, IClock clock, IReportCompletionStore reportCompletionStore)
             : base(logger, settings)
         {
             _clock = clock ?? SystemClock.Instance;
@@ -78,12 +76,13 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 GetAndSaveActivityReportsMultiThreaded,
                 DefaultAnalyticsDbContextFactory.Instance,
                 _clock,
-                _lastRunStore);
+                _lastRunStore,
+                userScopeProvider);
         }
 
         /// <summary>
         /// Orchestration-only constructor: the sections are supplied, so nothing here touches Graph, SQL or
-        /// Redis. Separate from the production constructor rather than another optional parameter on it,
+        /// Azure Storage. Separate from the production constructor rather than another optional parameter on it,
         /// because a trailing optional argument is baked in by the calling compiler and so is binary-breaking
         /// for already-compiled callers.
         ///
@@ -105,10 +104,10 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
 
         /// <summary>
         /// Runs a "non-fresh" Graph import section at most once per <paramref name="intervalHours"/>.
-        /// The last-run timestamp is persisted via <see cref="IImportLastRunStore"/> (Redis when
-        /// configured, otherwise in-memory) so the gate survives the per-cycle recreation of this
+        /// The last-run timestamp is persisted via <see cref="IImportLastRunStore"/> (the runtime state table when a
+        /// Storage connection string is configured, otherwise in-memory) so the gate survives the per-cycle recreation of this
         /// importer. An interval of 0 disables the gate (runs every cycle); <c>ForceGraphMetadataImport</c>
-        /// bypasses it for one run. Redis failures are fail-open (the section still runs).
+        /// bypasses it for one run. Store failures are fail-open (the section still runs).
         ///
         /// The section reports success itself instead of throwing. Returning false records the section as not
         /// done, so the cadence gate lets it retry next cycle, without an exception unwinding out of
@@ -123,7 +122,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             {
                 _logger.LogInformation($"Skipping {sectionName}: ran recently ({lastRun:u} UTC). " +
                     $"Next run after {lastRun?.AddHours(intervalHours):u} UTC (interval {intervalHours}h). " +
-                    $"Set ForceGraphMetadataImport=true or clear the '{key}' cache key to override.");
+                    $"Set ForceGraphMetadataImport=true, or delete the '{key}' row (partition '{Common.Entities.State.StatePartitions.ImportSchedule}') " +
+                    $"from the '{Common.Entities.State.StateStore.TableName}' table, to override.");
                 return;
             }
 
@@ -216,7 +216,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         /// </summary>
         /// <remarks>
         /// Deliberately does NOT fall back to the phase-level marker when a per-report stamp is absent. That
-        /// marker is an unversioned Redis key that predates the strict-paging fixes (#285 / #310); an older
+        /// marker is an unversioned key that predates the strict-paging fixes (#285 / #310); an older
         /// build could write it after a report had saved a partial day, and skipping a partially-stored date
         /// loses rows permanently once Graph's ~28-day retention passes. One extra full download per report on
         /// the first upgraded cycle is a bounded, one-off cost.
@@ -322,12 +322,14 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             }
         }
 
-        public async Task<bool> GetAndSaveActivityReportsMultiThreaded(int daysBackMax, ManualGraphCallClient client, UserGroupsCache userGroupsCache, UserGroupsFilterModel userGroupsFilterModel)        {
+        /// <param name="userScope">The <c>UserGroupsFilter</c> scope for this cycle; null means unfiltered.</param>
+        public async Task<bool> GetAndSaveActivityReportsMultiThreaded(int daysBackMax, ManualGraphCallClient client, UserImportScope userScope)
+        {
             var MIN_WAIT = TimeSpan.FromDays(1);
 
             // Throttle the whole activity/usage-report phase (all daily loaders + the weekly SharePoint sites
             // loader) to run at most once a day. The store is injected so it survives across import cycles:
-            // Redis when configured, otherwise an in-memory fallback (see ActivityReportsLastImportedStoreFactory).
+            // the runtime state table when Storage is configured, otherwise an in-memory fallback (see ActivityReportsLastImportedStoreFactory).
             // When no store is supplied (e.g. unit tests) we don't throttle and always import.
             DateTime? lastImportedDate = null;
             var lastImportedStore = _activityReportsLastImportedStore;
@@ -409,34 +411,34 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 var lookupIdCache = new ConcurrentLookupDbIdsCache();
 
                 // Daily imports
-                var teamsUserUsageLoader = new TeamsUserUsageLoader(client, userGroupsCache, userGroupsFilterModel, _logger);
+                var teamsUserUsageLoader = new TeamsUserUsageLoader(client, userScope, _logger);
                 importTasks.Add(RunReportSafely("Teams user activity", () => LoadAndSaveDailyImportReport(teamsUserUsageLoader, daysBackMax, "Teams user activity", _logger, lookupIdCache, lastImportedDate)));
 
-                var teamsUserDeviceLoader = new TeamsUserDeviceLoader(client, userGroupsCache, userGroupsFilterModel, _logger);
+                var teamsUserDeviceLoader = new TeamsUserDeviceLoader(client, userScope, _logger);
                 importTasks.Add(RunReportSafely("Teams user device", () => LoadAndSaveDailyImportReport(teamsUserDeviceLoader, daysBackMax, "Teams user device", _logger, lookupIdCache, lastImportedDate)));
 
-                var outlookLoader = new OutlookUserActivityLoader(client, userGroupsCache, userGroupsFilterModel, _logger);
+                var outlookLoader = new OutlookUserActivityLoader(client, userScope, _logger);
                 importTasks.Add(RunReportSafely("Outlook activity", () => LoadAndSaveDailyImportReport(outlookLoader, daysBackMax, "Outlook activity", _logger, lookupIdCache, lastImportedDate)));
 
-                var oneDriveUsageLoader = new OneDriveUsageLoader(client, userGroupsCache, userGroupsFilterModel, _logger);
+                var oneDriveUsageLoader = new OneDriveUsageLoader(client, userScope, _logger);
                 importTasks.Add(RunReportSafely("OneDrive usage", () => LoadAndSaveDailyImportReport(oneDriveUsageLoader, daysBackMax, "OneDrive usage", _logger, lookupIdCache, lastImportedDate)));
 
-                var oneDriveUserActivityLoader = new OneDriveUserActivityLoader(client, userGroupsCache, userGroupsFilterModel, _logger);
+                var oneDriveUserActivityLoader = new OneDriveUserActivityLoader(client, userScope, _logger);
                 importTasks.Add(RunReportSafely("OneDrive activity", () => LoadAndSaveDailyImportReport(oneDriveUserActivityLoader, daysBackMax, "OneDrive activity", _logger, lookupIdCache, lastImportedDate)));
 
-                var sharePointUserActivityLoader = new SharePointUserActivityLoader(client, userGroupsCache, userGroupsFilterModel, _logger);
+                var sharePointUserActivityLoader = new SharePointUserActivityLoader(client, userScope, _logger);
                 importTasks.Add(RunReportSafely("SharePoint user activity", () => LoadAndSaveDailyImportReport(sharePointUserActivityLoader, daysBackMax, "SharePoint user activity", _logger, lookupIdCache, lastImportedDate)));
 
-                var yammerUserActivityLoader = new YammerUserUsageLoader(client, userGroupsCache, userGroupsFilterModel, _logger);
+                var yammerUserActivityLoader = new YammerUserUsageLoader(client, userScope, _logger);
                 importTasks.Add(RunReportSafely("Yammer user activity", () => LoadAndSaveDailyImportReport(yammerUserActivityLoader, daysBackMax, "Yammer user activity", _logger, lookupIdCache, lastImportedDate)));
 
                 var yammerGroupsActivityLoader = new YammerGroupUsageLoader(client, _logger);
                 importTasks.Add(RunReportSafely("Yammer group activity", () => LoadAndSaveDailyImportReport(yammerGroupsActivityLoader, daysBackMax, "Yammer group activity", _logger, lookupIdCache, lastImportedDate)));
 
-                var yammerDeviceActivityLoader = new YammerDeviceUsageLoader(client, userGroupsCache, userGroupsFilterModel, _logger);
+                var yammerDeviceActivityLoader = new YammerDeviceUsageLoader(client, userScope, _logger);
                 importTasks.Add(RunReportSafely("Yammer device activity", () => LoadAndSaveDailyImportReport(yammerDeviceActivityLoader, daysBackMax, "Yammer device activity", _logger, lookupIdCache, lastImportedDate)));
 
-                var userPlatActivityLoader = new AppPlatformUserActivityLoader(client, userGroupsCache, userGroupsFilterModel, _logger);
+                var userPlatActivityLoader = new AppPlatformUserActivityLoader(client, userScope, _logger);
                 importTasks.Add(RunReportSafely("Apps & platform activity", () => LoadAndSaveDailyImportReport(userPlatActivityLoader, daysBackMax, "Apps & platform activity", _logger, lookupIdCache, lastImportedDate)));
 
                 // Weekly imports
