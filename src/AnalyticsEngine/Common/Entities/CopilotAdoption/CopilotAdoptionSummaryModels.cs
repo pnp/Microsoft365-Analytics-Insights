@@ -641,8 +641,9 @@ namespace Common.Entities.CopilotAdoption
         #region Cowork
 
         // Every Cowork figure here comes from the Copilot audit log, and counts interactions, never tasks.
-        // Microsoft's own Cowork task counts are only in the Microsoft 365 admin centre (Copilot > Cowork >
-        // Usage), which has no Graph API; this product does not import them (#692).
+        // Microsoft reports Cowork tasks in its Cowork usage report, which it publishes in the Microsoft 365
+        // admin centre (Copilot > Cowork > Usage) and not through Microsoft Graph; this product does not
+        // import it (#692).
 
         /// <summary>
         /// Licensed users with at least one Cowork interaction in the Copilot audit log inside the window.

@@ -1194,8 +1194,10 @@ describe('CopilotAdoptionPage modelled time saved', () => {
     expect(await screen.findByText('The licensing estimate is a model, not a measurement.')).toBeVisible();
     expect(screen.getByText(/\(10 minutes per meeting, 5 per email, 8 per document by default/)).toBeVisible();
     expect(screen.getByText('The Cowork estimate is a model, not a measurement.')).toBeVisible();
-    expect(screen.getByText(/at 6 minutes a task by default/)).toBeVisible();
-    expect(screen.getByText(/Everyone else is modelled from the work they already do by hand, one kind at a time/)).toBeVisible();
+    // #692: Cowork is audit-only, so nobody is modelled from task counts, and the method says so.
+    expect(screen.queryByText(/minutes a task/)).toBeNull();
+    expect(screen.getByText(/Everyone covered is modelled from the work they already do by hand, one kind at a time/)).toBeVisible();
+    expect(screen.getByText(/the Copilot audit log counts their Cowork interactions, not the work they hand over/)).toBeVisible();
     expect(screen.getByText(/it is never added to the licensing estimate/)).toBeVisible();
   });
 

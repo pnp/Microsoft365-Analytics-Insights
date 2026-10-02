@@ -143,14 +143,21 @@ describe('Copilot Adoption server-authored text reproduction', () => {
   it('names the datasets that could not be loaded in the reader language, leaving English and unknown names as sent', () => {
     setActiveLanguage('es');
     expect(incompleteDatasetText(tEs, 'licence types')).toBe('tipos de licencia');
-    expect(incompleteDatasetText(tEs, 'Cowork usage-report snapshot period')).toBe('periodo de instantánea del informe de uso de Cowork');
+    expect(incompleteDatasetText(tEs, 'Cowork agent lookup')).toBe('búsqueda de agente de Cowork');
     expect(incompleteDatasetText(tEs, 'a dataset this build does not know')).toBe('a dataset this build does not know');
     // An inherited property name must not resolve to a key.
     expect(incompleteDatasetText(tEs, 'constructor')).toBe('constructor');
 
     setActiveLanguage('en');
     expect(incompleteDatasetText(tEn, 'licence types')).toBe('licence types');
-    expect(incompleteDatasetText(tEn, 'Cowork usage-report snapshot period')).toBe('Cowork usage-report snapshot period');
+    expect(incompleteDatasetText(tEn, 'Cowork agent lookup')).toBe('Cowork agent lookup');
+  });
+
+  it('has no dataset for Microsoft\u2019s Cowork usage report, which this product never reads (#692)', () => {
+    // The server no longer queries a Cowork report, so these names are unknown and pass through as sent.
+    setActiveLanguage('es');
+    expect(incompleteDatasetText(tEs, 'Cowork usage-report snapshot period')).toBe('Cowork usage-report snapshot period');
+    expect(incompleteDatasetText(tEs, 'Cowork usage report')).toBe('Cowork usage report');
   });
 
   it('formats warning numbers with the active locale', () => {

@@ -571,7 +571,7 @@ export const copilotAdoption = {
   'copilotAdoption.page.kpi.purchasedSeatsSourceUnknown': 'Unknown because Graph subscribedSkus is unavailable or Organization.Read.All has not been granted; this is deliberately not shown as zero.',
   'copilotAdoption.page.kpi.coworkUsageObserved': 'Cowork usage observed',
   'copilotAdoption.page.kpi.coworkAuditHint': '{interactions} Cowork interactions, from the Copilot audit log',
-  'copilotAdoption.page.kpi.coworkHow': 'People with at least one Cowork interaction in the Copilot audit log in the period. Interactions are not Cowork tasks: Microsoft counts tasks only in its Cowork usage report in the Microsoft 365 admin centre (Copilot > Cowork > Usage), which this product does not import.',
+  'copilotAdoption.page.kpi.coworkHow': 'People with at least one Cowork interaction in the Copilot audit log in the period. Interactions are not Cowork tasks: Microsoft reports tasks in its Cowork usage report in the Microsoft 365 admin centre (Copilot > Cowork > Usage), which this product does not import.',
   'copilotAdoption.page.kpi.coworkWhatUnknownEligibility': 'Cowork users are shown, but the adoption percentage is suppressed because spending-policy eligibility is unknown.',
   'copilotAdoption.page.kpi.coworkWhatKnownEligibility': 'Cowork users as a share of known Cowork spending-policy eligibility.',
   'copilotAdoption.page.kpi.modelledBadge': 'Modelled',

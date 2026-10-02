@@ -178,9 +178,10 @@ namespace Common.Entities.CopilotAdoption
 
         #region Cowork use (interactions, from the Copilot audit log)
 
-        // Interactions, not tasks. The Copilot audit log records Cowork interactions; Microsoft's own unit,
-        // the Cowork task, is only in the Microsoft 365 admin centre (Copilot > Cowork > Usage), which has no
-        // Graph API and is not imported (#692). The two are different units and are never compared.
+        // Interactions, not tasks. The Copilot audit log records Cowork interactions. Microsoft's own unit, the
+        // Cowork task, is reported in its Cowork usage report, which Microsoft publishes in the Microsoft 365
+        // admin centre (Copilot > Cowork > Usage) and not through Microsoft Graph, so it is not imported (#692).
+        // The two are different units and are never compared.
 
         [JsonProperty("coworkInteractions")]
         public long CoworkInteractions { get; set; }

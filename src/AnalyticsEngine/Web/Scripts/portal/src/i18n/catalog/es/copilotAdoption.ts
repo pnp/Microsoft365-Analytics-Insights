@@ -572,7 +572,7 @@ const copilotAdoption: Record<keyof typeof en, string> = {
   'copilotAdoption.page.kpi.purchasedSeatsSourceUnknown': 'Desconocido porque Graph subscribedSkus no está disponible o no se ha concedido Organization.Read.All; deliberadamente no se muestra como cero.',
   'copilotAdoption.page.kpi.coworkUsageObserved': 'Uso de Cowork observado',
   'copilotAdoption.page.kpi.coworkAuditHint': '{interactions} interacciones de Cowork, del registro de auditoría de Copilot',
-  'copilotAdoption.page.kpi.coworkHow': 'Personas con al menos una interacción de Cowork en el registro de auditoría de Copilot durante el periodo. Las interacciones no son tareas de Cowork: Microsoft solo cuenta las tareas en su informe de uso de Cowork del centro de administración de Microsoft 365 (Copilot > Cowork > Usage), que este producto no importa.',
+  'copilotAdoption.page.kpi.coworkHow': 'Personas con al menos una interacción de Cowork en el registro de auditoría de Copilot durante el periodo. Las interacciones no son tareas de Cowork: Microsoft informa de las tareas en su informe de uso de Cowork del centro de administración de Microsoft 365 (Copilot > Cowork > Usage), que este producto no importa.',
   'copilotAdoption.page.kpi.coworkWhatUnknownEligibility': 'Se muestran los usuarios de Cowork, pero se suprime el porcentaje de adopción porque se desconoce la elegibilidad de la directiva de consumo.',
   'copilotAdoption.page.kpi.coworkWhatKnownEligibility': 'Usuarios de Cowork como proporción de la elegibilidad conocida de la directiva de consumo de Cowork.',
   'copilotAdoption.page.kpi.modelledBadge': 'Modelado',

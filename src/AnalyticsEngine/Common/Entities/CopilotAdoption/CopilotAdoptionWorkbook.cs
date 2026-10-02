@@ -460,7 +460,7 @@ namespace Common.Entities.CopilotAdoption
             {
                 AddMeta(sheet, "Cowork users", summary.CoworkUsers, "Users with at least one Cowork interaction in the Copilot audit log.");
                 AddMeta(sheet, "Cowork adoption %", summary.CoworkAdoptionPct, "Null when spending-policy eligibility is unknown; never divided by all licensed users.");
-                AddMeta(sheet, "Cowork interactions", summary.CoworkInteractions, "Cowork interactions from the Copilot audit log. Interactions, not Cowork tasks: Microsoft counts tasks only in the Microsoft 365 admin centre (Copilot > Cowork > Usage), which this product does not import.");
+                AddMeta(sheet, "Cowork interactions", summary.CoworkInteractions, "Cowork interactions from the Copilot audit log. Interactions, not Cowork tasks: Microsoft reports tasks in its Cowork usage report in the Microsoft 365 admin centre (Copilot > Cowork > Usage), which this product does not import.");
             }
 
             if (summary.CoworkReadinessAvailable)
@@ -1469,8 +1469,9 @@ namespace Common.Entities.CopilotAdoption
 
             // Observed Cowork use, from the Copilot audit log. It answers a different question from the tier
             // counts above: not "who should we enable?" but "who is using it?". Interactions only: Microsoft's
-            // own Cowork task figures are in the Microsoft 365 admin centre, which has no Graph API (#692), so
-            // the sheet says where to find them rather than implying they are imported.
+            // own Cowork task figures are in its Cowork usage report in the Microsoft 365 admin centre, which
+            // Microsoft does not publish through Graph (#692), so the sheet says where to find them rather than
+            // implying they are imported.
             if (summary.CoworkAuditUsers > 0)
             {
                 sheet.AddBlankRow();
@@ -1780,7 +1781,7 @@ namespace Common.Entities.CopilotAdoption
                 "MODELLED. After a pilot, compare this with the Cowork tasks a month per person that Microsoft's "
                 + "Cowork usage report in the Microsoft 365 admin centre (Copilot > Cowork > Usage) shows for your "
                 + "pilot group, and move the shares until the two agree. This product does not import that report. "
-                + "One Cowork task can cover several pieces of work, so the two need not match exactly.");
+                + "This model counts pieces of work, not Microsoft's Cowork tasks, so the two need not match exactly.");
 
             // ---- Time saved ----
             sheet.AddBlankRow();

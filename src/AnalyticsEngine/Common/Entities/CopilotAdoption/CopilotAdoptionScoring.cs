@@ -1540,8 +1540,8 @@ namespace Common.Entities.CopilotAdoption
 
             switch (row.Tier)
             {
-                // Cowork evidence is the Copilot audit log's interactions - never tasks, which only the
-                // Microsoft 365 admin centre counts (#692) - and the sentence names its source.
+                // Cowork evidence is the Copilot audit log's interactions - never tasks, which Microsoft reports
+                // in its Cowork usage report in the Microsoft 365 admin centre (#692) - and the sentence names its source.
                 case CoworkTiers.Established:
                     return $"Already established: {row.CoworkInteractions:N0} Cowork interaction"
                          + $"{Plural(row.CoworkInteractions)} in the Copilot audit log across {row.CoworkActiveDays:N0} day"

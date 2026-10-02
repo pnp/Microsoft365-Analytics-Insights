@@ -262,15 +262,16 @@ namespace Tests.UnitTests
         public void Workbook_TwoSnapshotsFromDifferentDatesDiffByKeyLookup()
         {
             // Deliberately different in date, population and - critically - in which figures are
-            // measurable at all. The later snapshot has no Cowork retention figure and no usage
+            // measurable at all. The later snapshot has no Cowork adoption percentage and no usage
             // report, which is exactly the case that would tempt a writer into omitting rows.
             var earlier = SyntheticAnalysis();
+            earlier.Summary.CoworkAdoptionPct = 12.5;
 
             var later = SyntheticAnalysis();
             later.Summary.GeneratedUtc = Now.AddDays(90);
             later.Summary.FromUtc = Now.AddDays(90 - later.Summary.WindowDays);
             later.Summary.ToUtc = Now.AddDays(90);
-            later.Summary.CoworkReportRetentionPct = null;
+            later.Summary.CoworkAdoptionPct = null;
             later.Summary.DataSources.CopilotUsageReportAvailable = false;
             later.Summary.ScoredUsers = earlier.Summary.ScoredUsers + 25;
             later.Summary.AdoptionRatePct = earlier.Summary.AdoptionRatePct + 6.5;
@@ -429,10 +430,10 @@ namespace Tests.UnitTests
         public void Workbook_SnapshotFactsLeaveUnknownValuesEmptyRatherThanZero()
         {
             var analysis = SyntheticAnalysis();
-            analysis.Summary.CoworkReportRetentionPct = null;
+            analysis.Summary.CoworkAdoptionPct = null;
 
             var cells = SheetCells(CopilotAdoptionWorkbook.Build(analysis), "Snapshot facts");
-            var index = cells.IndexOf("coworkReportRetentionPct");
+            var index = cells.IndexOf("coworkAdoptionPct");
 
             Assert.AreNotEqual(-1, index, "The key is missing from the Snapshot facts sheet.");
             Assert.AreNotEqual("0", cells.ElementAtOrDefault(index + 1),
@@ -828,10 +829,7 @@ namespace Tests.UnitTests
             {
                 "Ready now", "Every Copilot seat holder", "People covered", "People modelled from their own work",
                 "Pieces of work handed to Cowork a month",
-                "People with Cowork tasks (observed)", "Cowork tasks a month (observed)",
-                "Minutes saved per Cowork task (assumption)", "Hours a month from these tasks (high)",
-                "Cowork tasks a month per person already running them (observed)",
-                "Pieces of work handed to Cowork a month per person modelled",
+                "CHECKING THE SHARES AFTER A PILOT", "Pieces of work handed to Cowork a month per person",
                 "Cowork hours a month (low)", "Cowork hours a month (high)",
             };
             foreach (var activity in CoworkActivities.All)
@@ -851,12 +849,29 @@ namespace Tests.UnitTests
             CollectionAssert.DoesNotContain(cells, "Cowork tasks a month for each person projected",
                 "The flat tasks-a-person projection is gone: everyone is modelled from their own work.");
 
+            // #692: Cowork task counts are not available to this product, so nothing on the sheet is an
+            // observed task, and the pilot check names Microsoft's report only as something to read by hand.
+            foreach (var retired in new[]
+            {
+                "People with Cowork tasks (observed)", "Cowork tasks a month (observed)",
+                "Minutes saved per Cowork task (assumption)", "Hours a month from these tasks (high)",
+                "Cowork tasks a month per person already running them (observed)",
+            })
+            {
+                CollectionAssert.DoesNotContain(cells, retired, $"'{retired}' needs Cowork task counts the product cannot read.");
+            }
+
+            var pilotCheck = cells.Single(c => c.StartsWith("MODELLED. After a pilot", StringComparison.Ordinal));
+            StringAssert.Contains(pilotCheck, "Microsoft 365 admin centre (Copilot > Cowork > Usage)");
+            StringAssert.Contains(pilotCheck, "This product does not import that report.");
+
             var ready = analysis.Summary.CoworkValueEstimate;
             var full = analysis.Summary.CoworkFullRolloutEstimate;
             Assert.IsTrue(full.CohortUsers > 0, "The synthetic analysis must exercise the full-adoption cohort.");
-            Assert.IsTrue(full.CoworkTaskUsers > 0 && full.ProjectedCoworkUsers > 0,
-                "The synthetic analysis must exercise both the observed and the modelled people.");
+            Assert.IsTrue(analysis.Summary.CoworkEstablishedUsers + analysis.Summary.CoworkTriallingUsers > 0,
+                "The synthetic analysis must include people already using Cowork, who are modelled like everyone else.");
             AssertFollowedBy(cells, "People covered", ready.CohortUsers.ToString(CultureInfo.InvariantCulture));
+            AssertFollowedBy(cells, "People modelled from their own work", ready.CohortUsers.ToString(CultureInfo.InvariantCulture));
             AssertFollowedBy(cells, "Cowork hours a month (high)", ready.HoursPerMonthHigh.ToString(CultureInfo.InvariantCulture));
 
             // Kind by kind, the hours add up to the headline - the same split the portal draws.
@@ -866,6 +881,46 @@ namespace Tests.UnitTests
                 CopilotAdoptionScoring.CoworkVolume(ready, CoworkActivities.SendEmail).ToString(CultureInfo.InvariantCulture));
             Assert.IsTrue(cells.Any(c => c.StartsWith("Assumptions: the product defaults", StringComparison.Ordinal)),
                 "An uncustomised export must say its assumptions are the product defaults.");
+        }
+
+        /// <summary>
+        /// #692: the product never reads Microsoft's Cowork usage report, so no sheet may carry a figure only
+        /// that report has - tasks, the scheduled/user-initiated split, automation, retention - and where a
+        /// sheet names the report at all, it is as something to read by hand in the Microsoft 365 admin centre.
+        /// </summary>
+        [TestMethod]
+        public void Workbook_CarriesNoReportSourcedCoworkFigure()
+        {
+            var bytes = CopilotAdoptionWorkbook.Build(SyntheticAnalysis());
+
+            foreach (var sheet in WorkbookSheetNames(bytes))
+            {
+                foreach (var cell in SheetCells(bytes, sheet))
+                {
+                    // Guidance on what an admin can read for themselves in the admin centre may name these
+                    // figures, provided it says the product does not import them; nothing else may.
+                    var manualGuidance = cell.IndexOf("does not import", StringComparison.OrdinalIgnoreCase) >= 0;
+
+                    foreach (var banned in new[]
+                    {
+                        "Scheduled tasks", "User-initiated tasks", "Automation %", "Retention %", "Retained users",
+                        "COWORK TASKS ALREADY RUNNING", "People with Cowork tasks", "Credits per Cowork task",
+                        "Cowork tasks in Microsoft's report", "retained only for reconciliation",
+                    })
+                    {
+                        Assert.IsFalse(!manualGuidance && cell.IndexOf(banned, StringComparison.OrdinalIgnoreCase) >= 0,
+                            $"Sheet '{sheet}' carries the report-sourced '{banned}': {cell}");
+                    }
+
+                    if (cell.IndexOf("Cowork usage report", StringComparison.OrdinalIgnoreCase) >= 0)
+                    {
+                        StringAssert.Contains(cell, "Microsoft 365 admin centre (Copilot > Cowork > Usage)",
+                            $"Sheet '{sheet}' names the Cowork usage report without saying where to read it by hand.");
+                        StringAssert.Contains(cell, "does not import",
+                            $"Sheet '{sheet}' names the Cowork usage report without saying the product does not import it.");
+                    }
+                }
+            }
         }
 
         /// <summary>
@@ -1037,11 +1092,7 @@ namespace Tests.UnitTests
 
             // ...and the email share and minutes restate the Cowork estimate, from its published inputs.
             var full = analysis.Summary.CoworkFullRolloutEstimate;
-            var inputs = new CoworkTaskInputs
-            {
-                ObservedUsers = full.CoworkTaskUsers,
-                ObservedTasksPerMonth = full.ObservedCoworkTasks,
-            };
+            var inputs = new CoworkTaskInputs();
             foreach (var activity in CoworkActivities.All)
             {
                 inputs.ActivityVolumes[activity.Key] = CopilotAdoptionScoring.CoworkVolume(full, activity.Key);
@@ -1080,11 +1131,7 @@ namespace Tests.UnitTests
 
         private static CoworkTaskInputs InputsOf(CoworkValueEstimate estimate)
         {
-            var inputs = new CoworkTaskInputs
-            {
-                ObservedUsers = estimate.CoworkTaskUsers,
-                ObservedTasksPerMonth = estimate.ObservedCoworkTasks,
-            };
+            var inputs = new CoworkTaskInputs();
             foreach (var activity in CoworkActivities.All)
             {
                 inputs.ActivityVolumes[activity.Key] = CopilotAdoptionScoring.CoworkVolume(estimate, activity.Key);
@@ -1706,6 +1753,15 @@ namespace Tests.UnitTests
             for (var i = 0; i < 30; i++)
             {
                 var usesCowork = i % 5 == 0;
+                var coworkInteractions = usesCowork ? random.Next(5, 60) : 0;
+                var coworkActiveDays = usesCowork ? random.Next(1, 12) : 0;
+                var lastCoworkInteraction = usesCowork ? Now.AddDays(-random.Next(1, 14)) : (DateTime?)null;
+                if (usesCowork)
+                {
+                    // The five draws the retired Cowork usage-report fields took (#692), still spent so that
+                    // no other figure in this fixture moves.
+                    for (var draw = 0; draw < 5; draw++) random.Next();
+                }
 
                 analysis.CoworkSignals.Add(new CoworkReadinessSignalRow
                 {
@@ -1720,15 +1776,9 @@ namespace Tests.UnitTests
                     OfficeLocation = GreekDepartment,
                     CompanyName = "Contoso",
                     AccountEnabled = true,
-                    CoworkInteractions = usesCowork ? random.Next(5, 60) : 0,
-                    CoworkActiveDays = usesCowork ? random.Next(1, 12) : 0,
-                    LastCoworkInteractionUtc = usesCowork ? Now.AddDays(-random.Next(1, 14)) : (DateTime?)null,
-                    CoworkReportTotalTasks = usesCowork ? random.Next(2, 40) : (int?)null,
-                    CoworkReportScheduledTasks = usesCowork ? random.Next(0, 20) : (int?)null,
-                    CoworkReportUserInitiatedTasks = usesCowork ? random.Next(0, 20) : (int?)null,
-                    CoworkReportActiveDays = usesCowork ? random.Next(1, 12) : (int?)null,
-                    CoworkReportLastActivityDate = usesCowork ? Now.AddDays(-random.Next(1, 10)) : (DateTime?)null,
-                    CoworkReportRetainedUser = usesCowork ? (i % 10 == 0) : (bool?)null,
+                    CoworkInteractions = coworkInteractions,
+                    CoworkActiveDays = coworkActiveDays,
+                    LastCoworkInteractionUtc = lastCoworkInteraction,
                     TeamsMessages = random.Next(40, 600),
                     TeamsMeetings = random.Next(1, 30),
                     EmailsSent = random.Next(10, 200),
@@ -1744,9 +1794,6 @@ namespace Tests.UnitTests
                     FilesPerActiveDay = 3 + i % 9,
                 });
             }
-
-            // A Cowork usage-report snapshot with a known period, so the tasks above count as observed.
-            summary.DataSources.CoworkUsageReportPeriodDays = 28;
 
             new CopilotAdoptionService().FinaliseSummary(analysis);
             return analysis;

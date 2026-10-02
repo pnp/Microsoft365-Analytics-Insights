@@ -825,7 +825,7 @@ describe('CoworkPanel time-saved assumptions', () => {
         /^This model hands each person it covers 42 pieces of work a month\. Compare that with the Cowork tasks per person your pilot group ran over the last 28 days/,
       ),
     ).toBeTruthy();
-    expect(screen.getByText(/^One Cowork task can cover several pieces of work/)).toBeTruthy();
+    expect(screen.getByText(/^This model counts pieces of work, not Microsoft\u2019s Cowork tasks/)).toBeTruthy();
     // Nothing claims the product holds the tenant's own Cowork task counts (#692).
     expect(screen.queryAllByText(/^Your \d+ Cowork users? runs?/)).toHaveLength(0);
   });

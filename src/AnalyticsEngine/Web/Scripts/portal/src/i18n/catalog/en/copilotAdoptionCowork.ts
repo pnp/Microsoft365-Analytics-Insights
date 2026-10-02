@@ -229,7 +229,7 @@ export const copilotAdoptionCowork = {
   'copilotAdoptionCowork.timeSaved.shares.why.createDocuments': '{share}% of the files they work on - one in fifty. Microsoft\u2019s reports count every file opened as well as every file edited, so most of this is reading.',
   'copilotAdoptionCowork.timeSaved.shares.check.title': 'Checking the shares after a pilot',
   'copilotAdoptionCowork.timeSaved.shares.check.model': 'This model hands each person it covers {model} pieces of work a month. Compare that with the Cowork tasks per person your pilot group ran over the last 28 days, from Microsoft\u2019s Cowork usage report in the Microsoft 365 admin centre (Copilot > Cowork > Usage), which can export each person\u2019s tasks as a CSV. This product does not import that report, so the comparison is one you make by hand.',
-  'copilotAdoptionCowork.timeSaved.shares.check.caveat': 'One Cowork task can cover several pieces of work, and early adopters tend to use a new tool more than the people who follow, so the two need not match exactly - but a model far above what your pilot group does is one to tune down.',
+  'copilotAdoptionCowork.timeSaved.shares.check.caveat': 'This model counts pieces of work, not Microsoft\u2019s Cowork tasks, and early adopters tend to use a new tool more than the people who follow, so the two need not match exactly - but a model far above what your pilot group does is one to tune down.',
   'copilotAdoptionCowork.timeSaved.shares.test': 'After a pilot, move the shares until the pieces of work this model hands each person a month are close to the Cowork tasks per person your pilot group ran in the admin centre\u2019s report.',
 
   // Time saved - making it yours
