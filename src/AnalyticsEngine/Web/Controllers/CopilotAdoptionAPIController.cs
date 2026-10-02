@@ -911,11 +911,11 @@ namespace Web.AnalyticsWeb.Controllers
         ///
         /// <para>The optional time-saved parameters carry the assumptions the reader entered in the
         /// portal. <c>copilotMinutesSavedPerMeeting</c>, <c>copilotMinutesSavedPerMailThread</c> and
-        /// <c>copilotMinutesSavedPerDocument</c> restate the licence estimate;
-        /// <c>coworkMinutesSavedPerTask</c> and, for each kind of work Cowork could take on, its share and
-        /// minutes under the option's own name (<c>coworkOrganiseMeetingsShare</c>,
-        /// <c>coworkOrganiseMeetingsMinutes</c> and so on - see <see cref="CoworkActivities"/>) restate the
-        /// Cowork estimate; <c>coworkEstimateLowerBoundRatio</c> applies to both. The per-activity figures
+        /// <c>copilotMinutesSavedPerDocument</c> restate the licence estimate; for each kind of work Cowork
+        /// could take on, its share and minutes under the option's own name
+        /// (<c>coworkOrganiseMeetingsShare</c>, <c>coworkOrganiseMeetingsMinutes</c> and so on - see
+        /// <see cref="CoworkActivities"/>) restate the Cowork estimate; <c>coworkEstimateLowerBoundRatio</c>
+        /// applies to both. The per-activity figures
         /// are read from the query string by those names rather than bound one parameter each, so a kind
         /// of work added to the catalogue needs no change here. Those figures live in the browser only, so
         /// the export has to be told them or a customised page would download a workbook modelling
@@ -933,7 +933,6 @@ namespace Web.AnalyticsWeb.Controllers
             string copilotMinutesSavedPerMailThread = null,
             string copilotMinutesSavedPerDocument = null,
             string coworkEstimateLowerBoundRatio = null,
-            string coworkMinutesSavedPerTask = null,
             string copilotSeatOutlookMinutesPerAction = null,
             string copilotSeatOfficeMinutesPerAction = null,
             string copilotSeatMeetingMinutesPerAction = null,
@@ -958,7 +957,6 @@ namespace Web.AnalyticsWeb.Controllers
                 copilotMinutesSavedPerMailThread,
                 copilotMinutesSavedPerDocument,
                 coworkEstimateLowerBoundRatio,
-                coworkMinutesSavedPerTask,
                 copilotSeatOutlookMinutesPerAction,
                 copilotSeatOfficeMinutesPerAction,
                 copilotSeatMeetingMinutesPerAction,
@@ -1042,7 +1040,6 @@ namespace Web.AnalyticsWeb.Controllers
             string minutesPerMailThread,
             string minutesPerDocument,
             string lowerBoundRatio,
-            string minutesPerTask,
             IEnumerable<KeyValuePair<string, string>> query)
         {
             return ParseTimeSavedOverrides(
@@ -1050,7 +1047,6 @@ namespace Web.AnalyticsWeb.Controllers
                 minutesPerMailThread,
                 minutesPerDocument,
                 lowerBoundRatio,
-                minutesPerTask,
                 null,
                 null,
                 null,
@@ -1063,7 +1059,6 @@ namespace Web.AnalyticsWeb.Controllers
             string minutesPerMailThread,
             string minutesPerDocument,
             string lowerBoundRatio,
-            string minutesPerTask = null,
             string seatOutlookMinutesPerAction = null,
             string seatOfficeMinutesPerAction = null,
             string seatMeetingMinutesPerAction = null,
@@ -1076,7 +1071,6 @@ namespace Web.AnalyticsWeb.Controllers
                 MinutesSavedPerMailThread = ParseInvariantDouble(minutesPerMailThread),
                 MinutesSavedPerDocument = ParseInvariantDouble(minutesPerDocument),
                 LowerBoundRatio = ParseInvariantDouble(lowerBoundRatio),
-                MinutesSavedPerTask = ParseInvariantDouble(minutesPerTask),
                 SeatOutlookMinutesPerAction = ParseInvariantDouble(seatOutlookMinutesPerAction),
                 SeatOfficeMinutesPerAction = ParseInvariantDouble(seatOfficeMinutesPerAction),
                 SeatMeetingMinutesPerAction = ParseInvariantDouble(seatMeetingMinutesPerAction),

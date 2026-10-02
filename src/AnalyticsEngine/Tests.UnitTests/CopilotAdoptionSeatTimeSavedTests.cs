@@ -71,7 +71,7 @@ namespace Tests.UnitTests
             var summary = new CopilotAdoptionSummary
             {
                 LicenceOpportunityEstimate = CopilotAdoptionScoring.ModelLicenceValue(1, 60, 0, 0, CopilotAdoptionOptions.Default),
-                CoworkValueEstimate = CopilotAdoptionScoring.ModelCoworkValue(1, CopilotAdoptionOptions.Default, new CoworkTaskInputs { ObservedUsers = 1, ObservedTasksPerMonth = 10 }),
+                CoworkValueEstimate = CopilotAdoptionScoring.ModelCoworkValue(1, CopilotAdoptionOptions.Default, new CoworkTaskInputs { ActivityVolumes = { [CoworkActivities.SendEmail] = 200 } }),
                 SeatHolderTimeSavedEstimate = CopilotAdoptionScoring.ModelSeatHolderTimeSaved(1, 0, 10, 0, 0, 0, CopilotAdoptionOptions.Default),
             };
 

@@ -2310,7 +2310,6 @@ function MethodTab({ summary }: { summary: CopilotAdoptionSummary }) {
               <Text>
                 {tNode('copilotAdoption.page.method.coworkTimeSaved', {
                   heading: <strong>{t('copilotAdoption.page.method.coworkTimeSavedHeading')}</strong>,
-                  taskMinutes: formatNumber(o.coworkMinutesSavedPerTask, { maximumFractionDigits: 2 }),
                 })}
               </Text>
               <Text>
@@ -2704,7 +2703,6 @@ function buildTimeSavedKpis(
           what: t('copilotAdoption.page.kpi.coworkTimeSaved.what'),
           how: t('copilotAdoption.page.kpi.coworkTimeSaved.how'),
           formula: t('copilotAdoption.page.kpi.coworkTimeSaved.formula', {
-            taskMinutes: minutes(assumptions.taskMinutes),
             percent,
           }),
           source: t('copilotAdoption.page.kpi.coworkTimeSaved.source'),
@@ -2889,18 +2887,14 @@ function buildKpis(
         ? t('copilotAdoption.page.kpi.coworkUsageObserved')
         : t('copilotAdoption.page.coworkAdoption'),
       value: summary.coworkAdoptionPct === null ? formatCount(summary.coworkUsers) : formatPct(summary.coworkAdoptionPct),
-      hint: summary.coworkReportTotalTasks > 0
-        ? t('copilotAdoption.page.kpi.coworkTasksHint', {
-            tasks: formatCount(summary.coworkReportTotalTasks),
-            interactions: formatCount(summary.coworkInteractions),
-          })
-        : t('copilotAdoption.page.kpi.coworkAuditHint', { interactions: formatCount(summary.coworkInteractions) }),
+      // Cowork use comes from the Copilot audit log only, and counts interactions, never tasks (#692).
+      hint: t('copilotAdoption.page.kpi.coworkAuditHint', { interactions: formatCount(summary.coworkInteractions) }),
       tone: 'opportunity',
       info: {
         what: summary.coworkAdoptionPct === null
           ? t('copilotAdoption.page.kpi.coworkWhatUnknownEligibility')
           : t('copilotAdoption.page.kpi.coworkWhatKnownEligibility'),
-        how: t('copilotAdoption.page.microsoftCoworkUsageReportSuppliesTaskCountsAvailableAudit'),
+        how: t('copilotAdoption.page.kpi.coworkHow'),
         source:
           t('copilotAdoption.page.coworkEligibilityControlledSpendingPolicyScopeDeprecatedCoworkAgent'),
       },

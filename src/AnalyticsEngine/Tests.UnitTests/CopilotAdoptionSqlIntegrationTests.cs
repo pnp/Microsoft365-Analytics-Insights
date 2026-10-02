@@ -1332,7 +1332,7 @@ namespace Tests.UnitTests
                 Exception thrown = null;
                 try
                 {
-                    Query<int>(db, "SELECT COUNT(*) FROM dbo.cowork_usage_user_activity_log;");
+                    Query<int>(db, "SELECT COUNT(*) FROM dbo.contoso_table_the_upgrade_never_created;");
                 }
                 catch (Exception ex)
                 {

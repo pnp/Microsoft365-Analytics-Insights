@@ -712,7 +712,6 @@ const TIME_SAVED_ASSUMPTION_SPECS: TimeSavedAssumptionSpec[] = [
         'assumptions.sendEmailMinutes',
         'assumptions.postInTeamsMinutes',
         'assumptions.createDocumentsMinutes',
-        'assumptions.taskMinutes',
       ],
       shares: [
         'assumptions.organiseMeetingsShare',
@@ -721,10 +720,9 @@ const TIME_SAVED_ASSUMPTION_SPECS: TimeSavedAssumptionSpec[] = [
         'assumptions.postInTeamsShare',
         'assumptions.createDocumentsShare',
       ],
-      volumes: ['projection.cohortUsers', 'projection.workingDaysPerMonth', 'monthDays'],
-      // The tasks already running, and how many people run them - or the sentence saying nobody does.
-      observedTasks: ['projection.observedTasks', 'projection.observedUsers'],
-      observedNone: [],
+      volumes: ['projection.cohortUsers', 'projection.workingDaysPerMonth'],
+      // Everyone covered, people already using Cowork included, is modelled from their own work (#692).
+      everyoneModelled: [],
       increment: [],
       leftOut: [],
       lowerBound: ['conservativePercent'],
@@ -2306,7 +2304,9 @@ describe('Copilot Adoption server warning text', () => {
     const service = readFileSync(COPILOT_ADOPTION_SERVICE, 'utf8');
     const coworkQueries = sortedUnique([...service.matchAll(/CopilotAdoptionQueries\.(Cowork\w+)/g)].map((m) => m[1]));
 
-    expect(coworkQueries.length, 'Cowork queries not found in the service').toBeGreaterThanOrEqual(7);
+    // A floor, so a broken pattern cannot pass by finding nothing. Five since the Cowork usage-report date
+    // and period probes went with the import of a Graph function that does not exist (#692).
+    expect(coworkQueries.length, 'Cowork queries not found in the service').toBeGreaterThanOrEqual(5);
     expect(
       coworkQueries.filter((query) => !isCoworkWarning({ key: 'couldNotLoad', values: { query, description: '', message: '' } })),
       'Add each Cowork query to COWORK_WARNING_QUERIES in serverText.ts, or its failure disappears from the Cowork tab.',
@@ -2326,7 +2326,8 @@ describe('Copilot Adoption server warning text', () => {
     // The only non-literal uses are StepOutput.MarkIncomplete's own parameter and the step merge, which
     // forwards reasons recorded by literal calls above. Anything else could name a dataset this list misses.
     expect(sortedUnique(calls.filter((arg) => !arg.startsWith('"'))), 'non-literal dataset name').toEqual(['reason', 'string dataset']);
-    expect(literals.length, 'figures-incomplete datasets not found in the service').toBeGreaterThanOrEqual(17);
+    // A floor, as above. Fifteen since the two Cowork usage-report datasets were removed (#692).
+    expect(literals.length, 'figures-incomplete datasets not found in the service').toBeGreaterThanOrEqual(15);
     // Only the service names datasets: a call in any other CopilotAdoption file would escape the list below.
     const adoptionDir = join(process.cwd(), '..', '..', '..', 'Common', 'Entities', 'CopilotAdoption');
     for (const file of readdirSync(adoptionDir).filter((name) => name.endsWith('.cs') && name !== 'CopilotAdoptionService.cs')) {

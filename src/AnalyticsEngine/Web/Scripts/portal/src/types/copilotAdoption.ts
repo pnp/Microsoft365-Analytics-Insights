@@ -71,13 +71,10 @@ export interface AdoptionResourceTypeRow {
 export interface AdoptionDataSources {
   auditAvailable: boolean;
   copilotUsageReportAvailable: boolean;
-  coworkUsageReportAvailable: boolean;
   m365UsageReportsAvailable: boolean;
   userMetadataAvailable: boolean;
   copilotUsageReportDate: string | null;
   copilotUsageReportPeriodDays: number;
-  coworkUsageReportDate: string | null;
-  coworkUsageReportPeriodDays: number;
   m365UsageReportDate: string | null;
   copilotUsageReportObfuscated: boolean;
 }
@@ -188,11 +185,6 @@ export interface CopilotAdoptionOptions {
   copilotSeatOfficeMinutesPerAction?: number;
   copilotSeatMeetingMinutesPerAction?: number;
   copilotSeatUncreditedMinutesPerAction?: number;
-  /**
-   * Minutes Cowork is assumed to save per task already in Microsoft's Cowork report, on top of Copilot.
-   * No study has measured it.
-   */
-  coworkMinutesSavedPerTask: number;
   /**
    * For each kind of work Cowork could take on (`CoworkActivity`), the share of it handed to Cowork
    * (0 to 1) and the minutes Cowork saves on each piece, on top of Copilot. Assumptions, all of them -
@@ -412,20 +404,13 @@ export interface CopilotAdoptionSummary {
   medianAdoptionScore: number;
   totalInteractions: number;
 
+  // Cowork use, from the Copilot audit log only: interactions, never tasks (#692).
   coworkUsers: number;
   coworkAdoptionPct: number | null;
   coworkEligibilityKnown: boolean;
   coworkEligibleUsers: number | null;
   coworkAuditUsers: number;
   coworkInteractions: number;
-  coworkReportUsers: number;
-  coworkReportTotalTasks: number;
-  coworkReportScheduledTasks: number;
-  coworkReportUserInitiatedTasks: number;
-  coworkAutomationRatioPct: number | null;
-  coworkTasksPerActiveUser: number | null;
-  coworkReportRetainedUsers: number | null;
-  coworkReportRetentionPct: number | null;
   coworkDetected: boolean;
 
   /**
@@ -581,14 +566,6 @@ export interface LicensedUserAdoptionRow {
   appsUsed: number;
   agentsUsed: number;
   coworkInteractions: number;
-  coworkReportTotalTasks: number | null;
-  coworkReportScheduledTasks: number | null;
-  coworkReportUserInitiatedTasks: number | null;
-  coworkReportActiveDays: number | null;
-  coworkReportLastActivityDate: string | null;
-  coworkReportRetainedUser: boolean | null;
-  coworkAutomationRatioPct: number | null;
-  coworkCreditsPerTask: number | null;
   usedCowork: boolean;
 
   firstInteractionUtc: string | null;
@@ -777,11 +754,6 @@ export interface CoworkSegmentRow {
   primeCandidates: number;
   primeCandidateRatePct: number;
   regularCoworkUsers: number;
-  coworkReportTotalTasks: number;
-  coworkReportScheduledTasks: number;
-  coworkAutomationRatioPct: number | null;
-  coworkReportRetainedUsers: number | null;
-  coworkReportRetentionPct: number | null;
   coworkAdoptionPct: number;
   averageCoordinationLoad: number;
   averageFluency: number;
@@ -807,16 +779,16 @@ export interface CoworkCreditPosition {
 }
 
 /**
- * The kinds of work the Cowork estimate models for people not yet running Cowork tasks: each thing
- * Microsoft says Cowork does, against the count Microsoft's usage reports keep of people doing it by
- * hand. In the order the server publishes and sums them - see `COWORK_ACTIVITIES`.
+ * The kinds of work the Cowork estimate models: each thing Microsoft says Cowork does, against the count
+ * Microsoft's usage reports keep of people doing it by hand. In the order the server publishes and sums
+ * them - see `COWORK_ACTIVITIES`.
  */
 export type CoworkActivity = 'organiseMeetings' | 'prepareMeetings' | 'sendEmail' | 'postInTeams' | 'createDocuments';
 
 /** What one cohort already does by hand of one kind of work, a month. Observed, not modelled. */
 export interface CoworkActivityVolume {
   activity: CoworkActivity;
-  /** Done by hand a month by the people not yet running Cowork tasks. */
+  /** Done by hand a month by the people the estimate covers. */
   volumePerMonth: number;
 }
 
@@ -824,11 +796,10 @@ export interface CoworkActivityVolume {
  * The modelled Cowork estimate for one cohort: the time Cowork could give back ON TOP of what Microsoft
  * 365 Copilot already saves - the value of enabling Cowork, paid for in Copilot Credits.
  *
- * The Cowork tasks already in Microsoft's report, at minutes per task; and for everyone else, each kind
- * of work they already do by hand x the share of it handed to Cowork x the minutes saved on each piece.
- * The volumes are observed; the shares and minutes are assumptions no study has tested. There is
- * deliberately no Copilot layer: these people already hold a licence, and the time it gives back is not
- * Cowork's to claim.
+ * Each kind of work the cohort already does by hand x the share of it handed to Cowork x the minutes
+ * saved on each piece. Everyone is modelled this way, including people already using Cowork. The volumes
+ * are observed; the shares and minutes are assumptions no study has tested. There is deliberately no
+ * Copilot layer: these people already hold a licence, and the time it gives back is not Cowork's to claim.
  *
  * `assumptions` travels with the numbers so no component can render a figure without it. The portal
  * recomputes the hours from the published inputs whenever the reader enters their own assumptions -
@@ -872,25 +843,10 @@ export interface SeatHolderTimeSavedEstimate {
 export interface CoworkValueEstimate {
   isModelled: boolean;
   cohortUsers: number;
-  /** People in the cohort with Cowork tasks in Microsoft's Cowork report. Observed. */
-  coworkTaskUsers: number;
-  /** Their tasks, restated as a month. Observed. */
-  observedCoworkTasks: number;
-  /** Everyone else in the cohort, modelled from the work they already do. */
-  projectedCoworkUsers: number;
-  /** That work, a month, one entry per kind - every kind present, in `COWORK_ACTIVITIES` order. Observed. */
+  /** The work the cohort does by hand, a month, one entry per kind - every kind present, in `COWORK_ACTIVITIES` order. Observed. */
   activities: CoworkActivityVolume[];
-  /** Pieces of work a month handed to Cowork: each volume x its share, summed, then rounded. */
+  /** Pieces of work a month handed to Cowork: each volume x its share, summed, then rounded. Modelled. */
   projectedCoworkTasks: number;
-  /** Observed tasks plus the pieces of work handed over. */
-  coworkTasks: number;
-  /**
-   * The tenant's own Cowork users' average tasks a month - the sense check, not an input. Zero when
-   * nobody has Cowork tasks in the report.
-   */
-  observedTasksPerPersonPerMonth: number;
-  /** How many people that average is of. */
-  observedTaskRateUsers: number;
   hoursPerMonthLow: number;
   hoursPerMonthHigh: number;
   // No monetary fields, and none anywhere else in this report: the estimate is modelled, and a money
@@ -935,17 +891,10 @@ export interface CoworkReadinessRow {
   manager: string | null;
   accountEnabled: boolean | null;
 
+  // Cowork use, from the Copilot audit log only: interactions, never tasks (#692).
   coworkInteractions: number;
   coworkActiveDays: number;
   lastCoworkInteractionUtc: string | null;
-  coworkReportTotalTasks: number | null;
-  coworkReportScheduledTasks: number | null;
-  coworkReportUserInitiatedTasks: number | null;
-  coworkReportActiveDays: number | null;
-  coworkReportLastActivityDate: string | null;
-  coworkReportRetainedUser: boolean | null;
-  coworkAutomationRatioPct: number | null;
-  coworkCreditsPerTask: number | null;
   usedCowork: boolean;
   regularCoworkUser: boolean;
 
