@@ -1,4 +1,4 @@
-﻿using Common.Entities.CopilotAdoption;
+using Common.Entities.CopilotAdoption;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using Newtonsoft.Json.Linq;
 using System;
@@ -57,7 +57,7 @@ namespace Tests.UnitTests
         {
             var sql = CopilotAdoptionSeatTimeSql.SeatHolderTimeSavedSql(new[] { 1 }, new[] { 99 });
 
-            StringAssert.Contains(sql, "CAST(COUNT(DISTINCT a.meeting_id) AS bigint) AS TeamsMeetingActions");
+            StringAssert.Contains(sql, "SELECT DISTINCT user_id, meeting_id FROM #seat_time_grain WHERE meeting_id IS NOT NULL");
             StringAssert.Contains(sql, "a.meeting_id IS NULL AND a.app_host IN ('outlook')");
             StringAssert.Contains(sql, "a.meeting_id IS NULL AND a.app_host IN ('word','powerpoint','excel')");
             StringAssert.Contains(sql, "LOWER(CAST(ISNULL(c.app_host, '') AS nvarchar(100))) AS app_host");
@@ -152,3 +152,4 @@ namespace Tests.UnitTests
         }
     }
 }
+
