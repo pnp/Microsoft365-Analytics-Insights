@@ -36,6 +36,7 @@ export const health = {
   'health.component.Credential': 'Credential',
   'health.component.ServiceBus': 'ServiceBus',
   'health.component.BlobCheckpoint': 'BlobCheckpoint',
+  'health.component.CopilotAuditBackfill': 'Copilot audit backfill',
   'health.duration.day': '{count} day',
   'health.duration.days': '{count} days',
   'health.duration.hour': '{count} hour',
@@ -69,6 +70,11 @@ export const health = {
   'health.reason.blobCheckpointAuthenticationFailed': 'The audit blob checkpoint is degraded because Azure Storage rejected the checkpoint credential (HTTP {status} {errorCode}). Check the Storage connection string/account key, or the runtime service-principal credential used for RBAC fallback. Until this is fixed, the importer uses a non-durable in-memory checkpoint that is lost on restart/redeploy, and durable cross-cycle metadata recovery is unavailable.',
   'health.reason.blobCheckpointKeyAuthDisabled': "The audit blob checkpoint is degraded because the storage account has shared-key authentication disabled (HTTP {status} {errorCode}). The importer falls back to RBAC/Entra ID when the runtime service principal is configured; that identity needs 'Storage Table Data Contributor' on the storage account. Until this is fixed, the importer uses a non-durable in-memory checkpoint that is lost on restart/redeploy, and durable cross-cycle metadata recovery is unavailable.",
   'health.reason.blobCheckpointStorageRejected': 'The audit blob checkpoint is degraded because Azure Storage rejected the Table checkpoint request (HTTP {status} {errorCode}). Check the Storage connection string, Table service reachability, storage firewall/private endpoint settings and Table data-plane permissions. Until this is fixed, the importer uses a non-durable in-memory checkpoint that is lost on restart/redeploy, and durable cross-cycle metadata recovery is unavailable.',
+  'health.reason.copilotAuditBackfillHealthy': 'No Copilot audit backfill is currently blocked.',
+  'health.reason.copilotAuditBackfillRunning': 'A Copilot audit backfill is running. It advances bounded Microsoft Graph Audit Search slices during importer cycles.',
+  'health.reason.copilotAuditBackfillFailed': 'The Copilot audit backfill failed. Open Administration > Copilot audit backfill for the stable error code.',
+  'health.reason.copilotAuditBackfillMissingPermission': 'The Copilot audit backfill cannot run because the runtime app is missing AuditLogsQuery.Read.All. This permission is opt-in and needs admin consent.',
+  'health.reason.copilotAuditBackfillCompletedWithGaps': 'The Copilot audit backfill completed with failed or incomplete slices. Open Administration > Copilot audit backfill to see the affected days.',
 
   // Health page
   'health.page.title': 'System Health{buildLabel}',

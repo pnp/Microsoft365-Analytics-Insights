@@ -170,6 +170,10 @@ namespace Tests.UnitTests
             ["UserScopeAPIController.GetPurge"] = Admin,
             ["UserScopeAPIController.CancelPurge"] = Admin,
 
+            ["CopilotAuditBackfillAPIController.Get"] = Admin,
+            ["CopilotAuditBackfillAPIController.Start"] = Admin,
+            ["CopilotAuditBackfillAPIController.Cancel"] = Admin,
+
             ["WebActivityAPIController.Availability"] = Any,
             ["WebActivityAPIController.Overview"] = Any,
             ["WebActivityAPIController.Visits"] = Any,

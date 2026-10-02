@@ -36,6 +36,15 @@ export const HEALTH_COMPONENT_LABEL_KEYS: Record<string, TranslationKey> = {
   Credential: 'health.component.Credential',
   ServiceBus: 'health.component.ServiceBus',
   BlobCheckpoint: 'health.component.BlobCheckpoint',
+  CopilotAuditBackfill: 'health.component.CopilotAuditBackfill',
+};
+
+export const COPILOT_AUDIT_BACKFILL_REASON_KEYS: Record<string, TranslationKey> = {
+  'copilotAuditBackfill.healthy': 'health.reason.copilotAuditBackfillHealthy',
+  'copilotAuditBackfill.running': 'health.reason.copilotAuditBackfillRunning',
+  'copilotAuditBackfill.failed': 'health.reason.copilotAuditBackfillFailed',
+  'copilotAuditBackfill.missingPermission': 'health.reason.copilotAuditBackfillMissingPermission',
+  'copilotAuditBackfill.completedWithGaps': 'health.reason.copilotAuditBackfillCompletedWithGaps',
 };
 
 /**
@@ -295,6 +304,11 @@ export function translateHealthComponentDetail(component: ComponentHealthRow, t:
       status: component.httpStatus ? formatNumber(component.httpStatus) : '-',
       errorCode: component.errorCode ?? '-',
     });
+  }
+
+  const copilotBackfillKey = component.reasonKey ? COPILOT_AUDIT_BACKFILL_REASON_KEYS[component.reasonKey] : null;
+  if (copilotBackfillKey) {
+    return t(copilotBackfillKey);
   }
 
   return translateHealthComponentDetailText(component.detail, t);

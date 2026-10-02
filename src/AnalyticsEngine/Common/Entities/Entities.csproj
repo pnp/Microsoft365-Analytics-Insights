@@ -569,6 +569,9 @@
     <Compile Include="State\AzureTableKeyValueStore.cs" />
     <Compile Include="State\IKeyValueStore.cs" />
     <Compile Include="State\InMemoryKeyValueStore.cs" />
+    <Compile Include="CopilotAuditBackfill\CopilotAuditBackfillModels.cs" />
+    <Compile Include="CopilotAuditBackfill\CopilotAuditBackfillSlicer.cs" />
+    <Compile Include="CopilotAuditBackfill\CopilotAuditBackfillStateStore.cs" />
     <Compile Include="State\StateStore.cs" />
     <Compile Include="State\StorageTableClientFactory.cs" />
     <Compile Include="State\TeamsTokenStore.cs" />

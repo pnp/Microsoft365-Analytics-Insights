@@ -38,6 +38,7 @@ const UserLookupPage = lazyWithReload(() => import('./pages/UserLookupPage'));
 const UserOrgsPage = lazyWithReload(() => import('./pages/UserOrgsPage'));
 const UserImportPage = lazyWithReload(() => import('./pages/UserImportPage'));
 const UserScopePage = lazyWithReload(() => import('./pages/UserScopePage'));
+const CopilotAuditBackfillPage = lazyWithReload(() => import('./pages/CopilotAuditBackfillPage'));
 const ProfilingStatusPage = lazyWithReload(() => import('./pages/ProfilingStatusPage'));
 const InstallLogPage = lazyWithReload(() => import('./pages/InstallLogPage'));
 const HealthPage = lazyWithReload(() => import('./pages/HealthPage'));
@@ -217,6 +218,14 @@ export const ROUTES: PortalRoute[] = [
     groupKey: 'app.navGroup.manage',
     icon: <PeopleAudience20Regular />,
     element: <UserScopePage />,
+  },
+  {
+    area: 'admin',
+    path: '/admin/copilot-audit-backfill',
+    labelKey: 'app.route.copilotAuditBackfill',
+    groupKey: 'app.navGroup.manage',
+    icon: <Sparkle20Regular />,
+    element: <CopilotAuditBackfillPage />,
   },
   {
     area: 'admin',

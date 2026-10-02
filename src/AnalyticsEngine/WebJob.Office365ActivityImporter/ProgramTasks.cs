@@ -1,5 +1,7 @@
 using Common.Entities;
 using Common.Entities.Config;
+using Common.Entities.CopilotAuditBackfill;
+using Common.Entities.State;
 using Common.Entities.UserScope;
 using DataUtils;
 using DataUtils.Http;
@@ -14,6 +16,7 @@ using WebJob.Office365ActivityImporter.Engine.ActivityAPI;
 using WebJob.Office365ActivityImporter.Engine.ActivityAPI.Loaders;
 using WebJob.Office365ActivityImporter.Engine.AgentCosts;
 using WebJob.Office365ActivityImporter.Engine.Graph;
+using WebJob.Office365ActivityImporter.Engine.Graph.Copilot.AuditBackfill;
 using WebJob.Office365ActivityImporter.Engine.Graph.Calls;
 using WebJob.Office365ActivityImporter.Engine.Graph.Email;
 
@@ -37,6 +40,7 @@ namespace WebJob.Office365ActivityImporter
         private readonly IReportCompletionStore _reportCompletionStore;
         private readonly IImportLastRunStore _graphLastRunStore;
         private readonly ISentEmailMailboxSkipList _sentEmailMailboxSkipList;
+        private static readonly InMemoryKeyValueStore InMemoryCopilotAuditBackfillStore = new InMemoryKeyValueStore();
 
         public ProgramTasks(AnalyticsLogger logger, AppConfig settings, ISingleDateStore activityReportsLastImportedStore = null, IImportLastRunStore graphLastRunStore = null, ISentEmailMailboxSkipList sentEmailMailboxSkipList = null)
             : this(logger, settings, activityReportsLastImportedStore, graphLastRunStore, sentEmailMailboxSkipList, reportCompletionStore: null)
@@ -282,6 +286,18 @@ namespace WebJob.Office365ActivityImporter
 
                     // Output stats
                     _logger.LogInformation($"Finished activity import. Time taken in = {DateTime.Now.Subtract(startTime).TotalMinutes.ToString("N2")} minutes. Stats: {stats}");
+
+                    var durableBackfillStore = StateStore.TryOpen(_settings, StatePartitions.CopilotAuditBackfill, _logger);
+                    var backfillState = new CopilotAuditBackfillStateStore(
+                        durableBackfillStore ?? InMemoryCopilotAuditBackfillStore,
+                        isDurable: durableBackfillStore != null);
+                    var backfill = new CopilotAuditBackfillImporter(
+                        backfillState,
+                        new GraphCopilotAuditSearchSource(_manualGraphCallClient, _graphAppIndentityOAuthContext, _logger),
+                        sqlAdaptor,
+                        _settings,
+                        _logger);
+                    await backfill.AdvanceLatestAsync();
                 }
                 catch (System.Net.Http.HttpRequestException ex)
                 {
