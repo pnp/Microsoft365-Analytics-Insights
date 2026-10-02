@@ -116,10 +116,14 @@ namespace Common.Entities.CopilotAdoption
 
             return string.Format(
                 CultureInfo.InvariantCulture,
-                "copilot-adoption-{0}d{2}-{1:yyyy-MM-dd}.xlsx",
+                summary?.Options?.UsesExplicitDates == true
+                    ? "copilot-adoption-{3:yyyy-MM-dd}-to-{4:yyyy-MM-dd}{2}-{1:yyyy-MM-dd}.xlsx"
+                    : "copilot-adoption-{0}d{2}-{1:yyyy-MM-dd}.xlsx",
                 windowDays,
                 generated,
-                narrowed);
+                narrowed,
+                summary?.FromUtc ?? generated,
+                summary?.ToUtc ?? generated);
         }
 
         #region Report metadata
@@ -2202,6 +2206,10 @@ namespace Common.Entities.CopilotAdoption
             sheet.AddTitle("How this is calculated");
             sheet.AddBlankRow();
             sheet.AddHeaderRow("Measure", "Definition");
+
+            AddMethod(sheet, "Reporting period", summary.Options.UsesExplicitDates
+                ? $"This workbook covers the UTC calendar range {summary.FromUtc:yyyy-MM-dd} to {summary.ToUtc:yyyy-MM-dd} inclusive."
+                : $"This workbook covers the rolling {summary.WindowDays}-day period ending when the analysis ran.");
 
             AddMethod(sheet, "Engagement score",
                 "Each licensed user scores 0-100 from three capped components, because 'did they use Copilot?' is "

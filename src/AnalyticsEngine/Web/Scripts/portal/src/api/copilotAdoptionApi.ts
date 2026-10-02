@@ -1,4 +1,4 @@
-import { translateActive } from '../i18n/runtime';
+﻿import { translateActive } from '../i18n/runtime';
 import type { TranslationKey } from '../i18n/catalog';
 import { apiFetch } from './http';
 import type {
@@ -12,6 +12,7 @@ import type {
   LicensedUserPage,
   OpportunityFilters,
 } from '../types/copilotAdoption';
+import type { DateRange } from '../types/licenceActivity';
 
 const baseUrl = (): string =>
   window.o365AnalyticsCopilotAdoptionAPI ?? `${window.location.origin}/api/CopilotAdoption`;
@@ -94,6 +95,10 @@ async function getJson<T>(path: string, failureKey: TranslationKey, signal?: Abo
     }
 
     if (!response.ok) {
+      const body = (await response.clone().json().catch(() => null)) as { code?: unknown } | null;
+      if (typeof body?.code === 'string' && body.code.startsWith('copilotAdoption.error.')) {
+        throw new Error(translateActive(body.code as TranslationKey));
+      }
       throw new Error(translateActive(failureKey, { status: response.status }));
     }
 
@@ -102,8 +107,12 @@ async function getJson<T>(path: string, failureKey: TranslationKey, signal?: Abo
 }
 
 /** Common query parameters: every endpoint is scoped by the window and the seat-licence selection. */
-function scopeParams(windowDays: number, seatLicenceTypeIds?: number[]): URLSearchParams {
+function scopeParams(windowDays: number, seatLicenceTypeIds?: number[], dateRange?: DateRange | null): URLSearchParams {
   const params = new URLSearchParams({ windowDays: String(windowDays) });
+  if (dateRange) {
+    params.set('from', dateRange.from);
+    params.set('to', dateRange.to);
+  }
   if (seatLicenceTypeIds && seatLicenceTypeIds.length > 0) {
     params.set('seatLicenceTypeIds', seatLicenceTypeIds.join(','));
   }
@@ -164,8 +173,9 @@ export function fetchAdoptionSummary(
   signal?: AbortSignal,
   emailDomain?: string | null,
   userFilter?: string | null,
+  dateRange?: DateRange | null,
 ): Promise<CopilotAdoptionSummary> {
-  const params = scopeParams(windowDays, seatLicenceTypeIds);
+  const params = scopeParams(windowDays, seatLicenceTypeIds, dateRange);
   if (emailDomain) params.set('emailDomain', emailDomain);
   if (userFilter) params.set('userFilter', userFilter);
   return getJson<CopilotAdoptionSummary>(
@@ -186,9 +196,10 @@ export function fetchAdoptionFilters(
   windowDays: number,
   seatLicenceTypeIds?: number[],
   signal?: AbortSignal,
+  dateRange?: DateRange | null,
 ): Promise<AdoptionFilterOptions> {
   return getJson<AdoptionFilterOptions>(
-    `/filters?${scopeParams(windowDays, seatLicenceTypeIds)}`,
+    `/filters?${scopeParams(windowDays, seatLicenceTypeIds, dateRange)}`,
     'errors.copilotAdoption.filtersFailed',
     signal,
   );
@@ -201,8 +212,9 @@ export function fetchLicensedUsers(
   take: number,
   seatLicenceTypeIds?: number[],
   signal?: AbortSignal,
+  dateRange?: DateRange | null,
 ): Promise<LicensedUserPage> {
-  const params = applyLicensedUserFilters(scopeParams(windowDays, seatLicenceTypeIds), filters);
+  const params = applyLicensedUserFilters(scopeParams(windowDays, seatLicenceTypeIds, dateRange), filters);
   params.set('skip', String(skip));
   params.set('take', String(take));
 
@@ -216,8 +228,9 @@ export function fetchOpportunities(
   take: number,
   seatLicenceTypeIds?: number[],
   signal?: AbortSignal,
+  dateRange?: DateRange | null,
 ): Promise<LicenceOpportunityPage> {
-  const params = applyOpportunityFilters(scopeParams(windowDays, seatLicenceTypeIds), filters);
+  const params = applyOpportunityFilters(scopeParams(windowDays, seatLicenceTypeIds, dateRange), filters);
   params.set('skip', String(skip));
   params.set('take', String(take));
 
@@ -231,8 +244,9 @@ export function fetchCowork(
   take: number,
   seatLicenceTypeIds?: number[],
   signal?: AbortSignal,
+  dateRange?: DateRange | null,
 ): Promise<CoworkReadinessPage> {
-  const params = applyCoworkFilters(scopeParams(windowDays, seatLicenceTypeIds), filters);
+  const params = applyCoworkFilters(scopeParams(windowDays, seatLicenceTypeIds, dateRange), filters);
   params.set('skip', String(skip));
   params.set('take', String(take));
 
@@ -243,9 +257,10 @@ export function fetchAdoptionSql(
   windowDays: number,
   seatLicenceTypeIds?: number[],
   signal?: AbortSignal,
+  dateRange?: DateRange | null,
 ): Promise<Record<string, string>> {
   return getJson<Record<string, string>>(
-    `/sql?${scopeParams(windowDays, seatLicenceTypeIds)}`,
+    `/sql?${scopeParams(windowDays, seatLicenceTypeIds, dateRange)}`,
     'errors.copilotAdoption.queriesFailed',
     signal,
   );
@@ -262,8 +277,9 @@ export function licensedUsersExportUrl(
   windowDays: number,
   filters: LicensedUserFilters,
   seatLicenceTypeIds?: number[],
+  dateRange?: DateRange | null,
 ): string {
-  const params = applyLicensedUserFilters(scopeParams(windowDays, seatLicenceTypeIds), filters);
+  const params = applyLicensedUserFilters(scopeParams(windowDays, seatLicenceTypeIds, dateRange), filters);
   return `${baseUrl()}/licensed-users/export?${params}`;
 }
 
@@ -271,8 +287,9 @@ export function opportunitiesExportUrl(
   windowDays: number,
   filters: OpportunityFilters,
   seatLicenceTypeIds?: number[],
+  dateRange?: DateRange | null,
 ): string {
-  const params = applyOpportunityFilters(scopeParams(windowDays, seatLicenceTypeIds), filters);
+  const params = applyOpportunityFilters(scopeParams(windowDays, seatLicenceTypeIds, dateRange), filters);
   return `${baseUrl()}/opportunities/export?${params}`;
 }
 
@@ -287,8 +304,9 @@ export function coworkExportUrl(
   windowDays: number,
   filters: CoworkFilters,
   seatLicenceTypeIds?: number[],
+  dateRange?: DateRange | null,
 ): string {
-  const params = applyCoworkFilters(scopeParams(windowDays, seatLicenceTypeIds), filters);
+  const params = applyCoworkFilters(scopeParams(windowDays, seatLicenceTypeIds, dateRange), filters);
   return `${baseUrl()}/cowork/export?${params}`;
 }
 
@@ -314,8 +332,9 @@ export function workbookExportUrl(
   emailDomain?: string | null,
   timeSaved?: Record<string, string>,
   userFilter?: string | null,
+  dateRange?: DateRange | null,
 ): string {
-  const params = scopeParams(windowDays, seatLicenceTypeIds);
+  const params = scopeParams(windowDays, seatLicenceTypeIds, dateRange);
   if (emailDomain) params.set('emailDomain', emailDomain);
   if (userFilter) params.set('userFilter', userFilter);
   for (const [name, value] of Object.entries(timeSaved ?? {})) params.set(name, value);

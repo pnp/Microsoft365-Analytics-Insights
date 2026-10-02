@@ -123,6 +123,10 @@ export interface AdoptionDomainRow extends AdoptionSegmentRow {
 export interface CopilotAdoptionOptions {
   guidanceCatalogueVersion?: string;
   windowDays: number;
+  fromUtc?: string | null;
+  toUtc?: string | null;
+  toExclusiveUtc?: string | null;
+  usesExplicitDates?: boolean;
   historyDays: number;
   workingDaysPerWeek: number;
   frequencyTargetRatio: number;

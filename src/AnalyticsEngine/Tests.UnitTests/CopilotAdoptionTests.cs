@@ -20,6 +20,7 @@ using System.Web.Http;
 using System.Web.Http.Controllers;
 using System.Web.Http.Routing;
 using CopilotAdoptionAPIController = AnalyticsWeb::Web.AnalyticsWeb.Controllers.CopilotAdoptionAPIController;
+using AdoptionCoordinator = AnalyticsWeb::Web.AnalyticsWeb.Models.CopilotAdoption.CopilotAdoptionAnalysisCoordinator;
 
 namespace Tests.UnitTests
 {
@@ -1501,10 +1502,10 @@ namespace Tests.UnitTests
             // be active last Tuesday" and emptied the tab whenever that day was a weekend. The window
             // has to be read whole, and each table read exactly once.
             Assert.AreEqual(1, CountOccurrences(sql, "FROM dbo.teams_user_activity_log AS t"));
-            StringAssert.Contains(sql, "t.[date] >= @m365From AND t.[date] <= @m365ReportDate");
-            StringAssert.Contains(sql, "o.[date] >= @m365From AND o.[date] <= @m365ReportDate");
-            StringAssert.Contains(sql, "sp.[date] >= @m365From AND sp.[date] <= @m365ReportDate");
-            StringAssert.Contains(sql, "od.[date] >= @m365From AND od.[date] <= @m365ReportDate");
+            StringAssert.Contains(sql, "t.[date] >= @m365From AND t.[date] < @m365ToExclusive");
+            StringAssert.Contains(sql, "o.[date] >= @m365From AND o.[date] < @m365ToExclusive");
+            StringAssert.Contains(sql, "sp.[date] >= @m365From AND sp.[date] < @m365ToExclusive");
+            StringAssert.Contains(sql, "od.[date] >= @m365From AND od.[date] < @m365ToExclusive");
             Assert.AreEqual(0, CountOccurrences(sql, "[date] = @m365ReportDate"),
                 "A single-date equality seek is exactly the bug this query shape replaced.");
 
@@ -2601,7 +2602,11 @@ namespace Tests.UnitTests
                 { CopilotAdoptionWarningKeys.CoworkUsageReportMissing, Case("The first-party Cowork usage report is not available, so Cowork task counts, automation ratio and retention cannot be measured. Audit-derived Cowork interactions are retained only as a reconciliation signal.") },
                 { CopilotAdoptionWarningKeys.CoworkAuditMissing, Case("The Copilot audit import has no data for this period, so Cowork audit interactions cannot be reconciled against Microsoft's Cowork task report.") },
                 { CopilotAdoptionWarningKeys.UsageReportSourcedUsers, Case("1 licensed user (50.0%) were scored from Microsoft's Copilot usage report because the audit import had no per-user signal for them. Their Microsoft prompt counts are not added to audit interaction totals, concentration, intensity or licensed/unlicensed interaction comparisons.", "count", 1, "userPlural", string.Empty, "percentage", 50d) },
-                { CopilotAdoptionWarningKeys.UsageReportWindowMismatch, Case("Microsoft's pinned Copilot usage-report period is D90, but this analysis window is D28. Report-sourced rows are kept in the adoption population so active people are not marked as never used, but a report-sourced row that would otherwise be a PROBABLE reclaim is excluded from reclaimable-seat totals rather than normalising prompt counts across unlike windows. Certain (disabled-account) seats are never held back this way, because a disabled account is not an inference from an absence of use. The band breakdown therefore counts more idle seats than the reclaim figure does; the difference is reported as \"held back for window mismatch\".", "reportDays", 90, "analysisDays", 28) },
+                                { CopilotAdoptionWarningKeys.LicenceHistoryUnavailableForRange, Case("Licence assignment history is not available yet, so this date range is scored against today's Copilot seat holders. People who held a seat during the range but no longer hold one are missing, and people licensed only after the range may be included.") },
+                { CopilotAdoptionWarningKeys.LicenceHistoryPartialForRange, Case("Licence assignment history starts on 2026-01-01. Seat holders before that date are reconstructed from seeded rows held at the first history refresh, so people whose seat was removed earlier are missing.", "historyStart", "2026-01-01") },
+                { CopilotAdoptionWarningKeys.PastRangeNamedListsHidden, Case("This period does not end today, so named reclaim and recommendation lists and their exports are hidden. Counts remain visible; named action lists are only shown for periods ending today.") },
+                { CopilotAdoptionWarningKeys.CurrentOrgDataForPastRange, Case("Department, manager, country, office and company labels are today's directory values, not historical values for the selected period.") },
+                { CopilotAdoptionWarningKeys.AgentInventoryAsOfNow, Case("The agent inventory remains an as-of-now view even when the reporting period is historical.") },                { CopilotAdoptionWarningKeys.UsageReportWindowMismatch, Case("Microsoft's pinned Copilot usage-report period is D90, but this analysis window is D28. Report-sourced rows are kept in the adoption population so active people are not marked as never used, but a report-sourced row that would otherwise be a PROBABLE reclaim is excluded from reclaimable-seat totals rather than normalising prompt counts across unlike windows. Certain (disabled-account) seats are never held back this way, because a disabled account is not an inference from an absence of use. The band breakdown therefore counts more idle seats than the reclaim figure does; the difference is reported as \"held back for window mismatch\".", "reportDays", 90, "analysisDays", 28) },
                 { CopilotAdoptionWarningKeys.CoworkEligibilityUnknown, Case("Cowork adoption percentage is suppressed because Cowork eligibility is controlled by spending-policy scope and this import does not know that denominator. The deprecated Cowork agent entry is not used as an eligibility source.") },
                 { CopilotAdoptionWarningKeys.PurchasedSeatsUnknown, Case("Purchased and unassigned Copilot seats are unknown because Graph subscribedSkus/prepaidUnits has not been imported. Grant Organization.Read.All and rerun the user metadata import; the report deliberately does not show zero for unassigned seats when the purchase inventory is missing.") },
                 { CopilotAdoptionWarningKeys.SkuSeatMismatch, Case("Purchased and assigned Copilot seats disagree for Contoso Copilot SKU: Graph reports 1,234 purchased but 1,200 assigned, so unassigned seats are shown as Unknown rather than zero.", "skuName", "Contoso Copilot SKU", "purchased", 1234, "assigned", 1200) },
@@ -3512,6 +3517,46 @@ namespace Tests.UnitTests
             Assert.AreEqual(7, CopilotAdoptionAPIController.NormaliseWindowDays(1));
             Assert.AreEqual(180, CopilotAdoptionAPIController.NormaliseWindowDays(9999));
             Assert.AreEqual(7, CopilotAdoptionAPIController.NormaliseWindowDays(-5));
+        }
+
+        [TestMethod]
+        public void DateRange_ValidatesCustomBoundariesAndKeepsRollingWindowsUnchangedAtMidnight()
+        {
+            var now = new DateTime(2026, 10, 2, 0, 0, 0, DateTimeKind.Utc);
+
+            Assert.AreEqual(7, CopilotAdoptionDateRange.Create(28, "2026-09-25", "2026-10-01", now).WindowDays);
+            Assert.AreEqual(180, CopilotAdoptionDateRange.Create(28, "2026-04-05", "2026-10-01", now).WindowDays);
+            Assert.AreEqual(28, CopilotAdoptionDateRange.Create(28, null, null, now).WindowDays,
+                "Rolling windows must keep the requested windowDays exactly, including at UTC midnight.");
+
+            AssertRangeError("copilotAdoption.error.invalidDateRange", "2026-09-26", "2026-10-01", now);
+            AssertRangeError("copilotAdoption.error.invalidDateRange", "2026-04-04", "2026-10-01", now);
+            AssertRangeError("copilotAdoption.error.invalidDateRange", "2026-09-25", "2026-10-02", now);
+            AssertRangeError("copilotAdoption.error.invalidDateRange", "2026-10-01", "2026-09-25", now);
+            AssertRangeError("copilotAdoption.error.invalidDateFormat", "not-a-date", "2026-10-01", now);
+            AssertRangeError("copilotAdoption.error.missingDate", "2026-09-25", null, now);
+        }
+
+        [TestMethod]
+        public void AnalysisCacheKey_IncludesExplicitRangeButLeavesRollingKeyShapeUnchanged()
+        {
+            Assert.AreEqual("CopilotAdoption::Analysis::28::rolling::1,2", AdoptionCoordinator.CacheKey(28, new[] { 2, 1 }));
+
+            var range = CopilotAdoptionDateRange.Create(28, "2026-09-01", "2026-09-30", new DateTime(2026, 10, 2));
+            StringAssert.Contains(AdoptionCoordinator.CacheKey(range, new[] { 1 }), "20260901-20260930");
+        }
+
+        private static void AssertRangeError(string expected, string from, string to, DateTime now)
+        {
+            try
+            {
+                CopilotAdoptionDateRange.Create(28, from, to, now);
+                Assert.Fail("Expected range validation to reject the input.");
+            }
+            catch (ArgumentException ex)
+            {
+                Assert.AreEqual(expected, ex.Message);
+            }
         }
 
         [TestMethod]

@@ -277,6 +277,10 @@ namespace Tests.UnitTests
 
             public async Task<CopilotAdoptionAnalysis> RunAsync(
                 int windowDays,
+                DateTime? fromUtc,
+                DateTime? toUtc,
+                DateTime? toExclusiveUtc,
+                bool usesExplicitDates,
                 List<int> seatLicenceTypeIds,
                     ICopilotAdoptionRunTelemetry telemetry)
             {

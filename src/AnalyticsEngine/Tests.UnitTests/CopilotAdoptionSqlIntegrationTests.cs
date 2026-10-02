@@ -7,6 +7,7 @@ using System.Data.Entity;
 using Microsoft.Data.SqlClient;
 using Newtonsoft.Json;
 using System.Linq;
+using System.Globalization;
 
 namespace Tests.UnitTests
 {
@@ -45,6 +46,59 @@ namespace Tests.UnitTests
 
 
         #region Licensed users
+
+        [TestMethod]
+        public void SeatAssignmentsFromHistory_BackdatesInitialSeedRowsAndProratesObservedHoldings()
+        {
+            using (var db = ScratchDatabase.Create("CopilotSeatHist"))
+            {
+                CreateUserTables(db);
+                CreateLicenceHistoryTables(db);
+                db.Execute(
+                    @"INSERT INTO dbo.license_types (id, name, sku_id)
+                          VALUES (1, N'Microsoft Copilot for Microsoft 365', N'Microsoft_365_Copilot');
+                      INSERT INTO dbo.users (id, user_name)
+                          VALUES (1, N'seeded@contoso.com'),
+                                 (2, N'observed@contoso.com'),
+                                 (3, N'closed-before@contoso.com'),
+                                 (4, N'late-seed@contoso.com');
+                      INSERT INTO dbo.license_refresh_runs (completed_utc)
+                          VALUES ('2026-04-01T00:00:00');
+                      INSERT INTO dbo.user_license_history (user_id, license_type_id, valid_from_utc, valid_to_utc, from_source)
+                          VALUES (1, 1, '2026-04-01T00:00:00', NULL, 0),
+                                 (2, 1, '2026-03-20T00:00:00', '2026-03-25T00:00:00', 1),
+                                 (3, 1, '2026-04-01T00:00:00', '2026-04-05T00:00:00', 0),
+                                 (4, 1, '2026-04-10T00:00:00', NULL, 0);");
+
+                var sql = CopilotAdoptionSql.SeatAssignmentsFromHistorySql(new[] { 1 });
+                var before = Query<CopilotAdoptionService.SeatAssignmentRow>(db, sql,
+                    new SqlParameter("@from", new DateTime(2026, 3, 1)),
+                    new SqlParameter("@toExclusive", new DateTime(2026, 3, 31)),
+                    new SqlParameter("@historyStart", new DateTime(2026, 4, 1)));
+
+                Assert.AreEqual(3, before.Count);
+                Assert.AreEqual(30d, before.Single(r => r.UserId == 1).SeatHeldDays.Value, 0.001,
+                    "The initial history seed means this user held the seat at history start, so a pre-history range uses the range start.");
+                Assert.AreEqual(5d, before.Single(r => r.UserId == 2).SeatHeldDays.Value, 0.001,
+                    "Observed assignments use their real start/end and are prorated inside the selected range.");
+                Assert.AreEqual(30d, before.Single(r => r.UserId == 3).SeatHeldDays.Value, 0.001,
+                    "A user seeded at history start held the seat through the pre-history range even if it was removed shortly after history began.");
+                Assert.IsFalse(before.Any(r => r.UserId == 4), "A late drift-repair seeded row is not back-dated.");
+
+                var straddling = Query<CopilotAdoptionService.SeatAssignmentRow>(db, sql,
+                    new SqlParameter("@from", new DateTime(2026, 3, 20)),
+                    new SqlParameter("@toExclusive", new DateTime(2026, 4, 10)),
+                    new SqlParameter("@historyStart", new DateTime(2026, 4, 1)));
+                Assert.AreEqual(21d, straddling.Single(r => r.UserId == 1).SeatHeldDays.Value, 0.001,
+                    "The initial seed covers the full selected range even when the range straddles history start.");
+
+                var afterClose = Query<CopilotAdoptionService.SeatAssignmentRow>(db, sql,
+                    new SqlParameter("@from", new DateTime(2026, 4, 10)),
+                    new SqlParameter("@toExclusive", new DateTime(2026, 4, 20)),
+                    new SqlParameter("@historyStart", new DateTime(2026, 4, 1)));
+                Assert.IsFalse(afterClose.Any(r => r.UserId == 3), "A seeded row closed before the range is not held in the range.");
+            }
+        }
 
         [TestMethod]
         public void LicensedUsersQuery_RunsAndSplitsWindowFromHistory()
@@ -107,6 +161,7 @@ namespace Tests.UnitTests
                     + "non-N literal anywhere on this path would return question marks.");
 
                 var active = rows.Single(r => r.UserPrincipalName == "active@contoso.com");
+                Assert.IsNull(active.SeatHeldDays, "The current-assignment path must not add a synthetic per-user held-days value.");
                 Assert.AreEqual(3, active.Interactions);
                 Assert.AreEqual(2, active.ActiveDays, "Two distinct days inside the window.");
                 Assert.AreEqual(2, active.AppsUsed, "Teams and Cowork are two distinct app hosts.");
@@ -125,6 +180,111 @@ namespace Tests.UnitTests
                 Assert.IsNull(never.LastInteractionUtc);
                 Assert.AreEqual(false, never.AccountEnabled,
                     "A disabled account still holding a seat is the clearest reclaim there is, so the flag must survive.");
+            }
+        }
+
+            [TestMethod]
+            public void LicensedUsersQuery_ExcludesActivityAfterTheSelectedEnd()
+            {
+                using (var db = ScratchDatabase.Create("CopilotAdoptBound"))
+                {
+                    CreateUserTables(db);
+                    CreateCopilotTables(db);
+                    db.Execute(
+                        @"INSERT INTO dbo.license_types (id, name, sku_id)
+                              VALUES (1, N'Microsoft Copilot for Microsoft 365', N'Microsoft_365_Copilot');
+                          INSERT INTO dbo.users (id, user_name, account_enabled)
+                              VALUES (10, N'after@contoso.com', 1),
+                                     (11, N'dormant@contoso.com', 1),
+                                     (12, N'never@contoso.com', 1);
+                          INSERT INTO dbo.user_license_type_lookups (id, user_id, license_type_id)
+                              VALUES (1, 10, 1), (2, 11, 1), (3, 12, 1);");
+
+                    SeedCopilotInteractionAt(db, 10, new DateTime(2026, 1, 11, 12, 0, 0), "Teams");
+                    SeedCopilotInteractionAt(db, 11, new DateTime(2025, 12, 20, 12, 0, 0), "Teams");
+
+                    var rows = Query<LicensedUserUsageRow>(db, CopilotAdoptionSql.LicensedUsersSql(new[] { 1 }, new int[0], false),
+                        new SqlParameter("@from", new DateTime(2026, 1, 1)),
+                        new SqlParameter("@toExclusive", new DateTime(2026, 1, 11)),
+                        new SqlParameter("@historyFrom", new DateTime(2025, 12, 1)),
+                        new SqlParameter("@maxRows", 1000));
+
+                    var after = rows.Single(r => r.UserId == 10);
+                    Assert.AreEqual(0, after.Interactions);
+                    Assert.AreEqual(0, after.ActiveDays);
+                    Assert.IsNull(after.LastInteractionUtc, "Activity after @toExclusive must not leak into LastInteractionUtc.");
+
+                    var service = new CopilotAdoptionService(new CopilotAdoptionOptions { WindowDays = 10 });
+                    var analysis = new CopilotAdoptionAnalysis { LicensedUsers = rows.Select(r => CopilotAdoptionScoring.Score(r, new DateTime(2026, 1, 1), new DateTime(2026, 1, 11), auditAvailable: true)).ToList() };
+                    service.FinaliseSummary(analysis);
+                    Assert.AreEqual(1, analysis.Summary.DormantUsers, "Only the user with prior in-history use is dormant.");
+                    Assert.AreEqual(2, analysis.Summary.NeverUsedUsers, "The after-window interaction does not prevent Never-used classification for this range.");
+                }
+            }
+
+        [TestMethod]
+        public void AgentInventoryForExplicitOldRange_UsesTheRollingWindowEndingNow()
+        {
+            using (var db = ScratchDatabase.Create("CopilotAgentNow"))
+            {
+                CreateUserTables(db);
+                CreateCopilotTables(db);
+                db.Execute(
+                    @"INSERT INTO dbo.license_types (id, name, sku_id)
+                          VALUES (1, N'Microsoft Copilot for Microsoft 365', N'Microsoft_365_Copilot');
+                      INSERT INTO dbo.users (id, user_name, account_enabled)
+                          VALUES (1, N'person1@contoso.com', 1),
+                                 (2, N'person2@contoso.com', 1),
+                                 (3, N'person3@contoso.com', 1);
+                      INSERT INTO dbo.user_license_type_lookups (id, user_id, license_type_id)
+                          VALUES (1, 1, 1), (2, 2, 1), (3, 3, 1);
+                      INSERT INTO dbo.copilot_agents (id, name, agent_id)
+                          VALUES (1, N'Keep agent', N'contoso.keep'),
+                                 (2, N'Review agent', N'contoso.review'),
+                                 (3, N'Retire agent', N'contoso.retire');");
+
+                var today = DateTime.UtcNow.Date;
+                SeedCopilotInteractionAt(db, 1, today.AddDays(-2).AddHours(9), "Teams", agentId: 1);
+                SeedCopilotInteractionAt(db, 2, today.AddDays(-2).AddHours(9), "Teams", agentId: 1);
+                SeedCopilotInteractionAt(db, 3, today.AddDays(-2).AddHours(9), "Teams", agentId: 1);
+                SeedCopilotInteractionAt(db, 1, today.AddDays(-20).AddHours(9), "Teams", agentId: 2);
+                SeedCopilotInteractionAt(db, 1, today.AddDays(-100).AddHours(9), "Teams", agentId: 3);
+
+                var options = CopilotAdoptionOptions.Default;
+                options.WindowDays = 28;
+                var sql = CopilotAdoptionSql.AgentUsageSql(new[] { 1 });
+                var rollingStart = CopilotAdoptionScoring.WindowStartUtc(DateTime.UtcNow, options.WindowDays);
+                var agentHistoryStart = CopilotAdoptionScoring.WindowStartUtc(
+                    DateTime.UtcNow,
+                    Math.Max(options.WindowDays, Math.Max(options.AgentRetireInactiveDays, options.AgentHistoryDays)));
+
+                var rollingRows = Query<AgentUsageQueryRow>(db, sql,
+                    new SqlParameter("@from", rollingStart),
+                    new SqlParameter("@toExclusive", DateTime.UtcNow),
+                    new SqlParameter("@historyFrom", agentHistoryStart),
+                    new SqlParameter("@maxRows", options.MaxAgents));
+                var explicitAsNowRows = Query<AgentUsageQueryRow>(db, sql,
+                    new SqlParameter("@from", rollingStart),
+                    new SqlParameter("@toExclusive", DateTime.UtcNow),
+                    new SqlParameter("@historyFrom", agentHistoryStart),
+                    new SqlParameter("@maxRows", options.MaxAgents));
+
+                var rolling = rollingRows.Select(r => CopilotAdoptionScoring.ScoreAgent(r, DateTime.UtcNow, options)).ToList();
+                var historical = explicitAsNowRows.Select(r => CopilotAdoptionScoring.ScoreAgent(r, DateTime.UtcNow, options)).ToList();
+
+                CollectionAssert.AreEqual(rolling.Select(a => a.Name).ToArray(), historical.Select(a => a.Name).ToArray());
+                CollectionAssert.AreEqual(rolling.Select(a => a.HealthName).ToArray(), historical.Select(a => a.HealthName).ToArray());
+                CollectionAssert.AreEqual(rolling.Select(a => a.LastUsedUtc).ToArray(), historical.Select(a => a.LastUsedUtc).ToArray());
+
+                var display = CopilotAdoptionSql.ForDisplay(sql, new Dictionary<string, object>
+                {
+                    { "@from", rollingStart },
+                    { "@toExclusive", DateTime.UtcNow },
+                    { "@historyFrom", agentHistoryStart },
+                    { "@maxRows", options.MaxAgents },
+                });
+                StringAssert.Contains(display, "DECLARE @from datetime = '" + rollingStart.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture));
+                StringAssert.Contains(display, "DECLARE @toExclusive datetime = '" + DateTime.UtcNow.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture));
             }
         }
 
@@ -1303,6 +1463,24 @@ namespace Tests.UnitTests
 
         private static List<T> Query<T>(ScratchDatabase db, string sql, params SqlParameter[] parameters)
         {
+            if (sql.Contains("@toExclusive") && !parameters.Any(p => p.ParameterName == "@toExclusive"))
+            {
+                parameters = parameters
+                    .Concat(new[] { new SqlParameter("@toExclusive", new DateTime(2100, 1, 1)) })
+                    .ToArray();
+            }
+            if (sql.Contains("@m365ToExclusive") && !parameters.Any(p => p.ParameterName == "@m365ToExclusive"))
+            {
+                parameters = parameters
+                    .Concat(new[] { new SqlParameter("@m365ToExclusive", new DateTime(2100, 1, 1)) })
+                    .ToArray();
+            }
+            if (sql.Contains("@historyStart") && !parameters.Any(p => p.ParameterName == "@historyStart"))
+            {
+                parameters = parameters
+                    .Concat(new[] { new SqlParameter("@historyStart", new DateTime(2100, 1, 1)) })
+                    .ToArray();
+            }
             using (var context = new RawSqlContext(db.ConnectionString))
             {
                 context.Database.CommandTimeout = 120;
@@ -1405,6 +1583,21 @@ namespace Tests.UnitTests
                       name nvarchar(100) NULL,
                       agent_id nvarchar(max) NULL,
                       is_custom_agent bit NULL);");
+        }
+
+        private static void CreateLicenceHistoryTables(ScratchDatabase db)
+        {
+            db.Execute(
+                @"CREATE TABLE dbo.license_refresh_runs (
+                      id int IDENTITY PRIMARY KEY,
+                      completed_utc datetime2(0) NOT NULL);
+                  CREATE TABLE dbo.user_license_history (
+                      id bigint IDENTITY PRIMARY KEY,
+                      user_id int NOT NULL,
+                      license_type_id int NOT NULL,
+                      valid_from_utc datetime2(0) NOT NULL,
+                      valid_to_utc datetime2(0) NULL,
+                      from_source tinyint NOT NULL);");
         }
 
         private static void CreateCopilotReportTable(ScratchDatabase db)
@@ -1548,6 +1741,21 @@ namespace Tests.UnitTests
             ScratchDatabase db, int userId, int daysAgo, string appHost, int? agentId = null)
         {
             SeedCopilotInteractionReturningId(db, userId, daysAgo, appHost, agentId);
+        }
+
+        private static void SeedCopilotInteractionAt(
+            ScratchDatabase db, int userId, DateTime whenUtc, string appHost, int? agentId = null)
+        {
+            var id = Guid.NewGuid();
+            db.Execute(
+                $@"INSERT INTO dbo.audit_events (id, time_stamp, user_id)
+                       VALUES ('{id}', '{whenUtc:yyyy-MM-dd HH:mm:ss}', {userId});
+                   INSERT INTO dbo.event_meta_general (event_id, workload)
+                       VALUES ('{id}', N'Copilot');
+                   INSERT INTO dbo.copilot_chats (event_id, app_host, agent_id, user_id, time_stamp)
+                       SELECT '{id}', N'{appHost}', {(agentId.HasValue ? agentId.Value.ToString() : "NULL")},
+                              ae.user_id, ae.time_stamp
+                       FROM dbo.audit_events AS ae WHERE ae.id = '{id}';");
         }
 
         /// <summary>Seeds one interaction and returns its id, so accessed resources can be attached.</summary>

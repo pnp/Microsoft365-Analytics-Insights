@@ -1,4 +1,4 @@
-extern alias AnalyticsWeb;
+﻿extern alias AnalyticsWeb;
 
 using AnalyticsWeb::Web.AnalyticsWeb;
 using AnalyticsWeb::Web.AnalyticsWeb.Controllers;
@@ -963,6 +963,41 @@ namespace Tests.UnitTests
             }
         }
 
+        [TestMethod]
+        public async Task CopilotAdoptionPastRange_RefusesNamedListsButKeepsSummaryCounts()
+        {
+            var analysis = SmallAnalysis();
+            analysis.Summary.Options.UsesExplicitDates = true;
+            analysis.Summary.Options.FromUtc = new DateTime(2026, 7, 1);
+            analysis.Summary.Options.ToUtc = new DateTime(2026, 7, 31);
+            analysis.Summary.Options.ToExclusiveUtc = new DateTime(2026, 8, 1);
+            analysis.Summary.FromUtc = analysis.Summary.Options.FromUtc.Value;
+            analysis.Summary.ToUtc = analysis.Summary.Options.ToUtc.Value;
+
+            using (var host = CopilotAdoptionHost(analysis, PortalTestHost.SignedIn(PortalRoles.SeePii)))
+            {
+                var summary = JObject.Parse(await host.Client.GetStringAsync(
+                    "api/CopilotAdoption/summary?from=2026-07-01&to=2026-07-31"));
+                Assert.AreEqual(6, (int)summary["licensedUsers"]);
+
+                foreach (var url in new[]
+                {
+                    "api/CopilotAdoption/licensed-users?from=2026-07-01&to=2026-07-31",
+                    "api/CopilotAdoption/licensed-users/export?from=2026-07-01&to=2026-07-31",
+                    "api/CopilotAdoption/opportunities?from=2026-07-01&to=2026-07-31",
+                    "api/CopilotAdoption/opportunities/export?from=2026-07-01&to=2026-07-31",
+                    "api/CopilotAdoption/cowork?from=2026-07-01&to=2026-07-31",
+                    "api/CopilotAdoption/cowork/export?from=2026-07-01&to=2026-07-31",
+                })
+                {
+                    var response = await host.Client.GetAsync(url);
+                    Assert.AreEqual(HttpStatusCode.BadRequest, response.StatusCode, url);
+                    var body = JObject.Parse(await response.Content.ReadAsStringAsync());
+                    Assert.AreEqual("copilotAdoption.error.pastRangeNamedListsHidden", (string)body["code"], url);
+                }
+            }
+        }
+
         private static PortalTestHost CopilotAdoptionHost(CopilotAdoptionAnalysis analysis, IPrincipal principal)
         {
             var coordinator = new AdoptionCoordinator(
@@ -1045,7 +1080,7 @@ namespace Tests.UnitTests
             private readonly CopilotAdoptionAnalysis _analysis;
             internal FixedRunner(CopilotAdoptionAnalysis analysis) { _analysis = analysis; }
 
-            public Task<CopilotAdoptionAnalysis> RunAsync(int windowDays, List<int> seatLicenceTypeIds, ICopilotAdoptionRunTelemetry telemetry)
+            public Task<CopilotAdoptionAnalysis> RunAsync(int windowDays, DateTime? fromUtc, DateTime? toUtc, DateTime? toExclusiveUtc, bool usesExplicitDates, List<int> seatLicenceTypeIds, ICopilotAdoptionRunTelemetry telemetry)
                 => Task.FromResult(_analysis);
         }
 

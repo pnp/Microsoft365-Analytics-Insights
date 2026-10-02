@@ -31,6 +31,7 @@ import type {
   LicenceOpportunityRow,
   OpportunityFilters,
 } from '../../types/copilotAdoption';
+import type { DateRange } from '../../types/licenceActivity';
 import Spinner from '../Spinner';
 import {
   DetailRationale,
@@ -187,6 +188,7 @@ const DEFAULT_FILTERS: OpportunityFilters = {
  */
 export default function OpportunitiesPanel({
   windowDays,
+  dateRange,
   summary,
   options,
   guidanceLinks,
@@ -195,6 +197,7 @@ export default function OpportunitiesPanel({
   canSeePii = true,
 }: {
   windowDays: number;
+  dateRange?: DateRange | null;
   /** The analysis the licence estimate is published on, and whose assumptions the reader can change. */
   summary: CopilotAdoptionSummary;
   /** The weights and targets actually used, so the score explanation quotes them rather than guessing. */
@@ -322,7 +325,7 @@ export default function OpportunitiesPanel({
     setLoading(true);
     setError(null);
 
-    fetchOpportunities(windowDays, filters, page * PAGE_SIZE, PAGE_SIZE, seatLicenceTypeIds, controller.signal)
+    fetchOpportunities(windowDays, filters, page * PAGE_SIZE, PAGE_SIZE, seatLicenceTypeIds, controller.signal, ...(dateRange ? [dateRange] as const : []))
       .then((result) => {
         if (!cancelled) setData(result);
       })
@@ -351,7 +354,7 @@ export default function OpportunitiesPanel({
   };
 
   const exportUrl = useMemo(
-    () => opportunitiesExportUrl(windowDays, filters, seatLicenceTypeIds),
+    () => opportunitiesExportUrl(windowDays, filters, seatLicenceTypeIds, ...(dateRange ? [dateRange] as const : [])),
     [windowDays, filters, seatLicenceTypeIds],
   );
 
@@ -370,7 +373,7 @@ export default function OpportunitiesPanel({
     total: data?.total ?? 0,
     loadedRows: data?.rows.length ?? 0,
     loadPage: (skip, take, signal) =>
-      fetchOpportunities(windowDays, filters, skip, take, seatLicenceTypeIds, signal),
+      fetchOpportunities(windowDays, filters, skip, take, seatLicenceTypeIds, signal, ...(dateRange ? [dateRange] as const : [])),
   });
   const rows = printRows ?? data?.rows ?? [];
 

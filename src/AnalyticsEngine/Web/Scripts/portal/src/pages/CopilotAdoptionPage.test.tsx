@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { screen, waitFor, fireEvent, within } from '@testing-library/react';
 import { renderWithProvider } from '../test/renderWithProvider';
-import CopilotAdoptionPage from './CopilotAdoptionPage';
+import CopilotAdoptionPage, { lastCalendarMonthRange, lastCalendarQuarterRange } from './CopilotAdoptionPage';
 import {
   fetchAdoptionAvailability,
   fetchAdoptionFilters,
@@ -80,6 +80,7 @@ const options: CopilotAdoptionOptions = {
   agentRetireInactiveDays: 60,
   agentNewDays: 14,
   reclaimGraceDays: 30,
+  activationWindowDays: 30,
   agentMinUsers: 3,
   agentHistoryDays: 120,
   opportunityUnlicensedCopilotWeight: 40,
@@ -123,6 +124,7 @@ const options: CopilotAdoptionOptions = {
   usageReportLagDays: 3,
   topSegments: 10,
   minSeatsPerSegment: 5,
+  accountabilityDimension: 'directManager',
   maxLicensedUsersScored: 50000,
   maxOpportunityCandidates: 50000,
   maxAgents: 1000,
@@ -139,14 +141,17 @@ function summary(overrides: Partial<CopilotAdoptionSummary> = {}): CopilotAdopti
     dataSources: {
       auditAvailable: true,
       copilotUsageReportAvailable: true,
+      coworkUsageReportAvailable: true,
       m365UsageReportsAvailable: true,
       userMetadataAvailable: true,
       copilotUsageReportDate: '2026-01-01T00:00:00Z',
       copilotUsageReportPeriodDays: 28,
+      coworkUsageReportDate: '2026-01-01T00:00:00Z',
+      coworkUsageReportPeriodDays: 28,
       m365UsageReportDate: '2026-01-01T00:00:00Z',
       copilotUsageReportObfuscated: false,
     },
-    seatLicenceTypes: [{ id: 1, name: 'Microsoft 365 Copilot', skuPartNumber: 'M365_COPILOT', assignedUsers: 120, isCopilotSeat: true }],
+    seatLicenceTypes: [{ id: 1, name: 'Microsoft 365 Copilot', skuPartNumber: 'M365_COPILOT', assignedUsers: 120, isCopilotSeat: true, purchasedUnits: 120, unassignedUnits: 0, assignedIdleUsers: 0, purchasedUnitsRefreshedUtc: null }],
     licensedUsers: 120,
     scoredUsers: 120,
     activeUsers: 72,
@@ -244,7 +249,7 @@ function summary(overrides: Partial<CopilotAdoptionSummary> = {}): CopilotAdopti
     figuresIncomplete: false,
     incompleteReasons: [],
     ...overrides,
-  };
+  } as CopilotAdoptionSummary;
 }
 
 beforeEach(() => {
@@ -278,6 +283,52 @@ async function renderPage() {
   renderWithProvider(<CopilotAdoptionPage />);
   await screen.findByRole('tab', { name: 'Executive view', selected: true });
 }
+
+describe('CopilotAdoptionPage custom ranges', () => {
+  it('calculates calendar presets across month lengths and January', () => {
+    expect(lastCalendarMonthRange(new Date(Date.UTC(2026, 2, 15)))).toEqual({ from: '2026-02-01', to: '2026-02-28' });
+    expect(lastCalendarMonthRange(new Date(Date.UTC(2026, 0, 15)))).toEqual({ from: '2025-12-01', to: '2025-12-31' });
+    expect(lastCalendarQuarterRange(new Date(Date.UTC(2026, 0, 15)))).toEqual({ from: '2025-10-01', to: '2025-12-31' });
+  });
+
+  it('sends custom ranges to the API and clears them when a rolling preset is chosen', async () => {
+    await renderPage();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Last calendar month' }));
+    await waitFor(() => expect(vi.mocked(fetchAdoptionSummary)).toHaveBeenLastCalledWith(
+      28,
+      undefined,
+      expect.any(AbortSignal),
+      null,
+      null,
+      { from: '2026-09-01', to: '2026-09-30' },
+    ));
+
+    fireEvent.change(screen.getByLabelText('Reporting period'), { target: { value: '90' } });
+    await waitFor(() => expect(vi.mocked(fetchAdoptionSummary)).toHaveBeenLastCalledWith(
+      90,
+      undefined,
+      expect.any(AbortSignal),
+      null,
+      null,
+    ));
+  });
+
+  it('hides named action-list panels for past ranges while the print header keeps the range', async () => {
+    vi.mocked(fetchAdoptionSummary).mockResolvedValue(summary({
+      fromUtc: '2026-09-01T00:00:00Z',
+      toUtc: '2026-09-30T00:00:00Z',
+      options: { ...options, usesExplicitDates: true, fromUtc: '2026-09-01T00:00:00Z', toUtc: '2026-09-30T00:00:00Z', toExclusiveUtc: '2026-10-01T00:00:00Z' },
+    }));
+    await renderPage();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Last calendar month' }));
+    fireEvent.click(screen.getByRole('tab', { name: 'Licensed users' }));
+    expect(await screen.findByText(/named reclaim and recommendation lists/i)).toBeInTheDocument();
+    expect(screen.getByText(/1 Sept? 2026/i)).toBeInTheDocument();
+    expect(screen.getByText(/30 Sept? 2026/i)).toBeInTheDocument();
+  });
+});
 
 describe('CopilotAdoptionPage view split', () => {
   it('translates unavailable availability reasons instead of rendering server English', async () => {
