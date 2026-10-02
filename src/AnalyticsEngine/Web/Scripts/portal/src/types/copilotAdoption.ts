@@ -1,4 +1,4 @@
-// Mirrors Common/Entities/CopilotAdoption/CopilotAdoptionModels.cs (returned by api/CopilotAdoption).
+﻿// Mirrors Common/Entities/CopilotAdoption/CopilotAdoptionModels.cs (returned by api/CopilotAdoption).
 //
 // The chart shapes (AdoptionSeries / AdoptionCategory) are deliberately identical to the Reports
 // area's ReportSeries / ReportCategory so the existing TimeSeriesChart and CategoryBarChart
@@ -184,6 +184,10 @@ export interface CopilotAdoptionOptions {
   copilotMinutesSavedPerDocument: number;
   /** The conservative share of every minutes-saved assumption. Shared by both estimates. */
   coworkEstimateLowerBoundRatio: number;
+  copilotSeatOutlookMinutesPerAction?: number;
+  copilotSeatOfficeMinutesPerAction?: number;
+  copilotSeatMeetingMinutesPerAction?: number;
+  copilotSeatUncreditedMinutesPerAction?: number;
   /**
    * Minutes Cowork is assumed to save per task already in Microsoft's Cowork report, on top of Copilot.
    * No study has measured it.
@@ -468,6 +472,7 @@ export interface CopilotAdoptionSummary {
    * still type-check; the server always sends it.
    */
   licenceAllCandidatesEstimate?: LicenceValueEstimate;
+  seatHolderTimeSavedEstimate?: SeatHolderTimeSavedEstimate;
 
   funnel: ReportCategory[];
   bandBreakdown: ReportCategory[];
@@ -829,6 +834,41 @@ export interface CoworkActivityVolume {
  * recomputes the hours from the published inputs whenever the reader enters their own assumptions -
  * see `components/copilotAdoption/coworkTimeSaved.ts`.
  */
+export interface SeatHolderTimeSavedCredits {
+  outlookMinutesPerAction: number;
+  officeMinutesPerAction: number;
+  teamsMeetingMinutesPerAction: number;
+  uncreditedMinutesPerAction: number;
+  lowerBoundRatio: number;
+}
+
+export interface SeatHolderTimeSavedSegment {
+  segment: string;
+  cohortUsers: number;
+  observedOutlookActions: number;
+  observedOfficeActions: number;
+  observedTeamsMeetingActions: number;
+  observedUncreditedActions: number;
+  hoursPerMonthLow: number;
+  hoursPerMonthHigh: number;
+}
+
+export interface SeatHolderTimeSavedEstimate {
+  isModelled: boolean;
+  cohortUsers: number;
+  excludedUsageReportSourcedUsers: number;
+  observedOutlookActions: number;
+  observedOfficeActions: number;
+  observedTeamsMeetingActions: number;
+  observedUncreditedActions: number;
+  credits: SeatHolderTimeSavedCredits;
+  hoursPerMonthLow: number;
+  hoursPerMonthHigh: number;
+  assumptions: string[];
+  byBand: SeatHolderTimeSavedSegment[];
+  byDepartment: SeatHolderTimeSavedSegment[];
+}
+
 export interface CoworkValueEstimate {
   isModelled: boolean;
   cohortUsers: number;

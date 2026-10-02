@@ -113,6 +113,8 @@
     <Compile Include="CopilotAdoption\CopilotAdoptionOptions.cs" />
     <Compile Include="CopilotAdoption\CopilotAdoptionScope.cs" />
     <Compile Include="CopilotAdoption\CopilotAdoptionScoring.cs" />
+    <Compile Include="CopilotAdoption\CopilotAdoptionSeatTimeSavedModels.cs" />
+    <Compile Include="CopilotAdoption\CopilotAdoptionSeatTimeSql.cs" />
     <Compile Include="CopilotAdoption\CopilotAdoptionService.cs" />
     <Compile Include="CopilotAdoption\CopilotAdoptionSql.cs" />
     <Compile Include="CopilotAdoption\CopilotAdoptionSummaryModels.cs" />

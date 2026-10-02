@@ -1,4 +1,4 @@
-using Common.Entities.UserFilters;
+﻿using Common.Entities.UserFilters;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -250,7 +250,16 @@ namespace Common.Entities.CopilotAdoption
                 CoworkAssessedForWholePopulation = tenant.CoworkReadinessAvailable && !CoworkCapped(analysis, tenant),
                 CoworkAssessmentCapped = tenant.CoworkReadinessAvailable && CoworkCapped(analysis, tenant),
                 UnlicensedUsers = Narrow(analysis.UnlicensedUsers, u => u.UserId, u => u.EmailDomain, scope),
+                SeatHolderTimeSavedRows = NarrowSeatTimeRows(analysis.SeatHolderTimeSavedRows, licensedUsers),
             };
+        }
+
+        private static List<SeatHolderTimeSavedUserRow> NarrowSeatTimeRows(
+            IEnumerable<SeatHolderTimeSavedUserRow> rows, IEnumerable<LicensedUserAdoptionRow> licensedUsers)
+        {
+            if (rows == null) return new List<SeatHolderTimeSavedUserRow>();
+            var userIds = new HashSet<int>((licensedUsers ?? new List<LicensedUserAdoptionRow>()).Select(u => u.UserId));
+            return rows.Where(r => userIds.Contains(r.UserId)).ToList();
         }
 
         /// <summary>

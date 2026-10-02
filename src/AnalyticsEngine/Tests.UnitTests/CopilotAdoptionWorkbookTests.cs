@@ -813,6 +813,36 @@ namespace Tests.UnitTests
             StringAssert.Contains(text, "Purchased Copilot seats");
         }
 
+        [TestMethod]
+        public void Workbook_SeatHolderEstimateIsAggregateOnly()
+        {
+            var analysis = SyntheticAnalysis();
+            analysis.Summary.SeatHolderTimeSavedEstimate = CopilotAdoptionScoring.ModelSeatHolderTimeSaved(12, 2, 100, 30, 3, 50, analysis.Summary.Options);
+            analysis.Summary.SeatHolderTimeSavedEstimate.ByDepartment.Add(new SeatHolderTimeSavedSegment
+            {
+                Segment = "Finance",
+                CohortUsers = 12,
+                HoursPerMonthHigh = 14,
+            });
+
+            var cells = SheetCells(CopilotAdoptionWorkbook.Build(analysis), "Seat holders time saved");
+            Assert.IsFalse(cells.Any(c => c.IndexOf("@contoso.com", StringComparison.OrdinalIgnoreCase) >= 0),
+                "The realised-value estimate sheet must not name people.");
+            Assert.IsFalse(cells.Any(c => c.IndexOf("User principal name", StringComparison.OrdinalIgnoreCase) >= 0
+                                      || c.IndexOf("User ID", StringComparison.OrdinalIgnoreCase) >= 0),
+                "The realised-value estimate sheet must not carry per-person identifiers.");
+
+            var licensedCsv = CsvSerialiser.ToCsv(analysis.LicensedUsers, CopilotAdoptionExports.LicensedUserColumns(false, string.Empty));
+            var opportunityCsv = CsvSerialiser.ToCsv(analysis.Opportunities, CopilotAdoptionExports.LicenceOpportunityColumns(false, string.Empty));
+            var coworkCsv = CsvSerialiser.ToCsv(analysis.CoworkReadiness, CopilotAdoptionExports.CoworkReadinessColumns());
+            foreach (var csv in new[] { licensedCsv, opportunityCsv, coworkCsv })
+            {
+                Assert.IsFalse(csv.IndexOf("Modelled hours", StringComparison.OrdinalIgnoreCase) >= 0
+                            || csv.IndexOf("time saved", StringComparison.OrdinalIgnoreCase) >= 0,
+                    "Per-person CSV exports must not grow a per-user modelled-hours column.");
+            }
+        }
+
         /// <summary>
         /// The Cowork tab's headline quotes two cohorts - the people ready for Cowork now and every Copilot
         /// seat holder - so the workbook has to carry both, with the working that turns the work people

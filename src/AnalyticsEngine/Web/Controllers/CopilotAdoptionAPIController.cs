@@ -934,6 +934,10 @@ namespace Web.AnalyticsWeb.Controllers
             string copilotMinutesSavedPerDocument = null,
             string coworkEstimateLowerBoundRatio = null,
             string coworkMinutesSavedPerTask = null,
+            string copilotSeatOutlookMinutesPerAction = null,
+            string copilotSeatOfficeMinutesPerAction = null,
+            string copilotSeatMeetingMinutesPerAction = null,
+            string copilotSeatUncreditedMinutesPerAction = null,
             string userFilter = null,
             CancellationToken cancellationToken = default(CancellationToken))
         {
@@ -955,6 +959,10 @@ namespace Web.AnalyticsWeb.Controllers
                 copilotMinutesSavedPerDocument,
                 coworkEstimateLowerBoundRatio,
                 coworkMinutesSavedPerTask,
+                copilotSeatOutlookMinutesPerAction,
+                copilotSeatOfficeMinutesPerAction,
+                copilotSeatMeetingMinutesPerAction,
+                copilotSeatUncreditedMinutesPerAction,
                 Request?.GetQueryNameValuePairs());
 
             byte[] bytes;
@@ -1034,7 +1042,32 @@ namespace Web.AnalyticsWeb.Controllers
             string minutesPerMailThread,
             string minutesPerDocument,
             string lowerBoundRatio,
+            string minutesPerTask,
+            IEnumerable<KeyValuePair<string, string>> query)
+        {
+            return ParseTimeSavedOverrides(
+                minutesPerMeeting,
+                minutesPerMailThread,
+                minutesPerDocument,
+                lowerBoundRatio,
+                minutesPerTask,
+                null,
+                null,
+                null,
+                null,
+                query);
+        }
+
+        internal static TimeSavedOverrides ParseTimeSavedOverrides(
+            string minutesPerMeeting,
+            string minutesPerMailThread,
+            string minutesPerDocument,
+            string lowerBoundRatio,
             string minutesPerTask = null,
+            string seatOutlookMinutesPerAction = null,
+            string seatOfficeMinutesPerAction = null,
+            string seatMeetingMinutesPerAction = null,
+            string seatUncreditedMinutesPerAction = null,
             IEnumerable<KeyValuePair<string, string>> query = null)
         {
             var overrides = new TimeSavedOverrides
@@ -1044,6 +1077,10 @@ namespace Web.AnalyticsWeb.Controllers
                 MinutesSavedPerDocument = ParseInvariantDouble(minutesPerDocument),
                 LowerBoundRatio = ParseInvariantDouble(lowerBoundRatio),
                 MinutesSavedPerTask = ParseInvariantDouble(minutesPerTask),
+                SeatOutlookMinutesPerAction = ParseInvariantDouble(seatOutlookMinutesPerAction),
+                SeatOfficeMinutesPerAction = ParseInvariantDouble(seatOfficeMinutesPerAction),
+                SeatMeetingMinutesPerAction = ParseInvariantDouble(seatMeetingMinutesPerAction),
+                SeatUncreditedMinutesPerAction = ParseInvariantDouble(seatUncreditedMinutesPerAction),
             };
 
             if (query == null) return overrides;

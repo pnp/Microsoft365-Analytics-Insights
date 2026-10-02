@@ -385,6 +385,8 @@ namespace Common.Entities.CopilotAdoption
                     output => BuildLicensedUsersAsync(analysis, output, seatIds, windowStart, historyStart, nowUtc, cancellationToken)));
                 steps.Add(new AnalysisStep(CopilotAdoptionSteps.UsageByApp,
                     output => BuildUsageByAppAsync(analysis, output, seatIds, windowStart, cancellationToken)));
+                steps.Add(new AnalysisStep(CopilotAdoptionSteps.SeatHolderTimeSaved,
+                    output => BuildSeatHolderTimeSavedAsync(analysis, output, seatIds, windowStart, nowUtc, cancellationToken)));
                 steps.Add(new AnalysisStep(CopilotAdoptionSteps.WeeklyTrend,
                     output => BuildWeeklyTrendAsync(analysis, output, seatIds, trendStart, trendEndExclusive, cancellationToken)));
 
@@ -984,6 +986,47 @@ namespace Common.Entities.CopilotAdoption
         {
             var covered = new HashSet<int>(analysed);
             return seatHolders.Where(id => !covered.Contains(id)).ToArray();
+        }
+
+        private async Task BuildSeatHolderTimeSavedAsync(
+            CopilotAdoptionAnalysis analysis,
+            StepOutput output,
+            List<int> seatIds,
+            DateTime windowStart,
+            DateTime toExclusive,
+            CancellationToken cancellationToken)
+        {
+            if (!analysis.Summary.DataSources.AuditAvailable)
+            {
+                return;
+            }
+
+            var coworkAgentIds = await SafeAsync(
+                () => QueryAsync<IntValueRow>(CopilotAdoptionSql.CoworkAgentIdsSql, cancellationToken),
+                CopilotAdoptionSteps.SeatHolderTimeSaved,
+                CopilotAdoptionQueries.CoworkAgentLookup,
+                output,
+                "Cowork agent lookup", cancellationToken) ?? new List<IntValueRow>();
+
+            var sql = CopilotAdoptionSeatTimeSql.SeatHolderTimeSavedSql(seatIds, coworkAgentIds.Select(r => r.Value));
+            var parameters = new Dictionary<string, object>
+            {
+                { "@from", windowStart },
+                { "@toExclusive", toExclusive },
+            };
+            output.Sql["seatHolderTimeSaved"] = CopilotAdoptionSql.ForDisplay(sql, parameters);
+
+            var rows = await SafeAsync(
+                () => QueryAsync<SeatHolderTimeSavedUserRow>(sql, cancellationToken, ToSqlParameters(parameters)),
+                CopilotAdoptionSteps.SeatHolderTimeSaved,
+                CopilotAdoptionQueries.SeatHolderTimeSaved,
+                output,
+                "seat-holder Copilot time-saved inputs", cancellationToken);
+
+            if (rows != null)
+            {
+                analysis.SeatHolderTimeSavedRows = rows;
+            }
         }
 
         private async Task BuildUsageByAppAsync(
@@ -1634,6 +1677,7 @@ namespace Common.Entities.CopilotAdoption
             FinaliseAgents(analysis);
             FinaliseUnlicensed(analysis);
             FinaliseCowork(analysis);
+            FinaliseSeatHolderTimeSaved(analysis);
             summary.CombinedByDepartment = BuildCombinedSegments(analysis);
 
             var opportunities = analysis.Opportunities ?? new List<LicenceOpportunityRow>();
@@ -1684,6 +1728,60 @@ namespace Common.Entities.CopilotAdoption
             // together - the point of the domain view is that those four answer one question per
             // organisation rather than four separate ones.
             summary.EmailDomains = BuildEmailDomains(analysis);
+        }
+
+        private void FinaliseSeatHolderTimeSaved(CopilotAdoptionAnalysis analysis)
+        {
+            var summary = analysis.Summary;
+            var users = analysis.LicensedUsers ?? new List<LicensedUserAdoptionRow>();
+            var rows = (analysis.SeatHolderTimeSavedRows ?? new List<SeatHolderTimeSavedUserRow>())
+                .ToDictionary(r => r.UserId);
+            var modelledUsers = users.Where(u => !IsUsageReportSourced(u)).ToList();
+            var scale = Math.Max(1, _options.HabitBucketNormalisationDays) / (double)Math.Max(1, summary.WindowDays);
+
+            double Outlook(LicensedUserAdoptionRow u) { return rows.TryGetValue(u.UserId, out var r) ? r.OutlookActions * scale : 0d; }
+            double Office(LicensedUserAdoptionRow u) { return rows.TryGetValue(u.UserId, out var r) ? r.OfficeActions * scale : 0d; }
+            double Meetings(LicensedUserAdoptionRow u) { return rows.TryGetValue(u.UserId, out var r) ? r.TeamsMeetingActions * scale : 0d; }
+            double Other(LicensedUserAdoptionRow u) { return rows.TryGetValue(u.UserId, out var r) ? r.UncreditedActions * scale : 0d; }
+
+            summary.SeatHolderTimeSavedEstimate = CopilotAdoptionScoring.ModelSeatHolderTimeSaved(
+                modelledUsers.Count,
+                users.Count(IsUsageReportSourced),
+                modelledUsers.Sum(Outlook),
+                modelledUsers.Sum(Office),
+                modelledUsers.Sum(Meetings),
+                modelledUsers.Sum(Other),
+                _options);
+
+            summary.SeatHolderTimeSavedEstimate.ByBand = modelledUsers
+                .GroupBy(u => u.BandName ?? u.Band.ToString())
+                .Select(g => CopilotAdoptionScoring.ModelSeatHolderTimeSavedSegment(
+                    g.Key,
+                    g.Count(),
+                    g.Sum(Outlook),
+                    g.Sum(Office),
+                    g.Sum(Meetings),
+                    g.Sum(Other),
+                    _options))
+                .OrderByDescending(s => s.HoursPerMonthHigh)
+                .ThenBy(s => s.Segment, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            summary.SeatHolderTimeSavedEstimate.ByDepartment = modelledUsers
+                .GroupBy(u => string.IsNullOrWhiteSpace(u.Department) ? "(no department)" : u.Department.Trim())
+                .Where(g => g.Count() >= _options.MinSeatsPerSegment)
+                .Select(g => CopilotAdoptionScoring.ModelSeatHolderTimeSavedSegment(
+                    g.Key,
+                    g.Count(),
+                    g.Sum(Outlook),
+                    g.Sum(Office),
+                    g.Sum(Meetings),
+                    g.Sum(Other),
+                    _options))
+                .OrderByDescending(s => s.HoursPerMonthHigh)
+                .ThenBy(s => s.Segment, StringComparer.OrdinalIgnoreCase)
+                .Take(_options.TopSegments)
+                .ToList();
         }
 
         /// <summary>

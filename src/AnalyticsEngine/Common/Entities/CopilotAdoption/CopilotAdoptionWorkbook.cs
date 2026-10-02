@@ -92,6 +92,7 @@ namespace Common.Entities.CopilotAdoption
                 if (includeIndividualData) WriteLicensedUsersSheet(workbook, analysis);
                 WriteCoworkSheet(workbook, analysis, includeIndividualData);
                 WriteCoworkEstimateSheet(workbook, summary, configured, modelOptions);
+                WriteSeatHolderTimeSavedSheet(workbook, summary, configured, modelOptions);
                 if (includeIndividualData) WriteOpportunitiesSheet(workbook, analysis);
                 WriteLicenceEstimateSheet(workbook, summary, configured, modelOptions);
                 WriteMethodSheet(workbook, summary, includeIndividualData);
@@ -2071,6 +2072,87 @@ namespace Common.Entities.CopilotAdoption
         /// which randomised who received a licence - the decision this sheet sizes. There is no equivalent
         /// for people who already hold a licence, because no decision hangs on it.</para>
         /// </summary>
+        private static void WriteSeatHolderTimeSavedSheet(
+            XlsxWriter workbook,
+            CopilotAdoptionSummary summary,
+            CopilotAdoptionOptions configured,
+            CopilotAdoptionOptions model)
+        {
+            var source = summary.SeatHolderTimeSavedEstimate;
+            if (source == null || (source.CohortUsers == 0 && source.ExcludedUsageReportSourcedUsers == 0)) return;
+
+            var estimate = CopilotAdoptionScoring.ModelSeatHolderTimeSaved(
+                source.CohortUsers,
+                source.ExcludedUsageReportSourcedUsers,
+                source.ObservedOutlookActions,
+                source.ObservedOfficeActions,
+                source.ObservedTeamsMeetingActions,
+                source.ObservedUncreditedActions,
+                model);
+            estimate.ByBand = (source.ByBand ?? new List<SeatHolderTimeSavedSegment>())
+                .Select(s => CopilotAdoptionScoring.ModelSeatHolderTimeSavedSegment(
+                    s.Segment, s.CohortUsers, s.ObservedOutlookActions, s.ObservedOfficeActions,
+                    s.ObservedTeamsMeetingActions, s.ObservedUncreditedActions, model))
+                .ToList();
+            estimate.ByDepartment = (source.ByDepartment ?? new List<SeatHolderTimeSavedSegment>())
+                .Select(s => CopilotAdoptionScoring.ModelSeatHolderTimeSavedSegment(
+                    s.Segment, s.CohortUsers, s.ObservedOutlookActions, s.ObservedOfficeActions,
+                    s.ObservedTeamsMeetingActions, s.ObservedUncreditedActions, model))
+                .ToList();
+
+            var customised = !ReferenceEquals(configured, model)
+                && (model.CopilotSeatOutlookMinutesPerAction != configured.CopilotSeatOutlookMinutesPerAction
+                    || model.CopilotSeatOfficeMinutesPerAction != configured.CopilotSeatOfficeMinutesPerAction
+                    || model.CopilotSeatMeetingMinutesPerAction != configured.CopilotSeatMeetingMinutesPerAction
+                    || model.CopilotSeatUncreditedMinutesPerAction != configured.CopilotSeatUncreditedMinutesPerAction
+                    || CopilotAdoptionScoring.TimeSavedLowerBoundRatio(model) != CopilotAdoptionScoring.TimeSavedLowerBoundRatio(configured));
+
+            var sheet = workbook.AddSheet("Seat holders time saved");
+            sheet.SetColumnWidths(44, 18, 70);
+            sheet.AddTitle("Time already saved by Copilot seat holders - MODELLED, NOT MEASURED");
+            sheet.AddRow(XlsxCell.Wrapped(
+                "This sheet answers how much time the seats already paid for may be giving back. It uses "
+                + "observed Copilot audit actions by seat holders, multiplied by visible Microsoft-published "
+                + "per-action credits. It is aggregate only, never per person, never money, and never added to "
+                + "the licence or Cowork estimates."));
+            sheet.AddRow(XlsxCell.Wrapped(customised
+                ? "ASSUMPTIONS ENTERED IN THE PORTAL: figures on this sheet were entered by the person who downloaded this file."
+                : "Assumptions: the product defaults. The portal lets a reader enter their own figures before exporting."));
+            sheet.AddBlankRow();
+
+            sheet.AddHeaderRow("Measure", "Value", "What it means");
+            sheet.AddRow("People modelled", XlsxCell.Number(estimate.CohortUsers), XlsxCell.Wrapped("Seat holders scored from the Copilot audit import, not from Microsoft's usage report."));
+            sheet.AddRow("Excluded usage-report-sourced users", XlsxCell.Number(estimate.ExcludedUsageReportSourcedUsers), XlsxCell.Wrapped("Seat holders whose engagement came only from Microsoft's usage report. They have prompt counts, not per-action detail."));
+            sheet.AddRow("Outlook actions a month", XlsxCell.Number(estimate.ObservedOutlookActions), XlsxCell.Wrapped("OBSERVED. Outlook app-host Copilot actions, normalised to the report month."));
+            sheet.AddRow("Word/PowerPoint/Excel actions a month", XlsxCell.Number(estimate.ObservedOfficeActions), XlsxCell.Wrapped("OBSERVED. Office document-work Copilot actions, normalised to the report month."));
+            sheet.AddRow("Teams meeting actions a month", XlsxCell.Number(estimate.ObservedTeamsMeetingActions), XlsxCell.Wrapped("OBSERVED. Actions linked to a Teams meeting context, normalised to the report month."));
+            sheet.AddRow("Uncredited actions a month", XlsxCell.Number(estimate.ObservedUncreditedActions), XlsxCell.Wrapped("OBSERVED. Copilot Chat and other surfaces. Defaults to zero credit because no per-prompt credit is published."));
+            sheet.AddRow("Outlook minutes per action", estimate.Credits.OutlookMinutesPerAction, XlsxCell.Wrapped("ASSUMPTION. Microsoft-published email action credit."));
+            sheet.AddRow("Office minutes per action", estimate.Credits.OfficeMinutesPerAction, XlsxCell.Wrapped("ASSUMPTION. Microsoft-published document drafting/summarising credit."));
+            sheet.AddRow("Teams meeting minutes per action", estimate.Credits.TeamsMeetingMinutesPerAction, XlsxCell.Wrapped("ASSUMPTION. Fixed fallback because meeting duration is not reliably imported here."));
+            sheet.AddRow("Uncredited minutes per action", estimate.Credits.UncreditedMinutesPerAction, XlsxCell.Wrapped("ASSUMPTION. Defaults to zero."));
+            sheet.AddRow("Lower bound", XlsxCell.Percent(estimate.Credits.LowerBoundRatio), XlsxCell.Wrapped("ASSUMPTION. Conservative share applied to every credit."));
+            sheet.AddRow("Modelled hours a month (low)", XlsxCell.Number(estimate.HoursPerMonthLow), XlsxCell.Wrapped("MODELLED. Conservative end."));
+            sheet.AddRow("Modelled hours a month (high)", XlsxCell.Number(estimate.HoursPerMonthHigh), XlsxCell.Wrapped("MODELLED. Full credit end. Quote the range, never a single figure."));
+
+            sheet.AddBlankRow();
+            sheet.AddTitle("By engagement band");
+            sheet.AddHeaderRow("Band", "Hours high", "People");
+            foreach (var row in estimate.ByBand)
+                sheet.AddRow(row.Segment, XlsxCell.Number(row.HoursPerMonthHigh), XlsxCell.Number(row.CohortUsers));
+
+            sheet.AddBlankRow();
+            sheet.AddTitle("By department");
+            sheet.AddHeaderRow("Department", "Hours high", "People");
+            foreach (var row in estimate.ByDepartment)
+                sheet.AddRow(row.Segment, XlsxCell.Number(row.HoursPerMonthHigh), XlsxCell.Number(row.CohortUsers));
+
+            sheet.AddBlankRow();
+            sheet.AddTitle("Assumptions");
+            foreach (var assumption in estimate.Assumptions)
+                sheet.AddRow(XlsxCell.Wrapped(assumption));
+        }
+
         private static void WriteLicenceEstimateSheet(
             XlsxWriter workbook,
             CopilotAdoptionSummary summary,
