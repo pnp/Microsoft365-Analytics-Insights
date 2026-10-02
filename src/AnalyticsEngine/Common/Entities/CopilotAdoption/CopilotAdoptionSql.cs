@@ -169,9 +169,14 @@ namespace Common.Entities.CopilotAdoption
         public const string HasCopilotAuditDataSql =
             "SELECT CASE WHEN EXISTS (\r\n" +
             "    SELECT 1 FROM dbo.copilot_chats AS c\r\n" +
-            "    WHERE c.time_stamp >= @from\r\n" +
-            "      AND c.time_stamp < @toExclusive\r\n" +
+            "    WHERE c.time_stamp >= @from\r\n      AND c.time_stamp < @toExclusive\r\n" +
             ") THEN 1 ELSE 0 END AS Value;";
+
+        public const string LicenceHistoryStartSql =
+            "IF OBJECT_ID(N'dbo.license_refresh_runs', N'U') IS NULL OR OBJECT_ID(N'dbo.user_license_history', N'U') IS NULL\r\n" +
+            "    SELECT CAST(NULL AS datetime2) AS Value;\r\n" +
+            "ELSE\r\n" +
+            "    SELECT MIN(completed_utc) AS Value FROM dbo.license_refresh_runs;";
 
         /// <summary>
         /// Whether any Copilot interaction is still missing its denormalised <c>time_stamp</c>, and could be
@@ -366,11 +371,39 @@ namespace Common.Entities.CopilotAdoption
                 "SELECT ul.user_id AS UserId,\r\n" +
                 "       ul.license_type_id AS LicenceTypeId,\r\n" +
                 "       lt.sku_id AS SkuPartNumber,\r\n" +
-                "       lt.name AS LicenceName\r\n" +
+                "       lt.name AS LicenceName,\r\n" +
+                "       CAST(NULL AS float) AS SeatHeldDays\r\n" +
                 "FROM dbo.user_license_type_lookups AS ul\r\n" +
                 "JOIN dbo.license_types AS lt ON lt.id = ul.license_type_id\r\n" +
                 $"WHERE ul.license_type_id IN ({IdList(seatLicenceTypeIds)})\r\n" +
                 "ORDER BY ul.user_id;";
+        }
+
+        public static string SeatAssignmentsFromHistorySql(IEnumerable<int> seatLicenceTypeIds)
+        {
+            return
+                "WITH Holdings AS (\r\n" +
+                "    SELECT h.user_id AS user_id,\r\n" +
+                "           h.license_type_id AS license_type_id,\r\n" +
+                "           CASE WHEN h.from_source = 0 AND h.valid_from_utc <= @historyStart THEN @from\r\n" +
+                "                WHEN h.valid_from_utc < @from THEN @from\r\n" +
+                "                ELSE h.valid_from_utc END AS effective_from_utc,\r\n" +
+                "           CASE WHEN h.valid_to_utc IS NULL OR h.valid_to_utc > @toExclusive THEN @toExclusive ELSE h.valid_to_utc END AS effective_to_utc\r\n" +
+                "    FROM dbo.user_license_history AS h\r\n" +
+                $"    WHERE h.license_type_id IN ({IdList(seatLicenceTypeIds)})\r\n" +
+                "      AND (h.valid_from_utc < @toExclusive OR (h.from_source = 0 AND h.valid_from_utc <= @historyStart))\r\n" +
+                "      AND (h.valid_to_utc IS NULL OR h.valid_to_utc > @from)\r\n" +
+                ")\r\n" +
+                "SELECT h.user_id AS UserId,\r\n" +
+                "       h.license_type_id AS LicenceTypeId,\r\n" +
+                "       lt.sku_id AS SkuPartNumber,\r\n" +
+                "       lt.name AS LicenceName,\r\n" +
+                "       CAST(SUM(DATEDIFF_BIG(SECOND, h.effective_from_utc, h.effective_to_utc) / 86400.0) AS float) AS SeatHeldDays\r\n" +
+                "FROM Holdings AS h\r\n" +
+                "JOIN dbo.license_types AS lt ON lt.id = h.license_type_id\r\n" +
+                "WHERE h.effective_from_utc < h.effective_to_utc\r\n" +
+                "GROUP BY h.user_id, h.license_type_id, lt.sku_id, lt.name\r\n" +
+                "ORDER BY h.user_id;";
         }
 
         /// <summary>
@@ -416,7 +449,7 @@ namespace Common.Entities.CopilotAdoption
                 "           c.agent_id AS agent_id\r\n" +
                 "    FROM dbo.copilot_chats AS c\r\n" +
                 "    JOIN SeatUsers AS seats ON seats.user_id = c.user_id\r\n" +
-                "    WHERE c.time_stamp >= @historyFrom\r\n" +
+                "    WHERE c.time_stamp >= @historyFrom\r\n      AND c.time_stamp < @toExclusive\r\n" +
                 "),\r\n" +
                 "-- The counting totals: cheap, because none of them is a DISTINCT.\r\n" +
                 "CopilotTotals AS (\r\n" +
@@ -441,19 +474,19 @@ namespace Common.Entities.CopilotAdoption
                 "CopilotActiveDays AS (\r\n" +
                 "    SELECT user_id, COUNT(*) AS ActiveDays\r\n" +
                 "    FROM (SELECT DISTINCT user_id, CAST(time_stamp AS date) AS active_date\r\n" +
-                "          FROM CopilotWindow WHERE time_stamp >= @from) AS d\r\n" +
+                "          FROM CopilotWindow WHERE time_stamp >= @from AND time_stamp < @toExclusive) AS d\r\n" +
                 "    GROUP BY user_id\r\n" +
                 "),\r\n" +
                 "CopilotApps AS (\r\n" +
                 "    SELECT user_id, COUNT(*) AS AppsUsed\r\n" +
                 "    FROM (SELECT DISTINCT user_id, app_host\r\n" +
-                "          FROM CopilotWindow WHERE time_stamp >= @from AND app_host IS NOT NULL) AS a\r\n" +
+                "          FROM CopilotWindow WHERE time_stamp >= @from AND time_stamp < @toExclusive AND app_host IS NOT NULL) AS a\r\n" +
                 "    GROUP BY user_id\r\n" +
                 "),\r\n" +
                 "CopilotAgents AS (\r\n" +
                 "    SELECT user_id, COUNT(*) AS AgentsUsed\r\n" +
                 "    FROM (SELECT DISTINCT user_id, agent_id\r\n" +
-                "          FROM CopilotWindow WHERE time_stamp >= @from AND agent_id IS NOT NULL) AS g\r\n" +
+                "          FROM CopilotWindow WHERE time_stamp >= @from AND time_stamp < @toExclusive AND agent_id IS NOT NULL) AS g\r\n" +
                 "    GROUP BY user_id\r\n" +
                 "),\r\n" +
                 "-- Reassembled under the original name and shape, so everything downstream is unchanged.\r\n" +
@@ -819,7 +852,7 @@ namespace Common.Entities.CopilotAdoption
                     "           COUNT(DISTINCT CAST(c.time_stamp AS date)) AS ActiveDays,\r\n" +
                     "           MAX(c.time_stamp) AS LastInteractionUtc\r\n" +
                     "    FROM dbo.copilot_chats AS c\r\n" +
-                    "    WHERE c.time_stamp >= @from\r\n" +
+                    "    WHERE c.time_stamp >= @from\r\n      AND c.time_stamp < @toExclusive\r\n" +
                     "      AND c.user_id IS NOT NULL\r\n" +
                     $"      AND ({cowork})\r\n" +
                     "    GROUP BY c.user_id\r\n" +
@@ -871,7 +904,7 @@ namespace Common.Entities.CopilotAdoption
                     "           SUM(CAST(t.post_messages + t.reply_messages AS float)) AS PostsAndRepliesTotal,\r\n" +
                     "           MAX(t.last_activity_date) AS LastActivity\r\n" +
                     "    FROM dbo.teams_user_activity_log AS t\r\n" +
-                    "    WHERE t.[date] >= @m365From AND t.[date] <= @m365ReportDate\r\n" +
+                    "    WHERE t.[date] >= @m365From AND t.[date] < @m365ToExclusive\r\n" +
                     "      AND EXISTS (SELECT 1 FROM SeatUsers AS s WHERE s.user_id = t.user_id)\r\n" +
                     "    GROUP BY t.user_id\r\n" +
                     ")");
@@ -899,7 +932,7 @@ namespace Common.Entities.CopilotAdoption
                     "           SUM(CAST(o.email_read_count AS float)) AS ReadTotal,\r\n" +
                     "           MAX(o.last_activity_date) AS LastActivity\r\n" +
                     "    FROM dbo.outlook_user_activity_log AS o\r\n" +
-                    "    WHERE o.[date] >= @m365From AND o.[date] <= @m365ReportDate\r\n" +
+                    "    WHERE o.[date] >= @m365From AND o.[date] < @m365ToExclusive\r\n" +
                     "      AND EXISTS (SELECT 1 FROM SeatUsers AS s WHERE s.user_id = o.user_id)\r\n" +
                     "    GROUP BY o.user_id\r\n" +
                     ")");
@@ -927,12 +960,12 @@ namespace Common.Entities.CopilotAdoption
                     "    FROM (\r\n" +
                     "        SELECT sp.user_id, sp.[date], sp.viewed_or_edited, sp.last_activity_date\r\n" +
                     "        FROM dbo.sharepoint_user_activity_log AS sp\r\n" +
-                    "        WHERE sp.[date] >= @m365From AND sp.[date] <= @m365ReportDate\r\n" +
+                    "        WHERE sp.[date] >= @m365From AND sp.[date] < @m365ToExclusive\r\n" +
                     "          AND EXISTS (SELECT 1 FROM SeatUsers AS s WHERE s.user_id = sp.user_id)\r\n" +
                     "        UNION ALL\r\n" +
                     "        SELECT od.user_id, od.[date], od.viewed_or_edited, od.last_activity_date\r\n" +
                     "        FROM dbo.onedrive_user_activity_log AS od\r\n" +
-                    "        WHERE od.[date] >= @m365From AND od.[date] <= @m365ReportDate\r\n" +
+                    "        WHERE od.[date] >= @m365From AND od.[date] < @m365ToExclusive\r\n" +
                     "          AND EXISTS (SELECT 1 FROM SeatUsers AS s WHERE s.user_id = od.user_id)\r\n" +
                     "    ) AS f\r\n" +
                     "    GROUP BY f.user_id\r\n" +
@@ -1085,7 +1118,7 @@ namespace Common.Entities.CopilotAdoption
                 "SELECT cu.user_id AS UserId,\r\n" +
                 "       CAST(SUM(cu.billed_credits) AS decimal(18,4)) AS BilledCredits\r\n" +
                 "FROM dbo.copilot_studio_credit_user_daily AS cu\r\n" +
-                "WHERE cu.usage_date >= @from\r\n" +
+                "WHERE cu.usage_date >= @from\r\n  AND cu.usage_date < @toExclusive\r\n" +
                 "  AND cu.user_id IS NOT NULL\r\n" +
                 "  AND EXISTS (SELECT 1 FROM SeatUsers AS s WHERE s.user_id = cu.user_id)\r\n" +
                 "GROUP BY cu.user_id\r\n" +
@@ -1221,7 +1254,7 @@ namespace Common.Entities.CopilotAdoption
                     "           COUNT(DISTINCT CAST(c.time_stamp AS date)) AS ActiveDays,\r\n" +
                     "           MAX(c.time_stamp) AS LastInteractionUtc\r\n" +
                     "    FROM dbo.copilot_chats AS c\r\n" +
-                    "    WHERE c.time_stamp >= @from AND c.user_id IS NOT NULL\r\n" +
+                    "    WHERE c.time_stamp >= @from AND c.user_id IS NOT NULL\r\n      AND c.time_stamp < @toExclusive\r\n" +
                     "    GROUP BY c.user_id\r\n" +
                     ")");
             }
@@ -1238,7 +1271,7 @@ namespace Common.Entities.CopilotAdoption
                     "           " + PerActiveDay("t.meetings_attended_count + t.meetings_organized_count", "t.[date]") + " AS Meetings,\r\n" +
                     "           MAX(t.last_activity_date) AS LastActivity\r\n" +
                     "    FROM dbo.teams_user_activity_log AS t\r\n" +
-                    "    WHERE t.[date] >= @m365From AND t.[date] <= @m365ReportDate\r\n" +
+                    "    WHERE t.[date] >= @m365From AND t.[date] < @m365ToExclusive\r\n" +
                     "    GROUP BY t.user_id\r\n" +
                     ")");
 
@@ -1251,7 +1284,7 @@ namespace Common.Entities.CopilotAdoption
                     "           " + PerActiveDay("o.email_read_count", "o.[date]") + " AS EmailsRead,\r\n" +
                     "           MAX(o.last_activity_date) AS LastActivity\r\n" +
                     "    FROM dbo.outlook_user_activity_log AS o\r\n" +
-                    "    WHERE o.[date] >= @m365From AND o.[date] <= @m365ReportDate\r\n" +
+                    "    WHERE o.[date] >= @m365From AND o.[date] < @m365ToExclusive\r\n" +
                     "    GROUP BY o.user_id\r\n" +
                     ")");
 
@@ -1265,11 +1298,11 @@ namespace Common.Entities.CopilotAdoption
                     "    FROM (\r\n" +
                     "        SELECT sp.user_id, sp.[date], sp.viewed_or_edited, sp.last_activity_date\r\n" +
                     "        FROM dbo.sharepoint_user_activity_log AS sp\r\n" +
-                    "        WHERE sp.[date] >= @m365From AND sp.[date] <= @m365ReportDate\r\n" +
+                    "        WHERE sp.[date] >= @m365From AND sp.[date] < @m365ToExclusive\r\n" +
                     "        UNION ALL\r\n" +
                     "        SELECT od.user_id, od.[date], od.viewed_or_edited, od.last_activity_date\r\n" +
                     "        FROM dbo.onedrive_user_activity_log AS od\r\n" +
-                    "        WHERE od.[date] >= @m365From AND od.[date] <= @m365ReportDate\r\n" +
+                    "        WHERE od.[date] >= @m365From AND od.[date] < @m365ToExclusive\r\n" +
                     "    ) AS f\r\n" +
                     "    GROUP BY f.user_id\r\n" +
                     ")");
@@ -1409,7 +1442,7 @@ namespace Common.Entities.CopilotAdoption
                 "FROM (\r\n" +
                 "    SELECT DISTINCT c.user_id\r\n" +
                 "    FROM dbo.copilot_chats AS c\r\n" +
-                "    WHERE c.time_stamp >= @from\r\n" +
+                "    WHERE c.time_stamp >= @from\r\n      AND c.time_stamp < @toExclusive\r\n" +
                 "      AND c.user_id IS NOT NULL\r\n" +
                 "      AND NOT EXISTS (\r\n" +
                 "          SELECT 1 FROM dbo.user_license_type_lookups AS ul\r\n" +
@@ -1484,7 +1517,7 @@ namespace Common.Entities.CopilotAdoption
                 "INTO #agent_grain\r\n" +
                 "FROM dbo.copilot_chats AS c\r\n" +
                 "LEFT JOIN SeatUsers AS seats ON seats.user_id = c.user_id\r\n" +
-                "WHERE c.time_stamp >= @historyFrom\r\n" +
+                "WHERE c.time_stamp >= @historyFrom\r\n  AND c.time_stamp < @toExclusive\r\n" +
                 // Redundant against the inner join to copilot_agents below, but it lets the optimiser
                 // eliminate the (usually large) majority of Copilot interactions that carry no agent
                 // before it does any joining, rather than discovering it during the join.
@@ -1548,7 +1581,7 @@ namespace Common.Entities.CopilotAdoption
                 "FROM dbo.copilot_chats AS c\r\n" +
                 "JOIN dbo.users AS u ON u.id = c.user_id\r\n" +
                 "LEFT JOIN dbo.user_departments AS dept ON dept.id = u.department_id\r\n" +
-                "WHERE c.time_stamp >= @from\r\n" +
+                "WHERE c.time_stamp >= @from\r\n  AND c.time_stamp < @toExclusive\r\n" +
                 "  AND c.agent_id IS NOT NULL\r\n" +
                 "GROUP BY ISNULL(NULLIF(LTRIM(RTRIM(dept.name)), ''), '(no department)')\r\n" +
                 "ORDER BY Value DESC\r\n" +
@@ -1579,7 +1612,7 @@ namespace Common.Entities.CopilotAdoption
                 $"           {AppHostKey("c.app_host", "(unknown)")} AS app_host,\r\n" +
                 "           c.agent_id AS agent_id\r\n" +
                 "    FROM dbo.copilot_chats AS c\r\n" +
-                "    WHERE c.time_stamp >= @from\r\n" +
+                "    WHERE c.time_stamp >= @from\r\n      AND c.time_stamp < @toExclusive\r\n" +
                 "      AND c.user_id IS NOT NULL\r\n" +
                 "      AND NOT EXISTS (\r\n" +
                 "          SELECT 1 FROM dbo.user_license_type_lookups AS ul\r\n" +
@@ -1668,7 +1701,7 @@ namespace Common.Entities.CopilotAdoption
                 "FROM dbo.copilot_event_accessed_resources AS ar\r\n" +
                 "JOIN dbo.copilot_chats AS c ON c.event_id = ar.copilot_chat_id\r\n" +
                 "LEFT JOIN dbo.copilot_event_accessed_resource_types AS rt ON rt.id = ar.resource_type_id\r\n" +
-                "WHERE c.time_stamp >= @from\r\n" +
+                "WHERE c.time_stamp >= @from\r\n  AND c.time_stamp < @toExclusive\r\n" +
                 "GROUP BY ISNULL(rt.name, '" + Copilot.CopilotAccessedResourceTaxonomy.UnknownTypeLabel + "')\r\n" +
                 "ORDER BY Value DESC\r\n" +
                 "OPTION (RECOMPILE);";
@@ -1694,7 +1727,7 @@ namespace Common.Entities.CopilotAdoption
                 "       CAST(COUNT_BIG(*) AS float) AS Value\r\n" +
                 "FROM dbo.copilot_chats AS c\r\n" +
                 "JOIN SeatUsers AS seats ON seats.user_id = c.user_id\r\n" +
-                "WHERE c.time_stamp >= @from\r\n" +
+                "WHERE c.time_stamp >= @from\r\n  AND c.time_stamp < @toExclusive\r\n" +
                 $"GROUP BY {AppHostKey("c.app_host", "(unknown)")}\r\n" +
                 "ORDER BY Value DESC\r\n" +
                 "OPTION (RECOMPILE);";
@@ -1712,7 +1745,7 @@ namespace Common.Entities.CopilotAdoption
                 $"SELECT TOP (@top) {AppHostKey("c.app_host", "(unknown)")} AS Label,\r\n" +
                 "       CAST(COUNT_BIG(*) AS float) AS Value\r\n" +
                 "FROM dbo.copilot_chats AS c\r\n" +
-                "WHERE c.time_stamp >= @from\r\n" +
+                "WHERE c.time_stamp >= @from\r\n  AND c.time_stamp < @toExclusive\r\n" +
                 "  AND c.user_id IS NOT NULL\r\n" +
                 "  AND NOT EXISTS (\r\n" +
                 "      SELECT 1 FROM dbo.user_license_type_lookups AS ul\r\n" +

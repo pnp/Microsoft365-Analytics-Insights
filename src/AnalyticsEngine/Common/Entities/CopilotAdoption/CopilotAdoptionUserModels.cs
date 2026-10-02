@@ -55,6 +55,8 @@ namespace Common.Entities.CopilotAdoption
 
         public List<int> SeatLicenceTypeIds { get; set; } = new List<int>();
 
+        public double? SeatHeldDays { get; set; }
+
         #region Audit-log derived (all users, including Copilot Chat with no seat)
 
         /// <summary>Copilot interactions inside the reporting window.</summary>
@@ -199,6 +201,9 @@ namespace Common.Entities.CopilotAdoption
 
         [JsonIgnore]
         public List<int> SeatLicenceTypeIds { get; set; } = new List<int>();
+
+        [JsonProperty("seatHeldDays")]
+        public double? SeatHeldDays { get; set; }
 
         [JsonProperty("interactions")]
         public long Interactions { get; set; }

@@ -109,12 +109,15 @@ namespace Common.Entities.CopilotAdoption
             var o = options ?? CopilotAdoptionOptions.Default;
             var target = TargetActiveDays(o);
             var days = DaysSinceTenureStart(row?.AccountCreatedUtc, nowUtc);
-            if (!days.HasValue) return target;
 
             var windowDays = Math.Max(1, o.WindowDays);
             // "days since creation" counts whole days, so an account created today has been available
             // for one day of the window, not zero.
-            var observedDays = Math.Max(1, Math.Min(windowDays, days.Value + 1));
+            var observedDays = days.HasValue ? Math.Max(1, Math.Min(windowDays, days.Value + 1)) : windowDays;
+            if (row?.SeatHeldDays.HasValue == true)
+            {
+                observedDays = Math.Max(1, Math.Min(observedDays, (int)Math.Ceiling(row.SeatHeldDays.Value)));
+            }
             if (observedDays >= windowDays) return target;
 
             return Math.Max(1d, target * observedDays / windowDays);
@@ -243,6 +246,7 @@ namespace Common.Entities.CopilotAdoption
                 ReclaimExclusionExpired = row.ReclaimExclusionExpired,
                 SeatLicences = row.SeatLicences,
                 SeatLicenceTypeIds = row.SeatLicenceTypeIds,
+                SeatHeldDays = row.SeatHeldDays,
 
                 Interactions = interactions,
                 ActiveDays = activeDays,
