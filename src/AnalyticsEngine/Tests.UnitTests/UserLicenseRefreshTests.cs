@@ -475,7 +475,145 @@ namespace Tests.UnitTests
                 await RemoveTestLicences(skuPartNumber, unrelatedSkuPartNumber);
             }
         }
-
+        [TestMethod]
+        public async Task UserLicenseHistory_FirstRefresh_SeedsExistingAssignmentsAsHeldSinceAtLeast()
+        {
+            var tick = DateTime.Now.Ticks;
+            var upn = $"licenceseed{tick}@test.com";
+            var skuPart = $"CONTOSO_SEEDED_{tick}";
+            var licenceName = $"Contoso Seeded {tick}";
+            await RemoveTestUsers(upn);
+            await RemoveTestLicences(skuPart);
+            try
+            {
+                using (var db = new AnalyticsEntitiesContext())
+                {
+                    await ResetLicenceHistoryAsync(db);
+                    var dbUser = await InsertUser(db, upn);
+                    var licence = new LicenseType { Name = licenceName, SKUID = skuPart };
+                    db.LicenseTypes.Add(licence);
+                    await db.SaveChangesAsync();
+                    db.UserLicenseTypeLookups.Add(new UserLicenseTypeLookup { UserId = dbUser.ID, LicenseTypeId = licence.ID });
+                    await db.SaveChangesAsync();
+                    var skuId = Guid.NewGuid();
+                    var skus = new List<SubscribedSku> { new SubscribedSku { SkuId = skuId, SkuPartNumber = skuPart, ConsumedUnits = 1 } };
+                    var loader = new FakeUserMetadataLoader(null, skus,
+                        new Dictionary<Guid, List<SkuUser>> { { skuId, new List<SkuUser> { new SkuUser { UserPrincipalName = upn } } } });
+                    await new UserLicenseProcessor(AnalyticsLogger.ConsoleOnlyTracer(), loader, new UserMetadataCache(db), new FixedLicenseNameResolver(licenceName))
+                        .ProcessSKUsForAllUsers(skus, new List<Common.Entities.User> { dbUser }, db);
+                    var source = await db.Database.SqlQuery<byte>(
+                        "SELECT from_source FROM dbo.user_license_history WHERE user_id = @p0 AND license_type_id = @p1 AND valid_to_utc IS NULL",
+                        dbUser.ID, licence.ID).SingleAsync();
+                    Assert.AreEqual((byte)0, source, "An assignment that already existed when history began is seeded as 'held since at least'.");
+                    Assert.AreEqual(1, await db.Database.SqlQuery<int>("SELECT COUNT(*) FROM dbo.license_refresh_runs").SingleAsync());
+                }
+            }
+            finally
+            {
+                await RemoveTestUsers(upn);
+                await RemoveTestLicences(skuPart);
+            }
+        }
+        [TestMethod]
+        public async Task UserLicenseHistory_AddsCloseAndSeatCounts_AreRecordedOnlyForCompletedRefreshes()
+        {
+            var tick = DateTime.Now.Ticks;
+            var upn = $"licencehistory{tick}@test.com";
+            var skuPart = $"CONTOSO_HISTORY_{tick}";
+            var licenceName = $"Contoso History {tick}";
+            await RemoveTestUsers(upn);
+            await RemoveTestLicences(skuPart);
+            try
+            {
+                using (var db = new AnalyticsEntitiesContext())
+                {
+                    await ResetLicenceHistoryAsync(db);
+                    var dbUser = await InsertUser(db, upn);
+                    var skuId = Guid.NewGuid();
+                    var skus = new List<SubscribedSku>
+                    {
+                        new SubscribedSku
+                        {
+                            SkuId = skuId,
+                            SkuPartNumber = skuPart,
+                            ConsumedUnits = 1,
+                            PrepaidUnits = new LicenseUnitsDetail { Enabled = 5, Warning = 1, Suspended = 0 },
+                        }
+                    };
+                    var loader = new FakeUserMetadataLoader(null, skus,
+                        new Dictionary<Guid, List<SkuUser>> { { skuId, new List<SkuUser> { new SkuUser { UserPrincipalName = upn } } } });
+                    var processor = new UserLicenseProcessor(AnalyticsLogger.ConsoleOnlyTracer(), loader, new UserMetadataCache(db), new FixedLicenseNameResolver(licenceName));
+                    await processor.ProcessSKUsForAllUsers(skus, new List<Common.Entities.User> { dbUser }, db);
+                    var licenceId = await db.Database.SqlQuery<int>("SELECT id FROM dbo.license_types WHERE sku_id = @p0", skuPart).SingleAsync();
+                    var first = await db.Database.SqlQuery<byte>(
+                        "SELECT from_source FROM dbo.user_license_history WHERE user_id = @p0 AND license_type_id = @p1 AND valid_to_utc IS NULL",
+                        dbUser.ID, licenceId).SingleAsync();
+                    Assert.AreEqual((byte)1, first, "A newly observed assignment is recorded as observed, not seeded.");
+                    Assert.AreEqual(1, await db.Database.SqlQuery<int>("SELECT COUNT(*) FROM dbo.license_seat_count_history WHERE license_type_id = @p0 AND consumed_units = 1 AND prepaid_enabled_units = 5", licenceId).SingleAsync());
+                    skus[0].ConsumedUnits = 0;
+                    loader.SetFakeState(null, skus, new Dictionary<Guid, List<SkuUser>> { { skuId, new List<SkuUser>() } });
+                    await processor.ProcessSKUsForAllUsers(skus, new List<Common.Entities.User> { dbUser }, db);
+                    Assert.AreEqual(1, await db.Database.SqlQuery<int>(
+                        "SELECT COUNT(*) FROM dbo.user_license_history WHERE user_id = @p0 AND license_type_id = @p1 AND valid_to_utc IS NOT NULL AND valid_to_previous_refresh_utc IS NOT NULL",
+                        dbUser.ID, licenceId).SingleAsync(), "A confirmed removal closes the open holding with the previous-refresh uncertainty bound.");
+                    Assert.AreEqual(2, await db.Database.SqlQuery<int>("SELECT COUNT(*) FROM dbo.license_refresh_runs").SingleAsync(),
+                        "Both completed refreshes are recorded; an aborted refresh would never reach this call.");
+                }
+            }
+            finally
+            {
+                await RemoveTestUsers(upn);
+                await RemoveTestLicences(skuPart);
+            }
+        }
+        [TestMethod]
+        public async Task UserLicenseHistory_LicenceTypeRename_CarriesOpenHoldingWithoutChurn()
+        {
+            var tick = DateTime.Now.Ticks;
+            var upn = $"licencerenamehistory{tick}@test.com";
+            var skuPart = $"CONTOSO_RENAME_HISTORY_{tick}";
+            var oldName = $"Contoso Old {tick}";
+            var newName = $"Contoso New {tick}";
+            await RemoveTestUsers(upn);
+            await RemoveTestLicences(skuPart);
+            try
+            {
+                using (var db = new AnalyticsEntitiesContext())
+                {
+                    await ResetLicenceHistoryAsync(db);
+                    var dbUser = await InsertUser(db, upn);
+                    var oldLicence = new LicenseType { Name = oldName, SKUID = skuPart };
+                    db.LicenseTypes.Add(oldLicence);
+                    await db.SaveChangesAsync();
+                    db.UserLicenseTypeLookups.Add(new UserLicenseTypeLookup { UserId = dbUser.ID, LicenseTypeId = oldLicence.ID });
+                    await db.Database.ExecuteSqlCommandAsync(
+                        "INSERT INTO dbo.user_license_history (user_id, license_type_id, valid_from_utc, valid_to_utc, from_source) VALUES (@p0, @p1, '2026-09-01', NULL, 0)",
+                        dbUser.ID, oldLicence.ID);
+                    await db.SaveChangesAsync();
+                    var skuId = Guid.NewGuid();
+                    var skus = new List<SubscribedSku> { new SubscribedSku { SkuId = skuId, SkuPartNumber = skuPart, ConsumedUnits = 1 } };
+                    var loader = new FakeUserMetadataLoader(null, skus,
+                        new Dictionary<Guid, List<SkuUser>> { { skuId, new List<SkuUser> { new SkuUser { UserPrincipalName = upn } } } });
+                    await new UserLicenseProcessor(AnalyticsLogger.ConsoleOnlyTracer(), loader, new UserMetadataCache(db), new FixedLicenseNameResolver(newName))
+                        .ProcessSKUsForAllUsers(skus, new List<Common.Entities.User> { dbUser }, db);
+                    var newLicenceId = await db.Database.SqlQuery<int>("SELECT id FROM dbo.license_types WHERE name = @p0", newName).SingleAsync();
+                    Assert.AreEqual(1, await db.Database.SqlQuery<int>(
+                        "SELECT COUNT(*) FROM dbo.user_license_history WHERE user_id = @p0 AND license_type_id = @p1 AND valid_to_utc IS NULL",
+                        dbUser.ID, newLicenceId).SingleAsync(), "The open holding should move to the new licence-type row.");
+                    Assert.AreEqual(1, await db.Database.SqlQuery<int>(
+                        "SELECT COUNT(*) FROM dbo.user_license_history WHERE user_id = @p0",
+                        dbUser.ID).SingleAsync(), "A display-name rename must not close the old holding and open a second one.");
+                    Assert.AreEqual(newLicenceId, await db.Database.SqlQuery<int>(
+                        "SELECT license_type_id FROM dbo.user_license_type_lookups WHERE user_id = @p0",
+                        dbUser.ID).SingleAsync(), "The current lookup should move with the history row.");
+                }
+            }
+            finally
+            {
+                await RemoveTestUsers(upn);
+                await RemoveTestLicences(skuPart);
+            }
+        }
         /// <summary>Purchased units on the named licence type; -3 when they are unknown (NULL).</summary>
         private static Task<int> PurchasedUnits(AnalyticsEntitiesContext db, string licenceName)
         {
@@ -973,32 +1111,36 @@ namespace Tests.UnitTests
                     Observations.Add((point, await CountLookups(reader, _watchedUserId)));
                 }
             }
-
             public Task<HashSet<UserLicenseAssignment>> LoadAssignmentsFor(ICollection<int> userIds)
                 => _inner.LoadAssignmentsFor(userIds);
+            public Task<LicenseRefreshRunInfo> StartRefresh(DateTime completedUtc)
+                => _inner.StartRefresh(completedUtc);
+            public Task<int> CarryAssignmentsAcrossRenamedLicenceTypes(IReadOnlyList<int> currentLicenseTypeIds, LicenseRefreshRunInfo refresh)
+                => _inner.CarryAssignmentsAcrossRenamedLicenceTypes(currentLicenseTypeIds, refresh);
+            public Task<int?> CompleteRefresh(LicenseRefreshRunInfo refresh, IReadOnlyList<LicenseSeatCountSnapshot> seatCounts)
+                => _inner.CompleteRefresh(refresh, seatCounts);
 
-            public async Task<int> AddAssignments(IReadOnlyList<UserLicenseAssignment> assignments)
+            public Task<LicenseHistoryReconcileResult> ReconcileHistoryWithCurrentLookups(LicenseRefreshRunInfo refresh)
+                => _inner.ReconcileHistoryWithCurrentLookups(refresh);
+            public async Task<int> AddAssignments(IReadOnlyList<UserLicenseAssignment> assignments, LicenseRefreshRunInfo refresh)
             {
                 if (assignments == null || assignments.Count == 0)
                 {
-                    return await _inner.AddAssignments(assignments);
+                    return await _inner.AddAssignments(assignments, refresh);
                 }
-
                 await Probe("before-add");
-                var added = await _inner.AddAssignments(assignments);
+                var added = await _inner.AddAssignments(assignments, refresh);
                 await Probe("after-add");
                 return added;
             }
-
-            public async Task<int> RemoveAssignments(IReadOnlyList<UserLicenseAssignment> assignments)
+            public async Task<int> RemoveAssignments(IReadOnlyList<UserLicenseAssignment> assignments, LicenseRefreshRunInfo refresh)
             {
                 if (assignments == null || assignments.Count == 0)
                 {
-                    return await _inner.RemoveAssignments(assignments);
+                    return await _inner.RemoveAssignments(assignments, refresh);
                 }
-
                 await Probe("before-remove");
-                var removed = await _inner.RemoveAssignments(assignments);
+                var removed = await _inner.RemoveAssignments(assignments, refresh);
                 await Probe("after-remove");
                 return removed;
             }
@@ -1028,31 +1170,36 @@ namespace Tests.UnitTests
                 Removed.Clear();
                 Operations.Clear();
             }
-
             public Task<HashSet<UserLicenseAssignment>> LoadAssignmentsFor(ICollection<int> userIds)
                 => _inner.LoadAssignmentsFor(userIds);
+            public Task<LicenseRefreshRunInfo> StartRefresh(DateTime completedUtc)
+                => _inner.StartRefresh(completedUtc);
+            public Task<int> CarryAssignmentsAcrossRenamedLicenceTypes(IReadOnlyList<int> currentLicenseTypeIds, LicenseRefreshRunInfo refresh)
+                => _inner.CarryAssignmentsAcrossRenamedLicenceTypes(currentLicenseTypeIds, refresh);
+            public Task<int?> CompleteRefresh(LicenseRefreshRunInfo refresh, IReadOnlyList<LicenseSeatCountSnapshot> seatCounts)
+                => _inner.CompleteRefresh(refresh, seatCounts);
 
-            public async Task<int> AddAssignments(IReadOnlyList<UserLicenseAssignment> assignments)
+            public Task<LicenseHistoryReconcileResult> ReconcileHistoryWithCurrentLookups(LicenseRefreshRunInfo refresh)
+                => _inner.ReconcileHistoryWithCurrentLookups(refresh);
+            public async Task<int> AddAssignments(IReadOnlyList<UserLicenseAssignment> assignments, LicenseRefreshRunInfo refresh)
             {
                 if (assignments != null && assignments.Count > 0)
                 {
                     Added.AddRange(assignments);
                     Operations.Add("add");
                 }
-                return await _inner.AddAssignments(assignments);
+                return await _inner.AddAssignments(assignments, refresh);
             }
-
-            public async Task<int> RemoveAssignments(IReadOnlyList<UserLicenseAssignment> assignments)
+            public async Task<int> RemoveAssignments(IReadOnlyList<UserLicenseAssignment> assignments, LicenseRefreshRunInfo refresh)
             {
                 if (assignments != null && assignments.Count > 0)
                 {
                     Removed.AddRange(assignments);
                     Operations.Add("remove");
                 }
-                return await _inner.RemoveAssignments(assignments);
+                return await _inner.RemoveAssignments(assignments, refresh);
             }
         }
-
         private class RecordingLicenseNameResolver : IOfficeLicenseNameResolver
         {
             private readonly IOfficeLicenseNameResolver _inner;
@@ -1100,10 +1247,14 @@ namespace Tests.UnitTests
                     .Select(upn => new SkuUser { UserPrincipalName = upn, Id = users.First(u => u.Upn == upn).AadId })
                     .ToList();
             }
-
             return new FakeUserMetadataLoader(graphUsers, skuList, usersBySku);
         }
-
+        private static Task ResetLicenceHistoryAsync(AnalyticsEntitiesContext db)
+        {
+            return db.Database.ExecuteSqlCommandAsync(@"DELETE FROM dbo.license_seat_count_history;
+DELETE FROM dbo.license_refresh_runs;
+DELETE FROM dbo.user_license_history;");
+        }
         private static async Task<Common.Entities.User> InsertUser(AnalyticsEntitiesContext db, string upn)
         {
             var user = new Common.Entities.User { UserPrincipalName = upn, AccountEnabled = true };
@@ -1140,8 +1291,9 @@ namespace Tests.UnitTests
                 {
                     return;
                 }
-
                 var ids = users.Select(u => u.ID).ToList();
+                await db.Database.ExecuteSqlCommandAsync(
+                    "DELETE FROM dbo.user_license_history WHERE user_id IN ({0})".Replace("{0}", string.Join(",", ids)));
                 var lookups = await db.UserLicenseTypeLookups.Where(l => ids.Contains(l.UserId)).ToListAsync();
                 db.UserLicenseTypeLookups.RemoveRange(lookups);
                 db.users.RemoveRange(users);
@@ -1153,6 +1305,12 @@ namespace Tests.UnitTests
         {
             using (var db = new AnalyticsEntitiesContext())
             {
+                await db.Database.ExecuteSqlCommandAsync(
+                    "DELETE h FROM dbo.user_license_history h JOIN dbo.license_types lt ON lt.id = h.license_type_id WHERE lt.sku_id IN (@p0, @p1, @p2, @p3)",
+                    skuIds.ElementAtOrDefault(0) ?? string.Empty,
+                    skuIds.ElementAtOrDefault(1) ?? string.Empty,
+                    skuIds.ElementAtOrDefault(2) ?? string.Empty,
+                    skuIds.ElementAtOrDefault(3) ?? string.Empty);
                 var licences = await db.LicenseTypes
                     .Where(l => skuIds.Contains(l.SKUID) &&
                         !db.UserLicenseTypeLookups.Any(lookup => lookup.LicenseTypeId == l.ID))

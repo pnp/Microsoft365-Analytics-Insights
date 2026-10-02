@@ -148,7 +148,10 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             }
             await db.SaveChangesAsync();
 
-            await SaveSubscribedSkuCapacityAsync(db, skuLicenseTypes);
+            var store = _licenseStoreFactory(db);
+            var refresh = await store.StartRefresh(DateTime.UtcNow);
+            var seatCountSnapshots = await SaveSubscribedSkuCapacityAsync(db, skuLicenseTypes, refresh.CompletedUtc);
+            await store.CarryAssignmentsAcrossRenamedLicenceTypes(skuLicenseTypes.Select(pair => pair.Value.ID).ToList(), refresh);
 
             // Build the state Graph says the table should be in. Using a set also gives us the
             // de-duplication the UNIQUE index on (license_type_id, user_id) demands: two SKU part
@@ -184,7 +187,6 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 allUsersWithSku.Clear();
             }
 
-            var store = _licenseStoreFactory(db);
             var current = await store.LoadAssignmentsFor(scopeUserIds);
             var delta = UserLicenseAssignmentDelta.Between(current, desired);
 
@@ -206,45 +208,52 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 $"User import - licence refresh across {skus.Count.ToString("N0")} SKU(s) for {scopeUserIds.Count.ToString("N0")} user(s): " +
                 $"{delta.UnchangedCount.ToString("N0")} assignment(s) already correct, {delta.ToAdd.Count.ToString("N0")} to add, {removals.Count.ToString("N0")} to remove.");
 
-            if (delta.ToAdd.Count == 0 && removals.Count == 0)
+            var added = 0;
+            var removed = 0;
+            if (delta.ToAdd.Count > 0 || removals.Count > 0)
             {
-                return;
+                // Additions before removals. A user moving from one SKU to another then briefly holds
+                // both licences rather than neither - a momentary superset is safe to report on, a
+                // momentary gap is exactly the bug this replaced.
+                added = await store.AddAssignments(delta.ToAdd, refresh);
+                removed = await store.RemoveAssignments(removals, refresh);
             }
 
-            // Additions before removals. A user moving from one SKU to another then briefly holds
-            // both licences rather than neither - a momentary superset is safe to report on, a
-            // momentary gap is exactly the bug this replaced.
-            var added = await store.AddAssignments(delta.ToAdd);
-            var removed = await store.RemoveAssignments(removals);
+            var reconciled = await store.ReconcileHistoryWithCurrentLookups(refresh);
+            var runId = await store.CompleteRefresh(refresh, seatCountSnapshots);
 
-            _logger.LogInformation($"User import - licence refresh complete: {added.ToString("N0")} assignment(s) added, {removed.ToString("N0")} removed.");
+            _logger.LogInformation(
+                $"User import - licence refresh complete: {added.ToString("N0")} assignment(s) added, {removed.ToString("N0")} removed" +
+                $", {reconciled.OpenedLookupRowsWithoutHistory.ToString("N0")} missing history row(s) opened and {reconciled.ClosedOpenRowsWithoutLookup.ToString("N0")} stale history row(s) closed" +
+                (runId.HasValue ? $", history refresh run {runId.Value.ToString("N0")} recorded." : "."));
         }
 
 
-        private async Task SaveSubscribedSkuCapacityAsync(
+        private async Task<List<LicenseSeatCountSnapshot>> SaveSubscribedSkuCapacityAsync(
             AnalyticsEntitiesContext db,
-            List<KeyValuePair<SubscribedSku, LicenseType>> skuLicenseTypes)
+            List<KeyValuePair<SubscribedSku, LicenseType>> skuLicenseTypes,
+            DateTime refreshedUtc)
         {
+            var capacityByLicenceType = skuLicenseTypes
+                .GroupBy(pair => pair.Value.ID)
+                .Select(g => new LicenseSeatCountSnapshot
+                {
+                    LicenseTypeId = g.Key,
+                    ConsumedUnits = g.Any(pair => pair.Key.ConsumedUnits != null) ? g.Sum(pair => pair.Key.ConsumedUnits) : (int?)null,
+                    PrepaidEnabledUnits = g.Any(pair => pair.Key.PrepaidUnits?.Enabled != null) ? g.Sum(pair => pair.Key.PrepaidUnits?.Enabled) : (int?)null,
+                    PrepaidWarningUnits = g.Any(pair => pair.Key.PrepaidUnits?.Warning != null) ? g.Sum(pair => pair.Key.PrepaidUnits?.Warning) : (int?)null,
+                    PrepaidSuspendedUnits = g.Any(pair => pair.Key.PrepaidUnits?.Suspended != null) ? g.Sum(pair => pair.Key.PrepaidUnits?.Suspended) : (int?)null,
+                })
+                .ToList();
+
             var columnsExist = await db.Database.SqlQuery<int>(
                 "SELECT CASE WHEN COL_LENGTH(N'dbo.license_types', N'prepaid_enabled_units') IS NULL " +
                 "OR COL_LENGTH(N'dbo.license_types', N'subscribed_sku_refreshed_utc') IS NULL THEN 0 ELSE 1 END").SingleAsync();
             if (columnsExist == 0)
             {
                 _logger.LogWarning("User import - subscribed SKU capacity columns are not present yet; purchased/unassigned Copilot seats will remain unknown until the database migration has run.");
-                return;
+                return capacityByLicenceType;
             }
-
-            var refreshedUtc = DateTime.UtcNow;
-            var capacityByLicenceType = skuLicenseTypes
-                .GroupBy(pair => pair.Value.ID)
-                .Select(g => new
-                {
-                    LicenceTypeId = g.Key,
-                    Enabled = g.Any(pair => pair.Key.PrepaidUnits?.Enabled != null) ? g.Sum(pair => pair.Key.PrepaidUnits?.Enabled) : (int?)null,
-                    Warning = g.Any(pair => pair.Key.PrepaidUnits?.Warning != null) ? g.Sum(pair => pair.Key.PrepaidUnits?.Warning) : (int?)null,
-                    Suspended = g.Any(pair => pair.Key.PrepaidUnits?.Suspended != null) ? g.Sum(pair => pair.Key.PrepaidUnits?.Suspended) : (int?)null,
-                })
-                .ToList();
 
             foreach (var capacity in capacityByLicenceType)
             {
@@ -252,14 +261,15 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                     "UPDATE dbo.license_types " +
                     "SET prepaid_enabled_units = @enabled, prepaid_warning_units = @warning, prepaid_suspended_units = @suspended, subscribed_sku_refreshed_utc = @refreshedUtc " +
                     "WHERE id = @id",
-                    new SqlParameter("@enabled", (object)capacity.Enabled ?? DBNull.Value),
-                    new SqlParameter("@warning", (object)capacity.Warning ?? DBNull.Value),
-                    new SqlParameter("@suspended", (object)capacity.Suspended ?? DBNull.Value),
+                    new SqlParameter("@enabled", (object)capacity.PrepaidEnabledUnits ?? DBNull.Value),
+                    new SqlParameter("@warning", (object)capacity.PrepaidWarningUnits ?? DBNull.Value),
+                    new SqlParameter("@suspended", (object)capacity.PrepaidSuspendedUnits ?? DBNull.Value),
                     new SqlParameter("@refreshedUtc", refreshedUtc),
-                    new SqlParameter("@id", capacity.LicenceTypeId));
+                    new SqlParameter("@id", capacity.LicenseTypeId));
             }
 
-            await ZeroCapacityLeftBehindByRenamesAsync(db, skuLicenseTypes, capacityByLicenceType.Select(c => c.LicenceTypeId).ToList(), refreshedUtc);
+            await ZeroCapacityLeftBehindByRenamesAsync(db, skuLicenseTypes, capacityByLicenceType.Select(c => c.LicenseTypeId).ToList(), refreshedUtc);
+            return capacityByLicenceType;
         }
 
         /// <summary>
@@ -423,36 +433,73 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             GraphUser graphUser,
             Common.Entities.User dbUser)
         {
-            // Get user service-plan from Graph
-            var userServicePlans = await _userLoader.LoadUserLicenseDetails(graphUser.Id);
-
-            if (userServicePlans != null)
+            var desired = await BuildDesiredAssignmentsForUser(db, graphUser, dbUser);
+            if (desired == null)
             {
-                // Batch load all license types first to reduce repeated awaits
-                var skuPartNumbers = userServicePlans.Select(p => p.SkuPartNumber).Distinct().ToList();
-                var licenseTypesDict = new Dictionary<string, LicenseType>();
-                foreach (var skuPartNumber in skuPartNumbers)
-                {
-                    var licenseType = await GetLicenseType(skuPartNumber);
-                    licenseTypesDict[skuPartNumber] = licenseType;
-                }
+                return;
+            }
+            await ReconcileCollectedUserLicenses(db, new[] { dbUser.ID }, desired);
+        }
 
-                // Remove old lookups & re-add
-                db.UserLicenseTypeLookups.RemoveRange(dbUser.LicenseLookups.Where(l => l.IsSavedToDB));
+        public async Task<HashSet<UserLicenseAssignment>> BuildDesiredAssignmentsForUser(
+            AnalyticsEntitiesContext db,
+            GraphUser graphUser,
+            Common.Entities.User dbUser)
+        {
+            var desired = new HashSet<UserLicenseAssignment>();
+            var userServicePlans = await _userLoader.LoadUserLicenseDetails(graphUser.Id);
+            if (userServicePlans == null)
+            {
+                return null;
+            }
 
-                // Dedupe by LicenseType display name: two SKU part numbers can resolve
-                // to the same LicenseType, and the user_license_type_lookups table has
-                // a UNIQUE index on (license_type_id, user_id).
-                var addedLicenseNames = new HashSet<string>();
-                foreach (var userPlan in userServicePlans)
+            var skuPartNumbers = userServicePlans.Select(p => p.SkuPartNumber).Distinct().ToList();
+            var licenseTypesDict = new Dictionary<string, LicenseType>();
+            foreach (var skuPartNumber in skuPartNumbers)
+            {
+                var licenseType = await GetLicenseType(skuPartNumber);
+                licenseTypesDict[skuPartNumber] = licenseType;
+            }
+            await db.SaveChangesAsync();
+
+            var addedLicenseNames = new HashSet<string>();
+            foreach (var userPlan in userServicePlans)
+            {
+                if (licenseTypesDict.TryGetValue(userPlan.SkuPartNumber, out var licence) &&
+                    addedLicenseNames.Add(licence.Name))
                 {
-                    if (licenseTypesDict.TryGetValue(userPlan.SkuPartNumber, out var licence) &&
-                        addedLicenseNames.Add(licence.Name))
-                    {
-                        dbUser.LicenseLookups.Add(new UserLicenseTypeLookup { License = licence, User = dbUser });
-                    }
+                    desired.Add(new UserLicenseAssignment(dbUser.ID, licence.ID));
                 }
             }
+            return desired;
+        }
+
+        public async Task<int?> ReconcileCollectedUserLicenses(
+            AnalyticsEntitiesContext db,
+            ICollection<int> userIds,
+            HashSet<UserLicenseAssignment> desired)
+        {
+            if (userIds == null) throw new ArgumentNullException(nameof(userIds));
+            if (desired == null) throw new ArgumentNullException(nameof(desired));
+            if (userIds.Count == 0)
+            {
+                return null;
+            }
+
+            var store = _licenseStoreFactory(db);
+            var refresh = await store.StartRefresh(DateTime.UtcNow);
+            await store.CarryAssignmentsAcrossRenamedLicenceTypes(desired.Select(d => d.LicenseTypeId).Distinct().ToList(), refresh);
+            var current = await store.LoadAssignmentsFor(userIds);
+            var delta = UserLicenseAssignmentDelta.Between(current, desired);
+            var added = await store.AddAssignments(delta.ToAdd, refresh);
+            var removed = await store.RemoveAssignments(delta.ToRemove, refresh);
+            var reconciled = await store.ReconcileHistoryWithCurrentLookups(refresh);
+            var runId = await store.CompleteRefresh(refresh, new List<LicenseSeatCountSnapshot>());
+            _logger.LogInformation(
+                $"User import - per-user licence refresh complete for {userIds.Count.ToString("N0")} user(s): {added.ToString("N0")} assignment(s) added, {removed.ToString("N0")} removed" +
+                $", {reconciled.OpenedLookupRowsWithoutHistory.ToString("N0")} missing history row(s) opened and {reconciled.ClosedOpenRowsWithoutLookup.ToString("N0")} stale history row(s) closed" +
+                (runId.HasValue ? $", history refresh run {runId.Value.ToString("N0")} recorded." : "."));
+            return runId;
         }
 
         /// <summary>

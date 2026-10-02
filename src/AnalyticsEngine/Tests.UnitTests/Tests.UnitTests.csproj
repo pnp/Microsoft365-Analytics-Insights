@@ -43,6 +43,9 @@
     <Compile Include="LicenceActivityReadModelTests.cs" />
     <Compile Include="LicenceActivityReadModelCacheTests.cs" />
     <Compile Include="LicenceActivityReadModelSqlTests.cs" />
+    <Compile Include="LicenceHistorySqlTests.cs" />
+    <Compile Include="LicenceHistoryReconcileTests.cs" />
+    <Compile Include="LicenceHistoryMigrationScriptTests.cs" />
     <Compile Include="PreInstallAdvisorTests.cs" />
     <Compile Include="ImportCadenceTests.cs" />
     <Compile Include="AppInsightsApiClientTests.cs" />

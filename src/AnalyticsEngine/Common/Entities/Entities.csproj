@@ -90,6 +90,7 @@
     <Compile Include="LicenceActivity\SqlLicenceActivityReadModelLoader.cs" />
     <Compile Include="LicenceActivity\LicenceActivityReadModel.cs" />
     <Compile Include="LicenceActivity\LicenceActivityReadModelCache.cs" />
+    <Compile Include="Licences\LicenceHistorySql.cs" />
     <Compile Include="LicenceActivity\CachedLicenceActivityStore.cs" />
     <Compile Include="Calls\CallNotificationDispatcher.cs" />
     <Compile Include="Calls\CallNotificationRules.cs" />
@@ -527,6 +528,10 @@
     <Compile Include="Migrations\202609221200001_UserOrganisations.Designer.cs">
       <DependentUpon>202609221200001_UserOrganisations.cs</DependentUpon>
     </Compile>
+    <Compile Include="Migrations\202610021200001_LicenceHistory.cs" />
+    <Compile Include="Migrations\202610021200001_LicenceHistory.Designer.cs">
+      <DependentUpon>202610021200001_LicenceHistory.cs</DependentUpon>
+    </Compile>
     <Compile Include="Migrations\202609190900001_IndexPlatformUserActivityLogDate.cs" />
     <Compile Include="Migrations\202609190900001_IndexPlatformUserActivityLogDate.Designer.cs">
       <DependentUpon>202609190900001_IndexPlatformUserActivityLogDate.cs</DependentUpon>
@@ -836,6 +841,9 @@
     </EmbeddedResource>
     <EmbeddedResource Include="Migrations\202609221200001_UserOrganisations.resx">
       <DependentUpon>202609221200001_UserOrganisations.cs</DependentUpon>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Migrations\202610021200001_LicenceHistory.resx">
+      <DependentUpon>202610021200001_LicenceHistory.cs</DependentUpon>
     </EmbeddedResource>
     <EmbeddedResource Include="Migrations\202609190900001_IndexPlatformUserActivityLogDate.resx">
       <DependentUpon>202609190900001_IndexPlatformUserActivityLogDate.cs</DependentUpon>
