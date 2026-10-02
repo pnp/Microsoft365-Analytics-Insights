@@ -633,7 +633,7 @@ namespace Common.Entities.AgentCosts
                 // split one person into two rows - "Alice, 4 credits" next to "Unresolved, 9 credits" -
                 // for the whole window between those two events, on a page whose entire job is to say who
                 // spent what. Grouping on the identity and aggregating the link keeps them as one person.
-                var grouped = await rows
+                var groupedQuery = rows
                     .GroupBy(r => r.EntraObjectId)
                     .Select(g => new
                     {
@@ -642,9 +642,18 @@ namespace Common.Entities.AgentCosts
                         Credits = g.Sum(r => (decimal?)r.BilledCredits),
                         ActiveDays = g.Select(r => r.UsageDate).Distinct().Count(),
                     })
-                    .OrderByDescending(g => g.Credits)
-                    .Take(top)
-                    .ToListAsync();
+                    .OrderByDescending(g => g.Credits);
+
+                // Narrowed to the people the administrator's global filter covers BEFORE the top N is taken, so
+                // the list is the biggest consumers in scope rather than the tenant's top N with gaps. The
+                // grouped set has one row per person billed, so it is filtered in memory; someone not yet
+                // linked to a directory user cannot be shown to be in scope, and is left out.
+                var grouped = query.PeopleScope == null
+                    ? await groupedQuery.Take(top).ToListAsync()
+                    : (await groupedQuery.ToListAsync())
+                        .Where(g => g.UserId.HasValue && query.PeopleScope(g.UserId.Value))
+                        .Take(top)
+                        .ToList();
 
                 // The names come from a second, bounded query rather than a navigation property reached
                 // through the group. It is at most `top` (<= 200) ids, and it keeps the aggregation itself

@@ -198,6 +198,28 @@ namespace Tests.UnitTests
             Assert.ThrowsException<ArgumentException>(() => LicenceActivityWorkbook.Build(overview, users));
         }
 
+        [TestMethod]
+        public void Excel_DescribesTheAdministratorsFilterForTheReaderExportingIt()
+        {
+            var overview = SampleOverview();
+            using (var archive = new ZipArchive(new MemoryStream(LicenceActivityWorkbook.Build(overview, null, "Department is Sales"))))
+                Assert.IsFalse(Sheets(archive).Contains("Administrator's filter"), "An unscoped overview has no filter to describe.");
+
+            // The overview is cached and shared between readers, so the description is the exporter's, passed in.
+            overview.Query = overview.Query.WithPeopleScope(id => id == 1, "scope-key");
+            using (var archive = new ZipArchive(new MemoryStream(LicenceActivityWorkbook.Build(overview, null, "Manager is one of 2 named people"))))
+            {
+                var xml = Sheets(archive);
+                StringAssert.Contains(xml, "Administrator's filter");
+                StringAssert.Contains(xml, "Manager is one of 2 named people");
+            }
+            using (var archive = new ZipArchive(new MemoryStream(LicenceActivityWorkbook.Build(overview))))
+                StringAssert.Contains(Sheets(archive), "Applied");
+        }
+
+        private static string Sheets(ZipArchive archive) => string.Join("\n",
+            archive.Entries.Where(e => e.FullName.StartsWith("xl/worksheets/", StringComparison.Ordinal)).Select(Read));
+
         private static string Read(ZipArchiveEntry entry)
         {
             using (var reader = new StreamReader(entry.Open(), Encoding.UTF8)) return reader.ReadToEnd();

@@ -25,6 +25,22 @@ export const errors = {
   'errors.userOrgs.requestFailed': 'Request failed ({status})',
   'errors.userFilter.dimensionsFailed': "Couldn't load the attributes to filter on ({status}).",
   'errors.userFilter.valuesFailed': "Couldn't load the values for this attribute ({status}).",
+  'errors.globalFilter.unavailable':
+    "The filter a portal administrator set for reports couldn't be read, so this report isn't available right now. Try again shortly.",
+  'errors.globalFilter.invalid':
+    "The filter a portal administrator set for reports can't be read by this version of the portal, so this report isn't available. Ask a portal administrator to review it.",
+  'errors.globalFilter.directoryUnavailable':
+    "The user directory that report filters are applied to couldn't be read, so this filtered report isn't available right now. Try again shortly.",
+  'errors.globalFilter.invalidFilter': 'The server refused the filter as written. Check each condition and try again.',
+  'errors.globalFilter.revisionConflict':
+    'Someone else changed the global filter after you opened it. Reload to see their change before saving yours. Your unsaved changes will be lost.',
+  'errors.globalFilter.storageUnavailable':
+    "The database hasn't been upgraded to hold a global filter, so it couldn't be saved.",
+  'errors.globalFilter.saveFailed': "The global filter couldn't be saved. The failure has been logged. Try again shortly.",
+  'errors.globalFilter.effectiveFailed': "Couldn't check for a filter set by a portal administrator ({status}).",
+  'errors.globalFilter.loadFailed': "Couldn't load the global filter ({status}).",
+  'errors.globalFilter.saveFailedStatus': "Couldn't save the global filter ({status}).",
+  'errors.globalFilter.previewFailed': "Couldn't preview the global filter ({status}).",
   'errors.userOrgs.fileUnreadable': 'The file could not be read.',
   'errors.userOrgs.importNotStarted': 'The import could not be started.',
   'errors.userOrgs.saveFailed': 'The organisation type could not be saved.',

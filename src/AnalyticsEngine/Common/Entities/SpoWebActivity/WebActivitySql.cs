@@ -130,6 +130,27 @@ namespace Common.Entities.SpoWebActivity
         #region Fragments
 
         /// <summary>
+        /// Narrows <c>H</c> to the page views of the people the report's scope covers - the administrator's
+        /// global filter. A scope marker: removed when nobody is filtered, so the statement is unchanged
+        /// (see <see cref="Common.Entities.UserFilters.ReportScopeSql"/>). A hit with no visit cannot be
+        /// attributed to anyone, so a filtered report leaves it out.
+        /// </summary>
+        public const string HitScope =
+            "/*scope: AND EXISTS (SELECT 1 FROM dbo.sessions AS scope_s WHERE scope_s.id = h.session_id AND scope_s.user_id IN {scopeUsers})*/";
+
+        /// <summary>The same narrowing for <c>dbo.searches</c>, aliased <c>se</c>: a search belongs to its visit's visitor.</summary>
+        public const string SearchScope =
+            "/*scope: AND EXISTS (SELECT 1 FROM dbo.sessions AS scope_s WHERE scope_s.id = se.session_id AND scope_s.user_id IN {scopeUsers})*/";
+
+        /// <summary>The same narrowing for <c>dbo.hits_clicked_elements</c>, aliased <c>c</c>: a click belongs to its page view's visitor.</summary>
+        public const string ClickScope =
+            "/*scope: AND EXISTS (SELECT 1 FROM dbo.hits AS scope_h INNER JOIN dbo.sessions AS scope_s ON scope_s.id = scope_h.session_id"
+            + " WHERE scope_h.id = c.hit_id AND scope_s.user_id IN {scopeUsers})*/";
+
+        /// <summary>Narrows <c>dbo.users</c>, aliased <c>u</c>, so a reach percentage is measured against the people in scope.</summary>
+        public const string DirectoryScope = "/*scope: AND u.id IN {scopeUsers}*/";
+
+        /// <summary>
         /// Directory users the reach percentage is measured against. Users with an unknown
         /// <c>account_enabled</c> are counted: treating unknown as disabled would silently shrink the
         /// denominator and inflate reach.
@@ -142,7 +163,8 @@ namespace Common.Entities.SpoWebActivity
         /// <remarks>
         /// Always the first CTE so the date predicate is the first thing the optimiser sees and
         /// <c>IX_hits_hit_timestamp</c> can drive the plan. Columns beyond <c>session_id</c> are key
-        /// lookups, which is why the default window is 28 days rather than a year.
+        /// lookups, which is why the default window is 28 days rather than a year. Carries
+        /// <see cref="HitScope"/>, so every statement built on it is narrowed to the report's scope.
         /// </remarks>
         public const string HitWindowCte = @"
 H AS (
@@ -150,7 +172,7 @@ H AS (
            h.web_id, h.agent_id, h.device_id, h.os_id, h.city_id, h.country_id,
            h.location_province_id, h.page_title_id
     FROM dbo.hits AS h
-    WHERE h.hit_timestamp >= @from AND h.hit_timestamp < @to
+    WHERE h.hit_timestamp >= @from AND h.hit_timestamp < @to" + HitScope + @"
 )";
 
         /// <summary>
@@ -261,7 +283,7 @@ SELECT
        INNER JOIN dbo.sessions AS s ON s.id = v.session_id
        INNER JOIN dbo.users AS u ON u.id = s.user_id
       WHERE " + EnabledUsersPredicate + @")                                   AS EnabledVisitors,
-    (SELECT COUNT(*) FROM dbo.users AS u WHERE " + EnabledUsersPredicate + @") AS KnownUsers,
+    (SELECT COUNT(*) FROM dbo.users AS u WHERE " + EnabledUsersPredicate + DirectoryScope + @") AS KnownUsers,
     (SELECT COUNT(DISTINCT h.url_id) FROM H AS h)                             AS UniquePages,
     (SELECT COUNT(DISTINCT h.web_id) FROM H AS h WHERE h.web_id IS NOT NULL)  AS Sites,
     (SELECT CAST(ISNULL(SUM(CASE WHEN v.PageViews = 1 THEN 1 ELSE 0 END), 0) AS bigint) FROM V AS v) AS Bounces,
@@ -325,7 +347,7 @@ SearchWeeks AS (
     SELECT " + "DATEADD(DAY, -(DATEDIFF(DAY, 0, se.date_time) % 7), CAST(se.date_time AS date))" + @" AS WeekStart,
            COUNT_BIG(*) AS Searches
     FROM dbo.searches AS se
-    WHERE se.date_time >= @from AND se.date_time < @to
+    WHERE se.date_time >= @from AND se.date_time < @to" + SearchScope + @"
     GROUP BY " + "DATEADD(DAY, -(DATEDIFF(DAY, 0, se.date_time) % 7), CAST(se.date_time AS date))" + @"
 )
 SELECT weeks.WeekStart,
@@ -1006,7 +1028,7 @@ SELECT TOP (@top)
        COUNT_BIG(*) AS Count
 FROM dbo.hits_clicked_elements AS c
 LEFT JOIN dbo.hits_clicked_element_titles AS t ON t.id = c.element_title_id
-WHERE c.[timestamp] >= @from AND c.[timestamp] < @to
+WHERE c.[timestamp] >= @from AND c.[timestamp] < @to" + ClickScope + @"
 GROUP BY CAST(ISNULL(t.name, N'(untitled element)') AS nvarchar(200))
 ORDER BY COUNT_BIG(*) DESC, CAST(ISNULL(t.name, N'(untitled element)') AS nvarchar(200)) ASC
 OPTION (RECOMPILE);";
@@ -1015,7 +1037,7 @@ OPTION (RECOMPILE);";
         public const string ClickCount = @"
 SELECT COUNT_BIG(*) AS Clicks
 FROM dbo.hits_clicked_elements AS c
-WHERE c.[timestamp] >= @from AND c.[timestamp] < @to
+WHERE c.[timestamp] >= @from AND c.[timestamp] < @to" + ClickScope + @"
 OPTION (RECOMPILE);";
 
         #endregion
@@ -1171,7 +1193,7 @@ OPTION (RECOMPILE);";
 WITH S AS (
     SELECT se.id, se.session_id, se.search_term_id, se.date_time
     FROM dbo.searches AS se
-    WHERE se.date_time >= @from AND se.date_time < @to
+    WHERE se.date_time >= @from AND se.date_time < @to" + SearchScope + @"
 ),
 DeadEnds AS (
     SELECT s.id
@@ -1203,7 +1225,7 @@ OPTION (RECOMPILE);";
 WITH S AS (
     SELECT se.id, se.session_id, se.search_term_id, se.date_time
     FROM dbo.searches AS se
-    WHERE se.date_time >= @from AND se.date_time < @to
+    WHERE se.date_time >= @from AND se.date_time < @to" + SearchScope + @"
 ),
 Scored AS (
     SELECT s.search_term_id,
@@ -1249,7 +1271,7 @@ OPTION (RECOMPILE);";
 WITH S AS (
     SELECT se.id, se.session_id, se.search_term_id, se.date_time
     FROM dbo.searches AS se
-    WHERE se.date_time >= @from AND se.date_time < @to
+    WHERE se.date_time >= @from AND se.date_time < @to" + SearchScope + @"
 ),
 Scored AS (
     SELECT s.search_term_id,
@@ -1285,7 +1307,7 @@ SELECT " + "(DATEDIFF(DAY, 0, se.date_time) % 7)" + @" AS [Day],
        DATEPART(HOUR, se.date_time)                    AS [Hour],
        COUNT_BIG(*)                                    AS Count
 FROM dbo.searches AS se
-WHERE se.date_time >= @from AND se.date_time < @to
+WHERE se.date_time >= @from AND se.date_time < @to" + SearchScope + @"
 GROUP BY " + "(DATEDIFF(DAY, 0, se.date_time) % 7)" + @", DATEPART(HOUR, se.date_time)
 ORDER BY [Day], [Hour]
 OPTION (RECOMPILE);";
@@ -1302,7 +1324,7 @@ OPTION (RECOMPILE);";
 WITH S AS (
     SELECT se.id, se.session_id, se.date_time
     FROM dbo.searches AS se
-    WHERE se.date_time >= @from AND se.date_time < @to
+    WHERE se.date_time >= @from AND se.date_time < @to" + SearchScope + @"
 ),
 Context AS (
     SELECT s.id, ctx.web_id
@@ -1483,12 +1505,13 @@ OPTION (RECOMPILE);";
         /// <remarks>
         /// Deliberately NOT windowed. The availability bar's job is to tell an admin whether the import
         /// has ever worked; answering "no hits" because the chosen window happens to be quiet would
-        /// send them to debug a tracker that is running perfectly.
+        /// send them to debug a tracker that is running perfectly. For the same reason it is not
+        /// narrowed by the report's scope: it says whether the tracker works, not what anybody did.
         /// </remarks>
         public const string LatestHit = @"
 SELECT MAX(h.hit_timestamp) AS LastHitUtc
 FROM dbo.hits AS h
-OPTION (RECOMPILE);";
+OPTION (RECOMPILE);" + Common.Entities.UserFilters.ReportScopeSql.TenantWideMarker;
 
         /// <summary>Whether searches and element clicks have ever been recorded.</summary>
         public const string OptionalFeatureCounts = @"
@@ -1529,6 +1552,8 @@ OPTION (RECOMPILE);";
                 Declare("loadCeiling", LoadBucketCeilingSeconds),
                 $"DECLARE @loadOverflowBucket int = {LoadOverflowBucket};",
             };
+
+            lines.AddRange(Common.Entities.UserFilters.ReportScopeSql.DescribeScope(query.UserScope, sql));
 
             return string.Join("\r\n", lines) + "\r\n" + sql;
         }

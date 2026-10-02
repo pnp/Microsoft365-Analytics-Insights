@@ -68,6 +68,9 @@
     <Compile Include="UserFilterCodecTests.cs" />
     <Compile Include="UserFilterCompilerTests.cs" />
     <Compile Include="UserFilterWebTests.cs" />
+    <Compile Include="GlobalFilterTests.cs" />
+    <Compile Include="GlobalFilterWebTests.cs" />
+    <Compile Include="GlobalFilterSqlTests.cs" />
     <Compile Include="SqlUserDirectoryLoaderTests.cs" />
     <Compile Include="CopilotAdoptionUserFilterScopeTests.cs" />
     <Compile Include="CopilotEventManagerAccessedResourcesTests.cs" />
@@ -348,6 +351,7 @@
     <Compile Include="CopilotAdoptionCoworkTests.cs" />
     <Compile Include="CopilotAdoptionEmailDomainTests.cs" />
     <Compile Include="CopilotAdoptionLicenceEstimateTests.cs" />
+    <Compile Include="CopilotAdoptionSeatTimeSavedTests.cs" />
     <Compile Include="CopilotAdoptionSqlIntegrationTests.cs" />
     <Compile Include="CopilotAdoptionSynchronizationContextTests.cs" />
     <Compile Include="CopilotAdoptionTelemetryTests.cs" />

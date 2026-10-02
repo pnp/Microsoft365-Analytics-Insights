@@ -100,8 +100,11 @@ namespace Tests.UnitTests
         // snapshot verbatim: none of those tables was ever exposed as a DbSet, so removing them does not
         // touch the entity model.
         // UserOrganisations then adds the configurable user-organisation tables, raw-SQL and additive.
+        // PortalGlobalFilter then adds dbo.portal_global_filters, the administrator's global report filter.
+        // It is raw-SQL, additive, and reuses the predecessor snapshot verbatim.
         // LicenceHistory then adds licence assignment-history, completed-refresh and per-refresh
-        // seat-count tables. It is raw-SQL, additive, and reuses the predecessor snapshot verbatim.
+        // seat-count tables. It is raw-SQL, additive, and reuses the predecessor snapshot verbatim. As the
+        // chain head its snapshot is the one EF compares the live entity model against.
         private const string LatestId = "202610021200001_LicenceHistory";
         private const string IndexName = "IX_urls_full_url";
 

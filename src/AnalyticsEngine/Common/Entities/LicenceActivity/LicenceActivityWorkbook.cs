@@ -8,7 +8,12 @@ namespace Common.Entities.LicenceActivity
 {
     public static class LicenceActivityWorkbook
     {
-        public static byte[] Build(LicenceActivityOverview overview, LicenceActivityUsers users = null)
+        /// <param name="peopleScopeDescription">
+        /// The administrator's global filter in plain English, written for the reader exporting - who may not be
+        /// allowed to see the sign-in names it contains, and may not be the reader whose request built the cached
+        /// overview. Ignored when the overview is not narrowed.
+        /// </param>
+        public static byte[] Build(LicenceActivityOverview overview, LicenceActivityUsers users = null, string peopleScopeDescription = null)
         {
             if (overview == null) throw new ArgumentNullException(nameof(overview));
             if (users != null && users.OverviewId != overview.SnapshotId)
@@ -24,6 +29,9 @@ namespace Common.Entities.LicenceActivity
                 report.AddRow("To (UTC)", overview.Query.To, "Last day included; the dates each source represents are on the \"Where the figures come from\" sheet.");
                 report.AddRow("Department filter", overview.Query.DepartmentId, "Blank = all departments; 0 = people with no department recorded.");
                 report.AddRow("Country filter", overview.Query.CountryId, "Blank = all countries; 0 = people with no country recorded.");
+                if (overview.Query.PeopleScopeKey != null)
+                    report.AddRow("Administrator's filter", XlsxCell.Wrapped(peopleScopeDescription ?? "Applied"),
+                        XlsxCell.Wrapped("Set by a portal administrator for everyone who views this report. Every figure here covers only the people it matches."));
                 report.AddRow("People holding a licence", overview.DistinctAssignedUsers, "Each person counted once across the selected population.");
                 report.AddRow("Department/country lists capped", overview.DemographicsTruncated, "TRUE means only the largest departments and countries are listed.");
                 report.AddRow("Who holds each licence", null, XlsxCell.Wrapped(LicenceActivityRules.AssignmentCaveat));

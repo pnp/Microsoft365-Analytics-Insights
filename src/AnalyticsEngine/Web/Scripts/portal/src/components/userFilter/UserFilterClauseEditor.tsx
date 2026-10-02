@@ -48,6 +48,16 @@ const SEARCH_DEBOUNCE_MS = 250;
  */
 const NOT_SET_OPTION = '\u0000not-set';
 
+/**
+ * The prefix of a "the viewer's own value" option, followed by the viewer attribute. Like the "(not set)"
+ * option it never leaves this component - it becomes the `viewerAttribute` handed to `onApply`.
+ */
+const VIEWER_OPTION_PREFIX = '\u0000viewer:';
+
+function isViewerOption(value: string): boolean {
+  return value.startsWith(VIEWER_OPTION_PREFIX);
+}
+
 const useStyles = makeStyles({
   card: {
     display: 'flex',
@@ -131,19 +141,37 @@ export function DimensionCue({ kind, className }: { kind: 'entra' | 'custom'; cl
   );
 }
 
+export interface UserFilterClauseViewerOptions {
+  /** The viewer's attributes a condition on `dimension` may compare with - none means none is offered. */
+  attributesFor: (dimension: string) => readonly string[];
+  /** What the option for comparing `dimension` with the viewer's `attribute` is called in the value list. */
+  label: (dimension: string, attribute: string) => string;
+  /** A line under the editor explaining the options for `dimension`, or null. */
+  hint?: (dimension: string) => string | null;
+  /** The viewer attribute the condition compares with when the editor opens, if any. */
+  initial: string | null;
+}
+
 export interface UserFilterClauseEditorProps {
   /** The condition being edited. A new one arrives with an empty dimension. */
   clause: UserFilterClause;
   dimensions: UserFilterDimension[];
   /** True when the condition is being added rather than changed - there is nothing to remove yet. */
   isNew: boolean;
-  onApply: (clause: UserFilterClause) => void;
+  /** `viewerAttribute` is only ever set when `viewer` is given. */
+  onApply: (clause: UserFilterClause, viewerAttribute: string | null) => void;
   onCancel: () => void;
   onRemove?: () => void;
   /** A reason the condition cannot be applied as it stands (the filter would be too long), or null. */
-  validate?: (clause: UserFilterClause) => string | null;
+  validate?: (clause: UserFilterClause, viewerAttribute: string | null) => string | null;
   /** Names echoed by the server, so a condition on a type that has since gone still has a label. */
   echoNames?: Record<string, string> | null;
+  /**
+   * Offered by the administrator's global filter editor only: the value the person viewing the report
+   * holds, as one of the values - "Department is the viewer's own department". A reader's own filter
+   * never offers it; it is themselves.
+   */
+  viewer?: UserFilterClauseViewerOptions;
 }
 
 /**
@@ -163,6 +191,7 @@ export default function UserFilterClauseEditor({
   onRemove,
   validate,
   echoNames,
+  viewer,
 }: UserFilterClauseEditorProps) {
   const styles = useStyles();
   const t = useT();
@@ -171,6 +200,7 @@ export default function UserFilterClauseEditor({
   const [operator, setOperator] = useState<UserFilterOperator>(clause.operator);
   const [values, setValues] = useState<string[]>(clause.values);
   const [includeNotSet, setIncludeNotSet] = useState(clause.includeNotSet);
+  const [viewerAttribute, setViewerAttribute] = useState<string | null>(viewer?.initial ?? null);
   const [query, setQuery] = useState('');
   const [options, setOptions] = useState<UserFilterValue[]>([]);
   const [truncated, setTruncated] = useState(false);
@@ -214,8 +244,12 @@ export default function UserFilterClauseEditor({
     // The management chain has no "(not set)" option: "has no manager" is the Manager attribute's.
     includeNotSet: isChain ? false : includeNotSet,
   };
-  const complete = dimension !== '' && clauseIsComplete(draft);
-  const problem = complete && validate ? validate(draft) : null;
+  // The viewer options offered for this property. Never for a text search: "contains the viewer's own
+  // department" is not a comparison anyone means, and the server refuses it.
+  const viewerOptions = viewer && dimension && !textMatch ? viewer.attributesFor(dimension) : [];
+  const draftViewer = viewerAttribute && viewerOptions.includes(viewerAttribute) ? viewerAttribute : null;
+  const complete = dimension !== '' && (clauseIsComplete(draft) || draftViewer !== null);
+  const problem = complete && validate ? validate(draft, draftViewer) : null;
 
   // The values of the chosen attribute, largest first. Refetched when the attribute changes, and when
   // a search is typed into a list too long to hold in the page.
@@ -277,6 +311,7 @@ export default function UserFilterClauseEditor({
     setDimension(key);
     setValues([]);
     setIncludeNotSet(false);
+    setViewerAttribute(null);
     setQuery('');
     setServerSearch('');
     setAttempted(false);
@@ -306,6 +341,7 @@ export default function UserFilterClauseEditor({
     if (isTextOperator(next) !== isTextOperator(operator)) {
       setValues([]);
       setIncludeNotSet(false);
+      setViewerAttribute(null);
     }
     setOperator(next);
   };
@@ -319,8 +355,12 @@ export default function UserFilterClauseEditor({
 
   const onPickerSelect = (_e: unknown, data: { value: string; selectedOptions: string[] }) => {
     const next = data.selectedOptions;
+    // One viewer value per condition: the one just picked replaces any other.
+    const viewers = next.filter(isViewerOption);
+    const pickedViewer = isViewerOption(data.value) && viewers.includes(data.value) ? data.value : viewers[viewers.length - 1];
+    setViewerAttribute(pickedViewer ? pickedViewer.slice(VIEWER_OPTION_PREFIX.length) : null);
     setIncludeNotSet(next.includes(NOT_SET_OPTION));
-    setValues(next.filter((v) => v !== NOT_SET_OPTION));
+    setValues(next.filter((v) => v !== NOT_SET_OPTION && !isViewerOption(v)));
     setQuery('');
   };
 
@@ -336,10 +376,17 @@ export default function UserFilterClauseEditor({
   const apply = () => {
     setAttempted(true);
     if (!complete || problem) return;
-    onApply(draft);
+    onApply(draft, draftViewer);
   };
 
-  const pickerSelection = includeNotSet ? [NOT_SET_OPTION, ...values] : values;
+  const viewerSelection = draftViewer ? [VIEWER_OPTION_PREFIX + draftViewer] : [];
+  const pickerSelection = [...viewerSelection, ...(includeNotSet ? [NOT_SET_OPTION] : []), ...values];
+  const viewerLabel = (option: string) => (viewer ? viewer.label(dimension, option.slice(VIEWER_OPTION_PREFIX.length)) : option);
+  const viewerHint = viewer?.hint && dimension && viewerOptions.length > 0 ? viewer.hint(dimension) : null;
+  const visibleViewerOptions = viewerOptions
+    .map((attribute) => VIEWER_OPTION_PREFIX + attribute)
+    .filter((option) => !viewerSelection.includes(option))
+    .filter((option) => query.trim() === '' || viewerLabel(option).toLowerCase().includes(query.trim().toLowerCase()));
   const countLabel = (people: number) =>
     isChain
       ? t(plural(people, 'userFilter.editor.below.one', 'userFilter.editor.below.other'), { count: formatNumber(people) })
@@ -421,12 +468,14 @@ export default function UserFilterClauseEditor({
             <TagPickerControl>
               <TagPickerGroup aria-label={textMatch ? t('userFilter.editor.terms') : t('userFilter.editor.values')}>
                 {pickerSelection.map((value) => (
-                  <Tag key={value} shape="rounded" value={value}>
-                    {value === NOT_SET_OPTION
-                      ? t('userFilter.editor.notSet')
-                      : textMatch
-                        ? t('userFilter.describe.quoted', { term: value })
-                        : valueLabel(t, dimension, value)}
+                  <Tag key={value} shape="rounded" value={value} icon={isViewerOption(value) ? <Person16Regular /> : undefined}>
+                    {isViewerOption(value)
+                      ? viewerLabel(value)
+                      : value === NOT_SET_OPTION
+                        ? t('userFilter.editor.notSet')
+                        : textMatch
+                          ? t('userFilter.describe.quoted', { term: value })
+                          : valueLabel(t, dimension, value)}
                   </Tag>
                 ))}
               </TagPickerGroup>
@@ -457,6 +506,14 @@ export default function UserFilterClauseEditor({
                 )
               ) : (
                 [
+                  ...visibleViewerOptions.map((option) => (
+                    <TagPickerOption key={option} value={option} text={viewerLabel(option)}>
+                      <span className={styles.optionContent}>
+                        <Person16Regular className={styles.cue} />
+                        {viewerLabel(option)}
+                      </span>
+                    </TagPickerOption>
+                  )),
                   !includeNotSet && !isChain && !isUserName && query.trim() === '' && (
                     <TagPickerOption
                       key={NOT_SET_OPTION}
@@ -478,7 +535,7 @@ export default function UserFilterClauseEditor({
                       </span>
                     </TagPickerOption>
                   )),
-                  visibleOptions.length === 0 && !loadingValues && (
+                  visibleOptions.length === 0 && visibleViewerOptions.length === 0 && !loadingValues && (
                     <span key="none" className={styles.listNote}>
                       {valuesError ?? t('userFilter.editor.noValues')}
                     </span>
@@ -501,6 +558,7 @@ export default function UserFilterClauseEditor({
       )}
       {isChain && <Text size={200} className={styles.hint}>{t('userFilter.editor.managementChainHint')}</Text>}
       {isUserName && <Text size={200} className={styles.hint}>{t('userFilter.editor.userNameHint')}</Text>}
+      {viewerHint && <Text size={200} className={styles.hint}>{viewerHint}</Text>}
       {unknownDimension && <Text size={200} className={styles.error}>{t('userFilter.editor.unknownDimension')}</Text>}
       {problem && <Text size={200} className={styles.error}>{problem}</Text>}
 

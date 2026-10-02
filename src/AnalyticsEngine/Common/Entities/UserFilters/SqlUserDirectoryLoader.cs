@@ -67,7 +67,8 @@ SELECT id, name FROM dbo.user_usage_locations;
 
 SELECT u.id, u.user_name, u.mail, u.account_enabled, u.manager_id,
        u.department_id, u.job_title_id, u.company_name_id, u.office_location_id,
-       u.country_or_region_id, u.state_or_province_id, u.usage_location_id
+       u.country_or_region_id, u.state_or_province_id, u.usage_location_id,
+       u.azure_ad_id
 FROM dbo.users u;
 
 IF OBJECT_ID(N'dbo.user_org_assignments', N'U') IS NOT NULL
@@ -208,6 +209,7 @@ END";
                     Country = Lookup(countries, reader, 9),
                     StateOrProvince = Lookup(states, reader, 10),
                     UsageLocation = Lookup(usageLocations, reader, 11),
+                    EntraObjectId = reader.IsDBNull(12) ? null : reader.GetString(12),
                 });
             }
 
