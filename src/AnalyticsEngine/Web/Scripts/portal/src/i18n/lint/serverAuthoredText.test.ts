@@ -30,6 +30,8 @@ import { ENABLED_IMPORT_LABELS_BY_SETTING_PROPERTY } from '../../pages/InsightsO
 import { OFFICE_PLATFORM_LABEL_KEYS } from '../../pages/ReportsPage';
 import { WORKLOADS } from '../../types/licenceActivity';
 import { PORTAL_PERMISSION_ERROR_CODE } from '../../access';
+import { GLOBAL_FILTER_ERROR_KEYS } from '../../api/globalFilterApi';
+import { REPORT_SCOPE_ERROR_KEYS } from '../../api/http';
 
 function sortedUnique(values: string[]): string[] {
   return [...new Set(values)].sort((a, b) => a.localeCompare(b));
@@ -117,6 +119,49 @@ describe('API error-code drift checks', () => {
     expect(PORTAL_PERMISSION_ERROR_CODE).toBe(csharpStringConstant(source, 'ErrorCode'));
     expect(EN_CATALOG['access.permissionRequired.administration']).toBe(csharpStringConstant(source, 'AdministrationMessage'));
     expect(EN_CATALOG['access.permissionRequired.seePii']).toBe(csharpStringConstant(source, 'SeePiiMessage'));
+  });
+});
+
+/**
+ * The administrator's global report filter answers with codes, never with text the portal shows: the
+ * editor's endpoints (`GlobalFilterAPIController`), and every report refused because the filter cannot
+ * be applied (`ReportScopeFailure`, recognised once in `apiFetch`). A code added on the server without a
+ * sentence here would reach a Spanish reader as "Request failed (503)" - or not at all.
+ */
+const GLOBAL_FILTER_CONTROLLER = join(process.cwd(), '..', '..', 'Controllers', 'GlobalFilterAPIController.cs');
+const REPORT_SCOPE_RESOLVER = join(process.cwd(), '..', '..', 'Models', 'UserFilters', 'ReportScopeResolver.cs');
+
+describe('Global filter error codes', () => {
+  it('words every code the editor’s endpoints can send, and nothing they cannot', () => {
+    const source = readFileSync(GLOBAL_FILTER_CONTROLLER, 'utf8');
+    const server = sortedUnique([...source.matchAll(/internal\s+const\s+string\s+\w+Code\s*=\s*"([^"]+)"/g)].map((m) => m[1]));
+
+    expect(server.length).toBeGreaterThanOrEqual(4);
+    expect(sortedUnique([...GLOBAL_FILTER_ERROR_KEYS.keys()])).toEqual(server);
+    expect([...GLOBAL_FILTER_ERROR_KEYS.values()].filter((key) => !(key in EN_CATALOG))).toEqual([]);
+  });
+
+  it('words every refusal a report can send when the filter cannot be applied', () => {
+    const source = readFileSync(REPORT_SCOPE_RESOLVER, 'utf8');
+    const failures = source.slice(source.indexOf('class ReportScopeFailure'));
+    const server = sortedUnique(
+      [...failures.matchAll(/internal\s+const\s+string\s+(?:FilterUnavailable|FilterInvalid|DirectoryUnavailable)\s*=\s*"([^"]+)"/g)].map(
+        (m) => m[1],
+      ),
+    );
+
+    expect(server).toHaveLength(3);
+    expect(sortedUnique([...REPORT_SCOPE_ERROR_KEYS.keys()])).toEqual(server);
+    expect([...REPORT_SCOPE_ERROR_KEYS.values()].filter((key) => !(key in EN_CATALOG))).toEqual([]);
+  });
+
+  it('sends a code with every error the editor’s endpoints answer', () => {
+    const source = readFileSync(GLOBAL_FILTER_CONTROLLER, 'utf8');
+    const errors = [...source.matchAll(/new ApiErrorModel\(/g)].length;
+    const coded = [...source.matchAll(/new ApiErrorModel\(\s*[^,]+,\s*(?:\w+Code|ReportScopeFailure\.\w+)\s*\)/g)].length;
+
+    expect(errors).toBeGreaterThanOrEqual(6);
+    expect(coded, 'an ApiErrorModel sent without a code').toBe(errors);
   });
 });
 
@@ -1772,7 +1817,6 @@ const SERVER_PLACEHOLDER_LITERAL = /(?:N?'|")(\([A-Za-z][A-Za-z \-]*\))(?:'|")/g
 
 /** Parenthesised literals in those files that never reach a page, and why. */
 const NOT_DISPLAYED_PLACEHOLDERS: Record<string, string> = {
-  '(all)': 'a cache-key fragment in ReportsAPIController, never returned',
   '(Any app)': 'the Office apps matrix ranking sentinel, filtered out before the rows are returned',
 };
 

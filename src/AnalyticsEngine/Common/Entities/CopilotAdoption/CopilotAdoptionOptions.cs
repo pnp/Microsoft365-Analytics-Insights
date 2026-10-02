@@ -492,6 +492,51 @@ namespace Common.Entities.CopilotAdoption
         [JsonProperty("coworkEstimateLowerBoundRatio")]
         public double CoworkEstimateLowerBoundRatio { get; set; } = 0.5;
 
+        /// <summary>
+        /// Minutes credited to one observed Outlook Copilot action by the seat-holder realised-value model.
+        /// </summary>
+        /// <remarks>
+        /// Microsoft Viva Insights' Copilot assisted-hours metric counts deliberate Copilot actions and
+        /// credits email drafting, rewriting and thread-summary actions with a fixed per-action value.
+        /// This model uses that published six-minute credit for Outlook actions seen in the audit log.
+        /// Source: https://learn.microsoft.com/en-us/viva/insights/advanced/reference/metrics and the
+        /// Copilot Dashboard assisted-hours details.
+        /// </remarks>
+        [JsonProperty("copilotSeatOutlookMinutesPerAction")]
+        public double CopilotSeatOutlookMinutesPerAction { get; set; } = 6;
+
+        /// <summary>
+        /// Minutes credited to one observed Word, PowerPoint or Excel Copilot action by the seat-holder
+        /// realised-value model.
+        /// </summary>
+        /// <remarks>
+        /// Microsoft publishes a fixed Copilot assisted-hours credit for document drafting, editing and
+        /// summarising actions. This product groups Word, PowerPoint and Excel app-host actions under that
+        /// document-work credit.
+        /// </remarks>
+        [JsonProperty("copilotSeatOfficeMinutesPerAction")]
+        public double CopilotSeatOfficeMinutesPerAction { get; set; } = 6;
+
+        /// <summary>
+        /// Minutes credited to one observed Teams meeting recap/summarise action when the imported audit
+        /// data cannot supply meeting duration.
+        /// </summary>
+        /// <remarks>
+        /// Microsoft's Copilot assisted-hours method credits the elapsed meeting duration for meeting
+        /// summarisation or recap actions. The audit data imported here links a Copilot action to a meeting
+        /// but does not reliably carry that duration, so this fixed 30-minute fallback is visible and
+        /// reader-overridable.
+        /// </remarks>
+        [JsonProperty("copilotSeatMeetingMinutesPerAction")]
+        public double CopilotSeatMeetingMinutesPerAction { get; set; } = 30;
+
+        /// <summary>
+        /// Minutes credited to Copilot Chat and other observed Copilot actions in the seat-holder realised
+        /// value model. Defaults to zero because Microsoft has not published a per-prompt credit for them.
+        /// </summary>
+        [JsonProperty("copilotSeatUncreditedMinutesPerAction")]
+        public double CopilotSeatUncreditedMinutesPerAction { get; set; } = 0;
+
         // ---- The work Cowork could take on ----
         //
         // Each kind of work Microsoft says Cowork does is matched to the count Microsoft's usage reports

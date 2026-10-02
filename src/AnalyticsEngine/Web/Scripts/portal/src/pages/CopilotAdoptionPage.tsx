@@ -9,6 +9,7 @@ import {
   Button,
   Card,
   Select,
+  Input,
   Tab,
   TabList,
   Tooltip,
@@ -79,9 +80,11 @@ import {
   compactHoursRange,
   projectCoworkTimeSaved,
   projectLicenceTimeSaved,
+  projectSeatHolderTimeSaved,
   timeSavedExportParams,
   useTimeSavedAssumptions,
   type TimeSavedAssumptions,
+  type TimeSavedAssumptionState,
 } from '../components/copilotAdoption/coworkTimeSaved';
 import {
   resolveTimeSavedCohort,
@@ -90,6 +93,8 @@ import {
 } from '../components/copilotAdoption/timeSavedCohort';
 import UserFilterBar from '../components/userFilter/UserFilterBar';
 import UserFilterPrintSummary from '../components/userFilter/UserFilterPrintSummary';
+import GlobalFilterBar from '../components/globalFilter/GlobalFilterBar';
+import { describeGlobalFilter } from '../components/globalFilter/describeGlobalFilter';
 import {
   describeClause,
   describeUserFilter,
@@ -634,16 +639,28 @@ function CopilotAdoptionView({
               : t('copilotAdoption.page.print.lastDays', { v0: windowDays })}
             {summary && <> {t('copilotAdoption.page.print.dateRange', { v0: formatDate(summary.fromUtc), v1: formatDate(summary.toUtc) })}</>}
             {' \u00b7 '}
-            {isEmptyFilter(userFilter) ? t('copilotAdoption.page.print.everyone') : t('copilotAdoption.page.print.filtered')}
+            {isEmptyFilter(userFilter) && !summary?.globalFilter
+              ? t('copilotAdoption.page.print.everyone')
+              : t('copilotAdoption.page.print.filtered')}
             {summary && <> · {t('copilotAdoption.page.print.generatedDate', { v0: formatDate(summary.generatedUtc) })}</>}
           </Text>
         </div>
       )}
 
+      {/* The administrator's conditions sit directly above the reader's own, so the two read as one
+          filter in two parts: the locked half and the half the reader controls. Shown to every reader:
+          it narrows their figures whether or not they may add a filter of their own. */}
+      <GlobalFilterBar />
+
       {availability?.available && canSeePii && (
         <>
           <UserFilterBar filter={userFilter} onChange={setUserFilter} echoNames={summary?.userFilter?.dimensionNames} />
-          <UserFilterPrintSummary filter={userFilter} echo={summary?.userFilter} dimensions={filterDimensions?.dimensions} />
+          <UserFilterPrintSummary
+            filter={userFilter}
+            echo={summary?.userFilter}
+            dimensions={filterDimensions?.dimensions}
+            withinGlobalFilter={!!summary?.globalFilter}
+          />
         </>
       )}
 
@@ -766,6 +783,8 @@ function CopilotAdoptionView({
 
               {tab === 'licensed' && (
                 canSeePii ? (
+                  <>
+                  <SeatHolderTimeSavedPanel summary={summary} timeSaved={timeSaved} />
                   <LicensedUsersPanel
                     key={`${drillAction ?? 'all'}::${userFilterScope}`}
                     windowDays={windowDays}
@@ -776,6 +795,7 @@ function CopilotAdoptionView({
                     initialAction={drillAction}
                     userFilter={userFilterParam}
                   />
+                  </>
                 ) : <PiiHiddenNote />
               )}
 
@@ -841,7 +861,7 @@ function CopilotAdoptionView({
 
 /** Whether a summary describes fewer people than the whole tenant. */
 function isNarrowed(summary: CopilotAdoptionSummary): boolean {
-  return !!summary.scopedEmailDomain || !!summary.userFilter;
+  return !!summary.scopedEmailDomain || !!summary.userFilter || !!summary.globalFilter;
 }
 
 /**
@@ -864,8 +884,18 @@ function FilterBanner({
   const t = useT();
   const tNode = useTNode();
   const echo = summary.userFilter;
+  const global = summary.globalFilter;
 
   const parts: string[] = [];
+  // The administrator's conditions first, and said to be theirs: the reader cannot clear them, so the
+  // banner must not make them look like part of the filter its "Clear filter" link removes.
+  if (global && global.clauses.length > 0) {
+    parts.push(
+      t('globalFilter.banner.setByAdmin', {
+        description: describeGlobalFilter(t, global.clauses, 'reader', { dimensions, names: global.dimensionNames }),
+      }),
+    );
+  }
   if (summary.scopedEmailDomain) {
     parts.push(
       describeClause(
@@ -900,12 +930,19 @@ function FilterBanner({
                   v0: describeUnscopedSections(t, summary.unscopedSections ?? []),
                 })}`
               : '',
-          unknown: (echo?.unknownDimensions?.length ?? 0) > 0 ? ` ${t('userFilter.print.unknown')}` : '',
-          link: (
-            <Link onClick={onClear} data-print="hide">
-              {t('copilotAdoption.page.filterBanner.clear')}
-            </Link>
-          ),
+          unknown:
+            (echo?.unknownDimensions?.length ?? 0) > 0 || (global?.unknownDimensions?.length ?? 0) > 0
+              ? ` ${t('userFilter.print.unknown')}`
+              : '',
+          // Only the reader's own narrowing can be cleared; the administrator's stays whatever they click.
+          link:
+            echo || summary.scopedEmailDomain ? (
+              <Link onClick={onClear} data-print="hide">
+                {t('copilotAdoption.page.filterBanner.clear')}
+              </Link>
+            ) : (
+              ''
+            ),
         })}
       </MessageBarBody>
     </MessageBar>
@@ -2429,6 +2466,82 @@ function MethodTab({ summary }: { summary: CopilotAdoptionSummary }) {
 }
 
 /** The Executive view keeps only the board-pack headlines; the Analyst view keeps the full KPI set. */
+function SeatHolderTimeSavedPanel({
+  summary,
+  timeSaved,
+}: {
+  summary: CopilotAdoptionSummary;
+  timeSaved: TimeSavedAssumptionState;
+}) {
+  const t = useT();
+  const estimate = summary.seatHolderTimeSavedEstimate;
+  const projection = projectSeatHolderTimeSaved(estimate, timeSaved.assumptions);
+  if (!estimate || !projection) return null;
+
+  const update = (key: 'seatOutlookMinutes' | 'seatOfficeMinutes' | 'seatMeetingMinutes' | 'seatUncreditedMinutes') =>
+    (_ev: unknown, data: { value: string }) => {
+      const parsed = Number(data.value);
+      if (Number.isFinite(parsed)) timeSaved.setAssumption(key, parsed);
+    };
+  const number = (value: number) => formatNumber(value, { maximumFractionDigits: 0 });
+  const minutes = (value: number) => formatNumber(value, { maximumFractionDigits: 2 });
+
+  return (
+    <Card style={{ marginBottom: 16 }}>
+      <Title3>{t('copilotAdoption.page.seatTime.title')}</Title3>
+      <Body1>{t('copilotAdoption.page.seatTime.description')}</Body1>
+      <KpiGrid
+        items={[
+          {
+            key: 'seatTimeHours',
+            label: t('copilotAdoption.page.seatTime.hours'),
+            value: t('copilotAdoption.page.kpi.hoursValue', { range: compactHoursRange(t, projection.hoursLow, projection.hoursHigh) }),
+            hint: t('copilotAdoption.page.seatTime.hoursHint', { users: formatCount(projection.cohortUsers) }),
+            modelledBadge: t('copilotAdoption.page.kpi.modelledBadge'),
+            info: { what: t('copilotAdoption.page.seatTime.description'), how: t('copilotAdoption.page.kpi.seatHolderTimeSaved.how'), formula: t('copilotAdoption.page.kpi.seatHolderTimeSaved.formula', { outlook: minutes(timeSaved.assumptions.seatOutlookMinutes), office: minutes(timeSaved.assumptions.seatOfficeMinutes), meeting: minutes(timeSaved.assumptions.seatMeetingMinutes), other: minutes(timeSaved.assumptions.seatUncreditedMinutes), percent: formatNumber(timeSaved.assumptions.conservativeRatio * 100, { maximumFractionDigits: 1 }) }), source: t('copilotAdoption.page.kpi.seatHolderTimeSaved.source') },
+          },
+          {
+            key: 'seatTimeExcluded',
+            label: t('copilotAdoption.page.seatTime.excluded'),
+            value: formatCount(projection.excludedUsageReportSourcedUsers),
+            hint: t('copilotAdoption.page.seatTime.excludedHint'),
+            info: { what: t('copilotAdoption.page.seatTime.excludedHint'), how: t('copilotAdoption.page.kpi.seatHolderTimeSaved.how'), formula: t('copilotAdoption.page.seatTime.excludedHint'), source: t('copilotAdoption.page.kpi.seatHolderTimeSaved.source') },
+          },
+        ]}
+      />
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12 }}>
+        <label>{t('copilotAdoption.page.seatTime.input.outlook')}<Input type="number" value={String(timeSaved.assumptions.seatOutlookMinutes)} onChange={update('seatOutlookMinutes')} /></label>
+        <label>{t('copilotAdoption.page.seatTime.input.office')}<Input type="number" value={String(timeSaved.assumptions.seatOfficeMinutes)} onChange={update('seatOfficeMinutes')} /></label>
+        <label>{t('copilotAdoption.page.seatTime.input.meeting')}<Input type="number" value={String(timeSaved.assumptions.seatMeetingMinutes)} onChange={update('seatMeetingMinutes')} /></label>
+        <label>{t('copilotAdoption.page.seatTime.input.other')}<Input type="number" value={String(timeSaved.assumptions.seatUncreditedMinutes)} onChange={update('seatUncreditedMinutes')} /></label>
+      </div>
+      <Text>{t('copilotAdoption.page.seatTime.zeroCreditNote')}</Text>
+      <Text>
+        {t('copilotAdoption.page.seatTime.counts', {
+          outlook: number(projection.outlookActions),
+          office: number(projection.officeActions),
+          meeting: number(projection.teamsMeetingActions),
+          other: number(projection.uncreditedActions),
+          outlookMinutes: minutes(timeSaved.assumptions.seatOutlookMinutes),
+          officeMinutes: minutes(timeSaved.assumptions.seatOfficeMinutes),
+          meetingMinutes: minutes(timeSaved.assumptions.seatMeetingMinutes),
+          otherMinutes: minutes(timeSaved.assumptions.seatUncreditedMinutes),
+        })}
+      </Text>
+      {estimate.byDepartment?.length > 0 && (
+        <table>
+          <thead><tr><th>{t('copilotAdoption.page.seatTime.department')}</th><th>{t('copilotAdoption.page.seatTime.hoursHigh')}</th><th>{t('copilotAdoption.page.seatTime.people')}</th></tr></thead>
+          <tbody>
+            {estimate.byDepartment.map((row) => (
+              <tr key={row.segment}><td>{row.segment}</td><td>{formatCount(row.hoursPerMonthHigh)}</td><td>{formatCount(row.cohortUsers)}</td></tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </Card>
+  );
+}
+
 function buildExecutiveKpis(
   summary: CopilotAdoptionSummary,
   t: TFunction,
@@ -2444,6 +2557,7 @@ function buildExecutiveKpis(
     'unlicensed',
     'candidates',
     'licenceTimeSaved',
+    'seatHolderTimeSaved',
     'coworkTimeSaved',
   ]);
   return buildKpis(summary, t, timeSaved, cohorts, onOpenTab).filter((item) => executiveKeys.has(item.key));
@@ -2523,6 +2637,34 @@ function buildTimeSavedKpis(
           percent,
         }),
         source: t('copilotAdoption.page.kpi.licenceTimeSaved.source'),
+      },
+    });
+  }
+
+  const seatTime = projectSeatHolderTimeSaved(summary.seatHolderTimeSavedEstimate, assumptions);
+  if (seatTime && seatTime.cohortUsers > 0) {
+    items.push({
+      key: 'seatHolderTimeSaved',
+      label: t('copilotAdoption.page.kpi.seatHolderTimeSaved.label'),
+      value: t('copilotAdoption.page.kpi.hoursValue', { range: compactHoursRange(t, seatTime.hoursLow, seatTime.hoursHigh) }),
+      hint: t(
+        plural(seatTime.cohortUsers, 'copilotAdoption.page.kpi.seatHolderTimeSaved.hint.one', 'copilotAdoption.page.kpi.seatHolderTimeSaved.hint.other'),
+        { users: formatCount(seatTime.cohortUsers) },
+      ),
+      tone: 'opportunity',
+      modelledBadge: t('copilotAdoption.page.kpi.modelledBadge'),
+      action: onOpenTab ? { label: t('copilotAdoption.page.kpi.seatHolderTimeSaved.open'), onClick: () => onOpenTab('licensed') } : undefined,
+      info: {
+        what: t('copilotAdoption.page.kpi.seatHolderTimeSaved.what'),
+        how: t('copilotAdoption.page.kpi.seatHolderTimeSaved.how'),
+        formula: t('copilotAdoption.page.kpi.seatHolderTimeSaved.formula', {
+          outlook: minutes(assumptions.seatOutlookMinutes),
+          office: minutes(assumptions.seatOfficeMinutes),
+          meeting: minutes(assumptions.seatMeetingMinutes),
+          other: minutes(assumptions.seatUncreditedMinutes),
+          percent,
+        }),
+        source: t('copilotAdoption.page.kpi.seatHolderTimeSaved.source'),
       },
     });
   }

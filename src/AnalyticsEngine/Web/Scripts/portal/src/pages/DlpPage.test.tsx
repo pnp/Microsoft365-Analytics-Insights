@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { screen, fireEvent } from '@testing-library/react';
 import { renderWithProvider } from '../test/renderWithProvider';
 import DlpPage from './DlpPage';
+import { GlobalFilterProvider } from '../components/globalFilter/GlobalFilterProvider';
 import type { DlpAvailability, DlpSummary } from '../types/dlp';
 
 const mockAvailability = vi.fn();
@@ -197,5 +198,26 @@ describe('DlpPage', () => {
 
     const agent = await screen.findByText('Contoso HR Agent');
     expect(agent.closest('button')).toBeNull();
+  });
+
+  it('stops calling the DLP.All section tenant-wide while an administrator’s filter narrows it', async () => {
+    const { unmount } = renderWithProvider(<DlpPage />);
+    expect(await screen.findByText('Tenant-wide DLP activity')).toBeInTheDocument();
+    expect(screen.getByText('Policies (tenant-wide)')).toBeInTheDocument();
+    unmount();
+
+    renderWithProvider(
+      <GlobalFilterProvider
+        value={{
+          effective: { active: true, applied: true, bypassed: false, canBypass: false, revision: 1, filter: null, invalid: false },
+        }}
+      >
+        <DlpPage />
+      </GlobalFilterProvider>,
+    );
+    expect(await screen.findByText('DLP activity across all workloads')).toBeInTheDocument();
+    expect(screen.getByText('Policies (all workloads)')).toBeInTheDocument();
+    expect(screen.queryByText('Tenant-wide DLP activity')).not.toBeInTheDocument();
+    expect(screen.queryByText('Policies (tenant-wide)')).not.toBeInTheDocument();
   });
 });

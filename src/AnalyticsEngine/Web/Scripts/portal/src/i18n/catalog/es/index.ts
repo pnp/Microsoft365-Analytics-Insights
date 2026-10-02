@@ -20,6 +20,7 @@ import health from './health';
 import admin from './admin';
 import userOrgs from './userOrgs';
 import userFilter from './userFilter';
+import globalFilter from './globalFilter';
 import access from './access';
 
 /**
@@ -59,6 +60,7 @@ export const ES_MODULES = {
   admin,
   userOrgs,
   userFilter,
+  globalFilter,
   access,
 } as const;
 

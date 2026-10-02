@@ -1134,7 +1134,7 @@ namespace Tests.UnitTests
                 Assert.AreEqual(0.1d, parsed.CoworkShares[CoworkActivities.CreateDocuments]);
                 Assert.IsFalse(parsed.CoworkShares.ContainsKey(CoworkActivities.PrepareMeetings));
 
-                Assert.IsFalse(CopilotAdoptionAPIController.ParseTimeSavedOverrides(null, " ", null, null, null).Any,
+                Assert.IsFalse(CopilotAdoptionAPIController.ParseTimeSavedOverrides(null, " ", null, null).Any,
                     "An export with no figures of the reader's own must use the product defaults untouched.");
 
                 // #692 removed the per-task minutes. A link saved before then still carries them; they are

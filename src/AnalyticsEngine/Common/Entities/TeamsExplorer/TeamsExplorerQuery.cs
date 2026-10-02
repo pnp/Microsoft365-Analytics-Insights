@@ -1,3 +1,4 @@
+using Common.Entities.UserFilters;
 using System;
 using System.Globalization;
 using System.Linq;
@@ -89,6 +90,20 @@ namespace Common.Entities.TeamsExplorer
         /// <summary>Rows to return from a ranked table.</summary>
         public int Top { get; private set; }
 
+        /// <summary>
+        /// The people the report may describe - the administrator's global filter, resolved for the reader.
+        /// <see cref="ReportUserScope.Everyone"/> when no filter applies.
+        /// </summary>
+        public ReportUserScope UserScope { get; private set; } = ReportUserScope.Everyone;
+
+        /// <summary>This window, narrowed to <paramref name="scope"/>. Null is everyone.</summary>
+        public TeamsExplorerQuery WithUserScope(ReportUserScope scope)
+        {
+            var copy = (TeamsExplorerQuery)MemberwiseClone();
+            copy.UserScope = scope ?? ReportUserScope.Everyone;
+            return copy;
+        }
+
         /// <summary>Inclusive last UTC date of the live-data window, for display.</summary>
         public DateTime ToInclusiveUtc => ToExclusiveUtc.AddDays(-1);
 
@@ -168,11 +183,12 @@ namespace Common.Entities.TeamsExplorer
         /// <summary>
         /// Cache key for one section of the page. Includes the UTC date rather than the full
         /// timestamp, so a cached entry is reused across a day but can never be served after the
-        /// window has rolled over to a new day.
+        /// window has rolled over to a new day - and, when the report is narrowed, the scope, so two
+        /// readers the global filter treats differently never share an entry.
         /// </summary>
         public string CacheKey(string section)
         {
-            return string.Format(
+            var key = string.Format(
                 CultureInfo.InvariantCulture,
                 "TeamsExplorer::{0}::days={1}::group={2}::top={3}::asof={4:yyyy-MM-dd}",
                 section ?? string.Empty,
@@ -180,6 +196,8 @@ namespace Common.Entities.TeamsExplorer
                 GroupBy,
                 Top,
                 NowUtc.Date);
+
+            return key + "::scope=" + (UserScope.IsRestricted ? UserScope.Key : "all");
         }
     }
 }

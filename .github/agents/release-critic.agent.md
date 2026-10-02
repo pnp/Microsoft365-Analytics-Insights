@@ -132,11 +132,27 @@ Defects hide in the gap between two things that must agree. Whenever you change 
 | **Any English text in the portal** | **its translation in `src/i18n/catalog/es/` — and whether the key is still used** |
 | A JSON property name | the TypeScript type and every saved export |
 | A doc comment asserting an invariant | whether the invariant still holds |
+| **A new external call** (a Graph function, entity or property, or any REST endpoint) | **the evidence, cited in its PR, that the name exists**: Graph's `v1.0` or `beta` `$metadata`, or an official Microsoft Learn API reference page |
 
 In the source session: a terminology pass rewrote quoted string literals but not JSX text, leaving a
 column header whose Excel twin already used the new word; and a migration split left its manual script
 still building — and requiring — indexes it no longer owned, which re-coupled exactly what the split
 had separated.
+
+**For every new external call in the release diff, confirm its PR cites evidence that it exists.**
+#588 shipped an import for a Graph function that does not exist, and every test passed because the
+tests used synthetic fixtures. #632 then hid Graph's rejection of it, and two stable releases described
+fixes that no tenant could have seen (#692). Apply the same three checks as `release-manager`'s *Verify
+every new external call exists*:
+
+- **The name is in Graph's `$metadata` or on a Microsoft Learn API reference page.** A report
+  documented in an admin centre is not an API, and a test built on synthetic fixtures cannot prove an
+  endpoint exists. A name that isn't there is a blocker.
+- **Nothing classifies Graph's `400 BadRequest` "Resource not found for the segment '<name>'" as "not
+  available on this tenant", "not licensed" or "not rolled out".** That error means our URL is wrong,
+  so it must fail loudly.
+- **The release notes describe only symptoms that were observed or reproduced.** A fix known only from
+  code reading or tests must say so, and must not promise admins that data will appear.
 
 **Reword an English string and you have silently invalidated its Spanish.** Nothing catches it: the
 key still exists in both languages, so `tsc` is happy and the untranslated-text gate is happy — the

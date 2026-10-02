@@ -74,7 +74,27 @@ namespace Common.Entities.UserFilters
         /// <exception cref="UserFilterFormatException">The text is not a valid filter.</exception>
         public static UserFilterExpression Parse(string encoded)
         {
-            if (string.IsNullOrWhiteSpace(encoded)) return UserFilterExpression.Empty;
+            var array = ReadClauseArray(encoded);
+            if (array == null) return UserFilterExpression.Empty;
+
+            var clauses = new List<UserFilterClause>(array.Count);
+            for (var i = 0; i < array.Count; i++)
+            {
+                clauses.Add(ParseClause(array[i], i + 1));
+            }
+
+            CheckTextTerms(clauses);
+            return new UserFilterExpression(clauses);
+        }
+
+        /// <summary>
+        /// Reads the outer array of a filter's wire form, enforcing the length, depth and clause-count
+        /// limits. <c>null</c> for a blank or JSON-null filter. Shared with <see cref="GlobalFilterCodec"/>,
+        /// whose conditions are the same clauses with one extra property.
+        /// </summary>
+        internal static JArray ReadClauseArray(string encoded)
+        {
+            if (string.IsNullOrWhiteSpace(encoded)) return null;
 
             if (encoded.Length > MaxEncodedLength)
             {
@@ -93,6 +113,16 @@ namespace Common.Entities.UserFilters
                     reader.DateParseHandling = DateParseHandling.None;
                     reader.MaxDepth = 8;
                     root = JToken.ReadFrom(reader);
+
+                    // One document and nothing after it: "[][...]" is not the empty filter its first array is.
+                    // Newtonsoft throws on further content; a trailing comment is all that can still be read.
+                    while (reader.Read())
+                    {
+                        if (reader.TokenType != JsonToken.Comment)
+                        {
+                            throw new UserFilterFormatException("The filter must be a single JSON array of clauses.");
+                        }
+                    }
                 }
             }
             catch (JsonException ex)
@@ -100,7 +130,7 @@ namespace Common.Entities.UserFilters
                 throw new UserFilterFormatException("The filter is not valid JSON: " + ex.Message);
             }
 
-            if (root.Type == JTokenType.Null) return UserFilterExpression.Empty;
+            if (root.Type == JTokenType.Null) return null;
 
             if (!(root is JArray array))
             {
@@ -113,20 +143,18 @@ namespace Common.Entities.UserFilters
                     $"The filter has {array.Count} conditions; the limit is {MaxClauses}.");
             }
 
-            var clauses = new List<UserFilterClause>(array.Count);
-            for (var i = 0; i < array.Count; i++)
-            {
-                clauses.Add(ParseClause(array[i], i + 1));
-            }
+            return array;
+        }
 
+        /// <summary>Refuses a filter that looks for more pieces of text, in all, than <see cref="MaxTextTerms"/>.</summary>
+        internal static void CheckTextTerms(IEnumerable<UserFilterClause> clauses)
+        {
             var textTerms = clauses.Where(c => c.IsTextMatch).Sum(c => c.Values.Count);
             if (textTerms > MaxTextTerms)
             {
                 throw new UserFilterFormatException(
                     $"The filter looks for {textTerms:N0} pieces of text in all; the limit is {MaxTextTerms:N0}.");
             }
-
-            return new UserFilterExpression(clauses);
         }
 
         /// <summary>Writes a filter in its wire form, or <c>null</c> for an empty one.</summary>
@@ -170,7 +198,11 @@ namespace Common.Entities.UserFilters
             return join == UserFilterJoin.Or ? "or" : "and";
         }
 
-        private static UserFilterClause ParseClause(JToken token, int number)
+        /// <param name="allowNoValues">
+        /// True for a global-filter condition whose values come from the person viewing the report, which
+        /// legitimately names no values of its own.
+        /// </param>
+        internal static UserFilterClause ParseClause(JToken token, int number, bool allowNoValues = false)
         {
             if (!(token is JObject item))
             {
@@ -213,7 +245,7 @@ namespace Common.Entities.UserFilters
                 includeNotSet = true;
             }
 
-            if (values.Count == 0 && !includeNotSet)
+            if (values.Count == 0 && !includeNotSet && !allowNoValues)
             {
                 throw new UserFilterFormatException($"Condition {number} has no values to compare with.");
             }

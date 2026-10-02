@@ -1,4 +1,4 @@
-// Mirrors Common/Entities/CopilotAdoption/CopilotAdoptionModels.cs (returned by api/CopilotAdoption).
+﻿// Mirrors Common/Entities/CopilotAdoption/CopilotAdoptionModels.cs (returned by api/CopilotAdoption).
 //
 // The chart shapes (AdoptionSeries / AdoptionCategory) are deliberately identical to the Reports
 // area's ReportSeries / ReportCategory so the existing TimeSeriesChart and CategoryBarChart
@@ -6,6 +6,7 @@
 
 import type { ReportCategory, ReportSeries } from './reports';
 import type { UserFilterEcho } from './userFilter';
+import type { GlobalFilterEcho } from './globalFilter';
 
 /** Which parts of the adoption tool this deployment can show. */
 export interface CopilotAdoptionAvailability {
@@ -180,6 +181,10 @@ export interface CopilotAdoptionOptions {
   copilotMinutesSavedPerDocument: number;
   /** The conservative share of every minutes-saved assumption. Shared by both estimates. */
   coworkEstimateLowerBoundRatio: number;
+  copilotSeatOutlookMinutesPerAction?: number;
+  copilotSeatOfficeMinutesPerAction?: number;
+  copilotSeatMeetingMinutesPerAction?: number;
+  copilotSeatUncreditedMinutesPerAction?: number;
   /**
    * For each kind of work Cowork could take on (`CoworkActivity`), the share of it handed to Cowork
    * (0 to 1) and the minutes Cowork saves on each piece, on top of Copilot. Assumptions, all of them -
@@ -452,6 +457,7 @@ export interface CopilotAdoptionSummary {
    * still type-check; the server always sends it.
    */
   licenceAllCandidatesEstimate?: LicenceValueEstimate;
+  seatHolderTimeSavedEstimate?: SeatHolderTimeSavedEstimate;
 
   funnel: ReportCategory[];
   bandBreakdown: ReportCategory[];
@@ -486,6 +492,11 @@ export interface CopilotAdoptionSummary {
    * predates the filter still type-checks.
    */
   userFilter?: UserFilterEcho | null;
+  /**
+   * The administrator's global report filter as it applied to this reader - echoed apart from their own
+   * filter, so the page shows it locked. Null/absent when none applied.
+   */
+  globalFilter?: GlobalFilterEcho | null;
   /** The tenant-wide Copilot seat count, sent only when the summary is narrowed. */
   unscopedLicensedUsers?: number | null;
   accountabilityDimension: string | null;
@@ -794,6 +805,41 @@ export interface CoworkActivityVolume {
  * recomputes the hours from the published inputs whenever the reader enters their own assumptions -
  * see `components/copilotAdoption/coworkTimeSaved.ts`.
  */
+export interface SeatHolderTimeSavedCredits {
+  outlookMinutesPerAction: number;
+  officeMinutesPerAction: number;
+  teamsMeetingMinutesPerAction: number;
+  uncreditedMinutesPerAction: number;
+  lowerBoundRatio: number;
+}
+
+export interface SeatHolderTimeSavedSegment {
+  segment: string;
+  cohortUsers: number;
+  observedOutlookActions: number;
+  observedOfficeActions: number;
+  observedTeamsMeetingActions: number;
+  observedUncreditedActions: number;
+  hoursPerMonthLow: number;
+  hoursPerMonthHigh: number;
+}
+
+export interface SeatHolderTimeSavedEstimate {
+  isModelled: boolean;
+  cohortUsers: number;
+  excludedUsageReportSourcedUsers: number;
+  observedOutlookActions: number;
+  observedOfficeActions: number;
+  observedTeamsMeetingActions: number;
+  observedUncreditedActions: number;
+  credits: SeatHolderTimeSavedCredits;
+  hoursPerMonthLow: number;
+  hoursPerMonthHigh: number;
+  assumptions: string[];
+  byBand: SeatHolderTimeSavedSegment[];
+  byDepartment: SeatHolderTimeSavedSegment[];
+}
+
 export interface CoworkValueEstimate {
   isModelled: boolean;
   cohortUsers: number;

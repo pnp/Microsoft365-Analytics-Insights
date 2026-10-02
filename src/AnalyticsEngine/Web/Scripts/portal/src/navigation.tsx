@@ -5,6 +5,7 @@ import {
   DataTrending20Regular,
   DataUsage20Regular,
   DocumentBulletList20Regular,
+  Filter20Regular,
   Globe20Regular,
   Home20Regular,
   Money20Regular,
@@ -38,6 +39,7 @@ const UserLookupPage = lazyWithReload(() => import('./pages/UserLookupPage'));
 const UserOrgsPage = lazyWithReload(() => import('./pages/UserOrgsPage'));
 const UserImportPage = lazyWithReload(() => import('./pages/UserImportPage'));
 const UserScopePage = lazyWithReload(() => import('./pages/UserScopePage'));
+const GlobalFilterPage = lazyWithReload(() => import('./pages/GlobalFilterPage'));
 const ProfilingStatusPage = lazyWithReload(() => import('./pages/ProfilingStatusPage'));
 const InstallLogPage = lazyWithReload(() => import('./pages/InstallLogPage'));
 const HealthPage = lazyWithReload(() => import('./pages/HealthPage'));
@@ -217,6 +219,16 @@ export const ROUTES: PortalRoute[] = [
     groupKey: 'app.navGroup.manage',
     icon: <PeopleAudience20Regular />,
     element: <UserScopePage />,
+  },
+  {
+    area: 'admin',
+    path: '/admin/global-filter',
+    labelKey: 'app.route.globalFilter',
+    groupKey: 'app.navGroup.manage',
+    icon: <Filter20Regular />,
+    element: <GlobalFilterPage />,
+    // Its value picker lists people, and a filter can narrow every report to one of them (#680).
+    requires: 'seePii',
   },
   {
     area: 'admin',

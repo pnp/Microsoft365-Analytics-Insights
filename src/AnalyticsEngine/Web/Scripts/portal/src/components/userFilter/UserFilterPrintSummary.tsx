@@ -33,10 +33,17 @@ export default function UserFilterPrintSummary({
   filter,
   echo,
   dimensions,
+  withinGlobalFilter = false,
 }: {
   filter: UserFilter;
   echo?: UserFilterEcho | null;
   dimensions?: UserFilterDimension[] | null;
+  /**
+   * True when an administrator's global filter also narrows the report. With no filter of the reader's
+   * own, "everyone" then means everyone that filter allows - which the global filter's own printed block
+   * spells out above this one.
+   */
+  withinGlobalFilter?: boolean;
 }) {
   const styles = useStyles();
   const t = useT();
@@ -51,7 +58,11 @@ export default function UserFilterPrintSummary({
         {t('userFilter.print.heading')}
       </Text>
 
-      {groups.length === 0 && <Text size={300} block>{t('userFilter.print.everyone')}</Text>}
+      {groups.length === 0 && (
+        <Text size={300} block>
+          {withinGlobalFilter ? t('userFilter.print.everyoneWithinGlobal') : t('userFilter.print.everyone')}
+        </Text>
+      )}
 
       {groups.length === 1 && groups[0].length === 1 && (
         <Text size={300} block>{t('userFilter.print.single', { condition: groups[0][0] })}</Text>

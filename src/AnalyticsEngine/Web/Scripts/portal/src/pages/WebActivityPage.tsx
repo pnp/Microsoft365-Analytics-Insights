@@ -24,6 +24,7 @@ import JourneysPanel from '../components/webActivity/JourneysPanel';
 import GeographyPanel from '../components/webActivity/GeographyPanel';
 import SearchPanel from '../components/webActivity/SearchPanel';
 import TechnologyPanel from '../components/webActivity/TechnologyPanel';
+import GlobalFilterBar from '../components/globalFilter/GlobalFilterBar';
 import {
   downloadWebActivityExport,
   fetchWebActivityAvailability,
@@ -309,6 +310,8 @@ export default function WebActivityPage() {
           </Button>
         </div>
       </div>
+
+      <GlobalFilterBar />
 
       {availabilityError && (
         <MessageBar intent="error" style={{ marginTop: '12px' }}>
