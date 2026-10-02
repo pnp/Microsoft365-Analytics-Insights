@@ -51,8 +51,6 @@ function cowork(overrides: Partial<CoworkReadinessRow>): CoworkReadinessRow {
     rationale: 'server fallback',
     coworkInteractions: 0,
     coworkActiveDays: 0,
-    coworkReportTotalTasks: null,
-    coworkReportActiveDays: null,
     fluencyScore: 70,
     coordinationLoadScore: 80,
     teamsMeetings: 0,
@@ -107,17 +105,18 @@ describe('Copilot Adoption server-authored text reproduction', () => {
     expect(coworkTierLabel(tEs, 'futureTier', 'Future tier')).toBe('Future tier');
   });
 
-  it('reproduces the report-only Cowork rationale without turning a missing task count into zero', () => {
+  it('reproduces the Cowork rationale from the Copilot audit log, as interactions and never as tasks', () => {
     setActiveLanguage('es');
     const text = coworkRationaleText(
       tEs,
-      cowork({ tier: 'established', coworkReportActiveDays: 10, coworkReportTotalTasks: null }),
+      cowork({ tier: 'established', coworkInteractions: 12, coworkActiveDays: 10 }),
       OPTIONS,
     );
 
-    expect(text).toBe('Ya consolidado: activo durante 10 días en el informe de uso de Cowork de Microsoft. Manténgalo en el ámbito.');
-    expect(text).not.toMatch(/\b0\s+tareas?\b/i);
-    expect(text).not.toContain('tareas de Cowork');
+    expect(text).toBe('Ya consolidado: el registro de auditoría de Copilot muestra 12 interacciones de Cowork en 10 días. Manténgalo en el ámbito.');
+    // Cowork use is audit-only (#692): no task count, and no claim of a Cowork usage report.
+    expect(text).not.toMatch(/\btareas?\b/i);
+    expect(text).not.toMatch(/informe de uso de Cowork/i);
   });
 
   it('reproduces the no-workload Cowork rationale as unknown activity, not zero work', () => {
@@ -261,9 +260,6 @@ describe('Copilot Adoption server-authored text reproduction', () => {
       { key: COPILOT_ADOPTION_WARNING_KEYS.CouldNotLoad, values: { query: 'CoworkReadiness' } },
       { key: COPILOT_ADOPTION_WARNING_KEYS.CouldNotLoad, values: { query: 'CoworkAgentLookup' } },
       { key: COPILOT_ADOPTION_WARNING_KEYS.CouldNotLoad, values: { query: 'CoworkUserCredits' } },
-      // The usage-report probes: when they fail the tab would otherwise show only "report not available".
-      { key: COPILOT_ADOPTION_WARNING_KEYS.CouldNotLoad, values: { query: 'CoworkReportDate' } },
-      { key: COPILOT_ADOPTION_WARNING_KEYS.CouldNotLoad, values: { query: 'CoworkReportPeriod' } },
       { key: COPILOT_ADOPTION_WARNING_KEYS.CouldNotLoad, values: { query: 'CopilotReportDate' } },
       { key: COPILOT_ADOPTION_WARNING_KEYS.CouldNotLoad, values: { query: 'LicenceOpportunities' } },
       { key: COPILOT_ADOPTION_WARNING_KEYS.LicenceCandidatesAuditOnly },
@@ -274,8 +270,6 @@ describe('Copilot Adoption server-authored text reproduction', () => {
       'couldNotLoad:CoworkReadiness',
       'couldNotLoad:CoworkAgentLookup',
       'couldNotLoad:CoworkUserCredits',
-      'couldNotLoad:CoworkReportDate',
-      'couldNotLoad:CoworkReportPeriod',
     ]);
   });
 
@@ -288,7 +282,7 @@ describe('Copilot Adoption server-authored text reproduction', () => {
       { key: COPILOT_ADOPTION_WARNING_KEYS.CouldNotLoad, values: { query: 'LicenceOpportunities' } },
       { key: COPILOT_ADOPTION_WARNING_KEYS.CoworkReadinessNoSources },
       { key: COPILOT_ADOPTION_WARNING_KEYS.CoworkM365UsageMissing },
-      { key: COPILOT_ADOPTION_WARNING_KEYS.CoworkUsageReportMissing },
+      { key: COPILOT_ADOPTION_WARNING_KEYS.CoworkAuditMissing },
       { key: COPILOT_ADOPTION_WARNING_KEYS.UsageReportSourcedUsers },
       { key: COPILOT_ADOPTION_WARNING_KEYS.CoworkFluencyMissingAll },
       { key: COPILOT_ADOPTION_WARNING_KEYS.CouldNotLoad, values: { query: 'CoworkReadiness' } },

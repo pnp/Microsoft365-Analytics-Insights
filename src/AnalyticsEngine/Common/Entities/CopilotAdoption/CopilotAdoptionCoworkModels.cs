@@ -55,13 +55,6 @@ namespace Common.Entities.CopilotAdoption
         /// <summary>Most recent Cowork interaction inside the window.</summary>
         public DateTime? LastCoworkInteractionUtc { get; set; }
 
-        public int? CoworkReportTotalTasks { get; set; }
-        public int? CoworkReportScheduledTasks { get; set; }
-        public int? CoworkReportUserInitiatedTasks { get; set; }
-        public int? CoworkReportActiveDays { get; set; }
-        public DateTime? CoworkReportLastActivityDate { get; set; }
-        public bool? CoworkReportRetainedUser { get; set; }
-
         #endregion
 
         #region Microsoft 365 coordination load (per active day)
@@ -183,7 +176,11 @@ namespace Common.Entities.CopilotAdoption
         [JsonProperty("accountEnabled")]
         public bool? AccountEnabled { get; set; }
 
-        #region Cowork usage today
+        #region Cowork use (interactions, from the Copilot audit log)
+
+        // Interactions, not tasks. The Copilot audit log records Cowork interactions; Microsoft's own unit,
+        // the Cowork task, is only in the Microsoft 365 admin centre (Copilot > Cowork > Usage), which has no
+        // Graph API and is not imported (#692). The two are different units and are never compared.
 
         [JsonProperty("coworkInteractions")]
         public long CoworkInteractions { get; set; }
@@ -194,30 +191,7 @@ namespace Common.Entities.CopilotAdoption
         [JsonProperty("lastCoworkInteractionUtc")]
         public DateTime? LastCoworkInteractionUtc { get; set; }
 
-        [JsonProperty("coworkReportTotalTasks")]
-        public int? CoworkReportTotalTasks { get; set; }
-
-        [JsonProperty("coworkReportScheduledTasks")]
-        public int? CoworkReportScheduledTasks { get; set; }
-
-        [JsonProperty("coworkReportUserInitiatedTasks")]
-        public int? CoworkReportUserInitiatedTasks { get; set; }
-
-        [JsonProperty("coworkReportActiveDays")]
-        public int? CoworkReportActiveDays { get; set; }
-
-        [JsonProperty("coworkReportLastActivityDate")]
-        public DateTime? CoworkReportLastActivityDate { get; set; }
-
-        [JsonProperty("coworkReportRetainedUser")]
-        public bool? CoworkReportRetainedUser { get; set; }
-
-        [JsonProperty("coworkAutomationRatioPct")]
-        public double? CoworkAutomationRatioPct { get; set; }
-
-        [JsonProperty("coworkCreditsPerTask")]
-        public decimal? CoworkCreditsPerTask { get; set; }
-
+        /// <summary>True when the Copilot audit log shows at least one Cowork interaction in the window.</summary>
         [JsonProperty("usedCowork")]
         public bool UsedCowork { get; set; }
 
@@ -404,21 +378,6 @@ namespace Common.Entities.CopilotAdoption
         [JsonProperty("regularCoworkUsers")]
         public int RegularCoworkUsers { get; set; }
 
-        [JsonProperty("coworkReportTotalTasks")]
-        public int CoworkReportTotalTasks { get; set; }
-
-        [JsonProperty("coworkReportScheduledTasks")]
-        public int CoworkReportScheduledTasks { get; set; }
-
-        [JsonProperty("coworkAutomationRatioPct")]
-        public double? CoworkAutomationRatioPct { get; set; }
-
-        [JsonProperty("coworkReportRetainedUsers")]
-        public int? CoworkReportRetainedUsers { get; set; }
-
-        [JsonProperty("coworkReportRetentionPct")]
-        public double? CoworkReportRetentionPct { get; set; }
-
         [JsonProperty("coworkAdoptionPct")]
         public double CoworkAdoptionPct { get; set; }
 
@@ -499,20 +458,24 @@ namespace Common.Entities.CopilotAdoption
     /// (<see cref="CopilotAdoptionSummary.CoworkFullRolloutEstimate"/>).
     ///
     /// <b>Every hour here is derived from an assumption and none of it is measured.</b> The observed
-    /// inputs - the Cowork tasks already in Microsoft's report (<see cref="ObservedCoworkTasks"/>) and
-    /// the work everyone else already does by hand (<see cref="Activities"/>) - are real; the share of
+    /// input - the work the cohort already does by hand (<see cref="Activities"/>) - is real; the share of
     /// that work handed to Cowork and the minutes saved on it are not. <see cref="Assumptions"/>
     /// travels with the numbers so no surface can render a figure without the assumption that produced
     /// it, and <see cref="IsModelled"/> exists so a consumer cannot mistake this for evidence.
     /// </summary>
     /// <remarks>
-    /// <para><b>Where the time would come from, person by person.</b> The people already running
-    /// Cowork tasks are counted at their actual tasks. Everyone else is modelled from what Microsoft's
-    /// usage reports say they already do - the meetings they organise and attend, the emails they send,
-    /// their Teams messages, the files they work on - each kind of work times the share of it they are
-    /// assumed to hand to Cowork and the minutes Cowork saves on each piece (<see cref="CoworkActivities"/>).
-    /// A flat tasks-a-person projection could not say where the time was, and modelled the busiest and
-    /// the quietest person alike.</para>
+    /// <para><b>Where the time would come from, person by person.</b> Everyone in the cohort is modelled
+    /// from what Microsoft's usage reports say they already do - the meetings they organise and attend,
+    /// the emails they send, their Teams messages, the files they work on - each kind of work times the
+    /// share of it they are assumed to hand to Cowork and the minutes Cowork saves on each piece
+    /// (<see cref="CoworkActivities"/>). A flat tasks-a-person projection could not say where the time
+    /// was, and modelled the busiest and the quietest person alike.</para>
+    ///
+    /// <para><b>People already using Cowork are modelled like everyone else.</b> The Copilot audit log
+    /// records their Cowork interactions, and an interaction is not a unit of work the model can count,
+    /// so the estimate is the potential at full use, not the gain over today. Before #692 people with
+    /// Cowork tasks in a Graph Cowork usage report were counted at those tasks instead, but that report
+    /// does not exist in Graph and was never imported, so every tenant was already modelled this way.</para>
     ///
     /// <para><b>Cowork only, on purpose.</b> This is the figure a tenant uses to justify Copilot
     /// Credits: the value of enabling Cowork for people who already hold a Copilot licence. It used to
@@ -535,33 +498,10 @@ namespace Common.Entities.CopilotAdoption
         [JsonProperty("cohortUsers")]
         public int CohortUsers { get; set; }
 
-        #region Cowork tasks already running (observed)
-
-        /// <summary>
-        /// People in the cohort with Cowork tasks in Microsoft's Cowork usage report. Observed.
-        /// </summary>
-        [JsonProperty("coworkTaskUsers")]
-        public int CoworkTaskUsers { get; set; }
-
-        /// <summary>
-        /// Their Cowork tasks, restated from the report's period as a month. Observed, not modelled.
-        /// </summary>
-        [JsonProperty("observedCoworkTasks")]
-        public double ObservedCoworkTasks { get; set; }
-
-        #endregion
-
         #region The work Cowork could take on (observed volumes, assumed shares and minutes)
 
         /// <summary>
-        /// People in the cohort with no Cowork tasks in the report, whose own Microsoft 365 activity is
-        /// modelled instead.
-        /// </summary>
-        [JsonProperty("projectedCoworkUsers")]
-        public int ProjectedCoworkUsers { get; set; }
-
-        /// <summary>
-        /// What those people already do by hand a month, one entry per kind of work, in
+        /// What the cohort already does by hand a month, one entry per kind of work, in
         /// <see cref="CoworkActivities.All"/> order - every kind is present, at zero if nobody does it.
         /// Observed: per-active-day averages from Microsoft's usage reports, times working days a month,
         /// rounded as published.
@@ -570,35 +510,11 @@ namespace Common.Entities.CopilotAdoption
         public List<CoworkActivityVolume> Activities { get; set; } = new List<CoworkActivityVolume>();
 
         /// <summary>
-        /// Pieces of work a month the model hands to Cowork across those people: each volume times its
-        /// share, summed, then rounded.
+        /// Pieces of work a month the model hands to Cowork across the cohort: each volume times its
+        /// share, summed, then rounded. Modelled, and not a count of Cowork tasks.
         /// </summary>
         [JsonProperty("projectedCoworkTasks")]
         public double ProjectedCoworkTasks { get; set; }
-
-        /// <summary>Observed Cowork tasks plus the pieces of work projected, a month across the cohort.</summary>
-        [JsonProperty("coworkTasks")]
-        public double CoworkTasks { get; set; }
-
-        #endregion
-
-        #region Sense check (observed, tenant-wide)
-
-        /// <summary>
-        /// The Cowork tasks a month the tenant's own Cowork users run on average - everyone with tasks in
-        /// the report, not only this cohort's. Zero when nobody has any.
-        ///
-        /// <para>Not an input to the hours. It is the one measured figure the model can be held against:
-        /// a model that hands everyone else far more work than the people already using Cowork give it is
-        /// one to tune down. Early adopters tend to use a new tool more than the people who follow, and one
-        /// task can cover several pieces of work, so the two need not match.</para>
-        /// </summary>
-        [JsonProperty("observedTasksPerPersonPerMonth")]
-        public double ObservedTasksPerPersonPerMonth { get; set; }
-
-        /// <summary>How many people <see cref="ObservedTasksPerPersonPerMonth"/> is the average of.</summary>
-        [JsonProperty("observedTaskRateUsers")]
-        public int ObservedTaskRateUsers { get; set; }
 
         #endregion
 
@@ -612,8 +528,7 @@ namespace Common.Entities.CopilotAdoption
         public double HoursPerMonthLow { get; set; }
 
         /// <summary>
-        /// High end of the modelled monthly hours: observed tasks x minutes per task, plus each kind of
-        /// work x its share x its minutes.
+        /// High end of the modelled monthly hours: each kind of work x its share x its minutes.
         /// </summary>
         [JsonProperty("hoursPerMonthHigh")]
         public double HoursPerMonthHigh { get; set; }
@@ -652,45 +567,23 @@ namespace Common.Entities.CopilotAdoption
         [JsonProperty("activity")]
         public string Activity { get; set; }
 
-        /// <summary>The work done by hand a month by the people not yet running Cowork tasks.</summary>
+        /// <summary>The work done by hand a month by the people the estimate covers.</summary>
         [JsonProperty("volumePerMonth")]
         public double VolumePerMonth { get; set; }
     }
 
     /// <summary>
-    /// The Cowork tasks a month the tenant's own Cowork users run: the estimate's sense check, not one
-    /// of its inputs.
-    /// </summary>
-    public class CoworkTaskRate
-    {
-        /// <summary>Their average, restated as a month. Zero when nobody has Cowork tasks in the report.</summary>
-        public double TasksPerPersonPerMonth { get; set; }
-
-        /// <summary>The number of people it is the average of.</summary>
-        public int Users { get; set; }
-    }
-
-    /// <summary>
-    /// One cohort's inputs to the Cowork model: the tasks observed, and the work everyone else does by
-    /// hand. Everything the hours are computed from, so an estimate can be restated under a reader's own
-    /// assumptions without re-running the analysis.
+    /// One cohort's input to the Cowork model: the work it does by hand. Everything the hours are computed
+    /// from, so an estimate can be restated under a reader's own assumptions without re-running the
+    /// analysis.
     /// </summary>
     public class CoworkTaskInputs
     {
-        /// <summary>People in the cohort with Cowork tasks in the report.</summary>
-        public int ObservedUsers { get; set; }
-
-        /// <summary>Their tasks, restated as a month.</summary>
-        public double ObservedTasksPerMonth { get; set; }
-
         /// <summary>
-        /// Everyone else's work done by hand a month, keyed by <see cref="CoworkActivities"/> key. A kind
-        /// of work that is absent counts as none.
+        /// The cohort's work done by hand a month, keyed by <see cref="CoworkActivities"/> key. A kind of
+        /// work that is absent counts as none.
         /// </summary>
         public IDictionary<string, double> ActivityVolumes { get; set; } = new Dictionary<string, double>(StringComparer.Ordinal);
-
-        /// <summary>The tenant's own Cowork users' average, carried for the sense check. Null means none observed.</summary>
-        public CoworkTaskRate ObservedRate { get; set; }
     }
 
     /// <summary>A page of Cowork readiness rows, matching the shape of the other paged endpoints.</summary>

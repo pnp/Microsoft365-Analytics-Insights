@@ -53,8 +53,21 @@ namespace Common.Entities.Entities.UsageReports
         /// <summary>Per-user detail. Licensed users only, and affected by the tenant's concealed-user-information setting.</summary>
         public const string UsageUserDetail = "getMicrosoft365CopilotUsageUserDetail";
 
-        /// <summary>Per-user Cowork task detail from the first-party Cowork usage report.</summary>
-        public const string CoworkUsageUserDetail = "getMicrosoft365CopilotCoworkUsageUserDetail";
+        /// <summary>
+        /// RETIRED, and not a Graph function: never request it. Stable builds 1833 to 1846 called a function by
+        /// this name, but neither Graph's v1.0 nor its beta <c>$metadata</c> contains it, and Graph answers
+        /// <c>400 Resource not found for the segment</c>. Microsoft publishes the Cowork usage report only in
+        /// the Microsoft 365 admin centre (#692). The name is kept only because those builds wrote
+        /// import-log rows under it - see <see cref="Retired"/>.
+        /// </summary>
+        public const string RetiredCoworkUsageUserDetail = "getMicrosoft365CopilotCoworkUsageUserDetail";
+
+        /// <summary>
+        /// Report names that earlier builds wrote to the import log and this build never imports. Their
+        /// latest row never changes again, so the Health page ignores them: reporting a retired import's
+        /// last error would leave it degraded until someone deleted the row by hand.
+        /// </summary>
+        public static System.Collections.Generic.IReadOnlyCollection<string> Retired { get; } = new[] { RetiredCoworkUsageUserDetail };
     }
 
     /// <summary>
@@ -251,9 +264,11 @@ namespace Common.Entities.Entities.UsageReports
 
 
     /// <summary>
-    /// Per-user Cowork task usage from the first-party Cowork usage report. The importer writes this table
-    /// with raw SQL rather than EF so adding the table does not require a model-snapshot change; the class
-    /// keeps cleanup and inventory tests aware of the table shape.
+    /// The table Stable builds 1833 to 1846 meant to fill from a Cowork usage report in Graph. That report
+    /// does not exist in Graph (#692), so nothing has ever written this table and nothing reads it: Cowork
+    /// figures come from the Copilot audit log only. The table, its migration and this class are kept
+    /// exactly as they were, so the cleanup script, the user-scope purge and the inventory tests still cover
+    /// it; dropping the table would need a migration. Not in the EF model: it has no <c>DbSet</c>.
     /// </summary>
     [Table("cowork_usage_user_activity_log")]
     public class CoworkUsageUserActivityLog : UserRelatedAbstractUsageActivity

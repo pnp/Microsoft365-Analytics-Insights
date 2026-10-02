@@ -33,7 +33,6 @@ const OPTIONS = {
   copilotMinutesSavedPerMailThread: 0.5,
   copilotMinutesSavedPerDocument: 1,
   coworkEstimateLowerBoundRatio: 0.5,
-  coworkMinutesSavedPerTask: 6,
   coworkOrganiseMeetingsShare: 0.25,
   coworkOrganiseMeetingsMinutes: 6,
   coworkPrepareMeetingsShare: 0.1,
@@ -68,9 +67,6 @@ function coworkEstimate(overrides: Partial<CoworkValueEstimate> = {}): CoworkVal
   return {
     isModelled: true,
     cohortUsers: 10,
-    coworkTaskUsers: 3,
-    observedCoworkTasks: 45,
-    projectedCoworkUsers: 7,
     activities: [
       { activity: 'organiseMeetings', volumePerMonth: 142 },
       { activity: 'prepareMeetings', volumePerMonth: 560 },
@@ -79,11 +75,8 @@ function coworkEstimate(overrides: Partial<CoworkValueEstimate> = {}): CoworkVal
       { activity: 'createDocuments', volumePerMonth: 1100 },
     ],
     projectedCoworkTasks: 221,
-    coworkTasks: 266,
-    observedTasksPerPersonPerMonth: 15,
-    observedTaskRateUsers: 3,
-    hoursPerMonthLow: 13,
-    hoursPerMonthHigh: 27,
+    hoursPerMonthLow: 11,
+    hoursPerMonthHigh: 22,
     assumptions: [],
     ...overrides,
   };
@@ -131,7 +124,7 @@ describe('projectLicenceTimeSaved', () => {
 
     const heavierCowork = projectLicenceTimeSaved(
       licenceEstimate(),
-      { ...defaults(), taskMinutes: 240, sendEmailShare: 1, sendEmailMinutes: 240, organiseMeetingsShare: 1 },
+      { ...defaults(), sendEmailShare: 1, sendEmailMinutes: 240, organiseMeetingsShare: 1 },
       OPTIONS,
     )!;
     expect(heavierCowork.hoursHigh).toBe(projection.hoursHigh);
@@ -160,20 +153,17 @@ describe('projectCoworkTimeSaved', () => {
    *
    * At the product defaults: 142 meetings organised x 25% = 35.5, 560 attended x 10% = 56, 1,300
    * emails x 5% = 65, 4,200 Teams messages x 1% = 42 and 1,100 files x 2% = 22 - 220.5 pieces of work,
-   * published as 221 - plus 45 observed tasks. (45 + 220.5) x 6 minutes = 1,593 minutes = 26.55
-   * hours; x 50% = 13.3.
+   * published as 221. 220.5 x 6 minutes = 1,323 minutes = 22.05 hours; x 50% = 11.0.
    */
   it('matches the server to the hour for the same inputs and assumptions', () => {
     const projection = projectCoworkTimeSaved(coworkEstimate(), defaults(), OPTIONS)!;
 
     expect(projection.projectedTasks).toBe(221);
-    expect(projection.tasks).toBe(266);
-    expect(projection.hoursHigh).toBe(27);
-    expect(projection.hoursLow).toBe(13);
+    expect(projection.hoursHigh).toBe(22);
+    expect(projection.hoursLow).toBe(11);
     // Where the time comes from, split exactly as CoworkHoursByActivity splits it: the five kinds of
-    // work in order, then the observed tasks, adding up to the headline.
-    expect(projection.activities.map((a) => a.displayHours)).toEqual([4, 6, 7, 4, 2]);
-    expect(projection.observedDisplayHours).toBe(4);
+    // work in order, adding up to the headline.
+    expect(projection.activities.map((a) => a.displayHours)).toEqual([4, 6, 6, 4, 2]);
     expect(projection.activities.map((a) => a.displayPieces)).toEqual([36, 56, 65, 42, 22]);
   });
 
@@ -183,7 +173,7 @@ describe('projectCoworkTimeSaved', () => {
     expect(projection.activities.map((a) => a.activity)).toEqual([...COWORK_ACTIVITIES]);
     expect(projection.activities.map((a) => a.volume)).toEqual([142, 560, 1300, 4200, 1100]);
     expect(projection.activities.map((a) => a.share)).toEqual([0.25, 0.1, 0.05, 0.01, 0.02]);
-    const total = projection.activities.reduce((sum, a) => sum + a.sharePct, 0) + projection.observedSharePct;
+    const total = projection.activities.reduce((sum, a) => sum + a.sharePct, 0);
     expect(total).toBeCloseTo(100, 9);
   });
 
@@ -195,8 +185,8 @@ describe('projectCoworkTimeSaved', () => {
       OPTIONS,
     )!;
 
-    // 142 x 50% = 71 pieces x 12 minutes = 852 minutes, up from 213: (1,593 + 639) / 60 = 37.2.
-    expect(changed.hoursHigh).toBe(37);
+    // 142 x 50% = 71 pieces x 12 minutes = 852 minutes, up from 213: (1,323 + 639) / 60 = 32.7.
+    expect(changed.hoursHigh).toBe(33);
     expect(changed.projectedTasks).toBe(256);
     expect(changed.activities.slice(1).map((a) => a.pieces)).toEqual(baseline.activities.slice(1).map((a) => a.pieces));
   });
@@ -212,7 +202,7 @@ describe('projectCoworkTimeSaved', () => {
     )!;
 
     expect(heavierCopilot.hoursHigh).toBe(projection.hoursHigh);
-    expect(projection.minutesPerPersonDayHigh).toBeCloseTo(1593 / 200, 6);
+    expect(projection.minutesPerPersonDayHigh).toBeCloseTo(1323 / 200, 6);
   });
 
   it('takes every Cowork default from configuration: nobody is projected at a flat rate any more', () => {
@@ -220,34 +210,28 @@ describe('projectCoworkTimeSaved', () => {
     expect(d.organiseMeetingsShare).toBe(0.25);
     expect(d.sendEmailMinutes).toBe(6);
     expect(d).not.toHaveProperty('tasksPerPerson');
+    // The minutes per Cowork task went with the tasks it applied to (#692).
+    expect(d).not.toHaveProperty('taskMinutes');
     // A share above 100% is clamped as the server clamps it: Cowork is never handed more than people do.
     expect(defaultTimeSavedAssumptions({ ...OPTIONS, coworkSendEmailShare: 3 }).sendEmailShare).toBe(1);
   });
 
-  it('compares the model with the tenant\u2019s own Cowork users, and says nothing when there are none', () => {
+  it('states the pieces of work it hands each person it covers, for the reader to check after a pilot', () => {
     const projection = projectCoworkTimeSaved(coworkEstimate(), defaults(), OPTIONS)!;
-    expect(projection.observedRate).toBe(15);
-    expect(projection.observedRateUsers).toBe(3);
-    // 220.5 pieces over the 7 people modelled.
-    expect(projection.piecesPerProjectedPerson).toBeCloseTo(220.5 / 7, 9);
-
-    const nobody = projectCoworkTimeSaved(
-      coworkEstimate({ observedTasksPerPersonPerMonth: 0, observedTaskRateUsers: 0 }),
-      defaults(),
-      OPTIONS,
-    )!;
-    expect(nobody.observedRateUsers).toBe(0);
+    // 220.5 pieces over the 10 people covered.
+    expect(projection.piecesPerPerson).toBeCloseTo(220.5 / 10, 9);
   });
 
-  it('models only the people not yet running Cowork tasks', () => {
-    // Everyone is observed: there is nobody whose work to model, whatever the published volumes say.
-    const allObserved = projectCoworkTimeSaved(
-      coworkEstimate({ coworkTaskUsers: 10, projectedCoworkUsers: 0 }),
-      defaults(),
-      OPTIONS,
-    )!;
-    expect(allObserved.projectedTasks).toBe(0);
-    expect(allObserved.hoursHigh).toBe(Math.round((45 * 6) / 60));
+  it('models everyone from their own work, people already using Cowork included (#692)', () => {
+    // A build before #692 sent Cowork task counts from a Graph report that does not exist, and counted
+    // the people "running" them at those tasks instead of their work. Whatever such a payload carries,
+    // nothing is counted from tasks any more.
+    const legacy = { ...coworkEstimate(), coworkTaskUsers: 10, observedCoworkTasks: 45, projectedCoworkUsers: 0 } as CoworkValueEstimate;
+    const projection = projectCoworkTimeSaved(legacy, defaults(), OPTIONS)!;
+
+    expect(projection).toEqual(projectCoworkTimeSaved(coworkEstimate(), defaults(), OPTIONS));
+    expect(projection.projectedTasks).toBe(221);
+    expect(projection).not.toHaveProperty('observedTasks');
   });
 
   it('says nothing, rather than zero, when there is nobody to model', () => {
@@ -335,13 +319,16 @@ describe('the reader\u2019s own figures', () => {
     expect(result.current.isCustomised).toBe(false);
   });
 
-  it('forgets a figure from the flat tasks-a-person model rather than misreading it', () => {
-    // A session that began before the activity model stored its task rate under this key.
+  it('forgets figures from retired models rather than misreading them', () => {
+    // A session that began before the activity model stored its task rate under tasksPerPerson, and
+    // one from before #692 its minutes per Cowork task under taskMinutes. Neither is a figure now.
     sessionStorage.setItem(TIME_SAVED_STORAGE_KEY, JSON.stringify({ tasksPerPerson: 25, taskMinutes: 9 }));
     const { result } = renderHook(() => useTimeSavedAssumptions(SUMMARY));
 
-    expect(result.current.customised).toEqual(['taskMinutes']);
+    expect(result.current.customised).toEqual([]);
     expect(result.current.assumptions).not.toHaveProperty('tasksPerPerson');
+    expect(result.current.assumptions).not.toHaveProperty('taskMinutes');
+    expect(timeSavedExportParams(result.current)).toEqual({});
   });
 
   it('shares one set of figures between every part of the page', () => {
@@ -373,7 +360,6 @@ describe('the reader\u2019s own figures', () => {
     act(() => {
       result.current.setAssumption('meetingMinutes', 8);
       result.current.setAssumption('conservativeRatio', 0.3);
-      result.current.setAssumption('taskMinutes', 15);
       result.current.setAssumption('organiseMeetingsShare', 0.4);
       result.current.setAssumption('createDocumentsMinutes', 20);
       // On-screen only: the workbook quotes hours, not full-time people.
@@ -383,7 +369,6 @@ describe('the reader\u2019s own figures', () => {
     expect(timeSavedExportParams(result.current)).toEqual({
       copilotMinutesSavedPerMeeting: '8',
       coworkEstimateLowerBoundRatio: '0.3',
-      coworkMinutesSavedPerTask: '15',
       coworkOrganiseMeetingsShare: '0.4',
       coworkCreateDocumentsMinutes: '20',
     });

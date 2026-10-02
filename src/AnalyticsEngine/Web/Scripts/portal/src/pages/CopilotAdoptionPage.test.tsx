@@ -109,7 +109,6 @@ const options: CopilotAdoptionOptions = {
   copilotMinutesSavedPerMailThread: 5,
   copilotMinutesSavedPerDocument: 8,
   coworkEstimateLowerBoundRatio: 0.5,
-  coworkMinutesSavedPerTask: 6,
   coworkOrganiseMeetingsShare: 0.25,
   coworkOrganiseMeetingsMinutes: 6,
   coworkPrepareMeetingsShare: 0.1,
@@ -190,7 +189,7 @@ function summary(overrides: Partial<CopilotAdoptionSummary> = {}): CopilotAdopti
     coworkQuadrant: [],
     coworkByDepartment: [],
     coworkCreditPosition: { available: false, snapshotUtc: null, entitled: null, consumed: null, available_credits: null, payAsYouGoConsumed: null, status: null, perUserCreditsAvailable: false },
-    coworkValueEstimate: { isModelled: false, cohortUsers: 0, coworkTaskUsers: 0, observedCoworkTasks: 0, projectedCoworkUsers: 0, activities: [], projectedCoworkTasks: 0, coworkTasks: 0, observedTasksPerPersonPerMonth: 0, observedTaskRateUsers: 0, hoursPerMonthLow: 0, hoursPerMonthHigh: 0, assumptions: [] },
+    coworkValueEstimate: { isModelled: false, cohortUsers: 0, activities: [], projectedCoworkTasks: 0, hoursPerMonthLow: 0, hoursPerMonthHigh: 0, assumptions: [] },
     unlicensedActiveUsers: 14,
     recommendedForLicence: 9,
     funnel: [
@@ -745,7 +744,7 @@ describe('CopilotAdoptionPage printing', () => {
 describe('CopilotAdoptionPage data warnings', () => {
   const WARNINGS = [
     'Purchased and unassigned Copilot seats are unknown because Graph subscribedSkus has not been imported.',
-    'The first-party Cowork usage report is not available.',
+    'The Microsoft 365 usage reports are not available, so coordination load cannot be measured.',
   ];
 
   it('shows the warnings, and lets the reader put them away', async () => {
@@ -885,9 +884,9 @@ describe('CopilotAdoptionPage modelled time saved', () => {
     assumptions: [],
   };
 
-  // Cowork, for the 20 people ready now: 150 tasks observed from 10 people, and the other 10 modelled
-  // from their own work - 3,000 emails sent x 5% = 150 handed to Cowork, and nothing else. (150 + 150)
-  // x 6 minutes = 1,800 minutes = 30 hours, 15 conservative.
+  // Cowork, for the 20 people ready now, all modelled from their own work (#692): 6,000 emails sent x 5%
+  // = 300 handed to Cowork, and nothing else. 300 x 6 minutes = 1,800 minutes = 30 hours, 15
+  // conservative.
   const noWork = [
     { activity: 'organiseMeetings' as const, volumePerMonth: 0 },
     { activity: 'prepareMeetings' as const, volumePerMonth: 0 },
@@ -897,28 +896,20 @@ describe('CopilotAdoptionPage modelled time saved', () => {
   const coworkReady = {
     isModelled: true,
     cohortUsers: 20,
-    coworkTaskUsers: 10,
-    observedCoworkTasks: 150,
-    projectedCoworkUsers: 10,
-    activities: [{ activity: 'sendEmail' as const, volumePerMonth: 3000 }, ...noWork],
-    projectedCoworkTasks: 150,
-    coworkTasks: 300,
-    observedTasksPerPersonPerMonth: 15,
-    observedTaskRateUsers: 10,
+    activities: [{ activity: 'sendEmail' as const, volumePerMonth: 6000 }, ...noWork],
+    projectedCoworkTasks: 300,
     hoursPerMonthLow: 15,
     hoursPerMonthHigh: 30,
     assumptions: [],
   };
 
-  // The ceiling, all 100 seat holders: 150 observed + 27,000 emails x 5% = 1,350 = 1,500 x 6 minutes =
-  // 150 hours, 75 conservative.
+  // The ceiling, all 100 seat holders: 30,000 emails x 5% = 1,500 x 6 minutes = 150 hours, 75
+  // conservative.
   const coworkCeiling = {
     ...coworkReady,
     cohortUsers: 100,
-    projectedCoworkUsers: 90,
-    activities: [{ activity: 'sendEmail' as const, volumePerMonth: 27000 }, ...noWork],
-    projectedCoworkTasks: 1350,
-    coworkTasks: 1500,
+    activities: [{ activity: 'sendEmail' as const, volumePerMonth: 30000 }, ...noWork],
+    projectedCoworkTasks: 1500,
     hoursPerMonthLow: 75,
     hoursPerMonthHigh: 150,
   };
@@ -1099,10 +1090,7 @@ describe('CopilotAdoptionPage modelled time saved', () => {
         coworkValueEstimate: {
           ...coworkReady,
           cohortUsers: 0,
-          coworkTaskUsers: 0,
-          observedCoworkTasks: 0,
-          projectedCoworkUsers: 0,
-          coworkTasks: 0,
+          projectedCoworkTasks: 0,
           hoursPerMonthLow: 0,
           hoursPerMonthHigh: 0,
         },
@@ -1183,12 +1171,12 @@ describe('CopilotAdoptionPage modelled time saved', () => {
 
     await renderPage();
 
-    // 150 observed + 3,000 emails x 10% = 300 handed over = 450 x 6 = 2,700 minutes = 45 hours, 22.5
-    // conservative.
-    expect(within(await tile('Time back from Cowork')).getByText('23\u201345 h')).toBeVisible();
+    // 6,000 emails x 10% = 600 handed over x 6 = 3,600 minutes = 60 hours, 30 conservative.
+    expect(within(await tile('Time back from Cowork')).getByText('30\u201360 h')).toBeVisible();
     expect(within(await tile('Time back from licensing')).getByText('1,200\u20132,400 h')).toBeVisible();
     const url = new URL((screen.getByText('Excel report').closest('a') as HTMLAnchorElement).href);
     expect(url.searchParams.get('coworkSendEmailShare')).toBe('0.1');
+    // The minutes per Cowork task is gone with the tasks it applied to (#692): the server no longer reads it.
     expect(url.searchParams.has('coworkMinutesSavedPerTask')).toBe(false);
     // The flat task rate is gone: the server no longer reads it.
     expect(url.searchParams.has('coworkTasksPerPersonPerMonth')).toBe(false);

@@ -492,52 +492,34 @@ namespace Common.Entities.CopilotAdoption
         [JsonProperty("coworkEstimateLowerBoundRatio")]
         public double CoworkEstimateLowerBoundRatio { get; set; } = 0.5;
 
-        /// <summary>
-        /// Minutes Cowork is assumed to save on each task already in Microsoft's Cowork usage report, ON
-        /// TOP of what Microsoft 365 Copilot already saves: Cowork's increment over Copilot alone.
-        /// </summary>
-        /// <remarks>
-        /// <b>No study has measured Cowork's time savings - alone, or for people who already use Microsoft
-        /// 365 Copilot.</b> The Copilot per-item figures above rest on Copilot evidence, which is why
-        /// Cowork is modelled on its own in its own estimate
-        /// (<see cref="CopilotAdoptionSummary.CoworkValueEstimate"/>): it is the value of enabling Cowork,
-        /// which a tenant pays for separately in Copilot Credits, for people who already hold a Copilot
-        /// licence. Folding Copilot's minutes into that figure would credit Cowork with time the licence
-        /// already gives back.
-        /// <para>
-        /// Applies only to the people whose Cowork tasks the report already counts: Microsoft's report
-        /// says how many tasks they ran, not what kind of work each one was. Everyone else is modelled
-        /// from their own Microsoft 365 activity, one kind of work at a time - see
-        /// <see cref="CoworkActivities"/> and the <c>Cowork*Share</c> / <c>Cowork*Minutes</c> options
-        /// below.
-        /// </para>
-        /// <para>
-        /// The default is Microsoft's own time credit for agent work, the nearest published method. Agent
-        /// Assisted Hours in Viva Insights (the Copilot Studio agents report) credits each knowledge
-        /// source an agent session draws on with a customisable six-minute multiplier, and a session that
-        /// draws on none with six minutes when it is resolved (4.2 when escalated or abandoned). The six
-        /// minutes rests on Microsoft studies of information-retrieval and writing tasks. Six minutes for
-        /// a whole multi-step Cowork task, with nothing for the sources or steps inside it, is the
-        /// smallest credit that method gives a resolved session.
-        /// </para>
-        /// </remarks>
-        [JsonProperty("coworkMinutesSavedPerTask")]
-        public double CoworkMinutesSavedPerTask { get; set; } = 6;
-
-        // ---- The work Cowork could take on, for the people not yet running Cowork tasks ----
+        // ---- The work Cowork could take on ----
         //
         // Each kind of work Microsoft says Cowork does is matched to the count Microsoft's usage reports
         // already keep of people doing it by hand (see CoworkActivities for the mapping), and carries two
         // assumptions: the SHARE of that work a person would hand to Cowork, and the MINUTES Cowork saves
         // on each piece it takes on, on top of Copilot. Hours = observed volume x share x minutes.
         //
-        // None of these is measured - no study has measured Cowork - and every surface says so. The
-        // minutes all default to the same six-minute credit as a Cowork task above, because nothing
-        // published tells the kinds of work apart; the shares carry the judgement about how much of each
+        // None of these is measured - no study has measured Cowork's time savings, alone or for people who
+        // already use Microsoft 365 Copilot - and every surface says so. Cowork is modelled on its own, in
+        // its own estimate (CopilotAdoptionSummary.CoworkValueEstimate): it is the value of enabling Cowork,
+        // paid for separately in Copilot Credits, for people who already hold a Copilot licence, so the
+        // minutes are Cowork's increment over Copilot alone. Folding Copilot's minutes in would credit
+        // Cowork with time the licence already gives back.
+        //
+        // The minutes all default to six, Microsoft's own time credit for agent work and the nearest
+        // published method: Agent Assisted Hours in Viva Insights (the Copilot Studio agents report)
+        // credits each knowledge source an agent session draws on with a customisable six-minute
+        // multiplier, and a session that draws on none with six minutes when it is resolved (4.2 when
+        // escalated or abandoned). The six minutes rests on Microsoft studies of information-retrieval and
+        // writing tasks, and it is the smallest credit the method gives a resolved session; nothing
+        // published tells the kinds of work apart. The shares carry the judgement about how much of each
         // is worth delegating, and are deliberately cautious. Replacing the old flat "20 tasks a person"
-        // placeholder, they make the estimate follow what each person actually does: someone who
-        // organises ten meetings a week is modelled with more to hand over than someone who organises
-        // none. Changing a default is a product decision - CopilotAdoptionCoworkTests pins them.
+        // placeholder, they make the estimate follow what each person actually does: someone who organises
+        // ten meetings a week is modelled with more to hand over than someone who organises none. Changing
+        // a default is a product decision - CopilotAdoptionCoworkTests pins them.
+        //
+        // There is deliberately no minutes-per-Cowork-task option. It applied to Cowork tasks counted
+        // from a Graph Cowork usage report, which does not exist (#692).
 
         /// <summary>
         /// Share of the meetings a person organises that Cowork is assumed to organise for them -
@@ -616,7 +598,7 @@ namespace Common.Entities.CopilotAdoption
 
         // There is deliberately no loaded-hourly-cost or currency option here, and none anywhere else in
         // these options. The time-saved estimates are models built from assumed minutes per meeting,
-        // email, document and Cowork task, and epic #559 rejected an ROI calculator precisely because a
+        // email, document and piece of work handed to Cowork, and epic #559 rejected an ROI calculator precisely because a
         // fabricated money figure discredits the measured ones beside it. The per-SKU seat prices that
         // used to live here, feeding an idle-licence-spend figure, have been withdrawn for the same
         // reason: a price typed into a report header is not a source of truth about what a tenant pays.

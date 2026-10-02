@@ -63,8 +63,6 @@ export const COWORK_ACTIVITY_COLOUR: Record<CoworkActivity, string> = {
   createDocuments: '#8e562e',
 };
 
-export const COWORK_OBSERVED_COLOUR = '#605e5c';
-
 export const COWORK_ACTIVITY_LABEL: Record<CoworkActivity, TranslationKey> = {
   organiseMeetings: 'copilotAdoptionCowork.timeSaved.activity.organiseMeetings',
   prepareMeetings: 'copilotAdoptionCowork.timeSaved.activity.prepareMeetings',

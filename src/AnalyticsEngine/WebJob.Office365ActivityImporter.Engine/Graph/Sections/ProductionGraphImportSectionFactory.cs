@@ -46,7 +46,6 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Sections
         public const string GraphCopilotUsageReportUserCountTrendLastImportedKey = GraphCopilotUsageReportsLastImportedKey + ":UserCountTrend";
         public const string GraphCopilotUsageReportUserCountSummaryLastImportedKey = GraphCopilotUsageReportsLastImportedKey + ":UserCountSummary";
         public const string GraphCopilotUsageReportUsageUserDetailLastImportedKey = GraphCopilotUsageReportsLastImportedKey + ":UsageUserDetail";
-        public const string GraphCopilotUsageReportCoworkUsageUserDetailLastImportedKey = GraphCopilotUsageReportsLastImportedKey + ":CoworkUsageUserDetail";
         public const string CopilotInteractionHistoryLastImportedKey = "CopilotInteractionHistoryLastImported";
 
         private readonly AnalyticsLogger _logger;
@@ -311,12 +310,11 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Sections
                         new CopilotUsageUserDetailLoader(reportSource, _logger, userScope)
                             .LoadAndSaveAsync(db, CopilotReportRequest.DefaultRefreshPeriod))),
 
-                new CopilotUsageReportCadenceRunner.Report(
-                    "Cowork per-user usage detail",
-                    GraphCopilotUsageReportCoworkUsageUserDetailLastImportedKey,
-                    () => RunCopilotReport("Cowork per-user usage detail", db =>
-                        new CoworkUsageUserDetailLoader(reportSource, _logger, userScope)
-                            .LoadAndSaveAsync(db, CopilotReportRequest.DefaultRefreshPeriod))),
+                // There is deliberately no Cowork report here. Stable builds 1833 to 1846 requested a Graph
+                // function, getMicrosoft365CopilotCoworkUsageUserDetail, that does not exist: Microsoft
+                // publishes the Cowork usage report only in the Microsoft 365 admin centre (Copilot > Cowork >
+                // Usage, with a manual CSV export), and neither the v1.0 nor the beta $metadata names any
+                // Cowork function (#692). Cowork figures come from the Copilot audit log instead.
             });
         }
 
