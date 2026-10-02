@@ -58,8 +58,8 @@ namespace Tests.UnitTests
             var sql = CopilotAdoptionSeatTimeSql.SeatHolderTimeSavedSql(new[] { 1 }, new[] { 99 });
 
             StringAssert.Contains(sql, "SELECT DISTINCT user_id, meeting_id FROM #seat_time_grain WHERE meeting_id IS NOT NULL");
-            StringAssert.Contains(sql, "a.meeting_id IS NULL AND a.app_host IN ('outlook')");
-            StringAssert.Contains(sql, "a.meeting_id IS NULL AND a.app_host IN ('word','powerpoint','excel')");
+            StringAssert.Contains(sql, "meeting_id IS NULL AND app_host IN ('outlook')");
+            StringAssert.Contains(sql, "meeting_id IS NULL AND app_host IN ('word','powerpoint','excel')");
             StringAssert.Contains(sql, "LOWER(CAST(ISNULL(c.app_host, '') AS nvarchar(100))) AS app_host");
             Assert.IsFalse(sql.IndexOf("LIKE '%", StringComparison.OrdinalIgnoreCase) >= 0,
                 "The realised-value query must use the same exact app-host buckets the usage-by-app chart reports, not new wildcard rules.");
@@ -152,4 +152,5 @@ namespace Tests.UnitTests
         }
     }
 }
+
 
