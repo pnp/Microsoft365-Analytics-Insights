@@ -35,6 +35,7 @@ import {
 import { PRODUCT_NAME, REPOSITORY_URL, printedBuildText } from './product';
 import { LanguageSwitcher, useT } from './i18n';
 import { roleForPermission, usePortalAccess, type PortalPermission } from './access';
+import { useGlobalFilter } from './components/globalFilter/GlobalFilterProvider';
 
 const useStyles = makeStyles({
   header: {
@@ -175,6 +176,7 @@ export default function App() {
   const navigate = useNavigate();
   const t = useT();
   const access = usePortalAccess();
+  const { viewKey } = useGlobalFilter();
   const [navOpen, setNavOpen] = useState(true);
   const build = printedBuildText();
 
@@ -323,7 +325,12 @@ export default function App() {
                         </div>
                       }
                     >
-                      <Routes>
+                      {/* Keyed on the global filter's view in Insights, so switching it off or on - or an
+                          administrator replacing it - remounts the report and every figure is fetched
+                          again, rather than old figures sitting under a bar describing the new filter.
+                          Administration pages are never remounted by it: an editor there would lose its
+                          draft. */}
+                      <Routes key={currentArea === 'insights' ? `insights-${viewKey}` : 'admin'}>
                         <Route path="/" element={<Navigate to={DEFAULT_PATH} replace />} />
                         {ROUTES.map((route) => (
                           <Route key={route.path} path={route.path} element={<RouteElement route={route} />} />

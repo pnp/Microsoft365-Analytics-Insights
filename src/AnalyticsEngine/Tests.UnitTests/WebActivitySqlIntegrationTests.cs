@@ -1,6 +1,7 @@
 using Common.Entities;
 using Common.Entities.Entities.WebTraffic;
 using Common.Entities.SpoWebActivity;
+using Common.Entities.UserFilters;
 using Microsoft.Data.SqlClient;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System;
@@ -954,6 +955,66 @@ INSERT INTO @t VALUES
                     Math.Round(journeys.FlowsCoveragePct),
                     "Nothing was truncated, so the diagram covers all of the paired visits.");
             }
+        }
+
+        /// <summary>
+        /// The administrator's global filter - and a reader's own - narrow each statement through markers
+        /// that are uncommented only under a restricted scope, so this is the one test that ever runs that
+        /// SQL. Ada made two of the six visits and five of the eleven page views.
+        /// </summary>
+        [TestMethod]
+        public async Task UnderARestrictedScope_EverySectionRunsAndCountsOnlyThosePeople()
+        {
+            var ada = Convert.ToInt32(Scalar("SELECT id FROM dbo.users WHERE user_name = 'ada@contoso.com'"));
+            var store = NewStore();
+            var query = NewQuery().WithUserScope(ReportUserScope.ForUsers(new[] { ada }));
+            var sources = new WebActivitySources { WebTraffic = true, UserMetadata = true, AppInsightsConfigured = true };
+
+            var overview = await store.GetOverviewAsync(query, sources);
+            var sections = new List<Common.Entities.SpoWebActivity.WebActivitySection>
+            {
+                overview,
+                await store.GetVisitsAsync(query),
+                await store.GetPagesAsync(query),
+                await store.GetJourneysAsync(query),
+                await store.GetGeographyAsync(query),
+                await store.GetSearchAsync(query),
+                await store.GetTechnologyAsync(query),
+            };
+
+            var failures = sections
+                .SelectMany(s => s.Queries)
+                .Where(q => q.Error != null)
+                .Select(q => q.Key + ": " + q.Error)
+                .ToList();
+            Assert.AreEqual(0, failures.Count, string.Join(Environment.NewLine, failures));
+
+            // The one statement exempt is the "has the tracker ever collected anything" probe, tenant-wide
+            // by design: it decides whether to blame the tracker, not what any figure shows, and its SQL must
+            // not claim a narrowing it does not have.
+            var undeclared = sections
+                .SelectMany(s => s.Queries)
+                .Where(q => q.Key != "overview-ever-collected" && !q.Sql.Contains("DECLARE @scopeUsers"))
+                .Select(q => q.Key)
+                .ToList();
+            Assert.AreEqual(0, undeclared.Count, "Narrowed statements must say so, and how to reproduce them: " + string.Join(", ", undeclared));
+            Assert.IsFalse(
+                overview.Queries.Single(q => q.Key == "overview-ever-collected").Sql.Contains("DECLARE @scopeUsers"),
+                "A tenant-wide statement must not claim to be narrowed.");
+
+            Assert.AreEqual(2, overview.Kpis.Visits);
+            Assert.AreEqual(5, overview.Kpis.PageViews);
+            Assert.AreEqual(1, overview.Kpis.Visitors);
+            Assert.AreEqual(1, overview.Kpis.KnownUsers, "Reach is measured against the people in scope, not the whole directory.");
+
+            var search = await store.GetSearchAsync(query);
+            Assert.AreEqual(1, search.Kpis.Searches, "Grace's dead-end search is outside the scope.");
+
+            // A scope nobody is in is nobody, never everybody.
+            var nobody = await store.GetOverviewAsync(NewQuery().WithUserScope(ReportUserScope.ForUsers(new int[0])), sources);
+            Assert.IsTrue(nobody.Queries.All(q => q.Error == null), string.Join(" | ", nobody.Queries.Select(q => q.Key + ": " + q.Error)));
+            Assert.AreEqual(0, nobody.Kpis.Visits);
+            Assert.AreEqual(0, nobody.Kpis.PageViews);
         }
 
         #endregion

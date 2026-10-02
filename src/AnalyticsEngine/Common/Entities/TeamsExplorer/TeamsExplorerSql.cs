@@ -70,6 +70,59 @@ namespace Common.Entities.TeamsExplorer
         /// </summary>
         public const string EnabledUsersPredicate = "(u.account_enabled IS NULL OR u.account_enabled = 1)";
 
+        #region Scope markers
+
+        // Where each statement is narrowed to the people the report's scope covers - the administrator's
+        // global filter. Markers are comments: with no filter they are removed and the statement is exactly
+        // what it was (see Common.Entities.UserFilters.ReportScopeSql). The rules:
+        //  - usage and device rows belong to the person they describe;
+        //  - a call belongs to the person who ORGANISED it, so every call figure is about calls organised by
+        //    people in scope, and an attendance belongs to its attendee, so attendee head-counts and the
+        //    top-attendees list count only people in scope - a list never names anyone outside it;
+        //  - teams, channels and their conversation statistics belong to no one person, so the Collaboration
+        //    and Conversations tabs are tenant-wide by design and say so (TenantWideMarker).
+
+        /// <summary>Narrows <c>dbo.teams_user_activity_log</c>, aliased <c>t</c>.</summary>
+        public const string UsageScope = "/*scope: AND t.user_id IN {scopeUsers}*/";
+
+        /// <summary>Narrows <c>dbo.teams_user_device_usage_log</c>, aliased <c>d</c>.</summary>
+        public const string DeviceScope = "/*scope: AND d.user_id IN {scopeUsers}*/";
+
+        /// <summary>Narrows <c>dbo.users</c>, aliased <c>u</c> - the reach denominators.</summary>
+        public const string DirectoryScope = "/*scope: AND u.id IN {scopeUsers}*/";
+
+        /// <summary>Narrows <c>dbo.call_records</c>, aliased <c>c</c>, to calls organised by people in scope.</summary>
+        public const string CallScope = "/*scope: AND c.organizer_id IN {scopeUsers}*/";
+
+        /// <summary><see cref="CallScope"/> for a statement that aliases <c>dbo.call_records</c> differently.</summary>
+        public static string CallScopeAs(string alias) => "/*scope: AND " + alias + ".organizer_id IN {scopeUsers}*/";
+
+        /// <summary>Narrows <c>dbo.call_sessions</c>, aliased <c>s</c>, to attendances by people in scope.</summary>
+        public const string AttendeeScope = "/*scope: AND s.attendee_user_id IN {scopeUsers}*/";
+
+        /// <summary>
+        /// Joins <c>dbo.call_sessions</c>, aliased <c>s</c>, to the people in scope as <c>scope_attendees</c> -
+        /// for an aggregate that keeps every attendance of a call in one figure (its size) while another
+        /// figure, wrapped in <see cref="InScopeAttendeeOpen"/> and <see cref="InScopeAttendeeClose"/>, counts
+        /// only the attendances of people in scope. A subquery cannot sit inside an aggregate, so the join.
+        /// </summary>
+        public const string AttendeeScopeJoin =
+            "/*scope:\r\n        LEFT JOIN {scopeUsers} AS scope_attendees ON scope_attendees.user_id = s.attendee_user_id*/";
+
+        /// <summary>Opens an expression that counts only the attendances of people in scope - see <see cref="AttendeeScopeJoin"/>.</summary>
+        public const string InScopeAttendeeOpen = "/*scope:CASE WHEN scope_attendees.user_id IS NULL THEN 0 ELSE */";
+
+        /// <summary>Closes <see cref="InScopeAttendeeOpen"/>.</summary>
+        public const string InScopeAttendeeClose = "/*scope: END*/";
+
+        /// <summary>
+        /// Marks a statement about teams and channels, which no people filter can narrow. Run unchanged
+        /// under a scope; the page labels the section tenant-wide.
+        /// </summary>
+        public const string TenantWide = Common.Entities.UserFilters.ReportScopeSql.TenantWideMarker;
+
+        #endregion
+
         /// <summary>Buckets a datetime column to the Monday on or before it.</summary>
         public static string WeekBucket(string column)
         {
@@ -105,11 +158,11 @@ WITH PerUser AS (
         SUM(CAST(t.video_duration_seconds AS bigint))            AS VideoSeconds,
         SUM(CAST(t.screenshare_duration_seconds AS bigint))      AS ScreenShareSeconds
     FROM dbo.teams_user_activity_log AS t
-    WHERE t.[date] >= @usageFrom AND t.[date] < @usageTo
+    WHERE t.[date] >= @usageFrom AND t.[date] < @usageTo" + UsageScope + @"
     GROUP BY t.user_id
 )
 SELECT
-    (SELECT COUNT(*) FROM dbo.users AS u WHERE " + EnabledUsersPredicate + @") AS KnownUsers,
+    (SELECT COUNT(*) FROM dbo.users AS u WHERE " + EnabledUsersPredicate + DirectoryScope + @") AS KnownUsers,
     ISNULL(SUM(CASE WHEN p.ActiveDays > 0 THEN 1 ELSE 0 END), 0) AS ActiveUsers,
     COUNT(*)                                          AS MeasuredUsers,
     ISNULL(SUM(p.ChannelMessages), 0)                 AS ChannelMessages,
@@ -135,7 +188,7 @@ SELECT
     COUNT_BIG(*)                                  AS Calls,
     ISNULL(SUM({OutOfHours("c.[start]")}), 0)     AS OutOfHoursCalls
 FROM dbo.call_records AS c
-WHERE c.[start] >= @from AND c.[start] < @to
+WHERE c.[start] >= @from AND c.[start] < @to{CallScope}
 OPTION (RECOMPILE);";
         }
 
@@ -152,7 +205,7 @@ SELECT
     ISNULL(SUM(CAST(t.private_chat_count AS bigint)), 0)           AS PrivateMessages,
     ISNULL(SUM(CAST(t.meetings_attended_count AS bigint)), 0)      AS MeetingsAttended
 FROM dbo.teams_user_activity_log AS t
-WHERE t.[date] >= @usageFrom AND t.[date] < @usageTo
+WHERE t.[date] >= @usageFrom AND t.[date] < @usageTo{UsageScope}
 GROUP BY {week}
 ORDER BY WeekStart
 OPTION (RECOMPILE);";
@@ -173,7 +226,7 @@ OPTION (RECOMPILE);";
             return $@"
 SELECT {week} AS WeekStart, COUNT_BIG(*) AS Calls
 FROM dbo.call_records AS c
-WHERE c.[start] >= @from AND c.[start] < @to
+WHERE c.[start] >= @from AND c.[start] < @to{CallScope}
 GROUP BY {week}
 ORDER BY WeekStart
 OPTION (RECOMPILE);";
@@ -187,7 +240,7 @@ OPTION (RECOMPILE);";
 WITH PerUser AS (
     SELECT t.user_id, SUM(CASE WHEN " + ActivitySum + @" > 0 THEN 1 ELSE 0 END) AS ActiveDays
     FROM dbo.teams_user_activity_log AS t
-    WHERE t.[date] >= @usageFrom AND t.[date] < @usageTo
+    WHERE t.[date] >= @usageFrom AND t.[date] < @usageTo" + UsageScope + @"
     GROUP BY t.user_id
 )
 SELECT p.ActiveDays, COUNT_BIG(*) AS Users
@@ -209,7 +262,7 @@ OPTION (RECOMPILE);";
 WITH Daily AS (
     SELECT t.[date] AS D, COUNT(DISTINCT CASE WHEN {ActivitySum} > 0 THEN t.user_id END) AS Dau
     FROM dbo.teams_user_activity_log AS t
-    WHERE t.[date] >= @usageFrom AND t.[date] < @usageTo
+    WHERE t.[date] >= @usageFrom AND t.[date] < @usageTo{UsageScope}
     GROUP BY t.[date]
 )
 SELECT
@@ -217,12 +270,12 @@ SELECT
     (
         SELECT COUNT(DISTINCT t.user_id)
         FROM dbo.teams_user_activity_log AS t
-        WHERE t.[date] >= @wauFrom AND t.[date] < @usageTo AND {ActivitySum} > 0
+        WHERE t.[date] >= @wauFrom AND t.[date] < @usageTo{UsageScope} AND {ActivitySum} > 0
     ) AS WeeklyActiveUsers,
     (
         SELECT COUNT(DISTINCT t.user_id)
         FROM dbo.teams_user_activity_log AS t
-        WHERE t.[date] >= @mauFrom AND t.[date] < @usageTo AND {ActivitySum} > 0
+        WHERE t.[date] >= @mauFrom AND t.[date] < @usageTo{UsageScope} AND {ActivitySum} > 0
     ) AS MonthlyActiveUsers
 OPTION (RECOMPILE);";
         }
@@ -237,7 +290,7 @@ WITH PerUserWeek AS (
     SELECT {week} AS WeekStart, t.user_id,
            SUM(CASE WHEN {ActivitySum} > 0 THEN 1 ELSE 0 END) AS ActiveDays
     FROM dbo.teams_user_activity_log AS t
-    WHERE t.[date] >= @usageFrom AND t.[date] < @usageTo
+    WHERE t.[date] >= @usageFrom AND t.[date] < @usageTo{UsageScope}
     GROUP BY {week}, t.user_id
 )
 SELECT p.WeekStart, p.ActiveDays, COUNT_BIG(*) AS Users
@@ -264,7 +317,7 @@ WITH PerUser AS (
         SUM(CAST({ChannelMessageSum} + t.private_chat_count AS bigint)) AS Messages,
         SUM(CAST(t.meetings_attended_count AS bigint))       AS Meetings
     FROM dbo.teams_user_activity_log AS t
-    WHERE t.[date] >= @usageFrom AND t.[date] < @usageTo
+    WHERE t.[date] >= @usageFrom AND t.[date] < @usageTo{UsageScope}
     GROUP BY t.user_id
 )
 SELECT TOP (@top)
@@ -276,7 +329,7 @@ SELECT TOP (@top)
 FROM dbo.users AS u
 LEFT JOIN {join.Table} AS dim ON dim.id = u.{join.ForeignKey}
 LEFT JOIN PerUser AS p ON p.user_id = u.id
-WHERE {EnabledUsersPredicate}
+WHERE {EnabledUsersPredicate}{DirectoryScope}
 GROUP BY ISNULL(dim.[name], N'(not set)')
 ORDER BY ActiveUsers DESC, KnownUsers DESC
 OPTION (RECOMPILE);";
@@ -295,7 +348,7 @@ WITH PerUser AS (
         MAX(CASE WHEN d.used_linux     = 1 THEN 1 ELSE 0 END) AS UsedLinux,
         MAX(CASE WHEN d.used_chrome_os = 1 THEN 1 ELSE 0 END) AS UsedChromeOs
     FROM dbo.teams_user_device_usage_log AS d
-    WHERE d.[date] >= @usageFrom AND d.[date] < @usageTo
+    WHERE d.[date] >= @usageFrom AND d.[date] < @usageTo" + DeviceScope + @"
     GROUP BY d.user_id
 )
 SELECT
@@ -319,7 +372,7 @@ WITH PerUser AS (
         MAX(CASE WHEN t.[date] <  @midpoint AND " + ActivitySum + @" > 0 THEN 1 ELSE 0 END) AS FirstHalf,
         MAX(CASE WHEN t.[date] >= @midpoint AND " + ActivitySum + @" > 0 THEN 1 ELSE 0 END) AS SecondHalf
     FROM dbo.teams_user_activity_log AS t
-    WHERE t.[date] >= @usageFrom AND t.[date] < @usageTo
+    WHERE t.[date] >= @usageFrom AND t.[date] < @usageTo" + UsageScope + @"
     GROUP BY t.user_id
 )
 SELECT
@@ -343,7 +396,7 @@ WITH Calls AS (
            {OutOfHours("c.[start]")} AS OutOfHours,
            CASE WHEN {DayOfWeek("c.[start]")} >= 5 THEN 1 ELSE 0 END AS Weekend
     FROM dbo.call_records AS c
-    WHERE c.[start] >= @from AND c.[start] < @to
+    WHERE c.[start] >= @from AND c.[start] < @to{CallScope}
 ),
 PerCall AS (
     SELECT
@@ -354,9 +407,9 @@ PerCall AS (
     LEFT JOIN (
         SELECT s.call_record_id,
                COUNT_BIG(*) AS Attendees,
-               SUM(CAST(DATEDIFF(SECOND, s.[start], s.[end]) AS bigint)) AS AttendeeSeconds
+               SUM({InScopeAttendeeOpen}CAST(DATEDIFF(SECOND, s.[start], s.[end]) AS bigint){InScopeAttendeeClose}) AS AttendeeSeconds
         FROM dbo.call_sessions AS s
-        INNER JOIN Calls AS k2 ON k2.id = s.call_record_id
+        INNER JOIN Calls AS k2 ON k2.id = s.call_record_id{AttendeeScopeJoin}
         GROUP BY s.call_record_id
     ) AS s ON s.call_record_id = k.id
 )
@@ -373,7 +426,7 @@ SELECT
         SELECT COUNT(DISTINCT s.attendee_user_id)
         FROM dbo.call_sessions AS s
         INNER JOIN dbo.call_records AS c2 ON c2.id = s.call_record_id
-        WHERE c2.[start] >= @from AND c2.[start] < @to
+        WHERE c2.[start] >= @from AND c2.[start] < @to{CallScopeAs("c2")}{AttendeeScope}
     ) AS DistinctAttendees,
     (
         SELECT AVG(Engagement) FROM (
@@ -388,7 +441,7 @@ SELECT
                    END AS Engagement
             FROM dbo.call_sessions AS s
             INNER JOIN dbo.call_records AS c3 ON c3.id = s.call_record_id
-            WHERE c3.[start] >= @from AND c3.[start] < @to
+            WHERE c3.[start] >= @from AND c3.[start] < @to{CallScopeAs("c3")}{AttendeeScope}
         ) AS e
     ) AS AttendeeEngagement
 FROM PerCall AS p
@@ -400,7 +453,7 @@ OPTION (RECOMPILE);";
         public const string CallOrganiserVolumes = @"
 SELECT c.organizer_id AS OrganiserId, COUNT_BIG(*) AS Calls
 FROM dbo.call_records AS c
-WHERE c.[start] >= @from AND c.[start] < @to
+WHERE c.[start] >= @from AND c.[start] < @to" + CallScope + @"
 GROUP BY c.organizer_id
 OPTION (RECOMPILE);";
 
@@ -421,7 +474,7 @@ WITH Calls AS (
     SELECT c.id, {week} AS WeekStart,
            CAST(DATEDIFF(SECOND, c.[start], c.[end]) AS bigint) AS Seconds
     FROM dbo.call_records AS c
-    WHERE c.[start] >= @from AND c.[start] < @to
+    WHERE c.[start] >= @from AND c.[start] < @to{CallScope}
 ),
 Weekly AS (
     SELECT k.WeekStart, COUNT_BIG(*) AS Calls, SUM(k.Seconds) AS Seconds
@@ -431,7 +484,7 @@ Weekly AS (
 WeeklyAttendees AS (
     SELECT k.WeekStart, COUNT(DISTINCT s.attendee_user_id) AS Attendees
     FROM Calls AS k
-    INNER JOIN dbo.call_sessions AS s ON s.call_record_id = k.id
+    INNER JOIN dbo.call_sessions AS s ON s.call_record_id = k.id{AttendeeScope}
     GROUP BY k.WeekStart
 )
 SELECT w.WeekStart, w.Calls, CAST(w.Seconds AS float) / 60.0 AS Minutes, ISNULL(a.Attendees, 0) AS Attendees
@@ -446,7 +499,7 @@ OPTION (RECOMPILE);";
 WITH PerCall AS (
     SELECT c.id, (SELECT COUNT_BIG(*) FROM dbo.call_sessions AS s WHERE s.call_record_id = c.id) AS Attendees
     FROM dbo.call_records AS c
-    WHERE c.[start] >= @from AND c.[start] < @to
+    WHERE c.[start] >= @from AND c.[start] < @to" + CallScope + @"
 )
 SELECT p.Attendees, COUNT_BIG(*) AS Calls
 FROM PerCall AS p
@@ -463,7 +516,7 @@ SELECT
     END AS Minutes,
     COUNT_BIG(*) AS Calls
 FROM dbo.call_records AS c
-WHERE c.[start] >= @from AND c.[start] < @to
+WHERE c.[start] >= @from AND c.[start] < @to" + CallScope + @"
 GROUP BY CASE
         WHEN DATEDIFF(SECOND, c.[start], c.[end]) < 0 THEN 0
         ELSE DATEDIFF(SECOND, c.[start], c.[end]) / 60
@@ -479,7 +532,7 @@ OPTION (RECOMPILE);";
             return $@"
 SELECT {dow} AS DayOfWeek, DATEPART(HOUR, c.[start]) AS [Hour], COUNT_BIG(*) AS Calls
 FROM dbo.call_records AS c
-WHERE c.[start] >= @from AND c.[start] < @to
+WHERE c.[start] >= @from AND c.[start] < @to{CallScope}
 GROUP BY {dow}, DATEPART(HOUR, c.[start])
 ORDER BY DayOfWeek, [Hour]
 OPTION (RECOMPILE);";
@@ -492,7 +545,7 @@ FROM dbo.call_session_call_modalities AS l
 INNER JOIN dbo.call_modalities AS m ON m.id = l.call_modality_id
 INNER JOIN dbo.call_sessions AS s ON s.id = l.call_session_id
 INNER JOIN dbo.call_records AS c ON c.id = s.call_record_id
-WHERE c.[start] >= @from AND c.[start] < @to
+WHERE c.[start] >= @from AND c.[start] < @to" + CallScope + @"
 GROUP BY m.[name]
 ORDER BY [Count] DESC
 OPTION (RECOMPILE);";
@@ -502,7 +555,7 @@ OPTION (RECOMPILE);";
 SELECT TOP (@top) u.user_name AS Name, COUNT_BIG(*) AS [Count]
 FROM dbo.call_records AS c
 INNER JOIN dbo.users AS u ON u.id = c.organizer_id
-WHERE c.[start] >= @from AND c.[start] < @to
+WHERE c.[start] >= @from AND c.[start] < @to" + CallScope + @"
 GROUP BY u.user_name
 ORDER BY [Count] DESC
 OPTION (RECOMPILE);";
@@ -513,7 +566,7 @@ SELECT TOP (@top) u.user_name AS Name, COUNT_BIG(DISTINCT s.call_record_id) AS [
 FROM dbo.call_sessions AS s
 INNER JOIN dbo.call_records AS c ON c.id = s.call_record_id
 INNER JOIN dbo.users AS u ON u.id = s.attendee_user_id
-WHERE c.[start] >= @from AND c.[start] < @to
+WHERE c.[start] >= @from AND c.[start] < @to" + CallScope + AttendeeScope + @"
 GROUP BY u.user_name
 ORDER BY [Count] DESC
 OPTION (RECOMPILE);";
@@ -526,7 +579,7 @@ OPTION (RECOMPILE);";
 SELECT ISNULL(NULLIF(LTRIM(RTRIM(f.rating)), N''), N'(none)') AS Rating, COUNT_BIG(*) AS Feedback
 FROM dbo.call_feedback AS f
 INNER JOIN dbo.call_records AS c ON c.id = f.call_id
-WHERE c.[start] >= @from AND c.[start] < @to
+WHERE c.[start] >= @from AND c.[start] < @to" + CallScope + @"
 GROUP BY ISNULL(NULLIF(LTRIM(RTRIM(f.rating)), N''), N'(none)')
 ORDER BY Feedback DESC
 OPTION (RECOMPILE);";
@@ -539,7 +592,7 @@ SELECT
     COUNT_BIG(*) AS Failures
 FROM dbo.call_failures AS fa
 INNER JOIN dbo.call_records AS c ON c.id = fa.call_id
-WHERE c.[start] >= @from AND c.[start] < @to
+WHERE c.[start] >= @from AND c.[start] < @to" + CallScope + @"
 GROUP BY
     ISNULL(NULLIF(LTRIM(RTRIM(fa.reason)), N''), N'(not stated)'),
     ISNULL(NULLIF(LTRIM(RTRIM(fa.stage)),  N''), N'(not stated)')
@@ -580,7 +633,7 @@ SELECT
         SELECT COUNT_BIG(*) FROM dbo.teams_user_channel_reactions AS r
         WHERE r.[date] >= @from AND r.[date] < @to
     ) AS Reactions
-OPTION (RECOMPILE);";
+OPTION (RECOMPILE);" + TenantWide;
 
         /// <summary>
         /// The team leaderboard. Membership is taken from the most recent membership log date per team
@@ -648,7 +701,7 @@ LEFT JOIN Stats     AS st  ON st.team_id  = t.id
 LEFT JOIN Reactions AS re  ON re.team_id  = t.id
 LEFT JOIN Tabs      AS tab ON tab.team_id = t.id
 ORDER BY ISNULL(st.Messages, 0) DESC, ISNULL(re.Reactions, 0) DESC, t.[name]
-OPTION (RECOMPILE);";
+OPTION (RECOMPILE);" + TenantWide;
 
         /// <summary>The channel leaderboard.</summary>
         /// <remarks>
@@ -702,7 +755,7 @@ LEFT JOIN Stats     AS st  ON st.channel_id = ch.id
 LEFT JOIN Reactions AS re  ON re.channel_id = ch.id
 LEFT JOIN Tabs      AS tab ON tab.channel_id = ch.id
 ORDER BY ISNULL(st.Messages, 0) DESC, ISNULL(re.Reactions, 0) DESC, ch.[name]
-OPTION (RECOMPILE);";
+OPTION (RECOMPILE);" + TenantWide;
 
         /// <summary>Teams nobody owns - the governance finding that matters most.</summary>
         public const string OwnerlessTeams = @"
@@ -710,7 +763,7 @@ SELECT TOP (@top) t.[name] AS Name, CAST(DATEDIFF(DAY, t.discovered, @to) AS big
 FROM dbo.teams AS t
 WHERE NOT EXISTS (SELECT 1 FROM dbo.team_owners AS o WHERE o.team_id = t.id)
 ORDER BY t.discovered
-OPTION (RECOMPILE);";
+OPTION (RECOMPILE);" + TenantWide;
 
         /// <summary>
         /// Authorised teams that saw no channel message in the window. Restricted to authorised teams
@@ -729,7 +782,7 @@ WHERE t.has_refresh_token = 1
         WHERE ch.team_id = t.id AND s.[date] >= @from AND s.[date] < @to AND ISNULL(s.chats_count, 0) > 0
       )
 ORDER BY [Count] DESC, t.[name]
-OPTION (RECOMPILE);";
+OPTION (RECOMPILE);" + TenantWide;
 
         /// <summary>Which reactions people use - a cheap but genuine engagement signal.</summary>
         public const string ReactionMix = @"
@@ -739,7 +792,7 @@ LEFT JOIN dbo.teams_reaction_types AS rt ON rt.id = r.reaction_id
 WHERE r.[date] >= @from AND r.[date] < @to
 GROUP BY ISNULL(rt.[name], N'(unknown)')
 ORDER BY [Count] DESC
-OPTION (RECOMPILE);";
+OPTION (RECOMPILE);" + TenantWide;
 
         /// <summary>Which apps/tabs teams have pinned - are they using Teams as a workspace, or a chat app?</summary>
         public const string TabUsage = @"
@@ -749,7 +802,7 @@ INNER JOIN dbo.teams_tabs AS tb ON tb.id = tl.tab_id
 WHERE tl.[date] >= @from AND tl.[date] < @to
 GROUP BY tb.[name]
 ORDER BY [Count] DESC
-OPTION (RECOMPILE);";
+OPTION (RECOMPILE);" + TenantWide;
 
         /// <summary>Weekly distinct team members, for the membership-growth trend.</summary>
         public static string MembershipTrend()
@@ -762,7 +815,7 @@ FROM dbo.team_membership_log AS m
 WHERE m.[date] >= @from AND m.[date] < @to
 GROUP BY {week}
 ORDER BY WeekStart
-OPTION (RECOMPILE);";
+OPTION (RECOMPILE);{TenantWide}";
         }
 
         #endregion
@@ -778,7 +831,7 @@ INNER JOIN dbo.keywords AS k ON k.id = kw.keyword_id
 WHERE s.[date] >= @from AND s.[date] < @to
 GROUP BY k.[name]
 ORDER BY [Count] DESC
-OPTION (RECOMPILE);";
+OPTION (RECOMPILE);" + TenantWide;
 
         /// <summary>Languages detected in channel conversation.</summary>
         public const string Languages = @"
@@ -789,7 +842,7 @@ INNER JOIN dbo.languages AS l ON l.id = cl.language_id
 WHERE s.[date] >= @from AND s.[date] < @to
 GROUP BY l.[name]
 ORDER BY [Count] DESC
-OPTION (RECOMPILE);";
+OPTION (RECOMPILE);" + TenantWide;
 
         /// <summary>
         /// Weekly sentiment, weighted by message count exactly as the importer weights it when it
@@ -811,7 +864,7 @@ FROM dbo.teams_channel_stats_log AS s
 WHERE s.[date] >= @from AND s.[date] < @to
 GROUP BY {week}
 ORDER BY WeekStart
-OPTION (RECOMPILE);";
+OPTION (RECOMPILE);{TenantWide}";
         }
 
         /// <summary>Sentiment per team, weighted by message count.</summary>
@@ -829,7 +882,7 @@ WHERE s.[date] >= @from AND s.[date] < @to
   AND ISNULL(s.chats_count, 0) > 0
 GROUP BY t.[name]
 ORDER BY Messages DESC
-OPTION (RECOMPILE);";
+OPTION (RECOMPILE);" + TenantWide;
 
         /// <summary>Sentiment per channel, weighted by message count.</summary>
         public const string SentimentByChannel = @"
@@ -846,7 +899,7 @@ WHERE s.[date] >= @from AND s.[date] < @to
   AND ISNULL(s.chats_count, 0) > 0
 GROUP BY t.[name] + N' / ' + ch.[name]
 ORDER BY Messages DESC
-OPTION (RECOMPILE);";
+OPTION (RECOMPILE);" + TenantWide;
 
         /// <summary>
         /// Channel-days that actually carry a score. Distinguishes "cognitive services are off" from
@@ -856,7 +909,7 @@ OPTION (RECOMPILE);";
 SELECT COUNT_BIG(*) AS ScoredChannelDays
 FROM dbo.teams_channel_stats_log AS s
 WHERE s.[date] >= @from AND s.[date] < @to AND s.sentiment_score IS NOT NULL
-OPTION (RECOMPILE);";
+OPTION (RECOMPILE);" + TenantWide;
 
         #endregion
 
@@ -877,7 +930,7 @@ WITH PerUser AS (
         SUM(CAST(t.meetings_attended_count AS bigint))               AS MeetingsAttended,
         MAX(t.last_activity_date)                                    AS LastActivity
     FROM dbo.teams_user_activity_log AS t
-    WHERE t.[date] >= @usageFrom AND t.[date] < @usageTo
+    WHERE t.[date] >= @usageFrom AND t.[date] < @usageTo" + UsageScope + @"
     GROUP BY t.user_id
 )
 SELECT TOP (@top)
@@ -890,7 +943,7 @@ SELECT TOP (@top)
     p.MeetingsAttended          AS MeetingsAttended,
     ISNULL((
         SELECT COUNT_BIG(*) FROM dbo.call_records AS c
-        WHERE c.organizer_id = u.id AND c.[start] >= @from AND c.[start] < @to
+        WHERE c.organizer_id = u.id AND c.[start] >= @from AND c.[start] < @to" + CallScope + @"
     ), 0)                       AS CallsHosted,
     ISNULL((
         SELECT COUNT_BIG(DISTINCT s.call_record_id)
@@ -919,7 +972,7 @@ WITH PerUser AS (
         SUM(CASE WHEN " + ActivitySum + @" > 0 THEN 1 ELSE 0 END) AS ActiveDays,
         MAX(t.last_activity_date)                                AS LastActivity
     FROM dbo.teams_user_activity_log AS t
-    WHERE t.[date] >= @usageFrom AND t.[date] < @usageTo
+    WHERE t.[date] >= @usageFrom AND t.[date] < @usageTo" + UsageScope + @"
     GROUP BY t.user_id
 )
 SELECT TOP (@top)
@@ -945,7 +998,7 @@ OPTION (RECOMPILE);";
 WITH PerUser AS (
     SELECT t.user_id, SUM(CASE WHEN " + ActivitySum + @" > 0 THEN 1 ELSE 0 END) AS ActiveDays
     FROM dbo.teams_user_activity_log AS t
-    WHERE t.[date] >= @usageFrom AND t.[date] < @usageTo
+    WHERE t.[date] >= @usageFrom AND t.[date] < @usageTo" + UsageScope + @"
     GROUP BY t.user_id
 )
 SELECT TOP (@top) ISNULL(dep.[name], N'(not set)') AS Name, COUNT_BIG(*) AS [Count]
@@ -975,7 +1028,7 @@ SELECT
 FROM (
     SELECT DISTINCT TOP (200) t.user_id
     FROM dbo.teams_user_activity_log AS t
-    WHERE t.[date] >= @usageFrom AND t.[date] < @usageTo
+    WHERE t.[date] >= @usageFrom AND t.[date] < @usageTo" + UsageScope + @"
 ) AS sample
 INNER JOIN dbo.users AS u ON u.id = sample.user_id
 OPTION (RECOMPILE);";
@@ -1041,6 +1094,8 @@ OPTION (RECOMPILE);";
                 $"DECLARE @workEnd int = {TeamsExplorerScoring.WorkingDayEndHour};",
                 $"DECLARE @championDays int = {championDays};",
             };
+
+            lines.AddRange(Common.Entities.UserFilters.ReportScopeSql.DescribeScope(query.UserScope, sql));
 
             return string.Join("\r\n", lines) + "\r\n" + sql;
         }

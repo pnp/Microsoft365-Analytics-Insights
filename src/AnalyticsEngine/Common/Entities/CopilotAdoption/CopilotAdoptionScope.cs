@@ -16,10 +16,18 @@ namespace Common.Entities.CopilotAdoption
     /// </summary>
     public class CopilotAdoptionScope
     {
-        private CopilotAdoptionScope(string emailDomain, CompiledUserFilter userFilter)
+        private CopilotAdoptionScope(
+            string emailDomain,
+            CompiledUserFilter userFilter,
+            CompiledUserFilter restriction = null,
+            GlobalFilterEcho globalFilter = null,
+            string globalFilterDescription = null)
         {
             EmailDomain = emailDomain;
             UserFilter = userFilter;
+            Restriction = restriction;
+            GlobalFilter = restriction == null ? null : globalFilter;
+            GlobalFilterDescription = restriction == null ? null : globalFilterDescription;
         }
 
         /// <summary>The whole tenant - no narrowing at all.</summary>
@@ -34,8 +42,21 @@ namespace Common.Entities.CopilotAdoption
         /// <summary>The user filter every figure is narrowed by, or <c>null</c> for none.</summary>
         public CompiledUserFilter UserFilter { get; }
 
+        /// <summary>
+        /// The administrator's global filter, resolved for the reader, that every figure is ALSO narrowed by -
+        /// or <c>null</c> when none applies. Kept apart from <see cref="UserFilter"/> because the page shows
+        /// the two apart: the administrator's conditions locked, the reader's own editable.
+        /// </summary>
+        public CompiledUserFilter Restriction { get; }
+
+        /// <summary>The global filter as the page shows it, set whenever <see cref="Restriction"/> is.</summary>
+        public GlobalFilterEcho GlobalFilter { get; }
+
+        /// <summary>The global filter in plain English, for the Excel workbook.</summary>
+        public string GlobalFilterDescription { get; }
+
         /// <summary>True when this scope actually narrows anything.</summary>
-        public bool IsNarrowed => !string.IsNullOrWhiteSpace(EmailDomain) || UserFilter != null;
+        public bool IsNarrowed => !string.IsNullOrWhiteSpace(EmailDomain) || UserFilter != null || Restriction != null;
 
         /// <summary>
         /// Builds a scope from a caller-supplied domain. Anything blank, or that does not normalise to
@@ -53,16 +74,36 @@ namespace Common.Entities.CopilotAdoption
         /// </summary>
         public static CopilotAdoptionScope Create(string emailDomain, CompiledUserFilter userFilter)
         {
+            return Create(emailDomain, userFilter, null, null, null);
+        }
+
+        /// <summary>
+        /// As <see cref="Create(string, CompiledUserFilter)"/>, ANDed with the administrator's global filter
+        /// when one applies. A person is in scope when they match all three.
+        /// </summary>
+        public static CopilotAdoptionScope Create(
+            string emailDomain,
+            CompiledUserFilter userFilter,
+            CompiledUserFilter restriction,
+            GlobalFilterEcho globalFilter,
+            string globalFilterDescription)
+        {
             var normalised = CopilotAdoptionEmailDomain.Normalise(emailDomain);
 
-            if (string.IsNullOrWhiteSpace(normalised) && userFilter == null) return WholeTenant;
+            if (string.IsNullOrWhiteSpace(normalised) && userFilter == null && restriction == null) return WholeTenant;
 
-            return new CopilotAdoptionScope(string.IsNullOrWhiteSpace(normalised) ? null : normalised, userFilter);
+            return new CopilotAdoptionScope(
+                string.IsNullOrWhiteSpace(normalised) ? null : normalised,
+                userFilter,
+                restriction,
+                globalFilter,
+                globalFilterDescription);
         }
 
         /// <summary>
         /// Whether one row's person is in scope. The domain is the row's own, derived by the analysis;
-        /// the user filter is evaluated by user id against the directory snapshot it was compiled with.
+        /// the user filter and the global filter are evaluated by user id against the directory snapshot
+        /// they were compiled with.
         /// </summary>
         public bool Includes(int userId, string rowEmailDomain)
         {
@@ -72,22 +113,25 @@ namespace Common.Entities.CopilotAdoption
                 return false;
             }
 
-            return UserFilter == null || UserFilter.Matches(userId);
+            return (UserFilter == null || UserFilter.Matches(userId)) && (Restriction == null || Restriction.Matches(userId));
         }
 
         /// <summary>
         /// Whether a person the analysis holds no row for would be in scope, where the scope can tell. A user
-        /// filter carries the directory, which knows the person's attributes and email domain alike; an email
-        /// domain on its own has nothing to look a missing person up in, so that answers <c>null</c>.
+        /// filter or global filter carries the directory, which knows the person's attributes and email domain
+        /// alike; an email domain on its own has nothing to look a missing person up in, so that answers
+        /// <c>null</c>.
         /// </summary>
         public bool? IncludesFromDirectory(int userId)
         {
-            if (UserFilter == null) return null;
-            if (!UserFilter.Matches(userId)) return false;
+            var directory = UserFilter ?? Restriction;
+            if (directory == null) return null;
+            if (UserFilter != null && !UserFilter.Matches(userId)) return false;
+            if (Restriction != null && !Restriction.Matches(userId)) return false;
 
             return string.IsNullOrWhiteSpace(EmailDomain)
                 || string.Equals(
-                    CopilotAdoptionEmailDomain.Label(UserFilter.EmailDomainOf(userId)),
+                    CopilotAdoptionEmailDomain.Label(directory.EmailDomainOf(userId)),
                     EmailDomain,
                     StringComparison.OrdinalIgnoreCase);
         }
@@ -229,8 +273,13 @@ namespace Common.Entities.CopilotAdoption
 
                 // Echoed, like the domain, so the page states which population it is showing rather
                 // than assuming the request it sent is the one that was applied.
-                UserFilter = scope.UserFilter?.ToEcho(),
+                UserFilter = scope.UserFilter?.ToEcho(scope.Restriction),
                 UserFilterDescription = scope.UserFilter?.DescribeInEnglish(),
+
+                // The administrator's global filter, echoed apart from the reader's own: the page shows
+                // it locked, and the workbook states it on its cover.
+                GlobalFilter = scope.GlobalFilter,
+                GlobalFilterDescription = scope.GlobalFilterDescription,
 
                 // The tenant-wide seat count, so a narrowed page can say "312 of 4,210 licence holders"
                 // - the proportion is what tells a reader whether the slice is representative.
@@ -247,11 +296,7 @@ namespace Common.Entities.CopilotAdoption
                 // Cloned when a scoring pass is going to follow, because that pass writes this
                 // domain's idle-seat count onto each SKU and sharing the list would write it straight
                 // into the cached tenant-wide analysis every other caller is reading.
-                SeatLicenceTypes = cloneSeatLicenceTypes
-                    ? (tenant.SeatLicenceTypes ?? new List<LicenceTypeClassification>())
-                        .Select(l => l.Clone())
-                        .ToList()
-                    : tenant.SeatLicenceTypes,
+                SeatLicenceTypes = SeatLicenceTypesFor(tenant, scope, cloneSeatLicenceTypes),
 
                 // Which imports supplied data, which queries failed, and how long each step took. All
                 // statements about the analysis run, not about the population.
@@ -326,7 +371,7 @@ namespace Common.Entities.CopilotAdoption
             CopilotAdoptionAnalysis analysis, CopilotAdoptionScope scope, CopilotAdoptionSummary scoped)
         {
             var notAnalysed = analysis.LicensedUsersNotAnalysed;
-            if (notAnalysed == null || notAnalysed.Count == 0 || scope.UserFilter == null) return;
+            if (notAnalysed == null || notAnalysed.Count == 0 || (scope.UserFilter == null && scope.Restriction == null)) return;
 
             var inScope = 0;
             foreach (var userId in notAnalysed)
@@ -344,6 +389,27 @@ namespace Common.Entities.CopilotAdoption
                     { "count", inScope },
                     { "maxUsers", scoped.Options?.MaxLicensedUsersScored ?? CopilotAdoptionOptions.Default.MaxLicensedUsersScored },
                 });
+        }
+
+        /// <summary>
+        /// The licence types a narrowed summary lists.
+        /// </summary>
+        /// <remarks>
+        /// Under the administrator's global filter, only the Copilot seat types. No other type's assignment
+        /// count can be narrowed - a user row carries its Copilot seats only (see
+        /// <see cref="ScopeSeatLicenceTypes"/>) - and its assigned, purchased and unassigned counts all describe
+        /// the whole tenant, which is what that filter keeps a restricted reader from reading. Narrowed by an
+        /// email domain or by the reader's own filter, every type is listed, the others tenant-wide, as before.
+        /// </remarks>
+        private static List<LicenceTypeClassification> SeatLicenceTypesFor(
+            CopilotAdoptionSummary tenant, CopilotAdoptionScope scope, bool clone)
+        {
+            if (scope.Restriction == null && !clone) return tenant.SeatLicenceTypes;
+
+            IEnumerable<LicenceTypeClassification> listed = tenant.SeatLicenceTypes ?? new List<LicenceTypeClassification>();
+            if (scope.Restriction != null) listed = listed.Where(l => l.IsCopilotSeat);
+
+            return clone ? listed.Select(l => l.Clone()).ToList() : listed.ToList();
         }
 
         /// <summary>

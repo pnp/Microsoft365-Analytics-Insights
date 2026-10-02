@@ -112,7 +112,7 @@ namespace Common.Entities.CopilotAdoption
         {
             var generated = summary?.GeneratedUtc ?? DateTime.UtcNow;
             var windowDays = summary?.WindowDays ?? 0;
-            var narrowed = !string.IsNullOrWhiteSpace(summary?.UserFilterDescription) ? "-filtered" : string.Empty;
+            var narrowed = summary != null && !string.IsNullOrWhiteSpace(FilterDescription(summary)) ? "-filtered" : string.Empty;
 
             return string.Format(
                 CultureInfo.InvariantCulture,
@@ -137,7 +137,8 @@ namespace Common.Entities.CopilotAdoption
             sheet.SetColumnWidths(42, 34, 60);
 
             var hasDomain = !string.IsNullOrWhiteSpace(summary.ScopedEmailDomain);
-            var hasFilter = !string.IsNullOrWhiteSpace(summary.UserFilterDescription);
+            var filterDescription = FilterDescription(summary);
+            var hasFilter = !string.IsNullOrWhiteSpace(filterDescription);
 
             sheet.AddTitle(hasDomain
                 ? "Microsoft 365 Copilot - adoption report for " + summary.ScopedEmailDomain
@@ -154,11 +155,11 @@ namespace Common.Entities.CopilotAdoption
             {
                 var narrowedTo = hasDomain && hasFilter
                     ? "NARROWED TO ONE EMAIL DOMAIN: " + summary.ScopedEmailDomain + ", AND FILTERED TO PEOPLE WHERE: "
-                      + summary.UserFilterDescription + ". Every figure in this workbook describes those people only"
+                      + filterDescription + ". Every figure in this workbook describes those people only"
                     : hasDomain
                         ? "NARROWED TO ONE EMAIL DOMAIN: " + summary.ScopedEmailDomain + ". Every figure in this "
                           + "workbook describes the people on that domain only"
-                        : "FILTERED TO PEOPLE WHERE: " + summary.UserFilterDescription + ". Every figure in this "
+                        : "FILTERED TO PEOPLE WHERE: " + filterDescription + ". Every figure in this "
                           + "workbook describes those people only";
 
                 sheet.AddRow(XlsxCell.Wrapped(
@@ -173,7 +174,10 @@ namespace Common.Entities.CopilotAdoption
                 // A condition on an organisation type deleted or disabled since the filter was built
                 // matches nobody. Said here, because otherwise a file showing zero people reads as a
                 // measured empty population rather than as a filter that could not be applied.
-                var unknown = summary.UserFilter?.UnknownDimensions ?? new List<string>();
+                var unknown = (summary.UserFilter?.UnknownDimensions ?? new List<string>())
+                    .Concat(summary.GlobalFilter?.UnknownDimensions ?? new List<string>())
+                    .Distinct(StringComparer.Ordinal)
+                    .ToList();
                 if (unknown.Count > 0)
                 {
                     sheet.AddRow(XlsxCell.Wrapped(
@@ -324,7 +328,7 @@ namespace Common.Entities.CopilotAdoption
                 return $"Of {summary.LicensedUsers:N0} licences. Rates in this workbook are of the analysed users only.";
             }
 
-            if (!string.IsNullOrWhiteSpace(summary.UserFilterDescription))
+            if (!string.IsNullOrWhiteSpace(FilterDescription(summary)))
             {
                 return "Every licensed user matching the filter was analysed - not the whole tenant.";
             }
@@ -390,7 +394,7 @@ namespace Common.Entities.CopilotAdoption
                     : summary.ScoredUsers < summary.LicensedUsers
                     ? "FEWER THAN THE SEAT COUNT. Every rate below is of these users, not of the whole tenant, "
                       + "and must not be quoted as a tenant-wide figure."
-                    : !string.IsNullOrWhiteSpace(summary.UserFilterDescription)
+                    : !string.IsNullOrWhiteSpace(FilterDescription(summary))
                         ? "Every licensed user matching the filter was analysed. The rates below describe those "
                           + "people, NOT the whole tenant."
                         : string.IsNullOrWhiteSpace(summary.ScopedEmailDomain)
@@ -794,22 +798,44 @@ namespace Common.Entities.CopilotAdoption
         private static string PopulationLabel(CopilotAdoptionSummary summary)
         {
             var hasDomain = !string.IsNullOrWhiteSpace(summary.ScopedEmailDomain);
-            var hasFilter = !string.IsNullOrWhiteSpace(summary.UserFilterDescription);
+            var filterDescription = FilterDescription(summary);
+            var hasFilter = !string.IsNullOrWhiteSpace(filterDescription);
 
             if (hasDomain && hasFilter)
             {
-                return "Email domain " + summary.ScopedEmailDomain + ", people where " + summary.UserFilterDescription;
+                return "Email domain " + summary.ScopedEmailDomain + ", people where " + filterDescription;
             }
 
             if (hasDomain) return "Email domain " + summary.ScopedEmailDomain;
-            if (hasFilter) return "People where " + summary.UserFilterDescription;
+            if (hasFilter) return "People where " + filterDescription;
             return "Whole tenant";
+        }
+
+        /// <summary>
+        /// Every people filter applied, in plain English: the administrator's global filter, named as such,
+        /// and the reader's own. Each is bracketed when it has OR groups, so the "and" joining them cannot be
+        /// read as binding tighter than the groups inside either.
+        /// </summary>
+        internal static string FilterDescription(CopilotAdoptionSummary summary)
+        {
+            var user = summary.UserFilterDescription;
+            var global = summary.GlobalFilterDescription;
+
+            if (string.IsNullOrWhiteSpace(global)) return user;
+
+            var globalPart = Bracket(global) + " (set by a portal administrator)";
+            return string.IsNullOrWhiteSpace(user) ? globalPart : globalPart + " and " + Bracket(user);
+        }
+
+        private static string Bracket(string description)
+        {
+            return description.IndexOf(" or ", StringComparison.Ordinal) >= 0 ? "(" + description + ")" : description;
         }
 
         private static string PopulationNote(CopilotAdoptionSummary summary)
         {
             var hasDomain = !string.IsNullOrWhiteSpace(summary.ScopedEmailDomain);
-            var hasFilter = !string.IsNullOrWhiteSpace(summary.UserFilterDescription);
+            var hasFilter = !string.IsNullOrWhiteSpace(FilterDescription(summary));
 
             if (!hasDomain && !hasFilter) return "Every Copilot seat holder the analysis could see.";
 
