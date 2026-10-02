@@ -1106,6 +1106,10 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             if (readUserSkus)
             {
                 var desired = await _licenseProcessor.BuildDesiredAssignmentsForUser(db, graphUser, dbUser);
+                if (desired == null)
+                {
+                    return;
+                }
                 if (fallbackLicenceUserIds == null || fallbackDesiredLicences == null)
                 {
                     await _licenseProcessor.ReconcileCollectedUserLicenses(db, new[] { dbUser.ID }, desired);

@@ -392,6 +392,9 @@ SELECT @changed;";
                 return result;
             }
 
+            // The opened rows below use the same refresh.CompletedUtc that CompleteRefresh stores in
+            // license_refresh_runs. Consumers treat seeded rows at MIN(completed_utc) as "held before
+            // licence history began", so do not split those timestamps.
             result.ClosedOpenRowsWithoutLookup = await _db.Database.ExecuteSqlCommandAsync(
                 @"UPDATE history
 SET valid_to_utc = @refreshUtc,
@@ -432,6 +435,9 @@ WHERE NOT EXISTS
             {
                 return null;
             }
+
+            // Must match the reconcile seed timestamp exactly: from_source=0 rows at the first run's
+            // completed_utc are the contract for "held before licence history began".
             var runId = await _db.Database.SqlQuery<int>(
                 "INSERT INTO dbo.license_refresh_runs (completed_utc, previous_completed_utc) OUTPUT inserted.id VALUES (@completedUtc, @previousRefreshUtc);",
                 BuildRefreshParameters(refresh)).SingleAsync();

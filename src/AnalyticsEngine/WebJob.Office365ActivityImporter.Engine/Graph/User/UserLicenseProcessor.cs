@@ -434,6 +434,10 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             Common.Entities.User dbUser)
         {
             var desired = await BuildDesiredAssignmentsForUser(db, graphUser, dbUser);
+            if (desired == null)
+            {
+                return;
+            }
             await ReconcileCollectedUserLicenses(db, new[] { dbUser.ID }, desired);
         }
 
@@ -446,7 +450,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             var userServicePlans = await _userLoader.LoadUserLicenseDetails(graphUser.Id);
             if (userServicePlans == null)
             {
-                return desired;
+                return null;
             }
 
             var skuPartNumbers = userServicePlans.Select(p => p.SkuPartNumber).Distinct().ToList();
