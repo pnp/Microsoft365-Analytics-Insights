@@ -1,7 +1,6 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
-
 namespace WebJob.Office365ActivityImporter.Engine.Graph
 {
     /// <summary>
@@ -16,21 +15,16 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             UserId = userId;
             LicenseTypeId = licenseTypeId;
         }
-
         public int UserId { get; }
-
         public int LicenseTypeId { get; }
-
         public bool Equals(UserLicenseAssignment other)
         {
             return UserId == other.UserId && LicenseTypeId == other.LicenseTypeId;
         }
-
         public override bool Equals(object obj)
         {
             return obj is UserLicenseAssignment other && Equals(other);
         }
-
         public override int GetHashCode()
         {
             unchecked
@@ -38,10 +32,35 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 return (UserId * 397) ^ LicenseTypeId;
             }
         }
-
         public override string ToString() => $"user {UserId} -> licence type {LicenseTypeId}";
     }
-
+    /// <summary>
+    /// Context for one completed licence refresh. It is created before writes so assignment history
+    /// can carry the refresh timestamp and the preceding completed refresh as the uncertainty bound;
+    /// it is only persisted to dbo.license_refresh_runs once all Graph reads and SQL writes succeed.
+    /// </summary>
+    public sealed class LicenseRefreshRunInfo
+    {
+        public LicenseRefreshRunInfo(DateTime completedUtc, DateTime? previousCompletedUtc, bool historyTablesAvailable)
+        {
+            CompletedUtc = completedUtc;
+            PreviousCompletedUtc = previousCompletedUtc;
+            HistoryTablesAvailable = historyTablesAvailable;
+        }
+        public DateTime CompletedUtc { get; }
+        public DateTime? PreviousCompletedUtc { get; }
+        public bool HistoryTablesAvailable { get; }
+        public bool IsFirstHistoryRefresh => HistoryTablesAvailable && PreviousCompletedUtc == null;
+    }
+    /// <summary>Seat-count observation for one licence type in a completed refresh.</summary>
+    public sealed class LicenseSeatCountSnapshot
+    {
+        public int LicenseTypeId { get; set; }
+        public int? ConsumedUnits { get; set; }
+        public int? PrepaidEnabledUnits { get; set; }
+        public int? PrepaidWarningUnits { get; set; }
+        public int? PrepaidSuspendedUnits { get; set; }
+    }
     /// <summary>
     /// Read/write port for <c>dbo.user_license_type_lookups</c>, so the licence-refresh rules in
     /// <c>UserLicenseProcessor</c> can be exercised without a database. See issue #392.
@@ -59,15 +78,21 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         /// not returned, so the caller can never delete a row it does not own.
         /// </summary>
         Task<HashSet<UserLicenseAssignment>> LoadAssignmentsFor(ICollection<int> userIds);
-
+        /// <summary>Creates the in-memory context for one licence refresh, probing whether history tables exist.</summary>
+        Task<LicenseRefreshRunInfo> StartRefresh(DateTime completedUtc);
+        /// <summary>Carries current lookup and open-history rows across licence-type rows that represent the same SKU after a display-name rename.</summary>
+        Task<int> CarryAssignmentsAcrossRenamedLicenceTypes(IReadOnlyList<int> currentLicenseTypeIds, LicenseRefreshRunInfo refresh);
+        /// <summary>Seeds open history rows for assignments that already existed before history was enabled.</summary>
+        Task<int> SeedCurrentAssignments(IReadOnlyList<UserLicenseAssignment> assignments, LicenseRefreshRunInfo refresh);
         /// <summary>
         /// Inserts the supplied assignments, ignoring any that already exist. Returns rows written.
         /// </summary>
-        Task<int> AddAssignments(IReadOnlyList<UserLicenseAssignment> assignments);
-
+        Task<int> AddAssignments(IReadOnlyList<UserLicenseAssignment> assignments, LicenseRefreshRunInfo refresh);
         /// <summary>
         /// Deletes exactly the supplied assignments. Returns rows deleted.
         /// </summary>
-        Task<int> RemoveAssignments(IReadOnlyList<UserLicenseAssignment> assignments);
+        Task<int> RemoveAssignments(IReadOnlyList<UserLicenseAssignment> assignments, LicenseRefreshRunInfo refresh);
+        /// <summary>Records the completed refresh and its seat-count observations after every write has succeeded.</summary>
+        Task<int?> CompleteRefresh(LicenseRefreshRunInfo refresh, IReadOnlyList<LicenseSeatCountSnapshot> seatCounts);
     }
 }
