@@ -60,7 +60,7 @@
 
    PREREQUISITE
 
-     The database must already be on migration 202609221200001_UserOrganisations. The __MigrationHistory stamp copies that row's
+     The database must already be on migration 202610011330001_PortalGlobalFilter. The __MigrationHistory stamp copies that row's
 
      model snapshot, which is byte-identical to this one because this migration changes no EF entity
 
@@ -330,11 +330,11 @@ BEGIN
 
 END
 
-ELSE IF NOT EXISTS (SELECT 1 FROM [dbo].[__MigrationHistory] WHERE [MigrationId] = N'202609221200001_UserOrganisations')
+ELSE IF NOT EXISTS (SELECT 1 FROM [dbo].[__MigrationHistory] WHERE [MigrationId] = N'202610011330001_PortalGlobalFilter')
 
 BEGIN
 
-    RAISERROR('LicenceHistory: NOT stamped - prerequisite migration 202609221200001_UserOrganisations is not stamped in __MigrationHistory.', 16, 1);
+    RAISERROR('LicenceHistory: NOT stamped - prerequisite migration 202610011330001_PortalGlobalFilter is not stamped in __MigrationHistory.', 16, 1);
 
 END
 
@@ -348,7 +348,7 @@ BEGIN
 
     FROM [dbo].[__MigrationHistory]
 
-    WHERE [MigrationId] = N'202609221200001_UserOrganisations';
+    WHERE [MigrationId] = N'202610011330001_PortalGlobalFilter';
 
     RAISERROR('LicenceHistory: stamped __MigrationHistory.', 0, 1) WITH NOWAIT;
 

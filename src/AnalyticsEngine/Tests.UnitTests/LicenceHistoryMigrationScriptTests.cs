@@ -24,7 +24,7 @@ namespace Tests.UnitTests
 
         private const string MigrationId = "202610021200001_LicenceHistory";
 
-        private const string PredecessorId = "202609221200001_UserOrganisations";
+        private const string PredecessorId = "202610011330001_PortalGlobalFilter";
 
         private const string PredecessorModel = "0x1F8B0800AABBCCDD";
 
