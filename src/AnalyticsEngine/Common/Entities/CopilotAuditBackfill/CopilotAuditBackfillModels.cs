@@ -8,6 +8,7 @@ namespace Common.Entities.CopilotAuditBackfill
         public const string Queued = "queued";
         public const string Running = "running";
         public const string Completed = "completed";
+        public const string CompletedWithGaps = "completedWithGaps";
         public const string Failed = "failed";
         public const string Cancelled = "cancelled";
         public static bool IsActive(string state) => state == Queued || state == Running;
@@ -18,6 +19,8 @@ namespace Common.Entities.CopilotAuditBackfill
         public const string MissingPermission = "missingPermission";
         public const string CopilotImportOff = "copilotImportOff";
         public const string QueryFailed = "queryFailed";
+        public const string QueryTruncated = "queryTruncated";
+        public const string GraphAccessDenied = "graphAccessDenied";
         public const string StateUnavailable = "stateUnavailable";
         public const string Unexpected = "unexpected";
     }
@@ -37,6 +40,18 @@ namespace Common.Entities.CopilotAuditBackfill
         public string QueryId { get; set; }
         public DateTime? SubmittedUtc { get; set; }
         public int SplitLevel { get; set; }
+        public int AttemptCount { get; set; }
+    }
+
+    public sealed class CopilotAuditBackfillGap
+    {
+        public DateTime StartUtc { get; set; }
+        public DateTime EndUtc { get; set; }
+        public string Day { get; set; }
+        public string ErrorCode { get; set; }
+        public string Detail { get; set; }
+        public int Attempts { get; set; }
+        public bool Incomplete { get; set; }
     }
 
     public sealed class CopilotAuditBackfillJob
@@ -51,8 +66,10 @@ namespace Common.Entities.CopilotAuditBackfill
         public DateTime StartUtc { get; set; }
         public DateTime EndUtc { get; set; }
         public List<CopilotAuditBackfillSlice> PendingSlices { get; set; } = new List<CopilotAuditBackfillSlice>();
+        public List<CopilotAuditBackfillSlice> InFlightSlices { get; set; } = new List<CopilotAuditBackfillSlice>();
         public CopilotAuditBackfillSlice CurrentSlice { get; set; }
         public List<string> CompletedDays { get; set; } = new List<string>();
+        public List<CopilotAuditBackfillGap> Gaps { get; set; } = new List<CopilotAuditBackfillGap>();
         public long RecordsSeen { get; set; }
         public long RecordsImported { get; set; }
         public int SlicesSubmitted { get; set; }

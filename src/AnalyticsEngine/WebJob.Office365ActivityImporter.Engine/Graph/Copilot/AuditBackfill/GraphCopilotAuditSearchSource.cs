@@ -5,8 +5,8 @@ using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using System;
 using System.Collections.Generic;
-using System.Linq;
 using System.Net.Http;
+using System.Linq;
 using System.Threading.Tasks;
 using WebJob.Office365ActivityImporter.Engine.Graph;
 
@@ -53,7 +53,14 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.AuditBackfill
             using (var response = await _client.PostAsyncWithThrottleRetries(BaseUrl, body, _logger).ConfigureAwait(false))
             {
                 var json = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
-                response.EnsureSuccessStatusCode();
+                try
+                {
+                    response.EnsureSuccessStatusCode();
+                }
+                catch (HttpRequestException ex)
+                {
+                    throw new GraphHttpException(response.StatusCode, BaseUrl, json, ex, "POST", GetGraphRequestId(response));
+                }
                 return CopilotAuditSearchQuery.FromJson(json);
             }
         }
@@ -63,6 +70,13 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.AuditBackfill
 
         public async Task<CopilotAuditSearchRecordPage> GetRecordsAsync(string queryId, string nextLink = null)
             => CopilotAuditSearchRecordPage.FromJson(await _client.GetStringAsyncWithThrottleRetries(nextLink ?? (BaseUrl + "/" + Uri.EscapeDataString(queryId) + "/records")).ConfigureAwait(false));
+
+        private static string GetGraphRequestId(HttpResponseMessage response)
+        {
+            return response != null && response.Headers.TryGetValues("request-id", out var requestIds)
+                ? requestIds.FirstOrDefault()
+                : null;
+        }
     }
 
     public sealed class CopilotAuditSearchQuery
@@ -116,7 +130,17 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.AuditBackfill
     {
         [JsonProperty("id")]
         public string Id { get; set; }
+        [JsonProperty("createdDateTime")]
+        public DateTime? CreatedDateTime { get; set; }
+        [JsonProperty("auditLogRecordType")]
+        public string AuditLogRecordType { get; set; }
+        [JsonProperty("operation")]
+        public string Operation { get; set; }
+        [JsonProperty("service")]
+        public string Service { get; set; }
+        [JsonProperty("userPrincipalName")]
+        public string UserPrincipalName { get; set; }
         [JsonProperty("auditData")]
-        public string AuditData { get; set; }
+        public JToken AuditData { get; set; }
     }
 }

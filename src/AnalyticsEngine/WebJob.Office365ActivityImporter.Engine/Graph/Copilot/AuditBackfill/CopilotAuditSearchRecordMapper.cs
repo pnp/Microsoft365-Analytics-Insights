@@ -21,13 +21,19 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.AuditBackfill
     {
         public static CopilotAuditSearchRecordMapping Map(CopilotAuditSearchRecord record, Microsoft.Extensions.Logging.ILogger logger = null)
         {
-            if (record == null || string.IsNullOrWhiteSpace(record.AuditData))
+            if (record == null || record.AuditData == null || record.AuditData.Type == JTokenType.Null)
             {
                 return new CopilotAuditSearchRecordMapping { ErrorCode = "missingAuditData" };
             }
 
             JObject payload;
-            try { payload = JObject.Parse(record.AuditData); }
+            try
+            {
+                payload = record.AuditData.Type == JTokenType.String
+                    ? JObject.Parse((string)record.AuditData)
+                    : (JObject)record.AuditData.DeepClone();
+                payload.Remove("@odata.type");
+            }
             catch { return new CopilotAuditSearchRecordMapping { ErrorCode = "invalidAuditData" }; }
 
             var logBase = payload.ToObject<WorkloadOnlyAuditLogContent>();

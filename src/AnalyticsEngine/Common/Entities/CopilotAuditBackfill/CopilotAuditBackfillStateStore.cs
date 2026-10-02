@@ -51,7 +51,14 @@ namespace Common.Entities.CopilotAuditBackfill
             var job = JsonConvert.DeserializeObject<CopilotAuditBackfillJob>(json);
             if (job == null) return null;
             job.PendingSlices = job.PendingSlices ?? new System.Collections.Generic.List<CopilotAuditBackfillSlice>();
+            job.InFlightSlices = job.InFlightSlices ?? new System.Collections.Generic.List<CopilotAuditBackfillSlice>();
+            if (job.CurrentSlice != null)
+            {
+                job.InFlightSlices.Add(job.CurrentSlice);
+                job.CurrentSlice = null;
+            }
             job.CompletedDays = job.CompletedDays ?? new System.Collections.Generic.List<string>();
+            job.Gaps = job.Gaps ?? new System.Collections.Generic.List<CopilotAuditBackfillGap>();
             job.CancelRequested = await IsCancelRequestedAsync(id).ConfigureAwait(false);
             return job;
         }

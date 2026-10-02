@@ -42,6 +42,8 @@ namespace Web.AnalyticsWeb.Models.CopilotAuditBackfill
         public DateTime EndUtc { get; set; }
         [JsonProperty("pendingSlices")]
         public int PendingSlices { get; set; }
+        [JsonProperty("inFlightSlices")]
+        public int InFlightSlices { get; set; }
         [JsonProperty("slicesSubmitted")]
         public int SlicesSubmitted { get; set; }
         [JsonProperty("slicesCompleted")]
@@ -50,6 +52,10 @@ namespace Web.AnalyticsWeb.Models.CopilotAuditBackfill
         public int SlicesSplit { get; set; }
         [JsonProperty("completedDays")]
         public string[] CompletedDays { get; set; }
+        [JsonProperty("failedDays")]
+        public string[] FailedDays { get; set; }
+        [JsonProperty("incompleteDays")]
+        public string[] IncompleteDays { get; set; }
         [JsonProperty("recordsSeen")]
         public long RecordsSeen { get; set; }
         [JsonProperty("recordsImported")]
@@ -161,6 +167,9 @@ namespace Web.AnalyticsWeb.Models.CopilotAuditBackfill
         private static CopilotAuditBackfillJobModel ToModel(CopilotAuditBackfillJob job)
         {
             if (job == null) return null;
+            var gaps = job.Gaps ?? new System.Collections.Generic.List<CopilotAuditBackfillGap>();
+            var inFlight = job.InFlightSlices ?? new System.Collections.Generic.List<CopilotAuditBackfillSlice>();
+            var firstInFlight = inFlight.OrderBy(s => s.EndUtc).FirstOrDefault();
             return new CopilotAuditBackfillJobModel
             {
                 Id = job.Id,
@@ -172,19 +181,22 @@ namespace Web.AnalyticsWeb.Models.CopilotAuditBackfill
                 CompletedUtc = job.CompletedUtc,
                 StartUtc = job.StartUtc,
                 EndUtc = job.EndUtc,
-                PendingSlices = (job.PendingSlices?.Count ?? 0) + (job.CurrentSlice == null ? 0 : 1),
+                PendingSlices = job.PendingSlices?.Count ?? 0,
+                InFlightSlices = inFlight.Count,
                 SlicesSubmitted = job.SlicesSubmitted,
                 SlicesCompleted = job.SlicesCompleted,
                 SlicesSplit = job.SlicesSplit,
                 CompletedDays = (job.CompletedDays ?? new System.Collections.Generic.List<string>()).OrderByDescending(x => x, StringComparer.Ordinal).ToArray(),
+                FailedDays = gaps.Where(g => !g.Incomplete).Select(g => g.Day).Distinct().OrderByDescending(x => x, StringComparer.Ordinal).ToArray(),
+                IncompleteDays = gaps.Where(g => g.Incomplete).Select(g => g.Day).Distinct().OrderByDescending(x => x, StringComparer.Ordinal).ToArray(),
                 RecordsSeen = job.RecordsSeen,
                 RecordsImported = job.RecordsImported,
                 PermissionStatus = job.PermissionStatus,
                 CopilotImportEnabled = job.CopilotImportEnabled,
                 LastErrorCode = job.LastErrorCode,
                 CancelRequested = job.CancelRequested,
-                CurrentSliceStartUtc = job.CurrentSlice?.StartUtc,
-                CurrentSliceEndUtc = job.CurrentSlice?.EndUtc,
+                CurrentSliceStartUtc = firstInFlight?.StartUtc,
+                CurrentSliceEndUtc = firstInFlight?.EndUtc,
             };
         }
     }

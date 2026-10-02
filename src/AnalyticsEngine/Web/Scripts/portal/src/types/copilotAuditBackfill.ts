@@ -1,4 +1,4 @@
-export type CopilotAuditBackfillState = 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
+export type CopilotAuditBackfillState = 'queued' | 'running' | 'completed' | 'completedWithGaps' | 'failed' | 'cancelled';
 export type CopilotAuditBackfillPermissionStatus = 'unknown' | 'granted' | 'missing' | 'noIdentity';
 
 export interface CopilotAuditBackfillJob {
@@ -12,10 +12,13 @@ export interface CopilotAuditBackfillJob {
   startUtc: string;
   endUtc: string;
   pendingSlices: number;
+  inFlightSlices: number;
   slicesSubmitted: number;
   slicesCompleted: number;
   slicesSplit: number;
   completedDays: string[];
+  failedDays: string[];
+  incompleteDays: string[];
   recordsSeen: number;
   recordsImported: number;
   permissionStatus: CopilotAuditBackfillPermissionStatus;

@@ -13,6 +13,7 @@ const STATE_KEYS: Record<CopilotAuditBackfillState, TranslationKey> = {
   queued: 'admin.copilotAuditBackfill.state.queued',
   running: 'admin.copilotAuditBackfill.state.running',
   completed: 'admin.copilotAuditBackfill.state.completed',
+  completedWithGaps: 'admin.copilotAuditBackfill.state.completedWithGaps',
   failed: 'admin.copilotAuditBackfill.state.failed',
   cancelled: 'admin.copilotAuditBackfill.state.cancelled',
 };
@@ -28,6 +29,8 @@ const ERROR_KEYS: Record<string, TranslationKey> = {
   missingPermission: 'admin.copilotAuditBackfill.error.missingPermission',
   copilotImportOff: 'admin.copilotAuditBackfill.error.copilotImportOff',
   queryFailed: 'admin.copilotAuditBackfill.error.queryFailed',
+  queryTruncated: 'admin.copilotAuditBackfill.error.queryTruncated',
+  graphAccessDenied: 'admin.copilotAuditBackfill.error.graphAccessDenied',
   unexpected: 'admin.copilotAuditBackfill.error.unexpected',
 };
 
@@ -90,7 +93,7 @@ export default function CopilotAuditBackfillPage() {
 
   if (loading) return <Spinner label={t('admin.copilotAuditBackfill.loading')} />;
   const job = status?.latestJob ?? null;
-  const totalSlices = job ? job.pendingSlices + job.slicesCompleted : 0;
+  const totalSlices = job ? job.pendingSlices + job.inFlightSlices + job.slicesCompleted : 0;
   const progress = totalSlices > 0 ? job!.slicesCompleted / totalSlices : undefined;
 
   return <div>
@@ -119,9 +122,12 @@ export default function CopilotAuditBackfillPage() {
             <Row label={t('admin.copilotAuditBackfill.status.window')}>{formatUtc(job.startUtc)} - {formatUtc(job.endUtc)}</Row>
             <Row label={t('admin.copilotAuditBackfill.status.permission')}>{t(PERMISSION_KEYS[job.permissionStatus])}</Row>
             <Row label={t('admin.copilotAuditBackfill.status.slices')}>{formatNumber(job.slicesCompleted)} / {formatNumber(totalSlices)}</Row>
+            <Row label={t('admin.copilotAuditBackfill.status.inFlight')}>{formatNumber(job.inFlightSlices)}</Row>
             <Row label={t('admin.copilotAuditBackfill.status.records')}>{formatNumber(job.recordsImported)} / {formatNumber(job.recordsSeen)}</Row>
             <Row label={t('admin.copilotAuditBackfill.status.currentSlice')}>{job.currentSliceStartUtc ? `${formatUtc(job.currentSliceStartUtc)} - ${formatUtc(job.currentSliceEndUtc ?? job.currentSliceStartUtc)}` : t('admin.common.unknown')}</Row>
             <Row label={t('admin.copilotAuditBackfill.status.completedDays')}>{job.completedDays.length > 0 ? job.completedDays.slice(0, 12).join(', ') : t('admin.common.unknown')}</Row>
+            <Row label={t('admin.copilotAuditBackfill.status.failedDays')}>{job.failedDays.length > 0 ? job.failedDays.join(', ') : t('admin.common.unknown')}</Row>
+            <Row label={t('admin.copilotAuditBackfill.status.incompleteDays')}>{job.incompleteDays.length > 0 ? job.incompleteDays.join(', ') : t('admin.common.unknown')}</Row>
             {job.lastErrorCode && <Row label={t('admin.copilotAuditBackfill.status.lastError')}>{t(ERROR_KEYS[job.lastErrorCode] ?? 'admin.copilotAuditBackfill.error.unexpected')}</Row>}
           </TableBody></Table>
         </> : <Text className={styles.muted}>{t('admin.copilotAuditBackfill.status.none')}</Text>}
