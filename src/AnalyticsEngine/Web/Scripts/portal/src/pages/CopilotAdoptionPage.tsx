@@ -2485,6 +2485,7 @@ function SeatHolderTimeSavedPanel({
         <label>{t('copilotAdoption.page.seatTime.input.meeting')}<Input type="number" value={String(timeSaved.assumptions.seatMeetingMinutes)} onChange={update('seatMeetingMinutes')} /></label>
         <label>{t('copilotAdoption.page.seatTime.input.other')}<Input type="number" value={String(timeSaved.assumptions.seatUncreditedMinutes)} onChange={update('seatUncreditedMinutes')} /></label>
       </div>
+      <Text>{t('copilotAdoption.page.seatTime.zeroCreditNote')}</Text>
       <Text>
         {t('copilotAdoption.page.seatTime.counts', {
           outlook: number(projection.outlookActions),

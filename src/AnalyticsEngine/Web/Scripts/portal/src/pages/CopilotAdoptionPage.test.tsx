@@ -109,6 +109,10 @@ const options: CopilotAdoptionOptions = {
   copilotMinutesSavedPerMailThread: 5,
   copilotMinutesSavedPerDocument: 8,
   coworkEstimateLowerBoundRatio: 0.5,
+  copilotSeatOutlookMinutesPerAction: 6,
+  copilotSeatOfficeMinutesPerAction: 6,
+  copilotSeatMeetingMinutesPerAction: 30,
+  copilotSeatUncreditedMinutesPerAction: 0,
   coworkMinutesSavedPerTask: 6,
   coworkOrganiseMeetingsShare: 0.25,
   coworkOrganiseMeetingsMinutes: 6,
@@ -938,6 +942,22 @@ describe('CopilotAdoptionPage modelled time saved', () => {
     },
   };
 
+  const seatHolderEstimate = {
+    isModelled: true,
+    cohortUsers: 24,
+    excludedUsageReportSourcedUsers: 3,
+    observedOutlookActions: 100,
+    observedOfficeActions: 50,
+    observedTeamsMeetingActions: 4,
+    observedUncreditedActions: 20,
+    credits: { outlookMinutesPerAction: 6, officeMinutesPerAction: 6, teamsMeetingMinutesPerAction: 30, uncreditedMinutesPerAction: 0, lowerBoundRatio: 0.5 },
+    hoursPerMonthLow: 9,
+    hoursPerMonthHigh: 17,
+    assumptions: ['Copilot Chat has no published per-prompt credit and defaults to zero.'],
+    byBand: [{ segment: 'Established', cohortUsers: 24, observedOutlookActions: 100, observedOfficeActions: 50, observedTeamsMeetingActions: 4, observedUncreditedActions: 20, hoursPerMonthLow: 9, hoursPerMonthHigh: 17 }],
+    byDepartment: [{ segment: 'Finance', cohortUsers: 24, observedOutlookActions: 100, observedOfficeActions: 50, observedTeamsMeetingActions: 4, observedUncreditedActions: 20, hoursPerMonthLow: 9, hoursPerMonthHigh: 17 }],
+  };
+
   const withEstimate = (overrides: Partial<CopilotAdoptionSummary> = {}) =>
     summary({
       coworkReadinessAvailable: true,
@@ -946,6 +966,7 @@ describe('CopilotAdoptionPage modelled time saved', () => {
       coworkValueEstimate: coworkReady,
       coworkFullRolloutEstimate: coworkCeiling,
       licenceOpportunityEstimate: licenceEstimate,
+      seatHolderTimeSavedEstimate: seatHolderEstimate,
       licenceChatUsersEstimate: {
         ...licenceEstimate,
         cohortUsers: 3,
@@ -1056,6 +1077,40 @@ describe('CopilotAdoptionPage modelled time saved', () => {
       await screen.findByText(/^The time Microsoft 365 Copilot could give back each month if the first 40 licence candidates on the list/),
     ).toBeInTheDocument();
     expect(screen.queryByText(/if every licence candidate/)).toBeNull();
+  });
+
+  it('shows realised seat-holder time on the executive tile and Licensed users section', async () => {
+    vi.mocked(fetchAdoptionSummary).mockResolvedValue(withEstimate());
+
+    await renderPage();
+
+    const tileCard = await tile('Time already saved by seat holders');
+    expect(within(tileCard).getByText('9\u201317 h')).toBeVisible();
+    expect(within(tileCard).getByText('Modelled')).toBeVisible();
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Licensed users' }));
+    expect(await screen.findByText("Seat holders' time saved (modelled)")).toBeVisible();
+    expect(screen.getByText(/Copilot Chat, agents, Cowork and other surfaces default to zero minutes/)).toBeVisible();
+    expect(screen.getByText(/20 other at 0 min/)).toBeVisible();
+  });
+
+  it('lets the reader edit a realised-value credit for the session', async () => {
+    vi.mocked(fetchAdoptionSummary).mockResolvedValue(withEstimate());
+
+    await renderPage();
+    fireEvent.click(screen.getByRole('tab', { name: 'Licensed users' }));
+
+    const input = await screen.findByLabelText('Outlook minutes per action');
+    fireEvent.change(input, { target: { value: '12' } });
+
+    expect(await screen.findByText(/100 Outlook at 12 min/)).toBeVisible();
+    expect(screen.getByText('14\u201327 h')).toBeVisible();
+  });
+
+  it('has Spanish text for the realised seat-holder estimate', async () => {
+    const es = await loadCatalog('es');
+    expect(es['copilotAdoption.page.seatTime.title']).toBe('Tiempo ahorrado por titulares de licencia (modelado)');
+    expect(es['copilotAdoption.page.kpi.seatHolderTimeSaved.label']).toBe('Tiempo ya ahorrado por titulares de licencia');
   });
 
   it('puts each modelled figure on a tile of its own, marked as modelled', async () => {

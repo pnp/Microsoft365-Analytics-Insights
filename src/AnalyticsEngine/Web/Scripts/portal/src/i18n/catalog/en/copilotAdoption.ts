@@ -772,6 +772,8 @@ export const copilotAdoption = {
   'copilotAdoption.page.seatTime.hoursHigh': 'Hours high',
   'copilotAdoption.page.seatTime.people': 'People',
   'copilotAdoption.server.query.SeatHolderTimeSaved': 'seat-holder Copilot time-saved inputs',
+  'copilotAdoption.page.seatTime.zeroCreditNote': 'Copilot Chat, agents, Cowork and other surfaces default to zero minutes here because Microsoft has not published a per-prompt credit; Cowork stays in its own estimate.',
+
 } as const;
 
 export default copilotAdoption;

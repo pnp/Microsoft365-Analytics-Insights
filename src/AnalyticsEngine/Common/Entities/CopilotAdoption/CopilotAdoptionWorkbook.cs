@@ -2081,7 +2081,7 @@ namespace Common.Entities.CopilotAdoption
                     || model.CopilotSeatUncreditedMinutesPerAction != configured.CopilotSeatUncreditedMinutesPerAction
                     || CopilotAdoptionScoring.TimeSavedLowerBoundRatio(model) != CopilotAdoptionScoring.TimeSavedLowerBoundRatio(configured));
 
-            var sheet = workbook.AddSheet("Seat holders' time saved (modelled)");
+            var sheet = workbook.AddSheet("Seat holders time saved");
             sheet.SetColumnWidths(44, 18, 70);
             sheet.AddTitle("Time already saved by Copilot seat holders - MODELLED, NOT MEASURED");
             sheet.AddRow(XlsxCell.Wrapped(

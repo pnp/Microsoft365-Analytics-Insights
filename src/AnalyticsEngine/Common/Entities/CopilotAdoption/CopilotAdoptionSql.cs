@@ -302,7 +302,7 @@ namespace Common.Entities.CopilotAdoption
         /// When supplied, NULL is bucketed to this label first, matching the existing
         /// <c>ISNULL(app_host, '(unknown)')</c> behaviour. When null, NULL stays NULL.
         /// </param>
-        private static string AppHostKey(string column, string nullLabel = null)
+        internal static string AppHostKey(string column, string nullLabel = null)
         {
             var value = nullLabel == null ? column : $"ISNULL({column}, '{nullLabel}')";
             return $"CAST({value} AS nvarchar({AppHostKeyWidth}))";
