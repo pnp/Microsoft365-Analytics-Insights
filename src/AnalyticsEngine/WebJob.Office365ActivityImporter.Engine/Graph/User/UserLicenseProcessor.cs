@@ -8,6 +8,7 @@ using System.Data.Entity;
 using Microsoft.Data.SqlClient;
 using System.Linq;
 using System.Threading.Tasks;
+
 namespace WebJob.Office365ActivityImporter.Engine.Graph
 {
     /// <summary>
@@ -20,6 +21,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         private readonly IUserMetadataLoader _userLoader;
         private readonly UserMetadataCache _userMetaCache;
         private readonly Func<AnalyticsEntitiesContext, IUserLicenseStore> _licenseStoreFactory;
+
         public UserLicenseProcessor(
             AnalyticsLogger logger,
             IUserMetadataLoader userLoader,
@@ -27,6 +29,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             : this(logger, userLoader, userMetaCache, new OfficeLicenseNameResolver(), null)
         {
         }
+
         public UserLicenseProcessor(
             AnalyticsLogger logger,
             IUserMetadataLoader userLoader,
@@ -35,6 +38,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             : this(logger, userLoader, userMetaCache, new OfficeLicenseNameResolver(), licenseStoreFactory)
         {
         }
+
         internal UserLicenseProcessor(
             AnalyticsLogger logger,
             IUserMetadataLoader userLoader,
@@ -48,6 +52,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             _officeLicenseNameResolver = officeLicenseNameResolver ?? throw new ArgumentNullException(nameof(officeLicenseNameResolver));
             _licenseStoreFactory = licenseStoreFactory ?? (db => new SqlUserLicenseStore(db, logger));
         }
+
         /// <summary>
         /// Reconciles <c>dbo.user_license_type_lookups</c> for the supplied users against the licence
         /// assignments the tenant's SKUs report in Graph.
@@ -77,6 +82,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             if (skus == null) throw new ArgumentNullException(nameof(skus));
             if (graphFoundDbUsers == null) throw new ArgumentNullException(nameof(graphFoundDbUsers));
             if (db == null) throw new ArgumentNullException(nameof(db));
+
             // The users whose licence rows this refresh owns. Anything outside this set is left
             // strictly alone, so the refresh can never delete a licence it was not asked to manage.
             var scopeUserIds = new HashSet<int>();
@@ -87,11 +93,13 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                     scopeUserIds.Add(user.ID);
                 }
             }
+
             if (scopeUserIds.Count == 0)
             {
                 _logger.LogInformation("User import - no saved users to refresh licences for; skipping licence refresh.");
                 return;
             }
+
             // An empty SKU list is not a credible "this tenant holds no licences at all" - every
             // M365 tenant has at least one subscribed SKU - so it is almost always a Graph glitch or
             // a permissions change. Reconciling against it would delete every licence in the tenant,
@@ -103,6 +111,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 _logger.LogWarning("User import - Graph reported ZERO tenant SKUs. Existing licence data has been left untouched rather than deleted, because an empty SKU list is far more likely to be a transient Graph or permissions problem ('Organization.Read.All') than a tenant that genuinely holds no licences.");
                 return;
             }
+
             // Build the UPN dictionary ONCE for the whole tenant and reuse for every SKU.
             // Previous code rebuilt this 200k-entry dictionary on every SKU iteration - 30 SKUs
             // * 200k users = 6M unnecessary string allocations. The OrdinalIgnoreCase comparer
@@ -115,6 +124,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 {
                     continue;
                 }
+
                 // dbo.users has a UNIQUE index on user_name (IX_users), so a UPN collision should be
                 // impossible - but "last one wins" would leave the winner up to row order, which has
                 // no ORDER BY. If the constraint were ever relaxed that would make the reconciliation
@@ -125,8 +135,10 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 {
                     continue;
                 }
+
                 dbUsersByUpn[u.UserPrincipalName] = u;
             }
+
             // Resolve every SKU to its LicenseType and persist any newly created ones FIRST: the
             // reconciliation below compares primary keys, so each LicenseType must already have one.
             var skuLicenseTypes = new List<KeyValuePair<SubscribedSku, LicenseType>>(skus.Count);
@@ -135,22 +147,27 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 skuLicenseTypes.Add(new KeyValuePair<SubscribedSku, LicenseType>(sku, await GetLicenseType(sku.SkuPartNumber)));
             }
             await db.SaveChangesAsync();
+
             var store = _licenseStoreFactory(db);
             var refresh = await store.StartRefresh(DateTime.UtcNow);
             var seatCountSnapshots = await SaveSubscribedSkuCapacityAsync(db, skuLicenseTypes, refresh.CompletedUtc);
             await store.CarryAssignmentsAcrossRenamedLicenceTypes(skuLicenseTypes.Select(pair => pair.Value.ID).ToList(), refresh);
+
             // Build the state Graph says the table should be in. Using a set also gives us the
             // de-duplication the UNIQUE index on (license_type_id, user_id) demands: two SKU part
             // numbers (e.g. RIGHTSMANAGEMENT and RIGHTSMANAGEMENT_CE) can resolve to the same
             // display name, and therefore to the same LicenseType.
             var desired = new HashSet<UserLicenseAssignment>();
+
             // Licence types whose SKU gave an answer we do not believe. Their existing rows are left
             // alone rather than deleted - see the contradiction check below.
             var untrustedLicenceTypeIds = new HashSet<int>();
+
             foreach (var pair in skuLicenseTypes)
             {
                 // Load users with this SKU
                 var allUsersWithSku = await _userLoader.LoadUsersBySku(pair.Key.SkuId.Value);
+
                 // Graph contradicting itself: the tenant's own SKU record says seats are consumed,
                 // but the query for who holds that SKU came back empty. Believing the empty answer
                 // would delete every assignment for this licence type - issue #392 all over again,
@@ -163,12 +180,16 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                     untrustedLicenceTypeIds.Add(pair.Value.ID);
                     _logger.LogError($"User import - Graph reports {pair.Key.ConsumedUnits.GetValueOrDefault().ToString("N0")} consumed seat(s) for SKU '{pair.Key.SkuPartNumber}' but returned NO users holding it. Refusing to delete the existing '{pair.Value.Name}' assignments on the strength of that, because the two answers cannot both be right. They will reconcile on a later cycle once Graph is consistent.");
                 }
+
                 AddSkuAssignments(dbUsersByUpn, allUsersWithSku, pair.Key, pair.Value, desired);
+
                 // Clear the SKU users list to free memory
                 allUsersWithSku.Clear();
             }
+
             var current = await store.LoadAssignmentsFor(scopeUserIds);
             var delta = UserLicenseAssignmentDelta.Between(current, desired);
+
             var removals = delta.ToRemove;
             if (untrustedLicenceTypeIds.Count > 0)
             {
@@ -182,11 +203,11 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                     _logger.LogWarning($"User import - held back {suppressed.ToString("N0")} licence removal(s) belonging to {untrustedLicenceTypeIds.Count.ToString("N0")} SKU(s) that reported no holders while claiming consumed seats.");
                 }
             }
+
             _logger.LogInformation(
                 $"User import - licence refresh across {skus.Count.ToString("N0")} SKU(s) for {scopeUserIds.Count.ToString("N0")} user(s): " +
                 $"{delta.UnchangedCount.ToString("N0")} assignment(s) already correct, {delta.ToAdd.Count.ToString("N0")} to add, {removals.Count.ToString("N0")} to remove.");
-            var keptCurrentAssignments = current.Where(existing => !removals.Contains(existing)).ToList();
-            var seeded = await store.SeedCurrentAssignments(keptCurrentAssignments, refresh);
+
             var added = 0;
             var removed = 0;
             if (delta.ToAdd.Count > 0 || removals.Count > 0)
@@ -197,12 +218,17 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 added = await store.AddAssignments(delta.ToAdd, refresh);
                 removed = await store.RemoveAssignments(removals, refresh);
             }
+
+            var reconciled = await store.ReconcileHistoryWithCurrentLookups(refresh);
             var runId = await store.CompleteRefresh(refresh, seatCountSnapshots);
+
             _logger.LogInformation(
                 $"User import - licence refresh complete: {added.ToString("N0")} assignment(s) added, {removed.ToString("N0")} removed" +
-                $", {seeded.ToString("N0")} existing assignment(s) seeded into history" +
+                $", {reconciled.OpenedLookupRowsWithoutHistory.ToString("N0")} missing history row(s) opened and {reconciled.ClosedOpenRowsWithoutLookup.ToString("N0")} stale history row(s) closed" +
                 (runId.HasValue ? $", history refresh run {runId.Value.ToString("N0")} recorded." : "."));
         }
+
+
         private async Task<List<LicenseSeatCountSnapshot>> SaveSubscribedSkuCapacityAsync(
             AnalyticsEntitiesContext db,
             List<KeyValuePair<SubscribedSku, LicenseType>> skuLicenseTypes,
@@ -219,6 +245,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                     PrepaidSuspendedUnits = g.Any(pair => pair.Key.PrepaidUnits?.Suspended != null) ? g.Sum(pair => pair.Key.PrepaidUnits?.Suspended) : (int?)null,
                 })
                 .ToList();
+
             var columnsExist = await db.Database.SqlQuery<int>(
                 "SELECT CASE WHEN COL_LENGTH(N'dbo.license_types', N'prepaid_enabled_units') IS NULL " +
                 "OR COL_LENGTH(N'dbo.license_types', N'subscribed_sku_refreshed_utc') IS NULL THEN 0 ELSE 1 END").SingleAsync();
@@ -227,6 +254,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 _logger.LogWarning("User import - subscribed SKU capacity columns are not present yet; purchased/unassigned Copilot seats will remain unknown until the database migration has run.");
                 return capacityByLicenceType;
             }
+
             foreach (var capacity in capacityByLicenceType)
             {
                 await db.Database.ExecuteSqlCommandAsync(
@@ -239,9 +267,11 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                     new SqlParameter("@refreshedUtc", refreshedUtc),
                     new SqlParameter("@id", capacity.LicenseTypeId));
             }
+
             await ZeroCapacityLeftBehindByRenamesAsync(db, skuLicenseTypes, capacityByLicenceType.Select(c => c.LicenseTypeId).ToList(), refreshedUtc);
             return capacityByLicenceType;
         }
+
         /// <summary>
         /// Zeroes the capacity of licence types that a current SKU has moved away from.
         /// </summary>
@@ -270,6 +300,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             {
                 return;
             }
+
             var parameters = new List<SqlParameter> { new SqlParameter("@refreshedUtc", refreshedUtc) };
             var skuNames = new List<string>();
             for (var i = 0; i < currentSkuPartNumbers.Count; i++)
@@ -277,12 +308,14 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 skuNames.Add("@sku" + i);
                 parameters.Add(new SqlParameter("@sku" + i, currentSkuPartNumbers[i]));
             }
+
             var idNames = new List<string>();
             for (var i = 0; i < currentLicenceTypeIds.Count; i++)
             {
                 idNames.Add("@id" + i);
                 parameters.Add(new SqlParameter("@id" + i, currentLicenceTypeIds[i]));
             }
+
             // Only rows not already zero, so the log line means something and a steady state writes nothing.
             var zeroed = await db.Database.ExecuteSqlCommandAsync(
                 "UPDATE dbo.license_types " +
@@ -292,20 +325,24 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 "OR prepaid_warning_units IS NULL OR prepaid_warning_units <> 0 " +
                 "OR prepaid_suspended_units IS NULL OR prepaid_suspended_units <> 0)",
                 parameters.ToArray());
+
             if (zeroed > 0)
             {
                 _logger.LogInformation($"User import - set purchased capacity to zero on {zeroed.ToString("N0")} licence type(s) whose SKU is now filed under a renamed licence type, so its seats are not counted twice.");
             }
         }
+
         public static async Task MarkSubscribedSkuCapacityUnavailableAsync(AnalyticsEntitiesContext db, AnalyticsLogger logger)
         {
             var columnsExist = await db.Database.SqlQuery<int>(
                 "SELECT CASE WHEN COL_LENGTH(N'dbo.license_types', N'subscribed_sku_refreshed_utc') IS NULL THEN 0 ELSE 1 END").SingleAsync();
             if (columnsExist == 0) return;
+
             var cleared = await db.Database.ExecuteSqlCommandAsync(
                 "UPDATE dbo.license_types SET prepaid_enabled_units = NULL, prepaid_warning_units = NULL, prepaid_suspended_units = NULL, subscribed_sku_refreshed_utc = NULL");
             logger?.LogWarning($"User import - tenant subscribedSkus were unavailable, so cleared purchased-seat capacity for {cleared.ToString("N0")} licence type(s). Copilot Adoption will show purchased/unassigned seats as unknown, not zero.");
         }
+
         /// <summary>
         /// Adds the assignments implied by one SKU to <paramref name="desired"/>. The
         /// <paramref name="dbUsersByUpn"/> dictionary is built once per import in
@@ -324,6 +361,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             if (usersWithSku == null) throw new ArgumentNullException(nameof(usersWithSku));
             if (licence == null) throw new ArgumentNullException(nameof(licence));
             if (desired == null) throw new ArgumentNullException(nameof(desired));
+
             if (licence.ID < 1)
             {
                 // Without this we would silently stage assignments pointing at licence type 0.
@@ -331,9 +369,11 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 throw new InvalidOperationException(
                     $"Licence type '{licence.Name}' has not been saved to the database yet, so it has no ID to assign users to.");
             }
+
             var matchedDbUsers = 0;
             var newAssignments = 0;
             var duplicatesSkipped = 0;
+
             foreach (var graphUser in usersWithSku)
             {
                 // dbUsersByUpn is OrdinalIgnoreCase so we can look up with the original UPN
@@ -343,12 +383,15 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 {
                     continue;
                 }
+
                 matchedDbUsers++;
+
                 // A user that failed to insert has no primary key to point a lookup row at.
                 if (!dbUser.IsSavedToDB)
                 {
                     continue;
                 }
+
                 if (desired.Add(new UserLicenseAssignment(dbUser.ID, licence.ID)))
                 {
                     newAssignments++;
@@ -358,13 +401,17 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                     duplicatesSkipped++;
                 }
             }
+
             _logger.LogInformation($"User import - Found {matchedDbUsers.ToString("N0")} users in SQL for SKU Part Number '{sku?.SkuPartNumber}' from {usersWithSku.Count.ToString("N0")} Graph users.");
+
             if (duplicatesSkipped > 0)
             {
                 _logger.LogInformation($"User import - Skipped {duplicatesSkipped.ToString("N0")} duplicate license lookups for SKU '{sku?.SkuPartNumber}' (display-name '{licence.Name}' already assigned via another SKU).");
             }
+
             return newAssignments;
         }
+
         /// <summary>
         /// Deterministic tie-break when two database rows share a user-principal-name: keep a row
         /// that is actually saved over one that is not, then keep the lower primary key.
@@ -377,6 +424,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             }
             return existing.ID <= candidate.ID;
         }
+
         /// <summary>
         /// Process user-specific licenses when tenant-level SKUs are not available
         /// </summary>
@@ -385,48 +433,76 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             GraphUser graphUser,
             Common.Entities.User dbUser)
         {
-            // Get user service-plan from Graph
-            var userServicePlans = await _userLoader.LoadUserLicenseDetails(graphUser.Id);
-            if (userServicePlans != null)
-            {
-                // Batch load all license types first to reduce repeated awaits
-                var skuPartNumbers = userServicePlans.Select(p => p.SkuPartNumber).Distinct().ToList();
-                var licenseTypesDict = new Dictionary<string, LicenseType>();
-                foreach (var skuPartNumber in skuPartNumbers)
-                {
-                    var licenseType = await GetLicenseType(skuPartNumber);
-                    licenseTypesDict[skuPartNumber] = licenseType;
-                }
-                await db.SaveChangesAsync();
-                // Dedupe by LicenseType display name: two SKU part numbers can resolve
-                // to the same LicenseType, and the user_license_type_lookups table has
-                // a UNIQUE index on (license_type_id, user_id).
-                var desired = new HashSet<UserLicenseAssignment>();
-                var addedLicenseNames = new HashSet<string>();
-                foreach (var userPlan in userServicePlans)
-                {
-                    if (licenseTypesDict.TryGetValue(userPlan.SkuPartNumber, out var licence) &&
-                        addedLicenseNames.Add(licence.Name))
-                    {
-                        desired.Add(new UserLicenseAssignment(dbUser.ID, licence.ID));
-                    }
-                }
-                var store = _licenseStoreFactory(db);
-                var refresh = await store.StartRefresh(DateTime.UtcNow);
-                await store.CarryAssignmentsAcrossRenamedLicenceTypes(licenseTypesDict.Values.Select(l => l.ID).ToList(), refresh);
-                var current = await store.LoadAssignmentsFor(new[] { dbUser.ID });
-                var delta = UserLicenseAssignmentDelta.Between(current, desired);
-                var keptCurrentAssignments = current.Where(existing => !delta.ToRemove.Contains(existing)).ToList();
-                await store.SeedCurrentAssignments(keptCurrentAssignments, refresh);
-                await store.AddAssignments(delta.ToAdd, refresh);
-                await store.RemoveAssignments(delta.ToRemove, refresh);
-                await store.CompleteRefresh(refresh, new List<LicenseSeatCountSnapshot>());
-            }
+            var desired = await BuildDesiredAssignmentsForUser(db, graphUser, dbUser);
+            await ReconcileCollectedUserLicenses(db, new[] { dbUser.ID }, desired);
         }
+
+        public async Task<HashSet<UserLicenseAssignment>> BuildDesiredAssignmentsForUser(
+            AnalyticsEntitiesContext db,
+            GraphUser graphUser,
+            Common.Entities.User dbUser)
+        {
+            var desired = new HashSet<UserLicenseAssignment>();
+            var userServicePlans = await _userLoader.LoadUserLicenseDetails(graphUser.Id);
+            if (userServicePlans == null)
+            {
+                return desired;
+            }
+
+            var skuPartNumbers = userServicePlans.Select(p => p.SkuPartNumber).Distinct().ToList();
+            var licenseTypesDict = new Dictionary<string, LicenseType>();
+            foreach (var skuPartNumber in skuPartNumbers)
+            {
+                var licenseType = await GetLicenseType(skuPartNumber);
+                licenseTypesDict[skuPartNumber] = licenseType;
+            }
+            await db.SaveChangesAsync();
+
+            var addedLicenseNames = new HashSet<string>();
+            foreach (var userPlan in userServicePlans)
+            {
+                if (licenseTypesDict.TryGetValue(userPlan.SkuPartNumber, out var licence) &&
+                    addedLicenseNames.Add(licence.Name))
+                {
+                    desired.Add(new UserLicenseAssignment(dbUser.ID, licence.ID));
+                }
+            }
+            return desired;
+        }
+
+        public async Task<int?> ReconcileCollectedUserLicenses(
+            AnalyticsEntitiesContext db,
+            ICollection<int> userIds,
+            HashSet<UserLicenseAssignment> desired)
+        {
+            if (userIds == null) throw new ArgumentNullException(nameof(userIds));
+            if (desired == null) throw new ArgumentNullException(nameof(desired));
+            if (userIds.Count == 0)
+            {
+                return null;
+            }
+
+            var store = _licenseStoreFactory(db);
+            var refresh = await store.StartRefresh(DateTime.UtcNow);
+            await store.CarryAssignmentsAcrossRenamedLicenceTypes(desired.Select(d => d.LicenseTypeId).Distinct().ToList(), refresh);
+            var current = await store.LoadAssignmentsFor(userIds);
+            var delta = UserLicenseAssignmentDelta.Between(current, desired);
+            var added = await store.AddAssignments(delta.ToAdd, refresh);
+            var removed = await store.RemoveAssignments(delta.ToRemove, refresh);
+            var reconciled = await store.ReconcileHistoryWithCurrentLookups(refresh);
+            var runId = await store.CompleteRefresh(refresh, new List<LicenseSeatCountSnapshot>());
+            _logger.LogInformation(
+                $"User import - per-user licence refresh complete for {userIds.Count.ToString("N0")} user(s): {added.ToString("N0")} assignment(s) added, {removed.ToString("N0")} removed" +
+                $", {reconciled.OpenedLookupRowsWithoutHistory.ToString("N0")} missing history row(s) opened and {reconciled.ClosedOpenRowsWithoutLookup.ToString("N0")} stale history row(s) closed" +
+                (runId.HasValue ? $", history refresh run {runId.Value.ToString("N0")} recorded." : "."));
+            return runId;
+        }
+
         /// <summary>
         /// Width of <c>license_types.name</c>: <see cref="AbstractEFEntityWithName.Name"/> is <c>[MaxLength(100)]</c>.
         /// </summary>
         internal const int LicenceTypeNameMaxLength = 100;
+
         /// <summary>
         /// Get or create license type from SKU part number
         /// </summary>
@@ -436,15 +512,18 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             if (string.IsNullOrEmpty(productName))
             {
                 _logger.LogWarning($"User import - unexpected SKU part-number '{skuPartNumber}'. Couldn't find a corresponding display-name.");
+
                 // Set display name as SKU ID
                 productName = skuPartNumber;
             }
+
             // Some of Microsoft's product names are longer than the column (the GCC High and DoD Power
             // Pages capacity packs run to 105 characters). One of those would fail validation on the
             // SaveChanges that follows and abort the licence refresh for the whole tenant, every cycle.
             // Truncate before the name is used as the cache key as well: the cache finds existing rows
             // by name, so a key longer than the stored name would never find its row again.
             productName = StringUtils.EnsureMaxLength(productName, LicenceTypeNameMaxLength);
+
             var thisLicense = await _userMetaCache.LicenseTypeCache.GetOrCreateNewResource(productName,
                 new LicenseType
                 {

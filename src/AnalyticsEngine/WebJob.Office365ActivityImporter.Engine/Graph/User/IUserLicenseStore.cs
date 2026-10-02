@@ -15,16 +15,21 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             UserId = userId;
             LicenseTypeId = licenseTypeId;
         }
+
         public int UserId { get; }
+
         public int LicenseTypeId { get; }
+
         public bool Equals(UserLicenseAssignment other)
         {
             return UserId == other.UserId && LicenseTypeId == other.LicenseTypeId;
         }
+
         public override bool Equals(object obj)
         {
             return obj is UserLicenseAssignment other && Equals(other);
         }
+
         public override int GetHashCode()
         {
             unchecked
@@ -82,8 +87,6 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         Task<LicenseRefreshRunInfo> StartRefresh(DateTime completedUtc);
         /// <summary>Carries current lookup and open-history rows across licence-type rows that represent the same SKU after a display-name rename.</summary>
         Task<int> CarryAssignmentsAcrossRenamedLicenceTypes(IReadOnlyList<int> currentLicenseTypeIds, LicenseRefreshRunInfo refresh);
-        /// <summary>Seeds open history rows for assignments that already existed before history was enabled.</summary>
-        Task<int> SeedCurrentAssignments(IReadOnlyList<UserLicenseAssignment> assignments, LicenseRefreshRunInfo refresh);
         /// <summary>
         /// Inserts the supplied assignments, ignoring any that already exist. Returns rows written.
         /// </summary>
@@ -92,7 +95,18 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         /// Deletes exactly the supplied assignments. Returns rows deleted.
         /// </summary>
         Task<int> RemoveAssignments(IReadOnlyList<UserLicenseAssignment> assignments, LicenseRefreshRunInfo refresh);
+
+        /// <summary>Repairs open history rows to match the current lookup table after a completed refresh.</summary>
+        Task<LicenseHistoryReconcileResult> ReconcileHistoryWithCurrentLookups(LicenseRefreshRunInfo refresh);
+
         /// <summary>Records the completed refresh and its seat-count observations after every write has succeeded.</summary>
         Task<int?> CompleteRefresh(LicenseRefreshRunInfo refresh, IReadOnlyList<LicenseSeatCountSnapshot> seatCounts);
+    }
+
+    /// <summary>Counts from the set-based history/current-state reconcile.</summary>
+    public sealed class LicenseHistoryReconcileResult
+    {
+        public int ClosedOpenRowsWithoutLookup { get; set; }
+        public int OpenedLookupRowsWithoutHistory { get; set; }
     }
 }

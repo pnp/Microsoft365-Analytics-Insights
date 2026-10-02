@@ -1,4 +1,4 @@
-﻿using Common.Entities;
+using Common.Entities;
 using Common.Entities.Config;
 using DataUtils;
 using Microsoft.Graph.Models;
@@ -11,6 +11,7 @@ using System.Threading.Tasks;
 using Tests.UnitTests.FakeLoaderClasses;
 using WebJob.Office365ActivityImporter.Engine.Graph;
 using SkuUser = Microsoft.Graph.Models.User;
+
 namespace Tests.UnitTests
 {
     /// <summary>
@@ -29,6 +30,7 @@ namespace Tests.UnitTests
     public class UserLicenseRefreshTests
     {
         #region Pure delta logic (no database)
+
         [TestMethod]
         public void UserLicenseAssignmentDelta_UnchangedState_ProducesNoWrites()
         {
@@ -39,12 +41,15 @@ namespace Tests.UnitTests
                 new UserLicenseAssignment(2, 11),
             };
             var desired = new HashSet<UserLicenseAssignment>(current);
+
             var delta = UserLicenseAssignmentDelta.Between(current, desired);
+
             Assert.IsTrue(delta.IsEmpty, "An unchanged tenant must produce no writes at all.");
             Assert.AreEqual(0, delta.ToAdd.Count);
             Assert.AreEqual(0, delta.ToRemove.Count);
             Assert.AreEqual(3, delta.UnchangedCount, "Every existing assignment should be reported as already correct.");
         }
+
         [TestMethod]
         public void UserLicenseAssignmentDelta_AddsAndRemovesOnlyWhatChanged()
         {
@@ -60,7 +65,9 @@ namespace Tests.UnitTests
                 new UserLicenseAssignment(2, 10),
                 new UserLicenseAssignment(3, 12),   // new user + new licence
             };
+
             var delta = UserLicenseAssignmentDelta.Between(current, desired);
+
             CollectionAssert.AreEquivalent(
                 new[] { new UserLicenseAssignment(3, 12) }, delta.ToAdd.ToArray(),
                 "Only genuinely new assignments should be inserted.");
@@ -69,6 +76,7 @@ namespace Tests.UnitTests
                 "Only assignments Graph no longer reports should be deleted.");
             Assert.AreEqual(2, delta.UnchangedCount);
         }
+
         [TestMethod]
         public void UserLicenseAssignmentDelta_EmptyDesiredState_RemovesEverythingInScope()
         {
@@ -78,10 +86,13 @@ namespace Tests.UnitTests
                 new UserLicenseAssignment(1, 10),
                 new UserLicenseAssignment(2, 10),
             };
+
             var delta = UserLicenseAssignmentDelta.Between(current, new HashSet<UserLicenseAssignment>());
+
             Assert.AreEqual(0, delta.ToAdd.Count);
             Assert.AreEqual(2, delta.ToRemove.Count);
         }
+
         [TestMethod]
         public void UserLicenseAssignment_HasValueSemantics()
         {
@@ -89,11 +100,15 @@ namespace Tests.UnitTests
             Assert.AreEqual(new UserLicenseAssignment(7, 3), new UserLicenseAssignment(7, 3));
             Assert.AreEqual(new UserLicenseAssignment(7, 3).GetHashCode(), new UserLicenseAssignment(7, 3).GetHashCode());
             Assert.AreNotEqual(new UserLicenseAssignment(7, 3), new UserLicenseAssignment(3, 7));
+
             var set = new HashSet<UserLicenseAssignment> { new UserLicenseAssignment(7, 3) };
             Assert.IsFalse(set.Add(new UserLicenseAssignment(7, 3)), "Duplicate assignments must collapse - the table has a UNIQUE index on (license_type_id, user_id).");
         }
+
         #endregion
+
         #region End-to-end: the table is never observably incomplete
+
         /// <summary>
         /// End-to-end regression test for issue #392. Two users each hold a licence from a previous
         /// import. A second import then runs in which user B's seat moves to a different SKU - so the
@@ -111,23 +126,29 @@ namespace Tests.UnitTests
         {
             var logger = AnalyticsLogger.ConsoleOnlyTracer();
             var config = new AppConfig();
+
             var tick = DateTime.Now.Ticks;
             var userAUpn = $"licencewindowA{tick}@test.com";
             var userBUpn = $"licencewindowB{tick}@test.com";
             var userAId = Guid.NewGuid().ToString();
             var userBId = Guid.NewGuid().ToString();
+
             var skuAId = Guid.NewGuid();
             var skuBId = Guid.NewGuid();
             const string skuAPart = "ENTERPRISEPACK";
             const string skuBPart = "ENTERPRISEPREMIUM";
             const string licenceAName = "Office 365 E3";
             const string licenceBName = "Office 365 E5";
+
             await RemoveTestUsers(userAUpn, userBUpn);
+
             var fakeLoader = BuildLoader(
                 new[] { (userAUpn, userAId), (userBUpn, userBId) },
                 new[] { (skuAId, skuAPart, new[] { userAUpn }), (skuBId, skuBPart, new[] { userBUpn }) });
+
             // ---- Run 1: establish one licence each. ----
             await new UserMetadataUpdater(logger, config, fakeLoader).InsertAndUpdateDatabaseFromExternalUsers();
+
             int userADbId, userBDbId;
             using (var db = new AnalyticsEntitiesContext())
             {
@@ -136,6 +157,7 @@ namespace Tests.UnitTests
                 Assert.AreEqual(1, await CountLookups(db, userADbId), "Run 1 should give user A exactly one licence.");
                 Assert.AreEqual(1, await CountLookups(db, userBDbId), "Run 1 should give user B exactly one licence.");
             }
+
             // ---- Run 2: user B's seat moves from SKU B to SKU A, so the refresh really does write. ----
             fakeLoader.SetFakeState(
                 null,
@@ -149,6 +171,7 @@ namespace Tests.UnitTests
                     { skuAId, new List<SkuUser> { new SkuUser { UserPrincipalName = userAUpn, Id = userAId }, new SkuUser { UserPrincipalName = userBUpn, Id = userBId } } },
                     { skuBId, new List<SkuUser>() }
                 });
+
             var observations = new List<(Guid Sku, int UserA, int UserB)>();
             fakeLoader.OnLoadUsersBySku = async skuId =>
             {
@@ -161,7 +184,9 @@ namespace Tests.UnitTests
                         await CountLookups(probe, userBDbId)));
                 }
             };
+
             await new UserMetadataUpdater(logger, config, fakeLoader).InsertAndUpdateDatabaseFromExternalUsers();
+
             Assert.AreEqual(2, observations.Count, "Both SKUs should have been walked, giving two probes inside the refresh window.");
             foreach (var observed in observations)
             {
@@ -172,6 +197,7 @@ namespace Tests.UnitTests
                 Assert.IsTrue(observed.UserB >= 1,
                     $"REGRESSION (issue #392): user B's licence disappeared from user_license_type_lookups while the import was running. Observed {observed.UserB}.");
             }
+
             using (var db = new AnalyticsEntitiesContext())
             {
                 var a = await LoadLicenceNames(db, userADbId);
@@ -180,8 +206,10 @@ namespace Tests.UnitTests
                 CollectionAssert.AreEquivalent(new[] { licenceAName }, b, "User B should hold ONLY the licence they moved to after run 2.");
                 Assert.IsFalse(b.Contains(licenceBName), "User B's old licence should have been removed.");
             }
+
             await RemoveTestUsers(userAUpn, userBUpn);
         }
+
         /// <summary>
         /// The strongest form of the issue #392 invariant: probe the database on a separate connection
         /// at every point the refresh writes - before the insert, after the insert has COMMITTED, and
@@ -198,31 +226,38 @@ namespace Tests.UnitTests
             var tick = DateTime.Now.Ticks;
             var upn = $"licenceprobe{tick}@test.com";
             await RemoveTestUsers(upn);
+
             var oldSkuId = Guid.NewGuid();
             var newSkuId = Guid.NewGuid();
             var oldSkus = new List<SubscribedSku> { new SubscribedSku { SkuId = oldSkuId, SkuPartNumber = "ENTERPRISEPACK" } };
             var newSkus = new List<SubscribedSku> { new SubscribedSku { SkuId = newSkuId, SkuPartNumber = "ENTERPRISEPREMIUM" } };
+
             try
             {
                 using (var db = new AnalyticsEntitiesContext())
                 {
                     var dbUser = await InsertUser(db, upn);
                     var users = new List<Common.Entities.User> { dbUser };
+
                     // Establish the starting licence.
                     var oldLoader = new FakeUserMetadataLoader(null, oldSkus,
                         new Dictionary<Guid, List<SkuUser>> { { oldSkuId, new List<SkuUser> { new SkuUser { UserPrincipalName = upn } } } });
                     await new UserLicenseProcessor(AnalyticsLogger.ConsoleOnlyTracer(), oldLoader, new UserMetadataCache(db))
                         .ProcessSKUsForAllUsers(oldSkus, users, db);
                     Assert.AreEqual(1, await CountLookups(db, dbUser.ID), "Setup should have left the user with one licence.");
+
                     // Swap the SKU, probing on a separate connection around every write.
                     var probe = new ProbingUserLicenseStore(
                         new SqlUserLicenseStore(db, AnalyticsLogger.ConsoleOnlyTracer()), dbUser.ID);
                     var newLoader = new FakeUserMetadataLoader(null, newSkus,
                         new Dictionary<Guid, List<SkuUser>> { { newSkuId, new List<SkuUser> { new SkuUser { UserPrincipalName = upn } } } });
+
                     await new UserLicenseProcessor(AnalyticsLogger.ConsoleOnlyTracer(), newLoader, new UserMetadataCache(db), _ => probe)
                         .ProcessSKUsForAllUsers(newSkus, users, db);
+
                     Assert.IsTrue(probe.Observations.Count >= 4,
                         $"Expected the refresh to write (insert then delete) so the probe has something to watch; got: {probe.Describe()}");
+
                     foreach (var observation in probe.Observations)
                     {
                         Assert.IsTrue(observation.LicenceCount >= 1,
@@ -230,11 +265,13 @@ namespace Tests.UnitTests
                             $"'{observation.Point}'. The refresh must never leave user_license_type_lookups incomplete for a " +
                             $"user who still holds a licence. Full trace: {probe.Describe()}");
                     }
+
                     var beforeRemove = probe.Observations.First(o => o.Point == "before-remove");
                     Assert.AreEqual(2, beforeRemove.LicenceCount,
                         "Between the insert and the delete the user should transiently hold BOTH licences. Seeing 1 here means the " +
                         "delete ran before the insert, which is the ordering that produces a visible licence gap. Full trace: " + probe.Describe());
                 }
+
                 using (var verify = new AnalyticsEntitiesContext())
                 {
                     var names = await LoadLicenceNames(verify, await GetUserId(verify, upn));
@@ -246,6 +283,7 @@ namespace Tests.UnitTests
                 await RemoveTestUsers(upn);
             }
         }
+
         /// <summary>
         /// Graph reporting zero tenant SKUs is far more likely to be a transient failure or a lost
         /// 'Organization.Read.All' consent than a tenant that genuinely holds no licences. Wiping the
@@ -258,22 +296,27 @@ namespace Tests.UnitTests
             var tick = DateTime.Now.Ticks;
             var upn = $"licenceemptyskus{tick}@test.com";
             await RemoveTestUsers(upn);
+
             var skuId = Guid.NewGuid();
             var skus = new List<SubscribedSku> { new SubscribedSku { SkuId = skuId, SkuPartNumber = "ENTERPRISEPACK" } };
+
             try
             {
                 using (var db = new AnalyticsEntitiesContext())
                 {
                     var dbUser = await InsertUser(db, upn);
                     var users = new List<Common.Entities.User> { dbUser };
+
                     var loader = new FakeUserMetadataLoader(null, skus,
                         new Dictionary<Guid, List<SkuUser>> { { skuId, new List<SkuUser> { new SkuUser { UserPrincipalName = upn } } } });
                     await new UserLicenseProcessor(AnalyticsLogger.ConsoleOnlyTracer(), loader, new UserMetadataCache(db))
                         .ProcessSKUsForAllUsers(skus, users, db);
                     Assert.AreEqual(1, await CountLookups(db, dbUser.ID));
+
                     var emptyLoader = new FakeUserMetadataLoader(null, new List<SubscribedSku>(), new Dictionary<Guid, List<SkuUser>>());
                     await new UserLicenseProcessor(AnalyticsLogger.ConsoleOnlyTracer(), emptyLoader, new UserMetadataCache(db))
                         .ProcessSKUsForAllUsers(new List<SubscribedSku>(), users, db);
+
                     Assert.AreEqual(1, await CountLookups(db, dbUser.ID),
                         "An empty tenant SKU list must leave existing licences alone. Treating it as the authoritative 'nobody holds " +
                         "anything' would delete every licence row in the tenant on a transient Graph blip.");
@@ -284,6 +327,7 @@ namespace Tests.UnitTests
                 await RemoveTestUsers(upn);
             }
         }
+
         [TestMethod]
         public async Task UserLicenseRefresh_SumsCapacityWhenSkuPartNumbersShareALicenceType()
         {
@@ -292,6 +336,7 @@ namespace Tests.UnitTests
             var userBUpn = $"sharedcapacityB{tick}@test.com";
             var licenceName = $"Contoso Copilot Shared {tick}";
             await RemoveTestUsers(userAUpn, userBUpn);
+
             var skuAId = Guid.NewGuid();
             var skuBId = Guid.NewGuid();
             var users = new[]
@@ -314,6 +359,7 @@ namespace Tests.UnitTests
                     PrepaidUnits = new LicenseUnitsDetail { Enabled = 20, Warning = 3, Suspended = 4 },
                 },
             };
+
             try
             {
                 using (var db = new AnalyticsEntitiesContext())
@@ -324,6 +370,7 @@ namespace Tests.UnitTests
                         await InsertUser(db, userAUpn),
                         await InsertUser(db, userBUpn),
                     };
+
                     var loader = new FakeUserMetadataLoader(
                         null,
                         skus,
@@ -332,17 +379,20 @@ namespace Tests.UnitTests
                             { skuAId, new List<SkuUser> { new SkuUser { UserPrincipalName = userAUpn, Id = users[0].Item2 } } },
                             { skuBId, new List<SkuUser> { new SkuUser { UserPrincipalName = userBUpn, Id = users[1].Item2 } } },
                         });
+
                     await new UserLicenseProcessor(
                             AnalyticsLogger.ConsoleOnlyTracer(),
                             loader,
                             new UserMetadataCache(db),
                             new FixedLicenseNameResolver(licenceName))
                         .ProcessSKUsForAllUsers(skus, dbUsers, db);
+
                     var capacity = await db.Database.SqlQuery<int>(
                         @"SELECT ISNULL(prepaid_enabled_units, -1) + ISNULL(prepaid_warning_units, -1) + ISNULL(prepaid_suspended_units, -1)
                           FROM dbo.license_types
                           WHERE name = @name",
                         new Microsoft.Data.SqlClient.SqlParameter("@name", licenceName)).SingleAsync();
+
                     Assert.AreEqual(40, capacity,
                         "Two Copilot SKU part numbers can resolve to the same licence-type row; their capacity must be summed, not last-writer-wins.");
                 }
@@ -352,6 +402,7 @@ namespace Tests.UnitTests
                 await RemoveTestUsers(userAUpn, userBUpn);
             }
         }
+
         /// <summary>
         /// Licence types are filed by display name, so a SKU whose name changes - including one that gains
         /// a name for the first time when the licensing CSV is refreshed, as Microsoft 365 E7 does - moves
@@ -367,6 +418,7 @@ namespace Tests.UnitTests
             var unrelatedSkuPartNumber = $"CONTOSO_UNRELATED_{tick}";
             var newName = $"Contoso Renamed Suite {tick}";
             await RemoveTestUsers(upn);
+
             var skuId = Guid.NewGuid();
             var skus = new List<SubscribedSku>
             {
@@ -377,12 +429,14 @@ namespace Tests.UnitTests
                     PrepaidUnits = new LicenseUnitsDetail { Enabled = 50, Warning = 0, Suspended = 0 },
                 },
             };
+
             try
             {
                 using (var db = new AnalyticsEntitiesContext())
                 {
                     await EnsureSubscribedSkuCapacityColumns(db);
                     var dbUser = await InsertUser(db, upn);
+
                     // What an earlier build left: the SKU filed under its part number, because the CSV had
                     // no name for it, with the capacity it was last given - and an unrelated licence type
                     // that must not be touched.
@@ -396,14 +450,17 @@ namespace Tests.UnitTests
                           WHERE sku_id IN (@sku, @unrelated)",
                         new Microsoft.Data.SqlClient.SqlParameter("@sku", skuPartNumber),
                         new Microsoft.Data.SqlClient.SqlParameter("@unrelated", unrelatedSkuPartNumber));
+
                     var loader = new FakeUserMetadataLoader(null, skus,
                         new Dictionary<Guid, List<SkuUser>> { { skuId, new List<SkuUser> { new SkuUser { UserPrincipalName = upn } } } });
+
                     await new UserLicenseProcessor(
                             AnalyticsLogger.ConsoleOnlyTracer(),
                             loader,
                             new UserMetadataCache(db),
                             new FixedLicenseNameResolver(newName))
                         .ProcessSKUsForAllUsers(skus, new List<Common.Entities.User> { dbUser }, db);
+
                     Assert.AreEqual(50, await PurchasedUnits(db, newName),
                         "The SKU's capacity belongs to the licence type it is filed under now.");
                     Assert.AreEqual(0, await PurchasedUnits(db, skuPartNumber),
@@ -566,6 +623,7 @@ namespace Tests.UnitTests
                   WHERE name = @name",
                 new Microsoft.Data.SqlClient.SqlParameter("@name", licenceName)).SingleAsync();
         }
+
         private static Task EnsureSubscribedSkuCapacityColumns(AnalyticsEntitiesContext db)
         {
             return db.Database.ExecuteSqlCommandAsync(
@@ -578,6 +636,7 @@ namespace Tests.UnitTests
                   IF COL_LENGTH(N'dbo.license_types', N'subscribed_sku_refreshed_utc') IS NULL
                       ALTER TABLE dbo.license_types ADD subscribed_sku_refreshed_utc datetime NULL;");
         }
+
         /// <summary>
         /// A single SKU reporting zero holders while the tenant's own SKU record says seats are
         /// consumed is Graph contradicting itself. Believing the empty answer would delete every
@@ -590,33 +649,40 @@ namespace Tests.UnitTests
             var tick = DateTime.Now.Ticks;
             var upn = $"licencecontradiction{tick}@test.com";
             await RemoveTestUsers(upn);
+
             var skuId = Guid.NewGuid();
             const string skuPart = "ENTERPRISEPACK";
+
             try
             {
                 using (var db = new AnalyticsEntitiesContext())
                 {
                     var dbUser = await InsertUser(db, upn);
                     var users = new List<Common.Entities.User> { dbUser };
+
                     var licensedSkus = new List<SubscribedSku> { new SubscribedSku { SkuId = skuId, SkuPartNumber = skuPart, ConsumedUnits = 1 } };
                     var loader = new FakeUserMetadataLoader(null, licensedSkus,
                         new Dictionary<Guid, List<SkuUser>> { { skuId, new List<SkuUser> { new SkuUser { UserPrincipalName = upn } } } });
                     await new UserLicenseProcessor(AnalyticsLogger.ConsoleOnlyTracer(), loader, new UserMetadataCache(db))
                         .ProcessSKUsForAllUsers(licensedSkus, users, db);
                     Assert.AreEqual(1, await CountLookups(db, dbUser.ID), "Setup should have left the user licensed.");
+
                     // Graph now says 1 seat is consumed but returns nobody holding the SKU.
                     var contradictorySkus = new List<SubscribedSku> { new SubscribedSku { SkuId = skuId, SkuPartNumber = skuPart, ConsumedUnits = 1 } };
                     var contradictoryLoader = new FakeUserMetadataLoader(null, contradictorySkus, new Dictionary<Guid, List<SkuUser>>());
                     await new UserLicenseProcessor(AnalyticsLogger.ConsoleOnlyTracer(), contradictoryLoader, new UserMetadataCache(db))
                         .ProcessSKUsForAllUsers(contradictorySkus, users, db);
+
                     Assert.AreEqual(1, await CountLookups(db, dbUser.ID),
                         "A SKU that claims consumed seats but lists no holders must NOT have its assignments deleted - the two answers " +
                         "cannot both be right, and deleting is the unrecoverable one.");
+
                     // With ConsumedUnits back to 0 the empty list is credible, so the seat really goes.
                     var releasedSkus = new List<SubscribedSku> { new SubscribedSku { SkuId = skuId, SkuPartNumber = skuPart, ConsumedUnits = 0 } };
                     var releasedLoader = new FakeUserMetadataLoader(null, releasedSkus, new Dictionary<Guid, List<SkuUser>>());
                     await new UserLicenseProcessor(AnalyticsLogger.ConsoleOnlyTracer(), releasedLoader, new UserMetadataCache(db))
                         .ProcessSKUsForAllUsers(releasedSkus, users, db);
+
                     Assert.AreEqual(0, await CountLookups(db, dbUser.ID),
                         "When Graph consistently reports the SKU has no consumed seats and no holders, the assignment must be removed.");
                 }
@@ -626,6 +692,7 @@ namespace Tests.UnitTests
                 await RemoveTestUsers(upn);
             }
         }
+
         /// <summary>
         /// Documents why the duplicate-UPN tie-break in <c>ProcessSKUsForAllUsers</c> cannot be
         /// exercised end-to-end: <c>dbo.users</c> carries a UNIQUE index on <c>user_name</c>
@@ -640,12 +707,14 @@ namespace Tests.UnitTests
         {
             var upn = $"licencedupe{DateTime.Now.Ticks}@test.com";
             await RemoveTestUsers(upn);
+
             try
             {
                 using (var db = new AnalyticsEntitiesContext())
                 {
                     await InsertUser(db, upn);
                 }
+
                 using (var second = new AnalyticsEntitiesContext())
                 {
                     await Assert.ThrowsExceptionAsync<System.Data.Entity.Infrastructure.DbUpdateException>(
@@ -659,14 +728,18 @@ namespace Tests.UnitTests
                 await RemoveTestUsers(upn);
             }
         }
+
         #endregion
+
         #region Processor-level: what actually gets written
+
         [TestMethod]
         public async Task UserLicenseProcessor_InjectedResolver_UsesSameKnownSkuMapping()
         {
             const string skuPartNumber = "ENTERPRISEPACK";
             var expectedName = new OfficeLicenseNameResolver().GetDisplayNameFor(skuPartNumber);
             var resolver = new RecordingLicenseNameResolver(new OfficeLicenseNameResolver());
+
             using (var db = new AnalyticsEntitiesContext())
             {
                 var processor = new UserLicenseProcessor(
@@ -674,16 +747,20 @@ namespace Tests.UnitTests
                     new FakeUserMetadataLoader(null, null, null),
                     new UserMetadataCache(db),
                     resolver);
+
                 var licence = await processor.GetLicenseType(skuPartNumber);
+
                 Assert.AreEqual(expectedName, licence.Name);
                 Assert.AreEqual(skuPartNumber, licence.SKUID);
                 CollectionAssert.AreEqual(new[] { skuPartNumber }, resolver.RequestedSkuPartNumbers.ToArray());
             }
         }
+
         [TestMethod]
         public async Task UserLicenseProcessor_InjectedResolver_UnknownSkuFallsBackToSkuPartNumber()
         {
             var skuPartNumber = $"UNKNOWN_TEST_SKU_{Guid.NewGuid():N}";
+
             try
             {
                 using (var db = new AnalyticsEntitiesContext())
@@ -693,7 +770,9 @@ namespace Tests.UnitTests
                         new FakeUserMetadataLoader(null, null, null),
                         new UserMetadataCache(db),
                         new FixedLicenseNameResolver(null));
+
                     var licence = await processor.GetLicenseType(skuPartNumber);
+
                     Assert.AreEqual(skuPartNumber, licence.Name);
                     Assert.AreEqual(skuPartNumber, licence.SKUID);
                 }
@@ -703,6 +782,7 @@ namespace Tests.UnitTests
                 await RemoveTestLicences(skuPartNumber);
             }
         }
+
         /// <summary>
         /// <c>license_types.name</c> is <c>[MaxLength(100)]</c> and a few of Microsoft's own product
         /// names are longer (the GCC High and DoD Power Pages capacity packs). Every tenant SKU is
@@ -713,9 +793,11 @@ namespace Tests.UnitTests
         public async Task UserLicenseProcessor_OverLongProductName_IsTruncatedAndFoundAgainNextCycle()
         {
             var skuPartNumber = $"LONG_NAME_TEST_SKU_{Guid.NewGuid():N}";
+
             // Unique text first, so the part that survives truncation cannot collide with another run.
             var longName = $"{Guid.NewGuid():N} Contoso Pages authenticated users T3 min 1,000 units - 100 users/per site/month capacity pack";
             Assert.IsTrue(longName.Length > UserLicenseProcessor.LicenceTypeNameMaxLength, "The test name must be over-long.");
+
             try
             {
                 int savedId;
@@ -726,14 +808,17 @@ namespace Tests.UnitTests
                         new FakeUserMetadataLoader(null, null, null),
                         new UserMetadataCache(db),
                         new FixedLicenseNameResolver(longName));
+
                     var licence = await processor.GetLicenseType(skuPartNumber);
                     await db.SaveChangesAsync();
+
                     Assert.AreEqual(UserLicenseProcessor.LicenceTypeNameMaxLength, licence.Name.Length);
                     StringAssert.StartsWith(licence.Name, longName.Substring(0, 50));
                     StringAssert.EndsWith(licence.Name, "...", "Truncation should be visible, not silent.");
                     Assert.AreEqual(skuPartNumber, licence.SKUID);
                     savedId = licence.ID;
                 }
+
                 // The next cycle starts with an empty cache and must find that row by its stored name,
                 // not try to insert a second one.
                 using (var db = new AnalyticsEntitiesContext())
@@ -743,7 +828,9 @@ namespace Tests.UnitTests
                         new FakeUserMetadataLoader(null, null, null),
                         new UserMetadataCache(db),
                         new FixedLicenseNameResolver(longName));
+
                     var licence = await processor.GetLicenseType(skuPartNumber);
+
                     Assert.AreEqual(savedId, licence.ID, "The truncated name must also be the cache key.");
                 }
             }
@@ -752,6 +839,7 @@ namespace Tests.UnitTests
                 await RemoveTestLicences(skuPartNumber);
             }
         }
+
         [TestMethod]
         public async Task UserLicenseProcessor_ProductionConstructor_StillResolvesSkuNames()
         {
@@ -761,11 +849,14 @@ namespace Tests.UnitTests
                     AnalyticsLogger.ConsoleOnlyTracer(),
                     new FakeUserMetadataLoader(null, null, null),
                     new UserMetadataCache(db));
+
                 var licence = await processor.GetLicenseType("ENTERPRISEPACK");
+
                 Assert.AreEqual("Office 365 E3", licence.Name);
                 Assert.AreEqual("ENTERPRISEPACK", licence.SKUID);
             }
         }
+
         /// <summary>
         /// A run where nothing changed must not write anything at all. The old implementation
         /// rewrote every row on every cycle, which is both the source of the outage window and,
@@ -777,8 +868,10 @@ namespace Tests.UnitTests
             var tick = DateTime.Now.Ticks;
             var upn = $"licencesteady{tick}@test.com";
             await RemoveTestUsers(upn);
+
             var skuId = Guid.NewGuid();
             var skus = new List<SubscribedSku> { new SubscribedSku { SkuId = skuId, SkuPartNumber = "ENTERPRISEPACK" } };
+
             try
             {
                 using (var db = new AnalyticsEntitiesContext())
@@ -786,13 +879,16 @@ namespace Tests.UnitTests
                     var dbUser = await InsertUser(db, upn);
                     var loader = new FakeUserMetadataLoader(null, skus,
                         new Dictionary<Guid, List<SkuUser>> { { skuId, new List<SkuUser> { new SkuUser { UserPrincipalName = upn } } } });
+
                     var recorder = new RecordingUserLicenseStore(new SqlUserLicenseStore(db, AnalyticsLogger.ConsoleOnlyTracer()));
                     var processor = new UserLicenseProcessor(
                         AnalyticsLogger.ConsoleOnlyTracer(), loader, new UserMetadataCache(db), _ => recorder);
+
                     // First pass writes the one missing assignment.
                     await processor.ProcessSKUsForAllUsers(skus, new List<Common.Entities.User> { dbUser }, db);
                     Assert.AreEqual(1, recorder.Added.Count, "The first refresh should insert the missing assignment.");
                     Assert.AreEqual(0, recorder.Removed.Count);
+
                     // Second pass, same Graph answer: nothing to do.
                     recorder.Reset();
                     await processor.ProcessSKUsForAllUsers(skus, new List<Common.Entities.User> { dbUser }, db);
@@ -805,6 +901,7 @@ namespace Tests.UnitTests
                 await RemoveTestUsers(upn);
             }
         }
+
         /// <summary>
         /// A user swapping one SKU for another must never be momentarily unlicensed, so the insert
         /// has to happen before the delete.
@@ -815,33 +912,41 @@ namespace Tests.UnitTests
             var tick = DateTime.Now.Ticks;
             var upn = $"licenceswap{tick}@test.com";
             await RemoveTestUsers(upn);
+
             var oldSkuId = Guid.NewGuid();
             var newSkuId = Guid.NewGuid();
             var oldSkus = new List<SubscribedSku> { new SubscribedSku { SkuId = oldSkuId, SkuPartNumber = "ENTERPRISEPACK" } };
             var newSkus = new List<SubscribedSku> { new SubscribedSku { SkuId = newSkuId, SkuPartNumber = "ENTERPRISEPREMIUM" } };
+
             try
             {
                 using (var db = new AnalyticsEntitiesContext())
                 {
                     var dbUser = await InsertUser(db, upn);
                     var users = new List<Common.Entities.User> { dbUser };
+
                     var oldLoader = new FakeUserMetadataLoader(null, oldSkus,
                         new Dictionary<Guid, List<SkuUser>> { { oldSkuId, new List<SkuUser> { new SkuUser { UserPrincipalName = upn } } } });
                     var recorder = new RecordingUserLicenseStore(new SqlUserLicenseStore(db, AnalyticsLogger.ConsoleOnlyTracer()));
+
                     await new UserLicenseProcessor(AnalyticsLogger.ConsoleOnlyTracer(), oldLoader, new UserMetadataCache(db), _ => recorder)
                         .ProcessSKUsForAllUsers(oldSkus, users, db);
+
                     // Now the same user holds a different SKU instead.
                     recorder.Reset();
                     var newLoader = new FakeUserMetadataLoader(null, newSkus,
                         new Dictionary<Guid, List<SkuUser>> { { newSkuId, new List<SkuUser> { new SkuUser { UserPrincipalName = upn } } } });
+
                     await new UserLicenseProcessor(AnalyticsLogger.ConsoleOnlyTracer(), newLoader, new UserMetadataCache(db), _ => recorder)
                         .ProcessSKUsForAllUsers(newSkus, users, db);
+
                     Assert.AreEqual(1, recorder.Added.Count, "The new licence should be inserted.");
                     Assert.AreEqual(1, recorder.Removed.Count, "The licence the user no longer holds should be deleted.");
                     CollectionAssert.AreEqual(
                         new[] { "add", "remove" }, recorder.Operations.ToArray(),
                         "Additions must be applied before removals so a SKU swap never leaves the user momentarily unlicensed.");
                 }
+
                 using (var verify = new AnalyticsEntitiesContext())
                 {
                     var names = await LoadLicenceNames(verify, await GetUserId(verify, upn));
@@ -853,6 +958,7 @@ namespace Tests.UnitTests
                 await RemoveTestUsers(upn);
             }
         }
+
         /// <summary>
         /// The refresh must only ever delete rows for users it was given. Anyone else's licences are
         /// none of its business - that is what makes a scoped (non-full-population) call safe.
@@ -864,27 +970,34 @@ namespace Tests.UnitTests
             var inScopeUpn = $"licencescopein{tick}@test.com";
             var outOfScopeUpn = $"licencescopeout{tick}@test.com";
             await RemoveTestUsers(inScopeUpn, outOfScopeUpn);
+
             var skuId = Guid.NewGuid();
             var skus = new List<SubscribedSku> { new SubscribedSku { SkuId = skuId, SkuPartNumber = "ENTERPRISEPACK" } };
+
             try
             {
                 using (var db = new AnalyticsEntitiesContext())
                 {
                     var inScope = await InsertUser(db, inScopeUpn);
                     var outOfScope = await InsertUser(db, outOfScopeUpn);
+
                     var bothLicensedLoader = new FakeUserMetadataLoader(null, skus,
                         new Dictionary<Guid, List<SkuUser>>
                         {
                             { skuId, new List<SkuUser> { new SkuUser { UserPrincipalName = inScopeUpn }, new SkuUser { UserPrincipalName = outOfScopeUpn } } }
                         });
+
                     await new UserLicenseProcessor(AnalyticsLogger.ConsoleOnlyTracer(), bothLicensedLoader, new UserMetadataCache(db))
                         .ProcessSKUsForAllUsers(skus, new List<Common.Entities.User> { inScope, outOfScope }, db);
+
                     Assert.AreEqual(1, await CountLookups(db, inScope.ID));
                     Assert.AreEqual(1, await CountLookups(db, outOfScope.ID));
+
                     // Now refresh with Graph reporting nobody licensed, but only the in-scope user supplied.
                     var noneLicensedLoader = new FakeUserMetadataLoader(null, skus, new Dictionary<Guid, List<SkuUser>>());
                     await new UserLicenseProcessor(AnalyticsLogger.ConsoleOnlyTracer(), noneLicensedLoader, new UserMetadataCache(db))
                         .ProcessSKUsForAllUsers(skus, new List<Common.Entities.User> { inScope }, db);
+
                     Assert.AreEqual(0, await CountLookups(db, inScope.ID), "The in-scope user's licence should have been removed.");
                     Assert.AreEqual(1, await CountLookups(db, outOfScope.ID),
                         "A user outside the refresh scope must keep their licences - the refresh only owns the rows for the users it is given.");
@@ -895,6 +1008,7 @@ namespace Tests.UnitTests
                 await RemoveTestUsers(inScopeUpn, outOfScopeUpn);
             }
         }
+
         [TestMethod]
         public async Task UserLicenseRefresh_FailureAfterOneSkuPage_DoesNotReconcilePartialInventory()
         {
@@ -902,6 +1016,7 @@ namespace Tests.UnitTests
             var userAUpn = $"licencepartialA{tick}@test.com";
             var userBUpn = $"licencepartialB{tick}@test.com";
             await RemoveTestUsers(userAUpn, userBUpn);
+
             var skuAId = Guid.NewGuid();
             var skuBId = Guid.NewGuid();
             var initialSkus = new List<SubscribedSku>
@@ -909,6 +1024,7 @@ namespace Tests.UnitTests
                 new SubscribedSku { SkuId = skuAId, SkuPartNumber = "ENTERPRISEPACK" },
                 new SubscribedSku { SkuId = skuBId, SkuPartNumber = "ENTERPRISEPREMIUM" }
             };
+
             try
             {
                 using (var db = new AnalyticsEntitiesContext())
@@ -916,16 +1032,19 @@ namespace Tests.UnitTests
                     var userA = await InsertUser(db, userAUpn);
                     var userB = await InsertUser(db, userBUpn);
                     var users = new List<Common.Entities.User> { userA, userB };
+
                     var setupLoader = new FakeUserMetadataLoader(null, initialSkus,
                         new Dictionary<Guid, List<SkuUser>>
                         {
                             { skuAId, new List<SkuUser> { new SkuUser { UserPrincipalName = userAUpn } } },
                             { skuBId, new List<SkuUser> { new SkuUser { UserPrincipalName = userBUpn } } }
                         });
+
                     await new UserLicenseProcessor(AnalyticsLogger.ConsoleOnlyTracer(), setupLoader, new UserMetadataCache(db))
                         .ProcessSKUsForAllUsers(initialSkus, users, db);
                     Assert.AreEqual(1, await CountLookups(db, userA.ID));
                     Assert.AreEqual(1, await CountLookups(db, userB.ID));
+
                     var partialLoader = new FakeUserMetadataLoader(null, initialSkus,
                         new Dictionary<Guid, List<SkuUser>>
                         {
@@ -940,12 +1059,15 @@ namespace Tests.UnitTests
                             loadedSkuAPage = true;
                             return Task.CompletedTask;
                         }
+
                         throw new InvalidOperationException("simulated failure after a partial SKU-holder inventory");
                     };
                     var recorder = new RecordingUserLicenseStore(new SqlUserLicenseStore(db, AnalyticsLogger.ConsoleOnlyTracer()));
+
                     await Assert.ThrowsExceptionAsync<InvalidOperationException>(() =>
                         new UserLicenseProcessor(AnalyticsLogger.ConsoleOnlyTracer(), partialLoader, new UserMetadataCache(db), _ => recorder)
                             .ProcessSKUsForAllUsers(initialSkus, users, db));
+
                     Assert.IsTrue(loadedSkuAPage, "The failure must occur after at least one SKU-holder page has been read.");
                     Assert.AreEqual(0, recorder.Operations.Count,
                         "A partial SKU-holder inventory must not be reconciled as complete; writes happen only after every SKU has been read.");
@@ -958,8 +1080,11 @@ namespace Tests.UnitTests
                 await RemoveTestUsers(userAUpn, userBUpn);
             }
         }
+
         #endregion
+
         #region Helpers
+
         /// <summary>
         /// Decorator that queries the licence count for one user on a SEPARATE connection around every
         /// write the refresh performs, so a test can assert what a concurrent reader would have seen.
@@ -968,13 +1093,17 @@ namespace Tests.UnitTests
         {
             private readonly IUserLicenseStore _inner;
             private readonly int _watchedUserId;
+
             public ProbingUserLicenseStore(IUserLicenseStore inner, int watchedUserId)
             {
                 _inner = inner;
                 _watchedUserId = watchedUserId;
             }
+
             public List<(string Point, int LicenceCount)> Observations { get; } = new List<(string, int)>();
+
             public string Describe() => string.Join(", ", Observations.Select(o => $"{o.Point}={o.LicenceCount}"));
+
             private async Task Probe(string point)
             {
                 using (var reader = new AnalyticsEntitiesContext())
@@ -988,10 +1117,11 @@ namespace Tests.UnitTests
                 => _inner.StartRefresh(completedUtc);
             public Task<int> CarryAssignmentsAcrossRenamedLicenceTypes(IReadOnlyList<int> currentLicenseTypeIds, LicenseRefreshRunInfo refresh)
                 => _inner.CarryAssignmentsAcrossRenamedLicenceTypes(currentLicenseTypeIds, refresh);
-            public Task<int> SeedCurrentAssignments(IReadOnlyList<UserLicenseAssignment> assignments, LicenseRefreshRunInfo refresh)
-                => _inner.SeedCurrentAssignments(assignments, refresh);
             public Task<int?> CompleteRefresh(LicenseRefreshRunInfo refresh, IReadOnlyList<LicenseSeatCountSnapshot> seatCounts)
                 => _inner.CompleteRefresh(refresh, seatCounts);
+
+            public Task<LicenseHistoryReconcileResult> ReconcileHistoryWithCurrentLookups(LicenseRefreshRunInfo refresh)
+                => _inner.ReconcileHistoryWithCurrentLookups(refresh);
             public async Task<int> AddAssignments(IReadOnlyList<UserLicenseAssignment> assignments, LicenseRefreshRunInfo refresh)
             {
                 if (assignments == null || assignments.Count == 0)
@@ -1015,20 +1145,25 @@ namespace Tests.UnitTests
                 return removed;
             }
         }
+
         /// <summary>
         /// Decorator that records what the refresh asked the store to write, and in what order.
         /// </summary>
         private class RecordingUserLicenseStore : IUserLicenseStore
         {
             private readonly IUserLicenseStore _inner;
+
             public RecordingUserLicenseStore(IUserLicenseStore inner)
             {
                 _inner = inner;
             }
+
             public List<UserLicenseAssignment> Added { get; } = new List<UserLicenseAssignment>();
             public List<UserLicenseAssignment> Removed { get; } = new List<UserLicenseAssignment>();
+
             /// <summary>"add" / "remove" in call order, recorded only for calls that had work to do.</summary>
             public List<string> Operations { get; } = new List<string>();
+
             public void Reset()
             {
                 Added.Clear();
@@ -1041,10 +1176,11 @@ namespace Tests.UnitTests
                 => _inner.StartRefresh(completedUtc);
             public Task<int> CarryAssignmentsAcrossRenamedLicenceTypes(IReadOnlyList<int> currentLicenseTypeIds, LicenseRefreshRunInfo refresh)
                 => _inner.CarryAssignmentsAcrossRenamedLicenceTypes(currentLicenseTypeIds, refresh);
-            public Task<int> SeedCurrentAssignments(IReadOnlyList<UserLicenseAssignment> assignments, LicenseRefreshRunInfo refresh)
-                => _inner.SeedCurrentAssignments(assignments, refresh);
             public Task<int?> CompleteRefresh(LicenseRefreshRunInfo refresh, IReadOnlyList<LicenseSeatCountSnapshot> seatCounts)
                 => _inner.CompleteRefresh(refresh, seatCounts);
+
+            public Task<LicenseHistoryReconcileResult> ReconcileHistoryWithCurrentLookups(LicenseRefreshRunInfo refresh)
+                => _inner.ReconcileHistoryWithCurrentLookups(refresh);
             public async Task<int> AddAssignments(IReadOnlyList<UserLicenseAssignment> assignments, LicenseRefreshRunInfo refresh)
             {
                 if (assignments != null && assignments.Count > 0)
@@ -1067,26 +1203,33 @@ namespace Tests.UnitTests
         private class RecordingLicenseNameResolver : IOfficeLicenseNameResolver
         {
             private readonly IOfficeLicenseNameResolver _inner;
+
             public RecordingLicenseNameResolver(IOfficeLicenseNameResolver inner)
             {
                 _inner = inner;
             }
+
             public List<string> RequestedSkuPartNumbers { get; } = new List<string>();
+
             public string GetDisplayNameFor(string id)
             {
                 RequestedSkuPartNumbers.Add(id);
                 return _inner.GetDisplayNameFor(id);
             }
         }
+
         private class FixedLicenseNameResolver : IOfficeLicenseNameResolver
         {
             private readonly string _displayName;
+
             public FixedLicenseNameResolver(string displayName)
             {
                 _displayName = displayName;
             }
+
             public string GetDisplayNameFor(string id) => _displayName;
         }
+
         private static FakeUserMetadataLoader BuildLoader(
             (string Upn, string AadId)[] users,
             (Guid SkuId, string PartNumber, string[] LicensedUpns)[] skus)
@@ -1094,7 +1237,9 @@ namespace Tests.UnitTests
             var graphUsers = users
                 .Select(u => new GraphUser { UserPrincipalName = u.Upn, Id = u.AadId, AccountEnabled = true, Mail = u.Upn })
                 .ToList();
+
             var skuList = skus.Select(s => new SubscribedSku { SkuId = s.SkuId, SkuPartNumber = s.PartNumber }).ToList();
+
             var usersBySku = new Dictionary<Guid, List<SkuUser>>();
             foreach (var sku in skus)
             {
@@ -1117,14 +1262,17 @@ DELETE FROM dbo.user_license_history;");
             await db.SaveChangesAsync();
             return user;
         }
+
         private static async Task<int> GetUserId(AnalyticsEntitiesContext db, string upn)
         {
             var user = await db.users.AsNoTracking().FirstOrDefaultAsync(u => u.UserPrincipalName == upn);
             Assert.IsNotNull(user, $"Expected test user '{upn}' to exist in the database.");
             return user.ID;
         }
+
         private static Task<int> CountLookups(AnalyticsEntitiesContext db, int userId)
             => db.UserLicenseTypeLookups.AsNoTracking().CountAsync(l => l.UserId == userId);
+
         private static async Task<string[]> LoadLicenceNames(AnalyticsEntitiesContext db, int userId)
         {
             var names = await db.UserLicenseTypeLookups.AsNoTracking()
@@ -1133,6 +1281,7 @@ DELETE FROM dbo.user_license_history;");
                 .ToListAsync();
             return names.ToArray();
         }
+
         private static async Task RemoveTestUsers(params string[] upns)
         {
             using (var db = new AnalyticsEntitiesContext())
@@ -1151,6 +1300,7 @@ DELETE FROM dbo.user_license_history;");
                 await db.SaveChangesAsync();
             }
         }
+
         private static async Task RemoveTestLicences(params string[] skuIds)
         {
             using (var db = new AnalyticsEntitiesContext())
@@ -1169,6 +1319,7 @@ DELETE FROM dbo.user_license_history;");
                 await db.SaveChangesAsync();
             }
         }
+
         #endregion
     }
 }

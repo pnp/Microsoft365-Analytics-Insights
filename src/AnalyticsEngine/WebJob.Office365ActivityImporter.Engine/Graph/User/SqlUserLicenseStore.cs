@@ -1,4 +1,4 @@
-﻿using Common.Entities;
+using Common.Entities;
 using DataUtils.Sql;
 using Microsoft.Extensions.Logging;
 using System;
@@ -36,12 +36,12 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         private readonly AnalyticsEntitiesContext _db;
         private readonly ILogger _logger;
         // Cached statement text for a full-size batch. Parameterised, so it is byte-identical every
-        // time and SQL Server compiles the plan once then reuses it for every subsequent batch.
+        // time and SQL Server compiles the plan once then reuses it for every subsequent batch. That
+        // plan reuse is most of the 2.1x gap between this and inlining the values as literals.
         private string _fullBatchInsertSql;
         private string _fullBatchInsertWithHistorySql;
         private string _fullBatchDeleteSql;
         private string _fullBatchDeleteWithHistorySql;
-        private string _fullBatchSeedSql;
         public SqlUserLicenseStore(AnalyticsEntitiesContext db, ILogger logger)
         {
             _db = db ?? throw new ArgumentNullException(nameof(db));
@@ -55,8 +55,13 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 return loaded;
             }
             var scope = userIds as HashSet<int> ?? new HashSet<int>(userIds);
-            // One pass over the whole table, filtered in memory against the scope. The refresh this
-            // serves covers the entire user population, so a single scan of the narrow unique index
+            if (scope.Count <= 1000)
+            {
+                return await LoadAssignmentsForSmallScope(scope);
+            }
+
+            // One pass over the whole table, filtered in memory against the scope. The tenant-level
+            // refresh covers the entire user population, so a single scan of the narrow unique index
             // on (license_type_id, user_id) - which covers both columns read here - is cheaper than
             // chunked IN-lists and avoids the 2100-parameter limit entirely. Measured over 600k rows:
             // 1,045 logical reads, ~80ms.
@@ -98,6 +103,37 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 }
             }
             _logger.LogDebug($"User import - read {loaded.Count.ToString("N0")} existing licence assignment(s) for {scope.Count.ToString("N0")} in-scope user(s).");
+            return loaded;
+        }
+
+        private async Task<HashSet<UserLicenseAssignment>> LoadAssignmentsForSmallScope(HashSet<int> userIds)
+        {
+            var loaded = new HashSet<UserLicenseAssignment>();
+            var values = new StringBuilder(userIds.Count * 8);
+            var parameters = new List<object>(userIds.Count);
+            var i = 0;
+            foreach (var userId in userIds)
+            {
+                if (i > 0)
+                {
+                    values.Append(',');
+                }
+                values.Append("(@u").Append(i).Append(')');
+                parameters.Add(new SqlParameter("@u" + i, SqlDbType.Int) { Value = userId });
+                i++;
+            }
+
+            var sql =
+                "SELECT l.user_id, l.license_type_id\r\n" +
+                "FROM dbo.user_license_type_lookups AS l\r\n" +
+                $"INNER JOIN (VALUES {values}) AS scope(user_id) ON scope.user_id = l.user_id;";
+            var rows = await _db.Database.SqlQuery<UserLicenseAssignmentRow>(sql, parameters.ToArray()).ToListAsync();
+            foreach (var row in rows)
+            {
+                loaded.Add(new UserLicenseAssignment(row.user_id, row.license_type_id));
+            }
+
+            _logger.LogDebug($"User import - read {loaded.Count.ToString("N0")} existing licence assignment(s) for {userIds.Count.ToString("N0")} targeted in-scope user(s).");
             return loaded;
         }
         public async Task<LicenseRefreshRunInfo> StartRefresh(DateTime completedUtc)
@@ -191,27 +227,6 @@ SELECT @changed;";
             }
             return moved;
         }
-        public async Task<int> SeedCurrentAssignments(IReadOnlyList<UserLicenseAssignment> assignments, LicenseRefreshRunInfo refresh)
-        {
-            if (assignments == null || assignments.Count == 0 || refresh == null || !refresh.IsFirstHistoryRefresh)
-            {
-                return 0;
-            }
-            var written = 0;
-            for (var i = 0; i < assignments.Count; i += MAX_ROWS_PER_STATEMENT)
-            {
-                var take = Math.Min(MAX_ROWS_PER_STATEMENT, assignments.Count - i);
-                var sql = BuildBatchSql(take, ref _fullBatchSeedSql, valuesList =>
-                    "INSERT INTO dbo.user_license_history (user_id, license_type_id, valid_from_utc, valid_to_utc, from_source, valid_from_previous_refresh_utc)\r\n" +
-                    "SELECT v.user_id, v.license_type_id, @refreshUtc, NULL, CONVERT(tinyint, 0), @previousRefreshUtc\r\n" +
-                    $"FROM (VALUES {valuesList}) AS v(user_id, license_type_id)\r\n" +
-                    "WHERE NOT EXISTS (\r\n" +
-                    "    SELECT 1 FROM dbo.user_license_history AS h\r\n" +
-                    "    WHERE h.license_type_id = v.license_type_id AND h.user_id = v.user_id AND h.valid_to_utc IS NULL); ");
-                written += await _db.Database.ExecuteSqlCommandAsync(sql, BuildParameters(assignments, i, take, refresh));
-            }
-            return written;
-        }
         public async Task<int> AddAssignments(IReadOnlyList<UserLicenseAssignment> assignments, LicenseRefreshRunInfo refresh)
         {
             if (assignments == null || assignments.Count == 0)
@@ -228,14 +243,25 @@ SELECT @changed;";
                 // current state was read would otherwise fail the whole batch.
                 var sql = hasHistory
                     ? BuildBatchSql(take, ref _fullBatchInsertWithHistorySql, valuesList =>
+                        "SET XACT_ABORT ON;\r\n" +
+                        "DECLARE @inserted TABLE (user_id int NOT NULL, license_type_id int NOT NULL);\r\n" +
+                        "BEGIN TRANSACTION;\r\n" +
                         "INSERT INTO dbo.user_license_type_lookups (user_id, license_type_id)\r\n" +
-                        "OUTPUT inserted.user_id, inserted.license_type_id, @refreshUtc, NULL, CONVERT(tinyint, 1), @previousRefreshUtc\r\n" +
-                        "INTO dbo.user_license_history (user_id, license_type_id, valid_from_utc, valid_to_utc, from_source, valid_from_previous_refresh_utc)\r\n" +
+                        "OUTPUT inserted.user_id, inserted.license_type_id INTO @inserted (user_id, license_type_id)\r\n" +
                         "SELECT v.user_id, v.license_type_id\r\n" +
                         $"FROM (VALUES {valuesList}) AS v(user_id, license_type_id)\r\n" +
                         "WHERE NOT EXISTS (\r\n" +
                         "    SELECT 1 FROM dbo.user_license_type_lookups AS t\r\n" +
-                        "    WHERE t.license_type_id = v.license_type_id AND t.user_id = v.user_id); ")
+                        "    WHERE t.license_type_id = v.license_type_id AND t.user_id = v.user_id);\r\n" +
+                        "INSERT INTO dbo.user_license_history (user_id, license_type_id, valid_from_utc, valid_to_utc, from_source, valid_from_previous_refresh_utc)\r\n" +
+                        "SELECT i.user_id, i.license_type_id, @refreshUtc, NULL, CONVERT(tinyint, 1), @previousRefreshUtc\r\n" +
+                        "FROM @inserted AS i\r\n" +
+                        "WHERE NOT EXISTS (\r\n" +
+                        "    SELECT 1 FROM dbo.user_license_history AS h\r\n" +
+                        "    WHERE h.license_type_id = i.license_type_id AND h.user_id = i.user_id AND h.valid_to_utc IS NULL);\r\n" +
+                        "DECLARE @added int = (SELECT COUNT(*) FROM @inserted);\r\n" +
+                        "COMMIT TRANSACTION;\r\n" +
+                        "SELECT @added;")
                     : BuildBatchSql(take, ref _fullBatchInsertSql, valuesList =>
                         "INSERT INTO dbo.user_license_type_lookups (user_id, license_type_id)\r\n" +
                         "SELECT v.user_id, v.license_type_id\r\n" +
@@ -243,7 +269,9 @@ SELECT @changed;";
                         "WHERE NOT EXISTS (\r\n" +
                         "    SELECT 1 FROM dbo.user_license_type_lookups AS t\r\n" +
                         "    WHERE t.license_type_id = v.license_type_id AND t.user_id = v.user_id); ");
-                written += await ExecuteInsertBatchWithDuplicateRetry(sql, assignments, i, take, refresh);
+                written += hasHistory
+                    ? await ExecuteInsertBatchWithDuplicateRetryReturningScalar(sql, assignments, i, take, refresh)
+                    : await ExecuteInsertBatchWithDuplicateRetry(sql, assignments, i, take, refresh);
             }
             return written;
         }
@@ -263,6 +291,23 @@ SELECT @changed;";
                 try
                 {
                     return await _db.Database.ExecuteSqlCommandAsync(sql, BuildParameters(assignments, offset, count, refresh));
+                }
+                catch (Exception ex) when (attempt < MAX_ATTEMPTS && IsDuplicateKeyViolation(ex))
+                {
+                    _logger.LogWarning($"User import - a licence assignment batch hit a duplicate-key race (attempt {attempt} of {MAX_ATTEMPTS}); retrying. This means something else inserted the same assignment concurrently.");
+                }
+            }
+        }
+
+        private async Task<int> ExecuteInsertBatchWithDuplicateRetryReturningScalar(
+            string sql, IReadOnlyList<UserLicenseAssignment> assignments, int offset, int count, LicenseRefreshRunInfo refresh)
+        {
+            const int MAX_ATTEMPTS = 3;
+            for (var attempt = 1; ; attempt++)
+            {
+                try
+                {
+                    return await _db.Database.SqlQuery<int>(sql, BuildParameters(assignments, offset, count, refresh)).SingleAsync();
                 }
                 catch (Exception ex) when (attempt < MAX_ATTEMPTS && IsDuplicateKeyViolation(ex))
                 {
@@ -338,6 +383,49 @@ SELECT @changed;";
             }
             return deleted;
         }
+
+        public async Task<LicenseHistoryReconcileResult> ReconcileHistoryWithCurrentLookups(LicenseRefreshRunInfo refresh)
+        {
+            var result = new LicenseHistoryReconcileResult();
+            if (refresh == null || !refresh.HistoryTablesAvailable)
+            {
+                return result;
+            }
+
+            result.ClosedOpenRowsWithoutLookup = await _db.Database.ExecuteSqlCommandAsync(
+                @"UPDATE history
+SET valid_to_utc = @refreshUtc,
+    valid_to_previous_refresh_utc = @previousRefreshUtc
+FROM dbo.user_license_history AS history
+WHERE history.valid_to_utc IS NULL
+  AND NOT EXISTS
+  (
+      SELECT 1
+      FROM dbo.user_license_type_lookups AS lookup
+      WHERE lookup.user_id = history.user_id
+        AND lookup.license_type_id = history.license_type_id
+  );",
+                BuildRefreshParameters(refresh));
+
+            result.OpenedLookupRowsWithoutHistory = await _db.Database.ExecuteSqlCommandAsync(
+                @"INSERT INTO dbo.user_license_history (user_id, license_type_id, valid_from_utc, valid_to_utc, from_source, valid_from_previous_refresh_utc)
+SELECT lookup.user_id, lookup.license_type_id, @refreshUtc, NULL, CONVERT(tinyint, 0), @previousRefreshUtc
+FROM dbo.user_license_type_lookups AS lookup
+WHERE NOT EXISTS
+(
+    SELECT 1
+    FROM dbo.user_license_history AS history
+    WHERE history.user_id = lookup.user_id
+      AND history.license_type_id = lookup.license_type_id
+      AND history.valid_to_utc IS NULL
+);",
+                BuildRefreshParameters(refresh));
+
+            _logger.LogInformation(
+                $"User import - licence history reconcile closed {result.ClosedOpenRowsWithoutLookup.ToString("N0")} open row(s) without a current lookup and opened {result.OpenedLookupRowsWithoutHistory.ToString("N0")} lookup row(s) without open history.");
+            return result;
+        }
+
         public async Task<int?> CompleteRefresh(LicenseRefreshRunInfo refresh, IReadOnlyList<LicenseSeatCountSnapshot> seatCounts)
         {
             if (refresh == null || !refresh.HistoryTablesAvailable)
@@ -424,6 +512,12 @@ VALUES (@runId, @licenseTypeId, @observedUtc, @consumed, @enabled, @warning, @su
         {
             public int TablesAvailable { get; set; }
             public DateTime? PreviousCompletedUtc { get; set; }
+        }
+
+        private sealed class UserLicenseAssignmentRow
+        {
+            public int user_id { get; set; }
+            public int license_type_id { get; set; }
         }
     }
 }
