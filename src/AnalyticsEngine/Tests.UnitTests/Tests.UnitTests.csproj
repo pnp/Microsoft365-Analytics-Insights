@@ -50,6 +50,7 @@
     <Compile Include="AppInsightsImporterOrchestrationTests.cs" />
     <Compile Include="CheckpointTableClientFactoryTests.cs" />
     <Compile Include="CopilotAuditLogContentSchemaTests.cs" />
+    <Compile Include="CopilotAuditBackfillTests.cs" />
     <Compile Include="EntraOrgAttributeSpecTests.cs" />
     <Compile Include="UserOrgRulesTests.cs" />
     <Compile Include="UserOrgImportTests.cs" />

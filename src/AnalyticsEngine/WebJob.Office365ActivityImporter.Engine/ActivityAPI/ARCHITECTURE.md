@@ -34,6 +34,28 @@ Office 365 Management Activity API
 └─────────────────────────────────────┘
 ```
 
+### Copilot Audit Search backfill
+
+The live import above still owns normal steady-state Copilot audit ingestion. For issue #682 an
+administrator can additionally request an on-demand Microsoft Graph Audit Search backfill from the
+portal's Administration > Copilot audit backfill page. That request is stored in the `AnalyticsState`
+Azure Table under the `CopilotAuditBackfill` partition; no audit rows are marked in SQL.
+
+On each Office365ActivityImporter cycle, after the live Activity API content has been saved, the web job
+advances the request by a bounded amount. It submits/polls Graph Audit Search queries newest day first
+with `operationFilters=["CopilotInteraction"]`, maps each returned `auditData` payload back through
+`AuditLogContentDispatcher` and `CopilotAuditLogContent.FromJson`, and commits the resulting
+`Copilot` / record type 261 events through the same `ActivityReportSqlPersistenceManager` path as live
+Management Activity API records. This preserves the existing `UserGroupsFilter`, user-scope purge,
+`audit_events` de-duplication and Copilot child-table behaviour.
+
+The backfill is deliberately opt-in. It refuses to run while `ImportTaskSettings.Copilot` is off, and it
+checks the Graph app token for `AuditLogsQuery.Read.All` before submitting a query. That permission is
+not part of the installer's default consent. If Graph reports a slice as truncated, the importer discards
+that result and splits the day into hour slices; a truncated hour is treated as a failed job rather than
+accepting incomplete history. Application Insights receives only privacy-safe counts and stable state/error
+codes (`CopilotAuditBackfill` custom events), never payloads or user identifiers.
+
 ---
 
 ## Key Classes
