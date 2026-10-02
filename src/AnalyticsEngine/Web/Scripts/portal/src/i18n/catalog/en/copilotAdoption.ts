@@ -1,4 +1,4 @@
-/**
+﻿/**
  * English text for the Copilot Adoption page shell, funnel, action plan and shared adoption pieces.
  *
  * Every key here must have a Spanish counterpart in `../es/copilotAdoption.ts`; the type of that module
@@ -749,6 +749,29 @@ export const copilotAdoption = {
   'copilotAdoption.server.action.advocate.description': 'Engagement at or above {championScore} - among your deepest users. Ask them to run a peer session for their own department, which converts better than centrally run training. If their breadth score is low they are still worth showing one more surface.',
   'copilotAdoption.server.action.review.description': 'Potential reclaim cases that are too new to judge, or missing enough tenure or account-state context to act on automatically. Leave, part-time patterns, service accounts and shared mailboxes are not detectable from usage data, so a human review is required. Dormant seats are deliberately NOT here - they get the Win back action, because there is still somebody to talk to - but they are counted as review-only in the reclaim tiers, which is a seat decision rather than an enablement one.',
   'copilotAdoption.server.action.excluded.description': 'Reviewed cases an admin deliberately excluded from reclaim. They still hold a seat and remain in the licence denominator, but do not inflate the actionable reclaim KPI.',
+  'copilotAdoption.page.kpi.seatHolderTimeSaved.label': 'Time already saved by seat holders',
+  'copilotAdoption.page.kpi.seatHolderTimeSaved.hint.one': 'Modelled from observed Copilot actions by {users} seat holder.',
+  'copilotAdoption.page.kpi.seatHolderTimeSaved.hint.other': 'Modelled from observed Copilot actions by {users} seat holders.',
+  'copilotAdoption.page.kpi.seatHolderTimeSaved.open': 'Review on Licensed users',
+  'copilotAdoption.page.kpi.seatHolderTimeSaved.what': 'How much time the Copilot seats already paid for may be giving back in the selected period.',
+  'copilotAdoption.page.kpi.seatHolderTimeSaved.how': 'Observed Outlook, Office and Teams meeting Copilot actions are multiplied by visible credits. Copilot Chat, agents and Cowork default to zero here.',
+  'copilotAdoption.page.kpi.seatHolderTimeSaved.formula': 'Outlook x {outlook} min + Word/PowerPoint/Excel x {office} min + Teams meetings x {meeting} min + other x {other} min; low end applies {percent}%.',
+  'copilotAdoption.page.kpi.seatHolderTimeSaved.source': 'Copilot audit log, grouped for Copilot seat holders. Microsoft usage-report-only users are excluded because they have no per-action detail.',
+  'copilotAdoption.page.seatTime.title': "Seat holders' time saved (modelled)",
+  'copilotAdoption.page.seatTime.description': 'Hours only, never money. This models observed Copilot actions by people who already hold a licence; it is not added to the licence or Cowork estimates.',
+  'copilotAdoption.page.seatTime.hours': 'Modelled hours a month',
+  'copilotAdoption.page.seatTime.hoursHint': 'Based on {users} seat holders with audit-log action detail.',
+  'copilotAdoption.page.seatTime.excluded': 'Excluded users',
+  'copilotAdoption.page.seatTime.excludedHint': "Seat holders scored only from Microsoft's usage report have prompt counts, not per-action detail.",
+  'copilotAdoption.page.seatTime.input.outlook': 'Outlook minutes per action',
+  'copilotAdoption.page.seatTime.input.office': 'Word, PowerPoint and Excel minutes per action',
+  'copilotAdoption.page.seatTime.input.meeting': 'Teams meeting minutes per action',
+  'copilotAdoption.page.seatTime.input.other': 'Other-surface minutes per action',
+  'copilotAdoption.page.seatTime.counts': 'Observed monthly actions: {outlook} Outlook at {outlookMinutes} min, {office} Word/PowerPoint/Excel at {officeMinutes} min, {meeting} Teams meeting at {meetingMinutes} min, and {other} other at {otherMinutes} min.',
+  'copilotAdoption.page.seatTime.department': 'Department',
+  'copilotAdoption.page.seatTime.hoursHigh': 'Hours high',
+  'copilotAdoption.page.seatTime.people': 'People',
+  'copilotAdoption.server.query.SeatHolderTimeSaved': 'seat-holder Copilot time-saved inputs',
 } as const;
 
 export default copilotAdoption;

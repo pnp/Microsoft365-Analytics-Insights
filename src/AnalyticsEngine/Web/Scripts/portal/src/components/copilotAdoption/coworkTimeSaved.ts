@@ -1,10 +1,11 @@
-import { useCallback, useMemo, useSyncExternalStore } from 'react';
+﻿import { useCallback, useMemo, useSyncExternalStore } from 'react';
 import type {
   CopilotAdoptionOptions,
   CopilotAdoptionSummary,
   CoworkActivity,
   CoworkValueEstimate,
   LicenceValueEstimate,
+  SeatHolderTimeSavedEstimate,
 } from '../../types/copilotAdoption';
 import { formatNumber, type TFunction } from '../../i18n';
 
@@ -64,6 +65,14 @@ export interface TimeSavedAssumptions {
   emailMinutes: number;
   /** Minutes Copilot saves per SharePoint or OneDrive document viewed or edited. Licence estimate. */
   documentMinutes: number;
+  /** Minutes credited to one Outlook Copilot action by the already-licensed estimate. */
+  seatOutlookMinutes: number;
+  /** Minutes credited to one Word/PowerPoint/Excel Copilot action by the already-licensed estimate. */
+  seatOfficeMinutes: number;
+  /** Minutes credited to one Teams meeting recap/summarise action by the already-licensed estimate. */
+  seatMeetingMinutes: number;
+  /** Minutes credited to Copilot Chat and other uncredited actions by the already-licensed estimate. */
+  seatUncreditedMinutes: number;
   /** Minutes Cowork saves per task already in Microsoft's report, on top of Copilot. Cowork estimate. */
   taskMinutes: number;
   /** For each kind of work Cowork could take on: the share handed to it (0-1), and the minutes saved on each piece. */
@@ -136,6 +145,10 @@ export const TIME_SAVED_ASSUMPTION_KEYS: readonly TimeSavedAssumptionKey[] = [
   'meetingMinutes',
   'emailMinutes',
   'documentMinutes',
+  'seatOutlookMinutes',
+  'seatOfficeMinutes',
+  'seatMeetingMinutes',
+  'seatUncreditedMinutes',
   'taskMinutes',
   ...COWORK_ACTIVITY_KEYS,
   'conservativeRatio',
@@ -175,6 +188,10 @@ export const TIME_SAVED_LIMITS: Record<TimeSavedAssumptionKey, { min: number; ma
   meetingMinutes: { min: 0, max: 120 },
   emailMinutes: { min: 0, max: 60 },
   documentMinutes: { min: 0, max: 120 },
+  seatOutlookMinutes: { min: 0, max: 60 },
+  seatOfficeMinutes: { min: 0, max: 120 },
+  seatMeetingMinutes: { min: 0, max: 120 },
+  seatUncreditedMinutes: { min: 0, max: 240 },
   taskMinutes: { min: 0, max: 240 },
   organiseMeetingsShare: { min: 0, max: 1 },
   organiseMeetingsMinutes: { min: 0, max: 240 },
@@ -230,6 +247,10 @@ export function defaultTimeSavedAssumptions(options: CopilotAdoptionOptions | nu
     meetingMinutes: nonNegative(o.copilotMinutesSavedPerMeeting),
     emailMinutes: nonNegative(o.copilotMinutesSavedPerMailThread),
     documentMinutes: nonNegative(o.copilotMinutesSavedPerDocument),
+    seatOutlookMinutes: nonNegative(o.copilotSeatOutlookMinutesPerAction),
+    seatOfficeMinutes: nonNegative(o.copilotSeatOfficeMinutesPerAction),
+    seatMeetingMinutes: nonNegative(o.copilotSeatMeetingMinutesPerAction),
+    seatUncreditedMinutes: nonNegative(o.copilotSeatUncreditedMinutesPerAction),
     taskMinutes: nonNegative(o.coworkMinutesSavedPerTask),
     // Shares clamped exactly as the server clamps them (CoworkActivity.Share): above 1 the model would
     // hand Cowork more work than people do.
@@ -489,6 +510,43 @@ export function projectLicenceTimeSaved(
     })),
     candidatesCapped: estimate.candidatesCapped === true,
     ...restate(minutes, ratio, estimate.cohortUsers, assumptions, options),
+  };
+}
+
+export interface SeatHolderTimeSavedProjection {
+  cohortUsers: number;
+  excludedUsageReportSourcedUsers: number;
+  hoursLow: number;
+  hoursHigh: number;
+  outlookActions: number;
+  officeActions: number;
+  teamsMeetingActions: number;
+  uncreditedActions: number;
+}
+
+export function projectSeatHolderTimeSaved(
+  estimate: SeatHolderTimeSavedEstimate | null | undefined,
+  assumptions: TimeSavedAssumptions,
+): SeatHolderTimeSavedProjection | null {
+  if (!estimate || !((estimate.cohortUsers ?? 0) > 0 || (estimate.excludedUsageReportSourcedUsers ?? 0) > 0)) return null;
+  const outlook = Math.round(nonNegative(estimate.observedOutlookActions));
+  const office = Math.round(nonNegative(estimate.observedOfficeActions));
+  const meetings = Math.round(nonNegative(estimate.observedTeamsMeetingActions));
+  const uncredited = Math.round(nonNegative(estimate.observedUncreditedActions));
+  const ratio = clamp(nonNegative(assumptions.conservativeRatio), 0, 1);
+  const minutes = outlook * nonNegative(assumptions.seatOutlookMinutes)
+    + office * nonNegative(assumptions.seatOfficeMinutes)
+    + meetings * nonNegative(assumptions.seatMeetingMinutes)
+    + uncredited * nonNegative(assumptions.seatUncreditedMinutes);
+  return {
+    cohortUsers: estimate.cohortUsers ?? 0,
+    excludedUsageReportSourcedUsers: estimate.excludedUsageReportSourcedUsers ?? 0,
+    hoursHigh: Math.round(minutes / 60),
+    hoursLow: Math.round((minutes * ratio) / 60),
+    outlookActions: outlook,
+    officeActions: office,
+    teamsMeetingActions: meetings,
+    uncreditedActions: uncredited,
   };
 }
 
@@ -773,6 +831,10 @@ export function timeSavedExportParams(state: Pick<TimeSavedAssumptionState, 'ass
   if (customised.includes('documentMinutes')) params.copilotMinutesSavedPerDocument = String(assumptions.documentMinutes);
   if (customised.includes('conservativeRatio')) params.coworkEstimateLowerBoundRatio = String(assumptions.conservativeRatio);
   if (customised.includes('taskMinutes')) params.coworkMinutesSavedPerTask = String(assumptions.taskMinutes);
+  if (customised.includes('seatOutlookMinutes')) params.copilotSeatOutlookMinutesPerAction = String(assumptions.seatOutlookMinutes);
+  if (customised.includes('seatOfficeMinutes')) params.copilotSeatOfficeMinutesPerAction = String(assumptions.seatOfficeMinutes);
+  if (customised.includes('seatMeetingMinutes')) params.copilotSeatMeetingMinutesPerAction = String(assumptions.seatMeetingMinutes);
+  if (customised.includes('seatUncreditedMinutes')) params.copilotSeatUncreditedMinutesPerAction = String(assumptions.seatUncreditedMinutes);
   for (const activity of COWORK_ACTIVITIES) {
     const keys = COWORK_ACTIVITY_ASSUMPTIONS[activity];
     if (customised.includes(keys.share)) params[keys.shareOption] = String(assumptions[keys.share]);

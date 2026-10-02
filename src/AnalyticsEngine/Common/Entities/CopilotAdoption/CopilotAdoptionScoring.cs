@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
@@ -2054,6 +2054,101 @@ namespace Common.Entities.CopilotAdoption
         private static string Plural(long count)
         {
             return count == 1 ? string.Empty : "s";
+        }
+
+        #endregion
+
+
+
+        #region Already-licensed seat-holder time saved (MODELLED - not measured)
+
+        /// <summary>
+        /// Applies Microsoft's published Copilot assisted-hours credits to observed Copilot actions from
+        /// people who already hold a seat. Hours only, never money, and never added to the licence or
+        /// Cowork estimates: this answers "what are the seats we already pay for giving back?".
+        /// </summary>
+        public static SeatHolderTimeSavedEstimate ModelSeatHolderTimeSaved(
+            int cohortUsers,
+            int excludedUsageReportSourcedUsers,
+            double outlookActions,
+            double officeActions,
+            double teamsMeetingActions,
+            double uncreditedActions,
+            CopilotAdoptionOptions options = null)
+        {
+            var o = options ?? CopilotAdoptionOptions.Default;
+            var estimate = new SeatHolderTimeSavedEstimate
+            {
+                CohortUsers = Math.Max(0, cohortUsers),
+                ExcludedUsageReportSourcedUsers = Math.Max(0, excludedUsageReportSourcedUsers),
+                ObservedOutlookActions = Round(NonNegative(outlookActions), 0),
+                ObservedOfficeActions = Round(NonNegative(officeActions), 0),
+                ObservedTeamsMeetingActions = Round(NonNegative(teamsMeetingActions), 0),
+                ObservedUncreditedActions = Round(NonNegative(uncreditedActions), 0),
+                Credits = new SeatHolderTimeSavedCredits
+                {
+                    OutlookMinutesPerAction = NonNegative(o.CopilotSeatOutlookMinutesPerAction),
+                    OfficeMinutesPerAction = NonNegative(o.CopilotSeatOfficeMinutesPerAction),
+                    TeamsMeetingMinutesPerAction = NonNegative(o.CopilotSeatMeetingMinutesPerAction),
+                    UncreditedMinutesPerAction = NonNegative(o.CopilotSeatUncreditedMinutesPerAction),
+                    LowerBoundRatio = TimeSavedLowerBoundRatio(o),
+                }
+            };
+
+            if (estimate.CohortUsers <= 0 && estimate.ExcludedUsageReportSourcedUsers <= 0)
+            {
+                return estimate;
+            }
+
+            var minutes = estimate.ObservedOutlookActions * estimate.Credits.OutlookMinutesPerAction
+                        + estimate.ObservedOfficeActions * estimate.Credits.OfficeMinutesPerAction
+                        + estimate.ObservedTeamsMeetingActions * estimate.Credits.TeamsMeetingMinutesPerAction
+                        + estimate.ObservedUncreditedActions * estimate.Credits.UncreditedMinutesPerAction;
+
+            estimate.HoursPerMonthHigh = Round(minutes / 60d, 0);
+            estimate.HoursPerMonthLow = Round(minutes * estimate.Credits.LowerBoundRatio / 60d, 0);
+
+            var assumptions = new List<string>
+            {
+                $"Counts observed Copilot audit actions by Copilot seat holders in the selected period, restated as a {Math.Max(1, o.HabitBucketNormalisationDays)}-day month.",
+                $"Credits Outlook actions at {Num(estimate.Credits.OutlookMinutesPerAction)} minutes each, Word/PowerPoint/Excel actions at {Num(estimate.Credits.OfficeMinutesPerAction)} minutes each, and Teams meeting recap or summarise actions at {Num(estimate.Credits.TeamsMeetingMinutesPerAction)} minutes each.",
+                "Microsoft's Copilot assisted-hours method credits meeting summarisation from meeting duration; this import does not reliably carry duration, so the Teams meeting credit is a visible fixed fallback.",
+                $"Copilot Chat, agents, Cowork and other surfaces are credited at {Num(estimate.Credits.UncreditedMinutesPerAction)} minutes here unless the reader overrides it. Cowork has its own estimate and is never added to this one.",
+            };
+            if (estimate.ExcludedUsageReportSourcedUsers > 0)
+            {
+                assumptions.Add(
+                    $"{estimate.ExcludedUsageReportSourcedUsers:N0} seat holder{Plural(estimate.ExcludedUsageReportSourcedUsers)} were scored from Microsoft's usage report and are excluded because that report has prompt counts but no per-action detail.");
+            }
+            assumptions.Add($"The lower bound applies {Num(estimate.Credits.LowerBoundRatio * 100d)}% of each minutes-saved credit; the upper bound applies them in full.");
+            assumptions.Add("Time saved is NOT measured by this product and cannot be. These figures are a model for reporting realised seat value, not a result.");
+            assumptions.Add(NoMonetaryValueAssumption);
+            estimate.Assumptions.AddRange(assumptions);
+
+            return estimate;
+        }
+
+        public static SeatHolderTimeSavedSegment ModelSeatHolderTimeSavedSegment(
+            string segment,
+            int cohortUsers,
+            double outlookActions,
+            double officeActions,
+            double teamsMeetingActions,
+            double uncreditedActions,
+            CopilotAdoptionOptions options = null)
+        {
+            var estimate = ModelSeatHolderTimeSaved(cohortUsers, 0, outlookActions, officeActions, teamsMeetingActions, uncreditedActions, options);
+            return new SeatHolderTimeSavedSegment
+            {
+                Segment = segment,
+                CohortUsers = estimate.CohortUsers,
+                ObservedOutlookActions = estimate.ObservedOutlookActions,
+                ObservedOfficeActions = estimate.ObservedOfficeActions,
+                ObservedTeamsMeetingActions = estimate.ObservedTeamsMeetingActions,
+                ObservedUncreditedActions = estimate.ObservedUncreditedActions,
+                HoursPerMonthLow = estimate.HoursPerMonthLow,
+                HoursPerMonthHigh = estimate.HoursPerMonthHigh,
+            };
         }
 
         #endregion

@@ -1,4 +1,4 @@
-using Newtonsoft.Json;
+﻿using Newtonsoft.Json;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -160,6 +160,18 @@ namespace Common.Entities.CopilotAdoption
         /// </summary>
         public double? MinutesSavedPerTask { get; set; }
 
+        /// <summary>Minutes credited to one observed Outlook Copilot action for already-licensed users.</summary>
+        public double? SeatOutlookMinutesPerAction { get; set; }
+
+        /// <summary>Minutes credited to one observed Word, PowerPoint or Excel Copilot action for already-licensed users.</summary>
+        public double? SeatOfficeMinutesPerAction { get; set; }
+
+        /// <summary>Minutes credited to one observed Teams meeting recap/summarise action for already-licensed users.</summary>
+        public double? SeatMeetingMinutesPerAction { get; set; }
+
+        /// <summary>Minutes credited to Copilot Chat and other uncredited actions for already-licensed users.</summary>
+        public double? SeatUncreditedMinutesPerAction { get; set; }
+
         /// <summary>
         /// The share of each kind of work handed to Cowork, 0 to 1, keyed by <see cref="CoworkActivities"/>
         /// key. Restates the Cowork estimate. A key this build does not know is ignored.
@@ -179,6 +191,7 @@ namespace Common.Entities.CopilotAdoption
             || Usable(MinutesSavedPerDocument)
             || Usable(LowerBoundRatio)
             || Usable(MinutesSavedPerTask)
+            || AnySeatHolder
             || CoworkActivities.All.Any(a => Usable(Lookup(CoworkShares, a.Key)) || Usable(Lookup(CoworkMinutes, a.Key)));
 
         /// <summary>
@@ -188,6 +201,14 @@ namespace Common.Entities.CopilotAdoption
         public bool AnyCowork =>
             Usable(MinutesSavedPerTask)
             || CoworkActivities.All.Any(a => Usable(Lookup(CoworkShares, a.Key)) || Usable(Lookup(CoworkMinutes, a.Key)));
+
+        /// <summary>True when a figure used by the already-licensed seat-holder estimate was supplied.</summary>
+        public bool AnySeatHolder =>
+            Usable(SeatOutlookMinutesPerAction)
+            || Usable(SeatOfficeMinutesPerAction)
+            || Usable(SeatMeetingMinutesPerAction)
+            || Usable(SeatUncreditedMinutesPerAction)
+            || Usable(LowerBoundRatio);
 
         /// <summary>
         /// A copy of <paramref name="options"/> with the supplied figures in place of the defaults.
@@ -207,6 +228,14 @@ namespace Common.Entities.CopilotAdoption
                 copy.CoworkEstimateLowerBoundRatio = Clamp(LowerBoundRatio.Value, 0, 1);
             if (Usable(MinutesSavedPerTask))
                 copy.CoworkMinutesSavedPerTask = Clamp(MinutesSavedPerTask.Value, 0, MaxMinutesPerTask);
+            if (Usable(SeatOutlookMinutesPerAction))
+                copy.CopilotSeatOutlookMinutesPerAction = Clamp(SeatOutlookMinutesPerAction.Value, 0, MaxMinutesPerEmail);
+            if (Usable(SeatOfficeMinutesPerAction))
+                copy.CopilotSeatOfficeMinutesPerAction = Clamp(SeatOfficeMinutesPerAction.Value, 0, MaxMinutesPerItem);
+            if (Usable(SeatMeetingMinutesPerAction))
+                copy.CopilotSeatMeetingMinutesPerAction = Clamp(SeatMeetingMinutesPerAction.Value, 0, MaxMinutesPerItem);
+            if (Usable(SeatUncreditedMinutesPerAction))
+                copy.CopilotSeatUncreditedMinutesPerAction = Clamp(SeatUncreditedMinutesPerAction.Value, 0, MaxMinutesPerTask);
 
             foreach (var activity in CoworkActivities.All)
             {

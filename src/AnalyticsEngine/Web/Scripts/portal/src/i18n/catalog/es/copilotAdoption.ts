@@ -1,4 +1,4 @@
-import type { copilotAdoption as en } from '../en/copilotAdoption';
+﻿import type { copilotAdoption as en } from '../en/copilotAdoption';
 
 /**
  * Spanish (es-ES) text for the Copilot Adoption page shell, funnel, action plan and shared adoption pieces.
@@ -749,6 +749,30 @@ const copilotAdoption: Record<keyof typeof en, string> = {
   'copilotAdoption.server.action.advocate.description': 'Interacción igual o superior a {championScore}: entre sus usuarios más intensivos. Pídales que dirijan una sesión entre pares para su propio departamento, que convierte mejor que la formación centralizada. Si su puntuación de cobertura es baja, sigue mereciendo la pena mostrarles una superficie más.',
   'copilotAdoption.server.action.review.description': 'Posibles casos de recuperación que son demasiado nuevos para evaluarlos o a los que les falta suficiente contexto de antigüedad o estado de cuenta para actuar automáticamente. Bajas, patrones de tiempo parcial, cuentas de servicio y buzones compartidos no son detectables desde los datos de uso, por lo que se requiere una revisión humana. Los puestos inactivos deliberadamente NO están aquí: reciben la acción Recuperar interés, porque todavía hay alguien con quien hablar, pero se cuentan como solo para revisión en los niveles de recuperación, que es una decisión de puesto y no de habilitación.',
   'copilotAdoption.server.action.excluded.description': 'Casos revisados que un administrador excluyó deliberadamente de la recuperación. Siguen ocupando un puesto y permanecen en el denominador de licencias, pero no inflan el KPI de recuperación accionable.',
+  'copilotAdoption.page.kpi.seatHolderTimeSaved.label': 'Tiempo ya ahorrado por titulares de licencia',
+  'copilotAdoption.page.kpi.seatHolderTimeSaved.hint.one': 'Modelado a partir de acciones observadas de Copilot de {users} titular de licencia.',
+  'copilotAdoption.page.kpi.seatHolderTimeSaved.hint.other': 'Modelado a partir de acciones observadas de Copilot de {users} titulares de licencia.',
+  'copilotAdoption.page.kpi.seatHolderTimeSaved.open': 'Revisar en Usuarios con licencia',
+  'copilotAdoption.page.kpi.seatHolderTimeSaved.what': 'Cuánto tiempo pueden estar devolviendo las licencias de Copilot ya pagadas en el período seleccionado.',
+  'copilotAdoption.page.kpi.seatHolderTimeSaved.how': 'Las acciones observadas de Copilot en Outlook, Office y reuniones de Teams se multiplican por créditos visibles. Copilot Chat, agentes y Cowork tienen crédito cero aquí de forma predeterminada.',
+  'copilotAdoption.page.kpi.seatHolderTimeSaved.formula': 'Outlook x {outlook} min + Word/PowerPoint/Excel x {office} min + reuniones de Teams x {meeting} min + otros x {other} min; el extremo bajo aplica {percent}%.',
+  'copilotAdoption.page.kpi.seatHolderTimeSaved.source': 'Registro de auditoría de Copilot, agrupado para titulares de licencia de Copilot. Los usuarios solo procedentes del informe de uso de Microsoft se excluyen porque no tienen detalle por acción.',
+  'copilotAdoption.page.seatTime.title': 'Tiempo ahorrado por titulares de licencia (modelado)',
+  'copilotAdoption.page.seatTime.description': 'Solo horas, nunca dinero. Modela acciones observadas de Copilot de personas que ya tienen una licencia; no se suma a las estimaciones de licencia ni de Cowork.',
+  'copilotAdoption.page.seatTime.hours': 'Horas modeladas al mes',
+  'copilotAdoption.page.seatTime.hoursHint': 'Basado en {users} titulares de licencia con detalle de acciones en el registro de auditoría.',
+  'copilotAdoption.page.seatTime.excluded': 'Usuarios excluidos',
+  'copilotAdoption.page.seatTime.excludedHint': 'Los titulares de licencia puntuados solo desde el informe de uso de Microsoft tienen recuentos de prompts, no detalle por acción.',
+  'copilotAdoption.page.seatTime.input.outlook': 'Minutos de Outlook por acción',
+  'copilotAdoption.page.seatTime.input.office': 'Minutos de Word, PowerPoint y Excel por acción',
+  'copilotAdoption.page.seatTime.input.meeting': 'Minutos de reunión de Teams por acción',
+  'copilotAdoption.page.seatTime.input.other': 'Minutos por acción de otras superficies',
+  'copilotAdoption.page.seatTime.counts': 'Acciones mensuales observadas: {outlook} en Outlook a {outlookMinutes} min, {office} en Word/PowerPoint/Excel a {officeMinutes} min, {meeting} en reuniones de Teams a {meetingMinutes} min y {other} otras a {otherMinutes} min.',
+  'copilotAdoption.page.seatTime.department': 'Departamento',
+  'copilotAdoption.page.seatTime.hoursHigh': 'Horas altas',
+  'copilotAdoption.page.seatTime.people': 'Personas',
+  'copilotAdoption.server.query.SeatHolderTimeSaved': 'entradas de tiempo ahorrado por titulares de licencia de Copilot',
+
 };
 
 export default copilotAdoption;

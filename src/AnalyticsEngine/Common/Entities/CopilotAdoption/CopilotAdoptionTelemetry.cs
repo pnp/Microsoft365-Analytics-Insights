@@ -369,6 +369,7 @@ namespace Common.Entities.CopilotAdoption
         public const string CoworkAgentLookup = "CoworkAgentLookup";
         public const string LicensedUserDetail = "LicensedUserDetail";
         public const string LicensedUsageByApp = "LicensedUsageByApp";
+        public const string SeatHolderTimeSaved = "SeatHolderTimeSaved";
         public const string WeeklyTrend = "WeeklyTrend";
         public const string WeeklyTrendCoverage = "WeeklyTrendCoverage";
         public const string UnlicensedActiveUsers = "UnlicensedActiveUsers";

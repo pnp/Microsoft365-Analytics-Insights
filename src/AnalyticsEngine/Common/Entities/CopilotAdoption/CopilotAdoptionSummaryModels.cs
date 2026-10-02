@@ -840,6 +840,14 @@ namespace Common.Entities.CopilotAdoption
         [JsonProperty("licenceAllCandidatesEstimate")]
         public LicenceValueEstimate LicenceAllCandidatesEstimate { get; set; } = new LicenceValueEstimate();
 
+        /// <summary>
+        /// Modelled hours Microsoft 365 Copilot has already given back to people who hold a Copilot seat.
+        /// Aggregate only: tenant, engagement band and departments above the privacy floor. Never money,
+        /// never a per-person hours figure, and never added to the licence or Cowork estimates.
+        /// </summary>
+        [JsonProperty("seatHolderTimeSavedEstimate")]
+        public SeatHolderTimeSavedEstimate SeatHolderTimeSavedEstimate { get; set; } = new SeatHolderTimeSavedEstimate();
+
         #endregion
 
         #region Charts
