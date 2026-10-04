@@ -1,4 +1,5 @@
 using DataUtils.Http;
+using Common.Entities.Config;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System;
@@ -91,6 +92,24 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public async Task Tracer_UnknownLengthOversizeJson_IsSkippedWithoutCorruptingCallerBody()
+        {
+            var body = "{\"id\":\"contoso-app\",\"payload\":\"" + new string('x', 128) + "\"}";
+            var sink = new RecordingSink();
+            Assert.IsTrue(MessageTracePatternMatcher.TryCreate("*contoso-app*", NullLogger.Instance, out var matcher, out _));
+            HttpMessageTracing.Current = new MessageTraceInspectingTracer(matcher, sink, 10, 500, NullLogger.Instance);
+
+            var handler = new MessageTraceHandler("activity-api", new NoContentLengthJsonHandler(body));
+            using (var client = new HttpClient(handler))
+            using (var response = await client.GetAsync("https://manage.office.com/api/v1.0/contoso/activity/feed", HttpCompletionOption.ResponseHeadersRead))
+            {
+                Assert.AreEqual(body, await response.Content.ReadAsStringAsync());
+            }
+
+            Assert.AreEqual(0, sink.Envelopes.Count);
+        }
+
+        [TestMethod]
         public async Task Tracer_ExceptionsFromSink_DoNotPropagate()
         {
             Assert.IsTrue(MessageTracePatternMatcher.TryCreate("*contoso-app*", NullLogger.Instance, out var matcher, out _));
@@ -122,6 +141,25 @@ namespace Tests.UnitTests
 
                 Assert.IsTrue(uploader.TryEnqueue(new HttpMessageTraceEnvelope { Body = Encoding.UTF8.GetBytes("{}"), CapturedUtc = DateTime.UtcNow }));
                 await WaitForAsync(() => uploader.FailedCount == 1);
+            }
+        }
+
+        [TestMethod]
+        public void Uploader_Create_ValidatesOnlyAndDoesNotOpenStorageAtStartup()
+        {
+            var config = new AppConfig
+            {
+                MessageTraceContainer = "message-traces",
+                ConnectionStrings = new AppConnectionStrings
+                {
+                    StorageConnectionString = "DefaultEndpointsProtocol=https;AccountName=contosoanalytics;EndpointSuffix=core.windows.net"
+                }
+            };
+
+            using (var uploader = MessageTraceBlobUploader.Create(config, NullLogger.Instance))
+            {
+                Assert.IsNotNull(uploader);
+                Assert.AreEqual(0, uploader.FailedCount);
             }
         }
 
@@ -195,6 +233,31 @@ namespace Tests.UnitTests
             public StaticJsonHandler(string body) { _body = body; }
             protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
                 => Task.FromResult(Response("application/json", _body));
+        }
+
+        private sealed class NoContentLengthJsonHandler : HttpMessageHandler
+        {
+            private readonly string _body;
+            public NoContentLengthJsonHandler(string body) { _body = body; }
+            protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+            {
+                var content = new UnknownLengthStringContent(_body);
+                content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/json");
+                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = content });
+            }
+        }
+
+        private sealed class UnknownLengthStringContent : HttpContent
+        {
+            private readonly byte[] _body;
+            public UnknownLengthStringContent(string body) { _body = Encoding.UTF8.GetBytes(body); }
+            protected override Task SerializeToStreamAsync(System.IO.Stream stream, TransportContext context)
+                => stream.WriteAsync(_body, 0, _body.Length);
+            protected override bool TryComputeLength(out long length)
+            {
+                length = 0;
+                return false;
+            }
         }
     }
 }

@@ -370,7 +370,11 @@ namespace WebJob.Office365ActivityImporter
 
                 // Output cycle stats
                 importCycleTimer.TrackFinishedEventAndStopTimer(AnalyticsLogger.AnalyticsEvent.FinishedImportCycle);
-                messageTraceUploader?.LogSummary(logger);
+                if (messageTraceUploader != null)
+                {
+                    TrackMessageTracingEnabled(logger);
+                    messageTraceUploader.LogSummary(logger);
+                }
 
                 // Upload latest stats if not done recently. Re-enabled in this build after the
                 // Feb-2026 deprecation (commit 3485bd2) — the server endpoint is back online and we
@@ -418,6 +422,9 @@ namespace WebJob.Office365ActivityImporter
             HttpMessageTracing.Current = HttpMessageTracing.Disabled;
             if (settings == null || string.IsNullOrWhiteSpace(settings.MessageTraceMatch))
             {
+                logger.TrackHealthCheck(HealthComponent.MessageTracing, HealthStatus.Healthy,
+                    "Message tracing is disabled.",
+                    reasonKey: "messageTracing.disabled");
                 return null;
             }
 
@@ -448,6 +455,13 @@ namespace WebJob.Office365ActivityImporter
                     reasonKey: "messageTracing.invalidPattern");
                 return null;
             }
+        }
+
+        private static void TrackMessageTracingEnabled(AnalyticsLogger logger)
+        {
+            logger.TrackHealthCheck(HealthComponent.MessageTracing, HealthStatus.Degraded,
+                "Message tracing is enabled; matching API responses are saved in full to Azure Blob storage.",
+                reasonKey: "messageTracing.enabled");
         }
 
 

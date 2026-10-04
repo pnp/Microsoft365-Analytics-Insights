@@ -263,7 +263,7 @@ namespace DataUtils.Http
             byte[] body;
             try
             {
-                await response.Content.LoadIntoBufferAsync(_maxBodyBytes).ConfigureAwait(false);
+                await response.Content.LoadIntoBufferAsync().ConfigureAwait(false);
                 body = await response.Content.ReadAsByteArrayAsync().ConfigureAwait(false);
             }
             catch (Exception ex) when (ex is InvalidOperationException || ex is HttpRequestException || ex is IOException)

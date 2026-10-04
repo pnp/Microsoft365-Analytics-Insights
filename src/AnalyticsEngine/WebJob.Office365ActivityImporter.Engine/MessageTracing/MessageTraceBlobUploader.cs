@@ -63,9 +63,7 @@ namespace WebJob.Office365ActivityImporter.Engine.MessageTracing
             if (string.IsNullOrWhiteSpace(connectionString)) throw new InvalidOperationException("Message tracing needs the Storage connection string.");
             if (!IsValidContainerName(config.MessageTraceContainer)) throw new InvalidOperationException($"MessageTraceContainer '{config.MessageTraceContainer}' is not a legal Azure Blob container name.");
 
-            var container = OpenContainerAsync(connectionString, config.MessageTraceContainer, config, logger, CancellationToken.None)
-                .GetAwaiter().GetResult();
-            return new MessageTraceBlobUploader(_ => Task.FromResult(container), logger);
+            return new MessageTraceBlobUploader(ct => OpenContainerAsync(connectionString, config.MessageTraceContainer, config, logger, ct), logger);
         }
 
         public bool TryEnqueue(HttpMessageTraceEnvelope envelope)
