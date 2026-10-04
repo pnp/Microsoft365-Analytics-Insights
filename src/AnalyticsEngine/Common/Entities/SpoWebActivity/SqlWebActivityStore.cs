@@ -1,3 +1,4 @@
+using Common.Entities.UserFilters;
 using Microsoft.Data.SqlClient;
 using System;
 using System.Collections.Generic;
@@ -151,7 +152,7 @@ namespace Common.Entities.SpoWebActivity
                 {
                     db.Database.CommandTimeout = _commandTimeoutSeconds;
                     var rows = await db.Database
-                        .SqlQuery<LatestHitRow>(WebActivitySql.LatestHit)
+                        .SqlQuery<LatestHitRow>(ReportScopeSql.Apply(WebActivitySql.LatestHit, ReportUserScope.Everyone))
                         .ToListAsync()
                         .ConfigureAwait(false);
 
@@ -1262,10 +1263,26 @@ namespace Common.Entities.SpoWebActivity
             var info = new WebActivityQueryInfo
             {
                 Key = key,
-                Sql = WebActivitySql.Describe(sql, query),
             };
 
             var result = new QueryResult<T> { Info = info };
+
+            // Narrowed to the people the report's scope covers, or - with no filter - the statement exactly
+            // as written. A statement that cannot be narrowed is refused here and reported as this section's
+            // error, never run tenant-wide for a reader whose figures must be filtered.
+            string scopedSql;
+            try
+            {
+                scopedSql = ReportScopeSql.Apply(sql, query.UserScope);
+            }
+            catch (ReportScopeNotAppliedException ex)
+            {
+                info.Sql = WebActivitySql.Describe(sql, query);
+                info.Error = ex.Message;
+                return result;
+            }
+
+            info.Sql = WebActivitySql.Describe(scopedSql, query);
             var watch = Stopwatch.StartNew();
 
             // Bounded. An unbounded wait here is how a per-section failure becomes a whole-request
@@ -1290,7 +1307,7 @@ namespace Common.Entities.SpoWebActivity
                 {
                     db.Database.CommandTimeout = _commandTimeoutSeconds;
                     result.Rows = await db.Database
-                        .SqlQuery<T>(sql, Parameters(query))
+                        .SqlQuery<T>(scopedSql, ReportScopeSql.WithScope(Parameters(query), query.UserScope))
                         .ToListAsync()
                         .ConfigureAwait(false);
                 }

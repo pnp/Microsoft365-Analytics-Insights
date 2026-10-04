@@ -47,6 +47,7 @@ const app: Record<keyof typeof en, string> = {
   'app.route.userOrgs': 'Organizaciones de usuario',
   'app.route.userImport': 'Importación de usuarios',
   'app.route.userScope': 'Ámbito de usuarios',
+  'app.route.globalFilter': 'Filtro de informes',
   'app.route.configuration': 'Configuraci\u00f3n del servicio',
 };
 

@@ -90,6 +90,14 @@ namespace Tests.UnitTests
             ["DlpAPIController.Availability"] = Any,
             ["DlpAPIController.Summary"] = Any,                        // trims the top-users table
 
+            // Every reader is shown the administrator's filter that narrows their reports. Reading, previewing
+            // or changing the definition needs See PII as well as Administration: its value picker lists
+            // people, and a filter that selects one person turns every report into that person's record (#680).
+            ["GlobalFilterAPIController.Effective"] = Any,
+            ["GlobalFilterAPIController.Get"] = AdminAndPii,
+            ["GlobalFilterAPIController.Save"] = AdminAndPii,
+            ["GlobalFilterAPIController.Preview"] = AdminAndPii,
+
             ["HealthAPIController.Summary"] = Admin,
             ["HealthAPIController.Data"] = Admin,
             ["HealthAPIController.Liveness"] = Admin,

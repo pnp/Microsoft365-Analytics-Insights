@@ -38,6 +38,17 @@ namespace Common.Entities.LicenceActivity
             _instrumentation = instrumentation;
         }
 
+        /// <summary>
+        /// This direct SQL path cannot apply a people scope - it is narrowed in the read model instead
+        /// (<see cref="CachedLicenceActivityStore"/>, the path the portal uses). Refused rather than ignored,
+        /// so a scoped query can never come back with figures for people outside its scope.
+        /// </summary>
+        private static void RefusePeopleScope(LicenceActivityQuery query)
+        {
+            if (query.PeopleScope != null)
+                throw new NotSupportedException("A people-scoped licence activity query must be answered from the read model.");
+        }
+
         public async Task<LicenceActivityOverview> LoadOverviewAsync(
             LicenceActivityQuery query,
             LicenceActivitySources sources,
@@ -48,6 +59,7 @@ namespace Common.Entities.LicenceActivity
             if (sources == null) throw new ArgumentNullException(nameof(sources));
             if (!sources.UserMetadata)
                 throw new InvalidOperationException("Licence activity requires the user metadata import.");
+            RefusePeopleScope(query);
 
             diagnostics = diagnostics ?? NullLicenceActivityDiagnostics.Instance;
             var sqlWatch = Stopwatch.StartNew();
@@ -116,6 +128,7 @@ namespace Common.Entities.LicenceActivity
             if (sources == null) throw new ArgumentNullException(nameof(sources));
             if (!sources.UserMetadata)
                 throw new InvalidOperationException("Licence activity requires the user metadata import.");
+            RefusePeopleScope(query);
             if (!query.LicenceTypeId.HasValue)
                 throw new ArgumentException("A licenceTypeId is required for individual users.", nameof(query));
             if (overview.Query == null

@@ -67,6 +67,9 @@ const dlp: Record<keyof typeof en, string> = {
   'dlp.tenant.auditedOnly.hint': 'Coincidencia sin cumplimiento',
   'dlp.tenant.policies.title': 'Directivas (todo el inquilino)',
   'dlp.tenant.policies.description': 'Directivas que se activan en todo el inquilino, desde la fuente de auditoría DLP.',
+  'dlp.tenant.titleFiltered': 'Actividad DLP en todas las cargas de trabajo',
+  'dlp.tenant.policies.titleFiltered': 'Directivas (todas las cargas de trabajo)',
+  'dlp.tenant.policies.descriptionFiltered': 'Directivas que se activan para las personas que incluye el filtro del administrador, desde la fuente de auditoría DLP.',
 };
 
 export default dlp;

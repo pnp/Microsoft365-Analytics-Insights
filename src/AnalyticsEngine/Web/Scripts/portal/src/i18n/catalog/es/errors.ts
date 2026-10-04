@@ -19,6 +19,24 @@ const errors: Record<keyof typeof en, string> = {
   'errors.userOrgs.requestFailed': 'La solicitud ha fallado ({status})',
   'errors.userFilter.dimensionsFailed': 'No se han podido cargar los atributos para filtrar ({status}).',
   'errors.userFilter.valuesFailed': 'No se han podido cargar los valores de este atributo ({status}).',
+  'errors.globalFilter.unavailable':
+    'No se ha podido leer el filtro de informes que estableció un administrador del portal, por lo que este informe no está disponible ahora. Vuelva a intentarlo en breve.',
+  'errors.globalFilter.invalid':
+    'Esta versión del portal no puede leer el filtro de informes que estableció un administrador del portal, por lo que este informe no está disponible. Pida a un administrador del portal que lo revise.',
+  'errors.globalFilter.directoryUnavailable':
+    'No se ha podido leer el directorio de usuarios al que se aplican los filtros de los informes, por lo que este informe filtrado no está disponible ahora. Vuelva a intentarlo en breve.',
+  'errors.globalFilter.invalidFilter': 'El servidor rechazó el filtro tal como está escrito. Revise cada condición y vuelva a intentarlo.',
+  'errors.globalFilter.revisionConflict':
+    'Otra persona cambió el filtro global después de que usted lo abriera. Recargue para ver su cambio antes de guardar el suyo. Se perderán los cambios que no haya guardado.',
+  'errors.globalFilter.storageUnavailable':
+    'La base de datos no se ha actualizado para guardar un filtro global, por lo que no se ha podido guardar.',
+  'errors.globalFilter.saveFailed':
+    'No se ha podido guardar el filtro global. El error se ha registrado. Vuelva a intentarlo en breve.',
+  'errors.globalFilter.effectiveFailed':
+    'No se ha podido comprobar si hay un filtro establecido por un administrador del portal ({status}).',
+  'errors.globalFilter.loadFailed': 'No se ha podido cargar el filtro global ({status}).',
+  'errors.globalFilter.saveFailedStatus': 'No se ha podido guardar el filtro global ({status}).',
+  'errors.globalFilter.previewFailed': 'No se ha podido obtener la vista previa del filtro global ({status}).',
   'errors.userOrgs.fileUnreadable': 'No se ha podido leer el archivo.',
   'errors.userOrgs.importNotStarted': 'No se ha podido iniciar la importaci\u00f3n.',
   'errors.userOrgs.saveFailed': 'No se ha podido guardar el tipo de organizaci\u00f3n.',

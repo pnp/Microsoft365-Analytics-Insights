@@ -100,6 +100,14 @@ namespace Common.Entities.AgentCosts
         public int PageSize { get; set; } = 50;
         public string Sort { get; set; } = "credits";
         public string Direction { get; set; } = "desc";
+
+        /// <summary>
+        /// The people a per-person figure may name - the administrator's global filter, resolved for the
+        /// reader, as a predicate on <c>dbo.users.id</c>. <c>null</c> for everyone. Only the per-user credit
+        /// list is about people; agent and Azure figures are tenant billing and are not narrowed.
+        /// </summary>
+        [JsonIgnore]
+        public Func<int, bool> PeopleScope { get; set; }
     }
 
     /// <summary>Whether each agent-cost import is switched on, and how it last got on.</summary>

@@ -746,19 +746,12 @@ function sourceLabel(t: TFunction, source: string): string {
 /**
  * Cowork use as a short value rather than a sentence.
  *
- * The evidence is still distinguished - reported tasks, reported active days and audit interactions
- * are three different measurements and must not be conflated - but the qualifier is abbreviated so
- * the column stays one line wide. "Yes (312 audit interactions)" was wide enough on its own to push
- * the pinned Action column over the top of it.
+ * Cowork use comes from the Copilot audit log only, and it counts interactions, never tasks (#692). The
+ * qualifier is abbreviated so the column stays one line wide: "Yes (312 audit interactions)" was wide
+ * enough on its own to push the pinned Action column over the top of it.
  */
 function coworkCell(t: TFunction, row: LicensedUserAdoptionRow): string {
   if (!row.usedCowork) return t('copilotAdoptionUsers.licensed.coworkNo');
-  if (row.coworkReportTotalTasks !== null) {
-    return t('copilotAdoptionUsers.licensed.coworkTasks', { count: formatCount(row.coworkReportTotalTasks) });
-  }
-  if (row.coworkReportActiveDays !== null && row.coworkReportActiveDays > 0) {
-    return t('copilotAdoptionUsers.licensed.coworkDays', { count: formatCount(row.coworkReportActiveDays) });
-  }
   return t('copilotAdoptionUsers.licensed.coworkAudited', { count: formatCount(row.coworkInteractions) });
 }
 

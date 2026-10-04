@@ -83,24 +83,6 @@ const PAGE_SIZE = 50;
  */
 type CoworkSection = 'timeSaved' | 'readiness' | 'rollout' | 'people';
 
-/**
- * The scheduled / user-initiated split, naming only the halves Microsoft actually reported.
- *
- * These two columns are independently nullable and a blank one means "not reported", not "none".
- * Coercing either to 0 would state a measurement Microsoft never made - the same conflation the
- * per-user credit column goes out of its way to avoid.
- */
-function taskSplitLabel(row: CoworkReadinessRow, t: TFunction): string {
-  const parts: string[] = [];
-  if (row.coworkReportScheduledTasks !== null) {
-    parts.push(t('copilotAdoptionCowork.detail.taskSplit.scheduled', { count: formatCount(row.coworkReportScheduledTasks) }));
-  }
-  if (row.coworkReportUserInitiatedTasks !== null) {
-    parts.push(t('copilotAdoptionCowork.detail.taskSplit.userInitiated', { count: formatCount(row.coworkReportUserInitiatedTasks) }));
-  }
-  return parts.length > 0 ? parts.join(', ') : t('copilotAdoptionCowork.detail.taskSplit.notReported');
-}
-
 const SORT_OPTIONS: Array<{ value: string; labelKey: TranslationKey }> = [
   { value: 'load:desc', labelKey: 'copilotAdoptionCowork.sort.mostCoordinationLoad' },
   { value: 'fluency:desc', labelKey: 'copilotAdoptionCowork.sort.mostCopilotFluency' },
@@ -717,13 +699,6 @@ export default function CoworkPanel({
                     </td>
                     <td className={`${table.td} ${table.tdNumeric}`}>
                       {formatCount(row.regularCoworkUsers)}
-                      <Text size={100} block className={table.tdSub}>
-                        {row.coworkAutomationRatioPct === null
-                          ? '\u2014'
-                          : t('copilotAdoptionCowork.table.percentAutomated', {
-                              percent: Math.round(row.coworkAutomationRatioPct),
-                            })}
-                      </Text>
                     </td>
                     <td className={`${table.td} ${table.tdNumeric}`}>
                       {Math.round(row.averageCoordinationLoad)}
@@ -1100,19 +1075,10 @@ export default function CoworkPanel({
                         <td className={table.td}>
                           {row.usedCowork ? (
                             <Badge className={styles.evidence} size="small">
-                              {row.coworkReportTotalTasks !== null
-                                ? t('copilotAdoptionCowork.coworkUseBadge.tasksInDays', {
-                                    tasks: formatCount(row.coworkReportTotalTasks),
-                                    days: row.coworkReportActiveDays ?? 0,
-                                  })
-                                : row.coworkReportActiveDays !== null && row.coworkReportActiveDays > 0
-                                  ? t('copilotAdoptionCowork.coworkUseBadge.daysReported', {
-                                      days: formatCount(row.coworkReportActiveDays),
-                                    })
-                                  : t('copilotAdoptionCowork.coworkUseBadge.auditInteractionsInDays', {
-                                      interactions: formatCount(row.coworkInteractions),
-                                      days: row.coworkActiveDays,
-                                    })}
+                              {t('copilotAdoptionCowork.coworkUseBadge.auditInteractionsInDays', {
+                                interactions: formatCount(row.coworkInteractions),
+                                days: row.coworkActiveDays,
+                              })}
                             </Badge>
                           ) : (
                             <Text size={200} className={styles.muted}>
@@ -1190,7 +1156,7 @@ export default function CoworkPanel({
                               </DetailStats>
                             </DetailSection>
 
-                            <DetailSection title={t('copilotAdoptionCowork.table.coworkUse')}>
+                            <DetailSection title={t('copilotAdoptionCowork.detail.coworkInteractionsTitle')}>
                               <DetailStats>
                                 <DetailStat
                                   label={t('copilotAdoptionCowork.detail.auditInteractions')}
@@ -1202,33 +1168,6 @@ export default function CoworkPanel({
                                   value={formatDate(row.lastCoworkInteractionUtc)}
                                   sub={t(row.basis === 'evidence' ? 'copilotAdoptionCowork.detail.observed' : 'copilotAdoptionCowork.detail.predictedVerdict')}
                                 />
-                                {row.coworkReportLastActivityDate !== null && (
-                                  <DetailStat
-                                    label={t('copilotAdoptionCowork.detail.reportedLastActivity')}
-                                    value={formatDate(row.coworkReportLastActivityDate)}
-                                    sub={t('copilotAdoptionCowork.detail.fromMicrosoftUsageReport')}
-                                  />
-                                )}
-                                {row.coworkReportTotalTasks !== null && (
-                                  <DetailStat
-                                    label={t('copilotAdoptionCowork.detail.reportedTasks')}
-                                    value={formatCount(row.coworkReportTotalTasks)}
-                                    sub={taskSplitLabel(row, t)}
-                                  />
-                                )}
-                                {row.coworkReportActiveDays !== null && (
-                                  <DetailStat
-                                    label={t('copilotAdoptionCowork.detail.reportedActiveDays')}
-                                    value={formatCount(row.coworkReportActiveDays)}
-                                  />
-                                )}
-                                {row.coworkAutomationRatioPct !== null && (
-                                  <DetailStat
-                                    label={t('copilotAdoptionCowork.detail.automated')}
-                                    value={`${Math.round(row.coworkAutomationRatioPct)}%`}
-                                    sub={t('copilotAdoptionCowork.detail.scheduledShareOfTasks')}
-                                  />
-                                )}
                                 <DetailStat
                                   label={t('copilotAdoptionCowork.detail.lastM365Activity')}
                                   value={formatDate(row.lastM365ActivityUtc)}
@@ -1259,13 +1198,6 @@ export default function CoworkPanel({
                                         : t('copilotAdoptionCowork.detail.allCreditBilledNotCoworkShare')
                                     }
                                   />
-                                  {row.coworkCreditsPerTask !== null && (
-                                    <DetailStat
-                                      label={t('copilotAdoptionCowork.detail.creditsPerTask')}
-                                      value={formatCredits(row.coworkCreditsPerTask)}
-                                      sub={t('copilotAdoptionCowork.detail.allCopilotCreditsNotCoworkShare')}
-                                    />
-                                  )}
                                 </DetailStats>
                               </DetailSection>
                             )}

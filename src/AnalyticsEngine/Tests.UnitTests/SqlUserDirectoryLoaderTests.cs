@@ -43,7 +43,8 @@ CREATE TABLE dbo.users (
     office_location_id int NULL,
     country_or_region_id int NULL,
     state_or_province_id int NULL,
-    usage_location_id int NULL
+    usage_location_id int NULL,
+    azure_ad_id nvarchar(max) NULL
 );";
 
         private const string Data = @"
@@ -64,7 +65,8 @@ VALUES
     (103, 'analyst@contoso.onmicrosoft.com', N'analyst@fabrikam.com', 0, 101, 2, NULL, NULL, NULL, 2, NULL, NULL),
     -- A department id with no lookup row: must read as not set rather than fail the load.
     (104, 'orphan@contoso.com', NULL, NULL, 999, 42, NULL, NULL, NULL, NULL, NULL, NULL);
-SET IDENTITY_INSERT dbo.users OFF;";
+SET IDENTITY_INSERT dbo.users OFF;
+UPDATE dbo.users SET azure_ad_id = N'00000000-0000-0000-0000-000000000102' WHERE id = 102;";
 
         private static ScratchDatabase _db;
         private static ScratchDatabase _legacy;
@@ -158,6 +160,21 @@ INSERT INTO dbo.user_org_assignments (user_id, org_type_id, org_value_id) VALUES
             Assert.AreEqual(4, snapshot.PeopleCount);
             Assert.IsFalse(snapshot.Dimensions.Any(d => d.Kind == UserFilterDimensionKind.Custom));
             AssertValue(snapshot, UserFilterDimensions.Department, 101, "Sales");
+        }
+
+        [TestMethod]
+        public async Task Load_ReadsTheEntraObjectId_SoAReaderIsFoundByTheirAccountFirst()
+        {
+            var snapshot = await UserFilterStores.CreateDirectoryLoader(_db.ConnectionString).LoadAsync();
+
+            Assert.IsTrue(snapshot.TryFindPerson(new Guid("00000000-0000-0000-0000-000000000102"), null, out var row));
+            Assert.AreEqual(102, snapshot.UserIdAt(row));
+
+            // A different account presenting rep's sign-in name is not rep.
+            Assert.IsFalse(snapshot.TryFindPerson(new Guid("00000000-0000-0000-0000-0000000000ff"), "rep@contoso.com", out _));
+            // A row with no object id recorded is still found by name.
+            Assert.IsTrue(snapshot.TryFindPerson(new Guid("00000000-0000-0000-0000-0000000000ff"), "boss@contoso.com", out var boss));
+            Assert.AreEqual(101, snapshot.UserIdAt(boss));
         }
 
         [TestMethod]

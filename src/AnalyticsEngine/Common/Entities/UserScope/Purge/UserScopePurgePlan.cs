@@ -253,6 +253,7 @@ namespace Common.Entities.UserScope.Purge
                 Delete(UserScopePurgePhases.CopilotInteractions, "copilot_interaction_sessions", "id", ByUser("user_id"), "user_id"),
                 Delete(UserScopePurgePhases.CopilotInteractions, "copilot_interaction_user_watermarks", "id", ByUser("user_id"), "user_id"),
 
+                Delete(UserScopePurgePhases.LicencesAndCredits, "user_license_history", "id", ByUser("user_id"), "user_id"),
                 Delete(UserScopePurgePhases.LicencesAndCredits, "user_license_type_lookups", "id", ByUser("user_id"), "user_id"),
                 Delete(UserScopePurgePhases.LicencesAndCredits, "copilot_studio_credit_user_daily", "id", ByUser("user_id"), "user_id"),
                 Delete(UserScopePurgePhases.LicencesAndCredits, "copilot_adoption_reclaim_exclusions", "id", ByUser("user_id"), "user_id"),

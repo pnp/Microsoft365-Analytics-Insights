@@ -1,4 +1,5 @@
 import { translateActive } from '../i18n/runtime';
+import type { TranslationKey } from '../i18n/catalog';
 import {
   PORTAL_PERMISSION_ERROR_CODE,
   type PortalPermission,
@@ -132,6 +133,46 @@ async function portalPermissionError(response: Response): Promise<PortalPermissi
 }
 
 /**
+ * The codes a report answers with - always a 503 - when an administrator's global filter applies to
+ * the reader but cannot be evaluated: `ReportScopeFailure` on the server. The report is refused rather
+ * than answered unfiltered, so the reader needs to know it is the filter, not the report, that failed.
+ */
+export const REPORT_SCOPE_ERROR_KEYS: ReadonlyMap<string, TranslationKey> = new Map<string, TranslationKey>([
+  ['globalFilterUnavailable', 'errors.globalFilter.unavailable'],
+  ['globalFilterInvalid', 'errors.globalFilter.invalid'],
+  ['filterDirectoryUnavailable', 'errors.globalFilter.directoryUnavailable'],
+]);
+
+/** Thrown when a report was refused because the administrator's global filter could not be applied. */
+export class ReportScopeError extends Error {
+  readonly code: string;
+
+  constructor(code: string, key: TranslationKey) {
+    super(translateActive(key));
+    this.name = 'ReportScopeError';
+    this.code = code;
+  }
+}
+
+/**
+ * Recognised here, once, rather than in every report's API module: each of those words its own 503 as
+ * "busy" or "failed", and a reader told to try again later about a filter that cannot be read would wait
+ * for something that is not going to change.
+ */
+async function reportScopeError(response: Response): Promise<ReportScopeError | null> {
+  if (response.status !== 503) return null;
+
+  try {
+    const body = (await response.clone().json()) as { code?: unknown } | null;
+    const code = typeof body?.code === 'string' ? body.code : null;
+    const key = code ? REPORT_SCOPE_ERROR_KEYS.get(code) : undefined;
+    return code && key ? new ReportScopeError(code, key) : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Restores the route the user was on before an expired session bounced them through sign-in.
  * Called once from the app entry point, before the router reads the URL.
  *
@@ -205,6 +246,9 @@ export async function apiFetch(input: string, init: RequestInit = {}): Promise<R
   // After the guard above, deliberately: a permission refusal proves the session is healthy too.
   const permissionError = await portalPermissionError(response);
   if (permissionError) throw permissionError;
+
+  const scopeError = await reportScopeError(response);
+  if (scopeError) throw scopeError;
 
   return response;
 }

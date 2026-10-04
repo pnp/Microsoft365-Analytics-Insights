@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 
 namespace WebJob.Office365ActivityImporter.Engine.Graph
@@ -13,10 +13,12 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         private UserLicenseAssignmentDelta(
             List<UserLicenseAssignment> toAdd,
             List<UserLicenseAssignment> toRemove,
+            List<UserLicenseAssignment> unchanged,
             int unchangedCount)
         {
             ToAdd = toAdd;
             ToRemove = toRemove;
+            Unchanged = unchanged;
             UnchangedCount = unchangedCount;
         }
 
@@ -27,6 +29,9 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         public IReadOnlyList<UserLicenseAssignment> ToRemove { get; }
 
         /// <summary>Assignments that are already correct and must not be touched.</summary>
+        public IReadOnlyList<UserLicenseAssignment> Unchanged { get; }
+
+        /// <summary>How many assignments are already correct.</summary>
         public int UnchangedCount { get; }
 
         public bool IsEmpty => ToAdd.Count == 0 && ToRemove.Count == 0;
@@ -43,12 +48,12 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             if (desired == null) throw new ArgumentNullException(nameof(desired));
 
             var toAdd = new List<UserLicenseAssignment>();
-            var unchanged = 0;
+            var unchanged = new List<UserLicenseAssignment>();
             foreach (var wanted in desired)
             {
                 if (current.Contains(wanted))
                 {
-                    unchanged++;
+                    unchanged.Add(wanted);
                 }
                 else
                 {
@@ -65,7 +70,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 }
             }
 
-            return new UserLicenseAssignmentDelta(toAdd, toRemove, unchanged);
+            return new UserLicenseAssignmentDelta(toAdd, toRemove, unchanged, unchanged.Count);
         }
     }
 }

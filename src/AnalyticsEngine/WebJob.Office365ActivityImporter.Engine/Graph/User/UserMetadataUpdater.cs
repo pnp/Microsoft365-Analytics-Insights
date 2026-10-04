@@ -324,9 +324,11 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 }
 
                 var graphMentionedExistingDbUsers = _dataMapper.GetDbUsersFromGraphUsers(allActiveGraphUsers, allDbUsers);
+                var fallbackLicenceUserIds = skus == null ? new HashSet<int>() : null;
+                var fallbackDesiredLicences = skus == null ? new HashSet<UserLicenseAssignment>() : null;
 
                 // Insert any user we've not seen so far
-                var insertedDbUsers = await InsertMissingUsers(db, allActiveGraphUsers, graphMentionedExistingDbUsers, skus == null, importCycleLastUpdatedUtc);
+                var insertedDbUsers = await InsertMissingUsers(db, allActiveGraphUsers, graphMentionedExistingDbUsers, skus == null, importCycleLastUpdatedUtc, fallbackLicenceUserIds, fallbackDesiredLicences);
                 phaseResults.InsertPhaseSucceeded = true;
                 _logger.LogInformation($"User import - Insert phase completed. {insertedDbUsers.Count.ToString("N0")} new users inserted.");
 
@@ -451,7 +453,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                             notInsertedUpns,
                             dbUsersByUpn,
                             dbUsersByAadId,
-                            async (graphUser, dbUser) => await UpdateDbUserWithGraphData(db, graphUser, allActiveGraphUsers, new List<Common.Entities.User>(), dbUser, true, dbUsersByAadId, importCycleLastUpdatedUtc),
+                            async (graphUser, dbUser) => await UpdateDbUserWithGraphData(db, graphUser, allActiveGraphUsers, new List<Common.Entities.User>(), dbUser, true, dbUsersByAadId, importCycleLastUpdatedUtc, fallbackLicenceUserIds, fallbackDesiredLicences),
                             // Resolve the whole batch's managers in one query rather than one per
                             // user - see UserDataMapper.PrefetchManagersForBatchAsync (#371).
                             batch => _dataMapper.PrefetchManagersForBatchAsync(batch),
@@ -533,6 +535,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 else
                 {
                     await UserLicenseProcessor.MarkSubscribedSkuCapacityUnavailableAsync(db, _logger);
+                    await _licenseProcessor.ReconcileCollectedUserLicenses(db, fallbackLicenceUserIds, fallbackDesiredLicences);
 
                     // No separate licence phase runs at all when tenant SKUs are unavailable:
                     // ProcessUserLicenses already ran per user inside the update phase above, so
@@ -1095,14 +1098,29 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
 
         #endregion
 
-        private async Task UpdateDbUserWithGraphData(AnalyticsEntitiesContext db, GraphUser graphUser, List<GraphUser> allGraphUsers, List<Common.Entities.User> allDbUsers, Common.Entities.User dbUser, bool readUserSkus, Dictionary<string, Common.Entities.User> dbUsersByAadId = null, DateTime? lastUpdatedUtc = null)
+        private async Task UpdateDbUserWithGraphData(AnalyticsEntitiesContext db, GraphUser graphUser, List<GraphUser> allGraphUsers, List<Common.Entities.User> allDbUsers, Common.Entities.User dbUser, bool readUserSkus, Dictionary<string, Common.Entities.User> dbUsersByAadId = null, DateTime? lastUpdatedUtc = null, HashSet<int> fallbackLicenceUserIds = null, HashSet<UserLicenseAssignment> fallbackDesiredLicences = null)
         {
             await _dataMapper.UpdateUserMetadata(db, graphUser, allGraphUsers, dbUser, dbUsersByAadId, allDbUsers, lastUpdatedUtc);
 
             // This is only done per user if can't be done at tenant level (due to extra permission)
             if (readUserSkus)
             {
-                await _licenseProcessor.ProcessUserLicenses(db, graphUser, dbUser);
+                var desired = await _licenseProcessor.BuildDesiredAssignmentsForUser(db, graphUser, dbUser);
+                if (desired == null)
+                {
+                    return;
+                }
+                if (fallbackLicenceUserIds == null || fallbackDesiredLicences == null)
+                {
+                    await _licenseProcessor.ReconcileCollectedUserLicenses(db, new[] { dbUser.ID }, desired);
+                    return;
+                }
+
+                fallbackLicenceUserIds.Add(dbUser.ID);
+                foreach (var assignment in desired)
+                {
+                    fallbackDesiredLicences.Add(assignment);
+                }
             }
         }
 
@@ -1110,7 +1128,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         /// Inserts missing users into DB using two-phase approach: fast bulk insert, then metadata enrichment.
         /// Delegates to UserInsertProcessor for the heavy lifting.
         /// </summary>
-        public async Task<List<Common.Entities.User>> InsertMissingUsers(AnalyticsEntitiesContext db, List<GraphUser> allGraphUsers, List<Common.Entities.User> graphMentionedDbUsers, bool readUserSkus, DateTime? importCycleLastUpdatedUtc = null)
+        public async Task<List<Common.Entities.User>> InsertMissingUsers(AnalyticsEntitiesContext db, List<GraphUser> allGraphUsers, List<Common.Entities.User> graphMentionedDbUsers, bool readUserSkus, DateTime? importCycleLastUpdatedUtc = null, HashSet<int> fallbackLicenceUserIds = null, HashSet<UserLicenseAssignment> fallbackDesiredLicences = null)
         {
             // Ensure cache and helpers are initialized (for direct method calls from tests)
             if (_userMetaCache == null)
@@ -1135,7 +1153,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 _dataMapper,
                 _licenseProcessor,
                 async (ctx, graphUser, allGraph, allDb, dbUser, readSkus, dbByAadId) =>
-                    await UpdateDbUserWithGraphData(ctx, graphUser, allGraph, allDb, dbUser, readSkus, dbByAadId, importCycleLastUpdatedUtc));
+                    await UpdateDbUserWithGraphData(ctx, graphUser, allGraph, allDb, dbUser, readSkus, dbByAadId, importCycleLastUpdatedUtc, fallbackLicenceUserIds, fallbackDesiredLicences));
         }
 
         /// <summary>
