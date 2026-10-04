@@ -101,6 +101,51 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public void SeatAssignmentsFromHistory_MergesHeldDaysAcrossSeatSkus()
+        {
+            using (var db = ScratchDatabase.Create("CopilotSeatIslands"))
+            {
+                CreateUserTables(db);
+                CreateLicenceHistoryTables(db);
+                db.Execute(
+                    @"INSERT INTO dbo.license_types (id, name, sku_id)
+                          VALUES (1, N'Copilot SKU A', N'COPILOT_A'),
+                                 (2, N'Copilot SKU B', N'COPILOT_B');
+                      INSERT INTO dbo.users (id, user_name)
+                          VALUES (1, N'consecutive@contoso.com'),
+                                 (2, N'overlap@contoso.com'),
+                                 (3, N'gap@contoso.com');
+                      INSERT INTO dbo.license_refresh_runs (completed_utc)
+                          VALUES ('2026-04-01T00:00:00');
+                      INSERT INTO dbo.user_license_history (user_id, license_type_id, valid_from_utc, valid_to_utc, from_source)
+                          VALUES (1, 1, '2026-07-01T00:00:00', '2026-08-10T00:00:00', 1),
+                                 (1, 2, '2026-08-10T00:00:00', '2026-10-01T00:00:00', 1),
+                                 (2, 1, '2026-07-01T00:00:00', '2026-09-01T00:00:00', 1),
+                                 (2, 2, '2026-08-01T00:00:00', '2026-10-01T00:00:00', 1),
+                                 (3, 1, '2026-07-01T00:00:00', '2026-07-15T00:00:00', 1),
+                                 (3, 2, '2026-08-01T00:00:00', '2026-08-15T00:00:00', 1);");
+
+                var rows = Query<CopilotAdoptionService.SeatAssignmentRow>(
+                    db,
+                    CopilotAdoptionSql.SeatAssignmentsFromHistorySql(new[] { 1, 2 }),
+                    new SqlParameter("@from", new DateTime(2026, 7, 1)),
+                    new SqlParameter("@toExclusive", new DateTime(2026, 10, 1)),
+                    new SqlParameter("@historyStart", new DateTime(2026, 4, 1)));
+
+                Assert.AreEqual(92d, rows.First(r => r.UserId == 1).SeatHeldDays.Value, 0.001,
+                    "Consecutive seat SKUs should merge into one continuous holding period.");
+                Assert.AreEqual(92d, rows.First(r => r.UserId == 2).SeatHeldDays.Value, 0.001,
+                    "Overlapping seat SKUs should not double-count held days.");
+                Assert.AreEqual(28d, rows.First(r => r.UserId == 3).SeatHeldDays.Value, 0.001,
+                    "A real gap between seat SKUs should remain a gap.");
+                CollectionAssert.AreEquivalent(
+                    new[] { "Copilot SKU A", "Copilot SKU B" },
+                    rows.Where(r => r.UserId == 1).Select(r => r.LicenceName).ToArray(),
+                    "The query still returns one row per SKU so the UI can name every seat licence.");
+            }
+        }
+
+        [TestMethod]
         public void LicensedUsersQuery_RunsAndSplitsWindowFromHistory()
         {
             using (var db = ScratchDatabase.Create("CopilotAdoptLic"))
@@ -261,6 +306,97 @@ namespace Tests.UnitTests
                     Assert.IsTrue(rows.Any(r => r.UserId == 10), "A person who held a seat during the selected range is included even if they no longer hold one.");
                     Assert.IsTrue(rows.Any(r => r.UserId == 11), "A current holder whose history overlaps the range is included.");
                     Assert.IsFalse(rows.Any(r => r.UserId == 12), "A current holder whose first historical seat starts after the range is excluded.");
+                }
+            }
+
+            [TestMethod]
+            public void ExplicitRangeSeatDependentQueries_UseTheSameHistoryPopulation()
+            {
+                using (var db = ScratchDatabase.Create("CopilotHistScope"))
+                {
+                    CreateUserTables(db);
+                    CreateCopilotTables(db);
+                    CreateLicenceHistoryTables(db);
+                    CreateAgentCostTables(db);
+
+                    db.Execute(
+                        @"INSERT INTO dbo.license_types (id, name, sku_id)
+                              VALUES (1, N'Microsoft Copilot for Microsoft 365', N'Microsoft_365_Copilot');
+                          INSERT INTO dbo.users (id, user_name, account_enabled)
+                              VALUES (10, N'former@contoso.com', 1),
+                                     (11, N'later@contoso.com', 1);
+                          INSERT INTO dbo.user_license_type_lookups (id, user_id, license_type_id)
+                              VALUES (1, 11, 1);
+                          INSERT INTO dbo.license_refresh_runs (completed_utc)
+                              VALUES ('2026-10-01T00:00:00');
+                          INSERT INTO dbo.user_license_history (user_id, license_type_id, valid_from_utc, valid_to_utc, from_source)
+                              VALUES (10, 1, '2026-06-01T00:00:00', '2026-09-16T00:00:00', 1),
+                                     (11, 1, '2026-09-16T00:00:00', NULL, 1);
+                          INSERT INTO dbo.copilot_studio_credit_user_daily
+                              (id, usage_date, user_id, billed_credits, dimension_hash, imported_utc)
+                              VALUES (1, '2026-08-10T00:00:00', 10, 2.0, N'a', '2026-08-11T00:00:00'),
+                                     (2, '2026-08-10T00:00:00', 11, 3.0, N'b', '2026-08-11T00:00:00');");
+
+                    SeedCopilotInteractionAt(db, 10, new DateTime(2026, 8, 10, 9, 0, 0), "Word");
+                    SeedCopilotInteractionAt(db, 11, new DateTime(2026, 8, 10, 9, 0, 0), "Copilot Chat");
+
+                    SqlParameter[] RangeParameters(params SqlParameter[] extra)
+                    {
+                        return new[]
+                        {
+                            new SqlParameter("@from", new DateTime(2026, 8, 1)),
+                            new SqlParameter("@toExclusive", new DateTime(2026, 9, 1)),
+                            new SqlParameter("@historyStart", new DateTime(2026, 10, 1)),
+                        }.Concat(extra).ToArray();
+                    }
+
+                    var usageByApp = Query<CopilotAdoptionService.CategoryQueryRow>(
+                        db,
+                        CopilotAdoptionSql.UsageByAppSql(new[] { 1 }, useLicenceHistory: true),
+                        RangeParameters(new SqlParameter("@top", 10)));
+                    Assert.IsTrue(usageByApp.Any(r => r.Label == "Word" && r.Value == 1));
+                    Assert.IsFalse(usageByApp.Any(r => r.Label == "Copilot Chat"), "A user licensed only after the range is not licensed usage in that range.");
+
+                    var unlicensedActive = Query<int?>(
+                        db,
+                        CopilotAdoptionSql.UnlicensedActiveUsersSql(new[] { 1 }, useLicenceHistory: true),
+                        RangeParameters()).Single();
+                    Assert.AreEqual(1, unlicensedActive);
+
+                    var unlicensedRows = Query<UnlicensedUsageQueryRow>(
+                        db,
+                        CopilotAdoptionSql.UnlicensedUsageRowsSql(new[] { 1 }, useLicenceHistory: true),
+                        RangeParameters(new SqlParameter("@maxRows", 10)));
+                    Assert.IsTrue(unlicensedRows.Any(r => r.UserId == 11));
+                    Assert.IsFalse(unlicensedRows.Any(r => r.UserId == 10));
+
+                    var unlicensedByApp = Query<CopilotAdoptionService.CategoryQueryRow>(
+                        db,
+                        CopilotAdoptionSql.UnlicensedUsageByAppSql(new[] { 1 }, useLicenceHistory: true),
+                        RangeParameters(new SqlParameter("@top", 10)));
+                    Assert.IsTrue(unlicensedByApp.Any(r => r.Label == "Copilot Chat" && r.Value == 1));
+                    Assert.IsFalse(unlicensedByApp.Any(r => r.Label == "Word"));
+
+                    var opportunities = Query<UnlicensedUserSignalRow>(
+                        db,
+                        CopilotAdoptionSql.LicenceOpportunitiesSql(new[] { 1 }, CopilotAdoptionOptions.Default, includeCopilotAudit: true, includeM365Usage: false, useLicenceHistory: true),
+                        RangeParameters(new SqlParameter("@maxRows", 10)));
+                    Assert.IsTrue(opportunities.Any(r => r.UserId == 11));
+                    Assert.IsFalse(opportunities.Any(r => r.UserId == 10));
+
+                    var cowork = Query<CoworkReadinessSignalRow>(
+                        db,
+                        CopilotAdoptionSql.CoworkReadinessSql(new[] { 1 }, new int[0], CopilotAdoptionOptions.Default, includeCopilotAudit: true, includeM365Usage: false, useLicenceHistory: true),
+                        RangeParameters(new SqlParameter("@maxRows", 10)));
+                    Assert.IsTrue(cowork.Any(r => r.UserId == 10));
+                    Assert.IsFalse(cowork.Any(r => r.UserId == 11), "Cowork readiness must not score someone who had no Copilot seat in the selected range.");
+
+                    var credits = Query<CopilotAdoptionService.UserCreditRow>(
+                        db,
+                        CopilotAdoptionSql.CoworkUserCreditsSql(new[] { 1 }, useLicenceHistory: true),
+                        RangeParameters());
+                    Assert.IsTrue(credits.Any(r => r.UserId == 10));
+                    Assert.IsFalse(credits.Any(r => r.UserId == 11));
                 }
             }
 

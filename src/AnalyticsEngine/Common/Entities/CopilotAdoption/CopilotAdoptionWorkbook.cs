@@ -231,10 +231,13 @@ namespace Common.Entities.CopilotAdoption
             {
                 // Said on the cover sheet, because a reader comparing this file with one exported by a
                 // colleague who holds the permission would otherwise take the missing sheets for missing data.
-                AddMeta(sheet, "Individual rows", IndividualDataWithheld,
-                    "Exported without the portal's See PII permission, so this workbook describes groups only. The "
-                    + "Licensed users and Licence opportunities sheets, the Cowork candidate list and any roll-up "
-                    + "labelled with a manager's name are left out. Every aggregate figure still covers the whole population.");
+                var pastRange = summary.Options?.UsesExplicitDates == true;
+                AddMeta(sheet, "Individual rows", pastRange ? "not included (historical range)" : IndividualDataWithheld,
+                    pastRange
+                        ? "Historical ranges hide named reclaim and recommendation lists, even for readers with See PII, because they describe people and managers as they are today. The Licensed users and Licence opportunities sheets, the Cowork candidate list and any roll-up labelled with a manager's name are left out. Every aggregate figure still covers the selected population."
+                        : "Exported without the portal's See PII permission, so this workbook describes groups only. The "
+                          + "Licensed users and Licence opportunities sheets, the Cowork candidate list and any roll-up "
+                          + "labelled with a manager's name are left out. Every aggregate figure still covers the whole population.");
             }
 
             sheet.AddBlankRow();

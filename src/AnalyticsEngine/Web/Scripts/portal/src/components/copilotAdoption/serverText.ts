@@ -11,7 +11,7 @@ import type {
 import { AdoptionBand, AgentHealth } from '../../types/copilotAdoption';
 import { formatCount } from '../shared/KpiGrid';
 import { serverPlaceholderText } from '../shared/serverPlaceholder';
-import { activeLocale, EN_CATALOG, formatNumber, plural, type TFunction, type TranslationKey, type TranslationValues } from '../../i18n';
+import { activeLocale, EN_CATALOG, formatDateParts, formatNumber, plural, type TFunction, type TranslationKey, type TranslationValues } from '../../i18n';
 
 function catalogText(t: TFunction, key: TranslationKey, fallback: string, values?: TranslationValues): string {
   if (activeLocale().startsWith('en')) return fallback;
@@ -89,6 +89,14 @@ const OPPORTUNITY_WARNING_QUERIES = new Set<string>(['LicenceOpportunities']);
 function warningValues(values?: CopilotAdoptionWarningDetail['values']): TranslationValues {
   const mapped: TranslationValues = {};
   Object.entries(values ?? {}).forEach(([key, value]) => {
+    if (key === 'historyStart') {
+      const date = new Date(String(value ?? ''));
+      mapped[key] = Number.isNaN(date.getTime())
+        ? String(value ?? '')
+        : formatDateParts(date, { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' });
+      return;
+    }
+
     mapped[key] = typeof value === 'number'
       ? formatNumber(value, key === 'percentage'
         ? { minimumFractionDigits: 1, maximumFractionDigits: 1, useGrouping: true }
@@ -166,6 +174,7 @@ export const INCOMPLETE_DATASET_KEYS: readonly TranslationKey[] = [
   'copilotAdoption.server.dataset.copilotUsageReportSnapshotPeriod',
   'copilotAdoption.server.dataset.m365UsageReports',
   'copilotAdoption.server.dataset.copilotUsageReportAnonymisationCheck',
+  'copilotAdoption.server.dataset.licenceHistoryAvailability',
   'copilotAdoption.server.dataset.copilotLicenceAssignments',
   'copilotAdoption.server.dataset.licensedUserDetail',
   'copilotAdoption.server.dataset.weeklyCopilotAuditCoverage',

@@ -615,13 +615,18 @@ function CopilotAdoptionView({
         <div className={styles.controls} data-print="hide">
           <Text size={200} className={styles.muted}>{t('copilotAdoption.page.controls.periodLabel')}</Text>
           <Select
-            value={String(windowDays)}
+            value={dateRange ? 'custom' : String(windowDays)}
             onChange={(_e: unknown, d: { value: string }) => {
               setWindowDays(Number(d.value));
               setDateRange(null);
             }}
             aria-label={t('copilotAdoption.page.controls.reportingPeriodAria')}
           >
+            {dateRange && (
+              <option value="custom">
+                {t('copilotAdoption.page.window.customRange')}
+              </option>
+            )}
             {WINDOW_OPTIONS.map((o) => (
               <option key={o.value} value={o.value}>
                 {t(o.labelKey)}

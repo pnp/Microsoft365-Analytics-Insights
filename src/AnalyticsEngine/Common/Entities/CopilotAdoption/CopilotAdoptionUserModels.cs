@@ -31,6 +31,8 @@ namespace Common.Entities.CopilotAdoption
 
         public bool? AccountEnabled { get; set; }
 
+        public bool? HoldsSeatToday { get; set; }
+
         /// <summary>
         /// Entra user.createdDateTime persisted by the user import. Used as the current account-age proxy
         /// for Copilot seat tenure until real assignment history exists.
@@ -149,6 +151,9 @@ namespace Common.Entities.CopilotAdoption
 
         [JsonProperty("accountEnabled")]
         public bool? AccountEnabled { get; set; }
+
+        [JsonIgnore]
+        public bool? HoldsSeatToday { get; set; }
 
         [JsonProperty("accountCreatedUtc")]
         public DateTime? AccountCreatedUtc { get; set; }

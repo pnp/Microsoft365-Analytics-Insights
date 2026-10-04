@@ -723,6 +723,20 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public void PastRangeUserNoLongerHoldingSeat_IsNotReclaimable()
+        {
+            var wasActive = UsageRow(interactions: 0, activeDays: 0, appsUsed: 0, lastUse: null);
+            wasActive.AccountEnabled = false;
+            wasActive.HoldsSeatToday = false;
+
+            var scored = CopilotAdoptionScoring.Score(wasActive, WindowStart, Now, auditAvailable: true);
+
+            Assert.AreEqual(string.Empty, scored.ReclaimEligibility);
+            Assert.AreNotEqual(CopilotAdoptionScoring.AdoptionActionCodes.Reclaim, scored.RecommendedActionCode,
+                "A historical seat cannot be reclaimed after it has already been removed.");
+        }
+
+        [TestMethod]
         public void ProvenCopilotDemand_QualifiesOnItsOwn()
         {
             // The defect this guards: the Copilot-demand weight (35) sits below the recommendation bar
@@ -2148,6 +2162,53 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public void PastRangeSummary_HidesDirectManagerAccountabilityRollupOnCopy()
+        {
+            var summary = new CopilotAdoptionSummary
+            {
+                Options = new CopilotAdoptionOptions { UsesExplicitDates = true },
+                AccountabilityDimension = CopilotAdoptionAccountabilityDimensions.DirectManager,
+                AccountabilityRollup = new List<AccountabilityRollupRow>
+                {
+                    new AccountabilityRollupRow { Segment = "manager@contoso.com", ReclaimableSeats = 3 },
+                },
+            };
+
+            var visible = summary.WithoutPastRangeNamedLists();
+
+            Assert.AreEqual(1, summary.AccountabilityRollup.Count, "The cached summary must not be mutated.");
+            Assert.AreEqual(0, visible.AccountabilityRollup.Count, "Historical ranges hide named manager roll-ups even for See PII readers.");
+        }
+
+        [TestMethod]
+        public void RollingSeatDependentSql_DoesNotUseLicenceHistoryShape()
+        {
+            var options = CopilotAdoptionOptions.Default;
+            var queries = new[]
+            {
+                CopilotAdoptionSql.UsageByAppSql(new[] { 1 }),
+                CopilotAdoptionSql.UnlicensedActiveUsersSql(new[] { 1 }),
+                CopilotAdoptionSql.UnlicensedUsageRowsSql(new[] { 1 }),
+                CopilotAdoptionSql.UnlicensedUsageByAppSql(new[] { 1 }),
+                CopilotAdoptionSql.LicenceOpportunitiesSql(new[] { 1 }, options, includeCopilotAudit: true, includeM365Usage: true),
+                CopilotAdoptionSql.CoworkReadinessSql(new[] { 1 }, new int[0], options, includeCopilotAudit: true, includeM365Usage: true),
+                CopilotAdoptionSql.CoworkUserCreditsSql(new[] { 1 }),
+            };
+
+            foreach (var sql in queries)
+            {
+                Assert.IsFalse(sql.Contains("user_license_history"), sql);
+                Assert.IsFalse(sql.Contains("@historyStart"), sql);
+                StringAssert.Contains(sql, "user_license_type_lookups");
+            }
+
+            Assert.AreEqual(CopilotAdoptionSql.UsageByAppSql(new[] { 1 }, useLicenceHistory: false), CopilotAdoptionSql.UsageByAppSql(new[] { 1 }));
+            Assert.AreEqual(CopilotAdoptionSql.UnlicensedActiveUsersSql(new[] { 1 }, useLicenceHistory: false), CopilotAdoptionSql.UnlicensedActiveUsersSql(new[] { 1 }));
+            Assert.AreEqual(CopilotAdoptionSql.UnlicensedUsageRowsSql(new[] { 1 }, useLicenceHistory: false), CopilotAdoptionSql.UnlicensedUsageRowsSql(new[] { 1 }));
+            Assert.AreEqual(CopilotAdoptionSql.UnlicensedUsageByAppSql(new[] { 1 }, useLicenceHistory: false), CopilotAdoptionSql.UnlicensedUsageByAppSql(new[] { 1 }));
+        }
+
+        [TestMethod]
         public void DepartmentHabitBreakdown_IsRankedByHabitNotAdoption()
         {
             var analysis = new CopilotAdoptionAnalysis();
@@ -2604,9 +2665,9 @@ namespace Tests.UnitTests
                 { CopilotAdoptionWarningKeys.CoworkAuditMissing, Case("The Copilot audit import has no data for this period. Cowork interactions come only from the Copilot audit log, so nobody can be shown as already using Cowork, and everyone is assessed on coordination load and Copilot fluency alone.") },
                 { CopilotAdoptionWarningKeys.UsageReportSourcedUsers, Case("1 licensed user (50.0%) were scored from Microsoft's Copilot usage report because the audit import had no per-user signal for them. Their Microsoft prompt counts are not added to audit interaction totals, concentration, intensity or licensed/unlicensed interaction comparisons.", "count", 1, "userPlural", string.Empty, "percentage", 50d) },
                                 { CopilotAdoptionWarningKeys.LicenceHistoryUnavailableForRange, Case("Licence assignment history is not available yet, so this date range is scored against today's Copilot seat holders. People who held a seat during the range but no longer hold one are missing, and people licensed only after the range may be included.") },
-                { CopilotAdoptionWarningKeys.LicenceHistoryPartialForRange, Case("Licence assignment history starts on 2026-01-01. Seat holders before that date are reconstructed from seeded rows held at the first history refresh, so people whose seat was removed earlier are missing.", "historyStart", "2026-01-01") },
+                { CopilotAdoptionWarningKeys.LicenceHistoryPartialForRange, Case("Licence assignment history starts on 2026-01-01. Seat holders before that date are reconstructed from seeded rows held at the first history refresh, so people whose seat was removed earlier are missing, and people first licensed after the selected period may be included from the range start.", "historyStart", "2026-01-01") },
                 { CopilotAdoptionWarningKeys.PastRangeNamedListsHidden, Case("This period does not end today, so named reclaim and recommendation lists and their exports are hidden. Counts remain visible; named action lists are only shown for periods ending today.") },
-                { CopilotAdoptionWarningKeys.CurrentOrgDataForPastRange, Case("Department, manager, country, office and company labels are today's directory values, not historical values for the selected period.") },
+                { CopilotAdoptionWarningKeys.CurrentOrgDataForPastRange, Case("Department, manager, country, office, company, account status and reclaim exclusions are today's values, not historical values for the selected period.") },
                 { CopilotAdoptionWarningKeys.AgentInventoryAsOfNow, Case("The agent inventory remains an as-of-now view even when the reporting period is historical.") },                { CopilotAdoptionWarningKeys.UsageReportWindowMismatch, Case("Microsoft's pinned Copilot usage-report period is D90, but this analysis window is D28. Report-sourced rows are kept in the adoption population so active people are not marked as never used, but a report-sourced row that would otherwise be a PROBABLE reclaim is excluded from reclaimable-seat totals rather than normalising prompt counts across unlike windows. Certain (disabled-account) seats are never held back this way, because a disabled account is not an inference from an absence of use. The band breakdown therefore counts more idle seats than the reclaim figure does; the difference is reported as \"held back for window mismatch\".", "reportDays", 90, "analysisDays", 28) },
                 { CopilotAdoptionWarningKeys.CoworkEligibilityUnknown, Case("Cowork adoption percentage is suppressed because Cowork eligibility is controlled by spending-policy scope and this import does not know that denominator. The deprecated Cowork agent entry is not used as an eligibility source.") },
                 { CopilotAdoptionWarningKeys.PurchasedSeatsUnknown, Case("Purchased and unassigned Copilot seats are unknown because Graph subscribedSkus/prepaidUnits has not been imported. Grant Organization.Read.All and rerun the user metadata import; the report deliberately does not show zero for unassigned seats when the purchase inventory is missing.") },

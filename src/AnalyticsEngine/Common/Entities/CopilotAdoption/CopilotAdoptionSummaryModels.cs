@@ -442,6 +442,11 @@ namespace Common.Entities.CopilotAdoption
             return copy;
         }
 
+        public CopilotAdoptionSummary WithoutPastRangeNamedLists()
+        {
+            return Options?.UsesExplicitDates == true ? WithoutIndividualData() : this;
+        }
+
         [JsonProperty("generatedUtc")]
         public DateTime GeneratedUtc { get; set; }
 
@@ -1246,9 +1251,9 @@ namespace Common.Entities.CopilotAdoption
             { CopilotAdoptionWarningKeys.UsageReportSourcedUsers, "{count} licensed user{userPlural} ({percentage}%) were scored from Microsoft's Copilot usage report because the audit import had no per-user signal for them. Their Microsoft prompt counts are not added to audit interaction totals, concentration, intensity or licensed/unlicensed interaction comparisons." },
             { CopilotAdoptionWarningKeys.UsageReportWindowMismatch, "Microsoft's pinned Copilot usage-report period is D{reportDays}, but this analysis window is D{analysisDays}. Report-sourced rows are kept in the adoption population so active people are not marked as never used, but a report-sourced row that would otherwise be a PROBABLE reclaim is excluded from reclaimable-seat totals rather than normalising prompt counts across unlike windows. Certain (disabled-account) seats are never held back this way, because a disabled account is not an inference from an absence of use. The band breakdown therefore counts more idle seats than the reclaim figure does; the difference is reported as \"held back for window mismatch\"." },
             { CopilotAdoptionWarningKeys.LicenceHistoryUnavailableForRange, "Licence assignment history is not available yet, so this date range is scored against today's Copilot seat holders. People who held a seat during the range but no longer hold one are missing, and people licensed only after the range may be included." },
-            { CopilotAdoptionWarningKeys.LicenceHistoryPartialForRange, "Licence assignment history starts on {historyStart}. Seat holders before that date are reconstructed from seeded rows held at the first history refresh, so people whose seat was removed earlier are missing." },
+            { CopilotAdoptionWarningKeys.LicenceHistoryPartialForRange, "Licence assignment history starts on {historyStart}. Seat holders before that date are reconstructed from seeded rows held at the first history refresh, so people whose seat was removed earlier are missing, and people first licensed after the selected period may be included from the range start." },
             { CopilotAdoptionWarningKeys.PastRangeNamedListsHidden, "This period does not end today, so named reclaim and recommendation lists and their exports are hidden. Counts remain visible; named action lists are only shown for periods ending today." },
-            { CopilotAdoptionWarningKeys.CurrentOrgDataForPastRange, "Department, manager, country, office and company labels are today's directory values, not historical values for the selected period." },
+            { CopilotAdoptionWarningKeys.CurrentOrgDataForPastRange, "Department, manager, country, office, company, account status and reclaim exclusions are today's values, not historical values for the selected period." },
             { CopilotAdoptionWarningKeys.AgentInventoryAsOfNow, "The agent inventory remains an as-of-now view even when the reporting period is historical." },
             { CopilotAdoptionWarningKeys.CoworkEligibilityUnknown, "Cowork adoption percentage is suppressed because Cowork eligibility is controlled by spending-policy scope and this import does not know that denominator. The deprecated Cowork agent entry is not used as an eligibility source." },
             { CopilotAdoptionWarningKeys.PurchasedSeatsUnknown, "Purchased and unassigned Copilot seats are unknown because Graph subscribedSkus/prepaidUnits has not been imported. Grant Organization.Read.All and rerun the user metadata import; the report deliberately does not show zero for unassigned seats when the purchase inventory is missing." },

@@ -484,11 +484,17 @@ namespace Web.AnalyticsWeb.Controllers
             var analysis = await TryGetScopedSummaryAsync(
                 windowDays, from, to, seatLicenceTypeIds, emailDomain, filter, FirstResponseBudget, cancellationToken);
             if (analysis == null) return StillBuilding(windowDays, from, to, seatLicenceTypeIds);
-            return Ok(CanSeeIndividuals() ? analysis.Summary : analysis.Summary.WithoutIndividualData());
+            return Ok(SummaryForCaller(analysis.Summary));
         }
 
         /// <summary>Whether the caller holds the portal's See PII permission (#661).</summary>
         private bool CanSeeIndividuals() => PortalAccess.Evaluate(Request, User).SeePii;
+
+        private CopilotAdoptionSummary SummaryForCaller(CopilotAdoptionSummary summary)
+        {
+            var visible = CanSeeIndividuals() ? summary : summary.WithoutIndividualData();
+            return visible?.WithoutPastRangeNamedLists();
+        }
 
         /// <summary>
         /// Refuses a population-narrowing scope for a reader who cannot see individual data. Even when the

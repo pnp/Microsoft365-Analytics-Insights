@@ -189,6 +189,18 @@ describe('Copilot Adoption server-authored text reproduction', () => {
     )).toContain('(50.0%)');
   });
 
+  it('formats warning dates with the active locale', () => {
+    setActiveLanguage('es');
+    expect(copilotAdoptionWarningText(
+      tEs,
+      {
+        key: COPILOT_ADOPTION_WARNING_KEYS.LicenceHistoryPartialForRange,
+        values: { historyStart: '2026-10-02T00:00:00.0000000Z' },
+      },
+      'server fallback',
+    )).toContain('2 oct 2026');
+  });
+
   it('keeps SKU names verbatim while translating the SKU mismatch warning', () => {
     setActiveLanguage('es');
     const text = copilotAdoptionWarningText(

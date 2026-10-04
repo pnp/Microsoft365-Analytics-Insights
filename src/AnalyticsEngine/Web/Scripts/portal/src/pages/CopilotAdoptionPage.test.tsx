@@ -298,6 +298,17 @@ describe('CopilotAdoptionPage custom ranges', () => {
     await renderPage();
 
     fireEvent.click(screen.getByRole('button', { name: 'Last calendar month' }));
+    expect(screen.getByLabelText('Reporting period')).toHaveValue('custom');
+    fireEvent.change(screen.getByLabelText('Reporting period'), { target: { value: '28' } });
+    await waitFor(() => expect(vi.mocked(fetchAdoptionSummary)).toHaveBeenLastCalledWith(
+      28,
+      undefined,
+      expect.any(AbortSignal),
+      null,
+      null,
+    ));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Last calendar month' }));
     await waitFor(() => expect(vi.mocked(fetchAdoptionSummary)).toHaveBeenLastCalledWith(
       28,
       undefined,
@@ -1148,7 +1159,8 @@ describe('CopilotAdoptionPage modelled time saved', () => {
 
     fireEvent.click(screen.getByRole('tab', { name: 'Licensed users' }));
     expect(await screen.findByText("Seat holders' time saved (modelled)")).toBeVisible();
-    expect(screen.getByText(/Copilot Chat, agents, Cowork and other surfaces default to zero minutes/)).toBeVisible();
+    expect(screen.getByText(/Copilot Chat and other non-agent surfaces count at zero minutes/)).toBeVisible();
+    expect(screen.getByText(/Agent and Cowork activity is left out of this figure/)).toBeVisible();
     expect(screen.getByText(/20 other at 0 min/)).toBeVisible();
   });
 

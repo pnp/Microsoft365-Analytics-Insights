@@ -381,16 +381,42 @@ namespace Common.Entities.CopilotAdoption
                 $"    WHERE h.license_type_id IN ({IdList(seatLicenceTypeIds)})\r\n" +
                 "      AND (h.valid_from_utc < @toExclusive OR (h.from_source = 0 AND h.valid_from_utc <= @historyStart))\r\n" +
                 "      AND (h.valid_to_utc IS NULL OR h.valid_to_utc > @from)\r\n" +
+                "),\r\n" +
+                "EffectiveHoldings AS (\r\n" +
+                "    SELECT user_id, license_type_id, effective_from_utc, effective_to_utc\r\n" +
+                "    FROM Holdings\r\n" +
+                "    WHERE effective_from_utc < effective_to_utc\r\n" +
+                "),\r\n" +
+                "MarkedHoldings AS (\r\n" +
+                "    SELECT eh.user_id, eh.effective_from_utc, eh.effective_to_utc,\r\n" +
+                "           SUM(CASE WHEN previous_to_utc IS NULL OR eh.effective_from_utc > previous_to_utc THEN 1 ELSE 0 END)\r\n" +
+                "               OVER (PARTITION BY eh.user_id ORDER BY eh.effective_from_utc, eh.effective_to_utc ROWS UNBOUNDED PRECEDING) AS island_id\r\n" +
+                "    FROM (\r\n" +
+                "        SELECT eh.*,\r\n" +
+                "               MAX(eh.effective_to_utc) OVER (PARTITION BY eh.user_id ORDER BY eh.effective_from_utc, eh.effective_to_utc ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING) AS previous_to_utc\r\n" +
+                "        FROM EffectiveHoldings AS eh\r\n" +
+                "    ) AS eh\r\n" +
+                "),\r\n" +
+                "MergedHoldings AS (\r\n" +
+                "    SELECT user_id, MIN(effective_from_utc) AS effective_from_utc, MAX(effective_to_utc) AS effective_to_utc\r\n" +
+                "    FROM MarkedHoldings\r\n" +
+                "    GROUP BY user_id, island_id\r\n" +
+                "),\r\n" +
+                "HeldDays AS (\r\n" +
+                "    SELECT user_id,\r\n" +
+                "           CAST(SUM(DATEDIFF_BIG(SECOND, effective_from_utc, effective_to_utc) / 86400.0) AS float) AS SeatHeldDays\r\n" +
+                "    FROM MergedHoldings\r\n" +
+                "    GROUP BY user_id\r\n" +
                 ")\r\n" +
                 "SELECT h.user_id AS UserId,\r\n" +
                 "       h.license_type_id AS LicenceTypeId,\r\n" +
                 "       lt.sku_id AS SkuPartNumber,\r\n" +
                 "       lt.name AS LicenceName,\r\n" +
-                "       CAST(SUM(DATEDIFF_BIG(SECOND, h.effective_from_utc, h.effective_to_utc) / 86400.0) AS float) AS SeatHeldDays\r\n" +
-                "FROM Holdings AS h\r\n" +
+                "       hd.SeatHeldDays AS SeatHeldDays\r\n" +
+                "FROM EffectiveHoldings AS h\r\n" +
                 "JOIN dbo.license_types AS lt ON lt.id = h.license_type_id\r\n" +
-                "WHERE h.effective_from_utc < h.effective_to_utc\r\n" +
-                "GROUP BY h.user_id, h.license_type_id, lt.sku_id, lt.name\r\n" +
+                "JOIN HeldDays AS hd ON hd.user_id = h.user_id\r\n" +
+                "GROUP BY h.user_id, h.license_type_id, lt.sku_id, lt.name, hd.SeatHeldDays\r\n" +
                 "ORDER BY h.user_id;";
         }
 
@@ -419,21 +445,20 @@ namespace Common.Entities.CopilotAdoption
             bool useLicenceHistory = false)
         {
             var cowork = CoworkPredicate(coworkAgentIds);
-            var seats = IdList(seatLicenceTypeIds);
-            var seatUsers = useLicenceHistory
-                ? "    SELECT DISTINCT h.user_id AS user_id\r\n" +
-                  "    FROM dbo.user_license_history AS h\r\n" +
-                  $"    WHERE h.license_type_id IN ({seats})\r\n" +
-                  "      AND (h.valid_from_utc < @toExclusive OR (h.from_source = 0 AND h.valid_from_utc <= @historyStart))\r\n" +
-                  "      AND (h.valid_to_utc IS NULL OR h.valid_to_utc > @from)\r\n"
-                : "    SELECT DISTINCT ul.user_id AS user_id\r\n" +
+            var holdsSeatTodaySelect = useLicenceHistory
+                ? "       CAST(CASE WHEN current_seat.user_id IS NULL THEN 0 ELSE 1 END AS bit) AS HoldsSeatToday,\r\n"
+                : string.Empty;
+            var holdsSeatTodayJoin = useLicenceHistory
+                ? "OUTER APPLY (\r\n" +
+                  "    SELECT TOP (1) ul.user_id\r\n" +
                   "    FROM dbo.user_license_type_lookups AS ul\r\n" +
-                  $"    WHERE ul.license_type_id IN ({seats})\r\n";
+                  "    WHERE ul.user_id = u.id\r\n" +
+                  $"      AND ul.license_type_id IN ({IdList(seatLicenceTypeIds)})\r\n" +
+                  ") AS current_seat\r\n"
+                : string.Empty;
 
             var sql =
-                "WITH SeatUsers AS (\r\n" +
-                seatUsers +
-                "),\r\n" +
+                "WITH " + SeatUsersCte(seatLicenceTypeIds, useLicenceHistory) + ",\r\n" +
                 "-- One bounded pass over the Copilot audit history, projected to just the four columns\r\n" +
                 "-- the aggregates need. The reporting window and the earlier history are separated with\r\n" +
                 "-- CASE rather than by running the join twice.\r\n" +
@@ -538,6 +563,7 @@ namespace Common.Entities.CopilotAdoption
                 "       manager.user_name AS ManagerUserPrincipalName,\r\n" +
                 "       u.account_enabled AS AccountEnabled,\r\n" +
                 "       u.created_utc AS AccountCreatedUtc,\r\n" +
+                holdsSeatTodaySelect +
                 // A blank reason must still count as an exclusion. The tier is decided by whether this
                 // column has text, so an exclusion row saved with an empty reason would otherwise be
                 // silently ignored and the seat would be offered for reclaim - the exact opposite of
@@ -583,6 +609,7 @@ namespace Common.Entities.CopilotAdoption
                 "LEFT JOIN dbo.users AS manager ON manager.id = u.manager_id\r\n" +
                 "LEFT JOIN CopilotUsage AS chats ON chats.user_id = u.id\r\n" +
                 (includeCopilotReport ? "LEFT JOIN ReportSnapshot AS report ON report.user_id = u.id\r\n" : string.Empty) +
+                holdsSeatTodayJoin +
                 "OUTER APPLY (\r\n" +
                 "    SELECT TOP (1) e.reason, e.note, e.excluded_by, e.excluded_utc, e.review_after_utc\r\n" +
                 "    FROM dbo.copilot_adoption_reclaim_exclusions AS e\r\n" +
@@ -775,7 +802,8 @@ namespace Common.Entities.CopilotAdoption
             IEnumerable<int> coworkAgentIds,
             CopilotAdoptionOptions options,
             bool includeCopilotAudit,
-            bool includeM365Usage)
+            bool includeM365Usage,
+            bool useLicenceHistory = false)
         {
             var o = options ?? CopilotAdoptionOptions.Default;
             var cowork = CoworkPredicate(coworkAgentIds);
@@ -793,11 +821,7 @@ namespace Common.Entities.CopilotAdoption
 
             var ctes = new List<string>
             {
-                "SeatUsers AS (\r\n" +
-                "    SELECT DISTINCT ul.user_id AS user_id\r\n" +
-                "    FROM dbo.user_license_type_lookups AS ul\r\n" +
-                $"    WHERE ul.license_type_id IN ({IdList(seatLicenceTypeIds)})\r\n" +
-                ")"
+                SeatUsersCte(seatLicenceTypeIds, useLicenceHistory)
             };
 
             if (includeCopilotAudit)
@@ -1036,14 +1060,10 @@ namespace Common.Entities.CopilotAdoption
         /// a <c>dbo.users</c> row are excluded, because an unattributable credit cannot be shown against a
         /// person; they remain visible on the Agent Costs page, which reports by object id.</para>
         /// </summary>
-        public static string CoworkUserCreditsSql(IEnumerable<int> seatLicenceTypeIds)
+        public static string CoworkUserCreditsSql(IEnumerable<int> seatLicenceTypeIds, bool useLicenceHistory = false)
         {
             return
-                "WITH SeatUsers AS (\r\n" +
-                "    SELECT DISTINCT ul.user_id AS user_id\r\n" +
-                "    FROM dbo.user_license_type_lookups AS ul\r\n" +
-                $"    WHERE ul.license_type_id IN ({IdList(seatLicenceTypeIds)})\r\n" +
-                ")\r\n" +
+                "WITH " + SeatUsersCte(seatLicenceTypeIds, useLicenceHistory) + "\r\n" +
                 "SELECT cu.user_id AS UserId,\r\n" +
                 "       CAST(SUM(cu.billed_credits) AS decimal(18,4)) AS BilledCredits\r\n" +
                 "FROM dbo.copilot_studio_credit_user_daily AS cu\r\n" +
@@ -1138,7 +1158,8 @@ namespace Common.Entities.CopilotAdoption
             IEnumerable<int> seatLicenceTypeIds,
             CopilotAdoptionOptions options,
             bool includeCopilotAudit,
-            bool includeM365Usage)
+            bool includeM365Usage,
+            bool useLicenceHistory = false)
         {
             var o = options ?? CopilotAdoptionOptions.Default;
 
@@ -1165,11 +1186,7 @@ namespace Common.Entities.CopilotAdoption
 
             var ctes = new List<string>
             {
-                "SeatUsers AS (\r\n" +
-                "    SELECT DISTINCT ul.user_id AS user_id\r\n" +
-                "    FROM dbo.user_license_type_lookups AS ul\r\n" +
-                $"    WHERE ul.license_type_id IN ({IdList(seatLicenceTypeIds)})\r\n" +
-                ")"
+                SeatUsersCte(seatLicenceTypeIds, useLicenceHistory)
             };
 
             if (includeCopilotAudit)
@@ -1364,7 +1381,7 @@ namespace Common.Entities.CopilotAdoption
         /// from the candidate list because it is a headline figure - proven, unmet demand for Copilot -
         /// and must not be limited by the candidate list's row cap.
         /// </summary>
-        public static string UnlicensedActiveUsersSql(IEnumerable<int> seatLicenceTypeIds)
+        public static string UnlicensedActiveUsersSql(IEnumerable<int> seatLicenceTypeIds, bool useLicenceHistory = false)
         {
             return
                 "SELECT COUNT(*) AS Value\r\n" +
@@ -1373,11 +1390,7 @@ namespace Common.Entities.CopilotAdoption
                 "    FROM dbo.copilot_chats AS c\r\n" +
                 "    WHERE c.time_stamp >= @from\r\n      AND c.time_stamp < @toExclusive\r\n" +
                 "      AND c.user_id IS NOT NULL\r\n" +
-                "      AND NOT EXISTS (\r\n" +
-                "          SELECT 1 FROM dbo.user_license_type_lookups AS ul\r\n" +
-                "          WHERE ul.user_id = c.user_id\r\n" +
-                $"            AND ul.license_type_id IN ({IdList(seatLicenceTypeIds)})\r\n" +
-                "      )\r\n" +
+                UnlicensedPredicate(seatLicenceTypeIds, useLicenceHistory, "c.user_id", "      ") +
                 // Same population as the candidate list, which also excludes guests - otherwise this
                 // headline reports unmet demand that can never appear in the list it points you to.
                 ExcludeGuestsByUserId("c.user_id", "      ") +
@@ -1526,7 +1539,7 @@ namespace Common.Entities.CopilotAdoption
         /// to describe the population. This one is "everyone who actually used it", which is what a
         /// habit distribution needs.
         /// </summary>
-        public static string UnlicensedUsageRowsSql(IEnumerable<int> seatLicenceTypeIds)
+        public static string UnlicensedUsageRowsSql(IEnumerable<int> seatLicenceTypeIds, bool useLicenceHistory = false)
         {
             return
                 // The window's unlicensed interactions, read ONCE. This used to be a CTE that four
@@ -1543,11 +1556,7 @@ namespace Common.Entities.CopilotAdoption
                 "    FROM dbo.copilot_chats AS c\r\n" +
                 "    WHERE c.time_stamp >= @from\r\n      AND c.time_stamp < @toExclusive\r\n" +
                 "      AND c.user_id IS NOT NULL\r\n" +
-                "      AND NOT EXISTS (\r\n" +
-                "          SELECT 1 FROM dbo.user_license_type_lookups AS ul\r\n" +
-                "          WHERE ul.user_id = c.user_id\r\n" +
-                $"            AND ul.license_type_id IN ({IdList(seatLicenceTypeIds)})\r\n" +
-                "      )\r\n" +
+                UnlicensedPredicate(seatLicenceTypeIds, useLicenceHistory, "c.user_id", "      ") +
                 // Kept in step with UnlicensedActiveUsersSql - this is the detail behind that count.
                 ExcludeGuestsByUserId("c.user_id", "      ") +
                 ")\r\n" +
@@ -1644,14 +1653,10 @@ namespace Common.Entities.CopilotAdoption
         /// Where licensed users actually use Copilot. Answers "we bought it for Word and they only use
         /// it in Teams", which usually changes the enablement plan more than the headline rate does.
         /// </summary>
-        public static string UsageByAppSql(IEnumerable<int> seatLicenceTypeIds)
+        public static string UsageByAppSql(IEnumerable<int> seatLicenceTypeIds, bool useLicenceHistory = false)
         {
             return
-                "WITH SeatUsers AS (\r\n" +
-                "    SELECT DISTINCT ul.user_id AS user_id\r\n" +
-                "    FROM dbo.user_license_type_lookups AS ul\r\n" +
-                $"    WHERE ul.license_type_id IN ({IdList(seatLicenceTypeIds)})\r\n" +
-                ")\r\n" +
+                "WITH " + SeatUsersCte(seatLicenceTypeIds, useLicenceHistory) + "\r\n" +
                 $"SELECT TOP (@top) {AppHostKey("c.app_host", "(unknown)")} AS Label,\r\n" +
                 "       CAST(COUNT_BIG(*) AS float) AS Value\r\n" +
                 "FROM dbo.copilot_chats AS c\r\n" +
@@ -1668,7 +1673,7 @@ namespace Common.Entities.CopilotAdoption
         /// interesting difference usually is: unlicensed use concentrates in Teams and Copilot Chat,
         /// while seats are normally sold on the promise of Word and Outlook.
         /// </summary>
-        public static string UnlicensedUsageByAppSql(IEnumerable<int> seatLicenceTypeIds)
+        public static string UnlicensedUsageByAppSql(IEnumerable<int> seatLicenceTypeIds, bool useLicenceHistory = false)
         {
             return
                 $"SELECT TOP (@top) {AppHostKey("c.app_host", "(unknown)")} AS Label,\r\n" +
@@ -1676,11 +1681,7 @@ namespace Common.Entities.CopilotAdoption
                 "FROM dbo.copilot_chats AS c\r\n" +
                 "WHERE c.time_stamp >= @from\r\n  AND c.time_stamp < @toExclusive\r\n" +
                 "  AND c.user_id IS NOT NULL\r\n" +
-                "  AND NOT EXISTS (\r\n" +
-                "      SELECT 1 FROM dbo.user_license_type_lookups AS ul\r\n" +
-                "      WHERE ul.user_id = c.user_id\r\n" +
-                $"        AND ul.license_type_id IN ({IdList(seatLicenceTypeIds)})\r\n" +
-                "  )\r\n" +
+                UnlicensedPredicate(seatLicenceTypeIds, useLicenceHistory, "c.user_id", "  ") +
                 // Kept in step with UnlicensedActiveUsersSql - this breaks that same population down by app.
                 ExcludeGuestsByUserId("c.user_id", "  ") +
                 $"GROUP BY {AppHostKey("c.app_host", "(unknown)")}\r\n" +
@@ -1875,6 +1876,56 @@ namespace Common.Entities.CopilotAdoption
             return list.Count == 0
                 ? "-1"
                 : string.Join(", ", list.Select(id => id.ToString(CultureInfo.InvariantCulture)));
+        }
+
+        private static string SeatUsersCte(IEnumerable<int> seatLicenceTypeIds, bool useLicenceHistory)
+        {
+            var seats = IdList(seatLicenceTypeIds);
+            if (!useLicenceHistory)
+            {
+                return
+                    "SeatUsers AS (\r\n" +
+                    "    SELECT DISTINCT ul.user_id AS user_id\r\n" +
+                    "    FROM dbo.user_license_type_lookups AS ul\r\n" +
+                    $"    WHERE ul.license_type_id IN ({seats})\r\n" +
+                    ")";
+            }
+
+            return
+                "SeatUsers AS (\r\n" +
+                "    SELECT DISTINCT h.user_id AS user_id\r\n" +
+                "    FROM dbo.user_license_history AS h\r\n" +
+                $"    WHERE h.license_type_id IN ({seats})\r\n" +
+                "      AND (h.valid_from_utc < @toExclusive OR (h.from_source = 0 AND h.valid_from_utc <= @historyStart))\r\n" +
+                "      AND (h.valid_to_utc IS NULL OR h.valid_to_utc > @from)\r\n" +
+                ")";
+        }
+
+        private static string UnlicensedPredicate(
+            IEnumerable<int> seatLicenceTypeIds,
+            bool useLicenceHistory,
+            string userIdExpression,
+            string indent)
+        {
+            var seats = IdList(seatLicenceTypeIds);
+            if (!useLicenceHistory)
+            {
+                return
+                    $"{indent}AND NOT EXISTS (\r\n" +
+                    $"{indent}    SELECT 1 FROM dbo.user_license_type_lookups AS ul\r\n" +
+                    $"{indent}    WHERE ul.user_id = {userIdExpression}\r\n" +
+                    $"{indent}      AND ul.license_type_id IN ({seats})\r\n" +
+                    $"{indent})\r\n";
+            }
+
+            return
+                $"{indent}AND NOT EXISTS (\r\n" +
+                $"{indent}    SELECT 1 FROM dbo.user_license_history AS h\r\n" +
+                $"{indent}    WHERE h.user_id = {userIdExpression}\r\n" +
+                $"{indent}      AND h.license_type_id IN ({seats})\r\n" +
+                $"{indent}      AND (h.valid_from_utc < @toExclusive OR (h.from_source = 0 AND h.valid_from_utc <= @historyStart))\r\n" +
+                $"{indent}      AND (h.valid_to_utc IS NULL OR h.valid_to_utc > @from)\r\n" +
+                $"{indent})\r\n";
         }
 
         /// <summary>

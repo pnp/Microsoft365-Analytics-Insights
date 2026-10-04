@@ -233,6 +233,7 @@ namespace Common.Entities.CopilotAdoption
                 CompanyName = row.CompanyName,
                 ManagerUserPrincipalName = row.ManagerUserPrincipalName,
                 AccountEnabled = row.AccountEnabled,
+                HoldsSeatToday = row.HoldsSeatToday,
                 AccountCreatedUtc = row.AccountCreatedUtc,
                 TenureStartUtc = row.AccountCreatedUtc,
                 TenureBasis = row.AccountCreatedUtc.HasValue ? TenureBasisAccountAge : TenureBasisUnknown,
@@ -296,6 +297,13 @@ namespace Common.Entities.CopilotAdoption
         {
             if (row == null) throw new ArgumentNullException(nameof(row));
             var o = options ?? CopilotAdoptionOptions.Default;
+
+            if (row.HoldsSeatToday == false)
+            {
+                row.ReclaimEligibility = string.Empty;
+                row.ReclaimEligibilityReason = string.Empty;
+                return;
+            }
 
             if (!string.IsNullOrEmpty(row.ReclaimExclusionReason))
             {
@@ -522,8 +530,13 @@ namespace Common.Entities.CopilotAdoption
             var o = options ?? CopilotAdoptionOptions.Default;
 
             // Precedence deliberately matches ApplyReclaimEligibility, so the tier, the action code and
-            // this sentence can never disagree: an admin exclusion outranks everything, then a disabled
-            // account, then the review cases.
+            // this sentence can never disagree: no current seat means no reclaim action; otherwise an
+            // admin exclusion outranks everything, then a disabled account, then the review cases.
+            if (row.HoldsSeatToday == false)
+            {
+                return "No reclaim action - this person no longer holds a Copilot licence.";
+            }
+
             if (row.ReclaimEligibility == ReclaimEligibilityTiers.Excluded)
             {
                 var review = row.ReclaimExclusionReviewAfterUtc.HasValue
@@ -645,8 +658,11 @@ namespace Common.Entities.CopilotAdoption
         {
             if (row == null) throw new ArgumentNullException(nameof(row));
 
-            // Same precedence as ApplyReclaimEligibility and RecommendedAction: an admin exclusion
-            // outranks everything, then a disabled account, then the review cases.
+            // Same precedence as ApplyReclaimEligibility and RecommendedAction: no current seat means no
+            // reclaim action; otherwise an admin exclusion outranks everything, then a disabled account,
+            // then the review cases.
+            if (row.HoldsSeatToday == false) return string.Empty;
+
             if (row.ReclaimEligibility == ReclaimEligibilityTiers.Excluded) return AdoptionActionCodes.Excluded;
 
             // A disabled account holding a Copilot seat is the clearest reclaim there is, whatever its

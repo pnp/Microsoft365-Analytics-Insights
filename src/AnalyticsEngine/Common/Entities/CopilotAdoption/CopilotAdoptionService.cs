@@ -327,6 +327,37 @@ namespace Common.Entities.CopilotAdoption
                 () => summary.MarkFiguresIncomplete("Copilot usage-report anonymisation check"),
                 cancellationToken) == 1;
 
+            DateTime? licenceHistoryStartUtc = null;
+            var useLicenceHistory = false;
+            if (_options.UsesExplicitDates && seatIds.Count > 0)
+            {
+                licenceHistoryStartUtc = await SafeDateAsync(
+                    CopilotAdoptionSql.LicenceHistoryStartSql,
+                    CopilotAdoptionSteps.DataSourceProbes,
+                    CopilotAdoptionQueries.SeatAssignments,
+                    summary.Warnings,
+                    summary.WarningDetails,
+                    "licence history availability",
+                    () => summary.MarkFiguresIncomplete("licence history availability"),
+                    cancellationToken);
+                useLicenceHistory = licenceHistoryStartUtc.HasValue;
+
+                if (useLicenceHistory && windowStart < licenceHistoryStartUtc.Value)
+                {
+                    CopilotAdoptionWarnings.Add(
+                        summary,
+                        CopilotAdoptionWarningKeys.LicenceHistoryPartialForRange,
+                        new Dictionary<string, object>
+                        {
+                            { "historyStart", DateTime.SpecifyKind(licenceHistoryStartUtc.Value, DateTimeKind.Utc).ToString("o", CultureInfo.InvariantCulture) },
+                        });
+                }
+                else if (!useLicenceHistory)
+                {
+                    CopilotAdoptionWarnings.Add(summary, CopilotAdoptionWarningKeys.LicenceHistoryUnavailableForRange);
+                }
+            }
+
             probeWatch.Stop();
 
             // Six to eight sequential round trips (the two report-period probes run only when a snapshot
@@ -390,11 +421,11 @@ namespace Common.Entities.CopilotAdoption
             if (seatIds.Count > 0)
             {
                 steps.Add(new AnalysisStep(CopilotAdoptionSteps.LicensedUsers,
-                    output => BuildLicensedUsersAsync(analysis, output, seatIds, windowStart, historyStart, toExclusive, scoringNowUtc, cancellationToken)));
+                    output => BuildLicensedUsersAsync(analysis, output, seatIds, windowStart, historyStart, toExclusive, scoringNowUtc, useLicenceHistory, licenceHistoryStartUtc, cancellationToken)));
                 steps.Add(new AnalysisStep(CopilotAdoptionSteps.UsageByApp,
-                    output => BuildUsageByAppAsync(analysis, output, seatIds, windowStart, toExclusive, cancellationToken)));
+                    output => BuildUsageByAppAsync(analysis, output, seatIds, windowStart, toExclusive, useLicenceHistory, licenceHistoryStartUtc, cancellationToken)));
                 steps.Add(new AnalysisStep(CopilotAdoptionSteps.SeatHolderTimeSaved,
-                    output => BuildSeatHolderTimeSavedAsync(analysis, output, seatIds, windowStart, toExclusive, historyStart, cancellationToken)));
+                    output => BuildSeatHolderTimeSavedAsync(analysis, output, seatIds, windowStart, toExclusive, useLicenceHistory, licenceHistoryStartUtc, cancellationToken)));
                 steps.Add(new AnalysisStep(CopilotAdoptionSteps.WeeklyTrend,
                     output => BuildWeeklyTrendAsync(analysis, output, seatIds, trendStart, trendEndExclusive, cancellationToken)));
 
@@ -402,12 +433,12 @@ namespace Common.Entities.CopilotAdoption
                 // a Copilot licence as a prerequisite, so assessing an unlicensed user for it would produce
                 // a recommendation that cannot be acted on. Gated with the other seat-dependent steps.
                 steps.Add(new AnalysisStep(CopilotAdoptionSteps.CoworkReadiness,
-                    output => BuildCoworkReadinessAsync(analysis, output, seatIds, windowStart, toExclusive, cancellationToken)));
+                    output => BuildCoworkReadinessAsync(analysis, output, seatIds, windowStart, toExclusive, useLicenceHistory, licenceHistoryStartUtc, cancellationToken)));
             }
 
             // Deliberately not gated on seatIds.Count - see BuildOpportunitiesAsync.
             steps.Add(new AnalysisStep(CopilotAdoptionSteps.LicenceOpportunities,
-                output => BuildOpportunitiesAsync(analysis, output, seatIds, windowStart, toExclusive, cancellationToken)));
+                output => BuildOpportunitiesAsync(analysis, output, seatIds, windowStart, toExclusive, useLicenceHistory, licenceHistoryStartUtc, cancellationToken)));
 
             // The populations Microsoft's own reporting cannot see. Agents and unlicensed Copilot Chat are
             // reported in their own right, not merely as inputs to the seat decision: an agent estate has
@@ -416,7 +447,7 @@ namespace Common.Entities.CopilotAdoption
             if (summary.DataSources.AuditAvailable)
             {
                 steps.Add(new AnalysisStep(CopilotAdoptionSteps.UnlicensedPopulation,
-                    output => BuildUnlicensedPopulationAsync(analysis, output, seatIds, windowStart, toExclusive, cancellationToken)));
+                    output => BuildUnlicensedPopulationAsync(analysis, output, seatIds, windowStart, toExclusive, useLicenceHistory, licenceHistoryStartUtc, cancellationToken)));
                 steps.Add(new AnalysisStep(CopilotAdoptionSteps.ResourceTypes,
                     output => BuildResourceTypesAsync(analysis, output, windowStart, toExclusive, cancellationToken)));
             }
@@ -755,17 +786,20 @@ namespace Common.Entities.CopilotAdoption
             List<int> seatIds,
             DateTime windowStart,
             DateTime toExclusive,
+            bool useLicenceHistory,
+            DateTime? licenceHistoryStartUtc,
             CancellationToken cancellationToken)
         {
             var summary = analysis.Summary;
 
-            var sql = CopilotAdoptionSql.UnlicensedUsageRowsSql(seatIds);
+            var sql = CopilotAdoptionSql.UnlicensedUsageRowsSql(seatIds, useLicenceHistory);
             var parameters = new Dictionary<string, object>
             {
                 { "@from", windowStart },
                 { "@toExclusive", toExclusive },
                 { "@maxRows", _options.MaxUnlicensedUsersScored },
             };
+            if (useLicenceHistory) parameters["@historyStart"] = licenceHistoryStartUtc.Value;
             output.Sql["unlicensedUsage"] = CopilotAdoptionSql.ForDisplay(sql, parameters);
 
             var rows = await SafeAsync(
@@ -793,13 +827,14 @@ namespace Common.Entities.CopilotAdoption
                 }
             }
 
-            var appSql = CopilotAdoptionSql.UnlicensedUsageByAppSql(seatIds);
+            var appSql = CopilotAdoptionSql.UnlicensedUsageByAppSql(seatIds, useLicenceHistory);
             var appParameters = new Dictionary<string, object>
             {
                 { "@from", windowStart },
                 { "@toExclusive", toExclusive },
                 { "@top", _options.TopSegments },
             };
+            if (useLicenceHistory) appParameters["@historyStart"] = licenceHistoryStartUtc.Value;
             output.Sql["unlicensedUsageByApp"] = CopilotAdoptionSql.ForDisplay(appSql, appParameters);
 
             var apps = await SafeAsync(
@@ -876,6 +911,8 @@ namespace Common.Entities.CopilotAdoption
             DateTime historyStart,
             DateTime toExclusive,
             DateTime nowUtc,
+            bool useHistory,
+            DateTime? historyStartUtc,
             CancellationToken cancellationToken)
         {
             var summary = analysis.Summary;
@@ -883,33 +920,6 @@ namespace Common.Entities.CopilotAdoption
             // Seat assignments are read separately from the detail query for two reasons: it is the
             // only way to name every seat SKU a user holds (a user can hold more than one), and it
             // gives an exact licensed-user count that is not subject to the detail query's row cap.
-            var historyStartUtc = _options.UsesExplicitDates
-                ? await SafeDateAsync(
-                    CopilotAdoptionSql.LicenceHistoryStartSql,
-                    CopilotAdoptionSteps.LicensedUsers,
-                    CopilotAdoptionQueries.SeatAssignments,
-                    summary.Warnings,
-                    summary.WarningDetails,
-                    "licence history availability",
-                    () => { },
-                    cancellationToken)
-                : null;
-
-            var useHistory = _options.UsesExplicitDates && historyStartUtc.HasValue;
-            if (_options.UsesExplicitDates)
-            {
-                if (useHistory && windowStart < historyStartUtc.Value)
-                {
-                    output.AddWarning(
-                        CopilotAdoptionWarningKeys.LicenceHistoryPartialForRange,
-                        new Dictionary<string, object> { { "historyStart", historyStartUtc.Value.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) } });
-                }
-                else if (!useHistory)
-                {
-                    output.AddWarning(CopilotAdoptionWarningKeys.LicenceHistoryUnavailableForRange);
-                }
-            }
-
             var assignmentsSql = useHistory
                 ? CopilotAdoptionSql.SeatAssignmentsFromHistorySql(seatIds)
                 : CopilotAdoptionSql.SeatAssignmentsSql(seatIds);
@@ -1064,26 +1074,14 @@ namespace Common.Entities.CopilotAdoption
             List<int> seatIds,
             DateTime windowStart,
             DateTime toExclusive,
-            DateTime historyStart,
+            bool useHistory,
+            DateTime? historyStartUtc,
             CancellationToken cancellationToken)
         {
             if (!analysis.Summary.DataSources.AuditAvailable)
             {
                 return;
             }
-
-            var historyStartUtc = _options.UsesExplicitDates
-                ? await SafeDateAsync(
-                    CopilotAdoptionSql.LicenceHistoryStartSql,
-                    CopilotAdoptionSteps.SeatHolderTimeSaved,
-                    CopilotAdoptionQueries.SeatAssignments,
-                    analysis.Summary.Warnings,
-                    analysis.Summary.WarningDetails,
-                    "licence history availability",
-                    () => { },
-                    cancellationToken)
-                : null;
-            var useHistory = _options.UsesExplicitDates && historyStartUtc.HasValue;
 
             var coworkAgentIds = await SafeAsync(
                 () => QueryAsync<IntValueRow>(CopilotAdoptionSql.CoworkAgentIdsSql, cancellationToken),
@@ -1101,10 +1099,6 @@ namespace Common.Entities.CopilotAdoption
             if (useHistory)
             {
                 parameters["@historyStart"] = historyStartUtc.Value;
-            }
-            else if (_options.UsesExplicitDates)
-            {
-                parameters["@historyStart"] = historyStart;
             }
             output.Sql["seatHolderTimeSaved"] = CopilotAdoptionSql.ForDisplay(sql, parameters);
 
@@ -1127,6 +1121,8 @@ namespace Common.Entities.CopilotAdoption
             List<int> seatIds,
             DateTime windowStart,
             DateTime toExclusive,
+            bool useLicenceHistory,
+            DateTime? licenceHistoryStartUtc,
             CancellationToken cancellationToken)
         {
             if (!analysis.Summary.DataSources.AuditAvailable)
@@ -1134,13 +1130,14 @@ namespace Common.Entities.CopilotAdoption
                 return;
             }
 
-            var sql = CopilotAdoptionSql.UsageByAppSql(seatIds);
+            var sql = CopilotAdoptionSql.UsageByAppSql(seatIds, useLicenceHistory);
             var parameters = new Dictionary<string, object>
             {
                 { "@from", windowStart },
                 { "@toExclusive", toExclusive },
                 { "@top", _options.TopSegments },
             };
+            if (useLicenceHistory) parameters["@historyStart"] = licenceHistoryStartUtc.Value;
             output.Sql["usageByApp"] = CopilotAdoptionSql.ForDisplay(sql, parameters);
 
             var rows = await SafeAsync(
@@ -1247,6 +1244,8 @@ namespace Common.Entities.CopilotAdoption
             List<int> seatIds,
             DateTime windowStart,
             DateTime toExclusive,
+            bool useLicenceHistory,
+            DateTime? licenceHistoryStartUtc,
             CancellationToken cancellationToken)
         {
             var summary = analysis.Summary;
@@ -1257,9 +1256,10 @@ namespace Common.Entities.CopilotAdoption
             // here reported a flat zero while the candidate list below simultaneously showed real users.
             if (summary.DataSources.AuditAvailable)
             {
-                var unlicensedSql = CopilotAdoptionSql.UnlicensedActiveUsersSql(seatIds);
-                output.Sql["unlicensedActiveUsers"] = CopilotAdoptionSql.ForDisplay(
-                    unlicensedSql, new Dictionary<string, object> { { "@from", windowStart }, { "@toExclusive", toExclusive } });
+                var unlicensedSql = CopilotAdoptionSql.UnlicensedActiveUsersSql(seatIds, useLicenceHistory);
+                var unlicensedParameters = new Dictionary<string, object> { { "@from", windowStart }, { "@toExclusive", toExclusive } };
+                if (useLicenceHistory) unlicensedParameters["@historyStart"] = licenceHistoryStartUtc.Value;
+                output.Sql["unlicensedActiveUsers"] = CopilotAdoptionSql.ForDisplay(unlicensedSql, unlicensedParameters);
 
                 summary.UnlicensedActiveUsers = await SafeScalarAsync(
                     unlicensedSql,
@@ -1271,8 +1271,7 @@ namespace Common.Entities.CopilotAdoption
                     // reads as zero is indistinguishable from "nobody uses Copilot without a licence".
                     () => output.MarkIncomplete("unlicensed Copilot users"),
                     cancellationToken,
-                    new SqlParameter("@from", windowStart),
-                    new SqlParameter("@toExclusive", toExclusive));
+                    ToSqlParameters(unlicensedParameters));
             }
 
             var includeAudit = summary.DataSources.AuditAvailable;
@@ -1284,16 +1283,17 @@ namespace Common.Entities.CopilotAdoption
                 return;
             }
 
-            var sql = CopilotAdoptionSql.LicenceOpportunitiesSql(seatIds, _options, includeAudit, includeM365);
+            var sql = CopilotAdoptionSql.LicenceOpportunitiesSql(seatIds, _options, includeAudit, includeM365, useLicenceHistory);
             var parameters = new Dictionary<string, object>
             {
                 { "@maxRows", _options.MaxOpportunityCandidates },
             };
-            if (includeAudit)
+            if (includeAudit || useLicenceHistory)
             {
                 parameters["@from"] = windowStart;
                 parameters["@toExclusive"] = toExclusive;
             }
+            if (useLicenceHistory) parameters["@historyStart"] = licenceHistoryStartUtc.Value;
             if (includeM365)
             {
                 // The Microsoft 365 figures are read across the whole window, not from one report date.
@@ -1368,6 +1368,8 @@ namespace Common.Entities.CopilotAdoption
             List<int> seatIds,
             DateTime windowStart,
             DateTime toExclusive,
+            bool useLicenceHistory,
+            DateTime? licenceHistoryStartUtc,
             CancellationToken cancellationToken)
         {
             var summary = analysis.Summary;
@@ -1400,17 +1402,18 @@ namespace Common.Entities.CopilotAdoption
             var agentIds = coworkAgentIds.Select(r => r.Value).ToList();
 
             var sql = CopilotAdoptionSql.CoworkReadinessSql(
-                seatIds, agentIds, _options, includeAudit, includeM365);
+                seatIds, agentIds, _options, includeAudit, includeM365, useLicenceHistory);
 
             var parameters = new Dictionary<string, object>
             {
                 { "@maxRows", _options.MaxCoworkUsersScored },
             };
-            if (includeAudit)
+            if (includeAudit || useLicenceHistory)
             {
                 parameters["@from"] = windowStart;
                 parameters["@toExclusive"] = toExclusive;
             }
+            if (useLicenceHistory) parameters["@historyStart"] = licenceHistoryStartUtc.Value;
             if (includeM365)
             {
                 // Date-only columns, so the lower bound is the window's first calendar day rather than the
@@ -1470,7 +1473,7 @@ namespace Common.Entities.CopilotAdoption
 
             if (hasCreditTables)
             {
-                await AddCoworkCreditsAsync(analysis, output, rows, seatIds, windowStart, toExclusive, cancellationToken);
+                await AddCoworkCreditsAsync(analysis, output, rows, seatIds, windowStart, toExclusive, useLicenceHistory, licenceHistoryStartUtc, cancellationToken);
             }
 
             // Stored raw. Scoring happens in FinaliseCowork, once the licensed-user step has finished and
@@ -1495,14 +1498,18 @@ namespace Common.Entities.CopilotAdoption
             List<int> seatIds,
             DateTime windowStart,
             DateTime toExclusive,
+            bool useLicenceHistory,
+            DateTime? licenceHistoryStartUtc,
             CancellationToken cancellationToken)
         {
             var summary = analysis.Summary;
 
-            var creditsSql = CopilotAdoptionSql.CoworkUserCreditsSql(seatIds);
+            var creditsSql = CopilotAdoptionSql.CoworkUserCreditsSql(seatIds, useLicenceHistory);
+            var parameters = new Dictionary<string, object> { { "@from", windowStart }, { "@toExclusive", toExclusive } };
+            if (useLicenceHistory) parameters["@historyStart"] = licenceHistoryStartUtc.Value;
             var creditRows = await SafeAsync(
                 () => QueryAsync<UserCreditRow>(
-                    creditsSql, cancellationToken, new SqlParameter("@from", windowStart), new SqlParameter("@toExclusive", toExclusive)),
+                    creditsSql, cancellationToken, ToSqlParameters(parameters)),
                 CopilotAdoptionSteps.CoworkReadiness,
                 CopilotAdoptionQueries.CoworkUserCredits,
                 output,
@@ -1511,7 +1518,7 @@ namespace Common.Entities.CopilotAdoption
             if (creditRows != null && creditRows.Count > 0)
             {
                 output.Sql["coworkUserCredits"] = CopilotAdoptionSql.ForDisplay(
-                    creditsSql, new Dictionary<string, object> { { "@from", windowStart }, { "@toExclusive", toExclusive } });
+                    creditsSql, parameters);
 
                 var creditsByUser = new Dictionary<int, decimal>();
                 foreach (var credit in creditRows)
