@@ -781,6 +781,7 @@ const copilotAdoption: Record<keyof typeof en, string> = {
   'copilotAdoption.page.seatTime.department': 'Departamento',
   'copilotAdoption.page.seatTime.hoursHigh': 'Horas altas',
   'copilotAdoption.page.seatTime.people': 'Personas',
+  'copilotAdoption.server.dataset.seatHolderTimeSavedInputs': 'entradas de tiempo ahorrado por titulares de licencia de Copilot',
   'copilotAdoption.server.query.SeatHolderTimeSaved': 'entradas de tiempo ahorrado por titulares de licencia de Copilot',
   'copilotAdoption.page.seatTime.zeroCreditNote': 'Copilot Chat y otras superficies que no son agentes tienen cero minutos aquí de forma predeterminada porque Microsoft no ha publicado un crédito por prompt; edite el valor Otro de arriba si quiere modelarlas. La actividad de agentes y Cowork queda fuera de esta cifra; Cowork permanece en su propia estimación.',
 

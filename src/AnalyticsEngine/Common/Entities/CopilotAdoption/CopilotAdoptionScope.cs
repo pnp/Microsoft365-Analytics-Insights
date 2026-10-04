@@ -251,6 +251,7 @@ namespace Common.Entities.CopilotAdoption
                 CoworkAssessmentCapped = tenant.CoworkReadinessAvailable && CoworkCapped(analysis, tenant),
                 UnlicensedUsers = Narrow(analysis.UnlicensedUsers, u => u.UserId, u => u.EmailDomain, scope),
                 SeatHolderTimeSavedRows = NarrowSeatTimeRows(analysis.SeatHolderTimeSavedRows, licensedUsers),
+                SeatHolderTimeSavedAssessed = analysis.SeatHolderTimeSavedAssessed,
             };
         }
 

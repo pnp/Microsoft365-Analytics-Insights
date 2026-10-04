@@ -35,6 +35,7 @@ import type {
   AdoptionFilterOptions,
   CopilotAdoptionAvailability,
   CopilotAdoptionSummary,
+  SeatHolderTimeSavedSegment,
 } from '../types/copilotAdoption';
 import Spinner from '../components/Spinner';
 import SqlPopover from '../components/SqlPopover';
@@ -1077,7 +1078,7 @@ function ExecutiveTab({
   const o = summary.options;
   const { assumptions: timeSavedAssumptions } = useTimeSavedAssumptions(summary);
   const { cohorts: timeSavedCohorts } = useTimeSavedCohorts();
-  const kpis = buildExecutiveKpis(summary, t, timeSavedAssumptions, timeSavedCohorts, onOpenTab);
+  const kpis = buildExecutiveKpis(summary, t, timeSavedAssumptions, timeSavedCohorts, onOpenTab, canSeePii);
   return (
     <>
       <KpiGrid items={kpis} />
@@ -1383,7 +1384,7 @@ function AnalystTab({
   const t = useT();
   const { assumptions: timeSavedAssumptions } = useTimeSavedAssumptions(summary);
   const { cohorts: timeSavedCohorts } = useTimeSavedCohorts();
-  const kpis = buildKpis(summary, t, timeSavedAssumptions, timeSavedCohorts, onOpenTab);
+  const kpis = buildKpis(summary, t, timeSavedAssumptions, timeSavedCohorts, onOpenTab, canSeePii);
   const o = summary.options;
   const accountabilityCopy = accountabilityDimensionCopy(summary, t);
 
@@ -2542,6 +2543,18 @@ function SeatHolderTimeSavedPanel({
     };
   const number = (value: number) => formatNumber(value, { maximumFractionDigits: 0 });
   const minutes = (value: number) => formatNumber(value, { maximumFractionDigits: 2 });
+  const segmentHours = (row: SeatHolderTimeSavedSegment) =>
+    projectSeatHolderTimeSaved({
+      ...estimate,
+      cohortUsers: row.cohortUsers,
+      excludedUsageReportSourcedUsers: 0,
+      observedOutlookActions: row.observedOutlookActions,
+      observedOfficeActions: row.observedOfficeActions,
+      observedTeamsMeetingActions: row.observedTeamsMeetingActions,
+      observedUncreditedActions: row.observedUncreditedActions,
+      byBand: [],
+      byDepartment: [],
+    }, timeSaved.assumptions)?.hoursHigh ?? 0;
 
   return (
     <Card style={{ marginBottom: 16 }}>
@@ -2590,7 +2603,7 @@ function SeatHolderTimeSavedPanel({
           <thead><tr><th>{t('copilotAdoption.page.seatTime.department')}</th><th>{t('copilotAdoption.page.seatTime.hoursHigh')}</th><th>{t('copilotAdoption.page.seatTime.people')}</th></tr></thead>
           <tbody>
             {estimate.byDepartment.map((row) => (
-              <tr key={row.segment}><td>{row.segment}</td><td>{formatCount(row.hoursPerMonthHigh)}</td><td>{formatCount(row.cohortUsers)}</td></tr>
+              <tr key={row.segment}><td>{serverPlaceholderText(t, row.segment)}</td><td>{formatCount(segmentHours(row))}</td><td>{formatCount(row.cohortUsers)}</td></tr>
             ))}
           </tbody>
         </table>
@@ -2605,6 +2618,7 @@ function buildExecutiveKpis(
   timeSaved: TimeSavedAssumptions,
   cohorts: TimeSavedCohorts,
   onOpenTab?: (tab: AdoptionTab) => void,
+  canSeePii = true,
 ): KpiDefinition[] {
   const executiveKeys = new Set([
     'licensed',
@@ -2617,7 +2631,7 @@ function buildExecutiveKpis(
     'seatHolderTimeSaved',
     'coworkTimeSaved',
   ]);
-  return buildKpis(summary, t, timeSaved, cohorts, onOpenTab).filter((item) => executiveKeys.has(item.key));
+  return buildKpis(summary, t, timeSaved, cohorts, onOpenTab, canSeePii).filter((item) => executiveKeys.has(item.key));
 }
 
 /**
@@ -2645,6 +2659,7 @@ function buildTimeSavedKpis(
   assumptions: TimeSavedAssumptions,
   cohorts: TimeSavedCohorts,
   onOpenTab?: (tab: AdoptionTab) => void,
+  canSeePii = true,
 ): KpiDefinition[] {
   const o = summary.options;
   const items: KpiDefinition[] = [];
@@ -2710,7 +2725,7 @@ function buildTimeSavedKpis(
       ),
       tone: 'opportunity',
       modelledBadge: t('copilotAdoption.page.kpi.modelledBadge'),
-      action: onOpenTab ? { label: t('copilotAdoption.page.kpi.seatHolderTimeSaved.open'), onClick: () => onOpenTab('licensed') } : undefined,
+      action: onOpenTab && canSeePii ? { label: t('copilotAdoption.page.kpi.seatHolderTimeSaved.open'), onClick: () => onOpenTab('licensed') } : undefined,
       info: {
         what: t('copilotAdoption.page.kpi.seatHolderTimeSaved.what'),
         how: t('copilotAdoption.page.kpi.seatHolderTimeSaved.how'),
@@ -2781,6 +2796,7 @@ function buildKpis(
   timeSaved: TimeSavedAssumptions,
   cohorts: TimeSavedCohorts,
   onOpenTab?: (tab: AdoptionTab) => void,
+  canSeePii = true,
 ): KpiDefinition[] {
   const o = summary.options;
   const seatSkus = (summary.seatLicenceTypes ?? []).filter((l) => l.isCopilotSeat);
@@ -2995,7 +3011,7 @@ function buildKpis(
   });
 
   // Last: a model follows the measurements it is built on, never leads them.
-  items.push(...buildTimeSavedKpis(summary, t, timeSaved, cohorts, onOpenTab));
+  items.push(...buildTimeSavedKpis(summary, t, timeSaved, cohorts, onOpenTab, canSeePii));
 
   return items;
 }

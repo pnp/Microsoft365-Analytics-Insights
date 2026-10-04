@@ -1112,6 +1112,11 @@ namespace Common.Entities.CopilotAdoption
             if (rows != null)
             {
                 analysis.SeatHolderTimeSavedRows = rows;
+                analysis.SeatHolderTimeSavedAssessed = true;
+            }
+            else
+            {
+                output.MarkIncomplete("seat-holder Copilot time-saved inputs");
             }
         }
 
@@ -1816,6 +1821,12 @@ namespace Common.Entities.CopilotAdoption
         {
             var summary = analysis.Summary;
             var users = analysis.LicensedUsers ?? new List<LicensedUserAdoptionRow>();
+            if (!analysis.SeatHolderTimeSavedAssessed)
+            {
+                summary.SeatHolderTimeSavedEstimate = new SeatHolderTimeSavedEstimate();
+                return;
+            }
+
             var rows = (analysis.SeatHolderTimeSavedRows ?? new List<SeatHolderTimeSavedUserRow>())
                 .ToDictionary(r => r.UserId);
             var modelledUsers = users.Where(u => !IsUsageReportSourced(u)).ToList();
