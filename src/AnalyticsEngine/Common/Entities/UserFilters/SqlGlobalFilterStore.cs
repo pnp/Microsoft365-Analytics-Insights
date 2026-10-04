@@ -103,18 +103,6 @@ END
 
 BEGIN TRANSACTION;
 
-DECLARE @lockResult int;
-EXEC @lockResult = sp_getapplock
-    @Resource = N'portal_global_filters',
-    @LockMode = N'Exclusive',
-    @LockOwner = N'Transaction',
-    @LockTimeout = 10000;
-IF @lockResult < 0
-BEGIN
-    ROLLBACK TRANSACTION;
-    THROW 51000, 'Could not acquire the portal global filter save lock.', 1;
-END
-
 DECLARE @current int = (SELECT revision FROM dbo.portal_global_filters WITH (UPDLOCK, HOLDLOCK) WHERE id = 1);
 
 IF ISNULL(@current, 0) <> @expectedRevision
@@ -181,6 +169,21 @@ FROM @saved;";
             var by = string.IsNullOrWhiteSpace(modifiedBy) ? null : modifiedBy.Trim();
             if (by != null && by.Length > MaxModifiedByLength) by = by.Substring(0, MaxModifiedByLength);
 
+            for (var attempt = 0; ; attempt++)
+            {
+                try
+                {
+                    return await SaveOnceAsync(filterJson, expectedRevision, by, cancellationToken).ConfigureAwait(false);
+                }
+                catch (SqlException ex) when (IsDeadlock(ex) && attempt < 2)
+                {
+                    await Task.Delay(TimeSpan.FromMilliseconds(50 * (attempt + 1)), cancellationToken).ConfigureAwait(false);
+                }
+            }
+        }
+
+        private async Task<GlobalFilterRecord> SaveOnceAsync(string filterJson, int expectedRevision, string by, CancellationToken cancellationToken)
+        {
             using (var connection = AzureSqlTokenAuth.CreateConnection(_connectionString))
             {
                 await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
@@ -210,6 +213,16 @@ FROM @saved;";
                     }
                 }
             }
+        }
+
+        private static bool IsDeadlock(SqlException ex)
+        {
+            foreach (SqlError error in ex.Errors)
+            {
+                if (error.Number == 1205) return true;
+            }
+
+            return false;
         }
     }
 }
