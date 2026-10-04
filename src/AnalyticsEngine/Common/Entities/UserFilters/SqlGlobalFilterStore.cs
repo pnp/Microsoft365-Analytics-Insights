@@ -169,21 +169,6 @@ FROM @saved;";
             var by = string.IsNullOrWhiteSpace(modifiedBy) ? null : modifiedBy.Trim();
             if (by != null && by.Length > MaxModifiedByLength) by = by.Substring(0, MaxModifiedByLength);
 
-            for (var attempt = 0; ; attempt++)
-            {
-                try
-                {
-                    return await SaveOnceAsync(filterJson, expectedRevision, by, cancellationToken).ConfigureAwait(false);
-                }
-                catch (SqlException ex) when (IsDeadlock(ex) && attempt < 2)
-                {
-                    await Task.Delay(TimeSpan.FromMilliseconds(50 * (attempt + 1)), cancellationToken).ConfigureAwait(false);
-                }
-            }
-        }
-
-        private async Task<GlobalFilterRecord> SaveOnceAsync(string filterJson, int expectedRevision, string by, CancellationToken cancellationToken)
-        {
             using (var connection = AzureSqlTokenAuth.CreateConnection(_connectionString))
             {
                 await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
@@ -213,16 +198,6 @@ FROM @saved;";
                     }
                 }
             }
-        }
-
-        private static bool IsDeadlock(SqlException ex)
-        {
-            foreach (SqlError error in ex.Errors)
-            {
-                if (error.Number == 1205) return true;
-            }
-
-            return false;
         }
     }
 }
