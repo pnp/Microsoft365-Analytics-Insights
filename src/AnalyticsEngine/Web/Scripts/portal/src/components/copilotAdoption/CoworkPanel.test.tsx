@@ -41,7 +41,6 @@ const OPTIONS = {
   copilotMinutesSavedPerMailThread: 1,
   copilotMinutesSavedPerDocument: 3,
   coworkEstimateLowerBoundRatio: 0.5,
-  coworkMinutesSavedPerTask: 6,
   coworkOrganiseMeetingsShare: 0.25,
   coworkOrganiseMeetingsMinutes: 6,
   coworkPrepareMeetingsShare: 0.1,
@@ -140,14 +139,8 @@ function summary(overrides: Partial<CopilotAdoptionSummary> = {}): CopilotAdopti
     coworkValueEstimate: {
       isModelled: true,
       cohortUsers: 0,
-      coworkTaskUsers: 0,
-      observedCoworkTasks: 0,
-      projectedCoworkUsers: 0,
       activities: [],
       projectedCoworkTasks: 0,
-      coworkTasks: 0,
-      observedTasksPerPersonPerMonth: 0,
-      observedTaskRateUsers: 0,
       hoursPerMonthLow: 0,
       hoursPerMonthHigh: 0,
       assumptions: [],
@@ -172,17 +165,14 @@ async function openSection(user: ReturnType<typeof userEvent.setup>, name: RegEx
   return screen.getByRole('tabpanel', { name });
 }
 
-// The people ready for Cowork now: 40 tasks already in Microsoft's report from 4 people, and the 36
-// people not yet running Cowork tasks modelled from their own work at the product defaults -
-// 720 meetings organised x 25% = 180, 2,880 attended x 10% = 288, 14,400 emails x 5% = 720, 36,000
-// Teams messages x 1% = 360 and 7,200 files x 2% = 144: 1,692 pieces of work. (40 + 1,692) x 6
-// minutes = 10,392 minutes = 173.2 hours, 86.6 at the 50% conservative end.
+// The people ready for Cowork now, all 40 modelled from their own work at the product defaults -
+// people already using Cowork included (#692): 720 meetings organised x 25% = 180, 2,880 attended x
+// 10% = 288, 14,400 emails x 5% = 720, 36,000 Teams messages x 1% = 360 and 7,200 files x 2% = 144:
+// 1,692 pieces of work. 1,692 x 6 minutes = 10,152 minutes = 169.2 hours, 84.6 at the 50%
+// conservative end.
 const ESTIMATE = {
   isModelled: true,
   cohortUsers: 40,
-  coworkTaskUsers: 4,
-  observedCoworkTasks: 40,
-  projectedCoworkUsers: 36,
   activities: [
     { activity: 'organiseMeetings' as const, volumePerMonth: 720 },
     { activity: 'prepareMeetings' as const, volumePerMonth: 2880 },
@@ -191,26 +181,20 @@ const ESTIMATE = {
     { activity: 'createDocuments' as const, volumePerMonth: 7200 },
   ],
   projectedCoworkTasks: 1692,
-  coworkTasks: 1732,
-  observedTasksPerPersonPerMonth: 10,
-  observedTaskRateUsers: 4,
-  hoursPerMonthLow: 87,
-  hoursPerMonthHigh: 173,
+  hoursPerMonthLow: 85,
+  hoursPerMonthHigh: 169,
   assumptions: ['Assumes Cowork saves 6 minutes on each meeting it organises.', 'Time saved is NOT measured by this product.'],
 };
 
-// Every Copilot seat holder, the ceiling: the same 4 observed people, and 396 modelled, doing eleven
-// times the work of the 36 above - 18,612 pieces of work. (40 + 18,612) x 6 = 111,912 minutes =
-// 1,865.2 hours, 932.6 conservative.
+// Every Copilot seat holder, the ceiling: 400 people doing eleven times the work of the 40 above -
+// 18,612 pieces of work. 18,612 x 6 = 111,672 minutes = 1,861.2 hours, 930.6 conservative.
 const FULL_ESTIMATE = {
   ...ESTIMATE,
   cohortUsers: 400,
-  projectedCoworkUsers: 396,
   activities: ESTIMATE.activities.map((a) => ({ ...a, volumePerMonth: a.volumePerMonth * 11 })),
   projectedCoworkTasks: 18612,
-  coworkTasks: 18652,
-  hoursPerMonthLow: 933,
-  hoursPerMonthHigh: 1865,
+  hoursPerMonthLow: 931,
+  hoursPerMonthHigh: 1861,
 };
 
 /** A summary carrying both Cowork cohorts, as the server sends one for a tenant with readiness data. */
@@ -432,32 +416,27 @@ describe('CoworkPanel', () => {
   });
 
   /**
-   * Microsoft reports the scheduled and user-initiated task counts independently, and either can be
-   * absent. A blank one means "not reported", not "none" - the same distinction the per-user credit
-   * column protects. Rendering it as "0 scheduled" would state a measurement nobody made.
+   * Cowork use is audit-only (#692). A person's detail shows their Cowork interactions from the Copilot
+   * audit log, under a heading that says so, and nothing that reads as Microsoft's Cowork tasks: no
+   * task count, no scheduled / user-initiated split, no automation ratio and no credits per task.
    */
-  it('never turns an unreported task split into zeroes', async () => {
+  it('labels Cowork use as interactions from the Copilot audit log, never as tasks', async () => {
     const user = userEvent.setup();
     fetchCowork.mockResolvedValue(
-      page([
-        row({
-          usedCowork: true,
-          coworkReportTotalTasks: 40,
-          coworkReportScheduledTasks: null,
-          coworkReportUserInitiatedTasks: null,
-        }),
-      ]),
+      page([row({ usedCowork: true, coworkInteractions: 12, coworkActiveDays: 3, tier: 'established', basis: 'evidence' })]),
     );
 
     render(summary());
     const people = await openSection(user, /People to enable/);
     await waitFor(() => expect(within(people).getByText('aisha.rahman@contoso.com')).toBeTruthy());
+    expect(within(people).getByText('12 audit interactions in 3d')).toBeTruthy();
 
     await user.click(within(people).getByRole('button', { name: /Show the full assessment/ }));
 
-    expect(await within(people).findByText('split not reported')).toBeTruthy();
-    expect(screen.queryByText(/0 scheduled/)).toBeNull();
-    expect(screen.queryByText(/0 user-initiated/)).toBeNull();
+    expect(await within(people).findByText('Cowork interactions, from the Copilot audit log')).toBeTruthy();
+    expect(within(people).getByText('Audit interactions')).toBeTruthy();
+    expect(within(people).queryAllByText(/Reported tasks|split not reported|scheduled|user-initiated|Automated|Credits per task/)).toHaveLength(0);
+    expect(within(people).queryAllByText(/Cowork usage report/i)).toHaveLength(0);
   });
 
   it('shows an unattributable credit as a dash, never as zero', async () => {
@@ -496,14 +475,15 @@ describe('CoworkPanel', () => {
   it('leads with the people ready now, and shows every seat holder as the ceiling', async () => {
     await renderSettled(withEstimates());
 
-    const hero = screen.getByRole('region', { name: '87\u2013173 hours a month' });
+    const hero = screen.getByRole('region', { name: '85\u2013169 hours a month' });
     expect(within(hero).getByText('from the 40 people ready for Cowork now')).toBeTruthy();
-    expect(within(hero).getByText('933\u20131,865 h')).toBeTruthy();
+    expect(within(hero).getByText('931\u20131,861 h')).toBeTruthy();
     expect(within(hero).getByText('a month if all 400 Copilot seat holders used Cowork')).toBeTruthy();
     expect(within(hero).getByText(/^The ceiling, not a target/)).toBeTruthy();
+    // Modelled pieces of work, not Cowork tasks: the product has no Cowork task count (#692).
     expect(
       within(hero).getByText(
-        '1,732 tasks a month handed to Cowork, on top of what Copilot already saves - the part paid for in Copilot Credits.',
+        '1,692 pieces of work a month handed to Cowork, on top of what Copilot already saves - the part paid for in Copilot Credits.',
       ),
     ).toBeTruthy();
   });
@@ -516,18 +496,19 @@ describe('CoworkPanel', () => {
   it('shows where the time would come from, kind of work by kind of work', async () => {
     await renderSettled(withEstimates());
 
-    const hero = screen.getByRole('region', { name: '87\u2013173 hours a month' });
+    const hero = screen.getByRole('region', { name: '85\u2013169 hours a month' });
     expect(within(hero).getByText('Where the time would come from')).toBeTruthy();
-    // 4,320 of the 10,392 minutes are email: 72 hours, 42% of the total.
-    expect(within(hero).getByText('Send email - 72 h (42%)')).toBeTruthy();
-    expect(within(hero).getByText('Organise meetings - 18 h (10%)')).toBeTruthy();
+    // 4,320 of the 10,152 minutes are email: 72 hours, 43% of the total.
+    expect(within(hero).getByText('Send email - 72 h (43%)')).toBeTruthy();
+    expect(within(hero).getByText('Organise meetings - 18 h (11%)')).toBeTruthy();
     expect(within(hero).getByText('Prepare for meetings - 29 h (17%)')).toBeTruthy();
     expect(within(hero).getByText('Post in Teams - 36 h (21%)')).toBeTruthy();
     expect(within(hero).getByText('Create documents - 14 h (8%)')).toBeTruthy();
-    expect(within(hero).getByText('Cowork tasks already running - 4 h (2%)')).toBeTruthy();
+    // Nothing is counted from Cowork tasks any more (#692).
+    expect(within(hero).queryAllByText(/Cowork tasks already running/)).toHaveLength(0);
     expect(
       within(hero).getByRole('img', {
-        name: 'Modelled time by kind of work: Organise meetings 10%, Prepare for meetings 17%, Send email 42%, Post in Teams 21%, Create documents 8%, Cowork tasks already running 2%',
+        name: 'Modelled time by kind of work: Organise meetings 11%, Prepare for meetings 17%, Send email 43%, Post in Teams 21%, Create documents 8%',
       }),
     ).toBeTruthy();
   });
@@ -543,21 +524,20 @@ describe('CoworkPanel', () => {
     expect(within(row).getByRole('spinbutton', { name: 'Minutes saved on each meeting Cowork organises' })).toHaveValue(6);
     expect(within(row).getByText('18 h')).toBeTruthy();
 
-    // The people already running Cowork tasks are counted, not modelled from their work.
-    const observed = screen.getByText('Cowork tasks already running', { selector: 'span' }).closest('tr') as HTMLElement;
-    expect(within(observed).getByText('From Microsoft\u2019s Cowork usage report, for the 4 people already running them')).toBeTruthy();
-    expect(within(observed).getByText('counted as reported')).toBeTruthy();
-    expect(within(observed).getByRole('spinbutton', { name: 'Minutes saved per Cowork task' })).toHaveValue(6);
+    // Everyone is modelled from their work, people already using Cowork included: there is no row of
+    // Cowork tasks counted as reported, and no minutes-per-task figure to set (#692).
+    expect(screen.queryAllByText('Cowork tasks already running')).toHaveLength(0);
+    expect(screen.queryByRole('spinbutton', { name: 'Minutes saved per Cowork task' })).toBeNull();
 
     expect(
-      screen.getByText('Work done by hand a month by the 36 people not yet running Cowork tasks, from Microsoft\u2019s usage reports.'),
+      screen.getByText('Work done by hand a month by the 40 people covered, from Microsoft\u2019s usage reports.'),
     ).toBeTruthy();
   });
 
   it('badges the headline as modelled and as an assumption, never as published evidence', async () => {
     await renderSettled(withEstimates());
 
-    const hero = screen.getByRole('region', { name: '87\u2013173 hours a month' });
+    const hero = screen.getByRole('region', { name: '85\u2013169 hours a month' });
     expect(within(hero).getByText('Modelled, not measured')).toBeTruthy();
     expect(within(hero).getByText('Assumption - not yet studied')).toBeTruthy();
     // Copilot's published studies stand behind the licence estimate. None of them measured Cowork.
@@ -567,9 +547,9 @@ describe('CoworkPanel', () => {
   it('restates the headline as minutes a working day for each person ready now', async () => {
     await renderSettled(withEstimates());
 
-    // 10,392 minutes over 40 people x 20 working days = 13 minutes a day each, 6.5 at the conservative end.
-    const hero = screen.getByRole('region', { name: '87\u2013173 hours a month' });
-    expect(within(hero).getByText('6.5\u201313 minutes')).toBeTruthy();
+    // 10,152 minutes over 40 people x 20 working days = 12.7 minutes a day each, 6.3 at the conservative end.
+    const hero = screen.getByRole('region', { name: '85\u2013169 hours a month' });
+    expect(within(hero).getByText('6.3\u201313 minutes')).toBeTruthy();
     expect(within(hero).getByText('a working day, for each person ready now')).toBeTruthy();
   });
 
@@ -580,19 +560,15 @@ describe('CoworkPanel', () => {
         coworkValueEstimate: {
           ...ESTIMATE,
           cohortUsers: 0,
-          coworkTaskUsers: 0,
-          observedCoworkTasks: 0,
-          projectedCoworkUsers: 0,
           activities: [],
           projectedCoworkTasks: 0,
-          coworkTasks: 0,
           hoursPerMonthLow: 0,
           hoursPerMonthHigh: 0,
         },
       }),
     );
 
-    const hero = screen.getByRole('region', { name: '933\u20131,865 hours a month' });
+    const hero = screen.getByRole('region', { name: '931\u20131,861 hours a month' });
     expect(within(hero).getByText('if all 400 Copilot seat holders used Cowork')).toBeTruthy();
     expect(within(hero).getByText('a working day, for each Copilot seat holder')).toBeTruthy();
     // No second ceiling beside a headline that already is one, and no list of nobody to open.
@@ -616,11 +592,11 @@ describe('CoworkPanel', () => {
     expect(screen.getByRole('radio', { name: 'Ready now (40)' })).toBeChecked();
     await user.click(screen.getByRole('radio', { name: 'All Copilot seat holders (400)' }));
 
-    const hero = screen.getByRole('region', { name: '933\u20131,865 hours a month' });
+    const hero = screen.getByRole('region', { name: '931\u20131,861 hours a month' });
     expect(within(hero).getByText('if all 400 Copilot seat holders used Cowork')).toBeTruthy();
     expect(within(hero).getByText(/^Modelling every Copilot seat holder, not only the people ready now/)).toBeTruthy();
     // Where a rollout starts, in place of the ceiling it has become.
-    expect(within(hero).getByText('87\u2013173 h')).toBeTruthy();
+    expect(within(hero).getByText('85\u2013169 h')).toBeTruthy();
     expect(within(hero).getByText('a month from the 40 people ready for Cowork now')).toBeTruthy();
     expect(within(hero).queryByText('a month if all 400 Copilot seat holders used Cowork')).toBeNull();
     expect(within(hero).getByText('a working day, for each Copilot seat holder')).toBeTruthy();
@@ -631,17 +607,19 @@ describe('CoworkPanel', () => {
     expect(screen.getByText('158,400')).toBeTruthy();
 
     await user.click(screen.getByRole('radio', { name: 'Ready now (40)' }));
-    expect(screen.getByRole('region', { name: '87\u2013173 hours a month' })).toBeTruthy();
+    expect(screen.getByRole('region', { name: '85\u2013169 hours a month' })).toBeTruthy();
     expect(screen.getByRole('radio', { name: 'The 40 people ready now' })).toBeChecked();
     expect(sessionStorage.getItem(TIME_SAVED_COHORT_STORAGE_KEY)).toBeNull();
   });
 
-  it('shows the Cowork use already observed, badged as observed', async () => {
-    await renderSettled(withEstimates({ coworkDetected: true, coworkUsers: 4, coworkReportTotalTasks: 40 }));
+  it('shows the Cowork use already observed in the Copilot audit log, badged as observed', async () => {
+    await renderSettled(withEstimates({ coworkDetected: true, coworkUsers: 4, coworkInteractions: 120 }));
 
-    const hero = screen.getByRole('region', { name: '87\u2013173 hours a month' });
+    const hero = screen.getByRole('region', { name: '85\u2013169 hours a month' });
     expect(within(hero).getByText('Observed')).toBeTruthy();
-    expect(within(hero).getByText('Already happening: 4 people used Cowork in this period, running 40 tasks.')).toBeTruthy();
+    expect(within(hero).getByText('Already happening: the Copilot audit log shows 4 people using Cowork in this period.')).toBeTruthy();
+    // Interactions are not Cowork tasks, so no task count is claimed (#692).
+    expect(within(hero).queryAllByText(/running \d+ tasks/)).toHaveLength(0);
   });
 
   /**
@@ -669,7 +647,7 @@ describe('CoworkPanel', () => {
 
     expect(
       screen.getByText(
-        "Assumes Cowork saves 6 minutes on each meeting it organises, 6 on each meeting it prepares someone for, 6 on each email it sends, 6 on each Teams message it posts, 6 on each document it creates and 6 on each Cowork task already in Microsoft's report, on top of what Microsoft 365 Copilot already saves - Cowork's increment over Copilot alone. No study has yet measured Cowork's time savings, alone or for people who already use Copilot, so these figures are assumptions.",
+        "Assumes Cowork saves 6 minutes on each meeting it organises, 6 on each meeting it prepares someone for, 6 on each email it sends, 6 on each Teams message it posts and 6 on each document it creates, on top of what Microsoft 365 Copilot already saves - Cowork's increment over Copilot alone. No study has yet measured Cowork's time savings, alone or for people who already use Copilot, so these figures are assumptions.",
       ),
     ).toBeTruthy();
     expect(
@@ -679,13 +657,11 @@ describe('CoworkPanel', () => {
     ).toBeTruthy();
     expect(
       screen.getByText(
-        "Covers 40 Copilot seat holders. The work people already do comes from Microsoft's usage reports, restated over 20 working days a month; Cowork tasks from Microsoft's Cowork usage report are restated as a 28-day month.",
+        "Covers 40 Copilot seat holders. The work people already do comes from Microsoft's usage reports, restated over 20 working days a month.",
       ),
     ).toBeTruthy();
     expect(
-      screen.getByText(
-        "Cowork tasks already in Microsoft's Cowork usage report are counted as reported: 40 a month from the 4 people running them. Only everyone else's work is modelled, so nobody is counted twice.",
-      ),
+      screen.getByText('Everyone here is modelled from the work they already do by hand, including people already using Cowork.'),
     ).toBeTruthy();
     expect(screen.getByText(/^The minutes are Cowork's increment over Copilot alone\./)).toBeTruthy();
     expect(screen.getByText(/^Only work Microsoft's usage reports count is modelled\./)).toBeTruthy();
@@ -706,13 +682,13 @@ describe('CoworkPanel', () => {
 
     expect(
       screen.getByText(
-        "Covers 400 Copilot seat holders. The work people already do comes from Microsoft's usage reports, restated over 20 working days a month; Cowork tasks from Microsoft's Cowork usage report are restated as a 28-day month.",
+        "Covers 400 Copilot seat holders. The work people already do comes from Microsoft's usage reports, restated over 20 working days a month.",
       ),
     ).toBeTruthy();
-    // 14,400 emails x 11 for the 396 people modelled.
+    // 14,400 emails x 11 for the 400 people modelled.
     expect(screen.getByText('158,400')).toBeTruthy();
     // The calculator shows its working for another cohort; the headline stays on the decision.
-    expect(screen.getByRole('region', { name: '87\u2013173 hours a month' })).toBeTruthy();
+    expect(screen.getByRole('region', { name: '85\u2013169 hours a month' })).toBeTruthy();
   });
 
   it('never converts the modelled hours into money', async () => {
@@ -720,7 +696,7 @@ describe('CoworkPanel', () => {
 
     // Hours are the whole output. A currency figure derived from a modelled number is how a model
     // ends up quoted as a saving, which is exactly what this estimate must not become.
-    expect(screen.getByText('87\u2013173 hours a month')).toBeTruthy();
+    expect(screen.getByText('85\u2013169 hours a month')).toBeTruthy();
     expect(screen.queryByText(/at the configured loaded hourly cost/)).toBeNull();
     expect(document.body.textContent).not.toMatch(/[£$€]\s?\d/);
   });
@@ -760,15 +736,15 @@ describe('CoworkPanel time-saved assumptions', () => {
     await user.clear(input);
     await user.type(input, '12');
 
-    // 720 emails handed over x 6 more minutes = 4,320 more: 14,712 minutes = 245.2 hours, 122.6
-    // conservative. The ceiling's 7,920 emails give 159,432 minutes = 2,657.2 hours.
-    expect(await screen.findByText('123\u2013245 hours a month')).toBeTruthy();
-    expect(screen.getByText('1,329\u20132,657 h')).toBeTruthy();
+    // 720 emails handed over x 6 more minutes = 4,320 more: 14,472 minutes = 241.2 hours, 120.6
+    // conservative. The ceiling's 7,920 emails give 47,520 more: 159,192 minutes = 2,653.2 hours.
+    expect(await screen.findByText('121\u2013241 hours a month')).toBeTruthy();
+    expect(screen.getByText('1,327\u20132,653 h')).toBeTruthy();
     expect(screen.getByText(/^Using your figures for how much of each kind of work Cowork takes on/)).toBeTruthy();
     expect(JSON.parse(sessionStorage.getItem(TIME_SAVED_STORAGE_KEY) ?? '{}')).toEqual({ sendEmailMinutes: 12 });
 
     await user.click(screen.getByRole('button', { name: 'Reset every figure to the product default' }));
-    expect(await screen.findByText('87\u2013173 hours a month')).toBeTruthy();
+    expect(await screen.findByText('85\u2013169 hours a month')).toBeTruthy();
     expect(sessionStorage.getItem(TIME_SAVED_STORAGE_KEY)).toBeNull();
   });
 
@@ -781,7 +757,7 @@ describe('CoworkPanel time-saved assumptions', () => {
     await user.type(input, '10');
 
     // Twice the emails handed over: the same 4,320 more minutes as doubling their minutes.
-    expect(await screen.findByText('123\u2013245 hours a month')).toBeTruthy();
+    expect(await screen.findByText('121\u2013241 hours a month')).toBeTruthy();
     expect(screen.getByText(/, 10% of the emails they send,/)).toBeTruthy();
     expect(screen.getByText('1,440 a month handed to Cowork')).toBeTruthy();
     expect(JSON.parse(sessionStorage.getItem(TIME_SAVED_STORAGE_KEY) ?? '{}')).toEqual({ sendEmailShare: 0.1 });
@@ -797,7 +773,7 @@ describe('CoworkPanel time-saved assumptions', () => {
     await user.type(input, '-3');
 
     expect(await screen.findByRole('alert')).toHaveTextContent('Enter a number from 0 to 240.');
-    expect(screen.getByText('87\u2013173 hours a month')).toBeTruthy();
+    expect(screen.getByText('85\u2013169 hours a month')).toBeTruthy();
     expect(sessionStorage.getItem(TIME_SAVED_STORAGE_KEY)).toBeNull();
   });
 
@@ -814,45 +790,44 @@ describe('CoworkPanel time-saved assumptions', () => {
     expect(sessionStorage.getItem(TIME_SAVED_STORAGE_KEY)).toBeNull();
   });
 
-  it('says so plainly when nobody here runs Cowork tasks yet, and models everyone from their work', async () => {
-    await renderSettled(
-      withEstimates({
-        coworkValueEstimate: {
-          ...ESTIMATE,
-          coworkTaskUsers: 0,
-          observedCoworkTasks: 0,
-          projectedCoworkUsers: 40,
-          coworkTasks: 1692,
-          observedTasksPerPersonPerMonth: 0,
-          observedTaskRateUsers: 0,
-          // 1,692 pieces x 6 = 10,152 minutes = 169.2 hours.
-          hoursPerMonthLow: 85,
-          hoursPerMonthHigh: 169,
-        },
-        coworkFullRolloutEstimate: undefined,
-      }),
-    );
+  it('models everyone from their work, people already using Cowork included, and says so', async () => {
+    await renderSettled(withEstimates({ coworkDetected: true, coworkUsers: 4, coworkInteractions: 120 }));
 
     expect(screen.getByText('85\u2013169 hours a month')).toBeTruthy();
     expect(
-      screen.getByText(
-        "Nobody here has Cowork tasks in Microsoft's Cowork usage report yet, so everyone is modelled from the work they already do.",
-      ),
+      screen.getByText('Everyone here is modelled from the work they already do by hand, including people already using Cowork.'),
     ).toBeTruthy();
-    expect(screen.queryByText('Cowork tasks already running', { selector: 'span' })).toBeNull();
-    expect(screen.getByText(/^No Cowork tasks are in Microsoft\u2019s Cowork usage report yet, so there is nothing of your own/)).toBeTruthy();
+    expect(screen.queryAllByText('Cowork tasks already running')).toHaveLength(0);
   });
 
-  it('holds the model against the tenant\u2019s own Cowork users', async () => {
+  /**
+   * The product never reads Microsoft's Cowork usage report: it has no Graph API (#692). Where the page
+   * names it at all, it is as something the reader can check by hand in the Microsoft 365 admin centre,
+   * never as a source of any figure shown.
+   */
+  it('names Microsoft\u2019s Cowork usage report only as something to check by hand in the admin centre', async () => {
+    await renderSettled(withEstimates({ coworkDetected: true, coworkUsers: 4, coworkInteractions: 120 }));
+
+    const mentions = screen.queryAllByText(/Cowork usage report/i);
+    expect(mentions.length).toBeGreaterThan(0);
+    for (const mention of mentions) {
+      expect(mention.textContent).toMatch(/Microsoft 365 admin centre \(Copilot > Cowork > Usage\)/);
+      expect(mention.textContent).toMatch(/This product does not import that report/);
+    }
+  });
+
+  it('gives the pieces of work a person, for the reader to check by hand against a pilot', async () => {
     await renderSettled(withEstimates());
 
-    // 1,692 pieces over the 36 people modelled = 47 a month each.
+    // 1,692 pieces over the 40 people covered = 42 a month each.
     expect(
       screen.getByText(
-        'Your 4 Cowork users run 10 tasks a month each, from Microsoft\u2019s Cowork usage report. This model hands each person not yet running Cowork 47 pieces of work a month.',
+        /^This model hands each person it covers 42 pieces of work a month\. Compare that with the Cowork tasks per person your pilot group ran over the last 28 days/,
       ),
     ).toBeTruthy();
-    expect(screen.getByText(/^Early adopters tend to use a new tool more than the people who follow/)).toBeTruthy();
+    expect(screen.getByText(/^This model counts pieces of work, not Microsoft\u2019s Cowork tasks/)).toBeTruthy();
+    // Nothing claims the product holds the tenant's own Cowork task counts (#692).
+    expect(screen.queryAllByText(/^Your \d+ Cowork users? runs?/)).toHaveLength(0);
   });
 
   it('explains every default share as the judgement it is', async () => {

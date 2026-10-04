@@ -136,7 +136,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.AuditBackfill
             }
             catch (Exception ex)
             {
-                _logger?.LogError(ex, $"Copilot audit backfill {job.Id}: cycle-level failure while advancing; active slices will retry next cycle. {ex.Message}");
+                _logger?.LogError(ex, $"Copilot audit backfill {job.Id}: cycle-level failure while advancing; active slices will retry next cycle.");
                 job.LastErrorCode = CopilotAuditBackfillErrorCodes.Unexpected;
                 job.LastErrorDetail = Truncate(ex.Message);
                 await _state.SaveAsync(job).ConfigureAwait(false);
@@ -188,7 +188,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.AuditBackfill
             slice.QueryId = submitted.Id;
             slice.SubmittedUtc = _utcNow();
             job.SlicesSubmitted++;
-            _logger?.LogInformation($"Copilot audit backfill {job.Id}: submitted Audit Search query {submitted.Id} for {slice.StartUtc:o} to {slice.EndUtc:o} (attempt {slice.AttemptCount}).");
+            _logger?.LogInformation($"Copilot audit backfill {job.Id}: submitted Audit Search query for {slice.StartUtc:o} to {slice.EndUtc:o} (attempt {slice.AttemptCount}).");
         }
 
         private async Task<bool> PollInFlightAsync(CopilotAuditBackfillJob job)
@@ -224,7 +224,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.AuditBackfill
                         var split = CopilotAuditBackfillSlicer.SplitIntoHours(slice);
                         job.PendingSlices.InsertRange(0, split);
                         job.SlicesSplit++;
-                        _logger?.LogWarning($"Copilot audit backfill {job.Id}: Audit Search query {slice.QueryId} was truncated; split its day into {split.Count} hour slice(s).");
+                        _logger?.LogWarning($"Copilot audit backfill {job.Id}: Audit Search query was truncated; split its day into {split.Count} hour slice(s).");
                         Track(job, "truncated");
                         continue;
                     }
@@ -238,7 +238,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.AuditBackfill
                         var dayKey = CopilotAuditBackfillSlicer.DayKey(slice.StartUtc);
                         if (!job.CompletedDays.Contains(dayKey)) job.CompletedDays.Add(dayKey);
                     }
-                    _logger?.LogInformation($"Copilot audit backfill {job.Id}: imported {imported.Imported:N0} of {imported.Seen:N0} record(s) from query {slice.QueryId}.");
+                    _logger?.LogInformation($"Copilot audit backfill {job.Id}: imported {imported.Imported:N0} of {imported.Seen:N0} record(s) from an Audit Search query.");
                 }
                 catch (GraphHttpException ex) when (ex.StatusCode == HttpStatusCode.Unauthorized || ex.StatusCode == HttpStatusCode.Forbidden)
                 {
@@ -264,7 +264,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.AuditBackfill
                 job.PendingSlices.Add(slice);
                 job.LastErrorCode = errorCode;
                 job.LastErrorDetail = Truncate(detail);
-                _logger?.LogWarning($"Copilot audit backfill {job.Id}: slice {slice.StartUtc:o}-{slice.EndUtc:o} failed on attempt {slice.AttemptCount}; it will retry. {detail}");
+                _logger?.LogWarning($"Copilot audit backfill {job.Id}: slice {slice.StartUtc:o}-{slice.EndUtc:o} failed on attempt {slice.AttemptCount}; it will retry.");
                 return;
             }
 
@@ -286,7 +286,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.AuditBackfill
             job.Gaps.Add(gap);
             job.LastErrorCode = errorCode;
             job.LastErrorDetail = gap.Detail;
-            _logger?.LogWarning($"Copilot audit backfill {job.Id}: recorded {(incomplete ? "incomplete" : "failed")} slice {slice.StartUtc:o}-{slice.EndUtc:o} after {slice.AttemptCount} attempt(s). {detail}");
+            _logger?.LogWarning($"Copilot audit backfill {job.Id}: recorded {(incomplete ? "incomplete" : "failed")} slice {slice.StartUtc:o}-{slice.EndUtc:o} after {slice.AttemptCount} attempt(s).");
             Track(job, incomplete ? "sliceIncomplete" : "sliceFailed");
         }
 

@@ -13,6 +13,7 @@ using System.Threading.Tasks;
 using WebJob.Office365ActivityImporter.Engine;
 using WebJob.Office365ActivityImporter.Engine.ActivityAPI;
 using WebJob.Office365ActivityImporter.Engine.Entities;
+using WebJob.Office365ActivityImporter.Engine.Entities.Serialisation;
 using WebJob.Office365ActivityImporter.Engine.Graph.Copilot.AuditBackfill;
 
 namespace Tests.UnitTests
@@ -148,6 +149,44 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public async Task Importer_CommitsMappedCopilotInteractionsThroughNormalPersistencePath()
+        {
+            var state = await NewStateWithJobAsync();
+            var source = new FakeAuditSearchSource
+            {
+                Query = new CopilotAuditSearchQuery { Status = "succeeded" },
+                Pages = new Queue<CopilotAuditSearchRecordPage>(new[]
+                {
+                    new CopilotAuditSearchRecordPage
+                    {
+                        Records = new List<CopilotAuditSearchRecord>
+                        {
+                            SyntheticRecord(
+                                "00000000-0000-0000-0000-000000000014",
+                                "\"AppHost\":\"Word\",\"Contexts\":[{\"Id\":\"https://contoso.sharepoint.com/sites/example/Shared Documents/Plan.docx\",\"Type\":\"File\"}],\"AccessedResources\":[{\"Id\":\"resource-1\",\"Name\":\"Plan.docx\",\"Type\":\"File\"}],\"Messages\":[{\"Id\":\"message-1\",\"isPrompt\":true,\"JailbreakDetected\":false}]",
+                                "\"AgentName\":\"Copilot Cowork\",\"AppIdentity\":\"Copilot.M365Copilot.CoworkChat\",")
+                        }
+                    }
+                })
+            };
+            var persistence = new CountingPersistence();
+            var importer = NewImporter(state, source, persistence);
+
+            var job = await importer.AdvanceLatestAsync();
+
+            Assert.AreEqual(CopilotAuditBackfillStates.Completed, job.State);
+            Assert.AreEqual(1, persistence.CommitCount);
+            var content = persistence.LastActivities.Single() as CopilotAuditLogContent;
+            Assert.IsNotNull(content);
+            Assert.AreEqual("CopilotInteraction", content.Operation);
+            Assert.AreEqual("Copilot.M365Copilot.CoworkChat", content.AgentId);
+            Assert.AreEqual("Word", content.CopilotEventData.AppHost);
+            Assert.AreEqual(1, content.CopilotEventData.Contexts.Count);
+            Assert.AreEqual(1, content.CopilotEventData.AccessedResources.Count);
+            Assert.AreEqual(1, content.ParsedAuditEvent.Messages.Count);
+        }
+
+        [TestMethod]
         public void Mapper_UsesDocumentedAuditDataObjectAndRejectsOtherWorkloads()
         {
             var mapped = CopilotAuditSearchRecordMapper.Map(SyntheticRecord("00000000-0000-0000-0000-000000000003"), NullLogger.Instance);
@@ -186,7 +225,7 @@ namespace Tests.UnitTests
                 () => new DateTime(2026, 10, 2, 12, 0, 0, DateTimeKind.Utc),
                 _ => Task.CompletedTask);
 
-        private static CopilotAuditSearchRecord SyntheticRecord(string id)
+        private static CopilotAuditSearchRecord SyntheticRecord(string id, string copilotEventDataProperties = "\"ThreadId\":\"thread-1\",\"AccessedResources\":[],\"Contexts\":[],\"Messages\":[]", string topLevelProperties = "")
             => new CopilotAuditSearchRecord
             {
                 Id = id,
@@ -195,7 +234,7 @@ namespace Tests.UnitTests
                 Operation = "CopilotInteraction",
                 Service = "Copilot",
                 UserPrincipalName = "jane.doe@contoso.com",
-                AuditData = JObject.Parse("{\"@odata.type\":\"#microsoft.graph.security.auditData\",\"Id\":\"" + id + "\",\"RecordType\":261,\"CreationTime\":\"2026-10-01T10:00:00Z\",\"Operation\":\"CopilotInteraction\",\"Workload\":\"Copilot\",\"UserId\":\"jane.doe@contoso.com\",\"OrganizationId\":\"00000000-0000-0000-0000-000000000000\",\"CopilotEventData\":{\"ThreadId\":\"thread-1\",\"AccessedResources\":[],\"Contexts\":[],\"Messages\":[]}}")
+                AuditData = JObject.Parse("{\"@odata.type\":\"#microsoft.graph.security.auditData\",\"Id\":\"" + id + "\",\"RecordType\":261,\"CreationTime\":\"2026-10-01T10:00:00Z\",\"Operation\":\"CopilotInteraction\",\"Workload\":\"Copilot\",\"UserId\":\"jane.doe@contoso.com\",\"OrganizationId\":\"00000000-0000-0000-0000-000000000000\"," + topLevelProperties + "\"CopilotEventData\":{" + copilotEventDataProperties + "}}")
             };
 
         private sealed class FakeAuditSearchSource : ICopilotAuditSearchSource
@@ -239,12 +278,14 @@ namespace Tests.UnitTests
             public int CommitCount;
             public int LastCount;
             public List<int> BatchSizes = new List<int>();
+            public ActivityReportSet LastActivities;
 
             public Task<ImportStat> CommitAll(ActivityReportSet activities)
             {
                 CommitCount++;
                 LastCount = activities.Count;
                 BatchSizes.Add(activities.Count);
+                LastActivities = activities;
                 return Task.FromResult(new ImportStat { Imported = activities.Count, Total = activities.Count });
             }
         }

@@ -12,6 +12,7 @@ using System.Runtime.Caching;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Web.Http;
+using Web.AnalyticsWeb.Models.UserFilters;
 
 namespace Web.AnalyticsWeb.Controllers
 {
@@ -57,23 +58,28 @@ namespace Web.AnalyticsWeb.Controllers
 
         private readonly IWebActivityStore _store;
         private readonly Func<WebActivitySources> _sourcesFactory;
+        private readonly ReportScopeResolver _scopes;
 
         public WebActivityAPIController()
             : this(
                 new SqlWebActivityStore(DefaultAnalyticsDbContextFactory.Instance),
-                () => WebActivitySources.FromConfig(new AppConfig()))
+                () => WebActivitySources.FromConfig(new AppConfig()),
+                ReportScopeResolver.Default)
         {
         }
 
         /// <summary>
         /// Testable entry point. The store's queries are raw SQL, so a broken statement only shows up
         /// when it actually runs - which is why the integration test points a real store at a real,
-        /// migrated database rather than trusting that this compiles.
+        /// migrated database rather than trusting that this compiles. No global filter unless
+        /// <paramref name="scopes"/> supplies one.
         /// </summary>
-        internal WebActivityAPIController(IWebActivityStore store, Func<WebActivitySources> sourcesFactory)
+        internal WebActivityAPIController(
+            IWebActivityStore store, Func<WebActivitySources> sourcesFactory, ReportScopeResolver scopes = null)
         {
             _store = store ?? throw new ArgumentNullException(nameof(store));
             _sourcesFactory = sourcesFactory ?? throw new ArgumentNullException(nameof(sourcesFactory));
+            _scopes = scopes ?? new ReportScopeResolver(GlobalFilterProviders.None, CachedUserDirectorySource.Default);
         }
 
         // GET: api/WebActivity/availability
@@ -99,76 +105,76 @@ namespace Web.AnalyticsWeb.Controllers
         // GET: api/WebActivity/overview?days=28
         [HttpGet]
         [Route("overview")]
-        public Task<IHttpActionResult> Overview(int days = WebActivityQuery.DefaultWindowDays)
+        public async Task<IHttpActionResult> Overview(int days = WebActivityQuery.DefaultWindowDays)
         {
-            var query = BuildQuery(days);
-            return CachedAsync("overview", query, () => _store.GetOverviewAsync(query, ReadSources()));
+            var query = await BuildQueryAsync(days).ConfigureAwait(false);
+            return await CachedAsync("overview", query, () => _store.GetOverviewAsync(query, ReadSources())).ConfigureAwait(false);
         }
 
         // GET: api/WebActivity/visits?days=28
         [HttpGet]
         [Route("visits")]
-        public Task<IHttpActionResult> Visits(
+        public async Task<IHttpActionResult> Visits(
             int days = WebActivityQuery.DefaultWindowDays,
             int top = WebActivityQuery.DefaultTop)
         {
-            var query = BuildQuery(days, top);
-            return CachedAsync("visits", query, () => _store.GetVisitsAsync(query));
+            var query = await BuildQueryAsync(days, top).ConfigureAwait(false);
+            return await CachedAsync("visits", query, () => _store.GetVisitsAsync(query)).ConfigureAwait(false);
         }
 
         // GET: api/WebActivity/pages?days=28
         [HttpGet]
         [Route("pages")]
-        public Task<IHttpActionResult> Pages(
+        public async Task<IHttpActionResult> Pages(
             int days = WebActivityQuery.DefaultWindowDays,
             int top = WebActivityQuery.DefaultTop)
         {
-            var query = BuildQuery(days, top);
-            return CachedAsync("pages", query, () => _store.GetPagesAsync(query));
+            var query = await BuildQueryAsync(days, top).ConfigureAwait(false);
+            return await CachedAsync("pages", query, () => _store.GetPagesAsync(query)).ConfigureAwait(false);
         }
 
         // GET: api/WebActivity/journeys?days=28
         [HttpGet]
         [Route("journeys")]
-        public Task<IHttpActionResult> Journeys(
+        public async Task<IHttpActionResult> Journeys(
             int days = WebActivityQuery.DefaultWindowDays,
             int top = WebActivityQuery.DefaultTop)
         {
-            var query = BuildQuery(days, top);
-            return CachedAsync("journeys", query, () => _store.GetJourneysAsync(query));
+            var query = await BuildQueryAsync(days, top).ConfigureAwait(false);
+            return await CachedAsync("journeys", query, () => _store.GetJourneysAsync(query)).ConfigureAwait(false);
         }
 
         // GET: api/WebActivity/geography?days=28
         [HttpGet]
         [Route("geography")]
-        public Task<IHttpActionResult> Geography(
+        public async Task<IHttpActionResult> Geography(
             int days = WebActivityQuery.DefaultWindowDays,
             int top = WebActivityQuery.DefaultTop)
         {
-            var query = BuildQuery(days, top);
-            return CachedAsync("geography", query, () => _store.GetGeographyAsync(query));
+            var query = await BuildQueryAsync(days, top).ConfigureAwait(false);
+            return await CachedAsync("geography", query, () => _store.GetGeographyAsync(query)).ConfigureAwait(false);
         }
 
         // GET: api/WebActivity/search?days=28
         [HttpGet]
         [Route("search")]
-        public Task<IHttpActionResult> Search(
+        public async Task<IHttpActionResult> Search(
             int days = WebActivityQuery.DefaultWindowDays,
             int top = WebActivityQuery.DefaultTop)
         {
-            var query = BuildQuery(days, top);
-            return CachedAsync("search", query, () => _store.GetSearchAsync(query));
+            var query = await BuildQueryAsync(days, top).ConfigureAwait(false);
+            return await CachedAsync("search", query, () => _store.GetSearchAsync(query)).ConfigureAwait(false);
         }
 
         // GET: api/WebActivity/technology?days=28
         [HttpGet]
         [Route("technology")]
-        public Task<IHttpActionResult> Technology(
+        public async Task<IHttpActionResult> Technology(
             int days = WebActivityQuery.DefaultWindowDays,
             int top = WebActivityQuery.DefaultTop)
         {
-            var query = BuildQuery(days, top);
-            return CachedAsync("technology", query, () => _store.GetTechnologyAsync(query));
+            var query = await BuildQueryAsync(days, top).ConfigureAwait(false);
+            return await CachedAsync("technology", query, () => _store.GetTechnologyAsync(query)).ConfigureAwait(false);
         }
 
         /// <summary>
@@ -205,8 +211,12 @@ namespace Web.AnalyticsWeb.Controllers
                 };
             }
 
-            var query = BuildQuery(days, top);
+            var query = await BuildQueryAsync(days, top).ConfigureAwait(false);
             var normalised = section.ToLowerInvariant();
+
+            // A file narrowed by the administrator's global filter says so in its name, because a file
+            // outlives the page it was downloaded from and is forwarded without it.
+            var fileNamePrefix = WebActivityExports.FileNamePrefix(normalised) + (query.UserScope.IsRestricted ? "-filtered" : string.Empty);
 
             // Exports rebuild a whole tab, so a repeated click - or a script - would re-run every
             // query behind it. Cached on its own key (the display cache is capped at a different row
@@ -214,8 +224,7 @@ namespace Web.AnalyticsWeb.Controllers
             var cacheKey = query.CacheKey("export::" + normalised);
             if (MemoryCache.Default.Get(cacheKey) is byte[] cachedCsv)
             {
-                return CsvResponse(cachedCsv, CsvSerialiser.FileName(
-                    WebActivityExports.FileNamePrefix(normalised), DateTime.UtcNow));
+                return CsvResponse(cachedCsv, CsvSerialiser.FileName(fileNamePrefix, DateTime.UtcNow));
             }
 
             byte[] csv;
@@ -312,9 +321,7 @@ namespace Web.AnalyticsWeb.Controllers
 
             MemoryCache.Default.Set(cacheKey, csv, DateTimeOffset.UtcNow.AddSeconds(CacheSeconds));
 
-            return CsvResponse(csv, CsvSerialiser.FileName(
-                WebActivityExports.FileNamePrefix(normalised),
-                DateTime.UtcNow));
+            return CsvResponse(csv, CsvSerialiser.FileName(fileNamePrefix, DateTime.UtcNow));
         }
 
         /// <summary>The error from the query that produced an export's rows, or null when it succeeded.</summary>
@@ -348,9 +355,19 @@ namespace Web.AnalyticsWeb.Controllers
             }
         }
 
-        private static WebActivityQuery BuildQuery(int days, int top = WebActivityQuery.DefaultTop)
+        /// <summary>
+        /// The window, narrowed to the people the administrator's global filter leaves this reader seeing.
+        /// </summary>
+        /// <remarks>
+        /// Resolved on every request rather than trusted from the page: the filter is enforced here,
+        /// whatever the page sends. A filter that cannot be evaluated refuses the request (503) rather than
+        /// answering for the whole tenant.
+        /// </remarks>
+        private async Task<WebActivityQuery> BuildQueryAsync(int days, int top = WebActivityQuery.DefaultTop)
         {
-            return WebActivityQuery.Create(days, DateTime.UtcNow, top);
+            var query = WebActivityQuery.Create(days, DateTime.UtcNow, top);
+            var scope = await _scopes.ResolveAsync(Request, User, null, CancellationToken.None).ConfigureAwait(false);
+            return scope.IsRestricted ? query.WithUserScope(scope.Sql) : query;
         }
 
         /// <summary>

@@ -100,8 +100,6 @@ export const copilotAdoptionUsers = {
   'copilotAdoptionUsers.licensed.sourceUsageReport': 'Microsoft usage report',
   'copilotAdoptionUsers.licensed.sourceAudit': 'Audit log',
   'copilotAdoptionUsers.licensed.coworkNo': 'No',
-  'copilotAdoptionUsers.licensed.coworkTasks': 'Yes \u00b7 {count} tasks',
-  'copilotAdoptionUsers.licensed.coworkDays': 'Yes \u00b7 {count} days',
   'copilotAdoptionUsers.licensed.coworkAudited': 'Yes \u00b7 {count} audited',
   'copilotAdoptionUsers.licensed.microsoftWindow': 'Microsoft window',
   'copilotAdoptionUsers.licensed.sourceComparison': 'Audit D{windowDays}: {auditInteractions} interactions, {auditDays} days. Microsoft report {reportPeriod}{snapshotDate}: {prompts} prompts, {reportDays} days.',

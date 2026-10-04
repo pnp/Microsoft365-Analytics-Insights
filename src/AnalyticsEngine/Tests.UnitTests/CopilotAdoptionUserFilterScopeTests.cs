@@ -56,6 +56,41 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public void GlobalFilter_ListsOnlyTheCopilotLicenceTypes_WhoseCountsItCanNarrow()
+        {
+            var analysis = Analysis();
+            analysis.Summary.SeatLicenceTypes.Add(new LicenceTypeClassification
+            {
+                Id = 99,
+                Name = "Microsoft 365 E3",
+                SkuPartNumber = "SPE_E3",
+                IsCopilotSeat = false,
+                AssignedUsers = 4000,
+                PurchasedUnits = 4500,
+                UnassignedUnits = 500,
+            });
+            var service = Service();
+            service.FinaliseSummary(analysis);
+            var sales = UserFilterCompiler.Compile(UserFilterCodec.Parse("[{\"d\":\"department\",\"v\":[\"Sales\"]}]"), Directory());
+
+            // Under the administrator's filter a whole-tenant E3 count - or its purchased and unassigned
+            // seats, which give the same number - would tell a reader limited to Sales about everyone else.
+            var global = CopilotAdoptionScopeFilter.Apply(
+                analysis, CopilotAdoptionScope.Create(null, null, sales, null, null), service.FinaliseSummary);
+            Assert.IsTrue(global.Summary.SeatLicenceTypes.Count > 0);
+            Assert.IsTrue(global.Summary.SeatLicenceTypes.All(l => l.IsCopilotSeat), "Only the types whose counts were narrowed.");
+
+            var rows = CopilotAdoptionScopeFilter.FilterRows(analysis, CopilotAdoptionScope.Create(null, null, sales, null, null));
+            Assert.IsTrue(rows.Summary.SeatLicenceTypes.All(l => l.IsCopilotSeat));
+
+            // The reader's own filter lists every type, the others tenant-wide, as it always has.
+            var own = Narrow(analysis, "[{\"d\":\"department\",\"v\":[\"Sales\"]}]", service);
+            Assert.AreEqual(4000, own.Summary.SeatLicenceTypes.Single(l => !l.IsCopilotSeat).AssignedUsers);
+
+            Assert.IsTrue(analysis.Summary.SeatLicenceTypes.Any(l => !l.IsCopilotSeat), "The cached tenant analysis is untouched.");
+        }
+
+        [TestMethod]
         public void Filtering_LeavesTheCachedTenantAnalysisUntouched()
         {
             var analysis = Analysis();

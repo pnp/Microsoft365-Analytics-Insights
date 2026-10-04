@@ -5,9 +5,8 @@ using System.Linq;
 namespace Common.Entities.CopilotAdoption
 {
     /// <summary>
-    /// The kinds of work the Cowork estimate models for the people not yet running Cowork tasks: each
-    /// thing Microsoft says Cowork does, matched to the count Microsoft's usage reports already keep of
-    /// people doing it by hand.
+    /// The kinds of work the Cowork estimate models: each thing Microsoft says Cowork does, matched to the
+    /// count Microsoft's usage reports already keep of people doing it by hand.
     /// </summary>
     /// <remarks>
     /// <para><b>Why the estimate is broken down this way.</b> It used to project a flat number of Cowork

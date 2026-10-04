@@ -128,6 +128,57 @@ namespace Tests.UnitTests
             }
         }
 
+        [TestMethod]
+        public void SeatHolderTimeSavedQuery_DeduplicatesMeetings_AndGivesMeetingContextPrecedence()
+        {
+            using (var db = ScratchDatabase.Create("CopilotSeatTime"))
+            {
+                CreateUserTables(db);
+                CreateCopilotTables(db);
+                CreateSeatTimeMeetingTables(db);
+
+                db.Execute(
+                    @"INSERT INTO dbo.user_departments (id, name)
+                          VALUES (1, N'Finance'), (2, N'Tiny');
+                      INSERT INTO dbo.license_types (id, name, sku_id)
+                          VALUES (1, N'Microsoft Copilot for Microsoft 365', N'Microsoft_365_Copilot');
+                      INSERT INTO dbo.users (id, user_name, mail, account_enabled, department_id)
+                          VALUES (10, N'licensed@contoso.com', N'licensed@contoso.com', 1, 1),
+                                 (11, N'small@contoso.com', N'small@contoso.com', 1, 2);
+                      INSERT INTO dbo.user_license_type_lookups (id, user_id, license_type_id)
+                          VALUES (1, 10, 1), (2, 11, 1);
+                      INSERT INTO dbo.online_meetings (id, created, meeting_id, name)
+                          VALUES (1, '2026-01-01T09:00:00', N'meeting-1', N'Weekly review');");
+
+                for (var i = 0; i < 10; i++)
+                {
+                    var app = i == 0 ? "Outlook" : "Teams";
+                    var chat = SeedCopilotInteractionReturningId(db, userId: 10, daysAgo: 1, appHost: app);
+                    db.Execute($"INSERT INTO dbo.copilot_event_meetings (copilot_chat_id, meeting_id) VALUES ('{chat}', 1);");
+                }
+
+                SeedCopilotInteraction(db, userId: 10, daysAgo: 1, appHost: "Outlook");
+                SeedCopilotInteraction(db, userId: 10, daysAgo: 1, appHost: "Word");
+                SeedCopilotInteraction(db, userId: 10, daysAgo: 1, appHost: "PowerPoint");
+                SeedCopilotInteraction(db, userId: 10, daysAgo: 1, appHost: "Excel");
+                SeedCopilotInteraction(db, userId: 10, daysAgo: 1, appHost: "Copilot Chat");
+                SeedCopilotInteraction(db, userId: 11, daysAgo: 1, appHost: "Outlook");
+
+                var sql = CopilotAdoptionSeatTimeSql.SeatHolderTimeSavedSql(new[] { 1 }, new int[0]);
+                var rows = Query<SeatHolderTimeSavedUserRow>(db, sql,
+                    new SqlParameter("@from", DateTime.UtcNow.Date.AddDays(-28)),
+                    new SqlParameter("@toExclusive", DateTime.UtcNow.Date.AddDays(1)));
+
+                var row = rows.Single(r => r.UserId == 10);
+                Assert.AreEqual(1, row.TeamsMeetingActions,
+                    "Ten prompts linked to one meeting must earn one meeting credit for that user.");
+                Assert.AreEqual(1, row.OutlookActions,
+                    "The Outlook-hosted meeting interaction is counted as a meeting, not again as Outlook.");
+                Assert.AreEqual(3, row.OfficeActions, "Word, PowerPoint and Excel are the Office/document-work bucket.");
+                Assert.AreEqual(1, row.UncreditedActions, "Copilot Chat is visible but uncredited by default.");
+            }
+        }
+
         /// <summary>
         /// Guards the Unicode requirement end to end on the columns that are genuinely Unicode in
         /// production: a varchar column or a non-N string literal anywhere on this path turns a Greek
@@ -1281,7 +1332,7 @@ namespace Tests.UnitTests
                 Exception thrown = null;
                 try
                 {
-                    Query<int>(db, "SELECT COUNT(*) FROM dbo.cowork_usage_user_activity_log;");
+                    Query<int>(db, "SELECT COUNT(*) FROM dbo.contoso_table_the_upgrade_never_created;");
                 }
                 catch (Exception ex)
                 {
@@ -1405,6 +1456,26 @@ namespace Tests.UnitTests
                       name nvarchar(100) NULL,
                       agent_id nvarchar(max) NULL,
                       is_custom_agent bit NULL);");
+        }
+
+        private static void CreateSeatTimeMeetingTables(ScratchDatabase db)
+        {
+            db.Execute(
+                @"CREATE TABLE dbo.online_meetings (
+                      id int NOT NULL PRIMARY KEY,
+                      created datetime NOT NULL,
+                      meeting_id nvarchar(200) NULL,
+                      name nvarchar(100) NULL);
+
+                  CREATE TABLE dbo.copilot_event_meetings (
+                      copilot_chat_id uniqueidentifier NOT NULL PRIMARY KEY,
+                      meeting_id int NOT NULL);
+
+                  CREATE NONCLUSTERED INDEX IX_copilot_event_meetings_copilot_chat_id
+                      ON dbo.copilot_event_meetings (copilot_chat_id);
+
+                  CREATE NONCLUSTERED INDEX IX_copilot_event_meetings_meeting_id
+                      ON dbo.copilot_event_meetings (meeting_id);");
         }
 
         private static void CreateCopilotReportTable(ScratchDatabase db)

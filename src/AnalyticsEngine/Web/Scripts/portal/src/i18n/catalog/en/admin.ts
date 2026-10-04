@@ -16,7 +16,7 @@ export const admin = {
   // Copilot audit backfill.
   'admin.copilotAuditBackfill.cancel': 'Cancel',
   'admin.copilotAuditBackfill.copilotOff': 'The Copilot audit import toggle is off. Turn on Copilot import before starting a backfill.',
-  'admin.copilotAuditBackfill.description': 'Backfill Microsoft 365 Copilot interaction audit records from Microsoft Graph Audit Search for the retained window. The importer advances a few slices per cycle so live audit import is not delayed.',
+  'admin.copilotAuditBackfill.description': 'Use this only when the normal audit import cannot reach old Copilot interactions, such as a new install, a stopped importer, or Copilot import being enabled later. Normal live import continues every cycle; this on-demand backfill fills retained Audit Search history and de-duplicates any overlap.',
   'admin.copilotAuditBackfill.error.cancel': 'Unable to cancel the backfill.',
   'admin.copilotAuditBackfill.error.copilotImportOff': 'Copilot audit import is switched off.',
   'admin.copilotAuditBackfill.error.load': 'Unable to load Copilot audit backfill status.',

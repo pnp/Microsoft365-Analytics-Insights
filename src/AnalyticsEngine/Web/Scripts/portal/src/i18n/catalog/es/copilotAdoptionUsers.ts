@@ -102,8 +102,6 @@ const copilotAdoptionUsers: Record<keyof typeof en, string> = {
   'copilotAdoptionUsers.licensed.sourceUsageReport': 'Informe de uso de Microsoft',
   'copilotAdoptionUsers.licensed.sourceAudit': 'Registro de auditoría',
   'copilotAdoptionUsers.licensed.coworkNo': 'No',
-  'copilotAdoptionUsers.licensed.coworkTasks': 'Sí \u00b7 {count} tareas',
-  'copilotAdoptionUsers.licensed.coworkDays': 'Sí \u00b7 {count} días',
   'copilotAdoptionUsers.licensed.coworkAudited': 'Sí \u00b7 {count} auditadas',
   'copilotAdoptionUsers.licensed.microsoftWindow': 'Ventana de Microsoft',
   'copilotAdoptionUsers.licensed.sourceComparison': 'Auditoría D{windowDays}: {auditInteractions} interacciones, {auditDays} días. Informe de Microsoft {reportPeriod}{snapshotDate}: {prompts} avisos, {reportDays} días.',

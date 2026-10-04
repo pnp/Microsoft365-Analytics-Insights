@@ -36,36 +36,48 @@ Office 365 Management Activity API
 
 ### Copilot Audit Search backfill
 
-The live import above still owns normal steady-state Copilot audit ingestion. For issue #682 an
-administrator can additionally request an on-demand Microsoft Graph Audit Search backfill from the
-portal's Administration > Copilot audit backfill page. That request is stored in the `AnalyticsState`
-Azure Table under the `CopilotAuditBackfill` partition; no audit rows are marked in SQL.
+The live import above still owns normal steady-state Copilot audit ingestion. It uses the Office 365
+Management Activity API on every importer cycle (`ActivityImporter<T>` via
+`ProgramTasks.ImportActivityReports`) and scans the configured `DaysBeforeNowToDownload` window
+(`ContentMetaDataLoader.GetScanningTimeChunksFromNow`, default seven days in `AppConfig`). That is the
+right path for current data, but it can only download content blobs that the Management Activity API still
+offers. Older Copilot interactions are therefore unreachable when a deployment is new, the importer has
+been stopped for longer than the available-content retention, or `ImportTaskSettings.Copilot` was enabled
+after Copilot interactions had already happened.
+
+For those gaps an administrator can request an on-demand Microsoft Graph Audit Search backfill from the
+portal's Administration > Copilot audit backfill page. It is never automatic. The request is stored in the
+`AnalyticsState` Azure Table under the `CopilotAuditBackfill` partition; no audit rows are marked in SQL.
+`CopilotAuditBackfillSlicer.RetentionWindow` clamps the requested window to 180 days, matching standard
+Audit retention; the code does not currently expose a longer Premium Audit window. The Graph source is
+`GraphCopilotAuditSearchSource`, which submits `/security/auditLog/queries` with
+`operationFilters=["CopilotInteraction"]`, so the backfill imports Copilot `CopilotInteraction` records
+only. It checks the runtime app token for the opt-in `AuditLogsQuery.Read.All` application permission
+before submitting a query; that permission is not part of the installer's default consent.
 
 On each Office365ActivityImporter cycle, after the live Activity API content has been saved, the web job
-advances the request by a bounded amount. It keeps up to four Audit Search queries in flight (well under
-Graph's 50 queued/running tenant limit), polls them inside an eight-minute cycle budget, and tops the
-pipeline back up from newest to oldest slices. With the default hourly import cadence and ordinary day
-slices that complete within the cycle, the full 180-day retained window should finish in roughly 45 import
-cycles (about two days); busy tenants that split many days into hours take proportionally longer.
+advances the request by a bounded amount (`CopilotAuditBackfillImporter.AdvanceLatestAsync`). It keeps up
+to `MaxInFlightQueries` (4) Audit Search queries in flight, polls them inside `MaxCycleBudget` (eight
+minutes), and tops the pipeline back up from newest to oldest slices. Records are committed in
+`MaxRecordsPerCommit` batches of at most 5,000 mapped audit events, never as a whole day in memory. A
+failed slice is retried up to `MaxSliceAttempts` (3) submissions across cycles; after that it is recorded
+as a gap and the job continues. If Graph reports a slice as truncated, the importer discards that result
+and splits the day into hour slices; an hour that is still truncated is recorded as incomplete and the job
+continues. Any failed or incomplete slice makes the final state `completedWithGaps`, which the portal
+lists by affected day. Only systemic conditions stop the whole job: missing permission, the Copilot import
+toggle being off, or Graph 401/403.
 
-Queries use `operationFilters=["CopilotInteraction"]`. Each returned `auditData` payload is the documented
-Graph object form (a defensive JSON-string form is also accepted), is mapped back through
+The overlap between live import and backfill is harmless. Each returned `auditData` payload is the
+documented Graph object form (a defensive JSON-string form is also accepted), is mapped back through
 `AuditLogContentDispatcher` and `CopilotAuditLogContent.FromJson`, and is committed as `Copilot` / record
-type 261 through the same `ActivityReportSqlPersistenceManager` path as live Management Activity API
-records. This preserves the existing `UserGroupsFilter`, user-scope purge, `audit_events` de-duplication
-and Copilot child-table behaviour. Records are committed in pages/batches of at most 5,000 mapped audit
-events, never as a whole day in memory.
-
-The backfill is deliberately opt-in. It refuses to run while `ImportTaskSettings.Copilot` is off, and it
-checks the Graph app token for `AuditLogsQuery.Read.All` before submitting a query. That permission is
-not part of the installer's default consent. A failed slice is retried up to three submissions across
-cycles; after that it is recorded as a gap and the job continues. If Graph reports a slice as truncated,
-the importer discards that result and splits the day into hour slices; an hour that is still truncated is
-recorded as incomplete and the job continues. Any failed or incomplete slice makes the final state
-`completedWithGaps`, which the portal lists by affected day. Only systemic conditions stop the whole job:
-missing permission, the Copilot import toggle being off, or Graph 401/403. Application Insights receives
-only privacy-safe counts and stable state/error codes (`CopilotAuditBackfill` custom events and
-`CopilotAuditBackfill` component `HealthCheck` events), never payloads or user identifiers.
+type 261 through the same `ActivityReportSqlPersistenceManager.CommitAll` path as live Management
+Activity API records. That path applies the same `UserGroupsFilter`/`UserImportScope` staging gate (so
+users removed by the administrator user-scope purge are not reintroduced while the scope remains in
+force), `audit_events` de-duplication, Copilot child-table merges, agent/app classification,
+accessed-resource rows, Teams meeting rows and optional SharePoint/OneDrive metadata lookups through
+`GraphFileMetadataLoader`. Application Insights receives only privacy-safe counts and stable state/error
+codes (`CopilotAuditBackfill` custom events and `CopilotAuditBackfill` component `HealthCheck` events),
+never payloads, UPNs, tenant identifiers, audit record ids or Graph Audit Search query ids.
 
 ---
 

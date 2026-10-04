@@ -67,6 +67,32 @@ Select-String -Path src\AnalyticsEngine\Common\Entities\Installer\BaseSolutionIn
 - `CONFIG_VERSION` changed ⇒ tell admins to re-open and re-save their configuration, and confirm older config files still load.
 - No hits ⇒ you may state "no migrations / no config-schema change / no maintenance window" — and say it **prominently**, because it makes the upgrade trivial.
 
+#### Verify every new external call exists
+
+PR #588 shipped an import for a Microsoft Graph function that does not exist, and #632 hid Graph's rejection of it as "not available on this tenant". Two stable releases then described fixes and symptoms that no tenant could have seen (#692). So check every external call the release **adds**, whether it is a Microsoft Graph function, entity or property, or any other REST endpoint:
+
+1. **The PR that added it cites evidence that it exists.** For Graph, that is the exact name in `https://graph.microsoft.com/v1.0/$metadata` or `/beta/$metadata`, or on an official Microsoft Learn API reference page. Any other API needs its official reference page. A report documented in an admin centre is not an API, and tests built on synthetic fixtures prove nothing about existence. If the PR cites no evidence, check `$metadata` yourself. A name that isn't there is a **blocker**.
+2. **Nothing maps Graph's `400 BadRequest` "Resource not found for the segment '<name>'" to "not available on this tenant", "not licensed" or "not rolled out".** That error means our URL names something that isn't in Graph's schema, so it must fail loudly.
+3. **The release notes describe only symptoms that were observed or reproduced** (see section 4).
+
+```powershell
+# Worklist: URL literals and quoted Graph-style function names the release adds
+git --no-pager diff origin/main origin/dev -- "*.cs" "*.ts" "*.tsx" "*.ps1" |
+  Select-String -Pattern '^\+.*(https://|"get[A-Z][A-Za-z0-9]*")'
+
+# Is a Graph name in the schema? No auth needed. Zero matches in both documents means it does not exist.
+$name = 'getMicrosoft365CopilotUsageUserDetail'
+foreach ($v in 'v1.0', 'beta') {
+  $xml = (Invoke-WebRequest "https://graph.microsoft.com/$v/`$metadata" -UseBasicParsing).Content
+  '{0}: {1} match(es)' -f $v, ([regex]::Matches($xml, [regex]::Escape($name))).Count
+}
+
+# Does anything handle the unknown-segment 400? Read every hit outside the tests.
+git --no-pager diff origin/main origin/dev | Select-String -Pattern 'not found for the segment'
+```
+
+Record the result in the release PR (section 3): list each new external call with its evidence, or state "no new external calls".
+
 #### Verify the portal is fully translated
 
 The web portal ships in English and Spanish. Both are first-class: a Spanish-speaking admin sets
@@ -155,12 +181,13 @@ The `dev`→`main` PR is the first independent technical review of the combined 
 1. Exact base/head SHAs and current diff/file counts.
 2. Technical implementation summary by subsystem.
 3. Tests, benchmark evidence and migration/manual-script proof.
-4. Explicit database, fresh-install schema and installer-config effects.
-5. **Portal translation state** — either "no portal changes" or the result of the two commands in
+4. **Evidence that every new external call exists**: for each one, the `$metadata` element or Microsoft Learn reference that names it, or "no new external calls" (see *Verify every new external call exists*).
+5. Explicit database, fresh-install schema and installer-config effects.
+6. **Portal translation state** — either "no portal changes" or the result of the two commands in
    *Verify the portal is fully translated*, with the number of catalog keys added per language and
    an explicit note on any `allowList.ts` addition and why it is language-neutral.
-6. Risks, hand-resolved merge areas, deferred work and reviewer hotspots.
-7. Issues addressed by the release.
+7. Risks, hand-resolved merge areas, deferred work and reviewer hotspots.
+8. Issues addressed by the release.
 
 Tone: concise but technically deep. Assume the reader knows the codebase and is reviewing correctness, not operating the product.
 
@@ -178,6 +205,8 @@ Follow `.github/copilot-instructions.md` → *Releases*:
 6. Footer listing resolved issues and the previous build number.
 
 Tone: assume Azure/M365 admin fluency; assume no knowledge of this codebase. Explain misleading symptoms and operational consequences in plain English.
+
+**Describe only symptoms that were observed or reproduced.** If a fix comes only from reading code or from tests, say so. Don't promise admins that data will appear unless an end-to-end run has shown it. Stable builds 1833 and 1843 described import-log values and promised Cowork rows for an import that had never received a single row (#692).
 
 The auto-generated "What's Changed" list is not acceptable as final notes. Prepare the admin notes before merge if useful, but apply them to the actual stable GitHub release after the Release build creates it.
 

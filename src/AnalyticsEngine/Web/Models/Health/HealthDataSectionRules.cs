@@ -80,10 +80,15 @@ namespace Web.AnalyticsWeb.Models.Health
         /// <summary>
         /// Folds the latest import of each Copilot usage report into the section: the newest import time,
         /// whether the tenant conceals user identities, and any per-report errors.
+        ///
+        /// <para>Rows for a <see cref="CopilotUsageReportNames.Retired"/> report are skipped. This build never
+        /// imports those reports, so their latest row is frozen: the Cowork one (#692) carries the error or
+        /// "Report not available" note of the last attempt, which would otherwise keep this section degraded
+        /// for good.</para>
         /// </summary>
         private static void ApplyCopilotImports(DataOverviewSection section, IReadOnlyList<CopilotUsageReportImportRow> imports)
         {
-            foreach (var import in imports.Where(i => i != null))
+            foreach (var import in imports.Where(i => i != null && !CopilotUsageReportNames.Retired.Contains(i.ReportName)))
             {
                 if (!section.CopilotUsageReportLastImportUtc.HasValue
                     || import.ImportedUtc > section.CopilotUsageReportLastImportUtc.Value)

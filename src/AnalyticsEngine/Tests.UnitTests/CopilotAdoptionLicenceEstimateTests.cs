@@ -186,7 +186,6 @@ namespace Tests.UnitTests
         public void Estimate_OwnsTheCopilotMinutes_AndNothingOfCoworks()
         {
             var options = Options().Clone();
-            options.CoworkMinutesSavedPerTask = 240;
             options.CoworkSendEmailShare = 1;
             options.CoworkSendEmailMinutes = 240;
             options.CoworkOrganiseMeetingsShare = 1;

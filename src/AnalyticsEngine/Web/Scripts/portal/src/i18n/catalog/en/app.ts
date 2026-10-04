@@ -1,4 +1,4 @@
-/**
+﻿/**
  * English text for the application shell: the brand bar, the area switcher, the left navigation
  * and the language picker.
  *
@@ -47,6 +47,7 @@ export const app = {
   'app.route.userOrgs': 'User organisations',
   'app.route.userImport': 'User import',
   'app.route.userScope': 'User scope',
+  'app.route.globalFilter': 'Report filter',
   'app.route.copilotAuditBackfill': 'Copilot audit backfill',
   'app.route.configuration': 'Service configuration',
 } as const;

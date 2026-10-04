@@ -264,6 +264,10 @@
     <Compile Include="Controllers\UserDataLookupAPIController.cs" />
     <Compile Include="Controllers\UserOrgAPIController.cs" />
     <Compile Include="Controllers\UserFilterAPIController.cs" />
+    <Compile Include="Controllers\GlobalFilterAPIController.cs" />
+    <Compile Include="Models\UserFilters\GlobalFilterApiModels.cs" />
+    <Compile Include="Models\UserFilters\GlobalFilterProvider.cs" />
+    <Compile Include="Models\UserFilters\ReportScopeResolver.cs" />
     <Compile Include="Models\UserFilters\UserDirectorySource.cs" />
     <Compile Include="Models\UserOrgs\UserOrgApiModels.cs" />
     <Compile Include="Models\UserOrgs\UserOrgAdminService.cs" />

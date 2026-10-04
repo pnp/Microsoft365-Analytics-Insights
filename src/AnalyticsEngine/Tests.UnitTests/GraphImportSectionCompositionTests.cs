@@ -221,26 +221,23 @@ namespace Tests.UnitTests
             var trendRuns = 0;
             var summaryRuns = 0;
             var userDetailRuns = 0;
-            var coworkRuns = 0;
 
             var reports = new[]
             {
                 new ProductionGraphImportSectionFactory.CopilotUsageReportCadenceRunner.Report("Copilot user-count trend", "copilot-trend", () => { trendRuns++; return Task.FromResult(true); }),
-                new ProductionGraphImportSectionFactory.CopilotUsageReportCadenceRunner.Report("Copilot user-count summary", "copilot-summary", () => { summaryRuns++; return Task.FromResult(true); }),
+                new ProductionGraphImportSectionFactory.CopilotUsageReportCadenceRunner.Report("Copilot user-count summary", "copilot-summary", () => { summaryRuns++; return Task.FromResult(false); }),
                 new ProductionGraphImportSectionFactory.CopilotUsageReportCadenceRunner.Report("Copilot per-user usage detail", "copilot-user-detail", () => { userDetailRuns++; return Task.FromResult(true); }),
-                new ProductionGraphImportSectionFactory.CopilotUsageReportCadenceRunner.Report("Cowork per-user usage detail", "copilot-cowork", () => { coworkRuns++; return Task.FromResult(false); }),
             };
 
             Assert.IsFalse(await runner.RunAsync(reports),
-                "The section must still report failure so the failed Cowork report can retry next cycle.");
+                "The section must still report failure so the failed report can retry next cycle.");
             Assert.IsFalse(await runner.RunAsync(reports),
                 "The second cycle should retry only the failed report while the successful reports remain gated.");
 
             Assert.AreEqual(1, trendRuns, "The successful aggregate trend report must not be re-downloaded before its interval.");
-            Assert.AreEqual(1, summaryRuns, "The successful aggregate summary report must not be re-downloaded before its interval.");
+            Assert.AreEqual(2, summaryRuns, "The failed report remains eligible to retry.");
             Assert.AreEqual(1, userDetailRuns, "The expensive per-user detail report must not be re-downloaded before its interval.");
-            Assert.AreEqual(2, coworkRuns, "The failed optional Cowork report remains eligible to retry.");
-            CollectionAssert.AreEquivalent(new[] { "copilot-trend", "copilot-summary", "copilot-user-detail" },
+            CollectionAssert.AreEquivalent(new[] { "copilot-trend", "copilot-user-detail" },
                 store.Writes.Select(w => w.Key).ToArray(),
                 "Only reports that succeeded should get per-report cadence stamps.");
         }
@@ -262,12 +259,11 @@ namespace Tests.UnitTests
                 new ProductionGraphImportSectionFactory.CopilotUsageReportCadenceRunner.Report("Copilot user-count trend", "copilot-trend", () => Task.FromResult(true)),
                 new ProductionGraphImportSectionFactory.CopilotUsageReportCadenceRunner.Report("Copilot user-count summary", "copilot-summary", () => Task.FromResult(true)),
                 new ProductionGraphImportSectionFactory.CopilotUsageReportCadenceRunner.Report("Copilot per-user usage detail", "copilot-user-detail", () => Task.FromResult(true)),
-                new ProductionGraphImportSectionFactory.CopilotUsageReportCadenceRunner.Report("Cowork per-user usage detail", "copilot-cowork", () => Task.FromResult(true)),
             };
 
             Assert.IsTrue(await runner.RunAsync(reports),
-                "When Cowork maps an unavailable report to success, the Copilot section can be stamped by the outer gate.");
-            CollectionAssert.AreEquivalent(new[] { "copilot-trend", "copilot-summary", "copilot-user-detail", "copilot-cowork" },
+                "When every report succeeds, the Copilot section can be stamped by the outer gate.");
+            CollectionAssert.AreEquivalent(new[] { "copilot-trend", "copilot-summary", "copilot-user-detail" },
                 store.Writes.Select(w => w.Key).ToArray(),
                 "Every successful report should get its own cadence stamp.");
         }

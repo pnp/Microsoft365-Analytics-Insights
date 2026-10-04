@@ -374,10 +374,6 @@ namespace Common.Entities.CopilotAdoption
         [JsonProperty("copilotUsageReportAvailable")]
         public bool CopilotUsageReportAvailable { get; set; }
 
-        /// <summary>The first-party Cowork usage report has been imported.</summary>
-        [JsonProperty("coworkUsageReportAvailable")]
-        public bool CoworkUsageReportAvailable { get; set; }
-
         /// <summary>The Microsoft 365 workload usage reports (Teams/Outlook/SharePoint/OneDrive) have data.</summary>
         [JsonProperty("m365UsageReportsAvailable")]
         public bool M365UsageReportsAvailable { get; set; }
@@ -397,12 +393,6 @@ namespace Common.Entities.CopilotAdoption
         /// </summary>
         [JsonProperty("copilotUsageReportPeriodDays")]
         public int CopilotUsageReportPeriodDays { get; set; }
-
-        [JsonProperty("coworkUsageReportDate")]
-        public DateTime? CoworkUsageReportDate { get; set; }
-
-        [JsonProperty("coworkUsageReportPeriodDays")]
-        public int CoworkUsageReportPeriodDays { get; set; }
 
         /// <summary>
         /// The last daily Microsoft 365 usage report available. It bounds the period the workload
@@ -650,7 +640,15 @@ namespace Common.Entities.CopilotAdoption
 
         #region Cowork
 
-        /// <summary>Licensed users who used Microsoft 365 Copilot Cowork inside the window.</summary>
+        // Every Cowork figure here comes from the Copilot audit log, and counts interactions, never tasks.
+        // Microsoft reports Cowork tasks in its Cowork usage report, which it publishes in the Microsoft 365
+        // admin centre (Copilot > Cowork > Usage) and not through Microsoft Graph; this product does not
+        // import it (#692).
+
+        /// <summary>
+        /// Licensed users with at least one Cowork interaction in the Copilot audit log inside the window.
+        /// The same people as <see cref="CoworkAuditUsers"/>.
+        /// </summary>
         [JsonProperty("coworkUsers")]
         public int CoworkUsers { get; set; }
 
@@ -663,35 +661,13 @@ namespace Common.Entities.CopilotAdoption
         [JsonProperty("coworkEligibleUsers")]
         public int? CoworkEligibleUsers { get; set; }
 
+        /// <summary>Licensed users with at least one Cowork interaction in the Copilot audit log.</summary>
         [JsonProperty("coworkAuditUsers")]
         public int CoworkAuditUsers { get; set; }
 
+        /// <summary>Cowork interactions by licensed users in the window, from the Copilot audit log.</summary>
         [JsonProperty("coworkInteractions")]
         public long CoworkInteractions { get; set; }
-
-        [JsonProperty("coworkReportUsers")]
-        public int CoworkReportUsers { get; set; }
-
-        [JsonProperty("coworkReportTotalTasks")]
-        public int CoworkReportTotalTasks { get; set; }
-
-        [JsonProperty("coworkReportScheduledTasks")]
-        public int CoworkReportScheduledTasks { get; set; }
-
-        [JsonProperty("coworkReportUserInitiatedTasks")]
-        public int CoworkReportUserInitiatedTasks { get; set; }
-
-        [JsonProperty("coworkAutomationRatioPct")]
-        public double? CoworkAutomationRatioPct { get; set; }
-
-        [JsonProperty("coworkTasksPerActiveUser")]
-        public double? CoworkTasksPerActiveUser { get; set; }
-
-        [JsonProperty("coworkReportRetainedUsers")]
-        public int? CoworkReportRetainedUsers { get; set; }
-
-        [JsonProperty("coworkReportRetentionPct")]
-        public double? CoworkReportRetentionPct { get; set; }
 
         /// <summary>
         /// False when nothing in the data identifies Cowork at all - which on a tenant that has not
@@ -782,11 +758,10 @@ namespace Common.Entities.CopilotAdoption
         /// </summary>
         /// <remarks>
         /// Published next to <see cref="CoworkValueEstimate"/> so the page can say both "where to start"
-        /// and "how far it goes". Built from the same rows, options and task rate, so the recommended
-        /// cohort can never model more time than the population it is drawn from. It overstates rather
-        /// than understates: it projects the tenant's Cowork users' average onto people who are not ready
-        /// for Cowork yet, and those people would likely run fewer tasks. It is every bit as modelled as
-        /// its sibling and carries the same assumptions.
+        /// and "how far it goes". Built from the same rows and options, so the recommended cohort can never
+        /// model more time than the population it is drawn from. It overstates rather than understates: it
+        /// applies the same shares to people who are not ready for Cowork yet, and those people would
+        /// likely hand it less. It is every bit as modelled as its sibling and carries the same assumptions.
         /// </remarks>
         [JsonProperty("coworkFullRolloutEstimate")]
         public CoworkValueEstimate CoworkFullRolloutEstimate { get; set; } = new CoworkValueEstimate();
@@ -839,6 +814,14 @@ namespace Common.Entities.CopilotAdoption
         /// </remarks>
         [JsonProperty("licenceAllCandidatesEstimate")]
         public LicenceValueEstimate LicenceAllCandidatesEstimate { get; set; } = new LicenceValueEstimate();
+
+        /// <summary>
+        /// Modelled hours Microsoft 365 Copilot has already given back to people who hold a Copilot seat.
+        /// Aggregate only: tenant, engagement band and departments above the privacy floor. Never money,
+        /// never a per-person hours figure, and never added to the licence or Cowork estimates.
+        /// </summary>
+        [JsonProperty("seatHolderTimeSavedEstimate")]
+        public SeatHolderTimeSavedEstimate SeatHolderTimeSavedEstimate { get; set; } = new SeatHolderTimeSavedEstimate();
 
         #endregion
 
@@ -926,6 +909,18 @@ namespace Common.Entities.CopilotAdoption
         /// </summary>
         [JsonIgnore]
         public string UserFilterDescription { get; set; }
+
+        /// <summary>
+        /// The administrator's global filter this whole summary was ALSO narrowed by, resolved for the
+        /// reader, or <c>null</c> when none applied. Echoed apart from <see cref="UserFilter"/> because the
+        /// page shows it apart - locked, where the reader's own conditions can be edited.
+        /// </summary>
+        [JsonProperty("globalFilter")]
+        public GlobalFilterEcho GlobalFilter { get; set; }
+
+        /// <summary>The applied global filter in plain English, for the Excel workbook's cover sheet. Not sent to the browser.</summary>
+        [JsonIgnore]
+        public string GlobalFilterDescription { get; set; }
 
         /// <summary>
         /// The tenant-wide Copilot seat count, set only when this summary is narrowed, so a page can say
@@ -1208,7 +1203,6 @@ namespace Common.Entities.CopilotAdoption
         public const string LicenceCandidatesAuditOnly = "licenceCandidatesAuditOnly";
         public const string CoworkReadinessNoSources = "coworkReadinessNoSources";
         public const string CoworkM365UsageMissing = "coworkM365UsageMissing";
-        public const string CoworkUsageReportMissing = "coworkUsageReportMissing";
         public const string CoworkAuditMissing = "coworkAuditMissing";
         public const string UsageReportSourcedUsers = "usageReportSourcedUsers";
         public const string UsageReportWindowMismatch = "usageReportWindowMismatch";
@@ -1241,10 +1235,9 @@ namespace Common.Entities.CopilotAdoption
             { CopilotAdoptionWarningKeys.ScopedLicensedUsersNotAnalysed, "The analysis covers only the first {maxUsers} of this tenant's Copilot licence holders, and this view selects licence holders beyond that limit ({count} of them), so every figure below leaves them out. The limit follows internal user id, so it is the newest user records that are missed, and a filtered view can be made up largely or entirely of them. Treat these figures as a partial count of this view, not as its total." },
             { CopilotAdoptionWarningKeys.LicenceOpportunitiesNoSources, "Licence opportunities need either the Copilot audit import or the Microsoft 365 usage reports. Neither has data, so no candidates can be identified." },
             { CopilotAdoptionWarningKeys.LicenceCandidatesAuditOnly, "The Microsoft 365 usage reports are not available, so licence candidates are ranked only on unlicensed Copilot Chat use. Heavy Microsoft 365 users who have never tried Copilot will not appear." },
-            { CopilotAdoptionWarningKeys.CoworkReadinessNoSources, "Cowork readiness needs the Cowork usage report, the Copilot audit import or the Microsoft 365 usage reports. None has data for this period, so no readiness assessment is possible." },
+            { CopilotAdoptionWarningKeys.CoworkReadinessNoSources, "Cowork readiness needs the Copilot audit import or the Microsoft 365 usage reports. Neither has data for this period, so no readiness assessment is possible." },
             { CopilotAdoptionWarningKeys.CoworkM365UsageMissing, "The Microsoft 365 usage reports are not available, so coordination load cannot be measured. Everyone will score zero on that axis and no one will be identified as a Cowork candidate. Enable the Microsoft 365 usage report import to use this tab." },
-            { CopilotAdoptionWarningKeys.CoworkUsageReportMissing, "The first-party Cowork usage report is not available, so Cowork task counts, automation ratio and retention cannot be measured. Audit-derived Cowork interactions are retained only as a reconciliation signal." },
-            { CopilotAdoptionWarningKeys.CoworkAuditMissing, "The Copilot audit import has no data for this period, so Cowork audit interactions cannot be reconciled against Microsoft's Cowork task report." },
+            { CopilotAdoptionWarningKeys.CoworkAuditMissing, "The Copilot audit import has no data for this period. Cowork interactions come only from the Copilot audit log, so nobody can be shown as already using Cowork, and everyone is assessed on coordination load and Copilot fluency alone." },
             { CopilotAdoptionWarningKeys.UsageReportSourcedUsers, "{count} licensed user{userPlural} ({percentage}%) were scored from Microsoft's Copilot usage report because the audit import had no per-user signal for them. Their Microsoft prompt counts are not added to audit interaction totals, concentration, intensity or licensed/unlicensed interaction comparisons." },
             { CopilotAdoptionWarningKeys.UsageReportWindowMismatch, "Microsoft's pinned Copilot usage-report period is D{reportDays}, but this analysis window is D{analysisDays}. Report-sourced rows are kept in the adoption population so active people are not marked as never used, but a report-sourced row that would otherwise be a PROBABLE reclaim is excluded from reclaimable-seat totals rather than normalising prompt counts across unlike windows. Certain (disabled-account) seats are never held back this way, because a disabled account is not an inference from an absence of use. The band breakdown therefore counts more idle seats than the reclaim figure does; the difference is reported as \"held back for window mismatch\"." },
             { CopilotAdoptionWarningKeys.CoworkEligibilityUnknown, "Cowork adoption percentage is suppressed because Cowork eligibility is controlled by spending-policy scope and this import does not know that denominator. The deprecated Cowork agent entry is not used as an eligibility source." },

@@ -105,6 +105,19 @@ namespace Web.AnalyticsWeb.Controllers
         /// </remarks>
         private const string AnyAppSentinel = "(Any app)";
 
+        // Scope markers for this area (see AuditUserScope in the main file). Deliberately bare predicates -
+        // no parentheses, no FROM - because the area's contract tests read the CTE structure of these
+        // queries, and a marker must not look like part of it.
+        private const string PlatformActivityScope = "/*scope: AND a.user_id IN {scopeUsers}*/";
+        private const string CopilotReportScope = "/*scope: AND r.user_id IN {scopeUsers}*/";
+
+        /// <summary>
+        /// Narrows the department-adoption denominator - everyone in <c>dbo.users</c> - to the people in
+        /// scope, so the rate divides in-scope active people by in-scope people. A whole WHERE clause,
+        /// because that statement has none.
+        /// </summary>
+        private const string DirectoryWhereScope = "/*scope:    WHERE u.id IN {scopeUsers}\r\n*/";
+
         /// <summary>
         /// How many of this area's queries may be in flight at once, across all callers.
         /// </summary>
@@ -574,7 +587,7 @@ namespace Web.AnalyticsWeb.Controllers
                 "    SELECT a.user_id,\r\n" +
                 CollapseProjections(columns, "a") + "\r\n" +
                 "    FROM dbo.platform_user_activity_log AS a\r\n" +
-                "    WHERE a.[date] >= @from\r\n" +
+                "    WHERE a.[date] >= @from" + PlatformActivityScope + "\r\n" +
                 "    GROUP BY a.user_id\r\n" +
                 ")\r\n";
         }
@@ -620,7 +633,7 @@ namespace Web.AnalyticsWeb.Controllers
                 $"    SELECT a.user_id, {week} AS WeekStart,\r\n" +
                 CollapseProjections(columns, "a") + "\r\n" +
                 "    FROM dbo.platform_user_activity_log AS a\r\n" +
-                "    WHERE a.[date] >= @from\r\n" +
+                "    WHERE a.[date] >= @from" + PlatformActivityScope + "\r\n" +
                 $"    GROUP BY a.user_id, {week}\r\n" +
                 ")\r\n";
         }
@@ -676,7 +689,7 @@ namespace Web.AnalyticsWeb.Controllers
                 "    SELECT a.user_id,\r\n" +
                 $"           {sums} AS AppCount\r\n" +
                 "    FROM dbo.platform_user_activity_log AS a\r\n" +
-                "    WHERE a.[date] >= @from\r\n" +
+                "    WHERE a.[date] >= @from" + PlatformActivityScope + "\r\n" +
                 "    GROUP BY a.user_id\r\n" +
                 ")\r\n" +
                 "SELECT CAST(AppCount AS varchar(2))\r\n" +
@@ -742,7 +755,7 @@ namespace Web.AnalyticsWeb.Controllers
                 "    SELECT a.user_id,\r\n" +
                 CollapseProjections(AppColumns(), "a") + "\r\n" +
                 "    FROM dbo.platform_user_activity_log AS a\r\n" +
-                "    WHERE a.[date] >= @from\r\n" +
+                "    WHERE a.[date] >= @from" + PlatformActivityScope + "\r\n" +
                 "    GROUP BY a.user_id\r\n" +
                 "),\r\n" +
                 "PerUserDimension AS (\r\n" +
@@ -828,7 +841,7 @@ namespace Web.AnalyticsWeb.Controllers
                 "WITH ActiveUsers AS (\r\n" +
                 "    SELECT DISTINCT a.user_id\r\n" +
                 "    FROM dbo.platform_user_activity_log AS a\r\n" +
-                "    WHERE a.[date] >= @from\r\n" +
+                "    WHERE a.[date] >= @from" + PlatformActivityScope + "\r\n" +
                 $"      AND ({anyApp})\r\n" +
                 "),\r\n" +
                 "ByDepartment AS (\r\n" +
@@ -838,6 +851,7 @@ namespace Web.AnalyticsWeb.Controllers
                 "    FROM dbo.users AS u\r\n" +
                 "    LEFT JOIN dbo.user_departments AS dep ON dep.id = u.department_id\r\n" +
                 "    LEFT JOIN ActiveUsers AS act ON act.user_id = u.id\r\n" +
+                DirectoryWhereScope +
                 $"    GROUP BY ISNULL(dep.[name], N'{NoDepartmentLabel}')\r\n" +
                 ")\r\n" +
                 $"SELECT TOP ({AdoptionRankLimit}) DepartmentName AS Label,\r\n" +
@@ -928,7 +942,7 @@ namespace Web.AnalyticsWeb.Controllers
                 "    SELECT r.user_id,\r\n" +
                 copilotCollapse + "\r\n" +
                 "    FROM dbo.copilot_usage_user_activity_log AS r\r\n" +
-                "    WHERE r.[date] >= @from\r\n" +
+                "    WHERE r.[date] >= @from" + CopilotReportScope + "\r\n" +
                 "    GROUP BY r.user_id\r\n" +
                 "),\r\n" +
                 "CopilotUsers AS (\r\n" +
@@ -967,7 +981,7 @@ namespace Web.AnalyticsWeb.Controllers
             {
                 db.Database.CommandTimeout = QueryTimeoutSecs;
                 return await db.Database
-                    .SqlQuery<NamedWeekValueRow>(body, new SqlParameter("@from", from))
+                    .SqlQuery<NamedWeekValueRow>(Scoped(body), ScopedParameters(new SqlParameter("@from", from)))
                     .ToListAsync();
             }
         }
@@ -1002,7 +1016,7 @@ namespace Web.AnalyticsWeb.Controllers
                 {
                     db.Database.CommandTimeout = QueryTimeoutSecs;
                     result = await db.Database
-                        .SqlQuery<MatrixRow>(body, new SqlParameter("@from", from))
+                        .SqlQuery<MatrixRow>(Scoped(body), ScopedParameters(new SqlParameter("@from", from)))
                         .ToListAsync();
                 }
 

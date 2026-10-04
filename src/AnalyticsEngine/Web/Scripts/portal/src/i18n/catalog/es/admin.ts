@@ -18,7 +18,7 @@ const admin: Record<keyof typeof en, string> = {
   // Relleno de auditoría de Copilot.
   'admin.copilotAuditBackfill.cancel': 'Cancelar',
   'admin.copilotAuditBackfill.copilotOff': 'La importación de auditoría de Copilot está desactivada. Active la importación de Copilot antes de iniciar un relleno.',
-  'admin.copilotAuditBackfill.description': 'Rellene los registros de auditoría de interacciones de Microsoft 365 Copilot desde Microsoft Graph Audit Search para la ventana retenida. El importador avanza unos pocos segmentos por ciclo para no retrasar la importación de auditoría en directo.',
+  'admin.copilotAuditBackfill.description': 'Úselo solo cuando la importación normal de auditoría no pueda alcanzar interacciones antiguas de Copilot, como en una instalación nueva, un importador detenido o la activación posterior de la importación de Copilot. La importación en directo continúa en cada ciclo; este relleno bajo demanda completa el historial retenido de Audit Search y deduplica cualquier solapamiento.',
   'admin.copilotAuditBackfill.error.cancel': 'No se pudo cancelar el relleno.',
   'admin.copilotAuditBackfill.error.copilotImportOff': 'La importación de auditoría de Copilot está desactivada.',
   'admin.copilotAuditBackfill.error.load': 'No se pudo cargar el estado del relleno de auditoría de Copilot.',

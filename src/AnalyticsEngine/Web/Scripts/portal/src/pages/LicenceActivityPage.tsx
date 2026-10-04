@@ -46,6 +46,7 @@ import {
 } from '../components/licenceActivity/demographicOptions';
 import { usePortalAccess } from '../access';
 import PiiHiddenNote from '../components/shared/PiiHiddenNote';
+import GlobalFilterBar from '../components/globalFilter/GlobalFilterBar';
 
 const useStyles = makeStyles({
   header: {
@@ -348,6 +349,8 @@ export default function LicenceActivityPage() {
           <Text role="note" block size={200} className={styles.previewNote}>{t('licenceActivity.page.previewNote')}</Text>
         </div>
       </div>
+
+      <GlobalFilterBar />
 
       {availabilityLoading && (
         <div className={styles.center}>
