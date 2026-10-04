@@ -385,6 +385,25 @@ VALUES (@p0, @p1, @operationId, @userId);",
         }
 
         [TestMethod]
+        public async Task Importer_SubmitOutagePausesAndDoesNotCompleteWithPendingSlices()
+        {
+            var now = new DateTime(2026, 10, 2, 12, 0, 0, DateTimeKind.Utc);
+            var state = await NewStateWithJobAsync(days: 3);
+            var source = new FakeAuditSearchSource { SubmitFailure = new HttpRequestException("503") };
+            var importer = new CopilotAuditBackfillImporter(state, source, new CountingPersistence(),
+                new AppConfig { ImportJobSettings = new ImportTaskSettings { Copilot = true } }, NullLogger.Instance,
+                () => now, _ => Task.CompletedTask, new FakeExistingEventFilter());
+
+            var job = await importer.AdvanceLatestAsync();
+
+            Assert.AreEqual(CopilotAuditBackfillStates.Running, job.State);
+            Assert.AreEqual(1, source.SubmitCount);
+            Assert.AreEqual(3, job.PendingSlices.Count);
+            Assert.AreEqual(1, job.PendingSlices.Last().AttemptCount);
+            Assert.AreEqual(now.AddMinutes(5), job.SubmissionsPausedUntilUtc);
+        }
+
+        [TestMethod]
         public async Task Importer_SubmissionBudgetPausesAtOneHundredPerRollingDay()
         {
             var now = new DateTime(2026, 10, 2, 12, 0, 0, DateTimeKind.Utc);

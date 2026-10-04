@@ -78,6 +78,7 @@ namespace Common.Entities.CopilotAuditBackfill
         public List<CopilotAuditBackfillGap> Gaps { get; set; } = new List<CopilotAuditBackfillGap>();
         public List<DateTime> SubmissionTimestampsUtc { get; set; } = new List<DateTime>();
         public DateTime? SubmissionsPausedUntilUtc { get; set; }
+        public int SubmitFailureBackoffMinutes { get; set; }
         public Dictionary<string, long> MappingFailureCounts { get; set; } = new Dictionary<string, long>(StringComparer.Ordinal);
         public long RecordsSeen { get; set; }
         public long RecordsImported { get; set; }

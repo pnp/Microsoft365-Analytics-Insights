@@ -88,6 +88,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.AuditBackfill
         internal static readonly TimeSpan MinimumThrottlePause = TimeSpan.FromMinutes(15);
         internal static readonly TimeSpan SubmissionBudgetWindow = TimeSpan.FromHours(24);
         internal static readonly TimeSpan MaxUnknownStatusAge = TimeSpan.FromHours(24);
+        private const int InitialSubmitFailureBackoffMinutes = 5;
+        private const int MaxSubmitFailureBackoffMinutes = 60;
         internal static readonly TimeSpan TerminalDegradedHealthWindow = TimeSpan.FromDays(7);
 
         private readonly CopilotAuditBackfillStateStore _state;
@@ -174,9 +176,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.AuditBackfill
                     await TopUpQueriesAsync(job).ConfigureAwait(false);
                     if (job.InFlightSlices.Count == 0)
                     {
-                        if (job.PendingSlices.Count > 0
-                            && job.SubmissionsPausedUntilUtc.HasValue
-                            && job.SubmissionsPausedUntilUtc.Value > _utcNow())
+                        if (job.PendingSlices.Count > 0)
                         {
                             await _state.SaveAsync(job).ConfigureAwait(false);
                             TrackHealth(job);
@@ -270,6 +270,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.AuditBackfill
                 try
                 {
                     await SubmitSliceAsync(job, slice, now).ConfigureAwait(false);
+                    job.SubmitFailureBackoffMinutes = 0;
                     job.InFlightSlices.Add(slice);
                 }
                 catch (CopilotAuditSearchThrottledException ex)
@@ -294,6 +295,11 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.AuditBackfill
                 catch (Exception ex)
                 {
                     RetryOrGap(job, slice, CopilotAuditBackfillErrorCodes.QueryFailed, ex.Message, resubmitLater: true);
+                    var minutes = job.SubmitFailureBackoffMinutes <= 0
+                        ? InitialSubmitFailureBackoffMinutes
+                        : Math.Min(MaxSubmitFailureBackoffMinutes, job.SubmitFailureBackoffMinutes * 2);
+                    job.SubmitFailureBackoffMinutes = minutes;
+                    job.SubmissionsPausedUntilUtc = now.AddMinutes(minutes);
                     return;
                 }
             }
