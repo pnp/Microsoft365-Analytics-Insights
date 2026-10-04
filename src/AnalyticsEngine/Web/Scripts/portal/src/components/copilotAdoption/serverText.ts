@@ -177,6 +177,7 @@ export const INCOMPLETE_DATASET_KEYS: readonly TranslationKey[] = [
   'copilotAdoption.server.dataset.licenceHistoryAvailability',
   'copilotAdoption.server.dataset.copilotLicenceAssignments',
   'copilotAdoption.server.dataset.licensedUserDetail',
+  'copilotAdoption.server.dataset.seatHolderTimeSavedInputs',
   'copilotAdoption.server.dataset.weeklyCopilotAuditCoverage',
   'copilotAdoption.server.dataset.unlicensedCopilotUsers',
   'copilotAdoption.server.dataset.licenceOpportunities',

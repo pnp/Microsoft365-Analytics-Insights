@@ -144,13 +144,10 @@ function summary(overrides: Partial<CopilotAdoptionSummary> = {}): CopilotAdopti
     dataSources: {
       auditAvailable: true,
       copilotUsageReportAvailable: true,
-      coworkUsageReportAvailable: true,
       m365UsageReportsAvailable: true,
       userMetadataAvailable: true,
       copilotUsageReportDate: '2026-01-01T00:00:00Z',
       copilotUsageReportPeriodDays: 28,
-      coworkUsageReportDate: '2026-01-01T00:00:00Z',
-      coworkUsageReportPeriodDays: 28,
       m365UsageReportDate: '2026-01-01T00:00:00Z',
       copilotUsageReportObfuscated: false,
     },
@@ -283,9 +280,9 @@ beforeEach(() => {
   vi.mocked(fetchLicensedUsers).mockResolvedValue({ total: 0, skip: 0, take: 50, rows: [], warnings: [] });
 });
 
-async function renderPage() {
-  renderWithProvider(<CopilotAdoptionPage />);
-  await screen.findByRole('tab', { name: 'Executive view', selected: true });
+async function renderPage(options?: Parameters<typeof renderWithProvider>[1]) {
+  renderWithProvider(<CopilotAdoptionPage />, options);
+  await screen.findByRole('tab', { name: options?.language === 'es' ? 'Vista ejecutiva' : 'Executive view', selected: true });
 }
 
 describe('CopilotAdoptionPage custom ranges', () => {
@@ -1191,6 +1188,33 @@ describe('CopilotAdoptionPage modelled time saved', () => {
 
     expect(await screen.findByText(/100 Outlook at 12 min/)).toBeVisible();
     expect(screen.getByText('14\u201327 h')).toBeVisible();
+    const finance = screen.getByText('Finance').closest('tr') as HTMLElement;
+    expect(within(finance).getByText('27')).toBeVisible();
+  });
+
+  it('translates the no-department placeholder in the realised-value table', async () => {
+    vi.mocked(fetchAdoptionSummary).mockResolvedValue(withEstimate({
+      seatHolderTimeSavedEstimate: {
+        ...seatHolderEstimate,
+        byDepartment: [{ ...seatHolderEstimate.byDepartment[0], segment: '(no department)' }],
+      },
+    }));
+
+    await renderPage({ language: 'es' });
+    fireEvent.click(screen.getByRole('tab', { name: 'Usuarios con licencia' }));
+
+    expect(await screen.findByText('(sin departamento)')).toBeVisible();
+    expect(screen.queryByText('(no department)')).toBeNull();
+  });
+
+  it('does not offer to open the hidden Licensed users tab without See PII', async () => {
+    vi.mocked(fetchAdoptionSummary).mockResolvedValue(withEstimate());
+
+    await renderPage({ access: { administration: false, seePii: false } });
+
+    const tileCard = await tile('Time already saved by seat holders');
+    expect(within(tileCard).getByText('9\u201317 h')).toBeVisible();
+    expect(within(tileCard).queryByText('Review on Licensed users')).toBeNull();
   });
 
   it('has Spanish text for the realised seat-holder estimate', async () => {
