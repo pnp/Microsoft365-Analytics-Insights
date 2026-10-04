@@ -188,6 +188,13 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.AuditBackfill
                     }
 
                     var progressed = await PollInFlightAsync(job, () => elapsed() >= MaxCycleBudget).ConfigureAwait(false);
+                    if (job.InFlightSlices.Count == 0 && job.PendingSlices.Count > 0)
+                    {
+                        await _state.SaveAsync(job).ConfigureAwait(false);
+                        TrackHealth(job);
+                        return job;
+                    }
+
                     await _state.SaveAsync(job).ConfigureAwait(false);
                     TrackHealth(job);
 
@@ -274,9 +281,6 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.AuditBackfill
                 try
                 {
                     await SubmitSliceAsync(job, slice, now).ConfigureAwait(false);
-                    job.SubmitFailureBackoffMinutes = 0;
-                    await SaveLedgerAsync(job).ConfigureAwait(false);
-                    job.InFlightSlices.Add(slice);
                 }
                 catch (CopilotAuditSearchThrottledException ex)
                 {
@@ -309,6 +313,10 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.AuditBackfill
                     await SaveLedgerAsync(job).ConfigureAwait(false);
                     return;
                 }
+
+                job.SubmitFailureBackoffMinutes = 0;
+                job.InFlightSlices.Add(slice);
+                await SaveLedgerAsync(job).ConfigureAwait(false);
             }
         }
 
@@ -358,8 +366,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.AuditBackfill
                                 && _utcNow().Subtract(slice.SubmittedUtc.Value) >= MaxUnknownStatusAge)
                             {
                                 RetryOrGap(job, slice, CopilotAuditBackfillErrorCodes.QueryFailed, query.Status ?? "unknownFutureValue", resubmitLater: true);
-                                job.SubmissionsPausedUntilUtc = _utcNow().Add(PollDelay);
-                                await SaveLedgerAsync(job).ConfigureAwait(false);
+                                progressed = true;
                                 continue;
                             }
 

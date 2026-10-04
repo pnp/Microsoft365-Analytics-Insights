@@ -3,6 +3,7 @@ import { fireEvent, screen, waitFor } from '@testing-library/react';
 import { renderWithProvider } from '../test/renderWithProvider';
 import CopilotAuditBackfillPage from './CopilotAuditBackfillPage';
 import type { CopilotAuditBackfillJob, CopilotAuditBackfillStatus } from '../types/copilotAuditBackfill';
+import { PortalPermissionError, SessionExpiredError } from '../api/http';
 
 const mockFetch = vi.fn();
 const mockStart = vi.fn();
@@ -125,5 +126,22 @@ describe('CopilotAuditBackfillPage', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Start backfill' }));
 
     expect(await screen.findByText('Backfill state is not durable because Azure Storage is not configured. Configure the Storage connection string before starting a backfill.')).toBeVisible();
+  });
+
+  it('keeps translated session expiry errors from load', async () => {
+    mockFetch.mockRejectedValue(new SessionExpiredError());
+    renderWithProvider(<CopilotAuditBackfillPage />);
+
+    expect(await screen.findByText('Your session has expired. Reload the page to sign in again.')).toBeVisible();
+  });
+
+  it('keeps translated permission errors from cancel', async () => {
+    mockFetch.mockResolvedValue(status({ latestJob: job() }));
+    mockCancel.mockRejectedValue(new PortalPermissionError('administration', 'Portal.Administration'));
+    renderWithProvider(<CopilotAuditBackfillPage />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Cancel' }));
+
+    expect(await screen.findByText('This needs the Administration permission. Ask an Entra ID administrator to assign you the Portal.Administration app role.')).toBeVisible();
   });
 });

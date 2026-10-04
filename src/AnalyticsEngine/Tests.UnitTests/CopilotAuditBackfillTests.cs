@@ -103,7 +103,7 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
-        public async Task Importer_RetriesFailedSliceThenCompletesWithGaps()
+        public async Task Importer_RetriesFailedSliceWithoutCompletingWhileItIsPending()
         {
             var state = await NewStateWithJobAsync();
             var source = new FakeAuditSearchSource { Query = new CopilotAuditSearchQuery { Status = "failed", Error = "syntheticFailure" } };
@@ -111,10 +111,10 @@ namespace Tests.UnitTests
 
             var job = await importer.AdvanceLatestAsync();
 
-            Assert.AreEqual(CopilotAuditBackfillStates.CompletedWithGaps, job.State);
-            Assert.AreEqual(CopilotAuditBackfillImporter.MaxSliceAttempts, source.SubmitCount);
-            Assert.AreEqual(1, job.Gaps.Count);
-            Assert.AreEqual(CopilotAuditBackfillErrorCodes.QueryFailed, job.Gaps[0].ErrorCode);
+            Assert.AreEqual(CopilotAuditBackfillStates.Running, job.State);
+            Assert.AreEqual(1, source.SubmitCount);
+            Assert.AreEqual(1, job.PendingSlices.Count);
+            Assert.AreEqual(CopilotAuditBackfillErrorCodes.QueryFailed, job.LastErrorCode);
         }
 
         [TestMethod]
@@ -413,6 +413,30 @@ VALUES (@p0, N'Word', @userId, @p1);",
         }
 
         [TestMethod]
+        public async Task Importer_LedgerWriteFailureAfterSuccessfulSubmitLeavesSliceInFlight()
+        {
+            var now = new DateTime(2026, 10, 2, 12, 0, 0, DateTimeKind.Utc);
+            var store = new ThrowingLedgerStore();
+            var state = new CopilotAuditBackfillStateStore(store, true, () => now);
+            await state.CreateAsync(now.AddDays(-1), now, "admin@contoso.com");
+            store.ThrowLedgerWrites = true;
+            var source = new FakeAuditSearchSource();
+            var importer = new CopilotAuditBackfillImporter(state, source, new CountingPersistence(),
+                new AppConfig { ImportJobSettings = new ImportTaskSettings { Copilot = true } }, NullLogger.Instance,
+                () => now, _ => Task.CompletedTask, new FakeExistingEventFilter());
+
+            var job = await importer.AdvanceLatestAsync();
+
+            Assert.AreEqual(CopilotAuditBackfillStates.Running, job.State);
+            Assert.AreEqual(1, source.SubmitCount);
+            Assert.AreEqual(1, job.InFlightSlices.Count);
+            Assert.AreEqual("query-1", job.InFlightSlices[0].QueryId);
+            Assert.AreEqual(1, job.InFlightSlices[0].AttemptCount);
+            Assert.AreEqual(1, job.PendingSlices.Count);
+            Assert.AreEqual(0, job.PendingSlices[0].AttemptCount);
+        }
+
+        [TestMethod]
         public async Task Importer_SubmissionBudgetPausesAtOneHundredPerRollingDay()
         {
             var now = new DateTime(2026, 10, 2, 12, 0, 0, DateTimeKind.Utc);
@@ -486,6 +510,31 @@ VALUES (@p0, N'Word', @userId, @p1);",
             Assert.AreEqual(0, job.InFlightSlices.Count);
             Assert.IsTrue(job.PendingSlices.Count == 1 || job.Gaps.Count == 1, "The unknown status must be retried or gapped, not left in flight forever.");
             Assert.AreEqual(CopilotAuditBackfillErrorCodes.QueryFailed, job.LastErrorCode);
+        }
+
+        [TestMethod]
+        public async Task Importer_AgedOutQueryDoesNotShortenLongerSubmissionPause()
+        {
+            var now = new DateTime(2026, 10, 2, 12, 0, 0, DateTimeKind.Utc);
+            var state = new CopilotAuditBackfillStateStore(new InMemoryKeyValueStore(), false, () => now);
+            var job = await state.CreateAsync(now.AddDays(-1), now, "admin@contoso.com");
+            job.State = CopilotAuditBackfillStates.Running;
+            var slice = job.PendingSlices[0];
+            job.PendingSlices.Clear();
+            slice.QueryId = "query-1";
+            slice.SubmittedUtc = now.Subtract(CopilotAuditBackfillImporter.MaxUnknownStatusAge).AddMinutes(-1);
+            job.InFlightSlices.Add(slice);
+            await state.SaveAsync(job);
+            await state.SaveSubmissionLedgerAsync(new CopilotAuditBackfillSubmissionLedger { SubmissionsPausedUntilUtc = now.AddMinutes(15) });
+            var source = new FakeAuditSearchSource { Query = new CopilotAuditSearchQuery { Status = "running" } };
+            var importer = new CopilotAuditBackfillImporter(state, source, new CountingPersistence(),
+                new AppConfig { ImportJobSettings = new ImportTaskSettings { Copilot = true } }, NullLogger.Instance,
+                () => now, _ => Task.CompletedTask, new FakeExistingEventFilter());
+
+            job = await importer.AdvanceLatestAsync();
+            var ledger = await state.GetSubmissionLedgerAsync();
+
+            Assert.AreEqual(now.AddMinutes(15), ledger.SubmissionsPausedUntilUtc);
         }
 
         [TestMethod]
@@ -780,6 +829,24 @@ VALUES (@p0, N'Word', @userId, @p1);",
             public HashSet<Guid> Existing = new HashSet<Guid>();
             public Task<HashSet<Guid>> GetExistingIdsAsync(IEnumerable<Guid> ids)
                 => Task.FromResult(new HashSet<Guid>((ids ?? Enumerable.Empty<Guid>()).Where(id => Existing.Contains(id))));
+        }
+
+        private sealed class ThrowingLedgerStore : IKeyValueStore
+        {
+            private readonly InMemoryKeyValueStore _inner = new InMemoryKeyValueStore();
+            public bool ThrowLedgerWrites;
+            public string Description => _inner.Description;
+            public Task<string> GetStringAsync(string key, System.Threading.CancellationToken cancellationToken = default)
+                => _inner.GetStringAsync(key, cancellationToken);
+            public Task SetStringAsync(string key, string value, TimeSpan? timeToLive = null, System.Threading.CancellationToken cancellationToken = default)
+            {
+                if (ThrowLedgerWrites && key == "SubmissionLedger") throw new InvalidOperationException("ledger unavailable");
+                return _inner.SetStringAsync(key, value, timeToLive, cancellationToken);
+            }
+            public Task<bool> DeleteAsync(string key, System.Threading.CancellationToken cancellationToken = default)
+                => _inner.DeleteAsync(key, cancellationToken);
+            public Task<bool> ExistsAsync(string key, System.Threading.CancellationToken cancellationToken = default)
+                => _inner.ExistsAsync(key, cancellationToken);
         }
 
         private sealed class StaticResponseHandler : HttpMessageHandler

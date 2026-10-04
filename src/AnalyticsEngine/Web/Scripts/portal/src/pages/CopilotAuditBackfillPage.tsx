@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { Badge, Body1, Button, Card, CardHeader, Field, Input, MessageBar, MessageBarBody, ProgressBar, Table, TableBody, TableCell, TableRow, Text, Title3, makeStyles, tokens } from '@fluentui/react-components';
 import { ArrowClockwise16Regular, Dismiss16Regular, Play16Regular } from '@fluentui/react-icons';
 import { cancelCopilotAuditBackfill, fetchCopilotAuditBackfill, startCopilotAuditBackfill } from '../api/copilotAuditBackfillApi';
+import { PortalPermissionError, SessionExpiredError } from '../api/http';
 import Spinner from '../components/Spinner';
 import { formatUtc } from '../components/health/healthShared';
 import { formatNumber, useT, type TranslationKey } from '../i18n';
@@ -73,6 +74,10 @@ export default function CopilotAuditBackfillPage() {
     setError(null);
     try { setStatus(await fetchCopilotAuditBackfill()); }
     catch (e) {
+      if (e instanceof SessionExpiredError || e instanceof PortalPermissionError) {
+        setError(e.message);
+        return;
+      }
       const code = e instanceof Error ? e.message : null;
       setError(code && ERROR_KEYS[code] ? t(ERROR_KEYS[code]) : t('admin.copilotAuditBackfill.error.load'));
     }
@@ -105,6 +110,10 @@ export default function CopilotAuditBackfillPage() {
       const job = await cancelCopilotAuditBackfill(status.latestJob.id);
       setStatus((prev) => prev ? { ...prev, latestJob: job } : prev);
     } catch (e) {
+      if (e instanceof SessionExpiredError || e instanceof PortalPermissionError) {
+        setError(e.message);
+        return;
+      }
       const code = e instanceof Error ? e.message : null;
       setError(code && ERROR_KEYS[code] ? t(ERROR_KEYS[code]) : t('admin.copilotAuditBackfill.error.cancel'));
     }
