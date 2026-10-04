@@ -34,6 +34,9 @@
         /// so the overlapping API lookback window is re-downloaded after every restart/redeploy).</summary>
         BlobCheckpoint,
 
+        /// <summary>On-demand Microsoft Graph Audit Search backfill for Copilot interaction audit records.</summary>
+        CopilotAuditBackfill,
+
         /// <summary>Opt-in diagnostic capture of matching API JSON responses to Azure Blob storage.</summary>
         MessageTracing
     }

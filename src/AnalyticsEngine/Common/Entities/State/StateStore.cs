@@ -164,5 +164,11 @@ namespace Common.Entities.State
         /// purge's record expires after 90 days. Never the list of people a purge removes, which exists only while it runs.
         /// </summary>
         public const string UserScopePurge = "UserScopePurge";
+
+        /// <summary>
+        /// Admin-requested Microsoft 365 Copilot audit-search backfills: request, progress, completed days and stop
+        /// requests. The actual audit rows still go through the normal audit import tables.
+        /// </summary>
+        public const string CopilotAuditBackfill = "CopilotAuditBackfill";
     }
 }

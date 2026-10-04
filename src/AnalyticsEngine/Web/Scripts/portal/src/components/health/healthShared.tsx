@@ -43,7 +43,19 @@ export const HEALTH_COMPONENT_LABEL_KEYS: Record<string, TranslationKey> = {
   Credential: 'health.component.Credential',
   ServiceBus: 'health.component.ServiceBus',
   BlobCheckpoint: 'health.component.BlobCheckpoint',
+  CopilotAuditBackfill: 'health.component.CopilotAuditBackfill',
   MessageTracing: 'health.component.MessageTracing',
+};
+
+export const COPILOT_AUDIT_BACKFILL_REASON_KEYS: Record<string, TranslationKey> = {
+  'copilotAuditBackfill.healthy': 'health.reason.copilotAuditBackfillHealthy',
+  'copilotAuditBackfill.running': 'health.reason.copilotAuditBackfillRunning',
+  'copilotAuditBackfill.completed': 'health.reason.copilotAuditBackfillCompleted',
+  'copilotAuditBackfill.cancelled': 'health.reason.copilotAuditBackfillCancelled',
+  'copilotAuditBackfill.failed': 'health.reason.copilotAuditBackfillFailed',
+  'copilotAuditBackfill.missingPermission': 'health.reason.copilotAuditBackfillMissingPermission',
+  'copilotAuditBackfill.completedWithGaps': 'health.reason.copilotAuditBackfillCompletedWithGaps',
+  'copilotAuditBackfill.lastJobOld': 'health.reason.copilotAuditBackfillLastJobOld',
 };
 
 /**
@@ -309,6 +321,10 @@ export function translateHealthComponentDetail(component: ComponentHealthRow, t:
     });
   }
 
+  const copilotBackfillKey = component.reasonKey ? COPILOT_AUDIT_BACKFILL_REASON_KEYS[component.reasonKey] : null;
+  if (copilotBackfillKey) {
+    return t(copilotBackfillKey);
+  }
   const messageTracingKey = component.reasonKey ? MESSAGE_TRACING_REASON_KEYS[component.reasonKey] : null;
   if (messageTracingKey) return t(messageTracingKey);
 

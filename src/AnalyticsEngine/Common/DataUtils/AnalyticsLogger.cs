@@ -466,6 +466,7 @@ namespace DataUtils
             UsageReportSaveStage,
             UserOrgCsvImport,
             UserScopePurge,
+            CopilotAuditBackfill,
             GlobalFilterChanged
         }
 

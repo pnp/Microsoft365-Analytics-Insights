@@ -162,6 +162,9 @@
     <Compile Include="ExceptionHandler.cs" />
     <Compile Include="Graph\BoundedGraphRequestHandler.cs" />
     <Compile Include="Graph\DeltaValueProvider.cs" />
+    <Compile Include="Graph\Copilot\AuditBackfill\CopilotAuditBackfillImporter.cs" />
+    <Compile Include="Graph\Copilot\AuditBackfill\CopilotAuditSearchRecordMapper.cs" />
+    <Compile Include="Graph\Copilot\AuditBackfill\GraphCopilotAuditSearchSource.cs" />
     <Compile Include="Graph\Copilot\InteractionHistory\AiInteractionModels.cs" />
     <Compile Include="Graph\Copilot\InteractionHistory\CopilotInteractionHistoryImporter.cs" />
     <Compile Include="Graph\Copilot\InteractionHistory\GraphAiInteractionSourceLoader.cs" />
