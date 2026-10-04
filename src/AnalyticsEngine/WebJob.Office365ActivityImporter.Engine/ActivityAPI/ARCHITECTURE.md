@@ -39,9 +39,11 @@ Office 365 Management Activity API
 The live import above still owns normal steady-state Copilot audit ingestion. It uses the Office 365
 Management Activity API on every importer cycle (`ActivityImporter<T>` via
 `ProgramTasks.DownloadActivityData`) and scans the configured `DaysBeforeNowToDownload` window
-(`ContentMetaDataLoader.GetScanningTimeChunksFromNow`, default seven days in `AppConfig`). That API only
+(`ContentMetaDataLoader.GetScanningTimeChunksFromNow`, default six days in `AppConfig`, and
+`WebJob.Office365ActivityImporter/App.Release.config` also sets `DaysBeforeNowToDownload` to 6). That API only
 lists content blobs created after the tenant's subscription for that content type was started, and only
-while those blobs remain available (normally about seven days). A new install, a newly enabled Copilot
+while those blobs remain available (the Management Activity API can list content created up to about
+seven days back). A new install, a newly enabled Copilot
 import, or an importer outage longer than the available-content retention therefore leaves history that
 the live importer can never fetch. Filling that history is the backfill's only purpose; admins should not
 run it routinely.
@@ -88,7 +90,7 @@ conditions stop the whole job: missing permission, the Copilot import toggle bei
 Graph 400 query rejection, or a succeeded query whose returned `auditData` shape this build cannot
 recognise as CopilotInteraction.
 
-The overlap between live import and backfill is harmless, including the last seven days where both can see
+The overlap between live import and backfill is harmless, including the recent window where both can see
 the same interactions. Each returned `auditData` payload is the
 documented Graph object form (a defensive JSON-string form is also accepted), is mapped back through
 `AuditLogContentDispatcher` and `CopilotAuditLogContent.FromJson`, and is committed as `Copilot` / record
