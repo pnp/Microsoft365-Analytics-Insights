@@ -35,7 +35,22 @@ param(
 
     [string] $TelemetrySecretEnvironmentVariableName = 'TELEMETRY_SERVICE_SECRET',
 
+    # Client ID of the dashboard app registration. Optional: when omitted, the one already
+    # configured on an existing site is used, and a registration is only created for a new site.
     [string] $AzureAdClientId,
+
+    # Create a replacement app registration when the one this deployment is configured for no
+    # longer exists. Never done implicitly, because a replacement has a new client ID.
+    [switch] $AllowNewEntraApplication,
+
+    # Delete an existing Linux App Service and its plan so they can be re-created on Windows with
+    # the same name. An App Service cannot change operating system in place.
+    [switch] $ReplaceLinuxWebApp,
+
+    # Leave WEBSITE_LOAD_FIRST_PARTY_AUTH unset, for a subscription App Service has not enabled for
+    # first-party authentication. App Service Authentication then validates tokens with MISE v1,
+    # which does not satisfy the MISE compliance KPI.
+    [switch] $SkipFirstPartyAuth,
 
     [switch] $SkipApplicationPublish,
 
@@ -47,6 +62,8 @@ $ErrorActionPreference = 'Stop'
 
 $script:ScopeName = 'Telemetry.Read'
 $script:RoleName = 'Telemetry.Dashboard.Read'
+$script:TelemetryResourceGroupExists = $false
+$script:TelemetryDeployScriptRoot = $PSScriptRoot
 
 function Invoke-AzCli {
     param(
@@ -160,10 +177,23 @@ function Register-ResourceProviders {
             '--output', 'tsv'
         )
         if ($state -ne 'Registered') {
+            if ($WhatIf) {
+                Write-Warning "Resource provider $provider is not registered. A real run would register it before deployment."
+                continue
+            }
             Write-Host "Registering resource provider $provider..."
             Invoke-AzCli -Arguments @('provider', 'register', '--namespace', $provider, '--wait') | Out-Null
         }
     }
+}
+
+function Test-ResourceGroupExists {
+    $exists = Invoke-AzCli -Arguments @(
+            'group', 'exists',
+            '--name', $ResourceGroupName,
+            '--output', 'tsv'
+    )
+    return "$exists".Trim().Equals('true', [StringComparison]::OrdinalIgnoreCase)
 }
 
 function Assert-WebAppNameAvailable {
@@ -195,34 +225,245 @@ function Assert-WebAppNameAvailable {
     }
 }
 
-function Get-OrCreateEntraApplication {
+function Get-ExistingWebApp {
+    $existing = @(Invoke-AzCli -Arguments @(
+        'webapp', 'list',
+        '--subscription', $SubscriptionId,
+        '--query', "[?name=='$WebAppName'].{id:id,resourceGroup:resourceGroup}",
+        '--output', 'json'
+    ) -AsJson) | Where-Object { $_.resourceGroup -eq $ResourceGroupName } | Select-Object -First 1
+
+    if (-not $existing) {
+        return $null
+    }
+
+    return Invoke-AzCli -Arguments @('webapp', 'show', '--ids', $existing.id, '--output', 'json') -AsJson
+}
+
+function Get-ObjectPropertyValue {
     param(
+        [object] $InputObject,
+
         [Parameter(Mandatory)]
-        [string] $RedirectUri
+        [string[]] $Path
     )
 
-    $applications = @(Invoke-AzCli -Arguments @(
+    $current = $InputObject
+    foreach ($segment in $Path) {
+        if ($null -eq $current) {
+            return $null
+        }
+
+        if ($current.PSObject.Properties.Name -notcontains $segment) {
+            return $null
+        }
+
+        $current = $current.$segment
+    }
+
+    return $current
+}
+
+function Get-WebAppPlanId {
+    param(
+        [Parameter(Mandatory)]
+        [pscustomobject] $WebApp
+    )
+
+    $paths = @(
+        , @('serverFarmId')
+        , @('appServicePlanId')
+        , @('properties', 'serverFarmId')
+    )
+    foreach ($path in $paths) {
+        $planId = Get-ObjectPropertyValue -InputObject $WebApp -Path $path
+        if (-not [string]::IsNullOrWhiteSpace($planId)) {
+            return $planId
+        }
+    }
+
+    throw 'Azure CLI did not return the App Service plan resource ID for the web app. Expected serverFarmId, appServicePlanId, or properties.serverFarmId.'
+}
+
+function Get-WebAppManagedIdentityPrincipalId {
+    param(
+        [pscustomobject] $WebApp
+    )
+
+    $principalId = Get-ObjectPropertyValue -InputObject $WebApp -Path @('identity', 'principalId')
+    if ([string]::IsNullOrWhiteSpace($principalId)) {
+        return $null
+    }
+
+    return $principalId
+}
+
+function Get-WebAppVirtualNetworkSubnetId {
+    param(
+        [pscustomobject] $WebApp
+    )
+
+    $paths = @(
+        , @('virtualNetworkSubnetId')
+        , @('properties', 'virtualNetworkSubnetId')
+        , @('siteConfig', 'virtualNetworkSubnetId')
+        , @('properties', 'siteConfig', 'virtualNetworkSubnetId')
+    )
+    foreach ($path in $paths) {
+        $subnetId = Get-ObjectPropertyValue -InputObject $WebApp -Path $path
+        if (-not [string]::IsNullOrWhiteSpace($subnetId)) {
+            return $subnetId
+        }
+    }
+
+    return $null
+}
+
+function Test-IsLinuxWebApp {
+    param(
+        [Parameter(Mandatory)]
+        [pscustomobject] $WebApp
+    )
+
+    $reserved = Get-ObjectPropertyValue -InputObject $WebApp -Path @('reserved')
+    if ($null -eq $reserved) {
+        $reserved = Get-ObjectPropertyValue -InputObject $WebApp -Path @('properties', 'reserved')
+    }
+    $kind = Get-ObjectPropertyValue -InputObject $WebApp -Path @('kind')
+    if ($null -eq $kind) {
+        $kind = Get-ObjectPropertyValue -InputObject $WebApp -Path @('properties', 'kind')
+    }
+
+    return ($reserved -eq $true) -or ("$kind" -match 'linux')
+}
+
+function Get-ConfiguredEntraClientId {
+    $configured = Invoke-AzCli -Arguments @(
+        'webapp', 'config', 'appsettings', 'list',
+        '--resource-group', $ResourceGroupName,
+        '--name', $WebAppName,
+        '--query', "[?name=='AzureAd__ClientId'].value | [0]",
+        '--output', 'tsv'
+    )
+
+    if ([string]::IsNullOrWhiteSpace($configured)) {
+        return $null
+    }
+    return $configured.Trim()
+}
+
+function Find-EntraApplicationsByDisplayName {
+    return @(Invoke-AzCli -Arguments @(
         'ad', 'app', 'list',
         '--display-name', $EntraAppDisplayName,
         '--output', 'json'
     ) -AsJson | Where-Object { $_.displayName -eq $EntraAppDisplayName })
+}
 
-    if ($applications.Count -gt 1) {
-        throw "More than one Entra application has display name '$EntraAppDisplayName'."
+function Find-EntraApplicationByClientId {
+    param(
+        [Parameter(Mandatory)]
+        [string] $ClientId
+    )
+
+    return @(Invoke-AzCli -Arguments @(
+        'ad', 'app', 'list',
+        '--app-id', $ClientId,
+        '--output', 'json'
+    ) -AsJson) | Select-Object -First 1
+}
+
+function Find-DeletedEntraApplication {
+    param(
+        [Parameter(Mandatory)]
+        [string] $ClientId
+    )
+
+    # Reading deleted directory objects needs a permission not every deployer has. Without it the
+    # resulting error is only less specific, so a failure here is not fatal.
+    try {
+        $response = Invoke-AzRestJson -Method get `
+            -Uri "https://graph.microsoft.com/v1.0/directory/deletedItems/microsoft.graph.application?`$filter=appId eq '$ClientId'"
+        return @($response.value) | Select-Object -First 1
+    }
+    catch {
+        return $null
+    }
+}
+
+function New-EntraApplication {
+    Write-Host 'Creating the single-tenant Entra SPA/API registration...'
+    return Invoke-AzCli -Arguments @(
+        'ad', 'app', 'create',
+        '--display-name', $EntraAppDisplayName,
+        '--sign-in-audience', 'AzureADMyOrg',
+        '--output', 'json'
+    ) -AsJson
+}
+
+function Resolve-EntraApplication {
+    param(
+        [string] $ExpectedClientId
+    )
+
+    if (-not $ExpectedClientId) {
+        if ($script:TelemetryResourceGroupExists -and -not $AllowNewEntraApplication) {
+            throw "Resource group '$ResourceGroupName' already exists, but no authoritative Entra client ID could be determined from -AzureAdClientId, the existing site, or a replacement resume record. Refusing to adopt or create an application by display name. Pass -AzureAdClientId, restore the replacement record, or re-run with -AllowNewEntraApplication to make that replacement explicit."
+        }
+
+        # A new deployment: adopt the registration with the configured name, or create it.
+        $applications = @(Find-EntraApplicationsByDisplayName)
+        if ($applications.Count -gt 1) {
+            throw "More than one Entra application has display name '$EntraAppDisplayName'."
+        }
+        if ($applications.Count -eq 1) {
+            return $applications[0]
+        }
+        return New-EntraApplication
     }
 
-    if ($applications.Count -eq 0) {
-        Write-Host 'Creating the single-tenant Entra SPA/API registration...'
-        $application = Invoke-AzCli -Arguments @(
-            'ad', 'app', 'create',
-            '--display-name', $EntraAppDisplayName,
-            '--sign-in-audience', 'AzureADMyOrg',
-            '--output', 'json'
-        ) -AsJson
+    $application = Find-EntraApplicationByClientId -ClientId $ExpectedClientId
+    if ($application) {
+        return $application
+    }
+
+    # The registration this deployment is configured for has gone - typically deleted by a
+    # compliance process. Creating another would quietly change the client ID that sign-in, consent,
+    # role assignments and compliance tracking are all tied to, and restart any compliance process
+    # against a registration nobody knows exists. Stop and make that a deliberate decision instead.
+    $deleted = Find-DeletedEntraApplication -ClientId $ExpectedClientId
+    $deletedDetail = if ($deleted) {
+        " It was deleted on $($deleted.deletedDateTime). A deleted registration can be restored, with its client ID, for 30 days from Microsoft Entra ID > App registrations > Deleted applications."
     }
     else {
-        $application = $applications[0]
+        ''
     }
+    $message = "The Entra app registration this deployment is configured for (client ID $ExpectedClientId) no longer exists.$deletedDetail " +
+        'This script will not replace it on its own, because a replacement has a new client ID. ' +
+        'Restore it, pass -AzureAdClientId to use a different existing registration, or re-run with -AllowNewEntraApplication to create a replacement deliberately.'
+    if (-not $AllowNewEntraApplication) {
+        throw $message
+    }
+
+    $sameName = @(Find-EntraApplicationsByDisplayName)
+    if ($sameName.Count -gt 0) {
+        throw "-AllowNewEntraApplication was specified, but an Entra application named '$EntraAppDisplayName' already exists (client ID $($sameName[0].appId)). Pass -AzureAdClientId $($sameName[0].appId) to use it rather than creating another."
+    }
+
+    Write-Warning $message
+    Write-Warning 'Creating a replacement registration because -AllowNewEntraApplication was specified. Dashboard users must be assigned the dashboard role again.'
+    return New-EntraApplication
+}
+
+function Get-OrCreateEntraApplication {
+    param(
+        [Parameter(Mandatory)]
+        [string] $RedirectUri,
+
+        [string] $ExpectedClientId
+    )
+
+    $application = Resolve-EntraApplication -ExpectedClientId $ExpectedClientId
 
     $applicationObject = Invoke-AzRestJson -Method get `
         -Uri "https://graph.microsoft.com/v1.0/applications/$($application.id)"
@@ -243,6 +484,15 @@ function Get-OrCreateEntraApplication {
         Where-Object { $_.value -ne $script:RoleName }
     $otherRequiredAccess = @($applicationObject.requiredResourceAccess) |
         Where-Object { $_.resourceAppId -ne $application.appId }
+
+    # Keep redirect URIs added outside this script, such as https://localhost:7167 for local
+    # development, rather than replacing the list with the deployed site's alone.
+    $existingRedirectUris = @()
+    if ($applicationObject.PSObject.Properties.Name -contains 'spa' -and $applicationObject.spa -and
+        $applicationObject.spa.PSObject.Properties.Name -contains 'redirectUris') {
+        $existingRedirectUris = @($applicationObject.spa.redirectUris)
+    }
+    $redirectUris = @(@($existingRedirectUris) + @($RedirectUri) | Where-Object { $_ } | Select-Object -Unique)
 
     $scopeDefinition = @{
         id = $scopeId
@@ -268,7 +518,7 @@ function Get-OrCreateEntraApplication {
         -Body @{
             identifierUris = @("api://$($application.appId)")
             spa = @{
-                redirectUris = @($RedirectUri)
+                redirectUris = $redirectUris
             }
             api = @{
                 requestedAccessTokenVersion = 2
@@ -364,6 +614,419 @@ function Grant-CurrentUserDashboardAccess {
     }
 }
 
+function Assert-FirstPartyAuthAccepted {
+    # App Service only accepts WEBSITE_LOAD_FIRST_PARTY_AUTH on a subscription it has enabled for
+    # first-party authentication. Try it on the site that is about to be replaced anyway, so an
+    # unsupported subscription is found while nothing has been deleted, rather than halfway through
+    # building the replacement.
+    try {
+        Invoke-AzCli -Arguments @(
+            'webapp', 'config', 'appsettings', 'set',
+            '--resource-group', $ResourceGroupName,
+            '--name', $WebAppName,
+            '--settings', 'WEBSITE_LOAD_FIRST_PARTY_AUTH=true',
+            '--output', 'none'
+        ) | Out-Null
+    }
+    catch {
+        throw ('App Service did not accept WEBSITE_LOAD_FIRST_PARTY_AUTH on this subscription, so nothing has been deleted. ' +
+            'The setting is only accepted once App Service has enabled the subscription for first-party authentication. ' +
+            "Arrange that first, or re-run with -SkipFirstPartyAuth (App Service Authentication then stays on MISE v1).`n$($_.Exception.Message)")
+    }
+}
+
+function Get-WebAppRoleAssignments {
+    param(
+        [Parameter(Mandatory)]
+        [pscustomobject] $WebApp,
+
+        [string] $ManagedIdentityPrincipalId
+    )
+
+    # Assignments scoped to the site itself - typically the CI deployment identity's Website
+    # Contributor - are deleted with it, and nothing in the template re-creates them.
+    return @(Invoke-AzCli -Arguments @(
+        'role', 'assignment', 'list',
+        '--scope', $WebApp.id,
+        '--output', 'json'
+    ) -AsJson | Where-Object {
+        (Get-ObjectPropertyValue -InputObject $_ -Path @('scope')) -eq $WebApp.id
+    } | ForEach-Object {
+        [pscustomobject]@{
+            PrincipalId = Get-ObjectPropertyValue -InputObject $_ -Path @('principalId')
+            PrincipalType = Get-ObjectPropertyValue -InputObject $_ -Path @('principalType')
+            RoleDefinitionId = Get-ObjectPropertyValue -InputObject $_ -Path @('roleDefinitionId')
+            RoleDefinitionName = Get-ObjectPropertyValue -InputObject $_ -Path @('roleDefinitionName')
+            Scope = Get-ObjectPropertyValue -InputObject $_ -Path @('scope')
+            Condition = Get-ObjectPropertyValue -InputObject $_ -Path @('condition')
+            ConditionVersion = Get-ObjectPropertyValue -InputObject $_ -Path @('conditionVersion')
+        }
+    })
+}
+
+function Restore-WebAppRoleAssignments {
+    param(
+        [Parameter(Mandatory)]
+        [string] $WebAppResourceId,
+
+        [object[]] $Assignments = @(),
+
+        [string] $OldManagedIdentityPrincipalId,
+
+        [string] $NewManagedIdentityPrincipalId
+    )
+
+    foreach ($assignment in $Assignments) {
+        $principalId = $assignment.PrincipalId
+        if ($OldManagedIdentityPrincipalId -and $NewManagedIdentityPrincipalId -and $principalId -eq $OldManagedIdentityPrincipalId) {
+            $principalId = $NewManagedIdentityPrincipalId
+        }
+        $recordedScope = Get-ObjectPropertyValue -InputObject $assignment -Path @('Scope')
+        $scope = if ($recordedScope) {
+            $recordedScope
+        }
+        else {
+            $WebAppResourceId
+        }
+        if ($recordedScope -and $scope -match '/providers/Microsoft\.Web/sites/') {
+            $scope = $WebAppResourceId
+        }
+
+        $existing = @(Invoke-AzCli -Arguments @(
+            'role', 'assignment', 'list',
+            '--scope', $scope,
+            '--assignee-object-id', $principalId,
+            '--output', 'json'
+        ) -AsJson) | Where-Object {
+            (Get-ObjectPropertyValue -InputObject $_ -Path @('scope')) -eq $scope -and
+            (Get-ObjectPropertyValue -InputObject $_ -Path @('roleDefinitionId')) -eq $assignment.RoleDefinitionId
+        }
+        if ($existing) {
+            continue
+        }
+
+        Write-Host "Restoring site-scoped role '$($assignment.RoleDefinitionName)' for $($assignment.PrincipalType) $principalId..."
+        $arguments = @(
+            'role', 'assignment', 'create',
+            '--assignee-object-id', $principalId,
+            '--assignee-principal-type', $assignment.PrincipalType,
+            '--role', $assignment.RoleDefinitionId,
+            '--scope', $scope
+        )
+        if ($assignment.PSObject.Properties.Name -contains 'Condition' -and -not [string]::IsNullOrWhiteSpace($assignment.Condition)) {
+            $arguments += @('--condition', $assignment.Condition)
+        }
+        if ($assignment.PSObject.Properties.Name -contains 'ConditionVersion' -and -not [string]::IsNullOrWhiteSpace($assignment.ConditionVersion)) {
+            $arguments += @('--condition-version', $assignment.ConditionVersion)
+        }
+        Invoke-AzCli -Arguments $arguments | Out-Null
+    }
+}
+
+function Get-ReplacementRecordPath {
+    $repositoryRoot = (Resolve-Path (Join-Path $script:TelemetryDeployScriptRoot '..\..')).Path
+    $recordRoot = Join-Path $repositoryRoot 'artifacts\TelemetryService-state'
+    $key = "$SubscriptionId|$ResourceGroupName|$WebAppName".ToLowerInvariant()
+    $bytes = [Text.Encoding]::UTF8.GetBytes($key)
+    $sha256 = [Security.Cryptography.SHA256]::Create()
+    try {
+        $hash = [BitConverter]::ToString($sha256.ComputeHash($bytes)).Replace('-', '').ToLowerInvariant()
+    }
+    finally {
+        $sha256.Dispose()
+    }
+
+    return Join-Path $recordRoot "replacement-$hash.json"
+}
+
+function Get-ReplacementRecordRoleAssignments {
+    param(
+        [object] $ReplacementRecord
+    )
+
+    if (-not $ReplacementRecord) {
+        return @()
+    }
+
+    if ($ReplacementRecord.PSObject.Properties.Name -notcontains 'roleAssignments' -or
+        $null -eq $ReplacementRecord.roleAssignments) {
+        return @()
+    }
+
+    return @($ReplacementRecord.roleAssignments)
+}
+
+function Read-ReplacementRecord {
+    $path = Get-ReplacementRecordPath
+    if (-not (Test-Path -LiteralPath $path)) {
+        return $null
+    }
+
+    $record = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json -ErrorAction Stop
+    if ($record.version -ne 1 -or
+        $record.subscriptionId -ne $SubscriptionId -or
+        $record.resourceGroup -ne $ResourceGroupName -or
+        $record.siteName -ne $WebAppName) {
+        throw "Replacement resume record '$path' does not match this deployment target."
+    }
+
+    return $record
+}
+
+function Write-ReplacementRecord {
+    param(
+        [Parameter(Mandatory)]
+        [pscustomobject] $WebApp,
+
+        [Parameter(Mandatory)]
+        [string] $ClientId,
+
+        [string] $ManagedIdentityPrincipalId,
+
+        [object[]] $RoleAssignments = @()
+    )
+
+    $path = Get-ReplacementRecordPath
+    $directory = Split-Path -Parent $path
+    if (-not (Test-Path -LiteralPath $directory)) {
+        New-Item -ItemType Directory -Path $directory -Force | Out-Null
+    }
+
+    $record = [pscustomobject]@{
+        version = 1
+        subscriptionId = $SubscriptionId
+        resourceGroup = $ResourceGroupName
+        siteName = $WebAppName
+        planId = Get-WebAppPlanId -WebApp $WebApp
+        clientId = $ClientId
+        managedIdentityPrincipalId = $ManagedIdentityPrincipalId
+        roleAssignments = @($RoleAssignments)
+        createdUtc = [DateTime]::UtcNow.ToString('o')
+    }
+    [IO.File]::WriteAllText($path, ($record | ConvertTo-Json -Depth 20), (New-Object Text.UTF8Encoding $false))
+    Write-Host "Wrote Linux-to-Windows replacement resume record: $path"
+    return $record
+}
+
+function Remove-ReplacementRecord {
+    $path = Get-ReplacementRecordPath
+    if (Test-Path -LiteralPath $path) {
+        Remove-Item -LiteralPath $path -Force
+        Write-Host "Removed Linux-to-Windows replacement resume record: $path"
+    }
+}
+
+function Remove-PrincipalRoleAssignments {
+    param(
+        [Parameter(Mandatory)]
+        [string] $PrincipalId
+    )
+
+    # A deleted site's system-assigned identity leaves its role assignments behind. The template's
+    # assignments take their names from the site's resource ID, which the replacement shares, and ARM
+    # refuses to repoint an existing assignment at a different principal
+    # (RoleAssignmentUpdateNotPermitted) - so the orphans would block the deployment.
+    $assignments = @(Invoke-AzCli -Arguments @(
+        'role', 'assignment', 'list',
+        '--all',
+        '--assignee-object-id', $PrincipalId,
+        '--output', 'json'
+    ) -AsJson)
+    foreach ($assignment in $assignments) {
+        $assignmentId = Get-ObjectPropertyValue -InputObject $assignment -Path @('id')
+        if ($assignmentId) {
+            Invoke-AzCli -Arguments @('role', 'assignment', 'delete', '--ids', $assignmentId) | Out-Null
+        }
+    }
+
+    $cosmosAccountNames = @(Invoke-AzCli -Arguments @(
+        'cosmosdb', 'list',
+        '--resource-group', $ResourceGroupName,
+        '--query', '[].name',
+        '--output', 'json'
+    ) -AsJson)
+    foreach ($accountName in $cosmosAccountNames) {
+        $sqlAssignments = @(Invoke-AzCli -Arguments @(
+            'cosmosdb', 'sql', 'role', 'assignment', 'list',
+            '--resource-group', $ResourceGroupName,
+            '--account-name', $accountName,
+            '--output', 'json'
+        ) -AsJson) | Where-Object { (Get-ObjectPropertyValue -InputObject $_ -Path @('principalId')) -eq $PrincipalId }
+        foreach ($sqlAssignment in $sqlAssignments) {
+            Invoke-AzCli -Arguments @(
+                'cosmosdb', 'sql', 'role', 'assignment', 'delete',
+                '--resource-group', $ResourceGroupName,
+                '--account-name', $accountName,
+                '--role-assignment-id', (Get-ObjectPropertyValue -InputObject $sqlAssignment -Path @('name')),
+                '--yes'
+            ) | Out-Null
+        }
+    }
+}
+
+function Assert-NoManagementLocks {
+    # A lock would stop the replacement part-way, after the old site has already been taken apart.
+    $locks = @(Invoke-AzCli -Arguments @('lock', 'list', '--subscription', $SubscriptionId, '--output', 'json') -AsJson) |
+        Where-Object {
+            $_.id -like "/subscriptions/$SubscriptionId/providers/Microsoft.Authorization/locks/*" -or
+            $_.id -like "/subscriptions/$SubscriptionId/resourceGroups/$ResourceGroupName/*"
+        }
+    if (@($locks).Count -gt 0) {
+        throw "Management locks would block deleting the Linux site: $(@($locks | ForEach-Object { "$($_.name) ($($_.level))" }) -join ', '). Nothing has been changed."
+    }
+}
+
+function Get-AppServicePlanSites {
+    param(
+        [Parameter(Mandatory)]
+        [string] $PlanId
+    )
+
+    $response = Invoke-AzRestJson -Method get `
+        -Uri "https://management.azure.com$PlanId/sites?api-version=2024-04-01"
+    if ($null -eq $response -or $response.PSObject.Properties.Name -notcontains 'value') {
+        return @()
+    }
+
+    return @($response.value)
+}
+
+function Get-AppServicePlan {
+    param(
+        [Parameter(Mandatory)]
+        [string] $PlanId
+    )
+
+    try {
+        return Invoke-AzRestJson -Method get `
+            -Uri "https://management.azure.com${PlanId}?api-version=2024-04-01"
+    }
+    catch {
+        if ("$($_.Exception.Message)" -match '(?i)(notfound|not found|404)') {
+            return $null
+        }
+        throw
+    }
+}
+
+function Test-IsLinuxAppServicePlan {
+    param(
+        [Parameter(Mandatory)]
+        [pscustomobject] $Plan
+    )
+
+    $reserved = Get-ObjectPropertyValue -InputObject $Plan -Path @('properties', 'reserved')
+    if ($null -eq $reserved) {
+        $reserved = Get-ObjectPropertyValue -InputObject $Plan -Path @('reserved')
+    }
+    $kind = Get-ObjectPropertyValue -InputObject $Plan -Path @('kind')
+    return ($reserved -eq $true) -or ("$kind" -match 'linux')
+}
+
+function Assert-AppServicePlanReplaceable {
+    param(
+        [Parameter(Mandatory)]
+        [pscustomobject] $WebApp
+    )
+
+    $planId = Get-WebAppPlanId -WebApp $WebApp
+    $otherSites = @(Get-AppServicePlanSites -PlanId $planId |
+        Where-Object { $_.name -ne $WebAppName } |
+        ForEach-Object { $_.name })
+    if ($otherSites.Count -gt 0) {
+        throw "The App Service plan also hosts $($otherSites -join ', '), so it cannot be re-created on Windows. Nothing has been changed."
+    }
+}
+
+function Remove-LeftoverLinuxPlanFromReplacementRecord {
+    param(
+        [Parameter(Mandatory)]
+        [pscustomobject] $Record
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Record.planId)) {
+        return
+    }
+
+    $plan = Get-AppServicePlan -PlanId $Record.planId
+    if (-not $plan) {
+        return
+    }
+
+    if (-not (Test-IsLinuxAppServicePlan -Plan $plan)) {
+        return
+    }
+
+    $sites = @(Get-AppServicePlanSites -PlanId $Record.planId)
+    if ($sites.Count -gt 0) {
+        throw "Replacement resume record '$((Get-ReplacementRecordPath))' points at a Linux App Service plan that still hosts $(@($sites | ForEach-Object { $_.name }) -join ', '). Refusing to continue because the replacement cannot safely change that plan to Windows."
+    }
+
+    if ($WhatIf) {
+        Write-Warning "Replacement resume record found a leftover empty Linux App Service plan. A real -ReplaceLinuxWebApp run would delete it before redeploying."
+        return
+    }
+
+    if (-not $ReplaceLinuxWebApp) {
+        throw "Replacement resume record found a leftover empty Linux App Service plan. Re-run with -ReplaceLinuxWebApp to delete it before redeploying."
+    }
+
+    Write-Warning "Deleting leftover empty Linux App Service plan from the replacement resume record: $($Record.planId)"
+    Invoke-AzCli -Arguments @('appservice', 'plan', 'delete', '--ids', $Record.planId, '--yes') | Out-Null
+}
+
+function Remove-LinuxWebApp {
+    param(
+        [Parameter(Mandatory)]
+        [pscustomobject] $WebApp,
+
+        [string] $ManagedIdentityPrincipalId
+    )
+
+    $planId = Get-WebAppPlanId -WebApp $WebApp
+
+    Write-Warning "Deleting the Linux App Service '$WebAppName' and its plan so they can be re-created on Windows with the same name. The service is unavailable until this deployment completes."
+
+    if ($ManagedIdentityPrincipalId) {
+        Remove-PrincipalRoleAssignments -PrincipalId $ManagedIdentityPrincipalId
+    }
+
+    # Disconnect first. Deleting an app that is still integrated with a subnet can leave the subnet's
+    # service association link behind, and the replacement integrates with that same subnet.
+    $subnetId = Get-WebAppVirtualNetworkSubnetId -WebApp $WebApp
+    if ($subnetId) {
+        Invoke-AzCli -Arguments @(
+            'webapp', 'vnet-integration', 'remove',
+            '--resource-group', $ResourceGroupName,
+            '--name', $WebAppName
+        ) | Out-Null
+    }
+
+    Invoke-AzCli -Arguments @(
+        'webapp', 'delete',
+        '--resource-group', $ResourceGroupName,
+        '--name', $WebAppName,
+        '--keep-empty-plan'
+    ) | Out-Null
+    Invoke-AzCli -Arguments @('appservice', 'plan', 'delete', '--ids', $planId, '--yes') | Out-Null
+
+    # App Service releases the subnet a little after the integration is removed.
+    if ($subnetId) {
+        for ($attempt = 1; $attempt -le 30; $attempt++) {
+            $subnet = Invoke-AzRestJson -Method get -Uri "https://management.azure.com$($subnetId)?api-version=2024-05-01"
+            $links = @()
+            if ($subnet.properties.PSObject.Properties.Name -contains 'serviceAssociationLinks' -and $subnet.properties.serviceAssociationLinks) {
+                $links = @($subnet.properties.serviceAssociationLinks)
+            }
+            if ($links.Count -eq 0) {
+                return
+            }
+            Start-Sleep -Seconds 20
+        }
+        Write-Warning 'The App Service integration subnet still reports a service association link; the deployment may fail until App Service releases it. Re-run this script if it does.'
+    }
+}
+
 function New-DeploymentParameterFile {
     param(
         [Parameter(Mandatory)]
@@ -386,6 +1049,7 @@ function New-DeploymentParameterFile {
             appIntegrationSubnetPrefix = @{ value = $AppIntegrationSubnetPrefix }
             privateEndpointSubnetPrefix = @{ value = $PrivateEndpointSubnetPrefix }
             azureAdClientId = @{ value = $ClientId }
+            loadFirstPartyAuth = @{ value = (-not $SkipFirstPartyAuth) }
             telemetrySecret = @{ value = $TelemetrySecret }
             tags = @{
                 value = @{
@@ -476,42 +1140,45 @@ function Test-TelemetryDeployment {
 
     $authSettings = Invoke-AzRestJson -Method get `
         -Uri "https://management.azure.com$webAppResourceId/config/authsettingsV2/list?api-version=2024-04-01"
-    if (-not $authSettings -or -not $authSettings.properties) {
+    $authProperties = Get-ObjectPropertyValue -InputObject $authSettings -Path @('properties')
+    if (-not $authSettings -or -not $authProperties) {
         throw 'App Service Authentication settings were not returned.'
     }
 
-    $authProperties = $authSettings.properties
-    if ($authProperties.platform.enabled -ne $true) {
+    if ((Get-ObjectPropertyValue -InputObject $authProperties -Path @('platform', 'enabled')) -ne $true) {
         throw 'App Service Authentication is not enabled.'
     }
-    if ($authProperties.platform.runtimeVersion -ne '~1') {
-        throw "App Service Authentication runtime is '$($authProperties.platform.runtimeVersion)'; expected '~1'."
+    $runtimeVersion = Get-ObjectPropertyValue -InputObject $authProperties -Path @('platform', 'runtimeVersion')
+    if ($runtimeVersion -ne '~1') {
+        throw "App Service Authentication runtime is '$runtimeVersion'; expected '~1'."
     }
-    if ($authProperties.globalValidation.requireAuthentication -ne $false) {
+    if ((Get-ObjectPropertyValue -InputObject $authProperties -Path @('globalValidation', 'requireAuthentication')) -ne $false) {
         throw 'EasyAuth must allow anonymous requests so signed telemetry uploads can reach the application.'
     }
-    if ($authProperties.globalValidation.unauthenticatedClientAction -ne 'AllowAnonymous') {
-        throw "EasyAuth unauthenticated action is '$($authProperties.globalValidation.unauthenticatedClientAction)'; expected 'AllowAnonymous'."
+    $unauthenticatedAction = Get-ObjectPropertyValue -InputObject $authProperties -Path @('globalValidation', 'unauthenticatedClientAction')
+    if ($unauthenticatedAction -ne 'AllowAnonymous') {
+        throw "EasyAuth unauthenticated action is '$unauthenticatedAction'; expected 'AllowAnonymous'."
     }
 
-    $azureAdProvider = $authProperties.identityProviders.azureActiveDirectory
-    if ($azureAdProvider.enabled -ne $true) {
+    $azureAdProvider = Get-ObjectPropertyValue -InputObject $authProperties -Path @('identityProviders', 'azureActiveDirectory')
+    if (-not $azureAdProvider -or (Get-ObjectPropertyValue -InputObject $azureAdProvider -Path @('enabled')) -ne $true) {
         throw 'The EasyAuth Microsoft Entra provider is not enabled.'
     }
-    if ($azureAdProvider.registration.clientId -ne $ClientId) {
+    if ((Get-ObjectPropertyValue -InputObject $azureAdProvider -Path @('registration', 'clientId')) -ne $ClientId) {
         throw 'The EasyAuth client ID does not match the telemetry dashboard app registration.'
     }
-    if ($azureAdProvider.registration.openIdIssuer -ne $Outputs.easyAuthIssuer.value) {
-        throw "EasyAuth issuer is '$($azureAdProvider.registration.openIdIssuer)'; expected '$($Outputs.easyAuthIssuer.value)'."
+    $openIdIssuer = Get-ObjectPropertyValue -InputObject $azureAdProvider -Path @('registration', 'openIdIssuer')
+    if ($openIdIssuer -ne $Outputs.easyAuthIssuer.value) {
+        throw "EasyAuth issuer is '$openIdIssuer'; expected '$($Outputs.easyAuthIssuer.value)'."
     }
 
-    $allowedAudiences = @($azureAdProvider.validation.allowedAudiences)
+    $allowedAudiences = @(Get-ObjectPropertyValue -InputObject $azureAdProvider -Path @('validation', 'allowedAudiences'))
     foreach ($expectedAudience in @($ClientId, "api://$ClientId")) {
         if ($allowedAudiences -notcontains $expectedAudience) {
             throw "EasyAuth allowed audiences do not include '$expectedAudience'."
         }
     }
-    if ($authProperties.login.tokenStore.enabled -ne $false) {
+    if ((Get-ObjectPropertyValue -InputObject $authProperties -Path @('login', 'tokenStore', 'enabled')) -ne $false) {
         throw 'The EasyAuth token store should remain disabled because the SPA manages its own tokens.'
     }
 
@@ -524,6 +1191,31 @@ function Test-TelemetryDeployment {
     )
     if ($miseSetting -ne 'true') {
         throw "WEBSITE_AAD_ENABLE_MISE is '$miseSetting'; expected 'true'."
+    }
+
+    # WEBSITE_AAD_ENABLE_MISE on its own gives MISE v1, which does not satisfy the compliance KPI.
+    if (-not $SkipFirstPartyAuth) {
+        $firstPartyAuthSetting = Invoke-AzCli -Arguments @(
+            'webapp', 'config', 'appsettings', 'list',
+            '--resource-group', $ResourceGroupName,
+            '--name', $WebAppName,
+            '--query', "[?name=='WEBSITE_LOAD_FIRST_PARTY_AUTH'].value | [0]",
+            '--output', 'tsv'
+        )
+        if ($firstPartyAuthSetting -ne 'true') {
+            throw "WEBSITE_LOAD_FIRST_PARTY_AUTH is '$firstPartyAuthSetting'; expected 'true'."
+        }
+    }
+
+    $siteIsLinux = Invoke-AzCli -Arguments @(
+        'webapp', 'show',
+        '--resource-group', $ResourceGroupName,
+        '--name', $WebAppName,
+        '--query', 'reserved',
+        '--output', 'tsv'
+    )
+    if ($siteIsLinux -eq 'true') {
+        throw 'The App Service is running on Linux, where App Service Authentication validated tokens with MISE v1. Expected Windows.'
     }
 
     $easyAuthReady = $false
@@ -545,7 +1237,7 @@ function Test-TelemetryDeployment {
         }
 
         if ($easyAuthVersionResponse.StatusCode -eq 401) {
-            # Linux EasyAuth can require an authenticated session for this endpoint.
+            # EasyAuth can require an authenticated session for this endpoint (it did on Linux).
             # A 401 proves the platform route is active instead of falling through to the SPA.
             $easyAuthReady = $true
             break
@@ -555,8 +1247,9 @@ function Test-TelemetryDeployment {
             $versionMatch = [regex]::Match($easyAuthVersionResponse.Content, '\d+(?:\.\d+){2,3}')
             if ($versionMatch.Success) {
                 $easyAuthVersion = [version] $versionMatch.Value
-                if ($easyAuthVersion -le [version] '1.7.0') {
-                    throw "EasyAuth runtime version is $easyAuthVersion; a version newer than 1.7.0 is required."
+                # 1.13.0 is the first App Service Authentication release that can load MISE v2.
+                if ($easyAuthVersion -lt [version] '1.13.0') {
+                    throw "EasyAuth runtime version is $easyAuthVersion; 1.13.0 or later is required for MISE v2."
                 }
                 $easyAuthReady = $true
                 break
@@ -613,14 +1306,15 @@ function Test-TelemetryDeployment {
 
     $configReferences = Invoke-AzRestJson -Method get `
         -Uri "https://management.azure.com$webAppResourceId/config/configreferences/appsettings?api-version=2026-07-15"
-    $telemetrySecretReference = @($configReferences.value) |
+    $telemetrySecretReference = @(Get-ObjectPropertyValue -InputObject $configReferences -Path @('value')) |
         Where-Object { $_.name -eq 'TelemetrySecret' -or $_.id -match '/TelemetrySecret$' } |
         Select-Object -First 1
-    $referenceStatus = if ($telemetrySecretReference.properties.status -is [string]) {
-        $telemetrySecretReference.properties.status
+    $statusValue = Get-ObjectPropertyValue -InputObject $telemetrySecretReference -Path @('properties', 'status')
+    $referenceStatus = if ($statusValue -is [string]) {
+        $statusValue
     }
     else {
-        $telemetrySecretReference.properties.status.name
+        Get-ObjectPropertyValue -InputObject $telemetrySecretReference -Path @('properties', 'status', 'name')
     }
     if ($referenceStatus -ne 'Resolved') {
         throw "TelemetrySecret Key Vault reference status is '$referenceStatus'; expected 'Resolved'."
@@ -639,15 +1333,67 @@ function Test-TelemetryDeployment {
 
 Assert-AzureContext
 Register-ResourceProviders
+$script:TelemetryResourceGroupExists = Test-ResourceGroupExists
 Assert-WebAppNameAvailable
+
+$replacementRecord = Read-ReplacementRecord
+if ($replacementRecord) {
+    Write-Warning "Linux-to-Windows replacement resume record found at $(Get-ReplacementRecordPath). The script will reuse its app registration and recorded role assignments, then remove it only after restore succeeds."
+    if ($AzureAdClientId -and $replacementRecord.clientId -and $AzureAdClientId -ne $replacementRecord.clientId) {
+        throw "Replacement resume record expects Entra client ID $($replacementRecord.clientId), but -AzureAdClientId supplied $AzureAdClientId. Use the recorded client ID or remove the stale record after manually verifying the replacement."
+    }
+}
+
+$existingWebApp = Get-ExistingWebApp
+$replaceLinuxSite = $false
+if ($existingWebApp -and (Test-IsLinuxWebApp -WebApp $existingWebApp)) {
+    $linuxMessage = "App Service '$WebAppName' runs on Linux, and this template deploys it on Windows: App Service Authentication on Linux validated tokens with MISE v1, which does not satisfy the MISE compliance KPI. " +
+        'An App Service cannot change operating system, so the site and its plan must be deleted and re-created with the same name, and the service is offline until that deployment completes.'
+    if ($WhatIf) {
+        Write-Warning "$linuxMessage A real run needs -ReplaceLinuxWebApp; this preview cannot show that replacement."
+    }
+    elseif (-not $ReplaceLinuxWebApp) {
+        throw "$linuxMessage Re-run with -ReplaceLinuxWebApp to do that."
+    }
+    else {
+        $replaceLinuxSite = $true
+    }
+}
+
+if ($replacementRecord -and (-not $existingWebApp -or -not (Test-IsLinuxWebApp -WebApp $existingWebApp))) {
+    Remove-LeftoverLinuxPlanFromReplacementRecord -Record $replacementRecord
+}
+
+# Which app registration the deployment is tied to. An existing site already names one; it must not
+# be swapped for a different one just because the original can no longer be found by name.
+$expectedClientId = if ($replacementRecord) { $replacementRecord.clientId } else { $AzureAdClientId }
+if ($existingWebApp) {
+    $configuredClientId = Get-ConfiguredEntraClientId
+    if (-not $expectedClientId) {
+        $expectedClientId = $configuredClientId
+    }
+    elseif ($configuredClientId -and $configuredClientId -ne $expectedClientId) {
+        Write-Warning "The site is configured for app registration $configuredClientId; -AzureAdClientId switches it to $expectedClientId."
+    }
+}
 
 $redirectUri = "https://$WebAppName.azurewebsites.net"
 
 if ($WhatIf) {
-    $clientId = if ($AzureAdClientId) { $AzureAdClientId } else { '00000000-0000-0000-0000-000000000000' }
+    $clientId = if ($expectedClientId) { $expectedClientId } else { '00000000-0000-0000-0000-000000000000' }
+    if ($expectedClientId) {
+        try {
+            if (-not (Find-EntraApplicationByClientId -ClientId $expectedClientId)) {
+                Write-Warning "App registration $expectedClientId no longer exists. A real run stops until it is restored, or until -AllowNewEntraApplication is passed."
+            }
+        }
+        catch {
+            Write-Warning "Could not check that app registration $expectedClientId still exists: $($_.Exception.Message)"
+        }
+    }
 }
 else {
-    $entraApplication = Get-OrCreateEntraApplication -RedirectUri $redirectUri
+    $entraApplication = Get-OrCreateEntraApplication -RedirectUri $redirectUri -ExpectedClientId $expectedClientId
     Grant-CurrentUserDashboardAccess -EntraApplication $entraApplication
     $clientId = $entraApplication.AppId
 }
@@ -682,14 +1428,60 @@ try {
         return
     }
 
-    $deployment = Invoke-AzCli -Arguments @(
-        'deployment', 'sub', 'create',
-        '--name', $deploymentName,
-        '--location', $Location,
-        '--template-file', $templateFile,
-        '--parameters', "@$parameterFile",
-        '--output', 'json'
-    ) -AsJson
+    $preservedRoleAssignments = @(Get-ReplacementRecordRoleAssignments -ReplacementRecord $replacementRecord)
+    $oldManagedIdentityPrincipalId = if ($replacementRecord) { $replacementRecord.managedIdentityPrincipalId } else { $null }
+    if ($replaceLinuxSite) {
+        $managedIdentityPrincipalId = Get-WebAppManagedIdentityPrincipalId -WebApp $existingWebApp
+        if (-not $oldManagedIdentityPrincipalId) {
+            $oldManagedIdentityPrincipalId = $managedIdentityPrincipalId
+        }
+
+        # Read-only checks first, so a failure leaves the Linux site exactly as it was.
+        Assert-NoManagementLocks
+        Assert-AppServicePlanReplaceable -WebApp $existingWebApp
+        if (-not $replacementRecord) {
+            $preservedRoleAssignments = @(Get-WebAppRoleAssignments -WebApp $existingWebApp -ManagedIdentityPrincipalId $managedIdentityPrincipalId)
+        }
+
+        if (-not $SkipFirstPartyAuth) {
+            Assert-FirstPartyAuthAccepted
+        }
+
+        foreach ($assignment in $preservedRoleAssignments) {
+            # Printed first so they can be restored by hand if the deployment fails part-way.
+            Write-Host "Will restore site-scoped role '$($assignment.RoleDefinitionName)' for $($assignment.PrincipalType) $($assignment.PrincipalId) after re-creating the site."
+        }
+
+        if (-not $replacementRecord) {
+            $replacementRecord = Write-ReplacementRecord `
+                -WebApp $existingWebApp `
+                -ClientId $clientId `
+                -ManagedIdentityPrincipalId $managedIdentityPrincipalId `
+                -RoleAssignments $preservedRoleAssignments
+            $oldManagedIdentityPrincipalId = $replacementRecord.managedIdentityPrincipalId
+        }
+
+        Remove-LinuxWebApp -WebApp $existingWebApp -ManagedIdentityPrincipalId $managedIdentityPrincipalId
+    }
+
+    try {
+        $deployment = Invoke-AzCli -Arguments @(
+            'deployment', 'sub', 'create',
+            '--name', $deploymentName,
+            '--location', $Location,
+            '--template-file', $templateFile,
+            '--parameters', "@$parameterFile",
+            '--output', 'json'
+        ) -AsJson
+    }
+    catch {
+        if (-not $SkipFirstPartyAuth -and "$($_.Exception.Message)" -match '(?i)first[ -]?party') {
+            throw ('The deployment failed because App Service did not accept WEBSITE_LOAD_FIRST_PARTY_AUTH on this subscription. ' +
+                'The setting is only accepted once App Service has enabled the subscription for first-party authentication. ' +
+                "Arrange that and re-run, or re-run with -SkipFirstPartyAuth (App Service Authentication then stays on MISE v1).`n$($_.Exception.Message)")
+        }
+        throw
+    }
 
     $outputs = $deployment.properties.outputs
     $webAppResourceId = Invoke-AzCli -Arguments @(
@@ -699,6 +1491,20 @@ try {
         '--query', 'id',
         '--output', 'tsv'
     )
+
+    if (@($preservedRoleAssignments).Count -gt 0) {
+        $newWebApp = Get-ExistingWebApp
+        $newManagedIdentityPrincipalId = if ($newWebApp) { Get-WebAppManagedIdentityPrincipalId -WebApp $newWebApp } else { $null }
+        Restore-WebAppRoleAssignments `
+            -WebAppResourceId $webAppResourceId `
+            -Assignments $preservedRoleAssignments `
+            -OldManagedIdentityPrincipalId $oldManagedIdentityPrincipalId `
+            -NewManagedIdentityPrincipalId $newManagedIdentityPrincipalId
+    }
+
+    if ($replacementRecord) {
+        Remove-ReplacementRecord
+    }
 
     if (-not $SkipApplicationPublish) {
         Publish-TelemetryApplication -WebAppResourceId $webAppResourceId

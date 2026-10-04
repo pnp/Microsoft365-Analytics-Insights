@@ -62,6 +62,8 @@ import PrintButton from '../components/shared/PrintButton';
 import { PRINT_ROW_LIMIT } from '../components/shared/printPreparation';
 import { serverPlaceholderText } from '../components/shared/serverPlaceholder';
 import DismissibleWarnings from '../components/shared/DismissibleWarnings';
+import DateRangeControl from '../components/licenceActivity/DateRangeControl';
+import { latestEndString, addDays } from '../components/licenceActivity/dateRange';
 import PiiHiddenNote from '../components/shared/PiiHiddenNote';
 import { SegmentTable, BAND_COLOUR_LIST } from '../components/copilotAdoption/adoptionShared';
 import { KpiGrid, formatCount, formatDate, formatPct, weightSharePct } from '../components/shared/KpiGrid';
@@ -113,6 +115,7 @@ import {
 } from '../components/userFilter/userFilterModel';
 import { notify } from '../components/toast';
 import { EMPTY_USER_FILTER, type UserFilter, type UserFilterDimension } from '../types/userFilter';
+import type { DateRange } from '../types/licenceActivity';
 import { usePortalAccess } from '../access';
 
 const WINDOW_OPTIONS: { value: number; labelKey: TranslationKey }[] = [
@@ -121,6 +124,35 @@ const WINDOW_OPTIONS: { value: number; labelKey: TranslationKey }[] = [
   { value: 90, labelKey: 'copilotAdoption.page.window.last90Days' },
   { value: 180, labelKey: 'copilotAdoption.page.window.last180Days' },
 ];
+
+export function lastCalendarMonthRange(now = new Date()): DateRange {
+  const firstThisMonth = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
+  const to = addDays(formatDateInput(firstThisMonth), -1);
+  const end = new Date(`${to}T00:00:00Z`);
+  return { from: formatDateInput(new Date(Date.UTC(end.getUTCFullYear(), end.getUTCMonth(), 1))), to };
+}
+
+export function lastCalendarQuarterRange(now = new Date()): DateRange {
+  const currentQuarter = Math.floor(now.getUTCMonth() / 3);
+  const startMonth = currentQuarter === 0 ? 9 : (currentQuarter - 1) * 3;
+  const year = currentQuarter === 0 ? now.getUTCFullYear() - 1 : now.getUTCFullYear();
+  const from = formatDateInput(new Date(Date.UTC(year, startMonth, 1)));
+  const to = addDays(formatDateInput(new Date(Date.UTC(year, startMonth + 3, 1))), -1);
+  return { from, to };
+}
+
+function formatDateInput(d: Date): string {
+  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`;
+}
+
+function PastRangeNamedListsHiddenNote() {
+  const t = useT();
+  return (
+    <MessageBar intent="info">
+      <MessageBarBody>{t('copilotAdoption.server.warning.pastRangeNamedListsHidden')}</MessageBarBody>
+    </MessageBar>
+  );
+}
 
 type AdoptionTab = 'executive' | 'analyst' | 'licensed' | 'cowork' | 'unlicensed' | 'agents' | 'opportunities' | 'method';
 
@@ -415,6 +447,7 @@ function CopilotAdoptionView({
   const [availability, setAvailability] = useState<CopilotAdoptionAvailability | null>(null);
   const [availabilityError, setAvailabilityError] = useState<string | null>(null);
   const [windowDays, setWindowDays] = useState(28);
+  const [dateRange, setDateRange] = useState<DateRange | null>(null);
   // Who every visual on the page describes: conditions on people's Entra ID attributes and custom
   // organisations - email domain included - or no conditions for the whole tenant.
   //
@@ -492,14 +525,14 @@ function CopilotAdoptionView({
     // scope loads kept the Excel button pointing at one population and enabled against another -
     // and if the new request then failed, the page went on rendering the previous organisation's
     // figures underneath a heading naming the newly selected one.
-    const scopeKey = `${windowDays}::${userFilterScope}`;
+    const scopeKey = `${windowDays}::${dateRange?.from ?? 'rolling'}::${dateRange?.to ?? 'rolling'}::${userFilterScope}`;
     if (lastSummaryScope.current !== scopeKey) {
       setSummary(null);
     }
     setSummaryLoading(true);
     setSummaryError(null);
 
-    fetchAdoptionSummary(windowDays, undefined, controller.signal, null, userFilterScope || null)
+    fetchAdoptionSummary(windowDays, undefined, controller.signal, null, userFilterScope || null, ...(dateRange ? [dateRange] as const : []))
       .then((s) => {
         if (!cancelled) {
           lastSummaryScope.current = scopeKey;
@@ -519,13 +552,13 @@ function CopilotAdoptionView({
     //
     // Deliberately NOT narrowed by the user filter: these are the lists the per-table filters are
     // chosen FROM, so narrowing them would strand the reader on whatever the filter left.
-    fetchAdoptionFilters(windowDays, undefined, controller.signal)
+    fetchAdoptionFilters(windowDays, undefined, controller.signal, ...(dateRange ? [dateRange] as const : []))
       .then((f) => {
         if (!cancelled) setFilterOptions(f);
       })
       .catch(() => undefined);
 
-    fetchAdoptionSql(windowDays, undefined, controller.signal)
+    fetchAdoptionSql(windowDays, undefined, controller.signal, ...(dateRange ? [dateRange] as const : []))
       .then((s) => {
         if (!cancelled) setSql(s);
       })
@@ -538,7 +571,7 @@ function CopilotAdoptionView({
       // changed or the page unmounted.
       controller.abort();
     };
-  }, [availability, windowDays, userFilterScope]);
+  }, [availability, windowDays, dateRange, userFilterScope]);
 
   const onTabSelect: SelectTabEventHandler = (_e: unknown, data: { value: unknown }) => {
     setDrillAction(undefined);
@@ -582,16 +615,34 @@ function CopilotAdoptionView({
         <div className={styles.controls} data-print="hide">
           <Text size={200} className={styles.muted}>{t('copilotAdoption.page.controls.periodLabel')}</Text>
           <Select
-            value={String(windowDays)}
-            onChange={(_e: unknown, d: { value: string }) => setWindowDays(Number(d.value))}
+            value={dateRange ? 'custom' : String(windowDays)}
+            onChange={(_e: unknown, d: { value: string }) => {
+              setWindowDays(Number(d.value));
+              setDateRange(null);
+            }}
             aria-label={t('copilotAdoption.page.controls.reportingPeriodAria')}
           >
+            {dateRange && (
+              <option value="custom">
+                {t('copilotAdoption.page.window.customRange')}
+              </option>
+            )}
             {WINDOW_OPTIONS.map((o) => (
               <option key={o.value} value={o.value}>
                 {t(o.labelKey)}
               </option>
             ))}
           </Select>
+          <Button size="small" appearance={dateRange ? 'secondary' : 'subtle'} onClick={() => setDateRange(lastCalendarMonthRange())}>
+            {t('copilotAdoption.page.window.lastCalendarMonth')}
+          </Button>
+          <Button size="small" appearance={dateRange ? 'secondary' : 'subtle'} onClick={() => setDateRange(lastCalendarQuarterRange())}>
+            {t('copilotAdoption.page.window.lastCalendarQuarter')}
+          </Button>
+          <DateRangeControl
+            value={dateRange ?? { from: addDays(latestEndString(), -(windowDays - 1)), to: latestEndString() }}
+            onChange={setDateRange}
+          />
 
           {availability?.available && (
             <PrintButton
@@ -619,7 +670,7 @@ function CopilotAdoptionView({
                 as="a"
                 href={
                   summary
-                    ? workbookExportUrl(windowDays, undefined, null, timeSavedExportParams(timeSaved), userFilterParam)
+                    ? workbookExportUrl(windowDays, undefined, null, timeSavedExportParams(timeSaved), userFilterParam, ...(dateRange ? [dateRange] as const : []))
                     : undefined
                 }
                 disabled={!summary}
@@ -634,9 +685,11 @@ function CopilotAdoptionView({
           <Text size={200}>
             {t(TAB_LABEL_KEYS[tab])}
             {' \u00b7 '}
-            {WINDOW_OPTIONS.find((o) => o.value === windowDays)?.labelKey
-              ? t(WINDOW_OPTIONS.find((o) => o.value === windowDays)!.labelKey)
-              : t('copilotAdoption.page.print.lastDays', { v0: windowDays })}
+            {dateRange
+              ? t('copilotAdoption.page.window.customRange')
+              : WINDOW_OPTIONS.find((o) => o.value === windowDays)?.labelKey
+                ? t(WINDOW_OPTIONS.find((o) => o.value === windowDays)!.labelKey)
+                : t('copilotAdoption.page.print.lastDays', { v0: windowDays })}
             {summary && <> {t('copilotAdoption.page.print.dateRange', { v0: formatDate(summary.fromUtc), v1: formatDate(summary.toUtc) })}</>}
             {' \u00b7 '}
             {isEmptyFilter(userFilter) && !summary?.globalFilter
@@ -782,21 +835,23 @@ function CopilotAdoptionView({
               )}
 
               {tab === 'licensed' && (
-                canSeePii ? (
-                  <>
+                <>
                   <SeatHolderTimeSavedPanel summary={summary} timeSaved={timeSaved} />
-                  <LicensedUsersPanel
-                    key={`${drillAction ?? 'all'}::${userFilterScope}`}
-                    windowDays={windowDays}
-                    filterOptions={filterOptions}
-                    actionPlan={summary.actionPlan}
-                    options={summary.options}
-                    dataSources={summary.dataSources}
-                    initialAction={drillAction}
-                    userFilter={userFilterParam}
-                  />
-                  </>
-                ) : <PiiHiddenNote />
+                  {dateRange ? (
+                    <PastRangeNamedListsHiddenNote />
+                  ) : canSeePii ? (
+                    <LicensedUsersPanel
+                      key={`${drillAction ?? 'all'}::${userFilterScope}`}
+                      windowDays={windowDays} dateRange={dateRange}
+                      filterOptions={filterOptions}
+                      actionPlan={summary.actionPlan}
+                      options={summary.options}
+                      dataSources={summary.dataSources}
+                      initialAction={drillAction}
+                      userFilter={userFilterParam}
+                    />
+                  ) : <PiiHiddenNote />}
+                </>
               )}
 
               {tab === 'unlicensed' && (
@@ -821,23 +876,25 @@ function CopilotAdoptionView({
               {tab === 'cowork' && (
                 <CoworkPanel
                   key={userFilterScope || 'all'}
-                  windowDays={windowDays}
+                  windowDays={windowDays} dateRange={dateRange}
                   summary={summary}
                   options={summary.options}
                   userFilter={userFilterParam}
-                  canSeePii={canSeePii}
+                  canSeePii={canSeePii && !dateRange}
+                  hiddenListNote={canSeePii && dateRange ? <PastRangeNamedListsHiddenNote /> : undefined}
                 />
               )}
 
               {tab === 'opportunities' && (
                 <OpportunitiesPanel
                   key={userFilterScope || 'all'}
-                  windowDays={windowDays}
+                  windowDays={windowDays} dateRange={dateRange}
                   summary={summary}
                   options={summary.options}
                   guidanceLinks={summary.guidanceLinks}
                   userFilter={userFilterParam}
-                  canSeePii={canSeePii}
+                  canSeePii={canSeePii && !dateRange}
+                  hiddenListNote={canSeePii && dateRange ? <PastRangeNamedListsHiddenNote /> : undefined}
                 />
               )}
 
@@ -2837,7 +2894,12 @@ function buildKpis(
               })}`
             : '', v11: formatCount(
           summary.reclaimSeatsHeldBackForReview,
-        ) }),
+        ), v12: summary.reclaimSeatsNoLongerHeld > 0
+            ? ` + ${t('copilotAdoption.page.reclaimNoLongerHeldAddBack', {
+                count: formatCount(summary.reclaimSeatsNoLongerHeld),
+              })}`
+            : '',
+        }),
         source:
           t('copilotAdoption.page.drillThroughLicensedUsersTabReclaimTierFilterEach'),
       },

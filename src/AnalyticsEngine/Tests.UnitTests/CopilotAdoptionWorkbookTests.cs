@@ -386,6 +386,16 @@ namespace Tests.UnitTests
                 + "Missing: " + string.Join(", ", missing));
         }
 
+        [TestMethod]
+        public void Workbook_ReportSheetExplainsFormerSeatHolderReclaimHoldback()
+        {
+            var cells = SheetCells(CopilotAdoptionWorkbook.Build(SyntheticAnalysis()), "Headline figures");
+
+            Assert.IsTrue(cells.Contains("Held back - no longer held"),
+                "The Report sheet must name the former-seat-holder reconciliation term separately from review/exclusion.");
+            Assert.IsTrue(cells.Any(c => c.Contains("no longer hold a Copilot seat today")));
+        }
+
         /// <summary>
         /// Every tuning option must reach the Settings sheet, for the same reason: "were both files
         /// scored by the same rules?" has to be answerable by lookup, not by reading prose.

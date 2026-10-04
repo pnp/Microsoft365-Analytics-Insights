@@ -4,7 +4,8 @@ name: Telemetry Service
 #
 # Deliberately separate from ci.yml / pr.yml / tests.yml: those build the .NET Framework
 # AnalyticsEngine solution on Windows and publish GitHub releases, whereas this is a .NET 10
-# Linux web app that deploys straight to App Service.
+# web app (hosted on Windows App Service) that deploys straight to App Service. The build itself
+# runs on Linux: the published output is framework-dependent and portable, web.config included.
 
 on:
   # Only main builds automatically. Merging to `dev` no longer re-runs this: the pull request that

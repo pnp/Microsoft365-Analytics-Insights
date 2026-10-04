@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, Fragment } from 'react';
+import { useEffect, useMemo, useRef, useState, Fragment, type ReactNode } from 'react';
 import {
   makeStyles,
   tokens,
@@ -34,6 +34,7 @@ import type {
   CoworkReadinessRow,
   CoworkTier,
 } from '../../types/copilotAdoption';
+import type { DateRange } from '../../types/licenceActivity';
 import Spinner from '../Spinner';
 import {
   DetailRationale,
@@ -322,13 +323,16 @@ function BasisBadge({ basis }: { basis: CoworkBasis }) {
  */
 export default function CoworkPanel({
   windowDays,
+  dateRange,
   summary,
   options,
   seatLicenceTypeIds,
   userFilter,
   canSeePii = true,
+  hiddenListNote,
 }: {
   windowDays: number;
+  dateRange?: DateRange | null;
   summary: CopilotAdoptionSummary;
   options: CopilotAdoptionOptions;
   seatLicenceTypeIds?: number[];
@@ -344,6 +348,11 @@ export default function CoworkPanel({
    * note, and the list is never requested (the server would refuse it).
    */
   canSeePii?: boolean;
+  /**
+   * Shown instead of the people list when it is hidden. Defaults to the See PII note; a past date
+   * range passes its own note, because there the list is hidden for a different reason.
+   */
+  hiddenListNote?: ReactNode;
 }) {
   const styles = useStyles();
   const table = useAdoptionTableStyles();
@@ -413,7 +422,7 @@ export default function CoworkPanel({
     setLoading(true);
     setError(null);
 
-    fetchCowork(windowDays, filters, page * PAGE_SIZE, PAGE_SIZE, seatLicenceTypeIds, controller.signal)
+    fetchCowork(windowDays, filters, page * PAGE_SIZE, PAGE_SIZE, seatLicenceTypeIds, controller.signal, ...(dateRange ? [dateRange] as const : []))
       .then((result) => {
         if (!cancelled) setData(result);
       })
@@ -434,7 +443,7 @@ export default function CoworkPanel({
 
   const sortValue = `${filters.sortBy}:${filters.sortDesc ? 'desc' : 'asc'}`;
   const exportUrl = useMemo(
-    () => coworkExportUrl(windowDays, filters, seatLicenceTypeIds),
+    () => coworkExportUrl(windowDays, filters, seatLicenceTypeIds, ...(dateRange ? [dateRange] as const : [])),
     [windowDays, filters, seatLicenceTypeIds],
   );
 
@@ -447,7 +456,7 @@ export default function CoworkPanel({
     enabled: available && canSeePii && section === 'people' && !loading && data !== null,
     total: data?.total ?? 0,
     loadedRows: data?.rows.length ?? 0,
-    loadPage: (skip, take, signal) => fetchCowork(windowDays, filters, skip, take, seatLicenceTypeIds, signal),
+    loadPage: (skip, take, signal) => fetchCowork(windowDays, filters, skip, take, seatLicenceTypeIds, signal, ...(dateRange ? [dateRange] as const : [])),
   });
   const rows = printRows ?? data?.rows ?? [];
   const selectedTier = summary.coworkTiers.find((tier) => tier.code === filters.tiers[0]);
@@ -773,7 +782,7 @@ export default function CoworkPanel({
 
       {/* ---------- People: the spending-policy list ---------- */}
       <div role="tabpanel" aria-label={t('copilotAdoptionCowork.sections.people')} hidden={section !== 'people'}>
-      {!canSeePii ? <PiiHiddenNote /> : (
+      {!canSeePii ? (hiddenListNote ?? <PiiHiddenNote />) : (
       <Card>
         <Text weight="semibold" block>
           {t('copilotAdoptionCowork.intro.title')}

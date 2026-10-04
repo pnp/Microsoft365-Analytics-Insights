@@ -109,12 +109,15 @@ namespace Common.Entities.CopilotAdoption
             var o = options ?? CopilotAdoptionOptions.Default;
             var target = TargetActiveDays(o);
             var days = DaysSinceTenureStart(row?.AccountCreatedUtc, nowUtc);
-            if (!days.HasValue) return target;
 
             var windowDays = Math.Max(1, o.WindowDays);
             // "days since creation" counts whole days, so an account created today has been available
             // for one day of the window, not zero.
-            var observedDays = Math.Max(1, Math.Min(windowDays, days.Value + 1));
+            var observedDays = days.HasValue ? Math.Max(1, Math.Min(windowDays, days.Value + 1)) : windowDays;
+            if (row?.SeatHeldDays.HasValue == true)
+            {
+                observedDays = Math.Max(1, Math.Min(observedDays, (int)Math.Ceiling(row.SeatHeldDays.Value)));
+            }
             if (observedDays >= windowDays) return target;
 
             return Math.Max(1d, target * observedDays / windowDays);
@@ -230,6 +233,7 @@ namespace Common.Entities.CopilotAdoption
                 CompanyName = row.CompanyName,
                 ManagerUserPrincipalName = row.ManagerUserPrincipalName,
                 AccountEnabled = row.AccountEnabled,
+                HoldsSeatToday = row.HoldsSeatToday,
                 AccountCreatedUtc = row.AccountCreatedUtc,
                 TenureStartUtc = row.AccountCreatedUtc,
                 TenureBasis = row.AccountCreatedUtc.HasValue ? TenureBasisAccountAge : TenureBasisUnknown,
@@ -243,6 +247,7 @@ namespace Common.Entities.CopilotAdoption
                 ReclaimExclusionExpired = row.ReclaimExclusionExpired,
                 SeatLicences = row.SeatLicences,
                 SeatLicenceTypeIds = row.SeatLicenceTypeIds,
+                SeatHeldDays = row.SeatHeldDays,
 
                 Interactions = interactions,
                 ActiveDays = activeDays,
@@ -292,6 +297,13 @@ namespace Common.Entities.CopilotAdoption
         {
             if (row == null) throw new ArgumentNullException(nameof(row));
             var o = options ?? CopilotAdoptionOptions.Default;
+
+            if (row.HoldsSeatToday == false)
+            {
+                row.ReclaimEligibility = string.Empty;
+                row.ReclaimEligibilityReason = string.Empty;
+                return;
+            }
 
             if (!string.IsNullOrEmpty(row.ReclaimExclusionReason))
             {
@@ -518,8 +530,13 @@ namespace Common.Entities.CopilotAdoption
             var o = options ?? CopilotAdoptionOptions.Default;
 
             // Precedence deliberately matches ApplyReclaimEligibility, so the tier, the action code and
-            // this sentence can never disagree: an admin exclusion outranks everything, then a disabled
-            // account, then the review cases.
+            // this sentence can never disagree: no current seat means no reclaim action; otherwise an
+            // admin exclusion outranks everything, then a disabled account, then the review cases.
+            if (row.HoldsSeatToday == false)
+            {
+                return "No reclaim action - this person no longer holds a Copilot licence.";
+            }
+
             if (row.ReclaimEligibility == ReclaimEligibilityTiers.Excluded)
             {
                 var review = row.ReclaimExclusionReviewAfterUtc.HasValue
@@ -641,8 +658,11 @@ namespace Common.Entities.CopilotAdoption
         {
             if (row == null) throw new ArgumentNullException(nameof(row));
 
-            // Same precedence as ApplyReclaimEligibility and RecommendedAction: an admin exclusion
-            // outranks everything, then a disabled account, then the review cases.
+            // Same precedence as ApplyReclaimEligibility and RecommendedAction: no current seat means no
+            // reclaim action; otherwise an admin exclusion outranks everything, then a disabled account,
+            // then the review cases.
+            if (row.HoldsSeatToday == false) return string.Empty;
+
             if (row.ReclaimEligibility == ReclaimEligibilityTiers.Excluded) return AdoptionActionCodes.Excluded;
 
             // A disabled account holding a Copilot seat is the clearest reclaim there is, whatever its
@@ -1927,7 +1947,7 @@ namespace Common.Entities.CopilotAdoption
                 $"Counts observed Copilot audit actions by Copilot seat holders in the selected period, restated as a {Math.Max(1, o.HabitBucketNormalisationDays)}-day month.",
                 $"Credits Outlook actions at {Num(estimate.Credits.OutlookMinutesPerAction)} minutes each, Word/PowerPoint/Excel actions at {Num(estimate.Credits.OfficeMinutesPerAction)} minutes each, and Teams meeting recap or summarise actions at {Num(estimate.Credits.TeamsMeetingMinutesPerAction)} minutes each.",
                 "Microsoft's Copilot assisted-hours method credits meeting summarisation from meeting duration; this import does not reliably carry duration, so the Teams meeting credit is a visible fixed fallback.",
-                $"Copilot Chat, agents, Cowork and other surfaces are credited at {Num(estimate.Credits.UncreditedMinutesPerAction)} minutes here unless the reader overrides it. Cowork has its own estimate and is never added to this one.",
+                $"Copilot Chat and other non-agent surfaces default to {Num(estimate.Credits.UncreditedMinutesPerAction)} minutes here unless the reader overrides it. Agent and Cowork activity is excluded from this figure; Cowork has its own estimate and is never added to this one.",
             };
             if (estimate.ExcludedUsageReportSourcedUsers > 0)
             {

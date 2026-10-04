@@ -31,6 +31,8 @@ namespace Common.Entities.CopilotAdoption
 
         public bool? AccountEnabled { get; set; }
 
+        public bool? HoldsSeatToday { get; set; }
+
         /// <summary>
         /// Entra user.createdDateTime persisted by the user import. Used as the current account-age proxy
         /// for Copilot seat tenure until real assignment history exists.
@@ -54,6 +56,8 @@ namespace Common.Entities.CopilotAdoption
         public string SeatLicences { get; set; }
 
         public List<int> SeatLicenceTypeIds { get; set; } = new List<int>();
+
+        public double? SeatHeldDays { get; set; }
 
         #region Audit-log derived (all users, including Copilot Chat with no seat)
 
@@ -148,6 +152,9 @@ namespace Common.Entities.CopilotAdoption
         [JsonProperty("accountEnabled")]
         public bool? AccountEnabled { get; set; }
 
+        [JsonIgnore]
+        public bool? HoldsSeatToday { get; set; }
+
         [JsonProperty("accountCreatedUtc")]
         public DateTime? AccountCreatedUtc { get; set; }
 
@@ -192,6 +199,9 @@ namespace Common.Entities.CopilotAdoption
 
         [JsonIgnore]
         public List<int> SeatLicenceTypeIds { get; set; } = new List<int>();
+
+        [JsonProperty("seatHeldDays")]
+        public double? SeatHeldDays { get; set; }
 
         [JsonProperty("interactions")]
         public long Interactions { get; set; }
