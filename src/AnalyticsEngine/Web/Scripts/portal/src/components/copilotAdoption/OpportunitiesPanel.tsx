@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, Fragment } from 'react';
+import { useEffect, useMemo, useRef, useState, Fragment, type ReactNode } from 'react';
 import {
   makeStyles,
   tokens,
@@ -195,6 +195,7 @@ export default function OpportunitiesPanel({
   seatLicenceTypeIds,
   userFilter,
   canSeePii = true,
+  hiddenListNote,
 }: {
   windowDays: number;
   dateRange?: DateRange | null;
@@ -215,6 +216,11 @@ export default function OpportunitiesPanel({
    * is replaced by a note and never requested (the server would refuse it).
    */
   canSeePii?: boolean;
+  /**
+   * Shown instead of the candidate list when it is hidden. Defaults to the See PII note; a past date
+   * range passes its own note, because there the list is hidden for a different reason.
+   */
+  hiddenListNote?: ReactNode;
 }) {
   const styles = useStyles();
   const table = useAdoptionTableStyles();
@@ -392,7 +398,7 @@ export default function OpportunitiesPanel({
     .filter(({ detail }) => isLicenceOpportunityWarning(detail));
   const unlicensedGuidance = (guidanceLinks ?? []).filter((l) => l.actionCode === 'unlicensed');
 
-  const list = !canSeePii ? <PiiHiddenNote /> : (
+  const list = !canSeePii ? (hiddenListNote ?? <PiiHiddenNote />) : (
     <Card>
       {/* Chrome: nothing here can be used on paper. What it is set to is printed below instead. */}
       <div className={styles.filters} data-print="hide">
