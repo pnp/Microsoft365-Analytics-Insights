@@ -22,6 +22,18 @@ namespace Common.Entities.CopilotAdoption
         [JsonProperty("windowDays")]
         public int WindowDays { get; set; } = 28;
 
+        [JsonProperty("fromUtc")]
+        public DateTime? FromUtc { get; set; }
+
+        [JsonProperty("toUtc")]
+        public DateTime? ToUtc { get; set; }
+
+        [JsonProperty("toExclusiveUtc")]
+        public DateTime? ToExclusiveUtc { get; set; }
+
+        [JsonProperty("usesExplicitDates")]
+        public bool UsesExplicitDates { get; set; }
+
         /// <summary>
         /// How far back to look for <i>any</i> prior Copilot activity, used to tell "never touched it"
         /// apart from "used to use it and stopped" - two populations that need completely different

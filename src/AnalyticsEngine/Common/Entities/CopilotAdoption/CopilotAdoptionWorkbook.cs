@@ -117,10 +117,14 @@ namespace Common.Entities.CopilotAdoption
 
             return string.Format(
                 CultureInfo.InvariantCulture,
-                "copilot-adoption-{0}d{2}-{1:yyyy-MM-dd}.xlsx",
+                summary?.Options?.UsesExplicitDates == true
+                    ? "copilot-adoption-{3:yyyy-MM-dd}-to-{4:yyyy-MM-dd}{2}-{1:yyyy-MM-dd}.xlsx"
+                    : "copilot-adoption-{0}d{2}-{1:yyyy-MM-dd}.xlsx",
                 windowDays,
                 generated,
-                narrowed);
+                narrowed,
+                summary?.FromUtc ?? generated,
+                summary?.ToUtc ?? generated);
         }
 
         #region Report metadata
@@ -227,10 +231,13 @@ namespace Common.Entities.CopilotAdoption
             {
                 // Said on the cover sheet, because a reader comparing this file with one exported by a
                 // colleague who holds the permission would otherwise take the missing sheets for missing data.
-                AddMeta(sheet, "Individual rows", IndividualDataWithheld,
-                    "Exported without the portal's See PII permission, so this workbook describes groups only. The "
-                    + "Licensed users and Licence opportunities sheets, the Cowork candidate list and any roll-up "
-                    + "labelled with a manager's name are left out. Every aggregate figure still covers the whole population.");
+                var pastRange = summary.Options?.UsesExplicitDates == true;
+                AddMeta(sheet, "Individual rows", pastRange ? "not included (historical range)" : IndividualDataWithheld,
+                    pastRange
+                        ? "Historical ranges hide named reclaim and recommendation lists, even for readers with See PII, because they describe people and managers as they are today. The Licensed users and Licence opportunities sheets, the Cowork candidate list and any roll-up labelled with a manager's name are left out. Every aggregate figure still covers the selected population."
+                        : "Exported without the portal's See PII permission, so this workbook describes groups only. The "
+                          + "Licensed users and Licence opportunities sheets, the Cowork candidate list and any roll-up "
+                          + "labelled with a manager's name are left out. Every aggregate figure still covers the whole population.");
             }
 
             sheet.AddBlankRow();
@@ -430,10 +437,12 @@ namespace Common.Entities.CopilotAdoption
             // figures up against the band breakdown and land exactly on it.
             AddMeta(sheet, "Held back - review or exclusion", summary.ReclaimSeatsHeldBackForReview,
                 "Never-used or dormant seats kept out of the reclaimable total because a human has to look at them first, or because an admin has already excluded them.");
+            AddMeta(sheet, "Held back - no longer held", summary.ReclaimSeatsNoLongerHeld,
+                "Historical never-used or dormant seat holders kept out of the reclaimable total because they no longer hold a Copilot seat today.");
             AddMeta(sheet, "Held back - report window mismatch", summary.ReclaimSeatsHeldBackForWindowMismatch,
                 "Seats kept out of the reclaimable total because they were scored from Microsoft's usage report over a period that is not this analysis window.");
             AddMeta(sheet, "Reclaimable but still active", summary.ReclaimSeatsFromActiveBands,
-                "Reclaimable seats that are not never-used or dormant - disabled accounts that were still active when they were disabled. Never used + Dormant + this = Reclaimable + both held-back figures.");
+                "Reclaimable seats that are not never-used or dormant - disabled accounts that were still active when they were disabled. Never used + Dormant + this = Reclaimable + all held-back figures.");
             AddMeta(sheet, "Too new to judge", summary.TooNewToJudgeUsers,
                 $"Seats held for less than the {summary.Options.ReclaimGraceDays}-day grace period. Counted separately because an unused brand-new seat has not failed - it has not started, and reclaiming it would take a licence back from someone who was only just given one.");
             if (!string.IsNullOrWhiteSpace(summary.ReclaimCaveat))
@@ -1624,10 +1633,13 @@ namespace Common.Entities.CopilotAdoption
 
             if (!includeIndividualData)
             {
-                sheet.AddTitle("Cowork candidates - " + IndividualDataWithheld);
+                var pastRange = summary.Options?.UsesExplicitDates == true;
+                sheet.AddTitle("Cowork candidates - " + (pastRange ? "not included (historical range)" : IndividualDataWithheld));
                 sheet.AddRow(XlsxCell.Wrapped(
-                    "This workbook was exported without the portal's See PII permission, so the named list of "
-                    + "seat holders is left out. The tier counts and department figures above cover everyone."));
+                    pastRange
+                        ? "Historical ranges hide named recommendation lists even for readers with See PII, so the named list of seat holders is left out. The tier counts and department figures above cover everyone."
+                        : "This workbook was exported without the portal's See PII permission, so the named list of "
+                          + "seat holders is left out. The tier counts and department figures above cover everyone."));
                 return;
             }
 
@@ -2263,6 +2275,10 @@ namespace Common.Entities.CopilotAdoption
             sheet.AddBlankRow();
             sheet.AddHeaderRow("Measure", "Definition");
 
+            AddMethod(sheet, "Reporting period", summary.Options.UsesExplicitDates
+                ? $"This workbook covers the UTC calendar range {summary.FromUtc:yyyy-MM-dd} to {summary.ToUtc:yyyy-MM-dd} inclusive."
+                : $"This workbook covers the rolling {summary.WindowDays}-day period ending when the analysis ran.");
+
             AddMethod(sheet, "Engagement score",
                 "Each licensed user scores 0-100 from three capped components, because 'did they use Copilot?' is "
                 + "almost never a yes/no question - someone who opened it twice and someone who lives in it produce "
@@ -2369,9 +2385,12 @@ namespace Common.Entities.CopilotAdoption
                 + (includeIndividualData
                     ? "Where both sources cover the same licensed user, the Licensed users sheet shows both figures side by side "
                       + "with their source and window. "
-                    : "Where both sources cover the same licensed user, the per-user list shows both figures side by side "
-                      + "with their source and window; this file was exported without the See PII permission, so that list "
-                      + "is not included. ")
+                    : summary.Options?.UsesExplicitDates == true
+                        ? "Where both sources cover the same licensed user, the per-user list shows both figures side by side "
+                          + "with their source and window; historical exports hide named lists, so that list is not included. "
+                        : "Where both sources cover the same licensed user, the per-user list shows both figures side by side "
+                          + "with their source and window; this file was exported without the See PII permission, so that list "
+                          + "is not included. ")
                 + "Do not average or silently reconcile them into one number.");
 
             AddMethod(sheet, "Comparing two exports",
@@ -2408,10 +2427,14 @@ namespace Common.Entities.CopilotAdoption
                       + "it stops at the workbook row cap (maxWorkbookUserRows on the Settings sheet), so on a "
                       + "tenant with more seats than that, use the per-user CSV export for the full population "
                       + "instead."
-                    : "Per-user movement cannot be read from this file: it was exported without the See PII "
-                      + "permission, so it has no 'Licensed users' sheet. Its 'Snapshot facts' match a full "
-                      + "export's except accountabilityRollup.count, which is 0 when the roll-up is grouped by "
-                      + "manager, because those rows name managers."));
+                    : summary.Options?.UsesExplicitDates == true
+                        ? "Per-user movement cannot be read from this file: historical exports hide named lists, "
+                          + "so it has no 'Licensed users' sheet. Its 'Snapshot facts' match a full export's except "
+                          + "accountabilityRollup.count, which is 0 when the roll-up is grouped by manager, because those rows name managers."
+                        : "Per-user movement cannot be read from this file: it was exported without the See PII "
+                          + "permission, so it has no 'Licensed users' sheet. Its 'Snapshot facts' match a full "
+                          + "export's except accountabilityRollup.count, which is 0 when the roll-up is grouped by "
+                          + "manager, because those rows name managers."));
 
             AddMethod(sheet, "Licence classification",
                 "Microsoft ships Copilot-branded SKUs that are not a Microsoft 365 Copilot licence (Copilot Studio, "

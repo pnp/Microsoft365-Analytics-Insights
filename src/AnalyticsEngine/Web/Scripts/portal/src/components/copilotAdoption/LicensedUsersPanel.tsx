@@ -19,6 +19,7 @@ import {
 import { ArrowDownload16Regular, ArrowClockwise16Regular } from '@fluentui/react-icons';
 import { fetchLicensedUsers, licensedUsersExportUrl } from '../../api/copilotAdoptionApi';
 import { AdoptionBand } from '../../types/copilotAdoption';
+import type { DateRange } from '../../types/licenceActivity';
 import type {
   AdoptionActionSummary,
   AdoptionFilterOptions,
@@ -142,6 +143,7 @@ const DEFAULT_FILTERS: LicensedUserFilters = {
  */
 export default function LicensedUsersPanel({
   windowDays,
+  dateRange,
   filterOptions,
   actionPlan,
   options,
@@ -152,6 +154,7 @@ export default function LicensedUsersPanel({
   userFilter,
 }: {
   windowDays: number;
+  dateRange?: DateRange | null;
   filterOptions: AdoptionFilterOptions | null;
   /** The action catalogue, used for the legend that replaced the repeated per-row prose column. */
   actionPlan: AdoptionActionSummary[];
@@ -202,7 +205,7 @@ export default function LicensedUsersPanel({
     setLoading(true);
     setError(null);
 
-    fetchLicensedUsers(windowDays, filters, page * PAGE_SIZE, PAGE_SIZE, seatLicenceTypeIds, controller.signal)
+    fetchLicensedUsers(windowDays, filters, page * PAGE_SIZE, PAGE_SIZE, seatLicenceTypeIds, controller.signal, ...(dateRange ? [dateRange] as const : []))
       .then((result) => {
         if (!cancelled) setData(result);
       })
@@ -231,7 +234,7 @@ export default function LicensedUsersPanel({
   };
 
   const exportUrl = useMemo(
-    () => licensedUsersExportUrl(windowDays, filters, seatLicenceTypeIds),
+    () => licensedUsersExportUrl(windowDays, filters, seatLicenceTypeIds, ...(dateRange ? [dateRange] as const : [])),
     [windowDays, filters, seatLicenceTypeIds],
   );
 
@@ -242,7 +245,7 @@ export default function LicensedUsersPanel({
     enabled: !loading && data !== null,
     total: data?.total ?? 0,
     loadedRows: data?.rows.length ?? 0,
-    loadPage: (skip, take, signal) => fetchLicensedUsers(windowDays, filters, skip, take, seatLicenceTypeIds, signal),
+    loadPage: (skip, take, signal) => fetchLicensedUsers(windowDays, filters, skip, take, seatLicenceTypeIds, signal, ...(dateRange ? [dateRange] as const : [])),
   });
   const rows = printRows ?? data?.rows ?? [];
 

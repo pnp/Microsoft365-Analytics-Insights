@@ -20,6 +20,7 @@ using System.Web.Http;
 using System.Web.Http.Controllers;
 using System.Web.Http.Routing;
 using CopilotAdoptionAPIController = AnalyticsWeb::Web.AnalyticsWeb.Controllers.CopilotAdoptionAPIController;
+using AdoptionCoordinator = AnalyticsWeb::Web.AnalyticsWeb.Models.CopilotAdoption.CopilotAdoptionAnalysisCoordinator;
 
 namespace Tests.UnitTests
 {
@@ -719,6 +720,20 @@ namespace Tests.UnitTests
             StringAssert.Contains(scored.RecommendedAction, "disabled");
             Assert.AreNotEqual(CopilotAdoptionScoring.AdoptionActionCodes.Sustain, scored.RecommendedActionCode);
             Assert.AreNotEqual(CopilotAdoptionScoring.AdoptionActionCodes.Reengage, scored.RecommendedActionCode);
+        }
+
+        [TestMethod]
+        public void PastRangeUserNoLongerHoldingSeat_IsNotReclaimable()
+        {
+            var wasActive = UsageRow(interactions: 0, activeDays: 0, appsUsed: 0, lastUse: null);
+            wasActive.AccountEnabled = false;
+            wasActive.HoldsSeatToday = false;
+
+            var scored = CopilotAdoptionScoring.Score(wasActive, WindowStart, Now, auditAvailable: true);
+
+            Assert.AreEqual(string.Empty, scored.ReclaimEligibility);
+            Assert.AreNotEqual(CopilotAdoptionScoring.AdoptionActionCodes.Reclaim, scored.RecommendedActionCode,
+                "A historical seat cannot be reclaimed after it has already been removed.");
         }
 
         [TestMethod]
@@ -1501,10 +1516,10 @@ namespace Tests.UnitTests
             // be active last Tuesday" and emptied the tab whenever that day was a weekend. The window
             // has to be read whole, and each table read exactly once.
             Assert.AreEqual(1, CountOccurrences(sql, "FROM dbo.teams_user_activity_log AS t"));
-            StringAssert.Contains(sql, "t.[date] >= @m365From AND t.[date] <= @m365ReportDate");
-            StringAssert.Contains(sql, "o.[date] >= @m365From AND o.[date] <= @m365ReportDate");
-            StringAssert.Contains(sql, "sp.[date] >= @m365From AND sp.[date] <= @m365ReportDate");
-            StringAssert.Contains(sql, "od.[date] >= @m365From AND od.[date] <= @m365ReportDate");
+            StringAssert.Contains(sql, "t.[date] >= @m365From AND t.[date] < @m365ToExclusive");
+            StringAssert.Contains(sql, "o.[date] >= @m365From AND o.[date] < @m365ToExclusive");
+            StringAssert.Contains(sql, "sp.[date] >= @m365From AND sp.[date] < @m365ToExclusive");
+            StringAssert.Contains(sql, "od.[date] >= @m365From AND od.[date] < @m365ToExclusive");
             Assert.AreEqual(0, CountOccurrences(sql, "[date] = @m365ReportDate"),
                 "A single-date equality seek is exactly the bug this query shape replaced.");
 
@@ -2147,6 +2162,66 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public void PastRangeSummary_HidesDirectManagerAccountabilityRollupOnCopy()
+        {
+            var summary = new CopilotAdoptionSummary
+            {
+                Options = new CopilotAdoptionOptions { UsesExplicitDates = true },
+                AccountabilityDimension = CopilotAdoptionAccountabilityDimensions.DirectManager,
+                AccountabilityRollup = new List<AccountabilityRollupRow>
+                {
+                    new AccountabilityRollupRow { Segment = "manager@contoso.com", ReclaimableSeats = 3 },
+                },
+            };
+
+            var visible = summary.WithoutPastRangeNamedLists();
+
+            Assert.AreEqual(1, summary.AccountabilityRollup.Count, "The cached summary must not be mutated.");
+            Assert.AreEqual(0, visible.AccountabilityRollup.Count, "Historical ranges hide named manager roll-ups even for See PII readers.");
+        }
+
+        [TestMethod]
+        public void RollingSeatDependentSql_DoesNotUseLicenceHistoryShape()
+        {
+            var options = CopilotAdoptionOptions.Default;
+            var rollingQueries = new[]
+            {
+                CopilotAdoptionSql.UsageByAppSql(new[] { 1 }),
+                CopilotAdoptionSql.UnlicensedActiveUsersSql(new[] { 1 }),
+                CopilotAdoptionSql.UnlicensedUsageRowsSql(new[] { 1 }),
+                CopilotAdoptionSql.UnlicensedUsageByAppSql(new[] { 1 }),
+                CopilotAdoptionSql.LicenceOpportunitiesSql(new[] { 1 }, options, includeCopilotAudit: true, includeM365Usage: true),
+                CopilotAdoptionSql.CoworkReadinessSql(new[] { 1 }, new int[0], options, includeCopilotAudit: true, includeM365Usage: true),
+                CopilotAdoptionSql.CoworkUserCreditsSql(new[] { 1 }),
+            };
+
+            foreach (var sql in rollingQueries)
+            {
+                Assert.IsFalse(sql.Contains("user_license_history"), sql);
+                Assert.IsFalse(sql.Contains("license_refresh_runs"), sql);
+                Assert.IsFalse(sql.Contains("@historyStart"), sql);
+                StringAssert.Contains(sql, "user_license_type_lookups");
+            }
+
+            var explicitQueries = new[]
+            {
+                CopilotAdoptionSql.UsageByAppSql(new[] { 1 }, useLicenceHistory: true),
+                CopilotAdoptionSql.UnlicensedActiveUsersSql(new[] { 1 }, useLicenceHistory: true),
+                CopilotAdoptionSql.UnlicensedUsageRowsSql(new[] { 1 }, useLicenceHistory: true),
+                CopilotAdoptionSql.UnlicensedUsageByAppSql(new[] { 1 }, useLicenceHistory: true),
+                CopilotAdoptionSql.LicenceOpportunitiesSql(new[] { 1 }, options, includeCopilotAudit: true, includeM365Usage: true, useLicenceHistory: true),
+                CopilotAdoptionSql.CoworkReadinessSql(new[] { 1 }, new int[0], options, includeCopilotAudit: true, includeM365Usage: true, useLicenceHistory: true),
+                CopilotAdoptionSql.CoworkUserCreditsSql(new[] { 1 }, useLicenceHistory: true),
+            };
+
+            foreach (var sql in explicitQueries)
+            {
+                StringAssert.Contains(sql, "user_license_history");
+                StringAssert.Contains(sql, "@historyStart");
+            }
+        }
+
+        [TestMethod]
         public void DepartmentHabitBreakdown_IsRankedByHabitNotAdoption()
         {
             var analysis = new CopilotAdoptionAnalysis();
@@ -2545,6 +2620,34 @@ namespace Tests.UnitTests
             AssertReclaimArithmeticTiesOut(summary);
         }
 
+        [TestMethod]
+        public void ReclaimArithmeticTiesOut_ForPastRangeFormerSeatHolders()
+        {
+            var analysis = new CopilotAdoptionAnalysis();
+            var formerDisabled = ScoredUser("former-disabled@contoso.com", 0, AdoptionBand.NeverUsed);
+            formerDisabled.AccountEnabled = false;
+            formerDisabled.HoldsSeatToday = false;
+            var formerDormant = ScoredUser("former-dormant@contoso.com", 0, AdoptionBand.Dormant);
+            formerDormant.HoldsSeatToday = false;
+
+            analysis.LicensedUsers.AddRange(new[] { formerDisabled, formerDormant });
+            foreach (var user in analysis.LicensedUsers)
+            {
+                CopilotAdoptionScoring.ApplyReclaimEligibility(user);
+                user.RecommendedActionCode = CopilotAdoptionScoring.RecommendedActionCode(user);
+            }
+
+            new CopilotAdoptionService(new CopilotAdoptionOptions { UsesExplicitDates = true }).FinaliseSummary(analysis);
+
+            Assert.AreEqual(0, analysis.Summary.DisabledLicensedUsers,
+                "Former seat holders disabled today must not be labelled as disabled accounts still holding a licence.");
+            Assert.AreEqual(0, analysis.Summary.ReclaimSeatsHeldBackForReview,
+                "Former seat holders are not review-only seats: there is no seat left to review.");
+            Assert.AreEqual(2, analysis.Summary.ReclaimSeatsNoLongerHeld,
+                "Idle former seat holders are the explicit non-reclaimable term that keeps the displayed identity exact.");
+            AssertReclaimArithmeticTiesOut(analysis.Summary);
+        }
+
         /// <summary>
         /// The one identity the Copilot Adoption reclaim figures must always satisfy, whichever hold-back
         /// mechanisms happen to be active. A reclaim headline that cannot be reconciled against the band
@@ -2556,9 +2659,10 @@ namespace Tests.UnitTests
                 summary.NeverUsedUsers + summary.DormantUsers + summary.ReclaimSeatsFromActiveBands,
                 summary.ReclaimableSeats
                     + summary.ReclaimSeatsHeldBackForWindowMismatch
-                    + summary.ReclaimSeatsHeldBackForReview,
+                    + summary.ReclaimSeatsHeldBackForReview
+                    + summary.ReclaimSeatsNoLongerHeld,
                 "NeverUsed + Dormant + ReclaimSeatsFromActiveBands must equal "
-                + "ReclaimableSeats + ReclaimSeatsHeldBackForWindowMismatch + ReclaimSeatsHeldBackForReview.");
+                + "ReclaimableSeats + ReclaimSeatsHeldBackForWindowMismatch + ReclaimSeatsHeldBackForReview + ReclaimSeatsNoLongerHeld.");
         }
 
         private static void AssertWarningDetailsMatchEnglish(CopilotAdoptionSummary summary)
@@ -2602,7 +2706,11 @@ namespace Tests.UnitTests
                 // product cannot read, and the coworkUsageReportMissing warning about that report is gone.
                 { CopilotAdoptionWarningKeys.CoworkAuditMissing, Case("The Copilot audit import has no data for this period. Cowork interactions come only from the Copilot audit log, so nobody can be shown as already using Cowork, and everyone is assessed on coordination load and Copilot fluency alone.") },
                 { CopilotAdoptionWarningKeys.UsageReportSourcedUsers, Case("1 licensed user (50.0%) were scored from Microsoft's Copilot usage report because the audit import had no per-user signal for them. Their Microsoft prompt counts are not added to audit interaction totals, concentration, intensity or licensed/unlicensed interaction comparisons.", "count", 1, "userPlural", string.Empty, "percentage", 50d) },
-                { CopilotAdoptionWarningKeys.UsageReportWindowMismatch, Case("Microsoft's pinned Copilot usage-report period is D90, but this analysis window is D28. Report-sourced rows are kept in the adoption population so active people are not marked as never used, but a report-sourced row that would otherwise be a PROBABLE reclaim is excluded from reclaimable-seat totals rather than normalising prompt counts across unlike windows. Certain (disabled-account) seats are never held back this way, because a disabled account is not an inference from an absence of use. The band breakdown therefore counts more idle seats than the reclaim figure does; the difference is reported as \"held back for window mismatch\".", "reportDays", 90, "analysisDays", 28) },
+                                { CopilotAdoptionWarningKeys.LicenceHistoryUnavailableForRange, Case("Licence assignment history is not available yet, so this date range is scored against today's Copilot seat holders. People who held a seat during the range but no longer hold one are missing, and people licensed only after the range may be included.") },
+                { CopilotAdoptionWarningKeys.LicenceHistoryPartialForRange, Case("Licence assignment history starts on 1 Jan 2026. Seat holders before that date are reconstructed from seeded rows held at the first history refresh, so people whose seat was removed earlier are missing, and people first licensed after the selected period may be included from the range start.", "historyStart", new DateTime(2026, 1, 1)) },
+                { CopilotAdoptionWarningKeys.PastRangeNamedListsHidden, Case("This period does not end today, so named reclaim and recommendation lists and their exports are hidden. Counts remain visible; named action lists are only shown for periods ending today.") },
+                { CopilotAdoptionWarningKeys.CurrentOrgDataForPastRange, Case("Department, manager, country, office, company, account status and reclaim exclusions are today's values, not historical values for the selected period.") },
+                { CopilotAdoptionWarningKeys.AgentInventoryAsOfNow, Case("The agent inventory remains an as-of-now view even when the reporting period is historical.") },                { CopilotAdoptionWarningKeys.UsageReportWindowMismatch, Case("Microsoft's pinned Copilot usage-report period is D90, but this analysis window is D28. Report-sourced rows are kept in the adoption population so active people are not marked as never used, but a report-sourced row that would otherwise be a PROBABLE reclaim is excluded from reclaimable-seat totals rather than normalising prompt counts across unlike windows. Certain (disabled-account) seats are never held back this way, because a disabled account is not an inference from an absence of use. The band breakdown therefore counts more idle seats than the reclaim figure does; the difference is reported as \"held back for window mismatch\".", "reportDays", 90, "analysisDays", 28) },
                 { CopilotAdoptionWarningKeys.CoworkEligibilityUnknown, Case("Cowork adoption percentage is suppressed because Cowork eligibility is controlled by spending-policy scope and this import does not know that denominator. The deprecated Cowork agent entry is not used as an eligibility source.") },
                 { CopilotAdoptionWarningKeys.PurchasedSeatsUnknown, Case("Purchased and unassigned Copilot seats are unknown because Graph subscribedSkus/prepaidUnits has not been imported. Grant Organization.Read.All and rerun the user metadata import; the report deliberately does not show zero for unassigned seats when the purchase inventory is missing.") },
                 { CopilotAdoptionWarningKeys.SkuSeatMismatch, Case("Purchased and assigned Copilot seats disagree for Contoso Copilot SKU: Graph reports 1,234 purchased but 1,200 assigned, so unassigned seats are shown as Unknown rather than zero.", "skuName", "Contoso Copilot SKU", "purchased", 1234, "assigned", 1200) },
@@ -3513,6 +3621,46 @@ namespace Tests.UnitTests
             Assert.AreEqual(7, CopilotAdoptionAPIController.NormaliseWindowDays(1));
             Assert.AreEqual(180, CopilotAdoptionAPIController.NormaliseWindowDays(9999));
             Assert.AreEqual(7, CopilotAdoptionAPIController.NormaliseWindowDays(-5));
+        }
+
+        [TestMethod]
+        public void DateRange_ValidatesCustomBoundariesAndKeepsRollingWindowsUnchangedAtMidnight()
+        {
+            var now = new DateTime(2026, 10, 2, 0, 0, 0, DateTimeKind.Utc);
+
+            Assert.AreEqual(7, CopilotAdoptionDateRange.Create(28, "2026-09-25", "2026-10-01", now).WindowDays);
+            Assert.AreEqual(180, CopilotAdoptionDateRange.Create(28, "2026-04-05", "2026-10-01", now).WindowDays);
+            Assert.AreEqual(28, CopilotAdoptionDateRange.Create(28, null, null, now).WindowDays,
+                "Rolling windows must keep the requested windowDays exactly, including at UTC midnight.");
+
+            AssertRangeError("copilotAdoption.error.invalidDateRange", "2026-09-26", "2026-10-01", now);
+            AssertRangeError("copilotAdoption.error.invalidDateRange", "2026-04-04", "2026-10-01", now);
+            AssertRangeError("copilotAdoption.error.invalidDateRange", "2026-09-25", "2026-10-02", now);
+            AssertRangeError("copilotAdoption.error.invalidDateRange", "2026-10-01", "2026-09-25", now);
+            AssertRangeError("copilotAdoption.error.invalidDateFormat", "not-a-date", "2026-10-01", now);
+            AssertRangeError("copilotAdoption.error.missingDate", "2026-09-25", null, now);
+        }
+
+        [TestMethod]
+        public void AnalysisCacheKey_IncludesExplicitRangeButLeavesRollingKeyShapeUnchanged()
+        {
+            Assert.AreEqual("CopilotAdoption::Analysis::28::rolling::1,2", AdoptionCoordinator.CacheKey(28, new[] { 2, 1 }));
+
+            var range = CopilotAdoptionDateRange.Create(28, "2026-09-01", "2026-09-30", new DateTime(2026, 10, 2));
+            StringAssert.Contains(AdoptionCoordinator.CacheKey(range, new[] { 1 }), "20260901-20260930");
+        }
+
+        private static void AssertRangeError(string expected, string from, string to, DateTime now)
+        {
+            try
+            {
+                CopilotAdoptionDateRange.Create(28, from, to, now);
+                Assert.Fail("Expected range validation to reject the input.");
+            }
+            catch (ArgumentException ex)
+            {
+                Assert.AreEqual(expected, ex.Message);
+            }
         }
 
         [TestMethod]

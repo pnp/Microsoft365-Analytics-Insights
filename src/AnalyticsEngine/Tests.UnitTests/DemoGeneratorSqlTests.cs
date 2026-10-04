@@ -80,6 +80,7 @@ WHERE agent_name LIKE N'%Καλημέρα%';") > 0, "nvarchar agent names must s
                     var rows = raw.Database.SqlQuery<LicensedUserUsageRow>(
                         CopilotAdoptionSql.LicensedUsersSql(new[] { 2 }, new[] { 5 }, includeCopilotReport: true),
                         new SqlParameter("@from", options.AsOf.AddDays(-28)),
+                        new SqlParameter("@toExclusive", options.AsOf.AddDays(1)),
                         new SqlParameter("@historyFrom", options.AsOf.AddDays(-365)),
                         new SqlParameter("@maxRows", 1000),
                         new SqlParameter("@copilotReportDate", options.ReportEnd),

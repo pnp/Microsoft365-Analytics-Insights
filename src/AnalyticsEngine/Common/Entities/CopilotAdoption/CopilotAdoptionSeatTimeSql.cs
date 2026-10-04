@@ -8,6 +8,7 @@ namespace Common.Entities.CopilotAdoption
     /// <see cref="CopilotAdoptionSql"/> so work on date-window handling can merge without touching this
     /// query. The query takes both <c>@from</c> and <c>@toExclusive</c>; today's caller passes the analysis
     /// timestamp as <c>@toExclusive</c>, and custom ranges can wire their explicit end into the same shape.
+    /// </summary>
     /// <remarks>
     /// Surface mapping deliberately uses the same bounded app-host expression as the existing usage-by-app
     /// chart (<see cref="CopilotAdoptionSql.AppHostKey"/>), then maps exact keys: <c>Outlook</c> to the
@@ -19,7 +20,10 @@ namespace Common.Entities.CopilotAdoption
     /// </remarks>
     public static class CopilotAdoptionSeatTimeSql
     {
-        public static string SeatHolderTimeSavedSql(IEnumerable<int> seatLicenceTypeIds, IEnumerable<int> coworkAgentIds)
+        public static string SeatHolderTimeSavedSql(
+            IEnumerable<int> seatLicenceTypeIds,
+            IEnumerable<int> coworkAgentIds,
+            bool useLicenceHistory = false)
         {
             var seats = string.Join(",", (seatLicenceTypeIds ?? Enumerable.Empty<int>()).Distinct().OrderBy(i => i));
             if (string.IsNullOrWhiteSpace(seats)) seats = "-1";
@@ -32,14 +36,21 @@ namespace Common.Entities.CopilotAdoption
             var host = "LOWER(" + CopilotAdoptionSql.AppHostKey("c.app_host", string.Empty) + ")";
             const string outlookHosts = "'outlook'";
             const string officeHosts = "'word','powerpoint','excel'";
+            var seatUsers = useLicenceHistory
+                ? "    SELECT DISTINCT h.user_id AS user_id\r\n" +
+                  "    FROM dbo.user_license_history AS h\r\n" +
+                  $"    WHERE h.license_type_id IN ({seats})\r\n" +
+                  "      AND (h.valid_from_utc < @toExclusive OR (h.from_source = 0 AND h.valid_from_utc <= @historyStart))\r\n" +
+                  "      AND (h.valid_to_utc IS NULL OR h.valid_to_utc > @from)\r\n"
+                : "    SELECT DISTINCT ul.user_id AS user_id\r\n" +
+                  "    FROM dbo.user_license_type_lookups AS ul\r\n" +
+                  $"    WHERE ul.license_type_id IN ({seats})\r\n";
 
             return
                 "SET NOCOUNT ON;\r\n" +
                 "IF OBJECT_ID('tempdb..#seat_time_grain') IS NOT NULL DROP TABLE #seat_time_grain;\r\n" +
                 "WITH SeatUsers AS (\r\n" +
-                "    SELECT DISTINCT ul.user_id AS user_id\r\n" +
-                "    FROM dbo.user_license_type_lookups AS ul\r\n" +
-                $"    WHERE ul.license_type_id IN ({seats})\r\n" +
+                seatUsers +
                 ")\r\n" +
                 "SELECT c.user_id AS user_id,\r\n" +
                 "       " + host + " AS app_host,\r\n" +

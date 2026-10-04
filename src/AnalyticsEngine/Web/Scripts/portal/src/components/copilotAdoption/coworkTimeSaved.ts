@@ -32,9 +32,11 @@ import { formatNumber, type TFunction } from '../../i18n';
  *   The value of enabling Cowork for people who already hold a licence, paid for in Copilot Credits.
  *   No study has measured it, and every surface says so. Shown on the Cowork tab.
  *
- * There is deliberately no figure for the time Copilot gives back to people who already hold a
- * licence: no decision hangs on it, and it used to swell the Cowork headline with time Cowork does
- * not unlock.
+ * - The SEAT-HOLDER estimate (`projectSeatHolderTimeSaved`, server twin
+ *   `CopilotAdoptionScoring.ModelSeatHolderTimeSaved`): the Copilot actions already observed from
+ *   people who hold a licence, credited only where a published Microsoft method gives this product a
+ *   defensible unit. It is shown as hours already saved, never money, and is not added to either
+ *   decision estimate above.
  *
  * The reader can replace any assumption with their own figure. Those figures are kept in this
  * browser tab's session storage and nowhere else: they are never written to the database, so one

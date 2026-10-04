@@ -442,6 +442,11 @@ namespace Common.Entities.CopilotAdoption
             return copy;
         }
 
+        public CopilotAdoptionSummary WithoutPastRangeNamedLists()
+        {
+            return Options?.UsesExplicitDates == true ? WithoutIndividualData() : this;
+        }
+
         [JsonProperty("generatedUtc")]
         public DateTime GeneratedUtc { get; set; }
 
@@ -619,10 +624,18 @@ namespace Common.Entities.CopilotAdoption
         /// Published alongside <see cref="ReclaimSeatsHeldBackForWindowMismatch"/> so the whole
         /// arithmetic ties out on screen:
         /// <c>NeverUsedUsers + DormantUsers + ReclaimSeatsFromActiveBands ==
-        /// ReclaimableSeats + ReclaimSeatsHeldBackForWindowMismatch + ReclaimSeatsHeldBackForReview</c>.
+        /// ReclaimableSeats + ReclaimSeatsHeldBackForWindowMismatch + ReclaimSeatsHeldBackForReview
+        /// + ReclaimSeatsNoLongerHeld</c>.
         /// </remarks>
         [JsonProperty("reclaimSeatsHeldBackForReview")]
         public int ReclaimSeatsHeldBackForReview { get; set; }
+
+        /// <summary>
+        /// Idle historical seat holders that no longer hold a Copilot seat today. They remain in the
+        /// historical band breakdown, but there is no current seat to reclaim or review.
+        /// </summary>
+        [JsonProperty("reclaimSeatsNoLongerHeld")]
+        public int ReclaimSeatsNoLongerHeld { get; set; }
 
         /// <summary>
         /// Reclaimable seats whose engagement band is better than dormant - in practice, disabled
@@ -1206,6 +1219,11 @@ namespace Common.Entities.CopilotAdoption
         public const string CoworkAuditMissing = "coworkAuditMissing";
         public const string UsageReportSourcedUsers = "usageReportSourcedUsers";
         public const string UsageReportWindowMismatch = "usageReportWindowMismatch";
+        public const string LicenceHistoryUnavailableForRange = "licenceHistoryUnavailableForRange";
+        public const string LicenceHistoryPartialForRange = "licenceHistoryPartialForRange";
+        public const string PastRangeNamedListsHidden = "pastRangeNamedListsHidden";
+        public const string CurrentOrgDataForPastRange = "currentOrgDataForPastRange";
+        public const string AgentInventoryAsOfNow = "agentInventoryAsOfNow";
         public const string CoworkEligibilityUnknown = "coworkEligibilityUnknown";
         public const string PurchasedSeatsUnknown = "purchasedSeatsUnknown";
         public const string SkuSeatMismatch = "skuSeatMismatch";
@@ -1240,6 +1258,11 @@ namespace Common.Entities.CopilotAdoption
             { CopilotAdoptionWarningKeys.CoworkAuditMissing, "The Copilot audit import has no data for this period. Cowork interactions come only from the Copilot audit log, so nobody can be shown as already using Cowork, and everyone is assessed on coordination load and Copilot fluency alone." },
             { CopilotAdoptionWarningKeys.UsageReportSourcedUsers, "{count} licensed user{userPlural} ({percentage}%) were scored from Microsoft's Copilot usage report because the audit import had no per-user signal for them. Their Microsoft prompt counts are not added to audit interaction totals, concentration, intensity or licensed/unlicensed interaction comparisons." },
             { CopilotAdoptionWarningKeys.UsageReportWindowMismatch, "Microsoft's pinned Copilot usage-report period is D{reportDays}, but this analysis window is D{analysisDays}. Report-sourced rows are kept in the adoption population so active people are not marked as never used, but a report-sourced row that would otherwise be a PROBABLE reclaim is excluded from reclaimable-seat totals rather than normalising prompt counts across unlike windows. Certain (disabled-account) seats are never held back this way, because a disabled account is not an inference from an absence of use. The band breakdown therefore counts more idle seats than the reclaim figure does; the difference is reported as \"held back for window mismatch\"." },
+            { CopilotAdoptionWarningKeys.LicenceHistoryUnavailableForRange, "Licence assignment history is not available yet, so this date range is scored against today's Copilot seat holders. People who held a seat during the range but no longer hold one are missing, and people licensed only after the range may be included." },
+            { CopilotAdoptionWarningKeys.LicenceHistoryPartialForRange, "Licence assignment history starts on {historyStart}. Seat holders before that date are reconstructed from seeded rows held at the first history refresh, so people whose seat was removed earlier are missing, and people first licensed after the selected period may be included from the range start." },
+            { CopilotAdoptionWarningKeys.PastRangeNamedListsHidden, "This period does not end today, so named reclaim and recommendation lists and their exports are hidden. Counts remain visible; named action lists are only shown for periods ending today." },
+            { CopilotAdoptionWarningKeys.CurrentOrgDataForPastRange, "Department, manager, country, office, company, account status and reclaim exclusions are today's values, not historical values for the selected period." },
+            { CopilotAdoptionWarningKeys.AgentInventoryAsOfNow, "The agent inventory remains an as-of-now view even when the reporting period is historical." },
             { CopilotAdoptionWarningKeys.CoworkEligibilityUnknown, "Cowork adoption percentage is suppressed because Cowork eligibility is controlled by spending-policy scope and this import does not know that denominator. The deprecated Cowork agent entry is not used as an eligibility source." },
             { CopilotAdoptionWarningKeys.PurchasedSeatsUnknown, "Purchased and unassigned Copilot seats are unknown because Graph subscribedSkus/prepaidUnits has not been imported. Grant Organization.Read.All and rerun the user metadata import; the report deliberately does not show zero for unassigned seats when the purchase inventory is missing." },
             { CopilotAdoptionWarningKeys.SkuSeatMismatch, "Purchased and assigned Copilot seats disagree for {skuName}: Graph reports {purchased} purchased but {assigned} assigned, so unassigned seats are shown as Unknown rather than zero." },
@@ -1291,6 +1314,7 @@ namespace Common.Entities.CopilotAdoption
         private static string FormatEnglish(object value)
         {
             if (value == null) return string.Empty;
+            if (value is DateTime) return ((DateTime)value).ToString("d MMM yyyy", CultureInfo.GetCultureInfo("en-GB"));
             if (value is double) return ((double)value).ToString("N1", CultureInfo.GetCultureInfo("en-GB"));
             if (value is float) return ((float)value).ToString("N1", CultureInfo.GetCultureInfo("en-GB"));
             if (value is decimal) return ((decimal)value).ToString("N1", CultureInfo.GetCultureInfo("en-GB"));
