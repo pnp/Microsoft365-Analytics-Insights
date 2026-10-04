@@ -103,6 +103,18 @@ END
 
 BEGIN TRANSACTION;
 
+DECLARE @lockResult int;
+EXEC @lockResult = sp_getapplock
+    @Resource = N'portal_global_filters',
+    @LockMode = N'Exclusive',
+    @LockOwner = N'Transaction',
+    @LockTimeout = 10000;
+IF @lockResult < 0
+BEGIN
+    ROLLBACK TRANSACTION;
+    THROW 51000, 'Could not acquire the portal global filter save lock.', 1;
+END
+
 DECLARE @current int = (SELECT revision FROM dbo.portal_global_filters WITH (UPDLOCK, HOLDLOCK) WHERE id = 1);
 
 IF ISNULL(@current, 0) <> @expectedRevision
