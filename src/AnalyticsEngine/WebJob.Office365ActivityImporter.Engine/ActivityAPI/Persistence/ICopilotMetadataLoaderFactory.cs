@@ -1,7 +1,6 @@
 using ActivityImporter.Engine.ActivityAPI.Copilot;
 using Common.Entities.Config;
 using Microsoft.Extensions.Logging;
-using Microsoft.Graph;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -45,7 +44,7 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Persistence
         {
             var auth = new GraphAppIndentityOAuthContext(_logger, _appConfig.ClientID, _appConfig.TenantGUID.ToString(), _appConfig.ClientSecret, _appConfig.KeyVaultUrl, _appConfig.UseClientCertificate);
             await auth.InitClientCredential();
-            return new GraphFileMetadataLoader(new GraphServiceClient(auth.Creds), _logger);
+            return new GraphFileMetadataLoader(Graph.GraphServiceClientFactory.CreateForGraphImport(auth.Creds, _logger), _logger);
         }
     }
 

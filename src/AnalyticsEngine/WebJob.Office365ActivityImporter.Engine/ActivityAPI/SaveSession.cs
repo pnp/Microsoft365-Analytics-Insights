@@ -3,12 +3,12 @@ using Common.Entities;
 using Common.Entities.Config;
 using Common.Entities.Entities.AuditLog;
 using Microsoft.Extensions.Logging;
-using Microsoft.Graph;
 using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
 using WebJob.Office365ActivityImporter.Engine.ActivityAPI.Dlp;
 using WebJob.Office365ActivityImporter.Engine.ActivityAPI.PowerPlatform;
+using WebJob.Office365ActivityImporter.Engine.Graph;
 
 namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI
 {
@@ -56,7 +56,7 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI
             if (loader == null)
             {
                 await _authContext.InitClientCredential();
-                loader = new GraphFileMetadataLoader(new GraphServiceClient(_authContext.Creds), _logger);
+                loader = new GraphFileMetadataLoader(GraphServiceClientFactory.CreateForGraphImport(_authContext.Creds, _logger), _logger);
             }
             _copilotEventResolver = new CopilotAuditEventManager(_appConfig.ConnectionStrings.DatabaseConnectionString, loader, _logger, _appConfig.ResolveCopilotResourceMetadata);
             _powerPlatformEventResolver = new PowerPlatformAuditEventManager(_appConfig.ConnectionStrings.DatabaseConnectionString, _logger);

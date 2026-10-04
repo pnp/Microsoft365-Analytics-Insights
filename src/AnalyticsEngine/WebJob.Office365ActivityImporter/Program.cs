@@ -11,6 +11,8 @@ using Common.Entities.Installer;
 using Common.Entities.State;
 using Common.Entities.UserScope;
 using DataUtils;
+using DataUtils.Health;
+using DataUtils.Http;
 using Microsoft.Extensions.Logging;
 using Newtonsoft.Json;
 using System;
@@ -22,6 +24,7 @@ using WebJob.Office365ActivityImporter.Engine;
 using WebJob.Office365ActivityImporter.Engine.ActivityAPI; // for AuditTraceConfig
 using WebJob.Office365ActivityImporter.Engine.Graph.Calls;
 using WebJob.Office365ActivityImporter.Engine.Graph.Email;
+using WebJob.Office365ActivityImporter.Engine.MessageTracing;
 using WebJob.Office365ActivityImporter.Engine.StatsUploader;
 #endregion
 
@@ -86,6 +89,7 @@ namespace WebJob.Office365ActivityImporter
 
             // Create new telemetry client with AppInsights key
             var logger = new AnalyticsLogger(configuredSettings.AppInsightsConnectionString, "Office365ActivityImporter");
+            MessageTraceBlobUploader messageTraceUploader = ConfigureMessageTracing(configuredSettings, logger);
 
             // The UserGroupsFilter scope, shared by every import in this process - the Graph sections, the audit
             // import, the calls queue and the agent-cost import - so they all apply the same resolution and the
@@ -366,6 +370,7 @@ namespace WebJob.Office365ActivityImporter
 
                 // Output cycle stats
                 importCycleTimer.TrackFinishedEventAndStopTimer(AnalyticsLogger.AnalyticsEvent.FinishedImportCycle);
+                messageTraceUploader?.LogSummary(logger);
 
                 // Upload latest stats if not done recently. Re-enabled in this build after the
                 // Feb-2026 deprecation (commit 3485bd2) — the server endpoint is back online and we
@@ -399,7 +404,50 @@ namespace WebJob.Office365ActivityImporter
                 }
             } // Go around again?
 
+            if (messageTraceUploader != null)
+            {
+                await messageTraceUploader.FlushAsync(TimeSpan.FromSeconds(10));
+                messageTraceUploader.Dispose();
+            }
+            HttpMessageTracing.Current = HttpMessageTracing.Disabled;
             ConsoleApp.BombOut(false);
+        }
+
+        internal static MessageTraceBlobUploader ConfigureMessageTracing(AppConfig settings, AnalyticsLogger logger)
+        {
+            HttpMessageTracing.Current = HttpMessageTracing.Disabled;
+            if (settings == null || string.IsNullOrWhiteSpace(settings.MessageTraceMatch))
+            {
+                return null;
+            }
+
+            if (!MessageTracePatternMatcher.TryCreate(settings.MessageTraceMatch, logger, out var matcher, out var failure))
+            {
+                var detail = failure ?? "MessageTraceMatch is invalid; tracing is disabled.";
+                logger.LogWarning(detail + " The import will continue.");
+                logger.TrackHealthCheck(HealthComponent.MessageTracing, HealthStatus.Degraded, detail, reasonKey: "messageTracing.invalidPattern");
+                return null;
+            }
+
+            try
+            {
+                var uploader = MessageTraceBlobUploader.Create(settings, logger);
+                HttpMessageTracing.Current = new MessageTraceInspectingTracer(matcher, uploader, settings.MessageTraceMaxBodyBytes, settings.MessageTraceMaxPerHour, logger);
+                var patterns = string.Join("; ", matcher.Patterns);
+                logger.LogWarning($"MESSAGE TRACING IS ENABLED: every API response that matches '{patterns}' is saved in full to blob container '{settings.MessageTraceContainer}' in the solution's storage account. These responses can contain personal data. Remove the MessageTraceMatch app setting to turn it off.");
+                logger.TrackHealthCheck(HealthComponent.MessageTracing, HealthStatus.Degraded,
+                    "Message tracing is enabled; matching API responses are saved in full to Azure Blob storage.",
+                    reasonKey: "messageTracing.enabled");
+                return uploader;
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning($"Message tracing could not be initialised and is disabled; the import will continue. {ex.GetType().Name}: {ex.Message}");
+                logger.TrackHealthCheck(HealthComponent.MessageTracing, HealthStatus.Degraded,
+                    "Message tracing configuration is invalid or storage could not be initialised; tracing is disabled.",
+                    reasonKey: "messageTracing.invalidPattern");
+                return null;
+            }
         }
 
 

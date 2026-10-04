@@ -32,10 +32,16 @@ export const BLOB_CHECKPOINT_REASON_KEYS: Record<string, TranslationKey> = {
   'blobCheckpoint.storageRejected': 'health.reason.blobCheckpointStorageRejected',
 };
 
+export const MESSAGE_TRACING_REASON_KEYS: Record<string, TranslationKey> = {
+  'messageTracing.enabled': 'health.reason.messageTracingEnabled',
+  'messageTracing.invalidPattern': 'health.reason.messageTracingInvalidPattern',
+};
+
 export const HEALTH_COMPONENT_LABEL_KEYS: Record<string, TranslationKey> = {
   Credential: 'health.component.Credential',
   ServiceBus: 'health.component.ServiceBus',
   BlobCheckpoint: 'health.component.BlobCheckpoint',
+  MessageTracing: 'health.component.MessageTracing',
 };
 
 /**
@@ -296,6 +302,9 @@ export function translateHealthComponentDetail(component: ComponentHealthRow, t:
       errorCode: component.errorCode ?? '-',
     });
   }
+
+  const messageTracingKey = component.reasonKey ? MESSAGE_TRACING_REASON_KEYS[component.reasonKey] : null;
+  if (messageTracingKey) return t(messageTracingKey);
 
   return translateHealthComponentDetailText(component.detail, t);
 }

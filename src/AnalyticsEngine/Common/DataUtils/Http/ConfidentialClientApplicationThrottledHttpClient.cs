@@ -42,7 +42,27 @@ namespace DataUtils.Http
 
             request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", auth.Token);
 
-            return await base.SendAsync(request, cancellationToken);
+            var response = await base.SendAsync(request, cancellationToken);
+            var tracer = HttpMessageTracing.Current;
+            if (tracer?.IsEnabled == true)
+            {
+                try
+                {
+                    await tracer.TraceAsync(GetSource(request.RequestUri), request, response, cancellationToken).ConfigureAwait(false);
+                }
+                catch
+                {
+                }
+            }
+            return response;
+        }
+
+        private static string GetSource(Uri requestUri)
+        {
+            var host = requestUri?.Host ?? string.Empty;
+            return host.IndexOf("manage.office.com", StringComparison.OrdinalIgnoreCase) >= 0
+                ? "activity-api"
+                : "graph";
         }
     }
 }

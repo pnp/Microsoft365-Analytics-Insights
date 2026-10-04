@@ -38,6 +38,7 @@ const health: Record<keyof typeof en, string> = {
   'health.component.Credential': 'Credencial',
   'health.component.ServiceBus': 'Service Bus',
   'health.component.BlobCheckpoint': 'Punto de control de blobs',
+  'health.component.MessageTracing': 'Seguimiento de mensajes',
   'health.duration.day': '{count} día',
   'health.duration.days': '{count} días',
   'health.duration.hour': '{count} hora',
@@ -69,6 +70,8 @@ const health: Record<keyof typeof en, string> = {
   'health.reason.blobCheckpointAuthenticationFailed': 'El punto de control de blobs de auditoría está degradado porque Azure Storage rechazó la credencial del punto de control (HTTP {status} {errorCode}). Compruebe la cadena de conexión o la clave de la cuenta de Storage, o la credencial de la entidad de servicio en tiempo de ejecución usada para la reserva de RBAC. Hasta que se corrija, el importador usa un punto de control en memoria no duradero que se pierde al reiniciar o volver a implementar, y la recuperación de metadatos duradera entre ciclos no está disponible.',
   'health.reason.blobCheckpointKeyAuthDisabled': "El punto de control de blobs de auditoría está degradado porque la cuenta de almacenamiento tiene deshabilitada la autenticación de clave compartida (HTTP {status} {errorCode}). El importador recurre a RBAC/Entra ID cuando la entidad de servicio en tiempo de ejecución está configurada; esa identidad necesita 'Storage Table Data Contributor' en la cuenta de almacenamiento. Hasta que se corrija, el importador usa un punto de control en memoria no duradero que se pierde al reiniciar o volver a implementar, y la recuperación de metadatos duradera entre ciclos no está disponible.",
   'health.reason.blobCheckpointStorageRejected': 'El punto de control de blobs de auditoría está degradado porque Azure Storage rechazó la solicitud de punto de control de Table (HTTP {status} {errorCode}). Compruebe la cadena de conexión de Storage, la accesibilidad del servicio Table, la configuración de firewall o punto de conexión privado de Storage y los permisos de plano de datos de Table. Hasta que se corrija, el importador usa un punto de control en memoria no duradero que se pierde al reiniciar o volver a implementar, y la recuperación de metadatos duradera entre ciclos no está disponible.',
+  'health.reason.messageTracingEnabled': 'El seguimiento de mensajes está habilitado. Las respuestas de API que coincidan se guardan completas en Azure Blob Storage y pueden contener datos personales; quite el valor de aplicación MessageTraceMatch para desactivarlo.',
+  'health.reason.messageTracingInvalidPattern': 'Se solicitó el seguimiento de mensajes, pero su configuración no es válida, por lo que el seguimiento está deshabilitado y las importaciones continúan con normalidad. Compruebe MessageTraceMatch y MessageTraceContainer en los valores de aplicación de App Service.',
 
   // Health page
   'health.page.title': 'Estado del sistema{buildLabel}',
