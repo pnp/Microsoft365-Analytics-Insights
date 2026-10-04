@@ -442,7 +442,10 @@ above with `-ReplaceLinuxWebApp` added. It then:
    the deletion part-way, that the plan hosts no other app, and that App
    Service accepts `WEBSITE_LOAD_FIRST_PARTY_AUTH` on the subscription;
 2. records role assignments scoped to the site itself — typically the CI
-   deployment identity's Website Contributor — so it can restore them;
+   deployment identity's Website Contributor — so it can restore them. The
+   record includes any Azure RBAC ABAC condition and condition version, and is
+   written to the gitignored `artifacts/TelemetryService/` folder before the
+   first destructive step;
 3. deletes the old site's managed-identity role assignments on Key Vault and
    Cosmos DB (the replacement gets a new identity, and ARM will not repoint an
    existing assignment at it), disconnects the site from its subnet (deleting
@@ -455,6 +458,41 @@ The service is unavailable from step 3 until the deployment completes.
 Importers treat a failed upload as non-fatal and do not record it, so their
 next cycle sends again. The old site's deployment history and logs do not
 survive the replacement.
+
+If the replacement fails after the old site has been deleted, re-run the same
+command. The script detects the resume record for that subscription, resource
+group and site, reuses its expected Entra client ID, restores the captured
+site-scoped role assignments after the Windows site exists, and deletes the
+record only after the restore succeeds. If the old empty Linux plan survived,
+the re-run deletes it before deploying; if the plan still hosts any app, the
+script refuses to continue. A conflicting `-AzureAdClientId` is an error,
+because changing the client ID during a resume would recreate the app
+registration problem this deployment guard prevents. `-WhatIf` remains
+read-only: it reports that a resume record or leftover Linux plan exists, but
+does not delete plans, create role assignments or change Entra.
+
+The resume record is operational state, not source: it may contain real Azure
+resource IDs and principal IDs, so keep it in `artifacts/TelemetryService/`
+where the repository `.gitignore` excludes it. Delete it by hand only after
+verifying the replacement site has the intended role assignments.
+
+Azure CLI 2.87 changed `az webapp show` / `az webapp list` so the site's plan
+resource ID can appear as `serverFarmId` instead of the older
+`appServicePlanId`. `deploy.ps1` accepts both shapes, plus
+`properties.serverFarmId`, so the replacement preflight still works on newer
+CLI builds.
+
+After this change reaches `main`, the weekly `infra-drift.yml` Monday run is
+expected to report drift until a maintainer runs
+`deploy.ps1 -ReplaceLinuxWebApp`: the deployed Linux plan/site still have
+Linux `kind`/`reserved` values, Linux runtime settings and no
+`WEBSITE_LOAD_FIRST_PARTY_AUTH` setting while the template declares Windows
+MISE v2 hosting. Running the replacement before the release creates the mirror
+image: the live service becomes Windows while the released template still says
+Linux. The `telemetry-service.yml` deploy job keeps working against the
+existing Linux site before the replacement because the application change in
+this PR is only a comment update; there are no project, hosting or `web.config`
+changes.
 
 If App Service has not enabled the subscription for first-party
 authentication, step 1 stops the script with nothing changed. The Azure CLI

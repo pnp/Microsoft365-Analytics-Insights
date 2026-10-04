@@ -263,6 +263,43 @@ and does the proposed change produce that specific signal? "Tokens now validate
 through a MISE-enabled component" was assumed to imply the KPI would clear. It
 did not.
 
+### Destructive replacements need a resume record
+
+The Linux-to-Windows move is intentionally destructive: App Service cannot
+change a plan's operating system, so the old site and plan have to be deleted
+before the Windows site can be deployed with the same hostname. Anything that
+has to survive that delete — the expected Entra client ID, site-scoped RBAC and
+the fact that this run is a replacement rather than a fresh install — cannot
+live only in process memory.
+
+`deploy.ps1 -ReplaceLinuxWebApp` writes a resume record under the gitignored
+`artifacts/TelemetryService/` folder before deleting anything, and removes it
+only after the replacement site has had the recorded role assignments restored.
+That is deliberately local operational state: it can contain real Azure
+resource and principal IDs, so never commit it or paste it into public notes.
+
+The important failure mode is a run that dies after the old site is gone. A
+plain re-run would otherwise see "no Linux site", skip RBAC restoration, and —
+if no client ID is passed — fall back to display-name app adoption or creation.
+That loses the CI identity's site-scoped Website Contributor assignment and can
+silently create a new app registration. A resume record makes the re-run use
+the old client ID, remove any leftover empty Linux plan, deploy Windows, restore
+RBAC and then clear the record.
+
+### Azure CLI 2.87 renamed the web app's plan ID field
+
+Azure CLI 2.87 changed the shape returned by `az webapp show` and
+`az webapp list`: the App Service plan resource ID can be `serverFarmId` rather
+than the older `appServicePlanId` (tracked upstream as Azure/azure-cli#33732).
+Under `Set-StrictMode -Version Latest`, directly reading a missing property
+throws before the script reaches the safety checks.
+
+When reading Azure CLI JSON, prefer small shape-tolerant helpers over direct
+property access for fields that have moved or can be omitted. For the site plan
+ID, `deploy.ps1` now checks `serverFarmId`, `appServicePlanId` and
+`properties.serverFarmId`, and fails with a message naming all three when none
+is present.
+
 ### Prove it with the target signal, not a proxy
 
 Every check made after that deployment — EasyAuth intercepting requests,
