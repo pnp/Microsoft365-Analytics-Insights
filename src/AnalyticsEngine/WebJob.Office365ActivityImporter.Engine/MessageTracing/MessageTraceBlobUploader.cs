@@ -20,6 +20,14 @@ namespace WebJob.Office365ActivityImporter.Engine.MessageTracing
     {
         public const int DefaultMaxQueueMessages = 100;
         public const long DefaultMaxQueueBytes = 256L * 1024 * 1024;
+
+        /// <summary>
+        /// After the container can't be opened, traces are refused (counted as dropped) and no open is attempted
+        /// for this long, so unreachable storage neither holds queued bodies in memory nor repeats the SDK's
+        /// retry budget for every item. The next trace after it retries the open.
+        /// </summary>
+        public static readonly TimeSpan StorageRetryInterval = TimeSpan.FromMinutes(10);
+
         private static readonly Regex ContainerName = new Regex("^[a-z0-9](?:[a-z0-9-]{1,61}[a-z0-9])$", RegexOptions.CultureInvariant);
         private readonly BlockingCollection<HttpMessageTraceEnvelope> _queue;
         private readonly long _maxQueueBytes;
@@ -27,18 +35,22 @@ namespace WebJob.Office365ActivityImporter.Engine.MessageTracing
         private readonly Task _worker;
         private readonly CancellationTokenSource _cts = new CancellationTokenSource();
         private readonly Func<CancellationToken, Task<BlobContainerClient>> _openContainer;
+        private readonly Func<DateTime> _utcNow;
         private readonly SemaphoreSlim _openGate = new SemaphoreSlim(1, 1);
         private BlobContainerClient _container;
         private long _queuedBytes;
         private int _inFlightUploads;
+        private bool _storageUnavailable;
+        private long _storageRetryAfterTicks;
         private DateTime _lastFailureLogUtc = DateTime.MinValue;
 
         public MessageTraceBlobUploader(Func<CancellationToken, Task<BlobContainerClient>> openContainer, ILogger logger,
-            int maxQueueMessages = DefaultMaxQueueMessages, long maxQueueBytes = DefaultMaxQueueBytes)
+            int maxQueueMessages = DefaultMaxQueueMessages, long maxQueueBytes = DefaultMaxQueueBytes, Func<DateTime> utcNow = null)
         {
             _openContainer = openContainer ?? throw new ArgumentNullException(nameof(openContainer));
             _logger = logger;
             _maxQueueBytes = maxQueueBytes;
+            _utcNow = utcNow ?? (() => DateTime.UtcNow);
             _queue = new BlockingCollection<HttpMessageTraceEnvelope>(new ConcurrentQueue<HttpMessageTraceEnvelope>(), maxQueueMessages);
             _worker = Task.Run(ProcessQueueAsync);
         }
@@ -47,6 +59,13 @@ namespace WebJob.Office365ActivityImporter.Engine.MessageTracing
         public long DroppedCount => Interlocked.Read(ref _droppedCount);
         public long FailedCount => Interlocked.Read(ref _failedCount);
         public long QueuedCount => _queue.Count;
+
+        /// <summary>
+        /// True from a failed attempt to open the blob container until an open succeeds, so the importer's
+        /// per-cycle Health check can report that traces aren't being saved.
+        /// </summary>
+        public bool IsStorageUnavailable => Volatile.Read(ref _storageUnavailable);
+
         private long _savedCount;
         private long _droppedCount;
         private long _failedCount;
@@ -70,6 +89,12 @@ namespace WebJob.Office365ActivityImporter.Engine.MessageTracing
         public bool TryEnqueue(HttpMessageTraceEnvelope envelope)
         {
             if (envelope?.Body == null) return false;
+            if (IsInStorageBackoff())
+            {
+                Interlocked.Increment(ref _droppedCount);
+                return false;
+            }
+
             var bytes = envelope.Body.LongLength;
             var queued = Interlocked.Add(ref _queuedBytes, bytes);
             if (queued > _maxQueueBytes)
@@ -163,13 +188,35 @@ namespace WebJob.Office365ActivityImporter.Engine.MessageTracing
             await _openGate.WaitAsync(cancellationToken).ConfigureAwait(false);
             try
             {
-                if (_container == null) Volatile.Write(ref _container, await _openContainer(cancellationToken).ConfigureAwait(false));
+                if (_container != null) return _container;
+                if (IsInStorageBackoff())
+                {
+                    throw new InvalidOperationException("Message tracing blob storage was unavailable on the last attempt; the open is retried after the back-off.");
+                }
+
+                try
+                {
+                    Volatile.Write(ref _container, await _openContainer(cancellationToken).ConfigureAwait(false));
+                    Volatile.Write(ref _storageUnavailable, false);
+                }
+                catch (Exception) when (!cancellationToken.IsCancellationRequested)
+                {
+                    Interlocked.Exchange(ref _storageRetryAfterTicks, (_utcNow() + StorageRetryInterval).Ticks);
+                    Volatile.Write(ref _storageUnavailable, true);
+                    throw;
+                }
                 return _container;
             }
             finally
             {
                 _openGate.Release();
             }
+        }
+
+        private bool IsInStorageBackoff()
+        {
+            return Volatile.Read(ref _storageUnavailable)
+                && _utcNow().Ticks < Interlocked.Read(ref _storageRetryAfterTicks);
         }
 
         private static async Task<BlobContainerClient> OpenContainerAsync(string connectionString, string containerName, AppConfig config, ILogger logger, CancellationToken cancellationToken)

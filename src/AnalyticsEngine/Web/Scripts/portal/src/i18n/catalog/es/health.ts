@@ -82,7 +82,7 @@ const health: Record<keyof typeof en, string> = {
   'health.reason.messageTracingEnabled': 'El seguimiento de mensajes está habilitado. Las respuestas de API que coincidan se guardan completas en Azure Blob Storage y pueden contener datos personales; quite el valor de aplicación MessageTraceMatch para desactivarlo.',
   'health.reason.messageTracingDisabled': 'El seguimiento de mensajes está desactivado.',
   'health.reason.messageTracingInvalidPattern': 'Se solicitó el seguimiento de mensajes, pero su configuración no es válida, por lo que el seguimiento está deshabilitado y las importaciones continúan con normalidad. Compruebe MessageTraceMatch y MessageTraceContainer en los valores de aplicación de App Service.',
-  'health.reason.messageTracingStorageUnavailable': 'Se solicitó el seguimiento de mensajes, pero no se pudo inicializar Blob Storage, por lo que el seguimiento está deshabilitado y las importaciones continúan con normalidad. Compruebe la cadena de conexión de Storage, el nombre del contenedor de blobs, la ruta de red y el rol Storage Blob Data Contributor.',
+  'health.reason.messageTracingStorageUnavailable': 'Se ha solicitado el seguimiento de mensajes, pero no puede guardar en Azure Blob Storage, por lo que no se está guardando ninguna respuesta; las importaciones continúan con normalidad. Compruebe la cadena de conexión de Storage, el nombre del contenedor de blobs, el acceso de red a la cuenta de almacenamiento y el rol Storage Blob Data Contributor.',
 
   // Health page
   'health.page.title': 'Estado del sistema{buildLabel}',

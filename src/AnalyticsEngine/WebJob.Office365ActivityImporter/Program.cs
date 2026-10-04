@@ -373,7 +373,7 @@ namespace WebJob.Office365ActivityImporter
                 importCycleTimer.TrackFinishedEventAndStopTimer(AnalyticsLogger.AnalyticsEvent.FinishedImportCycle);
                 if (messageTraceUploader != null)
                 {
-                    TrackMessageTracingEnabled(logger);
+                    TrackMessageTracingHealth(logger, messageTraceUploader);
                     messageTraceUploader.LogSummary(logger);
                 }
 
@@ -457,11 +457,31 @@ namespace WebJob.Office365ActivityImporter
             catch (Exception ex)
             {
                 logger.LogWarning($"Message tracing could not be initialised and is disabled; the import will continue. {ex.GetType().Name}: {ex.Message}");
-                logger.TrackHealthCheck(HealthComponent.MessageTracing, HealthStatus.Degraded,
-                    "Message tracing was requested but blob storage could not be initialised, so tracing is disabled and imports continue normally. Check the Storage connection string, blob container name, network path and Storage Blob Data Contributor role.",
-                    reasonKey: "messageTracing.storageUnavailable");
+                TrackMessageTracingStorageUnavailable(logger);
                 return null;
             }
+        }
+
+        /// <summary>
+        /// Per-cycle Health for an enabled tracer. The container is opened lazily on the first save, so a storage
+        /// problem only shows up after that; once an open has failed, Health says traces aren't being saved
+        /// rather than that they are, until an open succeeds.
+        /// </summary>
+        private static void TrackMessageTracingHealth(AnalyticsLogger logger, MessageTraceBlobUploader uploader)
+        {
+            if (uploader.IsStorageUnavailable)
+            {
+                TrackMessageTracingStorageUnavailable(logger);
+                return;
+            }
+            TrackMessageTracingEnabled(logger);
+        }
+
+        private static void TrackMessageTracingStorageUnavailable(AnalyticsLogger logger)
+        {
+            logger.TrackHealthCheck(HealthComponent.MessageTracing, HealthStatus.Degraded,
+                "Message tracing is requested but can't save to Azure Blob storage, so no responses are being saved; imports continue normally. Check the Storage connection string, the blob container name, network access to the storage account and the Storage Blob Data Contributor role.",
+                reasonKey: "messageTracing.storageUnavailable");
         }
 
         private static void TrackMessageTracingEnabled(AnalyticsLogger logger)

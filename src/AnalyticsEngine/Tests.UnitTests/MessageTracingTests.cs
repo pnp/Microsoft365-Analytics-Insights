@@ -180,6 +180,70 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public async Task Uploader_OpenFailure_ReportsStorageUnavailableAndBacksOffUntilRetry()
+        {
+            var now = new DateTime(2026, 10, 4, 12, 0, 0, DateTimeKind.Utc);
+            var opens = 0;
+            using (var uploader = new MessageTraceBlobUploader(
+                _ =>
+                {
+                    Interlocked.Increment(ref opens);
+                    return Task.FromException<Azure.Storage.Blobs.BlobContainerClient>(new InvalidOperationException("denied"));
+                },
+                NullLogger.Instance, utcNow: () => now))
+            {
+                Assert.IsFalse(uploader.IsStorageUnavailable);
+                Assert.IsTrue(uploader.TryEnqueue(TraceEnvelope()));
+                await WaitForAsync(() => uploader.FailedCount == 1);
+                Assert.IsTrue(uploader.IsStorageUnavailable);
+                Assert.AreEqual(1, Volatile.Read(ref opens));
+
+                // While backing off, traces are refused rather than held in memory, and storage isn't retried.
+                Assert.IsFalse(uploader.TryEnqueue(TraceEnvelope()));
+                Assert.AreEqual(1, uploader.DroppedCount);
+                Assert.AreEqual(0, uploader.QueuedCount);
+
+                now = now + MessageTraceBlobUploader.StorageRetryInterval + TimeSpan.FromSeconds(1);
+                Assert.IsTrue(uploader.TryEnqueue(TraceEnvelope()));
+                await WaitForAsync(() => uploader.FailedCount == 2);
+                Assert.AreEqual(2, Volatile.Read(ref opens));
+                Assert.IsTrue(uploader.IsStorageUnavailable);
+            }
+        }
+
+        [TestMethod]
+        public async Task Uploader_SuccessfulOpenAfterFailure_ClearsStorageUnavailable()
+        {
+            var now = new DateTime(2026, 10, 4, 12, 0, 0, DateTimeKind.Utc);
+            var opens = 0;
+            // Opens fine but nothing listens, so the upload itself fails fast (no retries).
+            var unreachable = new Azure.Storage.Blobs.BlobContainerClient(
+                new Uri("http://127.0.0.1:1/devstoreaccount1/message-traces"),
+                new Azure.Storage.Blobs.BlobClientOptions { Retry = { MaxRetries = 0 } });
+            using (var uploader = new MessageTraceBlobUploader(
+                _ => Interlocked.Increment(ref opens) == 1
+                    ? Task.FromException<Azure.Storage.Blobs.BlobContainerClient>(new InvalidOperationException("denied"))
+                    : Task.FromResult(unreachable),
+                NullLogger.Instance, utcNow: () => now))
+            {
+                Assert.IsTrue(uploader.TryEnqueue(TraceEnvelope()));
+                await WaitForAsync(() => uploader.FailedCount == 1);
+                Assert.IsTrue(uploader.IsStorageUnavailable);
+
+                now = now + MessageTraceBlobUploader.StorageRetryInterval + TimeSpan.FromSeconds(1);
+                Assert.IsTrue(uploader.TryEnqueue(TraceEnvelope()));
+                await WaitForAsync(() => uploader.FailedCount == 2);
+                Assert.AreEqual(2, Volatile.Read(ref opens));
+                Assert.IsFalse(uploader.IsStorageUnavailable);
+            }
+        }
+
+        private static HttpMessageTraceEnvelope TraceEnvelope()
+        {
+            return new HttpMessageTraceEnvelope { Body = Encoding.UTF8.GetBytes("{}"), CapturedUtc = DateTime.UtcNow, Source = "graph" };
+        }
+
+        [TestMethod]
         public void Uploader_Create_ValidatesOnlyAndDoesNotOpenStorageAtStartup()
         {
             var config = new AppConfig

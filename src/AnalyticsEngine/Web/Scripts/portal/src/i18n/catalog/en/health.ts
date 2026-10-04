@@ -82,7 +82,7 @@ export const health = {
   'health.reason.messageTracingEnabled': 'Message tracing is enabled. Matching API responses are being saved in full to Azure Blob storage and can contain personal data; remove the MessageTraceMatch app setting to turn it off.',
   'health.reason.messageTracingDisabled': 'Message tracing is off.',
   'health.reason.messageTracingInvalidPattern': 'Message tracing was requested but its configuration is invalid, so tracing is disabled and imports continue normally. Check MessageTraceMatch and MessageTraceContainer in App Service application settings.',
-  'health.reason.messageTracingStorageUnavailable': 'Message tracing was requested but blob storage could not be initialised, so tracing is disabled and imports continue normally. Check the Storage connection string, blob container name, network path and Storage Blob Data Contributor role.',
+  'health.reason.messageTracingStorageUnavailable': "Message tracing is requested but can't save to Azure Blob storage, so no responses are being saved; imports continue normally. Check the Storage connection string, the blob container name, network access to the storage account and the Storage Blob Data Contributor role.",
 
   // Health page
   'health.page.title': 'System Health{buildLabel}',
