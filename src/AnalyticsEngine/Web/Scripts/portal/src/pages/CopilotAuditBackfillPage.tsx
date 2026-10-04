@@ -98,6 +98,10 @@ export default function CopilotAuditBackfillPage() {
       const job = await startCopilotAuditBackfill(iso);
       setStatus((prev) => ({ stateDurable: prev?.stateDurable ?? false, copilotImportEnabled: prev?.copilotImportEnabled ?? true, latestJob: job }));
     } catch (e) {
+      if (e instanceof SessionExpiredError || e instanceof PortalPermissionError) {
+        setError(e.message);
+        return;
+      }
       const code = e instanceof Error ? e.message : null;
       setError(code && ERROR_KEYS[code] ? t(ERROR_KEYS[code]) : t('admin.copilotAuditBackfill.error.start'));
     }

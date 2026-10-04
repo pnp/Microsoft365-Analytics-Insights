@@ -144,4 +144,13 @@ describe('CopilotAuditBackfillPage', () => {
 
     expect(await screen.findByText('This needs the Administration permission. Ask an Entra ID administrator to assign you the Portal.Administration app role.')).toBeVisible();
   });
+
+  it('keeps translated session expiry errors from start', async () => {
+    mockStart.mockRejectedValue(new SessionExpiredError());
+    renderWithProvider(<CopilotAuditBackfillPage />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Start backfill' }));
+
+    expect(await screen.findByText('Your session has expired. Reload the page to sign in again.')).toBeVisible();
+  });
 });
