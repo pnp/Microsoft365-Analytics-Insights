@@ -1,4 +1,4 @@
-﻿using Common.Entities;
+using Common.Entities;
 using Common.Entities.Config;
 using Common.Entities.CopilotAuditBackfill;
 using Common.Entities.State;
@@ -495,11 +495,15 @@ VALUES (@p0, @p1, @operationId, @userId);",
         [TestMethod]
         public void HealthSemantics_OptionalBackfillDoesNotTurnRunningOrFailedJobsUnhealthy()
         {
+            var now = new DateTime(2026, 10, 4, 12, 0, 0, DateTimeKind.Utc);
             Assert.AreEqual(HealthStatus.Healthy, CopilotAuditBackfillImporter.ResolveHealth(new CopilotAuditBackfillJob { State = CopilotAuditBackfillStates.Running }).Status);
             Assert.AreEqual(HealthStatus.Healthy, CopilotAuditBackfillImporter.ResolveHealth(new CopilotAuditBackfillJob { State = CopilotAuditBackfillStates.Completed }).Status);
             Assert.AreEqual(HealthStatus.Healthy, CopilotAuditBackfillImporter.ResolveHealth(new CopilotAuditBackfillJob { State = CopilotAuditBackfillStates.Cancelled }).Status);
-            Assert.AreEqual(HealthStatus.Degraded, CopilotAuditBackfillImporter.ResolveHealth(new CopilotAuditBackfillJob { State = CopilotAuditBackfillStates.CompletedWithGaps }).Status);
-            Assert.AreEqual(HealthStatus.Degraded, CopilotAuditBackfillImporter.ResolveHealth(new CopilotAuditBackfillJob { State = CopilotAuditBackfillStates.Failed, LastErrorCode = CopilotAuditBackfillErrorCodes.MissingPermission }).Status);
+            Assert.AreEqual(HealthStatus.Degraded, CopilotAuditBackfillImporter.ResolveHealth(new CopilotAuditBackfillJob { State = CopilotAuditBackfillStates.CompletedWithGaps, CompletedUtc = now.AddDays(-1) }, now).Status);
+            Assert.AreEqual(HealthStatus.Degraded, CopilotAuditBackfillImporter.ResolveHealth(new CopilotAuditBackfillJob { State = CopilotAuditBackfillStates.Failed, LastErrorCode = CopilotAuditBackfillErrorCodes.MissingPermission, CompletedUtc = now.AddDays(-1) }, now).Status);
+            var aged = CopilotAuditBackfillImporter.ResolveHealth(new CopilotAuditBackfillJob { State = CopilotAuditBackfillStates.Failed, LastErrorCode = CopilotAuditBackfillErrorCodes.MissingPermission, CompletedUtc = now.AddDays(-8) }, now);
+            Assert.AreEqual(HealthStatus.Healthy, aged.Status);
+            Assert.AreEqual("copilotAuditBackfill.lastJobOld", aged.ReasonKey);
         }
 
         [TestMethod]

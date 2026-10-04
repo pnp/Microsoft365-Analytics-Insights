@@ -49,7 +49,7 @@ export const admin = {
   'admin.copilotAuditBackfill.state.failed': 'Failed',
   'admin.copilotAuditBackfill.state.queued': 'Queued',
   'admin.copilotAuditBackfill.state.running': 'Running',
-  'admin.copilotAuditBackfill.status.completedDays': 'Completed days',
+  'admin.copilotAuditBackfill.status.completedDays': 'Completed days (most recent 12)',
   'admin.copilotAuditBackfill.status.currentSlice': 'Current slice',
   'admin.copilotAuditBackfill.status.failedDays': 'Failed days',
   'admin.copilotAuditBackfill.status.incompleteDays': 'Incomplete days',

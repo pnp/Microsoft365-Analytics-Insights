@@ -77,6 +77,7 @@ export const health = {
   'health.reason.copilotAuditBackfillFailed': 'The Copilot audit backfill failed. Open Administration > Copilot audit backfill for the stable error code.',
   'health.reason.copilotAuditBackfillMissingPermission': 'The Copilot audit backfill cannot run because the runtime app is missing AuditLogsQuery.Read.All. This permission is opt-in and needs admin consent.',
   'health.reason.copilotAuditBackfillCompletedWithGaps': 'The Copilot audit backfill completed with failed or incomplete slices. Open Administration > Copilot audit backfill to see the affected days.',
+  'health.reason.copilotAuditBackfillLastJobOld': 'The latest Copilot audit backfill issue is more than seven days old. Open Administration > Copilot audit backfill to review the last result.',
 
   // Health page
   'health.page.title': 'System Health{buildLabel}',

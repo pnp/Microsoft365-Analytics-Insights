@@ -77,6 +77,7 @@ const health: Record<keyof typeof en, string> = {
   'health.reason.copilotAuditBackfillFailed': 'El relleno de auditoría de Copilot produjo un error. Abra Administración > Relleno de auditoría de Copilot para ver el código de error estable.',
   'health.reason.copilotAuditBackfillMissingPermission': 'El relleno de auditoría de Copilot no puede ejecutarse porque a la aplicación en tiempo de ejecución le falta AuditLogsQuery.Read.All. Este permiso es opcional y necesita consentimiento de administrador.',
   'health.reason.copilotAuditBackfillCompletedWithGaps': 'El relleno de auditoría de Copilot terminó con segmentos con error o incompletos. Abra Administración > Relleno de auditoría de Copilot para ver los días afectados.',
+  'health.reason.copilotAuditBackfillLastJobOld': 'La última incidencia del relleno de auditoría de Copilot tiene más de siete días. Abra Administración > Relleno de auditoría de Copilot para revisar el último resultado.',
 
   // Health page
   'health.page.title': 'Estado del sistema{buildLabel}',

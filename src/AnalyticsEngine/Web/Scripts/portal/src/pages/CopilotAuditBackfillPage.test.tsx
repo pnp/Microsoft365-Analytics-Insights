@@ -78,6 +78,7 @@ describe('CopilotAuditBackfillPage', () => {
     expect(screen.getByText('3 / 19')).toBeVisible();
     expect(screen.getByText('1,190 / 1,200')).toBeVisible();
     expect(screen.getByText('10')).toBeVisible();
+    expect(screen.getByText('Completed days (most recent 12)')).toBeVisible();
 
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
     await waitFor(() => expect(mockCancel).toHaveBeenCalledWith(42));

@@ -51,7 +51,7 @@ const admin: Record<keyof typeof en, string> = {
   'admin.copilotAuditBackfill.state.failed': 'Con error',
   'admin.copilotAuditBackfill.state.queued': 'En cola',
   'admin.copilotAuditBackfill.state.running': 'En ejecución',
-  'admin.copilotAuditBackfill.status.completedDays': 'Días completados',
+  'admin.copilotAuditBackfill.status.completedDays': 'Días completados (12 más recientes)',
   'admin.copilotAuditBackfill.status.currentSlice': 'Segmento actual',
   'admin.copilotAuditBackfill.status.failedDays': 'Días con error',
   'admin.copilotAuditBackfill.status.incompleteDays': 'Días incompletos',

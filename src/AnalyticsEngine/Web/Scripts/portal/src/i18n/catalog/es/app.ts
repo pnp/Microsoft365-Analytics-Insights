@@ -1,4 +1,4 @@
-﻿import type { app as en } from '../en/app';
+import type { app as en } from '../en/app';
 
 /**
  * Spanish (es-ES) text for the application shell.

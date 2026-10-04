@@ -1,4 +1,4 @@
-﻿using Common.Entities;
+using Common.Entities;
 using Common.Entities.Config;
 using Common.Entities.CopilotAuditBackfill;
 using DataUtils;
@@ -88,6 +88,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.AuditBackfill
         internal static readonly TimeSpan MinimumThrottlePause = TimeSpan.FromMinutes(15);
         internal static readonly TimeSpan SubmissionBudgetWindow = TimeSpan.FromHours(24);
         internal static readonly TimeSpan MaxUnknownStatusAge = TimeSpan.FromHours(24);
+        internal static readonly TimeSpan TerminalDegradedHealthWindow = TimeSpan.FromDays(7);
 
         private readonly CopilotAuditBackfillStateStore _state;
         private readonly ICopilotAuditSearchSource _source;
@@ -618,15 +619,18 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.AuditBackfill
             var analytics = _logger as AnalyticsLogger;
             if (analytics == null || job == null) return;
 
-            var health = ResolveHealth(job);
+            var health = ResolveHealth(job, _utcNow());
             analytics.TrackHealthCheck(HealthComponent.CopilotAuditBackfill, health.Status, health.Detail, reasonKey: health.ReasonKey);
         }
 
-        internal static CopilotAuditBackfillHealth ResolveHealth(CopilotAuditBackfillJob job)
+        internal static CopilotAuditBackfillHealth ResolveHealth(CopilotAuditBackfillJob job, DateTime? nowUtc = null)
         {
             HealthStatus status;
             string reasonKey;
             string detail;
+            var terminalAge = job.CompletedUtc.HasValue
+                ? (nowUtc ?? DateTime.UtcNow).Subtract(job.CompletedUtc.Value)
+                : TimeSpan.Zero;
             switch (job.State)
             {
                 case CopilotAuditBackfillStates.Running:
@@ -636,18 +640,36 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.AuditBackfill
                     detail = "Copilot audit backfill is running.";
                     break;
                 case CopilotAuditBackfillStates.CompletedWithGaps:
-                    status = HealthStatus.Degraded;
-                    reasonKey = "copilotAuditBackfill.completedWithGaps";
-                    detail = "Copilot audit backfill completed with failed or incomplete slices.";
+                    if (terminalAge > TerminalDegradedHealthWindow)
+                    {
+                        status = HealthStatus.Healthy;
+                        reasonKey = "copilotAuditBackfill.lastJobOld";
+                        detail = "The last Copilot audit backfill completed with issues more than seven days ago.";
+                    }
+                    else
+                    {
+                        status = HealthStatus.Degraded;
+                        reasonKey = "copilotAuditBackfill.completedWithGaps";
+                        detail = "Copilot audit backfill completed with failed or incomplete slices.";
+                    }
                     break;
                 case CopilotAuditBackfillStates.Failed:
-                    status = HealthStatus.Degraded;
-                    reasonKey = job.LastErrorCode == CopilotAuditBackfillErrorCodes.MissingPermission
-                        ? "copilotAuditBackfill.missingPermission"
-                        : "copilotAuditBackfill.failed";
-                    detail = job.LastErrorCode == CopilotAuditBackfillErrorCodes.MissingPermission
-                        ? "Copilot audit backfill cannot run because AuditLogsQuery.Read.All is missing."
-                        : "Copilot audit backfill failed.";
+                    if (terminalAge > TerminalDegradedHealthWindow)
+                    {
+                        status = HealthStatus.Healthy;
+                        reasonKey = "copilotAuditBackfill.lastJobOld";
+                        detail = "The last Copilot audit backfill failure is more than seven days old.";
+                    }
+                    else
+                    {
+                        status = HealthStatus.Degraded;
+                        reasonKey = job.LastErrorCode == CopilotAuditBackfillErrorCodes.MissingPermission
+                            ? "copilotAuditBackfill.missingPermission"
+                            : "copilotAuditBackfill.failed";
+                        detail = job.LastErrorCode == CopilotAuditBackfillErrorCodes.MissingPermission
+                            ? "Copilot audit backfill cannot run because AuditLogsQuery.Read.All is missing."
+                            : "Copilot audit backfill failed.";
+                    }
                     break;
                 case CopilotAuditBackfillStates.Completed:
                     status = HealthStatus.Healthy;

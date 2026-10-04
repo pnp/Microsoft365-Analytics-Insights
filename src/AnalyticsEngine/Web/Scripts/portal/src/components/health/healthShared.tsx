@@ -47,6 +47,7 @@ export const COPILOT_AUDIT_BACKFILL_REASON_KEYS: Record<string, TranslationKey> 
   'copilotAuditBackfill.failed': 'health.reason.copilotAuditBackfillFailed',
   'copilotAuditBackfill.missingPermission': 'health.reason.copilotAuditBackfillMissingPermission',
   'copilotAuditBackfill.completedWithGaps': 'health.reason.copilotAuditBackfillCompletedWithGaps',
+  'copilotAuditBackfill.lastJobOld': 'health.reason.copilotAuditBackfillLastJobOld',
 };
 
 /**

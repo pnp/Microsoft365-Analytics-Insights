@@ -1,4 +1,4 @@
-﻿/**
+/**
  * English text for the application shell: the brand bar, the area switcher, the left navigation
  * and the language picker.
  *
