@@ -45,7 +45,6 @@ const OPTIONS = {
   copilotMinutesSavedPerMailThread: 0.5,
   copilotMinutesSavedPerDocument: 1,
   coworkEstimateLowerBoundRatio: 0.5,
-  coworkMinutesSavedPerTask: 6,
   coworkSendEmailShare: 0.05,
   coworkSendEmailMinutes: 6,
   maxOpportunityCandidates: 50000,

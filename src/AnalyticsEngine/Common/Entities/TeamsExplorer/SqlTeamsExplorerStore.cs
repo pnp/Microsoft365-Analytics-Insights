@@ -1,3 +1,4 @@
+using Common.Entities.UserFilters;
 using Microsoft.Data.SqlClient;
 using System;
 using System.Collections.Generic;
@@ -856,10 +857,26 @@ namespace Common.Entities.TeamsExplorer
             var info = new TeamsExplorerQueryInfo
             {
                 Key = key,
-                Sql = TeamsExplorerSql.Describe(sql, query, championDays),
             };
 
             var result = new QueryResult<T> { Info = info };
+
+            // Narrowed to the people the report's scope covers, or - with no filter - exactly as written. A
+            // statement that cannot be narrowed is refused and reported as this section's error, never run
+            // tenant-wide for a reader whose figures must be filtered.
+            string scopedSql;
+            try
+            {
+                scopedSql = ReportScopeSql.Apply(sql, query.UserScope);
+            }
+            catch (ReportScopeNotAppliedException ex)
+            {
+                info.Sql = TeamsExplorerSql.Describe(sql, query, championDays);
+                info.Error = ex.Message;
+                return result;
+            }
+
+            info.Sql = TeamsExplorerSql.Describe(scopedSql, query, championDays);
             var watch = Stopwatch.StartNew();
 
             try
@@ -868,7 +885,7 @@ namespace Common.Entities.TeamsExplorer
                 {
                     db.Database.CommandTimeout = _commandTimeoutSeconds;
                     result.Rows = await db.Database
-                        .SqlQuery<T>(sql, Parameters(query, championDays))
+                        .SqlQuery<T>(scopedSql, ReportScopeSql.WithScope(Parameters(query, championDays), query.UserScope))
                         .ToListAsync()
                         .ConfigureAwait(false);
                 }

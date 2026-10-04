@@ -30,6 +30,9 @@ param privateEndpointSubnetPrefix string
 @description('Application (client) ID of the single-tenant Entra SPA/API registration.')
 param azureAdClientId string
 
+@description('Load App Service Authentication\'s first-party modules (WEBSITE_LOAD_FIRST_PARTY_AUTH), which validate tokens with MISE v2. App Service only accepts the setting on a subscription it has enabled for first-party authentication, so set this to false anywhere else.')
+param loadFirstPartyAuth bool = true
+
 @description('Signed-upload shared secret. This value is stored in Key Vault.')
 @secure()
 param telemetrySecret string
@@ -60,6 +63,7 @@ module telemetryResources './resources.bicep' = {
     privateEndpointSubnetPrefix: privateEndpointSubnetPrefix
     azureAdTenantId: tenant().tenantId
     azureAdClientId: azureAdClientId
+    loadFirstPartyAuth: loadFirstPartyAuth
     telemetrySecret: telemetrySecret
     tags: union(defaultTags, tags)
   }

@@ -32,7 +32,13 @@
         /// <summary>Audit-importer processed-blob checkpoint durability. Healthy = durable Azure Table store;
         /// Degraded = fell back to the in-memory store (dedupes within this process but is lost on restart,
         /// so the overlapping API lookback window is re-downloaded after every restart/redeploy).</summary>
-        BlobCheckpoint
+        BlobCheckpoint,
+
+        /// <summary>On-demand Microsoft Graph Audit Search backfill for Copilot interaction audit records.</summary>
+        CopilotAuditBackfill,
+
+        /// <summary>Opt-in diagnostic capture of matching API JSON responses to Azure Blob storage.</summary>
+        MessageTracing
     }
 
     /// <summary>

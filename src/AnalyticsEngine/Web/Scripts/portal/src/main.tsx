@@ -5,6 +5,7 @@ import { FluentProvider, webLightTheme } from '@fluentui/react-components';
 import App from './App';
 import { I18nProvider, detectLanguage, loadCatalog } from './i18n';
 import { PortalAccessProvider } from './access';
+import { GlobalFilterProvider } from './components/globalFilter/GlobalFilterProvider';
 import { restoreRouteAfterReauth } from './api/http';
 import './index.css';
 
@@ -39,7 +40,9 @@ void loadCatalog(language).then(() => {
         <I18nProvider initialLanguage={language}>
           <PortalAccessProvider>
             <HashRouter>
-              <App />
+              <GlobalFilterProvider>
+                <App />
+              </GlobalFilterProvider>
             </HashRouter>
           </PortalAccessProvider>
         </I18nProvider>

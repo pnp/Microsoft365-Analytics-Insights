@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { screen, waitFor, fireEvent, within } from '@testing-library/react';
 import { renderWithProvider } from '../test/renderWithProvider';
-import CopilotAdoptionPage from './CopilotAdoptionPage';
+import CopilotAdoptionPage, { lastCalendarMonthRange, lastCalendarQuarterRange } from './CopilotAdoptionPage';
 import {
   fetchAdoptionAvailability,
   fetchAdoptionFilters,
@@ -80,6 +80,7 @@ const options: CopilotAdoptionOptions = {
   agentRetireInactiveDays: 60,
   agentNewDays: 14,
   reclaimGraceDays: 30,
+  activationWindowDays: 30,
   agentMinUsers: 3,
   agentHistoryDays: 120,
   opportunityUnlicensedCopilotWeight: 40,
@@ -109,7 +110,10 @@ const options: CopilotAdoptionOptions = {
   copilotMinutesSavedPerMailThread: 5,
   copilotMinutesSavedPerDocument: 8,
   coworkEstimateLowerBoundRatio: 0.5,
-  coworkMinutesSavedPerTask: 6,
+  copilotSeatOutlookMinutesPerAction: 6,
+  copilotSeatOfficeMinutesPerAction: 6,
+  copilotSeatMeetingMinutesPerAction: 30,
+  copilotSeatUncreditedMinutesPerAction: 0,
   coworkOrganiseMeetingsShare: 0.25,
   coworkOrganiseMeetingsMinutes: 6,
   coworkPrepareMeetingsShare: 0.1,
@@ -123,6 +127,7 @@ const options: CopilotAdoptionOptions = {
   usageReportLagDays: 3,
   topSegments: 10,
   minSeatsPerSegment: 5,
+  accountabilityDimension: 'directManager',
   maxLicensedUsersScored: 50000,
   maxOpportunityCandidates: 50000,
   maxAgents: 1000,
@@ -146,7 +151,7 @@ function summary(overrides: Partial<CopilotAdoptionSummary> = {}): CopilotAdopti
       m365UsageReportDate: '2026-01-01T00:00:00Z',
       copilotUsageReportObfuscated: false,
     },
-    seatLicenceTypes: [{ id: 1, name: 'Microsoft 365 Copilot', skuPartNumber: 'M365_COPILOT', assignedUsers: 120, isCopilotSeat: true }],
+    seatLicenceTypes: [{ id: 1, name: 'Microsoft 365 Copilot', skuPartNumber: 'M365_COPILOT', assignedUsers: 120, isCopilotSeat: true, purchasedUnits: 120, unassignedUnits: 0, assignedIdleUsers: 0, purchasedUnitsRefreshedUtc: null }],
     licensedUsers: 120,
     scoredUsers: 120,
     activeUsers: 72,
@@ -166,6 +171,7 @@ function summary(overrides: Partial<CopilotAdoptionSummary> = {}): CopilotAdopti
     reclaimCaveat: null,
     reclaimSeatsHeldBackForWindowMismatch: 0,
     reclaimSeatsHeldBackForReview: 24,
+    reclaimSeatsNoLongerHeld: 0,
     reclaimSeatsFromActiveBands: 0,
     usageReportSourcedUsers: 0,
     usageReportSourcedUserPct: 0,
@@ -190,7 +196,7 @@ function summary(overrides: Partial<CopilotAdoptionSummary> = {}): CopilotAdopti
     coworkQuadrant: [],
     coworkByDepartment: [],
     coworkCreditPosition: { available: false, snapshotUtc: null, entitled: null, consumed: null, available_credits: null, payAsYouGoConsumed: null, status: null, perUserCreditsAvailable: false },
-    coworkValueEstimate: { isModelled: false, cohortUsers: 0, coworkTaskUsers: 0, observedCoworkTasks: 0, projectedCoworkUsers: 0, activities: [], projectedCoworkTasks: 0, coworkTasks: 0, observedTasksPerPersonPerMonth: 0, observedTaskRateUsers: 0, hoursPerMonthLow: 0, hoursPerMonthHigh: 0, assumptions: [] },
+    coworkValueEstimate: { isModelled: false, cohortUsers: 0, activities: [], projectedCoworkTasks: 0, hoursPerMonthLow: 0, hoursPerMonthHigh: 0, assumptions: [] },
     unlicensedActiveUsers: 14,
     recommendedForLicence: 9,
     funnel: [
@@ -244,7 +250,7 @@ function summary(overrides: Partial<CopilotAdoptionSummary> = {}): CopilotAdopti
     figuresIncomplete: false,
     incompleteReasons: [],
     ...overrides,
-  };
+  } as CopilotAdoptionSummary;
 }
 
 beforeEach(() => {
@@ -274,10 +280,83 @@ beforeEach(() => {
   vi.mocked(fetchLicensedUsers).mockResolvedValue({ total: 0, skip: 0, take: 50, rows: [], warnings: [] });
 });
 
-async function renderPage() {
-  renderWithProvider(<CopilotAdoptionPage />);
-  await screen.findByRole('tab', { name: 'Executive view', selected: true });
+async function renderPage(options?: Parameters<typeof renderWithProvider>[1]) {
+  renderWithProvider(<CopilotAdoptionPage />, options);
+  await screen.findByRole('tab', { name: options?.language === 'es' ? 'Vista ejecutiva' : 'Executive view', selected: true });
 }
+
+describe('CopilotAdoptionPage custom ranges', () => {
+  it('calculates calendar presets across month lengths and January', () => {
+    expect(lastCalendarMonthRange(new Date(Date.UTC(2026, 2, 15)))).toEqual({ from: '2026-02-01', to: '2026-02-28' });
+    expect(lastCalendarMonthRange(new Date(Date.UTC(2026, 0, 15)))).toEqual({ from: '2025-12-01', to: '2025-12-31' });
+    expect(lastCalendarQuarterRange(new Date(Date.UTC(2026, 0, 15)))).toEqual({ from: '2025-10-01', to: '2025-12-31' });
+  });
+
+  it('sends custom ranges to the API and clears them when a rolling preset is chosen', async () => {
+    await renderPage();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Last calendar month' }));
+    expect(screen.getByLabelText('Reporting period')).toHaveValue('custom');
+    fireEvent.change(screen.getByLabelText('Reporting period'), { target: { value: '28' } });
+    await waitFor(() => expect(vi.mocked(fetchAdoptionSummary)).toHaveBeenLastCalledWith(
+      28,
+      undefined,
+      expect.any(AbortSignal),
+      null,
+      null,
+    ));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Last calendar month' }));
+    await waitFor(() => expect(vi.mocked(fetchAdoptionSummary)).toHaveBeenLastCalledWith(
+      28,
+      undefined,
+      expect.any(AbortSignal),
+      null,
+      null,
+      { ...lastCalendarMonthRange() },
+    ));
+
+    fireEvent.change(screen.getByLabelText('Reporting period'), { target: { value: '90' } });
+    await waitFor(() => expect(vi.mocked(fetchAdoptionSummary)).toHaveBeenLastCalledWith(
+      90,
+      undefined,
+      expect.any(AbortSignal),
+      null,
+      null,
+    ));
+  });
+
+  it('hides named action-list panels for past ranges while the print header keeps the range', async () => {
+    vi.mocked(fetchAdoptionSummary).mockResolvedValue(summary({
+      fromUtc: '2026-09-01T00:00:00Z',
+      toUtc: '2026-09-30T00:00:00Z',
+      options: { ...options, usesExplicitDates: true, fromUtc: '2026-09-01T00:00:00Z', toUtc: '2026-09-30T00:00:00Z', toExclusiveUtc: '2026-10-01T00:00:00Z' },
+      seatHolderTimeSavedEstimate: {
+        isModelled: true,
+        cohortUsers: 12,
+        excludedUsageReportSourcedUsers: 0,
+        observedOutlookActions: 10,
+        observedOfficeActions: 5,
+        observedTeamsMeetingActions: 1,
+        observedUncreditedActions: 0,
+        credits: { outlookMinutesPerAction: 6, officeMinutesPerAction: 6, teamsMeetingMinutesPerAction: 30, uncreditedMinutesPerAction: 0, lowerBoundRatio: 0.5 },
+        hoursPerMonthLow: 1,
+        hoursPerMonthHigh: 2,
+        assumptions: [],
+        byBand: [],
+        byDepartment: [],
+      },
+    }));
+    await renderPage();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Last calendar month' }));
+    fireEvent.click(screen.getByRole('tab', { name: 'Licensed users' }));
+    expect(await screen.findByText("Seat holders' time saved (modelled)")).toBeVisible();
+    expect(await screen.findByText(/named reclaim and recommendation lists/i)).toBeInTheDocument();
+    expect(screen.getByText(/1 Sept? 2026/i)).toBeInTheDocument();
+    expect(screen.getByText(/30 Sept? 2026/i)).toBeInTheDocument();
+  });
+});
 
 describe('CopilotAdoptionPage view split', () => {
   it('translates unavailable availability reasons instead of rendering server English', async () => {
@@ -347,6 +426,21 @@ describe('CopilotAdoptionPage view split', () => {
     expect(screen.getByText('The shape of adoption')).toBeVisible();
     expect(screen.getByText('Usage frequency and intensity')).toBeVisible();
     expect(screen.getAllByRole('button', { name: 'SQL' }).length).toBeGreaterThanOrEqual(5);
+  });
+
+  it('shows former seat holders as their own reclaim reconciliation term', async () => {
+    vi.mocked(fetchAdoptionSummary).mockResolvedValue(summary({
+      reclaimSeatsHeldBackForReview: 0,
+      reclaimSeatsNoLongerHeld: 2,
+    }));
+
+    await renderPage();
+    const card = (await screen.findByText('Reclaimable licences')).closest('.fui-Card') as HTMLElement;
+
+    fireEvent.click(within(card).getByRole('button', { name: /How "Reclaimable licences" is calculated/ }));
+
+    expect(await screen.findByText(/2 no longer hold a seat/)).toBeInTheDocument();
+    expect(screen.queryByText(/2 held back for review or exclusion/)).toBeNull();
   });
 
   it('drills the executive enablement plan through using the action code counted by the aggregate', async () => {
@@ -745,7 +839,7 @@ describe('CopilotAdoptionPage printing', () => {
 describe('CopilotAdoptionPage data warnings', () => {
   const WARNINGS = [
     'Purchased and unassigned Copilot seats are unknown because Graph subscribedSkus has not been imported.',
-    'The first-party Cowork usage report is not available.',
+    'The Microsoft 365 usage reports are not available, so coordination load cannot be measured.',
   ];
 
   it('shows the warnings, and lets the reader put them away', async () => {
@@ -885,9 +979,9 @@ describe('CopilotAdoptionPage modelled time saved', () => {
     assumptions: [],
   };
 
-  // Cowork, for the 20 people ready now: 150 tasks observed from 10 people, and the other 10 modelled
-  // from their own work - 3,000 emails sent x 5% = 150 handed to Cowork, and nothing else. (150 + 150)
-  // x 6 minutes = 1,800 minutes = 30 hours, 15 conservative.
+  // Cowork, for the 20 people ready now, all modelled from their own work (#692): 6,000 emails sent x 5%
+  // = 300 handed to Cowork, and nothing else. 300 x 6 minutes = 1,800 minutes = 30 hours, 15
+  // conservative.
   const noWork = [
     { activity: 'organiseMeetings' as const, volumePerMonth: 0 },
     { activity: 'prepareMeetings' as const, volumePerMonth: 0 },
@@ -897,28 +991,20 @@ describe('CopilotAdoptionPage modelled time saved', () => {
   const coworkReady = {
     isModelled: true,
     cohortUsers: 20,
-    coworkTaskUsers: 10,
-    observedCoworkTasks: 150,
-    projectedCoworkUsers: 10,
-    activities: [{ activity: 'sendEmail' as const, volumePerMonth: 3000 }, ...noWork],
-    projectedCoworkTasks: 150,
-    coworkTasks: 300,
-    observedTasksPerPersonPerMonth: 15,
-    observedTaskRateUsers: 10,
+    activities: [{ activity: 'sendEmail' as const, volumePerMonth: 6000 }, ...noWork],
+    projectedCoworkTasks: 300,
     hoursPerMonthLow: 15,
     hoursPerMonthHigh: 30,
     assumptions: [],
   };
 
-  // The ceiling, all 100 seat holders: 150 observed + 27,000 emails x 5% = 1,350 = 1,500 x 6 minutes =
-  // 150 hours, 75 conservative.
+  // The ceiling, all 100 seat holders: 30,000 emails x 5% = 1,500 x 6 minutes = 150 hours, 75
+  // conservative.
   const coworkCeiling = {
     ...coworkReady,
     cohortUsers: 100,
-    projectedCoworkUsers: 90,
-    activities: [{ activity: 'sendEmail' as const, volumePerMonth: 27000 }, ...noWork],
-    projectedCoworkTasks: 1350,
-    coworkTasks: 1500,
+    activities: [{ activity: 'sendEmail' as const, volumePerMonth: 30000 }, ...noWork],
+    projectedCoworkTasks: 1500,
     hoursPerMonthLow: 75,
     hoursPerMonthHigh: 150,
   };
@@ -938,6 +1024,22 @@ describe('CopilotAdoptionPage modelled time saved', () => {
     },
   };
 
+  const seatHolderEstimate = {
+    isModelled: true,
+    cohortUsers: 24,
+    excludedUsageReportSourcedUsers: 3,
+    observedOutlookActions: 100,
+    observedOfficeActions: 50,
+    observedTeamsMeetingActions: 4,
+    observedUncreditedActions: 20,
+    credits: { outlookMinutesPerAction: 6, officeMinutesPerAction: 6, teamsMeetingMinutesPerAction: 30, uncreditedMinutesPerAction: 0, lowerBoundRatio: 0.5 },
+    hoursPerMonthLow: 9,
+    hoursPerMonthHigh: 17,
+    assumptions: ['Copilot Chat has no published per-prompt credit and defaults to zero.'],
+    byBand: [{ segment: 'Established', cohortUsers: 24, observedOutlookActions: 100, observedOfficeActions: 50, observedTeamsMeetingActions: 4, observedUncreditedActions: 20, hoursPerMonthLow: 9, hoursPerMonthHigh: 17 }],
+    byDepartment: [{ segment: 'Finance', cohortUsers: 24, observedOutlookActions: 100, observedOfficeActions: 50, observedTeamsMeetingActions: 4, observedUncreditedActions: 20, hoursPerMonthLow: 9, hoursPerMonthHigh: 17 }],
+  };
+
   const withEstimate = (overrides: Partial<CopilotAdoptionSummary> = {}) =>
     summary({
       coworkReadinessAvailable: true,
@@ -946,6 +1048,7 @@ describe('CopilotAdoptionPage modelled time saved', () => {
       coworkValueEstimate: coworkReady,
       coworkFullRolloutEstimate: coworkCeiling,
       licenceOpportunityEstimate: licenceEstimate,
+      seatHolderTimeSavedEstimate: seatHolderEstimate,
       licenceChatUsersEstimate: {
         ...licenceEstimate,
         cohortUsers: 3,
@@ -1058,6 +1161,68 @@ describe('CopilotAdoptionPage modelled time saved', () => {
     expect(screen.queryByText(/if every licence candidate/)).toBeNull();
   });
 
+  it('shows realised seat-holder time on the executive tile and Licensed users section', async () => {
+    vi.mocked(fetchAdoptionSummary).mockResolvedValue(withEstimate());
+
+    await renderPage();
+
+    const tileCard = await tile('Time already saved by seat holders');
+    expect(within(tileCard).getByText('9\u201317 h')).toBeVisible();
+    expect(within(tileCard).getByText('Modelled')).toBeVisible();
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Licensed users' }));
+    expect(await screen.findByText("Seat holders' time saved (modelled)")).toBeVisible();
+    expect(screen.getByText(/Copilot Chat and other non-agent surfaces default to zero minutes/)).toBeVisible();
+    expect(screen.getByText(/Agent and Cowork activity is left out of this figure/)).toBeVisible();
+    expect(screen.getByText(/20 other at 0 min/)).toBeVisible();
+  });
+
+  it('lets the reader edit a realised-value credit for the session', async () => {
+    vi.mocked(fetchAdoptionSummary).mockResolvedValue(withEstimate());
+
+    await renderPage();
+    fireEvent.click(screen.getByRole('tab', { name: 'Licensed users' }));
+
+    const input = await screen.findByLabelText('Outlook minutes per action');
+    fireEvent.change(input, { target: { value: '12' } });
+
+    expect(await screen.findByText(/100 Outlook at 12 min/)).toBeVisible();
+    expect(screen.getByText('14\u201327 h')).toBeVisible();
+    const finance = screen.getByText('Finance').closest('tr') as HTMLElement;
+    expect(within(finance).getByText('27')).toBeVisible();
+  });
+
+  it('translates the no-department placeholder in the realised-value table', async () => {
+    vi.mocked(fetchAdoptionSummary).mockResolvedValue(withEstimate({
+      seatHolderTimeSavedEstimate: {
+        ...seatHolderEstimate,
+        byDepartment: [{ ...seatHolderEstimate.byDepartment[0], segment: '(no department)' }],
+      },
+    }));
+
+    await renderPage({ language: 'es' });
+    fireEvent.click(screen.getByRole('tab', { name: 'Usuarios con licencia' }));
+
+    expect(await screen.findByText('(sin departamento)')).toBeVisible();
+    expect(screen.queryByText('(no department)')).toBeNull();
+  });
+
+  it('does not offer to open the hidden Licensed users tab without See PII', async () => {
+    vi.mocked(fetchAdoptionSummary).mockResolvedValue(withEstimate());
+
+    await renderPage({ access: { administration: false, seePii: false } });
+
+    const tileCard = await tile('Time already saved by seat holders');
+    expect(within(tileCard).getByText('9\u201317 h')).toBeVisible();
+    expect(within(tileCard).queryByText('Review on Licensed users')).toBeNull();
+  });
+
+  it('has Spanish text for the realised seat-holder estimate', async () => {
+    const es = await loadCatalog('es');
+    expect(es['copilotAdoption.page.seatTime.title']).toBe('Tiempo ahorrado por titulares de licencia (modelado)');
+    expect(es['copilotAdoption.page.kpi.seatHolderTimeSaved.label']).toBe('Tiempo ya ahorrado por titulares de licencia');
+  });
+
   it('puts each modelled figure on a tile of its own, marked as modelled', async () => {
     vi.mocked(fetchAdoptionSummary).mockResolvedValue(withEstimate());
 
@@ -1099,10 +1264,7 @@ describe('CopilotAdoptionPage modelled time saved', () => {
         coworkValueEstimate: {
           ...coworkReady,
           cohortUsers: 0,
-          coworkTaskUsers: 0,
-          observedCoworkTasks: 0,
-          projectedCoworkUsers: 0,
-          coworkTasks: 0,
+          projectedCoworkTasks: 0,
           hoursPerMonthLow: 0,
           hoursPerMonthHigh: 0,
         },
@@ -1127,6 +1289,47 @@ describe('CopilotAdoptionPage modelled time saved', () => {
     fireEvent.click(screen.getByRole('tab', { name: 'Executive view' }));
     fireEvent.click(within(await tile('Time back from Cowork')).getByRole('button', { name: 'See the Cowork tab' }));
     expect(await screen.findByRole('tab', { name: 'Cowork', selected: true })).toBeVisible();
+  });
+
+  it('keeps the Cowork and licence-opportunity figures for a past range and hides only their named lists', async () => {
+    vi.mocked(fetchAdoptionSummary).mockResolvedValue(withEstimate({
+      fromUtc: '2026-09-01T00:00:00Z',
+      toUtc: '2026-09-30T00:00:00Z',
+      options: { ...options, usesExplicitDates: true, fromUtc: '2026-09-01T00:00:00Z', toUtc: '2026-09-30T00:00:00Z', toExclusiveUtc: '2026-10-01T00:00:00Z' },
+    }));
+
+    await renderPage();
+    fireEvent.click(screen.getByRole('button', { name: 'Last calendar month' }));
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Licence opportunities' }));
+    expect(await screen.findByRole('tablist', { name: 'Licence opportunity sections' })).toBeVisible();
+    expect(screen.getByText(/named reclaim and recommendation lists/i)).toBeInTheDocument();
+    expect(screen.queryByText('Individual details are hidden')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Cowork' }));
+    expect(await screen.findByRole('tablist', { name: 'Cowork sections' })).toBeVisible();
+    expect(screen.getByText(/named reclaim and recommendation lists/i)).toBeInTheDocument();
+    expect(screen.queryByText('Individual details are hidden')).not.toBeInTheDocument();
+
+    const printHeader = screen.getByText((_content, element) =>
+      element?.tagName === 'SPAN' && /Custom range/.test(element.textContent ?? '') && /30 Sept? 2026/.test(element.textContent ?? ''));
+    expect(printHeader.textContent).not.toMatch(/Last 28 days/);
+  });
+
+  it('gives a reader without See PII the permission reason in the panels on a past range', async () => {
+    vi.mocked(fetchAdoptionSummary).mockResolvedValue(withEstimate({
+      fromUtc: '2026-09-01T00:00:00Z',
+      toUtc: '2026-09-30T00:00:00Z',
+      options: { ...options, usesExplicitDates: true, fromUtc: '2026-09-01T00:00:00Z', toUtc: '2026-09-30T00:00:00Z', toExclusiveUtc: '2026-10-01T00:00:00Z' },
+    }));
+
+    renderWithProvider(<CopilotAdoptionPage />, { access: { administration: false, seePii: false } });
+    await screen.findByRole('tab', { name: 'Executive view', selected: true });
+    fireEvent.click(screen.getByRole('button', { name: 'Last calendar month' }));
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Licence opportunities' }));
+    expect(await screen.findByRole('tablist', { name: 'Licence opportunity sections' })).toBeVisible();
+    expect(screen.getByText('Individual details are hidden')).toBeInTheDocument();
   });
 
   it('claims nothing when there is nobody to model', async () => {
@@ -1183,12 +1386,12 @@ describe('CopilotAdoptionPage modelled time saved', () => {
 
     await renderPage();
 
-    // 150 observed + 3,000 emails x 10% = 300 handed over = 450 x 6 = 2,700 minutes = 45 hours, 22.5
-    // conservative.
-    expect(within(await tile('Time back from Cowork')).getByText('23\u201345 h')).toBeVisible();
+    // 6,000 emails x 10% = 600 handed over x 6 = 3,600 minutes = 60 hours, 30 conservative.
+    expect(within(await tile('Time back from Cowork')).getByText('30\u201360 h')).toBeVisible();
     expect(within(await tile('Time back from licensing')).getByText('1,200\u20132,400 h')).toBeVisible();
     const url = new URL((screen.getByText('Excel report').closest('a') as HTMLAnchorElement).href);
     expect(url.searchParams.get('coworkSendEmailShare')).toBe('0.1');
+    // The minutes per Cowork task is gone with the tasks it applied to (#692): the server no longer reads it.
     expect(url.searchParams.has('coworkMinutesSavedPerTask')).toBe(false);
     // The flat task rate is gone: the server no longer reads it.
     expect(url.searchParams.has('coworkTasksPerPersonPerMonth')).toBe(false);
@@ -1206,8 +1409,10 @@ describe('CopilotAdoptionPage modelled time saved', () => {
     expect(await screen.findByText('The licensing estimate is a model, not a measurement.')).toBeVisible();
     expect(screen.getByText(/\(10 minutes per meeting, 5 per email, 8 per document by default/)).toBeVisible();
     expect(screen.getByText('The Cowork estimate is a model, not a measurement.')).toBeVisible();
-    expect(screen.getByText(/at 6 minutes a task by default/)).toBeVisible();
-    expect(screen.getByText(/Everyone else is modelled from the work they already do by hand, one kind at a time/)).toBeVisible();
+    // #692: Cowork is audit-only, so nobody is modelled from task counts, and the method says so.
+    expect(screen.queryByText(/minutes a task/)).toBeNull();
+    expect(screen.getByText(/Everyone covered is modelled from the work they already do by hand, one kind at a time/)).toBeVisible();
+    expect(screen.getByText(/the Copilot audit log counts their Cowork interactions, not the work they hand over/)).toBeVisible();
     expect(screen.getByText(/it is never added to the licensing estimate/)).toBeVisible();
   });
 

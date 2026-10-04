@@ -36,9 +36,6 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Copilot
 
         /// <summary>Per-user detail. Licensed users only, and affected by the tenant's concealed-user-information setting.</summary>
         public const string UsageUserDetail = Common.Entities.Entities.UsageReports.CopilotUsageReportNames.UsageUserDetail;
-
-        /// <summary>Per-user Cowork task detail from the first-party Cowork usage report.</summary>
-        public const string CoworkUsageUserDetail = Common.Entities.Entities.UsageReports.CopilotUsageReportNames.CoworkUsageUserDetail;
     }
 
     /// <summary>

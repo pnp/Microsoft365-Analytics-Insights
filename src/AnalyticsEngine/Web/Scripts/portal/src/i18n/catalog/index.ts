@@ -21,6 +21,7 @@ import enHealth from './en/health';
 import enAdmin from './en/admin';
 import enUserOrgs from './en/userOrgs';
 import enUserFilter from './en/userFilter';
+import enGlobalFilter from './en/globalFilter';
 import enAccess from './en/access';
 
 /**
@@ -69,6 +70,7 @@ export const EN_MODULES = {
   admin: enAdmin,
   userOrgs: enUserOrgs,
   userFilter: enUserFilter,
+  globalFilter: enGlobalFilter,
   access: enAccess,
 } as const;
 

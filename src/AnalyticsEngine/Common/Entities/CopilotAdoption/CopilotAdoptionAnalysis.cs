@@ -1,4 +1,4 @@
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
 
 namespace Common.Entities.CopilotAdoption
 {
@@ -47,6 +47,18 @@ namespace Common.Entities.CopilotAdoption
 
         /// <summary>Raw usage for every unlicensed person who used Copilot in the window.</summary>
         public List<UnlicensedUsageQueryRow> UnlicensedUsers { get; set; } = new List<UnlicensedUsageQueryRow>();
+
+        /// <summary>
+        /// Observed Copilot actions per licensed user, already collapsed by SQL to one row per user for
+        /// the modelled realised-value estimate. Internal only; never exposed as a per-person hours figure.
+        /// </summary>
+        internal List<SeatHolderTimeSavedUserRow> SeatHolderTimeSavedRows { get; set; } = new List<SeatHolderTimeSavedUserRow>();
+
+        /// <summary>
+        /// True only when the realised seat-holder time query completed. An empty row set is then a real
+        /// zero-activity result; false means the estimate was not assessed and must be withheld.
+        /// </summary>
+        internal bool SeatHolderTimeSavedAssessed { get; set; }
 
         /// <summary>
         /// Raw Cowork signals as the database returned them, before scoring.

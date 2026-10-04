@@ -9,6 +9,7 @@ import {
   Button,
   Card,
   Select,
+  Input,
   Tab,
   TabList,
   Tooltip,
@@ -34,6 +35,7 @@ import type {
   AdoptionFilterOptions,
   CopilotAdoptionAvailability,
   CopilotAdoptionSummary,
+  SeatHolderTimeSavedSegment,
 } from '../types/copilotAdoption';
 import Spinner from '../components/Spinner';
 import SqlPopover from '../components/SqlPopover';
@@ -61,6 +63,8 @@ import PrintButton from '../components/shared/PrintButton';
 import { PRINT_ROW_LIMIT } from '../components/shared/printPreparation';
 import { serverPlaceholderText } from '../components/shared/serverPlaceholder';
 import DismissibleWarnings from '../components/shared/DismissibleWarnings';
+import DateRangeControl from '../components/licenceActivity/DateRangeControl';
+import { latestEndString, addDays } from '../components/licenceActivity/dateRange';
 import PiiHiddenNote from '../components/shared/PiiHiddenNote';
 import { SegmentTable, BAND_COLOUR_LIST } from '../components/copilotAdoption/adoptionShared';
 import { KpiGrid, formatCount, formatDate, formatPct, weightSharePct } from '../components/shared/KpiGrid';
@@ -79,9 +83,11 @@ import {
   compactHoursRange,
   projectCoworkTimeSaved,
   projectLicenceTimeSaved,
+  projectSeatHolderTimeSaved,
   timeSavedExportParams,
   useTimeSavedAssumptions,
   type TimeSavedAssumptions,
+  type TimeSavedAssumptionState,
 } from '../components/copilotAdoption/coworkTimeSaved';
 import {
   resolveTimeSavedCohort,
@@ -90,6 +96,8 @@ import {
 } from '../components/copilotAdoption/timeSavedCohort';
 import UserFilterBar from '../components/userFilter/UserFilterBar';
 import UserFilterPrintSummary from '../components/userFilter/UserFilterPrintSummary';
+import GlobalFilterBar from '../components/globalFilter/GlobalFilterBar';
+import { describeGlobalFilter } from '../components/globalFilter/describeGlobalFilter';
 import {
   describeClause,
   describeUserFilter,
@@ -108,6 +116,7 @@ import {
 } from '../components/userFilter/userFilterModel';
 import { notify } from '../components/toast';
 import { EMPTY_USER_FILTER, type UserFilter, type UserFilterDimension } from '../types/userFilter';
+import type { DateRange } from '../types/licenceActivity';
 import { usePortalAccess } from '../access';
 
 const WINDOW_OPTIONS: { value: number; labelKey: TranslationKey }[] = [
@@ -116,6 +125,35 @@ const WINDOW_OPTIONS: { value: number; labelKey: TranslationKey }[] = [
   { value: 90, labelKey: 'copilotAdoption.page.window.last90Days' },
   { value: 180, labelKey: 'copilotAdoption.page.window.last180Days' },
 ];
+
+export function lastCalendarMonthRange(now = new Date()): DateRange {
+  const firstThisMonth = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
+  const to = addDays(formatDateInput(firstThisMonth), -1);
+  const end = new Date(`${to}T00:00:00Z`);
+  return { from: formatDateInput(new Date(Date.UTC(end.getUTCFullYear(), end.getUTCMonth(), 1))), to };
+}
+
+export function lastCalendarQuarterRange(now = new Date()): DateRange {
+  const currentQuarter = Math.floor(now.getUTCMonth() / 3);
+  const startMonth = currentQuarter === 0 ? 9 : (currentQuarter - 1) * 3;
+  const year = currentQuarter === 0 ? now.getUTCFullYear() - 1 : now.getUTCFullYear();
+  const from = formatDateInput(new Date(Date.UTC(year, startMonth, 1)));
+  const to = addDays(formatDateInput(new Date(Date.UTC(year, startMonth + 3, 1))), -1);
+  return { from, to };
+}
+
+function formatDateInput(d: Date): string {
+  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`;
+}
+
+function PastRangeNamedListsHiddenNote() {
+  const t = useT();
+  return (
+    <MessageBar intent="info">
+      <MessageBarBody>{t('copilotAdoption.server.warning.pastRangeNamedListsHidden')}</MessageBarBody>
+    </MessageBar>
+  );
+}
 
 type AdoptionTab = 'executive' | 'analyst' | 'licensed' | 'cowork' | 'unlicensed' | 'agents' | 'opportunities' | 'method';
 
@@ -410,6 +448,7 @@ function CopilotAdoptionView({
   const [availability, setAvailability] = useState<CopilotAdoptionAvailability | null>(null);
   const [availabilityError, setAvailabilityError] = useState<string | null>(null);
   const [windowDays, setWindowDays] = useState(28);
+  const [dateRange, setDateRange] = useState<DateRange | null>(null);
   // Who every visual on the page describes: conditions on people's Entra ID attributes and custom
   // organisations - email domain included - or no conditions for the whole tenant.
   //
@@ -487,14 +526,14 @@ function CopilotAdoptionView({
     // scope loads kept the Excel button pointing at one population and enabled against another -
     // and if the new request then failed, the page went on rendering the previous organisation's
     // figures underneath a heading naming the newly selected one.
-    const scopeKey = `${windowDays}::${userFilterScope}`;
+    const scopeKey = `${windowDays}::${dateRange?.from ?? 'rolling'}::${dateRange?.to ?? 'rolling'}::${userFilterScope}`;
     if (lastSummaryScope.current !== scopeKey) {
       setSummary(null);
     }
     setSummaryLoading(true);
     setSummaryError(null);
 
-    fetchAdoptionSummary(windowDays, undefined, controller.signal, null, userFilterScope || null)
+    fetchAdoptionSummary(windowDays, undefined, controller.signal, null, userFilterScope || null, ...(dateRange ? [dateRange] as const : []))
       .then((s) => {
         if (!cancelled) {
           lastSummaryScope.current = scopeKey;
@@ -514,13 +553,13 @@ function CopilotAdoptionView({
     //
     // Deliberately NOT narrowed by the user filter: these are the lists the per-table filters are
     // chosen FROM, so narrowing them would strand the reader on whatever the filter left.
-    fetchAdoptionFilters(windowDays, undefined, controller.signal)
+    fetchAdoptionFilters(windowDays, undefined, controller.signal, ...(dateRange ? [dateRange] as const : []))
       .then((f) => {
         if (!cancelled) setFilterOptions(f);
       })
       .catch(() => undefined);
 
-    fetchAdoptionSql(windowDays, undefined, controller.signal)
+    fetchAdoptionSql(windowDays, undefined, controller.signal, ...(dateRange ? [dateRange] as const : []))
       .then((s) => {
         if (!cancelled) setSql(s);
       })
@@ -533,7 +572,7 @@ function CopilotAdoptionView({
       // changed or the page unmounted.
       controller.abort();
     };
-  }, [availability, windowDays, userFilterScope]);
+  }, [availability, windowDays, dateRange, userFilterScope]);
 
   const onTabSelect: SelectTabEventHandler = (_e: unknown, data: { value: unknown }) => {
     setDrillAction(undefined);
@@ -577,16 +616,34 @@ function CopilotAdoptionView({
         <div className={styles.controls} data-print="hide">
           <Text size={200} className={styles.muted}>{t('copilotAdoption.page.controls.periodLabel')}</Text>
           <Select
-            value={String(windowDays)}
-            onChange={(_e: unknown, d: { value: string }) => setWindowDays(Number(d.value))}
+            value={dateRange ? 'custom' : String(windowDays)}
+            onChange={(_e: unknown, d: { value: string }) => {
+              setWindowDays(Number(d.value));
+              setDateRange(null);
+            }}
             aria-label={t('copilotAdoption.page.controls.reportingPeriodAria')}
           >
+            {dateRange && (
+              <option value="custom">
+                {t('copilotAdoption.page.window.customRange')}
+              </option>
+            )}
             {WINDOW_OPTIONS.map((o) => (
               <option key={o.value} value={o.value}>
                 {t(o.labelKey)}
               </option>
             ))}
           </Select>
+          <Button size="small" appearance={dateRange ? 'secondary' : 'subtle'} onClick={() => setDateRange(lastCalendarMonthRange())}>
+            {t('copilotAdoption.page.window.lastCalendarMonth')}
+          </Button>
+          <Button size="small" appearance={dateRange ? 'secondary' : 'subtle'} onClick={() => setDateRange(lastCalendarQuarterRange())}>
+            {t('copilotAdoption.page.window.lastCalendarQuarter')}
+          </Button>
+          <DateRangeControl
+            value={dateRange ?? { from: addDays(latestEndString(), -(windowDays - 1)), to: latestEndString() }}
+            onChange={setDateRange}
+          />
 
           {availability?.available && (
             <PrintButton
@@ -614,7 +671,7 @@ function CopilotAdoptionView({
                 as="a"
                 href={
                   summary
-                    ? workbookExportUrl(windowDays, undefined, null, timeSavedExportParams(timeSaved), userFilterParam)
+                    ? workbookExportUrl(windowDays, undefined, null, timeSavedExportParams(timeSaved), userFilterParam, ...(dateRange ? [dateRange] as const : []))
                     : undefined
                 }
                 disabled={!summary}
@@ -629,21 +686,35 @@ function CopilotAdoptionView({
           <Text size={200}>
             {t(TAB_LABEL_KEYS[tab])}
             {' \u00b7 '}
-            {WINDOW_OPTIONS.find((o) => o.value === windowDays)?.labelKey
-              ? t(WINDOW_OPTIONS.find((o) => o.value === windowDays)!.labelKey)
-              : t('copilotAdoption.page.print.lastDays', { v0: windowDays })}
+            {dateRange
+              ? t('copilotAdoption.page.window.customRange')
+              : WINDOW_OPTIONS.find((o) => o.value === windowDays)?.labelKey
+                ? t(WINDOW_OPTIONS.find((o) => o.value === windowDays)!.labelKey)
+                : t('copilotAdoption.page.print.lastDays', { v0: windowDays })}
             {summary && <> {t('copilotAdoption.page.print.dateRange', { v0: formatDate(summary.fromUtc), v1: formatDate(summary.toUtc) })}</>}
             {' \u00b7 '}
-            {isEmptyFilter(userFilter) ? t('copilotAdoption.page.print.everyone') : t('copilotAdoption.page.print.filtered')}
+            {isEmptyFilter(userFilter) && !summary?.globalFilter
+              ? t('copilotAdoption.page.print.everyone')
+              : t('copilotAdoption.page.print.filtered')}
             {summary && <> · {t('copilotAdoption.page.print.generatedDate', { v0: formatDate(summary.generatedUtc) })}</>}
           </Text>
         </div>
       )}
 
+      {/* The administrator's conditions sit directly above the reader's own, so the two read as one
+          filter in two parts: the locked half and the half the reader controls. Shown to every reader:
+          it narrows their figures whether or not they may add a filter of their own. */}
+      <GlobalFilterBar />
+
       {availability?.available && canSeePii && (
         <>
           <UserFilterBar filter={userFilter} onChange={setUserFilter} echoNames={summary?.userFilter?.dimensionNames} />
-          <UserFilterPrintSummary filter={userFilter} echo={summary?.userFilter} dimensions={filterDimensions?.dimensions} />
+          <UserFilterPrintSummary
+            filter={userFilter}
+            echo={summary?.userFilter}
+            dimensions={filterDimensions?.dimensions}
+            withinGlobalFilter={!!summary?.globalFilter}
+          />
         </>
       )}
 
@@ -765,18 +836,23 @@ function CopilotAdoptionView({
               )}
 
               {tab === 'licensed' && (
-                canSeePii ? (
-                  <LicensedUsersPanel
-                    key={`${drillAction ?? 'all'}::${userFilterScope}`}
-                    windowDays={windowDays}
-                    filterOptions={filterOptions}
-                    actionPlan={summary.actionPlan}
-                    options={summary.options}
-                    dataSources={summary.dataSources}
-                    initialAction={drillAction}
-                    userFilter={userFilterParam}
-                  />
-                ) : <PiiHiddenNote />
+                <>
+                  <SeatHolderTimeSavedPanel summary={summary} timeSaved={timeSaved} />
+                  {dateRange ? (
+                    <PastRangeNamedListsHiddenNote />
+                  ) : canSeePii ? (
+                    <LicensedUsersPanel
+                      key={`${drillAction ?? 'all'}::${userFilterScope}`}
+                      windowDays={windowDays} dateRange={dateRange}
+                      filterOptions={filterOptions}
+                      actionPlan={summary.actionPlan}
+                      options={summary.options}
+                      dataSources={summary.dataSources}
+                      initialAction={drillAction}
+                      userFilter={userFilterParam}
+                    />
+                  ) : <PiiHiddenNote />}
+                </>
               )}
 
               {tab === 'unlicensed' && (
@@ -801,23 +877,25 @@ function CopilotAdoptionView({
               {tab === 'cowork' && (
                 <CoworkPanel
                   key={userFilterScope || 'all'}
-                  windowDays={windowDays}
+                  windowDays={windowDays} dateRange={dateRange}
                   summary={summary}
                   options={summary.options}
                   userFilter={userFilterParam}
-                  canSeePii={canSeePii}
+                  canSeePii={canSeePii && !dateRange}
+                  hiddenListNote={canSeePii && dateRange ? <PastRangeNamedListsHiddenNote /> : undefined}
                 />
               )}
 
               {tab === 'opportunities' && (
                 <OpportunitiesPanel
                   key={userFilterScope || 'all'}
-                  windowDays={windowDays}
+                  windowDays={windowDays} dateRange={dateRange}
                   summary={summary}
                   options={summary.options}
                   guidanceLinks={summary.guidanceLinks}
                   userFilter={userFilterParam}
-                  canSeePii={canSeePii}
+                  canSeePii={canSeePii && !dateRange}
+                  hiddenListNote={canSeePii && dateRange ? <PastRangeNamedListsHiddenNote /> : undefined}
                 />
               )}
 
@@ -841,7 +919,7 @@ function CopilotAdoptionView({
 
 /** Whether a summary describes fewer people than the whole tenant. */
 function isNarrowed(summary: CopilotAdoptionSummary): boolean {
-  return !!summary.scopedEmailDomain || !!summary.userFilter;
+  return !!summary.scopedEmailDomain || !!summary.userFilter || !!summary.globalFilter;
 }
 
 /**
@@ -864,8 +942,18 @@ function FilterBanner({
   const t = useT();
   const tNode = useTNode();
   const echo = summary.userFilter;
+  const global = summary.globalFilter;
 
   const parts: string[] = [];
+  // The administrator's conditions first, and said to be theirs: the reader cannot clear them, so the
+  // banner must not make them look like part of the filter its "Clear filter" link removes.
+  if (global && global.clauses.length > 0) {
+    parts.push(
+      t('globalFilter.banner.setByAdmin', {
+        description: describeGlobalFilter(t, global.clauses, 'reader', { dimensions, names: global.dimensionNames }),
+      }),
+    );
+  }
   if (summary.scopedEmailDomain) {
     parts.push(
       describeClause(
@@ -900,12 +988,19 @@ function FilterBanner({
                   v0: describeUnscopedSections(t, summary.unscopedSections ?? []),
                 })}`
               : '',
-          unknown: (echo?.unknownDimensions?.length ?? 0) > 0 ? ` ${t('userFilter.print.unknown')}` : '',
-          link: (
-            <Link onClick={onClear} data-print="hide">
-              {t('copilotAdoption.page.filterBanner.clear')}
-            </Link>
-          ),
+          unknown:
+            (echo?.unknownDimensions?.length ?? 0) > 0 || (global?.unknownDimensions?.length ?? 0) > 0
+              ? ` ${t('userFilter.print.unknown')}`
+              : '',
+          // Only the reader's own narrowing can be cleared; the administrator's stays whatever they click.
+          link:
+            echo || summary.scopedEmailDomain ? (
+              <Link onClick={onClear} data-print="hide">
+                {t('copilotAdoption.page.filterBanner.clear')}
+              </Link>
+            ) : (
+              ''
+            ),
         })}
       </MessageBarBody>
     </MessageBar>
@@ -983,7 +1078,7 @@ function ExecutiveTab({
   const o = summary.options;
   const { assumptions: timeSavedAssumptions } = useTimeSavedAssumptions(summary);
   const { cohorts: timeSavedCohorts } = useTimeSavedCohorts();
-  const kpis = buildExecutiveKpis(summary, t, timeSavedAssumptions, timeSavedCohorts, onOpenTab);
+  const kpis = buildExecutiveKpis(summary, t, timeSavedAssumptions, timeSavedCohorts, onOpenTab, canSeePii);
   return (
     <>
       <KpiGrid items={kpis} />
@@ -1289,7 +1384,7 @@ function AnalystTab({
   const t = useT();
   const { assumptions: timeSavedAssumptions } = useTimeSavedAssumptions(summary);
   const { cohorts: timeSavedCohorts } = useTimeSavedCohorts();
-  const kpis = buildKpis(summary, t, timeSavedAssumptions, timeSavedCohorts, onOpenTab);
+  const kpis = buildKpis(summary, t, timeSavedAssumptions, timeSavedCohorts, onOpenTab, canSeePii);
   const o = summary.options;
   const accountabilityCopy = accountabilityDimensionCopy(summary, t);
 
@@ -2273,7 +2368,6 @@ function MethodTab({ summary }: { summary: CopilotAdoptionSummary }) {
               <Text>
                 {tNode('copilotAdoption.page.method.coworkTimeSaved', {
                   heading: <strong>{t('copilotAdoption.page.method.coworkTimeSavedHeading')}</strong>,
-                  taskMinutes: formatNumber(o.coworkMinutesSavedPerTask, { maximumFractionDigits: 2 }),
                 })}
               </Text>
               <Text>
@@ -2430,12 +2524,101 @@ function MethodTab({ summary }: { summary: CopilotAdoptionSummary }) {
 }
 
 /** The Executive view keeps only the board-pack headlines; the Analyst view keeps the full KPI set. */
+function SeatHolderTimeSavedPanel({
+  summary,
+  timeSaved,
+}: {
+  summary: CopilotAdoptionSummary;
+  timeSaved: TimeSavedAssumptionState;
+}) {
+  const t = useT();
+  const estimate = summary.seatHolderTimeSavedEstimate;
+  const projection = projectSeatHolderTimeSaved(estimate, timeSaved.assumptions);
+  if (!estimate || !projection) return null;
+
+  const update = (key: 'seatOutlookMinutes' | 'seatOfficeMinutes' | 'seatMeetingMinutes' | 'seatUncreditedMinutes') =>
+    (_ev: unknown, data: { value: string }) => {
+      const parsed = Number(data.value);
+      if (Number.isFinite(parsed)) timeSaved.setAssumption(key, parsed);
+    };
+  const number = (value: number) => formatNumber(value, { maximumFractionDigits: 0 });
+  const minutes = (value: number) => formatNumber(value, { maximumFractionDigits: 2 });
+  const segmentHours = (row: SeatHolderTimeSavedSegment) =>
+    projectSeatHolderTimeSaved({
+      ...estimate,
+      cohortUsers: row.cohortUsers,
+      excludedUsageReportSourcedUsers: 0,
+      observedOutlookActions: row.observedOutlookActions,
+      observedOfficeActions: row.observedOfficeActions,
+      observedTeamsMeetingActions: row.observedTeamsMeetingActions,
+      observedUncreditedActions: row.observedUncreditedActions,
+      byBand: [],
+      byDepartment: [],
+    }, timeSaved.assumptions)?.hoursHigh ?? 0;
+
+  return (
+    <Card style={{ marginBottom: 16 }}>
+      <Title3>{t('copilotAdoption.page.seatTime.title')}</Title3>
+      <Body1>{t('copilotAdoption.page.seatTime.description')}</Body1>
+      <KpiGrid
+        items={[
+          {
+            key: 'seatTimeHours',
+            label: t('copilotAdoption.page.seatTime.hours'),
+            value: t('copilotAdoption.page.kpi.hoursValue', { range: compactHoursRange(t, projection.hoursLow, projection.hoursHigh) }),
+            hint: t('copilotAdoption.page.seatTime.hoursHint', { users: formatCount(projection.cohortUsers) }),
+            modelledBadge: t('copilotAdoption.page.kpi.modelledBadge'),
+            info: { what: t('copilotAdoption.page.seatTime.description'), how: t('copilotAdoption.page.kpi.seatHolderTimeSaved.how'), formula: t('copilotAdoption.page.kpi.seatHolderTimeSaved.formula', { outlook: minutes(timeSaved.assumptions.seatOutlookMinutes), office: minutes(timeSaved.assumptions.seatOfficeMinutes), meeting: minutes(timeSaved.assumptions.seatMeetingMinutes), other: minutes(timeSaved.assumptions.seatUncreditedMinutes), percent: formatNumber(timeSaved.assumptions.conservativeRatio * 100, { maximumFractionDigits: 1 }) }), source: t('copilotAdoption.page.kpi.seatHolderTimeSaved.source') },
+          },
+          {
+            key: 'seatTimeExcluded',
+            label: t('copilotAdoption.page.seatTime.excluded'),
+            value: formatCount(projection.excludedUsageReportSourcedUsers),
+            hint: t('copilotAdoption.page.seatTime.excludedHint'),
+            info: { what: t('copilotAdoption.page.seatTime.excludedHint'), how: t('copilotAdoption.page.kpi.seatHolderTimeSaved.how'), formula: t('copilotAdoption.page.seatTime.excludedHint'), source: t('copilotAdoption.page.kpi.seatHolderTimeSaved.source') },
+          },
+        ]}
+      />
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12 }}>
+        <label>{t('copilotAdoption.page.seatTime.input.outlook')}<Input type="number" value={String(timeSaved.assumptions.seatOutlookMinutes)} onChange={update('seatOutlookMinutes')} /></label>
+        <label>{t('copilotAdoption.page.seatTime.input.office')}<Input type="number" value={String(timeSaved.assumptions.seatOfficeMinutes)} onChange={update('seatOfficeMinutes')} /></label>
+        <label>{t('copilotAdoption.page.seatTime.input.meeting')}<Input type="number" value={String(timeSaved.assumptions.seatMeetingMinutes)} onChange={update('seatMeetingMinutes')} /></label>
+        <label>{t('copilotAdoption.page.seatTime.input.other')}<Input type="number" value={String(timeSaved.assumptions.seatUncreditedMinutes)} onChange={update('seatUncreditedMinutes')} /></label>
+      </div>
+      <Text>{t('copilotAdoption.page.seatTime.zeroCreditNote')}</Text>
+      <Text>
+        {t('copilotAdoption.page.seatTime.counts', {
+          outlook: number(projection.outlookActions),
+          office: number(projection.officeActions),
+          meeting: number(projection.teamsMeetingActions),
+          other: number(projection.uncreditedActions),
+          outlookMinutes: minutes(timeSaved.assumptions.seatOutlookMinutes),
+          officeMinutes: minutes(timeSaved.assumptions.seatOfficeMinutes),
+          meetingMinutes: minutes(timeSaved.assumptions.seatMeetingMinutes),
+          otherMinutes: minutes(timeSaved.assumptions.seatUncreditedMinutes),
+        })}
+      </Text>
+      {estimate.byDepartment?.length > 0 && (
+        <table>
+          <thead><tr><th>{t('copilotAdoption.page.seatTime.department')}</th><th>{t('copilotAdoption.page.seatTime.hoursHigh')}</th><th>{t('copilotAdoption.page.seatTime.people')}</th></tr></thead>
+          <tbody>
+            {estimate.byDepartment.map((row) => (
+              <tr key={row.segment}><td>{serverPlaceholderText(t, row.segment)}</td><td>{formatCount(segmentHours(row))}</td><td>{formatCount(row.cohortUsers)}</td></tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </Card>
+  );
+}
+
 function buildExecutiveKpis(
   summary: CopilotAdoptionSummary,
   t: TFunction,
   timeSaved: TimeSavedAssumptions,
   cohorts: TimeSavedCohorts,
   onOpenTab?: (tab: AdoptionTab) => void,
+  canSeePii = true,
 ): KpiDefinition[] {
   const executiveKeys = new Set([
     'licensed',
@@ -2445,9 +2628,10 @@ function buildExecutiveKpis(
     'unlicensed',
     'candidates',
     'licenceTimeSaved',
+    'seatHolderTimeSaved',
     'coworkTimeSaved',
   ]);
-  return buildKpis(summary, t, timeSaved, cohorts, onOpenTab).filter((item) => executiveKeys.has(item.key));
+  return buildKpis(summary, t, timeSaved, cohorts, onOpenTab, canSeePii).filter((item) => executiveKeys.has(item.key));
 }
 
 /**
@@ -2475,6 +2659,7 @@ function buildTimeSavedKpis(
   assumptions: TimeSavedAssumptions,
   cohorts: TimeSavedCohorts,
   onOpenTab?: (tab: AdoptionTab) => void,
+  canSeePii = true,
 ): KpiDefinition[] {
   const o = summary.options;
   const items: KpiDefinition[] = [];
@@ -2528,6 +2713,34 @@ function buildTimeSavedKpis(
     });
   }
 
+  const seatTime = projectSeatHolderTimeSaved(summary.seatHolderTimeSavedEstimate, assumptions);
+  if (seatTime && seatTime.cohortUsers > 0) {
+    items.push({
+      key: 'seatHolderTimeSaved',
+      label: t('copilotAdoption.page.kpi.seatHolderTimeSaved.label'),
+      value: t('copilotAdoption.page.kpi.hoursValue', { range: compactHoursRange(t, seatTime.hoursLow, seatTime.hoursHigh) }),
+      hint: t(
+        plural(seatTime.cohortUsers, 'copilotAdoption.page.kpi.seatHolderTimeSaved.hint.one', 'copilotAdoption.page.kpi.seatHolderTimeSaved.hint.other'),
+        { users: formatCount(seatTime.cohortUsers) },
+      ),
+      tone: 'opportunity',
+      modelledBadge: t('copilotAdoption.page.kpi.modelledBadge'),
+      action: onOpenTab && canSeePii ? { label: t('copilotAdoption.page.kpi.seatHolderTimeSaved.open'), onClick: () => onOpenTab('licensed') } : undefined,
+      info: {
+        what: t('copilotAdoption.page.kpi.seatHolderTimeSaved.what'),
+        how: t('copilotAdoption.page.kpi.seatHolderTimeSaved.how'),
+        formula: t('copilotAdoption.page.kpi.seatHolderTimeSaved.formula', {
+          outlook: minutes(assumptions.seatOutlookMinutes),
+          office: minutes(assumptions.seatOfficeMinutes),
+          meeting: minutes(assumptions.seatMeetingMinutes),
+          other: minutes(assumptions.seatUncreditedMinutes),
+          percent,
+        }),
+        source: t('copilotAdoption.page.kpi.seatHolderTimeSaved.source'),
+      },
+    });
+  }
+
   if (summary.coworkReadinessAvailable) {
     // The people ready now lead, as on the Cowork tab: that is the spending-policy decision. When the
     // reader chose every seat holder, or nobody is ready, the ceiling stands in - and says it is every
@@ -2562,7 +2775,6 @@ function buildTimeSavedKpis(
           what: t('copilotAdoption.page.kpi.coworkTimeSaved.what'),
           how: t('copilotAdoption.page.kpi.coworkTimeSaved.how'),
           formula: t('copilotAdoption.page.kpi.coworkTimeSaved.formula', {
-            taskMinutes: minutes(assumptions.taskMinutes),
             percent,
           }),
           source: t('copilotAdoption.page.kpi.coworkTimeSaved.source'),
@@ -2584,6 +2796,7 @@ function buildKpis(
   timeSaved: TimeSavedAssumptions,
   cohorts: TimeSavedCohorts,
   onOpenTab?: (tab: AdoptionTab) => void,
+  canSeePii = true,
 ): KpiDefinition[] {
   const o = summary.options;
   const seatSkus = (summary.seatLicenceTypes ?? []).filter((l) => l.isCopilotSeat);
@@ -2697,7 +2910,12 @@ function buildKpis(
               })}`
             : '', v11: formatCount(
           summary.reclaimSeatsHeldBackForReview,
-        ) }),
+        ), v12: summary.reclaimSeatsNoLongerHeld > 0
+            ? ` + ${t('copilotAdoption.page.reclaimNoLongerHeldAddBack', {
+                count: formatCount(summary.reclaimSeatsNoLongerHeld),
+              })}`
+            : '',
+        }),
         source:
           t('copilotAdoption.page.drillThroughLicensedUsersTabReclaimTierFilterEach'),
       },
@@ -2747,18 +2965,14 @@ function buildKpis(
         ? t('copilotAdoption.page.kpi.coworkUsageObserved')
         : t('copilotAdoption.page.coworkAdoption'),
       value: summary.coworkAdoptionPct === null ? formatCount(summary.coworkUsers) : formatPct(summary.coworkAdoptionPct),
-      hint: summary.coworkReportTotalTasks > 0
-        ? t('copilotAdoption.page.kpi.coworkTasksHint', {
-            tasks: formatCount(summary.coworkReportTotalTasks),
-            interactions: formatCount(summary.coworkInteractions),
-          })
-        : t('copilotAdoption.page.kpi.coworkAuditHint', { interactions: formatCount(summary.coworkInteractions) }),
+      // Cowork use comes from the Copilot audit log only, and counts interactions, never tasks (#692).
+      hint: t('copilotAdoption.page.kpi.coworkAuditHint', { interactions: formatCount(summary.coworkInteractions) }),
       tone: 'opportunity',
       info: {
         what: summary.coworkAdoptionPct === null
           ? t('copilotAdoption.page.kpi.coworkWhatUnknownEligibility')
           : t('copilotAdoption.page.kpi.coworkWhatKnownEligibility'),
-        how: t('copilotAdoption.page.microsoftCoworkUsageReportSuppliesTaskCountsAvailableAudit'),
+        how: t('copilotAdoption.page.kpi.coworkHow'),
         source:
           t('copilotAdoption.page.coworkEligibilityControlledSpendingPolicyScopeDeprecatedCoworkAgent'),
       },
@@ -2797,7 +3011,7 @@ function buildKpis(
   });
 
   // Last: a model follows the measurements it is built on, never leads them.
-  items.push(...buildTimeSavedKpis(summary, t, timeSaved, cohorts, onOpenTab));
+  items.push(...buildTimeSavedKpis(summary, t, timeSaved, cohorts, onOpenTab, canSeePii));
 
   return items;
 }

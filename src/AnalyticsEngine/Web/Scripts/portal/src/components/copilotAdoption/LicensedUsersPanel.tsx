@@ -19,6 +19,7 @@ import {
 import { ArrowDownload16Regular, ArrowClockwise16Regular } from '@fluentui/react-icons';
 import { fetchLicensedUsers, licensedUsersExportUrl } from '../../api/copilotAdoptionApi';
 import { AdoptionBand } from '../../types/copilotAdoption';
+import type { DateRange } from '../../types/licenceActivity';
 import type {
   AdoptionActionSummary,
   AdoptionFilterOptions,
@@ -142,6 +143,7 @@ const DEFAULT_FILTERS: LicensedUserFilters = {
  */
 export default function LicensedUsersPanel({
   windowDays,
+  dateRange,
   filterOptions,
   actionPlan,
   options,
@@ -152,6 +154,7 @@ export default function LicensedUsersPanel({
   userFilter,
 }: {
   windowDays: number;
+  dateRange?: DateRange | null;
   filterOptions: AdoptionFilterOptions | null;
   /** The action catalogue, used for the legend that replaced the repeated per-row prose column. */
   actionPlan: AdoptionActionSummary[];
@@ -202,7 +205,7 @@ export default function LicensedUsersPanel({
     setLoading(true);
     setError(null);
 
-    fetchLicensedUsers(windowDays, filters, page * PAGE_SIZE, PAGE_SIZE, seatLicenceTypeIds, controller.signal)
+    fetchLicensedUsers(windowDays, filters, page * PAGE_SIZE, PAGE_SIZE, seatLicenceTypeIds, controller.signal, ...(dateRange ? [dateRange] as const : []))
       .then((result) => {
         if (!cancelled) setData(result);
       })
@@ -231,7 +234,7 @@ export default function LicensedUsersPanel({
   };
 
   const exportUrl = useMemo(
-    () => licensedUsersExportUrl(windowDays, filters, seatLicenceTypeIds),
+    () => licensedUsersExportUrl(windowDays, filters, seatLicenceTypeIds, ...(dateRange ? [dateRange] as const : [])),
     [windowDays, filters, seatLicenceTypeIds],
   );
 
@@ -242,7 +245,7 @@ export default function LicensedUsersPanel({
     enabled: !loading && data !== null,
     total: data?.total ?? 0,
     loadedRows: data?.rows.length ?? 0,
-    loadPage: (skip, take, signal) => fetchLicensedUsers(windowDays, filters, skip, take, seatLicenceTypeIds, signal),
+    loadPage: (skip, take, signal) => fetchLicensedUsers(windowDays, filters, skip, take, seatLicenceTypeIds, signal, ...(dateRange ? [dateRange] as const : [])),
   });
   const rows = printRows ?? data?.rows ?? [];
 
@@ -743,19 +746,12 @@ function sourceLabel(t: TFunction, source: string): string {
 /**
  * Cowork use as a short value rather than a sentence.
  *
- * The evidence is still distinguished - reported tasks, reported active days and audit interactions
- * are three different measurements and must not be conflated - but the qualifier is abbreviated so
- * the column stays one line wide. "Yes (312 audit interactions)" was wide enough on its own to push
- * the pinned Action column over the top of it.
+ * Cowork use comes from the Copilot audit log only, and it counts interactions, never tasks (#692). The
+ * qualifier is abbreviated so the column stays one line wide: "Yes (312 audit interactions)" was wide
+ * enough on its own to push the pinned Action column over the top of it.
  */
 function coworkCell(t: TFunction, row: LicensedUserAdoptionRow): string {
   if (!row.usedCowork) return t('copilotAdoptionUsers.licensed.coworkNo');
-  if (row.coworkReportTotalTasks !== null) {
-    return t('copilotAdoptionUsers.licensed.coworkTasks', { count: formatCount(row.coworkReportTotalTasks) });
-  }
-  if (row.coworkReportActiveDays !== null && row.coworkReportActiveDays > 0) {
-    return t('copilotAdoptionUsers.licensed.coworkDays', { count: formatCount(row.coworkReportActiveDays) });
-  }
   return t('copilotAdoptionUsers.licensed.coworkAudited', { count: formatCount(row.coworkInteractions) });
 }
 

@@ -14,6 +14,10 @@ namespace Web.AnalyticsWeb.Models.CopilotAdoption
     {
         Task<CopilotAdoptionAnalysis> RunAsync(
             int windowDays,
+            DateTime? fromUtc,
+            DateTime? toUtc,
+            DateTime? toExclusiveUtc,
+            bool usesExplicitDates,
             List<int> seatLicenceTypeIds,
             ICopilotAdoptionRunTelemetry telemetry);
     }
@@ -22,11 +26,19 @@ namespace Web.AnalyticsWeb.Models.CopilotAdoption
     {
         public Task<CopilotAdoptionAnalysis> RunAsync(
             int windowDays,
+            DateTime? fromUtc,
+            DateTime? toUtc,
+            DateTime? toExclusiveUtc,
+            bool usesExplicitDates,
             List<int> seatLicenceTypeIds,
             ICopilotAdoptionRunTelemetry telemetry)
         {
             var options = CopilotAdoptionOptions.Default;
             options.WindowDays = windowDays;
+            options.FromUtc = fromUtc;
+            options.ToUtc = toUtc;
+            options.ToExclusiveUtc = toExclusiveUtc;
+            options.UsesExplicitDates = usesExplicitDates;
 
             var service = new CopilotAdoptionService(
                 options,
@@ -221,12 +233,12 @@ namespace Web.AnalyticsWeb.Models.CopilotAdoption
         }
 
         public async Task<CopilotAdoptionAnalysis> TryGetAsync(
-            int windowDays,
+            CopilotAdoptionDateRange range,
             List<int> seatLicenceTypeIds,
             TimeSpan waitBudget,
             CancellationToken cancellationToken)
         {
-            var task = Join(windowDays, seatLicenceTypeIds, out var interest);
+            var task = Join(range, seatLicenceTypeIds, out var interest);
             if (task.IsCompleted) return await task;
 
             // Joining already recorded this request, so a queued run cannot judge it absent in the gap
@@ -244,24 +256,41 @@ namespace Web.AnalyticsWeb.Models.CopilotAdoption
             }
         }
 
+        public Task<CopilotAdoptionAnalysis> TryGetAsync(
+            int windowDays,
+            List<int> seatLicenceTypeIds,
+            TimeSpan waitBudget,
+            CancellationToken cancellationToken) =>
+            TryGetAsync(CopilotAdoptionDateRange.Create(windowDays, null, null, _utcNow()), seatLicenceTypeIds, waitBudget, cancellationToken);
+
         /// <summary>
         /// The telemetry <c>RunId</c> of the analysis currently running (or queued) for this window and seat
         /// override, or null when there is none. Returned to the browser with a 202 so a HAR can be matched to
         /// the run's lifecycle events.
         /// </summary>
-        internal string InFlightRunId(int windowDays, List<int> seatLicenceTypeIds)
+        internal string InFlightRunId(CopilotAdoptionDateRange range, List<int> seatLicenceTypeIds)
         {
             return _inFlight.TryGetValue(
-                CacheKey(windowDays, seatLicenceTypeIds ?? new List<int>()), out var generation)
+                CacheKey(range, seatLicenceTypeIds ?? new List<int>()), out var generation)
                 ? generation.RunId
                 : null;
+        }
+
+        internal string InFlightRunId(int windowDays, List<int> seatLicenceTypeIds) =>
+            InFlightRunId(CopilotAdoptionDateRange.Create(windowDays, null, null, _utcNow()), seatLicenceTypeIds);
+
+        internal Task<CopilotAdoptionAnalysis> GetAsync(
+            CopilotAdoptionDateRange range,
+            List<int> seatLicenceTypeIds)
+        {
+            return Join(range, seatLicenceTypeIds, out _);
         }
 
         internal Task<CopilotAdoptionAnalysis> GetAsync(
             int windowDays,
             List<int> seatLicenceTypeIds)
         {
-            return Join(windowDays, seatLicenceTypeIds, out _);
+            return GetAsync(CopilotAdoptionDateRange.Create(windowDays, null, null, _utcNow()), seatLicenceTypeIds);
         }
 
         /// <summary>
@@ -274,13 +303,13 @@ namespace Web.AnalyticsWeb.Models.CopilotAdoption
         /// caller can invent.
         /// </param>
         private Task<CopilotAdoptionAnalysis> Join(
-            int windowDays,
+            CopilotAdoptionDateRange range,
             List<int> seatLicenceTypeIds,
             out AnalysisInterest interest)
         {
             interest = null;
             var ids = seatLicenceTypeIds ?? new List<int>();
-            var cacheKey = CacheKey(windowDays, ids);
+            var cacheKey = CacheKey(range, ids);
 
             if (_cache.TryGet(cacheKey, out var cached))
             {
@@ -291,7 +320,7 @@ namespace Web.AnalyticsWeb.Models.CopilotAdoption
             // instant before this request; one created by this pass cannot be sealed before it has even started.
             for (var pass = 0; pass < 3; pass++)
             {
-                var candidate = NewGeneration(cacheKey, windowDays, ids);
+                var candidate = NewGeneration(cacheKey, range, ids);
                 var effective = _inFlight.GetOrAdd(cacheKey, candidate);
 
                 // A previous generation may have published between the first miss and GetOrAdd.
@@ -317,7 +346,7 @@ namespace Web.AnalyticsWeb.Models.CopilotAdoption
             return Task.FromResult<CopilotAdoptionAnalysis>(null);
         }
 
-        private Generation NewGeneration(string cacheKey, int windowDays, List<int> ids)
+        private Generation NewGeneration(string cacheKey, CopilotAdoptionDateRange range, List<int> ids)
         {
             Generation generation = null;
             generation = new Generation(new Lazy<Task<CopilotAdoptionAnalysis>>(
@@ -338,25 +367,28 @@ namespace Web.AnalyticsWeb.Models.CopilotAdoption
                 // Starting the run on the thread pool gives it no ambient SynchronizationContext at all,
                 // which fixes this for every await in the analysis - including ones not yet written -
                 // rather than relying on ~32 separate ConfigureAwait(false) calls staying correct.
-                () => Task.Run(() => RunAndPublishAsync(cacheKey, generation, windowDays, ids)),
+                () => Task.Run(() => RunAndPublishAsync(cacheKey, generation, range, ids)),
                 LazyThreadSafetyMode.ExecutionAndPublication));
             return generation;
         }
 
-        internal static string CacheKey(int windowDays, IEnumerable<int> seatLicenceTypeIds)
+        internal static string CacheKey(CopilotAdoptionDateRange range, IEnumerable<int> seatLicenceTypeIds)
         {
             var ids = (seatLicenceTypeIds ?? Enumerable.Empty<int>())
                 .Distinct()
                 .OrderBy(id => id)
                 .ToList();
-            return CacheKeyPrefix + windowDays + "::"
+            return CacheKeyPrefix + range.WindowDays + "::" + (range.UsesExplicitDates ? range.FromUtc.ToString("yyyyMMdd", System.Globalization.CultureInfo.InvariantCulture) + "-" + range.ToInclusiveUtc.ToString("yyyyMMdd", System.Globalization.CultureInfo.InvariantCulture) : "rolling") + "::"
                    + (ids.Count == 0 ? "auto" : string.Join(",", ids));
         }
+
+        internal static string CacheKey(int windowDays, IEnumerable<int> seatLicenceTypeIds) =>
+            CacheKey(CopilotAdoptionDateRange.Create(windowDays, null, null, DateTime.UtcNow), seatLicenceTypeIds);
 
         private async Task<CopilotAdoptionAnalysis> RunAndPublishAsync(
             string cacheKey,
             Generation generation,
-            int windowDays,
+            CopilotAdoptionDateRange range,
             List<int> seatLicenceTypeIds)
         {
             ICopilotAdoptionAnalysisTelemetry telemetry =
@@ -379,7 +411,7 @@ namespace Web.AnalyticsWeb.Models.CopilotAdoption
                 try
                 {
                     telemetry = _telemetryFactory(
-                        windowDays, seatLicenceTypeIds.Count > 0)
+                        range.WindowDays, seatLicenceTypeIds.Count > 0)
                         ?? NullCopilotAdoptionAnalysisTelemetry.Instance;
                 }
                 catch (Exception)
@@ -442,7 +474,11 @@ namespace Web.AnalyticsWeb.Models.CopilotAdoption
 
                 var serviceWatch = System.Diagnostics.Stopwatch.StartNew();
                 var analysis = await _runner.RunAsync(
-                    windowDays,
+                    range.WindowDays,
+                    range.UsesExplicitDates ? (DateTime?)range.FromUtc : null,
+                    range.UsesExplicitDates ? (DateTime?)range.ToInclusiveUtc : null,
+                    range.UsesExplicitDates ? (DateTime?)range.ToExclusiveUtc : null,
+                    range.UsesExplicitDates,
                     seatLicenceTypeIds,
                     telemetry).ConfigureAwait(false);
                 var serviceDurationMs = serviceWatch.ElapsedMilliseconds;

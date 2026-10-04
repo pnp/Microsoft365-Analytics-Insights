@@ -65,6 +65,7 @@ import {
 } from '../components/agentCosts/agentCostShared';
 import { usePortalAccess } from '../access';
 import PiiHiddenNote from '../components/shared/PiiHiddenNote';
+import GlobalFilterBar from '../components/globalFilter/GlobalFilterBar';
 
 const WINDOW_OPTIONS: { value: number; labelKey: TranslationKey }[] = [
   { value: 7, labelKey: 'agentCosts.window.last7Days' },
@@ -562,6 +563,8 @@ export default function AgentCostsPage() {
           </Button>
         </div>
       </div>
+
+      <GlobalFilterBar note={t('globalFilter.note.agentCosts')} />
 
       {error && (
         <div className={styles.messages}>

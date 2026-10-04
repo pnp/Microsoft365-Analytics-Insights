@@ -38,6 +38,21 @@ namespace Common.Entities.LicenceActivity
         [JsonIgnore]
         public int Days => (ToUtc - FromUtc).Days + 1;
 
+        /// <summary>
+        /// Who else the query may cover, beyond its department and country: the administrator's global
+        /// filter (resolved for the reader) as a predicate on <c>dbo.users.id</c>. <c>null</c> for everyone.
+        /// </summary>
+        /// <remarks>Never serialised: the page shows the filter itself, and the predicate is not data.</remarks>
+        [JsonIgnore]
+        public Func<int, bool> PeopleScope { get; private set; }
+
+        /// <summary>
+        /// A stable identity for <see cref="PeopleScope"/>, so cached figures are never shared across scopes: the hash
+        /// of the people it admits, so it survives a re-read of the directory that changes nobody. Null for everyone.
+        /// </summary>
+        [JsonIgnore]
+        public string PeopleScopeKey { get; private set; }
+
         private LicenceActivityQuery() { }
 
         public static LicenceActivityQuery Create(
@@ -80,9 +95,23 @@ namespace Common.Entities.LicenceActivity
         public LicenceActivityQuery ForUsers(
             int licenceTypeId, string workload, string search, string sort, string direction,
             int top, int page, int pageSize, DateTime nowUtc) =>
-            Create(From, To, nowUtc, DepartmentId, CountryId, licenceTypeId, workload, search, sort, direction, top, page, pageSize);
+            Create(From, To, nowUtc, DepartmentId, CountryId, licenceTypeId, workload, search, sort, direction, top, page, pageSize)
+                .WithPeopleScope(PeopleScope, PeopleScopeKey);
 
-        public string CacheKey() => JsonConvert.SerializeObject(this);
+        /// <summary>
+        /// This query narrowed to the people <paramref name="scope"/> admits as well. A null scope is everyone.
+        /// </summary>
+        public LicenceActivityQuery WithPeopleScope(Func<int, bool> scope, string key)
+        {
+            var copy = (LicenceActivityQuery)MemberwiseClone();
+            copy.PeopleScope = scope;
+            copy.PeopleScopeKey = scope == null ? null : (key ?? throw new ArgumentNullException(nameof(key)));
+            return copy;
+        }
+
+        public string CacheKey() => PeopleScopeKey == null
+            ? JsonConvert.SerializeObject(this)
+            : JsonConvert.SerializeObject(this) + "\npeople=" + PeopleScopeKey;
 
         private static DateTime ParseDate(string value)
         {
