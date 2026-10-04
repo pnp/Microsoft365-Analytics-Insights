@@ -64,6 +64,8 @@ describe('CopilotAuditBackfillPage', () => {
     renderWithProvider(<CopilotAuditBackfillPage />);
 
     expect(await screen.findByText('Copilot audit backfill')).toBeVisible();
+    expect(screen.getByText('Preview')).toBeVisible();
+    expect(screen.getByText(/uses a newer Microsoft Graph API/)).toBeVisible();
     expect(screen.getByText('No Copilot audit backfill has been requested.')).toBeVisible();
     expect(screen.getByRole('button', { name: 'Start backfill' })).toBeEnabled();
   });

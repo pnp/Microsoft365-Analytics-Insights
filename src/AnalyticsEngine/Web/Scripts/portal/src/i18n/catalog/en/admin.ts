@@ -35,6 +35,8 @@ export const admin = {
   'admin.copilotAuditBackfill.permission.missing': 'AuditLogsQuery.Read.All missing',
   'admin.copilotAuditBackfill.permission.noIdentity': 'No runtime identity to inspect',
   'admin.copilotAuditBackfill.permission.unknown': 'Not checked yet',
+  'admin.copilotAuditBackfill.preview': 'Preview',
+  'admin.copilotAuditBackfill.previewNote': "This backfill uses a newer Microsoft Graph API whose results have not been verified on every tenant. After the first days complete, check that the imported counts match what you expect before relying on the backfilled history.",
   'admin.copilotAuditBackfill.refresh': 'Refresh',
   'admin.copilotAuditBackfill.stateNotDurable': "Backfill state is not durable because Azure Storage is not configured. Configure the Storage connection string before starting a backfill.",
   'admin.copilotAuditBackfill.start.button': 'Start backfill',

@@ -37,6 +37,8 @@ const admin: Record<keyof typeof en, string> = {
   'admin.copilotAuditBackfill.permission.missing': 'Falta AuditLogsQuery.Read.All',
   'admin.copilotAuditBackfill.permission.noIdentity': 'No hay identidad en tiempo de ejecución que inspeccionar',
   'admin.copilotAuditBackfill.permission.unknown': 'Aún no comprobado',
+  'admin.copilotAuditBackfill.preview': 'Versión preliminar',
+  'admin.copilotAuditBackfill.previewNote': 'Este relleno usa una API más reciente de Microsoft Graph cuyos resultados no se han verificado en todos los inquilinos. Cuando se completen los primeros días, compruebe que los recuentos importados coinciden con lo esperado antes de confiar en el historial rellenado.',
   'admin.copilotAuditBackfill.refresh': 'Actualizar',
   'admin.copilotAuditBackfill.stateNotDurable': 'El estado del relleno no es duradero porque Azure Storage no está configurado. Configure la cadena de conexión de Storage antes de iniciar un relleno.',
   'admin.copilotAuditBackfill.start.button': 'Iniciar relleno',

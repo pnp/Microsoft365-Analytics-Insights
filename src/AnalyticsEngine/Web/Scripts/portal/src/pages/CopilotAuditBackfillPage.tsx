@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
-import { Body1, Button, Card, CardHeader, Field, Input, MessageBar, MessageBarBody, ProgressBar, Table, TableBody, TableCell, TableRow, Text, Title3, makeStyles, tokens } from '@fluentui/react-components';
+import { Badge, Body1, Button, Card, CardHeader, Field, Input, MessageBar, MessageBarBody, ProgressBar, Table, TableBody, TableCell, TableRow, Text, Title3, makeStyles, tokens } from '@fluentui/react-components';
 import { ArrowClockwise16Regular, Dismiss16Regular, Play16Regular } from '@fluentui/react-icons';
 import { cancelCopilotAuditBackfill, fetchCopilotAuditBackfill, startCopilotAuditBackfill } from '../api/copilotAuditBackfillApi';
 import Spinner from '../components/Spinner';
@@ -43,7 +43,9 @@ const useStyles = makeStyles({
   cards: { display: 'flex', flexDirection: 'column', gap: '16px', marginTop: '16px' },
   label: { fontWeight: tokens.fontWeightSemibold, width: '250px' },
   muted: { color: tokens.colorNeutralForeground3 },
+  previewNote: { color: tokens.colorNeutralForeground3, marginTop: '4px' },
   progress: { maxWidth: '520px' },
+  titleRow: { display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' },
 });
 
 function isActive(job: CopilotAuditBackfillJob | null | undefined): job is CopilotAuditBackfillJob {
@@ -104,8 +106,12 @@ export default function CopilotAuditBackfillPage() {
   const progress = totalSlices > 0 ? job!.slicesCompleted / totalSlices : undefined;
 
   return <div>
-    <Title3>{t('admin.copilotAuditBackfill.title')}</Title3>
+    <div className={styles.titleRow}>
+      <Title3>{t('admin.copilotAuditBackfill.title')}</Title3>
+      <Badge appearance="tint" color="brand" size="medium">{t('admin.copilotAuditBackfill.preview')}</Badge>
+    </div>
     <Body1>{t('admin.copilotAuditBackfill.description')}</Body1>
+    <Text role="note" block size={200} className={styles.previewNote}>{t('admin.copilotAuditBackfill.previewNote')}</Text>
     <div className={styles.cards}>
       {error && <MessageBar intent="error"><MessageBarBody>{error}</MessageBarBody></MessageBar>}
       {!status?.copilotImportEnabled && <MessageBar intent="warning"><MessageBarBody>{t('admin.copilotAuditBackfill.copilotOff')}</MessageBarBody></MessageBar>}
