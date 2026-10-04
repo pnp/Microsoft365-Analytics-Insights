@@ -763,7 +763,7 @@ const copilotAdoption: Record<keyof typeof en, string> = {
   'copilotAdoption.page.kpi.seatHolderTimeSaved.hint.other': 'Modelado a partir de acciones observadas de Copilot de {users} titulares de licencia.',
   'copilotAdoption.page.kpi.seatHolderTimeSaved.open': 'Revisar en Usuarios con licencia',
   'copilotAdoption.page.kpi.seatHolderTimeSaved.what': 'Cuánto tiempo pueden estar devolviendo las licencias de Copilot ya pagadas en el período seleccionado.',
-  'copilotAdoption.page.kpi.seatHolderTimeSaved.how': 'Las acciones observadas de Copilot en Outlook, Office y reuniones de Teams se multiplican por créditos visibles. Copilot Chat y otras superficies que no son agentes cuentan con cero minutos cuando Microsoft no publica un crédito por prompt. La actividad de agentes y Cowork se excluye de esta cifra; Cowork tiene su propia estimación.',
+  'copilotAdoption.page.kpi.seatHolderTimeSaved.how': 'Las acciones observadas de Copilot en Outlook, Office y reuniones de Teams se multiplican por créditos visibles. Copilot Chat y otras superficies que no son agentes tienen cero minutos de forma predeterminada porque Microsoft no publica un crédito por prompt, y el valor se puede editar arriba. La actividad de agentes y Cowork se excluye de esta cifra; Cowork tiene su propia estimación.',
   'copilotAdoption.page.kpi.seatHolderTimeSaved.formula': 'Outlook x {outlook} min + Word/PowerPoint/Excel x {office} min + reuniones de Teams x {meeting} min + otros x {other} min; el extremo bajo aplica {percent}%.',
   'copilotAdoption.page.kpi.seatHolderTimeSaved.source': 'Registro de auditoría de Copilot, agrupado para titulares de licencia de Copilot. Los usuarios solo procedentes del informe de uso de Microsoft se excluyen porque no tienen detalle por acción.',
   'copilotAdoption.page.seatTime.title': 'Tiempo ahorrado por titulares de licencia (modelado)',
@@ -781,7 +781,7 @@ const copilotAdoption: Record<keyof typeof en, string> = {
   'copilotAdoption.page.seatTime.hoursHigh': 'Horas altas',
   'copilotAdoption.page.seatTime.people': 'Personas',
   'copilotAdoption.server.query.SeatHolderTimeSaved': 'entradas de tiempo ahorrado por titulares de licencia de Copilot',
-  'copilotAdoption.page.seatTime.zeroCreditNote': 'Copilot Chat y otras superficies que no son agentes cuentan con cero minutos aquí porque Microsoft no ha publicado un crédito por prompt. La actividad de agentes y Cowork queda fuera de esta cifra; Cowork permanece en su propia estimación.',
+  'copilotAdoption.page.seatTime.zeroCreditNote': 'Copilot Chat y otras superficies que no son agentes tienen cero minutos aquí de forma predeterminada porque Microsoft no ha publicado un crédito por prompt; edite el valor Otro de arriba si quiere modelarlas. La actividad de agentes y Cowork queda fuera de esta cifra; Cowork permanece en su propia estimación.',
 
 };
 

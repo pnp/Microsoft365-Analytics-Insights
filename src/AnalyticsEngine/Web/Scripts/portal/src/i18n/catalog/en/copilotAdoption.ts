@@ -762,7 +762,7 @@ export const copilotAdoption = {
   'copilotAdoption.page.kpi.seatHolderTimeSaved.hint.other': 'Modelled from observed Copilot actions by {users} seat holders.',
   'copilotAdoption.page.kpi.seatHolderTimeSaved.open': 'Review on Licensed users',
   'copilotAdoption.page.kpi.seatHolderTimeSaved.what': 'How much time the Copilot seats already paid for may be giving back in the selected period.',
-  'copilotAdoption.page.kpi.seatHolderTimeSaved.how': 'Observed Outlook, Office and Teams meeting Copilot actions are multiplied by visible credits. Copilot Chat and other non-agent surfaces are counted at zero minutes when Microsoft publishes no per-prompt credit. Agent and Cowork activity is excluded from this figure; Cowork has its own estimate.',
+  'copilotAdoption.page.kpi.seatHolderTimeSaved.how': 'Observed Outlook, Office and Teams meeting Copilot actions are multiplied by visible credits. Copilot Chat and other non-agent surfaces default to zero minutes because Microsoft publishes no per-prompt credit, and the value is editable above. Agent and Cowork activity is excluded from this figure; Cowork has its own estimate.',
   'copilotAdoption.page.kpi.seatHolderTimeSaved.formula': 'Outlook x {outlook} min + Word/PowerPoint/Excel x {office} min + Teams meetings x {meeting} min + other x {other} min; low end applies {percent}%.',
   'copilotAdoption.page.kpi.seatHolderTimeSaved.source': 'Copilot audit log, grouped for Copilot seat holders. Microsoft usage-report-only users are excluded because they have no per-action detail.',
   'copilotAdoption.page.seatTime.title': "Seat holders' time saved (modelled)",
@@ -780,7 +780,7 @@ export const copilotAdoption = {
   'copilotAdoption.page.seatTime.hoursHigh': 'Hours high',
   'copilotAdoption.page.seatTime.people': 'People',
   'copilotAdoption.server.query.SeatHolderTimeSaved': 'seat-holder Copilot time-saved inputs',
-  'copilotAdoption.page.seatTime.zeroCreditNote': 'Copilot Chat and other non-agent surfaces count at zero minutes here because Microsoft has not published a per-prompt credit. Agent and Cowork activity is left out of this figure; Cowork remains in its own estimate.',
+  'copilotAdoption.page.seatTime.zeroCreditNote': 'Copilot Chat and other non-agent surfaces default to zero minutes here because Microsoft has not published a per-prompt credit; edit the Other value above if you want to model them. Agent and Cowork activity is left out of this figure; Cowork remains in its own estimate.',
 
 } as const;
 

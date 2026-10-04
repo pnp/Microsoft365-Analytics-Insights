@@ -1947,7 +1947,7 @@ namespace Common.Entities.CopilotAdoption
                 $"Counts observed Copilot audit actions by Copilot seat holders in the selected period, restated as a {Math.Max(1, o.HabitBucketNormalisationDays)}-day month.",
                 $"Credits Outlook actions at {Num(estimate.Credits.OutlookMinutesPerAction)} minutes each, Word/PowerPoint/Excel actions at {Num(estimate.Credits.OfficeMinutesPerAction)} minutes each, and Teams meeting recap or summarise actions at {Num(estimate.Credits.TeamsMeetingMinutesPerAction)} minutes each.",
                 "Microsoft's Copilot assisted-hours method credits meeting summarisation from meeting duration; this import does not reliably carry duration, so the Teams meeting credit is a visible fixed fallback.",
-                $"Copilot Chat, agents, Cowork and other surfaces are credited at {Num(estimate.Credits.UncreditedMinutesPerAction)} minutes here unless the reader overrides it. Cowork has its own estimate and is never added to this one.",
+                $"Copilot Chat and other non-agent surfaces default to {Num(estimate.Credits.UncreditedMinutesPerAction)} minutes here unless the reader overrides it. Agent and Cowork activity is excluded from this figure; Cowork has its own estimate and is never added to this one.",
             };
             if (estimate.ExcludedUsageReportSourcedUsers > 0)
             {

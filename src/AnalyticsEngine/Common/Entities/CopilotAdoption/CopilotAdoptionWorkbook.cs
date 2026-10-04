@@ -1631,10 +1631,13 @@ namespace Common.Entities.CopilotAdoption
 
             if (!includeIndividualData)
             {
-                sheet.AddTitle("Cowork candidates - " + IndividualDataWithheld);
+                var pastRange = summary.Options?.UsesExplicitDates == true;
+                sheet.AddTitle("Cowork candidates - " + (pastRange ? "not included (historical range)" : IndividualDataWithheld));
                 sheet.AddRow(XlsxCell.Wrapped(
-                    "This workbook was exported without the portal's See PII permission, so the named list of "
-                    + "seat holders is left out. The tier counts and department figures above cover everyone."));
+                    pastRange
+                        ? "Historical ranges hide named recommendation lists even for readers with See PII, so the named list of seat holders is left out. The tier counts and department figures above cover everyone."
+                        : "This workbook was exported without the portal's See PII permission, so the named list of "
+                          + "seat holders is left out. The tier counts and department figures above cover everyone."));
                 return;
             }
 
@@ -2380,9 +2383,12 @@ namespace Common.Entities.CopilotAdoption
                 + (includeIndividualData
                     ? "Where both sources cover the same licensed user, the Licensed users sheet shows both figures side by side "
                       + "with their source and window. "
-                    : "Where both sources cover the same licensed user, the per-user list shows both figures side by side "
-                      + "with their source and window; this file was exported without the See PII permission, so that list "
-                      + "is not included. ")
+                    : summary.Options?.UsesExplicitDates == true
+                        ? "Where both sources cover the same licensed user, the per-user list shows both figures side by side "
+                          + "with their source and window; historical exports hide named lists, so that list is not included. "
+                        : "Where both sources cover the same licensed user, the per-user list shows both figures side by side "
+                          + "with their source and window; this file was exported without the See PII permission, so that list "
+                          + "is not included. ")
                 + "Do not average or silently reconcile them into one number.");
 
             AddMethod(sheet, "Comparing two exports",
@@ -2419,10 +2425,14 @@ namespace Common.Entities.CopilotAdoption
                       + "it stops at the workbook row cap (maxWorkbookUserRows on the Settings sheet), so on a "
                       + "tenant with more seats than that, use the per-user CSV export for the full population "
                       + "instead."
-                    : "Per-user movement cannot be read from this file: it was exported without the See PII "
-                      + "permission, so it has no 'Licensed users' sheet. Its 'Snapshot facts' match a full "
-                      + "export's except accountabilityRollup.count, which is 0 when the roll-up is grouped by "
-                      + "manager, because those rows name managers."));
+                    : summary.Options?.UsesExplicitDates == true
+                        ? "Per-user movement cannot be read from this file: historical exports hide named lists, "
+                          + "so it has no 'Licensed users' sheet. Its 'Snapshot facts' match a full export's except "
+                          + "accountabilityRollup.count, which is 0 when the roll-up is grouped by manager, because those rows name managers."
+                        : "Per-user movement cannot be read from this file: it was exported without the See PII "
+                          + "permission, so it has no 'Licensed users' sheet. Its 'Snapshot facts' match a full "
+                          + "export's except accountabilityRollup.count, which is 0 when the roll-up is grouped by "
+                          + "manager, because those rows name managers."));
 
             AddMethod(sheet, "Licence classification",
                 "Microsoft ships Copilot-branded SKUs that are not a Microsoft 365 Copilot licence (Copilot Studio, "

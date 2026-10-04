@@ -1159,7 +1159,7 @@ describe('CopilotAdoptionPage modelled time saved', () => {
 
     fireEvent.click(screen.getByRole('tab', { name: 'Licensed users' }));
     expect(await screen.findByText("Seat holders' time saved (modelled)")).toBeVisible();
-    expect(screen.getByText(/Copilot Chat and other non-agent surfaces count at zero minutes/)).toBeVisible();
+    expect(screen.getByText(/Copilot Chat and other non-agent surfaces default to zero minutes/)).toBeVisible();
     expect(screen.getByText(/Agent and Cowork activity is left out of this figure/)).toBeVisible();
     expect(screen.getByText(/20 other at 0 min/)).toBeVisible();
   });

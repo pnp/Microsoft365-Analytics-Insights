@@ -1306,6 +1306,7 @@ namespace Common.Entities.CopilotAdoption
         private static string FormatEnglish(object value)
         {
             if (value == null) return string.Empty;
+            if (value is DateTime) return ((DateTime)value).ToString("d MMM yyyy", CultureInfo.GetCultureInfo("en-GB"));
             if (value is double) return ((double)value).ToString("N1", CultureInfo.GetCultureInfo("en-GB"));
             if (value is float) return ((float)value).ToString("N1", CultureInfo.GetCultureInfo("en-GB"));
             if (value is decimal) return ((decimal)value).ToString("N1", CultureInfo.GetCultureInfo("en-GB"));

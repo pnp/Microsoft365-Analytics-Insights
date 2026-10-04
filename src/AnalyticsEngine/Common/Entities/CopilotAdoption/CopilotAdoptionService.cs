@@ -349,7 +349,7 @@ namespace Common.Entities.CopilotAdoption
                         CopilotAdoptionWarningKeys.LicenceHistoryPartialForRange,
                         new Dictionary<string, object>
                         {
-                            { "historyStart", DateTime.SpecifyKind(licenceHistoryStartUtc.Value, DateTimeKind.Utc).ToString("o", CultureInfo.InvariantCulture) },
+                            { "historyStart", DateTime.SpecifyKind(licenceHistoryStartUtc.Value, DateTimeKind.Utc) },
                         });
                 }
                 else if (!useLicenceHistory)
@@ -1671,7 +1671,7 @@ namespace Common.Entities.CopilotAdoption
             // The left-hand extra term is there because "certain" is not a subset of the idle bands: a
             // disabled account that was active right up to the day it was disabled is the clearest
             // reclaim there is, and it is not in NeverUsed + Dormant.
-            summary.DisabledLicensedUsers = users.Count(u => u.AccountEnabled == false);
+            summary.DisabledLicensedUsers = users.Count(u => u.AccountEnabled == false && u.HoldsSeatToday != false);
             summary.ReclaimCertainSeats = users.Count(u => IsReclaimTier(u, CopilotAdoptionScoring.ReclaimEligibilityTiers.Certain));
             summary.ReclaimProbableSeats = users.Count(u => IsReclaimTier(u, CopilotAdoptionScoring.ReclaimEligibilityTiers.Probable));
             summary.ReclaimReviewSeats = users.Count(u => IsReclaimTier(u, CopilotAdoptionScoring.ReclaimEligibilityTiers.Review));
@@ -1702,7 +1702,8 @@ namespace Common.Entities.CopilotAdoption
             summary.ReclaimSeatsHeldBackForReview = users.Count(u =>
                 IsIdleBand(u.Band)
                 && (IsReclaimTier(u, CopilotAdoptionScoring.ReclaimEligibilityTiers.Review)
-                    || IsReclaimTier(u, CopilotAdoptionScoring.ReclaimEligibilityTiers.Excluded)));
+                    || IsReclaimTier(u, CopilotAdoptionScoring.ReclaimEligibilityTiers.Excluded)
+                    || u.HoldsSeatToday == false));
 
             summary.ReclaimCaveatKey = CopilotAdoptionWarningKeys.ReclaimCaveat;
             summary.ReclaimCaveat = "Reclaim excludes admin exclusions and separates review-only cases. Leave, part-time patterns, service/shared accounts and role-based mailboxes are not detectable from Microsoft 365 usage data.";
