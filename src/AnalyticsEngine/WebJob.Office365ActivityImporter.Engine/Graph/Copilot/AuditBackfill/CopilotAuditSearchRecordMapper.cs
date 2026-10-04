@@ -1,4 +1,4 @@
-﻿using Common.Entities;
+using Common.Entities;
 using Common.Entities.CopilotAuditBackfill;
 using Newtonsoft.Json.Linq;
 using System;

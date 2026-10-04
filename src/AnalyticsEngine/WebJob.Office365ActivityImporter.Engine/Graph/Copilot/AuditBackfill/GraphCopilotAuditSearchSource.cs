@@ -1,4 +1,4 @@
-﻿using Common.Entities.CopilotAuditBackfill;
+using Common.Entities.CopilotAuditBackfill;
 using DataUtils.Http;
 using Microsoft.Extensions.Logging;
 using Newtonsoft.Json;
