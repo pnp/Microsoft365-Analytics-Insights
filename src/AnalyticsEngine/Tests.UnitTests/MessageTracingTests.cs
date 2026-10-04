@@ -216,14 +216,11 @@ namespace Tests.UnitTests
         {
             var now = new DateTime(2026, 10, 4, 12, 0, 0, DateTimeKind.Utc);
             var opens = 0;
-            // Opens fine but nothing listens, so the upload itself fails fast (no retries).
-            var unreachable = new Azure.Storage.Blobs.BlobContainerClient(
-                new Uri("http://127.0.0.1:1/devstoreaccount1/message-traces"),
-                new Azure.Storage.Blobs.BlobClientOptions { Retry = { MaxRetries = 0 } });
+            var storage = new StaticBlobResponseHandler(HttpStatusCode.Created);
             using (var uploader = new MessageTraceBlobUploader(
                 _ => Interlocked.Increment(ref opens) == 1
                     ? Task.FromException<Azure.Storage.Blobs.BlobContainerClient>(new InvalidOperationException("denied"))
-                    : Task.FromResult(unreachable),
+                    : Task.FromResult(FakeContainer(storage)),
                 NullLogger.Instance, utcNow: () => now))
             {
                 Assert.IsTrue(uploader.TryEnqueue(TraceEnvelope()));
@@ -232,9 +229,82 @@ namespace Tests.UnitTests
 
                 now = now + MessageTraceBlobUploader.StorageRetryInterval + TimeSpan.FromSeconds(1);
                 Assert.IsTrue(uploader.TryEnqueue(TraceEnvelope()));
+                await WaitForAsync(() => uploader.SavedCount == 1);
+                Assert.AreEqual(2, Volatile.Read(ref opens));
+                Assert.AreEqual(1, Volatile.Read(ref storage.Requests));
+                Assert.IsFalse(uploader.IsStorageUnavailable);
+            }
+        }
+
+        [TestMethod]
+        public async Task Uploader_StorageSideUploadFailureAfterOpen_DropsContainerAndBacksOff()
+        {
+            var now = new DateTime(2026, 10, 4, 12, 0, 0, DateTimeKind.Utc);
+            var opens = 0;
+            var storage = new StaticBlobResponseHandler(HttpStatusCode.Forbidden);
+            using (var uploader = new MessageTraceBlobUploader(
+                _ =>
+                {
+                    Interlocked.Increment(ref opens);
+                    return Task.FromResult(FakeContainer(storage));
+                },
+                NullLogger.Instance, utcNow: () => now))
+            {
+                // The open succeeds, then storage refuses the upload: e.g. shared-key access disabled mid-run.
+                Assert.IsTrue(uploader.TryEnqueue(TraceEnvelope()));
+                await WaitForAsync(() => uploader.FailedCount == 1);
+                Assert.IsTrue(uploader.IsStorageUnavailable);
+                Assert.IsFalse(uploader.TryEnqueue(TraceEnvelope()));
+                Assert.AreEqual(1, Volatile.Read(ref storage.Requests));
+
+                // After the back-off the open runs again (re-creating the container, redoing the RBAC fallback).
+                now = now + MessageTraceBlobUploader.StorageRetryInterval + TimeSpan.FromSeconds(1);
+                Assert.IsTrue(uploader.TryEnqueue(TraceEnvelope()));
                 await WaitForAsync(() => uploader.FailedCount == 2);
                 Assert.AreEqual(2, Volatile.Read(ref opens));
-                Assert.IsFalse(uploader.IsStorageUnavailable);
+            }
+        }
+
+        [TestMethod]
+        public void Uploader_ClassifiesStorageSideFailures()
+        {
+            Assert.IsTrue(MessageTraceBlobUploader.IsStorageSideFailure(new Azure.RequestFailedException(403, "denied")));
+            Assert.IsTrue(MessageTraceBlobUploader.IsStorageSideFailure(new Azure.RequestFailedException(404, "ContainerNotFound")));
+            Assert.IsTrue(MessageTraceBlobUploader.IsStorageSideFailure(new Azure.RequestFailedException(503, "busy")));
+            Assert.IsTrue(MessageTraceBlobUploader.IsStorageSideFailure(new Azure.RequestFailedException("transport", new HttpRequestException("reset"))));
+            Assert.IsTrue(MessageTraceBlobUploader.IsStorageSideFailure(new AggregateException(new Azure.RequestFailedException(0, "unreachable"))));
+            Assert.IsFalse(MessageTraceBlobUploader.IsStorageSideFailure(new Azure.RequestFailedException(400, "InvalidMetadata")));
+            Assert.IsFalse(MessageTraceBlobUploader.IsStorageSideFailure(new InvalidOperationException("back-off")));
+        }
+
+        private static Azure.Storage.Blobs.BlobContainerClient FakeContainer(StaticBlobResponseHandler storage)
+        {
+            return new Azure.Storage.Blobs.BlobContainerClient(
+                new Uri("https://contosoanalytics.blob.core.windows.net/message-traces"),
+                new Azure.Storage.Blobs.BlobClientOptions
+                {
+                    Transport = new Azure.Core.Pipeline.HttpClientTransport(new HttpClient(storage)),
+                    Retry = { MaxRetries = 0 },
+                });
+        }
+
+        private sealed class StaticBlobResponseHandler : HttpMessageHandler
+        {
+            private readonly HttpStatusCode _status;
+            public int Requests;
+
+            public StaticBlobResponseHandler(HttpStatusCode status)
+            {
+                _status = status;
+            }
+
+            protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+            {
+                Interlocked.Increment(ref Requests);
+                var response = new HttpResponseMessage(_status) { Content = new ByteArrayContent(new byte[0]), RequestMessage = request };
+                response.Headers.ETag = new System.Net.Http.Headers.EntityTagHeaderValue("\"0x8DCONTOSO\"");
+                response.Content.Headers.LastModified = DateTimeOffset.UtcNow;
+                return Task.FromResult(response);
             }
         }
 

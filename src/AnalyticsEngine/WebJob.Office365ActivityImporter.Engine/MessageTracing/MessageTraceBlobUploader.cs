@@ -165,6 +165,11 @@ namespace WebJob.Office365ActivityImporter.Engine.MessageTracing
                 catch (Exception ex)
                 {
                     Interlocked.Increment(ref _failedCount);
+                    if (IsStorageSideFailure(ex))
+                    {
+                        await MarkStorageUnavailableAsync().ConfigureAwait(false);
+                    }
+
                     var now = DateTime.UtcNow;
                     if ((now - _lastFailureLogUtc) > TimeSpan.FromMinutes(5))
                     {
@@ -177,6 +182,45 @@ namespace WebJob.Office365ActivityImporter.Engine.MessageTracing
                     Interlocked.Decrement(ref _inFlightUploads);
                     Interlocked.Add(ref _queuedBytes, -item.Body.LongLength);
                 }
+            }
+        }
+
+        /// <summary>
+        /// A failure that says the storage account or container is unusable rather than that one item was bad:
+        /// access refused, the container gone (deleted while tracing was on), the service failing, or the transport
+        /// failing after the SDK's own retries. An item-specific 400 (e.g. oversized metadata) is not one.
+        /// </summary>
+        internal static bool IsStorageSideFailure(Exception ex)
+        {
+            switch (ex)
+            {
+                case AggregateException aggregate:
+                    return aggregate.InnerExceptions.Any(IsStorageSideFailure);
+                case RequestFailedException failed:
+                    return failed.Status == 0 || failed.Status == 401 || failed.Status == 403 || failed.Status == 404
+                        || failed.Status == 408 || failed.Status >= 500;
+                default:
+                    return ex is System.Net.Http.HttpRequestException || ex is IOException || ex is TimeoutException
+                        || ex is OperationCanceledException;
+            }
+        }
+
+        /// <summary>
+        /// Drops the cached container so the next attempt re-runs the open (which re-creates a deleted container
+        /// and redoes the key-to-RBAC fallback), and backs off like a failed open so Health reports it.
+        /// </summary>
+        private async Task MarkStorageUnavailableAsync()
+        {
+            await _openGate.WaitAsync().ConfigureAwait(false);
+            try
+            {
+                Volatile.Write(ref _container, null);
+                Interlocked.Exchange(ref _storageRetryAfterTicks, (_utcNow() + StorageRetryInterval).Ticks);
+                Volatile.Write(ref _storageUnavailable, true);
+            }
+            finally
+            {
+                _openGate.Release();
             }
         }
 
