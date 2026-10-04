@@ -38,6 +38,7 @@ const health: Record<keyof typeof en, string> = {
   'health.component.Credential': 'Credencial',
   'health.component.ServiceBus': 'Service Bus',
   'health.component.BlobCheckpoint': 'Punto de control de blobs',
+  'health.component.CopilotAuditBackfill': 'Relleno de auditoría de Copilot',
   'health.duration.day': '{count} día',
   'health.duration.days': '{count} días',
   'health.duration.hour': '{count} hora',
@@ -69,6 +70,14 @@ const health: Record<keyof typeof en, string> = {
   'health.reason.blobCheckpointAuthenticationFailed': 'El punto de control de blobs de auditoría está degradado porque Azure Storage rechazó la credencial del punto de control (HTTP {status} {errorCode}). Compruebe la cadena de conexión o la clave de la cuenta de Storage, o la credencial de la entidad de servicio en tiempo de ejecución usada para la reserva de RBAC. Hasta que se corrija, el importador usa un punto de control en memoria no duradero que se pierde al reiniciar o volver a implementar, y la recuperación de metadatos duradera entre ciclos no está disponible.',
   'health.reason.blobCheckpointKeyAuthDisabled': "El punto de control de blobs de auditoría está degradado porque la cuenta de almacenamiento tiene deshabilitada la autenticación de clave compartida (HTTP {status} {errorCode}). El importador recurre a RBAC/Entra ID cuando la entidad de servicio en tiempo de ejecución está configurada; esa identidad necesita 'Storage Table Data Contributor' en la cuenta de almacenamiento. Hasta que se corrija, el importador usa un punto de control en memoria no duradero que se pierde al reiniciar o volver a implementar, y la recuperación de metadatos duradera entre ciclos no está disponible.",
   'health.reason.blobCheckpointStorageRejected': 'El punto de control de blobs de auditoría está degradado porque Azure Storage rechazó la solicitud de punto de control de Table (HTTP {status} {errorCode}). Compruebe la cadena de conexión de Storage, la accesibilidad del servicio Table, la configuración de firewall o punto de conexión privado de Storage y los permisos de plano de datos de Table. Hasta que se corrija, el importador usa un punto de control en memoria no duradero que se pierde al reiniciar o volver a implementar, y la recuperación de metadatos duradera entre ciclos no está disponible.',
+  'health.reason.copilotAuditBackfillHealthy': 'No hay ningún relleno de auditoría de Copilot bloqueado actualmente.',
+  'health.reason.copilotAuditBackfillRunning': 'Hay un relleno de auditoría de Copilot en ejecución. Avanza segmentos acotados de Microsoft Graph Audit Search durante los ciclos del importador.',
+  'health.reason.copilotAuditBackfillCompleted': 'El último relleno de auditoría de Copilot se completó correctamente.',
+  'health.reason.copilotAuditBackfillCancelled': 'El último relleno de auditoría de Copilot se canceló.',
+  'health.reason.copilotAuditBackfillFailed': 'El relleno de auditoría de Copilot produjo un error. Abra Administración > Relleno de auditoría de Copilot para ver el código de error estable.',
+  'health.reason.copilotAuditBackfillMissingPermission': 'El relleno de auditoría de Copilot no puede ejecutarse porque a la aplicación en tiempo de ejecución le falta AuditLogsQuery.Read.All. Este permiso es opcional y necesita consentimiento de administrador.',
+  'health.reason.copilotAuditBackfillCompletedWithGaps': 'El relleno de auditoría de Copilot terminó con segmentos con error o incompletos. Abra Administración > Relleno de auditoría de Copilot para ver los días afectados.',
+  'health.reason.copilotAuditBackfillLastJobOld': 'La última incidencia del relleno de auditoría de Copilot tiene más de siete días. Abra Administración > Relleno de auditoría de Copilot para revisar el último resultado.',
 
   // Health page
   'health.page.title': 'Estado del sistema{buildLabel}',
