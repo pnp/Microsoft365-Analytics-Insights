@@ -36,7 +36,7 @@ export const health = {
   'health.component.Credential': 'Credential',
   'health.component.ServiceBus': 'ServiceBus',
   'health.component.BlobCheckpoint': 'BlobCheckpoint',
-  'health.component.MessageTracing': 'MessageTracing',
+  'health.component.MessageTracing': 'Message tracing',
   'health.duration.day': '{count} day',
   'health.duration.days': '{count} days',
   'health.duration.hour': '{count} hour',

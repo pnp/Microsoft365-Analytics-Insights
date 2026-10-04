@@ -1,6 +1,7 @@
 using Azure.Core;
 using Microsoft.Extensions.Logging;
 using System;
+using System.Linq;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Threading;
@@ -48,7 +49,7 @@ namespace DataUtils.Http
             {
                 try
                 {
-                    await tracer.TraceAsync(GetSource(request.RequestUri), request, response, cancellationToken).ConfigureAwait(false);
+                    await tracer.TraceAsync(GetTraceSource(request.RequestUri), request, response, cancellationToken).ConfigureAwait(false);
                 }
                 catch (HttpRequestException)
                 {
@@ -61,12 +62,17 @@ namespace DataUtils.Http
             return response;
         }
 
-        private static string GetSource(Uri requestUri)
+        public static string GetTraceSource(Uri requestUri)
         {
             var host = requestUri?.Host ?? string.Empty;
-            return host.IndexOf("manage.office.com", StringComparison.OrdinalIgnoreCase) >= 0
-                ? "activity-api"
-                : "graph";
+            if (host.Equals("graph.microsoft.com", StringComparison.OrdinalIgnoreCase)) return "graph";
+            if (host.Equals("manage.office.com", StringComparison.OrdinalIgnoreCase)) return "activity-api";
+            if (host.Equals("management.azure.com", StringComparison.OrdinalIgnoreCase)) return "azure-management";
+
+            var label = new string(host.ToLowerInvariant()
+                .Select(c => char.IsLetterOrDigit(c) || c == '-' ? c : '-')
+                .ToArray()).Trim('-');
+            return string.IsNullOrWhiteSpace(label) ? "http" : label;
         }
     }
 }

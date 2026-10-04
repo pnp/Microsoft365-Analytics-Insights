@@ -37,13 +37,16 @@ Contributor. Azurite/development storage uses the connection string only.
 
 Tracing can store full API responses, including personal data, so importer start-up logs a prominent warning
 and emits a degraded Health component while enabled. It observes Management Activity API content fetches,
-manual Graph REST calls and SDK Graph calls routed through `GraphServiceClientFactory`. Token endpoints,
-Key Vault, OAuth token bodies and Copilot AI interaction-history responses are explicitly excluded; the product
-does not store prompt/response text from the interaction-history API.
+manual REST calls through the shared confidential-client HTTP handler (Graph, Azure Cost Management,
+Power Platform licensing and any other JSON endpoint it reaches) and SDK Graph calls routed through
+`GraphServiceClientFactory`. Microsoft 365 usage reports requested as JSON are inspected; CSV downloads are
+skipped by the JSON-only content-type gate. Token endpoints, Key Vault, OAuth token bodies and Copilot AI
+interaction-history responses are explicitly excluded; the product does not store prompt/response text from
+the interaction-history API.
 
-Installer upgrades merge unmanaged App Service app settings before writing the replacement settings collection,
-so a manually-added `MessageTraceMatch` is preserved by an upgrade. Remove `MessageTraceMatch` from App
-Service application settings to stop tracing.
+Installer upgrades already merge unmanaged App Service app settings before writing the replacement settings
+collection (dev has done this since #318), so a manually-added `MessageTraceMatch` is preserved by an upgrade.
+Remove `MessageTraceMatch` from App Service application settings to stop tracing.
 
 ---
 

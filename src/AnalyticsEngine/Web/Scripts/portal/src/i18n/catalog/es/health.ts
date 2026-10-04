@@ -38,7 +38,7 @@ const health: Record<keyof typeof en, string> = {
   'health.component.Credential': 'Credencial',
   'health.component.ServiceBus': 'Service Bus',
   'health.component.BlobCheckpoint': 'Punto de control de blobs',
-  'health.component.MessageTracing': 'Seguimiento de mensajes',
+  'health.component.MessageTracing': 'Rastreo de mensajes',
   'health.duration.day': '{count} día',
   'health.duration.days': '{count} días',
   'health.duration.hour': '{count} hora',

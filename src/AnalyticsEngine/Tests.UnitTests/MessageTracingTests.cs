@@ -49,6 +49,16 @@ namespace Tests.UnitTests
             Assert.IsFalse(string.IsNullOrWhiteSpace(failure));
         }
 
+        [DataTestMethod]
+        [DataRow("https://graph.microsoft.com/v1.0/users", "graph")]
+        [DataRow("https://manage.office.com/api/v1.0/contoso/activity/feed", "activity-api")]
+        [DataRow("https://management.azure.com/subscriptions/00000000-0000-0000-0000-000000000000", "azure-management")]
+        [DataRow("https://api.powerplatform.com/licensing", "api-powerplatform-com")]
+        public void ConfidentialClientTraceSource_LabelsKnownHostsAndSanitisesOthers(string url, string expected)
+        {
+            Assert.AreEqual(expected, ConfidentialClientApplicationHttpHandler.GetTraceSource(new Uri(url)));
+        }
+
         [TestMethod]
         public async Task Handler_Disabled_NoOpsAndCallerCanReadBody()
         {
