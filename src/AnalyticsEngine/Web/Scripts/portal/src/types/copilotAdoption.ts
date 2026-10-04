@@ -400,6 +400,7 @@ export interface CopilotAdoptionSummary {
   reclaimCaveatKey?: string | null;
   reclaimSeatsHeldBackForWindowMismatch: number;
   reclaimSeatsHeldBackForReview: number;
+  reclaimSeatsNoLongerHeld: number;
   reclaimSeatsFromActiveBands: number;
   usageReportSourcedUsers: number;
   usageReportSourcedUserPct: number;

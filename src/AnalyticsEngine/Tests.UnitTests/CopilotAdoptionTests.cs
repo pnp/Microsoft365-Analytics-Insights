@@ -2641,7 +2641,9 @@ namespace Tests.UnitTests
 
             Assert.AreEqual(0, analysis.Summary.DisabledLicensedUsers,
                 "Former seat holders disabled today must not be labelled as disabled accounts still holding a licence.");
-            Assert.AreEqual(2, analysis.Summary.ReclaimSeatsHeldBackForReview,
+            Assert.AreEqual(0, analysis.Summary.ReclaimSeatsHeldBackForReview,
+                "Former seat holders are not review-only seats: there is no seat left to review.");
+            Assert.AreEqual(2, analysis.Summary.ReclaimSeatsNoLongerHeld,
                 "Idle former seat holders are the explicit non-reclaimable term that keeps the displayed identity exact.");
             AssertReclaimArithmeticTiesOut(analysis.Summary);
         }
@@ -2657,9 +2659,10 @@ namespace Tests.UnitTests
                 summary.NeverUsedUsers + summary.DormantUsers + summary.ReclaimSeatsFromActiveBands,
                 summary.ReclaimableSeats
                     + summary.ReclaimSeatsHeldBackForWindowMismatch
-                    + summary.ReclaimSeatsHeldBackForReview,
+                    + summary.ReclaimSeatsHeldBackForReview
+                    + summary.ReclaimSeatsNoLongerHeld,
                 "NeverUsed + Dormant + ReclaimSeatsFromActiveBands must equal "
-                + "ReclaimableSeats + ReclaimSeatsHeldBackForWindowMismatch + ReclaimSeatsHeldBackForReview.");
+                + "ReclaimableSeats + ReclaimSeatsHeldBackForWindowMismatch + ReclaimSeatsHeldBackForReview + ReclaimSeatsNoLongerHeld.");
         }
 
         private static void AssertWarningDetailsMatchEnglish(CopilotAdoptionSummary summary)

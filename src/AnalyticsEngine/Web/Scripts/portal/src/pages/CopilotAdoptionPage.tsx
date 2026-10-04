@@ -2894,7 +2894,12 @@ function buildKpis(
               })}`
             : '', v11: formatCount(
           summary.reclaimSeatsHeldBackForReview,
-        ) }),
+        ), v12: summary.reclaimSeatsNoLongerHeld > 0
+            ? ` + ${t('copilotAdoption.page.reclaimNoLongerHeldAddBack', {
+                count: formatCount(summary.reclaimSeatsNoLongerHeld),
+              })}`
+            : '',
+        }),
         source:
           t('copilotAdoption.page.drillThroughLicensedUsersTabReclaimTierFilterEach'),
       },

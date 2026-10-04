@@ -1667,6 +1667,7 @@ namespace Common.Entities.CopilotAdoption
             //
             //   NeverUsed + Dormant + ReclaimSeatsFromActiveBands
             //     == ReclaimableSeats + ReclaimSeatsHeldBackForWindowMismatch + ReclaimSeatsHeldBackForReview
+            //        + ReclaimSeatsNoLongerHeld
             //
             // The left-hand extra term is there because "certain" is not a subset of the idle bands: a
             // disabled account that was active right up to the day it was disabled is the clearest
@@ -1702,8 +1703,8 @@ namespace Common.Entities.CopilotAdoption
             summary.ReclaimSeatsHeldBackForReview = users.Count(u =>
                 IsIdleBand(u.Band)
                 && (IsReclaimTier(u, CopilotAdoptionScoring.ReclaimEligibilityTiers.Review)
-                    || IsReclaimTier(u, CopilotAdoptionScoring.ReclaimEligibilityTiers.Excluded)
-                    || u.HoldsSeatToday == false));
+                    || IsReclaimTier(u, CopilotAdoptionScoring.ReclaimEligibilityTiers.Excluded)));
+            summary.ReclaimSeatsNoLongerHeld = users.Count(u => IsIdleBand(u.Band) && u.HoldsSeatToday == false);
 
             summary.ReclaimCaveatKey = CopilotAdoptionWarningKeys.ReclaimCaveat;
             summary.ReclaimCaveat = "Reclaim excludes admin exclusions and separates review-only cases. Leave, part-time patterns, service/shared accounts and role-based mailboxes are not detectable from Microsoft 365 usage data.";

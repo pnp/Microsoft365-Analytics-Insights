@@ -624,10 +624,18 @@ namespace Common.Entities.CopilotAdoption
         /// Published alongside <see cref="ReclaimSeatsHeldBackForWindowMismatch"/> so the whole
         /// arithmetic ties out on screen:
         /// <c>NeverUsedUsers + DormantUsers + ReclaimSeatsFromActiveBands ==
-        /// ReclaimableSeats + ReclaimSeatsHeldBackForWindowMismatch + ReclaimSeatsHeldBackForReview</c>.
+        /// ReclaimableSeats + ReclaimSeatsHeldBackForWindowMismatch + ReclaimSeatsHeldBackForReview
+        /// + ReclaimSeatsNoLongerHeld</c>.
         /// </remarks>
         [JsonProperty("reclaimSeatsHeldBackForReview")]
         public int ReclaimSeatsHeldBackForReview { get; set; }
+
+        /// <summary>
+        /// Idle historical seat holders that no longer hold a Copilot seat today. They remain in the
+        /// historical band breakdown, but there is no current seat to reclaim or review.
+        /// </summary>
+        [JsonProperty("reclaimSeatsNoLongerHeld")]
+        public int ReclaimSeatsNoLongerHeld { get; set; }
 
         /// <summary>
         /// Reclaimable seats whose engagement band is better than dormant - in practice, disabled

@@ -174,6 +174,7 @@ function summary(overrides: Partial<CopilotAdoptionSummary> = {}): CopilotAdopti
     reclaimCaveat: null,
     reclaimSeatsHeldBackForWindowMismatch: 0,
     reclaimSeatsHeldBackForReview: 24,
+    reclaimSeatsNoLongerHeld: 0,
     reclaimSeatsFromActiveBands: 0,
     usageReportSourcedUsers: 0,
     usageReportSourcedUserPct: 0,
@@ -428,6 +429,21 @@ describe('CopilotAdoptionPage view split', () => {
     expect(screen.getByText('The shape of adoption')).toBeVisible();
     expect(screen.getByText('Usage frequency and intensity')).toBeVisible();
     expect(screen.getAllByRole('button', { name: 'SQL' }).length).toBeGreaterThanOrEqual(5);
+  });
+
+  it('shows former seat holders as their own reclaim reconciliation term', async () => {
+    vi.mocked(fetchAdoptionSummary).mockResolvedValue(summary({
+      reclaimSeatsHeldBackForReview: 0,
+      reclaimSeatsNoLongerHeld: 2,
+    }));
+
+    await renderPage();
+    const card = (await screen.findByText('Reclaimable licences')).closest('.fui-Card') as HTMLElement;
+
+    fireEvent.click(within(card).getByRole('button', { name: /How "Reclaimable licences" is calculated/ }));
+
+    expect(await screen.findByText(/2 no longer hold a seat/)).toBeInTheDocument();
+    expect(screen.queryByText(/2 held back for review or exclusion/)).toBeNull();
   });
 
   it('drills the executive enablement plan through using the action code counted by the aggregate', async () => {

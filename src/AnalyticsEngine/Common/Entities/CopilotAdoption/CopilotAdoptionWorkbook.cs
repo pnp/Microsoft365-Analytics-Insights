@@ -437,10 +437,12 @@ namespace Common.Entities.CopilotAdoption
             // figures up against the band breakdown and land exactly on it.
             AddMeta(sheet, "Held back - review or exclusion", summary.ReclaimSeatsHeldBackForReview,
                 "Never-used or dormant seats kept out of the reclaimable total because a human has to look at them first, or because an admin has already excluded them.");
+            AddMeta(sheet, "Held back - no longer held", summary.ReclaimSeatsNoLongerHeld,
+                "Historical never-used or dormant seat holders kept out of the reclaimable total because they no longer hold a Copilot seat today.");
             AddMeta(sheet, "Held back - report window mismatch", summary.ReclaimSeatsHeldBackForWindowMismatch,
                 "Seats kept out of the reclaimable total because they were scored from Microsoft's usage report over a period that is not this analysis window.");
             AddMeta(sheet, "Reclaimable but still active", summary.ReclaimSeatsFromActiveBands,
-                "Reclaimable seats that are not never-used or dormant - disabled accounts that were still active when they were disabled. Never used + Dormant + this = Reclaimable + both held-back figures.");
+                "Reclaimable seats that are not never-used or dormant - disabled accounts that were still active when they were disabled. Never used + Dormant + this = Reclaimable + all held-back figures.");
             AddMeta(sheet, "Too new to judge", summary.TooNewToJudgeUsers,
                 $"Seats held for less than the {summary.Options.ReclaimGraceDays}-day grace period. Counted separately because an unused brand-new seat has not failed - it has not started, and reclaiming it would take a licence back from someone who was only just given one.");
             if (!string.IsNullOrWhiteSpace(summary.ReclaimCaveat))

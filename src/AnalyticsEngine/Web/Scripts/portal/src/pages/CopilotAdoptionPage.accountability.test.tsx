@@ -132,6 +132,7 @@ function incompleteSummary(): CopilotAdoptionSummary {
     reclaimCaveat: null,
     reclaimSeatsHeldBackForWindowMismatch: 0,
     reclaimSeatsHeldBackForReview: 0,
+    reclaimSeatsNoLongerHeld: 0,
     reclaimSeatsFromActiveBands: 0,
     usageReportSourcedUsers: 0,
     usageReportSourcedUserPct: 0,
