@@ -49,3 +49,4 @@ src/TelemetryService/web.client/.vscode/*
 /infra/TelemetryService/*.parameters.json
 /infra/TelemetryService/.deploy/
 /artifacts/TelemetryService/
+/artifacts/TelemetryService-state/
