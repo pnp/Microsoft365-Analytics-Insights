@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, Fragment } from 'react';
+import { useEffect, useMemo, useRef, useState, Fragment, type ReactNode } from 'react';
 import {
   makeStyles,
   tokens,
@@ -329,6 +329,7 @@ export default function CoworkPanel({
   seatLicenceTypeIds,
   userFilter,
   canSeePii = true,
+  hiddenListNote,
 }: {
   windowDays: number;
   dateRange?: DateRange | null;
@@ -347,6 +348,11 @@ export default function CoworkPanel({
    * note, and the list is never requested (the server would refuse it).
    */
   canSeePii?: boolean;
+  /**
+   * Shown instead of the people list when it is hidden. Defaults to the See PII note; a past date
+   * range passes its own note, because there the list is hidden for a different reason.
+   */
+  hiddenListNote?: ReactNode;
 }) {
   const styles = useStyles();
   const table = useAdoptionTableStyles();
@@ -776,7 +782,7 @@ export default function CoworkPanel({
 
       {/* ---------- People: the spending-policy list ---------- */}
       <div role="tabpanel" aria-label={t('copilotAdoptionCowork.sections.people')} hidden={section !== 'people'}>
-      {!canSeePii ? <PiiHiddenNote /> : (
+      {!canSeePii ? (hiddenListNote ?? <PiiHiddenNote />) : (
       <Card>
         <Text weight="semibold" block>
           {t('copilotAdoptionCowork.intro.title')}

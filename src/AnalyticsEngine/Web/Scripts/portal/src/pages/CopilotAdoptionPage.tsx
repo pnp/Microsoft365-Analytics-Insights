@@ -685,9 +685,11 @@ function CopilotAdoptionView({
           <Text size={200}>
             {t(TAB_LABEL_KEYS[tab])}
             {' \u00b7 '}
-            {WINDOW_OPTIONS.find((o) => o.value === windowDays)?.labelKey
-              ? t(WINDOW_OPTIONS.find((o) => o.value === windowDays)!.labelKey)
-              : t('copilotAdoption.page.print.lastDays', { v0: windowDays })}
+            {dateRange
+              ? t('copilotAdoption.page.window.customRange')
+              : WINDOW_OPTIONS.find((o) => o.value === windowDays)?.labelKey
+                ? t(WINDOW_OPTIONS.find((o) => o.value === windowDays)!.labelKey)
+                : t('copilotAdoption.page.print.lastDays', { v0: windowDays })}
             {summary && <> {t('copilotAdoption.page.print.dateRange', { v0: formatDate(summary.fromUtc), v1: formatDate(summary.toUtc) })}</>}
             {' \u00b7 '}
             {isEmptyFilter(userFilter) && !summary?.globalFilter
@@ -872,29 +874,27 @@ function CopilotAdoptionView({
               )}
 
               {tab === 'cowork' && (
-                dateRange ? (
-                  <PastRangeNamedListsHiddenNote />
-                ) : <CoworkPanel
+                <CoworkPanel
                   key={userFilterScope || 'all'}
                   windowDays={windowDays} dateRange={dateRange}
                   summary={summary}
                   options={summary.options}
                   userFilter={userFilterParam}
-                  canSeePii={canSeePii}
+                  canSeePii={canSeePii && !dateRange}
+                  hiddenListNote={dateRange ? <PastRangeNamedListsHiddenNote /> : undefined}
                 />
               )}
 
               {tab === 'opportunities' && (
-                dateRange ? (
-                  <PastRangeNamedListsHiddenNote />
-                ) : <OpportunitiesPanel
+                <OpportunitiesPanel
                   key={userFilterScope || 'all'}
                   windowDays={windowDays} dateRange={dateRange}
                   summary={summary}
                   options={summary.options}
                   guidanceLinks={summary.guidanceLinks}
                   userFilter={userFilterParam}
-                  canSeePii={canSeePii}
+                  canSeePii={canSeePii && !dateRange}
+                  hiddenListNote={dateRange ? <PastRangeNamedListsHiddenNote /> : undefined}
                 />
               )}
 

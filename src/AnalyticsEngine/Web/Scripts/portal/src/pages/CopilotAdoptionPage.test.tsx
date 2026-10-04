@@ -1267,6 +1267,31 @@ describe('CopilotAdoptionPage modelled time saved', () => {
     expect(await screen.findByRole('tab', { name: 'Cowork', selected: true })).toBeVisible();
   });
 
+  it('keeps the Cowork and licence-opportunity figures for a past range and hides only their named lists', async () => {
+    vi.mocked(fetchAdoptionSummary).mockResolvedValue(withEstimate({
+      fromUtc: '2026-09-01T00:00:00Z',
+      toUtc: '2026-09-30T00:00:00Z',
+      options: { ...options, usesExplicitDates: true, fromUtc: '2026-09-01T00:00:00Z', toUtc: '2026-09-30T00:00:00Z', toExclusiveUtc: '2026-10-01T00:00:00Z' },
+    }));
+
+    await renderPage();
+    fireEvent.click(screen.getByRole('button', { name: 'Last calendar month' }));
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Licence opportunities' }));
+    expect(await screen.findByRole('tablist', { name: 'Licence opportunity sections' })).toBeVisible();
+    expect(screen.getByText(/named reclaim and recommendation lists/i)).toBeInTheDocument();
+    expect(screen.queryByText('Individual details are hidden')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Cowork' }));
+    expect(await screen.findByRole('tablist', { name: 'Cowork sections' })).toBeVisible();
+    expect(screen.getByText(/named reclaim and recommendation lists/i)).toBeInTheDocument();
+    expect(screen.queryByText('Individual details are hidden')).not.toBeInTheDocument();
+
+    const printHeader = screen.getByText((_content, element) =>
+      element?.tagName === 'SPAN' && /Custom range/.test(element.textContent ?? '') && /30 Sept? 2026/.test(element.textContent ?? ''));
+    expect(printHeader.textContent).not.toMatch(/Last 28 days/);
+  });
+
   it('claims nothing when there is nobody to model', async () => {
     // This file's default summary: no licence estimate from the server, and Cowork readiness not assessed.
     await renderPage();
