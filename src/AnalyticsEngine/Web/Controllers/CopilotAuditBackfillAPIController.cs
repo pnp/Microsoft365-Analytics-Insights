@@ -41,6 +41,10 @@ namespace Web.AnalyticsWeb.Controllers
         {
             try { return await action(_createService()); }
             catch (CopilotAuditBackfillRequestException ex) { return Content(ex.Status, new CopilotAuditBackfillError { Code = ex.Code }); }
+            catch (Common.Entities.CopilotAuditBackfill.CopilotAuditBackfillStateUnavailableException)
+            {
+                return Content(HttpStatusCode.ServiceUnavailable, new CopilotAuditBackfillError { Code = Common.Entities.CopilotAuditBackfill.CopilotAuditBackfillErrorCodes.StateUnavailable });
+            }
         }
     }
 }

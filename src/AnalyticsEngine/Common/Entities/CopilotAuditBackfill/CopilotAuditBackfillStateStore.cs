@@ -9,6 +9,7 @@ namespace Common.Entities.CopilotAuditBackfill
     public sealed class CopilotAuditBackfillStateStore
     {
         private const string LatestKey = "LatestJob";
+        private const string SubmissionLedgerKey = "SubmissionLedger";
         private static readonly DateTime IdEpoch = new DateTime(2020, 1, 1, 0, 0, 0, DateTimeKind.Utc);
         private readonly IKeyValueStore _values;
         private readonly Func<DateTime> _utcNow;
@@ -89,6 +90,23 @@ namespace Common.Entities.CopilotAuditBackfill
         }
 
         public async Task<bool> IsCancelRequestedAsync(int id) => await ReadAsync(CancelKey(id)).ConfigureAwait(false) != null;
+
+        public async Task<CopilotAuditBackfillSubmissionLedger> GetSubmissionLedgerAsync()
+        {
+            var json = await ReadAsync(SubmissionLedgerKey).ConfigureAwait(false);
+            var ledger = string.IsNullOrEmpty(json)
+                ? new CopilotAuditBackfillSubmissionLedger()
+                : JsonConvert.DeserializeObject<CopilotAuditBackfillSubmissionLedger>(json) ?? new CopilotAuditBackfillSubmissionLedger();
+            ledger.SubmissionTimestampsUtc = ledger.SubmissionTimestampsUtc ?? new System.Collections.Generic.List<DateTime>();
+            return ledger;
+        }
+
+        public Task SaveSubmissionLedgerAsync(CopilotAuditBackfillSubmissionLedger ledger)
+        {
+            ledger = ledger ?? new CopilotAuditBackfillSubmissionLedger();
+            ledger.SubmissionTimestampsUtc = ledger.SubmissionTimestampsUtc ?? new System.Collections.Generic.List<DateTime>();
+            return WriteAsync(SubmissionLedgerKey, JsonConvert.SerializeObject(ledger), TimeSpan.FromDays(2));
+        }
 
         private async Task<int> GetLatestIdAsync()
         {

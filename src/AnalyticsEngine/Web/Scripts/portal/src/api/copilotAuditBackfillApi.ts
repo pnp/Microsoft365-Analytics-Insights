@@ -5,6 +5,10 @@ const BASE = 'api/CopilotAuditBackfill';
 
 export async function fetchCopilotAuditBackfill(): Promise<CopilotAuditBackfillStatus> {
   const response = await apiFetch(BASE);
+  if (!response.ok) {
+    const body = await response.json().catch(() => null) as { code?: unknown } | null;
+    throw new Error(typeof body?.code === 'string' ? body.code : 'loadFailed');
+  }
   return response.json() as Promise<CopilotAuditBackfillStatus>;
 }
 
@@ -26,5 +30,9 @@ export async function cancelCopilotAuditBackfill(id: number): Promise<CopilotAud
     method: 'POST',
     headers: { 'X-Requested-With': 'XMLHttpRequest' },
   });
+  if (!response.ok) {
+    const body = await response.json().catch(() => null) as { code?: unknown } | null;
+    throw new Error(typeof body?.code === 'string' ? body.code : 'cancelFailed');
+  }
   return response.json() as Promise<CopilotAuditBackfillJob>;
 }

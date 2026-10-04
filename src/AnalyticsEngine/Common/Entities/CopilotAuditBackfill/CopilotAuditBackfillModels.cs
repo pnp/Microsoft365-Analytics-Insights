@@ -60,6 +60,13 @@ namespace Common.Entities.CopilotAuditBackfill
         public bool Incomplete { get; set; }
     }
 
+    public sealed class CopilotAuditBackfillSubmissionLedger
+    {
+        public List<DateTime> SubmissionTimestampsUtc { get; set; } = new List<DateTime>();
+        public DateTime? SubmissionsPausedUntilUtc { get; set; }
+        public int SubmitFailureBackoffMinutes { get; set; }
+    }
+
     public sealed class CopilotAuditBackfillJob
     {
         public int Id { get; set; }

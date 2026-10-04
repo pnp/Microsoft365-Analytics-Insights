@@ -28,6 +28,9 @@ const PERMISSION_KEYS: Record<CopilotAuditBackfillPermissionStatus, TranslationK
 const ERROR_KEYS: Record<string, TranslationKey> = {
   missingPermission: 'admin.copilotAuditBackfill.error.missingPermission',
   copilotImportOff: 'admin.copilotAuditBackfill.error.copilotImportOff',
+  jobActive: 'admin.copilotAuditBackfill.error.jobActive',
+  jobNotActive: 'admin.copilotAuditBackfill.error.jobNotActive',
+  jobNotFound: 'admin.copilotAuditBackfill.error.jobNotFound',
   queryFailed: 'admin.copilotAuditBackfill.error.queryFailed',
   queryRejected: 'admin.copilotAuditBackfill.error.queryRejected',
   queryThrottled: 'admin.copilotAuditBackfill.error.queryThrottled',
@@ -35,6 +38,7 @@ const ERROR_KEYS: Record<string, TranslationKey> = {
   graphAccessDenied: 'admin.copilotAuditBackfill.error.graphAccessDenied',
   unrecognisedAuditData: 'admin.copilotAuditBackfill.error.unrecognisedAuditData',
   stateNotDurable: 'admin.copilotAuditBackfill.error.stateNotDurable',
+  stateUnavailable: 'admin.copilotAuditBackfill.error.stateUnavailable',
   unexpected: 'admin.copilotAuditBackfill.error.unexpected',
 };
 
@@ -68,7 +72,10 @@ export default function CopilotAuditBackfillPage() {
   const load = useCallback(async () => {
     setError(null);
     try { setStatus(await fetchCopilotAuditBackfill()); }
-    catch (e) { setError(e instanceof Error ? e.message : t('admin.copilotAuditBackfill.error.load')); }
+    catch (e) {
+      const code = e instanceof Error ? e.message : null;
+      setError(code && ERROR_KEYS[code] ? t(ERROR_KEYS[code]) : t('admin.copilotAuditBackfill.error.load'));
+    }
     finally { setLoading(false); }
   }, [t]);
 
@@ -97,7 +104,10 @@ export default function CopilotAuditBackfillPage() {
     try {
       const job = await cancelCopilotAuditBackfill(status.latestJob.id);
       setStatus((prev) => prev ? { ...prev, latestJob: job } : prev);
-    } catch (e) { setError(e instanceof Error ? e.message : t('admin.copilotAuditBackfill.error.cancel')); }
+    } catch (e) {
+      const code = e instanceof Error ? e.message : null;
+      setError(code && ERROR_KEYS[code] ? t(ERROR_KEYS[code]) : t('admin.copilotAuditBackfill.error.cancel'));
+    }
   };
 
   if (loading) return <Spinner label={t('admin.copilotAuditBackfill.loading')} />;

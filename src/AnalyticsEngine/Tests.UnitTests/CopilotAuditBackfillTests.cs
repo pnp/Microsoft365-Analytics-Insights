@@ -242,10 +242,11 @@ namespace Tests.UnitTests
 
         [TestMethod]
         [TestCategory("SqlIntegration")]
-        public async Task Importer_WithRealSqlPersistence_SkipsAlreadyImportedOldAuditEventAndImportsNewOne()
+        public async Task Importer_WithRealSqlPersistence_SkipsOnlyEventsThatAlreadyHaveCopilotMetadata()
         {
-            var existingId = new Guid("00000000-0000-0000-0000-000000000041");
-            var newId = new Guid("00000000-0000-0000-0000-000000000042");
+            var completeId = new Guid("00000000-0000-0000-0000-000000000041");
+            var metadataMissingId = new Guid("00000000-0000-0000-0000-000000000042");
+            var newId = new Guid("00000000-0000-0000-0000-000000000043");
             var existingOperation = "Already imported CopilotInteraction " + Guid.NewGuid().ToString("N");
             var config = new TestsAppConfig
             {
@@ -256,7 +257,7 @@ namespace Tests.UnitTests
 
             using (var db = TestDb())
             {
-                CleanupEvents(db, existingId, newId);
+                CleanupEvents(db, completeId, metadataMissingId, newId);
                 db.Database.ExecuteSqlCommand(@"
 DECLARE @operationId int = (SELECT id FROM dbo.event_operations WHERE operation_name = @p2);
 IF @operationId IS NULL
@@ -271,12 +272,17 @@ BEGIN
     SET @userId = SCOPE_IDENTITY();
 END
 INSERT INTO dbo.audit_events (id, time_stamp, operation_id, user_id)
-VALUES (@p0, @p1, @operationId, @userId);",
-                    existingId,
+VALUES (@p0, @p1, @operationId, @userId);
+INSERT INTO dbo.audit_events (id, time_stamp, operation_id, user_id)
+VALUES (@p5, @p1, @operationId, @userId);
+INSERT INTO dbo.copilot_chats (event_id, app_host, user_id, time_stamp)
+VALUES (@p0, N'Word', @userId, @p1);",
+                    completeId,
                     new DateTime(2026, 9, 1, 10, 0, 0, DateTimeKind.Utc),
                     existingOperation,
                     "jane.doe@contoso.com",
-                    "00000000-0000-0000-0000-000000000041");
+                    "00000000-0000-0000-0000-000000000041",
+                    metadataMissingId);
             }
 
             var state = await NewStateWithJobAsync();
@@ -289,7 +295,8 @@ VALUES (@p0, @p1, @operationId, @userId);",
                     {
                         Records = new List<CopilotAuditSearchRecord>
                         {
-                            SyntheticRecord(existingId.ToString()),
+                            SyntheticRecord(completeId.ToString()),
+                            SyntheticRecord(metadataMissingId.ToString()),
                             SyntheticRecord(newId.ToString()),
                         }
                     }
@@ -304,15 +311,17 @@ VALUES (@p0, @p1, @operationId, @userId);",
 
             using (var db = TestDb())
             {
-                var existing = db.AuditEventsCommon.Single(e => e.Id == existingId);
-                var inserted = db.AuditEventsCommon.SingleOrDefault(e => e.Id == newId);
+                var complete = db.AuditEventsCommon.Single(e => e.Id == completeId);
+                var recovered = db.CopilotChats.SingleOrDefault(c => c.EventID == metadataMissingId);
+                var inserted = db.CopilotChats.SingleOrDefault(c => c.EventID == newId);
+                Assert.IsNotNull(recovered, "An audit_events row without Copilot metadata must be re-staged for metadata recovery.");
                 Assert.IsNotNull(inserted, "The genuinely new backfill record should be committed through the real SQL path.");
-                Assert.AreEqual(new DateTime(2026, 9, 1, 10, 0, 0, DateTimeKind.Utc), existing.TimeStamp, "The existing old audit event must be left untouched.");
+                Assert.AreEqual(new DateTime(2026, 9, 1, 10, 0, 0, DateTimeKind.Utc), complete.TimeStamp, "The complete existing old audit event must be left untouched.");
                 Assert.AreEqual(CopilotAuditBackfillStates.Completed, job.State);
-                Assert.AreEqual(2, job.RecordsSeen);
-                Assert.AreEqual(1, job.RecordsImported);
+                Assert.AreEqual(3, job.RecordsSeen);
+                Assert.AreEqual(2, job.RecordsImported);
                 Assert.AreEqual(1, job.RecordsAlreadyPresent);
-                CleanupEvents(db, existingId, newId);
+                CleanupEvents(db, completeId, metadataMissingId, newId);
             }
         }
 
@@ -409,10 +418,12 @@ VALUES (@p0, @p1, @operationId, @userId);",
             var now = new DateTime(2026, 10, 2, 12, 0, 0, DateTimeKind.Utc);
             var state = new CopilotAuditBackfillStateStore(new InMemoryKeyValueStore(), false, () => now);
             var job = await state.CreateAsync(now.AddDays(-2), now, "admin@contoso.com");
-            job.SubmissionTimestampsUtc = Enumerable.Range(0, CopilotAuditBackfillImporter.DailySubmissionBudget)
-                .Select(i => now.AddHours(-23).AddMinutes(i))
-                .ToList();
-            await state.SaveAsync(job);
+            await state.SaveSubmissionLedgerAsync(new CopilotAuditBackfillSubmissionLedger
+            {
+                SubmissionTimestampsUtc = Enumerable.Range(0, CopilotAuditBackfillImporter.DailySubmissionBudget)
+                    .Select(i => now.AddHours(-23).AddMinutes(i))
+                    .ToList(),
+            });
             var source = new FakeAuditSearchSource();
             var importer = new CopilotAuditBackfillImporter(state, source, new CountingPersistence(),
                 new AppConfig { ImportJobSettings = new ImportTaskSettings { Copilot = true } }, NullLogger.Instance,
@@ -422,6 +433,33 @@ VALUES (@p0, @p1, @operationId, @userId);",
 
             Assert.AreEqual(0, source.SubmitCount);
             Assert.IsTrue(job.SubmissionsPausedUntilUtc > now);
+        }
+
+        [TestMethod]
+        public async Task Importer_SubmissionLedgerSurvivesCancelAndNewJob()
+        {
+            var now = new DateTime(2026, 10, 2, 12, 0, 0, DateTimeKind.Utc);
+            var state = new CopilotAuditBackfillStateStore(new InMemoryKeyValueStore(), true, () => now);
+            var first = await state.CreateAsync(now.AddDays(-1), now, "admin@contoso.com");
+            await state.SaveSubmissionLedgerAsync(new CopilotAuditBackfillSubmissionLedger
+            {
+                SubmissionTimestampsUtc = Enumerable.Range(0, CopilotAuditBackfillImporter.DailySubmissionBudget)
+                    .Select(i => now.AddHours(-23).AddMinutes(i))
+                    .ToList(),
+                SubmissionsPausedUntilUtc = now.AddHours(1),
+            });
+            await state.RequestCancelAsync(first.Id);
+            await state.CreateAsync(now.AddDays(-2), now, "admin@contoso.com");
+            var source = new FakeAuditSearchSource();
+            var importer = new CopilotAuditBackfillImporter(state, source, new CountingPersistence(),
+                new AppConfig { ImportJobSettings = new ImportTaskSettings { Copilot = true } }, NullLogger.Instance,
+                () => now, _ => Task.CompletedTask, new FakeExistingEventFilter());
+
+            var job = await importer.AdvanceLatestAsync();
+
+            Assert.AreEqual(CopilotAuditBackfillStates.Running, job.State);
+            Assert.AreEqual(0, source.SubmitCount);
+            Assert.AreEqual(now.AddHours(1), job.SubmissionsPausedUntilUtc);
         }
 
 
@@ -447,6 +485,30 @@ VALUES (@p0, @p1, @operationId, @userId);",
 
             Assert.AreEqual(0, job.InFlightSlices.Count);
             Assert.IsTrue(job.PendingSlices.Count == 1 || job.Gaps.Count == 1, "The unknown status must be retried or gapped, not left in flight forever.");
+            Assert.AreEqual(CopilotAuditBackfillErrorCodes.QueryFailed, job.LastErrorCode);
+        }
+
+        [TestMethod]
+        public async Task Importer_RetriesRunningQueryAfterBoundedAge()
+        {
+            var now = new DateTime(2026, 10, 2, 12, 0, 0, DateTimeKind.Utc);
+            var state = new CopilotAuditBackfillStateStore(new InMemoryKeyValueStore(), false, () => now);
+            var job = await state.CreateAsync(now.AddDays(-1), now, "admin@contoso.com");
+            job.State = CopilotAuditBackfillStates.Running;
+            var slice = job.PendingSlices[0];
+            job.PendingSlices.Clear();
+            slice.QueryId = "query-1";
+            slice.SubmittedUtc = now.Subtract(CopilotAuditBackfillImporter.MaxUnknownStatusAge).AddMinutes(-1);
+            job.InFlightSlices.Add(slice);
+            await state.SaveAsync(job);
+            var source = new FakeAuditSearchSource { Query = new CopilotAuditSearchQuery { Status = "running" } };
+            var importer = new CopilotAuditBackfillImporter(state, source, new CountingPersistence(),
+                new AppConfig { ImportJobSettings = new ImportTaskSettings { Copilot = true } }, NullLogger.Instance,
+                () => now, _ => Task.CompletedTask, new FakeExistingEventFilter());
+
+            job = await importer.AdvanceLatestAsync();
+
+            Assert.AreEqual(0, job.InFlightSlices.Count);
             Assert.AreEqual(CopilotAuditBackfillErrorCodes.QueryFailed, job.LastErrorCode);
         }
 
@@ -600,6 +662,26 @@ VALUES (@p0, @p1, @operationId, @userId);",
 
             Assert.IsNull(mapped.Content);
             Assert.AreEqual(CopilotAuditBackfillErrorCodes.UnrecognisedAuditData, mapped.ErrorCode);
+        }
+
+        [TestMethod]
+        public void Mapper_MalformedRecordTypeIsARecordMappingFailureNotASliceException()
+        {
+            var payload = (JObject)SyntheticRecord("00000000-0000-0000-0000-000000000054").AuditData.DeepClone();
+            payload["RecordType"] = "not-an-int";
+
+            var mapped = CopilotAuditSearchRecordMapper.Map(new CopilotAuditSearchRecord
+            {
+                Id = "00000000-0000-0000-0000-000000000054",
+                AuditLogRecordType = "CopilotInteraction",
+                Operation = "CopilotInteraction",
+                Service = "Copilot",
+                UserPrincipalName = "jane.doe@contoso.com",
+                AuditData = payload,
+            }, NullLogger.Instance);
+
+            Assert.IsNull(mapped.Content);
+            Assert.AreEqual("invalidAuditData", mapped.ErrorCode);
         }
 
         [TestMethod]

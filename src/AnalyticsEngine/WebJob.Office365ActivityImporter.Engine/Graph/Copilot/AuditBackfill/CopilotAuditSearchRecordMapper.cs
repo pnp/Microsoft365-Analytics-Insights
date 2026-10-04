@@ -42,7 +42,16 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.AuditBackfill
             catch { return new CopilotAuditSearchRecordMapping { ErrorCode = "invalidAuditData" }; }
 
             var graphSaysCopilot = IsGraphCopilotInteraction(record);
-            var logBase = payload.ToObject<WorkloadOnlyAuditLogContent>();
+            WorkloadOnlyAuditLogContent logBase;
+            try
+            {
+                logBase = payload.ToObject<WorkloadOnlyAuditLogContent>();
+            }
+            catch (Exception ex) when (IsMappingException(ex))
+            {
+                return new CopilotAuditSearchRecordMapping { ErrorCode = "invalidAuditData" };
+            }
+
             if (logBase == null || logBase.Workload != ActivityImportConstants.WORKLOAD_COPILOT || logBase.RecordType != 261)
             {
                 if (!graphSaysCopilot || !TryCompleteCopilotPayloadFromRecord(payload, record))
@@ -52,7 +61,15 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.AuditBackfill
             }
 
             EnsureGuidId(payload, record.Id, out var idMatched);
-            var content = AuditLogContentDispatcher.Dispatch(payload, payload.ToObject<WorkloadOnlyAuditLogContent>(), logger, importPowerPlatform: false, importCopilot: true, importDlp: false);
+            AbstractAuditLogContent content;
+            try
+            {
+                content = AuditLogContentDispatcher.Dispatch(payload, payload.ToObject<WorkloadOnlyAuditLogContent>(), logger, importPowerPlatform: false, importCopilot: true, importDlp: false);
+            }
+            catch (Exception ex) when (IsMappingException(ex))
+            {
+                return new CopilotAuditSearchRecordMapping { ErrorCode = "invalidAuditData", IdMatched = idMatched };
+            }
             if (content != null)
             {
                 content.OriginalImportFileContents = payload.ToString(Newtonsoft.Json.Formatting.None);
@@ -106,6 +123,14 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.AuditBackfill
             if (payload["CreationTime"] == null) payload["CreationTime"] = record.CreatedDateTime.Value;
             if (payload["UserId"] == null) payload["UserId"] = record.UserPrincipalName;
             return true;
+        }
+
+        private static bool IsMappingException(Exception ex)
+        {
+            return ex is Newtonsoft.Json.JsonException
+                || ex is FormatException
+                || ex is InvalidCastException
+                || ex is ArgumentException;
         }
 
         private static void EnsureGuidId(JObject payload, string graphRecordId, out bool idMatched)

@@ -70,7 +70,8 @@ Search queries in flight, polls them inside `MaxCycleBudget` (eight minutes), an
 up from newest to oldest slices. Records are committed in `MaxRecordsPerCommit` batches of at most 5,000
 mapped audit events, never as a whole day in memory; if the cycle budget expires during paging, the slice's
 `RecordsNextLink` is saved and the next cycle resumes from it. If Graph rejects a resumed link, the slice
-restarts from page one, which is safe because already-present audit ids are filtered before each commit.
+restarts from page one, which is safe because the SQL merge is idempotent and the backfill filters
+already-complete Copilot metadata before each commit.
 
 The submission budget is deliberately lower than Graph's tenant limit. Microsoft documents a baseline of
 200 Audit Search query submissions per rolling 24 hours per tenant (shared with Purview, SIEM and other
@@ -95,10 +96,13 @@ the same interactions. Each returned `auditData` payload is the
 documented Graph object form (a defensive JSON-string form is also accepted), is mapped back through
 `AuditLogContentDispatcher` and `CopilotAuditLogContent.FromJson`, and is committed as `Copilot` / record
 type 261 through the same `ActivityReportSqlPersistenceManager.CommitAll` path as live Management
-Activity API records. Before each commit the backfill asks `SqlCopilotAuditBackfillExistingEventFilter`
-for ids already present in `audit_events` (PK seeks in chunks of at most 1,000 ids) and drops them,
-counting them as `RecordsAlreadyPresent`; this protects older records outside the live import's in-memory
-dedup window and makes re-running a backfill safe. The shared persistence path applies the same
+Activity API records. The merge SQL already has `NOT EXISTS` guards for base `audit_events` and Copilot
+child rows, so duplicates do not create primary-key failures. Before each commit the backfill asks
+`SqlCopilotAuditBackfillExistingEventFilter` for ids that already have a `dbo.copilot_chats` row (PK seeks
+in chunks of at most 1,000 ids) and drops only those complete Copilot interactions, counting them as
+`RecordsAlreadyPresent`. An id with a base `audit_events` row but no Copilot metadata is deliberately
+re-staged so the normal metadata-recovery path can write the missing child rows. The shared persistence
+path applies the same
 `UserGroupsFilter`/`UserImportScope` staging gate (so
 users removed by the administrator user-scope purge are not reintroduced while the scope remains in
 force), `audit_events` de-duplication, Copilot child-table merges, agent/app classification,
@@ -106,9 +110,12 @@ accessed-resource rows, Teams meeting rows and optional SharePoint/OneDrive meta
 `GraphFileMetadataLoader`. Application Insights receives only privacy-safe counts and stable state/error
 codes (`CopilotAuditBackfill` custom events and `CopilotAuditBackfill` component `HealthCheck` events),
 including mapping-failure counts by stable code; it never sends payloads, UPNs, tenant identifiers, audit
-record ids or Graph Audit Search query ids. With the 100/day budget, 180 unsplit days take just under two
-days of available budget; tenants that split many days into six-hour or hourly slices take proportionally
-longer.
+record ids or Graph Audit Search query ids. The shared Graph HTTP client can still log failing request
+URLs in its generic retry/error traces, as other Graph imports do; stored job error detail is sanitised to
+stable status/error codes rather than URLs or skip tokens. With the 100/day budget, 180 unsplit days take
+just under two days of available budget; tenants that split many days into six-hour or hourly slices take
+proportionally longer. Like the live import, the backfill assumes a single active importer instance; there
+is no lease or ETag around the job state in this preview.
 
 ---
 
