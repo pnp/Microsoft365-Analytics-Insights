@@ -21,6 +21,7 @@ export interface CopilotAuditBackfillJob {
   incompleteDays: string[];
   recordsSeen: number;
   recordsImported: number;
+  recordsAlreadyPresent: number;
   permissionStatus: CopilotAuditBackfillPermissionStatus;
   copilotImportEnabled: boolean;
   lastErrorCode: string | null;

@@ -42,6 +42,8 @@ export const HEALTH_COMPONENT_LABEL_KEYS: Record<string, TranslationKey> = {
 export const COPILOT_AUDIT_BACKFILL_REASON_KEYS: Record<string, TranslationKey> = {
   'copilotAuditBackfill.healthy': 'health.reason.copilotAuditBackfillHealthy',
   'copilotAuditBackfill.running': 'health.reason.copilotAuditBackfillRunning',
+  'copilotAuditBackfill.completed': 'health.reason.copilotAuditBackfillCompleted',
+  'copilotAuditBackfill.cancelled': 'health.reason.copilotAuditBackfillCancelled',
   'copilotAuditBackfill.failed': 'health.reason.copilotAuditBackfillFailed',
   'copilotAuditBackfill.missingPermission': 'health.reason.copilotAuditBackfillMissingPermission',
   'copilotAuditBackfill.completedWithGaps': 'health.reason.copilotAuditBackfillCompletedWithGaps',

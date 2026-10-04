@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Globalization;
 
@@ -32,6 +32,28 @@ namespace Common.Entities.CopilotAuditBackfill
                 cursor = sliceStart;
             }
             return slices;
+        }
+
+
+        public static List<CopilotAuditBackfillSlice> SplitForTruncation(CopilotAuditBackfillSlice slice)
+        {
+            return slice.SplitLevel == 0
+                ? SplitByHours(slice, 6)
+                : SplitIntoHours(slice);
+        }
+
+        private static List<CopilotAuditBackfillSlice> SplitByHours(CopilotAuditBackfillSlice slice, int hours)
+        {
+            var result = new List<CopilotAuditBackfillSlice>();
+            var cursor = slice.EndUtc;
+            while (cursor > slice.StartUtc)
+            {
+                var start = cursor.AddHours(-hours);
+                if (start < slice.StartUtc) start = slice.StartUtc;
+                result.Add(new CopilotAuditBackfillSlice { StartUtc = start, EndUtc = cursor, SplitLevel = slice.SplitLevel + 1 });
+                cursor = start;
+            }
+            return result;
         }
 
         public static List<CopilotAuditBackfillSlice> SplitIntoHours(CopilotAuditBackfillSlice slice)

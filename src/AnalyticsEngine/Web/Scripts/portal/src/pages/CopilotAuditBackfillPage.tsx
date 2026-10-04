@@ -29,8 +29,12 @@ const ERROR_KEYS: Record<string, TranslationKey> = {
   missingPermission: 'admin.copilotAuditBackfill.error.missingPermission',
   copilotImportOff: 'admin.copilotAuditBackfill.error.copilotImportOff',
   queryFailed: 'admin.copilotAuditBackfill.error.queryFailed',
+  queryRejected: 'admin.copilotAuditBackfill.error.queryRejected',
+  queryThrottled: 'admin.copilotAuditBackfill.error.queryThrottled',
   queryTruncated: 'admin.copilotAuditBackfill.error.queryTruncated',
   graphAccessDenied: 'admin.copilotAuditBackfill.error.graphAccessDenied',
+  unrecognisedAuditData: 'admin.copilotAuditBackfill.error.unrecognisedAuditData',
+  stateNotDurable: 'admin.copilotAuditBackfill.error.stateNotDurable',
   unexpected: 'admin.copilotAuditBackfill.error.unexpected',
 };
 
@@ -79,7 +83,10 @@ export default function CopilotAuditBackfillPage() {
       const iso = startDate ? new Date(`${startDate}T00:00:00Z`).toISOString() : null;
       const job = await startCopilotAuditBackfill(iso);
       setStatus((prev) => ({ stateDurable: prev?.stateDurable ?? false, copilotImportEnabled: prev?.copilotImportEnabled ?? true, latestJob: job }));
-    } catch (e) { setError(e instanceof Error ? e.message : t('admin.copilotAuditBackfill.error.start')); }
+    } catch (e) {
+      const code = e instanceof Error ? e.message : null;
+      setError(code && ERROR_KEYS[code] ? t(ERROR_KEYS[code]) : t('admin.copilotAuditBackfill.error.start'));
+    }
   };
 
   const cancel = async () => {
@@ -102,13 +109,14 @@ export default function CopilotAuditBackfillPage() {
     <div className={styles.cards}>
       {error && <MessageBar intent="error"><MessageBarBody>{error}</MessageBarBody></MessageBar>}
       {!status?.copilotImportEnabled && <MessageBar intent="warning"><MessageBarBody>{t('admin.copilotAuditBackfill.copilotOff')}</MessageBarBody></MessageBar>}
+      {status && !status.stateDurable && <MessageBar intent="warning"><MessageBarBody>{t('admin.copilotAuditBackfill.stateNotDurable')}</MessageBarBody></MessageBar>}
       <Card>
         <CardHeader header={<Text weight="semibold">{t('admin.copilotAuditBackfill.start.title')}</Text>} />
         <div className={styles.actions}>
           <Field label={t('admin.copilotAuditBackfill.start.startDate')} hint={t('admin.copilotAuditBackfill.start.hint')}>
             <Input type="date" value={startDate} onChange={(_, data) => setStartDate(data.value)} />
           </Field>
-          <Button icon={<Play16Regular />} appearance="primary" onClick={start} disabled={isActive(job) || !status?.copilotImportEnabled}>{t('admin.copilotAuditBackfill.start.button')}</Button>
+          <Button icon={<Play16Regular />} appearance="primary" onClick={start} disabled={isActive(job) || !status?.copilotImportEnabled || !status?.stateDurable}>{t('admin.copilotAuditBackfill.start.button')}</Button>
           <Button icon={<ArrowClockwise16Regular />} onClick={load}>{t('admin.copilotAuditBackfill.refresh')}</Button>
           <Button icon={<Dismiss16Regular />} onClick={cancel} disabled={!isActive(job)}>{t('admin.copilotAuditBackfill.cancel')}</Button>
         </div>
@@ -124,6 +132,7 @@ export default function CopilotAuditBackfillPage() {
             <Row label={t('admin.copilotAuditBackfill.status.slices')}>{formatNumber(job.slicesCompleted)} / {formatNumber(totalSlices)}</Row>
             <Row label={t('admin.copilotAuditBackfill.status.inFlight')}>{formatNumber(job.inFlightSlices)}</Row>
             <Row label={t('admin.copilotAuditBackfill.status.records')}>{formatNumber(job.recordsImported)} / {formatNumber(job.recordsSeen)}</Row>
+            <Row label={t('admin.copilotAuditBackfill.status.recordsAlreadyPresent')}>{formatNumber(job.recordsAlreadyPresent)}</Row>
             <Row label={t('admin.copilotAuditBackfill.status.currentSlice')}>{job.currentSliceStartUtc ? `${formatUtc(job.currentSliceStartUtc)} - ${formatUtc(job.currentSliceEndUtc ?? job.currentSliceStartUtc)}` : t('admin.common.unknown')}</Row>
             <Row label={t('admin.copilotAuditBackfill.status.completedDays')}>{job.completedDays.length > 0 ? job.completedDays.slice(0, 12).join(', ') : t('admin.common.unknown')}</Row>
             <Row label={t('admin.copilotAuditBackfill.status.failedDays')}>{job.failedDays.length > 0 ? job.failedDays.join(', ') : t('admin.common.unknown')}</Row>

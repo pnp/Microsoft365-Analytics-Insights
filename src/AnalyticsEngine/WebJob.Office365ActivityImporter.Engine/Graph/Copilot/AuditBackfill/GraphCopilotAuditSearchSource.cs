@@ -1,11 +1,13 @@
-using Common.Entities.CopilotAuditBackfill;
+﻿using Common.Entities.CopilotAuditBackfill;
 using DataUtils.Http;
 using Microsoft.Extensions.Logging;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using System;
 using System.Collections.Generic;
+using System.Net;
 using System.Net.Http;
+using System.Text;
 using System.Linq;
 using System.Threading.Tasks;
 using WebJob.Office365ActivityImporter.Engine.Graph;
@@ -50,9 +52,14 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.AuditBackfill
                 operationFilters = new[] { CopilotOperationFilter },
             };
 
-            using (var response = await _client.PostAsyncWithThrottleRetries(BaseUrl, body, _logger).ConfigureAwait(false))
+            var payload = JsonConvert.SerializeObject(body);
+            using (var response = await _client.PostAsync(BaseUrl, new StringContent(payload, Encoding.UTF8, "application/json")).ConfigureAwait(false))
             {
                 var json = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
+                if (response.StatusCode == (HttpStatusCode)429)
+                {
+                    throw new CopilotAuditSearchThrottledException(response.GetRetryAfterHeaderSeconds(), GetGraphRequestId(response));
+                }
                 try
                 {
                     response.EnsureSuccessStatusCode();
@@ -79,12 +86,27 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.AuditBackfill
         }
     }
 
+
+    public sealed class CopilotAuditSearchThrottledException : Exception
+    {
+        public CopilotAuditSearchThrottledException(int? retryAfterSeconds, string requestId)
+            : base("Microsoft Graph Audit Search throttled query submissions.")
+        {
+            RetryAfterSeconds = retryAfterSeconds;
+            RequestId = requestId;
+        }
+
+        public int? RetryAfterSeconds { get; }
+        public string RequestId { get; }
+    }
+
     public sealed class CopilotAuditSearchQuery
     {
         public string Id { get; set; }
         public string Status { get; set; }
         public string Error { get; set; }
-        public int? RecordCount { get; set; }
+        public long? ApproximateReturnedRecordCount { get; set; }
+        public long? RecordCountLimit { get; set; }
         public bool IsTruncated { get; set; }
 
         public bool IsTerminal => string.Equals(Status, "succeeded", StringComparison.OrdinalIgnoreCase)
@@ -101,13 +123,18 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.AuditBackfill
                 Id = (string)o["id"],
                 Status = ((string)o["status"]) ?? "unknown",
                 Error = (string)o.SelectToken("error.message") ?? (string)o.SelectToken("error.code"),
-                RecordCount = (int?)o["recordCount"] ?? (int?)o["recordsCount"] ?? (int?)o.SelectToken("resultInfo.recordCount"),
+                ApproximateReturnedRecordCount = (long?)o["approximateReturnedRecordCount"],
+                RecordCountLimit = (long?)o["recordCountLimit"],
             };
-            q.IsTruncated = Truthy(o["isTruncated"]) || Truthy(o["resultTruncated"]) || Truthy(o.SelectToken("resultInfo.isTruncated")) || q.RecordCount >= 1000000;
+
+            var limitExceeded = o["isRecordCountLimitExceeded"];
+            q.IsTruncated = limitExceeded != null && limitExceeded.Type == JTokenType.Boolean
+                ? (bool)limitExceeded
+                : q.ApproximateReturnedRecordCount.HasValue
+                  && q.RecordCountLimit.HasValue
+                  && q.ApproximateReturnedRecordCount.Value >= q.RecordCountLimit.Value;
             return q;
         }
-
-        private static bool Truthy(JToken token) => token != null && token.Type == JTokenType.Boolean && (bool)token;
     }
 
     public sealed class CopilotAuditSearchRecordPage

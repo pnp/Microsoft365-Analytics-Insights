@@ -60,6 +60,8 @@ namespace Web.AnalyticsWeb.Models.CopilotAuditBackfill
         public long RecordsSeen { get; set; }
         [JsonProperty("recordsImported")]
         public long RecordsImported { get; set; }
+        [JsonProperty("recordsAlreadyPresent")]
+        public long RecordsAlreadyPresent { get; set; }
         [JsonProperty("permissionStatus")]
         public string PermissionStatus { get; set; }
         [JsonProperty("copilotImportEnabled")]
@@ -140,6 +142,10 @@ namespace Web.AnalyticsWeb.Models.CopilotAuditBackfill
             {
                 throw new CopilotAuditBackfillRequestException(HttpStatusCode.Conflict, "jobActive");
             }
+            if (!_state.IsDurable)
+            {
+                throw new CopilotAuditBackfillRequestException(HttpStatusCode.Conflict, CopilotAuditBackfillErrorCodes.StateNotDurable);
+            }
             if (!_config.ImportJobSettings.Copilot)
             {
                 throw new CopilotAuditBackfillRequestException(HttpStatusCode.Conflict, CopilotAuditBackfillErrorCodes.CopilotImportOff);
@@ -191,6 +197,7 @@ namespace Web.AnalyticsWeb.Models.CopilotAuditBackfill
                 IncompleteDays = gaps.Where(g => g.Incomplete).Select(g => g.Day).Distinct().OrderByDescending(x => x, StringComparer.Ordinal).ToArray(),
                 RecordsSeen = job.RecordsSeen,
                 RecordsImported = job.RecordsImported,
+                RecordsAlreadyPresent = job.RecordsAlreadyPresent,
                 PermissionStatus = job.PermissionStatus,
                 CopilotImportEnabled = job.CopilotImportEnabled,
                 LastErrorCode = job.LastErrorCode,

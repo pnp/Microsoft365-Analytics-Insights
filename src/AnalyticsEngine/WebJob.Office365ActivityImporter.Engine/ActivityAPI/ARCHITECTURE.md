@@ -38,12 +38,13 @@ Office 365 Management Activity API
 
 The live import above still owns normal steady-state Copilot audit ingestion. It uses the Office 365
 Management Activity API on every importer cycle (`ActivityImporter<T>` via
-`ProgramTasks.ImportActivityReports`) and scans the configured `DaysBeforeNowToDownload` window
-(`ContentMetaDataLoader.GetScanningTimeChunksFromNow`, default seven days in `AppConfig`). That is the
-right path for current data, but it can only download content blobs that the Management Activity API still
-offers. Older Copilot interactions are therefore unreachable when a deployment is new, the importer has
-been stopped for longer than the available-content retention, or `ImportTaskSettings.Copilot` was enabled
-after Copilot interactions had already happened.
+`ProgramTasks.DownloadActivityData`) and scans the configured `DaysBeforeNowToDownload` window
+(`ContentMetaDataLoader.GetScanningTimeChunksFromNow`, default seven days in `AppConfig`). That API only
+lists content blobs created after the tenant's subscription for that content type was started, and only
+while those blobs remain available (normally about seven days). A new install, a newly enabled Copilot
+import, or an importer outage longer than the available-content retention therefore leaves history that
+the live importer can never fetch. Filling that history is the backfill's only purpose; admins should not
+run it routinely.
 
 For those gaps an administrator can request an on-demand Microsoft Graph Audit Search backfill from the
 portal's Administration > Copilot audit backfill page. It is never automatic. The request is stored in the
@@ -56,28 +57,52 @@ only. It checks the runtime app token for the opt-in `AuditLogsQuery.Read.All` a
 before submitting a query; that permission is not part of the installer's default consent.
 
 On each Office365ActivityImporter cycle, after the live Activity API content has been saved, the web job
-advances the request by a bounded amount (`CopilotAuditBackfillImporter.AdvanceLatestAsync`). It keeps up
-to `MaxInFlightQueries` (4) Audit Search queries in flight, polls them inside `MaxCycleBudget` (eight
-minutes), and tops the pipeline back up from newest to oldest slices. Records are committed in
-`MaxRecordsPerCommit` batches of at most 5,000 mapped audit events, never as a whole day in memory. A
-failed slice is retried up to `MaxSliceAttempts` (3) submissions across cycles; after that it is recorded
-as a gap and the job continues. If Graph reports a slice as truncated, the importer discards that result
-and splits the day into hour slices; an hour that is still truncated is recorded as incomplete and the job
-continues. Any failed or incomplete slice makes the final state `completedWithGaps`, which the portal
-lists by affected day. Only systemic conditions stop the whole job: missing permission, the Copilot import
-toggle being off, or Graph 401/403.
+advances the request by a bounded amount (`CopilotAuditBackfillImporter.AdvanceLatestAsync`). Backfill
+failures are isolated from the live import: a state-store, Graph or paging failure is logged and retried
+without making the activity import look failed. The importer keeps up to `MaxInFlightQueries` (4) Audit
+Search queries in flight, polls them inside `MaxCycleBudget` (eight minutes), and tops the pipeline back
+up from newest to oldest slices. Records are committed in `MaxRecordsPerCommit` batches of at most 5,000
+mapped audit events, never as a whole day in memory; if the cycle budget expires during paging, the slice's
+`RecordsNextLink` is saved and the next cycle resumes from it. If Graph rejects a resumed link, the slice
+restarts from page one, which is safe because already-present audit ids are filtered before each commit.
 
-The overlap between live import and backfill is harmless. Each returned `auditData` payload is the
+The submission budget is deliberately lower than Graph's tenant limit. Microsoft documents a baseline of
+200 Audit Search query submissions per rolling 24 hours per tenant (shared with Purview, SIEM and other
+clients). This importer uses `DailySubmissionBudget` = 100 submissions per rolling 24 hours, leaving half
+the baseline capacity for other tooling. A 429 response pauses new submissions until Graph's
+`Retry-After` (or at least `MinimumThrottlePause`, 15 minutes), keeps polling already submitted queries,
+and does not count as a slice attempt. Other submission failures cost one attempt but stop top-up for that
+cycle, so a systemic outage cannot burn every slice's attempts in one run. A 400 Bad Request is treated as
+`queryRejected` because it means the request shape is wrong for this tenant/API response.
+
+A failed slice is retried up to `MaxSliceAttempts` (3) submissions across cycles; after that it is
+recorded as a gap and the job continues. If Graph reports `isRecordCountLimitExceeded`, the importer
+discards the partial result and splits a day into four six-hour slices; a truncated six-hour slice splits
+into hours; a truncated hour is recorded as incomplete and the job continues. Any failed or incomplete
+slice makes the final state `completedWithGaps`, which the portal lists by affected day. Only systemic
+conditions stop the whole job: missing permission, the Copilot import toggle being off, Graph 401/403,
+Graph 400 query rejection, or a succeeded query whose returned `auditData` shape this build cannot
+recognise as CopilotInteraction.
+
+The overlap between live import and backfill is harmless, including the last seven days where both can see
+the same interactions. Each returned `auditData` payload is the
 documented Graph object form (a defensive JSON-string form is also accepted), is mapped back through
 `AuditLogContentDispatcher` and `CopilotAuditLogContent.FromJson`, and is committed as `Copilot` / record
 type 261 through the same `ActivityReportSqlPersistenceManager.CommitAll` path as live Management
-Activity API records. That path applies the same `UserGroupsFilter`/`UserImportScope` staging gate (so
+Activity API records. Before each commit the backfill asks `SqlCopilotAuditBackfillExistingEventFilter`
+for ids already present in `audit_events` (PK seeks in chunks of at most 1,000 ids) and drops them,
+counting them as `RecordsAlreadyPresent`; this protects older records outside the live import's in-memory
+dedup window and makes re-running a backfill safe. The shared persistence path applies the same
+`UserGroupsFilter`/`UserImportScope` staging gate (so
 users removed by the administrator user-scope purge are not reintroduced while the scope remains in
 force), `audit_events` de-duplication, Copilot child-table merges, agent/app classification,
 accessed-resource rows, Teams meeting rows and optional SharePoint/OneDrive metadata lookups through
 `GraphFileMetadataLoader`. Application Insights receives only privacy-safe counts and stable state/error
 codes (`CopilotAuditBackfill` custom events and `CopilotAuditBackfill` component `HealthCheck` events),
-never payloads, UPNs, tenant identifiers, audit record ids or Graph Audit Search query ids.
+including mapping-failure counts by stable code; it never sends payloads, UPNs, tenant identifiers, audit
+record ids or Graph Audit Search query ids. With the 100/day budget, 180 unsplit days take just under two
+days of available budget; tenants that split many days into six-hour or hourly slices take proportionally
+longer.
 
 ---
 

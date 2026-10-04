@@ -286,24 +286,32 @@ namespace WebJob.Office365ActivityImporter
 
                     // Output stats
                     _logger.LogInformation($"Finished activity import. Time taken in = {DateTime.Now.Subtract(startTime).TotalMinutes.ToString("N2")} minutes. Stats: {stats}");
-
-                    var durableBackfillStore = StateStore.TryOpen(_settings, StatePartitions.CopilotAuditBackfill, _logger);
-                    var backfillState = new CopilotAuditBackfillStateStore(
-                        durableBackfillStore ?? InMemoryCopilotAuditBackfillStore,
-                        isDurable: durableBackfillStore != null);
-                    var backfill = new CopilotAuditBackfillImporter(
-                        backfillState,
-                        new GraphCopilotAuditSearchSource(_manualGraphCallClient, _graphAppIndentityOAuthContext, _logger),
-                        sqlAdaptor,
-                        _settings,
-                        _logger);
-                    await backfill.AdvanceLatestAsync();
                 }
                 catch (System.Net.Http.HttpRequestException ex)
                 {
                     _logger.LogError(ex, $"Got unexpected exception importing activity: {ex.Message}");
                 }
+
+                await AdvanceCopilotAuditBackfillSafely(sqlAdaptor);
             }
+        }
+
+        internal async Task AdvanceCopilotAuditBackfillSafely(IActivityReportPersistenceManager sqlAdaptor)
+        {
+            await CopilotAuditBackfillSafeRunner.AdvanceSafely(async () =>
+            {
+                var durableBackfillStore = StateStore.TryOpen(_settings, StatePartitions.CopilotAuditBackfill, _logger);
+                var backfillState = new CopilotAuditBackfillStateStore(
+                    durableBackfillStore ?? InMemoryCopilotAuditBackfillStore,
+                    isDurable: durableBackfillStore != null);
+                var backfill = new CopilotAuditBackfillImporter(
+                    backfillState,
+                    new GraphCopilotAuditSearchSource(_manualGraphCallClient, _graphAppIndentityOAuthContext, _logger),
+                    sqlAdaptor,
+                    _settings,
+                    _logger);
+                await backfill.AdvanceLatestAsync();
+            }, _logger);
         }
     }
 }

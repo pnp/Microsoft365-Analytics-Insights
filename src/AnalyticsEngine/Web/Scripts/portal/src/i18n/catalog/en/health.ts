@@ -72,6 +72,8 @@ export const health = {
   'health.reason.blobCheckpointStorageRejected': 'The audit blob checkpoint is degraded because Azure Storage rejected the Table checkpoint request (HTTP {status} {errorCode}). Check the Storage connection string, Table service reachability, storage firewall/private endpoint settings and Table data-plane permissions. Until this is fixed, the importer uses a non-durable in-memory checkpoint that is lost on restart/redeploy, and durable cross-cycle metadata recovery is unavailable.',
   'health.reason.copilotAuditBackfillHealthy': 'No Copilot audit backfill is currently blocked.',
   'health.reason.copilotAuditBackfillRunning': 'A Copilot audit backfill is running. It advances bounded Microsoft Graph Audit Search slices during importer cycles.',
+  'health.reason.copilotAuditBackfillCompleted': 'The latest Copilot audit backfill completed successfully.',
+  'health.reason.copilotAuditBackfillCancelled': 'The latest Copilot audit backfill was cancelled.',
   'health.reason.copilotAuditBackfillFailed': 'The Copilot audit backfill failed. Open Administration > Copilot audit backfill for the stable error code.',
   'health.reason.copilotAuditBackfillMissingPermission': 'The Copilot audit backfill cannot run because the runtime app is missing AuditLogsQuery.Read.All. This permission is opt-in and needs admin consent.',
   'health.reason.copilotAuditBackfillCompletedWithGaps': 'The Copilot audit backfill completed with failed or incomplete slices. Open Administration > Copilot audit backfill to see the affected days.',

@@ -59,6 +59,8 @@ namespace Common.Entities.CopilotAuditBackfill
             }
             job.CompletedDays = job.CompletedDays ?? new System.Collections.Generic.List<string>();
             job.Gaps = job.Gaps ?? new System.Collections.Generic.List<CopilotAuditBackfillGap>();
+            job.SubmissionTimestampsUtc = job.SubmissionTimestampsUtc ?? new System.Collections.Generic.List<DateTime>();
+            job.MappingFailureCounts = job.MappingFailureCounts ?? new System.Collections.Generic.Dictionary<string, long>(StringComparer.Ordinal);
             job.CancelRequested = await IsCancelRequestedAsync(id).ConfigureAwait(false);
             return job;
         }

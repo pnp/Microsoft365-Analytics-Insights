@@ -34,6 +34,7 @@ const job = (over: Partial<CopilotAuditBackfillJob> = {}): CopilotAuditBackfillJ
   incompleteDays: [],
   recordsSeen: 1200,
   recordsImported: 1190,
+  recordsAlreadyPresent: 10,
   permissionStatus: 'granted',
   copilotImportEnabled: true,
   lastErrorCode: null,
@@ -74,6 +75,7 @@ describe('CopilotAuditBackfillPage', () => {
     expect(await screen.findByText('Running')).toBeVisible();
     expect(screen.getByText('3 / 19')).toBeVisible();
     expect(screen.getByText('1,190 / 1,200')).toBeVisible();
+    expect(screen.getByText('10')).toBeVisible();
 
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
     await waitFor(() => expect(mockCancel).toHaveBeenCalledWith(42));
@@ -103,5 +105,22 @@ describe('CopilotAuditBackfillPage', () => {
     expect(screen.getByText('A Microsoft Graph Audit Search slice was still truncated after splitting to hours.')).toBeVisible();
     expect(screen.getByText('2026-09-30')).toBeVisible();
     expect(screen.getByText('2026-09-29')).toBeVisible();
+  });
+
+  it('disables start when state is not durable', async () => {
+    mockFetch.mockResolvedValue(status({ stateDurable: false }));
+    renderWithProvider(<CopilotAuditBackfillPage />);
+
+    expect(await screen.findByText('Backfill state is not durable because Azure Storage is not configured. Configure the Storage connection string before starting a backfill.')).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Start backfill' })).toBeDisabled();
+  });
+
+  it('translates a stateNotDurable start refusal from the API', async () => {
+    mockStart.mockRejectedValue(new Error('stateNotDurable'));
+    renderWithProvider(<CopilotAuditBackfillPage />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Start backfill' }));
+
+    expect(await screen.findByText('Backfill state is not durable because Azure Storage is not configured. Configure the Storage connection string before starting a backfill.')).toBeVisible();
   });
 });

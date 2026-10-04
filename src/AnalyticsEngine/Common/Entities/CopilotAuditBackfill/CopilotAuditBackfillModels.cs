@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 
 namespace Common.Entities.CopilotAuditBackfill
@@ -19,7 +19,11 @@ namespace Common.Entities.CopilotAuditBackfill
         public const string MissingPermission = "missingPermission";
         public const string CopilotImportOff = "copilotImportOff";
         public const string QueryFailed = "queryFailed";
+        public const string QueryRejected = "queryRejected";
+        public const string QueryThrottled = "queryThrottled";
         public const string QueryTruncated = "queryTruncated";
+        public const string UnrecognisedAuditData = "unrecognisedAuditData";
+        public const string StateNotDurable = "stateNotDurable";
         public const string GraphAccessDenied = "graphAccessDenied";
         public const string StateUnavailable = "stateUnavailable";
         public const string Unexpected = "unexpected";
@@ -39,6 +43,8 @@ namespace Common.Entities.CopilotAuditBackfill
         public DateTime EndUtc { get; set; }
         public string QueryId { get; set; }
         public DateTime? SubmittedUtc { get; set; }
+        public string RecordsNextLink { get; set; }
+        public bool ImportingRecords { get; set; }
         public int SplitLevel { get; set; }
         public int AttemptCount { get; set; }
     }
@@ -70,8 +76,12 @@ namespace Common.Entities.CopilotAuditBackfill
         public CopilotAuditBackfillSlice CurrentSlice { get; set; }
         public List<string> CompletedDays { get; set; } = new List<string>();
         public List<CopilotAuditBackfillGap> Gaps { get; set; } = new List<CopilotAuditBackfillGap>();
+        public List<DateTime> SubmissionTimestampsUtc { get; set; } = new List<DateTime>();
+        public DateTime? SubmissionsPausedUntilUtc { get; set; }
+        public Dictionary<string, long> MappingFailureCounts { get; set; } = new Dictionary<string, long>(StringComparer.Ordinal);
         public long RecordsSeen { get; set; }
         public long RecordsImported { get; set; }
+        public long RecordsAlreadyPresent { get; set; }
         public int SlicesSubmitted { get; set; }
         public int SlicesCompleted { get; set; }
         public int SlicesSplit { get; set; }

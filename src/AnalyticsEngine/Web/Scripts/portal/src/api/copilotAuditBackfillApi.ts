@@ -14,6 +14,10 @@ export async function startCopilotAuditBackfill(startDateUtc: string | null): Pr
     headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
     body: JSON.stringify({ startDateUtc }),
   });
+  if (!response.ok) {
+    const body = await response.json().catch(() => null) as { code?: unknown } | null;
+    throw new Error(typeof body?.code === 'string' ? body.code : 'startFailed');
+  }
   return response.json() as Promise<CopilotAuditBackfillJob>;
 }
 
