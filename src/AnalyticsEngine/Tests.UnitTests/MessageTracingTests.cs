@@ -6,6 +6,7 @@ using System;
 using System.Collections.Generic;
 using System.Net;
 using System.Net.Http;
+using System.Net.Sockets;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -16,11 +17,17 @@ namespace Tests.UnitTests
     [TestClass]
     public class MessageTracingTests
     {
+        [TestCleanup]
+        public void Cleanup()
+        {
+            HttpMessageTracing.Current = HttpMessageTracing.Disabled;
+        }
+
         [TestMethod]
         public void PatternMatcher_LiteralContains_IsCaseInsensitive()
         {
             Assert.IsTrue(MessageTracePatternMatcher.TryCreate("*00000000-0000-0000-0000-000000000000*", NullLogger.Instance, out var matcher, out _));
-            Assert.IsTrue(matcher.TryMatch(@"{""appId"":""00000000-0000-0000-0000-000000000000""}", out var matched));
+            Assert.IsTrue(matcher.TryMatch(Encoding.UTF8.GetBytes(@"{""appId"":""00000000-0000-0000-0000-000000000000""}"), out var matched));
             Assert.AreEqual("*00000000-0000-0000-0000-000000000000*", matched);
         }
 
@@ -28,8 +35,8 @@ namespace Tests.UnitTests
         public void PatternMatcher_Wildcards_MatchWholeMessage()
         {
             Assert.IsTrue(MessageTracePatternMatcher.TryCreate("{*contoso?app*}", NullLogger.Instance, out var matcher, out _));
-            Assert.IsTrue(matcher.TryMatch("{\"id\":\"Contoso1App\"}", out _));
-            Assert.IsFalse(matcher.TryMatch("prefix {\"id\":\"Contoso1App\"} suffix", out _));
+            Assert.IsTrue(matcher.TryMatch(Encoding.UTF8.GetBytes("{\"id\":\"Contoso1App\"}"), out _));
+            Assert.IsFalse(matcher.TryMatch(Encoding.UTF8.GetBytes("prefix {\"id\":\"Contoso1App\"} suffix"), out _));
         }
 
         [DataTestMethod]
@@ -99,14 +106,32 @@ namespace Tests.UnitTests
             Assert.IsTrue(MessageTracePatternMatcher.TryCreate("*contoso-app*", NullLogger.Instance, out var matcher, out _));
             HttpMessageTracing.Current = new MessageTraceInspectingTracer(matcher, sink, 10, 500, NullLogger.Instance);
 
-            var handler = new MessageTraceHandler("activity-api", new NoContentLengthJsonHandler(body));
-            using (var client = new HttpClient(handler))
-            using (var response = await client.GetAsync("https://manage.office.com/api/v1.0/contoso/activity/feed", HttpCompletionOption.ResponseHeadersRead))
+            using (var server = new OneShotChunkedJsonServer(body))
+            using (var client = new HttpClient(new MessageTraceHandler("activity-api", new HttpClientHandler())))
+            using (var response = await client.GetAsync(server.Url, HttpCompletionOption.ResponseHeadersRead))
             {
                 Assert.AreEqual(body, await response.Content.ReadAsStringAsync());
             }
 
             Assert.AreEqual(0, sink.Envelopes.Count);
+        }
+
+        [TestMethod]
+        public async Task AutoThrottle_RetriesWhenTracingBufferingSeesConnectionReset()
+        {
+            var body = "{\"id\":\"contoso-app\",\"payload\":\"" + new string('x', 4096) + "\"}";
+            var sink = new RecordingSink();
+            Assert.IsTrue(MessageTracePatternMatcher.TryCreate("*contoso-app*", NullLogger.Instance, out var matcher, out _));
+            HttpMessageTracing.Current = new MessageTraceInspectingTracer(matcher, sink, 1024 * 1024, 500, NullLogger.Instance);
+
+            using (var server = new ResetThenSuccessJsonServer(body))
+            using (var client = new AutoThrottleHttpClient(new MessageTraceHandler("activity-api", new HttpClientHandler()), NullLogger.Instance) { MaxRetries = 2 })
+            using (var response = await client.GetAsyncWithThrottleRetries(server.Url, HttpCompletionOption.ResponseHeadersRead, NullLogger.Instance))
+            {
+                Assert.AreEqual(body, await response.Content.ReadAsStringAsync());
+            }
+
+            Assert.AreEqual(1, sink.Envelopes.Count);
         }
 
         [TestMethod]
@@ -235,28 +260,103 @@ namespace Tests.UnitTests
                 => Task.FromResult(Response("application/json", _body));
         }
 
-        private sealed class NoContentLengthJsonHandler : HttpMessageHandler
+        private sealed class OneShotChunkedJsonServer : IDisposable
         {
+            private readonly TcpListener _listener;
+            private readonly Task _server;
             private readonly string _body;
-            public NoContentLengthJsonHandler(string body) { _body = body; }
-            protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+
+            public OneShotChunkedJsonServer(string body)
             {
-                var content = new UnknownLengthStringContent(_body);
-                content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/json");
-                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = content });
+                _body = body;
+                _listener = new TcpListener(IPAddress.Loopback, 0);
+                _listener.Start();
+                Url = $"http://127.0.0.1:{((IPEndPoint)_listener.LocalEndpoint).Port}/trace";
+                _server = Task.Run(ServeAsync);
+            }
+
+            public string Url { get; }
+
+            private async Task ServeAsync()
+            {
+                using (var client = await _listener.AcceptTcpClientAsync())
+                using (var stream = client.GetStream())
+                {
+                    await ReadRequestHeadersAsync(stream);
+                    var header = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n";
+                    var bodyBytes = Encoding.UTF8.GetBytes(_body);
+                    var prefix = Encoding.ASCII.GetBytes(header + bodyBytes.Length.ToString("x") + "\r\n");
+                    await stream.WriteAsync(prefix, 0, prefix.Length);
+                    await stream.WriteAsync(bodyBytes, 0, bodyBytes.Length);
+                    var suffix = Encoding.ASCII.GetBytes("\r\n0\r\n\r\n");
+                    await stream.WriteAsync(suffix, 0, suffix.Length);
+                }
+            }
+
+            public void Dispose()
+            {
+                _listener.Stop();
+                try { _server.Wait(TimeSpan.FromSeconds(2)); } catch { }
             }
         }
 
-        private sealed class UnknownLengthStringContent : HttpContent
+        private sealed class ResetThenSuccessJsonServer : IDisposable
         {
-            private readonly byte[] _body;
-            public UnknownLengthStringContent(string body) { _body = Encoding.UTF8.GetBytes(body); }
-            protected override Task SerializeToStreamAsync(System.IO.Stream stream, TransportContext context)
-                => stream.WriteAsync(_body, 0, _body.Length);
-            protected override bool TryComputeLength(out long length)
+            private readonly TcpListener _listener;
+            private readonly Task _server;
+            private readonly string _body;
+
+            public ResetThenSuccessJsonServer(string body)
             {
-                length = 0;
-                return false;
+                _body = body;
+                _listener = new TcpListener(IPAddress.Loopback, 0);
+                _listener.Start();
+                Url = $"http://127.0.0.1:{((IPEndPoint)_listener.LocalEndpoint).Port}/trace";
+                _server = Task.Run(ServeAsync);
+            }
+
+            public string Url { get; }
+
+            private async Task ServeAsync()
+            {
+                using (var first = await _listener.AcceptTcpClientAsync())
+                using (var stream = first.GetStream())
+                {
+                    first.LingerState = new LingerOption(true, 0);
+                    await ReadRequestHeadersAsync(stream);
+                    var bodyBytes = Encoding.UTF8.GetBytes(_body);
+                    var header = Encoding.ASCII.GetBytes($"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {bodyBytes.Length}\r\nConnection: close\r\n\r\n");
+                    await stream.WriteAsync(header, 0, header.Length);
+                    await stream.WriteAsync(bodyBytes, 0, bodyBytes.Length / 2);
+                }
+
+                using (var second = await _listener.AcceptTcpClientAsync())
+                using (var stream = second.GetStream())
+                {
+                    await ReadRequestHeadersAsync(stream);
+                    var bodyBytes = Encoding.UTF8.GetBytes(_body);
+                    var header = Encoding.ASCII.GetBytes($"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {bodyBytes.Length}\r\nConnection: close\r\n\r\n");
+                    await stream.WriteAsync(header, 0, header.Length);
+                    await stream.WriteAsync(bodyBytes, 0, bodyBytes.Length);
+                }
+            }
+
+            public void Dispose()
+            {
+                _listener.Stop();
+                try { _server.Wait(TimeSpan.FromSeconds(2)); } catch { }
+            }
+        }
+
+        private static async Task ReadRequestHeadersAsync(NetworkStream stream)
+        {
+            var buffer = new byte[1024];
+            var seen = new StringBuilder();
+            while (!seen.ToString().Contains("\r\n\r\n"))
+            {
+                var read = await stream.ReadAsync(buffer, 0, buffer.Length);
+                if (read == 0) return;
+                seen.Append(Encoding.ASCII.GetString(buffer, 0, read));
             }
         }
     }

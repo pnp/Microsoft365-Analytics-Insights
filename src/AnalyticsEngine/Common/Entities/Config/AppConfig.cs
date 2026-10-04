@@ -67,7 +67,7 @@ namespace Common.Entities.Config
                 : ConfigurationManager.AppSettings.Get("MessageTraceContainer").Trim();
             this.MessageTraceMaxBodyBytes = long.TryParse(ConfigurationManager.AppSettings.Get("MessageTraceMaxBodyBytes"), out var messageTraceMaxBodyBytes)
                 && messageTraceMaxBodyBytes > 0
-                ? messageTraceMaxBodyBytes
+                ? Math.Min(messageTraceMaxBodyBytes, MaxMessageTraceBodyBytes)
                 : 32L * 1024 * 1024;
             this.MessageTraceMaxPerHour = int.TryParse(ConfigurationManager.AppSettings.Get("MessageTraceMaxPerHour"), out var messageTraceMaxPerHour)
                 && messageTraceMaxPerHour > 0
@@ -397,6 +397,7 @@ namespace Common.Entities.Config
 
         public string MessageTraceMatch { get; set; }
         public string MessageTraceContainer { get; set; } = "message-traces";
+        public const long MaxMessageTraceBodyBytes = 256L * 1024 * 1024;
         public long MessageTraceMaxBodyBytes { get; set; } = 32L * 1024 * 1024;
         public int MessageTraceMaxPerHour { get; set; } = 500;
 

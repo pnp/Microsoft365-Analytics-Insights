@@ -143,6 +143,7 @@ namespace WebJob.Office365ActivityImporter
                             auth.Creds, logger, configuredSettings.TenantGUID.ToString(),
                             await userScopeProvider.GetScopeAsync());
 
+                        await ShutdownMessageTracingAsync(messageTraceUploader);
                         ConsoleApp.BombOut(false);
                     }
                 }
@@ -408,13 +409,18 @@ namespace WebJob.Office365ActivityImporter
                 }
             } // Go around again?
 
+            await ShutdownMessageTracingAsync(messageTraceUploader);
+            ConsoleApp.BombOut(false);
+        }
+
+        private static async Task ShutdownMessageTracingAsync(MessageTraceBlobUploader messageTraceUploader)
+        {
             if (messageTraceUploader != null)
             {
                 await messageTraceUploader.FlushAsync(TimeSpan.FromSeconds(10));
                 messageTraceUploader.Dispose();
             }
             HttpMessageTracing.Current = HttpMessageTracing.Disabled;
-            ConsoleApp.BombOut(false);
         }
 
         internal static MessageTraceBlobUploader ConfigureMessageTracing(AppConfig settings, AnalyticsLogger logger)
@@ -423,16 +429,17 @@ namespace WebJob.Office365ActivityImporter
             if (settings == null || string.IsNullOrWhiteSpace(settings.MessageTraceMatch))
             {
                 logger.TrackHealthCheck(HealthComponent.MessageTracing, HealthStatus.Healthy,
-                    "Message tracing is disabled.",
+                    "Message tracing is off.",
                     reasonKey: "messageTracing.disabled");
                 return null;
             }
 
             if (!MessageTracePatternMatcher.TryCreate(settings.MessageTraceMatch, logger, out var matcher, out var failure))
             {
-                var detail = failure ?? "MessageTraceMatch is invalid; tracing is disabled.";
-                logger.LogWarning(detail + " The import will continue.");
-                logger.TrackHealthCheck(HealthComponent.MessageTracing, HealthStatus.Degraded, detail, reasonKey: "messageTracing.invalidPattern");
+                logger.LogWarning((failure ?? "MessageTraceMatch is invalid; tracing is disabled.") + " The import will continue.");
+                logger.TrackHealthCheck(HealthComponent.MessageTracing, HealthStatus.Degraded,
+                    "Message tracing was requested but its configuration is invalid, so tracing is disabled and imports continue normally. Check MessageTraceMatch and MessageTraceContainer in App Service application settings.",
+                    reasonKey: "messageTracing.invalidPattern");
                 return null;
             }
 
@@ -443,7 +450,7 @@ namespace WebJob.Office365ActivityImporter
                 var patterns = string.Join("; ", matcher.Patterns);
                 logger.LogWarning($"MESSAGE TRACING IS ENABLED: every API response that matches '{patterns}' is saved in full to blob container '{settings.MessageTraceContainer}' in the solution's storage account. These responses can contain personal data. Remove the MessageTraceMatch app setting to turn it off.");
                 logger.TrackHealthCheck(HealthComponent.MessageTracing, HealthStatus.Degraded,
-                    "Message tracing is enabled; matching API responses are saved in full to Azure Blob storage.",
+                    "Message tracing is enabled. Matching API responses are being saved in full to Azure Blob storage and can contain personal data; remove the MessageTraceMatch app setting to turn it off.",
                     reasonKey: "messageTracing.enabled");
                 return uploader;
             }
@@ -451,8 +458,8 @@ namespace WebJob.Office365ActivityImporter
             {
                 logger.LogWarning($"Message tracing could not be initialised and is disabled; the import will continue. {ex.GetType().Name}: {ex.Message}");
                 logger.TrackHealthCheck(HealthComponent.MessageTracing, HealthStatus.Degraded,
-                    "Message tracing configuration is invalid or storage could not be initialised; tracing is disabled.",
-                    reasonKey: "messageTracing.invalidPattern");
+                    "Message tracing was requested but blob storage could not be initialised, so tracing is disabled and imports continue normally. Check the Storage connection string, blob container name, network path and Storage Blob Data Contributor role.",
+                    reasonKey: "messageTracing.storageUnavailable");
                 return null;
             }
         }
@@ -460,7 +467,7 @@ namespace WebJob.Office365ActivityImporter
         private static void TrackMessageTracingEnabled(AnalyticsLogger logger)
         {
             logger.TrackHealthCheck(HealthComponent.MessageTracing, HealthStatus.Degraded,
-                "Message tracing is enabled; matching API responses are saved in full to Azure Blob storage.",
+                "Message tracing is enabled. Matching API responses are being saved in full to Azure Blob storage and can contain personal data; remove the MessageTraceMatch app setting to turn it off.",
                 reasonKey: "messageTracing.enabled");
         }
 

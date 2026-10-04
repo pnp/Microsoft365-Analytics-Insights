@@ -56,7 +56,7 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI
             if (loader == null)
             {
                 await _authContext.InitClientCredential();
-                loader = new GraphFileMetadataLoader(GraphServiceClientFactory.CreateForGraphImport(_authContext.Creds, _logger), _logger);
+                loader = new GraphFileMetadataLoader(GraphServiceClientFactory.CreateWithTimeout(_authContext.Creds, GraphServiceClientFactory.DefaultGraphSdkTimeout), _logger);
             }
             _copilotEventResolver = new CopilotAuditEventManager(_appConfig.ConnectionStrings.DatabaseConnectionString, loader, _logger, _appConfig.ResolveCopilotResourceMetadata);
             _powerPlatformEventResolver = new PowerPlatformAuditEventManager(_appConfig.ConnectionStrings.DatabaseConnectionString, _logger);

@@ -30,6 +30,7 @@ namespace WebJob.Office365ActivityImporter.Engine.MessageTracing
         private readonly SemaphoreSlim _openGate = new SemaphoreSlim(1, 1);
         private BlobContainerClient _container;
         private long _queuedBytes;
+        private int _inFlightUploads;
         private DateTime _lastFailureLogUtc = DateTime.MinValue;
 
         public MessageTraceBlobUploader(Func<CancellationToken, Task<BlobContainerClient>> openContainer, ILogger logger,
@@ -101,7 +102,7 @@ namespace WebJob.Office365ActivityImporter.Engine.MessageTracing
         public async Task FlushAsync(TimeSpan timeout)
         {
             var until = DateTime.UtcNow + timeout;
-            while (_queue.Count > 0 && DateTime.UtcNow < until)
+            while ((_queue.Count > 0 || Volatile.Read(ref _inFlightUploads) > 0) && DateTime.UtcNow < until)
             {
                 await Task.Delay(200).ConfigureAwait(false);
             }
@@ -122,6 +123,7 @@ namespace WebJob.Office365ActivityImporter.Engine.MessageTracing
             {
                 try
                 {
+                    Interlocked.Increment(ref _inFlightUploads);
                     var container = await GetContainerAsync(_cts.Token).ConfigureAwait(false);
                     var blob = container.GetBlobClient(BuildBlobName(item));
                     var headers = new BlobHttpHeaders { ContentType = item.ContentType ?? "application/json" };
@@ -147,6 +149,7 @@ namespace WebJob.Office365ActivityImporter.Engine.MessageTracing
                 }
                 finally
                 {
+                    Interlocked.Decrement(ref _inFlightUploads);
                     Interlocked.Add(ref _queuedBytes, -item.Body.LongLength);
                 }
             }

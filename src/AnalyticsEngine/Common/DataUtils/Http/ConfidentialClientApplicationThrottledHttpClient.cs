@@ -50,6 +50,10 @@ namespace DataUtils.Http
                 {
                     await tracer.TraceAsync(GetSource(request.RequestUri), request, response, cancellationToken).ConfigureAwait(false);
                 }
+                catch (HttpRequestException)
+                {
+                    throw;
+                }
                 catch
                 {
                 }

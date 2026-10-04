@@ -71,7 +71,9 @@ export const health = {
   'health.reason.blobCheckpointKeyAuthDisabled': "The audit blob checkpoint is degraded because the storage account has shared-key authentication disabled (HTTP {status} {errorCode}). The importer falls back to RBAC/Entra ID when the runtime service principal is configured; that identity needs 'Storage Table Data Contributor' on the storage account. Until this is fixed, the importer uses a non-durable in-memory checkpoint that is lost on restart/redeploy, and durable cross-cycle metadata recovery is unavailable.",
   'health.reason.blobCheckpointStorageRejected': 'The audit blob checkpoint is degraded because Azure Storage rejected the Table checkpoint request (HTTP {status} {errorCode}). Check the Storage connection string, Table service reachability, storage firewall/private endpoint settings and Table data-plane permissions. Until this is fixed, the importer uses a non-durable in-memory checkpoint that is lost on restart/redeploy, and durable cross-cycle metadata recovery is unavailable.',
   'health.reason.messageTracingEnabled': 'Message tracing is enabled. Matching API responses are being saved in full to Azure Blob storage and can contain personal data; remove the MessageTraceMatch app setting to turn it off.',
+  'health.reason.messageTracingDisabled': 'Message tracing is off.',
   'health.reason.messageTracingInvalidPattern': 'Message tracing was requested but its configuration is invalid, so tracing is disabled and imports continue normally. Check MessageTraceMatch and MessageTraceContainer in App Service application settings.',
+  'health.reason.messageTracingStorageUnavailable': 'Message tracing was requested but blob storage could not be initialised, so tracing is disabled and imports continue normally. Check the Storage connection string, blob container name, network path and Storage Blob Data Contributor role.',
 
   // Health page
   'health.page.title': 'System Health{buildLabel}',

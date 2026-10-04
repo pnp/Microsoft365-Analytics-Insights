@@ -34,7 +34,9 @@ export const BLOB_CHECKPOINT_REASON_KEYS: Record<string, TranslationKey> = {
 
 export const MESSAGE_TRACING_REASON_KEYS: Record<string, TranslationKey> = {
   'messageTracing.enabled': 'health.reason.messageTracingEnabled',
+  'messageTracing.disabled': 'health.reason.messageTracingDisabled',
   'messageTracing.invalidPattern': 'health.reason.messageTracingInvalidPattern',
+  'messageTracing.storageUnavailable': 'health.reason.messageTracingStorageUnavailable',
 };
 
 export const HEALTH_COMPONENT_LABEL_KEYS: Record<string, TranslationKey> = {
@@ -268,6 +270,10 @@ export function translateHealthComponentDetailText(detail: string | null | undef
 
   if (detail === enHealth['health.reason.blobCheckpointHealthy']) return t('health.reason.blobCheckpointHealthy');
   if (detail === enHealth['health.reason.blobCheckpointNotConfigured']) return t('health.reason.blobCheckpointNotConfigured');
+  if (detail === enHealth['health.reason.messageTracingEnabled']) return t('health.reason.messageTracingEnabled');
+  if (detail === enHealth['health.reason.messageTracingDisabled']) return t('health.reason.messageTracingDisabled');
+  if (detail === enHealth['health.reason.messageTracingInvalidPattern']) return t('health.reason.messageTracingInvalidPattern');
+  if (detail === enHealth['health.reason.messageTracingStorageUnavailable']) return t('health.reason.messageTracingStorageUnavailable');
 
   const blobCheckpointUnavailable = BLOB_CHECKPOINT_UNAVAILABLE.exec(detail);
   if (blobCheckpointUnavailable) {

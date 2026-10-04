@@ -97,7 +97,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities.Serialisation
         public static async Task<CallRecord> SaveNewCallToDB(string callId, ManualGraphCallClient manualClient, TokenCredential graphServiceClientAuthenticationProvider, ILogger logger, string thisTenantId,
             UserImportScope userScope = null)
         {
-            var teamsLoadContext = new TeamsLoadContext(GraphServiceClientFactory.CreateForGraphImport(graphServiceClientAuthenticationProvider, logger));
+            var teamsLoadContext = new TeamsLoadContext(GraphServiceClientFactory.CreateWithTimeout(graphServiceClientAuthenticationProvider, GraphServiceClientFactory.DefaultGraphSdkTimeout));
 
             var newCall = await LoadFromGraphByID(callId, manualClient, teamsLoadContext, logger, thisTenantId);
 

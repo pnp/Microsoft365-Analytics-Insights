@@ -5,7 +5,6 @@ using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Net.Http;
-using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -60,6 +59,10 @@ namespace DataUtils.Http
                 {
                     await tracer.TraceAsync(_source, request, response, cancellationToken).ConfigureAwait(false);
                 }
+                catch (HttpRequestException)
+                {
+                    throw;
+                }
                 catch
                 {
                 }
@@ -70,7 +73,6 @@ namespace DataUtils.Http
 
     public sealed class MessageTracePatternMatcher
     {
-        private static readonly TimeSpan RegexTimeout = TimeSpan.FromSeconds(2);
         private readonly IReadOnlyList<Pattern> _patterns;
         private readonly ILogger _logger;
 
@@ -109,25 +111,9 @@ namespace DataUtils.Http
                     return false;
                 }
 
-                if (IsContainsLiteral(raw))
-                {
-                    patterns.Add(Pattern.Contains(raw, raw.Substring(1, raw.Length - 2)));
-                }
-                else
-                {
-                    try
-                    {
-                        patterns.Add(Pattern.Wildcard(raw, new Regex("^" + WildcardToRegex(raw) + "$",
-                            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Singleline,
-                            RegexTimeout)));
-                    }
-                    catch (ArgumentException ex)
-                    {
-                        failure = $"MessageTraceMatch pattern '{raw}' could not be compiled: {ex.Message}";
-                        logger?.LogWarning(failure);
-                        return false;
-                    }
-                }
+                patterns.Add(IsContainsLiteral(raw)
+                    ? Pattern.Contains(raw, raw.Substring(1, raw.Length - 2))
+                    : Pattern.Wildcard(raw));
             }
 
             if (patterns.Count == 0) return false;
@@ -135,27 +121,31 @@ namespace DataUtils.Http
             return true;
         }
 
-        public bool TryMatch(string message, out string matchedPattern)
+        public bool TryMatch(byte[] utf8Message, out string matchedPattern)
         {
             matchedPattern = null;
-            if (message == null) return false;
+            if (utf8Message == null) return false;
 
             foreach (var pattern in _patterns)
             {
-                try
+                if (pattern.TryMatchBytes(utf8Message))
                 {
-                    if (pattern.IsMatch(message))
-                    {
-                        matchedPattern = pattern.Raw;
-                        return true;
-                    }
-                }
-                catch (RegexMatchTimeoutException)
-                {
-                    _logger?.LogWarning($"Message tracing wildcard pattern '{pattern.Raw}' timed out and was treated as no match.");
+                    matchedPattern = pattern.Raw;
+                    return true;
                 }
             }
 
+            if (!_patterns.Any(p => p.RequiresTextMatch)) return false;
+
+            var message = System.Text.Encoding.UTF8.GetString(utf8Message);
+            foreach (var pattern in _patterns.Where(p => p.RequiresTextMatch))
+            {
+                if (pattern.IsMatch(message))
+                {
+                    matchedPattern = pattern.Raw;
+                    return true;
+                }
+            }
             return false;
         }
 
@@ -169,39 +159,130 @@ namespace DataUtils.Http
             return true;
         }
 
-        private static string WildcardToRegex(string raw)
-        {
-            var parts = raw.Select(c =>
-            {
-                if (c == '*') return ".*";
-                if (c == '?') return ".";
-                return Regex.Escape(c.ToString(CultureInfo.InvariantCulture));
-            });
-            return string.Concat(parts);
-        }
-
         private sealed class Pattern
         {
             private readonly string _literal;
-            private readonly Regex _regex;
+            private readonly byte[] _asciiLiteralUpper;
+            private readonly Segment[] _segments;
+            private readonly bool _startsWithWildcard;
+            private readonly bool _endsWithWildcard;
 
-            private Pattern(string raw, string literal, Regex regex)
+            private Pattern(string raw, string literal, Segment[] segments, bool startsWithWildcard, bool endsWithWildcard)
             {
                 Raw = raw;
                 _literal = literal;
-                _regex = regex;
+                _asciiLiteralUpper = literal != null && literal.All(c => c <= 127)
+                    ? literal.Select(c => (byte)char.ToUpperInvariant(c)).ToArray()
+                    : null;
+                _segments = segments;
+                _startsWithWildcard = startsWithWildcard;
+                _endsWithWildcard = endsWithWildcard;
             }
 
             public string Raw { get; }
+            public bool RequiresTextMatch => _asciiLiteralUpper == null;
 
-            public static Pattern Contains(string raw, string literal) => new Pattern(raw, literal, null);
-            public static Pattern Wildcard(string raw, Regex regex) => new Pattern(raw, null, regex);
+            public static Pattern Contains(string raw, string literal) => new Pattern(raw, literal, null, true, true);
+            public static Pattern Wildcard(string raw)
+            {
+                var segments = raw.Split(new[] { '*' }, StringSplitOptions.RemoveEmptyEntries)
+                    .Select(Segment.Create)
+                    .ToArray();
+                return new Pattern(raw, null, segments, raw[0] == '*', raw[raw.Length - 1] == '*');
+            }
+
+            public bool TryMatchBytes(byte[] message)
+            {
+                if (_asciiLiteralUpper == null) return false;
+                for (var i = 0; i <= message.Length - _asciiLiteralUpper.Length; i++)
+                {
+                    var matched = true;
+                    for (var j = 0; j < _asciiLiteralUpper.Length; j++)
+                    {
+                        var b = message[i + j];
+                        if (b >= (byte)'a' && b <= (byte)'z') b = (byte)(b - 32);
+                        if (b != _asciiLiteralUpper[j])
+                        {
+                            matched = false;
+                            break;
+                        }
+                    }
+                    if (matched) return true;
+                }
+                return false;
+            }
 
             public bool IsMatch(string message)
             {
-                return _literal != null
-                    ? message.IndexOf(_literal, StringComparison.OrdinalIgnoreCase) >= 0
-                    : _regex.IsMatch(message);
+                if (_literal != null) return message.IndexOf(_literal, StringComparison.OrdinalIgnoreCase) >= 0;
+                if (_segments.Length == 0) return message.Length == 0;
+
+                var pos = 0;
+                for (var i = 0; i < _segments.Length; i++)
+                {
+                    var last = i == _segments.Length - 1;
+                    int match;
+                    if (i == 0 && !_startsWithWildcard)
+                    {
+                        match = _segments[i].MatchesAt(message, 0) ? 0 : -1;
+                    }
+                    else if (last && !_endsWithWildcard)
+                    {
+                        var exact = message.Length - _segments[i].Length;
+                        match = exact >= pos && _segments[i].MatchesAt(message, exact) ? exact : -1;
+                    }
+                    else
+                    {
+                        match = _segments[i].IndexIn(message, pos);
+                    }
+
+                    if (match < 0) return false;
+                    pos = match + _segments[i].Length;
+                }
+                return _endsWithWildcard || pos == message.Length;
+            }
+        }
+
+        private sealed class Segment
+        {
+            private readonly string[] _literalParts;
+
+            private Segment(string raw)
+            {
+                Raw = raw;
+                _literalParts = raw.Split('?');
+            }
+
+            public string Raw { get; }
+            public int Length => Raw.Length;
+
+            public static Segment Create(string raw) => new Segment(raw);
+
+            public int IndexIn(string message, int start)
+            {
+                for (var i = start; i <= message.Length - Length; i++)
+                {
+                    if (MatchesAt(message, i)) return i;
+                }
+                return -1;
+            }
+
+            public bool MatchesAt(string message, int index)
+            {
+                if (index < 0 || index + Length > message.Length) return false;
+
+                var offset = index;
+                for (var i = 0; i < _literalParts.Length; i++)
+                {
+                    var part = _literalParts[i];
+                    if (part.Length > 0 && string.Compare(message, offset, part, 0, part.Length, ignoreCase: true, culture: CultureInfo.InvariantCulture) != 0)
+                    {
+                        return false;
+                    }
+                    offset += part.Length;
+                    if (i < _literalParts.Length - 1) offset++;
+                }
+                return true;
             }
         }
     }
@@ -234,7 +315,7 @@ namespace DataUtils.Http
         {
             _matcher = matcher ?? throw new ArgumentNullException(nameof(matcher));
             _sink = sink ?? throw new ArgumentNullException(nameof(sink));
-            _maxBodyBytes = maxBodyBytes > 0 ? maxBodyBytes : 32L * 1024 * 1024;
+            _maxBodyBytes = maxBodyBytes > 0 ? Math.Min(maxBodyBytes, 256L * 1024 * 1024) : 32L * 1024 * 1024;
             _maxPerHour = maxPerHour > 0 ? maxPerHour : 500;
             _logger = logger;
             _hourUtc = TruncateToHour(DateTime.UtcNow);
@@ -266,10 +347,13 @@ namespace DataUtils.Http
                 await response.Content.LoadIntoBufferAsync().ConfigureAwait(false);
                 body = await response.Content.ReadAsByteArrayAsync().ConfigureAwait(false);
             }
+            catch (HttpRequestException)
+            {
+                throw;
+            }
             catch (Exception ex) when (ex is InvalidOperationException || ex is HttpRequestException || ex is IOException)
             {
-                Interlocked.Increment(ref _skippedOversize);
-                return;
+                throw new HttpRequestException("Message tracing could not buffer the HTTP response body before the caller read it.", ex);
             }
 
             if (body.LongLength > _maxBodyBytes)
@@ -278,14 +362,13 @@ namespace DataUtils.Http
                 return;
             }
 
-            var text = System.Text.Encoding.UTF8.GetString(body);
-            if (ContainsTokenBody(text))
+            if (ContainsTokenBody(body))
             {
                 Interlocked.Increment(ref _skippedSecrets);
                 return;
             }
 
-            if (!_matcher.TryMatch(text, out var matchedPattern)) return;
+            if (!_matcher.TryMatch(body, out var matchedPattern)) return;
             if (!TryTakeHourlySlot())
             {
                 _sink.RecordDroppedByHourlyCap();
@@ -367,10 +450,31 @@ namespace DataUtils.Http
                 || mediaType.EndsWith("+json", StringComparison.OrdinalIgnoreCase);
         }
 
-        private static bool ContainsTokenBody(string text)
+        private static bool ContainsTokenBody(byte[] body)
         {
-            return text?.IndexOf("\"access_token\"", StringComparison.OrdinalIgnoreCase) >= 0
-                || text?.IndexOf("\"refresh_token\"", StringComparison.OrdinalIgnoreCase) >= 0;
+            return ContainsAscii(body, "\"access_token\"") || ContainsAscii(body, "\"refresh_token\"");
+        }
+
+        private static bool ContainsAscii(byte[] body, string needle)
+        {
+            if (body == null || body.Length < needle.Length) return false;
+            var upper = needle.Select(c => (byte)char.ToUpperInvariant(c)).ToArray();
+            for (var i = 0; i <= body.Length - upper.Length; i++)
+            {
+                var matched = true;
+                for (var j = 0; j < upper.Length; j++)
+                {
+                    var b = body[i + j];
+                    if (b >= (byte)'a' && b <= (byte)'z') b = (byte)(b - 32);
+                    if (b != upper[j])
+                    {
+                        matched = false;
+                        break;
+                    }
+                }
+                if (matched) return true;
+            }
+            return false;
         }
     }
 

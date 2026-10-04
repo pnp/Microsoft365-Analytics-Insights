@@ -21,6 +21,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
     public static class GraphServiceClientFactory
     {
         private static readonly string[] DefaultScopes = new[] { "https://graph.microsoft.com/.default" };
+        public static readonly TimeSpan DefaultGraphSdkTimeout = TimeSpan.FromSeconds(100);
 
         /// <summary>
         /// Create the SDK-backed Graph client used by the Graph importer.

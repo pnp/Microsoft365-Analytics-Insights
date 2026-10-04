@@ -25,7 +25,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
             : this(o365DownloadSettings?.TenantGUID.ToString(), o365DownloadSettings?.ClientID, o365DownloadSettings?.ClientSecret, logger) { }
 
         public CallWebhook(string tenantId, string clientId, string secret, ILogger logger)
-            : this(new GraphCallRecordSubscriptionManager(GraphServiceClientFactory.CreateWithTimeout(new ClientSecretCredential(tenantId, clientId, secret), TimeSpan.FromHours(1))), logger, SystemClock.Instance) { }
+            : this(new GraphCallRecordSubscriptionManager(GraphServiceClientFactory.CreateWithTimeout(new ClientSecretCredential(tenantId, clientId, secret), GraphServiceClientFactory.DefaultGraphSdkTimeout)), logger, SystemClock.Instance) { }
 
         /// <summary>
         /// Constructor taking the Graph subscription API as a port and the clock as a dependency, so

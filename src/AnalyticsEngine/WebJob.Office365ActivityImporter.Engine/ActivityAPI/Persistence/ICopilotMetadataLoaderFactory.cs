@@ -44,7 +44,7 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Persistence
         {
             var auth = new GraphAppIndentityOAuthContext(_logger, _appConfig.ClientID, _appConfig.TenantGUID.ToString(), _appConfig.ClientSecret, _appConfig.KeyVaultUrl, _appConfig.UseClientCertificate);
             await auth.InitClientCredential();
-            return new GraphFileMetadataLoader(Graph.GraphServiceClientFactory.CreateForGraphImport(auth.Creds, _logger), _logger);
+            return new GraphFileMetadataLoader(Graph.GraphServiceClientFactory.CreateWithTimeout(auth.Creds, Graph.GraphServiceClientFactory.DefaultGraphSdkTimeout), _logger);
         }
     }
 
