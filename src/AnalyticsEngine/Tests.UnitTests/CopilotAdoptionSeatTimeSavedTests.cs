@@ -2,7 +2,12 @@ using Common.Entities.CopilotAdoption;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using Newtonsoft.Json.Linq;
 using System;
+using System.Collections.Generic;
 using System.Linq;
+using System.Reflection;
+using System.Threading;
+using System.Threading.Tasks;
+using UnitTests.FakeLoaderClasses;
 
 namespace Tests.UnitTests
 {
@@ -115,6 +120,7 @@ namespace Tests.UnitTests
             analysis.Summary.FromUtc = DateTime.UtcNow.AddDays(-28);
             analysis.Summary.Options = options;
             analysis.Summary.DataSources.AuditAvailable = true;
+            analysis.SeatHolderTimeSavedAssessed = true;
 
             for (var i = 1; i <= 3; i++)
             {
@@ -136,6 +142,64 @@ namespace Tests.UnitTests
                 "Departments below MinSeatsPerSegment must be suppressed from the aggregate estimate.");
         }
 
+        [TestMethod]
+        public void Summary_WithholdsSeatHolderEstimateWhenAuditDataWasUnavailable()
+        {
+            var analysis = new CopilotAdoptionAnalysis();
+            analysis.Summary.WindowDays = 28;
+            analysis.Summary.Options = CopilotAdoptionOptions.Default;
+            analysis.Summary.DataSources.AuditAvailable = false;
+            analysis.LicensedUsers.Add(User(1, "Established", "Finance"));
+
+            new CopilotAdoptionService().FinaliseSummary(analysis);
+
+            Assert.AreEqual(0, analysis.Summary.SeatHolderTimeSavedEstimate.CohortUsers);
+            Assert.AreEqual(0d, analysis.Summary.SeatHolderTimeSavedEstimate.HoursPerMonthHigh);
+            Assert.IsFalse(analysis.Summary.FiguresIncomplete,
+                "A tenant without audit data has no realised-value estimate, but that absence is already explained by data-source warnings.");
+        }
+
+        [TestMethod]
+        public async Task QueryFailure_WithholdsSeatHolderEstimate_AndMarksFiguresIncomplete()
+        {
+            var service = new CopilotAdoptionService(contextFactory: new ThrowingAnalyticsDbContextFactory());
+            var analysis = new CopilotAdoptionAnalysis();
+            analysis.Summary.WindowDays = 28;
+            analysis.Summary.Options = CopilotAdoptionOptions.Default;
+            analysis.Summary.DataSources.AuditAvailable = true;
+            analysis.LicensedUsers.Add(User(1, "Established", "Finance"));
+
+            var output = CreateStepOutput();
+            await InvokeBuildSeatHolderTimeSavedAsync(service, analysis, output, new List<int> { 1 });
+            MergeStepOutput(analysis, output);
+            analysis.Summary.Diagnostics.Record(CopilotAdoptionSteps.SeatHolderTimeSaved, 0, StepOutputQueryFailed(output));
+
+            service.FinaliseSummary(analysis);
+
+            Assert.AreEqual(0, analysis.Summary.SeatHolderTimeSavedEstimate.CohortUsers);
+            Assert.IsTrue(analysis.Summary.FiguresIncomplete);
+            CollectionAssert.Contains(analysis.Summary.IncompleteReasons.ToArray(), "seat-holder Copilot time-saved inputs");
+            Assert.IsTrue(analysis.Summary.Diagnostics.Steps.Single(s => s.Step == CopilotAdoptionSteps.SeatHolderTimeSaved).Failed);
+        }
+
+        [TestMethod]
+        public void Summary_PublishesZeroWhenSeatHolderQuerySucceededWithNoActions()
+        {
+            var analysis = new CopilotAdoptionAnalysis();
+            analysis.Summary.WindowDays = 28;
+            analysis.Summary.Options = CopilotAdoptionOptions.Default;
+            analysis.Summary.DataSources.AuditAvailable = true;
+            analysis.SeatHolderTimeSavedAssessed = true;
+            analysis.LicensedUsers.Add(User(1, "Established", "Finance"));
+            analysis.LicensedUsers.Add(User(2, "Established", "Finance"));
+
+            new CopilotAdoptionService().FinaliseSummary(analysis);
+
+            Assert.AreEqual(2, analysis.Summary.SeatHolderTimeSavedEstimate.CohortUsers);
+            Assert.AreEqual(0d, analysis.Summary.SeatHolderTimeSavedEstimate.HoursPerMonthHigh);
+            Assert.IsFalse(analysis.Summary.FiguresIncomplete);
+        }
+
         private static LicensedUserAdoptionRow User(int id, string band, string department, string source = "audit")
         {
             return new LicensedUserAdoptionRow
@@ -150,7 +214,50 @@ namespace Tests.UnitTests
                 Band = AdoptionBand.Established,
             };
         }
+
+        private static object CreateStepOutput()
+        {
+            var type = typeof(CopilotAdoptionService).GetNestedType("StepOutput", BindingFlags.NonPublic);
+            return Activator.CreateInstance(type);
+        }
+
+        private static async Task InvokeBuildSeatHolderTimeSavedAsync(
+            CopilotAdoptionService service,
+            CopilotAdoptionAnalysis analysis,
+            object output,
+            List<int> seatIds)
+        {
+            var method = typeof(CopilotAdoptionService).GetMethod("BuildSeatHolderTimeSavedAsync", BindingFlags.Instance | BindingFlags.NonPublic);
+            var task = (Task)method.Invoke(service, new object[]
+            {
+                analysis,
+                output,
+                seatIds,
+                new DateTime(2025, 12, 1),
+                new DateTime(2026, 1, 1),
+                false,
+                null,
+                CancellationToken.None,
+            });
+            await task.ConfigureAwait(false);
+        }
+
+        private static void MergeStepOutput(CopilotAdoptionAnalysis analysis, object output)
+        {
+            foreach (var reason in StepOutputList<string>(output, "IncompleteReasons"))
+            {
+                analysis.Summary.MarkFiguresIncomplete(reason);
+            }
+        }
+
+        private static bool StepOutputQueryFailed(object output)
+        {
+            return (bool)output.GetType().GetProperty("QueryFailed", BindingFlags.Instance | BindingFlags.Public).GetValue(output);
+        }
+
+        private static List<T> StepOutputList<T>(object output, string property)
+        {
+            return (List<T>)output.GetType().GetProperty(property, BindingFlags.Instance | BindingFlags.Public).GetValue(output);
+        }
     }
 }
-
-

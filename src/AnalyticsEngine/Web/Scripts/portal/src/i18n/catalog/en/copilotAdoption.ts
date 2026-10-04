@@ -780,6 +780,7 @@ export const copilotAdoption = {
   'copilotAdoption.page.seatTime.department': 'Department',
   'copilotAdoption.page.seatTime.hoursHigh': 'Hours high',
   'copilotAdoption.page.seatTime.people': 'People',
+  'copilotAdoption.server.dataset.seatHolderTimeSavedInputs': 'seat-holder Copilot time-saved inputs',
   'copilotAdoption.server.query.SeatHolderTimeSaved': 'seat-holder Copilot time-saved inputs',
   'copilotAdoption.page.seatTime.zeroCreditNote': 'Copilot Chat and other non-agent surfaces default to zero minutes here because Microsoft has not published a per-prompt credit; edit the Other value above if you want to model them. Agent and Cowork activity is left out of this figure; Cowork remains in its own estimate.',
 

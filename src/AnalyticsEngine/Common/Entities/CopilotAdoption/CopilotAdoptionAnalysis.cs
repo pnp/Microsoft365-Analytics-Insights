@@ -55,6 +55,12 @@ namespace Common.Entities.CopilotAdoption
         internal List<SeatHolderTimeSavedUserRow> SeatHolderTimeSavedRows { get; set; } = new List<SeatHolderTimeSavedUserRow>();
 
         /// <summary>
+        /// True only when the realised seat-holder time query completed. An empty row set is then a real
+        /// zero-activity result; false means the estimate was not assessed and must be withheld.
+        /// </summary>
+        internal bool SeatHolderTimeSavedAssessed { get; set; }
+
+        /// <summary>
         /// Raw Cowork signals as the database returned them, before scoring.
         ///
         /// Held between the query step and scoring because the Copilot engagement score they are scored
