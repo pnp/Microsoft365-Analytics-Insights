@@ -37,6 +37,7 @@ export const health = {
   'health.component.ServiceBus': 'ServiceBus',
   'health.component.BlobCheckpoint': 'BlobCheckpoint',
   'health.component.CopilotAuditBackfill': 'Copilot audit backfill',
+  'health.component.MessageTracing': 'Message tracing',
   'health.duration.day': '{count} day',
   'health.duration.days': '{count} days',
   'health.duration.hour': '{count} hour',
@@ -78,6 +79,10 @@ export const health = {
   'health.reason.copilotAuditBackfillMissingPermission': 'The Copilot audit backfill cannot run because the runtime app is missing AuditLogsQuery.Read.All. This permission is opt-in and needs admin consent.',
   'health.reason.copilotAuditBackfillCompletedWithGaps': 'The Copilot audit backfill completed with failed or incomplete slices. Open Administration > Copilot audit backfill to see the affected days.',
   'health.reason.copilotAuditBackfillLastJobOld': 'The latest Copilot audit backfill issue is more than seven days old. Open Administration > Copilot audit backfill to review the last result.',
+  'health.reason.messageTracingEnabled': 'Message tracing is enabled. Matching API responses are being saved in full to Azure Blob storage and can contain personal data; remove the MessageTraceMatch app setting to turn it off.',
+  'health.reason.messageTracingDisabled': 'Message tracing is off.',
+  'health.reason.messageTracingInvalidPattern': 'Message tracing was requested but its configuration is invalid, so tracing is disabled and imports continue normally. Check MessageTraceMatch and MessageTraceContainer in App Service application settings.',
+  'health.reason.messageTracingStorageUnavailable': "Message tracing is requested but can't save to Azure Blob storage, so no responses are being saved; imports continue normally. Check the Storage connection string, the blob container name, network access to the storage account and the Storage Blob Data Contributor role.",
 
   // Health page
   'health.page.title': 'System Health{buildLabel}',

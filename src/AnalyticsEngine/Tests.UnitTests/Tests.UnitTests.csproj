@@ -52,6 +52,7 @@
     <Compile Include="AppInsightsAuthTests.cs" />
     <Compile Include="AppInsightsImporterOrchestrationTests.cs" />
     <Compile Include="CheckpointTableClientFactoryTests.cs" />
+    <Compile Include="MessageTracingTests.cs" />
     <Compile Include="CopilotAuditLogContentSchemaTests.cs" />
     <Compile Include="CopilotAuditBackfillTests.cs" />
     <Compile Include="EntraOrgAttributeSpecTests.cs" />

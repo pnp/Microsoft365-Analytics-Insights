@@ -516,22 +516,25 @@ const HEALTH_SERVICE_COMPONENT = /Component\s*=\s*"([^"]+)"/g;
 const HEALTH_TELEMETRY_COMPONENT = /TrackHealthCheck\(\s*HealthComponent\.([A-Za-z0-9_]+)/g;
 const HEALTH_COMPONENT_BLOB_CHECKPOINT_FACTORY = join(process.cwd(), '..', '..', '..', 'WebJob.Office365ActivityImporter.Engine', 'ActivityAPI', 'BlobCheckpoint', 'ProcessedBlobStoreFactory.cs');
 const HEALTH_COMPONENT_COPILOT_BACKFILL = join(process.cwd(), '..', '..', '..', 'WebJob.Office365ActivityImporter.Engine', 'Graph', 'Copilot', 'AuditBackfill', 'CopilotAuditBackfillImporter.cs');
+const HEALTH_COMPONENT_OFFICE_IMPORTER_PROGRAM = join(process.cwd(), '..', '..', '..', 'WebJob.Office365ActivityImporter', 'Program.cs');
 
 function healthComponentKeys(): string[] {
   const source = readFileSync(join(process.cwd(), '..', '..', 'Models', 'Health', 'HealthService.cs'), 'utf8');
   const blobCheckpointSource = readFileSync(HEALTH_COMPONENT_BLOB_CHECKPOINT_FACTORY, 'utf8');
   const copilotBackfillSource = readFileSync(HEALTH_COMPONENT_COPILOT_BACKFILL, 'utf8');
+  const officeImporterSource = readFileSync(HEALTH_COMPONENT_OFFICE_IMPORTER_PROGRAM, 'utf8');
   return sortedUnique([
     ...[...source.matchAll(HEALTH_SERVICE_COMPONENT)].map((m) => m[1]),
     ...[...blobCheckpointSource.matchAll(HEALTH_TELEMETRY_COMPONENT)].map((m) => m[1]),
     ...[...copilotBackfillSource.matchAll(HEALTH_TELEMETRY_COMPONENT)].map((m) => m[1]),
+    ...[...officeImporterSource.matchAll(HEALTH_TELEMETRY_COMPONENT)].map((m) => m[1]),
   ]);
 }
 
 describe('Health component display names', () => {
   it('translates every concrete component name the server can send today', () => {
     const serverKeys = healthComponentKeys();
-    expect(serverKeys).toEqual(['BlobCheckpoint', 'CopilotAuditBackfill', 'Credential', 'ServiceBus']);
+    expect(serverKeys).toEqual(['BlobCheckpoint', 'CopilotAuditBackfill', 'Credential', 'MessageTracing', 'ServiceBus']);
 
     const missingMapEntries = serverKeys.filter((key) => !(key in HEALTH_COMPONENT_LABEL_KEYS));
     const missingCatalogEntries = serverKeys

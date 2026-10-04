@@ -39,7 +39,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
                 // Managed to get user-delegated token from refresh-token. Impersonate user.
                 // v5+ removed DelegateAuthenticationProvider - drop in our own
                 // IAuthenticationProvider that pins the supplied bearer token onto every request.
-                var _preCachedTokenClient = new GraphServiceClient(new BearerTokenAuthenticationProvider(_refreshToken.AccessToken));
+                var _preCachedTokenClient = GraphServiceClientFactory.CreateWithTimeout(new BearerTokenAuthenticationProvider(_refreshToken.AccessToken), GraphServiceClientFactory.DefaultGraphSdkTimeout);
 
                 var channelMessagesLoader = new ChannelMessagesLoader(_preCachedTokenClient, _deltaTokenStore, _logger);
                 try

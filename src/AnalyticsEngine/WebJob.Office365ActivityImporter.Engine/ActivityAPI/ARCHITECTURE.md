@@ -6,6 +6,50 @@ operational guidance for extending or debugging the pipeline.
 
 ---
 
+## Message tracing (opt-in diagnostics)
+
+Message tracing is off by default. Set the App Service app setting `MessageTraceMatch` to one or more
+semicolon-separated wildcard patterns to capture matching JSON API responses to Azure Blob storage. `*`
+matches any run of characters and `?` matches one character; `*00000000-0000-0000-0000-000000000000*`
+captures responses containing that synthetic app id. Patterns are case-insensitive and matched against the
+whole response body. Wildcard-only patterns, and patterns with fewer than four literal characters, are refused
+so the setting cannot accidentally trace every response.
+
+Settings:
+
+| Setting | Default | Purpose |
+|---------|---------|---------|
+| `MessageTraceMatch` | empty | Disabled when empty or missing. Remove this setting to turn tracing off. |
+| `MessageTraceContainer` | `message-traces` | Private blob container that receives captured responses. |
+| `MessageTraceMaxBodyBytes` | `33554432` (32 MB) | Responses larger than this are skipped. |
+| `MessageTraceMaxPerHour` | `500` | Per-process cap on saved matching responses; later matches are dropped and counted. |
+
+The captured blob is the response body byte-for-byte, named
+`yyyy/MM/dd/HHmmssfff-<source>-<guid>.json`. Metadata records the capture time, HTTP method, request URL
+(with secret-looking query parameters stripped), status code, content type and matched pattern. Uploads are
+queued to a bounded background worker, so storage failures, full queues and caps are logged and counted but
+never abort the import.
+
+Blob authentication uses the solution `Storage` connection string. If that carries an account key or SAS it is
+used first; if Azure Storage refuses it with 401/403, or if the connection string has no credentials, the
+runtime service principal is used through RBAC. The installer grants that identity Storage Blob Data
+Contributor. Azurite/development storage uses the connection string only.
+
+Tracing can store full API responses, including personal data, so importer start-up logs a prominent warning
+and emits a degraded Health component while enabled. It observes Management Activity API content fetches,
+manual REST calls through the shared confidential-client HTTP handler (Graph, Azure Cost Management,
+Power Platform licensing and any other JSON endpoint it reaches) and SDK Graph calls routed through
+`GraphServiceClientFactory`. Microsoft 365 usage reports requested as JSON are inspected; CSV downloads are
+skipped by the JSON-only content-type gate. Token endpoints, Key Vault, OAuth token bodies and Copilot AI
+interaction-history responses are explicitly excluded; the product does not store prompt/response text from
+the interaction-history API.
+
+Installer upgrades already merge unmanaged App Service app settings before writing the replacement settings
+collection (dev has done this since #318), so a manually-added `MessageTraceMatch` is preserved by an upgrade.
+Remove `MessageTraceMatch` from App Service application settings to stop tracing.
+
+---
+
 ## High-Level Flow
 
 ```
