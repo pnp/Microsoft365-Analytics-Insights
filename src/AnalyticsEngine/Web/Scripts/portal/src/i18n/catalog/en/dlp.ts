@@ -65,6 +65,10 @@ export const dlp = {
   'dlp.tenant.auditedOnly.hint': 'Matched, not enforced',
   'dlp.tenant.policies.title': 'Policies (tenant-wide)',
   'dlp.tenant.policies.description': 'Policies firing across the tenant, from the DLP audit feed.',
+  // The same section while a portal administrator's filter narrows it, when it is no longer tenant-wide.
+  'dlp.tenant.titleFiltered': 'DLP activity across all workloads',
+  'dlp.tenant.policies.titleFiltered': 'Policies (all workloads)',
+  'dlp.tenant.policies.descriptionFiltered': 'Policies firing for the people the administrator’s filter covers, from the DLP audit feed.',
 } as const;
 
 export default dlp;

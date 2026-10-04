@@ -1,5 +1,6 @@
 using Azure;
 using Azure.Data.Tables;
+using Common.Entities.Config;
 using Common.Entities.State;
 using Microsoft.Extensions.Logging;
 using System;
@@ -14,8 +15,8 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.BlobCheckpoint
     /// <remarks>
     /// A thin facade over <see cref="StorageTableClientFactory"/>, which the runtime state table
     /// (<see cref="StateStore"/>) shares, so both tables authenticate the same way: the Storage connection string's own
-    /// credentials when it has them, the runtime service principal (<see cref="Azure.Identity.ClientSecretCredential"/>,
-    /// never <c>DefaultAzureCredential</c> or managed identity) when the account denies them or there are none.
+    /// credentials when it has them, the runtime service principal with the configured certificate or client secret
+    /// when the account denies them or there are none.
     /// <para>
     /// Data-plane RBAC on the Table service needs the <b>Storage Table Data Contributor</b> role;
     /// <c>Storage Blob Data Contributor</c> does NOT cover Table storage. The installer assigns it in
@@ -35,6 +36,13 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.BlobCheckpoint
         public static TableClient CreateAndEnsureTable(string storageConnectionString, string tableName,
             string tenantId, string clientId, string clientSecret, ILogger logger)
             => StorageTableClientFactory.CreateAndEnsureTable(storageConnectionString, tableName, tenantId, clientId, clientSecret, logger, Purpose);
+
+        /// <summary>
+        /// The production path: uses the runtime account's configured certificate or client secret when RBAC is needed.
+        /// </summary>
+        public static TableClient CreateAndEnsureTable(
+            string storageConnectionString, string tableName, AppConfig config, ILogger logger)
+            => StorageTableClientFactory.CreateAndEnsureTable(storageConnectionString, tableName, config, logger, Purpose);
 
         /// <summary>True when the storage account rejected the request because account-key auth is turned off.</summary>
         public static bool IsKeyAuthDisabled(RequestFailedException ex) => StorageTableClientFactory.IsKeyAuthDisabled(ex);

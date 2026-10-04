@@ -15,39 +15,23 @@ namespace Tests.UnitTests
     /// Each test names the defect it pins so a later change cannot quietly reintroduce it.
     /// </summary>
     [TestClass]
-    public class CoworkReportCsvIngestionTests
+    public class RetiredCoworkReportParserTests
     {
         /// <summary>
-        /// Production requests the Cowork report through the same GA v1.0 CSV transport as every other
-        /// Copilot report (ProductionGraphImportSectionFactory -> CoworkUsageUserDetailLoader ->
-        /// GraphCopilotReportSource, whose primary attempt is $format=text/csv). The CSV parser had no
-        /// Cowork branch, so it threw ArgumentOutOfRangeException - which is not a Graph HTTP failure and
-        /// therefore not eligible for the source's fallback chain. The whole Cowork import failed every
-        /// cycle on any tenant where the GA endpoint answers.
+        /// #692: the Cowork report these tests used to parse is published only in the Microsoft 365 admin
+        /// centre, never through Microsoft Graph; the function the importer called is in neither the v1.0
+        /// nor the beta schema. Its parser branch went with the import, so the name must now be rejected
+        /// like any other unknown report rather than parsed into rows that nothing could ever have sent.
         /// </summary>
         [TestMethod]
-        public void CoworkUserDetailCsv_IsParsed_NotRejectedAsAnUnknownReport()
+        public void TheRetiredCoworkReportName_IsRejectedLikeAnyUnknownReport()
         {
             var csv = string.Join("\r\n",
-                "Report Refresh Date,User Principal Name,Total tasks,Scheduled tasks,User-initiated tasks,Active days,Last activity date,Retained Cowork user,Report Period",
-                "2026-09-15,adele.vance@contoso.onmicrosoft.com,40,10,30,12,2026-09-14,Yes,28");
+                "Report Refresh Date,User Principal Name,Report Period",
+                "2026-09-15,adele.vance@contoso.onmicrosoft.com,28");
 
-            var reports = CopilotReportCsvParser.Parse(CopilotReportNames.CoworkUsageUserDetail, csv);
-
-            Assert.AreEqual(1, reports.Count, "The Cowork CSV must produce one report object per row.");
-
-            var rows = CoworkUsageUserDetailParser.Parse(reports);
-
-            Assert.AreEqual(1, rows.Count, "The CSV-derived object must be consumable by the Cowork parser.");
-            var row = rows.Single();
-            Assert.AreEqual("adele.vance@contoso.onmicrosoft.com", row.UserPrincipalName);
-            Assert.AreEqual(40, row.TotalTasks);
-            Assert.AreEqual(10, row.ScheduledTasks);
-            Assert.AreEqual(30, row.UserInitiatedTasks);
-            Assert.AreEqual(12, row.ActiveDays);
-            Assert.AreEqual(28, row.ReportPeriodDays);
-            Assert.AreEqual(true, row.RetainedUser);
-            Assert.AreEqual(new DateTime(2026, 9, 15), row.ReportRefreshDate);
+            Assert.ThrowsException<ArgumentOutOfRangeException>(
+                () => CopilotReportCsvParser.Parse(CopilotUsageReportNames.RetiredCoworkUsageUserDetail, csv));
         }
 
         /// <summary>
@@ -60,31 +44,12 @@ namespace Tests.UnitTests
             Assert.ThrowsException<ArgumentOutOfRangeException>(
                 () => CopilotReportCsvParser.Parse("getSomeReportThatDoesNotExist", "a,b\r\n1,2"));
         }
-
-        /// <summary>
-        /// Blank cells must stay unknown rather than becoming a measured zero - a false "0 tasks" would
-        /// read as a user who was offered Cowork and ignored it.
-        /// </summary>
-        [TestMethod]
-        public void BlankCoworkCells_StayNull_RatherThanBecomingZero()
-        {
-            var csv = string.Join("\r\n",
-                "Report Refresh Date,User Principal Name,Total tasks,Scheduled tasks,Active days,Report Period",
-                "2026-09-15,adele.vance@contoso.onmicrosoft.com,,,,28");
-
-            var rows = CoworkUsageUserDetailParser.Parse(
-                CopilotReportCsvParser.Parse(CopilotReportNames.CoworkUsageUserDetail, csv));
-
-            var row = rows.Single();
-            Assert.IsNull(row.TotalTasks, "A blank cell is unknown, not zero.");
-            Assert.IsNull(row.ScheduledTasks);
-            Assert.IsNull(row.ActiveDays);
-        }
     }
 
     /// <summary>
-    /// #558 moved the Cowork basis from audit heuristics to Microsoft's documented first-party report.
-    /// RegularCoworkUser and the rationale text both honoured that; the tier function did not.
+    /// #692: Cowork readiness is judged on the Copilot audit log alone, because Microsoft's Cowork usage
+    /// report is not available through Graph. The tier, the "used Cowork" flag, RegularCoworkUser and the
+    /// rationale must all read the same audit evidence against the same regular-use bar.
     /// </summary>
     [TestClass]
     public class CoworkTierSourceTests
@@ -96,41 +61,14 @@ namespace Tests.UnitTests
             return o;
         }
 
-        /// <summary>
-        /// A user Microsoft's report shows as active on 10 days, with no audit signal at all, is
-        /// established. Before the fix the tier read only the audit count, so this user was tiered
-        /// "Trialling" and the rationale then printed the self-contradiction "on 10 active days ...
-        /// short of the 3 needed to count as regular use".
-        /// </summary>
+        /// <summary>Cowork interactions on at least the regular-use number of days make a user established.</summary>
         [TestMethod]
-        public void ReportOnlyUser_AboveTheRegularBar_IsEstablished()
-        {
-            var row = new CoworkReadinessRow
-            {
-                CoworkActiveDays = 0,
-                CoworkInteractions = 0,
-                CoworkReportActiveDays = 10,
-                CoworkReportTotalTasks = 40,
-                UsedCowork = true,
-            };
-
-            Assert.AreEqual(CopilotAdoptionScoring.CoworkTiers.Established,
-                CopilotAdoptionScoring.CoworkTierFor(row, Options()),
-                "The first-party report is the documented basis for this tab; ignoring it demotes a real user.");
-        }
-
-        /// <summary>
-        /// The other direction - the audit fallback must survive. A user with no report row but a strong
-        /// audit signal is still established, otherwise the fix would have traded one blind spot for another.
-        /// </summary>
-        [TestMethod]
-        public void AuditOnlyUser_AboveTheRegularBar_IsStillEstablished()
+        public void AuditUser_AboveTheRegularBar_IsEstablished()
         {
             var row = new CoworkReadinessRow
             {
                 CoworkActiveDays = 7,
                 CoworkInteractions = 25,
-                CoworkReportActiveDays = null,
                 UsedCowork = true,
             };
 
@@ -139,47 +77,35 @@ namespace Tests.UnitTests
         }
 
         /// <summary>
-        /// And the report must be able to say "not regular" too: a present-but-low report count is
-        /// authoritative and must not fall back to a higher audit number.
+        /// The other direction: Cowork interactions on fewer days than the bar are a trial, not regular use.
         /// </summary>
         [TestMethod]
-        public void ReportActiveDays_WhenPresent_TakePrecedenceOverAudit()
+        public void AuditUser_BelowTheRegularBar_IsTrialling()
         {
             var row = new CoworkReadinessRow
             {
-                CoworkActiveDays = 9,
-                CoworkReportActiveDays = 1,
+                CoworkActiveDays = 2,
+                CoworkInteractions = 9,
                 UsedCowork = true,
             };
 
             Assert.AreEqual(CopilotAdoptionScoring.CoworkTiers.Trialling,
-                CopilotAdoptionScoring.CoworkTierFor(row, Options()),
-                "A present report value is the documented source and must win over the audit heuristic.");
+                CopilotAdoptionScoring.CoworkTierFor(row, Options()));
         }
 
         /// <summary>
-        /// Tiering on report active days while UsedCowork ignored them produced a row that was
-        /// simultaneously "Established" and "has not used Cowork" - contradicting the tier, the
-        /// "Used Cowork" CSV column and the workbook. Report active days are evidence of use.
+        /// A row that is "Established" and "has not used Cowork" at once would contradict the tier, the
+        /// "Used Cowork" CSV column and the workbook, so all three must come from the same audit evidence.
         /// </summary>
         [TestMethod]
-        public void ReportActiveDaysAlone_CountAsHavingUsedCowork()
+        public void AuditInteractions_DriveTheTierTheUsedFlagAndRegularUseTogether()
         {
             var scored = CopilotAdoptionScoring.ScoreCoworkReadiness(
-                new CoworkReadinessSignalRow
-                {
-                    UserId = 1,
-                    CoworkActiveDays = 0,
-                    CoworkInteractions = 0,
-                    CoworkReportActiveDays = 12,
-                    CoworkReportTotalTasks = null,
-                },
+                new CoworkReadinessSignalRow { UserId = 1, CoworkActiveDays = 12, CoworkInteractions = 30 },
                 Options());
 
             Assert.AreEqual(CopilotAdoptionScoring.CoworkTiers.Established, scored.Tier);
-            Assert.IsTrue(scored.UsedCowork,
-                "A user the first-party report shows as active on 12 days has used Cowork, whatever the "
-                + "task cell says - otherwise the tier and the Used Cowork column contradict each other.");
+            Assert.IsTrue(scored.UsedCowork);
             Assert.IsTrue(scored.RegularCoworkUser);
         }
 
@@ -198,49 +124,27 @@ namespace Tests.UnitTests
         }
 
         /// <summary>
-        /// Widening UsedCowork to count report active days broke the codebase's "a task count means the
-        /// row is report-sourced" proxy: the rationale fell through to the audit wording and told the
-        /// admin "established by audit reconciliation: 0 Cowork interactions across 0 days" about a user
-        /// Microsoft's report showed as active on 12 days.
+        /// The rationale names where its evidence came from - the Copilot audit log - and counts
+        /// interactions. It must never speak of tasks or cite Microsoft's Cowork usage report, which this
+        /// product cannot read: that is the claim #692 removed.
         /// </summary>
         [TestMethod]
-        public void Rationale_ForAReportOnlyUserWithNoTaskCount_DoesNotClaimAuditEvidence()
+        public void Rationale_CitesTheCopilotAuditLog_NeverTasksOrTheUsageReport()
         {
-            var scored = CopilotAdoptionScoring.ScoreCoworkReadiness(
-                new CoworkReadinessSignalRow
-                {
-                    UserId = 3,
-                    CoworkActiveDays = 0,
-                    CoworkInteractions = 0,
-                    CoworkReportActiveDays = 12,
-                    CoworkReportTotalTasks = null,
-                },
-                Options());
+            foreach (var activeDays in new[] { 7, 1 })
+            {
+                var scored = CopilotAdoptionScoring.ScoreCoworkReadiness(
+                    new CoworkReadinessSignalRow { UserId = 4, CoworkActiveDays = activeDays, CoworkInteractions = 20 },
+                    Options());
 
-            StringAssert.Contains(scored.Rationale, "Cowork usage report",
-                "The rationale must attribute the evidence to Microsoft's report, which is where it came from.");
-            Assert.IsFalse(scored.Rationale.Contains("audit reconciliation"),
-                "There is no audit evidence for this user - claiming it invents a source.");
-            Assert.IsFalse(scored.Rationale.Contains("0 Cowork task"),
-                "An unknown task count must not be printed as a measured zero.");
-        }
-
-        /// <summary>
-        /// The other direction: a genuinely audit-sourced user must still say so.
-        /// </summary>
-        [TestMethod]
-        public void Rationale_ForAnAuditOnlyUser_StillCitesAuditReconciliation()
-        {
-            var scored = CopilotAdoptionScoring.ScoreCoworkReadiness(
-                new CoworkReadinessSignalRow
-                {
-                    UserId = 4,
-                    CoworkActiveDays = 7,
-                    CoworkInteractions = 20,
-                },
-                Options());
-
-            StringAssert.Contains(scored.Rationale, "audit reconciliation");
+                Assert.AreEqual(activeDays >= 3 ? CopilotAdoptionScoring.CoworkTiers.Established : CopilotAdoptionScoring.CoworkTiers.Trialling,
+                    scored.Tier);
+                StringAssert.Contains(scored.Rationale, "20 Cowork interactions in the Copilot audit log");
+                Assert.IsFalse(scored.Rationale.IndexOf("task", StringComparison.OrdinalIgnoreCase) >= 0,
+                    $"The audit log counts interactions, not tasks: \"{scored.Rationale}\"");
+                Assert.IsFalse(scored.Rationale.IndexOf("usage report", StringComparison.OrdinalIgnoreCase) >= 0,
+                    $"The rationale must not cite a report the product never reads: \"{scored.Rationale}\"");
+            }
         }
     }
 

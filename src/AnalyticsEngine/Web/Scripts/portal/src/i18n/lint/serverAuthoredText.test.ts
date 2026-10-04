@@ -30,6 +30,8 @@ import { ENABLED_IMPORT_LABELS_BY_SETTING_PROPERTY } from '../../pages/InsightsO
 import { OFFICE_PLATFORM_LABEL_KEYS } from '../../pages/ReportsPage';
 import { WORKLOADS } from '../../types/licenceActivity';
 import { PORTAL_PERMISSION_ERROR_CODE } from '../../access';
+import { GLOBAL_FILTER_ERROR_KEYS } from '../../api/globalFilterApi';
+import { REPORT_SCOPE_ERROR_KEYS } from '../../api/http';
 
 function sortedUnique(values: string[]): string[] {
   return [...new Set(values)].sort((a, b) => a.localeCompare(b));
@@ -117,6 +119,49 @@ describe('API error-code drift checks', () => {
     expect(PORTAL_PERMISSION_ERROR_CODE).toBe(csharpStringConstant(source, 'ErrorCode'));
     expect(EN_CATALOG['access.permissionRequired.administration']).toBe(csharpStringConstant(source, 'AdministrationMessage'));
     expect(EN_CATALOG['access.permissionRequired.seePii']).toBe(csharpStringConstant(source, 'SeePiiMessage'));
+  });
+});
+
+/**
+ * The administrator's global report filter answers with codes, never with text the portal shows: the
+ * editor's endpoints (`GlobalFilterAPIController`), and every report refused because the filter cannot
+ * be applied (`ReportScopeFailure`, recognised once in `apiFetch`). A code added on the server without a
+ * sentence here would reach a Spanish reader as "Request failed (503)" - or not at all.
+ */
+const GLOBAL_FILTER_CONTROLLER = join(process.cwd(), '..', '..', 'Controllers', 'GlobalFilterAPIController.cs');
+const REPORT_SCOPE_RESOLVER = join(process.cwd(), '..', '..', 'Models', 'UserFilters', 'ReportScopeResolver.cs');
+
+describe('Global filter error codes', () => {
+  it('words every code the editor’s endpoints can send, and nothing they cannot', () => {
+    const source = readFileSync(GLOBAL_FILTER_CONTROLLER, 'utf8');
+    const server = sortedUnique([...source.matchAll(/internal\s+const\s+string\s+\w+Code\s*=\s*"([^"]+)"/g)].map((m) => m[1]));
+
+    expect(server.length).toBeGreaterThanOrEqual(4);
+    expect(sortedUnique([...GLOBAL_FILTER_ERROR_KEYS.keys()])).toEqual(server);
+    expect([...GLOBAL_FILTER_ERROR_KEYS.values()].filter((key) => !(key in EN_CATALOG))).toEqual([]);
+  });
+
+  it('words every refusal a report can send when the filter cannot be applied', () => {
+    const source = readFileSync(REPORT_SCOPE_RESOLVER, 'utf8');
+    const failures = source.slice(source.indexOf('class ReportScopeFailure'));
+    const server = sortedUnique(
+      [...failures.matchAll(/internal\s+const\s+string\s+(?:FilterUnavailable|FilterInvalid|DirectoryUnavailable)\s*=\s*"([^"]+)"/g)].map(
+        (m) => m[1],
+      ),
+    );
+
+    expect(server).toHaveLength(3);
+    expect(sortedUnique([...REPORT_SCOPE_ERROR_KEYS.keys()])).toEqual(server);
+    expect([...REPORT_SCOPE_ERROR_KEYS.values()].filter((key) => !(key in EN_CATALOG))).toEqual([]);
+  });
+
+  it('sends a code with every error the editor’s endpoints answer', () => {
+    const source = readFileSync(GLOBAL_FILTER_CONTROLLER, 'utf8');
+    const errors = [...source.matchAll(/new ApiErrorModel\(/g)].length;
+    const coded = [...source.matchAll(/new ApiErrorModel\(\s*[^,]+,\s*(?:\w+Code|ReportScopeFailure\.\w+)\s*\)/g)].length;
+
+    expect(errors).toBeGreaterThanOrEqual(6);
+    expect(coded, 'an ApiErrorModel sent without a code').toBe(errors);
   });
 });
 
@@ -667,7 +712,6 @@ const TIME_SAVED_ASSUMPTION_SPECS: TimeSavedAssumptionSpec[] = [
         'assumptions.sendEmailMinutes',
         'assumptions.postInTeamsMinutes',
         'assumptions.createDocumentsMinutes',
-        'assumptions.taskMinutes',
       ],
       shares: [
         'assumptions.organiseMeetingsShare',
@@ -676,10 +720,9 @@ const TIME_SAVED_ASSUMPTION_SPECS: TimeSavedAssumptionSpec[] = [
         'assumptions.postInTeamsShare',
         'assumptions.createDocumentsShare',
       ],
-      volumes: ['projection.cohortUsers', 'projection.workingDaysPerMonth', 'monthDays'],
-      // The tasks already running, and how many people run them - or the sentence saying nobody does.
-      observedTasks: ['projection.observedTasks', 'projection.observedUsers'],
-      observedNone: [],
+      volumes: ['projection.cohortUsers', 'projection.workingDaysPerMonth'],
+      // Everyone covered, people already using Cowork included, is modelled from their own work (#692).
+      everyoneModelled: [],
       increment: [],
       leftOut: [],
       lowerBound: ['conservativePercent'],
@@ -1774,7 +1817,6 @@ const SERVER_PLACEHOLDER_LITERAL = /(?:N?'|")(\([A-Za-z][A-Za-z \-]*\))(?:'|")/g
 
 /** Parenthesised literals in those files that never reach a page, and why. */
 const NOT_DISPLAYED_PLACEHOLDERS: Record<string, string> = {
-  '(all)': 'a cache-key fragment in ReportsAPIController, never returned',
   '(Any app)': 'the Office apps matrix ranking sentinel, filtered out before the rows are returned',
 };
 
@@ -2262,7 +2304,9 @@ describe('Copilot Adoption server warning text', () => {
     const service = readFileSync(COPILOT_ADOPTION_SERVICE, 'utf8');
     const coworkQueries = sortedUnique([...service.matchAll(/CopilotAdoptionQueries\.(Cowork\w+)/g)].map((m) => m[1]));
 
-    expect(coworkQueries.length, 'Cowork queries not found in the service').toBeGreaterThanOrEqual(7);
+    // A floor, so a broken pattern cannot pass by finding nothing. Five since the Cowork usage-report date
+    // and period probes went with the import of a Graph function that does not exist (#692).
+    expect(coworkQueries.length, 'Cowork queries not found in the service').toBeGreaterThanOrEqual(5);
     expect(
       coworkQueries.filter((query) => !isCoworkWarning({ key: 'couldNotLoad', values: { query, description: '', message: '' } })),
       'Add each Cowork query to COWORK_WARNING_QUERIES in serverText.ts, or its failure disappears from the Cowork tab.',
@@ -2282,7 +2326,8 @@ describe('Copilot Adoption server warning text', () => {
     // The only non-literal uses are StepOutput.MarkIncomplete's own parameter and the step merge, which
     // forwards reasons recorded by literal calls above. Anything else could name a dataset this list misses.
     expect(sortedUnique(calls.filter((arg) => !arg.startsWith('"'))), 'non-literal dataset name').toEqual(['reason', 'string dataset']);
-    expect(literals.length, 'figures-incomplete datasets not found in the service').toBeGreaterThanOrEqual(17);
+    // A floor, as above. Fifteen since the two Cowork usage-report datasets were removed (#692).
+    expect(literals.length, 'figures-incomplete datasets not found in the service').toBeGreaterThanOrEqual(15);
     // Only the service names datasets: a call in any other CopilotAdoption file would escape the list below.
     const adoptionDir = join(process.cwd(), '..', '..', '..', 'Common', 'Entities', 'CopilotAdoption');
     for (const file of readdirSync(adoptionDir).filter((name) => name.endsWith('.cs') && name !== 'CopilotAdoptionService.cs')) {

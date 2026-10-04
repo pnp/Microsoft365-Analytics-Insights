@@ -69,13 +69,6 @@ namespace Common.Entities.CopilotAdoption
         /// <summary>Interactions inside the window attributed to Microsoft 365 Copilot Cowork by the audit log.</summary>
         public long CoworkInteractions { get; set; }
 
-        public int? CoworkReportTotalTasks { get; set; }
-        public int? CoworkReportScheduledTasks { get; set; }
-        public int? CoworkReportUserInitiatedTasks { get; set; }
-        public int? CoworkReportActiveDays { get; set; }
-        public DateTime? CoworkReportLastActivityDate { get; set; }
-        public bool? CoworkReportRetainedUser { get; set; }
-
         /// <summary>Distinct Copilot agents used inside the window.</summary>
         public int AgentsUsed { get; set; }
 
@@ -232,33 +225,11 @@ namespace Common.Entities.CopilotAdoption
         [JsonProperty("agentsUsed")]
         public int AgentsUsed { get; set; }
 
+        /// <summary>Cowork interactions in the window, from the Copilot audit log. Interactions, not Cowork tasks.</summary>
         [JsonProperty("coworkInteractions")]
         public long CoworkInteractions { get; set; }
 
-        [JsonProperty("coworkReportTotalTasks")]
-        public int? CoworkReportTotalTasks { get; set; }
-
-        [JsonProperty("coworkReportScheduledTasks")]
-        public int? CoworkReportScheduledTasks { get; set; }
-
-        [JsonProperty("coworkReportUserInitiatedTasks")]
-        public int? CoworkReportUserInitiatedTasks { get; set; }
-
-        [JsonProperty("coworkReportActiveDays")]
-        public int? CoworkReportActiveDays { get; set; }
-
-        [JsonProperty("coworkReportLastActivityDate")]
-        public DateTime? CoworkReportLastActivityDate { get; set; }
-
-        [JsonProperty("coworkReportRetainedUser")]
-        public bool? CoworkReportRetainedUser { get; set; }
-
-        [JsonProperty("coworkAutomationRatioPct")]
-        public double? CoworkAutomationRatioPct { get; set; }
-
-        [JsonProperty("coworkCreditsPerTask")]
-        public decimal? CoworkCreditsPerTask { get; set; }
-
+        /// <summary>True when the Copilot audit log shows at least one Cowork interaction in the window.</summary>
         [JsonProperty("usedCowork")]
         public bool UsedCowork { get; set; }
 

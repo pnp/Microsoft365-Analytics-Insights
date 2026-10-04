@@ -75,7 +75,6 @@ const OPTIONS: CopilotAdoptionOptions = {
   copilotMinutesSavedPerMailThread: 5,
   copilotMinutesSavedPerDocument: 15,
   coworkEstimateLowerBoundRatio: 0.5,
-  coworkMinutesSavedPerTask: 6,
   coworkOrganiseMeetingsShare: 0.25,
   coworkOrganiseMeetingsMinutes: 6,
   coworkPrepareMeetingsShare: 0.1,
@@ -106,13 +105,10 @@ function incompleteSummary(): CopilotAdoptionSummary {
     dataSources: {
       auditAvailable: false,
       copilotUsageReportAvailable: false,
-      coworkUsageReportAvailable: false,
       m365UsageReportsAvailable: false,
       userMetadataAvailable: false,
       copilotUsageReportDate: null,
       copilotUsageReportPeriodDays: 0,
-      coworkUsageReportDate: null,
-      coworkUsageReportPeriodDays: 0,
       m365UsageReportDate: null,
       copilotUsageReportObfuscated: false,
     },
@@ -172,14 +168,8 @@ function incompleteSummary(): CopilotAdoptionSummary {
     coworkValueEstimate: {
       isModelled: false,
       cohortUsers: 0,
-      coworkTaskUsers: 0,
-      observedCoworkTasks: 0,
-      projectedCoworkUsers: 0,
       activities: [],
       projectedCoworkTasks: 0,
-      coworkTasks: 0,
-      observedTasksPerPersonPerMonth: 0,
-      observedTaskRateUsers: 0,
       hoursPerMonthLow: 0,
       hoursPerMonthHigh: 0,
       assumptions: [],
@@ -382,6 +372,7 @@ describe('CopilotAdoptionPage without See PII', () => {
     renderWithProvider(<CopilotAdoptionPage />, { access: { administration: false, seePii: false } });
 
     expect(await screen.findByRole('tab', { name: 'Analyst view' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Add filter' })).not.toBeInTheDocument();
     expect(screen.queryByRole('tab', { name: 'Licensed users' })).not.toBeInTheDocument();
     expect(screen.getByRole('tab', { name: 'Cowork' })).toBeInTheDocument();
     expect(screen.getByRole('tab', { name: 'Licence opportunities' })).toBeInTheDocument();

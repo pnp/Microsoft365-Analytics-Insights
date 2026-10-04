@@ -90,6 +90,14 @@ namespace Tests.UnitTests
             ["DlpAPIController.Availability"] = Any,
             ["DlpAPIController.Summary"] = Any,                        // trims the top-users table
 
+            // Every reader is shown the administrator's filter that narrows their reports. Reading, previewing
+            // or changing the definition needs See PII as well as Administration: its value picker lists
+            // people, and a filter that selects one person turns every report into that person's record (#680).
+            ["GlobalFilterAPIController.Effective"] = Any,
+            ["GlobalFilterAPIController.Get"] = AdminAndPii,
+            ["GlobalFilterAPIController.Save"] = AdminAndPii,
+            ["GlobalFilterAPIController.Preview"] = AdminAndPii,
+
             ["HealthAPIController.Summary"] = Admin,
             ["HealthAPIController.Data"] = Admin,
             ["HealthAPIController.Liveness"] = Admin,
@@ -144,8 +152,8 @@ namespace Tests.UnitTests
             ["UserDataLookupAPIController.Detail"] = AdminAndPii,
 
             // Aggregate dimensions and value counts drive the report-wide filter for every insights reader.
-            ["UserFilterAPIController.Dimensions"] = Any,
-            ["UserFilterAPIController.Values"] = Any,
+            ["UserFilterAPIController.Dimensions"] = Pii,
+            ["UserFilterAPIController.Values"] = Pii,
 
             ["UserImportCheckpointAPIController.Get"] = Admin,
             ["UserImportCheckpointAPIController.Clear"] = Admin,
@@ -879,6 +887,53 @@ namespace Tests.UnitTests
                 var full = JObject.Parse(await host.Client.GetStringAsync("api/CopilotAdoption/summary"));
                 Assert.AreEqual("manager@contoso.com", (string)full["accountabilityRollup"][0]["segment"]);
                 Assert.IsTrue(analysis.Summary.AccountabilityRollup.Count > 0, "The shared analysis must never be edited for one reader.");
+            }
+        }
+
+        [TestMethod]
+        public async Task CopilotAdoption_NarrowedAggregates_RequireSeePii()
+        {
+            using (var host = CopilotAdoptionHost(SmallAnalysis(), PortalTestHost.SignedIn()))
+            {
+                foreach (var url in new[]
+                {
+                    "api/CopilotAdoption/summary?emailDomain=contoso.com",
+                    "api/CopilotAdoption/summary?userFilter=%5B%7B%22d%22%3A%22userName%22%2C%22v%22%3A%5B%22person1%40contoso.com%22%5D%7D%5D",
+                    "api/CopilotAdoption/export/workbook?emailDomain=contoso.com",
+                })
+                {
+                    var response = await host.Client.GetAsync(url);
+                    Assert.AreEqual(HttpStatusCode.Forbidden, response.StatusCode, url);
+                    var body = JObject.Parse(await response.Content.ReadAsStringAsync());
+                    Assert.AreEqual(PortalPermissionDeniedModel.ErrorCode, (string)body["code"], url);
+                    Assert.AreEqual("seePii", (string)body["permission"], url);
+                }
+
+                host.Principal = PortalTestHost.SignedIn(PortalRoles.SeePii);
+                foreach (var url in new[]
+                {
+                    "api/CopilotAdoption/summary?emailDomain=contoso.com",
+                    "api/CopilotAdoption/export/workbook?emailDomain=contoso.com",
+                })
+                {
+                    Assert.AreEqual(HttpStatusCode.OK, (await host.Client.GetAsync(url)).StatusCode, url);
+                }
+            }
+        }
+
+        [TestMethod]
+        public async Task UserFilterCatalogue_RequiresSeePii()
+        {
+            using (var host = new PortalTestHost(
+                new[] { typeof(UserFilterAPIController) },
+                PortalTestHost.SignedIn(),
+                PortalAccessPolicy.Enforcing))
+            {
+                foreach (var url in new[] { "api/UserFilter/dimensions", "api/UserFilter/values?dimension=userName" })
+                {
+                    var response = await host.Client.GetAsync(url);
+                    Assert.AreEqual(HttpStatusCode.Forbidden, response.StatusCode, url);
+                }
             }
         }
 

@@ -28,6 +28,14 @@ describe('useUserFilterDimensions', () => {
     mocks.fetchUserFilterDimensions.mockReset();
   });
 
+  it('does not request the PII-bearing catalogue while disabled', async () => {
+    const result = renderHook(() => useUserFilterDimensions(false));
+
+    await waitFor(() => expect(result.result.current.loading).toBe(false));
+    expect(result.result.current.list).toBeNull();
+    expect(mocks.fetchUserFilterDimensions).not.toHaveBeenCalled();
+  });
+
   it('shares one list between filter bars, until the organisation types change', async () => {
     mocks.fetchUserFilterDimensions.mockResolvedValueOnce(list('Cost centre')).mockResolvedValueOnce(list('Cost centre (UK)'));
 

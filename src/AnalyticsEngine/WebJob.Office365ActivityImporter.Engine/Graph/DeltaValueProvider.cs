@@ -303,6 +303,15 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
 
         /// <summary>Records <paramref name="fingerprint"/>; an empty one (no filter) removes the record.</summary>
         Task SetFingerprintAsync(string orgAttributeQualifier, string fingerprint);
+
+        /// <returns>
+        /// The enabled-member fingerprint recorded after the token's last successful full read, or null when none
+        /// has been recorded.
+        /// </returns>
+        Task<string> GetMembershipFingerprintAsync(string orgAttributeQualifier);
+
+        /// <summary>Records the enabled-member fingerprint; null or empty removes the record.</summary>
+        Task SetMembershipFingerprintAsync(string orgAttributeQualifier, string fingerprint);
     }
 
     /// <summary>
@@ -336,6 +345,21 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 await _store.SetStringAsync(key, fingerprint).ConfigureAwait(false);
             }
         }
+
+        public Task<string> GetMembershipFingerprintAsync(string orgAttributeQualifier)
+            => _store.GetStringAsync(UserImportCheckpointKeys.DeltaTokenUserScopeMembers(_tenantId, orgAttributeQualifier));
+
+        public async Task SetMembershipFingerprintAsync(string orgAttributeQualifier, string fingerprint)
+        {
+            var key = UserImportCheckpointKeys.DeltaTokenUserScopeMembers(_tenantId, orgAttributeQualifier);
+            if (string.IsNullOrEmpty(fingerprint))
+            {
+                await _store.DeleteAsync(key).ConfigureAwait(false);
+            }
+            else
+            {
+                await _store.SetStringAsync(key, fingerprint).ConfigureAwait(false);
+            }
+        }
     }
 }
-

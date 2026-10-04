@@ -636,6 +636,61 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public async Task UserDirectory_ExistingRowThatEntersScope_GetsCurrentMetadataFromAFullReRead()
+        {
+            var token = Guid.NewGuid().ToString("N");
+            var pilot = DirectoryUser(Guid.NewGuid().ToString(), $"pilot-{token}@contoso.local");
+            var existing = DirectoryUser(Guid.NewGuid().ToString(), $"existing-{token}@contoso.local");
+            existing.PostalCode = "CURRENT";
+
+            var loader = new FakeUserMetadataLoader(new List<GraphUser> { pilot, existing })
+            {
+                DeltaUsersOverride = new List<GraphUser>(),
+            };
+            var marker = new InMemoryUserImportScopeMarkerStore();
+            var lastRun = new InMemoryImportLastRunStore();
+            var clock = new FixedClock(new DateTime(2026, 9, 30, 8, 0, 0, DateTimeKind.Utc));
+
+            using (var db = new AnalyticsEntitiesContext())
+            {
+                db.users.Add(new DbUser
+                {
+                    UserPrincipalName = existing.UserPrincipalName,
+                    Mail = existing.Mail,
+                    AzureAdId = existing.Id,
+                    AccountEnabled = true,
+                    PostalCode = "STALE",
+                });
+                await db.SaveChangesAsync();
+            }
+
+            Task<bool> Import(params GraphUser[] members) => new UserMetadataUpdater(
+                    AnalyticsLogger.ConsoleOnlyTracer(), new AppConfig(), loader, clock)
+                .WithUserScope(
+                    TestUserScopes.Provider(TestUserScopes.OfMembers(
+                        members.Select(m => (m.Id, m.UserPrincipalName, m.Mail)).ToArray())),
+                    lastRun,
+                    marker)
+                .InsertAndUpdateDatabaseFromExternalUsers();
+
+            try
+            {
+                Assert.IsTrue(await Import(pilot));
+                Assert.IsNotNull(marker.MembershipFingerprint, "The completed full read records which membership its delta token covers.");
+                Assert.AreEqual("STALE", (await UsersNamedLikeAsync(token)).Single(u => u.AzureAdId == existing.Id).PostalCode);
+
+                Assert.IsTrue(await Import(pilot, existing));
+
+                Assert.AreEqual("CURRENT", (await UsersNamedLikeAsync(token)).Single(u => u.AzureAdId == existing.Id).PostalCode,
+                    "The row's existence must not be mistaken for current metadata: joining the group forces a full Graph read.");
+            }
+            finally
+            {
+                await DeleteUsersAsync(token);
+            }
+        }
+
+        [TestMethod]
         public async Task UserDirectory_FilterRemoved_TheNextImportReadsTheWholeDirectory()
         {
             var token = Guid.NewGuid().ToString("N");

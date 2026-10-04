@@ -43,6 +43,13 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         /// <summary>At most one scope catch-up re-read per this many hours.</summary>
         public const int ScopeCatchUpIntervalHours = 24;
 
+        private enum ScopeCatchUpDecision
+        {
+            None,
+            FullReadAlreadyPending,
+            MembershipCatchUpRequested,
+        }
+
         /// <summary>
         /// Reads the admin-configured org types. Injectable so the org step can be exercised without a
         /// database; built from the configured SQL connection string otherwise.
@@ -248,10 +255,21 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 // different UserGroupsFilter would never return the people the new filter lets in.
                 deltaTokenCleared |= await ClearDeltaTokenIfUserScopeChangedAsync(orgSelection.DeltaKeyQualifier, alreadyCleared: deltaTokenCleared);
 
+                var scopeCatchUpDecision = ScopeCatchUpDecision.None;
                 if (!deltaTokenCleared && userScope.IsFiltered)
                 {
-                    await ClearDeltaTokenForScopeCatchUpIfDueAsync(db, userScope);
+                    scopeCatchUpDecision = await ClearDeltaTokenForScopeCatchUpIfDueAsync(
+                        db, userScope, orgSelection.DeltaKeyQualifier);
+                    deltaTokenCleared |= scopeCatchUpDecision == ScopeCatchUpDecision.MembershipCatchUpRequested;
                 }
+
+                // The membership marker is advanced only after a successful FULL read. Advancing it after an
+                // incremental read would forget a membership change while the newly in-scope person's user object
+                // remained behind the stored delta checkpoint.
+                var readingFullDirectory = deltaTokenCleared
+                    || scopeCatchUpDecision == ScopeCatchUpDecision.FullReadAlreadyPending;
+                var scopeCatchUpRequested =
+                    scopeCatchUpDecision == ScopeCatchUpDecision.MembershipCatchUpRequested;
 
                 // Load from Graph & update delta code once done
                 var allActiveGraphUsers = await _userLoader.LoadAllActiveUsers();
@@ -306,9 +324,11 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 }
 
                 var graphMentionedExistingDbUsers = _dataMapper.GetDbUsersFromGraphUsers(allActiveGraphUsers, allDbUsers);
+                var fallbackLicenceUserIds = skus == null ? new HashSet<int>() : null;
+                var fallbackDesiredLicences = skus == null ? new HashSet<UserLicenseAssignment>() : null;
 
                 // Insert any user we've not seen so far
-                var insertedDbUsers = await InsertMissingUsers(db, allActiveGraphUsers, graphMentionedExistingDbUsers, skus == null, importCycleLastUpdatedUtc);
+                var insertedDbUsers = await InsertMissingUsers(db, allActiveGraphUsers, graphMentionedExistingDbUsers, skus == null, importCycleLastUpdatedUtc, fallbackLicenceUserIds, fallbackDesiredLicences);
                 phaseResults.InsertPhaseSucceeded = true;
                 _logger.LogInformation($"User import - Insert phase completed. {insertedDbUsers.Count.ToString("N0")} new users inserted.");
 
@@ -433,7 +453,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                             notInsertedUpns,
                             dbUsersByUpn,
                             dbUsersByAadId,
-                            async (graphUser, dbUser) => await UpdateDbUserWithGraphData(db, graphUser, allActiveGraphUsers, new List<Common.Entities.User>(), dbUser, true, dbUsersByAadId, importCycleLastUpdatedUtc),
+                            async (graphUser, dbUser) => await UpdateDbUserWithGraphData(db, graphUser, allActiveGraphUsers, new List<Common.Entities.User>(), dbUser, true, dbUsersByAadId, importCycleLastUpdatedUtc, fallbackLicenceUserIds, fallbackDesiredLicences),
                             // Resolve the whole batch's managers in one query rather than one per
                             // user - see UserDataMapper.PrefetchManagersForBatchAsync (#371).
                             batch => _dataMapper.PrefetchManagersForBatchAsync(batch),
@@ -515,6 +535,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 else
                 {
                     await UserLicenseProcessor.MarkSubscribedSkuCapacityUnavailableAsync(db, _logger);
+                    await _licenseProcessor.ReconcileCollectedUserLicenses(db, fallbackLicenceUserIds, fallbackDesiredLicences);
 
                     // No separate licence phase runs at all when tenant SKUs are unavailable:
                     // ProcessUserLicenses already ran per user inside the update phase above, so
@@ -566,6 +587,11 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                     _logger.LogWarning("User import - NOT committing the Graph delta token: at least one import phase did not complete. " +
                         "The same users will be reprocessed on the next cycle rather than being skipped.");
                     cycleCompleted = false;
+                }
+
+                if (cycleCompleted && readingFullDirectory)
+                {
+                    await RecordScopeMembershipAfterFullReadAsync(orgSelection.DeltaKeyQualifier, userScope, scopeCatchUpRequested);
                 }
 
                 // Final cleanup
@@ -652,17 +678,17 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
 
         /// <summary>
         /// People added to the <c>UserGroupsFilter</c> groups after the directory was last read in full are never
-        /// returned by an incremental <c>/users/delta</c> read - their user object did not change, only the group did -
-        /// so they would never reach the users table. When any enabled member is missing from it, discard the delta
-        /// tokens so this cycle reads the full user list (filtered to the scope as always). Rate-limited to once per
-        /// <see cref="ScopeCatchUpIntervalHours"/>, so a member who can never be imported cannot cause a full read
-        /// every cycle.
+        /// returned by an incremental <c>/users/delta</c> read - their user object did not change, only the group did.
+        /// Compare the current enabled membership with the membership recorded after that full read and discard the
+        /// delta tokens when it changed. This deliberately does not use "does a users-table row exist?" as the marker:
+        /// an existing row may carry metadata from before the person entered scope and needs the same catch-up.
         /// </summary>
-        private async Task ClearDeltaTokenForScopeCatchUpIfDueAsync(AnalyticsEntitiesContext db, UserImportScope userScope)
+        private async Task<ScopeCatchUpDecision> ClearDeltaTokenForScopeCatchUpIfDueAsync(
+            AnalyticsEntitiesContext db, UserImportScope userScope, string orgAttributeQualifier)
         {
-            if (_lastRunStore == null || userScope.EnabledMemberObjectIds.Count == 0)
+            if (_lastRunStore == null)
             {
-                return;
+                return ScopeCatchUpDecision.None;
             }
 
             try
@@ -670,9 +696,40 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 // The token this cycle would resume: the provider is keyed by the org selection already.
                 if (string.IsNullOrEmpty(await _userLoader.DeltaValueProvider.GetDeltaToken()))
                 {
-                    return;     // Already reading the full list.
+                    return ScopeCatchUpDecision.FullReadAlreadyPending;
                 }
 
+                if (_scopeMarkerStore != null)
+                {
+                    var current = userScope.EnabledMembershipFingerprint;
+                    var stored = await _scopeMarkerStore.GetMembershipFingerprintAsync(orgAttributeQualifier);
+                    if (string.Equals(stored, current, StringComparison.Ordinal))
+                    {
+                        return ScopeCatchUpDecision.None;
+                    }
+
+                    // No marker means this build has just introduced membership tracking. Read once immediately:
+                    // an old dbo.users row cannot prove that the person's metadata was imported while in scope.
+                    if (stored != null)
+                    {
+                        var lastMembershipCatchUp = await _lastRunStore.GetLastRunUtc(ScopeCatchUpLastRunKey);
+                        if (!ImportCadenceGate.ShouldRun(lastMembershipCatchUp, ScopeCatchUpIntervalHours, force: false, nowUtc: _clock.UtcNow))
+                        {
+                            _logger.LogInformation("User import - enabled membership of the UserGroupsFilter group(s) has changed since the last full directory read. " +
+                                $"The next catch-up read is due after {lastMembershipCatchUp?.AddHours(ScopeCatchUpIntervalHours):u} UTC.");
+                            return ScopeCatchUpDecision.None;
+                        }
+                    }
+
+                    _logger.LogInformation(stored == null
+                        ? "User import - no membership marker exists for the stored /users/delta checkpoint. Reading the full user list once so every current UserGroupsFilter member has current metadata."
+                        : "User import - enabled membership of the UserGroupsFilter group(s) changed after the stored /users/delta checkpoint was taken. Reading the full user list this cycle.");
+                    await _userLoader.ClearStoredDeltaTokensAsync();
+                    return ScopeCatchUpDecision.MembershipCatchUpRequested;
+                }
+
+                // Non-persisted/test loaders have no marker store. Retain the old missing-row check as a best-effort
+                // fallback; production persisted checkpoints take the fingerprint path above.
                 var knownObjectIds = new HashSet<Guid>();
                 foreach (var id in await db.users.Where(u => u.AzureAdId != null && u.AzureAdId != "").Select(u => u.AzureAdId).ToListAsync())
                 {
@@ -685,7 +742,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 var missing = userScope.EnabledMemberObjectIds.Count(id => !knownObjectIds.Contains(id));
                 if (missing == 0)
                 {
-                    return;
+                    return ScopeCatchUpDecision.None;
                 }
 
                 var lastCatchUp = await _lastRunStore.GetLastRunUtc(ScopeCatchUpLastRunKey);
@@ -693,7 +750,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 {
                     _logger.LogInformation($"User import - {missing:N0} enabled member(s) of the UserGroupsFilter group(s) are not in the users table yet. " +
                         $"The next full re-read to add them is due after {lastCatchUp?.AddHours(ScopeCatchUpIntervalHours):u} UTC.");
-                    return;
+                    return ScopeCatchUpDecision.None;
                 }
 
                 _logger.LogInformation($"User import - {missing:N0} enabled member(s) of the UserGroupsFilter group(s) are not in the users table - usually " +
@@ -701,12 +758,49 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                     "Reading the full user list this cycle to add them.");
                 await _userLoader.ClearStoredDeltaTokensAsync();
                 await _lastRunStore.SetLastRunUtc(ScopeCatchUpLastRunKey, _clock.UtcNow);
+                return ScopeCatchUpDecision.MembershipCatchUpRequested;
             }
             catch (Exception ex)
             {
                 // A missed catch-up only delays adding new members; it must not stop the import.
                 _logger.LogWarning($"User import - could not check for UserGroupsFilter members missing from the users table ({ex.Message}). " +
                     "Will check again next cycle.");
+                return ScopeCatchUpDecision.None;
+            }
+        }
+
+        /// <summary>
+        /// Records which enabled membership a successfully completed full directory read covered. Each organisation
+        /// attribute selection has its own delta token, so it has its own marker too; the unqualified fallback token
+        /// is recorded alongside the selected one for the same reason as the filter marker.
+        /// </summary>
+        private async Task RecordScopeMembershipAfterFullReadAsync(
+            string orgAttributeQualifier, UserImportScope userScope, bool wasMembershipCatchUp)
+        {
+            if (_scopeMarkerStore == null)
+            {
+                return;
+            }
+
+            try
+            {
+                var fingerprint = userScope.IsFiltered ? userScope.EnabledMembershipFingerprint : null;
+                await _scopeMarkerStore.SetMembershipFingerprintAsync(orgAttributeQualifier, fingerprint);
+                var unqualified = GraphUserOrgSelection.None.DeltaKeyQualifier;
+                if (!string.Equals(orgAttributeQualifier ?? string.Empty, unqualified ?? string.Empty, StringComparison.Ordinal))
+                {
+                    await _scopeMarkerStore.SetMembershipFingerprintAsync(unqualified, fingerprint);
+                }
+
+                if (wasMembershipCatchUp && _lastRunStore != null)
+                {
+                    await _lastRunStore.SetLastRunUtc(ScopeCatchUpLastRunKey, _clock.UtcNow);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning($"User import - could not record which UserGroupsFilter membership the completed full directory read covered ({ex.Message}). " +
+                    "The next cycle may repeat the full read rather than risk leaving a newly in-scope user's metadata stale.");
             }
         }
 
@@ -1004,14 +1098,29 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
 
         #endregion
 
-        private async Task UpdateDbUserWithGraphData(AnalyticsEntitiesContext db, GraphUser graphUser, List<GraphUser> allGraphUsers, List<Common.Entities.User> allDbUsers, Common.Entities.User dbUser, bool readUserSkus, Dictionary<string, Common.Entities.User> dbUsersByAadId = null, DateTime? lastUpdatedUtc = null)
+        private async Task UpdateDbUserWithGraphData(AnalyticsEntitiesContext db, GraphUser graphUser, List<GraphUser> allGraphUsers, List<Common.Entities.User> allDbUsers, Common.Entities.User dbUser, bool readUserSkus, Dictionary<string, Common.Entities.User> dbUsersByAadId = null, DateTime? lastUpdatedUtc = null, HashSet<int> fallbackLicenceUserIds = null, HashSet<UserLicenseAssignment> fallbackDesiredLicences = null)
         {
             await _dataMapper.UpdateUserMetadata(db, graphUser, allGraphUsers, dbUser, dbUsersByAadId, allDbUsers, lastUpdatedUtc);
 
             // This is only done per user if can't be done at tenant level (due to extra permission)
             if (readUserSkus)
             {
-                await _licenseProcessor.ProcessUserLicenses(db, graphUser, dbUser);
+                var desired = await _licenseProcessor.BuildDesiredAssignmentsForUser(db, graphUser, dbUser);
+                if (desired == null)
+                {
+                    return;
+                }
+                if (fallbackLicenceUserIds == null || fallbackDesiredLicences == null)
+                {
+                    await _licenseProcessor.ReconcileCollectedUserLicenses(db, new[] { dbUser.ID }, desired);
+                    return;
+                }
+
+                fallbackLicenceUserIds.Add(dbUser.ID);
+                foreach (var assignment in desired)
+                {
+                    fallbackDesiredLicences.Add(assignment);
+                }
             }
         }
 
@@ -1019,7 +1128,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         /// Inserts missing users into DB using two-phase approach: fast bulk insert, then metadata enrichment.
         /// Delegates to UserInsertProcessor for the heavy lifting.
         /// </summary>
-        public async Task<List<Common.Entities.User>> InsertMissingUsers(AnalyticsEntitiesContext db, List<GraphUser> allGraphUsers, List<Common.Entities.User> graphMentionedDbUsers, bool readUserSkus, DateTime? importCycleLastUpdatedUtc = null)
+        public async Task<List<Common.Entities.User>> InsertMissingUsers(AnalyticsEntitiesContext db, List<GraphUser> allGraphUsers, List<Common.Entities.User> graphMentionedDbUsers, bool readUserSkus, DateTime? importCycleLastUpdatedUtc = null, HashSet<int> fallbackLicenceUserIds = null, HashSet<UserLicenseAssignment> fallbackDesiredLicences = null)
         {
             // Ensure cache and helpers are initialized (for direct method calls from tests)
             if (_userMetaCache == null)
@@ -1044,7 +1153,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 _dataMapper,
                 _licenseProcessor,
                 async (ctx, graphUser, allGraph, allDb, dbUser, readSkus, dbByAadId) =>
-                    await UpdateDbUserWithGraphData(ctx, graphUser, allGraph, allDb, dbUser, readSkus, dbByAadId, importCycleLastUpdatedUtc));
+                    await UpdateDbUserWithGraphData(ctx, graphUser, allGraph, allDb, dbUser, readSkus, dbByAadId, importCycleLastUpdatedUtc, fallbackLicenceUserIds, fallbackDesiredLicences));
         }
 
         /// <summary>

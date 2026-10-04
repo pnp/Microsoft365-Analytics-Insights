@@ -24,6 +24,8 @@ import Spinner from '../components/Spinner';
 import { formatNumber, useT, type TFunction, type TranslationKey } from '../i18n';
 import { usePortalAccess } from '../access';
 import PiiHiddenNote from '../components/shared/PiiHiddenNote';
+import GlobalFilterBar from '../components/globalFilter/GlobalFilterBar';
+import { useGlobalFilter } from '../components/globalFilter/GlobalFilterProvider';
 
 const WINDOWS = [
   { days: 7, labelKey: 'dlp.period.last7Days' },
@@ -237,6 +239,8 @@ export default function DlpPage() {
   const styles = useStyles();
   const t = useT();
   const { seePii } = usePortalAccess();
+  // The DLP.All section is tenant-wide only while no administrator's filter narrows it.
+  const narrowedByAdmin = useGlobalFilter().effective?.applied === true;
 
   const [days, setDays] = useState(28);
   const [reloadKey, setReloadKey] = useState(0);
@@ -307,6 +311,8 @@ export default function DlpPage() {
       <Body1 block className={styles.intro}>
         {t('dlp.intro')}
       </Body1>
+
+      <GlobalFilterBar />
 
       {error && (
         <MessageBar intent="error" style={{ marginTop: '12px' }}>
@@ -391,7 +397,7 @@ export default function DlpPage() {
           />
 
           <Text className={styles.sectionTitle} weight="semibold" size={500} block>
-            {t('dlp.tenant.title')}
+            {narrowedByAdmin ? t('dlp.tenant.titleFiltered') : t('dlp.tenant.title')}
           </Text>
           <Body1 block className={styles.muted} style={{ marginTop: '4px' }}>
             {t('dlp.tenant.description')}
@@ -408,8 +414,8 @@ export default function DlpPage() {
                 <KpiCard label={t('dlp.kpi.auditedOnly.label')} value={summary.tenantAuditedCount} hint={t('dlp.tenant.auditedOnly.hint')} />
               </div>
               <ImpactTable
-                title={t('dlp.tenant.policies.title')}
-                description={t('dlp.tenant.policies.description')}
+                title={narrowedByAdmin ? t('dlp.tenant.policies.titleFiltered') : t('dlp.tenant.policies.title')}
+                description={narrowedByAdmin ? t('dlp.tenant.policies.descriptionFiltered') : t('dlp.tenant.policies.description')}
                 nameHeader={t('dlp.column.policy')}
                 rows={summary.tenantTopPolicies}
                 showUsers={false}
