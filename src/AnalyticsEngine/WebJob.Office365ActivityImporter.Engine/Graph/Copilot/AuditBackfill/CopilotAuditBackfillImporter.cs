@@ -87,6 +87,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.AuditBackfill
         internal static readonly TimeSpan PollDelay = TimeSpan.FromSeconds(20);
         internal static readonly TimeSpan MinimumThrottlePause = TimeSpan.FromMinutes(15);
         internal static readonly TimeSpan SubmissionBudgetWindow = TimeSpan.FromHours(24);
+        internal static readonly TimeSpan MaxUnknownStatusAge = TimeSpan.FromHours(24);
 
         private readonly CopilotAuditBackfillStateStore _state;
         private readonly ICopilotAuditSearchSource _source;
@@ -322,6 +323,15 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.AuditBackfill
                         var query = await _source.GetQueryAsync(slice.QueryId).ConfigureAwait(false);
                         if (!query.IsTerminal)
                         {
+                            if (!query.IsKnownNonTerminal
+                                && slice.SubmittedUtc.HasValue
+                                && _utcNow().Subtract(slice.SubmittedUtc.Value) >= MaxUnknownStatusAge)
+                            {
+                                RetryOrGap(job, slice, CopilotAuditBackfillErrorCodes.QueryFailed, query.Status ?? "unknownFutureValue", resubmitLater: true);
+                                job.SubmissionsPausedUntilUtc = _utcNow().Add(PollDelay);
+                                continue;
+                            }
+
                             remaining.Add(slice);
                             continue;
                         }

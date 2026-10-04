@@ -55,6 +55,10 @@ Audit retention; the code does not currently expose a longer Premium Audit windo
 `operationFilters=["CopilotInteraction"]`, so the backfill imports Copilot `CopilotInteraction` records
 only. It checks the runtime app token for the opt-in `AuditLogsQuery.Read.All` application permission
 before submitting a query; that permission is not part of the installer's default consent.
+The v1.0 metadata path for these calls is `security` → `auditLog` (`auditCoreRoot`) → `queries`
+(`Collection(auditLogQuery)`, contained) → `records` (`Collection(auditLogRecord)`). `auditData` is an
+open abstract `auditData` complex type; Copilot's derived `copilotInteractionAuditRecord` fields can
+therefore arrive as top-level open properties or under `dynamicProperties`, and the mapper accepts both.
 
 On each Office365ActivityImporter cycle, after the live Activity API content has been saved, the web job
 advances the request by a bounded amount (`CopilotAuditBackfillImporter.AdvanceLatestAsync`). Backfill
@@ -76,7 +80,7 @@ cycle, so a systemic outage cannot burn every slice's attempts in one run. A 400
 `queryRejected` because it means the request shape is wrong for this tenant/API response.
 
 A failed slice is retried up to `MaxSliceAttempts` (3) submissions across cycles; after that it is
-recorded as a gap and the job continues. If Graph reports `isRecordCountLimitExceeded`, the importer
+recorded as a gap and the job continues. If Graph reports the non-nullable `isRecordCountLimitExceeded`, the importer
 discards the partial result and splits a day into four six-hour slices; a truncated six-hour slice splits
 into hours; a truncated hour is recorded as incomplete and the job continues. Any failed or incomplete
 slice makes the final state `completedWithGaps`, which the portal lists by affected day. Only systemic

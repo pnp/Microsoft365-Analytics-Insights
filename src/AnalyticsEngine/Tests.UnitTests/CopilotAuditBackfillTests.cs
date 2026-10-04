@@ -405,6 +405,32 @@ VALUES (@p0, @p1, @operationId, @userId);",
             Assert.IsTrue(job.SubmissionsPausedUntilUtc > now);
         }
 
+
+        [TestMethod]
+        public async Task Importer_RetriesUnknownFutureQueryStatusAfterBoundedAge()
+        {
+            var now = new DateTime(2026, 10, 2, 12, 0, 0, DateTimeKind.Utc);
+            var state = new CopilotAuditBackfillStateStore(new InMemoryKeyValueStore(), false, () => now);
+            var job = await state.CreateAsync(now.AddDays(-1), now, "admin@contoso.com");
+            job.State = CopilotAuditBackfillStates.Running;
+            var slice = job.PendingSlices[0];
+            job.PendingSlices.Clear();
+            slice.QueryId = "query-1";
+            slice.SubmittedUtc = now.Subtract(CopilotAuditBackfillImporter.MaxUnknownStatusAge).AddMinutes(-1);
+            job.InFlightSlices.Add(slice);
+            await state.SaveAsync(job);
+            var source = new FakeAuditSearchSource { Query = new CopilotAuditSearchQuery { Status = "unknownFutureValue" } };
+            var importer = new CopilotAuditBackfillImporter(state, source, new CountingPersistence(),
+                new AppConfig { ImportJobSettings = new ImportTaskSettings { Copilot = true } }, NullLogger.Instance,
+                () => now, _ => Task.CompletedTask, new FakeExistingEventFilter());
+
+            job = await importer.AdvanceLatestAsync();
+
+            Assert.AreEqual(0, job.InFlightSlices.Count);
+            Assert.IsTrue(job.PendingSlices.Count == 1 || job.Gaps.Count == 1, "The unknown status must be retried or gapped, not left in flight forever.");
+            Assert.AreEqual(CopilotAuditBackfillErrorCodes.QueryFailed, job.LastErrorCode);
+        }
+
         [TestMethod]
         public async Task Importer_PausesRecordPagingAtCycleBudgetAndResumesNextLink()
         {
@@ -487,6 +513,70 @@ VALUES (@p0, @p1, @operationId, @userId);",
             var rejected = CopilotAuditSearchRecordMapper.Map(new CopilotAuditSearchRecord { Id = "x", AuditData = JObject.Parse("{\"Workload\":\"SharePoint\",\"RecordType\":4}") }, NullLogger.Instance);
             Assert.IsNull(rejected.Content);
             Assert.AreEqual("notCopilotInteraction", rejected.ErrorCode);
+        }
+
+
+        [TestMethod]
+        public void Mapper_AcceptsDynamicPropertiesAuditDataShapeAndStripsODataMetadata()
+        {
+            var id = "00000000-0000-0000-0000-000000000051";
+            var inner = SyntheticRecord(id).AuditData as JObject;
+            inner["@odata.type"] = "#microsoft.graph.security.copilotInteractionAuditRecord";
+            var record = SyntheticRecord(id);
+            record.AuditData = new JObject
+            {
+                ["@odata.type"] = "#microsoft.graph.security.auditData",
+                ["dynamicProperties"] = inner,
+            };
+
+            var mapped = CopilotAuditSearchRecordMapper.Map(record, NullLogger.Instance);
+
+            Assert.IsNotNull(mapped.Content);
+            Assert.AreEqual(new Guid(id), mapped.Content.Id);
+            Assert.IsFalse(mapped.Content.OriginalImportFileContents.Contains("@odata"));
+        }
+
+        [TestMethod]
+        public void Mapper_CompletesMissingWorkloadFromGraphRecordWhenPayloadHasCopilotFields()
+        {
+            var id = "00000000-0000-0000-0000-000000000052";
+            var payload = (JObject)SyntheticRecord(id).AuditData.DeepClone();
+            payload.Remove("Workload");
+            payload.Remove("RecordType");
+            payload.Remove("Operation");
+            var record = new CopilotAuditSearchRecord
+            {
+                Id = id,
+                CreatedDateTime = new DateTime(2026, 10, 1, 10, 0, 0, DateTimeKind.Utc),
+                AuditLogRecordType = "CopilotInteraction",
+                Operation = "CopilotInteraction",
+                Service = "Copilot",
+                UserPrincipalName = "jane.doe@contoso.com",
+                AuditData = payload,
+            };
+
+            var mapped = CopilotAuditSearchRecordMapper.Map(record, NullLogger.Instance);
+
+            Assert.IsNotNull(mapped.Content);
+            Assert.AreEqual("Copilot", mapped.Content.Workload);
+            Assert.AreEqual("CopilotInteraction", mapped.Content.Operation);
+        }
+
+        [TestMethod]
+        public void Mapper_GraphCopilotRecordWithUnrecognisablePayloadUsesStableShapeError()
+        {
+            var mapped = CopilotAuditSearchRecordMapper.Map(new CopilotAuditSearchRecord
+            {
+                Id = "00000000-0000-0000-0000-000000000053",
+                AuditLogRecordType = "CopilotInteraction",
+                Operation = "CopilotInteraction",
+                Service = "Copilot",
+                UserPrincipalName = "jane.doe@contoso.com",
+                AuditData = JObject.Parse("{\"dynamicProperties\":{\"Id\":\"00000000-0000-0000-0000-000000000053\"}}"),
+            }, NullLogger.Instance);
+
+            Assert.IsNull(mapped.Content);
+            Assert.AreEqual(CopilotAuditBackfillErrorCodes.UnrecognisedAuditData, mapped.ErrorCode);
         }
 
         [TestMethod]

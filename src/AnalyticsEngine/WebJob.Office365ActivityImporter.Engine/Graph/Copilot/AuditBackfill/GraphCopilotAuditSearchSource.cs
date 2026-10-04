@@ -115,6 +115,9 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.AuditBackfill
 
         public bool Succeeded => string.Equals(Status, "succeeded", StringComparison.OrdinalIgnoreCase);
 
+        public bool IsKnownNonTerminal => string.Equals(Status, "notStarted", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(Status, "running", StringComparison.OrdinalIgnoreCase);
+
         public static CopilotAuditSearchQuery FromJson(string json)
         {
             var o = JObject.Parse(json);

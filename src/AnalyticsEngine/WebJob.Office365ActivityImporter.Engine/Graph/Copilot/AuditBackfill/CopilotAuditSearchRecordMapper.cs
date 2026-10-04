@@ -1,6 +1,8 @@
-using Common.Entities;
+﻿using Common.Entities;
+using Common.Entities.CopilotAuditBackfill;
 using Newtonsoft.Json.Linq;
 using System;
+using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
 using WebJob.Office365ActivityImporter.Engine;
@@ -26,20 +28,27 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.AuditBackfill
                 return new CopilotAuditSearchRecordMapping { ErrorCode = "missingAuditData" };
             }
 
+            JObject auditData;
             JObject payload;
             try
             {
-                payload = record.AuditData.Type == JTokenType.String
+                auditData = record.AuditData.Type == JTokenType.String
                     ? JObject.Parse((string)record.AuditData)
                     : (JObject)record.AuditData.DeepClone();
-                payload.Remove("@odata.type");
+                StripODataProperties(auditData);
+                payload = SelectPayload(auditData);
+                StripODataProperties(payload);
             }
             catch { return new CopilotAuditSearchRecordMapping { ErrorCode = "invalidAuditData" }; }
 
+            var graphSaysCopilot = IsGraphCopilotInteraction(record);
             var logBase = payload.ToObject<WorkloadOnlyAuditLogContent>();
             if (logBase == null || logBase.Workload != ActivityImportConstants.WORKLOAD_COPILOT || logBase.RecordType != 261)
             {
-                return new CopilotAuditSearchRecordMapping { ErrorCode = "notCopilotInteraction" };
+                if (!graphSaysCopilot || !TryCompleteCopilotPayloadFromRecord(payload, record))
+                {
+                    return new CopilotAuditSearchRecordMapping { ErrorCode = graphSaysCopilot ? CopilotAuditBackfillErrorCodes.UnrecognisedAuditData : "notCopilotInteraction" };
+                }
             }
 
             EnsureGuidId(payload, record.Id, out var idMatched);
@@ -49,6 +58,54 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.AuditBackfill
                 content.OriginalImportFileContents = payload.ToString(Newtonsoft.Json.Formatting.None);
             }
             return new CopilotAuditSearchRecordMapping { Content = content, IdMatched = idMatched };
+        }
+
+
+        private static JObject SelectPayload(JObject auditData)
+        {
+            var dynamicProperties = auditData["dynamicProperties"] as JObject;
+            if (dynamicProperties != null
+                && (dynamicProperties["RecordType"] != null || dynamicProperties["Workload"] != null || dynamicProperties["Id"] != null || dynamicProperties["id"] != null))
+            {
+                return (JObject)dynamicProperties.DeepClone();
+            }
+
+            return auditData;
+        }
+
+        private static void StripODataProperties(JObject obj)
+        {
+            if (obj == null) return;
+            foreach (var property in obj.Properties().Where(p => p.Name.StartsWith("@odata.", StringComparison.OrdinalIgnoreCase)).ToList())
+            {
+                property.Remove();
+            }
+        }
+
+        private static bool IsGraphCopilotInteraction(CopilotAuditSearchRecord record)
+        {
+            return record != null
+                && string.Equals(record.AuditLogRecordType, "CopilotInteraction", StringComparison.OrdinalIgnoreCase)
+                && string.Equals(record.Service, ActivityImportConstants.WORKLOAD_COPILOT, StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static bool TryCompleteCopilotPayloadFromRecord(JObject payload, CopilotAuditSearchRecord record)
+        {
+            if (payload == null || payload["CopilotEventData"] == null || payload["CopilotEventData"].Type != JTokenType.Object)
+            {
+                return false;
+            }
+
+            if (payload["Id"] == null && payload["id"] == null && string.IsNullOrEmpty(record.Id)) return false;
+            if (payload["CreationTime"] == null && !record.CreatedDateTime.HasValue) return false;
+            if (payload["UserId"] == null && string.IsNullOrEmpty(record.UserPrincipalName)) return false;
+
+            if (payload["Workload"] == null) payload["Workload"] = ActivityImportConstants.WORKLOAD_COPILOT;
+            if (payload["RecordType"] == null) payload["RecordType"] = 261;
+            if (payload["Operation"] == null) payload["Operation"] = string.IsNullOrEmpty(record.Operation) ? "CopilotInteraction" : record.Operation;
+            if (payload["CreationTime"] == null) payload["CreationTime"] = record.CreatedDateTime.Value;
+            if (payload["UserId"] == null) payload["UserId"] = record.UserPrincipalName;
+            return true;
         }
 
         private static void EnsureGuidId(JObject payload, string graphRecordId, out bool idMatched)
