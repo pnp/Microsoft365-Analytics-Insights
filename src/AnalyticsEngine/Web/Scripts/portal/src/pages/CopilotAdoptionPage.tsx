@@ -881,7 +881,7 @@ function CopilotAdoptionView({
                   options={summary.options}
                   userFilter={userFilterParam}
                   canSeePii={canSeePii && !dateRange}
-                  hiddenListNote={dateRange ? <PastRangeNamedListsHiddenNote /> : undefined}
+                  hiddenListNote={canSeePii && dateRange ? <PastRangeNamedListsHiddenNote /> : undefined}
                 />
               )}
 
@@ -894,7 +894,7 @@ function CopilotAdoptionView({
                   guidanceLinks={summary.guidanceLinks}
                   userFilter={userFilterParam}
                   canSeePii={canSeePii && !dateRange}
-                  hiddenListNote={dateRange ? <PastRangeNamedListsHiddenNote /> : undefined}
+                  hiddenListNote={canSeePii && dateRange ? <PastRangeNamedListsHiddenNote /> : undefined}
                 />
               )}
 

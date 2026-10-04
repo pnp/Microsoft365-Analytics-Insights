@@ -316,7 +316,7 @@ describe('CopilotAdoptionPage custom ranges', () => {
       expect.any(AbortSignal),
       null,
       null,
-      { from: '2026-09-01', to: '2026-09-30' },
+      { ...lastCalendarMonthRange() },
     ));
 
     fireEvent.change(screen.getByLabelText('Reporting period'), { target: { value: '90' } });
@@ -1290,6 +1290,22 @@ describe('CopilotAdoptionPage modelled time saved', () => {
     const printHeader = screen.getByText((_content, element) =>
       element?.tagName === 'SPAN' && /Custom range/.test(element.textContent ?? '') && /30 Sept? 2026/.test(element.textContent ?? ''));
     expect(printHeader.textContent).not.toMatch(/Last 28 days/);
+  });
+
+  it('gives a reader without See PII the permission reason in the panels on a past range', async () => {
+    vi.mocked(fetchAdoptionSummary).mockResolvedValue(withEstimate({
+      fromUtc: '2026-09-01T00:00:00Z',
+      toUtc: '2026-09-30T00:00:00Z',
+      options: { ...options, usesExplicitDates: true, fromUtc: '2026-09-01T00:00:00Z', toUtc: '2026-09-30T00:00:00Z', toExclusiveUtc: '2026-10-01T00:00:00Z' },
+    }));
+
+    renderWithProvider(<CopilotAdoptionPage />, { access: { administration: false, seePii: false } });
+    await screen.findByRole('tab', { name: 'Executive view', selected: true });
+    fireEvent.click(screen.getByRole('button', { name: 'Last calendar month' }));
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Licence opportunities' }));
+    expect(await screen.findByRole('tablist', { name: 'Licence opportunity sections' })).toBeVisible();
+    expect(screen.getByText('Individual details are hidden')).toBeInTheDocument();
   });
 
   it('claims nothing when there is nobody to model', async () => {
