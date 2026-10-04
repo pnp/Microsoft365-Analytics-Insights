@@ -444,7 +444,7 @@ above with `-ReplaceLinuxWebApp` added. It then:
 2. records role assignments scoped to the site itself — typically the CI
    deployment identity's Website Contributor — so it can restore them. The
    record includes any Azure RBAC ABAC condition and condition version, and is
-   written to the gitignored `artifacts/TelemetryService/` folder before the
+   written to the gitignored `artifacts/TelemetryService-state/` folder before the
    first destructive step;
 3. deletes the old site's managed-identity role assignments on Key Vault and
    Cosmos DB (the replacement gets a new identity, and ARM will not repoint an
@@ -472,7 +472,7 @@ read-only: it reports that a resume record or leftover Linux plan exists, but
 does not delete plans, create role assignments or change Entra.
 
 The resume record is operational state, not source: it may contain real Azure
-resource IDs and principal IDs, so keep it in `artifacts/TelemetryService/`
+resource IDs and principal IDs, so keep it in `artifacts/TelemetryService-state/`
 where the repository `.gitignore` excludes it. Delete it by hand only after
 verifying the replacement site has the intended role assignments.
 

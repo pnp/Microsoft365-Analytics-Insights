@@ -725,7 +725,7 @@ function Restore-WebAppRoleAssignments {
 
 function Get-ReplacementRecordPath {
     $repositoryRoot = (Resolve-Path (Join-Path $script:TelemetryDeployScriptRoot '..\..')).Path
-    $recordRoot = Join-Path $repositoryRoot 'artifacts\TelemetryService'
+    $recordRoot = Join-Path $repositoryRoot 'artifacts\TelemetryService-state'
     $key = "$SubscriptionId|$ResourceGroupName|$WebAppName".ToLowerInvariant()
     $bytes = [Text.Encoding]::UTF8.GetBytes($key)
     $sha256 = [Security.Cryptography.SHA256]::Create()
@@ -737,6 +737,23 @@ function Get-ReplacementRecordPath {
     }
 
     return Join-Path $recordRoot "replacement-$hash.json"
+}
+
+function Get-ReplacementRecordRoleAssignments {
+    param(
+        [object] $ReplacementRecord
+    )
+
+    if (-not $ReplacementRecord) {
+        return @()
+    }
+
+    if ($ReplacementRecord.PSObject.Properties.Name -notcontains 'roleAssignments' -or
+        $null -eq $ReplacementRecord.roleAssignments) {
+        return @()
+    }
+
+    return @($ReplacementRecord.roleAssignments)
 }
 
 function Read-ReplacementRecord {
@@ -1411,7 +1428,7 @@ try {
         return
     }
 
-    $preservedRoleAssignments = if ($replacementRecord) { @($replacementRecord.roleAssignments) } else { @() }
+    $preservedRoleAssignments = @(Get-ReplacementRecordRoleAssignments -ReplacementRecord $replacementRecord)
     $oldManagedIdentityPrincipalId = if ($replacementRecord) { $replacementRecord.managedIdentityPrincipalId } else { $null }
     if ($replaceLinuxSite) {
         $managedIdentityPrincipalId = Get-WebAppManagedIdentityPrincipalId -WebApp $existingWebApp
@@ -1475,7 +1492,7 @@ try {
         '--output', 'tsv'
     )
 
-    if ($preservedRoleAssignments.Count -gt 0) {
+    if (@($preservedRoleAssignments).Count -gt 0) {
         $newWebApp = Get-ExistingWebApp
         $newManagedIdentityPrincipalId = if ($newWebApp) { Get-WebAppManagedIdentityPrincipalId -WebApp $newWebApp } else { $null }
         Restore-WebAppRoleAssignments `

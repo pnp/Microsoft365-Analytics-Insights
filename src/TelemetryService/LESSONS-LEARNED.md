@@ -273,7 +273,7 @@ the fact that this run is a replacement rather than a fresh install — cannot
 live only in process memory.
 
 `deploy.ps1 -ReplaceLinuxWebApp` writes a resume record under the gitignored
-`artifacts/TelemetryService/` folder before deleting anything, and removes it
+`artifacts/TelemetryService-state/` folder before deleting anything, and removes it
 only after the replacement site has had the recorded role assignments restored.
 That is deliberately local operational state: it can contain real Azure
 resource and principal IDs, so never commit it or paste it into public notes.
