@@ -2,6 +2,7 @@
 using Microsoft.Extensions.Logging;
 using Newtonsoft.Json;
 using System.Collections.Generic;
+using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using WebJob.Office365ActivityImporter.Engine.ActivityAPI;
 using WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot;
@@ -17,6 +18,17 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities.Serialisation
 
         public string AgentName { get; set; }
         public string AgentId { get; set; }
+
+        /// <summary>
+        /// A name for the agent to use only until a real one is known. It is the Copilot Studio schema name
+        /// parsed from <see cref="AppIdentity"/>, set for a record that identifies its agent (AgentId) but
+        /// carries no AgentName or TargetAgentName. Copilot Studio's runtime writes such a record for every
+        /// turn on every channel. The agents upsert only uses it to fill a NULL name, so a display name
+        /// from a Microsoft 365 Copilot record always replaces it. It is kept out of <see cref="AgentName"/>
+        /// on purpose: that property also decides credit estimation. See issue #699.
+        /// </summary>
+        [JsonIgnore]
+        public string AgentFallbackName { get; set; }
 
         /// <summary>
         /// Indicates whether this is a custom engine agent or a declarative agent.
@@ -107,6 +119,15 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities.Serialisation
                         }
                     }
                 }
+
+                // An agent in any environment other than the default one has a bare GUID environment id,
+                // which does not contain the OrganizationId, so the search above finds nothing for it.
+                if (string.IsNullOrEmpty(thisAuditLogReport.AgentName) &&
+                    TryGetCopilotStudioSchemaName(thisAuditLogReport.AppIdentity, out var legacySchemaName))
+                {
+                    thisAuditLogReport.AgentName = legacySchemaName;
+                    thisAuditLogReport.AgentId = thisAuditLogReport.AppIdentity;
+                }
             }
 
             // First-party named agents (e.g. Copilot Cowork, AppIdentity "Copilot.M365Copilot.CoworkChat")
@@ -131,6 +152,15 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities.Serialisation
             // one id string - notably SharePoint agents as both "SharePointAgents.Declarative.SPO_..." and bare
             // "SPO_..." - which would otherwise create duplicate copilot_agents rows and double-count usage.
             thisAuditLogReport.AgentId = NormalizeAgentId(thisAuditLogReport.AgentId);
+
+            // Copilot Studio's runtime records name their agent only through AppIdentity. Without this, an
+            // agent used only in Teams or the Copilot Studio test pane would never get a name (#699).
+            if (string.IsNullOrEmpty(thisAuditLogReport.AgentName) &&
+                !string.IsNullOrEmpty(thisAuditLogReport.AgentId) &&
+                TryGetCopilotStudioSchemaName(thisAuditLogReport.AppIdentity, out var fallbackName))
+            {
+                thisAuditLogReport.AgentFallbackName = fallbackName;
+            }
 
             if (!string.IsNullOrEmpty(thisAuditLogReport.AgentName))
             {
@@ -159,6 +189,49 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities.Serialisation
 
         private const string SharePointDeclarativeAgentIdPrefix = "SharePointAgents.Declarative.";
 
+        private const string GuidPattern = "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}";
+
+        /// <summary>
+        /// The AgentId Microsoft 365 Copilot logs for a Copilot Studio agent: "T_{titleId}.{agentId}", where
+        /// titleId is the agent's Microsoft 365 app title and agentId is its application (client) ID, the
+        /// Entra Agent ID. Copilot Studio's runtime logs the same agent under the bare agentId.
+        /// </summary>
+        private static readonly Regex TitleScopedAgentIdPattern = new Regex(
+            "^T_" + GuidPattern + "\\.(?<agentId>" + GuidPattern + ")$",
+            RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
+        /// <summary>
+        /// The AppIdentity of Copilot Studio's runtime records: "Copilot.Studio.{environmentId}-{schemaName}".
+        /// The environment id is "Default-{tenantId}" for the default environment and a bare GUID for any other.
+        /// The schema name starts with the solution publisher's prefix, which varies (e.g. "new_" or "cr123_").
+        /// </summary>
+        private static readonly Regex CopilotStudioAppIdentityPattern = new Regex(
+            "^Copilot\\.Studio\\.(?:Default-)?" + GuidPattern + "-(?<schemaName>.+)$",
+            RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
+
+        /// <summary>
+        /// Reads the agent's schema name from a Copilot Studio runtime AppIdentity (see
+        /// <see cref="CopilotStudioAppIdentityPattern"/>). False for any other shape, including the
+        /// "Copilot.Studio.CustomEngine.T_{titleId}" AppIdentity on Microsoft 365 Copilot's records.
+        /// </summary>
+        internal static bool TryGetCopilotStudioSchemaName(string appIdentity, out string schemaName)
+        {
+            schemaName = null;
+            if (string.IsNullOrEmpty(appIdentity))
+            {
+                return false;
+            }
+
+            var match = CopilotStudioAppIdentityPattern.Match(appIdentity);
+            if (!match.Success)
+            {
+                return false;
+            }
+
+            schemaName = match.Groups["schemaName"].Value;
+            return true;
+        }
+
         /// <summary>
         /// True when <paramref name="appIdentity"/> starts with a vetted first-party prefix from
         /// <see cref="FirstPartyNamedAgentAppIdentityPrefixes"/> and can therefore safely be used as an AgentId.
@@ -183,9 +256,16 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities.Serialisation
 
         /// <summary>
         /// Collapses redundant agent id variants to a single canonical form so the same logical agent is not
-        /// dimensioned twice. Currently strips the "SharePointAgents.Declarative." wrapper prefix from SharePoint
-        /// agent ids, whose canonical identity is the bare "SPO_..." item id (Microsoft emits both forms for the
-        /// same agent). Null/empty and all other ids are returned unchanged.
+        /// dimensioned twice. Null/empty and all other ids are returned unchanged. Two variants are collapsed:
+        /// <list type="bullet">
+        /// <item>The "SharePointAgents.Declarative." wrapper is stripped from SharePoint agent ids, whose canonical
+        /// identity is the bare "SPO_..." item id (Microsoft emits both forms for the same agent).</item>
+        /// <item>"T_{titleId}.{agentId}" (Microsoft 365 Copilot's id for a Copilot Studio agent) becomes the bare
+        /// agentId, the id Copilot Studio's runtime records use for the same agent. Microsoft documents the
+        /// application (client) ID as unchanged when an agent's identity is migrated, so it is the stable key.
+        /// Only that exact shape is rewritten; dotted ids such as "CopilotStudio.Declarative.T_..." are not
+        /// (#699).</item>
+        /// </list>
         /// </summary>
         internal static string NormalizeAgentId(string agentId)
         {
@@ -201,6 +281,12 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities.Serialisation
                 {
                     return remainder;
                 }
+            }
+
+            var titleScoped = TitleScopedAgentIdPattern.Match(agentId);
+            if (titleScoped.Success)
+            {
+                return titleScoped.Groups["agentId"].Value;
             }
 
             return agentId;

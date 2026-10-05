@@ -10,12 +10,41 @@ DECLARE @t DATETIME2(7) = SYSUTCDATETIME();
 DECLARE @t0 DATETIME2(7) = @t;
 DECLARE @rows INT = 0;
 
--- Insert new agents
-INSERT INTO copilot_agents([name], [agent_id], [is_custom_agent])
-	SELECT distinct imports.agent_name, imports.agent_id, imports.is_custom_agent
-	FROM [${STAGING_TABLE_ACTIVITY}] imports
-	left join copilot_agents on copilot_agents.[agent_id] = imports.[agent_id]
-	where copilot_agents.[agent_id] is null and imports.[agent_id] is not null;
+-- ================================================================================================
+-- Agents (dbo.copilot_agents): one row per agent_id, kept up to date from each batch. Issue #699.
+--
+-- 1. The batch is collapsed to ONE row per agent_id before copilot_agents is touched. Inserting
+--    straight from the staging rows (SELECT DISTINCT name, agent_id, flag) gave a new agent one row
+--    per distinct name in the batch, a NULL name included, and agent_id is nvarchar(max), so no unique
+--    index can stop it. A Copilot Studio agent would hit that every time: its runtime record (no name)
+--    and its Microsoft 365 Copilot record (display name) resolve to the same agent_id.
+-- 2. Name. A display name (agent_name, from AgentName / TargetAgentName) names an unnamed agent, and
+--    replaces a different stored name when every record in the batch agrees on it. A batch whose
+--    records disagree leaves the stored name alone, so two spellings of one agent can't flip it back and
+--    forth on every batch. agent_fallback_name (a Copilot Studio schema name parsed from AppIdentity,
+--    for records that carry no name) only ever fills a NULL name, so it never replaces a display name.
+--    Nothing here sets a name to NULL. Comparisons are NULL-safe: "agent_name <> name" is UNKNOWN for a
+--    NULL stored name, which is why an agent first seen without a name used to stay unnamed for good.
+-- 3. is_custom_agent. A non-NULL flag replaces a different stored one (true wins within a batch). Name
+--    and flag are updated independently: each used to be set from a subquery that returned NULL
+--    whenever only the OTHER column had changed, wiping it.
+-- 4. Names are trimmed to the column's 100 characters, so an over-long name can't fail the batch.
+-- ================================================================================================
+SELECT
+	imports.agent_id,
+	MIN(LEFT(NULLIF(imports.agent_name, N''), 100)) AS name_min,
+	MAX(LEFT(NULLIF(imports.agent_name, N''), 100)) AS name_max,
+	MIN(LEFT(NULLIF(imports.agent_fallback_name, N''), 100)) AS fallback_name,
+	CAST(MAX(CAST(imports.is_custom_agent AS tinyint)) AS bit) AS is_custom_agent
+INTO #batch_agents
+FROM [${STAGING_TABLE_ACTIVITY}] imports
+WHERE imports.agent_id IS NOT NULL
+GROUP BY imports.agent_id;
+
+INSERT INTO dbo.copilot_agents ([name], [agent_id], [is_custom_agent])
+SELECT COALESCE(b.name_min, b.fallback_name), b.agent_id, b.is_custom_agent
+FROM #batch_agents AS b
+WHERE NOT EXISTS (SELECT 1 FROM dbo.copilot_agents AS ca WHERE ca.[agent_id] = b.agent_id);
 
 
 SET @rows = @@ROWCOUNT;
@@ -23,35 +52,26 @@ IF @dbg = 1 INSERT INTO dbo.copilot_merge_step_timings (batch_id, staging_table,
     VALUES (@batch_id, N'${STAGING_TABLE_ACTIVITY}', 'insert_agents', DATEDIFF(MILLISECOND, @t, SYSUTCDATETIME()), @rows);
 SET @t = SYSUTCDATETIME();
 
--- Update agent names to the first value in imports.agent_name for matching agent_id
-UPDATE copilot_agents
-SET [name] = (
-	SELECT TOP 1 imports.agent_name
-	FROM [${STAGING_TABLE_ACTIVITY}] imports
-	WHERE copilot_agents.[agent_id] = imports.[agent_id]
-	  AND imports.agent_name IS NOT NULL
-	  AND imports.agent_name <> copilot_agents.[name]
-	ORDER BY imports.agent_name
-),
-[is_custom_agent] = (
-	SELECT TOP 1 imports.is_custom_agent
-	FROM [${STAGING_TABLE_ACTIVITY}] imports
-	WHERE copilot_agents.[agent_id] = imports.[agent_id]
-	  AND imports.is_custom_agent IS NOT NULL
-	ORDER BY imports.agent_name
-)
-WHERE EXISTS (
-	SELECT 1
-	FROM [${STAGING_TABLE_ACTIVITY}] imports
-	WHERE copilot_agents.[agent_id] = imports.[agent_id]
-	  AND (
-		  (imports.agent_name IS NOT NULL AND imports.agent_name <> copilot_agents.[name])
-		  OR (imports.is_custom_agent IS NOT NULL AND (copilot_agents.[is_custom_agent] IS NULL OR imports.is_custom_agent <> copilot_agents.[is_custom_agent]))
-	  )
-);
+UPDATE ca
+SET [name] = n.new_name,
+	[is_custom_agent] = COALESCE(b.is_custom_agent, ca.[is_custom_agent])
+FROM dbo.copilot_agents AS ca
+INNER JOIN #batch_agents AS b
+	ON b.agent_id = ca.[agent_id]
+CROSS APPLY (
+	SELECT CASE
+		WHEN b.name_min IS NULL THEN COALESCE(ca.[name], b.fallback_name)	-- no display name in the batch
+		WHEN ca.[name] IS NULL THEN b.name_min								-- the first display name
+		WHEN b.name_min = b.name_max THEN b.name_min						-- the batch agrees: take it
+		ELSE ca.[name]														-- the batch disagrees: keep it
+	END AS new_name
+) AS n
+WHERE (n.new_name IS NOT NULL AND (ca.[name] IS NULL OR n.new_name <> ca.[name]))
+	OR (b.is_custom_agent IS NOT NULL AND (ca.[is_custom_agent] IS NULL OR b.is_custom_agent <> ca.[is_custom_agent]));
 
 
 SET @rows = @@ROWCOUNT;
+DROP TABLE #batch_agents;
 IF @dbg = 1 INSERT INTO dbo.copilot_merge_step_timings (batch_id, staging_table, step_name, duration_ms, rows_affected)
     VALUES (@batch_id, N'${STAGING_TABLE_ACTIVITY}', 'update_agents', DATEDIFF(MILLISECOND, @t, SYSUTCDATETIME()), @rows);
 SET @t = SYSUTCDATETIME();
@@ -77,6 +97,10 @@ SET @t = SYSUTCDATETIME();
 -- LEFT (not INNER) JOIN on purpose: an INNER JOIN would silently DROP a chat whose audit event was
 -- missing, turning a loud foreign-key violation into invisible data loss. With LEFT JOIN the row is
 -- still offered to the insert and the existing FK behaviour is preserved exactly.
+--
+-- The ROW_NUMBER orders by the agent row's id so that an agent_id which already has more than one
+-- copilot_agents row (from before #699 stopped new ones) always resolves to its oldest row, rather than
+-- to whichever one the plan happened to return first.
 INSERT INTO dbo.copilot_chats (event_id, app_host, agent_id, copilot_credit_estimate_total, copilot_credit_estimate_json, thread_id, client_region, copilot_log_version, user_id, time_stamp)
 SELECT event_id, app_host, agent_id, copilot_credit_estimate_total, copilot_credit_estimate_json, thread_id, client_region, copilot_log_version, user_id, time_stamp
 FROM (
@@ -91,7 +115,7 @@ FROM (
         LEFT(i.copilot_log_version, 50) AS copilot_log_version,
         ae.user_id AS user_id,
         ae.time_stamp AS time_stamp,
-        ROW_NUMBER() OVER (PARTITION BY i.event_id ORDER BY (SELECT NULL)) AS rn
+        ROW_NUMBER() OVER (PARTITION BY i.event_id ORDER BY ca.id) AS rn
     FROM dbo.[${STAGING_TABLE_ACTIVITY}] AS i
     LEFT JOIN dbo.copilot_agents AS ca
         ON ca.agent_id = i.agent_id

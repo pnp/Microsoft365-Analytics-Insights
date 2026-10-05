@@ -308,6 +308,7 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
             row.AppHost = auditRecord.CopilotEventData?.AppHost ?? "Unknown";
             row.AgentId = auditRecord.AgentId;
             row.AgentName = auditRecord.AgentName;
+            row.AgentFallbackName = auditRecord.AgentFallbackName;
             row.IsCustomAgent = auditRecord.IsCustomAgent;
             row.AccessedResourcesJson = SerializeAccessedResources(auditRecord.CopilotEventData?.AccessedResources);
             row.MessagesJson = SerializeMessages(auditRecord);
