@@ -634,7 +634,7 @@ describe('OpportunitiesPanel licence model', () => {
     expect(within(model).queryByText(/^Assumes each Cowork task saves/)).toBeNull();
     // The one mention: the two figures it shares with the Cowork estimate.
     expect(
-      within(model).getByText(/^The conservative share and the hours in a working day apply to both time-saved estimates/),
+      within(model).getByText(/^The conservative share applies to every time-saved estimate - licensing, Cowork and the time already saved by seat holders/),
     ).toBeTruthy();
   });
 

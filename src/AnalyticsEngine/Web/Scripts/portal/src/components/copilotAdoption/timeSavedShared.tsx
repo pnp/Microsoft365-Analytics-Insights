@@ -936,39 +936,56 @@ export function ScenarioPicker<T extends string>({
 
 /**
  * What every calculator ends on: the hours in a day for the full-time restatement, a reset for every
- * figure, the reminder that two of the figures are shared with the other estimate, and where the
+ * figure, the reminder that some of the figures are shared with the other estimates, and where the
  * reader's figures are kept.
+ *
+ * The seat holders' estimate restates nothing as full-time people, so it leaves the hours in a day
+ * out and says which of its figures are shared in its own words.
  */
-export function CalculatorControls({ timeSaved }: { timeSaved: TimeSavedAssumptionState }) {
+export function CalculatorControls({
+  timeSaved,
+  showHoursPerDay = true,
+  sharedNote,
+}: {
+  timeSaved: TimeSavedAssumptionState;
+  showHoursPerDay?: boolean;
+  sharedNote?: string;
+}) {
   const styles = useModelStyles();
   const t = useT();
   const { assumptions, defaults, customised, isCustomised, setAssumption, resetAssumption, resetAll } = timeSaved;
 
   return (
     <>
-      <div className={styles.controlsRow}>
-        <span className={styles.inline}>
-          <Text size={200}>{t('copilotAdoptionTimeSaved.input.hoursPerDayLabel')}</Text>
-          <AssumptionInput
-            field="hoursPerDay"
-            value={assumptions.hoursPerDay}
-            defaultValue={defaults.hoursPerDay}
-            customised={customised.includes('hoursPerDay')}
-            label={t('copilotAdoptionTimeSaved.input.hoursPerDayLabel')}
-            unit={t('copilotAdoptionTimeSaved.unit.hours')}
-            onCommit={setAssumption}
-            onReset={resetAssumption}
-          />
-        </span>
-        {isCustomised && (
-          <Button size="small" icon={<ArrowCounterclockwise16Regular />} onClick={resetAll} data-print="hide">
-            {t('copilotAdoptionTimeSaved.input.resetAll')}
-          </Button>
-        )}
-      </div>
+      {(showHoursPerDay || isCustomised) && (
+        <div className={styles.controlsRow}>
+          {showHoursPerDay ? (
+            <span className={styles.inline}>
+              <Text size={200}>{t('copilotAdoptionTimeSaved.input.hoursPerDayLabel')}</Text>
+              <AssumptionInput
+                field="hoursPerDay"
+                value={assumptions.hoursPerDay}
+                defaultValue={defaults.hoursPerDay}
+                customised={customised.includes('hoursPerDay')}
+                label={t('copilotAdoptionTimeSaved.input.hoursPerDayLabel')}
+                unit={t('copilotAdoptionTimeSaved.unit.hours')}
+                onCommit={setAssumption}
+                onReset={resetAssumption}
+              />
+            </span>
+          ) : (
+            <span />
+          )}
+          {isCustomised && (
+            <Button size="small" icon={<ArrowCounterclockwise16Regular />} onClick={resetAll} data-print="hide">
+              {t('copilotAdoptionTimeSaved.input.resetAll')}
+            </Button>
+          )}
+        </div>
+      )}
 
       <Text size={100} className={styles.sub} style={{ marginTop: '8px' }}>
-        {t('copilotAdoptionTimeSaved.input.sharedNote')}
+        {sharedNote ?? t('copilotAdoptionTimeSaved.input.sharedNote')}
       </Text>
 
       <MessageBar intent={isCustomised ? 'warning' : 'info'} style={{ marginTop: '12px' }}>

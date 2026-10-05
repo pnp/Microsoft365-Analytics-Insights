@@ -860,7 +860,7 @@ describe('CoworkPanel time-saved assumptions', () => {
     await renderSettled(withEstimates());
 
     expect(
-      screen.getByText(/^The conservative share and the hours in a working day apply to both time-saved estimates/),
+      screen.getByText(/^The conservative share applies to every time-saved estimate - licensing, Cowork and the time already saved by seat holders/),
     ).toBeTruthy();
   });
 });

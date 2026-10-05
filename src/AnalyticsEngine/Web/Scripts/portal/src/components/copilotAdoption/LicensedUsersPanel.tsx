@@ -152,6 +152,7 @@ export default function LicensedUsersPanel({
   initialBands,
   initialAction,
   userFilter,
+  shown = true,
 }: {
   windowDays: number;
   dateRange?: DateRange | null;
@@ -176,6 +177,11 @@ export default function LicensedUsersPanel({
    * different population from the summary above it.
    */
   userFilter?: string | null;
+  /**
+   * False while the list sits in a section of the tab that is not showing. A hidden list is not
+   * printed, so it must not hold the printout up loading every row.
+   */
+  shown?: boolean;
 }) {
   const styles = useStyles();
   const table = useAdoptionTableStyles();
@@ -242,7 +248,7 @@ export default function LicensedUsersPanel({
 
   // The whole list while a print is being produced; the page on screen the rest of the time.
   const printRows = usePrintAllRows<LicensedUserAdoptionRow>({
-    enabled: !loading && data !== null,
+    enabled: shown && !loading && data !== null,
     total: data?.total ?? 0,
     loadedRows: data?.rows.length ?? 0,
     loadPage: (skip, take, signal) => fetchLicensedUsers(windowDays, filters, skip, take, seatLicenceTypeIds, signal, ...(dateRange ? [dateRange] as const : [])),
