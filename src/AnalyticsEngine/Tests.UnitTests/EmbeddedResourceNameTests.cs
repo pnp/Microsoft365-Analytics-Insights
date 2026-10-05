@@ -55,6 +55,7 @@ namespace Tests.UnitTests
             "WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot.SQL.insert_sp_copilot_events_from_staging_table.sql",
             "WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot.SQL.insert_teams_copilot_events_from_staging_table.sql",
             "WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot.SQL.repair_denormalised_copilot_columns.sql",
+            "WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot.SQL.repair_split_copilot_agents.sql",
             "WebJob.Office365ActivityImporter.Engine.ActivityAPI.Dlp.SQL.insert_copilot_dlp_events_from_staging_table.sql",
             "WebJob.Office365ActivityImporter.Engine.ActivityAPI.Dlp.SQL.insert_dlp_rule_matches_from_staging_table.sql",
             "WebJob.Office365ActivityImporter.Engine.ActivityAPI.PowerPlatform.SQL.insert_copilot_studio_events_from_staging_table.sql",
