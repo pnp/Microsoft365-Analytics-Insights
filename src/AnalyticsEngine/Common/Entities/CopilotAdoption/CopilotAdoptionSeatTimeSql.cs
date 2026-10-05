@@ -28,10 +28,13 @@ namespace Common.Entities.CopilotAdoption
             var seats = string.Join(",", (seatLicenceTypeIds ?? Enumerable.Empty<int>()).Distinct().OrderBy(i => i));
             if (string.IsNullOrWhiteSpace(seats)) seats = "-1";
 
+            // Negated below, so the agent-id term must be FALSE - never UNKNOWN - for the NULL agent_id that
+            // every row kept here has. A bare `c.agent_id IN (...)` made NOT (...) UNKNOWN for all of them, so
+            // a tenant with any Cowork agent row got no actions at all and every seat holder read zero.
             var coworkIds = (coworkAgentIds ?? Enumerable.Empty<int>()).Distinct().OrderBy(i => i).ToList();
             var cowork = coworkIds.Count == 0
                 ? "(LOWER(CAST(ISNULL(c.app_host, '') AS nvarchar(100))) = 'cowork')"
-                : "(LOWER(CAST(ISNULL(c.app_host, '') AS nvarchar(100))) = 'cowork' OR c.agent_id IN (" + string.Join(",", coworkIds) + "))";
+                : "(LOWER(CAST(ISNULL(c.app_host, '') AS nvarchar(100))) = 'cowork' OR (c.agent_id IS NOT NULL AND c.agent_id IN (" + string.Join(",", coworkIds) + ")))";
 
             var host = "LOWER(" + CopilotAdoptionSql.AppHostKey("c.app_host", string.Empty) + ")";
             const string outlookHosts = "'outlook'";
