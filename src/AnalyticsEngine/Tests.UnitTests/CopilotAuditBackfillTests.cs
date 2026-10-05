@@ -757,8 +757,12 @@ VALUES (@p0, N'Word', @userId, @p1);",
             }
         }
 
+        // net10: EF looks "name=SPOInsightsEntities" up in ConfigurationManager, which has no App.config behind it
+        // on this branch, so the connection string is read from AnalyticsConfig and handed over instead - as
+        // AnalyticsEntitiesContext's own constructor does. Still without auto-update, as on main.
         private static AnalyticsEntitiesContext TestDb()
-            => new AnalyticsEntitiesContext("name=SPOInsightsEntities", false, false);
+            => new AnalyticsEntitiesContext(
+                AnalyticsConfig.ConnectionStrings[AnalyticsEntitiesContext.ConnectionStringName].ConnectionString, false, false);
 
         private static async Task<CopilotAuditBackfillStateStore> NewStateWithJobAsync(int days = 1)
         {

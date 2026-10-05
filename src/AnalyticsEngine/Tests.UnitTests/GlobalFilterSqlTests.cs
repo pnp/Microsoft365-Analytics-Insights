@@ -2,18 +2,17 @@ extern alias AnalyticsWeb;
 
 using Common.Entities.Migrations;
 using Common.Entities.UserFilters;
+using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.Data.SqlClient;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
-using System.Net.Http;
 using System.Security.Claims;
 using System.Threading;
 using System.Threading.Tasks;
-using System.Web.Http;
-using System.Web.Http.Results;
 using GlobalFilterProviders = AnalyticsWeb::Web.AnalyticsWeb.Models.UserFilters.GlobalFilterProviders;
 using IUserDirectorySource = AnalyticsWeb::Web.AnalyticsWeb.Models.UserFilters.IUserDirectorySource;
 using PortalAccessPolicy = AnalyticsWeb::Web.AnalyticsWeb.Security.PortalAccessPolicy;
@@ -306,7 +305,7 @@ CREATE TABLE dbo.__MigrationHistory (
                 new Directory());
             var unfiltered = new ReportScopeResolver(GlobalFilterProviders.None, new Directory());
 
-            var areas = new Dictionary<string, Func<ReportsAPIController, Task<IHttpActionResult>>>
+            var areas = new Dictionary<string, Func<ReportsAPIController, Task<IActionResult>>>
             {
                 ["copilot"] = c => c.Copilot(1),
                 ["copilot-agents"] = c => c.CopilotAgents(1),
@@ -341,26 +340,29 @@ CREATE TABLE dbo.__MigrationHistory (
             Assert.AreEqual(0, broken.Count, string.Join(Environment.NewLine, broken));
         }
 
-        private static async Task<ReportAreaData> Area(ReportScopeResolver scopes, Func<ReportsAPIController, Task<IHttpActionResult>> call)
+        private static async Task<ReportAreaData> Area(ReportScopeResolver scopes, Func<ReportsAPIController, Task<IActionResult>> call)
         {
-            var configuration = new HttpConfiguration();
-            configuration.Properties[typeof(PortalAccessPolicy)] = PortalAccessPolicy.Enforcing;
-            var request = new HttpRequestMessage(HttpMethod.Get, "https://contoso.example/api/Reports");
-            request.SetConfiguration(configuration);
+            // net10: an ASP.NET Core request, with the role policy pinned where PortalAccess reads it on this
+            // host - HttpContext.Items - rather than in Web API 2's HttpConfiguration properties.
+            var http = new DefaultHttpContext();
+            http.Items[typeof(PortalAccessPolicy)] = PortalAccessPolicy.Enforcing;
+            http.Request.Method = HttpMethods.Get;
+            http.Request.Scheme = "https";
+            http.Request.Host = new HostString("contoso.example");
+            http.Request.Path = "/api/Reports";
 
             var identity = new ClaimsIdentity("Test");
             identity.AddClaim(new Claim("upn", "rep@contoso.com"));
+            http.User = new ClaimsPrincipal(identity);
 
             var controller = new ReportsAPIController(scopes)
             {
-                Request = request,
-                Configuration = configuration,
-                User = new ClaimsPrincipal(identity),
+                ControllerContext = new ControllerContext { HttpContext = http },
             };
 
-            var result = await call(controller) as OkNegotiatedContentResult<ReportAreaData>;
+            var result = await call(controller) as OkObjectResult;
             Assert.IsNotNull(result, "The area did not answer 200.");
-            return result.Content;
+            return (ReportAreaData)result.Value;
         }
 
         /// <summary>Five people in Sales - the fewest a reader without See PII may be shown - and one elsewhere.</summary>
@@ -377,7 +379,12 @@ CREATE TABLE dbo.__MigrationHistory (
                 builder.AddUser(new UserDirectoryEntry { UserId = 5, UserPrincipalName = "analyst@contoso.com", Department = "Sales" });
                 builder.AddUser(new UserDirectoryEntry { UserId = 6, UserPrincipalName = "planner@contoso.com", Department = "Sales" });
                 builder.AddUser(new UserDirectoryEntry { UserId = 4, UserPrincipalName = "engineer@contoso.com", Department = "Engineering" });
-                _snapshot = builder.Build(new DateTime(2026, 9, 1, 8, 0, 0, DateTimeKind.Utc));
+                // net10: read "at" a different instant from GlobalFilterWebTests' directory. A report's id set is
+                // cached process-wide in MemoryCache.Default, keyed by when the directory was read and the resolved
+                // filter, and both fixtures resolve "department is Sales" - five people here, three there. The SDK
+                // project compiles the test classes alphabetically, so this class now runs first and, at the same
+                // instant, served its five people to that class's three-person assertions.
+                _snapshot = builder.Build(new DateTime(2026, 9, 1, 8, 30, 0, DateTimeKind.Utc));
             }
 
             public Task<UserDirectorySnapshot> GetAsync(CancellationToken cancellationToken) => Task.FromResult(_snapshot);

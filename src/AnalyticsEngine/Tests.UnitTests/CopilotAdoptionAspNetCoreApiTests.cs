@@ -61,8 +61,9 @@ namespace Tests.UnitTests
                     // into an unparseable "0.1,0.9" - so the first value must be what is handed over.
                     + "&coworkCreateDocumentsShare=0.1&coworkCreateDocumentsShare=0.9");
 
+                // Stable build 1848 (#692) retired the per-task minutes argument; the query string is the fifth.
                 var parsed = CopilotAdoptionAPIController.ParseTimeSavedOverrides(
-                    null, null, null, null, null,
+                    null, null, null, null,
                     CopilotAdoptionAPIController.QueryNameValuePairs(context.Request));
 
                 Assert.AreEqual(0.15d, parsed.CoworkShares[CoworkActivities.SendEmail], "A German server must not read '0.15' as 15.");
@@ -81,7 +82,7 @@ namespace Tests.UnitTests
         {
             Assert.IsNull(CopilotAdoptionAPIController.QueryNameValuePairs(null));
             Assert.IsFalse(CopilotAdoptionAPIController.ParseTimeSavedOverrides(
-                null, null, null, null, null, CopilotAdoptionAPIController.QueryNameValuePairs(new DefaultHttpContext().Request)).Any);
+                null, null, null, null, CopilotAdoptionAPIController.QueryNameValuePairs(new DefaultHttpContext().Request)).Any);
         }
 
         [TestMethod]
@@ -247,7 +248,7 @@ namespace Tests.UnitTests
 
             public FixedAnalysisRunner(CopilotAdoptionAnalysis analysis) => _analysis = analysis;
 
-            public Task<CopilotAdoptionAnalysis> RunAsync(int windowDays, List<int> seatLicenceTypeIds, ICopilotAdoptionRunTelemetry telemetry)
+            public Task<CopilotAdoptionAnalysis> RunAsync(int windowDays, DateTime? fromUtc, DateTime? toUtc, DateTime? toExclusiveUtc, bool usesExplicitDates, List<int> seatLicenceTypeIds, ICopilotAdoptionRunTelemetry telemetry)
                 => Task.FromResult(_analysis);
         }
 

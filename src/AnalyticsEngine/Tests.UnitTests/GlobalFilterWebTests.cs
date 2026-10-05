@@ -1,17 +1,21 @@
 extern alias AnalyticsWeb;
 
 using Common.Entities.UserFilters;
+using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
+using Newtonsoft.Json.Linq;
 using System;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
+using System.Reflection;
 using System.Security.Claims;
 using System.Threading;
 using System.Threading.Tasks;
-using System.Web.Http;
-using System.Web.Http.Results;
 using ApiErrorModel = AnalyticsWeb::Web.AnalyticsWeb.Models.ApiErrorModel;
+using ApiReplyException = AnalyticsWeb::Web.AnalyticsWeb.ApiReplyException;
+using ApiReplyExceptionFilterAttribute = AnalyticsWeb::Web.AnalyticsWeb.ApiReplyExceptionFilterAttribute;
 using CachedGlobalFilterProvider = AnalyticsWeb::Web.AnalyticsWeb.Models.UserFilters.CachedGlobalFilterProvider;
 using GlobalFilterAdminModel = AnalyticsWeb::Web.AnalyticsWeb.Models.UserFilters.GlobalFilterAdminModel;
 using GlobalFilterAPIController = AnalyticsWeb::Web.AnalyticsWeb.Controllers.GlobalFilterAPIController;
@@ -26,6 +30,7 @@ using PortalAccessPolicy = AnalyticsWeb::Web.AnalyticsWeb.Security.PortalAccessP
 using PortalPermissionDeniedModel = AnalyticsWeb::Web.AnalyticsWeb.Security.PortalPermissionDeniedModel;
 using PortalRoles = AnalyticsWeb::Web.AnalyticsWeb.Security.PortalRoles;
 using ReportScopeResolver = AnalyticsWeb::Web.AnalyticsWeb.Models.UserFilters.ReportScopeResolver;
+using ReportsAPIController = AnalyticsWeb::Web.AnalyticsWeb.Controllers.ReportsAPIController;
 using UserFilterAPIController = AnalyticsWeb::Web.AnalyticsWeb.Controllers.UserFilterAPIController;
 
 namespace Tests.UnitTests
@@ -353,7 +358,7 @@ namespace Tests.UnitTests
             var response = await Execute(await controller.Save(new GlobalFilterSaveRequest { Filter = "", Revision = 0 }, CancellationToken.None));
 
             Assert.AreEqual(HttpStatusCode.Conflict, response.StatusCode);
-            Assert.AreEqual("revisionConflict", ((ApiErrorModel)((ObjectContent)response.Content).Value).Code);
+            Assert.AreEqual("revisionConflict", ((ApiErrorModel)response.Value).Code);
             Assert.AreEqual(MyDepartment, store.Record.FilterJson, "The filter someone else saved is untouched.");
         }
 
@@ -368,7 +373,7 @@ namespace Tests.UnitTests
                 CancellationToken.None));
 
             Assert.AreEqual(HttpStatusCode.BadRequest, response.StatusCode);
-            Assert.AreEqual("invalidFilter", ((ApiErrorModel)((ObjectContent)response.Content).Value).Code);
+            Assert.AreEqual("invalidFilter", ((ApiErrorModel)response.Value).Code);
             Assert.AreEqual(0, store.Saves);
         }
 
@@ -381,7 +386,7 @@ namespace Tests.UnitTests
             var response = await Execute(await controller.Save(new GlobalFilterSaveRequest { Filter = MyDepartment }, CancellationToken.None));
 
             Assert.AreEqual(HttpStatusCode.ServiceUnavailable, response.StatusCode);
-            Assert.AreEqual("storageUnavailable", ((ApiErrorModel)((ObjectContent)response.Content).Value).Code);
+            Assert.AreEqual("storageUnavailable", ((ApiErrorModel)response.Value).Code);
         }
 
         [TestMethod]
@@ -422,18 +427,18 @@ namespace Tests.UnitTests
             var directory = new Directory();
             var controller = Picker(directory, PiiReader("rep@contoso.com"));
 
-            var names = await controller.Values("userName", null, 200, CancellationToken.None) as OkNegotiatedContentResult<UserFilterValuePage>;
+            var names = OkValue<UserFilterValuePage>(await controller.Values("userName", null, 200, CancellationToken.None));
             Assert.IsNotNull(names);
             CollectionAssert.AreEquivalent(
                 new[] { "director@contoso.com", "rep@contoso.com", "peer@contoso.com" },
-                names.Content.Values.Select(v => v.Value).ToArray(),
+                names.Values.Select(v => v.Value).ToArray(),
                 "A sign-in name is a person: the picker must not name anyone the reader's reports leave out.");
 
-            var departments = await controller.Values("department", null, 200, CancellationToken.None) as OkNegotiatedContentResult<UserFilterValuePage>;
-            CollectionAssert.AreEqual(new[] { "Sales" }, departments.Content.Values.Select(v => v.Value).ToArray());
+            var departments = OkValue<UserFilterValuePage>(await controller.Values("department", null, 200, CancellationToken.None));
+            CollectionAssert.AreEqual(new[] { "Sales" }, departments.Values.Select(v => v.Value).ToArray());
 
-            var dimensions = await controller.Dimensions(CancellationToken.None) as OkNegotiatedContentResult<UserFilterDimensionList>;
-            Assert.AreEqual(3, dimensions.Content.People);
+            var dimensions = OkValue<UserFilterDimensionList>(await controller.Dimensions(CancellationToken.None));
+            Assert.AreEqual(3, dimensions.People);
         }
 
         [TestMethod]
@@ -441,20 +446,125 @@ namespace Tests.UnitTests
         {
             var controller = Picker(new Directory(), Admin("rep@contoso.com"));
 
-            var names = await controller.Values("userName", null, 200, CancellationToken.None) as OkNegotiatedContentResult<UserFilterValuePage>;
+            var names = OkValue<UserFilterValuePage>(await controller.Values("userName", null, 200, CancellationToken.None));
 
-            Assert.AreEqual(5, names.Content.Values.Count);
+            Assert.AreEqual(5, names.Values.Count);
         }
 
         private static UserFilterAPIController Picker(Directory directory, ClaimsPrincipal user)
         {
-            var request = Request();
             return new UserFilterAPIController(directory, new ReportScopeResolver(Provider(new MemoryStore(MyDepartment)), directory))
             {
-                Request = request,
-                Configuration = request.GetConfiguration(),
-                User = user,
+                ControllerContext = ContextFor(Request(), user),
             };
+        }
+
+        #endregion
+
+        #region net10: refusals reach the reader through ASP.NET Core
+
+        /// <summary>
+        /// Web API 2 sent an <c>HttpResponseException</c>'s response from any controller. ASP.NET Core has no such
+        /// thing, so a refusal is an <see cref="ApiReplyException"/> and each controller needs the filter that sends
+        /// it - without it a reader would get the generic error page instead of the refusal the portal explains.
+        /// </summary>
+        [TestMethod]
+        public void EveryControllerThatResolvesAReportScope_SendsItsRefusals()
+        {
+            const BindingFlags members = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
+            var resolving = PortalTestHost.WebControllers()
+                .Where(c => c.GetFields(members).Any(f => f.FieldType == typeof(ReportScopeResolver))
+                            || c.GetProperties(members).Any(p => p.PropertyType == typeof(ReportScopeResolver)))
+                .ToList();
+
+            CollectionAssert.IsSubsetOf(
+                new[]
+                {
+                    "AgentCostsAPIController", "CopilotAdoptionAPIController", "DlpAPIController", "GlobalFilterAPIController",
+                    "LicenceActivityAPIController", "ReportsAPIController", "TeamsExplorerAPIController",
+                    "UserFilterAPIController", "WebActivityAPIController",
+                },
+                resolving.Select(c => c.Name).ToList(),
+                "The controllers known to apply the global filter must be found, or this test proves nothing.");
+
+            var missing = resolving
+                .Where(c => c.GetCustomAttribute<ApiReplyExceptionFilterAttribute>(inherit: true) == null)
+                .Select(c => c.Name)
+                .ToList();
+            Assert.AreEqual(0, missing.Count, "Missing [ApiReplyExceptionFilter]: " + string.Join(", ", missing));
+        }
+
+        [TestMethod]
+        public async Task ARefusal_IsSentAsJsonToAScript_AndAsTextToAPageLoad_AndNeverCached()
+        {
+            var resolver = new ReportScopeResolver(new BrokenProvider(), new Directory());
+
+            using (var host = new PortalTestHost(
+                new[] { typeof(GlobalFilterAPIController) },
+                PortalTestHost.SignedIn(),
+                PortalAccessPolicy.Enforcing,
+                _ => new GlobalFilterAPIController(resolver)))
+            {
+                var script = await host.Client.GetAsync("api/GlobalFilter/effective");
+                Assert.AreEqual(HttpStatusCode.ServiceUnavailable, script.StatusCode);
+                Assert.AreEqual("globalFilterUnavailable", (string)JObject.Parse(await script.Content.ReadAsStringAsync())["code"]);
+                Assert.IsTrue(script.Headers.CacheControl?.NoStore == true, "A refusal depends on the reader and must not be cached.");
+
+                var navigation = new HttpRequestMessage(HttpMethod.Get, "api/GlobalFilter/effective");
+                navigation.Headers.Add("Sec-Fetch-Mode", "navigate");
+                var page = await host.Client.SendAsync(navigation);
+                Assert.AreEqual(HttpStatusCode.ServiceUnavailable, page.StatusCode);
+                Assert.AreEqual("text/plain", page.Content.Headers.ContentType?.MediaType);
+                StringAssert.StartsWith(await page.Content.ReadAsStringAsync(), "The administrator's report filter could not be read");
+            }
+        }
+
+        /// <summary>
+        /// The bypass cookie arrives among the browser's other cookies, and possibly twice when it was set at two
+        /// paths. net10 reads the Cookie header itself, as Web API 2's <c>GetCookies</c> did, rather than
+        /// <see cref="HttpRequest.Cookies"/>, which keeps only one value per name.
+        /// </summary>
+        [TestMethod]
+        public async Task Bypass_IsFoundAmongTheBrowsersOtherCookies()
+        {
+            var resolver = Resolver(new MemoryStore(MyDepartment));
+
+            foreach (var header in new[] { "theme=dark; GlobalFilterBypass=1", "GlobalFilterBypass=0; GlobalFilterBypass=1" })
+            {
+                var request = Request();
+                request.Headers.Cookie = header;
+
+                var admin = await resolver.ResolveAsync(request, Admin("rep@contoso.com"), null, CancellationToken.None);
+
+                Assert.IsTrue(admin.Global.Bypassed, header);
+                Assert.IsFalse(admin.IsRestricted, header);
+            }
+
+            var notSwitchedOff = Request();
+            notSwitchedOff.Headers.Cookie = "theme=dark; GlobalFilterBypass=0";
+            var stillFiltered = await resolver.ResolveAsync(notSwitchedOff, Admin("rep@contoso.com"), null, CancellationToken.None);
+            Assert.IsTrue(stillFiltered.IsRestricted, "Only the value 1 switches the filter off.");
+        }
+
+        [TestMethod]
+        public async Task ReaderWithoutSeePii_IsSentThePortalsOwnSeePiiRefusal_ByAReport()
+        {
+            // Three people, explicitly - nothing taken from the reader - so under the floor of five whoever reads it.
+            var resolver = new ReportScopeResolver(Provider(new MemoryStore("[{\"d\":\"department\",\"v\":[\"Sales\"]}]")), new Directory());
+
+            using (var host = new PortalTestHost(
+                new[] { typeof(ReportsAPIController) },
+                PortalTestHost.SignedIn(),
+                PortalAccessPolicy.Enforcing,
+                _ => new ReportsAPIController(resolver)))
+            {
+                var response = await host.Client.GetAsync("api/Reports/copilot");
+
+                Assert.AreEqual(HttpStatusCode.Forbidden, response.StatusCode);
+                var body = JObject.Parse(await response.Content.ReadAsStringAsync());
+                Assert.AreEqual(PortalPermissionDeniedModel.ErrorCode, (string)body["code"]);
+                Assert.AreEqual("seePii", (string)body["permission"]);
+            }
         }
 
         #endregion
@@ -471,27 +581,41 @@ namespace Tests.UnitTests
             return new CachedGlobalFilterProvider(store, TimeSpan.FromMinutes(1));
         }
 
-        private static HttpRequestMessage Request(bool bypass = false, HttpMethod method = null)
+        /// <summary>
+        /// A request to the portal's API, as ASP.NET Core hands it to a controller.
+        /// </summary>
+        /// <remarks>
+        /// net10: the role policy is pinned where <c>PortalAccess</c> reads it on this host - the request's
+        /// <see cref="HttpContext.Items"/> - rather than in Web API 2's <c>HttpConfiguration</c> properties.
+        /// </remarks>
+        private static HttpRequest Request(bool bypass = false, HttpMethod method = null)
         {
-            var configuration = new HttpConfiguration();
-            configuration.Properties[typeof(PortalAccessPolicy)] = PortalAccessPolicy.Enforcing;
+            var context = new DefaultHttpContext();
+            context.Items[typeof(PortalAccessPolicy)] = PortalAccessPolicy.Enforcing;
 
-            var request = new HttpRequestMessage(method ?? HttpMethod.Get, "https://contoso.example/api/GlobalFilter");
-            request.SetConfiguration(configuration);
-            request.Headers.Add("X-Requested-With", "XMLHttpRequest");
-            if (bypass) request.Headers.Add("Cookie", "GlobalFilterBypass=1");
+            var request = context.Request;
+            request.Method = (method ?? HttpMethod.Get).Method;
+            request.Scheme = "https";
+            request.Host = new HostString("contoso.example");
+            request.Path = "/api/GlobalFilter";
+            request.Headers["X-Requested-With"] = "XMLHttpRequest";
+            if (bypass) request.Headers.Cookie = "GlobalFilterBypass=1";
             return request;
         }
 
         private static GlobalFilterAPIController Controller(ReportScopeResolver resolver, ClaimsPrincipal user, bool bypass = false, HttpMethod method = null)
         {
-            var request = Request(bypass, method);
             return new GlobalFilterAPIController(resolver)
             {
-                Request = request,
-                Configuration = request.GetConfiguration(),
-                User = user,
+                ControllerContext = ContextFor(Request(bypass, method), user),
             };
+        }
+
+        /// <summary>The controller context for <paramref name="request"/>, signed in as <paramref name="user"/>.</summary>
+        private static ControllerContext ContextFor(HttpRequest request, ClaimsPrincipal user)
+        {
+            request.HttpContext.User = user;
+            return new ControllerContext { HttpContext = request.HttpContext };
         }
 
         private static ClaimsPrincipal Reader(string upn) => Principal(upn);
@@ -517,18 +641,23 @@ namespace Tests.UnitTests
             return principal;
         }
 
-        private static async Task<HttpResponseMessage> Execute(IHttpActionResult result)
+        private static Task<Reply> Execute(IActionResult result)
         {
-            return await result.ExecuteAsync(CancellationToken.None);
+            return Task.FromResult(Reply.Of(result));
         }
 
-        private static T Body<T>(IHttpActionResult result) where T : class
+        private static T Body<T>(IActionResult result) where T : class
         {
-            var response = result.ExecuteAsync(CancellationToken.None).GetAwaiter().GetResult();
+            var response = Reply.Of(result);
             Assert.AreEqual(HttpStatusCode.OK, response.StatusCode, "Expected 200 but got " + response.StatusCode);
-            var body = ((ObjectContent)response.Content).Value as T;
+            var body = response.Value as T;
             Assert.IsNotNull(body, "The response body was not a " + typeof(T).Name);
             return body;
+        }
+
+        private static T OkValue<T>(IActionResult result) where T : class
+        {
+            return (result as OkObjectResult)?.Value as T;
         }
 
         private static async Task<Tuple<HttpStatusCode, string>> RefusalOf(Func<Task> action)
@@ -537,10 +666,10 @@ namespace Tests.UnitTests
             {
                 await action();
             }
-            catch (HttpResponseException ex)
+            catch (ApiReplyException ex)
             {
-                var body = (ex.Response.Content as ObjectContent)?.Value as ApiErrorModel;
-                return Tuple.Create(ex.Response.StatusCode, body?.Code);
+                var reply = Reply.Of(ex.Result);
+                return Tuple.Create(reply.StatusCode, (reply.Value as ApiErrorModel)?.Code);
             }
 
             throw new AssertFailedException("The request was answered rather than refused.");
@@ -553,13 +682,39 @@ namespace Tests.UnitTests
             {
                 await action();
             }
-            catch (HttpResponseException ex)
+            catch (ApiReplyException ex)
             {
-                var body = ex.Response.Content == null ? string.Empty : await ex.Response.Content.ReadAsStringAsync();
-                return Tuple.Create(ex.Response.StatusCode, body);
+                var reply = Reply.Of(ex.Result);
+                var body = reply.Value == null ? string.Empty
+                    : reply.Value as string ?? Newtonsoft.Json.JsonConvert.SerializeObject(reply.Value);
+                return Tuple.Create(reply.StatusCode, body);
             }
 
             throw new AssertFailedException("The request was answered rather than refused.");
+        }
+
+        /// <summary>
+        /// net10: an action's result as the status and body it would send. ASP.NET Core results are inspected
+        /// rather than executed; <c>Ok(x)</c> is an <see cref="OkObjectResult"/>, and Web API 2's
+        /// <c>Content(status, x)</c> is ported as <c>StatusCode(status, x)</c>, an <see cref="ObjectResult"/>.
+        /// </summary>
+        private sealed class Reply
+        {
+            public HttpStatusCode StatusCode { get; private set; }
+
+            public object Value { get; private set; }
+
+            public static Reply Of(IActionResult result)
+            {
+                switch (result)
+                {
+                    case ObjectResult value: return new Reply { StatusCode = (HttpStatusCode)(value.StatusCode ?? 200), Value = value.Value };
+                    case JsonResult json: return new Reply { StatusCode = (HttpStatusCode)(json.StatusCode ?? 200), Value = json.Value };
+                    case ContentResult content: return new Reply { StatusCode = (HttpStatusCode)(content.StatusCode ?? 200), Value = content.Content };
+                    case StatusCodeResult status: return new Reply { StatusCode = (HttpStatusCode)status.StatusCode };
+                    default: throw new AssertFailedException("Unexpected result " + result?.GetType().Name);
+                }
+            }
         }
 
         private static UserDirectorySnapshot Snapshot()
