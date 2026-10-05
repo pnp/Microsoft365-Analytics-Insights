@@ -544,6 +544,44 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public void WithoutLicenceEstimate_ModelsCandidatesFromTheirUnroundedWork_AndSaysTheyNeedALicence()
+        {
+            var options = Options();
+            // Two candidates, each organising half a meeting a day - which a rounded figure would drop.
+            var candidates = new List<LicenceOpportunityRow>
+            {
+                new LicenceOpportunityRow { UserId = 1, MeetingsOrganisedPerActiveDay = 0.5, EmailsSentPerActiveDay = 4 },
+                new LicenceOpportunityRow { UserId = 2, MeetingsOrganisedPerActiveDay = 0.5, FilesPerActiveDay = 3 },
+            };
+
+            var estimate = CopilotAdoptionScoring.EstimateCoworkValueWithoutLicence(candidates, options);
+
+            // The same arithmetic as the seat holders' estimate over the same work.
+            var sameWork = CopilotAdoptionScoring.EstimateCoworkValue(
+                candidates.Select(c => new CoworkReadinessRow
+                {
+                    MeetingsOrganisedPerActiveDay = c.MeetingsOrganisedPerActiveDay,
+                    EmailsSentPerActiveDay = c.EmailsSentPerActiveDay,
+                    FilesPerActiveDay = c.FilesPerActiveDay,
+                }).ToList(),
+                options);
+
+            Assert.AreEqual(2, estimate.CohortUsers);
+            Assert.AreEqual(sameWork.HoursPerMonthHigh, estimate.HoursPerMonthHigh);
+            Assert.AreEqual(sameWork.HoursPerMonthLow, estimate.HoursPerMonthLow);
+            var organised = estimate.Activities.Single(a => a.Activity == CoworkActivities.OrganiseMeetings);
+            Assert.AreEqual(
+                Math.Round(2 * 0.5 * CopilotAdoptionScoring.WorkingDaysPerMonth(options), 0, MidpointRounding.AwayFromZero),
+                organised.VolumePerMonth,
+                "Half a meeting a day each is real work, not zero.");
+
+            Assert.IsTrue(estimate.Assumptions.Any(a => a.Contains("2 people without a Microsoft 365 Copilot licence")), string.Join(" | ", estimate.Assumptions));
+            Assert.IsTrue(estimate.Assumptions.Any(a => a.Contains("never added together")), "The licence estimate is never summed with this one.");
+            Assert.IsFalse(estimate.Assumptions.Any(a => a.Contains("seat holder")), "These people hold no seat.");
+            Assert.AreEqual(0, CopilotAdoptionScoring.EstimateCoworkValueWithoutLicence(new List<LicenceOpportunityRow>(), options).CohortUsers);
+        }
+
+        [TestMethod]
         public void Estimate_NeverProducesAMonetaryFigure()
         {
             // Epic #559 rejects an ROI calculator, and the idle-licence-spend figure #553 once allowed has

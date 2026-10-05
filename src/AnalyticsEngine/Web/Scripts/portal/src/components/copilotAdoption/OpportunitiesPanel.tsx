@@ -367,8 +367,8 @@ export default function OpportunitiesPanel({
   const totalPages = data ? Math.max(1, Math.ceil(data.total / PAGE_SIZE)) : 1;
 
   // With a licence estimate the tab is sectioned, and a list in the section that is not showing is
-  // not printed - so it must not hold the printout up, or refuse it for being long. Either cohort
-  // counts: when nobody is recommended, every candidate is modelled instead.
+  // not printed - so it must not hold the printout up loading rows. Either cohort counts: when nobody
+  // is recommended, every candidate is modelled instead.
   const sectioned =
     (summary?.licenceOpportunityEstimate?.cohortUsers ?? 0) > 0 ||
     (summary?.licenceAllCandidatesEstimate?.cohortUsers ?? 0) > 0;
@@ -466,6 +466,8 @@ export default function OpportunitiesPanel({
           <MessageBarBody>{error}</MessageBarBody>
         </MessageBar>
       )}
+
+      {!loading && data && <PartialPrintNote shownRows={rows.length} totalRows={data.total} truncated={printRows !== null} />}
 
       {!loading && relevantWarnings.length > 0 && (
         <div className={styles.warnings}>
@@ -809,7 +811,6 @@ export default function OpportunitiesPanel({
           )}
         </div>
       )}
-      {!loading && data && <PartialPrintNote shownRows={rows.length} totalRows={data.total} />}
     </Card>
   );
 

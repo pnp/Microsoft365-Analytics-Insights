@@ -6,6 +6,7 @@ import type {
   CoworkValueEstimate,
   LicenceValueEstimate,
   SeatHolderTimeSavedEstimate,
+  SeatHolderTimeSavedSegment,
 } from '../../types/copilotAdoption';
 import { formatNumber, type TFunction } from '../../i18n';
 
@@ -497,6 +498,34 @@ export function projectLicenceTimeSaved(
   };
 }
 
+/** The kinds of Copilot action the seat-holder estimate credits, in the order the server sums them. */
+export type SeatHolderAction = 'outlook' | 'office' | 'meetings' | 'other';
+
+export const SEAT_HOLDER_ACTIONS: readonly SeatHolderAction[] = ['outlook', 'office', 'meetings', 'other'];
+
+/** The minutes-per-action assumption each kind of action is credited with. */
+export const SEAT_HOLDER_ACTION_ASSUMPTION: Record<SeatHolderAction, TimeSavedAssumptionKey> = {
+  outlook: 'seatOutlookMinutes',
+  office: 'seatOfficeMinutes',
+  meetings: 'seatMeetingMinutes',
+  other: 'seatUncreditedMinutes',
+};
+
+/** One kind of Copilot action in the seat-holder estimate: how many were observed, the credit, and the result. */
+export interface SeatHolderActionProjection {
+  action: SeatHolderAction;
+  /** Observed actions a month across the seat holders modelled. Measured, not modelled. */
+  volume: number;
+  /** The minutes credited to each action. */
+  minutesEach: number;
+  /** Modelled hours a month at the full credit, unrounded. */
+  hours: number;
+  /** The same hours rounded so the kinds of action add up to exactly `hoursHigh`. */
+  displayHours: number;
+  /** Share of the estimate's total, 0-100. */
+  sharePct: number;
+}
+
 export interface SeatHolderTimeSavedProjection {
   cohortUsers: number;
   excludedUsageReportSourcedUsers: number;
@@ -506,6 +535,31 @@ export interface SeatHolderTimeSavedProjection {
   officeActions: number;
   teamsMeetingActions: number;
   uncreditedActions: number;
+  /** The same arithmetic kind by kind, in `SEAT_HOLDER_ACTIONS` order. */
+  actions: SeatHolderActionProjection[];
+}
+
+/** Observed actions as the model counts them: whole, never negative - as the server reads them. */
+function seatHolderCounts(source: {
+  observedOutlookActions: number;
+  observedOfficeActions: number;
+  observedTeamsMeetingActions: number;
+  observedUncreditedActions: number;
+}): Record<SeatHolderAction, number> {
+  return {
+    outlook: Math.round(nonNegative(source.observedOutlookActions)),
+    office: Math.round(nonNegative(source.observedOfficeActions)),
+    meetings: Math.round(nonNegative(source.observedTeamsMeetingActions)),
+    other: Math.round(nonNegative(source.observedUncreditedActions)),
+  };
+}
+
+/** Observed actions times the minutes credited to each, summed in the server's order. */
+function seatHolderMinutes(counts: Record<SeatHolderAction, number>, assumptions: TimeSavedAssumptions): number {
+  return counts.outlook * nonNegative(assumptions.seatOutlookMinutes)
+    + counts.office * nonNegative(assumptions.seatOfficeMinutes)
+    + counts.meetings * nonNegative(assumptions.seatMeetingMinutes)
+    + counts.other * nonNegative(assumptions.seatUncreditedMinutes);
 }
 
 export function projectSeatHolderTimeSaved(
@@ -513,25 +567,50 @@ export function projectSeatHolderTimeSaved(
   assumptions: TimeSavedAssumptions,
 ): SeatHolderTimeSavedProjection | null {
   if (!estimate || !((estimate.cohortUsers ?? 0) > 0 || (estimate.excludedUsageReportSourcedUsers ?? 0) > 0)) return null;
-  const outlook = Math.round(nonNegative(estimate.observedOutlookActions));
-  const office = Math.round(nonNegative(estimate.observedOfficeActions));
-  const meetings = Math.round(nonNegative(estimate.observedTeamsMeetingActions));
-  const uncredited = Math.round(nonNegative(estimate.observedUncreditedActions));
+  const counts = seatHolderCounts(estimate);
   const ratio = clamp(nonNegative(assumptions.conservativeRatio), 0, 1);
-  const minutes = outlook * nonNegative(assumptions.seatOutlookMinutes)
-    + office * nonNegative(assumptions.seatOfficeMinutes)
-    + meetings * nonNegative(assumptions.seatMeetingMinutes)
-    + uncredited * nonNegative(assumptions.seatUncreditedMinutes);
+  const minutes = seatHolderMinutes(counts, assumptions);
+  const hoursHigh = Math.round(minutes / 60);
+
+  const raw = SEAT_HOLDER_ACTIONS.map((action) => ({
+    action,
+    volume: counts[action],
+    minutesEach: nonNegative(assumptions[SEAT_HOLDER_ACTION_ASSUMPTION[action]]),
+  }));
+  const hours = raw.map((r) => (r.volume * r.minutesEach) / 60);
+  const display = apportion(hoursHigh, hours);
+
   return {
     cohortUsers: estimate.cohortUsers ?? 0,
     excludedUsageReportSourcedUsers: estimate.excludedUsageReportSourcedUsers ?? 0,
-    hoursHigh: Math.round(minutes / 60),
+    hoursHigh,
     hoursLow: Math.round((minutes * ratio) / 60),
-    outlookActions: outlook,
-    officeActions: office,
-    teamsMeetingActions: meetings,
-    uncreditedActions: uncredited,
+    outlookActions: counts.outlook,
+    officeActions: counts.office,
+    teamsMeetingActions: counts.meetings,
+    uncreditedActions: counts.other,
+    actions: raw.map((r, i) => ({
+      ...r,
+      hours: hours[i],
+      displayHours: display[i],
+      sharePct: minutes > 0 ? ((r.volume * r.minutesEach) / minutes) * 100 : 0,
+    })),
   };
+}
+
+/**
+ * One segment of the seat-holder estimate - a department - under the reader's assumptions.
+ *
+ * The server sends each segment's hours at the product defaults; recomputed here so the breakdown
+ * follows the figures the reader typed, exactly as the total above it does.
+ */
+export function projectSeatHolderSegment(
+  segment: SeatHolderTimeSavedSegment,
+  assumptions: TimeSavedAssumptions,
+): { hoursLow: number; hoursHigh: number } {
+  const minutes = seatHolderMinutes(seatHolderCounts(segment), assumptions);
+  const ratio = clamp(nonNegative(assumptions.conservativeRatio), 0, 1);
+  return { hoursLow: Math.round((minutes * ratio) / 60), hoursHigh: Math.round(minutes / 60) };
 }
 
 /**

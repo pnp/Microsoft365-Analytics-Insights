@@ -90,7 +90,9 @@ export default function LicenceTimeSavedModel({
   const chatUsers = projectLicenceTimeSaved(summary.licenceChatUsersEstimate, assumptions, options);
   const all = projectLicenceTimeSaved(summary.licenceAllCandidatesEstimate, assumptions, options);
   const resolved = resolveTimeSavedCohort(cohort, recommended, all);
-  const shown: Scenario = resolved?.cohort ?? 'recommended';
+  // The licence estimate has no "without a licence" cohort - it is already about those people - so
+  // resolving with no third projection can only ever answer recommended or all.
+  const shown: Scenario = resolved?.cohort === 'all' ? 'all' : 'recommended';
 
   const [scenario, setScenario] = useState<Scenario>(shown);
   // Follows the headline: when the reader switches who it models, the working switches with it. Set

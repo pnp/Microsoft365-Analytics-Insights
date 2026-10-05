@@ -18,6 +18,11 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot
         [Column("agent_id", true)]
         public string AgentId { get; set; }
 
+        // A name to use only until the agent's display name is known (CopilotAuditLogContent.AgentFallbackName).
+        // The agents upsert only uses it to fill a NULL name.
+        [Column("agent_fallback_name", true)]
+        public string AgentFallbackName { get; set; }
+
         [Column("is_custom_agent", true)]
         public bool? IsCustomAgent { get; set; }
 

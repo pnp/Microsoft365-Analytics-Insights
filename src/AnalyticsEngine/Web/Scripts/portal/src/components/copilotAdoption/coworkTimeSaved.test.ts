@@ -5,6 +5,7 @@ import type {
   CopilotAdoptionSummary,
   CoworkValueEstimate,
   LicenceValueEstimate,
+  SeatHolderTimeSavedEstimate,
 } from '../../types/copilotAdoption';
 import {
   COWORK_ACTIVITIES,
@@ -18,6 +19,8 @@ import {
   parseTimeSavedOverrides,
   projectCoworkTimeSaved,
   projectLicenceTimeSaved,
+  projectSeatHolderSegment,
+  projectSeatHolderTimeSaved,
   resetTimeSavedStore,
   timeSavedExportParams,
   useTimeSavedAssumptions,
@@ -237,6 +240,79 @@ describe('projectCoworkTimeSaved', () => {
   it('says nothing, rather than zero, when there is nobody to model', () => {
     expect(projectCoworkTimeSaved(coworkEstimate({ cohortUsers: 0 }), defaults(), OPTIONS)).toBeNull();
     expect(projectCoworkTimeSaved(undefined, defaults(), OPTIONS)).toBeNull();
+  });
+});
+
+describe('projectSeatHolderTimeSaved', () => {
+  /** The product's seat-holder credits: 6 minutes an Outlook or Office action, 30 a meeting, nothing for the rest. */
+  const seatAssumptions = () => ({
+    ...defaults(),
+    seatOutlookMinutes: 6,
+    seatOfficeMinutes: 6,
+    seatMeetingMinutes: 30,
+    seatUncreditedMinutes: 0,
+    conservativeRatio: 0.5,
+  });
+
+  function seatEstimate(overrides: Partial<SeatHolderTimeSavedEstimate> = {}): SeatHolderTimeSavedEstimate {
+    return {
+      isModelled: true,
+      cohortUsers: 24,
+      excludedUsageReportSourcedUsers: 3,
+      observedOutlookActions: 100,
+      observedOfficeActions: 50,
+      observedTeamsMeetingActions: 4,
+      observedUncreditedActions: 20,
+      credits: { outlookMinutesPerAction: 6, officeMinutesPerAction: 6, teamsMeetingMinutesPerAction: 30, uncreditedMinutesPerAction: 0, lowerBoundRatio: 0.5 },
+      hoursPerMonthLow: 9,
+      hoursPerMonthHigh: 17,
+      assumptions: [],
+      byBand: [],
+      byDepartment: [],
+      ...overrides,
+    };
+  }
+
+  /** 100 x 6 + 50 x 6 + 4 x 30 + 20 x 0 = 1,020 minutes = 17 hours; x 50% = 8.5, rounded to 9. */
+  it('breaks the total down by kind of action, in the server\u2019s order, adding up to the rounded total', () => {
+    const projection = projectSeatHolderTimeSaved(seatEstimate(), seatAssumptions())!;
+
+    expect(projection.hoursHigh).toBe(17);
+    expect(projection.hoursLow).toBe(9);
+    expect(projection.actions.map((a) => a.action)).toEqual(['outlook', 'office', 'meetings', 'other']);
+    expect(projection.actions.map((a) => a.volume)).toEqual([100, 50, 4, 20]);
+    expect(projection.actions.map((a) => a.minutesEach)).toEqual([6, 6, 30, 0]);
+    expect(projection.actions.map((a) => a.displayHours)).toEqual([10, 5, 2, 0]);
+    expect(projection.actions.reduce((sum, a) => sum + a.displayHours, 0)).toBe(projection.hoursHigh);
+    expect(projection.actions.map((a) => Math.round(a.sharePct))).toEqual([59, 29, 12, 0]);
+  });
+
+  it('credits the uncredited surfaces only when the reader gives them minutes', () => {
+    const projection = projectSeatHolderTimeSaved(seatEstimate(), { ...seatAssumptions(), seatUncreditedMinutes: 3 })!;
+
+    expect(projection.actions[3].displayHours).toBe(1);
+    expect(projection.hoursHigh).toBe(18);
+  });
+
+  it('recomputes a department from its own actions under the reader\u2019s figures', () => {
+    const finance = {
+      segment: 'Finance',
+      cohortUsers: 24,
+      observedOutlookActions: 100,
+      observedOfficeActions: 50,
+      observedTeamsMeetingActions: 4,
+      observedUncreditedActions: 20,
+      hoursPerMonthLow: 9,
+      hoursPerMonthHigh: 17,
+    };
+
+    expect(projectSeatHolderSegment(finance, seatAssumptions())).toEqual({ hoursLow: 9, hoursHigh: 17 });
+    expect(projectSeatHolderSegment(finance, { ...seatAssumptions(), seatOutlookMinutes: 12 })).toEqual({ hoursLow: 14, hoursHigh: 27 });
+  });
+
+  it('says nothing, rather than zero, when there is nobody to model', () => {
+    expect(projectSeatHolderTimeSaved(seatEstimate({ cohortUsers: 0, excludedUsageReportSourcedUsers: 0 }), seatAssumptions())).toBeNull();
+    expect(projectSeatHolderTimeSaved(undefined, seatAssumptions())).toBeNull();
   });
 });
 

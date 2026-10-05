@@ -72,6 +72,25 @@ const copilotAdoptionAgents: Record<keyof typeof en, string> = {
   'copilotAdoptionAgents.agents.table.licensedUsers': '{count} con licencia',
   'copilotAdoptionAgents.agents.legend.title': 'Qué significa cada veredicto',
 
+  // Los usuarios que más usan agentes
+  'copilotAdoptionAgents.agents.topUsers.title': 'Usuarios que más usan agentes',
+  'copilotAdoptionAgents.agents.topUsers.description': 'Las {count} personas que más usaron agentes de Copilot en el periodo seleccionado; {licensed} de ellas tienen licencia de Copilot.',
+  'copilotAdoptionAgents.agents.topUsers.what': 'Las personas de esta vista que más veces ejecutaron agentes de Copilot en el periodo seleccionado, y si cada una tiene licencia de Microsoft 365 Copilot.',
+  'copilotAdoptionAgents.agents.topUsers.how': 'Interacciones con agentes en los últimos {windowDays} días, contando todos los agentes (Cowork incluido), de más a menos. "Agentes" es cuántos agentes distintos usó la persona; "Más usado" es el que más ejecutó. La licencia es la que tiene hoy.',
+  'copilotAdoptionAgents.agents.topUsers.source': 'Un usuario intensivo de agentes sin licencia de Copilot es candidato a una: ya está sacando trabajo adelante con agentes. Un usuario intensivo con licencia es un promotor natural de los agentes en los que confía.',
+  'copilotAdoptionAgents.agents.topUsers.sqlTitle': 'SQL de esta lista',
+  'copilotAdoptionAgents.agents.topUsers.capped': 'Solo se leyeron los {max} usuarios de agentes más intensivos del inquilino, así que en una vista filtrada esta lista puede omitir a personas que quedan por debajo.',
+  'copilotAdoptionAgents.agents.topUsers.user': 'Usuario',
+  'copilotAdoptionAgents.agents.topUsers.department': 'Departamento',
+  'copilotAdoptionAgents.agents.topUsers.interactions': 'Interacciones con agentes',
+  'copilotAdoptionAgents.agents.topUsers.agents': 'Agentes',
+  'copilotAdoptionAgents.agents.topUsers.activeDays': 'Días activos',
+  'copilotAdoptionAgents.agents.topUsers.topAgent': 'Más usado',
+  'copilotAdoptionAgents.agents.topUsers.topAgentInteractions': '{interactions} interacciones',
+  'copilotAdoptionAgents.agents.topUsers.licence': 'Licencia de Copilot',
+  'copilotAdoptionAgents.agents.topUsers.licensed': 'Con licencia',
+  'copilotAdoptionAgents.agents.topUsers.unlicensed': 'Sin licencia',
+
   // KPI
   'copilotAdoptionAgents.agents.kpi.active.label': 'Agentes activos',
   'copilotAdoptionAgents.agents.kpi.active.hint': '{known} conocidos, {custom} personalizados',

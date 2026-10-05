@@ -65,7 +65,7 @@ const copilotAdoptionTimeSaved: Record<keyof typeof en, string> = {
   'copilotAdoptionTimeSaved.input.resetAll': 'Restablecer todas las cifras al valor predeterminado del producto',
   'copilotAdoptionTimeSaved.input.invalid': 'Escriba un número entre {min} y {max}.',
   'copilotAdoptionTimeSaved.input.usingYours': 'Con la suya: {minutes} min',
-  'copilotAdoptionTimeSaved.input.sharedNote': 'La parte que aplica el extremo conservador y las horas de un día laborable valen para las dos estimaciones de tiempo ahorrado (licencias y Cowork), así que cambiarlas aquí también las cambia en la otra pestaña.',
+  'copilotAdoptionTimeSaved.input.sharedNote': 'La parte que aplica el extremo conservador vale para todas las estimaciones de tiempo ahorrado (licencias, Cowork y el tiempo ya ahorrado por titulares de licencia), y las horas de un día laborable, para las de licencias y Cowork, así que cambiar cualquiera de las dos aquí también la cambia en las otras pestañas.',
   'copilotAdoptionTimeSaved.storage.defaults': 'Cualquier cifra que cambie se guarda solo en esta pestaña del explorador, durante esta sesión. No se guarda en la base de datos y nadie más la ve, pero se usa en el informe de Excel que descargue desde esta página.',
   'copilotAdoptionTimeSaved.storage.customised': 'Está usando sus propias cifras. Se guardan solo en esta pestaña del explorador, durante esta sesión, y se aplican al informe de Excel que descargue desde esta página. Cualquier otra persona que abra este informe ve los valores predeterminados del producto.',
 
@@ -200,6 +200,32 @@ const copilotAdoptionTimeSaved: Record<keyof typeof en, string> = {
   'copilotAdoptionTimeSaved.own.askPerItem': 'Si hace una encuesta al grupo piloto, pregunte por los minutos ahorrados por reunión, por correo electrónico y por documento en lugar de por una única cifra de "horas a la semana": una pregunta concreta exagera menos.',
   'copilotAdoptionTimeSaved.own.compareDashboard': 'Cuando el grupo piloto tenga licencia, contraste con Copilot assisted hours en el Copilot Dashboard de Microsoft, que aplica los créditos por acción de Microsoft a su uso real de Copilot.',
   'copilotAdoptionTimeSaved.own.enter': 'Introduzca los resultados arriba. El titular de esta pestaña, el tiempo recuperado con licencias de la vista general y el informe de Excel los usan durante el resto de su sesión.',
+
+  // El tiempo ya ahorrado por titulares de licencia: el modelo de la pestaña Usuarios con licencia
+  'copilotAdoptionTimeSaved.seat.model.intro.one': 'Acciones de Copilot observadas en el registro de auditoría de {users} titular de licencia con detalle por acción, cada una multiplicada por los minutos que se acreditan a ese tipo de acción. Los recuentos se miden; los minutos son hipótesis: los valores predeterminados del producto o los suyos. Cambie cualquier cifra de abajo y esta tabla y el tiempo ya ahorrado por titulares de licencia de la vista general se actualizarán. Solo horas, nunca dinero, y nunca se suma a las estimaciones de licencias ni de Cowork.',
+  'copilotAdoptionTimeSaved.seat.model.intro.other': 'Acciones de Copilot observadas en el registro de auditoría de los {users} titulares de licencia con detalle por acción, cada una multiplicada por los minutos que se acreditan a ese tipo de acción. Los recuentos se miden; los minutos son hipótesis: los valores predeterminados del producto o los suyos. Cambie cualquier cifra de abajo y esta tabla y el tiempo ya ahorrado por titulares de licencia de la vista general se actualizarán. Solo horas, nunca dinero, y nunca se suma a las estimaciones de licencias ni de Cowork.',
+  'copilotAdoptionTimeSaved.seat.model.excluded.one': '{users} titular de licencia no está en esta cifra: se puntuó a partir del informe de uso de Microsoft, que cuenta prompts pero no el detalle por acción que necesita este modelo.',
+  'copilotAdoptionTimeSaved.seat.model.excluded.other': '{users} titulares de licencia no están en esta cifra: se puntuaron a partir del informe de uso de Microsoft, que cuenta prompts pero no el detalle por acción que necesita este modelo.',
+  'copilotAdoptionTimeSaved.seat.model.zeroCreditNote': 'Copilot Chat y otras superficies que no son agentes tienen cero minutos de forma predeterminada porque Microsoft no ha publicado un crédito por prompt; asígneles minutos arriba si quiere modelarlas. La actividad de agentes y Cowork queda fuera de esta cifra; Cowork permanece en su propia estimación.',
+  'copilotAdoptionTimeSaved.seat.model.sharedNote': 'La parte que aplica el extremo conservador es la misma que usan las estimaciones de licencias y Cowork, así que cambiarla aquí también la cambia en esas pestañas. Los minutos por acción solo los usa esta estimación.',
+  'copilotAdoptionTimeSaved.seat.table.action': 'Acción de Copilot',
+  'copilotAdoptionTimeSaved.seat.table.observed': 'Acciones al mes',
+  'copilotAdoptionTimeSaved.seat.action.outlook': 'Outlook',
+  'copilotAdoptionTimeSaved.seat.action.office': 'Word, PowerPoint y Excel',
+  'copilotAdoptionTimeSaved.seat.action.meetings': 'Reuniones de Teams',
+  'copilotAdoptionTimeSaved.seat.action.other': 'Copilot Chat y otras aplicaciones',
+  'copilotAdoptionTimeSaved.seat.volume.outlook': 'Interacciones con Copilot en Outlook',
+  'copilotAdoptionTimeSaved.seat.volume.office': 'Interacciones con Copilot en Word, PowerPoint y Excel',
+  'copilotAdoptionTimeSaved.seat.volume.meetings': 'Reuniones en las que se usó Copilot, cada una contada una vez por persona',
+  'copilotAdoptionTimeSaved.seat.volume.other': 'Cualquier otra interacción con Copilot, como Copilot Chat; sin agentes ni Cowork',
+  'copilotAdoptionTimeSaved.seat.input.outlook': 'Minutos de Outlook por acción',
+  'copilotAdoptionTimeSaved.seat.input.office': 'Minutos de Word, PowerPoint y Excel por acción',
+  'copilotAdoptionTimeSaved.seat.input.meeting': 'Minutos de reunión de Teams por acción',
+  'copilotAdoptionTimeSaved.seat.input.other': 'Minutos por acción de otras superficies',
+  'copilotAdoptionTimeSaved.seat.departments.title': 'Dónde se ahorra el tiempo, por departamento',
+  'copilotAdoptionTimeSaved.seat.departments.note': 'Hasta {top} departamentos, elegidos por el tiempo ahorrado con los valores predeterminados del producto, entre los departamentos con al menos {minSeats} titulares de licencia con detalle por acción. Sus horas siguen los minutos de arriba.',
+  'copilotAdoptionTimeSaved.seat.departments.department': 'Departamento',
+  'copilotAdoptionTimeSaved.seat.departments.people': 'Titulares de licencia',
 };
 
 export default copilotAdoptionTimeSaved;

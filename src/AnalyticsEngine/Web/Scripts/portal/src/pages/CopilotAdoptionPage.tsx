@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useInRouterContext, useSearchParams } from 'react-router-dom';
 import {
   makeStyles,
@@ -8,8 +8,6 @@ import {
   Text,
   Button,
   Card,
-  Select,
-  Input,
   Tab,
   TabList,
   Tooltip,
@@ -22,7 +20,7 @@ import {
   AccordionPanel,
   type SelectTabEventHandler,
 } from '@fluentui/react-components';
-import { ArrowDownload16Regular } from '@fluentui/react-icons';
+import { ArrowDownload16Regular, Clock20Regular, PeopleList20Regular } from '@fluentui/react-icons';
 import {
   fetchAdoptionAvailability,
   fetchAdoptionFilters,
@@ -35,7 +33,6 @@ import type {
   AdoptionFilterOptions,
   CopilotAdoptionAvailability,
   CopilotAdoptionSummary,
-  SeatHolderTimeSavedSegment,
 } from '../types/copilotAdoption';
 import Spinner from '../components/Spinner';
 import SqlPopover from '../components/SqlPopover';
@@ -63,8 +60,8 @@ import PrintButton from '../components/shared/PrintButton';
 import { PRINT_ROW_LIMIT } from '../components/shared/printPreparation';
 import { serverPlaceholderText } from '../components/shared/serverPlaceholder';
 import DismissibleWarnings from '../components/shared/DismissibleWarnings';
-import DateRangeControl from '../components/licenceActivity/DateRangeControl';
-import { latestEndString, addDays } from '../components/licenceActivity/dateRange';
+import AdoptionPeriodControl, { periodLabel, type FixedPeriod } from '../components/copilotAdoption/AdoptionPeriodControl';
+import SeatHolderTimeSavedModel from '../components/copilotAdoption/SeatHolderTimeSavedModel';
 import PiiHiddenNote from '../components/shared/PiiHiddenNote';
 import { SegmentTable, BAND_COLOUR_LIST } from '../components/copilotAdoption/adoptionShared';
 import { KpiGrid, formatCount, formatDate, formatPct, weightSharePct } from '../components/shared/KpiGrid';
@@ -87,7 +84,6 @@ import {
   timeSavedExportParams,
   useTimeSavedAssumptions,
   type TimeSavedAssumptions,
-  type TimeSavedAssumptionState,
 } from '../components/copilotAdoption/coworkTimeSaved';
 import {
   resolveTimeSavedCohort,
@@ -116,35 +112,7 @@ import {
 } from '../components/userFilter/userFilterModel';
 import { notify } from '../components/toast';
 import { EMPTY_USER_FILTER, type UserFilter, type UserFilterDimension } from '../types/userFilter';
-import type { DateRange } from '../types/licenceActivity';
 import { usePortalAccess } from '../access';
-
-const WINDOW_OPTIONS: { value: number; labelKey: TranslationKey }[] = [
-  { value: 7, labelKey: 'copilotAdoption.page.window.last7Days' },
-  { value: 28, labelKey: 'copilotAdoption.page.window.last28Days' },
-  { value: 90, labelKey: 'copilotAdoption.page.window.last90Days' },
-  { value: 180, labelKey: 'copilotAdoption.page.window.last180Days' },
-];
-
-export function lastCalendarMonthRange(now = new Date()): DateRange {
-  const firstThisMonth = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
-  const to = addDays(formatDateInput(firstThisMonth), -1);
-  const end = new Date(`${to}T00:00:00Z`);
-  return { from: formatDateInput(new Date(Date.UTC(end.getUTCFullYear(), end.getUTCMonth(), 1))), to };
-}
-
-export function lastCalendarQuarterRange(now = new Date()): DateRange {
-  const currentQuarter = Math.floor(now.getUTCMonth() / 3);
-  const startMonth = currentQuarter === 0 ? 9 : (currentQuarter - 1) * 3;
-  const year = currentQuarter === 0 ? now.getUTCFullYear() - 1 : now.getUTCFullYear();
-  const from = formatDateInput(new Date(Date.UTC(year, startMonth, 1)));
-  const to = addDays(formatDateInput(new Date(Date.UTC(year, startMonth + 3, 1))), -1);
-  return { from, to };
-}
-
-function formatDateInput(d: Date): string {
-  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`;
-}
 
 function PastRangeNamedListsHiddenNote() {
   const t = useT();
@@ -156,6 +124,16 @@ function PastRangeNamedListsHiddenNote() {
 }
 
 type AdoptionTab = 'executive' | 'analyst' | 'licensed' | 'cowork' | 'unlicensed' | 'agents' | 'opportunities' | 'method';
+
+/**
+ * The Licensed users tab's sections. The list is the tab's purpose and opens first; the seat holders'
+ * time-saved model is there for whoever wants it, as the licence estimate sits beside the candidate
+ * list rather than above it.
+ */
+type LicensedSection = 'people' | 'timeSaved';
+
+/** Opens a tab - on the Licensed users tab, at the section that explains the figure. */
+type OpenTab = (tab: AdoptionTab, section?: LicensedSection) => void;
 
 type AccountabilityDimensionText = {
   labelKey: TranslationKey;
@@ -253,15 +231,24 @@ const MICROSOFT_COPILOT_USAGE_REPORT_API_URL =
 const useStyles = makeStyles({
   header: {
     display: 'flex',
+    flexDirection: 'column',
+  },
+  // One row under the title: the reporting period on the left, what can be done with the report on
+  // the right. Wraps as a whole on a narrow window rather than squeezing the buttons' labels.
+  toolbar: {
+    display: 'flex',
     alignItems: 'flex-start',
     justifyContent: 'space-between',
-    gap: '12px',
     flexWrap: 'wrap',
+    gap: '12px',
+    marginTop: '16px',
   },
-  controls: {
+  actions: {
     display: 'flex',
     alignItems: 'center',
     gap: '8px',
+    flexShrink: 0,
+    whiteSpace: 'nowrap',
   },
   intro: {
     marginTop: '8px',
@@ -277,6 +264,13 @@ const useStyles = makeStyles({
   },
   subTabs: {
     marginTop: '16px',
+  },
+  // The Licensed users tab's own sections, styled as the Licence opportunities tab's.
+  sectionNav: {
+    marginBottom: '12px',
+    borderBottomWidth: '1px',
+    borderBottomStyle: 'solid',
+    borderBottomColor: tokens.colorNeutralStroke2,
   },
   stack: {
     display: 'flex',
@@ -448,7 +442,10 @@ function CopilotAdoptionView({
   const [availability, setAvailability] = useState<CopilotAdoptionAvailability | null>(null);
   const [availabilityError, setAvailabilityError] = useState<string | null>(null);
   const [windowDays, setWindowDays] = useState(28);
-  const [dateRange, setDateRange] = useState<DateRange | null>(null);
+  // A period with explicit dates - last calendar month or quarter, or the reader's own range. Null for
+  // a rolling window, which ends today. `windowDays` keeps the last rolling window chosen meanwhile.
+  const [fixedPeriod, setFixedPeriod] = useState<FixedPeriod | null>(null);
+  const dateRange = fixedPeriod?.range ?? null;
   // Who every visual on the page describes: conditions on people's Entra ID attributes and custom
   // organisations - email domain included - or no conditions for the whole tenant.
   //
@@ -488,6 +485,7 @@ function CopilotAdoptionView({
   // on is pre-filtered to exactly the group the plan counted. Cleared when they choose a tab
   // themselves - otherwise a filter they never asked for reappears every time they come back.
   const [drillAction, setDrillAction] = useState<string | undefined>(undefined);
+  const [licensedSection, setLicensedSection] = useState<LicensedSection>('people');
 
   const [summary, setSummary] = useState<CopilotAdoptionSummary | null>(null);
   const [summaryLoading, setSummaryLoading] = useState(true);
@@ -587,11 +585,13 @@ function CopilotAdoptionView({
 
   const drillToAction = (code: string) => {
     setDrillAction(code);
+    setLicensedSection('people');
     setTab('licensed');
   };
 
   const showLicensedDetails = () => {
     setDrillAction(undefined);
+    setLicensedSection('people');
     setTab('licensed');
   };
 
@@ -600,60 +600,47 @@ function CopilotAdoptionView({
     setTab('opportunities');
   };
 
-  /** Where a headline tile's link takes the reader - the tab that explains the figure. */
-  const openTab = (next: AdoptionTab) => {
+  /**
+   * Where a headline tile's link takes the reader - the tab that explains the figure, and on the
+   * Licensed users tab the section that does: the seat holders' time saved is not the list.
+   */
+  const openTab = (next: AdoptionTab, section?: LicensedSection) => {
     setDrillAction(undefined);
+    if (next === 'licensed') setLicensedSection(section ?? 'people');
     setTab(next);
   };
+
+  const periodName = periodLabel(t, windowDays, fixedPeriod);
+  // The Licensed users tab is split into the list and the seat holders' time saved only when there is
+  // a time-saved estimate to show; otherwise it is the list alone, as before.
+  const seatTimeSectioned = !!summary && projectSeatHolderTimeSaved(summary.seatHolderTimeSavedEstimate, timeSaved.assumptions) !== null;
 
   return (
     <div>
       <div className={styles.header}>
-        <div>
-          <Title3>{t('copilotAdoption.page.title')}</Title3>
-          <Body1 block className={styles.intro}>{t('copilotAdoption.page.intro')}</Body1>
-        </div>
-        <div className={styles.controls} data-print="hide">
-          <Text size={200} className={styles.muted}>{t('copilotAdoption.page.controls.periodLabel')}</Text>
-          <Select
-            value={dateRange ? 'custom' : String(windowDays)}
-            onChange={(_e: unknown, d: { value: string }) => {
-              setWindowDays(Number(d.value));
-              setDateRange(null);
-            }}
-            aria-label={t('copilotAdoption.page.controls.reportingPeriodAria')}
-          >
-            {dateRange && (
-              <option value="custom">
-                {t('copilotAdoption.page.window.customRange')}
-              </option>
-            )}
-            {WINDOW_OPTIONS.map((o) => (
-              <option key={o.value} value={o.value}>
-                {t(o.labelKey)}
-              </option>
-            ))}
-          </Select>
-          <Button size="small" appearance={dateRange ? 'secondary' : 'subtle'} onClick={() => setDateRange(lastCalendarMonthRange())}>
-            {t('copilotAdoption.page.window.lastCalendarMonth')}
-          </Button>
-          <Button size="small" appearance={dateRange ? 'secondary' : 'subtle'} onClick={() => setDateRange(lastCalendarQuarterRange())}>
-            {t('copilotAdoption.page.window.lastCalendarQuarter')}
-          </Button>
-          <DateRangeControl
-            value={dateRange ?? { from: addDays(latestEndString(), -(windowDays - 1)), to: latestEndString() }}
-            onChange={setDateRange}
-          />
+        <Title3>{t('copilotAdoption.page.title')}</Title3>
+        <Body1 block className={styles.intro}>{t('copilotAdoption.page.intro')}</Body1>
+      </div>
 
-          {availability?.available && (
+      <div className={styles.toolbar} data-print="hide">
+        <AdoptionPeriodControl
+          windowDays={windowDays}
+          fixed={fixedPeriod}
+          onRollingChange={(days) => {
+            setWindowDays(days);
+            setFixedPeriod(null);
+          }}
+          onFixedChange={setFixedPeriod}
+        />
+
+        {availability?.available && (
+          <div className={styles.actions}>
             <PrintButton
               tooltip={t('copilotAdoption.page.controls.printTooltip', {
                 v0: t(TAB_LABEL_KEYS[tab]),
                 limit: formatCount(PRINT_ROW_LIMIT),
               })}
             />
-          )}
-          {availability?.available && (
             <Tooltip
               relationship="description"
               content={
@@ -677,8 +664,8 @@ function CopilotAdoptionView({
                 disabled={!summary}
               >{t('copilotAdoption.page.controls.excelReport')}</Button>
             </Tooltip>
-          )}
-        </div>
+          </div>
+        )}
       </div>
 
       {availability?.available && (
@@ -686,11 +673,7 @@ function CopilotAdoptionView({
           <Text size={200}>
             {t(TAB_LABEL_KEYS[tab])}
             {' \u00b7 '}
-            {dateRange
-              ? t('copilotAdoption.page.window.customRange')
-              : WINDOW_OPTIONS.find((o) => o.value === windowDays)?.labelKey
-                ? t(WINDOW_OPTIONS.find((o) => o.value === windowDays)!.labelKey)
-                : t('copilotAdoption.page.print.lastDays', { v0: windowDays })}
+            {periodName}
             {summary && <> {t('copilotAdoption.page.print.dateRange', { v0: formatDate(summary.fromUtc), v1: formatDate(summary.toUtc) })}</>}
             {' \u00b7 '}
             {isEmptyFilter(userFilter) && !summary?.globalFilter
@@ -836,8 +819,11 @@ function CopilotAdoptionView({
               )}
 
               {tab === 'licensed' && (
-                <>
-                  <SeatHolderTimeSavedPanel summary={summary} timeSaved={timeSaved} />
+                <LicensedTabSections
+                  section={licensedSection}
+                  onSectionChange={setLicensedSection}
+                  timeSaved={seatTimeSectioned ? <SeatHolderTimeSavedModel summary={summary} timeSaved={timeSaved} /> : null}
+                >
                   {dateRange ? (
                     <PastRangeNamedListsHiddenNote />
                   ) : canSeePii ? (
@@ -850,9 +836,10 @@ function CopilotAdoptionView({
                       dataSources={summary.dataSources}
                       initialAction={drillAction}
                       userFilter={userFilterParam}
+                      shown={!seatTimeSectioned || licensedSection === 'people'}
                     />
                   ) : <PiiHiddenNote />}
-                </>
+                </LicensedTabSections>
               )}
 
               {tab === 'unlicensed' && (
@@ -871,6 +858,9 @@ function CopilotAdoptionView({
                   options={summary.options}
                   windowDays={windowDays}
                   sql={sql}
+                  topUsers={summary.topAgentUsers}
+                  topUsersCapped={summary.topAgentUsersCapped}
+                  canSeePii={canSeePii}
                 />
               )}
 
@@ -1068,7 +1058,7 @@ function ExecutiveTab({
   onDrillToAction?: (code: string) => void;
   onShowLicensedDetails: () => void;
   onShowOpportunityDetails: () => void;
-  onOpenTab?: (tab: AdoptionTab) => void;
+  onOpenTab?: OpenTab;
   selectedEmailDomain?: string | null;
   onSelectEmailDomain?: (domain: string | null) => void;
   canSeePii: boolean;
@@ -1375,7 +1365,7 @@ function AnalystTab({
   summary: CopilotAdoptionSummary;
   sql: Record<string, string> | null;
   onDrillToAction?: (code: string) => void;
-  onOpenTab?: (tab: AdoptionTab) => void;
+  onOpenTab?: OpenTab;
   selectedEmailDomain?: string | null;
   onSelectEmailDomain?: (domain: string | null) => void;
   canSeePii: boolean;
@@ -2523,101 +2513,66 @@ function MethodTab({ summary }: { summary: CopilotAdoptionSummary }) {
   );
 }
 
-/** The Executive view keeps only the board-pack headlines; the Analyst view keeps the full KPI set. */
-function SeatHolderTimeSavedPanel({
-  summary,
+/**
+ * The Licensed users tab, split into the list and the seat holders' time saved when there is an
+ * estimate to show - the same section strip the Licence opportunities and Cowork tabs use.
+ *
+ * The time-saved model is a view the reader opens, not a panel above the list: the list is what the
+ * tab is for, and fifty rows should not start below a calculator. The list stays mounted while the
+ * other section is open, so its filters and page survive the round trip.
+ */
+function LicensedTabSections({
+  section,
+  onSectionChange,
   timeSaved,
+  children,
 }: {
-  summary: CopilotAdoptionSummary;
-  timeSaved: TimeSavedAssumptionState;
+  section: LicensedSection;
+  onSectionChange: (section: LicensedSection) => void;
+  /** The seat holders' time-saved model, or null when there is no estimate to show. */
+  timeSaved: ReactNode;
+  /** The list, or the note standing in for it. */
+  children: ReactNode;
 }) {
+  const styles = useStyles();
   const t = useT();
-  const estimate = summary.seatHolderTimeSavedEstimate;
-  const projection = projectSeatHolderTimeSaved(estimate, timeSaved.assumptions);
-  if (!estimate || !projection) return null;
-
-  const update = (key: 'seatOutlookMinutes' | 'seatOfficeMinutes' | 'seatMeetingMinutes' | 'seatUncreditedMinutes') =>
-    (_ev: unknown, data: { value: string }) => {
-      const parsed = Number(data.value);
-      if (Number.isFinite(parsed)) timeSaved.setAssumption(key, parsed);
-    };
-  const number = (value: number) => formatNumber(value, { maximumFractionDigits: 0 });
-  const minutes = (value: number) => formatNumber(value, { maximumFractionDigits: 2 });
-  const segmentHours = (row: SeatHolderTimeSavedSegment) =>
-    projectSeatHolderTimeSaved({
-      ...estimate,
-      cohortUsers: row.cohortUsers,
-      excludedUsageReportSourcedUsers: 0,
-      observedOutlookActions: row.observedOutlookActions,
-      observedOfficeActions: row.observedOfficeActions,
-      observedTeamsMeetingActions: row.observedTeamsMeetingActions,
-      observedUncreditedActions: row.observedUncreditedActions,
-      byBand: [],
-      byDepartment: [],
-    }, timeSaved.assumptions)?.hoursHigh ?? 0;
+  if (!timeSaved) return <>{children}</>;
 
   return (
-    <Card style={{ marginBottom: 16 }}>
-      <Title3>{t('copilotAdoption.page.seatTime.title')}</Title3>
-      <Body1>{t('copilotAdoption.page.seatTime.description')}</Body1>
-      <KpiGrid
-        items={[
-          {
-            key: 'seatTimeHours',
-            label: t('copilotAdoption.page.seatTime.hours'),
-            value: t('copilotAdoption.page.kpi.hoursValue', { range: compactHoursRange(t, projection.hoursLow, projection.hoursHigh) }),
-            hint: t('copilotAdoption.page.seatTime.hoursHint', { users: formatCount(projection.cohortUsers) }),
-            modelledBadge: t('copilotAdoption.page.kpi.modelledBadge'),
-            info: { what: t('copilotAdoption.page.seatTime.description'), how: t('copilotAdoption.page.kpi.seatHolderTimeSaved.how'), formula: t('copilotAdoption.page.kpi.seatHolderTimeSaved.formula', { outlook: minutes(timeSaved.assumptions.seatOutlookMinutes), office: minutes(timeSaved.assumptions.seatOfficeMinutes), meeting: minutes(timeSaved.assumptions.seatMeetingMinutes), other: minutes(timeSaved.assumptions.seatUncreditedMinutes), percent: formatNumber(timeSaved.assumptions.conservativeRatio * 100, { maximumFractionDigits: 1 }) }), source: t('copilotAdoption.page.kpi.seatHolderTimeSaved.source') },
-          },
-          {
-            key: 'seatTimeExcluded',
-            label: t('copilotAdoption.page.seatTime.excluded'),
-            value: formatCount(projection.excludedUsageReportSourcedUsers),
-            hint: t('copilotAdoption.page.seatTime.excludedHint'),
-            info: { what: t('copilotAdoption.page.seatTime.excludedHint'), how: t('copilotAdoption.page.kpi.seatHolderTimeSaved.how'), formula: t('copilotAdoption.page.seatTime.excludedHint'), source: t('copilotAdoption.page.kpi.seatHolderTimeSaved.source') },
-          },
-        ]}
-      />
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12 }}>
-        <label>{t('copilotAdoption.page.seatTime.input.outlook')}<Input type="number" value={String(timeSaved.assumptions.seatOutlookMinutes)} onChange={update('seatOutlookMinutes')} /></label>
-        <label>{t('copilotAdoption.page.seatTime.input.office')}<Input type="number" value={String(timeSaved.assumptions.seatOfficeMinutes)} onChange={update('seatOfficeMinutes')} /></label>
-        <label>{t('copilotAdoption.page.seatTime.input.meeting')}<Input type="number" value={String(timeSaved.assumptions.seatMeetingMinutes)} onChange={update('seatMeetingMinutes')} /></label>
-        <label>{t('copilotAdoption.page.seatTime.input.other')}<Input type="number" value={String(timeSaved.assumptions.seatUncreditedMinutes)} onChange={update('seatUncreditedMinutes')} /></label>
+    <div>
+      <div className={styles.sectionNav} data-print="hide">
+        <TabList
+          selectedValue={section}
+          onTabSelect={(_e: unknown, d: { value: unknown }) => onSectionChange(d.value as LicensedSection)}
+          aria-label={t('copilotAdoptionUsers.licensed.sections.ariaLabel')}
+        >
+          <Tab value="people" icon={<PeopleList20Regular />}>
+            {t('copilotAdoptionUsers.licensed.sections.people')}
+          </Tab>
+          <Tab value="timeSaved" icon={<Clock20Regular />}>
+            {t('copilotAdoptionUsers.licensed.sections.timeSaved')}
+          </Tab>
+        </TabList>
       </div>
-      <Text>{t('copilotAdoption.page.seatTime.zeroCreditNote')}</Text>
-      <Text>
-        {t('copilotAdoption.page.seatTime.counts', {
-          outlook: number(projection.outlookActions),
-          office: number(projection.officeActions),
-          meeting: number(projection.teamsMeetingActions),
-          other: number(projection.uncreditedActions),
-          outlookMinutes: minutes(timeSaved.assumptions.seatOutlookMinutes),
-          officeMinutes: minutes(timeSaved.assumptions.seatOfficeMinutes),
-          meetingMinutes: minutes(timeSaved.assumptions.seatMeetingMinutes),
-          otherMinutes: minutes(timeSaved.assumptions.seatUncreditedMinutes),
-        })}
-      </Text>
-      {estimate.byDepartment?.length > 0 && (
-        <table>
-          <thead><tr><th>{t('copilotAdoption.page.seatTime.department')}</th><th>{t('copilotAdoption.page.seatTime.hoursHigh')}</th><th>{t('copilotAdoption.page.seatTime.people')}</th></tr></thead>
-          <tbody>
-            {estimate.byDepartment.map((row) => (
-              <tr key={row.segment}><td>{serverPlaceholderText(t, row.segment)}</td><td>{formatCount(segmentHours(row))}</td><td>{formatCount(row.cohortUsers)}</td></tr>
-            ))}
-          </tbody>
-        </table>
-      )}
-    </Card>
+
+      <div role="tabpanel" aria-label={t('copilotAdoptionUsers.licensed.sections.people')} hidden={section !== 'people'}>
+        {children}
+      </div>
+
+      <div role="tabpanel" aria-label={t('copilotAdoptionUsers.licensed.sections.timeSaved')} hidden={section !== 'timeSaved'}>
+        {timeSaved}
+      </div>
+    </div>
   );
 }
 
+/** The Executive view keeps only the board-pack headlines; the Analyst view keeps the full KPI set. */
 function buildExecutiveKpis(
   summary: CopilotAdoptionSummary,
   t: TFunction,
   timeSaved: TimeSavedAssumptions,
   cohorts: TimeSavedCohorts,
-  onOpenTab?: (tab: AdoptionTab) => void,
+  onOpenTab?: OpenTab,
   canSeePii = true,
 ): KpiDefinition[] {
   const executiveKeys = new Set([
@@ -2658,7 +2613,7 @@ function buildTimeSavedKpis(
   t: TFunction,
   assumptions: TimeSavedAssumptions,
   cohorts: TimeSavedCohorts,
-  onOpenTab?: (tab: AdoptionTab) => void,
+  onOpenTab?: OpenTab,
   canSeePii = true,
 ): KpiDefinition[] {
   const o = summary.options;
@@ -2725,7 +2680,7 @@ function buildTimeSavedKpis(
       ),
       tone: 'opportunity',
       modelledBadge: t('copilotAdoption.page.kpi.modelledBadge'),
-      action: onOpenTab && canSeePii ? { label: t('copilotAdoption.page.kpi.seatHolderTimeSaved.open'), onClick: () => onOpenTab('licensed') } : undefined,
+      action: onOpenTab && canSeePii ? { label: t('copilotAdoption.page.kpi.seatHolderTimeSaved.open'), onClick: () => onOpenTab('licensed', 'timeSaved') } : undefined,
       info: {
         what: t('copilotAdoption.page.kpi.seatHolderTimeSaved.what'),
         how: t('copilotAdoption.page.kpi.seatHolderTimeSaved.how'),
@@ -2749,6 +2704,7 @@ function buildTimeSavedKpis(
       cohorts.cowork,
       projectCoworkTimeSaved(summary.coworkValueEstimate, assumptions, o),
       projectCoworkTimeSaved(summary.coworkFullRolloutEstimate, assumptions, o),
+      projectCoworkTimeSaved(summary.coworkWithoutLicenceEstimate, assumptions, o),
     );
     if (coworkCohort) {
       const cowork = coworkCohort.projection;
@@ -2762,10 +2718,15 @@ function buildTimeSavedKpis(
                 plural(cowork.cohortUsers, 'copilotAdoption.page.kpi.coworkTimeSaved.hintReady.one', 'copilotAdoption.page.kpi.coworkTimeSaved.hintReady.other'),
                 { users: formatCount(cowork.cohortUsers) },
               )
-            : t(
-                plural(cowork.cohortUsers, 'copilotAdoption.page.kpi.coworkTimeSaved.hintCeiling.one', 'copilotAdoption.page.kpi.coworkTimeSaved.hintCeiling.other'),
-                { users: formatCount(cowork.cohortUsers) },
-              ),
+            : coworkCohort.cohort === 'withoutLicence'
+              ? t(
+                  plural(cowork.cohortUsers, 'copilotAdoption.page.kpi.coworkTimeSaved.hintWithoutLicence.one', 'copilotAdoption.page.kpi.coworkTimeSaved.hintWithoutLicence.other'),
+                  { users: formatCount(cowork.cohortUsers) },
+                )
+              : t(
+                  plural(cowork.cohortUsers, 'copilotAdoption.page.kpi.coworkTimeSaved.hintCeiling.one', 'copilotAdoption.page.kpi.coworkTimeSaved.hintCeiling.other'),
+                  { users: formatCount(cowork.cohortUsers) },
+                ),
         tone: 'opportunity',
         modelledBadge: t('copilotAdoption.page.kpi.modelledBadge'),
         action: onOpenTab
@@ -2795,7 +2756,7 @@ function buildKpis(
   t: TFunction,
   timeSaved: TimeSavedAssumptions,
   cohorts: TimeSavedCohorts,
-  onOpenTab?: (tab: AdoptionTab) => void,
+  onOpenTab?: OpenTab,
   canSeePii = true,
 ): KpiDefinition[] {
   const o = summary.options;

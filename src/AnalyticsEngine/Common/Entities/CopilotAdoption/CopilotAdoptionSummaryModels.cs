@@ -420,25 +420,29 @@ namespace Common.Entities.CopilotAdoption
         /// <remarks>
         /// <para>A copy rather than an edit because summaries are cached and shared: the analysis coordinator
         /// hands the same instance to every reader of a period for ten minutes, and the next one may hold
-        /// the permission. The copy is shallow on purpose - only the one collection it replaces differs.</para>
-        /// <para>Only the accountability roll-up names anyone, and only when it is grouped by direct manager:
-        /// each row is then labelled with a manager's sign-in name and describes that manager's team.
-        /// Grouped by department, country, office or company it is an aggregate like every other breakdown
-        /// here, all of which <see cref="CopilotAdoptionOptions.MinSeatsPerSegment"/> already keeps too large
-        /// to single anyone out, so the summary is returned as it is.</para>
+        /// the permission. The copy is shallow on purpose - only the collections it replaces differ.</para>
+        /// <para>Two parts can name someone. The heaviest agent users (<see cref="TopAgentUsers"/>) always
+        /// do. The accountability roll-up does only when it is grouped by direct manager: each row is then
+        /// labelled with a manager's sign-in name and describes that manager's team. Grouped by department,
+        /// country, office or company it is an aggregate like every other breakdown here, all of which
+        /// <see cref="CopilotAdoptionOptions.MinSeatsPerSegment"/> already keeps too large to single anyone
+        /// out. When neither applies the summary is returned as it is.</para>
         /// </remarks>
         public CopilotAdoptionSummary WithoutIndividualData()
         {
-            if (!string.Equals(
-                    CopilotAdoptionService.NormaliseAccountabilityDimension(AccountabilityDimension),
-                    CopilotAdoptionAccountabilityDimensions.DirectManager,
-                    StringComparison.Ordinal))
+            var rollupNamesManagers = string.Equals(
+                CopilotAdoptionService.NormaliseAccountabilityDimension(AccountabilityDimension),
+                CopilotAdoptionAccountabilityDimensions.DirectManager,
+                StringComparison.Ordinal);
+            var namesAgentUsers = TopAgentUsers != null && TopAgentUsers.Count > 0;
+            if (!rollupNamesManagers && !namesAgentUsers)
             {
                 return this;
             }
 
             var copy = (CopilotAdoptionSummary)MemberwiseClone();
-            copy.AccountabilityRollup = new List<AccountabilityRollupRow>();
+            if (rollupNamesManagers) copy.AccountabilityRollup = new List<AccountabilityRollupRow>();
+            if (namesAgentUsers) copy.TopAgentUsers = new List<AgentUserRow>();
             return copy;
         }
 
@@ -779,6 +783,20 @@ namespace Common.Entities.CopilotAdoption
         [JsonProperty("coworkFullRolloutEstimate")]
         public CoworkValueEstimate CoworkFullRolloutEstimate { get; set; } = new CoworkValueEstimate();
 
+        /// <summary>
+        /// The same model over the people WITHOUT a Copilot seat - every licence candidate: what Cowork
+        /// could give back to them once they were licensed and enabled for it.
+        /// </summary>
+        /// <remarks>
+        /// Cowork needs a Microsoft 365 Copilot licence, so this is a what-if on top of a purchase, and the
+        /// time the licence itself would give back is <see cref="LicenceAllCandidatesEstimate"/> - beside its
+        /// own decision, and never added to this. Built from the opportunity rows, so it covers exactly the
+        /// people the candidate list ranks, shares its cap, and follows a filtered view. Empty without the
+        /// Microsoft 365 usage reports, for the same reason as its siblings.
+        /// </remarks>
+        [JsonProperty("coworkWithoutLicenceEstimate")]
+        public CoworkValueEstimate CoworkWithoutLicenceEstimate { get; set; } = new CoworkValueEstimate();
+
         #endregion
 
         #region Licence opportunity
@@ -1009,6 +1027,26 @@ namespace Common.Entities.CopilotAdoption
         /// <summary>The agent estate: what exists, who uses it, and what should be retired.</summary>
         [JsonProperty("agents")]
         public AgentEstateSummary Agents { get; set; } = new AgentEstateSummary();
+
+        /// <summary>
+        /// The people who used Copilot agents most in the period, heaviest first, each with whether they
+        /// hold a Copilot seat - up to <see cref="CopilotAdoptionOptions.TopAgentUsers"/> of them.
+        /// </summary>
+        /// <remarks>
+        /// Names people, so <see cref="WithoutIndividualData"/> removes it for a reader without the See PII
+        /// permission. Kept here rather than on <see cref="Agents"/> because the estate is tenant-level and a
+        /// filtered view carries it whole, while this list is rebuilt from the view's own people.
+        /// </remarks>
+        [JsonProperty("topAgentUsers")]
+        public List<AgentUserRow> TopAgentUsers { get; set; } = new List<AgentUserRow>();
+
+        /// <summary>
+        /// True when the people <see cref="TopAgentUsers"/> was picked from stopped at
+        /// <see cref="CopilotAdoptionOptions.MaxAgentUsersScored"/>, so in a filtered view the list may
+        /// miss people who rank below that tenant-wide cut.
+        /// </summary>
+        [JsonProperty("topAgentUsersCapped")]
+        public bool TopAgentUsersCapped { get; set; }
 
         /// <summary>Unlicensed Copilot Chat as a population in its own right.</summary>
         [JsonProperty("unlicensed")]

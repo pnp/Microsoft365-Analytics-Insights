@@ -107,6 +107,24 @@ namespace Common.Entities.CopilotAdoption
     }
 
     /// <summary>
+    /// Who a <see cref="CoworkValueEstimate"/> covers. Like <see cref="LicenceEstimateCohort"/>, it decides
+    /// only how the estimate's assumptions describe the people in it: the arithmetic is the same.
+    /// </summary>
+    public enum CoworkEstimateCohort
+    {
+        /// <summary>Copilot seat holders - the people ready for Cowork now, or every seat holder.</summary>
+        SeatHolders,
+
+        /// <summary>
+        /// People without a Copilot seat: every licence candidate. Cowork needs a Microsoft 365 Copilot
+        /// licence, so for them the estimate is what Cowork could add once they were licensed and enabled -
+        /// on top of the licence's own time saved, which the licence estimate sizes and which is never
+        /// added to this.
+        /// </summary>
+        WithoutLicence,
+    }
+
+    /// <summary>
     /// A reader's own time-saved assumptions, sent with an Excel export so the workbook models the same
     /// figures they were looking at in the portal.
     /// </summary>

@@ -1,4 +1,4 @@
-import { makeStyles, tokens, Text, Badge, Button, Tooltip } from '@fluentui/react-components';
+import { makeStyles, mergeClasses, tokens, Text, Badge, Button, Tooltip } from '@fluentui/react-components';
 import {
   ArrowCollapseAll16Regular,
   ArrowExpandAll16Regular,
@@ -247,6 +247,14 @@ const useStyles = makeStyles({
     flexDirection: 'column',
     minWidth: '0',
   },
+  /**
+   * For a table that must fit the page rather than scroll: a long UPN breaks onto a second line
+   * instead of widening its column, but never so narrow that a name becomes a column of letters.
+   */
+  upnWrap: {
+    minWidth: '160px',
+    overflowWrap: 'anywhere',
+  },
   userSecondary: {
     color: tokens.colorNeutralForeground3,
   },
@@ -332,6 +340,17 @@ const useStyles = makeStyles({
     display: 'none',
     marginBottom: '8px',
     color: tokens.colorNeutralForeground2,
+  },
+  /** A list cut short on paper: a bar down the side so it reads as a warning, not a caption. */
+  printWarning: {
+    color: tokens.colorNeutralForeground1,
+    borderLeftWidth: '4px',
+    borderLeftStyle: 'solid',
+    borderLeftColor: tokens.colorPaletteDarkOrangeBorder2,
+    paddingTop: '4px',
+    paddingBottom: '4px',
+    paddingLeft: '10px',
+    marginBottom: '12px',
   },
 });
 
@@ -627,21 +646,37 @@ export function printedSearch(t: TFunction, search: string): PrintedFilter | nul
 }
 
 /**
- * Says, on paper, that a printed list is one page of a longer one.
+ * Says, on paper, that a printed list is not the whole list - and why, and how to get the rest.
  *
- * Only reachable when the page was printed from the browser's own menu, which cannot wait for the
- * rest of the list to load: the Print button loads every row first, or refuses. Without this the
- * printout would carry fifty rows under a footer saying there are six hundred, and nothing to say
- * why the other five hundred and fifty are missing or how to get them.
+ * Two ways to get there. The Print button prints a list's first `PRINT_ROW_LIMIT` rows when it is
+ * longer than that (`truncated`), which is a warning worth seeing before reading on, so it is drawn
+ * as one. The browser's own print menu cannot wait for rows to load at all, so it prints only the
+ * page on screen. Either way, without this the printout would carry part of the list under a footer
+ * counting all of it, and nothing to say why the rest is missing.
+ *
+ * Render it above the list, where a reader starts.
  */
-export function PartialPrintNote({ shownRows, totalRows }: { shownRows: number; totalRows: number }) {
+export function PartialPrintNote({
+  shownRows,
+  totalRows,
+  truncated = false,
+}: {
+  shownRows: number;
+  totalRows: number;
+  /** The rows are what the Print button loaded - the list's first rows, cut short at the limit. */
+  truncated?: boolean;
+}) {
   const styles = useStyles();
   const t = useT();
   if (shownRows >= totalRows) return null;
 
   return (
-    <div className={styles.printOnly} data-print="only">
-      <Text size={200}>{t('copilotAdoption.shared.partialPrint', { limit: formatCount(PRINT_ROW_LIMIT) })}</Text>
+    <div className={mergeClasses(styles.printOnly, truncated && styles.printWarning)} data-print="only">
+      <Text size={200} weight={truncated ? 'semibold' : undefined}>
+        {truncated
+          ? t('copilotAdoption.shared.truncatedPrint', { shown: formatCount(shownRows), total: formatCount(totalRows) })
+          : t('copilotAdoption.shared.partialPrint', { limit: formatCount(PRINT_ROW_LIMIT) })}
+      </Text>
     </div>
   );
 }
@@ -677,13 +712,19 @@ export function ExpandableUserCell({
   onToggle,
   userPrincipalName,
   secondary,
+  secondaryClassName,
   className,
+  wrapName = false,
 }: {
   open: boolean;
   onToggle: () => void;
   userPrincipalName: string;
   secondary?: string | null;
+  /** Restyles the second line - a disabled account is stated in red, for one. */
+  secondaryClassName?: string;
   className?: string;
+  /** Lets a long UPN wrap rather than widen the column, for a table that must not scroll sideways. */
+  wrapName?: boolean;
 }) {
   const styles = useStyles();
   const t = useT();
@@ -700,11 +741,11 @@ export function ExpandableUserCell({
           onClick={onToggle}
           data-print="hide"
         />
-        <span className={styles.upnStack}>
+        <span className={mergeClasses(styles.upnStack, wrapName && styles.upnWrap)}>
           <Text size={200} weight="semibold">
             {userPrincipalName}
           </Text>
-          <Text size={100} className={styles.userSecondary}>
+          <Text size={100} className={mergeClasses(styles.userSecondary, secondaryClassName)}>
             {secondary || ''}
           </Text>
         </span>

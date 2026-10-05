@@ -634,7 +634,7 @@ describe('OpportunitiesPanel licence model', () => {
     expect(within(model).queryByText(/^Assumes each Cowork task saves/)).toBeNull();
     // The one mention: the two figures it shares with the Cowork estimate.
     expect(
-      within(model).getByText(/^The conservative share and the hours in a working day apply to both time-saved estimates/),
+      within(model).getByText(/^The conservative share applies to every time-saved estimate - licensing, Cowork and the time already saved by seat holders/),
     ).toBeTruthy();
   });
 
@@ -739,14 +739,21 @@ describe('OpportunitiesPanel printing', { timeout: 30000 }, () => {
     expect(listed()).toBe(50);
   });
 
-  it('refuses, rather than printing one page, when the list is longer than can be printed', async () => {
+  it('prints the first candidates of a list too long to print in full, rather than refusing', async () => {
     serve(PRINT_ROW_LIMIT * 3);
     await renderPanel(summary());
     await waitFor(() => expect(listed()).toBe(50));
-    vi.spyOn(window, 'print').mockImplementation(() => {});
 
-    await expect(requestPrint()).resolves.toMatchObject({ kind: 'tooManyRows' });
-    expect(window.print).not.toHaveBeenCalled();
+    const printed = { rows: -1, warned: false };
+    vi.spyOn(window, 'print').mockImplementation(() => {
+      printed.rows = listed();
+      printed.warned = within(candidates()).queryByText(/^Only the first .* rows are printed/) !== null;
+    });
+    await act(async () => {
+      await expect(requestPrint()).resolves.toMatchObject({ kind: 'printed', truncated: { rows: PRINT_ROW_LIMIT * 3 } });
+    });
+
+    expect(printed).toEqual({ rows: PRINT_ROW_LIMIT, warned: true });
   });
 
   it('does not hold up a print of the time-saved section', async () => {

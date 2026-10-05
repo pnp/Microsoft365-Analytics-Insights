@@ -1,4 +1,4 @@
-import { makeStyles, tokens, Text, Badge } from '@fluentui/react-components';
+import { makeStyles, mergeClasses, tokens, Text, Badge } from '@fluentui/react-components';
 import type { AdoptionActionSummary } from '../../types/copilotAdoption';
 import type { CopilotAdoptionOptions } from '../../types/copilotAdoption';
 import { useT } from '../../i18n';
@@ -43,6 +43,19 @@ const useStyles = makeStyles({
   badge: {
     color: '#ffffff',
     whiteSpace: 'nowrap',
+  },
+  /**
+   * For a table that must fit the page: a long label - and some translations of these are long - breaks
+   * onto a second line instead of widening its column. A badge has a fixed height, so it grows with it.
+   */
+  badgeWrap: {
+    whiteSpace: 'normal',
+    height: 'auto',
+    minHeight: '16px',
+    maxWidth: '150px',
+    paddingTop: '1px',
+    paddingBottom: '1px',
+    textAlign: 'start',
   },
   count: {
     fontVariantNumeric: 'tabular-nums',
@@ -99,11 +112,15 @@ const useStyles = makeStyles({
 });
 
 /** The action badge used in the user list, so the tag and the plan always use one palette. */
-export function ActionBadge({ code, label }: { code: string; label: string }) {
+export function ActionBadge({ code, label, wrap = false }: { code: string; label: string; wrap?: boolean }) {
   const styles = useStyles();
   const t = useT();
   return (
-    <Badge className={styles.badge} style={{ backgroundColor: ACTION_COLOUR[code] ?? '#605e5c' }} size="small">
+    <Badge
+      className={mergeClasses(styles.badge, wrap && styles.badgeWrap)}
+      style={{ backgroundColor: ACTION_COLOUR[code] ?? '#605e5c' }}
+      size="small"
+    >
       {actionLabel(t, code, label)}
     </Badge>
   );

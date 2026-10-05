@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { act, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { renderWithProvider } from '../../test/renderWithProvider';
 import LicensedUsersPanel from './LicensedUsersPanel';
 import { AdoptionBand } from '../../types/copilotAdoption';
@@ -133,7 +133,7 @@ function row(over: Partial<LicensedUserAdoptionRow>): LicensedUserAdoptionRow {
 describe('LicensedUsersPanel source reconciliation', () => {
   beforeEach(() => vi.mocked(fetchLicensedUsers).mockReset());
 
-  it('keeps both source figures on hover only for rows covered by both sources', async () => {
+  it('keeps the signal out of the table, and shows both source figures in the expanded row of a user covered by both', async () => {
     const page: LicensedUserPage = {
       total: 3,
       skip: 0,
@@ -191,27 +191,40 @@ describe('LicensedUsersPanel source reconciliation', () => {
 
     expect(await screen.findByText('both@contoso.com')).toBeInTheDocument();
 
-    // The reconciliation figures are carried on hover rather than printed inline: rendered in full
-    // they wrapped to five lines and set the height of every row in the table. They must still be
-    // reachable, and still be per-row - that is what this asserts.
-    const markers = screen.getAllByText('both sources');
-    expect(markers).toHaveLength(2);
+    // The table fits the page: where the signal came from is detail, not a column of its own.
+    expect(screen.queryByRole('columnheader', { name: /Signal/ })).toBeNull();
+    expect(screen.queryByText('Audit log')).toBeNull();
 
-    const titles = markers.map((m) => m.getAttribute('title') ?? '');
-    expect(titles.some((t) =>
-      t.includes('Audit D28: 12 interactions, 4 days.')
-      && t.includes('Microsoft report D28')
-      && t.includes('18 prompts, 5 days.'))).toBe(true);
-    expect(titles.some((t) =>
-      t.includes('Audit D28: 0 interactions, 0 days.')
-      && t.includes('Microsoft report D28')
-      && t.includes('18 prompts, 5 days.'))).toBe(true);
+    fireEvent.click(screen.getByRole('button', { name: 'Show the full assessment for both@contoso.com' }));
+    expect(screen.getByText('Audit log')).toBeInTheDocument();
+    expect(screen.getByText('both sources')).toBeInTheDocument();
+    expect(screen.getByText(/Audit D28: 12 interactions, 4 days\./).textContent).toMatch(/Microsoft report D28.*18 prompts, 5 days\./);
 
+    // Every row at once, as the printout gets it.
+    fireEvent.click(screen.getByRole('button', { name: 'Expand all' }));
     expect(screen.getAllByText('Audit log')).toHaveLength(2);
     expect(screen.getByText('Microsoft usage report')).toBeInTheDocument();
+    expect(screen.getAllByText('both sources')).toHaveLength(2);
+    expect(screen.getByText(/Audit D28: 0 interactions, 0 days\./)).toBeInTheDocument();
 
-    // The audit-only row has nothing to reconcile, so it must not claim it has.
-    expect(screen.queryByText(/Audit D28: 12 interactions, 4 days\./)).toBeNull();
+    // The audit-only row has nothing to reconcile, so it must not claim it has: two comparisons for
+    // three expanded rows.
+    expect(screen.getAllByText(/^Audit D28: /)).toHaveLength(2);
+  });
+
+  it('keeps the reclaim tier on the row, under the action it qualifies', async () => {
+    vi.mocked(fetchLicensedUsers).mockResolvedValue({
+      total: 1,
+      skip: 0,
+      take: 50,
+      warnings: [],
+      rows: [row({ userPrincipalName: 'idle@contoso.com', reclaimEligibility: 'probable', reclaimExclusionExpired: false })],
+    });
+
+    renderWithProvider(<LicensedUsersPanel windowDays={28} filterOptions={null} actionPlan={[]} options={OPTIONS} />);
+
+    expect(await screen.findByText('idle@contoso.com')).toBeInTheDocument();
+    expect(within(screen.getByRole('table')).getByText('Probable reclaim')).toBeInTheDocument();
   });
 });
 
@@ -274,14 +287,29 @@ describe('LicensedUsersPanel printing', { timeout: 30000 }, () => {
     expect(listed()).toBe(50);
   });
 
-  it('refuses, rather than printing one page, when the list is longer than can be printed', async () => {
+  it('prints the first rows of a list too long to print in full, and says so above it', async () => {
     serve(PRINT_ROW_LIMIT + 10);
     renderPanel();
     await waitFor(() => expect(listed()).toBe(50));
-    vi.spyOn(window, 'print').mockImplementation(() => {});
 
-    await expect(requestPrint()).resolves.toMatchObject({ kind: 'tooManyRows', rows: PRINT_ROW_LIMIT + 10 });
-    expect(window.print).not.toHaveBeenCalled();
+    const printed = { rows: -1, warned: false };
+    vi.spyOn(window, 'print').mockImplementation(() => {
+      printed.rows = listed();
+      printed.warned =
+        screen.queryByText(
+          `Only the first ${PRINT_ROW_LIMIT.toLocaleString('en')} of ${(PRINT_ROW_LIMIT + 10).toLocaleString('en')} rows are printed`,
+          { exact: false },
+        ) !== null;
+    });
+    await act(async () => {
+      await expect(requestPrint()).resolves.toEqual({
+        kind: 'printed',
+        truncated: { rows: PRINT_ROW_LIMIT + 10, limit: PRINT_ROW_LIMIT },
+      });
+    });
+
+    expect(printed).toEqual({ rows: PRINT_ROW_LIMIT, warned: true });
+    expect(listed()).toBe(50);
   });
 
   it('keeps the filter bar and the pager off paper, and prints what the bar was set to', async () => {
