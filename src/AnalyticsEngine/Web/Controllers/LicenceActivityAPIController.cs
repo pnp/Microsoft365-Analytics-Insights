@@ -24,6 +24,7 @@ namespace Web.AnalyticsWeb.Controllers
     /// </summary>
     [Authorize]
     [Route("api/LicenceActivity")]
+    [ApiReplyExceptionFilter]
     public sealed class LicenceActivityAPIController  : ControllerBase
     {
         private static readonly LicenceActivitySnapshotCache<LicenceActivityOverview> OverviewCache =

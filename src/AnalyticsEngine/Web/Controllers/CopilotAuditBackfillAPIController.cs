@@ -1,7 +1,8 @@
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Mvc;
 using System;
 using System.Net;
 using System.Threading.Tasks;
-using System.Web.Http;
 using Web.AnalyticsWeb.Models.CopilotAuditBackfill;
 using Web.AnalyticsWeb.Security;
 
@@ -9,8 +10,8 @@ namespace Web.AnalyticsWeb.Controllers
 {
     [Authorize]
     [RequirePortalPermission(PortalPermission.Administration)]
-    [RoutePrefix("api/CopilotAuditBackfill")]
-    public class CopilotAuditBackfillAPIController : ApiController
+    [Route("api/CopilotAuditBackfill")]
+    public class CopilotAuditBackfillAPIController : ControllerBase
     {
         private readonly Func<CopilotAuditBackfillService> _createService;
 
@@ -23,27 +24,29 @@ namespace Web.AnalyticsWeb.Controllers
 
         [HttpGet]
         [Route("")]
-        public Task<IHttpActionResult> Get() => Answer(async service => Ok(await service.GetStatusAsync()));
+        public Task<IActionResult> Get() => Answer(async service => Ok(await service.GetStatusAsync()));
 
         [HttpPost]
         [Route("start")]
         [RequireSameOriginXhr]
-        public Task<IHttpActionResult> Start([FromBody] CopilotAuditBackfillStartRequest request)
-            => Answer(async service => Content(HttpStatusCode.Accepted, await service.StartAsync(request, User?.Identity?.Name)));
+        public Task<IActionResult> Start([FromBody] CopilotAuditBackfillStartRequest request)
+            => Answer(async service => StatusCode((int)HttpStatusCode.Accepted, await service.StartAsync(request, User?.Identity?.Name)));
 
         [HttpPost]
         [Route("{id:int}/cancel")]
         [RequireSameOriginXhr]
-        public Task<IHttpActionResult> Cancel(int id)
+        public Task<IActionResult> Cancel(int id)
             => Answer(async service => Ok(await service.CancelAsync(id)));
 
-        private async Task<IHttpActionResult> Answer(Func<CopilotAuditBackfillService, Task<IHttpActionResult>> action)
+        // net10: Web API 2's Content(status, value) is ported as StatusCode(status, value), an ObjectResult
+        // written by the Web API compatible JSON formatter, so CopilotAuditBackfillError keeps its "code" name.
+        private async Task<IActionResult> Answer(Func<CopilotAuditBackfillService, Task<IActionResult>> action)
         {
             try { return await action(_createService()); }
-            catch (CopilotAuditBackfillRequestException ex) { return Content(ex.Status, new CopilotAuditBackfillError { Code = ex.Code }); }
+            catch (CopilotAuditBackfillRequestException ex) { return StatusCode((int)ex.Status, new CopilotAuditBackfillError { Code = ex.Code }); }
             catch (Common.Entities.CopilotAuditBackfill.CopilotAuditBackfillStateUnavailableException)
             {
-                return Content(HttpStatusCode.ServiceUnavailable, new CopilotAuditBackfillError { Code = Common.Entities.CopilotAuditBackfill.CopilotAuditBackfillErrorCodes.StateUnavailable });
+                return StatusCode((int)HttpStatusCode.ServiceUnavailable, new CopilotAuditBackfillError { Code = Common.Entities.CopilotAuditBackfill.CopilotAuditBackfillErrorCodes.StateUnavailable });
             }
         }
     }

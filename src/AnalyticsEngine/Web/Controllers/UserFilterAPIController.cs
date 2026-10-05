@@ -26,6 +26,7 @@ namespace Web.AnalyticsWeb.Controllers
     [Authorize]
     [RequirePortalPermission(PortalPermission.SeePii)]
     [Route("api/UserFilter")]
+    [ApiReplyExceptionFilter]
     public class UserFilterAPIController : ControllerBase
     {
         public UserFilterAPIController() : this(CachedUserDirectorySource.Default, ReportScopeResolver.Default)
@@ -122,7 +123,7 @@ namespace Web.AnalyticsWeb.Controllers
             {
                 return await work().ConfigureAwait(false);
             }
-            catch (HttpResponseException)
+            catch (ApiReplyException)
             {
                 // A deliberate refusal - the global filter could not be evaluated - already shaped for the caller.
                 throw;

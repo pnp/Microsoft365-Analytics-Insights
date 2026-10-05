@@ -45,6 +45,7 @@ namespace Web.AnalyticsWeb.Controllers
     /// </remarks>
     [Authorize]
     [Route("api/TeamsExplorer")]
+    [ApiReplyExceptionFilter]
     public class TeamsExplorerAPIController : ControllerBase
     {
         /// <summary>

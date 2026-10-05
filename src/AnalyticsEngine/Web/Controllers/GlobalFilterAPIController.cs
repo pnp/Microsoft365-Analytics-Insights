@@ -1,15 +1,14 @@
 using Common.Entities.Config;
 using Common.Entities.UserFilters;
 using DataUtils;
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Mvc;
 using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Net;
-using System.Net.Http;
-using System.Net.Http.Headers;
 using System.Threading;
 using System.Threading.Tasks;
-using System.Web.Http;
 using Web.AnalyticsWeb.Models;
 using Web.AnalyticsWeb.Models.UserFilters;
 using Web.AnalyticsWeb.Security;
@@ -30,8 +29,9 @@ namespace Web.AnalyticsWeb.Controllers
     /// that outlives the row it overwrote.</para>
     /// </remarks>
     [Authorize]
-    [RoutePrefix("api/GlobalFilter")]
-    public class GlobalFilterAPIController : ApiController
+    [Route("api/GlobalFilter")]
+    [ApiReplyExceptionFilter]
+    public class GlobalFilterAPIController : ControllerBase
     {
         internal const string InvalidFilterCode = "invalidFilter";
         internal const string RevisionConflictCode = "revisionConflict";
@@ -68,7 +68,7 @@ namespace Web.AnalyticsWeb.Controllers
         /// </summary>
         [HttpGet]
         [Route("effective")]
-        public async Task<IHttpActionResult> Effective(CancellationToken cancellationToken = default(CancellationToken))
+        public async Task<IActionResult> Effective(CancellationToken cancellationToken = default(CancellationToken))
         {
             var canBypass = PortalAccess.Evaluate(Request, User).Administration;
             var global = await Resolver.DescribeAsync(Request, User, cancellationToken).ConfigureAwait(false);
@@ -80,7 +80,7 @@ namespace Web.AnalyticsWeb.Controllers
         [Route("")]
         [RequirePortalPermission(PortalPermission.Administration)]
         [RequirePortalPermission(PortalPermission.SeePii)]
-        public async Task<IHttpActionResult> Get(CancellationToken cancellationToken = default(CancellationToken))
+        public async Task<IActionResult> Get(CancellationToken cancellationToken = default(CancellationToken))
         {
             GlobalFilterState state;
             try
@@ -106,7 +106,7 @@ namespace Web.AnalyticsWeb.Controllers
         [RequirePortalPermission(PortalPermission.Administration)]
         [RequirePortalPermission(PortalPermission.SeePii)]
         [RequireSameOriginXhr]
-        public async Task<IHttpActionResult> Save(
+        public async Task<IActionResult> Save(
             [FromBody] GlobalFilterSaveRequest body, CancellationToken cancellationToken = default(CancellationToken))
         {
             if (body == null)
@@ -164,7 +164,7 @@ namespace Web.AnalyticsWeb.Controllers
         [RequirePortalPermission(PortalPermission.Administration)]
         [RequirePortalPermission(PortalPermission.SeePii)]
         [RequireSameOriginXhr]
-        public async Task<IHttpActionResult> Preview(
+        public async Task<IActionResult> Preview(
             [FromBody] GlobalFilterPreviewRequest body, CancellationToken cancellationToken = default(CancellationToken))
         {
             GlobalFilterDefinition definition;
@@ -225,11 +225,14 @@ namespace Web.AnalyticsWeb.Controllers
             }
         }
 
-        private IHttpActionResult NoStore(HttpStatusCode status, object body)
+        /// <remarks>
+        /// net10: Web API 2's <c>Request.CreateResponse(status, body)</c> with its cache headers set. The body is
+        /// written by the Web API compatible JSON formatter, so the models' <c>[JsonProperty]</c> names hold.
+        /// </remarks>
+        private IActionResult NoStore(HttpStatusCode status, object body)
         {
-            var response = Request.CreateResponse(status, body);
-            response.Headers.CacheControl = new CacheControlHeaderValue { NoStore = true, Private = true };
-            return ResponseMessage(response);
+            Response.Headers.CacheControl = "no-store, private";
+            return StatusCode((int)status, body);
         }
     }
 }

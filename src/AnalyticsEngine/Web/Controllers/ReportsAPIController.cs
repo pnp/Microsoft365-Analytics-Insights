@@ -37,6 +37,7 @@ namespace Web.AnalyticsWeb.Controllers
     /// </summary>
     [Authorize]
     [Route("api/Reports")]
+    [ApiReplyExceptionFilter]
     public partial class ReportsAPIController  : ControllerBase
     {
         // A single slow weekly scan would otherwise run until Azure App Service kills the HTTP

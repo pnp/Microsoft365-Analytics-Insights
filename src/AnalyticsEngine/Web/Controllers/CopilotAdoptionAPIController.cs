@@ -57,7 +57,7 @@ namespace Web.AnalyticsWeb.Controllers
     /// </summary>
     [Authorize]
     [Route("api/CopilotAdoption")]
-    [UserFilterDirectoryUnavailableFilter]
+    [ApiReplyExceptionFilter]
     public class CopilotAdoptionAPIController  : ControllerBase
     {
         /// <summary>Windows the UI offers. Anything else is snapped to the nearest, so a hand-edited URL cannot force a year-long scan.</summary>
@@ -345,9 +345,11 @@ namespace Web.AnalyticsWeb.Controllers
             }
             catch (ArgumentException ex)
             {
-                throw new HttpResponseException(Request.CreateResponse(
-                    HttpStatusCode.BadRequest,
-                    new ApiErrorModel(ex.Message, ex.Message)));
+                // net10: Web API 2's HttpResponseException(Request.CreateResponse(400, ...)), carried to the
+                // reply by [ApiReplyExceptionFilter] on this controller.
+                throw new ApiReplyException(
+                    StatusCode((int)HttpStatusCode.BadRequest, new ApiErrorModel(ex.Message, ex.Message)),
+                    ex.Message);
             }
 
             return await Coordinator.TryGetAsync(
@@ -449,23 +451,30 @@ namespace Web.AnalyticsWeb.Controllers
             };
         }
 
-        private static HttpResponseMessage PastRangeListExportHiddenResponse()
+        /// <summary>
+        /// An export of a named list for an explicit past date range: refused, as the lists themselves are.
+        /// </summary>
+        /// <remarks>
+        /// net10: the same bytes as the .NET Framework build's hand-built <c>HttpResponseMessage</c> - the
+        /// error model serialised by <see cref="JsonConvert"/> with its default settings - rather than a
+        /// negotiated result, so the body is identical on both builds.
+        /// </remarks>
+        private static IActionResult PastRangeListExportHiddenResponse()
         {
-            return new HttpResponseMessage(HttpStatusCode.BadRequest)
+            return new ContentResult
             {
-                Content = new StringContent(
-                    JsonConvert.SerializeObject(new ApiErrorModel(
-                        "copilotAdoption.error.pastRangeNamedListsHidden",
-                        "copilotAdoption.error.pastRangeNamedListsHidden")),
-                    Encoding.UTF8,
-                    "application/json"),
+                StatusCode = (int)HttpStatusCode.BadRequest,
+                Content = JsonConvert.SerializeObject(new ApiErrorModel(
+                    "copilotAdoption.error.pastRangeNamedListsHidden",
+                    "copilotAdoption.error.pastRangeNamedListsHidden")),
+                ContentType = "application/json; charset=utf-8",
             };
         }
 
-        private IHttpActionResult PastRangeListHidden()
+        private IActionResult PastRangeListHidden()
         {
-            return Content(
-                HttpStatusCode.BadRequest,
+            return StatusCode(
+                (int)HttpStatusCode.BadRequest,
                 new ApiErrorModel(
                     "copilotAdoption.error.pastRangeNamedListsHidden",
                     "copilotAdoption.error.pastRangeNamedListsHidden"));
@@ -1451,34 +1460,5 @@ namespace Web.AnalyticsWeb.Controllers
         }
 
         #endregion
-    }
-
-    /// <summary>
-    /// The user filter's directory could not be read. Answered with a plain 503 by
-    /// <see cref="UserFilterDirectoryUnavailableFilterAttribute"/> - the ASP.NET Core stand-in for Web API 2's
-    /// <c>HttpResponseException</c> - rather than left to the generic error page.
-    /// </summary>
-    internal sealed class UserFilterDirectoryUnavailableException : Exception
-    {
-        public UserFilterDirectoryUnavailableException(string message) : base(message)
-        {
-        }
-    }
-
-    internal sealed class UserFilterDirectoryUnavailableFilterAttribute : ExceptionFilterAttribute
-    {
-        public override void OnException(ExceptionContext context)
-        {
-            if (context.Exception is UserFilterDirectoryUnavailableException unavailable)
-            {
-                context.Result = new ContentResult
-                {
-                    StatusCode = StatusCodes.Status503ServiceUnavailable,
-                    Content = unavailable.Message,
-                    ContentType = "text/plain; charset=utf-8",
-                };
-                context.ExceptionHandled = true;
-            }
-        }
     }
 }

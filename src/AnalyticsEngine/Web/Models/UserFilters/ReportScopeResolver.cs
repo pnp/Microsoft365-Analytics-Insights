@@ -1,18 +1,14 @@
 using Common.Entities.UserFilters;
+using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Mvc;
 using System;
 using System.Collections.Concurrent;
 using System.Linq;
-using System.Net;
-using System.Net.Http;
-using System.Net.Http.Formatting;
-using System.Net.Http.Headers;
 using System.Runtime.CompilerServices;
 using System.Security.Claims;
 using System.Security.Principal;
-using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
-using System.Web.Http;
 using Web.AnalyticsWeb.Security;
 
 namespace Web.AnalyticsWeb.Models.UserFilters
@@ -200,30 +196,34 @@ namespace Web.AnalyticsWeb.Models.UserFilters
         internal const string DirectoryUnavailableMessage =
             "The directory the report's filters are applied to could not be read, so the filtered report is not available right now. The failure has been logged. Try again shortly.";
 
-        internal static HttpResponseException Exception(HttpRequestMessage request, string code, string message)
+        /// <summary>
+        /// The 503 refusal. JSON with <paramref name="code"/> for the SPA and for scripts, whatever <c>Accept</c>
+        /// they send; plain text for a document navigation - an export link opened in a tab - because the
+        /// person who clicked has to be able to read it.
+        /// </summary>
+        /// <remarks>
+        /// net10: the ASP.NET Core form of the Web API 2 <c>HttpResponseException</c> the .NET Framework build
+        /// throws here. The reply travels inside an <see cref="ApiReplyException"/>, which
+        /// <see cref="ApiReplyExceptionFilterAttribute"/> on the controller sends, marked no-store.
+        /// </remarks>
+        internal static ApiReplyException Exception(HttpRequest request, string code, string message)
         {
-            HttpResponseMessage response;
-            if (request == null)
+            IActionResult result;
+            if (request == null || PortalPermissionDenied.IsDocumentNavigation(request))
             {
-                response = new HttpResponseMessage(HttpStatusCode.ServiceUnavailable)
+                result = new ContentResult
                 {
-                    Content = new StringContent(message, Encoding.UTF8, "text/plain"),
+                    StatusCode = StatusCodes.Status503ServiceUnavailable,
+                    Content = message,
+                    ContentType = "text/plain; charset=utf-8",
                 };
-            }
-            else if (PortalPermissionDenied.IsDocumentNavigation(request))
-            {
-                // An export link opened in a tab: the person who clicked has to be able to read it.
-                response = request.CreateResponse(HttpStatusCode.ServiceUnavailable);
-                response.Content = new StringContent(message, Encoding.UTF8, "text/plain");
             }
             else
             {
-                var json = (MediaTypeFormatter)request.GetConfiguration()?.Formatters.JsonFormatter ?? new JsonMediaTypeFormatter();
-                response = request.CreateResponse(HttpStatusCode.ServiceUnavailable, new ApiErrorModel(message, code), json);
+                result = new JsonResult(new ApiErrorModel(message, code)) { StatusCode = StatusCodes.Status503ServiceUnavailable };
             }
 
-            response.Headers.CacheControl = new CacheControlHeaderValue { NoStore = true, Private = true };
-            return new HttpResponseException(response);
+            return new ApiReplyException(result, message);
         }
 
         /// <summary>
@@ -231,11 +231,13 @@ namespace Web.AnalyticsWeb.Models.UserFilters
         /// permission refusal, so the page says which permission would show the report, exactly as it does when
         /// such a reader narrows a report themselves (#680).
         /// </summary>
-        internal static HttpResponseException TooFewPeople(HttpRequestMessage request)
+        internal static ApiReplyException TooFewPeople(HttpRequest request)
         {
-            return new HttpResponseException(request == null
-                ? new HttpResponseMessage(HttpStatusCode.Forbidden)
-                : PortalPermissionDenied.Response(request, PortalPermission.SeePii));
+            return new ApiReplyException(
+                request == null
+                    ? new StatusCodeResult(StatusCodes.Status403Forbidden)
+                    : PortalPermissionDenied.Result(request, PortalPermission.SeePii),
+                PortalPermissionDeniedModel.SeePiiMessage);
         }
     }
 
@@ -302,9 +304,9 @@ namespace Web.AnalyticsWeb.Models.UserFilters
 
         /// <summary>The scope a report request may cover.</summary>
         /// <param name="userFilter">The reader's own filter, for the reports that take one; <c>null</c> otherwise.</param>
-        /// <exception cref="HttpResponseException">503 - a filter applies but cannot be evaluated.</exception>
+        /// <exception cref="ApiReplyException">503 - a filter applies but cannot be evaluated; or 403 - it leaves a reader without See PII too few people.</exception>
         public async Task<ReportScope> ResolveAsync(
-            HttpRequestMessage request, IPrincipal principal, UserFilterExpression userFilter, CancellationToken cancellationToken)
+            HttpRequest request, IPrincipal principal, UserFilterExpression userFilter, CancellationToken cancellationToken)
         {
             var state = await ReadFilterAsync(request, cancellationToken).ConfigureAwait(false);
             var access = PortalAccess.Evaluate(request, principal);
@@ -361,7 +363,7 @@ namespace Web.AnalyticsWeb.Models.UserFilters
         /// off, so the filter bar can still show what everyone else sees. <c>null</c> when none is defined.
         /// </summary>
         public async Task<GlobalFilterApplication> DescribeAsync(
-            HttpRequestMessage request, IPrincipal principal, CancellationToken cancellationToken)
+            HttpRequest request, IPrincipal principal, CancellationToken cancellationToken)
         {
             var state = await ReadFilterAsync(request, cancellationToken).ConfigureAwait(false);
             if (!state.IsDefined) return null;
@@ -387,7 +389,7 @@ namespace Web.AnalyticsWeb.Models.UserFilters
         /// <summary>A draft definition evaluated for the signed-in person - the administration page's preview.</summary>
         /// <remarks>Only an administrator with See PII may preview (the endpoint requires both), so nothing is withheld.</remarks>
         public async Task<GlobalFilterApplication> PreviewAsync(
-            HttpRequestMessage request, IPrincipal principal, GlobalFilterDefinition draft, CancellationToken cancellationToken)
+            HttpRequest request, IPrincipal principal, GlobalFilterDefinition draft, CancellationToken cancellationToken)
         {
             var global = new GlobalFilterApplication { Defined = draft != null && !draft.IsEmpty, CanBypass = true, SeesIndividuals = true };
             if (!global.Defined) return global;
@@ -424,7 +426,7 @@ namespace Web.AnalyticsWeb.Models.UserFilters
             return compiled;
         }
 
-        private async Task<GlobalFilterState> ReadFilterAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        private async Task<GlobalFilterState> ReadFilterAsync(HttpRequest request, CancellationToken cancellationToken)
         {
             try
             {
@@ -437,7 +439,7 @@ namespace Web.AnalyticsWeb.Models.UserFilters
             }
         }
 
-        private async Task<UserDirectorySnapshot> ReadDirectoryAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        private async Task<UserDirectorySnapshot> ReadDirectoryAsync(HttpRequest request, CancellationToken cancellationToken)
         {
             try
             {
@@ -451,14 +453,17 @@ namespace Web.AnalyticsWeb.Models.UserFilters
         }
 
         /// <summary>Whether the request carries the administrator's "switch it off for my view" cookie.</summary>
-        internal static bool BypassRequested(HttpRequestMessage request)
+        /// <remarks>
+        /// net10: every cookie of that name counts, as Web API 2's <c>GetCookies</c> read them - not only the one
+        /// <see cref="HttpRequest.Cookies"/> keeps when a browser sends the name twice (set at two paths).
+        /// </remarks>
+        internal static bool BypassRequested(HttpRequest request)
         {
             if (request == null) return false;
 
-            return request.Headers.GetCookies(BypassCookie)
-                .SelectMany(c => c.Cookies)
-                .Any(c => string.Equals(c.Name, BypassCookie, StringComparison.Ordinal)
-                          && string.Equals(c.Value?.Trim(), "1", StringComparison.Ordinal));
+            return Microsoft.Net.Http.Headers.CookieHeaderValue.TryParseList(request.Headers.Cookie, out var cookies)
+                && cookies.Any(c => string.Equals(c.Name.Value, BypassCookie, StringComparison.Ordinal)
+                                    && string.Equals(c.Value.Value?.Trim(), "1", StringComparison.Ordinal));
         }
     }
 }

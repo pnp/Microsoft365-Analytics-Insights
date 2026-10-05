@@ -30,6 +30,7 @@ namespace Web.AnalyticsWeb.Controllers
     /// </summary>
     [Authorize]
     [Route("api/AgentCosts")]
+    [ApiReplyExceptionFilter]
     public class AgentCostsAPIController  : ControllerBase
     {
         /// <summary>Default window. A month is the unit Microsoft bills in, so it is the natural default.</summary>
@@ -258,7 +259,7 @@ namespace Web.AnalyticsWeb.Controllers
             {
                 return await handler();
             }
-            catch (HttpResponseException)
+            catch (ApiReplyException)
             {
                 // A deliberate response - the global filter could not be evaluated, so the report is refused.
                 throw;

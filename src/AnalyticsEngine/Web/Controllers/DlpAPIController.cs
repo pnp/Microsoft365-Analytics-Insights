@@ -46,6 +46,7 @@ namespace Web.AnalyticsWeb.Controllers
     /// </remarks>
     [Authorize]
     [Route("api/Dlp")]
+    [ApiReplyExceptionFilter]
     public class DlpAPIController  : ControllerBase
     {
         /// <summary>Windows the UI offers. Anything else snaps to the nearest, so a hand-edited URL cannot force a huge scan.</summary>

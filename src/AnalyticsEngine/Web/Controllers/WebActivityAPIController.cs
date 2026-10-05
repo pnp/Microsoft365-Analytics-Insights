@@ -41,6 +41,7 @@ namespace Web.AnalyticsWeb.Controllers
     /// </remarks>
     [Authorize]
     [Route("api/WebActivity")]
+    [ApiReplyExceptionFilter]
     public class WebActivityAPIController : ControllerBase
     {
         /// <summary>
