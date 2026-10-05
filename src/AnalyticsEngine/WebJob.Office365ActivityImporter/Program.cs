@@ -358,6 +358,12 @@ namespace WebJob.Office365ActivityImporter
                 await ActivityImporter.Engine.ActivityAPI.Copilot.CopilotAuditEventManager
                     .RepairDenormalisedColumnsAsync(configuredSettings.ConnectionStrings.DatabaseConnectionString, logger);
 
+                // Merge Copilot agents an older importer split across several copilot_agents rows (#699). It is
+                // here, outside every gate, for the same reasons as the repair above. Two scans of copilot_agents
+                // when there is nothing to merge, and it never throws.
+                await ActivityImporter.Engine.ActivityAPI.Copilot.CopilotAuditEventManager
+                    .RepairSplitAgentsAsync(configuredSettings.ConnectionStrings.DatabaseConnectionString, logger);
+
                 // Agent cost imports (Copilot Studio billed credits + Azure Cost Management). Kept as their
                 // own phase rather than folded into the Graph or Activity API imports: they authenticate to
                 // different audiences (api.powerplatform.com and management.azure.com) and need role

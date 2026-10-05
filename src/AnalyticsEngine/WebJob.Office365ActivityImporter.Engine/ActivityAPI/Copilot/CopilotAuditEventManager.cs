@@ -578,6 +578,80 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
             }
         }
 
+        /// <summary>
+        /// Merges Copilot agents that an older importer split across several <c>copilot_agents</c> rows. Each row
+        /// is mapped to the id <see cref="CopilotAuditLogContent.NormalizeAgentId"/> produces today, and the rows
+        /// that share an id are merged into one, interactions included. See
+        /// <c>repair_split_copilot_agents.sql</c> and issue #699.
+        /// </summary>
+        /// <remarks>
+        /// Called once per import cycle from the web-job top level, straight after
+        /// <see cref="RepairDenormalisedColumnsAsync"/> and for the same reasons. It must heal a database whose
+        /// import is failing, idle or switched off, and it catches rows an older importer writes during an upgrade.
+        /// When there is nothing to merge it costs two scans of <c>copilot_agents</c> (measured at 54 ms for 51,000
+        /// agents). It never fails an import, and
+        /// its timeout is finite for the same reason as the other repair's: a hang can't be caught.
+        /// </remarks>
+        public static async Task RepairSplitAgentsAsync(string connectionString, ILogger logger)
+        {
+            if (string.IsNullOrEmpty(connectionString)) return;
+
+            try
+            {
+                var result = await RunSplitAgentRepairAsync(connectionString);
+                if (result.MergedAgentRows > 0 || result.RekeyedAgentRows > 0 || result.MovedInteractions > 0)
+                {
+                    logger.LogWarning(
+                        $"Merged {result.MergedAgentRows:n0} duplicate Copilot agent row(s) and re-keyed "
+                        + $"{result.RekeyedAgentRows:n0}, moving {result.MovedInteractions:n0} interaction(s) onto the "
+                        + "rows that were kept. Older builds imported some agents under more than one id. This is "
+                        + "expected once after upgrading; if it keeps happening, an older importer build is still "
+                        + "writing to this database."
+                        + (result.PendingAgentRows > 0
+                            ? $" {result.PendingAgentRows:n0} row(s) still have interactions to move, and the next cycle will finish them."
+                            : string.Empty));
+                }
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex,
+                    "Could not merge duplicate Copilot agent rows this cycle. The import itself succeeded; the "
+                    + "affected agents stay split in Copilot reports until a later cycle merges them.");
+            }
+        }
+
+        /// <summary>Runs <c>repair_split_copilot_agents.sql</c> once and returns what it did.</summary>
+        internal static async Task<CopilotAgentRepairResult> RunSplitAgentRepairAsync(string connectionString)
+        {
+            // Generous enough for the bounded 1M-interaction move, but finite.
+            const int repairTimeoutSecs = 1800;
+
+            var rr = new ProjectResourceReader(System.Reflection.Assembly.GetExecutingAssembly());
+            var sql = rr.ReadResourceString(
+                "WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot.SQL.repair_split_copilot_agents.sql");
+
+            using (var con = AzureSqlTokenAuth.CreateConnection(connectionString))
+            {
+                await con.OpenAsync();
+                using (var cmd = new SqlCommand(sql, con) { CommandTimeout = repairTimeoutSecs })
+                using (var reader = await cmd.ExecuteReaderAsync())
+                {
+                    if (!await reader.ReadAsync())
+                    {
+                        return new CopilotAgentRepairResult();
+                    }
+
+                    return new CopilotAgentRepairResult
+                    {
+                        MergedAgentRows = Convert.ToInt32(reader["MergedAgentRows"]),
+                        RekeyedAgentRows = Convert.ToInt32(reader["RekeyedAgentRows"]),
+                        MovedInteractions = Convert.ToInt64(reader["MovedInteractions"]),
+                        PendingAgentRows = Convert.ToInt32(reader["PendingAgentRows"]),
+                    };
+                }
+            }
+        }
+
         public void Dispose()
         {
             // Nothing disposable currently. Placeholder for future enhancements.
@@ -589,5 +663,21 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
         Task<SpoDocumentFileInfo> GetSpoFileInfo(string copilotId, string eventUpn);
         Task<MeetingMetadata> GetMeetingInfo(string threadId, string userGuid);
         Task<string> GetUserIdFromUpn(string userPrincipalName);
+    }
+
+    /// <summary>What one run of <c>repair_split_copilot_agents.sql</c> did.</summary>
+    public class CopilotAgentRepairResult
+    {
+        /// <summary>Rows merged into another row and deleted.</summary>
+        public int MergedAgentRows { get; set; }
+
+        /// <summary>Kept rows whose agent_id was rewritten to the canonical id.</summary>
+        public int RekeyedAgentRows { get; set; }
+
+        /// <summary>Interactions moved onto a kept row.</summary>
+        public long MovedInteractions { get; set; }
+
+        /// <summary>Rows still waiting to be merged, because they have interactions left to move.</summary>
+        public int PendingAgentRows { get; set; }
     }
 }

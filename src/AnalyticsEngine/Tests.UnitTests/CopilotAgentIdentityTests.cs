@@ -401,6 +401,162 @@ namespace Tests.UnitTests
 
         #endregion
 
+        #region Repair of existing installations
+
+        /// <summary>
+        /// The headline case for a database an older importer has already filled: a Copilot Studio agent split into
+        /// its runtime row (keyed on the agent id, unnamed) and its Microsoft 365 Copilot row (T_..., named).
+        /// </summary>
+        [TestMethod]
+        public async Task Repair_SplitCopilotStudioAgent_IsMergedIntoTheRowKeyedOnItsAgentId()
+        {
+            var agentGuid = NewAgentId();
+            var titleScopedId = $"T_{Guid.NewGuid()}.{agentGuid}";
+            var runtimeRowId = await AddLegacyAgentRow(agentGuid);
+            var m365CopilotRowId = await AddLegacyAgentRow(titleScopedId, Greek, isCustomAgent: true);
+            var runtimeChats = await CommitBatch(Record(agentGuid), Record(agentGuid));
+            var m365CopilotChats = await CommitBatch(Record(titleScopedId));
+
+            var result = await RunRepair();
+
+            Assert.IsTrue(result.MergedAgentRows >= 1);
+            Assert.IsTrue(result.MovedInteractions >= 1);
+            var kept = await SingleAgentRow(agentGuid);
+            Assert.AreEqual(runtimeRowId, kept.ID, "The row already keyed on the agent id is the one kept.");
+            Assert.AreEqual(Greek, kept.Name, "It takes the display name Microsoft 365 Copilot logged.");
+            Assert.AreEqual(true, kept.IsCustomAgent);
+            Assert.IsNull(await AgentRowById(m365CopilotRowId), "The T_ row is deleted once its interactions have moved.");
+            CollectionAssert.AreEqual(new List<int?> { kept.ID, kept.ID, kept.ID },
+                await ChatAgentIds(runtimeChats.Concat(m365CopilotChats)), "Every interaction is on the kept row.");
+
+            // The importer's next Microsoft 365 Copilot record for the agent lands on the same row.
+            var next = await CommitBatch(CopilotAuditLogContent.FromJson(Microsoft365CopilotRecord(agentGuid, Greek)));
+            Assert.AreEqual(kept.ID, (await ChatAgentIds(next)).Single());
+            Assert.AreEqual(kept.ID, (await SingleAgentRow(agentGuid)).ID);
+        }
+
+        [TestMethod]
+        public async Task Repair_TitleScopedRowWithNoAgentIdRow_IsRekeyedInPlace()
+        {
+            var agentGuid = NewAgentId();
+            var titleScopedId = $"T_{Guid.NewGuid()}.{agentGuid}";
+            var rowId = await AddLegacyAgentRow(titleScopedId, DisplayName);
+            var chats = await CommitBatch(Record(titleScopedId));
+
+            var result = await RunRepair();
+
+            Assert.IsTrue(result.RekeyedAgentRows >= 1);
+            var kept = await SingleAgentRow(agentGuid);
+            Assert.AreEqual(rowId, kept.ID, "The row keeps its id, so nothing that points at it has to move.");
+            Assert.AreEqual(DisplayName, kept.Name);
+            Assert.AreEqual(rowId, (await ChatAgentIds(chats)).Single());
+        }
+
+        [TestMethod]
+        public async Task Repair_DuplicateRowsForOneAgentId_AreMergedIntoTheOldest()
+        {
+            var agentId = NewAgentId();
+            var oldestRowId = await AddLegacyAgentRow(agentId);
+            var newerRowId = await AddLegacyAgentRow(agentId, DisplayName, isCustomAgent: true);
+            var chats = await CommitBatch(Record(agentId), Record(agentId));
+            await MoveChat(chats[1], newerRowId);   // the old upsert could send an interaction to either row
+
+            await RunRepair();
+
+            var kept = await SingleAgentRow(agentId);
+            Assert.AreEqual(oldestRowId, kept.ID);
+            Assert.AreEqual(DisplayName, kept.Name, "A NULL name is filled from the duplicate.");
+            Assert.AreEqual(true, kept.IsCustomAgent);
+            CollectionAssert.AreEqual(new List<int?> { oldestRowId, oldestRowId }, await ChatAgentIds(chats));
+        }
+
+        /// <summary>
+        /// The importer has collapsed "SharePointAgents.Declarative.SPO_..." to "SPO_..." since July 2026, but nothing
+        /// merged the rows created before that.
+        /// </summary>
+        [TestMethod]
+        public async Task Repair_SharePointWrapperRow_IsMergedIntoTheBareSpoRow()
+        {
+            var spoId = "SPO_" + Guid.NewGuid().ToString("N");
+            var wrapperId = "SharePointAgents.Declarative." + spoId;
+            var wrapperRowId = await AddLegacyAgentRow(wrapperId, "Contoso Proposals Agent");
+            var bareRowId = await AddLegacyAgentRow(spoId, "Contoso Proposals Agent");
+            var wrapperChats = await CommitBatch(Record(wrapperId));
+
+            await RunRepair();
+
+            var kept = await SingleAgentRow(spoId);
+            Assert.AreEqual(bareRowId, kept.ID);
+            Assert.IsNull(await AgentRowById(wrapperRowId));
+            Assert.AreEqual(bareRowId, (await ChatAgentIds(wrapperChats)).Single());
+        }
+
+        [TestMethod]
+        public async Task Repair_PrefersTheMicrosoft365CopilotDisplayNameOverASchemaName()
+        {
+            var agentGuid = NewAgentId();
+            await AddLegacyAgentRow($"T_{Guid.NewGuid()}.{agentGuid}", DisplayName);   // the older row
+            var runtimeRowId = await AddLegacyAgentRow(agentGuid, SchemaName);
+
+            await RunRepair();
+
+            var kept = await SingleAgentRow(agentGuid);
+            Assert.AreEqual(runtimeRowId, kept.ID, "The row already keyed on the agent id is kept, even when it is newer.");
+            Assert.AreEqual(DisplayName, kept.Name);
+        }
+
+        [TestMethod]
+        public async Task Repair_LeavesEveryOtherIdShapeAlone()
+        {
+            var a = Guid.NewGuid();
+            var b = Guid.NewGuid();
+            var agentIds = new[]
+            {
+                $"CopilotStudio.Declarative.T_{a}.{b}",
+                $"T_{a}",
+                $"P_{a}.{b}",
+                $"T_{a}.{b}.extra",
+                $"Copilot.M365Copilot.{a:N}",
+                $"Contoso.Unknown.{a:N}",
+                b.ToString(),
+            };
+            var rowIds = new List<int>();
+            foreach (var agentId in agentIds)
+            {
+                rowIds.Add(await AddLegacyAgentRow(agentId, DisplayName));
+            }
+
+            await RunRepair();
+
+            for (var i = 0; i < agentIds.Length; i++)
+            {
+                var row = await AgentRowById(rowIds[i]);
+                Assert.IsNotNull(row, $"{agentIds[i]} must not be merged away.");
+                Assert.AreEqual(agentIds[i], row.AgentID);
+                Assert.AreEqual(DisplayName, row.Name);
+            }
+        }
+
+        [TestMethod]
+        public async Task Repair_RunAgain_DoesNothing()
+        {
+            var agentGuid = NewAgentId();
+            var titleScopedId = $"T_{Guid.NewGuid()}.{agentGuid}";
+            await AddLegacyAgentRow(agentGuid);
+            await AddLegacyAgentRow(titleScopedId, DisplayName);
+            await CommitBatch(Record(titleScopedId));
+
+            await RunRepair();
+            var second = await RunRepair();
+
+            Assert.AreEqual(0, second.MergedAgentRows);
+            Assert.AreEqual(0, second.RekeyedAgentRows);
+            Assert.AreEqual(0L, second.MovedInteractions);
+            Assert.AreEqual(0, second.PendingAgentRows);
+        }
+
+        #endregion
+
         #region Helpers
 
         private static string NewAgentId() => Guid.NewGuid().ToString();
@@ -468,6 +624,51 @@ namespace Tests.UnitTests
                     DisplayName, agentId);
             }
         }
+
+        /// <summary>A copilot_agents row exactly as an older importer could have left it. Returns its id.</summary>
+        private static async Task<int> AddLegacyAgentRow(string agentId, string name = null, bool? isCustomAgent = null)
+        {
+            using (var db = new AnalyticsEntitiesContext())
+            {
+                return await db.Database.SqlQuery<int>(
+                    "INSERT INTO dbo.copilot_agents ([name], agent_id, is_custom_agent) OUTPUT INSERTED.id VALUES ({0}, {1}, {2});",
+                    name, agentId, isCustomAgent).SingleAsync();
+            }
+        }
+
+        private static async Task<CopilotAgent> AgentRowById(int id)
+        {
+            using (var db = new AnalyticsEntitiesContext())
+            {
+                return await db.CopilotAgents.AsNoTracking().SingleOrDefaultAsync(a => a.ID == id);
+            }
+        }
+
+        /// <summary>The agent row each interaction points at, in the order the events are given.</summary>
+        private static async Task<List<int?>> ChatAgentIds(IEnumerable<Guid> eventIds)
+        {
+            var ids = eventIds.ToList();
+            using (var db = new AnalyticsEntitiesContext())
+            {
+                var byEvent = await db.CopilotChats.AsNoTracking()
+                    .Where(c => ids.Contains(c.AuditEvent.Id))
+                    .Select(c => new { EventId = c.AuditEvent.Id, c.AgentId })
+                    .ToListAsync();
+                return ids.Select(id => byEvent.Single(c => c.EventId == id).AgentId).ToList();
+            }
+        }
+
+        private static async Task MoveChat(Guid eventId, int agentRowId)
+        {
+            using (var db = new AnalyticsEntitiesContext())
+            {
+                await db.Database.ExecuteSqlCommandAsync(
+                    "UPDATE dbo.copilot_chats SET agent_id = {0} WHERE event_id = {1};", agentRowId, eventId);
+            }
+        }
+
+        private Task<CopilotAgentRepairResult> RunRepair()
+            => CopilotAuditEventManager.RunSplitAgentRepairAsync(_config.ConnectionStrings.DatabaseConnectionString);
 
         #endregion
     }
