@@ -11,6 +11,8 @@ using Common.Entities.Installer;
 using Common.Entities.State;
 using Common.Entities.UserScope;
 using DataUtils;
+using DataUtils.Health;
+using DataUtils.Http;
 using Microsoft.Extensions.Logging;
 using Newtonsoft.Json;
 using System;
@@ -22,6 +24,7 @@ using WebJob.Office365ActivityImporter.Engine;
 using WebJob.Office365ActivityImporter.Engine.ActivityAPI; // for AuditTraceConfig
 using WebJob.Office365ActivityImporter.Engine.Graph.Calls;
 using WebJob.Office365ActivityImporter.Engine.Graph.Email;
+using WebJob.Office365ActivityImporter.Engine.MessageTracing;
 using WebJob.Office365ActivityImporter.Engine.StatsUploader;
 #endregion
 
@@ -86,6 +89,7 @@ namespace WebJob.Office365ActivityImporter
 
             // Create new telemetry client with AppInsights key
             var logger = new AnalyticsLogger(configuredSettings.AppInsightsConnectionString, "Office365ActivityImporter");
+            MessageTraceBlobUploader messageTraceUploader = ConfigureMessageTracing(configuredSettings, logger);
 
             // The UserGroupsFilter scope, shared by every import in this process - the Graph sections, the audit
             // import, the calls queue and the agent-cost import - so they all apply the same resolution and the
@@ -139,6 +143,7 @@ namespace WebJob.Office365ActivityImporter
                             auth.Creds, logger, configuredSettings.TenantGUID.ToString(),
                             await userScopeProvider.GetScopeAsync());
 
+                        await ShutdownMessageTracingAsync(messageTraceUploader);
                         ConsoleApp.BombOut(false);
                     }
                 }
@@ -366,6 +371,11 @@ namespace WebJob.Office365ActivityImporter
 
                 // Output cycle stats
                 importCycleTimer.TrackFinishedEventAndStopTimer(AnalyticsLogger.AnalyticsEvent.FinishedImportCycle);
+                if (messageTraceUploader != null)
+                {
+                    TrackMessageTracingHealth(logger, messageTraceUploader);
+                    messageTraceUploader.LogSummary(logger);
+                }
 
                 // Upload latest stats if not done recently. Re-enabled in this build after the
                 // Feb-2026 deprecation (commit 3485bd2) — the server endpoint is back online and we
@@ -399,7 +409,86 @@ namespace WebJob.Office365ActivityImporter
                 }
             } // Go around again?
 
+            await ShutdownMessageTracingAsync(messageTraceUploader);
             ConsoleApp.BombOut(false);
+        }
+
+        private static async Task ShutdownMessageTracingAsync(MessageTraceBlobUploader messageTraceUploader)
+        {
+            if (messageTraceUploader != null)
+            {
+                await messageTraceUploader.FlushAsync(TimeSpan.FromSeconds(10));
+                messageTraceUploader.Dispose();
+            }
+            HttpMessageTracing.Current = HttpMessageTracing.Disabled;
+        }
+
+        internal static MessageTraceBlobUploader ConfigureMessageTracing(AppConfig settings, AnalyticsLogger logger)
+        {
+            HttpMessageTracing.Current = HttpMessageTracing.Disabled;
+            if (settings == null || string.IsNullOrWhiteSpace(settings.MessageTraceMatch))
+            {
+                logger.TrackHealthCheck(HealthComponent.MessageTracing, HealthStatus.Healthy,
+                    "Message tracing is off.",
+                    reasonKey: "messageTracing.disabled");
+                return null;
+            }
+
+            if (!MessageTracePatternMatcher.TryCreate(settings.MessageTraceMatch, logger, out var matcher, out var failure))
+            {
+                logger.LogWarning((failure ?? "MessageTraceMatch is invalid; tracing is disabled.") + " The import will continue.");
+                logger.TrackHealthCheck(HealthComponent.MessageTracing, HealthStatus.Degraded,
+                    "Message tracing was requested but its configuration is invalid, so tracing is disabled and imports continue normally. Check MessageTraceMatch and MessageTraceContainer in App Service application settings.",
+                    reasonKey: "messageTracing.invalidPattern");
+                return null;
+            }
+
+            try
+            {
+                var uploader = MessageTraceBlobUploader.Create(settings, logger);
+                HttpMessageTracing.Current = new MessageTraceInspectingTracer(matcher, uploader, settings.MessageTraceMaxBodyBytes, settings.MessageTraceMaxPerHour, logger);
+                var patterns = string.Join("; ", matcher.Patterns);
+                logger.LogWarning($"MESSAGE TRACING IS ENABLED: every API response that matches '{patterns}' is saved in full to blob container '{settings.MessageTraceContainer}' in the solution's storage account. These responses can contain personal data. Remove the MessageTraceMatch app setting to turn it off.");
+                logger.TrackHealthCheck(HealthComponent.MessageTracing, HealthStatus.Degraded,
+                    "Message tracing is enabled. Matching API responses are being saved in full to Azure Blob storage and can contain personal data; remove the MessageTraceMatch app setting to turn it off.",
+                    reasonKey: "messageTracing.enabled");
+                return uploader;
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning($"Message tracing could not be initialised and is disabled; the import will continue. {ex.GetType().Name}: {ex.Message}");
+                TrackMessageTracingStorageUnavailable(logger);
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// Per-cycle Health for an enabled tracer. The container is opened lazily on the first save, so a storage
+        /// problem only shows up after that; once an open has failed, Health says traces aren't being saved
+        /// rather than that they are, until an open succeeds.
+        /// </summary>
+        private static void TrackMessageTracingHealth(AnalyticsLogger logger, MessageTraceBlobUploader uploader)
+        {
+            if (uploader.IsStorageUnavailable)
+            {
+                TrackMessageTracingStorageUnavailable(logger);
+                return;
+            }
+            TrackMessageTracingEnabled(logger);
+        }
+
+        private static void TrackMessageTracingStorageUnavailable(AnalyticsLogger logger)
+        {
+            logger.TrackHealthCheck(HealthComponent.MessageTracing, HealthStatus.Degraded,
+                "Message tracing is requested but can't save to Azure Blob storage, so no responses are being saved; imports continue normally. Check the Storage connection string, the blob container name, network access to the storage account and the Storage Blob Data Contributor role.",
+                reasonKey: "messageTracing.storageUnavailable");
+        }
+
+        private static void TrackMessageTracingEnabled(AnalyticsLogger logger)
+        {
+            logger.TrackHealthCheck(HealthComponent.MessageTracing, HealthStatus.Degraded,
+                "Message tracing is enabled. Matching API responses are being saved in full to Azure Blob storage and can contain personal data; remove the MessageTraceMatch app setting to turn it off.",
+                reasonKey: "messageTracing.enabled");
         }
 
 

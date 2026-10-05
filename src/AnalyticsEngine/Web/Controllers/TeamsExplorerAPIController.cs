@@ -4,9 +4,11 @@ using Common.Entities.CopilotAdoption;
 using Common.Entities.TeamsExplorer;
 using System;
 using System.Runtime.Caching;
+using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Web.AnalyticsWeb.Models.UserFilters;
 using Web.AnalyticsWeb.Security;
 
 namespace Web.AnalyticsWeb.Controllers
@@ -53,23 +55,28 @@ namespace Web.AnalyticsWeb.Controllers
 
         private readonly ITeamsExplorerStore _store;
         private readonly Func<TeamsExplorerSources> _sourcesFactory;
+        private readonly ReportScopeResolver _scopes;
 
         public TeamsExplorerAPIController()
             : this(
                 new SqlTeamsExplorerStore(DefaultAnalyticsDbContextFactory.Instance),
-                () => TeamsExplorerSources.FromConfig(new AppConfig()))
+                () => TeamsExplorerSources.FromConfig(new AppConfig()),
+                ReportScopeResolver.Default)
         {
         }
 
         /// <summary>
         /// Testable entry point. The store's queries are raw SQL, so a broken statement only shows up
         /// when it actually runs - which is why the integration test points a real store at a real,
-        /// migrated database rather than trusting that this compiles.
+        /// migrated database rather than trusting that this compiles. No global filter unless
+        /// <paramref name="scopes"/> supplies one.
         /// </summary>
-        internal TeamsExplorerAPIController(ITeamsExplorerStore store, Func<TeamsExplorerSources> sourcesFactory)
+        internal TeamsExplorerAPIController(
+            ITeamsExplorerStore store, Func<TeamsExplorerSources> sourcesFactory, ReportScopeResolver scopes = null)
         {
             _store = store ?? throw new ArgumentNullException(nameof(store));
             _sourcesFactory = sourcesFactory ?? throw new ArgumentNullException(nameof(sourcesFactory));
+            _scopes = scopes ?? new ReportScopeResolver(GlobalFilterProviders.None, CachedUserDirectorySource.Default);
         }
 
         // GET: api/TeamsExplorer/availability
@@ -89,71 +96,71 @@ namespace Web.AnalyticsWeb.Controllers
         // GET: api/TeamsExplorer/overview?days=28
         [HttpGet]
         [Route("overview")]
-        public Task<IActionResult> Overview(int days = TeamsExplorerQuery.DefaultWindowDays)
+        public async Task<IActionResult> Overview(int days = TeamsExplorerQuery.DefaultWindowDays)
         {
-            var query = BuildQuery(days);
-            return CachedAsync("overview", query, () => _store.GetOverviewAsync(query, ReadSources()));
+            var query = await BuildQueryAsync(days).ConfigureAwait(false);
+            return await CachedAsync("overview", query, () => _store.GetOverviewAsync(query, ReadSources())).ConfigureAwait(false);
         }
 
         // GET: api/TeamsExplorer/adoption?days=28&groupBy=department
         [HttpGet]
         [Route("adoption")]
-        public Task<IActionResult> Adoption(
+        public async Task<IActionResult> Adoption(
             int days = TeamsExplorerQuery.DefaultWindowDays,
             string groupBy = TeamsExplorerQuery.DefaultGrouping,
             int top = TeamsExplorerQuery.DefaultTop)
         {
-            var query = BuildQuery(days, groupBy, top);
-            return CachedAsync("adoption", query, () => _store.GetAdoptionAsync(query));
+            var query = await BuildQueryAsync(days, groupBy, top).ConfigureAwait(false);
+            return await CachedAsync("adoption", query, () => _store.GetAdoptionAsync(query)).ConfigureAwait(false);
         }
 
         // GET: api/TeamsExplorer/meetings?days=28
         [HttpGet]
         [Route("meetings")]
-        public Task<IActionResult> Meetings(
+        public async Task<IActionResult> Meetings(
             int days = TeamsExplorerQuery.DefaultWindowDays,
             int top = TeamsExplorerQuery.DefaultTop)
         {
-            var query = BuildQuery(days, TeamsExplorerQuery.DefaultGrouping, top);
+            var query = await BuildQueryAsync(days, TeamsExplorerQuery.DefaultGrouping, top).ConfigureAwait(false);
             Func<TeamsMeetings, TeamsMeetings> forReader = null;
             if (!PortalAccess.Evaluate(Request, User).SeePii) forReader = m => m.WithoutIndividualData();
-            return CachedAsync("meetings", query, () => _store.GetMeetingsAsync(query), forReader);
+            return await CachedAsync("meetings", query, () => _store.GetMeetingsAsync(query), forReader).ConfigureAwait(false);
         }
 
         // GET: api/TeamsExplorer/collaboration?days=28
         [HttpGet]
         [Route("collaboration")]
-        public Task<IActionResult> Collaboration(
+        public async Task<IActionResult> Collaboration(
             int days = TeamsExplorerQuery.DefaultWindowDays,
             int top = TeamsExplorerQuery.DefaultTop)
         {
-            var query = BuildQuery(days, TeamsExplorerQuery.DefaultGrouping, top);
-            return CachedAsync("collaboration", query, () => _store.GetCollaborationAsync(query));
+            var query = await BuildQueryAsync(days, TeamsExplorerQuery.DefaultGrouping, top).ConfigureAwait(false);
+            return await CachedAsync("collaboration", query, () => _store.GetCollaborationAsync(query)).ConfigureAwait(false);
         }
 
         // GET: api/TeamsExplorer/conversations?days=28
         [HttpGet]
         [Route("conversations")]
-        public Task<IActionResult> Conversations(
+        public async Task<IActionResult> Conversations(
             int days = TeamsExplorerQuery.DefaultWindowDays,
             int top = TeamsExplorerQuery.DefaultTop)
         {
-            var query = BuildQuery(days, TeamsExplorerQuery.DefaultGrouping, top);
+            var query = await BuildQueryAsync(days, TeamsExplorerQuery.DefaultGrouping, top).ConfigureAwait(false);
             var cognitive = ReadSources().Cognitive;
-            return CachedAsync("conversations", query, () => _store.GetConversationsAsync(query, cognitive));
+            return await CachedAsync("conversations", query, () => _store.GetConversationsAsync(query, cognitive)).ConfigureAwait(false);
         }
 
         // GET: api/TeamsExplorer/people?days=28&top=20
         [HttpGet]
         [Route("people")]
-        public Task<IActionResult> People(
+        public async Task<IActionResult> People(
             int days = TeamsExplorerQuery.DefaultWindowDays,
             int top = TeamsExplorerQuery.DefaultTop)
         {
-            var query = BuildQuery(days, TeamsExplorerQuery.DefaultGrouping, top);
+            var query = await BuildQueryAsync(days, TeamsExplorerQuery.DefaultGrouping, top).ConfigureAwait(false);
             Func<TeamsPeople, TeamsPeople> forReader = null;
             if (!PortalAccess.Evaluate(Request, User).SeePii) forReader = p => p.WithoutIndividualData();
-            return CachedAsync("people", query, () => _store.GetPeopleAsync(query), forReader);
+            return await CachedAsync("people", query, () => _store.GetPeopleAsync(query), forReader).ConfigureAwait(false);
         }
 
         /// <summary>
@@ -185,7 +192,7 @@ namespace Web.AnalyticsWeb.Controllers
                 return PortalPermissionDenied.Result(Request, PortalPermission.SeePii);
             }
 
-            var query = BuildQuery(days, groupBy, top);
+            var query = await BuildQueryAsync(days, groupBy, top).ConfigureAwait(false);
             var normalised = section.ToLowerInvariant();
             byte[] csv;
 
@@ -229,8 +236,9 @@ namespace Web.AnalyticsWeb.Controllers
                 }
             }
 
+            // A file narrowed by the administrator's global filter says so in its name: it outlives the page.
             return CsvResponse(csv, CsvSerialiser.FileName(
-                TeamsExplorerExports.FileNamePrefix(normalised),
+                TeamsExplorerExports.FileNamePrefix(normalised) + (query.UserScope.IsRestricted ? "-filtered" : string.Empty),
                 DateTime.UtcNow));
         }
 
@@ -256,12 +264,19 @@ namespace Web.AnalyticsWeb.Controllers
             }
         }
 
-        private static TeamsExplorerQuery BuildQuery(
+        /// <summary>
+        /// The window, narrowed to the people the administrator's global filter leaves this reader seeing.
+        /// Resolved on every request rather than trusted from the page; a filter that cannot be evaluated
+        /// refuses the request (503) rather than answering for the whole tenant.
+        /// </summary>
+        private async Task<TeamsExplorerQuery> BuildQueryAsync(
             int days,
             string groupBy = TeamsExplorerQuery.DefaultGrouping,
             int top = TeamsExplorerQuery.DefaultTop)
         {
-            return TeamsExplorerQuery.Create(days, DateTime.UtcNow, groupBy, top);
+            var query = TeamsExplorerQuery.Create(days, DateTime.UtcNow, groupBy, top);
+            var scope = await _scopes.ResolveAsync(Request, User, null, CancellationToken.None).ConfigureAwait(false);
+            return scope.IsRestricted ? query.WithUserScope(scope.Sql) : query;
         }
 
         /// <summary>Serves a section from the short-lived cache, or builds and caches it.</summary>

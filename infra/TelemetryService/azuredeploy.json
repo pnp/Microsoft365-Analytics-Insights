@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.46.1.21595",
-      "templateHash": "7161291526094261756"
+      "templateHash": "15234501744165286302"
     }
   },
   "parameters": {
@@ -61,6 +61,13 @@
       "type": "string",
       "metadata": {
         "description": "Application (client) ID of the single-tenant Entra SPA/API registration."
+      }
+    },
+    "loadFirstPartyAuth": {
+      "type": "bool",
+      "defaultValue": true,
+      "metadata": {
+        "description": "Load App Service Authentication's first-party modules (WEBSITE_LOAD_FIRST_PARTY_AUTH), which validate tokens with MISE v2. App Service only accepts the setting on a subscription it has enabled for first-party authentication, so set this to false anywhere else."
       }
     },
     "telemetrySecret": {
@@ -126,6 +133,9 @@
           "azureAdClientId": {
             "value": "[parameters('azureAdClientId')]"
           },
+          "loadFirstPartyAuth": {
+            "value": "[parameters('loadFirstPartyAuth')]"
+          },
           "telemetrySecret": {
             "value": "[parameters('telemetrySecret')]"
           },
@@ -140,7 +150,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.46.1.21595",
-              "templateHash": "11062731204687532164"
+              "templateHash": "12105249696364800827"
             }
           },
           "parameters": {
@@ -167,6 +177,13 @@
             },
             "azureAdClientId": {
               "type": "string"
+            },
+            "loadFirstPartyAuth": {
+              "type": "bool",
+              "defaultValue": true,
+              "metadata": {
+                "description": "Load App Service Authentication's first-party modules (WEBSITE_LOAD_FIRST_PARTY_AUTH), which validate tokens with MISE v2. App Service only accepts the setting on a subscription it has enabled for first-party authentication, so set this to false anywhere else."
+              }
             },
             "telemetrySecret": {
               "type": "securestring"
@@ -592,7 +609,7 @@
               "apiVersion": "2024-04-01",
               "name": "[variables('appServicePlanName')]",
               "location": "[parameters('location')]",
-              "kind": "linux",
+              "kind": "app",
               "tags": "[parameters('tags')]",
               "sku": {
                 "name": "B1",
@@ -600,7 +617,7 @@
                 "capacity": 1
               },
               "properties": {
-                "reserved": true,
+                "reserved": false,
                 "zoneRedundant": false
               }
             },
@@ -609,7 +626,7 @@
               "apiVersion": "2024-04-01",
               "name": "[parameters('webAppName')]",
               "location": "[parameters('location')]",
-              "kind": "app,linux",
+              "kind": "app",
               "tags": "[parameters('tags')]",
               "identity": {
                 "type": "SystemAssigned"
@@ -622,7 +639,14 @@
                 "virtualNetworkSubnetId": "[resourceId('Microsoft.Network/virtualNetworks/subnets', variables('vnetName'), variables('appIntegrationSubnetName'))]",
                 "vnetRouteAllEnabled": true,
                 "siteConfig": {
-                  "linuxFxVersion": "DOTNETCORE|10.0",
+                  "netFrameworkVersion": "v10.0",
+                  "metadata": [
+                    {
+                      "name": "CURRENT_STACK",
+                      "value": "dotnet"
+                    }
+                  ],
+                  "use32BitWorkerProcess": false,
                   "alwaysOn": true,
                   "ftpsState": "Disabled",
                   "minTlsVersion": "1.2",
@@ -739,28 +763,7 @@
               "type": "Microsoft.Web/sites/config",
               "apiVersion": "2024-04-01",
               "name": "[format('{0}/{1}', parameters('webAppName'), 'appsettings')]",
-              "properties": {
-                "ASPNETCORE_ENVIRONMENT": "Production",
-                "WEBSITE_RUN_FROM_PACKAGE": "1",
-                "WEBSITE_VNET_ROUTE_ALL": "1",
-                "WEBSITE_HEALTHCHECK_MAXPINGFAILURES": "5",
-                "SCM_DO_BUILD_DURING_DEPLOYMENT": "false",
-                "ENABLE_ORYX_BUILD": "false",
-                "WEBSITE_AAD_ENABLE_MISE": "true",
-                "TelemetrySecret": "[format('@Microsoft.KeyVault(VaultName={0};SecretName={1})', variables('keyVaultName'), variables('telemetrySecretName'))]",
-                "CosmosDb__AccountEndpoint": "[reference(resourceId('Microsoft.DocumentDB/databaseAccounts', variables('cosmosAccountName')), '2024-11-15').documentEndpoint]",
-                "CosmosDb__DatabaseName": "[variables('cosmosDatabaseName')]",
-                "CosmosDb__ContainerNameCurrent": "[variables('currentContainerName')]",
-                "CosmosDb__ContainerNameHistory": "[variables('historyContainerName')]",
-                "AzureAd__Instance": "[environment().authentication.loginEndpoint]",
-                "AzureAd__TenantId": "[parameters('azureAdTenantId')]",
-                "AzureAd__ClientId": "[parameters('azureAdClientId')]",
-                "AzureAd__Scopes": "Telemetry.Read",
-                "AZURE_TENANT_ID": "[parameters('azureAdTenantId')]",
-                "DashboardCacheSeconds": "60",
-                "MaxDashboardItems": "5000",
-                "APPLICATIONINSIGHTS_CONNECTION_STRING": "[reference(resourceId('Microsoft.Insights/components', variables('appInsightsName')), '2020-02-02').ConnectionString]"
-              },
+              "properties": "[union(createObject('ASPNETCORE_ENVIRONMENT', 'Production', 'WEBSITE_RUN_FROM_PACKAGE', '1', 'WEBSITE_VNET_ROUTE_ALL', '1', 'WEBSITE_HEALTHCHECK_MAXPINGFAILURES', '5', 'SCM_DO_BUILD_DURING_DEPLOYMENT', 'false', 'WEBSITE_AAD_ENABLE_MISE', 'true', 'TelemetrySecret', format('@Microsoft.KeyVault(VaultName={0};SecretName={1})', variables('keyVaultName'), variables('telemetrySecretName')), 'CosmosDb__AccountEndpoint', reference(resourceId('Microsoft.DocumentDB/databaseAccounts', variables('cosmosAccountName')), '2024-11-15').documentEndpoint, 'CosmosDb__DatabaseName', variables('cosmosDatabaseName'), 'CosmosDb__ContainerNameCurrent', variables('currentContainerName'), 'CosmosDb__ContainerNameHistory', variables('historyContainerName'), 'AzureAd__Instance', environment().authentication.loginEndpoint, 'AzureAd__TenantId', parameters('azureAdTenantId'), 'AzureAd__ClientId', parameters('azureAdClientId'), 'AzureAd__Scopes', 'Telemetry.Read', 'AZURE_TENANT_ID', parameters('azureAdTenantId'), 'DashboardCacheSeconds', '60', 'MaxDashboardItems', '5000', 'APPLICATIONINSIGHTS_CONNECTION_STRING', reference(resourceId('Microsoft.Insights/components', variables('appInsightsName')), '2020-02-02').ConnectionString), if(parameters('loadFirstPartyAuth'), createObject('WEBSITE_LOAD_FIRST_PARTY_AUTH', 'true'), createObject()))]",
               "dependsOn": [
                 "[resourceId('Microsoft.Insights/components', variables('appInsightsName'))]",
                 "[resourceId('Microsoft.DocumentDB/databaseAccounts', variables('cosmosAccountName'))]",

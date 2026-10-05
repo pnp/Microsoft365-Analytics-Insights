@@ -361,14 +361,13 @@ namespace Common.Entities.CopilotAdoption
         public const string PendingBackfillProbe = "PendingBackfillProbe";
         public const string CopilotReportDate = "CopilotReportDate";
         public const string CopilotReportPeriod = "CopilotReportPeriod";
-        public const string CoworkReportDate = "CoworkReportDate";
-        public const string CoworkReportPeriod = "CoworkReportPeriod";
         public const string M365ReportDate = "M365ReportDate";
         public const string CopilotReportAnonymisation = "CopilotReportAnonymisation";
         public const string SeatAssignments = "SeatAssignments";
         public const string CoworkAgentLookup = "CoworkAgentLookup";
         public const string LicensedUserDetail = "LicensedUserDetail";
         public const string LicensedUsageByApp = "LicensedUsageByApp";
+        public const string SeatHolderTimeSaved = "SeatHolderTimeSaved";
         public const string WeeklyTrend = "WeeklyTrend";
         public const string WeeklyTrendCoverage = "WeeklyTrendCoverage";
         public const string UnlicensedActiveUsers = "UnlicensedActiveUsers";

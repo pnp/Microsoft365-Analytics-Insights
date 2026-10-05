@@ -1,4 +1,4 @@
-using Common.Entities;
+﻿using Common.Entities;
 using Common.Entities.Config;
 using Common.Entities.State;
 using Common.Entities.UserScope;
@@ -59,7 +59,7 @@ namespace Tests.UnitTests
             public int PilotMail, OutsiderMail;
             public int SharedCall, OutsiderOnlyCall, ExternalCall, OutsiderOrganisedCall;
             public int Url, SearchTerm, Address, CallType;
-            public int OrgType;
+            public int OrgType, LicenceType;
         }
 
         /// <summary>
@@ -142,6 +142,14 @@ INSERT INTO dbo.call_records (organizer_id, call_type_id, start, [end], graph_id
 SET @outsiderOrganisedCall = SCOPE_IDENTITY();
 INSERT INTO dbo.call_sessions (attendee_user_id, start, [end], call_record_id) VALUES (@pilot, @now, @now, @outsiderOrganisedCall);
 
+-- Licence history: both current and historical rows are per-person.
+DECLARE @licenceType int;
+INSERT INTO dbo.license_types (name, sku_id) VALUES (@token + N'-licence', @token + N'_SKU'); SET @licenceType = SCOPE_IDENTITY();
+INSERT INTO dbo.user_license_type_lookups (user_id, license_type_id) VALUES (@pilot, @licenceType), (@outsider, @licenceType);
+INSERT INTO dbo.user_license_history (user_id, license_type_id, valid_from_utc, valid_to_utc, from_source, valid_from_previous_refresh_utc, valid_to_previous_refresh_utc)
+VALUES (@pilot, @licenceType, DATEADD(day, -1, @now), NULL, 0, NULL, NULL),
+       (@outsider, @licenceType, DATEADD(day, -2, @now), DATEADD(day, -1, @now), 1, DATEADD(day, -3, @now), DATEADD(day, -1, @now));
+
 -- User organisations: both are in the same one.
 DECLARE @orgType int, @orgValue int;
 INSERT INTO dbo.user_org_types (name, source_kind) VALUES (@token, 2); SET @orgType = SCOPE_IDENTITY();
@@ -150,7 +158,7 @@ INSERT INTO dbo.user_org_assignments (user_id, org_type_id, org_value_id) VALUES
 
 SELECT @pilot, @outsider, @report, @unknown, @pilotEvent, @outsiderEvent, @pilotShareEvent, @outsiderShareEvent,
        @pilotSession, @outsiderSession, @outsiderComment, @pilotReply, @pilotMail, @outsiderMail,
-       @sharedCall, @outsiderOnlyCall, @externalCall, @url, @term, @address, @callType, @outsiderOrganisedCall, @orgType;";
+       @sharedCall, @outsiderOnlyCall, @externalCall, @url, @term, @address, @callType, @outsiderOrganisedCall, @orgType, @licenceType;";
 
             using (var connection = new SqlConnection(ConnectionString))
             using (var command = new SqlCommand(sql, connection))
@@ -171,7 +179,7 @@ SELECT @pilot, @outsider, @report, @unknown, @pilotEvent, @outsiderEvent, @pilot
                         SharedCall = reader.GetInt32(14), OutsiderOnlyCall = reader.GetInt32(15), ExternalCall = reader.GetInt32(16),
                         Url = reader.GetInt32(17), SearchTerm = reader.GetInt32(18), Address = reader.GetInt32(19), CallType = reader.GetInt32(20),
                         OutsiderOrganisedCall = reader.GetInt32(21),
-                        OrgType = reader.GetInt32(22),
+                        OrgType = reader.GetInt32(22), LicenceType = reader.GetInt32(23),
                     };
                 }
             }
@@ -188,6 +196,9 @@ DELETE s FROM dbo.call_sessions s JOIN dbo.call_records r ON r.id = s.call_recor
 DELETE f FROM dbo.call_feedback f JOIN dbo.call_records r ON r.id = f.call_id WHERE r.call_type_id = {seed.CallType};
 DELETE FROM dbo.call_records WHERE call_type_id = {seed.CallType};
 DELETE FROM dbo.call_types WHERE id = {seed.CallType};
+DELETE FROM dbo.user_license_history WHERE user_id IN ({users});
+DELETE FROM dbo.user_license_type_lookups WHERE user_id IN ({users});
+DELETE FROM dbo.license_types WHERE id = {seed.LicenceType};
 DELETE FROM dbo.teams_user_activity_log WHERE user_id IN ({users});
 DELETE r FROM dbo.sent_email_recipients r JOIN dbo.sent_emails e ON e.id = r.sent_email_id WHERE e.user_id IN ({users});
 DELETE FROM dbo.sent_emails WHERE user_id IN ({users});
@@ -322,6 +333,9 @@ DELETE FROM dbo.users WHERE id IN ({users});");
                 "The pilot's email keeps its recipient.");
             await Exists("The outsider's usage rows are gone.", "SELECT COUNT(*) FROM dbo.teams_user_activity_log WHERE user_id = @id", false, ("@id", s.Outsider));
             await Exists("The pilot's usage rows stay.", "SELECT COUNT(*) FROM dbo.teams_user_activity_log WHERE user_id = @id", true, ("@id", s.Pilot));
+            await Exists("The outsider's licence history is gone.", "SELECT COUNT(*) FROM dbo.user_license_history WHERE user_id = @id", false, ("@id", s.Outsider));
+            await Exists("The pilot's licence history stays.", "SELECT COUNT(*) FROM dbo.user_license_history WHERE user_id = @id", true, ("@id", s.Pilot));
+            await Exists("The outsider's current licence lookup is gone.", "SELECT COUNT(*) FROM dbo.user_license_type_lookups WHERE user_id = @id", false, ("@id", s.Outsider));
             Assert.AreEqual(s.Pilot.ToString(), await ScalarAsync("SELECT STRING_AGG(user_id, ',') FROM dbo.user_org_assignments WHERE org_type_id = @t", ("@t", s.OrgType)),
                 "Only the pilot keeps their organisation value; the value itself stays for them.");
 

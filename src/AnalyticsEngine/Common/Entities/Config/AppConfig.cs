@@ -61,6 +61,19 @@ namespace Common.Entities.Config
                 ? resolveCopilotResourceMetadata
                 : true;
 
+            this.MessageTraceMatch = ConfigurationManager.AppSettings.Get("MessageTraceMatch");
+            this.MessageTraceContainer = string.IsNullOrWhiteSpace(ConfigurationManager.AppSettings.Get("MessageTraceContainer"))
+                ? "message-traces"
+                : ConfigurationManager.AppSettings.Get("MessageTraceContainer").Trim();
+            this.MessageTraceMaxBodyBytes = long.TryParse(ConfigurationManager.AppSettings.Get("MessageTraceMaxBodyBytes"), out var messageTraceMaxBodyBytes)
+                && messageTraceMaxBodyBytes > 0
+                ? Math.Min(messageTraceMaxBodyBytes, MaxMessageTraceBodyBytes)
+                : 32L * 1024 * 1024;
+            this.MessageTraceMaxPerHour = int.TryParse(ConfigurationManager.AppSettings.Get("MessageTraceMaxPerHour"), out var messageTraceMaxPerHour)
+                && messageTraceMaxPerHour > 0
+                ? messageTraceMaxPerHour
+                : 500;
+
             // Optional: how many days before today to start reading hits from App Insights.
             // Can be overridden via the -readHitsDaysBeforeToday command line argument.
             var readHitsDaysBeforeTodayString = AnalyticsConfig.AppSettings.Get("ReadHitsDaysBeforeToday");
@@ -381,6 +394,12 @@ namespace Common.Entities.Config
         /// only Copilot agent-level reporting is needed.
         /// </summary>
         public bool ResolveCopilotResourceMetadata { get; set; }
+
+        public string MessageTraceMatch { get; set; }
+        public string MessageTraceContainer { get; set; } = "message-traces";
+        public const long MaxMessageTraceBodyBytes = 256L * 1024 * 1024;
+        public long MessageTraceMaxBodyBytes { get; set; } = 32L * 1024 * 1024;
+        public int MessageTraceMaxPerHour { get; set; } = 500;
 
         /// <summary>
         /// Optional: how many days before today to start reading hits from App Insights.

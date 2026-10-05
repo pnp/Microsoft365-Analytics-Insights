@@ -31,6 +31,8 @@ namespace Common.Entities.CopilotAdoption
 
         public bool? AccountEnabled { get; set; }
 
+        public bool? HoldsSeatToday { get; set; }
+
         /// <summary>
         /// Entra user.createdDateTime persisted by the user import. Used as the current account-age proxy
         /// for Copilot seat tenure until real assignment history exists.
@@ -55,6 +57,8 @@ namespace Common.Entities.CopilotAdoption
 
         public List<int> SeatLicenceTypeIds { get; set; } = new List<int>();
 
+        public double? SeatHeldDays { get; set; }
+
         #region Audit-log derived (all users, including Copilot Chat with no seat)
 
         /// <summary>Copilot interactions inside the reporting window.</summary>
@@ -68,13 +72,6 @@ namespace Common.Entities.CopilotAdoption
 
         /// <summary>Interactions inside the window attributed to Microsoft 365 Copilot Cowork by the audit log.</summary>
         public long CoworkInteractions { get; set; }
-
-        public int? CoworkReportTotalTasks { get; set; }
-        public int? CoworkReportScheduledTasks { get; set; }
-        public int? CoworkReportUserInitiatedTasks { get; set; }
-        public int? CoworkReportActiveDays { get; set; }
-        public DateTime? CoworkReportLastActivityDate { get; set; }
-        public bool? CoworkReportRetainedUser { get; set; }
 
         /// <summary>Distinct Copilot agents used inside the window.</summary>
         public int AgentsUsed { get; set; }
@@ -155,6 +152,9 @@ namespace Common.Entities.CopilotAdoption
         [JsonProperty("accountEnabled")]
         public bool? AccountEnabled { get; set; }
 
+        [JsonIgnore]
+        public bool? HoldsSeatToday { get; set; }
+
         [JsonProperty("accountCreatedUtc")]
         public DateTime? AccountCreatedUtc { get; set; }
 
@@ -200,6 +200,9 @@ namespace Common.Entities.CopilotAdoption
         [JsonIgnore]
         public List<int> SeatLicenceTypeIds { get; set; } = new List<int>();
 
+        [JsonProperty("seatHeldDays")]
+        public double? SeatHeldDays { get; set; }
+
         [JsonProperty("interactions")]
         public long Interactions { get; set; }
 
@@ -232,33 +235,11 @@ namespace Common.Entities.CopilotAdoption
         [JsonProperty("agentsUsed")]
         public int AgentsUsed { get; set; }
 
+        /// <summary>Cowork interactions in the window, from the Copilot audit log. Interactions, not Cowork tasks.</summary>
         [JsonProperty("coworkInteractions")]
         public long CoworkInteractions { get; set; }
 
-        [JsonProperty("coworkReportTotalTasks")]
-        public int? CoworkReportTotalTasks { get; set; }
-
-        [JsonProperty("coworkReportScheduledTasks")]
-        public int? CoworkReportScheduledTasks { get; set; }
-
-        [JsonProperty("coworkReportUserInitiatedTasks")]
-        public int? CoworkReportUserInitiatedTasks { get; set; }
-
-        [JsonProperty("coworkReportActiveDays")]
-        public int? CoworkReportActiveDays { get; set; }
-
-        [JsonProperty("coworkReportLastActivityDate")]
-        public DateTime? CoworkReportLastActivityDate { get; set; }
-
-        [JsonProperty("coworkReportRetainedUser")]
-        public bool? CoworkReportRetainedUser { get; set; }
-
-        [JsonProperty("coworkAutomationRatioPct")]
-        public double? CoworkAutomationRatioPct { get; set; }
-
-        [JsonProperty("coworkCreditsPerTask")]
-        public decimal? CoworkCreditsPerTask { get; set; }
-
+        /// <summary>True when the Copilot audit log shows at least one Cowork interaction in the window.</summary>
         [JsonProperty("usedCowork")]
         public bool UsedCowork { get; set; }
 

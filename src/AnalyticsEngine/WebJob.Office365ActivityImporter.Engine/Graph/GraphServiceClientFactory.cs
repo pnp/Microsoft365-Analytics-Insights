@@ -1,6 +1,7 @@
 using Azure.Core;
 using Microsoft.Extensions.Logging;
 using Microsoft.Graph;
+using Microsoft.Kiota.Abstractions.Authentication;
 using Microsoft.Kiota.Authentication.Azure;
 using Microsoft.Kiota.Http.HttpClientLibrary.Middleware;
 using Microsoft.Kiota.Http.HttpClientLibrary.Middleware.Options;
@@ -8,6 +9,7 @@ using System;
 using System.Linq;
 using System.Net.Http;
 using System.Threading;
+using DataUtils.Http;
 
 namespace WebJob.Office365ActivityImporter.Engine.Graph
 {
@@ -19,6 +21,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
     public static class GraphServiceClientFactory
     {
         private static readonly string[] DefaultScopes = new[] { "https://graph.microsoft.com/.default" };
+        public static readonly TimeSpan DefaultGraphSdkTimeout = TimeSpan.FromSeconds(100);
 
         /// <summary>
         /// Create the SDK-backed Graph client used by the Graph importer.
@@ -63,6 +66,10 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             }
 
             handlers.Insert(0, new BoundedGraphRequestHandler(budget, logger));
+            if (HttpMessageTracing.Current.IsEnabled)
+            {
+                handlers.Insert(1, new MessageTraceHandler("graph"));
+            }
             var httpClient = GraphClientFactory.Create(authProvider, handlers, finalHandler: finalHandler);
             httpClient.Timeout = Timeout.InfiniteTimeSpan;
             budget.Log(logger);
@@ -76,7 +83,17 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         public static GraphServiceClient CreateWithTimeout(TokenCredential credential, TimeSpan timeout)
         {
             var authProvider = new AzureIdentityAuthenticationProvider(credential, scopes: DefaultScopes);
-            var httpClient = GraphClientFactory.Create(authProvider);
+            return CreateWithTimeout(authProvider, timeout);
+        }
+
+        public static GraphServiceClient CreateWithTimeout(IAuthenticationProvider authProvider, TimeSpan timeout)
+        {
+            var handlers = GraphClientFactory.CreateDefaultHandlers(new GraphClientOptions()).ToList();
+            if (HttpMessageTracing.Current.IsEnabled)
+            {
+                handlers.Insert(0, new MessageTraceHandler("graph"));
+            }
+            var httpClient = GraphClientFactory.Create(handlers);
             httpClient.Timeout = timeout;
             return new GraphServiceClient(httpClient, authProvider);
         }

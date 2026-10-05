@@ -23,6 +23,7 @@ import MeetingsPanel from '../components/teamsExplorer/MeetingsPanel';
 import CollaborationPanel from '../components/teamsExplorer/CollaborationPanel';
 import ConversationsPanel from '../components/teamsExplorer/ConversationsPanel';
 import PeoplePanel from '../components/teamsExplorer/PeoplePanel';
+import GlobalFilterBar from '../components/globalFilter/GlobalFilterBar';
 import {
   downloadTeamsExport,
   fetchTeamsAdoption,
@@ -268,6 +269,8 @@ export default function TeamsExplorerPage() {
           </Button>
         </div>
       </div>
+
+      <GlobalFilterBar note={t('globalFilter.note.teams')} />
 
       {availabilityError && (
         <MessageBar intent="error" style={{ marginTop: '12px' }}>

@@ -23,7 +23,6 @@ import {
   COWORK_ACTIVITY_MINUTES_INPUT_LABEL,
   COWORK_ACTIVITY_SHARE_INPUT_LABEL,
   COWORK_ACTIVITY_VOLUME_LABEL,
-  COWORK_OBSERVED_COLOUR,
   EvidenceEntry,
   ScenarioPicker,
   TIME_SAVED_COWORK_COLOUR,
@@ -39,24 +38,30 @@ function percentFigure(share: number): string {
   return formatNumber(share * 100, { maximumFractionDigits: 2 });
 }
 
-/** Every minutes figure the Cowork estimate uses - the task minutes and each kind of work's. */
-const COWORK_MINUTES_KEYS: readonly TimeSavedAssumptionKey[] = [
-  'taskMinutes',
-  ...COWORK_ACTIVITIES.map((activity) => COWORK_ACTIVITY_ASSUMPTIONS[activity].minutes),
-];
+/** Every minutes figure the Cowork estimate uses: each kind of work's. */
+const COWORK_MINUTES_KEYS: readonly TimeSavedAssumptionKey[] = COWORK_ACTIVITIES.map(
+  (activity) => COWORK_ACTIVITY_ASSUMPTIONS[activity].minutes,
+);
+
+/**
+ * The minutes each piece of work is assumed to save by default. Every kind of work ships with the same
+ * figure (CopilotAdoptionCoworkTests pins the defaults), which is what the minutes card explains.
+ */
+const DEFAULT_MINUTES_KEY: TimeSavedAssumptionKey = COWORK_ACTIVITY_ASSUMPTIONS[COWORK_ACTIVITIES[0]].minutes;
 
 /**
  * The Cowork estimate laid open: where the time would come from, what was observed, what is assumed,
  * and what is and is not known.
  *
- * Written for the meeting where somebody pushes back on the number. The people not yet running Cowork
- * are modelled from the work they already do by hand - one row per kind of work Cowork can take on,
- * each with the share of it handed over and the minutes saved on each piece as inputs the reader can
- * change on the spot - and the page says plainly that no study has measured either. So the figure is
- * sized honestly for what it is: the value of enabling Cowork for people who already hold a Copilot
- * licence, on top of what that licence gives back. The only thing it can be checked against is the
- * tenant's own Cowork users, and the shares card does that; the Copilot evidence and its sense check
- * sit with the licence estimate, on the Licence opportunities tab.
+ * Written for the meeting where somebody pushes back on the number. Everyone covered is modelled from
+ * the work they already do by hand - one row per kind of work Cowork can take on, each with the share of
+ * it handed over and the minutes saved on each piece as inputs the reader can change on the spot - and
+ * the page says plainly that no study has measured either. So the figure is sized honestly for what it
+ * is: the value of enabling Cowork for people who already hold a Copilot licence, on top of what that
+ * licence gives back. The product has no Cowork task counts to check it against - Microsoft's are only
+ * in the Microsoft 365 admin centre (#692) - so the shares card says how to check it by hand after a
+ * pilot; the Copilot evidence and its sense check sit with the licence estimate, on the Licence
+ * opportunities tab.
  *
  * It shows its working for the cohort the headline models - the people ready now, or every Copilot
  * seat holder - and follows the headline when the reader switches it.
@@ -118,7 +123,6 @@ export default function CoworkTimeSavedModel({
   }
 
   const conservativePercent = formatNumber(assumptions.conservativeRatio * 100, { maximumFractionDigits: 1 });
-  const monthDays = Math.max(1, options.habitBucketNormalisationDays);
   const commit = (field: TimeSavedAssumptionKey, value: number) => setAssumption(field, value);
   const shareBar = (sharePct: number, colour: string) => (
     <div className={styles.shareBar} title={`${formatNumber(sharePct, { maximumFractionDigits: 0 })}%`}>
@@ -164,11 +168,11 @@ export default function CoworkTimeSavedModel({
           <Text size={200} className={styles.note}>
             {t(
               plural(
-                projection.projectedUsers,
+                projection.cohortUsers,
                 'copilotAdoptionCowork.timeSaved.table.caption.one',
                 'copilotAdoptionCowork.timeSaved.table.caption.other',
               ),
-              { users: formatCount(projection.projectedUsers) },
+              { users: formatCount(projection.cohortUsers) },
             )}
           </Text>
 
@@ -245,52 +249,6 @@ export default function CoworkTimeSavedModel({
                     </tr>
                   );
                 })}
-                {projection.observedUsers > 0 && (
-                  <tr>
-                    <td className={styles.td}>
-                      <span className={styles.activityCell}>
-                        <span className={styles.swatch} style={{ backgroundColor: COWORK_OBSERVED_COLOUR }} aria-hidden="true" />
-                        <span>
-                          <Text size={300} weight="semibold">
-                            {t('copilotAdoptionCowork.timeSaved.activity.observedTasks')}
-                          </Text>
-                          <Text size={100} className={styles.sub}>
-                            {t(
-                              plural(
-                                projection.observedUsers,
-                                'copilotAdoptionCowork.timeSaved.volume.observedTasks.one',
-                                'copilotAdoptionCowork.timeSaved.volume.observedTasks.other',
-                              ),
-                              { users: formatCount(projection.observedUsers) },
-                            )}
-                          </Text>
-                        </span>
-                      </span>
-                    </td>
-                    <td className={mergeClasses(styles.td, styles.tdNumeric)}>{formatCount(projection.observedTasks)}</td>
-                    <td className={styles.td}>
-                      <Text size={100} className={styles.sub}>
-                        {t('copilotAdoptionCowork.timeSaved.table.countedAsReported')}
-                      </Text>
-                    </td>
-                    <td className={styles.td}>
-                      <AssumptionInput
-                        field="taskMinutes"
-                        value={assumptions.taskMinutes}
-                        defaultValue={defaults.taskMinutes}
-                        customised={customised.includes('taskMinutes')}
-                        label={t('copilotAdoptionCowork.timeSaved.input.taskMinutes')}
-                        unit={t('copilotAdoptionTimeSaved.unit.minutes')}
-                        onCommit={commit}
-                        onReset={resetAssumption}
-                      />
-                    </td>
-                    <td className={mergeClasses(styles.td, styles.tdNumeric)}>
-                      {t('copilotAdoptionTimeSaved.table.hoursValue', { hours: formatCount(projection.observedDisplayHours) })}
-                    </td>
-                    <td className={styles.td}>{shareBar(projection.observedSharePct, COWORK_OBSERVED_COLOUR)}</td>
-                  </tr>
-                )}
                 <tr className={styles.totalRow}>
                   <td className={styles.td} colSpan={4}>
                     {t('copilotAdoptionTimeSaved.table.total')}
@@ -355,7 +313,7 @@ export default function CoworkTimeSavedModel({
         <Card className={styles.card} style={{ borderTopColor: TIME_SAVED_COWORK_COLOUR }}>
           <div className={styles.cardHead}>
             <Text weight="semibold" size={400}>
-              {t('copilotAdoptionCowork.timeSaved.card.minutes', { minutes: formatAssumption(defaults.taskMinutes) })}
+              {t('copilotAdoptionCowork.timeSaved.card.minutes', { minutes: formatAssumption(defaults[DEFAULT_MINUTES_KEY]) })}
             </Text>
             {customisesAny(customised, COWORK_MINUTES_KEYS) ? (
               <Badge size="small" appearance="tint" color="brand">
@@ -382,7 +340,7 @@ export default function CoworkTimeSavedModel({
           </div>
           <div>
             <Text size={100} weight="semibold" className={styles.label}>
-              {t('copilotAdoptionTimeSaved.rationale.whyThisFigure', { minutes: formatAssumption(defaults.taskMinutes) })}
+              {t('copilotAdoptionTimeSaved.rationale.whyThisFigure', { minutes: formatAssumption(defaults[DEFAULT_MINUTES_KEY]) })}
             </Text>
             <Text size={200}>{t(COWORK_TASK_RATIONALE.whyKey)}</Text>
           </div>
@@ -430,28 +388,13 @@ export default function CoworkTimeSavedModel({
               {t('copilotAdoptionCowork.timeSaved.shares.check.title')}
             </Text>
             <Text size={200} block>
-              {projection.observedRateUsers > 0
-                ? t(
-                    plural(
-                      projection.observedRateUsers,
-                      'copilotAdoptionCowork.timeSaved.shares.check.observed.one',
-                      'copilotAdoptionCowork.timeSaved.shares.check.observed.other',
-                    ),
-                    {
-                      users: formatCount(projection.observedRateUsers),
-                      rate: formatModelled(projection.observedRate),
-                      model: formatModelled(projection.piecesPerProjectedPerson),
-                    },
-                  )
-                : t('copilotAdoptionCowork.timeSaved.shares.check.none', {
-                    model: formatModelled(projection.piecesPerProjectedPerson),
-                  })}
+              {t('copilotAdoptionCowork.timeSaved.shares.check.model', {
+                model: formatModelled(projection.piecesPerPerson),
+              })}
             </Text>
-            {projection.observedRateUsers > 0 && (
-              <Text size={200} block style={{ marginTop: '6px' }}>
-                {t('copilotAdoptionCowork.timeSaved.shares.check.caveat')}
-              </Text>
-            )}
+            <Text size={200} block style={{ marginTop: '6px' }}>
+              {t('copilotAdoptionCowork.timeSaved.shares.check.caveat')}
+            </Text>
           </div>
           <div className={styles.test}>
             <Text size={100} weight="semibold" className={styles.label}>
@@ -477,7 +420,6 @@ export default function CoworkTimeSavedModel({
                   email: formatNumber(assumptions.sendEmailMinutes, { maximumFractionDigits: 15 }),
                   teams: formatNumber(assumptions.postInTeamsMinutes, { maximumFractionDigits: 15 }),
                   documents: formatNumber(assumptions.createDocumentsMinutes, { maximumFractionDigits: 15 }),
-                  tasks: formatNumber(assumptions.taskMinutes, { maximumFractionDigits: 15 }),
                 })}
               </Text>
             </li>
@@ -503,27 +445,12 @@ export default function CoworkTimeSavedModel({
                   {
                     users: formatNumber(projection.cohortUsers),
                     workingDays: formatNumber(projection.workingDaysPerMonth, { maximumFractionDigits: 15 }),
-                    days: formatNumber(monthDays),
                   },
                 )}
               </Text>
             </li>
-            <li key="estimate-assumption-observed">
-              <Text size={200}>
-                {projection.observedUsers > 0
-                  ? t(
-                      plural(
-                        projection.observedUsers,
-                        'copilotAdoptionCowork.estimate.assumption.observedTasks.one',
-                        'copilotAdoptionCowork.estimate.assumption.observedTasks.other',
-                      ),
-                      {
-                        tasks: formatNumber(projection.observedTasks),
-                        users: formatNumber(projection.observedUsers),
-                      },
-                    )
-                  : t('copilotAdoptionCowork.estimate.assumption.observedNone')}
-              </Text>
+            <li key="estimate-assumption-everyoneModelled">
+              <Text size={200}>{t('copilotAdoptionCowork.estimate.assumption.everyoneModelled')}</Text>
             </li>
             <li key="estimate-assumption-increment">
               <Text size={200}>{t('copilotAdoptionCowork.estimate.assumption.increment')}</Text>

@@ -510,6 +510,12 @@ namespace Web.AnalyticsWeb.Models.Health
             foreach (var row in table.Rows)
             {
                 var component = table.GetString(row, "Component");
+                var reasonKey = table.GetString(row, "ReasonKey");
+                if (string.Equals(component, "MessageTracing", StringComparison.OrdinalIgnoreCase)
+                    && string.Equals(reasonKey, "messageTracing.disabled", StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
                 // Runtime checks done above (Credential, Service Bus) are fresher than telemetry - keep them.
                 if (section.ComponentHealth.Any(c => string.Equals(c.Component, component, StringComparison.OrdinalIgnoreCase))) continue;
 
@@ -518,7 +524,7 @@ namespace Web.AnalyticsWeb.Models.Health
                     Component = component,
                     Status = table.GetString(row, "Status"),
                     Detail = table.GetString(row, "Detail"),
-                    ReasonKey = table.GetString(row, "ReasonKey"),
+                    ReasonKey = reasonKey,
                     ErrorCode = table.GetString(row, "ErrorCode"),
                     HttpStatus = table.GetInt(row, "HttpStatus"),
                     DaysToExpiry = table.GetInt(row, "DaysToExpiry"),

@@ -28,16 +28,20 @@ namespace Web.AnalyticsWeb.Controllers
     [Route("api/UserFilter")]
     public class UserFilterAPIController : ControllerBase
     {
-        public UserFilterAPIController() : this(CachedUserDirectorySource.Default)
+        public UserFilterAPIController() : this(CachedUserDirectorySource.Default, ReportScopeResolver.Default)
         {
         }
 
-        internal UserFilterAPIController(IUserDirectorySource directory)
+        /// <summary>For tests: no global filter unless <paramref name="scopes"/> supplies one.</summary>
+        internal UserFilterAPIController(IUserDirectorySource directory, ReportScopeResolver scopes = null)
         {
             Directory = directory ?? throw new ArgumentNullException(nameof(directory));
+            Scopes = scopes ?? new ReportScopeResolver(GlobalFilterProviders.None, directory);
         }
 
         internal IUserDirectorySource Directory { get; }
+
+        internal ReportScopeResolver Scopes { get; }
 
         /// <summary>GET api/UserFilter/dimensions - every attribute a filter can use right now.</summary>
         [HttpGet]
@@ -46,8 +50,9 @@ namespace Web.AnalyticsWeb.Controllers
         {
             return GuardAsync(async () =>
             {
-                var snapshot = await Directory.GetAsync(cancellationToken).ConfigureAwait(false);
-                return Ok(UserFilterCatalogue.ListDimensions(snapshot));
+                var restriction = await RestrictionAsync(cancellationToken).ConfigureAwait(false);
+                var snapshot = restriction?.Snapshot ?? await Directory.GetAsync(cancellationToken).ConfigureAwait(false);
+                return Ok(UserFilterCatalogue.ListDimensions(snapshot, restriction));
             }, cancellationToken);
         }
 
@@ -70,8 +75,9 @@ namespace Web.AnalyticsWeb.Controllers
                     return Content(HttpStatusCode.BadRequest, new ApiErrorModel("That is not an attribute a report can be filtered on."));
                 }
 
-                var snapshot = await Directory.GetAsync(cancellationToken).ConfigureAwait(false);
-                var page = UserFilterCatalogue.ListValues(snapshot, dimension, search, take);
+                var restriction = await RestrictionAsync(cancellationToken).ConfigureAwait(false);
+                var snapshot = restriction?.Snapshot ?? await Directory.GetAsync(cancellationToken).ConfigureAwait(false);
+                var page = UserFilterCatalogue.ListValues(snapshot, dimension, search, take, restriction);
 
                 // A custom organisation type deleted or disabled since the page loaded its list.
                 if (page == null)
@@ -81,6 +87,23 @@ namespace Web.AnalyticsWeb.Controllers
 
                 return Ok(page);
             }, cancellationToken);
+        }
+
+        /// <summary>
+        /// The administrator's global filter as it applies to the caller, so the picker offers only the values
+        /// held by people they may see - or <c>null</c> for no narrowing.
+        /// </summary>
+        /// <remarks>
+        /// A portal administrator always sees every value: they can change or switch off the global filter
+        /// itself, and its editor picks values here - narrowed to their own view, it could only ever offer the
+        /// values it already selects.
+        /// </remarks>
+        private async Task<CompiledUserFilter> RestrictionAsync(CancellationToken cancellationToken)
+        {
+            if (PortalAccess.Evaluate(Request, User).Administration) return null;
+
+            var scope = await Scopes.ResolveAsync(Request, User, null, cancellationToken).ConfigureAwait(false);
+            return scope.Restriction;
         }
 
         /// <summary>
@@ -98,6 +121,11 @@ namespace Web.AnalyticsWeb.Controllers
             try
             {
                 return await work().ConfigureAwait(false);
+            }
+            catch (HttpResponseException)
+            {
+                // A deliberate refusal - the global filter could not be evaluated - already shaped for the caller.
+                throw;
             }
             catch (Exception) when (cancellationToken.IsCancellationRequested)
             {

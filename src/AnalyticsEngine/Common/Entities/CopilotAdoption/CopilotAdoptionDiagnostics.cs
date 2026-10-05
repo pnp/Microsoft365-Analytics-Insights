@@ -1,4 +1,4 @@
-using Newtonsoft.Json;
+﻿using Newtonsoft.Json;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -88,6 +88,7 @@ namespace Common.Entities.CopilotAdoption
         public const string DataSourceProbes = "DataSourceProbes";
         public const string LicensedUsers = "LicensedUsers";
         public const string UsageByApp = "UsageByApp";
+        public const string SeatHolderTimeSaved = "SeatHolderTimeSaved";
         public const string WeeklyTrend = "WeeklyTrend";
         public const string LicenceOpportunities = "LicenceOpportunities";
         public const string CoworkReadiness = "CoworkReadiness";

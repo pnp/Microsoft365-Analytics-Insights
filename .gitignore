@@ -49,6 +49,7 @@ src/TelemetryService/web.client/.vscode/*
 /infra/TelemetryService/*.parameters.json
 /infra/TelemetryService/.deploy/
 /artifacts/TelemetryService/
+/artifacts/TelemetryService-state/
 
 # Container Apps demo: the real environment file (subscription, tenant, resource names) stays on the
 # machine that deploys. Only demo.environment.example.json, with placeholders, is committed.

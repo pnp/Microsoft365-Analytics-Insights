@@ -73,7 +73,7 @@ namespace Web.AnalyticsWeb.Controllers
         private const int MaxCsvRows = 100000;
 
         public CopilotAdoptionAPIController()
-            : this(CopilotAdoptionAnalysisCoordinator.Default, CachedUserDirectorySource.Default)
+            : this(CopilotAdoptionAnalysisCoordinator.Default, CachedUserDirectorySource.Default, ReportScopeResolver.Default)
         {
         }
 
@@ -82,16 +82,22 @@ namespace Web.AnalyticsWeb.Controllers
         {
         }
 
-        internal CopilotAdoptionAPIController(CopilotAdoptionAnalysisCoordinator coordinator, IUserDirectorySource directory)
+        /// <summary>For tests: no global filter, unless one is supplied through <paramref name="scopes"/>.</summary>
+        internal CopilotAdoptionAPIController(
+            CopilotAdoptionAnalysisCoordinator coordinator, IUserDirectorySource directory, ReportScopeResolver scopes = null)
         {
             Coordinator = coordinator ?? throw new ArgumentNullException(nameof(coordinator));
             Directory = directory ?? throw new ArgumentNullException(nameof(directory));
+            Scopes = scopes ?? new ReportScopeResolver(GlobalFilterProviders.None, directory);
         }
 
         internal CopilotAdoptionAnalysisCoordinator Coordinator { get; }
 
         /// <summary>The directory snapshot a <c>userFilter</c> is evaluated against.</summary>
         internal IUserDirectorySource Directory { get; }
+
+        /// <summary>Resolves the administrator's global filter and the reader's own filter into one scope.</summary>
+        internal ReportScopeResolver Scopes { get; }
 
         #region Availability
 
@@ -201,9 +207,9 @@ namespace Web.AnalyticsWeb.Controllers
         /// <see cref="CopilotAdoptionAnalysisCoordinator"/>.
         /// </remarks>
         private async Task<CopilotAdoptionAnalysis> TryGetAnalysisAsync(
-            int windowDays, string seatLicenceTypeIds, CancellationToken cancellationToken)
+            int windowDays, string from, string to, string seatLicenceTypeIds, CancellationToken cancellationToken)
         {
-            return await TryGetAnalysisAsync(windowDays, seatLicenceTypeIds, FirstResponseBudget, cancellationToken);
+            return await TryGetAnalysisAsync(windowDays, from, to, seatLicenceTypeIds, FirstResponseBudget, cancellationToken);
         }
 
         /// <summary>
@@ -217,14 +223,14 @@ namespace Web.AnalyticsWeb.Controllers
         /// which does.
         /// </remarks>
         private async Task<CopilotAdoptionAnalysis> TryGetScopedRowsAsync(
-            int windowDays, string seatLicenceTypeIds, string emailDomain, UserFilterExpression userFilter,
+            int windowDays, string from, string to, string seatLicenceTypeIds, string emailDomain, UserFilterExpression userFilter,
             TimeSpan budget, CancellationToken cancellationToken)
         {
             // Read the directory while the analysis is being waited for, not after it: on a cold
             // process both are slow, and neither depends on the other.
             if (!userFilter.IsEmpty) Directory.Prefetch();
 
-            var analysis = await TryGetAnalysisAsync(windowDays, seatLicenceTypeIds, budget, cancellationToken);
+            var analysis = await TryGetAnalysisAsync(windowDays, from, to, seatLicenceTypeIds, budget, cancellationToken);
             if (analysis == null) return null;
 
             var scope = await ResolveScopeAsync(emailDomain, userFilter, cancellationToken);
@@ -232,11 +238,11 @@ namespace Web.AnalyticsWeb.Controllers
         }
 
         private async Task<CopilotAdoptionAnalysis> TryGetScopedRowsAsync(
-            int windowDays, string seatLicenceTypeIds, string emailDomain, UserFilterExpression userFilter,
+            int windowDays, string from, string to, string seatLicenceTypeIds, string emailDomain, UserFilterExpression userFilter,
             CancellationToken cancellationToken)
         {
             return await TryGetScopedRowsAsync(
-                windowDays, seatLicenceTypeIds, emailDomain, userFilter, FirstResponseBudget, cancellationToken);
+                windowDays, from, to, seatLicenceTypeIds, emailDomain, userFilter, FirstResponseBudget, cancellationToken);
         }
 
         /// <summary>
@@ -249,12 +255,12 @@ namespace Web.AnalyticsWeb.Controllers
         /// and named in <see cref="CopilotAdoptionSummary.UnscopedSections"/> so the page can label them.
         /// </remarks>
         private async Task<CopilotAdoptionAnalysis> TryGetScopedSummaryAsync(
-            int windowDays, string seatLicenceTypeIds, string emailDomain, UserFilterExpression userFilter,
+            int windowDays, string from, string to, string seatLicenceTypeIds, string emailDomain, UserFilterExpression userFilter,
             TimeSpan budget, CancellationToken cancellationToken)
         {
             if (!userFilter.IsEmpty) Directory.Prefetch();
 
-            var analysis = await TryGetAnalysisAsync(windowDays, seatLicenceTypeIds, budget, cancellationToken);
+            var analysis = await TryGetAnalysisAsync(windowDays, from, to, seatLicenceTypeIds, budget, cancellationToken);
             if (analysis == null) return null;
 
             var scope = await ResolveScopeAsync(emailDomain, userFilter, cancellationToken);
@@ -265,33 +271,27 @@ namespace Web.AnalyticsWeb.Controllers
         }
 
         /// <summary>
-        /// Combines the email domain and the user filter into one scope, evaluating the filter against
-        /// the shared directory snapshot.
+        /// Combines the email domain, the reader's user filter and the administrator's global filter into one
+        /// scope, evaluating the filters against the shared directory snapshot.
         /// </summary>
         /// <remarks>
-        /// A directory that cannot be read is answered with a plain 503 rather than left to the Web API
-        /// pipeline: this site ships with customErrors off, so an unhandled SQL exception would reach
-        /// the browser carrying object names. The fault still goes to Application Insights.
+        /// A filter that cannot be evaluated - the directory or the global filter cannot be read - is
+        /// answered with a plain 503 by <see cref="ReportScopeResolver"/> rather than left to the Web API
+        /// pipeline: this site ships with customErrors off, so an unhandled SQL exception would reach the
+        /// browser carrying object names. The fault still goes to Application Insights.
         /// </remarks>
         private async Task<CopilotAdoptionScope> ResolveScopeAsync(
             string emailDomain, UserFilterExpression userFilter, CancellationToken cancellationToken)
         {
-            if (userFilter == null || userFilter.IsEmpty) return CopilotAdoptionScope.ForEmailDomain(emailDomain);
+            var scope = await Scopes.ResolveAsync(Request, User, userFilter, cancellationToken);
+            if (!scope.IsRestricted) return CopilotAdoptionScope.ForEmailDomain(emailDomain);
 
-            UserDirectorySnapshot snapshot;
-            try
-            {
-                snapshot = await Directory.GetAsync(cancellationToken);
-            }
-            catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
-            {
-                WebExceptionTelemetry.Report(ex, "CopilotAdoptionAPI.UserFilter");
-                throw new UserFilterDirectoryUnavailableException(
-                    "The directory the filter is applied to could not be read, so the filtered report is "
-                    + "not available right now. The failure has been logged. Try again shortly, or clear the filter.");
-            }
-
-            return CopilotAdoptionScope.Create(emailDomain, UserFilterCompiler.Compile(userFilter, snapshot));
+            return CopilotAdoptionScope.Create(
+                emailDomain,
+                scope.UserFilter,
+                scope.Restriction,
+                scope.GlobalEcho,
+                scope.Global?.DescribeInEnglish());
         }
 
         /// <summary>
@@ -336,10 +336,22 @@ namespace Web.AnalyticsWeb.Controllers
         /// <see cref="ExportWaitBudget"/>.
         /// </summary>
         private async Task<CopilotAdoptionAnalysis> TryGetAnalysisAsync(
-            int windowDays, string seatLicenceTypeIds, TimeSpan budget, CancellationToken cancellationToken)
+            int windowDays, string from, string to, string seatLicenceTypeIds, TimeSpan budget, CancellationToken cancellationToken)
         {
+            CopilotAdoptionDateRange range;
+            try
+            {
+                range = CopilotAdoptionDateRange.Create(windowDays, from, to, DateTime.UtcNow);
+            }
+            catch (ArgumentException ex)
+            {
+                throw new HttpResponseException(Request.CreateResponse(
+                    HttpStatusCode.BadRequest,
+                    new ApiErrorModel(ex.Message, ex.Message)));
+            }
+
             return await Coordinator.TryGetAsync(
-                NormaliseWindowDays(windowDays),
+                range,
                 ParseIds(seatLicenceTypeIds),
                 budget,
                 cancellationToken);
@@ -348,16 +360,18 @@ namespace Web.AnalyticsWeb.Controllers
         /// <summary>
         /// The 202 body. Deliberately the same shape for every endpoint so the SPA has one thing to detect.
         /// </summary>
-        private IActionResult StillBuilding(int windowDays, string seatLicenceTypeIds)
-            => StillBuildingResponse(InFlightRunId(windowDays, seatLicenceTypeIds));
+        private IActionResult StillBuilding(int windowDays, string from, string to, string seatLicenceTypeIds)
+            => StillBuildingResponse(InFlightRunId(windowDays, from, to, seatLicenceTypeIds));
 
         /// <summary>
         /// The telemetry id of the run a 202 is waiting on, so a browser trace can be matched to the run's
         /// <c>CopilotAdoptionLifecycle</c> events in Application Insights.
         /// </summary>
-        private string InFlightRunId(int windowDays, string seatLicenceTypeIds)
+        private string InFlightRunId(int windowDays, string from, string to, string seatLicenceTypeIds)
         {
-            return Coordinator.InFlightRunId(NormaliseWindowDays(windowDays), ParseIds(seatLicenceTypeIds));
+            return Coordinator.InFlightRunId(
+                CopilotAdoptionDateRange.Create(windowDays, from, to, DateTime.UtcNow),
+                ParseIds(seatLicenceTypeIds));
         }
 
         /// <summary>The header carrying the analysis run id on 202s, "not ready" 503s and export downloads.</summary>
@@ -417,10 +431,10 @@ namespace Web.AnalyticsWeb.Controllers
         /// the person who clicked has to be able to read it. 503 + <c>Retry-After</c> is the honest
         /// status - the report is temporarily unavailable and retrying later will work.
         /// </remarks>
-        private IActionResult ExportNotReadyResponse(int windowDays, string seatLicenceTypeIds)
+        private IActionResult ExportNotReadyResponse(int windowDays, string from, string to, string seatLicenceTypeIds)
         {
             Response.Headers.RetryAfter = RetryAfterSeconds.ToString(CultureInfo.InvariantCulture);
-            AddRunIdHeader(Response, InFlightRunId(windowDays, seatLicenceTypeIds));
+            AddRunIdHeader(Response, InFlightRunId(windowDays, from, to, seatLicenceTypeIds));
 
             return new ContentResult
             {
@@ -435,6 +449,28 @@ namespace Web.AnalyticsWeb.Controllers
             };
         }
 
+        private static HttpResponseMessage PastRangeListExportHiddenResponse()
+        {
+            return new HttpResponseMessage(HttpStatusCode.BadRequest)
+            {
+                Content = new StringContent(
+                    JsonConvert.SerializeObject(new ApiErrorModel(
+                        "copilotAdoption.error.pastRangeNamedListsHidden",
+                        "copilotAdoption.error.pastRangeNamedListsHidden")),
+                    Encoding.UTF8,
+                    "application/json"),
+            };
+        }
+
+        private IHttpActionResult PastRangeListHidden()
+        {
+            return Content(
+                HttpStatusCode.BadRequest,
+                new ApiErrorModel(
+                    "copilotAdoption.error.pastRangeNamedListsHidden",
+                    "copilotAdoption.error.pastRangeNamedListsHidden"));
+        }
+
         #endregion
 
         #region Summary and licence types
@@ -445,6 +481,8 @@ namespace Web.AnalyticsWeb.Controllers
         [Route("summary")]
         public async Task<IActionResult> Summary(
             int windowDays = 28,
+            string from = null,
+            string to = null,
             string seatLicenceTypeIds = null,
             string emailDomain = null,
             string userFilter = null,
@@ -455,13 +493,19 @@ namespace Web.AnalyticsWeb.Controllers
             if (permissionDenied != null) return permissionDenied;
 
             var analysis = await TryGetScopedSummaryAsync(
-                windowDays, seatLicenceTypeIds, emailDomain, filter, FirstResponseBudget, cancellationToken);
-            if (analysis == null) return StillBuilding(windowDays, seatLicenceTypeIds);
-            return Ok(CanSeeIndividuals() ? analysis.Summary : analysis.Summary.WithoutIndividualData());
+                windowDays, from, to, seatLicenceTypeIds, emailDomain, filter, FirstResponseBudget, cancellationToken);
+            if (analysis == null) return StillBuilding(windowDays, from, to, seatLicenceTypeIds);
+            return Ok(SummaryForCaller(analysis.Summary));
         }
 
         /// <summary>Whether the caller holds the portal's See PII permission (#661).</summary>
         private bool CanSeeIndividuals() => PortalAccess.Evaluate(Request, User).SeePii;
+
+        private CopilotAdoptionSummary SummaryForCaller(CopilotAdoptionSummary summary)
+        {
+            var visible = CanSeeIndividuals() ? summary : summary.WithoutIndividualData();
+            return visible?.WithoutPastRangeNamedLists();
+        }
 
         /// <summary>
         /// Refuses a population-narrowing scope for a reader who cannot see individual data. Even when the
@@ -483,17 +527,24 @@ namespace Web.AnalyticsWeb.Controllers
         /// Exposed deliberately: Microsoft ships new Copilot SKUs faster than any shipped classification
         /// list can track, so an admin has to be able to see what the tool decided - and override it -
         /// rather than discover from a wrong headline number that a SKU was missed.
+        ///
+        /// Under the administrator's global filter only the Copilot seat types are listed, with the narrowed
+        /// assigned and idle counts the summary shows: a reader limited to one department must not be able to
+        /// read the whole tenant's per-licence counts here instead.
         /// </summary>
         // GET: api/CopilotAdoption/licence-types
         [HttpGet]
         [Route("licence-types")]
         public async Task<IActionResult> LicenceTypes(
             int windowDays = 28,
+            string from = null,
+            string to = null,
             string seatLicenceTypeIds = null,
             CancellationToken cancellationToken = default(CancellationToken))
         {
-            var analysis = await TryGetAnalysisAsync(windowDays, seatLicenceTypeIds, cancellationToken);
-            if (analysis == null) return StillBuilding(windowDays, seatLicenceTypeIds);
+            var analysis = await TryGetScopedSummaryAsync(
+                windowDays, from, to, seatLicenceTypeIds, null, UserFilterExpression.Empty, FirstResponseBudget, cancellationToken);
+            if (analysis == null) return StillBuilding(windowDays, from, to, seatLicenceTypeIds);
             return Ok(analysis.Summary.SeatLicenceTypes);
         }
 
@@ -503,11 +554,13 @@ namespace Web.AnalyticsWeb.Controllers
         [Route("sql")]
         public async Task<IActionResult> Sql(
             int windowDays = 28,
+            string from = null,
+            string to = null,
             string seatLicenceTypeIds = null,
             CancellationToken cancellationToken = default(CancellationToken))
         {
-            var analysis = await TryGetAnalysisAsync(windowDays, seatLicenceTypeIds, cancellationToken);
-            if (analysis == null) return StillBuilding(windowDays, seatLicenceTypeIds);
+            var analysis = await TryGetAnalysisAsync(windowDays, from, to, seatLicenceTypeIds, cancellationToken);
+            if (analysis == null) return StillBuilding(windowDays, from, to, seatLicenceTypeIds);
             return Ok(analysis.Sql);
         }
 
@@ -516,38 +569,50 @@ namespace Web.AnalyticsWeb.Controllers
         /// filter drop-downs. Derived from the already-loaded result rather than from another query.
         /// </summary>
         /// <remarks>
-        /// Deliberately NOT narrowed by the current scope: this is the list the domain filter itself is
+        /// Deliberately NOT narrowed by the reader's own scope: this is the list the domain filter itself is
         /// chosen from, so narrowing it would leave the selected domain as the only option and make the
-        /// filter impossible to change.
+        /// filter impossible to change. It IS narrowed by the administrator's global filter, which the
+        /// reader cannot change: offering values held only by people outside it would list organisations
+        /// the reader may not see, every one of which would select nobody.
         /// </remarks>
         // GET: api/CopilotAdoption/filters
         [HttpGet]
         [Route("filters")]
         public async Task<IActionResult> Filters(
             int windowDays = 28,
+            string from = null,
+            string to = null,
             string seatLicenceTypeIds = null,
             CancellationToken cancellationToken = default(CancellationToken))
         {
-            var analysis = await TryGetAnalysisAsync(windowDays, seatLicenceTypeIds, cancellationToken);
-            if (analysis == null) return StillBuilding(windowDays, seatLicenceTypeIds);
+            var analysis = await TryGetAnalysisAsync(windowDays, from, to, seatLicenceTypeIds, cancellationToken);
+            if (analysis == null) return StillBuilding(windowDays, from, to, seatLicenceTypeIds);
+
+            var global = await Scopes.ResolveAsync(Request, User, null, cancellationToken);
+            Func<int, bool> visible = global.IsRestricted ? (Func<int, bool>)global.Includes : _ => true;
+
+            var licensed = analysis.LicensedUsers.Where(u => visible(u.UserId)).ToList();
+            var opportunities = analysis.Opportunities.Where(o => visible(o.UserId)).ToList();
+            var cowork = analysis.CoworkReadiness.Where(c => visible(c.UserId)).ToList();
+            var unlicensed = analysis.UnlicensedUsers.Where(u => visible(u.UserId)).ToList();
 
             return Ok(new
             {
                 // Every population, so a domain that holds no seats at all - an acquired business
                 // using Copilot Chat without ever having been licensed - is still selectable.
                 emailDomains = Distinct(
-                    analysis.LicensedUsers.Select(u => CopilotAdoptionEmailDomain.Label(u.EmailDomain))
-                        .Concat(analysis.Opportunities.Select(o => CopilotAdoptionEmailDomain.Label(o.EmailDomain)))
-                        .Concat(analysis.CoworkReadiness.Select(c => CopilotAdoptionEmailDomain.Label(c.EmailDomain)))
-                        .Concat(analysis.UnlicensedUsers.Select(u => CopilotAdoptionEmailDomain.Label(u.EmailDomain)))),
+                    licensed.Select(u => CopilotAdoptionEmailDomain.Label(u.EmailDomain))
+                        .Concat(opportunities.Select(o => CopilotAdoptionEmailDomain.Label(o.EmailDomain)))
+                        .Concat(cowork.Select(c => CopilotAdoptionEmailDomain.Label(c.EmailDomain)))
+                        .Concat(unlicensed.Select(u => CopilotAdoptionEmailDomain.Label(u.EmailDomain)))),
                 departments = Distinct(
-                    analysis.LicensedUsers.Select(u => u.Department)
-                        .Concat(analysis.Opportunities.Select(o => o.Department))
-                        .Concat(analysis.CoworkReadiness.Select(c => c.Department))),
+                    licensed.Select(u => u.Department)
+                        .Concat(opportunities.Select(o => o.Department))
+                        .Concat(cowork.Select(c => c.Department))),
                 countries = Distinct(
-                    analysis.LicensedUsers.Select(u => u.Country)
-                        .Concat(analysis.Opportunities.Select(o => o.Country))
-                        .Concat(analysis.CoworkReadiness.Select(c => c.Country))),
+                    licensed.Select(u => u.Country)
+                        .Concat(opportunities.Select(o => o.Country))
+                        .Concat(cowork.Select(c => c.Country))),
                 bands = CopilotAdoptionScoring.AllBands
                     .Select(b => new { value = (int)b, name = CopilotAdoptionScoring.BandDisplayName(b) })
                     .ToList(),
@@ -579,6 +644,8 @@ namespace Web.AnalyticsWeb.Controllers
         [RequirePortalPermission(PortalPermission.SeePii)]
         public async Task<IActionResult> LicensedUsers(
             int windowDays = 28,
+            string from = null,
+            string to = null,
             string seatLicenceTypeIds = null,
             string search = null,
             string bands = null,
@@ -600,8 +667,12 @@ namespace Web.AnalyticsWeb.Controllers
         {
             if (!TryParseUserFilter(userFilter, out var filter, out var filterError)) return InvalidFilter(filterError);
 
-            var analysis = await TryGetScopedRowsAsync(windowDays, seatLicenceTypeIds, emailDomain, filter, cancellationToken);
-            if (analysis == null) return StillBuilding(windowDays, seatLicenceTypeIds);
+            var analysis = await TryGetScopedRowsAsync(windowDays, from, to, seatLicenceTypeIds, emailDomain, filter, cancellationToken);
+            if (analysis == null) return StillBuilding(windowDays, from, to, seatLicenceTypeIds);
+            if (analysis.Summary.Options.UsesExplicitDates)
+            {
+                return PastRangeListHidden();
+            }
 
             var query = BuildLicensedUserQuery(
                 search, bands, department, country, reclaimEligibility, coworkOnly, disabledOnly, minScore, maxScore, sortBy, sortDesc, actions);
@@ -629,6 +700,8 @@ namespace Web.AnalyticsWeb.Controllers
         [RequirePortalPermission(PortalPermission.SeePii)]
         public async Task<IActionResult> ExportLicensedUsers(
             int windowDays = 28,
+            string from = null,
+            string to = null,
             string seatLicenceTypeIds = null,
             string search = null,
             string bands = null,
@@ -653,8 +726,9 @@ namespace Web.AnalyticsWeb.Controllers
             // ExportWaitBudget, because waiting past the platform limit produced a 500 and a corrupt
             // download instead of an answer.
             var analysis = await TryGetScopedRowsAsync(
-                windowDays, seatLicenceTypeIds, emailDomain, filter, ExportWaitBudget, cancellationToken);
-            if (analysis == null) return ExportNotReadyResponse(windowDays, seatLicenceTypeIds);
+                windowDays, from, to, seatLicenceTypeIds, emailDomain, filter, ExportWaitBudget, cancellationToken);
+            if (analysis == null) return ExportNotReadyResponse(windowDays, from, to, seatLicenceTypeIds);
+            if (analysis.Summary.Options.UsesExplicitDates) return PastRangeListExportHiddenResponse();
 
             var query = BuildLicensedUserQuery(
                 search, bands, department, country, reclaimEligibility, coworkOnly, disabledOnly, minScore, maxScore, sortBy, sortDesc, actions);
@@ -667,7 +741,7 @@ namespace Web.AnalyticsWeb.Controllers
                     CopilotAdoptionExports.LicensedUserColumns(
                         analysis.Summary.FiguresIncomplete,
                         WarningSummary(analysis.Summary))),
-                CsvSerialiser.FileName(ScopedFileNamePrefix("copilot-licensed-users", emailDomain, filter), analysis.Summary.GeneratedUtc),
+                CsvSerialiser.FileName(ScopedFileNamePrefix("copilot-licensed-users", emailDomain, filter, analysis.Summary), analysis.Summary.GeneratedUtc),
                 analysis.Summary.Diagnostics?.RunId);
         }
 
@@ -706,6 +780,8 @@ namespace Web.AnalyticsWeb.Controllers
         [RequirePortalPermission(PortalPermission.SeePii)]
         public async Task<IActionResult> Opportunities(
             int windowDays = 28,
+            string from = null,
+            string to = null,
             string seatLicenceTypeIds = null,
             string search = null,
             string department = null,
@@ -723,8 +799,12 @@ namespace Web.AnalyticsWeb.Controllers
         {
             if (!TryParseUserFilter(userFilter, out var filter, out var filterError)) return InvalidFilter(filterError);
 
-            var analysis = await TryGetScopedRowsAsync(windowDays, seatLicenceTypeIds, emailDomain, filter, cancellationToken);
-            if (analysis == null) return StillBuilding(windowDays, seatLicenceTypeIds);
+            var analysis = await TryGetScopedRowsAsync(windowDays, from, to, seatLicenceTypeIds, emailDomain, filter, cancellationToken);
+            if (analysis == null) return StillBuilding(windowDays, from, to, seatLicenceTypeIds);
+            if (analysis.Summary.Options.UsesExplicitDates)
+            {
+                return PastRangeListHidden();
+            }
 
             var query = BuildOpportunityQuery(
                 search, department, country, recommendedOnly, existingCopilotUsersOnly, minScore, sortBy, sortDesc);
@@ -748,6 +828,8 @@ namespace Web.AnalyticsWeb.Controllers
         [RequirePortalPermission(PortalPermission.SeePii)]
         public async Task<IActionResult> ExportOpportunities(
             int windowDays = 28,
+            string from = null,
+            string to = null,
             string seatLicenceTypeIds = null,
             string search = null,
             string department = null,
@@ -768,8 +850,9 @@ namespace Web.AnalyticsWeb.Controllers
             // ExportWaitBudget, because waiting past the platform limit produced a 500 and a corrupt
             // download instead of an answer.
             var analysis = await TryGetScopedRowsAsync(
-                windowDays, seatLicenceTypeIds, emailDomain, filter, ExportWaitBudget, cancellationToken);
-            if (analysis == null) return ExportNotReadyResponse(windowDays, seatLicenceTypeIds);
+                windowDays, from, to, seatLicenceTypeIds, emailDomain, filter, ExportWaitBudget, cancellationToken);
+            if (analysis == null) return ExportNotReadyResponse(windowDays, from, to, seatLicenceTypeIds);
+            if (analysis.Summary.Options.UsesExplicitDates) return PastRangeListExportHiddenResponse();
 
             var query = BuildOpportunityQuery(
                 search, department, country, recommendedOnly, existingCopilotUsersOnly, minScore, sortBy, sortDesc);
@@ -782,7 +865,7 @@ namespace Web.AnalyticsWeb.Controllers
                     CopilotAdoptionExports.LicenceOpportunityColumns(
                         analysis.Summary.FiguresIncomplete,
                         WarningSummary(analysis.Summary))),
-                CsvSerialiser.FileName(ScopedFileNamePrefix("copilot-licence-opportunities", emailDomain, filter), analysis.Summary.GeneratedUtc),
+                CsvSerialiser.FileName(ScopedFileNamePrefix("copilot-licence-opportunities", emailDomain, filter, analysis.Summary), analysis.Summary.GeneratedUtc),
                 analysis.Summary.Diagnostics?.RunId);
         }
 
@@ -800,6 +883,8 @@ namespace Web.AnalyticsWeb.Controllers
         [RequirePortalPermission(PortalPermission.SeePii)]
         public async Task<IActionResult> Cowork(
             int windowDays = 28,
+            string from = null,
+            string to = null,
             string seatLicenceTypeIds = null,
             string search = null,
             string tiers = null,
@@ -819,8 +904,12 @@ namespace Web.AnalyticsWeb.Controllers
         {
             if (!TryParseUserFilter(userFilter, out var filter, out var filterError)) return InvalidFilter(filterError);
 
-            var analysis = await TryGetScopedRowsAsync(windowDays, seatLicenceTypeIds, emailDomain, filter, cancellationToken);
-            if (analysis == null) return StillBuilding(windowDays, seatLicenceTypeIds);
+            var analysis = await TryGetScopedRowsAsync(windowDays, from, to, seatLicenceTypeIds, emailDomain, filter, cancellationToken);
+            if (analysis == null) return StillBuilding(windowDays, from, to, seatLicenceTypeIds);
+            if (analysis.Summary.Options.UsesExplicitDates)
+            {
+                return PastRangeListHidden();
+            }
 
             var query = BuildCoworkQuery(
                 search, tiers, department, country, recommendedOnly, coworkUsersOnly,
@@ -850,6 +939,8 @@ namespace Web.AnalyticsWeb.Controllers
         [RequirePortalPermission(PortalPermission.SeePii)]
         public async Task<IActionResult> ExportCowork(
             int windowDays = 28,
+            string from = null,
+            string to = null,
             string seatLicenceTypeIds = null,
             string search = null,
             string tiers = null,
@@ -869,8 +960,9 @@ namespace Web.AnalyticsWeb.Controllers
 
             // Exports are <a href> downloads, not fetch() calls - see ExportOpportunities.
             var analysis = await TryGetScopedRowsAsync(
-                windowDays, seatLicenceTypeIds, emailDomain, filter, ExportWaitBudget, cancellationToken);
-            if (analysis == null) return ExportNotReadyResponse(windowDays, seatLicenceTypeIds);
+                windowDays, from, to, seatLicenceTypeIds, emailDomain, filter, ExportWaitBudget, cancellationToken);
+            if (analysis == null) return ExportNotReadyResponse(windowDays, from, to, seatLicenceTypeIds);
+            if (analysis.Summary.Options.UsesExplicitDates) return PastRangeListExportHiddenResponse();
 
             var query = BuildCoworkQuery(
                 search, tiers, department, country, recommendedOnly, coworkUsersOnly,
@@ -880,7 +972,7 @@ namespace Web.AnalyticsWeb.Controllers
 
             return CsvResponse(
                 CsvSerialiser.ToBytes(rows, CopilotAdoptionExports.CoworkReadinessColumns()),
-                CsvSerialiser.FileName(ScopedFileNamePrefix("copilot-cowork-readiness", emailDomain, filter), analysis.Summary.GeneratedUtc),
+                CsvSerialiser.FileName(ScopedFileNamePrefix("copilot-cowork-readiness", emailDomain, filter, analysis.Summary), analysis.Summary.GeneratedUtc),
                 analysis.Summary.Diagnostics?.RunId);
         }
 
@@ -907,11 +999,11 @@ namespace Web.AnalyticsWeb.Controllers
         ///
         /// <para>The optional time-saved parameters carry the assumptions the reader entered in the
         /// portal. <c>copilotMinutesSavedPerMeeting</c>, <c>copilotMinutesSavedPerMailThread</c> and
-        /// <c>copilotMinutesSavedPerDocument</c> restate the licence estimate;
-        /// <c>coworkMinutesSavedPerTask</c> and, for each kind of work Cowork could take on, its share and
-        /// minutes under the option's own name (<c>coworkOrganiseMeetingsShare</c>,
-        /// <c>coworkOrganiseMeetingsMinutes</c> and so on - see <see cref="CoworkActivities"/>) restate the
-        /// Cowork estimate; <c>coworkEstimateLowerBoundRatio</c> applies to both. The per-activity figures
+        /// <c>copilotMinutesSavedPerDocument</c> restate the licence estimate; for each kind of work Cowork
+        /// could take on, its share and minutes under the option's own name
+        /// (<c>coworkOrganiseMeetingsShare</c>, <c>coworkOrganiseMeetingsMinutes</c> and so on - see
+        /// <see cref="CoworkActivities"/>) restate the Cowork estimate; <c>coworkEstimateLowerBoundRatio</c>
+        /// applies to both. The per-activity figures
         /// are read from the query string by those names rather than bound one parameter each, so a kind
         /// of work added to the catalogue needs no change here. Those figures live in the browser only, so
         /// the export has to be told them or a customised page would download a workbook modelling
@@ -923,13 +1015,18 @@ namespace Web.AnalyticsWeb.Controllers
         [Route("export/workbook")]
         public async Task<IActionResult> ExportWorkbook(
             int windowDays = 28,
+            string from = null,
+            string to = null,
             string seatLicenceTypeIds = null,
             string emailDomain = null,
             string copilotMinutesSavedPerMeeting = null,
             string copilotMinutesSavedPerMailThread = null,
             string copilotMinutesSavedPerDocument = null,
             string coworkEstimateLowerBoundRatio = null,
-            string coworkMinutesSavedPerTask = null,
+            string copilotSeatOutlookMinutesPerAction = null,
+            string copilotSeatOfficeMinutesPerAction = null,
+            string copilotSeatMeetingMinutesPerAction = null,
+            string copilotSeatUncreditedMinutesPerAction = null,
             string userFilter = null,
             CancellationToken cancellationToken = default(CancellationToken))
         {
@@ -942,22 +1039,27 @@ namespace Web.AnalyticsWeb.Controllers
             // ExportWaitBudget, because waiting past the platform limit produced a 500 and a corrupt
             // download instead of an answer.
             var analysis = await TryGetScopedSummaryAsync(
-                windowDays, seatLicenceTypeIds, emailDomain, filter, ExportWaitBudget, cancellationToken);
-            if (analysis == null) return ExportNotReadyResponse(windowDays, seatLicenceTypeIds);
+                windowDays, from, to, seatLicenceTypeIds, emailDomain, filter, ExportWaitBudget, cancellationToken);
+            if (analysis == null) return ExportNotReadyResponse(windowDays, from, to, seatLicenceTypeIds);
 
             var timeSaved = ParseTimeSavedOverrides(
                 copilotMinutesSavedPerMeeting,
                 copilotMinutesSavedPerMailThread,
                 copilotMinutesSavedPerDocument,
                 coworkEstimateLowerBoundRatio,
-                coworkMinutesSavedPerTask,
+                copilotSeatOutlookMinutesPerAction,
+                copilotSeatOfficeMinutesPerAction,
+                copilotSeatMeetingMinutesPerAction,
+                copilotSeatUncreditedMinutesPerAction,
                 QueryNameValuePairs(Request));
 
             byte[] bytes;
             try
             {
                 bytes = CopilotAdoptionWorkbook.Build(
-                    analysis, timeSaved.Any ? timeSaved : null, includeIndividualData: CanSeeIndividuals());
+                    analysis,
+                    timeSaved.Any ? timeSaved : null,
+                    includeIndividualData: CanSeeIndividuals() && !analysis.Summary.Options.UsesExplicitDates);
             }
             catch (Exception ex)
             {
@@ -1025,7 +1127,29 @@ namespace Web.AnalyticsWeb.Controllers
             string minutesPerMailThread,
             string minutesPerDocument,
             string lowerBoundRatio,
-            string minutesPerTask = null,
+            IEnumerable<KeyValuePair<string, string>> query)
+        {
+            return ParseTimeSavedOverrides(
+                minutesPerMeeting,
+                minutesPerMailThread,
+                minutesPerDocument,
+                lowerBoundRatio,
+                null,
+                null,
+                null,
+                null,
+                query);
+        }
+
+        internal static TimeSavedOverrides ParseTimeSavedOverrides(
+            string minutesPerMeeting,
+            string minutesPerMailThread,
+            string minutesPerDocument,
+            string lowerBoundRatio,
+            string seatOutlookMinutesPerAction = null,
+            string seatOfficeMinutesPerAction = null,
+            string seatMeetingMinutesPerAction = null,
+            string seatUncreditedMinutesPerAction = null,
             IEnumerable<KeyValuePair<string, string>> query = null)
         {
             var overrides = new TimeSavedOverrides
@@ -1034,7 +1158,10 @@ namespace Web.AnalyticsWeb.Controllers
                 MinutesSavedPerMailThread = ParseInvariantDouble(minutesPerMailThread),
                 MinutesSavedPerDocument = ParseInvariantDouble(minutesPerDocument),
                 LowerBoundRatio = ParseInvariantDouble(lowerBoundRatio),
-                MinutesSavedPerTask = ParseInvariantDouble(minutesPerTask),
+                SeatOutlookMinutesPerAction = ParseInvariantDouble(seatOutlookMinutesPerAction),
+                SeatOfficeMinutesPerAction = ParseInvariantDouble(seatOfficeMinutesPerAction),
+                SeatMeetingMinutesPerAction = ParseInvariantDouble(seatMeetingMinutesPerAction),
+                SeatUncreditedMinutesPerAction = ParseInvariantDouble(seatUncreditedMinutesPerAction),
             };
 
             if (query == null) return overrides;
@@ -1076,15 +1203,7 @@ namespace Web.AnalyticsWeb.Controllers
         /// </summary>
         internal static int NormaliseWindowDays(int windowDays)
         {
-            if (AllowedWindowDays.Contains(windowDays))
-            {
-                return windowDays;
-            }
-
-            return AllowedWindowDays
-                .OrderBy(allowed => Math.Abs(allowed - windowDays))
-                .ThenBy(allowed => allowed)
-                .First();
+            return CopilotAdoptionDateRange.NormaliseWindowDays(windowDays);
         }
 
         /// <summary>
@@ -1272,12 +1391,20 @@ namespace Web.AnalyticsWeb.Controllers
         /// user filter is too long to spell out in a file name, but saying that there was one keeps the
         /// file from being mistaken for the whole list.
         /// </remarks>
-        private static string ScopedFileNamePrefix(string prefix, string emailDomain, UserFilterExpression userFilter = null)
+        private static string ScopedFileNamePrefix(
+            string prefix, string emailDomain, UserFilterExpression userFilter = null, CopilotAdoptionSummary summary = null)
         {
             var scope = CopilotAdoptionEmailDomain.Normalise(emailDomain);
             var name = string.IsNullOrWhiteSpace(scope) ? prefix : prefix + "-" + scope;
+            if (summary?.Options?.UsesExplicitDates == true)
+            {
+                name += "-" + summary.FromUtc.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)
+                    + "-to-" + summary.ToUtc.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+            }
 
-            return userFilter != null && !userFilter.IsEmpty ? name + "-filtered" : name;
+            // The administrator's global filter narrows the file exactly as the reader's own filter does.
+            var filtered = (userFilter != null && !userFilter.IsEmpty) || summary?.GlobalFilter != null;
+            return filtered ? name + "-filtered" : name;
         }
 
         private static List<string> Distinct(IEnumerable<string> values)        {

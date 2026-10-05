@@ -373,6 +373,27 @@ CREATE TABLE [dbo].[user_org_import_changes] (
 );
 
 
+-- --------------------------------------------------
+-- The portal's global report filter.
+--
+-- The conditions a portal administrator sets that every insights report applies on top of a reader's
+-- own filters. At most one row. See migration 202610011330001_PortalGlobalFilter.
+--
+-- nvarchar: the definition carries department names and other text from a customer tenant.
+-- --------------------------------------------------
+
+-- Creating table 'portal_global_filters'
+CREATE TABLE [dbo].[portal_global_filters] (
+    [id] int NOT NULL,
+    [filter_json] nvarchar(max) NOT NULL CONSTRAINT [DF_portal_global_filters_filter_json] DEFAULT (N''),
+    [revision] int NOT NULL CONSTRAINT [DF_portal_global_filters_revision] DEFAULT (1),
+    [modified_utc] datetime2(7) NOT NULL CONSTRAINT [DF_portal_global_filters_modified_utc] DEFAULT SYSUTCDATETIME(),
+    [modified_by] nvarchar(256) NULL,
+    CONSTRAINT [PK_portal_global_filters] PRIMARY KEY CLUSTERED ([id] ASC),
+    CONSTRAINT [CK_portal_global_filters_single_row] CHECK ([id] = 1)
+);
+
+
 
 -- --------------------------------------------------
 -- Creating all PRIMARY KEY constraints

@@ -96,9 +96,14 @@ namespace Tests.UnitTests
         // digest_run), because comparison over time was taken out of the product - two exported Excel
         // workbooks are diffed instead. It is raw-SQL and reuses the IndexPlatformUserActivityLogDate
         // snapshot verbatim: none of those tables was ever exposed as a DbSet, so removing them does not
-        // touch the entity model. As the chain head its snapshot is the one EF compares the live entity
-        // model against.
-        private const string LatestId = "202609221200001_UserOrganisations";
+        // touch the entity model.
+        // UserOrganisations then adds the configurable user-organisation tables, raw-SQL and additive.
+        // PortalGlobalFilter then adds dbo.portal_global_filters, the administrator's global report filter.
+        // It is raw-SQL, additive, and reuses the predecessor snapshot verbatim.
+        // LicenceHistory then adds licence assignment-history, completed-refresh and per-refresh
+        // seat-count tables. It is raw-SQL, additive, and reuses the predecessor snapshot verbatim. As the
+        // chain head its snapshot is the one EF compares the live entity model against.
+        private const string LatestId = "202610021200001_LicenceHistory";
         private const string IndexName = "IX_urls_full_url";
 
         // "Καλημέρα κόσμε" - the classic Greek charset sample (synthetic; no customer data).

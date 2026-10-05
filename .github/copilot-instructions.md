@@ -55,6 +55,19 @@ That file is the source of truth for:
 
 Always read it before making changes under `src/AnalyticsEngine/`.
 
+## External APIs: prove they exist before coding against them
+
+PR #588 shipped an import for a Microsoft Graph function, `getMicrosoft365CopilotCoworkUsageUserDetail`, that does not exist. Its name was made up by analogy with the real `getMicrosoft365CopilotUsageUserDetail`, and every test passed because the tests used synthetic fixtures. #632 then classified Graph's rejection as "not available on this tenant", which hid the problem. Two stable releases went on to describe fixes and symptoms that no tenant could have seen. The incident is #692.
+
+- **Prove an external API exists before coding against it.**
+  - For a new Microsoft Graph function, entity or property, find its exact name in `https://graph.microsoft.com/v1.0/$metadata` or `https://graph.microsoft.com/beta/$metadata` (no auth needed), or on an official Microsoft Learn API reference page. **Cite that evidence in the PR body.** Any other external API needs its official reference page cited in the same way.
+  - A report documented in an admin centre is not an API. Having a page and a CSV export in the Microsoft 365 admin centre does not mean Graph serves that report.
+  - Unit tests with synthetic fixtures cannot prove an endpoint exists. They only prove that our code handles the payload we imagined.
+- **Graph's `400 BadRequest` "Resource not found for the segment '<name>'" means our URL names something that isn't in Graph's schema.** That's a bug in our request. Graph returns it for any name that isn't in its schema, including an obviously made-up one, and returns it before it checks permissions (reproduced in #692). Never classify it as "not available on this tenant", "not licensed" or "not rolled out"; let it fail loudly.
+- **Release notes describe only symptoms that were observed or reproduced.** If a fix comes only from reading code or from tests, say so. Don't promise admins that data will appear unless an end-to-end run has shown it.
+
+The `release-manager` and `release-critic` agents apply the same three checks to every new external call in a release diff.
+
 ## Git workflow: never update `dev` or `main` unasked
 - **Never push to, merge into or otherwise update `dev` or `main` unless the user asks for that specific push or merge.** That covers a direct `git push`, `gh pr merge`, and anything else that moves either branch. Permission for one does not carry over to the next, so ask again each time. Never force-push either branch.
 - **Every other branch is yours: commit and push whenever you like, without asking.** Checkpoint work, get CI running, open or update a PR. Work reaches `dev` through a pull request (below), and reaches `main` only through the release PR.

@@ -11,7 +11,7 @@ import type {
 import { AdoptionBand, AgentHealth } from '../../types/copilotAdoption';
 import { formatCount } from '../shared/KpiGrid';
 import { serverPlaceholderText } from '../shared/serverPlaceholder';
-import { activeLocale, EN_CATALOG, formatNumber, plural, type TFunction, type TranslationKey, type TranslationValues } from '../../i18n';
+import { activeLocale, EN_CATALOG, formatDateParts, formatNumber, plural, type TFunction, type TranslationKey, type TranslationValues } from '../../i18n';
 
 function catalogText(t: TFunction, key: TranslationKey, fallback: string, values?: TranslationValues): string {
   if (activeLocale().startsWith('en')) return fallback;
@@ -35,10 +35,14 @@ export const COPILOT_ADOPTION_WARNING_KEYS = {
   LicenceCandidatesAuditOnly: 'licenceCandidatesAuditOnly',
   CoworkReadinessNoSources: 'coworkReadinessNoSources',
   CoworkM365UsageMissing: 'coworkM365UsageMissing',
-  CoworkUsageReportMissing: 'coworkUsageReportMissing',
   CoworkAuditMissing: 'coworkAuditMissing',
   UsageReportSourcedUsers: 'usageReportSourcedUsers',
   UsageReportWindowMismatch: 'usageReportWindowMismatch',
+  LicenceHistoryUnavailableForRange: 'licenceHistoryUnavailableForRange',
+  LicenceHistoryPartialForRange: 'licenceHistoryPartialForRange',
+  PastRangeNamedListsHidden: 'pastRangeNamedListsHidden',
+  CurrentOrgDataForPastRange: 'currentOrgDataForPastRange',
+  AgentInventoryAsOfNow: 'agentInventoryAsOfNow',
   CoworkEligibilityUnknown: 'coworkEligibilityUnknown',
   PurchasedSeatsUnknown: 'purchasedSeatsUnknown',
   SkuSeatMismatch: 'skuSeatMismatch',
@@ -53,7 +57,6 @@ export const COPILOT_ADOPTION_WARNING_KEYS = {
 const COWORK_WARNING_KEYS = new Set<string>([
   COPILOT_ADOPTION_WARNING_KEYS.CoworkReadinessNoSources,
   COPILOT_ADOPTION_WARNING_KEYS.CoworkM365UsageMissing,
-  COPILOT_ADOPTION_WARNING_KEYS.CoworkUsageReportMissing,
   COPILOT_ADOPTION_WARNING_KEYS.CoworkAuditMissing,
   COPILOT_ADOPTION_WARNING_KEYS.CoworkEligibilityUnknown,
   COPILOT_ADOPTION_WARNING_KEYS.CoworkFluencyMissingAll,
@@ -72,10 +75,8 @@ const OPPORTUNITY_WARNING_KEYS = new Set<string>([
 
 // Every query whose failure the Cowork tab must show. serverAuthoredText.test.ts fails when the service
 // gains a CopilotAdoptionQueries.Cowork* query that is missing here - the English 'cowork' substring this
-// replaced caught those by accident, including the usage-report date and period probes.
+// replaced caught those by accident.
 const COWORK_WARNING_QUERIES = new Set<string>([
-  'CoworkReportDate',
-  'CoworkReportPeriod',
   'CoworkAgentLookup',
   'CoworkReadiness',
   'CoworkCreditProbe',
@@ -88,6 +89,14 @@ const OPPORTUNITY_WARNING_QUERIES = new Set<string>(['LicenceOpportunities']);
 function warningValues(values?: CopilotAdoptionWarningDetail['values']): TranslationValues {
   const mapped: TranslationValues = {};
   Object.entries(values ?? {}).forEach(([key, value]) => {
+    if (key === 'historyStart') {
+      const date = new Date(String(value ?? ''));
+      mapped[key] = Number.isNaN(date.getTime())
+        ? String(value ?? '')
+        : formatDateParts(date, { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' });
+      return;
+    }
+
     mapped[key] = typeof value === 'number'
       ? formatNumber(value, key === 'percentage'
         ? { minimumFractionDigits: 1, maximumFractionDigits: 1, useGrouping: true }
@@ -163,12 +172,12 @@ export const INCOMPLETE_DATASET_KEYS: readonly TranslationKey[] = [
   'copilotAdoption.server.dataset.copilotInteractionsAwaitingBackfill',
   'copilotAdoption.server.dataset.copilotUsageReport',
   'copilotAdoption.server.dataset.copilotUsageReportSnapshotPeriod',
-  'copilotAdoption.server.dataset.coworkUsageReport',
-  'copilotAdoption.server.dataset.coworkUsageReportSnapshotPeriod',
   'copilotAdoption.server.dataset.m365UsageReports',
   'copilotAdoption.server.dataset.copilotUsageReportAnonymisationCheck',
+  'copilotAdoption.server.dataset.licenceHistoryAvailability',
   'copilotAdoption.server.dataset.copilotLicenceAssignments',
   'copilotAdoption.server.dataset.licensedUserDetail',
+  'copilotAdoption.server.dataset.seatHolderTimeSavedInputs',
   'copilotAdoption.server.dataset.weeklyCopilotAuditCoverage',
   'copilotAdoption.server.dataset.unlicensedCopilotUsers',
   'copilotAdoption.server.dataset.licenceOpportunities',
@@ -512,33 +521,6 @@ function countText(value: number): string {
   return formatNumber(value);
 }
 
-function coworkReportHasSignal(row: CoworkReadinessRow): boolean {
-  return (row.coworkReportTotalTasks ?? 0) > 0 || (row.coworkReportActiveDays ?? 0) > 0;
-}
-
-function coworkReportEvidencePhrase(t: TFunction, row: CoworkReadinessRow): string {
-  const days = row.coworkReportActiveDays ?? 0;
-  if (row.coworkReportTotalTasks !== null) {
-    return t('copilotAdoptionCowork.server.rationale.reportEvidence.tasks', {
-      tasks: countText(row.coworkReportTotalTasks),
-      taskWord: row.coworkReportTotalTasks === 1
-        ? t('copilotAdoptionCowork.server.rationale.task')
-        : t('copilotAdoptionCowork.server.rationale.tasks'),
-      days: countText(days),
-      dayWord: days === 1
-        ? t('copilotAdoptionCowork.server.rationale.day')
-        : t('copilotAdoptionCowork.server.rationale.days'),
-    });
-  }
-
-  return t('copilotAdoptionCowork.server.rationale.reportEvidence.activeDays', {
-    days: countText(days),
-    dayWord: days === 1
-      ? t('copilotAdoptionCowork.server.rationale.day')
-      : t('copilotAdoptionCowork.server.rationale.days'),
-  });
-}
-
 function coworkWorkloadPhrase(t: TFunction, row: CoworkReadinessRow): string {
   const workload: string[] = [];
   if (row.teamsMeetings > 0) {
@@ -585,12 +567,8 @@ export function coworkRationaleText(t: TFunction, row: CoworkReadinessRow, optio
 
   const regularDays = Math.max(1, options.coworkRegularMinActiveDays);
   switch (row.tier) {
+    // Cowork evidence is the Copilot audit log's interactions, never tasks (#692).
     case 'established':
-      if (coworkReportHasSignal(row)) {
-        return t('copilotAdoptionCowork.server.rationale.established.report', {
-          evidence: coworkReportEvidencePhrase(t, row),
-        });
-      }
       return t('copilotAdoptionCowork.server.rationale.established.audit', {
         interactions: countText(row.coworkInteractions),
         interactionWord: row.coworkInteractions === 1
@@ -603,12 +581,6 @@ export function coworkRationaleText(t: TFunction, row: CoworkReadinessRow, optio
       });
 
     case 'trialling':
-      if (coworkReportHasSignal(row)) {
-        return t('copilotAdoptionCowork.server.rationale.trialling.report', {
-          evidence: coworkReportEvidencePhrase(t, row),
-          days: countText(regularDays),
-        });
-      }
       return t('copilotAdoptionCowork.server.rationale.trialling.audit', {
         interactions: countText(row.coworkInteractions),
         interactionWord: row.coworkInteractions === 1

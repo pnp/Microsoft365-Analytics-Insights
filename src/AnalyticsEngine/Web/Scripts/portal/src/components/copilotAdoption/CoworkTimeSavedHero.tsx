@@ -17,7 +17,6 @@ import {
   AssumptionBadge,
   COWORK_ACTIVITY_COLOUR,
   COWORK_ACTIVITY_LABEL,
-  COWORK_OBSERVED_COLOUR,
   CohortPicker,
   EVIDENCE_GREEN,
   ModelledBadge,
@@ -151,7 +150,6 @@ export default function CoworkTimeSavedHero({
   const everyone = shown === 'all';
 
   const figures = {
-    taskMinutes: formatAssumption(assumptions.taskMinutes),
     percent: formatNumber(assumptions.conservativeRatio * 100, { maximumFractionDigits: 1 }),
   };
   const readyUsers = summary.coworkRecommendedForPolicy;
@@ -208,28 +206,15 @@ export default function CoworkTimeSavedHero({
     },
   );
 
-  // Where the time would come from: every kind of work, then the tasks already running - the order
-  // the calculator's rows and the Excel report use, so the three agree part for part.
-  const segments = [
-    ...headline.activities.map((a) => ({
-      key: a.activity as string,
-      label: t(COWORK_ACTIVITY_LABEL[a.activity]),
-      colour: COWORK_ACTIVITY_COLOUR[a.activity],
-      hours: a.displayHours,
-      sharePct: a.sharePct,
-    })),
-    ...(headline.observedUsers > 0
-      ? [
-          {
-            key: 'observed',
-            label: t('copilotAdoptionCowork.timeSaved.activity.observedTasks'),
-            colour: COWORK_OBSERVED_COLOUR,
-            hours: headline.observedDisplayHours,
-            sharePct: headline.observedSharePct,
-          },
-        ]
-      : []),
-  ];
+  // Where the time would come from: every kind of work, in the order the calculator's rows and the
+  // Excel report use, so the three agree part for part.
+  const segments = headline.activities.map((a) => ({
+    key: a.activity as string,
+    label: t(COWORK_ACTIVITY_LABEL[a.activity]),
+    colour: COWORK_ACTIVITY_COLOUR[a.activity],
+    hours: a.displayHours,
+    sharePct: a.sharePct,
+  }));
   const shares = wholeShares(segments.map((s) => s.sharePct));
 
   const breakdown =
@@ -344,11 +329,11 @@ export default function CoworkTimeSavedHero({
       }
       caption={t(
         plural(
-          headline.tasks,
+          headline.projectedTasks,
           'copilotAdoptionCowork.timeSaved.hero.caption.one',
           'copilotAdoptionCowork.timeSaved.hero.caption.other',
         ),
-        { tasks: formatCount(headline.tasks) },
+        { pieces: formatCount(headline.projectedTasks) },
       )}
       notice={
         everyone ? (
@@ -408,23 +393,14 @@ export default function CoworkTimeSavedHero({
               {t('copilotAdoptionCowork.basis.observed')}
             </Badge>
             <Text size={200}>
-              {summary.coworkReportTotalTasks > 0
-                ? t(
-                    plural(
-                      summary.coworkUsers,
-                      'copilotAdoptionCowork.timeSaved.hero.observed.tasks.one',
-                      'copilotAdoptionCowork.timeSaved.hero.observed.tasks.other',
-                    ),
-                    { users: formatCount(summary.coworkUsers), tasks: formatCount(summary.coworkReportTotalTasks) },
-                  )
-                : t(
-                    plural(
-                      summary.coworkUsers,
-                      'copilotAdoptionCowork.timeSaved.hero.observed.users.one',
-                      'copilotAdoptionCowork.timeSaved.hero.observed.users.other',
-                    ),
-                    { users: formatCount(summary.coworkUsers) },
-                  )}
+              {t(
+                plural(
+                  summary.coworkUsers,
+                  'copilotAdoptionCowork.timeSaved.hero.observed.users.one',
+                  'copilotAdoptionCowork.timeSaved.hero.observed.users.other',
+                ),
+                { users: formatCount(summary.coworkUsers) },
+              )}
             </Text>
           </div>
         ) : undefined

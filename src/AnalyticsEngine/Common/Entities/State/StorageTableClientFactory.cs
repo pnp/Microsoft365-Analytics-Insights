@@ -267,6 +267,25 @@ namespace Common.Entities.State
             return Uri.TryCreate($"{scheme}://{account.Trim()}.table.{suffix}", UriKind.Absolute, out var uri) ? uri : null;
         }
 
+        /// <summary>Resolves the Blob service endpoint matching <see cref="GetTableEndpoint"/>.</summary>
+        public static Uri GetBlobEndpoint(string storageConnectionString)
+        {
+            var parts = Parse(storageConnectionString);
+
+            if (parts.TryGetValue("BlobEndpoint", out var explicitEndpoint) && !string.IsNullOrWhiteSpace(explicitEndpoint))
+                return Uri.TryCreate(explicitEndpoint.Trim(), UriKind.Absolute, out var explicitUri) ? explicitUri : null;
+
+            if (!parts.TryGetValue("AccountName", out var account) || string.IsNullOrWhiteSpace(account))
+                return null;
+
+            var suffix = parts.TryGetValue("EndpointSuffix", out var s) && !string.IsNullOrWhiteSpace(s)
+                ? s.Trim() : "core.windows.net";
+            var scheme = parts.TryGetValue("DefaultEndpointsProtocol", out var p) && !string.IsNullOrWhiteSpace(p)
+                ? p.Trim() : "https";
+
+            return Uri.TryCreate($"{scheme}://{account.Trim()}.blob.{suffix}", UriKind.Absolute, out var uri) ? uri : null;
+        }
+
         private static async Task<TableClient> CreateFromConnectionStringAsync(string storageConnectionString, string tableName,
             TableClientOptions clientOptions, CancellationToken cancellationToken, bool synchronous)
         {
@@ -289,7 +308,7 @@ namespace Common.Entities.State
             }
         }
 
-        private static async Task<TokenCredential> CreateRuntimeCredentialAsync(
+        public static async Task<TokenCredential> CreateRuntimeCredentialAsync(
             string tenantId, string clientId, string clientSecret, string keyVaultUrl,
             bool useClientCertificate, ILogger logger)
         {

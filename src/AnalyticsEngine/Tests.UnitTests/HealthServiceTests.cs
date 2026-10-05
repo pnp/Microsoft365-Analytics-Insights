@@ -368,6 +368,41 @@ namespace Tests.UnitTests
             Assert.AreEqual(0, section.CopilotUsageReportErrors.Count);
         }
 
+        /// <summary>
+        /// #692: builds 1833 to 1846 logged an import of a Cowork report Graph never had, and every one of those
+        /// rows carries an error ("Report not available: ..." from #632 onwards). This build never imports it, so
+        /// the last such row is frozen; read as current it would keep the Data section degraded for good.
+        /// </summary>
+        [TestMethod]
+        public async Task Data_ARetiredCoworkReportRow_IsIgnored_AndDegradesNothing()
+        {
+            var current = new DateTime(2026, 6, 1, 0, 0, 0, DateTimeKind.Utc);
+            var source = new FakeHealthDataSource
+            {
+                CountsResult = new DatabaseCountsResult
+                {
+                    CopilotUsageReportImports = new List<CopilotUsageReportImportRow>
+                    {
+                        new CopilotUsageReportImportRow { ReportName = CopilotUsageReportNames.UsageUserDetail, ImportedUtc = current },
+                        new CopilotUsageReportImportRow
+                        {
+                            ReportName = CopilotUsageReportNames.RetiredCoworkUsageUserDetail,
+                            // Later than the live report, so it would also have become the "last import".
+                            ImportedUtc = current.AddDays(1),
+                            Error = "Report not available: BadRequest",
+                        },
+                    }
+                }
+            };
+            var service = Build(source, new InMemoryHealthCache());
+
+            var section = await service.LoadDataAsync();
+
+            Assert.AreEqual(0, section.CopilotUsageReportErrors.Count, "A report this build never imports is not an error to act on.");
+            Assert.AreEqual(current, section.CopilotUsageReportLastImportUtc, "Only reports this build imports date the import.");
+            Assert.AreEqual(HealthStatusNames.Healthy, section.Status);
+        }
+
         #endregion
 
         #region Overview probe row

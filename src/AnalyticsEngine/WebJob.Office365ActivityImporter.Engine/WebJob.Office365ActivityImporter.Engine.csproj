@@ -20,6 +20,8 @@
     <PackageReference Include="Azure.Data.Tables" Version="12.12.0" />
     <PackageReference Include="Azure.Identity" Version="1.21.0" />
     <PackageReference Include="Azure.Messaging.ServiceBus" Version="7.20.2" />
+    <!-- Added by the stable build 1848 forward-port: MessageTracing\MessageTraceBlobUploader.cs (#698). -->
+    <PackageReference Include="Azure.Storage.Blobs" Version="12.29.2" />
     <PackageReference Include="CsvHelper" Version="33.1.0" />
     <PackageReference Include="EntityFramework" Version="6.5.2" />
     <PackageReference Include="Microsoft.Data.SqlClient" Version="6.1.4" />

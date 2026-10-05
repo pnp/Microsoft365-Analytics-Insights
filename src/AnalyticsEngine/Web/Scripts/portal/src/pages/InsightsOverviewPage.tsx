@@ -18,6 +18,7 @@ import type { DataOverviewSection, HealthSummary } from '../types/health';
 import DataKpiTiles from '../components/overview/DataKpiTiles';
 import HealthSnapshot from '../components/overview/HealthSnapshot';
 import WhereToNext from '../components/overview/WhereToNext';
+import GlobalFilterBar from '../components/globalFilter/GlobalFilterBar';
 import Spinner from '../components/Spinner';
 import { usePortalAccess } from '../access';
 
@@ -213,6 +214,8 @@ export default function InsightsOverviewPage() {
       <Text className={styles.lede}>
         {t('overview.page.lede')}
       </Text>
+
+      <GlobalFilterBar note={t('globalFilter.note.overview')} />
 
       <div className={styles.sections}>
         <section>

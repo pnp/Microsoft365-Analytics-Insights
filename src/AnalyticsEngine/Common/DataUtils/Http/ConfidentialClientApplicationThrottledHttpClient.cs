@@ -1,6 +1,7 @@
 using Azure.Core;
 using Microsoft.Extensions.Logging;
 using System;
+using System.Linq;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Threading;
@@ -42,7 +43,36 @@ namespace DataUtils.Http
 
             request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", auth.Token);
 
-            return await base.SendAsync(request, cancellationToken);
+            var response = await base.SendAsync(request, cancellationToken);
+            var tracer = HttpMessageTracing.Current;
+            if (tracer?.IsEnabled == true)
+            {
+                try
+                {
+                    await tracer.TraceAsync(GetTraceSource(request.RequestUri), request, response, cancellationToken).ConfigureAwait(false);
+                }
+                catch (HttpRequestException)
+                {
+                    throw;
+                }
+                catch
+                {
+                }
+            }
+            return response;
+        }
+
+        public static string GetTraceSource(Uri requestUri)
+        {
+            var host = requestUri?.Host ?? string.Empty;
+            if (host.Equals("graph.microsoft.com", StringComparison.OrdinalIgnoreCase)) return "graph";
+            if (host.Equals("manage.office.com", StringComparison.OrdinalIgnoreCase)) return "activity-api";
+            if (host.Equals("management.azure.com", StringComparison.OrdinalIgnoreCase)) return "azure-management";
+
+            var label = new string(host.ToLowerInvariant()
+                .Select(c => char.IsLetterOrDigit(c) || c == '-' ? c : '-')
+                .ToArray()).Trim('-');
+            return string.IsNullOrWhiteSpace(label) ? "http" : label;
         }
     }
 }

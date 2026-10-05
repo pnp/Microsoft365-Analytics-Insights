@@ -5,9 +5,11 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Net;
+using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Web.AnalyticsWeb.Models.UserFilters;
 using Web.AnalyticsWeb.Security;
 
 namespace Web.AnalyticsWeb.Controllers
@@ -41,16 +43,20 @@ namespace Web.AnalyticsWeb.Controllers
 
         private readonly IAgentCostReportStore _store;
         private readonly Func<ImportTaskSettings> _importSettings;
+        private readonly ReportScopeResolver _scopes;
 
         public AgentCostsAPIController()
-            : this(new SqlAgentCostReportStore(), () => new AppConfig().ImportJobSettings)
+            : this(new SqlAgentCostReportStore(), () => new AppConfig().ImportJobSettings, ReportScopeResolver.Default)
         {
         }
 
-        internal AgentCostsAPIController(IAgentCostReportStore store, Func<ImportTaskSettings> importSettings)
+        /// <summary>For tests: no global filter unless <paramref name="scopes"/> supplies one.</summary>
+        internal AgentCostsAPIController(
+            IAgentCostReportStore store, Func<ImportTaskSettings> importSettings, ReportScopeResolver scopes = null)
         {
             _store = store;
             _importSettings = importSettings;
+            _scopes = scopes ?? new ReportScopeResolver(GlobalFilterProviders.None, CachedUserDirectorySource.Default);
         }
 
         /// <summary>
@@ -165,6 +171,11 @@ namespace Web.AnalyticsWeb.Controllers
             => Execute(async () =>
             {
                 var query = BuildQuery(from, to, null, environmentId, null, null, null);
+
+                // The one per-person figure on this page, so the one the administrator's global filter narrows.
+                var scope = await _scopes.ResolveAsync(Request, User, null, CancellationToken.None);
+                if (scope.IsRestricted) query.PeopleScope = scope.Includes;
+
                 return Ok(await _store.GetTopUsersAsync(query, top));
             });
 
@@ -246,6 +257,11 @@ namespace Web.AnalyticsWeb.Controllers
             try
             {
                 return await handler();
+            }
+            catch (HttpResponseException)
+            {
+                // A deliberate response - the global filter could not be evaluated, so the report is refused.
+                throw;
             }
             catch (ArgumentException ex)
             {

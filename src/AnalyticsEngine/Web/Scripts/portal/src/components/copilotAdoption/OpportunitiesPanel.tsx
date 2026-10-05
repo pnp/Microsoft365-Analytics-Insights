@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, Fragment } from 'react';
+import { useEffect, useMemo, useRef, useState, Fragment, type ReactNode } from 'react';
 import {
   makeStyles,
   tokens,
@@ -31,6 +31,7 @@ import type {
   LicenceOpportunityRow,
   OpportunityFilters,
 } from '../../types/copilotAdoption';
+import type { DateRange } from '../../types/licenceActivity';
 import Spinner from '../Spinner';
 import {
   DetailRationale,
@@ -187,14 +188,17 @@ const DEFAULT_FILTERS: OpportunityFilters = {
  */
 export default function OpportunitiesPanel({
   windowDays,
+  dateRange,
   summary,
   options,
   guidanceLinks,
   seatLicenceTypeIds,
   userFilter,
   canSeePii = true,
+  hiddenListNote,
 }: {
   windowDays: number;
+  dateRange?: DateRange | null;
   /** The analysis the licence estimate is published on, and whose assumptions the reader can change. */
   summary: CopilotAdoptionSummary;
   /** The weights and targets actually used, so the score explanation quotes them rather than guessing. */
@@ -212,6 +216,11 @@ export default function OpportunitiesPanel({
    * is replaced by a note and never requested (the server would refuse it).
    */
   canSeePii?: boolean;
+  /**
+   * Shown instead of the candidate list when it is hidden. Defaults to the See PII note; a past date
+   * range passes its own note, because there the list is hidden for a different reason.
+   */
+  hiddenListNote?: ReactNode;
 }) {
   const styles = useStyles();
   const table = useAdoptionTableStyles();
@@ -322,7 +331,7 @@ export default function OpportunitiesPanel({
     setLoading(true);
     setError(null);
 
-    fetchOpportunities(windowDays, filters, page * PAGE_SIZE, PAGE_SIZE, seatLicenceTypeIds, controller.signal)
+    fetchOpportunities(windowDays, filters, page * PAGE_SIZE, PAGE_SIZE, seatLicenceTypeIds, controller.signal, ...(dateRange ? [dateRange] as const : []))
       .then((result) => {
         if (!cancelled) setData(result);
       })
@@ -351,7 +360,7 @@ export default function OpportunitiesPanel({
   };
 
   const exportUrl = useMemo(
-    () => opportunitiesExportUrl(windowDays, filters, seatLicenceTypeIds),
+    () => opportunitiesExportUrl(windowDays, filters, seatLicenceTypeIds, ...(dateRange ? [dateRange] as const : [])),
     [windowDays, filters, seatLicenceTypeIds],
   );
 
@@ -370,7 +379,7 @@ export default function OpportunitiesPanel({
     total: data?.total ?? 0,
     loadedRows: data?.rows.length ?? 0,
     loadPage: (skip, take, signal) =>
-      fetchOpportunities(windowDays, filters, skip, take, seatLicenceTypeIds, signal),
+      fetchOpportunities(windowDays, filters, skip, take, seatLicenceTypeIds, signal, ...(dateRange ? [dateRange] as const : [])),
   });
   const rows = printRows ?? data?.rows ?? [];
 
@@ -389,7 +398,7 @@ export default function OpportunitiesPanel({
     .filter(({ detail }) => isLicenceOpportunityWarning(detail));
   const unlicensedGuidance = (guidanceLinks ?? []).filter((l) => l.actionCode === 'unlicensed');
 
-  const list = !canSeePii ? <PiiHiddenNote /> : (
+  const list = !canSeePii ? (hiddenListNote ?? <PiiHiddenNote />) : (
     <Card>
       {/* Chrome: nothing here can be used on paper. What it is set to is printed below instead. */}
       <div className={styles.filters} data-print="hide">

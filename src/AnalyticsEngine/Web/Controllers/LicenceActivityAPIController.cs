@@ -12,6 +12,7 @@ using System.Threading.Tasks;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Web.AnalyticsWeb.Models.LicenceActivity;
+using Web.AnalyticsWeb.Models.UserFilters;
 using Web.AnalyticsWeb.Security;
 
 namespace Web.AnalyticsWeb.Controllers
@@ -34,17 +35,21 @@ namespace Web.AnalyticsWeb.Controllers
         private readonly Func<LicenceActivityRequestContext> _context;
         private readonly LicenceActivitySnapshotCache<LicenceActivityOverview> _overviews;
         private readonly LicenceActivitySnapshotCache<LicenceActivityUsers> _users;
+        private readonly ReportScopeResolver _scopes;
 
-        public LicenceActivityAPIController() : this(CreateContext, OverviewCache, UsersCache) { }
+        public LicenceActivityAPIController() : this(CreateContext, OverviewCache, UsersCache, ReportScopeResolver.Default) { }
 
+        /// <summary>For tests: no global filter unless <paramref name="scopes"/> supplies one.</summary>
         internal LicenceActivityAPIController(
             Func<LicenceActivityRequestContext> context,
             LicenceActivitySnapshotCache<LicenceActivityOverview> overviews,
-            LicenceActivitySnapshotCache<LicenceActivityUsers> users)
+            LicenceActivitySnapshotCache<LicenceActivityUsers> users,
+            ReportScopeResolver scopes = null)
         {
             _context = context;
             _overviews = overviews;
             _users = users;
+            _scopes = scopes ?? new ReportScopeResolver(GlobalFilterProviders.None, CachedUserDirectorySource.Default);
         }
 
         [HttpGet, Route("availability")]
@@ -67,6 +72,13 @@ namespace Web.AnalyticsWeb.Controllers
                 var context = _context();
                 var query = LicenceActivityQuery.Create(from, to, context.Sources.NowUtc, departmentId, countryId);
                 if (!context.Sources.UserMetadata) return MissingMetadata();
+
+                // The administrator's global filter narrows every figure - and is part of the cache key, so
+                // two readers it treats differently never share an overview. Keyed on the hash of the people it
+                // admits, not on when the directory was read, so a re-read that changes nobody keeps the figures.
+                var scope = await _scopes.ResolveAsync(Request, User, null, cancellationToken).ConfigureAwait(false);
+                if (scope.IsRestricted) query = query.WithPeopleScope(scope.Includes, scope.Sql.Key);
+
                 var task = _overviews.GetAsync(context.Scope, query.CacheKey(), async (diagnostics, lifetime) =>
                 {
                     var result = await context.Store.LoadOverviewAsync(query, context.Sources, diagnostics, lifetime).ConfigureAwait(false);
@@ -92,6 +104,7 @@ namespace Web.AnalyticsWeb.Controllers
                 var context = _context();
                 if (!context.Sources.UserMetadata) return MissingMetadata();
                 var overview = _overviews.Find(context.Scope, overviewId);
+                await RequireSamePeopleScopeAsync(overview, cancellationToken).ConfigureAwait(false);
                 if (!overview.Licences.Any(sku => sku.LicenceTypeId == licenceTypeId))
                     return Reply(HttpStatusCode.NotFound, Error("licenceNotOnScreen", "That licence is not part of the figures currently on screen. Refresh the report and try again."));
                 var query = overview.Query.ForUsers(licenceTypeId, workload, search, sort, direction, top, page, pageSize, context.Sources.NowUtc);
@@ -108,29 +121,49 @@ namespace Web.AnalyticsWeb.Controllers
 
         [HttpGet, Route("export")]
         public Task<IActionResult> Export(string overviewId, string usersId = null) =>
-            ExecuteAsync(() =>
+            ExecuteAsync(async () =>
             {
                 // The totals-only workbook is for everyone. Asking for the people as well is asking for
                 // exactly what api/LicenceActivity/users refuses, so it is refused the same way - checked
                 // on every export rather than trusted from when the user list was loaded, so a snapshot
                 // taken while the permission was held cannot be exported after it is withdrawn.
                 if (usersId != null && !PortalAccess.Evaluate(Request, User).SeePii)
-                    return Task.FromResult(PortalPermissionDenied.Result(Request, PortalPermission.SeePii));
+                    return PortalPermissionDenied.Result(Request, PortalPermission.SeePii);
                 var context = _context();
-                if (!context.Sources.UserMetadata) return Task.FromResult(MissingMetadata());
+                if (!context.Sources.UserMetadata) return MissingMetadata();
                 var overview = _overviews.Find(context.Scope, overviewId);
+                // Likewise the people scope: figures prepared for someone the global filter treats differently
+                // - or before it changed - are not exported to this reader.
+                var scope = await RequireSamePeopleScopeAsync(overview, CancellationToken.None).ConfigureAwait(false);
                 var users = usersId == null ? null : _users.Find(context.Scope, usersId);
                 if (users != null && users.OverviewId != overviewId)
-                    return Task.FromResult(Reply(HttpStatusCode.Conflict, Error("summaryUsersMismatch", "The summary and the user list are no longer from the same set of figures. Refresh the report before exporting.")));
+                    return Reply(HttpStatusCode.Conflict, Error("summaryUsersMismatch", "The summary and the user list are no longer from the same set of figures. Refresh the report before exporting."));
                 Response.Headers.CacheControl = "no-store, private";
 
-                return Task.FromResult<IActionResult>(new FileContentResult(
-                    LicenceActivityWorkbook.Build(overview, users),
+                // The filter is described for this reader, not taken from the cached overview: it may have been
+                // built for someone allowed to see the sign-in names in it.
+                return new FileContentResult(
+                    LicenceActivityWorkbook.Build(overview, users, scope.Global?.DescribeInEnglish()),
                     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
                 {
                     FileDownloadName = "licence-activity-" + overview.GeneratedUtc.ToString("yyyy-MM-dd") + ".xlsx",
-                });
+                };
             });
+
+        /// <summary>
+        /// Refuses figures held for a different people scope from the one that applies to this request now -
+        /// prepared for a reader the global filter treats differently, or before the filter or the directory
+        /// changed who it admits. Answered as expired figures, which the page already handles by refreshing the
+        /// report. Returns the scope that applies now.
+        /// </summary>
+        private async Task<ReportScope> RequireSamePeopleScopeAsync(LicenceActivityOverview overview, CancellationToken cancellationToken)
+        {
+            var scope = await _scopes.ResolveAsync(Request, User, null, cancellationToken).ConfigureAwait(false);
+            var current = scope.IsRestricted ? scope.Sql.Key : null;
+            if (!string.Equals(overview?.Query?.PeopleScopeKey, current, StringComparison.Ordinal))
+                throw new LicenceActivityExpiredException();
+            return scope;
+        }
 
         private async Task<IActionResult> ExecuteAsync(Func<Task<IActionResult>> action)
         {
