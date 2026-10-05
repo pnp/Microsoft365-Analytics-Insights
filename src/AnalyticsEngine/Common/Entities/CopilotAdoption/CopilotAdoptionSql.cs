@@ -719,7 +719,7 @@ namespace Common.Entities.CopilotAdoption
         /// <see cref="CopilotAdoptionScoring"/> exists to prevent.</para>
         ///
         /// <para>The Microsoft 365 workload figures are read across the whole window and reduced to a
-        /// per-active-day average by <see cref="PerActiveDay"/>, for the same correctness reason as
+        /// per-active-day average by <see cref="RoundedPerDay"/>, for the same correctness reason as
         /// <see cref="LicenceOpportunitiesSql"/>: these are Graph's <i>daily</i> user-detail reports, so
         /// seeking a single date would make the answer "whoever happened to be working last Tuesday".</para>
         ///
@@ -855,7 +855,7 @@ namespace Common.Entities.CopilotAdoption
                 //
                 // Each workload is two CTEs: *Totals aggregates - the window's sums and the user's active
                 // days, each computed once - and *Usage divides them. The coordination-load figures are
-                // the same per-active-day averages, rounded, that PerActiveDay produces elsewhere; the
+                // the same per-active-day averages, rounded, that LicenceOpportunitiesSql produces; the
                 // Cowork estimate's volumes (CoworkActivities) are the same division unrounded, derived
                 // from those sums wherever it can be. That matters because COUNT(DISTINCT) makes every
                 // SUM here ride a two-stage aggregate over one row per user per day, and measured at
@@ -1207,14 +1207,24 @@ namespace Common.Entities.CopilotAdoption
 
             if (includeM365Usage)
             {
+                // Graph's daily user-detail reports: one row per user per day they did something, so a
+                // single [date] only ever sees that day's active users. Read the whole window and reduce
+                // to a per-active-day average, which is the unit the opportunity targets are set in.
+                //
+                // Each workload is two CTEs, exactly as in CoworkReadinessSql: *Totals aggregates - the
+                // window's sums and the user's active days, each computed once - and *Usage divides them.
+                // The opportunity figures are the rounded averages (RoundedPerDay rounds precisely as
+                // PerActiveDay did, so no score moves); the Cowork estimate for people without a seat
+                // takes the same division unrounded. That costs two extra SUMs - meetings organised, and
+                // the posts and replies channel messages already contain - and no extra scan.
                 ctes.Add(
-                    "-- Graph's daily user-detail reports: one row per user per day they did something, so a\r\n" +
-                    "-- single [date] only ever sees that day's active users. Read the whole window and reduce\r\n" +
-                    "-- to a per-active-day average, which is the unit the opportunity targets are set in.\r\n" +
-                    "TeamsUsage AS (\r\n" +
+                    "TeamsTotals AS (\r\n" +
                     "    SELECT t.user_id AS user_id,\r\n" +
-                    "           " + PerActiveDay("t.private_chat_count + t.team_chat_count + t.post_messages + t.reply_messages", "t.[date]") + " AS Messages,\r\n" +
-                    "           " + PerActiveDay("t.meetings_attended_count + t.meetings_organized_count", "t.[date]") + " AS Meetings,\r\n" +
+                    "           COUNT(DISTINCT CAST(t.[date] AS date)) AS ActiveDays,\r\n" +
+                    "           SUM(CAST(t.private_chat_count + t.team_chat_count + t.post_messages + t.reply_messages AS float)) AS MessagesTotal,\r\n" +
+                    "           SUM(CAST(t.meetings_attended_count + t.meetings_organized_count AS float)) AS MeetingsTotal,\r\n" +
+                    "           SUM(CAST(t.meetings_organized_count AS float)) AS MeetingsOrganisedTotal,\r\n" +
+                    "           SUM(CAST(t.post_messages + t.reply_messages AS float)) AS PostsAndRepliesTotal,\r\n" +
                     "           MAX(t.last_activity_date) AS LastActivity\r\n" +
                     "    FROM dbo.teams_user_activity_log AS t\r\n" +
                     "    WHERE t.[date] >= @m365From AND t.[date] < @m365ToExclusive\r\n" +
@@ -1222,12 +1232,25 @@ namespace Common.Entities.CopilotAdoption
                     ")");
 
                 ctes.Add(
-                    "MailUsage AS (\r\n" +
+                    // Channel messages (team_chat_count) already include the posts and replies Microsoft
+                    // also reports on their own, so chat plus channel is the total less those.
+                    "TeamsUsage AS (\r\n" +
+                    "    SELECT tt.user_id AS user_id,\r\n" +
+                    "           " + RoundedPerDay("tt.MessagesTotal", "tt.ActiveDays") + " AS Messages,\r\n" +
+                    "           " + RoundedPerDay("tt.MeetingsTotal", "tt.ActiveDays") + " AS Meetings,\r\n" +
+                    "           tt.MeetingsOrganisedTotal / NULLIF(tt.ActiveDays, 0) AS MeetingsOrganised,\r\n" +
+                    "           (tt.MeetingsTotal - tt.MeetingsOrganisedTotal) / NULLIF(tt.ActiveDays, 0) AS MeetingsAttended,\r\n" +
+                    "           (tt.MessagesTotal - tt.PostsAndRepliesTotal) / NULLIF(tt.ActiveDays, 0) AS ChatAndChannelMessages,\r\n" +
+                    "           tt.LastActivity AS LastActivity\r\n" +
+                    "    FROM TeamsTotals AS tt\r\n" +
+                    ")");
+
+                ctes.Add(
+                    "MailTotals AS (\r\n" +
                     "    SELECT o.user_id AS user_id,\r\n" +
-                    // Named EmailsSent/EmailsRead, not Sent/Read: READ is a reserved word in T-SQL and
-                    // an unbracketed alias produces a syntax error the moment it is referenced.
-                    "           " + PerActiveDay("o.email_send_count", "o.[date]") + " AS EmailsSent,\r\n" +
-                    "           " + PerActiveDay("o.email_read_count", "o.[date]") + " AS EmailsRead,\r\n" +
+                    "           COUNT(DISTINCT CAST(o.[date] AS date)) AS ActiveDays,\r\n" +
+                    "           SUM(CAST(o.email_send_count AS float)) AS SentTotal,\r\n" +
+                    "           SUM(CAST(o.email_read_count AS float)) AS ReadTotal,\r\n" +
                     "           MAX(o.last_activity_date) AS LastActivity\r\n" +
                     "    FROM dbo.outlook_user_activity_log AS o\r\n" +
                     "    WHERE o.[date] >= @m365From AND o.[date] < @m365ToExclusive\r\n" +
@@ -1235,11 +1258,24 @@ namespace Common.Entities.CopilotAdoption
                     ")");
 
                 ctes.Add(
+                    "MailUsage AS (\r\n" +
+                    "    SELECT mt.user_id AS user_id,\r\n" +
+                    // Named EmailsSent/EmailsRead, not Sent/Read: READ is a reserved word in T-SQL and
+                    // an unbracketed alias produces a syntax error the moment it is referenced.
+                    "           " + RoundedPerDay("mt.SentTotal", "mt.ActiveDays") + " AS EmailsSent,\r\n" +
+                    "           " + RoundedPerDay("mt.ReadTotal", "mt.ActiveDays") + " AS EmailsRead,\r\n" +
+                    "           mt.SentTotal / NULLIF(mt.ActiveDays, 0) AS EmailsSentExact,\r\n" +
+                    "           mt.LastActivity AS LastActivity\r\n" +
+                    "    FROM MailTotals AS mt\r\n" +
+                    ")");
+
+                ctes.Add(
                     "-- SharePoint and OneDrive are one signal (\"works with documents\"), so they are\r\n" +
                     "-- summed rather than shown as two weak ones. A day the user touched both counts once.\r\n" +
-                    "FileUsage AS (\r\n" +
+                    "FileTotals AS (\r\n" +
                     "    SELECT f.user_id AS user_id,\r\n" +
-                    "           " + PerActiveDay("f.viewed_or_edited", "f.[date]") + " AS ViewedOrEdited,\r\n" +
+                    "           COUNT(DISTINCT CAST(f.[date] AS date)) AS ActiveDays,\r\n" +
+                    "           SUM(CAST(f.viewed_or_edited AS float)) AS ViewedOrEditedTotal,\r\n" +
                     "           MAX(f.last_activity_date) AS LastActivity\r\n" +
                     "    FROM (\r\n" +
                     "        SELECT sp.user_id, sp.[date], sp.viewed_or_edited, sp.last_activity_date\r\n" +
@@ -1251,6 +1287,15 @@ namespace Common.Entities.CopilotAdoption
                     "        WHERE od.[date] >= @m365From AND od.[date] < @m365ToExclusive\r\n" +
                     "    ) AS f\r\n" +
                     "    GROUP BY f.user_id\r\n" +
+                    ")");
+
+                ctes.Add(
+                    "FileUsage AS (\r\n" +
+                    "    SELECT ft.user_id AS user_id,\r\n" +
+                    "           " + RoundedPerDay("ft.ViewedOrEditedTotal", "ft.ActiveDays") + " AS ViewedOrEdited,\r\n" +
+                    "           ft.ViewedOrEditedTotal / NULLIF(ft.ActiveDays, 0) AS ViewedOrEditedExact,\r\n" +
+                    "           ft.LastActivity AS LastActivity\r\n" +
+                    "    FROM FileTotals AS ft\r\n" +
                     ")");
             }
 
@@ -1283,13 +1328,23 @@ namespace Common.Entities.CopilotAdoption
                   "       CAST(ISNULL(mail.EmailsSent, 0) AS bigint) AS EmailsSent,\r\n" +
                   "       CAST(ISNULL(mail.EmailsRead, 0) AS bigint) AS EmailsRead,\r\n" +
                   "       CAST(ISNULL(files.ViewedOrEdited, 0) AS bigint) AS FilesViewedOrEdited,\r\n" +
-                  "       (SELECT MAX(activity.dt) FROM (VALUES (teams.LastActivity), (mail.LastActivity), (files.LastActivity)) AS activity(dt)) AS LastM365ActivityUtc,\r\n"
+                  "       (SELECT MAX(activity.dt) FROM (VALUES (teams.LastActivity), (mail.LastActivity), (files.LastActivity)) AS activity(dt)) AS LastM365ActivityUtc,\r\n" +
+                  "       CAST(ISNULL(teams.MeetingsOrganised, 0) AS float) AS MeetingsOrganisedPerActiveDay,\r\n" +
+                  "       CAST(ISNULL(teams.MeetingsAttended, 0) AS float) AS MeetingsAttendedPerActiveDay,\r\n" +
+                  "       CAST(ISNULL(teams.ChatAndChannelMessages, 0) AS float) AS ChatAndChannelMessagesPerActiveDay,\r\n" +
+                  "       CAST(ISNULL(mail.EmailsSentExact, 0) AS float) AS EmailsSentPerActiveDay,\r\n" +
+                  "       CAST(ISNULL(files.ViewedOrEditedExact, 0) AS float) AS FilesPerActiveDay,\r\n"
                 : "       CAST(0 AS bigint) AS TeamsMessages,\r\n" +
                   "       CAST(0 AS bigint) AS TeamsMeetings,\r\n" +
                   "       CAST(0 AS bigint) AS EmailsSent,\r\n" +
                   "       CAST(0 AS bigint) AS EmailsRead,\r\n" +
                   "       CAST(0 AS bigint) AS FilesViewedOrEdited,\r\n" +
-                  "       CAST(NULL AS datetime) AS LastM365ActivityUtc,\r\n";
+                  "       CAST(NULL AS datetime) AS LastM365ActivityUtc,\r\n" +
+                  "       CAST(0 AS float) AS MeetingsOrganisedPerActiveDay,\r\n" +
+                  "       CAST(0 AS float) AS MeetingsAttendedPerActiveDay,\r\n" +
+                  "       CAST(0 AS float) AS ChatAndChannelMessagesPerActiveDay,\r\n" +
+                  "       CAST(0 AS float) AS EmailsSentPerActiveDay,\r\n" +
+                  "       CAST(0 AS float) AS FilesPerActiveDay,\r\n";
 
             // Proven demand must survive the row cap. The list is TOP (@maxRows) ORDER BY the composite
             // score, and that score cannot express proven demand: the Copilot weight sits below the
@@ -1348,28 +1403,17 @@ namespace Common.Entities.CopilotAdoption
         }
 
         /// <summary>
-        /// A user's average of <paramref name="metric"/> per day they actually appear in a Graph daily
-        /// usage report, over whatever window the surrounding query filtered to.
+        /// A user's average per day they actually appear in a Graph daily usage report, from a window
+        /// total and the user's own active days, rounded to a whole number: the float sum divided by the
+        /// distinct-day count, then ROUND and CAST.
         ///
         /// Divided by the user's own active days rather than by the length of the window on purpose:
         /// the opportunity targets (<see cref="CopilotAdoptionOptions.OpportunityCollaborationTarget"/>
         /// and friends) describe what a heavy user does on a working day, so dividing by calendar days
         /// would dilute every user by their weekends and public holidays and quietly halve the score of
-        /// a perfectly normal knowledge worker. <c>COUNT(DISTINCT ...)</c> is free here - it rides the
-        /// same <c>GROUP BY</c> as the sums.
-        /// </summary>
-        private static string PerActiveDay(string metric, string dateColumn)
-        {
-            return $"CAST(ROUND(SUM(CAST({metric} AS float)) "
-                 + $"/ NULLIF(COUNT(DISTINCT CAST({dateColumn} AS date)), 0), 0) AS bigint)";
-        }
-
-        /// <summary>
-        /// A per-active-day average from a window total and the active days it was counted over, rounded
-        /// to a whole number exactly as <see cref="PerActiveDay"/> rounds it: the same float sum divided by
-        /// the same distinct-day count, then the same ROUND and CAST. Used where a query computes its totals
-        /// once and derives several figures from them (<see cref="CoworkReadinessSql"/>), so splitting the
-        /// aggregate from the division changes no figure.
+        /// a perfectly normal knowledge worker. The totals and the distinct-day count ride one
+        /// <c>GROUP BY</c> (<see cref="LicenceOpportunitiesSql"/>, <see cref="CoworkReadinessSql"/>), which
+        /// computes them once and lets the unrounded figures the Cowork estimate needs come from the same sums.
         /// </summary>
         private static string RoundedPerDay(string total, string activeDays)
         {
@@ -1528,6 +1572,89 @@ namespace Common.Entities.CopilotAdoption
                 "GROUP BY ISNULL(NULLIF(LTRIM(RTRIM(dept.name)), ''), '(no department)')\r\n" +
                 "ORDER BY Value DESC\r\n" +
                 "OPTION (RECOMPILE);";
+        }
+
+        /// <summary>
+        /// The people who used Copilot agents most in the window, heaviest first: their agent interactions,
+        /// how many agents and days, the agent they used most, and whether they hold a Copilot seat today.
+        /// </summary>
+        /// <remarks>
+        /// <para>Every agent counts, Cowork included, and licensed and unlicensed people alike - the same
+        /// population as the estate's agent-user figures. The seat is today's, like the inventory it sits
+        /// beside, which reads up to now even for a past range.</para>
+        /// <para>Shaped like <see cref="AgentUsageSql"/>, for the same reasons: ONE pass over the window's
+        /// agent interactions, collapsed to one row per (person, agent, day) and materialised, because the
+        /// figures below read it three ways - a CTE would be expanded, and the window scanned, at every
+        /// reference - and no grouping carries two DISTINCT aggregates, which forces a spool. The pass reads
+        /// the same rows as <see cref="AgentUsageByDepartmentSql"/>: the window, agent interactions only.</para>
+        /// <para>Ties break on the user id, so which people survive the row cap does not vary between runs.</para>
+        /// </remarks>
+        public static string AgentUsersSql(IEnumerable<int> seatLicenceTypeIds)
+        {
+            return
+                "SET NOCOUNT ON;\r\n" +
+                "IF OBJECT_ID('tempdb..#agent_user_grain') IS NOT NULL DROP TABLE #agent_user_grain;\r\n" +
+                "\r\n" +
+                "SELECT c.user_id AS user_id,\r\n" +
+                "       c.agent_id AS agent_id,\r\n" +
+                "       CAST(c.time_stamp AS date) AS active_date,\r\n" +
+                "       COUNT_BIG(*) AS Interactions,\r\n" +
+                "       MAX(c.time_stamp) AS LastUsedUtc\r\n" +
+                "INTO #agent_user_grain\r\n" +
+                "FROM dbo.copilot_chats AS c\r\n" +
+                "WHERE c.time_stamp >= @from\r\n  AND c.time_stamp < @toExclusive\r\n" +
+                "  AND c.agent_id IS NOT NULL\r\n" +
+                "  AND c.user_id IS NOT NULL\r\n" +
+                "GROUP BY c.user_id, c.agent_id, CAST(c.time_stamp AS date)\r\n" +
+                "OPTION (RECOMPILE);\r\n" +
+                "\r\n" +
+                "WITH " + SeatUsersCte(seatLicenceTypeIds, useLicenceHistory: false) + ",\r\n" +
+                "PerUserAgent AS (\r\n" +
+                "    SELECT user_id, agent_id, SUM(Interactions) AS Interactions\r\n" +
+                "    FROM #agent_user_grain\r\n" +
+                "    GROUP BY user_id, agent_id\r\n" +
+                "),\r\n" +
+                "PerUser AS (\r\n" +
+                "    SELECT user_id, SUM(Interactions) AS Interactions, COUNT(*) AS AgentsUsed\r\n" +
+                "    FROM PerUserAgent\r\n" +
+                "    GROUP BY user_id\r\n" +
+                "),\r\n" +
+                "PerUserDays AS (\r\n" +
+                "    SELECT user_id, COUNT(*) AS ActiveDays, MAX(LastUsedUtc) AS LastUsedUtc\r\n" +
+                "    FROM (SELECT user_id, active_date, MAX(LastUsedUtc) AS LastUsedUtc\r\n" +
+                "          FROM #agent_user_grain GROUP BY user_id, active_date) AS d\r\n" +
+                "    GROUP BY user_id\r\n" +
+                "),\r\n" +
+                "TopAgent AS (\r\n" +
+                "    SELECT user_id, agent_id, Interactions,\r\n" +
+                "           ROW_NUMBER() OVER (PARTITION BY user_id ORDER BY Interactions DESC, agent_id) AS rn\r\n" +
+                "    FROM PerUserAgent\r\n" +
+                ")\r\n" +
+                "SELECT TOP (@maxRows)\r\n" +
+                "       u.id AS UserId,\r\n" +
+                "       u.user_name AS UserPrincipalName,\r\n" +
+                "       u.mail AS Mail,\r\n" +
+                "       dept.name AS Department,\r\n" +
+                "       title.name AS JobTitle,\r\n" +
+                "       CAST(p.Interactions AS bigint) AS Interactions,\r\n" +
+                "       p.AgentsUsed AS AgentsUsed,\r\n" +
+                "       ISNULL(days.ActiveDays, 0) AS ActiveDays,\r\n" +
+                "       days.LastUsedUtc AS LastUsedUtc,\r\n" +
+                "       ISNULL(ag.name, '(unnamed agent)') AS TopAgentName,\r\n" +
+                "       CAST(ISNULL(top_agent.Interactions, 0) AS bigint) AS TopAgentInteractions,\r\n" +
+                "       CAST(CASE WHEN EXISTS (SELECT 1 FROM SeatUsers AS seats WHERE seats.user_id = u.id)\r\n" +
+                "                 THEN 1 ELSE 0 END AS bit) AS HoldsCopilotSeat\r\n" +
+                "FROM PerUser AS p\r\n" +
+                "JOIN dbo.users AS u ON u.id = p.user_id\r\n" +
+                "LEFT JOIN PerUserDays AS days ON days.user_id = p.user_id\r\n" +
+                "LEFT JOIN TopAgent AS top_agent ON top_agent.user_id = p.user_id AND top_agent.rn = 1\r\n" +
+                "LEFT JOIN dbo.copilot_agents AS ag ON ag.id = top_agent.agent_id\r\n" +
+                "LEFT JOIN dbo.user_departments AS dept ON dept.id = u.department_id\r\n" +
+                "LEFT JOIN dbo.user_job_titles AS title ON title.id = u.job_title_id\r\n" +
+                "ORDER BY p.Interactions DESC, u.id\r\n" +
+                "OPTION (RECOMPILE);\r\n" +
+                "\r\n" +
+                "DROP TABLE #agent_user_grain;";
         }
 
         /// <summary>

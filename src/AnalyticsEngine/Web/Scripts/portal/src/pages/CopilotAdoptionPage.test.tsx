@@ -1,7 +1,8 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { screen, waitFor, fireEvent, within } from '@testing-library/react';
 import { renderWithProvider } from '../test/renderWithProvider';
-import CopilotAdoptionPage, { lastCalendarMonthRange, lastCalendarQuarterRange } from './CopilotAdoptionPage';
+import CopilotAdoptionPage from './CopilotAdoptionPage';
+import { lastCalendarMonthRange, lastCalendarQuarterRange } from '../components/copilotAdoption/AdoptionPeriodControl';
 import {
   fetchAdoptionAvailability,
   fetchAdoptionFilters,
@@ -285,6 +286,17 @@ async function renderPage(options?: Parameters<typeof renderWithProvider>[1]) {
   await screen.findByRole('tab', { name: options?.language === 'es' ? 'Vista ejecutiva' : 'Executive view', selected: true });
 }
 
+/** Picks a reporting period from the page's one period drop-down: a rolling window's days, `lastMonth`, `lastQuarter` or `custom`. */
+function choosePeriod(value: string) {
+  fireEvent.change(screen.getByLabelText('Reporting period'), { target: { value } });
+}
+
+/** The printed caption naming the view and the period, found by the period's name and a date in it. */
+function printCaption(periodName: RegExp, date: RegExp) {
+  return screen.getByText((_content, element) =>
+    element?.tagName === 'SPAN' && periodName.test(element.textContent ?? '') && date.test(element.textContent ?? ''));
+}
+
 describe('CopilotAdoptionPage custom ranges', () => {
   it('calculates calendar presets across month lengths and January', () => {
     expect(lastCalendarMonthRange(new Date(Date.UTC(2026, 2, 15)))).toEqual({ from: '2026-02-01', to: '2026-02-28' });
@@ -295,9 +307,9 @@ describe('CopilotAdoptionPage custom ranges', () => {
   it('sends custom ranges to the API and clears them when a rolling preset is chosen', async () => {
     await renderPage();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Last calendar month' }));
-    expect(screen.getByLabelText('Reporting period')).toHaveValue('custom');
-    fireEvent.change(screen.getByLabelText('Reporting period'), { target: { value: '28' } });
+    choosePeriod('lastMonth');
+    expect(screen.getByLabelText('Reporting period')).toHaveValue('lastMonth');
+    choosePeriod('28');
     await waitFor(() => expect(vi.mocked(fetchAdoptionSummary)).toHaveBeenLastCalledWith(
       28,
       undefined,
@@ -306,7 +318,7 @@ describe('CopilotAdoptionPage custom ranges', () => {
       null,
     ));
 
-    fireEvent.click(screen.getByRole('button', { name: 'Last calendar month' }));
+    choosePeriod('lastMonth');
     await waitFor(() => expect(vi.mocked(fetchAdoptionSummary)).toHaveBeenLastCalledWith(
       28,
       undefined,
@@ -316,7 +328,17 @@ describe('CopilotAdoptionPage custom ranges', () => {
       { ...lastCalendarMonthRange() },
     ));
 
-    fireEvent.change(screen.getByLabelText('Reporting period'), { target: { value: '90' } });
+    choosePeriod('lastQuarter');
+    await waitFor(() => expect(vi.mocked(fetchAdoptionSummary)).toHaveBeenLastCalledWith(
+      28,
+      undefined,
+      expect.any(AbortSignal),
+      null,
+      null,
+      { ...lastCalendarQuarterRange() },
+    ));
+
+    choosePeriod('90');
     await waitFor(() => expect(vi.mocked(fetchAdoptionSummary)).toHaveBeenLastCalledWith(
       90,
       undefined,
@@ -324,6 +346,52 @@ describe('CopilotAdoptionPage custom ranges', () => {
       null,
       null,
     ));
+  });
+
+  it('offers one period control, with no second set of presets beside it', async () => {
+    await renderPage();
+
+    const period = screen.getByLabelText('Reporting period');
+    const choices = within(period).getAllByRole('option').map((o) => o.textContent);
+    expect(choices).toEqual([
+      'Last 7 days',
+      'Last 28 days',
+      'Last 90 days',
+      'Last 180 days',
+      'Last calendar month',
+      'Last calendar quarter',
+      'Custom range',
+    ]);
+    // The licence-activity presets and their date fields used to sit beside the drop-down as well.
+    expect(screen.queryByRole('button', { name: 'Last calendar month' })).toBeNull();
+    expect(screen.queryByRole('button', { name: /settled/ })).toBeNull();
+    expect(screen.queryByLabelText('From')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Apply' })).toBeNull();
+  });
+
+  it('asks for dates only for a custom range, and changes the report only on Apply', async () => {
+    await renderPage();
+    await waitFor(() => expect(vi.mocked(fetchAdoptionSummary)).toHaveBeenCalled());
+    const callsBefore = vi.mocked(fetchAdoptionSummary).mock.calls.length;
+
+    choosePeriod('custom');
+    expect(screen.getByLabelText('Reporting period')).toHaveValue('custom');
+    expect(vi.mocked(fetchAdoptionSummary).mock.calls.length).toBe(callsBefore);
+
+    fireEvent.change(screen.getByLabelText('From'), { target: { value: '2026-08-03' } });
+    fireEvent.change(screen.getByLabelText('To'), { target: { value: '2026-08-30' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Apply' }));
+
+    await waitFor(() => expect(vi.mocked(fetchAdoptionSummary)).toHaveBeenLastCalledWith(
+      28,
+      undefined,
+      expect.any(AbortSignal),
+      null,
+      null,
+      { from: '2026-08-03', to: '2026-08-30' },
+    ));
+    // Applied, so there is nothing left to apply until a date changes again.
+    expect(screen.getByRole('button', { name: 'Apply' })).toBeDisabled();
   });
 
   it('hides named action-list panels for past ranges while the print header keeps the range', async () => {
@@ -349,12 +417,12 @@ describe('CopilotAdoptionPage custom ranges', () => {
     }));
     await renderPage();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Last calendar month' }));
+    choosePeriod('lastMonth');
     fireEvent.click(screen.getByRole('tab', { name: 'Licensed users' }));
-    expect(await screen.findByText("Seat holders' time saved (modelled)")).toBeVisible();
-    expect(await screen.findByText(/named reclaim and recommendation lists/i)).toBeInTheDocument();
-    expect(screen.getByText(/1 Sept? 2026/i)).toBeInTheDocument();
-    expect(screen.getByText(/30 Sept? 2026/i)).toBeInTheDocument();
+    expect(await screen.findByText(/named reclaim and recommendation lists/i)).toBeVisible();
+    fireEvent.click(screen.getByRole('tab', { name: 'Time saved' }));
+    expect(await screen.findByText('Time already saved by seat holders')).toBeVisible();
+    expect(printCaption(/Last calendar month/, /1 Sept? 2026/i).textContent).toMatch(/30 Sept? 2026/i);
   });
 });
 
@@ -1170,11 +1238,47 @@ describe('CopilotAdoptionPage modelled time saved', () => {
     expect(within(tileCard).getByText('9\u201317 h')).toBeVisible();
     expect(within(tileCard).getByText('Modelled')).toBeVisible();
 
+    // The tile opens the section that explains it, not the list.
+    fireEvent.click(within(tileCard).getByRole('button', { name: 'Review on Licensed users' }));
+    expect(await screen.findByRole('tab', { name: 'Licensed users', selected: true })).toBeVisible();
+    expect(screen.getByRole('tab', { name: 'Time saved', selected: true })).toBeVisible();
+
+    const model = screen.getByRole('tabpanel', { name: 'Time saved' });
+    expect(within(model).getByText('Time already saved by seat holders')).toBeVisible();
+    expect(within(model).getByText(/Copilot Chat and other non-agent surfaces default to zero minutes/)).toBeVisible();
+    expect(within(model).getByText(/Agent and Cowork activity is left out of this figure/)).toBeVisible();
+
+    const other = within(model).getByText('Copilot Chat and other apps').closest('tr') as HTMLElement;
+    expect(within(other).getByText('20')).toBeVisible();
+    expect(within(other).getByText('0 h')).toBeVisible();
+    expect(within(model).getByText('17 h')).toBeVisible();
+    expect(within(model).getByText('9 h')).toBeVisible();
+    expect(within(model).getByText(/^3 seat holders are not in this figure/)).toBeVisible();
+  });
+
+  it('opens the Licensed users tab on the list, with the time saved a section away', async () => {
+    vi.mocked(fetchAdoptionSummary).mockResolvedValue(withEstimate());
+
+    await renderPage();
     fireEvent.click(screen.getByRole('tab', { name: 'Licensed users' }));
-    expect(await screen.findByText("Seat holders' time saved (modelled)")).toBeVisible();
-    expect(screen.getByText(/Copilot Chat and other non-agent surfaces default to zero minutes/)).toBeVisible();
-    expect(screen.getByText(/Agent and Cowork activity is left out of this figure/)).toBeVisible();
-    expect(screen.getByText(/20 other at 0 min/)).toBeVisible();
+
+    expect(await screen.findByRole('tab', { name: 'Seat holders', selected: true })).toBeVisible();
+    expect(screen.getByRole('tabpanel', { name: 'Seat holders' })).toBeVisible();
+    expect(screen.queryByRole('tabpanel', { name: 'Time saved' })).toBeNull();
+    expect(screen.getByText('Time already saved by seat holders')).not.toBeVisible();
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Time saved' }));
+    expect(screen.getByText('Time already saved by seat holders')).toBeVisible();
+    expect(screen.queryByRole('tabpanel', { name: 'Seat holders' })).toBeNull();
+  });
+
+  it('shows the Licensed users list alone when there is no seat-holder estimate', async () => {
+    await renderPage();
+    fireEvent.click(screen.getByRole('tab', { name: 'Licensed users' }));
+
+    await waitFor(() => expect(vi.mocked(fetchLicensedUsers)).toHaveBeenCalled());
+    expect(screen.queryByRole('tab', { name: 'Time saved' })).toBeNull();
+    expect(screen.queryByText('Time already saved by seat holders')).toBeNull();
   });
 
   it('lets the reader edit a realised-value credit for the session', async () => {
@@ -1182,14 +1286,51 @@ describe('CopilotAdoptionPage modelled time saved', () => {
 
     await renderPage();
     fireEvent.click(screen.getByRole('tab', { name: 'Licensed users' }));
+    fireEvent.click(await screen.findByRole('tab', { name: 'Time saved' }));
 
     const input = await screen.findByLabelText('Outlook minutes per action');
     fireEvent.change(input, { target: { value: '12' } });
 
-    expect(await screen.findByText(/100 Outlook at 12 min/)).toBeVisible();
-    expect(screen.getByText('14\u201327 h')).toBeVisible();
-    const finance = screen.getByText('Finance').closest('tr') as HTMLElement;
-    expect(within(finance).getByText('27')).toBeVisible();
+    const model = screen.getByRole('tabpanel', { name: 'Time saved' });
+    const outlook = within(model).getByText('Copilot interactions in Outlook').closest('tr') as HTMLElement;
+    expect(within(outlook).getByText('20 h')).toBeVisible();
+    expect(within(model).getByText('27 h')).toBeVisible();
+    expect(within(model).getByText('14 h')).toBeVisible();
+    const finance = within(model).getByText('Finance').closest('tr') as HTMLElement;
+    expect(within(finance).getByText('14\u201327 h')).toBeVisible();
+
+    // The overview's tile is the same model, so it follows the figure too.
+    fireEvent.click(screen.getByRole('tab', { name: 'Executive view' }));
+    expect(within(await tile('Time already saved by seat holders')).getByText('14\u201327 h')).toBeVisible();
+  });
+
+  it('refuses a credit outside the model\u2019s bounds rather than modelling it', async () => {
+    vi.mocked(fetchAdoptionSummary).mockResolvedValue(withEstimate());
+
+    await renderPage();
+    fireEvent.click(screen.getByRole('tab', { name: 'Licensed users' }));
+    fireEvent.click(await screen.findByRole('tab', { name: 'Time saved' }));
+
+    fireEvent.change(await screen.findByLabelText('Outlook minutes per action'), { target: { value: '600' } });
+
+    const model = screen.getByRole('tabpanel', { name: 'Time saved' });
+    expect(within(model).getByText('Enter a number from 0 to 60.')).toBeVisible();
+    expect(within(model).getByText('17 h')).toBeVisible();
+  });
+
+  it('explains, rather than models, when no seat holder has per-action detail', async () => {
+    vi.mocked(fetchAdoptionSummary).mockResolvedValue(withEstimate({
+      seatHolderTimeSavedEstimate: { ...seatHolderEstimate, cohortUsers: 0, excludedUsageReportSourcedUsers: 5, byDepartment: [] },
+    }));
+
+    await renderPage();
+    fireEvent.click(screen.getByRole('tab', { name: 'Licensed users' }));
+    fireEvent.click(await screen.findByRole('tab', { name: 'Time saved' }));
+
+    const model = screen.getByRole('tabpanel', { name: 'Time saved' });
+    expect(within(model).getByText(/^5 seat holders are not in this figure/)).toBeVisible();
+    expect(within(model).queryByRole('table')).toBeNull();
+    expect(within(model).queryByLabelText('Outlook minutes per action')).toBeNull();
   });
 
   it('translates the no-department placeholder in the realised-value table', async () => {
@@ -1202,6 +1343,7 @@ describe('CopilotAdoptionPage modelled time saved', () => {
 
     await renderPage({ language: 'es' });
     fireEvent.click(screen.getByRole('tab', { name: 'Usuarios con licencia' }));
+    fireEvent.click(await screen.findByRole('tab', { name: 'Tiempo ahorrado' }));
 
     expect(await screen.findByText('(sin departamento)')).toBeVisible();
     expect(screen.queryByText('(no department)')).toBeNull();
@@ -1219,7 +1361,8 @@ describe('CopilotAdoptionPage modelled time saved', () => {
 
   it('has Spanish text for the realised seat-holder estimate', async () => {
     const es = await loadCatalog('es');
-    expect(es['copilotAdoption.page.seatTime.title']).toBe('Tiempo ahorrado por titulares de licencia (modelado)');
+    expect(es['copilotAdoptionUsers.licensed.sections.timeSaved']).toBe('Tiempo ahorrado');
+    expect(es['copilotAdoptionTimeSaved.seat.table.observed']).toBe('Acciones al mes');
     expect(es['copilotAdoption.page.kpi.seatHolderTimeSaved.label']).toBe('Tiempo ya ahorrado por titulares de licencia');
   });
 
@@ -1299,7 +1442,7 @@ describe('CopilotAdoptionPage modelled time saved', () => {
     }));
 
     await renderPage();
-    fireEvent.click(screen.getByRole('button', { name: 'Last calendar month' }));
+    choosePeriod('lastMonth');
 
     fireEvent.click(screen.getByRole('tab', { name: 'Licence opportunities' }));
     expect(await screen.findByRole('tablist', { name: 'Licence opportunity sections' })).toBeVisible();
@@ -1311,9 +1454,9 @@ describe('CopilotAdoptionPage modelled time saved', () => {
     expect(screen.getByText(/named reclaim and recommendation lists/i)).toBeInTheDocument();
     expect(screen.queryByText('Individual details are hidden')).not.toBeInTheDocument();
 
-    const printHeader = screen.getByText((_content, element) =>
-      element?.tagName === 'SPAN' && /Custom range/.test(element.textContent ?? '') && /30 Sept? 2026/.test(element.textContent ?? ''));
-    expect(printHeader.textContent).not.toMatch(/Last 28 days/);
+    // The printout names the period chosen - not "Custom range", and not the rolling window it replaced.
+    const printHeader = printCaption(/Last calendar month/, /30 Sept? 2026/);
+    expect(printHeader.textContent).not.toMatch(/Last 28 days|Custom range/);
   });
 
   it('gives a reader without See PII the permission reason in the panels on a past range', async () => {
@@ -1325,7 +1468,7 @@ describe('CopilotAdoptionPage modelled time saved', () => {
 
     renderWithProvider(<CopilotAdoptionPage />, { access: { administration: false, seePii: false } });
     await screen.findByRole('tab', { name: 'Executive view', selected: true });
-    fireEvent.click(screen.getByRole('button', { name: 'Last calendar month' }));
+    choosePeriod('lastMonth');
 
     fireEvent.click(screen.getByRole('tab', { name: 'Licence opportunities' }));
     expect(await screen.findByRole('tablist', { name: 'Licence opportunity sections' })).toBeVisible();

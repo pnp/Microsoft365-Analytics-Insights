@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { screen } from '@testing-library/react';
+import { screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { renderWithProvider } from '../../test/renderWithProvider';
 import AgentsPanel from './AgentsPanel';
@@ -7,6 +7,7 @@ import { AgentHealth } from '../../types/copilotAdoption';
 import type {
   AgentEstateSummary,
   AgentUsageRow,
+  AgentUserRow,
   CopilotAdoptionOptions,
 } from '../../types/copilotAdoption';
 
@@ -151,5 +152,82 @@ describe('AgentsPanel inventory', () => {
     // engine, so the truncation itself (max-width + text-overflow) cannot be verified from a test.
     // That was checked in a headless browser against a 180-character key.
     expect(screen.getByText(LONG_KEY)).toHaveAttribute('title', LONG_KEY);
+  });
+});
+
+describe('AgentsPanel heaviest agent users', () => {
+  function person(over: Partial<AgentUserRow>): AgentUserRow {
+    return {
+      userId: 1,
+      userPrincipalName: 'heavy.user@contoso.com',
+      mail: 'heavy.user@contoso.com',
+      emailDomain: 'contoso.com',
+      department: 'Finance',
+      jobTitle: 'Analyst',
+      interactions: 180,
+      agentsUsed: 3,
+      activeDays: 14,
+      lastUsedUtc: '2026-02-01T00:00:00Z',
+      topAgentName: 'Contoso Expenses Helper',
+      topAgentInteractions: 120,
+      holdsCopilotSeat: true,
+      ...over,
+    };
+  }
+
+  const PEOPLE: AgentUserRow[] = [
+    person({ userId: 1 }),
+    person({
+      userId: 2,
+      userPrincipalName: 'chat.only@fabrikam.com',
+      department: 'Καλημέρα κόσμε',
+      interactions: 95,
+      topAgentName: '(unnamed agent)',
+      holdsCopilotSeat: false,
+    }),
+  ];
+
+  function renderWith(props: Partial<Parameters<typeof AgentsPanel>[0]>) {
+    return renderWithProvider(
+      <AgentsPanel
+        estate={ESTATE}
+        agents={AGENTS}
+        options={{ ...OPTIONS, maxAgentUsersScored: 20000 }}
+        windowDays={30}
+        sql={null}
+        {...props}
+      />,
+    );
+  }
+
+  it('names the heaviest agent users and whether each holds a Copilot licence, for a See PII reader', () => {
+    renderWith({ topUsers: PEOPLE, canSeePii: true });
+
+    const card = screen.getByText('Heaviest agent users').closest('.fui-Card') as HTMLElement;
+    expect(within(card).getByText('The 2 people who used Copilot agents most in the selected period - 1 of them hold a Copilot licence.')).toBeInTheDocument();
+
+    const rows = within(card).getAllByRole('row').slice(1);
+    expect(rows).toHaveLength(2);
+    expect(within(rows[0]).getByText('heavy.user@contoso.com')).toBeInTheDocument();
+    expect(within(rows[0]).getByText('Licensed')).toBeInTheDocument();
+    expect(within(rows[0]).getByText('120 interactions')).toBeInTheDocument();
+    expect(within(rows[1]).getByText('chat.only@fabrikam.com')).toBeInTheDocument();
+    expect(within(rows[1]).getByText('No licence')).toBeInTheDocument();
+    // Tenant data renders exactly as stored; the server's own placeholder goes through the catalog.
+    expect(within(rows[1]).getByText('Καλημέρα κόσμε')).toBeInTheDocument();
+    expect(within(rows[1]).getByText('(unnamed agent)')).toBeInTheDocument();
+  });
+
+  it('says the list is hidden, rather than showing an empty one, to a reader without See PII', () => {
+    renderWith({ topUsers: [], canSeePii: false });
+
+    expect(screen.queryByText('Heaviest agent users')).toBeNull();
+    expect(screen.getByRole('note')).toBeInTheDocument();
+  });
+
+  it('says a filtered view\u2019s list may be short when the tenant-wide read was capped', () => {
+    renderWith({ topUsers: PEOPLE, topUsersCapped: true, canSeePii: true });
+
+    expect(screen.getByText(/Only the 20,000 heaviest agent users in the tenant were read/)).toBeInTheDocument();
   });
 });

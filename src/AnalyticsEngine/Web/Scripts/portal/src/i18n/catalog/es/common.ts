@@ -61,9 +61,8 @@ const common: Record<keyof typeof en, string> = {
 
   // Bot\u00f3n Imprimir
   'common.print.preparing': 'Preparando\u2026',
-  'common.print.tooManyRows.title': 'Demasiadas filas para imprimir',
-  'common.print.tooManyRows.body':
-    '{rows} filas coinciden con los filtros de esta lista, y una lista solo se imprime completa hasta {limit} filas. Acote la lista con sus filtros y vuelva a imprimir, o exp\u00f3rtela para obtener todas las filas.',
+  'common.print.truncated':
+    'Se han impreso las primeras {limit} de {rows} filas: la lista es demasiado larga para imprimirla completa, y la impresi\u00f3n lo indica. Acote la lista con sus filtros para imprimir el resto, o exp\u00f3rtela para obtener todas las filas.',
   'common.print.failed.title': 'No se ha podido preparar la impresi\u00f3n',
   'common.print.failed.body':
     'No se ha podido cargar la lista completa para imprimirla, as\u00ed que no se ha impreso nada. Vuelva a intentarlo dentro de un momento.',

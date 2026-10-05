@@ -14,9 +14,10 @@ import {
  * Printing a paged list.
  *
  * A stylesheet can hide a pager but it cannot print rows that are not on the page, so these lists
- * load in full before a print and go back to their page afterwards. What matters is the state of
- * the document at the moment the browser captures it - which is what the `window.print` stub below
- * records - and that nothing is ever printed partially and silently.
+ * load before a print - in full, or their first rows past the limit - and go back to their page
+ * afterwards. What matters is the state of the document at the moment the browser captures it -
+ * which is what the `window.print` stub below records - and that nothing is ever printed partially
+ * and silently.
  */
 
 const range = (from: number, count: number) => Array.from({ length: count }, (_, i) => `row ${from + i}`);
@@ -126,20 +127,38 @@ describe('requestPrint', () => {
     expect(screen.getByTestId('phase').textContent).toBe('idle');
   });
 
-  it('refuses a list longer than the limit instead of printing part of it', async () => {
-    // The compromise for tenant-sized lists: tens of thousands of seat holders cannot be laid out
-    // to print, and printing the first page as if it were the list would be worse. So nothing is
-    // loaded, nothing is printed, and the caller is told why.
+  it('prints the first rows of a list longer than the limit, and reports that it was cut short', async () => {
+    // Tenant-sized lists: tens of thousands of seat holders cannot be laid out to print, but refusing
+    // left nothing to print at all. So the first rows - in the list's own order - are loaded and
+    // printed, and the outcome says the list was cut short, for the list and the button to say so.
     const loadPage = server(PRINT_ROW_LIMIT + 1);
     render(<List total={PRINT_ROW_LIMIT + 1} pageRows={range(0, 50)} loadPage={loadPage} />);
 
-    await expect(requestPrint()).resolves.toEqual({
-      kind: 'tooManyRows',
-      rows: PRINT_ROW_LIMIT + 1,
-      limit: PRINT_ROW_LIMIT,
+    await act(async () => {
+      await expect(requestPrint()).resolves.toEqual({
+        kind: 'printed',
+        truncated: { rows: PRINT_ROW_LIMIT + 1, limit: PRINT_ROW_LIMIT },
+      });
     });
-    expect(window.print).not.toHaveBeenCalled();
-    expect(loadPage).not.toHaveBeenCalled();
+
+    expect(rowsWhenPrinted).toBe(PRINT_ROW_LIMIT);
+    // Never a row past the limit is requested, however long the list.
+    expect(loadPage.mock.calls.map(([skip, take]) => [skip, take])).toEqual([
+      [0, PRINT_FETCH_PAGE_SIZE],
+      [PRINT_FETCH_PAGE_SIZE, PRINT_ROW_LIMIT - PRINT_FETCH_PAGE_SIZE],
+    ]);
+    expect(screen.getAllByRole('listitem')).toHaveLength(50);
+  });
+
+  it('prints only the limit even from a server that returns more than it was asked for', async () => {
+    const loadPage = vi.fn(async (skip: number) => ({ rows: range(skip, PRINT_FETCH_PAGE_SIZE + 7) }));
+    render(<List total={PRINT_ROW_LIMIT * 4} pageRows={range(0, 50)} loadPage={loadPage} />);
+
+    await act(async () => {
+      await requestPrint();
+    });
+
+    expect(rowsWhenPrinted).toBe(PRINT_ROW_LIMIT);
   });
 
   it('prints a list of exactly the limit', async () => {
@@ -192,7 +211,7 @@ describe('requestPrint', () => {
 
   it('leaves out a list that is not showing', async () => {
     // A list in a hidden section or tab is not on the printout, so it must neither hold the print
-    // up while it loads nor refuse it for being long.
+    // up while it loads nor be reported as cut short.
     const loadPage = server(5000);
     render(<List enabled={false} total={5000} pageRows={range(0, 50)} loadPage={loadPage} />);
 
@@ -222,16 +241,22 @@ describe('requestPrint', () => {
     expect(rowsWhenPrinted).toBe(70);
   });
 
-  it('takes the largest registered list when deciding whether a print is too long', async () => {
+  it('reports the longest registered list when a print was cut short', async () => {
     const unregister = registerPrintParticipant({
       rowCount: () => PRINT_ROW_LIMIT + 500,
       needsLoading: () => true,
-      prepare: vi.fn(),
+      prepare: vi.fn(async () => undefined),
       restore: vi.fn(),
     });
     render(<List total={40} pageRows={range(0, 40)} loadPage={server(40)} />);
 
-    await expect(requestPrint()).resolves.toMatchObject({ kind: 'tooManyRows', rows: PRINT_ROW_LIMIT + 500 });
+    await act(async () => {
+      await expect(requestPrint()).resolves.toMatchObject({
+        kind: 'printed',
+        truncated: { rows: PRINT_ROW_LIMIT + 500, limit: PRINT_ROW_LIMIT },
+      });
+    });
+    expect(window.print).toHaveBeenCalledTimes(1);
     unregister();
   });
 });

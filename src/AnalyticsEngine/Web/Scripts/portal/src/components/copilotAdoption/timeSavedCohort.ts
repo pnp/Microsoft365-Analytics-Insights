@@ -15,8 +15,11 @@ import { useCallback, useMemo, useSyncExternalStore } from 'react';
  * database: one admin's view cannot become another's report.
  */
 
-/** The recommended cohort, or everyone it was drawn from. */
-export type TimeSavedCohort = 'recommended' | 'all';
+/**
+ * Who a headline models: the people recommended, everyone they were drawn from, or - for Cowork only -
+ * the people without a Copilot licence.
+ */
+export type TimeSavedCohort = 'recommended' | 'all' | 'withoutLicence';
 
 /** The two time-saved models, each with its own cohort. */
 export type TimeSavedModel = 'licence' | 'cowork';
@@ -24,6 +27,15 @@ export type TimeSavedModel = 'licence' | 'cowork';
 export type TimeSavedCohorts = Record<TimeSavedModel, TimeSavedCohort>;
 
 const MODELS: readonly TimeSavedModel[] = ['licence', 'cowork'];
+
+/**
+ * The cohorts each model can show. The licence estimate is already about people without a licence, so
+ * "without a licence" is a choice for Cowork only: what Cowork could add once they were licensed.
+ */
+const COHORTS_FOR: Record<TimeSavedModel, readonly TimeSavedCohort[]> = {
+  licence: ['recommended', 'all'],
+  cowork: ['recommended', 'all', 'withoutLicence'],
+};
 
 /** The product's default: both headlines lead with the people recommended. */
 export const DEFAULT_TIME_SAVED_COHORTS: Readonly<TimeSavedCohorts> = Object.freeze({
@@ -51,7 +63,9 @@ export function parseTimeSavedCohorts(raw: string): TimeSavedCohorts {
 
   for (const model of MODELS) {
     const value = (parsed as Record<string, unknown>)[model];
-    if (value === 'recommended' || value === 'all') cohorts[model] = value;
+    if (typeof value === 'string' && (COHORTS_FOR[model] as readonly string[]).includes(value)) {
+      cohorts[model] = value as TimeSavedCohort;
+    }
   }
   return cohorts;
 }
@@ -157,17 +171,21 @@ export interface ResolvedTimeSavedCohort<P> {
 
 /**
  * Picks the projection a headline shows: the reader's choice when it has anybody in it, otherwise the
- * other cohort, otherwise nothing.
+ * recommended cohort, otherwise everyone, otherwise nothing.
  *
  * Standing in for an empty cohort is the point of the "all" option. A tenant where nobody is recommended
  * used to get no licence headline at all, and every Copilot seat holder already stood in for an empty
- * Cowork cohort; both now say that is what happened.
+ * Cowork cohort; both now say that is what happened. `withoutLicence` is Cowork's third choice - the
+ * people without a Copilot seat - and is only ever shown when chosen: it is a different population, not
+ * a stand-in for an empty one.
  */
 export function resolveTimeSavedCohort<P>(
   chosen: TimeSavedCohort,
   recommended: P | null | undefined,
   all: P | null | undefined,
+  withoutLicence?: P | null,
 ): ResolvedTimeSavedCohort<P> | null {
+  if (chosen === 'withoutLicence' && withoutLicence) return { cohort: 'withoutLicence', projection: withoutLicence, fallback: false };
   if (chosen === 'all' && all) return { cohort: 'all', projection: all, fallback: false };
   if (recommended) return { cohort: 'recommended', projection: recommended, fallback: chosen !== 'recommended' };
   if (all) return { cohort: 'all', projection: all, fallback: true };

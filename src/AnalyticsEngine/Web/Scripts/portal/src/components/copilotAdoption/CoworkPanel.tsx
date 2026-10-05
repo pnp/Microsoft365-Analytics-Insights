@@ -449,9 +449,9 @@ export default function CoworkPanel({
 
   const totalPages = data ? Math.max(1, Math.ceil(data.total / PAGE_SIZE)) : 1;
 
-  // The whole list while a print is being produced; the page on screen the rest of the time. Only
-  // while the people section is the one showing: a hidden section is not printed, so its list must
-  // not hold the printout up or refuse it for being long.
+  // The whole list while a print is being produced (its first rows, past the print limit); the page on
+  // screen the rest of the time. Only while the people section is the one showing: a hidden section is
+  // not printed, so its list must not hold the printout up loading rows.
   const printRows = usePrintAllRows<CoworkReadinessRow>({
     enabled: available && canSeePii && section === 'people' && !loading && data !== null,
     total: data?.total ?? 0,
@@ -918,6 +918,8 @@ export default function CoworkPanel({
           </MessageBar>
         )}
 
+        {!loading && data && <PartialPrintNote shownRows={rows.length} totalRows={data.total} truncated={printRows !== null} />}
+
         {!loading && (data?.warnings ?? [])
           .map((warning, index) => ({ warning, detail: data?.warningDetails?.[index] }))
           .filter(({ detail }) => isCoworkWarning(detail)).length > 0 && (
@@ -1259,7 +1261,6 @@ export default function CoworkPanel({
             )}
           </div>
         )}
-        {!loading && data && <PartialPrintNote shownRows={rows.length} totalRows={data.total} />}
       </Card>
       )}
       </div>

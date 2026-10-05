@@ -217,6 +217,10 @@ export interface CopilotAdoptionOptions {
    */
   maxWorkbookUserRows?: number;
   maxAgents: number;
+  /** How many of the heaviest agent users the Agents tab lists. */
+  topAgentUsers?: number;
+  /** How many agent users, heaviest first, the analysis keeps to pick that list from. */
+  maxAgentUsersScored?: number;
   maxUnlicensedUsersScored: number;
   maxCoworkUsersScored: number;
 }
@@ -304,6 +308,27 @@ export interface AgentEstateSummary {
   usageByDepartment: ReportCategory[];
   usageByAgent: ReportCategory[];
   agents: AgentUsageRow[];
+}
+
+/**
+ * One of the people who used Copilot agents most in the period, and whether they hold a Copilot seat.
+ * Names a person, so the server only sends these to a reader with the See PII permission.
+ */
+export interface AgentUserRow {
+  userId: number;
+  userPrincipalName: string;
+  mail: string | null;
+  emailDomain: string | null;
+  department: string | null;
+  jobTitle: string | null;
+  interactions: number;
+  agentsUsed: number;
+  activeDays: number;
+  lastUsedUtc: string | null;
+  /** The agent this person used most, or the server's unnamed-agent placeholder. */
+  topAgentName: string;
+  topAgentInteractions: number;
+  holdsCopilotSeat: boolean;
 }
 
 /** Unlicensed Copilot Chat as a population in its own right. */
@@ -445,6 +470,12 @@ export interface CopilotAdoptionSummary {
    * Optional only so a fixture written before it existed still type-checks; the server always sends it.
    */
   coworkFullRolloutEstimate?: CoworkValueEstimate;
+  /**
+   * The same model over the people WITHOUT a Copilot seat - every licence candidate: what Cowork could
+   * add for them once licensed and enabled. Cowork needs a Copilot licence, and the time that licence
+   * would give back is the licence estimate - never added to this. Absent from an older server.
+   */
+  coworkWithoutLicenceEstimate?: CoworkValueEstimate;
 
   unlicensedActiveUsers: number;
   recommendedForLicence: number;
@@ -516,6 +547,13 @@ export interface CopilotAdoptionSummary {
   combinedByDepartment: AdoptionCombinedSegmentRow[];
   topResourceTypes: AdoptionResourceTypeRow[];
   agents: AgentEstateSummary;
+  /**
+   * The heaviest agent users, heaviest first. Empty for a reader without the See PII permission, and
+   * absent from a server that predates it.
+   */
+  topAgentUsers?: AgentUserRow[];
+  /** The people that list was picked from stopped at the server's row cap, so a filtered view's list may be short. */
+  topAgentUsersCapped?: boolean;
   unlicensed: UnlicensedPopulationSummary;
 
   options: CopilotAdoptionOptions;

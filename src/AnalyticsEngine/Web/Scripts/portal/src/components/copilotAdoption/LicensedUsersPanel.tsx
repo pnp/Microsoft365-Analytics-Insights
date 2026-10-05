@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { Fragment, useEffect, useMemo, useState } from 'react';
 import {
   makeStyles,
   tokens,
@@ -32,6 +32,14 @@ import type {
 import Spinner from '../Spinner';
 import {
   BandBadge,
+  DetailRationale,
+  DetailRow,
+  DetailSection,
+  DetailSections,
+  DetailStat,
+  DetailStats,
+  ExpandAllButton,
+  ExpandableUserCell,
   PartialPrintNote,
   PrintedFilters,
   ScoreBar,
@@ -39,6 +47,7 @@ import {
   scoreColour,
   SortableTh,
   useAdoptionTableStyles,
+  useRowExpansion,
 } from './adoptionShared';
 import { usePrintAllRows } from '../shared/printPreparation';
 import { formatCount, formatDate, formatPct, weightSharePct } from '../shared/KpiGrid';
@@ -53,6 +62,13 @@ import {
 } from './serverText';
 
 const PAGE_SIZE = 50;
+
+/**
+ * The columns the table itself shows. Everything else about a seat holder - where the signal came
+ * from, apps, Cowork, the reclaim tier and its reason, the score's components - is in the row's
+ * expanded detail, so the table fits the page without scrolling sideways.
+ */
+const TABLE_COLUMNS = 8;
 
 /**
  * The default sort. "Least engaged first" because the entire purpose of the list is finding the
@@ -86,7 +102,21 @@ const useStyles = makeStyles({
     flexGrow: 1,
   },
   tableWrap: {
+    // Only a safety net for a very narrow window: the table is sized to fit the page, with the detail
+    // that used to need sideways scrolling moved into each row's expander.
     overflowX: 'auto',
+    // Makes this scrollport the container an expanded row's detail panel is sized against, and the
+    // one the optional columns below measure.
+    containerType: 'inline-size',
+  },
+  /**
+   * A column that gives way on a narrow page rather than push the table sideways: what it shows is in
+   * every row's expanded detail too. The rest - who, engagement, band, active days, the action - stay.
+   */
+  optionalColumn: {
+    '@container (max-width: 1040px)': {
+      display: 'none',
+    },
   },
   muted: {
     color: tokens.colorNeutralForeground3,
@@ -100,23 +130,15 @@ const useStyles = makeStyles({
     flexWrap: 'wrap',
   },
   /**
-   * The "both sources" marker under a signal-source label.
-   *
-   * A hover affordance rather than plain text: the reconciliation figures behind it are only wanted
-   * when a number is being challenged, and printed inline they were the single biggest contributor
-   * to this table's row height.
+   * The source comparison in an expanded row. It used to be a hover title on a "both sources" marker,
+   * because squeezed into a column it set the height of every row; the expander has room for it.
    */
   comparison: {
-    cursor: 'help',
-    textDecorationLine: 'underline',
-    textDecorationStyle: 'dotted',
+    color: tokens.colorNeutralForeground2,
+    marginTop: '4px',
   },
   legend: {
     marginBottom: '8px',
-  },
-  upn: {
-    display: 'flex',
-    flexDirection: 'column',
   },
   disabled: {
     color: tokens.colorPaletteRedForeground1,
@@ -152,6 +174,7 @@ export default function LicensedUsersPanel({
   initialBands,
   initialAction,
   userFilter,
+  shown = true,
 }: {
   windowDays: number;
   dateRange?: DateRange | null;
@@ -176,6 +199,11 @@ export default function LicensedUsersPanel({
    * different population from the summary above it.
    */
   userFilter?: string | null;
+  /**
+   * False while the list sits in a section of the tab that is not showing. A hidden list is not
+   * printed, so it must not hold the printout up loading every row.
+   */
+  shown?: boolean;
 }) {
   const styles = useStyles();
   const table = useAdoptionTableStyles();
@@ -194,10 +222,16 @@ export default function LicensedUsersPanel({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
+  const { isExpanded, toggle: toggleRow, resetRows, expandAll, collapseAll, allExpanded } = useRowExpansion();
 
   // Any filter change invalidates the current page number - staying on page 5 of a result set that
   // now has two pages shows an empty table and looks like a bug.
   useEffect(() => setPage(0), [filters, windowDays]);
+
+  // Paging or re-filtering replaces the rows under an open detail, so the expander would end up
+  // describing whoever happens to land on that line next. "Expand all" survives it: that is a
+  // choice about the whole list, not about the rows that happened to be on screen.
+  useEffect(() => resetRows(), [filters, windowDays, page, resetRows]);
 
   useEffect(() => {
     let cancelled = false;
@@ -242,7 +276,7 @@ export default function LicensedUsersPanel({
 
   // The whole list while a print is being produced; the page on screen the rest of the time.
   const printRows = usePrintAllRows<LicensedUserAdoptionRow>({
-    enabled: !loading && data !== null,
+    enabled: shown && !loading && data !== null,
     total: data?.total ?? 0,
     loadedRows: data?.rows.length ?? 0,
     loadPage: (skip, take, signal) => fetchLicensedUsers(windowDays, filters, skip, take, seatLicenceTypeIds, signal, ...(dateRange ? [dateRange] as const : [])),
@@ -345,6 +379,12 @@ export default function LicensedUsersPanel({
 
         <div className={styles.spacer} />
 
+        <ExpandAllButton
+          allExpanded={allExpanded}
+          onExpandAll={expandAll}
+          onCollapseAll={collapseAll}
+          disabled={rows.length === 0}
+        />
         <Button
           size="small"
           appearance="subtle"
@@ -394,6 +434,8 @@ export default function LicensedUsersPanel({
         </MessageBar>
       )}
 
+      {!loading && data && <PartialPrintNote shownRows={rows.length} totalRows={data.total} truncated={printRows !== null} />}
+
       {loading && (
         <div style={{ textAlign: 'center', padding: '28px' }}>
           <Spinner size={56} label={t('copilotAdoptionUsers.licensed.loadingUsers')} />
@@ -421,7 +463,7 @@ export default function LicensedUsersPanel({
           <table className={table.table}>
             <thead>
               <tr>
-                <SortableTh label={t('copilotAdoptionUsers.common.userSortLabel')} sortKey="upn" activeKey={filters.sortBy} descending={filters.sortDesc} onSort={applySort} className={table.stickyLeft}>
+                <SortableTh label={t('copilotAdoptionUsers.common.userSortLabel')} sortKey="upn" activeKey={filters.sortBy} descending={filters.sortDesc} onSort={applySort}>
                   {t('copilotAdoptionUsers.common.user')}
                 </SortableTh>
                 <SortableTh label={t('copilotAdoptionUsers.common.departmentSortLabel')} sortKey="department" activeKey={filters.sortBy} descending={filters.sortDesc} onSort={applySort}>
@@ -520,21 +562,6 @@ export default function LicensedUsersPanel({
                   {t('copilotAdoptionUsers.licensed.bandHeader')}
                 </SortableTh>
                 <SortableTh
-                  label={t('copilotAdoptionUsers.licensed.signalSourceLabel')}
-                  sortKey="signalSource"
-                  activeKey={filters.sortBy}
-                  descending={filters.sortDesc}
-                  onSort={applySort}
-                  infoTitle={t('copilotAdoptionUsers.licensed.signalSourceTitle')}
-                  info={{
-                    what: t('copilotAdoptionUsers.licensed.signalSourceWhat'),
-                    how: t('copilotAdoptionUsers.licensed.signalSourceHow', { windowDays }),
-                    source: t('copilotAdoptionUsers.licensed.signalSourceSource'),
-                  }}
-                >
-                  {t('copilotAdoptionUsers.licensed.signalHeader')}
-                </SortableTh>
-                <SortableTh
                   label={t('copilotAdoptionUsers.licensed.interactionsSortLabel')}
                   sortKey="interactions"
                   activeKey={filters.sortBy}
@@ -542,6 +569,7 @@ export default function LicensedUsersPanel({
                   onSort={applySort}
                   numeric
                   defaultDescending
+                  className={styles.optionalColumn}
                 >
                   {t('copilotAdoptionUsers.licensed.interactionsHeader')}
                 </SortableTh>
@@ -569,29 +597,8 @@ export default function LicensedUsersPanel({
                 >
                   {t('copilotAdoptionUsers.licensed.activeDaysHeader')}
                 </SortableTh>
-                <SortableTh label={t('copilotAdoptionUsers.licensed.appsUsedLabel')} sortKey="apps" activeKey={filters.sortBy} descending={filters.sortDesc} onSort={applySort} numeric defaultDescending>
-                  {t('copilotAdoptionUsers.licensed.appsHeader')}
-                </SortableTh>
-                <SortableTh label={t('copilotAdoptionUsers.licensed.coworkUseLabel')} sortKey="cowork" activeKey={filters.sortBy} descending={filters.sortDesc} onSort={applySort} defaultDescending>
-                  {t('copilotAdoptionUsers.licensed.coworkHeader')}
-                </SortableTh>
-                <SortableTh label={t('copilotAdoptionUsers.licensed.lastUsedLabel')} sortKey="lastUse" activeKey={filters.sortBy} descending={filters.sortDesc} onSort={applySort}>
+                <SortableTh label={t('copilotAdoptionUsers.licensed.lastUsedLabel')} sortKey="lastUse" activeKey={filters.sortBy} descending={filters.sortDesc} onSort={applySort} className={styles.optionalColumn}>
                   {t('copilotAdoptionUsers.licensed.lastUsedHeader')}
-                </SortableTh>
-                <SortableTh
-                  label={t('copilotAdoptionUsers.licensed.reclaimTierLabel')}
-                  sortKey="reclaimEligibility"
-                  activeKey={filters.sortBy}
-                  descending={filters.sortDesc}
-                  onSort={applySort}
-                  infoTitle={t('copilotAdoptionUsers.licensed.reclaimEligibilityTitle')}
-                  info={{
-                    what: t('copilotAdoptionUsers.licensed.reclaimEligibilityWhat'),
-                    how: t('copilotAdoptionUsers.licensed.reclaimEligibilityHow', { days: options.reclaimGraceDays }),
-                    source: t('copilotAdoptionUsers.licensed.reclaimEligibilitySource'),
-                  }}
-                >
-                  {t('copilotAdoptionUsers.licensed.reclaimTierHeader')}
                 </SortableTh>
                 <SortableTh
                   label={t('copilotAdoptionUsers.licensed.recommendedActionLabel')}
@@ -599,7 +606,6 @@ export default function LicensedUsersPanel({
                   activeKey={filters.sortBy}
                   descending={filters.sortDesc}
                   onSort={applySort}
-                  className={table.stickyRight}
                   infoTitle={t('copilotAdoptionUsers.licensed.recommendedActionTitle')}
                   info={{
                     what: t('copilotAdoptionUsers.licensed.recommendedActionWhat'),
@@ -612,88 +618,198 @@ export default function LicensedUsersPanel({
               </tr>
             </thead>
             <tbody>
-              {rows.map((row) => (
-                <tr key={row.userId}>
-                  <td className={`${table.td} ${table.stickyLeft}`}>
-                    <span className={styles.upn}>
-                      <Text size={200} weight="semibold">
-                        {row.userPrincipalName}
-                      </Text>
-                      <Text size={100} className={row.accountEnabled === false ? styles.disabled : styles.muted}>
-                        {row.accountEnabled === false ? t('copilotAdoptionUsers.licensed.accountDisabled') : row.jobTitle || row.mail || ''}
-                      </Text>
-                    </span>
-                  </td>
-                  <td className={table.td}>{row.department || '\u2014'}</td>
-                  <td className={table.td}>
-                    <Tooltip
-                      relationship="description"
-                      content={t('copilotAdoptionUsers.licensed.scoreTooltip', {
-                        frequency: Math.round(row.frequencyScore),
-                        depth: Math.round(row.depthScore),
-                        breadth: Math.round(row.breadthScore),
-                        activeDays: row.activeDays,
-                        expectedDays: row.expectedActiveDays,
-                      })}
-                    >
-                      <div>
-                        <ScoreBar score={row.adoptionScore} colour={scoreColour(row.adoptionScore, bands)} />
-                      </div>
-                    </Tooltip>
-                  </td>
-                  <td className={`${table.td} ${table.tdNoWrap}`}>
-                    <BandBadge band={row.band} name={adoptionBandLabel(t, row.band, row.bandName)} />
-                  </td>
-                  <td className={`${table.td} ${table.tdNoWrap}`}>
-                    <Text size={200}>{sourceLabel(t, row.signalSource)}</Text>
-                    {row.sourceComparisonAvailable && (
-                      // The two source figures used to be printed under the label. Squeezed into this
-                      // column they wrapped to five lines and set the height of every row in the
-                      // table, for a reconciliation detail that is only read when a figure is being
-                      // questioned. Same information, on hover - and still in the CSV export.
-                      <Text
-                        size={100}
-                        block
-                        className={`${table.tdSub} ${styles.comparison}`}
-                        title={sourceComparisonText(t, row, windowDays, dataSources)}
-                      >
-                        {t('copilotAdoptionUsers.licensed.bothSources')}
-                      </Text>
+              {rows.map((row) => {
+                const open = isExpanded(row.userId);
+                const disabled = row.accountEnabled === false;
+                const reclaimTier = reclaimTierText(t, row.reclaimEligibility);
+                return (
+                  <Fragment key={row.userId}>
+                    <tr>
+                      <ExpandableUserCell
+                        open={open}
+                        onToggle={() => toggleRow(row.userId)}
+                        userPrincipalName={row.userPrincipalName}
+                        secondary={disabled ? t('copilotAdoptionUsers.licensed.accountDisabled') : row.jobTitle || row.mail}
+                        secondaryClassName={disabled ? styles.disabled : undefined}
+                        wrapName
+                      />
+                      <td className={table.td}>{row.department || '\u2014'}</td>
+                      <td className={table.td}>
+                        <Tooltip
+                          relationship="description"
+                          content={t('copilotAdoptionUsers.licensed.scoreTooltip', {
+                            frequency: Math.round(row.frequencyScore),
+                            depth: Math.round(row.depthScore),
+                            breadth: Math.round(row.breadthScore),
+                            activeDays: row.activeDays,
+                            expectedDays: row.expectedActiveDays,
+                          })}
+                        >
+                          <div>
+                            <ScoreBar score={row.adoptionScore} colour={scoreColour(row.adoptionScore, bands)} />
+                          </div>
+                        </Tooltip>
+                      </td>
+                      <td className={`${table.td} ${table.tdNoWrap}`}>
+                        <BandBadge band={row.band} name={adoptionBandLabel(t, row.band, row.bandName)} />
+                      </td>
+                      <td className={`${table.td} ${table.tdNumeric} ${styles.optionalColumn}`}>{formatCount(row.interactions)}</td>
+                      <td className={`${table.td} ${table.tdNumeric} ${table.tdNoWrap}`}>
+                        {row.activeDays} <span className={styles.muted}>/ {Math.round(row.expectedActiveDays)}</span>
+                      </td>
+                      <td className={`${table.td} ${table.tdNoWrap} ${styles.optionalColumn}`}>
+                        {formatDate(row.lastInteractionUtc)}
+                        {row.daysSinceLastUse !== null && row.daysSinceLastUse > 0 && (
+                          <Text size={100} block className={table.tdSub}>
+                            {t('copilotAdoptionUsers.licensed.daysAgo', { days: row.daysSinceLastUse })}
+                          </Text>
+                        )}
+                      </td>
+                      <td className={table.td}>
+                        <Tooltip relationship="description" content={recommendedActionText(t, row, options)}>
+                          <div>
+                            <ActionBadge code={row.recommendedActionCode} label={row.recommendedActionLabel} wrap />
+                          </div>
+                        </Tooltip>
+                        {/* The reclaim tier lost its column, but a seat that is in one is the reason many
+                            readers open this list, so it stays on the row - under the action it qualifies. */}
+                        {reclaimTier && (
+                          <Text size={100} block className={table.tdSub}>
+                            {row.reclaimExclusionExpired
+                              ? t('copilotAdoptionUsers.licensed.reclaimTierExpired', { tier: reclaimTier })
+                              : reclaimTier}
+                          </Text>
+                        )}
+                      </td>
+                    </tr>
+                    {open && (
+                      <DetailRow colSpan={TABLE_COLUMNS}>
+                        <DetailSections>
+                          <DetailSection
+                            title={t('copilotAdoptionUsers.licensed.detail.engagementTitle', { score: Math.round(row.adoptionScore) })}
+                          >
+                            <DetailStats>
+                              <DetailStat
+                                label={t('copilotAdoptionUsers.licensed.detail.frequency')}
+                                value={Math.round(row.frequencyScore)}
+                                sub={t('copilotAdoptionUsers.licensed.detail.frequencySub', {
+                                  activeDays: formatCount(row.activeDays),
+                                  expectedDays: formatCount(Math.round(row.expectedActiveDays)),
+                                })}
+                              />
+                              <DetailStat
+                                label={t('copilotAdoptionUsers.licensed.detail.depth')}
+                                value={Math.round(row.depthScore)}
+                                sub={t('copilotAdoptionUsers.licensed.detail.depthSub', {
+                                  target: formatCount(options.depthTargetInteractionsPerActiveDay),
+                                })}
+                              />
+                              <DetailStat
+                                label={t('copilotAdoptionUsers.licensed.detail.breadth')}
+                                value={Math.round(row.breadthScore)}
+                                sub={t('copilotAdoptionUsers.licensed.detail.breadthSub', {
+                                  apps: formatCount(row.appsUsed),
+                                  target: formatCount(options.breadthTargetApps),
+                                })}
+                              />
+                            </DetailStats>
+                          </DetailSection>
+
+                          <DetailSection title={t('copilotAdoptionUsers.licensed.detail.useTitle')}>
+                            <DetailStats>
+                              <DetailStat
+                                label={t('copilotAdoptionUsers.licensed.interactionsHeader')}
+                                value={formatCount(row.interactions)}
+                              />
+                              <DetailStat
+                                label={t('copilotAdoptionUsers.licensed.appsHeader')}
+                                value={formatCount(row.appsUsed)}
+                                sub={t('copilotAdoptionUsers.licensed.detail.agentsSub', { agents: formatCount(row.agentsUsed) })}
+                              />
+                              <DetailStat label={t('copilotAdoptionUsers.licensed.coworkHeader')} value={coworkCell(t, row)} />
+                              <DetailStat
+                                label={t('copilotAdoptionUsers.licensed.detail.firstUsed')}
+                                value={formatDate(row.firstInteractionUtc)}
+                              />
+                              <DetailStat
+                                label={t('copilotAdoptionUsers.licensed.lastUsedHeader')}
+                                value={formatDate(row.lastInteractionUtc)}
+                                sub={
+                                  row.daysSinceLastUse !== null && row.daysSinceLastUse > 0
+                                    ? t('copilotAdoptionUsers.licensed.daysAgo', { days: row.daysSinceLastUse })
+                                    : undefined
+                                }
+                              />
+                            </DetailStats>
+                          </DetailSection>
+
+                          <DetailSection
+                            title={t('copilotAdoptionUsers.licensed.signalSourceTitle')}
+                            info={{
+                              what: t('copilotAdoptionUsers.licensed.signalSourceWhat'),
+                              how: t('copilotAdoptionUsers.licensed.signalSourceHow', { windowDays }),
+                              source: t('copilotAdoptionUsers.licensed.signalSourceSource'),
+                            }}
+                          >
+                            <DetailStats>
+                              <DetailStat
+                                label={t('copilotAdoptionUsers.licensed.signalHeader')}
+                                value={sourceLabel(t, row.signalSource)}
+                                sub={row.sourceComparisonAvailable ? t('copilotAdoptionUsers.licensed.bothSources') : undefined}
+                              />
+                            </DetailStats>
+                            {row.sourceComparisonAvailable && (
+                              <Text size={200} block className={styles.comparison}>
+                                {sourceComparisonText(t, row, windowDays, dataSources)}
+                              </Text>
+                            )}
+                          </DetailSection>
+
+                          <DetailSection
+                            title={t('copilotAdoptionUsers.licensed.detail.seatTitle')}
+                            info={{
+                              what: t('copilotAdoptionUsers.licensed.reclaimEligibilityWhat'),
+                              how: t('copilotAdoptionUsers.licensed.reclaimEligibilityHow', { days: options.reclaimGraceDays }),
+                              source: t('copilotAdoptionUsers.licensed.reclaimEligibilitySource'),
+                            }}
+                            infoTitle={t('copilotAdoptionUsers.licensed.reclaimEligibilityTitle')}
+                          >
+                            <DetailStats>
+                              <DetailStat
+                                label={t('copilotAdoptionUsers.licensed.reclaimTierHeader')}
+                                value={reclaimTier || t('copilotAdoptionUsers.licensed.detail.noReclaimTier')}
+                                sub={row.reclaimExclusionExpired ? t('copilotAdoptionUsers.licensed.exclusionExpired') : undefined}
+                              />
+                              <DetailStat
+                                label={t('copilotAdoptionUsers.licensed.detail.account')}
+                                value={t(disabled ? 'copilotAdoptionUsers.licensed.accountDisabled' : 'copilotAdoptionUsers.licensed.detail.accountEnabled')}
+                              />
+                              <DetailStat
+                                label={t('copilotAdoptionUsers.licensed.detail.licences')}
+                                value={row.seatLicences || '\u2014'}
+                              />
+                            </DetailStats>
+                          </DetailSection>
+                        </DetailSections>
+
+                        <DetailSection title={t('copilotAdoptionUsers.licensed.detail.reclaimReasonTitle')}>
+                          <DetailRationale
+                            text={reclaimEligibilityReason(t, row, options) || t('copilotAdoptionUsers.licensed.activeSeatNotReclaimable')}
+                          />
+                        </DetailSection>
+
+                        <DetailSection
+                          title={t('copilotAdoptionUsers.licensed.detail.actionTitle', {
+                            action: actionLabel(t, row.recommendedActionCode, row.recommendedActionLabel),
+                          })}
+                        >
+                          <DetailRationale text={recommendedActionText(t, row, options)} />
+                        </DetailSection>
+                      </DetailRow>
                     )}
-                  </td>
-                  <td className={`${table.td} ${table.tdNumeric}`}>{formatCount(row.interactions)}</td>
-                  <td className={`${table.td} ${table.tdNumeric} ${table.tdNoWrap}`}>
-                    {row.activeDays} <span className={styles.muted}>/ {Math.round(row.expectedActiveDays)}</span>
-                  </td>
-                  <td className={`${table.td} ${table.tdNumeric}`}>{row.appsUsed}</td>
-                  <td className={`${table.td} ${table.tdNoWrap}`}>{coworkCell(t, row)}</td>
-                  <td className={`${table.td} ${table.tdNoWrap}`}>
-                    {formatDate(row.lastInteractionUtc)}
-                    {row.daysSinceLastUse !== null && row.daysSinceLastUse > 0 && (
-                      <Text size={100} block className={table.tdSub}>
-                        {t('copilotAdoptionUsers.licensed.daysAgo', { days: row.daysSinceLastUse })}
-                      </Text>
-                    )}
-                  </td>
-                  <td className={`${table.td} ${table.tdNoWrap}`}>
-                    <Tooltip relationship="description" content={reclaimEligibilityReason(t, row, options) || t('copilotAdoptionUsers.licensed.activeSeatNotReclaimable')}>
-                      <Text size={200}>{reclaimEligibilityLabel(t, row.reclaimEligibility)}</Text>
-                    </Tooltip>
-                    {row.reclaimExclusionExpired && (
-                      <Text size={100} block className={table.tdSub}>
-                        {t('copilotAdoptionUsers.licensed.exclusionExpired')}
-                      </Text>
-                    )}
-                  </td>
-                  <td className={`${table.td} ${table.tdNoWrap} ${table.stickyRight}`}>
-                    <Tooltip relationship="description" content={recommendedActionText(t, row, options)}>
-                      <div>
-                        <ActionBadge code={row.recommendedActionCode} label={row.recommendedActionLabel} />
-                      </div>
-                    </Tooltip>
-                  </td>
-                </tr>
-              ))}
+                  </Fragment>
+                );
+              })}
             </tbody>
           </table>
           </div>
@@ -729,7 +845,6 @@ export default function LicensedUsersPanel({
           )}
         </div>
       )}
-      {!loading && data && <PartialPrintNote shownRows={rows.length} totalRows={data.total} />}
     </Card>
   );
 }
@@ -741,6 +856,16 @@ function sourceLabel(t: TFunction, source: string): string {
     : source === 'audit'
       ? t('copilotAdoptionUsers.licensed.sourceAudit')
       : source;
+}
+
+/**
+ * A seat's reclaim tier as the filter names it - "Probable reclaim" rather than the bare "probable",
+ * which says nothing on its own under an action badge. Empty for a seat in no tier.
+ */
+function reclaimTierText(t: TFunction, tier: string | null): string {
+  if (!tier) return '';
+  const option = RECLAIM_OPTIONS.find((o) => o.value === tier);
+  return option ? t(option.labelKey) : reclaimEligibilityLabel(t, tier);
 }
 
 /**

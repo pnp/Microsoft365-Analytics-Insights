@@ -178,4 +178,62 @@ namespace Common.Entities.CopilotAdoption
         [JsonProperty("agents")]
         public List<AgentUsageRow> Agents { get; set; } = new List<AgentUsageRow>();
     }
+
+    /// <summary>
+    /// One person's use of Copilot agents in the reporting period, for the Agents tab's list of the
+    /// heaviest agent users - and whether they hold a Microsoft 365 Copilot seat, because heavy agent
+    /// use without one is a licence conversation and heavy use with one is an advocate.
+    /// </summary>
+    /// <remarks>
+    /// Names a person, so it is only ever sent to a reader with the See PII permission: see
+    /// <see cref="CopilotAdoptionSummary.WithoutIndividualData"/>. Every agent counts, Cowork included, as
+    /// it does in the estate's own agent-user figures.
+    /// </remarks>
+    public class AgentUserRow
+    {
+        [JsonProperty("userId")]
+        public int UserId { get; set; }
+
+        [JsonProperty("userPrincipalName")]
+        public string UserPrincipalName { get; set; }
+
+        [JsonProperty("mail")]
+        public string Mail { get; set; }
+
+        /// <summary>The organisation this person belongs to. Derived after the query; see <see cref="CopilotAdoptionEmailDomain"/>.</summary>
+        [JsonProperty("emailDomain")]
+        public string EmailDomain { get; set; }
+
+        [JsonProperty("department")]
+        public string Department { get; set; }
+
+        [JsonProperty("jobTitle")]
+        public string JobTitle { get; set; }
+
+        /// <summary>Agent interactions in the reporting period, across every agent.</summary>
+        [JsonProperty("interactions")]
+        public long Interactions { get; set; }
+
+        /// <summary>Distinct agents used in the period.</summary>
+        [JsonProperty("agentsUsed")]
+        public int AgentsUsed { get; set; }
+
+        /// <summary>Distinct days with at least one agent interaction.</summary>
+        [JsonProperty("activeDays")]
+        public int ActiveDays { get; set; }
+
+        [JsonProperty("lastUsedUtc")]
+        public DateTime? LastUsedUtc { get; set; }
+
+        /// <summary>The agent this person used most, or the unnamed-agent placeholder when it has no name.</summary>
+        [JsonProperty("topAgentName")]
+        public string TopAgentName { get; set; }
+
+        [JsonProperty("topAgentInteractions")]
+        public long TopAgentInteractions { get; set; }
+
+        /// <summary>True when the person holds a Microsoft 365 Copilot seat today.</summary>
+        [JsonProperty("holdsCopilotSeat")]
+        public bool HoldsCopilotSeat { get; set; }
+    }
 }

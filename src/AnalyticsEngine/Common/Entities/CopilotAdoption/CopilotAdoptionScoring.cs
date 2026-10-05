@@ -1050,6 +1050,12 @@ namespace Common.Entities.CopilotAdoption
                 FilesViewedOrEdited = row.FilesViewedOrEdited,
                 LastM365ActivityUtc = row.LastM365ActivityUtc,
 
+                MeetingsOrganisedPerActiveDay = row.MeetingsOrganisedPerActiveDay,
+                MeetingsAttendedPerActiveDay = row.MeetingsAttendedPerActiveDay,
+                ChatAndChannelMessagesPerActiveDay = row.ChatAndChannelMessagesPerActiveDay,
+                EmailsSentPerActiveDay = row.EmailsSentPerActiveDay,
+                FilesPerActiveDay = row.FilesPerActiveDay,
+
                 CopilotDemandScore = Round(copilot * 100d, 1),
                 CollaborationScore = Round(collaboration * 100d, 1),
                 EmailScore = Round(email * 100d, 1),
@@ -1665,7 +1671,8 @@ namespace Common.Entities.CopilotAdoption
         /// <param name="options">Tuning, including every share and minutes-saved assumption.</param>
         public static CoworkValueEstimate EstimateCoworkValue(
             IReadOnlyCollection<CoworkReadinessRow> cohort,
-            CopilotAdoptionOptions options = null)
+            CopilotAdoptionOptions options = null,
+            CoworkEstimateCohort who = CoworkEstimateCohort.SeatHolders)
         {
             var o = options ?? CopilotAdoptionOptions.Default;
 
@@ -1693,7 +1700,39 @@ namespace Common.Entities.CopilotAdoption
                 inputs.ActivityVolumes[CoworkActivities.All[i].Key] = volumes[i];
             }
 
-            return ModelCoworkValue(cohort.Count, o, inputs);
+            return ModelCoworkValue(cohort.Count, o, inputs, who);
+        }
+
+        /// <summary>
+        /// The Cowork estimate for people without a Copilot seat: every licence candidate, modelled from the
+        /// same unrounded per-active-day work, from the same reports, as a seat holder's.
+        /// </summary>
+        /// <remarks>
+        /// Cowork needs a Microsoft 365 Copilot licence, so this is what Cowork could add for these people
+        /// once licensed and enabled. The time the licence itself would give back is the licence estimate,
+        /// beside the decision it sizes on the Licence opportunities tab - and the two are never added.
+        /// </remarks>
+        public static CoworkValueEstimate EstimateCoworkValueWithoutLicence(
+            IReadOnlyCollection<LicenceOpportunityRow> candidates,
+            CopilotAdoptionOptions options = null)
+        {
+            if (candidates == null || candidates.Count == 0)
+            {
+                return new CoworkValueEstimate();
+            }
+
+            var work = candidates
+                .Select(c => new CoworkReadinessRow
+                {
+                    MeetingsOrganisedPerActiveDay = c.MeetingsOrganisedPerActiveDay,
+                    MeetingsAttendedPerActiveDay = c.MeetingsAttendedPerActiveDay,
+                    ChatAndChannelMessagesPerActiveDay = c.ChatAndChannelMessagesPerActiveDay,
+                    EmailsSentPerActiveDay = c.EmailsSentPerActiveDay,
+                    FilesPerActiveDay = c.FilesPerActiveDay,
+                })
+                .ToList();
+
+            return EstimateCoworkValue(work, options, CoworkEstimateCohort.WithoutLicence);
         }
 
         /// <summary>
@@ -1724,7 +1763,8 @@ namespace Common.Entities.CopilotAdoption
         public static CoworkValueEstimate ModelCoworkValue(
             int cohortUsers,
             CopilotAdoptionOptions options = null,
-            CoworkTaskInputs inputs = null)
+            CoworkTaskInputs inputs = null,
+            CoworkEstimateCohort who = CoworkEstimateCohort.SeatHolders)
         {
             var o = options ?? CopilotAdoptionOptions.Default;
             var estimate = new CoworkValueEstimate();
@@ -1780,10 +1820,25 @@ namespace Common.Entities.CopilotAdoption
                 + $"{Percent(documents.Share(o))} of the files they work on. No study has measured how much "
                 + "work people hand to Cowork either, so these shares are assumptions too.");
 
-            estimate.Assumptions.Add(
-                $"Covers {cohortUsers:N0} Copilot seat holder{Plural(cohortUsers)}. The work people already "
-                + $"do comes from Microsoft's usage reports, restated over {Num(WorkingDaysPerMonth(o))} working "
-                + "days a month.");
+            if (who == CoworkEstimateCohort.WithoutLicence)
+            {
+                estimate.Assumptions.Add(
+                    $"Covers {cohortUsers:N0} {(cohortUsers == 1 ? "person" : "people")} without a Microsoft 365 Copilot "
+                    + "licence - every licence candidate. The work people already do comes from Microsoft's usage "
+                    + $"reports, restated over {Num(WorkingDaysPerMonth(o))} working days a month.");
+
+                estimate.Assumptions.Add(
+                    "Cowork needs a Microsoft 365 Copilot licence, so for these people this is what Cowork could add "
+                    + "once they were licensed and enabled for it. The time the licence itself would give back is the "
+                    + "licence estimate, and the two are never added together.");
+            }
+            else
+            {
+                estimate.Assumptions.Add(
+                    $"Covers {cohortUsers:N0} Copilot seat holder{Plural(cohortUsers)}. The work people already "
+                    + $"do comes from Microsoft's usage reports, restated over {Num(WorkingDaysPerMonth(o))} working "
+                    + "days a month.");
+            }
 
             estimate.Assumptions.Add(
                 "Everyone here is modelled from the work they already do by hand, including people already "
@@ -2025,7 +2080,7 @@ namespace Common.Entities.CopilotAdoption
             }
 
             // Both the opportunity query and the Cowork readiness query reduce Graph's daily reports to a
-            // per-active-day average (CopilotAdoptionSql.PerActiveDay), so the same working-days multiplier
+            // per-active-day average (CopilotAdoptionSql.RoundedPerDay), so the same working-days multiplier
             // restates them as the month every modelled figure in this report is quoted in.
             var workingDaysPerMonth = WorkingDaysPerMonth(o);
 

@@ -65,9 +65,8 @@ export const common = {
 
   // Print button
   'common.print.preparing': 'Preparing\u2026',
-  'common.print.tooManyRows.title': 'Too many rows to print',
-  'common.print.tooManyRows.body':
-    '{rows} rows match this list\u2019s filters, and a list prints in full only up to {limit} rows. Narrow the list with its filters and print again, or export it to get every row.',
+  'common.print.truncated':
+    'Printed the first {limit} of {rows} rows: the list is too long to print in full, and the printout says so. Narrow it with its filters to print the rest, or export it for every row.',
   'common.print.failed.title': 'Could not prepare the printout',
   'common.print.failed.body':
     'The full list could not be loaded for printing, so nothing was printed. Try again in a moment.',

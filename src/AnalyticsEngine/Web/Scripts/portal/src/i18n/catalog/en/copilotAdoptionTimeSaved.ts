@@ -64,7 +64,7 @@ export const copilotAdoptionTimeSaved = {
   'copilotAdoptionTimeSaved.input.resetAll': 'Reset every figure to the product default',
   'copilotAdoptionTimeSaved.input.invalid': 'Enter a number from {min} to {max}.',
   'copilotAdoptionTimeSaved.input.usingYours': 'Using yours: {minutes} min',
-  'copilotAdoptionTimeSaved.input.sharedNote': 'The conservative share and the hours in a working day apply to both time-saved estimates - licensing and Cowork - so changing either here changes it on the other tab too.',
+  'copilotAdoptionTimeSaved.input.sharedNote': 'The conservative share applies to every time-saved estimate - licensing, Cowork and the time already saved by seat holders - and the hours in a working day to licensing and Cowork, so changing either here changes it on the other tabs too.',
   'copilotAdoptionTimeSaved.storage.defaults': 'Any figure you change is kept in this browser tab only, for this session. It is not saved to the database and nobody else sees it, but it is used in the Excel report you download from this page.',
   'copilotAdoptionTimeSaved.storage.customised': 'You are using your own figures. They are kept in this browser tab only, for this session, and are applied to the Excel report you download from this page. Anybody else opening this report sees the product defaults.',
 
@@ -199,6 +199,32 @@ export const copilotAdoptionTimeSaved = {
   'copilotAdoptionTimeSaved.own.askPerItem': 'If you survey the pilot, ask for minutes saved per meeting, per email and per document rather than one "hours a week" figure: a specific question overstates less.',
   'copilotAdoptionTimeSaved.own.compareDashboard': 'Once the pilot is licensed, cross-check with Copilot assisted hours in Microsoft\u2019s Copilot Dashboard, which applies Microsoft\u2019s per-action credits to their actual Copilot use.',
   'copilotAdoptionTimeSaved.own.enter': 'Enter the results above. The headline on this tab, the overview\u2019s time back from licensing and the Excel report all use them for the rest of your session.',
+
+  // The time already saved by seat holders: the model on the Licensed users tab
+  'copilotAdoptionTimeSaved.seat.model.intro.one': 'Copilot actions observed in the audit log for the {users} seat holder with per-action detail, each multiplied by the minutes that kind of action is credited with. The counts are measured; the minutes are assumptions - the product\u2019s defaults, or yours. Change any figure below and this table and the overview\u2019s time already saved by seat holders both follow. Hours only, never money, and never added to the licensing or Cowork estimates.',
+  'copilotAdoptionTimeSaved.seat.model.intro.other': 'Copilot actions observed in the audit log for the {users} seat holders with per-action detail, each multiplied by the minutes that kind of action is credited with. The counts are measured; the minutes are assumptions - the product\u2019s defaults, or yours. Change any figure below and this table and the overview\u2019s time already saved by seat holders both follow. Hours only, never money, and never added to the licensing or Cowork estimates.',
+  'copilotAdoptionTimeSaved.seat.model.excluded.one': '{users} seat holder is not in this figure: they were scored from Microsoft\u2019s usage report, which counts prompts but not the per-action detail this model needs.',
+  'copilotAdoptionTimeSaved.seat.model.excluded.other': '{users} seat holders are not in this figure: they were scored from Microsoft\u2019s usage report, which counts prompts but not the per-action detail this model needs.',
+  'copilotAdoptionTimeSaved.seat.model.zeroCreditNote': 'Copilot Chat and other non-agent surfaces default to zero minutes because Microsoft has not published a per-prompt credit; give them minutes above if you want to model them. Agent and Cowork activity is left out of this figure; Cowork remains in its own estimate.',
+  'copilotAdoptionTimeSaved.seat.model.sharedNote': 'The conservative share is the one the licensing and Cowork estimates use, so changing it here changes it on those tabs too. The minutes per action are used by this estimate alone.',
+  'copilotAdoptionTimeSaved.seat.table.action': 'Copilot action',
+  'copilotAdoptionTimeSaved.seat.table.observed': 'Actions a month',
+  'copilotAdoptionTimeSaved.seat.action.outlook': 'Outlook',
+  'copilotAdoptionTimeSaved.seat.action.office': 'Word, PowerPoint and Excel',
+  'copilotAdoptionTimeSaved.seat.action.meetings': 'Teams meetings',
+  'copilotAdoptionTimeSaved.seat.action.other': 'Copilot Chat and other apps',
+  'copilotAdoptionTimeSaved.seat.volume.outlook': 'Copilot interactions in Outlook',
+  'copilotAdoptionTimeSaved.seat.volume.office': 'Copilot interactions in Word, PowerPoint and Excel',
+  'copilotAdoptionTimeSaved.seat.volume.meetings': 'Meetings Copilot was used in, each counted once per person',
+  'copilotAdoptionTimeSaved.seat.volume.other': 'Every other Copilot interaction, such as Copilot Chat - agents and Cowork excluded',
+  'copilotAdoptionTimeSaved.seat.input.outlook': 'Outlook minutes per action',
+  'copilotAdoptionTimeSaved.seat.input.office': 'Word, PowerPoint and Excel minutes per action',
+  'copilotAdoptionTimeSaved.seat.input.meeting': 'Teams meeting minutes per action',
+  'copilotAdoptionTimeSaved.seat.input.other': 'Other-surface minutes per action',
+  'copilotAdoptionTimeSaved.seat.departments.title': 'Where the time is saved, by department',
+  'copilotAdoptionTimeSaved.seat.departments.note': 'Up to {top} departments, chosen by the time saved at the product defaults, among departments with at least {minSeats} seat holders with per-action detail. Their hours follow the minutes above.',
+  'copilotAdoptionTimeSaved.seat.departments.department': 'Department',
+  'copilotAdoptionTimeSaved.seat.departments.people': 'Seat holders',
 } as const;
 
 export default copilotAdoptionTimeSaved;

@@ -363,6 +363,22 @@ namespace Common.Entities.CopilotAdoption
 
         /// <summary>Most recent activity date across the Microsoft 365 usage reports.</summary>
         public DateTime? LastM365ActivityUtc { get; set; }
+
+        /// <summary>
+        /// The work the Cowork estimate models, per active day and UNROUNDED - the same figures, from the
+        /// same reports, as a seat holder's <see cref="CoworkReadinessRow"/> carries. The figures above are
+        /// rounded to whole numbers for the licence score; rounding a person's 0.4 meetings organised a
+        /// day to none would drop most of that work from the estimate.
+        /// </summary>
+        public double MeetingsOrganisedPerActiveDay { get; set; }
+
+        public double MeetingsAttendedPerActiveDay { get; set; }
+
+        public double ChatAndChannelMessagesPerActiveDay { get; set; }
+
+        public double EmailsSentPerActiveDay { get; set; }
+
+        public double FilesPerActiveDay { get; set; }
     }
 
     /// <summary>An unlicensed user ranked as a candidate for a Copilot seat.</summary>
@@ -464,5 +480,26 @@ namespace Common.Entities.CopilotAdoption
         /// <summary>Plain-English justification, safe to paste into a licence request.</summary>
         [JsonProperty("rationale")]
         public string Rationale { get; set; }
+
+        /// <summary>
+        /// The work the Cowork estimate models, per active day and unrounded - see
+        /// <see cref="UnlicensedUserSignalRow.MeetingsOrganisedPerActiveDay"/>. Kept for the Cowork tab's
+        /// "people without a Copilot licence" estimate, which every filtered view rebuilds from these rows.
+        /// Not part of the list or its export, which carry the rounded figures above.
+        /// </summary>
+        [JsonIgnore]
+        public double MeetingsOrganisedPerActiveDay { get; set; }
+
+        [JsonIgnore]
+        public double MeetingsAttendedPerActiveDay { get; set; }
+
+        [JsonIgnore]
+        public double ChatAndChannelMessagesPerActiveDay { get; set; }
+
+        [JsonIgnore]
+        public double EmailsSentPerActiveDay { get; set; }
+
+        [JsonIgnore]
+        public double FilesPerActiveDay { get; set; }
     }
 }

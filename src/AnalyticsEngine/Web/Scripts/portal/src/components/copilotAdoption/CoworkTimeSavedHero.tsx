@@ -144,10 +144,13 @@ export default function CoworkTimeSavedHero({
 
   const ready = projectCoworkTimeSaved(summary.coworkValueEstimate, assumptions, options);
   const full = projectCoworkTimeSaved(summary.coworkFullRolloutEstimate, assumptions, options);
-  const resolved = resolveTimeSavedCohort(cohort, ready, full);
+  const withoutLicence = projectCoworkTimeSaved(summary.coworkWithoutLicenceEstimate, assumptions, options);
+  const resolved = resolveTimeSavedCohort(cohort, ready, full, withoutLicence);
   if (!resolved) return null;
   const { projection: headline, cohort: shown, fallback } = resolved;
   const everyone = shown === 'all';
+  // People without a Copilot seat: a what-if on top of a licence, said as one wherever it is quoted.
+  const unlicensed = shown === 'withoutLicence';
 
   const figures = {
     percent: formatNumber(assumptions.conservativeRatio * 100, { maximumFractionDigits: 1 }),
@@ -157,7 +160,7 @@ export default function CoworkTimeSavedHero({
     modelledRange(t, formatCount(projection.hoursLow), formatCount(projection.hoursHigh));
 
   const stats: HeroStat[] = [];
-  if (!everyone && full) {
+  if (!everyone && !unlicensed && full) {
     stats.push({
       key: 'ceiling',
       value: t('copilotAdoptionTimeSaved.hero.hoursValue', { range: hours(full) }),
@@ -193,7 +196,13 @@ export default function CoworkTimeSavedHero({
       value: t('copilotAdoptionTimeSaved.stat.perPerson.value', {
         range: modelledRange(t, formatModelled(headline.minutesPerPersonDayLow), formatModelled(headline.minutesPerPersonDayHigh)),
       }),
-      label: t(everyone ? 'copilotAdoptionCowork.timeSaved.hero.perPerson.labelAll' : 'copilotAdoptionCowork.timeSaved.hero.perPerson.label'),
+      label: t(
+        unlicensed
+          ? 'copilotAdoptionCowork.timeSaved.hero.perPerson.labelWithoutLicence'
+          : everyone
+            ? 'copilotAdoptionCowork.timeSaved.hero.perPerson.labelAll'
+            : 'copilotAdoptionCowork.timeSaved.hero.perPerson.label',
+      ),
       hint: t('copilotAdoptionCowork.timeSaved.hero.perPerson.hint'),
     },
     {
@@ -279,7 +288,13 @@ export default function CoworkTimeSavedHero({
       }
       infoTitle={t('copilotAdoptionCowork.timeSaved.hero.infoTitle')}
       info={{
-        what: t(everyone ? 'copilotAdoptionCowork.timeSaved.hero.info.whatAll' : 'copilotAdoptionCowork.timeSaved.hero.info.what'),
+        what: t(
+          unlicensed
+            ? 'copilotAdoptionCowork.timeSaved.hero.info.whatWithoutLicence'
+            : everyone
+              ? 'copilotAdoptionCowork.timeSaved.hero.info.whatAll'
+              : 'copilotAdoptionCowork.timeSaved.hero.info.what',
+        ),
         how: t('copilotAdoptionCowork.timeSaved.hero.info.how'),
         formula: t('copilotAdoptionCowork.timeSaved.hero.info.formula', {
           ...figures,
@@ -289,7 +304,7 @@ export default function CoworkTimeSavedHero({
         source: t('copilotAdoptionCowork.timeSaved.hero.info.source'),
       }}
       picker={
-        full ? (
+        full || withoutLicence ? (
           <CohortPicker
             value={shown}
             onChange={onCohortChange}
@@ -299,17 +314,33 @@ export default function CoworkTimeSavedHero({
                 label: t('copilotAdoptionCowork.timeSaved.cohort.ready', { users: formatCount(ready?.cohortUsers ?? 0) }),
                 disabled: !ready,
               },
-              {
-                value: 'all',
-                label: t('copilotAdoptionCowork.timeSaved.cohort.all', { users: formatCount(full.cohortUsers) }),
-              },
+              ...(full
+                ? [{ value: 'all' as const, label: t('copilotAdoptionCowork.timeSaved.cohort.all', { users: formatCount(full.cohortUsers) }) }]
+                : []),
+              ...(withoutLicence
+                ? [
+                    {
+                      value: 'withoutLicence' as const,
+                      label: t('copilotAdoptionCowork.timeSaved.cohort.withoutLicence', { users: formatCount(withoutLicence.cohortUsers) }),
+                    },
+                  ]
+                : []),
             ]}
           />
         ) : undefined
       }
       headline={t('copilotAdoptionTimeSaved.hero.hoursRange', { range: hours(headline) })}
       subline={
-        everyone
+        unlicensed
+          ? t(
+              plural(
+                headline.cohortUsers,
+                'copilotAdoptionCowork.timeSaved.hero.withoutLicenceAdoption.one',
+                'copilotAdoptionCowork.timeSaved.hero.withoutLicenceAdoption.other',
+              ),
+              { users: formatCount(headline.cohortUsers) },
+            )
+          : everyone
           ? t(
               plural(
                 headline.cohortUsers,
@@ -336,7 +367,17 @@ export default function CoworkTimeSavedHero({
         { pieces: formatCount(headline.projectedTasks) },
       )}
       notice={
-        everyone ? (
+        unlicensed ? (
+          <MessageBar intent="info">
+            <MessageBarBody>
+              {summary.licenceAllCandidatesEstimate?.candidatesCapped
+                ? t('copilotAdoptionCowork.timeSaved.hero.withoutLicenceNoticeCapped', {
+                    cap: formatCount(options.maxOpportunityCandidates),
+                  })
+                : t('copilotAdoptionCowork.timeSaved.hero.withoutLicenceNotice')}
+            </MessageBarBody>
+          </MessageBar>
+        ) : everyone ? (
           <MessageBar intent="info">
             <MessageBarBody>
               {t(fallback ? 'copilotAdoptionCowork.timeSaved.hero.noneReady' : 'copilotAdoptionCowork.timeSaved.hero.allNotice')}
@@ -357,7 +398,7 @@ export default function CoworkTimeSavedHero({
           <Button appearance="primary" size="small" icon={<Options16Regular />} onClick={onAdjust}>
             {t('copilotAdoptionTimeSaved.hero.adjust')}
           </Button>
-          {everyone ? (
+          {unlicensed ? null : everyone ? (
             onShowAll && (
               <Button appearance="secondary" size="small" icon={<ArrowRight16Regular />} iconPosition="after" onClick={onShowAll}>
               {t(

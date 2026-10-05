@@ -1516,8 +1516,12 @@ namespace Tests.UnitTests
             Assert.AreEqual(0, CountOccurrences(sql, "[date] = @m365ReportDate"),
                 "A single-date equality seek is exactly the bug this query shape replaced.");
 
-            // Averaged per active day, not summed, so the OpportunityXTarget values keep their units.
-            StringAssert.Contains(sql, "NULLIF(COUNT(DISTINCT CAST(t.[date] AS date)), 0)");
+            // Averaged per active day, not summed, so the OpportunityXTarget values keep their units: the
+            // window's totals are divided by the user's own distinct active days.
+            StringAssert.Contains(sql, "COUNT(DISTINCT CAST(t.[date] AS date)) AS ActiveDays");
+            StringAssert.Contains(sql, "CAST(ROUND(tt.MessagesTotal / NULLIF(tt.ActiveDays, 0), 0) AS bigint) AS Messages");
+            StringAssert.Contains(sql, "CAST(ROUND(mt.SentTotal / NULLIF(mt.ActiveDays, 0), 0) AS bigint) AS EmailsSent");
+            StringAssert.Contains(sql, "CAST(ROUND(ft.ViewedOrEditedTotal / NULLIF(ft.ActiveDays, 0), 0) AS bigint) AS ViewedOrEdited");
         }
 
         [TestMethod]

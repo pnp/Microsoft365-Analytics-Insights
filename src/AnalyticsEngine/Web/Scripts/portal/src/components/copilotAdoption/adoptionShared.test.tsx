@@ -375,6 +375,14 @@ describe('partial print note', () => {
     expect(note?.textContent).toContain(PRINT_ROW_LIMIT.toLocaleString('en'));
   });
 
+  it('says a list printed from the Print button was cut short at the limit, and how to get the rest', () => {
+    renderWithProvider(<PartialPrintNote shownRows={PRINT_ROW_LIMIT} totalRows={12345} truncated />);
+
+    const note = document.querySelector('[data-print="only"]');
+    expect(note?.textContent).toContain(`Only the first ${PRINT_ROW_LIMIT.toLocaleString('en')} of 12,345 rows are printed`);
+    expect(note?.textContent).toContain('export it for every row');
+  });
+
   it('says nothing when the whole list is on the page', () => {
     renderWithProvider(<PartialPrintNote shownRows={600} totalRows={600} />);
 
