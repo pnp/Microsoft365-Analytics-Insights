@@ -562,6 +562,57 @@ namespace Tests.UnitTests
         }
 
         /// <summary>
+        /// The query keeps only non-agent interactions (<c>agent_id IS NULL</c>) and drops Cowork with
+        /// <c>NOT (...)</c>. A bare <c>c.agent_id IN (...)</c> inside that NOT is UNKNOWN for every row it
+        /// keeps, so once the tenant had a Cowork agent row nothing survived and every seat holder's time
+        /// saved read zero. The other tests here pass no Cowork agents, which is why they never saw it.
+        /// </summary>
+        [TestMethod]
+        public void SeatHolderTimeSavedQuery_KeepsNonAgentActions_WhenACoworkAgentIsKnown()
+        {
+            using (var db = ScratchDatabase.Create("CopilotSeatTimeCowork"))
+            {
+                CreateUserTables(db);
+                CreateCopilotTables(db);
+                CreateSeatTimeMeetingTables(db);
+
+                db.Execute(
+                    @"INSERT INTO dbo.license_types (id, name, sku_id)
+                          VALUES (1, N'Microsoft Copilot for Microsoft 365', N'Microsoft_365_Copilot');
+                      INSERT INTO dbo.users (id, user_name, mail, account_enabled)
+                          VALUES (10, N'licensed@contoso.com', N'licensed@contoso.com', 1);
+                      INSERT INTO dbo.user_license_type_lookups (id, user_id, license_type_id)
+                          VALUES (1, 10, 1);
+                      INSERT INTO dbo.copilot_agents (id, name, agent_id)
+                          VALUES (5, N'Copilot Cowork', N'Copilot.M365Copilot.CoworkAgent');");
+
+                SeedCopilotInteraction(db, userId: 10, daysAgo: 1, appHost: "Outlook");
+                SeedCopilotInteraction(db, userId: 10, daysAgo: 1, appHost: "Word");
+                SeedCopilotInteraction(db, userId: 10, daysAgo: 1, appHost: "Copilot Chat");
+                // Cowork both ways it reaches the audit log: as the Cowork agent, and as a bare app host.
+                SeedCopilotInteraction(db, userId: 10, daysAgo: 1, appHost: "cowork", agentId: 5);
+                SeedCopilotInteraction(db, userId: 10, daysAgo: 1, appHost: "cowork");
+
+                var coworkAgentIds = Query<CopilotAdoptionService.IntValueRow>(db, CopilotAdoptionSql.CoworkAgentIdsSql)
+                    .Select(r => r.Value)
+                    .ToArray();
+                CollectionAssert.AreEqual(new[] { 5 }, coworkAgentIds, "Control: the service passes the Cowork agent to the query.");
+
+                var sql = CopilotAdoptionSeatTimeSql.SeatHolderTimeSavedSql(new[] { 1 }, coworkAgentIds);
+                var rows = Query<SeatHolderTimeSavedUserRow>(db, sql,
+                    new SqlParameter("@from", DateTime.UtcNow.Date.AddDays(-28)),
+                    new SqlParameter("@toExclusive", DateTime.UtcNow.Date.AddDays(1)));
+
+                var row = rows.SingleOrDefault(r => r.UserId == 10);
+                Assert.IsNotNull(row, "A seat holder's non-agent actions must survive the Cowork exclusion when a Cowork agent is known.");
+                Assert.AreEqual(1, row.OutlookActions);
+                Assert.AreEqual(1, row.OfficeActions);
+                Assert.AreEqual(0, row.TeamsMeetingActions);
+                Assert.AreEqual(1, row.UncreditedActions, "Copilot Chat only: neither Cowork interaction is counted.");
+            }
+        }
+
+        /// <summary>
         /// Guards the Unicode requirement end to end on the columns that are genuinely Unicode in
         /// production: a varchar column or a non-N string literal anywhere on this path turns a Greek
         /// department or display name into question marks, in an export about to be sent to an executive.
