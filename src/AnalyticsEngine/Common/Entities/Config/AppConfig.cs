@@ -61,15 +61,18 @@ namespace Common.Entities.Config
                 ? resolveCopilotResourceMetadata
                 : true;
 
-            this.MessageTraceMatch = ConfigurationManager.AppSettings.Get("MessageTraceMatch");
-            this.MessageTraceContainer = string.IsNullOrWhiteSpace(ConfigurationManager.AppSettings.Get("MessageTraceContainer"))
+            // net10: read through AnalyticsConfig like every other setting here. The ConfigurationManager calls
+            // these arrived with from main compile on this branch but have no App.config behind them, so they
+            // would silently read nothing and leave message tracing impossible to switch on.
+            this.MessageTraceMatch = AnalyticsConfig.AppSettings.Get("MessageTraceMatch");
+            this.MessageTraceContainer = string.IsNullOrWhiteSpace(AnalyticsConfig.AppSettings.Get("MessageTraceContainer"))
                 ? "message-traces"
-                : ConfigurationManager.AppSettings.Get("MessageTraceContainer").Trim();
-            this.MessageTraceMaxBodyBytes = long.TryParse(ConfigurationManager.AppSettings.Get("MessageTraceMaxBodyBytes"), out var messageTraceMaxBodyBytes)
+                : AnalyticsConfig.AppSettings.Get("MessageTraceContainer").Trim();
+            this.MessageTraceMaxBodyBytes = long.TryParse(AnalyticsConfig.AppSettings.Get("MessageTraceMaxBodyBytes"), out var messageTraceMaxBodyBytes)
                 && messageTraceMaxBodyBytes > 0
                 ? Math.Min(messageTraceMaxBodyBytes, MaxMessageTraceBodyBytes)
                 : 32L * 1024 * 1024;
-            this.MessageTraceMaxPerHour = int.TryParse(ConfigurationManager.AppSettings.Get("MessageTraceMaxPerHour"), out var messageTraceMaxPerHour)
+            this.MessageTraceMaxPerHour = int.TryParse(AnalyticsConfig.AppSettings.Get("MessageTraceMaxPerHour"), out var messageTraceMaxPerHour)
                 && messageTraceMaxPerHour > 0
                 ? messageTraceMaxPerHour
                 : 500;

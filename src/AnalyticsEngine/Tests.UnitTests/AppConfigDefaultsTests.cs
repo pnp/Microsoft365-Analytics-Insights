@@ -34,6 +34,10 @@ namespace Tests.UnitTests
         private const string GraphTeamsImportIntervalHours = "GraphTeamsImportIntervalHours";
         private const string ForceGraphMetadataImport = "ForceGraphMetadataImport";
         private const string ImportStartStaggerMinutes = "ImportStartStaggerMinutes";
+        private const string MessageTraceMatch = "MessageTraceMatch";
+        private const string MessageTraceContainer = "MessageTraceContainer";
+        private const string MessageTraceMaxBodyBytes = "MessageTraceMaxBodyBytes";
+        private const string MessageTraceMaxPerHour = "MessageTraceMaxPerHour";
 
 
         private static readonly string[] _trackedKeys =
@@ -52,6 +56,10 @@ namespace Tests.UnitTests
             GraphTeamsImportIntervalHours,
             ForceGraphMetadataImport,
             ImportStartStaggerMinutes,
+            MessageTraceMatch,
+            MessageTraceContainer,
+            MessageTraceMaxBodyBytes,
+            MessageTraceMaxPerHour,
 
         };
 
@@ -92,6 +100,51 @@ namespace Tests.UnitTests
             var cfg = new AppConfig();
             Assert.AreEqual(TimeSpan.FromDays(1), cfg.ChunkSize,
                 "ChunkSize must fall back to 1 day when the AppSetting is invalid, not TimeSpan.Zero.");
+        }
+
+        /// <summary>
+        /// Message tracing (#698). main reads these four with <c>ConfigurationManager</c>, which still compiles on
+        /// this branch but has no App.config behind it: a value set here must actually reach <see cref="AppConfig"/>,
+        /// or tracing could never be switched on.
+        /// </summary>
+        [TestMethod]
+        public void MessageTrace_Settings_AreReadFromConfiguration()
+        {
+            AnalyticsConfig.AppSettings.Set(MessageTraceMatch, "*contoso-app*");
+            AnalyticsConfig.AppSettings.Set(MessageTraceContainer, " contoso-traces ");
+            AnalyticsConfig.AppSettings.Set(MessageTraceMaxBodyBytes, "1048576");
+            AnalyticsConfig.AppSettings.Set(MessageTraceMaxPerHour, "25");
+
+            var cfg = new AppConfig();
+
+            Assert.AreEqual("*contoso-app*", cfg.MessageTraceMatch);
+            Assert.AreEqual("contoso-traces", cfg.MessageTraceContainer, "The container name is trimmed.");
+            Assert.AreEqual(1048576L, cfg.MessageTraceMaxBodyBytes);
+            Assert.AreEqual(25, cfg.MessageTraceMaxPerHour);
+        }
+
+        [TestMethod]
+        public void MessageTrace_MissingOrInvalidSettings_KeepTheDefaults()
+        {
+            AnalyticsConfig.AppSettings.Set(MessageTraceMatch, string.Empty);
+            AnalyticsConfig.AppSettings.Set(MessageTraceContainer, "   ");
+            AnalyticsConfig.AppSettings.Set(MessageTraceMaxBodyBytes, "0");
+            AnalyticsConfig.AppSettings.Set(MessageTraceMaxPerHour, "not-an-int");
+
+            var cfg = new AppConfig();
+
+            Assert.IsTrue(string.IsNullOrWhiteSpace(cfg.MessageTraceMatch), "No pattern means tracing is off.");
+            Assert.AreEqual("message-traces", cfg.MessageTraceContainer);
+            Assert.AreEqual(32L * 1024 * 1024, cfg.MessageTraceMaxBodyBytes);
+            Assert.AreEqual(500, cfg.MessageTraceMaxPerHour);
+        }
+
+        [TestMethod]
+        public void MessageTrace_MaxBodyBytes_IsClampedToTheCeiling()
+        {
+            AnalyticsConfig.AppSettings.Set(MessageTraceMaxBodyBytes, (AppConfig.MaxMessageTraceBodyBytes * 4).ToString(System.Globalization.CultureInfo.InvariantCulture));
+
+            Assert.AreEqual(AppConfig.MaxMessageTraceBodyBytes, new AppConfig().MessageTraceMaxBodyBytes);
         }
 
         [TestMethod]
