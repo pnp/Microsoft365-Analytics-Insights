@@ -947,10 +947,21 @@ describe('User organisation server messages', () => {
     const errors = [...source.matchAll(/new ApiErrorModel\(/g)].length;
     expect(errors).toBeGreaterThanOrEqual(9);
     expect([...source.matchAll(coded)].length, 'an ApiErrorModel sent without a code').toBe(errors);
+    // net10: this controller keeps Web API 2's `Content(HttpStatusCode.X, body)` spelling through private
+    // shims over ASP.NET Core's StatusCode(...). Their declarations, and the comment that explains them, are
+    // not replies, so they are left out of the count. A reply written in the ASP.NET Core spelling,
+    // `StatusCode((int)HttpStatusCode.X, body)`, must carry an ApiErrorModel too.
+    const replySource = source
+      .replace(/^\s*\/\/.*$/gm, '')
+      .replace(/\bprivate\s+IActionResult\s+(?:Content|StatusCode)\s*\([^)]*\)\s*=>[^;]*;/g, '');
     expect(
-      [...source.matchAll(/\bContent\s*\(/g)].length,
+      [...replySource.matchAll(/\bContent\s*\(/g)].length,
       'a UserOrgAPIController Content(...) reply that is not an ApiErrorModel',
-    ).toBe([...source.matchAll(/\bContent\s*\(\s*HttpStatusCode\.\w+,\s*new ApiErrorModel\(/g)].length);
+    ).toBe([...replySource.matchAll(/\bContent\s*\(\s*HttpStatusCode\.\w+,\s*new ApiErrorModel\(/g)].length);
+    expect(
+      [...replySource.matchAll(/\bStatusCode\s*\(\s*\(int\)\s*HttpStatusCode\.\w+\s*,/g)].length,
+      'a UserOrgAPIController StatusCode(...) reply that is not an ApiErrorModel',
+    ).toBe([...replySource.matchAll(/\bStatusCode\s*\(\s*\(int\)\s*HttpStatusCode\.\w+\s*,\s*new ApiErrorModel\(/g)].length);
 
     const notFound = [...source.matchAll(/new UserOrgNotFoundException\(/g)].length;
     expect(notFound).toBeGreaterThanOrEqual(5);
@@ -2558,7 +2569,9 @@ describe('Teams connection outcomes', () => {
 
   it('starts the connection at the action that issues it', () => {
     // RouteConfig maps "Account/{action}" to AccountController.
+    // net10: PortalHosting maps the same "Account/{action}" route. The ASP.NET Core action returns its
+    // Challenge(...) as an IActionResult, where MVC 5 issued it from a void action.
     expect(TEAMS_CONNECT_URL).toBe('/Account/ConnectTeams');
-    expect(readFileSync(ACCOUNT_CONTROLLER, 'utf8')).toMatch(/public\s+void\s+ConnectTeams\s*\(\s*\)/);
+    expect(readFileSync(ACCOUNT_CONTROLLER, 'utf8')).toMatch(/public\s+(?:void|IActionResult)\s+ConnectTeams\s*\(\s*\)/);
   });
 });
