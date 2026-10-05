@@ -78,6 +78,12 @@ $script:GraphAppId = '00000003-0000-0000-c000-000000000000'
 # Delegated Microsoft Graph permissions the portal's sign-in asks for (Web/Program.cs): the OpenID
 # Connect basics plus the two Teams scopes it requests for Teams deep analytics.
 $script:GraphScopes = @('openid', 'email', 'profile', 'offline_access', 'User.Read', 'Team.ReadBasic.All', 'ChannelMessage.Read.All')
+# The portal's two app roles (Web/Security/PortalPermissions.cs), defined as the wiki's Portal
+# Permissions page tells an administrator to define them. The portal reads only the value.
+$script:PortalAppRoles = @(
+    @{ value = 'Portal.Administration'; displayName = 'Portal Administration'; description = 'Use the Administration area of the Microsoft 365 Advanced Analytics portal.' }
+    @{ value = 'Portal.SeePII'; displayName = 'Portal See PII'; description = 'See data about individual people in the Microsoft 365 Advanced Analytics portal.' }
+)
 
 #region Output and Azure CLI helpers
 
@@ -296,6 +302,7 @@ function Assert-AzureSignIn {
     if ($account.tenantId -ne $script:Config.TenantId) {
         throw "Subscription $($script:Config.SubscriptionId) belongs to tenant $($account.tenantId), not $($script:Config.TenantId)."
     }
+    $script:SignedInAccount = $account
     Write-Detail "Subscription: $($account.name)"
     Write-Detail "Signed in as: $($account.user.name)"
     # Proves a Graph token can be had for the tenant before anything is created.
@@ -772,7 +779,7 @@ function Set-PortalAppRegistration([string[]] $PortalUrls) {
     $requiredResourceAccess = @(@{ resourceAppId = $script:GraphAppId; resourceAccess = @($access) })
 
     $filter = [uri]::EscapeDataString("displayName eq '$($script:Config.EntraAppDisplayName.Replace("'", "''"))'")
-    $existing = @((Invoke-Api -Audience graph -Method GET -Uri "/applications?`$filter=$filter&`$select=id,appId,displayName").value)
+    $existing = @((Invoke-Api -Audience graph -Method GET -Uri "/applications?`$filter=$filter&`$select=id,appId,displayName,appRoles").value)
     if ($existing.Count -gt 1) {
         throw "More than one app registration is named '$($script:Config.EntraAppDisplayName)'. Rename or delete the extras, or set entraApp.displayName."
     }
@@ -783,7 +790,7 @@ function Set-PortalAppRegistration([string[]] $PortalUrls) {
         # Filtering on redirect URIs is an advanced query, hence ConsistencyLevel and $count.
         foreach ($portalUrl in $PortalUrls) {
             $callback = [uri]::EscapeDataString("web/redirectUris/any(p:p eq '$portalUrl/signin-oidc')")
-            $byAddress = @((Invoke-Api -Audience graph -Method GET -Uri "/applications?`$filter=$callback&`$count=true&`$select=id,appId,displayName" -Headers @{ ConsistencyLevel = 'eventual' }).value)
+            $byAddress = @((Invoke-Api -Audience graph -Method GET -Uri "/applications?`$filter=$callback&`$count=true&`$select=id,appId,displayName,appRoles" -Headers @{ ConsistencyLevel = 'eventual' }).value)
             if ($byAddress.Count -gt 1) {
                 throw "More than one app registration already redirects to $portalUrl ($(($byAddress | ForEach-Object { $_.displayName }) -join ', ')). Delete the extras, or set entraApp.displayName to the one to keep."
             }
@@ -797,15 +804,19 @@ function Set-PortalAppRegistration([string[]] $PortalUrls) {
 
     if ($existing.Count -eq 0) {
         Write-Detail "Creating app registration '$($script:Config.EntraAppDisplayName)'..."
+        $appRoles = @(Merge-PortalAppRoles @())
         $application = Invoke-Api -Audience graph -Method POST -Uri '/applications' -Body @{
             displayName            = $script:Config.EntraAppDisplayName
             signInAudience         = 'AzureADMyOrg'
             web                    = $web
             requiredResourceAccess = $requiredResourceAccess
+            appRoles               = $appRoles
         }
     }
     else {
         $application = $existing[0]
+        $currentRoles = @($application.appRoles | Where-Object { $_ })
+        $appRoles = @(Merge-PortalAppRoles $currentRoles)
         $update = @{
             web                    = $web
             requiredResourceAccess = $requiredResourceAccess
@@ -816,6 +827,10 @@ function Set-PortalAppRegistration([string[]] $PortalUrls) {
         }
         else {
             Write-Detail "Updating app registration '$($application.displayName)' ($($application.appId))..."
+        }
+        if ($appRoles.Count -ne $currentRoles.Count) {
+            Write-Detail "Adding the portal's app roles: $((@($appRoles | Select-Object -Skip $currentRoles.Count) | ForEach-Object { $_.value }) -join ', ')."
+            $update.appRoles = $appRoles
         }
         Invoke-Api -Audience graph -Method PATCH -Uri "/applications/$($application.id)" -Body $update | Out-Null
     }
@@ -831,6 +846,7 @@ function Set-PortalAppRegistration([string[]] $PortalUrls) {
     }
 
     Grant-AdminConsent -ClientServicePrincipalId $servicePrincipal.id -GraphServicePrincipalId $graph.id
+    Grant-PortalRolesToDeployer -ServicePrincipalId $servicePrincipal.id -AppRoles $appRoles
 
     # Read directly rather than by member enumeration: in strict mode, enumerating a property whose
     # value is an empty array - a new registration's passwordCredentials - reports it as missing.
@@ -865,6 +881,80 @@ function Grant-AdminConsent([string] $ClientServicePrincipalId, [string] $GraphS
     }
     catch {
         Write-Warning "Admin consent could not be granted ($($_.Exception.Message)). An administrator must consent to the portal's Microsoft Graph permissions before anyone can sign in."
+    }
+}
+
+# The registration's app roles with the portal's two added. Roles are matched on their value, the only
+# field the portal reads. An existing role keeps its id, which its assignments refer to, and any other
+# role is left as it is: Graph replaces the whole collection, and refuses to drop an enabled role.
+function Merge-PortalAppRoles([object[]] $Existing) {
+    $roles = [System.Collections.Generic.List[object]]::new()
+    foreach ($role in @($Existing | Where-Object { $_ })) {
+        # Only the writable fields: Graph documents the 'origin' it returns with each role as read-only.
+        $roles.Add([pscustomobject]@{
+            id                 = $role.id
+            value              = $role.value
+            displayName        = $role.displayName
+            description        = $role.description
+            allowedMemberTypes = @($role.allowedMemberTypes)
+            isEnabled          = $role.isEnabled
+        })
+    }
+    foreach ($wanted in $script:PortalAppRoles) {
+        if (@($roles | Where-Object { $_.value -eq $wanted.value }).Count -gt 0) { continue }
+        $roles.Add([pscustomobject]@{
+            id                 = [guid]::NewGuid().ToString()
+            value              = $wanted.value
+            displayName        = $wanted.displayName
+            description        = $wanted.description
+            allowedMemberTypes = @('User')
+            isEnabled          = $true
+        })
+    }
+    return $roles.ToArray()
+}
+
+# Assigns both portal roles to the account running the script, so whoever deploys the demo sees all of
+# it, the Administration area included. Nobody else is given a role: like a production deployment,
+# anyone else who signs in sees only the aggregate insights until an administrator assigns them one.
+function Grant-PortalRolesToDeployer([string] $ServicePrincipalId, [object[]] $AppRoles) {
+    $names = ($script:PortalAppRoles | ForEach-Object { $_.value }) -join ' and '
+    $howTo = "Assign $names to people on the enterprise application '$($script:Config.EntraAppDisplayName)' (Users and groups); without them the portal's Administration area and per-person detail stay hidden."
+    if ((Get-Setting $script:SignedInAccount 'user.type') -ne 'user') {
+        Write-Warning "The Azure CLI is signed in as a service principal, so no portal role was assigned. $howTo"
+        return
+    }
+    try {
+        $me = Invoke-Api -Audience graph -Method GET -Uri '/me?$select=id,userPrincipalName'
+        $assigned = @(@((Invoke-Api -Audience graph -Method GET -Uri "/servicePrincipals/$ServicePrincipalId/appRoleAssignedTo?`$top=999").value) |
+            Where-Object { $_ -and $_.principalId -eq $me.id })
+        $added = [System.Collections.Generic.List[string]]::new()
+        foreach ($wanted in $script:PortalAppRoles) {
+            $role = @($AppRoles | Where-Object { $_.value -eq $wanted.value }) | Select-Object -First 1
+            if (@($assigned | Where-Object { $_.appRoleId -eq $role.id }).Count -gt 0) { continue }
+            # A role added to the registration moments ago can take a few seconds to reach its service principal.
+            for ($attempt = 1; ; $attempt++) {
+                try {
+                    Invoke-Api -Audience graph -Method POST -Uri "/servicePrincipals/$ServicePrincipalId/appRoleAssignedTo" -Body @{
+                        principalId = $me.id
+                        resourceId  = $ServicePrincipalId
+                        appRoleId   = $role.id
+                    } | Out-Null
+                    break
+                }
+                catch { if ($attempt -ge 6) { throw }; Start-Sleep -Seconds 10 }
+            }
+            $added.Add($wanted.value)
+        }
+        if ($added.Count -gt 0) {
+            Write-Detail "Assigned $($added -join ' and ') to $($me.userPrincipalName). Sign out of the portal and in again to use them."
+        }
+        else {
+            Write-Detail "Portal roles: $($me.userPrincipalName) holds $names."
+        }
+    }
+    catch {
+        Write-Warning "The portal's app roles could not be assigned to the signed-in account ($($_.Exception.Message)). $howTo"
     }
 }
 

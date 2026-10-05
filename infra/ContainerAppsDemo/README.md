@@ -6,7 +6,9 @@ Apps, for showing what the product measures without a real tenant's data or a fu
 It is a demo, not an installation. There are no importers: the portal's one database is emptied and
 rebuilt every night from the synthetic Contoso tenant that `Tests.FakeDataGen` generates, so the
 portal always shows recent, realistic activity. Sign-in is real - the portal uses its own Microsoft
-Entra ID app registration exactly as a production deployment does.
+Entra ID app registration exactly as a production deployment does, and the product's app roles decide
+who may use its Administration area and see data about individual people (see
+[Who can see what](#who-can-see-what)).
 
 ```text
  Browser ──https──► Container app  <prefix>-portal        (web portal, scales to zero)
@@ -72,7 +74,8 @@ Prerequisites:
 - Permission to create an app registration and **grant admin consent** in Microsoft Entra ID (for
   example Global Administrator, or Cloud Application Administrator plus Privileged Role
   Administrator). The portal asks for `ChannelMessage.Read.All`, which only an administrator can
-  consent to. Without the consent nobody can sign in, and the script warns rather than fails.
+  consent to. Without the consent nobody can sign in, and the script warns rather than fails. The
+  same roles cover defining the portal's app roles and assigning them to you.
 
 ```powershell
 cd infra/ContainerAppsDemo
@@ -113,7 +116,8 @@ What the script does, in order:
    `code id_token` sign-in, the Microsoft Graph delegated permissions it requests, and admin consent.
    The registration is found by `entraApp.displayName`, or else by already redirecting to this
    portal, in which case it is renamed. The client secret is kept while it has more than 30 days
-   left; otherwise a new one is issued and the old one removed.
+   left; otherwise a new one is issued and the old one removed. It also defines the portal's two app
+   roles and assigns both to the account running the script (see [Who can see what](#who-can-see-what)).
 7. With `web.customDomain`, creates its DNS records (or asks you to) and waits for public DNS.
 8. Deploys `apps.bicep`: the portal container app and the scheduled job. For a new custom domain it
    then requests the managed certificate, waits for it and deploys again to bind it.
@@ -169,6 +173,23 @@ for an existing environment is the one change the demo makes to it.
 
 Removing `web.customDomain` unbinds the name on the next run; the DNS records and the certificate are
 left for you to delete, like everything else the script creates.
+
+### Who can see what
+
+The portal enforces the product's two app roles, exactly as a production deployment does:
+`Portal.Administration` opens the Administration area, and `Portal.SeePII` shows data about
+individual people - the Licensed users tab, named lists, per-person exports and the user filter. The
+people are synthetic, but the portal treats them as real ones. Anyone without a role who signs in
+sees only the aggregate insights. [Portal permissions](https://github.com/pnp/Microsoft365-Analytics-Insights/wiki/Portal-Permissions)
+lists exactly what each role unlocks.
+
+The script defines both roles on the demo's app registration, as that page describes, and assigns
+both to the account that runs it, so whoever deploys the demo can show all of it. A role reaches a
+portal session at its next sign-in, so sign out (top right) and in again after the first run that
+assigns them. To let someone else see everything, assign them both roles on the enterprise
+application: **Entra ID** → **Enterprise apps** → the `entraApp.displayName` application → **Users
+and groups**, one assignment per role. The script never removes an assignment. When the Azure CLI is
+signed in as a service principal it assigns nobody, and says so.
 
 ### Environment file
 
@@ -256,6 +277,7 @@ itself does not.)
 | `The managed certificate for ... was not issued` | Usually a CAA record on the domain that does not allow DigiCert, which issues Container Apps' managed certificates, or a CNAME that no longer points at the portal. The portal stays reachable at its default address; fix the cause and run the script again. |
 | `AADSTS65001` / "Need admin approval" at sign-in | Admin consent was not granted. Re-run the script as an administrator, or grant consent to the app registration in the Entra admin center. |
 | `AADSTS50011` redirect URI mismatch | The portal's address changed (new environment or app name). Re-run the script; it rewrites the redirect URIs. |
+| "You do not have access to this page", naming `Portal.Administration` or `Portal.SeePII` | That account doesn't hold the role. The script assigns both only to the account that runs it; assign them to anyone else on the enterprise application (see [Who can see what](#who-can-see-what)). A role assigned while someone is signed in reaches them when they sign out and in again. |
 | Job fails with `Refusing to --recreate ContosoDemo_...` | The database holds objects but no synthetic-demo marker. Only point the demo at a database it created. |
 | Job fails with `Login failed for user '<token-identified principal>'` | The managed identity is not the SQL server's Entra admin - the server was created by something else. |
 | Portal shows data errors for about ten minutes after 00:00 UTC | The nightly rebuild. |
