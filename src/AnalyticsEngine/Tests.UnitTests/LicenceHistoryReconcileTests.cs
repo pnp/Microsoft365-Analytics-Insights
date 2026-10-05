@@ -75,6 +75,22 @@ namespace Tests.UnitTests
                     db.LicenseTypes.Add(licence);
                     await db.SaveChangesAsync();
 
+                    // net10: the reconcile is deliberately table-wide, and the suite's database is shared. The SDK
+                    // project runs the test classes alphabetically, so on this branch a class that leaves a lookup
+                    // without open history behind has already run - one such row made the count 2 in CI. Count
+                    // the drift that is not this test's, so the totals below still prove the reconcile touched
+                    // exactly one row of each kind of its own; the per-user checks pin which rows.
+                    var lookupsWithoutHistoryBefore = await db.Database.SqlQuery<int>(@"
+SELECT COUNT(*) FROM dbo.user_license_type_lookups AS lookup
+WHERE NOT EXISTS (SELECT 1 FROM dbo.user_license_history AS history
+                  WHERE history.user_id = lookup.user_id AND history.license_type_id = lookup.license_type_id
+                    AND history.valid_to_utc IS NULL);").SingleAsync();
+                    var openRowsWithoutLookupBefore = await db.Database.SqlQuery<int>(@"
+SELECT COUNT(*) FROM dbo.user_license_history AS history
+WHERE history.valid_to_utc IS NULL
+  AND NOT EXISTS (SELECT 1 FROM dbo.user_license_type_lookups AS lookup
+                  WHERE lookup.user_id = history.user_id AND lookup.license_type_id = history.license_type_id);").SingleAsync();
+
                     await db.Database.ExecuteSqlCommandAsync(@"
 INSERT INTO dbo.user_license_type_lookups (user_id, license_type_id) VALUES (@p0, @p2);
 INSERT INTO dbo.user_license_history (user_id, license_type_id, valid_from_utc, valid_to_utc, from_source) VALUES (@p1, @p2, '2026-09-01', NULL, 1);",
@@ -84,8 +100,8 @@ INSERT INTO dbo.user_license_history (user_id, license_type_id, valid_from_utc, 
                     var refresh = await store.StartRefresh(new DateTime(2026, 10, 2, 8, 0, 0, DateTimeKind.Utc));
                     var result = await store.ReconcileHistoryWithCurrentLookups(refresh);
 
-                    Assert.AreEqual(1, result.OpenedLookupRowsWithoutHistory, "User A had a lookup but no open history row, so reconcile should seed it.");
-                    Assert.AreEqual(1, result.ClosedOpenRowsWithoutLookup, "User B had open history but no lookup, so reconcile should close it.");
+                    Assert.AreEqual(1 + lookupsWithoutHistoryBefore, result.OpenedLookupRowsWithoutHistory, "User A had a lookup but no open history row, so reconcile should seed it.");
+                    Assert.AreEqual(1 + openRowsWithoutLookupBefore, result.ClosedOpenRowsWithoutLookup, "User B had open history but no lookup, so reconcile should close it.");
                     Assert.AreEqual(1, await db.Database.SqlQuery<int>(
                         "SELECT COUNT(*) FROM dbo.user_license_history WHERE user_id = @p0 AND license_type_id = @p1 AND valid_to_utc IS NULL AND from_source = 0",
                         userA.ID, licence.ID).SingleAsync());
