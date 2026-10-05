@@ -612,6 +612,36 @@ describe('CoworkPanel', () => {
     expect(sessionStorage.getItem(TIME_SAVED_COHORT_STORAGE_KEY)).toBeNull();
   });
 
+  /**
+   * The people without a Copilot seat - every licence candidate. A what-if on top of a licence, since
+   * Cowork needs one, and said as one; never added to the licence estimate.
+   */
+  it('models the people without a Copilot licence when chosen, and says they would need one first', async () => {
+    const user = userEvent.setup();
+    // 250 people doing five times the work of the 40 ready now: 8,460 pieces of work, 846 hours at six
+    // minutes each, 423 at the conservative end.
+    const withoutLicence = {
+      ...ESTIMATE,
+      cohortUsers: 250,
+      activities: ESTIMATE.activities.map((a) => ({ ...a, volumePerMonth: a.volumePerMonth * 5 })),
+      projectedCoworkTasks: 8460,
+      hoursPerMonthLow: 423,
+      hoursPerMonthHigh: 846,
+    };
+    await renderSettled(withEstimates({ coworkWithoutLicenceEstimate: withoutLicence }));
+
+    await user.click(screen.getByRole('radio', { name: 'People without a Copilot licence (250)' }));
+
+    const hero = screen.getByRole('region', { name: '423\u2013846 hours a month' });
+    expect(within(hero).getByText('if the 250 people without a Copilot licence were licensed and used Cowork')).toBeTruthy();
+    expect(within(hero).getByText(/^Modelling the people without a Copilot licence/)).toBeTruthy();
+    expect(within(hero).getByText('a working day, for each person without a Copilot licence')).toBeTruthy();
+    expect(JSON.parse(sessionStorage.getItem(TIME_SAVED_COHORT_STORAGE_KEY) ?? '{}')).toEqual({ cowork: 'withoutLicence' });
+
+    // The working follows the headline.
+    expect(screen.getByRole('radio', { name: 'The 250 people without a Copilot licence' })).toBeChecked();
+  });
+
   it('shows the Cowork use already observed in the Copilot audit log, badged as observed', async () => {
     await renderSettled(withEstimates({ coworkDetected: true, coworkUsers: 4, coworkInteractions: 120 }));
 
@@ -1139,20 +1169,30 @@ describe('CoworkPanel printing', { timeout: 30000 }, () => {
     expect(within(people).getByRole('button', { name: 'Collapse all' })).toBeTruthy();
   });
 
-  it('refuses, rather than printing one page, when the list is longer than can be printed', async () => {
+  it('prints the first seat holders of a list too long to print in full, and says so', async () => {
     const { people } = await openPeople(PRINT_ROW_LIMIT + 1);
-    const calls = fetchCowork.mock.calls.length;
-    capturePrint(people);
+    const printed = { rows: -1, footer: '', warned: false };
+    vi.spyOn(window, 'print').mockImplementation(() => {
+      printed.rows = listed(people);
+      printed.footer = within(people).getByText(/^Showing /).textContent ?? '';
+      printed.warned = within(people).queryByText(/^Only the first .* rows are printed/) !== null;
+    });
 
-    await expect(requestPrint()).resolves.toMatchObject({ kind: 'tooManyRows', rows: PRINT_ROW_LIMIT + 1 });
+    await act(async () => {
+      await expect(requestPrint()).resolves.toMatchObject({ kind: 'printed', truncated: { rows: PRINT_ROW_LIMIT + 1 } });
+    });
 
-    expect(window.print).not.toHaveBeenCalled();
-    expect(fetchCowork.mock.calls.length).toBe(calls);
+    expect(printed).toEqual({
+      rows: PRINT_ROW_LIMIT,
+      footer: `Showing 1-${PRINT_ROW_LIMIT.toLocaleString('en')} of ${(PRINT_ROW_LIMIT + 1).toLocaleString('en')} seat holders`,
+      warned: true,
+    });
+    expect(listed(people)).toBe(50);
   });
 
   it('does not hold up a print of another section, however long the list', async () => {
     // The tab opens on the time-saved section. The list is not on that printout, so it must not
-    // be loaded for it - or refuse it for being long.
+    // be loaded for it.
     serve(PRINT_ROW_LIMIT * 5);
     render(summary());
     await waitFor(() => expect(fetchCowork).toHaveBeenCalled());

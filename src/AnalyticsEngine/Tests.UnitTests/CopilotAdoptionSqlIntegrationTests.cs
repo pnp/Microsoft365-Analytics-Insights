@@ -466,6 +466,77 @@ namespace Tests.UnitTests
             }
         }
 
+        /// <summary>
+        /// The heaviest agent users: ranked by agent interactions in the window, with distinct agents and
+        /// days, the agent each used most, and whether each holds a Copilot seat - and with plain Copilot
+        /// use, and agent use outside the window, left out.
+        /// </summary>
+        [TestMethod]
+        public void AgentUsersQuery_RanksPeopleByAgentUse_WithTheirMostUsedAgentAndSeat()
+        {
+            using (var db = ScratchDatabase.Create("CopilotAgentUsers"))
+            {
+                CreateUserTables(db);
+                CreateCopilotTables(db);
+                db.Execute(
+                    @"INSERT INTO dbo.user_departments (id, name) VALUES (1, N'Καλημέρα κόσμε');
+                      INSERT INTO dbo.user_job_titles (id, name) VALUES (1, N'Analyst');
+                      INSERT INTO dbo.license_types (id, name, sku_id)
+                          VALUES (1, N'Microsoft Copilot for Microsoft 365', N'Microsoft_365_Copilot');
+                      INSERT INTO dbo.users (id, user_name, mail, account_enabled, department_id, job_title_id)
+                          VALUES (1, N'heavy@contoso.com', N'heavy@contoso.com', 1, 1, 1),
+                                 (2, N'chat.only@contoso.com', N'chat.only@contoso.com', 1, NULL, NULL),
+                                 (3, N'no.agents@contoso.com', N'no.agents@contoso.com', 1, NULL, NULL);
+                      INSERT INTO dbo.user_license_type_lookups (id, user_id, license_type_id) VALUES (1, 1, 1);
+                      INSERT INTO dbo.copilot_agents (id, name, agent_id)
+                          VALUES (1, N'Expenses helper', N'contoso.expenses'),
+                                 (2, N'Travel booker', N'contoso.travel');");
+
+                var today = DateTime.UtcNow.Date;
+                // Person 1: four agent interactions over two days and two agents, mostly the expenses helper.
+                SeedCopilotInteractionAt(db, 1, today.AddDays(-2).AddHours(9), "Teams", agentId: 1);
+                SeedCopilotInteractionAt(db, 1, today.AddDays(-2).AddHours(10), "Teams", agentId: 1);
+                SeedCopilotInteractionAt(db, 1, today.AddDays(-3).AddHours(9), "Word", agentId: 1);
+                SeedCopilotInteractionAt(db, 1, today.AddDays(-3).AddHours(11), "Teams", agentId: 2);
+                // Person 2: unlicensed, two agent interactions - plus agent use before the window, not counted.
+                SeedCopilotInteractionAt(db, 2, today.AddDays(-1).AddHours(9), "Teams", agentId: 2);
+                SeedCopilotInteractionAt(db, 2, today.AddDays(-1).AddHours(10), "Teams", agentId: 2);
+                SeedCopilotInteractionAt(db, 2, today.AddDays(-60).AddHours(9), "Teams", agentId: 1);
+                // Person 3: plain Copilot only - not an agent user at all.
+                SeedCopilotInteractionAt(db, 3, today.AddDays(-1).AddHours(9), "Outlook");
+
+                var rows = Query<AgentUserRow>(db, CopilotAdoptionSql.AgentUsersSql(new[] { 1 }),
+                    new SqlParameter("@from", today.AddDays(-28)),
+                    new SqlParameter("@toExclusive", today.AddDays(1)),
+                    new SqlParameter("@maxRows", 1000));
+
+                CollectionAssert.AreEqual(new[] { 1, 2 }, rows.Select(r => r.UserId).ToArray(), "Heaviest first; plain Copilot use is not agent use.");
+
+                var heavy = rows[0];
+                Assert.AreEqual(4, heavy.Interactions);
+                Assert.AreEqual(2, heavy.AgentsUsed);
+                Assert.AreEqual(2, heavy.ActiveDays);
+                Assert.AreEqual("Expenses helper", heavy.TopAgentName);
+                Assert.AreEqual(3, heavy.TopAgentInteractions);
+                Assert.IsTrue(heavy.HoldsCopilotSeat);
+                Assert.AreEqual("Καλημέρα κόσμε", heavy.Department, "A department is tenant text and must round-trip in full.");
+                Assert.AreEqual("Analyst", heavy.JobTitle);
+                Assert.AreEqual(today.AddDays(-2).AddHours(10), heavy.LastUsedUtc);
+
+                var chatOnly = rows[1];
+                Assert.AreEqual(2, chatOnly.Interactions, "Agent use before the window is not counted.");
+                Assert.AreEqual(1, chatOnly.AgentsUsed);
+                Assert.AreEqual("Travel booker", chatOnly.TopAgentName);
+                Assert.IsFalse(chatOnly.HoldsCopilotSeat);
+
+                var capped = Query<AgentUserRow>(db, CopilotAdoptionSql.AgentUsersSql(new[] { 1 }),
+                    new SqlParameter("@from", today.AddDays(-28)),
+                    new SqlParameter("@toExclusive", today.AddDays(1)),
+                    new SqlParameter("@maxRows", 1));
+                Assert.AreEqual(1, capped.Single().UserId, "The cap keeps the heaviest.");
+            }
+        }
+
         [TestMethod]
         public void SeatHolderTimeSavedQuery_DeduplicatesMeetings_AndGivesMeetingContextPrecedence()
         {
@@ -929,8 +1000,71 @@ namespace Tests.UnitTests
                 Assert.AreEqual(3, onLeave.TeamsMeetings, "(4 + 2) meetings over the 2 days they were active.");
                 Assert.AreEqual(earlier, onLeave.LastM365ActivityUtc, "The most recent activity date in the period.");
 
+                // The Cowork estimate's figures for people without a seat: the same division, unrounded,
+                // and split the way a seat holder's are - organised apart from attended.
+                Assert.AreEqual(0d, onLeave.MeetingsOrganisedPerActiveDay, 1e-9);
+                Assert.AreEqual(3d, onLeave.MeetingsAttendedPerActiveDay, 1e-9);
+                Assert.AreEqual(40d, onLeave.ChatAndChannelMessagesPerActiveDay, 1e-9);
+
                 var onLatest = rows.Single(r => r.UserPrincipalName == "onlatestday@contoso.com");
                 Assert.AreEqual(10, onLatest.TeamsMessages, "A single active day still reports that day's figure.");
+            }
+        }
+
+        [TestMethod]
+        public void OpportunitiesQuery_CarriesTheCoworkWorkUnrounded_WithoutMovingTheRoundedFigures()
+        {
+            using (var db = ScratchDatabase.Create("CopilotAdoptOppCowork"))
+            {
+                CreateUserTables(db);
+                CreateCopilotTables(db);
+                CreateM365UsageTables(db);
+
+                var day1 = DateTime.UtcNow.Date.AddDays(-5);
+                var day2 = DateTime.UtcNow.Date.AddDays(-4);
+
+                db.Execute(
+                    $@"INSERT INTO dbo.license_types (id, name, sku_id)
+                           VALUES (1, N'Microsoft Copilot for Microsoft 365', N'Microsoft_365_Copilot');
+                       INSERT INTO dbo.users (id, user_name, account_enabled) VALUES (1, N'candidate@contoso.com', 1);
+
+                       -- One meeting organised over two active days: 0.5 a day, which rounds to 0 or 1.
+                       INSERT INTO dbo.teams_user_activity_log
+                           (id, [date], user_id, last_activity_date, private_chat_count, team_chat_count,
+                            post_messages, reply_messages, meetings_attended_count, meetings_organized_count)
+                       VALUES (1, '{day1:yyyy-MM-dd}', 1, '{day1:yyyy-MM-dd}', 3, 4, 1, 1, 2, 1),
+                              (2, '{day2:yyyy-MM-dd}', 1, '{day2:yyyy-MM-dd}', 0, 2, 0, 1, 1, 0);
+
+                       INSERT INTO dbo.outlook_user_activity_log
+                           (id, [date], user_id, last_activity_date, email_send_count, email_receive_count, email_read_count)
+                       VALUES (1, '{day1:yyyy-MM-dd}', 1, '{day1:yyyy-MM-dd}', 3, 10, 4),
+                              (2, '{day2:yyyy-MM-dd}', 1, '{day2:yyyy-MM-dd}', 0, 10, 5);
+
+                       INSERT INTO dbo.sharepoint_user_activity_log (id, [date], user_id, last_activity_date, viewed_or_edited)
+                       VALUES (1, '{day1:yyyy-MM-dd}', 1, '{day1:yyyy-MM-dd}', 5);");
+
+                var row = Query<UnlicensedUserSignalRow>(
+                    db,
+                    CopilotAdoptionSql.LicenceOpportunitiesSql(
+                        new[] { 1 }, CopilotAdoptionOptions.Default, includeCopilotAudit: false, includeM365Usage: true),
+                    new SqlParameter("@m365From", DateTime.UtcNow.Date.AddDays(-28)),
+                    new SqlParameter("@maxRows", 1000)).Single();
+
+                // The licence score's figures, rounded exactly as before.
+                Assert.AreEqual(6, row.TeamsMessages, "(3+4+1+1) + (0+2+0+1) = 12 messages over 2 active days.");
+                Assert.AreEqual(2, row.TeamsMeetings, "(2+1 + 1+0) = 4 meetings over 2 days.");
+                Assert.AreEqual(2, row.EmailsSent, "3 sent over 2 days, 1.5 rounded.");
+                Assert.AreEqual(5, row.FilesViewedOrEdited, "5 files on the 1 day with file activity.");
+
+                // The Cowork estimate's figures, unrounded.
+                Assert.AreEqual(0.5, row.MeetingsOrganisedPerActiveDay, 1e-9, "1 organised over 2 days.");
+                Assert.AreEqual(1.5, row.MeetingsAttendedPerActiveDay, 1e-9, "3 attended over 2 days.");
+                Assert.AreEqual(4.5, row.ChatAndChannelMessagesPerActiveDay, 1e-9, "Chat plus channel, less the posts and replies channel messages contain: (3+4 + 0+2) over 2 days.");
+                Assert.AreEqual(1.5, row.EmailsSentPerActiveDay, 1e-9);
+                Assert.AreEqual(5d, row.FilesPerActiveDay, 1e-9);
+
+                var scored = CopilotAdoptionScoring.ScoreOpportunity(row, CopilotAdoptionOptions.Default);
+                Assert.AreEqual(0.5, scored.MeetingsOrganisedPerActiveDay, 1e-9, "The scored row keeps them for the estimate.");
             }
         }
 

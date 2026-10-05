@@ -36,6 +36,25 @@ namespace Common.Entities.CopilotAdoption
         public List<AgentUsageRow> Agents { get; set; } = new List<AgentUsageRow>();
 
         /// <summary>
+        /// The people who used Copilot agents in the period, heaviest first, up to
+        /// <see cref="CopilotAdoptionOptions.MaxAgentUsersScored"/>.
+        /// </summary>
+        /// <remarks>
+        /// Held as rows, unlike the tenant-level agent inventory, so a filtered view narrows them like any
+        /// other per-person list and lists its own heaviest users rather than the tenant's. The summary
+        /// names only the first few (<see cref="CopilotAdoptionSummary.TopAgentUsers"/>), and only to a
+        /// reader with the See PII permission.
+        /// </remarks>
+        public List<AgentUserRow> AgentUsers { get; set; } = new List<AgentUserRow>();
+
+        /// <summary>
+        /// True when the agent-user query stopped at <see cref="CopilotAdoptionOptions.MaxAgentUsersScored"/>
+        /// - in the tenant analysis and in every slice of it, which inherits the cap: a slice's heaviest
+        /// users may rank below the tenant-wide cut.
+        /// </summary>
+        public bool AgentUsersCapped { get; set; }
+
+        /// <summary>
         /// Every Copilot seat holder scored for Cowork readiness: who already uses it, and who carries the
         /// coordination load that Cowork is built to absorb.
         ///

@@ -227,6 +227,10 @@ namespace Common.Entities.CopilotAdoption
                 Summary = SeedScopedSummary(tenant, scope, cloneSeatLicenceTypes: false),
                 Sql = analysis.Sql,
                 Agents = analysis.Agents,
+                // Unlike the inventory, a person: narrowed like every other per-person list, so a filtered
+                // view lists its own heaviest agent users. The cap was tenant-wide, so a slice inherits it.
+                AgentUsers = Narrow(analysis.AgentUsers, u => u.UserId, u => u.EmailDomain, scope),
+                AgentUsersCapped = analysis.AgentUsersCapped,
 
                 LicensedUsers = licensedUsers,
                 // Like the opportunity cap below: the licensed-user query's cap was applied to the whole

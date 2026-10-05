@@ -355,6 +355,7 @@
     <Compile Include="CopilotAdoptionEmailDomainTests.cs" />
     <Compile Include="CopilotAdoptionLicenceEstimateTests.cs" />
     <Compile Include="CopilotAdoptionSeatTimeSavedTests.cs" />
+    <Compile Include="CopilotAdoptionAgentUsersTests.cs" />
     <Compile Include="CopilotAdoptionSqlIntegrationTests.cs" />
     <Compile Include="CopilotAdoptionSynchronizationContextTests.cs" />
     <Compile Include="CopilotAdoptionTelemetryTests.cs" />

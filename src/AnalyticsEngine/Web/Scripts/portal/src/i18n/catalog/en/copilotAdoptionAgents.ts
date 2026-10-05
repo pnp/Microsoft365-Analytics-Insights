@@ -70,6 +70,25 @@ export const copilotAdoptionAgents = {
   'copilotAdoptionAgents.agents.table.licensedUsers': '{count} licensed',
   'copilotAdoptionAgents.agents.legend.title': 'What each verdict means',
 
+  // The heaviest agent users
+  'copilotAdoptionAgents.agents.topUsers.title': 'Heaviest agent users',
+  'copilotAdoptionAgents.agents.topUsers.description': 'The {count} people who used Copilot agents most in the selected period - {licensed} of them hold a Copilot licence.',
+  'copilotAdoptionAgents.agents.topUsers.what': 'The people in this view who ran Copilot agents most often in the selected period, and whether each holds a Microsoft 365 Copilot licence.',
+  'copilotAdoptionAgents.agents.topUsers.how': 'Agent interactions in the last {windowDays} days, every agent counted - Cowork included - ranked from the most. "Agents" is how many different agents the person used; "Most used" is the one they ran most. The licence is the one they hold today.',
+  'copilotAdoptionAgents.agents.topUsers.source': 'A heavy agent user without a Copilot licence is a candidate for one - they are already getting work done through agents. A heavy user with one is a natural advocate for the agents they rely on.',
+  'copilotAdoptionAgents.agents.topUsers.sqlTitle': 'SQL behind this list',
+  'copilotAdoptionAgents.agents.topUsers.capped': 'Only the {max} heaviest agent users in the tenant were read, so in a filtered view this list can miss people who rank below them.',
+  'copilotAdoptionAgents.agents.topUsers.user': 'User',
+  'copilotAdoptionAgents.agents.topUsers.department': 'Department',
+  'copilotAdoptionAgents.agents.topUsers.interactions': 'Agent interactions',
+  'copilotAdoptionAgents.agents.topUsers.agents': 'Agents',
+  'copilotAdoptionAgents.agents.topUsers.activeDays': 'Active days',
+  'copilotAdoptionAgents.agents.topUsers.topAgent': 'Most used',
+  'copilotAdoptionAgents.agents.topUsers.topAgentInteractions': '{interactions} interactions',
+  'copilotAdoptionAgents.agents.topUsers.licence': 'Copilot licence',
+  'copilotAdoptionAgents.agents.topUsers.licensed': 'Licensed',
+  'copilotAdoptionAgents.agents.topUsers.unlicensed': 'No licence',
+
   // KPIs
   'copilotAdoptionAgents.agents.kpi.active.label': 'Active agents',
   'copilotAdoptionAgents.agents.kpi.active.hint': '{known} known, {custom} custom-built',

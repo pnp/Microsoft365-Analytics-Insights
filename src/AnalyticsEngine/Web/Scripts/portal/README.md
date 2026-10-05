@@ -218,19 +218,24 @@ they are showing. The **Print** button - and Ctrl+P/Cmd+P while that button is o
 through `requestPrint`, which loads every row of each such list in pages of 500 (the API's `MaxTake`),
 commits them with `flushSync`, calls `window.print()`, and then puts each list back to its page.
 
-- **Lists longer than `PRINT_ROW_LIMIT` (1,000 rows) are refused, not truncated.** The button explains
-  and asks for a narrower filter; the list's CSV export is the way to get every row. These lists grow
-  with the tenant, and laying out tens of thousands of rows to print would stall the tab.
+- **Lists longer than `PRINT_ROW_LIMIT` (1,000 rows) print their first 1,000 rows, and say so.** Only
+  that many are ever loaded - in the list's own sort order, so the people the sort puts first - and the
+  printout opens the list with a warning naming how many of how many rows it holds and how to get the
+  rest (narrow the filters, or use the list's CSV export for every row); the Print button also raises
+  an on-screen warning toast. These lists grow with the tenant, and laying out tens of thousands of rows
+  to print would stall the tab, but refusing outright left nothing to print at all.
 - **"Expand all" is a mode, not a list of ids**, so it also opens the rows only the printout loads.
 - **A list in a hidden section or tab does not take part**: it is not on the printout, so it must not
-  hold the print up or refuse it for being long.
+  hold the print up loading rows nobody will see.
 - **The browser's own File > Print cannot be delayed** (`beforeprint` is synchronous), so it prints the
   page on screen, and each list says on paper that it holds only the rows that were on screen.
 
 Wide lists are still clipped at the right-hand edge of the sheet: the Cowork people table lays out
 at about 1,190px against roughly 700px of printable A4 width, and landscape does not recover it. On
 the lists with expandable rows, **Expand all** also prints each clipped column's figure in that row's
-detail.
+detail. The licensed-user table is the exception: it is sized to fit the page, with the signal, apps,
+Cowork use and reclaim detail in each row's expander, and its interactions and last-used columns step
+aside on a narrow page (a container query on the table's wrapper) rather than scroll.
 
 The footer is a real `<tfoot>` inside a layout `<table>` wrapping the report, and that is load-bearing.
 A running footer must repeat on every page *and* have room reserved for it; `position: fixed` gives

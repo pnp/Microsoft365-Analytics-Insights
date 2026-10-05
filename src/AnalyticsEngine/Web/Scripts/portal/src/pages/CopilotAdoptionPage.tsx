@@ -858,6 +858,9 @@ function CopilotAdoptionView({
                   options={summary.options}
                   windowDays={windowDays}
                   sql={sql}
+                  topUsers={summary.topAgentUsers}
+                  topUsersCapped={summary.topAgentUsersCapped}
+                  canSeePii={canSeePii}
                 />
               )}
 
@@ -2701,6 +2704,7 @@ function buildTimeSavedKpis(
       cohorts.cowork,
       projectCoworkTimeSaved(summary.coworkValueEstimate, assumptions, o),
       projectCoworkTimeSaved(summary.coworkFullRolloutEstimate, assumptions, o),
+      projectCoworkTimeSaved(summary.coworkWithoutLicenceEstimate, assumptions, o),
     );
     if (coworkCohort) {
       const cowork = coworkCohort.projection;
@@ -2714,10 +2718,15 @@ function buildTimeSavedKpis(
                 plural(cowork.cohortUsers, 'copilotAdoption.page.kpi.coworkTimeSaved.hintReady.one', 'copilotAdoption.page.kpi.coworkTimeSaved.hintReady.other'),
                 { users: formatCount(cowork.cohortUsers) },
               )
-            : t(
-                plural(cowork.cohortUsers, 'copilotAdoption.page.kpi.coworkTimeSaved.hintCeiling.one', 'copilotAdoption.page.kpi.coworkTimeSaved.hintCeiling.other'),
-                { users: formatCount(cowork.cohortUsers) },
-              ),
+            : coworkCohort.cohort === 'withoutLicence'
+              ? t(
+                  plural(cowork.cohortUsers, 'copilotAdoption.page.kpi.coworkTimeSaved.hintWithoutLicence.one', 'copilotAdoption.page.kpi.coworkTimeSaved.hintWithoutLicence.other'),
+                  { users: formatCount(cowork.cohortUsers) },
+                )
+              : t(
+                  plural(cowork.cohortUsers, 'copilotAdoption.page.kpi.coworkTimeSaved.hintCeiling.one', 'copilotAdoption.page.kpi.coworkTimeSaved.hintCeiling.other'),
+                  { users: formatCount(cowork.cohortUsers) },
+                ),
         tone: 'opportunity',
         modelledBadge: t('copilotAdoption.page.kpi.modelledBadge'),
         action: onOpenTab

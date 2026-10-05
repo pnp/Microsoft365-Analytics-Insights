@@ -770,6 +770,33 @@ namespace Common.Entities.CopilotAdoption
                     .Select(r => new AdoptionCategory { Label = r.Label, Value = r.Value })
                     .ToList();
             }
+
+            var usersSql = CopilotAdoptionSql.AgentUsersSql(seatIds);
+            var usersParameters = new Dictionary<string, object>
+            {
+                { "@from", agentWindowStart },
+                { "@toExclusive", agentToExclusive },
+                { "@maxRows", _options.MaxAgentUsersScored },
+            };
+            output.Sql["agentUsers"] = CopilotAdoptionSql.ForDisplay(usersSql, usersParameters);
+
+            var agentUsers = await SafeAsync(
+                () => QueryAsync<AgentUserRow>(usersSql, cancellationToken, ToSqlParameters(usersParameters)),
+                CopilotAdoptionSteps.AgentEstate,
+                CopilotAdoptionQueries.AgentUsers,
+                output,
+                "agent usage per person", cancellationToken);
+
+            if (agentUsers != null)
+            {
+                foreach (var row in agentUsers)
+                {
+                    row.EmailDomain = CopilotAdoptionEmailDomain.From(row.UserPrincipalName, row.Mail);
+                }
+
+                analysis.AgentUsers = agentUsers;
+                analysis.AgentUsersCapped = agentUsers.Count >= _options.MaxAgentUsersScored;
+            }
         }
 
         /// <summary>
@@ -1811,6 +1838,13 @@ namespace Common.Entities.CopilotAdoption
                     LicenceEstimateCohort.AllCandidates)
                 : new LicenceValueEstimate();
 
+            // The same people, through the Cowork model instead: what Cowork could add for everyone without
+            // a seat once licensed. Offered on the Cowork tab beside the seat holders; never summed with the
+            // licence figure above, which is the time the licence itself would give back.
+            summary.CoworkWithoutLicenceEstimate = volumesObserved
+                ? CopilotAdoptionScoring.EstimateCoworkValueWithoutLicence(opportunities, _options)
+                : new CoworkValueEstimate();
+
             // Last, because it reads the licensed, unlicensed, opportunity and Cowork populations
             // together - the point of the domain view is that those four answer one question per
             // organisation rather than four separate ones.
@@ -2255,6 +2289,15 @@ namespace Common.Entities.CopilotAdoption
                 .ToList();
 
             estate.Agents = agents;
+
+            // On the summary itself rather than on the estate: the estate is tenant-level and a filtered
+            // view carries it whole, but these are people, and a filtered view lists its own.
+            summary.TopAgentUsers = (analysis.AgentUsers ?? new List<AgentUserRow>())
+                .OrderByDescending(u => u.Interactions)
+                .ThenBy(u => u.UserId)
+                .Take(Math.Max(0, _options.TopAgentUsers))
+                .ToList();
+            summary.TopAgentUsersCapped = analysis.AgentUsersCapped;
         }
 
         /// <summary>

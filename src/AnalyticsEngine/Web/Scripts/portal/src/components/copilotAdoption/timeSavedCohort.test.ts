@@ -44,6 +44,23 @@ describe('resolveTimeSavedCohort', () => {
     expect(resolveTimeSavedCohort('recommended', null, null)).toBeNull();
     expect(resolveTimeSavedCohort('all', null, undefined)).toBeNull();
   });
+
+  it('models the people without a licence only when the reader chose them, and never as a stand-in', () => {
+    const withoutLicence = { cohortUsers: 300 };
+    expect(resolveTimeSavedCohort('withoutLicence', recommended, all, withoutLicence)).toEqual({
+      cohort: 'withoutLicence',
+      projection: withoutLicence,
+      fallback: false,
+    });
+    // A different population, not a ceiling: an empty seat-holder cohort never falls back to it.
+    expect(resolveTimeSavedCohort('recommended', null, null, withoutLicence)).toBeNull();
+    // Chosen but empty, the seat holders stand in - and say so.
+    expect(resolveTimeSavedCohort('withoutLicence', recommended, all, null)).toEqual({
+      cohort: 'recommended',
+      projection: recommended,
+      fallback: true,
+    });
+  });
 });
 
 describe('parseTimeSavedCohorts', () => {
@@ -55,6 +72,13 @@ describe('parseTimeSavedCohorts', () => {
     expect(parseTimeSavedCohorts(JSON.stringify({ licence: 'all', cowork: 'everyone', future: 'all' }))).toEqual({
       licence: 'all',
       cowork: 'recommended',
+    });
+  });
+
+  it('offers the people without a licence for Cowork only - the licence estimate is already about them', () => {
+    expect(parseTimeSavedCohorts(JSON.stringify({ licence: 'withoutLicence', cowork: 'withoutLicence' }))).toEqual({
+      licence: 'recommended',
+      cowork: 'withoutLicence',
     });
   });
 

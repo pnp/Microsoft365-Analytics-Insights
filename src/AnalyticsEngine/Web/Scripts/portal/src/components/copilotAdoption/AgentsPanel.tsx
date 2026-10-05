@@ -12,13 +12,14 @@ import {
   Tooltip,
 } from '@fluentui/react-components';
 import { Dismiss16Regular, Search16Regular } from '@fluentui/react-icons';
-import type { AgentEstateSummary, AgentUsageRow, CopilotAdoptionOptions } from '../../types/copilotAdoption';
+import type { AgentEstateSummary, AgentUsageRow, AgentUserRow, CopilotAdoptionOptions } from '../../types/copilotAdoption';
 import { AgentHealth } from '../../types/copilotAdoption';
 import CategoryBarChart from '../charts/CategoryBarChart';
 import TreemapChart from '../charts/TreemapChart';
 import DonutChart from '../charts/DonutChart';
 import SqlPopover from '../SqlPopover';
 import InfoTip from '../shared/InfoTip';
+import PiiHiddenNote from '../shared/PiiHiddenNote';
 import { KpiGrid, formatCount, formatDate } from '../shared/KpiGrid';
 import type { KpiDefinition } from '../shared/KpiGrid';
 import { serverPlaceholderText } from '../shared/serverPlaceholder';
@@ -129,6 +130,25 @@ const useStyles = makeStyles({
     padding: '24px 0',
     textAlign: 'center',
   },
+  person: {
+    display: 'flex',
+    flexDirection: 'column',
+    overflowWrap: 'anywhere',
+    minWidth: '160px',
+  },
+  licensed: {
+    color: tokens.colorNeutralForegroundOnBrand,
+    backgroundColor: '#107c10',
+    whiteSpace: 'nowrap',
+  },
+  unlicensed: {
+    whiteSpace: 'nowrap',
+  },
+  note: {
+    display: 'block',
+    marginBottom: '8px',
+    color: tokens.colorNeutralForeground3,
+  },
 });
 
 /** The health verdict as a coloured pill. */
@@ -155,12 +175,21 @@ export default function AgentsPanel({
   options,
   windowDays,
   sql,
+  topUsers,
+  topUsersCapped = false,
+  canSeePii = false,
 }: {
   estate: AgentEstateSummary;
   agents: AgentUsageRow[];
   options: CopilotAdoptionOptions;
   windowDays: number;
   sql: Record<string, string> | null;
+  /** The heaviest agent users. Only ever sent to a reader with the See PII permission. */
+  topUsers?: AgentUserRow[];
+  /** The people that list was picked from were capped tenant-wide, so a filtered view's list may be short. */
+  topUsersCapped?: boolean;
+  /** Whether the reader holds the See PII permission - without it the list is withheld, and says so. */
+  canSeePii?: boolean;
 }) {
   const styles = useStyles();
   const table = useAdoptionTableStyles();
@@ -316,6 +345,19 @@ export default function AgentsPanel({
           </div>
         </Card>
       )}
+
+      {/* Named people: shown to a See PII reader only, and stated as hidden - never left empty - otherwise. */}
+      {canSeePii
+        ? (topUsers?.length ?? 0) > 0 && (
+            <TopAgentUsersCard
+              users={topUsers ?? []}
+              capped={topUsersCapped}
+              maxUsers={options.maxAgentUsersScored ?? 0}
+              windowDays={windowDays}
+              sql={sql?.agentUsers}
+            />
+          )
+        : estate.agentUsers > 0 && <PiiHiddenNote />}
 
       <Card>
         <div className={styles.cardHead}>
@@ -495,6 +537,129 @@ export default function AgentsPanel({
         </div>
       </Card>
     </div>
+  );
+}
+
+/**
+ * The people who use agents most, and whether each holds a Copilot licence.
+ *
+ * The licence is the point of listing them here: heavy agent use without a Copilot seat is the
+ * clearest case for one, and heavy use with one marks the people to ask to champion the agents
+ * they rely on. Sorted heaviest first by the server; shown whole because it is short by design.
+ */
+function TopAgentUsersCard({
+  users,
+  capped,
+  maxUsers,
+  windowDays,
+  sql,
+}: {
+  users: AgentUserRow[];
+  capped: boolean;
+  maxUsers: number;
+  windowDays: number;
+  sql?: string;
+}) {
+  const styles = useStyles();
+  const table = useAdoptionTableStyles();
+  const t = useT();
+  const licensed = users.filter((u) => u.holdsCopilotSeat).length;
+
+  return (
+    <Card>
+      <div className={styles.cardHead}>
+        <div>
+          <Text weight="semibold" size={400}>
+            {t('copilotAdoptionAgents.agents.topUsers.title')}
+          </Text>
+          <Text size={200} block className={styles.muted}>
+            {t('copilotAdoptionAgents.agents.topUsers.description', {
+              count: formatCount(users.length),
+              licensed: formatCount(licensed),
+            })}
+          </Text>
+        </div>
+        <div className={styles.cardTools}>
+          <InfoTip
+            title={t('copilotAdoptionAgents.agents.topUsers.title')}
+            content={{
+              what: t('copilotAdoptionAgents.agents.topUsers.what'),
+              how: t('copilotAdoptionAgents.agents.topUsers.how', { windowDays }),
+              source: t('copilotAdoptionAgents.agents.topUsers.source'),
+            }}
+          />
+          {sql && <SqlPopover sql={sql} title={t('copilotAdoptionAgents.agents.topUsers.sqlTitle')} />}
+        </div>
+      </div>
+
+      <div className={styles.cardBody}>
+        {capped && maxUsers > 0 && (
+          <Text size={200} className={styles.note}>
+            {t('copilotAdoptionAgents.agents.topUsers.capped', { max: formatCount(maxUsers) })}
+          </Text>
+        )}
+        <div className={styles.tableWrap}>
+          <table className={table.table}>
+            <thead>
+              <tr>
+                <th className={table.th}>{t('copilotAdoptionAgents.agents.topUsers.user')}</th>
+                <th className={table.th}>{t('copilotAdoptionAgents.agents.topUsers.department')}</th>
+                <th className={`${table.th} ${table.thNumeric}`}>{t('copilotAdoptionAgents.agents.topUsers.interactions')}</th>
+                <th className={`${table.th} ${table.thNumeric}`}>{t('copilotAdoptionAgents.agents.topUsers.agents')}</th>
+                <th className={`${table.th} ${table.thNumeric}`}>{t('copilotAdoptionAgents.agents.topUsers.activeDays')}</th>
+                <th className={table.th}>{t('copilotAdoptionAgents.agents.topUsers.topAgent')}</th>
+                <th className={table.th}>{t('copilotAdoptionAgents.agents.table.lastUsed')}</th>
+                <th className={table.th}>{t('copilotAdoptionAgents.agents.topUsers.licence')}</th>
+              </tr>
+            </thead>
+            <tbody>
+              {users.map((user) => (
+                <tr key={user.userId}>
+                  <td className={table.td}>
+                    <span className={styles.person}>
+                      <Text size={200} weight="semibold">
+                        {user.userPrincipalName}
+                      </Text>
+                      {user.jobTitle && (
+                        <Text size={100} className={styles.muted}>
+                          {user.jobTitle}
+                        </Text>
+                      )}
+                    </span>
+                  </td>
+                  <td className={table.td}>{user.department || '\u2014'}</td>
+                  <td className={`${table.td} ${table.tdNumeric}`}>{formatCount(user.interactions)}</td>
+                  <td className={`${table.td} ${table.tdNumeric}`}>{formatCount(user.agentsUsed)}</td>
+                  <td className={`${table.td} ${table.tdNumeric}`}>{formatCount(user.activeDays)}</td>
+                  <td className={table.td}>
+                    <span className={styles.agentName}>
+                      <Text size={200}>{serverPlaceholderText(t, user.topAgentName)}</Text>
+                      <Text size={100} className={styles.muted}>
+                        {t('copilotAdoptionAgents.agents.topUsers.topAgentInteractions', {
+                          interactions: formatCount(user.topAgentInteractions),
+                        })}
+                      </Text>
+                    </span>
+                  </td>
+                  <td className={`${table.td} ${table.tdNoWrap}`}>{formatDate(user.lastUsedUtc)}</td>
+                  <td className={table.td}>
+                    {user.holdsCopilotSeat ? (
+                      <Badge className={styles.licensed} size="small">
+                        {t('copilotAdoptionAgents.agents.topUsers.licensed')}
+                      </Badge>
+                    ) : (
+                      <Badge className={styles.unlicensed} size="small" appearance="tint" color="warning">
+                        {t('copilotAdoptionAgents.agents.topUsers.unlicensed')}
+                      </Badge>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </Card>
   );
 }
 

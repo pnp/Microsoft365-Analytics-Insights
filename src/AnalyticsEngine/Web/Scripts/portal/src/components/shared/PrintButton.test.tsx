@@ -3,10 +3,14 @@ import { act, fireEvent, screen, waitFor } from '@testing-library/react';
 import { renderWithProvider } from '../../test/renderWithProvider';
 import PrintButton from './PrintButton';
 import { PRINT_ROW_LIMIT, registerPrintParticipant, resetPrintPreparation } from './printPreparation';
+import { notify } from '../toast';
+
+vi.mock('../toast', () => ({ notify: vi.fn() }));
 
 describe('PrintButton', () => {
   beforeEach(() => {
     resetPrintPreparation();
+    vi.mocked(notify).mockReset();
     vi.spyOn(window, 'print').mockImplementation(() => {});
   });
 
@@ -70,25 +74,38 @@ describe('PrintButton', () => {
     expect(event.defaultPrevented).toBe(false);
   });
 
-  it('explains, rather than printing part of it, when a list is too long to print', async () => {
+  it('prints a long list\u2019s first rows, and warns on screen that it was cut short', async () => {
     registerPrintParticipant({
       rowCount: () => 12345,
       needsLoading: () => true,
-      prepare: vi.fn(),
+      prepare: vi.fn(async () => undefined),
       restore: vi.fn(),
     });
     renderWithProvider(<PrintButton tooltip="Prints this view" />);
 
     fireEvent.click(screen.getByRole('button', { name: 'Print' }));
 
-    const dialog = await screen.findByRole('dialog');
-    expect(dialog.textContent).toContain('Too many rows to print');
-    expect(dialog.textContent).toContain('12,345 rows match');
-    expect(dialog.textContent).toContain(`up to ${PRINT_ROW_LIMIT.toLocaleString('en')} rows`);
-    expect(window.print).not.toHaveBeenCalled();
+    await waitFor(() => expect(notify).toHaveBeenCalledTimes(1));
+    expect(window.print).toHaveBeenCalledTimes(1);
+    const [message, intent] = vi.mocked(notify).mock.calls[0];
+    expect(intent).toBe('warning');
+    expect(message).toContain(`Printed the first ${PRINT_ROW_LIMIT.toLocaleString('en')} of 12,345 rows`);
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
 
-    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
-    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+  it('raises no warning when every row was printed', async () => {
+    registerPrintParticipant({
+      rowCount: () => 80,
+      needsLoading: () => true,
+      prepare: vi.fn(async () => undefined),
+      restore: vi.fn(),
+    });
+    renderWithProvider(<PrintButton tooltip="Prints this view" />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Print' }));
+
+    await waitFor(() => expect(window.print).toHaveBeenCalledTimes(1));
+    expect(notify).not.toHaveBeenCalled();
   });
 
   it('says so when the full list could not be loaded', async () => {

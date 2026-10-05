@@ -31,7 +31,7 @@ import {
   useModelStyles,
 } from './timeSavedShared';
 
-type Scenario = 'ready' | 'full';
+type Scenario = 'ready' | 'full' | 'withoutLicence';
 
 /** A share as the figure a sentence quotes before its percent sign: 0.25 -> "25". */
 function percentFigure(share: number): string {
@@ -91,9 +91,12 @@ export default function CoworkTimeSavedModel({
 
   const ready = projectCoworkTimeSaved(summary.coworkValueEstimate, assumptions, options);
   const full = projectCoworkTimeSaved(summary.coworkFullRolloutEstimate, assumptions, options);
-  // The cohort the headline models - the people ready now unless the reader chose every seat holder,
-  // or nobody is ready.
-  const shown: Scenario = resolveTimeSavedCohort(cohort, ready, full)?.cohort === 'all' ? 'full' : 'ready';
+  const withoutLicence = projectCoworkTimeSaved(summary.coworkWithoutLicenceEstimate, assumptions, options);
+  // The cohort the headline models - the people ready now unless the reader chose every seat holder or
+  // the people without a licence, or nobody is ready.
+  const resolvedCohort = resolveTimeSavedCohort(cohort, ready, full, withoutLicence)?.cohort;
+  const shown: Scenario =
+    resolvedCohort === 'withoutLicence' ? 'withoutLicence' : resolvedCohort === 'all' ? 'full' : 'ready';
   const [scenario, setScenario] = useState<Scenario>(shown);
   // Follows the headline: when the reader switches who it models, the working switches with it. Set
   // during render rather than in an effect, so the table never shows one frame of the old cohort.
@@ -104,7 +107,10 @@ export default function CoworkTimeSavedModel({
   }
   const { ref: calculatorRef, highlighted } = useCalculatorFocus(focusRequest);
 
-  const projection = (scenario === 'ready' ? ready : full) ?? ready ?? full;
+  const projection =
+    (scenario === 'withoutLicence' ? withoutLicence : scenario === 'ready' ? ready : full) ?? ready ?? full;
+  // Whether the working shown is for the people without a licence, whose assumptions say so.
+  const modellingWithoutLicence = scenario === 'withoutLicence' && !!withoutLicence;
 
   if (!projection) {
     // Without the usage reports there is no work to model, which is a missing import, not a finding
@@ -142,25 +148,48 @@ export default function CoworkTimeSavedModel({
             {t('copilotAdoptionCowork.timeSaved.model.intro')}
           </Text>
 
-          {ready && full && (
+          {[ready, full, withoutLicence].filter(Boolean).length > 1 && (
             <ScenarioPicker<Scenario>
               value={scenario}
               onChange={setScenario}
               options={[
-                {
-                  value: 'ready',
-                  label: t(
-                    plural(ready.cohortUsers, 'copilotAdoptionCowork.timeSaved.model.scenario.ready.one', 'copilotAdoptionCowork.timeSaved.model.scenario.ready.other'),
-                    { users: formatCount(ready.cohortUsers) },
-                  ),
-                },
-                {
-                  value: 'full',
-                  label: t(
-                    plural(full.cohortUsers, 'copilotAdoptionCowork.timeSaved.model.scenario.full.one', 'copilotAdoptionCowork.timeSaved.model.scenario.full.other'),
-                    { users: formatCount(full.cohortUsers) },
-                  ),
-                },
+                ...(ready
+                  ? [
+                      {
+                        value: 'ready' as const,
+                        label: t(
+                          plural(ready.cohortUsers, 'copilotAdoptionCowork.timeSaved.model.scenario.ready.one', 'copilotAdoptionCowork.timeSaved.model.scenario.ready.other'),
+                          { users: formatCount(ready.cohortUsers) },
+                        ),
+                      },
+                    ]
+                  : []),
+                ...(full
+                  ? [
+                      {
+                        value: 'full' as const,
+                        label: t(
+                          plural(full.cohortUsers, 'copilotAdoptionCowork.timeSaved.model.scenario.full.one', 'copilotAdoptionCowork.timeSaved.model.scenario.full.other'),
+                          { users: formatCount(full.cohortUsers) },
+                        ),
+                      },
+                    ]
+                  : []),
+                ...(withoutLicence
+                  ? [
+                      {
+                        value: 'withoutLicence' as const,
+                        label: t(
+                          plural(
+                            withoutLicence.cohortUsers,
+                            'copilotAdoptionCowork.timeSaved.model.scenario.withoutLicence.one',
+                            'copilotAdoptionCowork.timeSaved.model.scenario.withoutLicence.other',
+                          ),
+                          { users: formatCount(withoutLicence.cohortUsers) },
+                        ),
+                      },
+                    ]
+                  : []),
               ]}
             />
           )}
@@ -434,21 +463,44 @@ export default function CoworkTimeSavedModel({
                 })}
               </Text>
             </li>
-            <li key="estimate-assumption-volumes">
-              <Text size={200}>
-                {t(
-                  plural(
-                    projection.cohortUsers,
-                    'copilotAdoptionCowork.estimate.assumption.volumes.one',
-                    'copilotAdoptionCowork.estimate.assumption.volumes.other',
-                  ),
-                  {
-                    users: formatNumber(projection.cohortUsers),
-                    workingDays: formatNumber(projection.workingDaysPerMonth, { maximumFractionDigits: 15 }),
-                  },
-                )}
-              </Text>
-            </li>
+            {modellingWithoutLicence ? (
+              <>
+                <li key="estimate-assumption-volumesWithoutLicence">
+                  <Text size={200}>
+                    {t(
+                      plural(
+                        projection.cohortUsers,
+                        'copilotAdoptionCowork.estimate.assumption.volumesWithoutLicence.one',
+                        'copilotAdoptionCowork.estimate.assumption.volumesWithoutLicence.other',
+                      ),
+                      {
+                        users: formatNumber(projection.cohortUsers),
+                        workingDays: formatNumber(projection.workingDaysPerMonth, { maximumFractionDigits: 15 }),
+                      },
+                    )}
+                  </Text>
+                </li>
+                <li key="estimate-assumption-needsLicence">
+                  <Text size={200}>{t('copilotAdoptionCowork.estimate.assumption.needsLicence')}</Text>
+                </li>
+              </>
+            ) : (
+              <li key="estimate-assumption-volumes">
+                <Text size={200}>
+                  {t(
+                    plural(
+                      projection.cohortUsers,
+                      'copilotAdoptionCowork.estimate.assumption.volumes.one',
+                      'copilotAdoptionCowork.estimate.assumption.volumes.other',
+                    ),
+                    {
+                      users: formatNumber(projection.cohortUsers),
+                      workingDays: formatNumber(projection.workingDaysPerMonth, { maximumFractionDigits: 15 }),
+                    },
+                  )}
+                </Text>
+              </li>
+            )}
             <li key="estimate-assumption-everyoneModelled">
               <Text size={200}>{t('copilotAdoptionCowork.estimate.assumption.everyoneModelled')}</Text>
             </li>

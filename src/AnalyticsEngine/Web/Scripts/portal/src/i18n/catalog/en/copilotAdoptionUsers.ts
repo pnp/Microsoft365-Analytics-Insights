@@ -109,6 +109,25 @@ export const copilotAdoptionUsers = {
   'copilotAdoptionUsers.licensed.sourceComparisonSnapshotDate': ', {date}',
   'copilotAdoptionUsers.licensed.engagementFormula.unitWeight': 'frequency  = min(1, activeDays / expectedActiveDays)\nconfidence = min(1, activeDays / {depthMinDays})\ndepth      = min(1, interactions / activeDays / {depthTarget}) x confidence\nbreadth    = min(1, appsUsed / {breadthTarget})\nscore      = (frequency x {frequencyWeight} + depth x {depthWeight} + breadth x {breadthWeight}) x 100',
   'copilotAdoptionUsers.licensed.engagementFormula.weighted': 'frequency  = min(1, activeDays / expectedActiveDays)\nconfidence = min(1, activeDays / {depthMinDays})\ndepth      = min(1, interactions / activeDays / {depthTarget}) x confidence\nbreadth    = min(1, appsUsed / {breadthTarget})\nscore      = (frequency x {frequencyWeight} + depth x {depthWeight} + breadth x {breadthWeight})\n             / {weightSum} x 100',
+  'copilotAdoptionUsers.licensed.reclaimTierExpired': '{tier} - exclusion expired',
+  // A seat holder's expanded row
+  'copilotAdoptionUsers.licensed.detail.engagementTitle': 'Engagement score - {score}/100',
+  'copilotAdoptionUsers.licensed.detail.frequency': 'Frequency',
+  'copilotAdoptionUsers.licensed.detail.frequencySub': 'Active on {activeDays} of {expectedDays} days',
+  'copilotAdoptionUsers.licensed.detail.depth': 'Depth',
+  'copilotAdoptionUsers.licensed.detail.depthSub': 'Target {target} interactions a day',
+  'copilotAdoptionUsers.licensed.detail.breadth': 'Breadth',
+  'copilotAdoptionUsers.licensed.detail.breadthSub': '{apps} of {target} apps',
+  'copilotAdoptionUsers.licensed.detail.useTitle': 'Copilot use in this period',
+  'copilotAdoptionUsers.licensed.detail.agentsSub': 'Agents used: {agents}',
+  'copilotAdoptionUsers.licensed.detail.firstUsed': 'First used',
+  'copilotAdoptionUsers.licensed.detail.seatTitle': 'Seat and reclaim',
+  'copilotAdoptionUsers.licensed.detail.noReclaimTier': 'None',
+  'copilotAdoptionUsers.licensed.detail.account': 'Account',
+  'copilotAdoptionUsers.licensed.detail.accountEnabled': 'Enabled',
+  'copilotAdoptionUsers.licensed.detail.licences': 'Copilot licences',
+  'copilotAdoptionUsers.licensed.detail.reclaimReasonTitle': 'Reclaim assessment',
+  'copilotAdoptionUsers.licensed.detail.actionTitle': 'Next step - {action}',
 
 
   // Opportunities panel

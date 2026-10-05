@@ -727,6 +727,9 @@ const TIME_SAVED_ASSUMPTION_SPECS: TimeSavedAssumptionSpec[] = [
         'assumptions.createDocumentsShare',
       ],
       volumes: ['projection.cohortUsers', 'projection.workingDaysPerMonth'],
+      // The same sentence for the people without a Copilot licence, and the licence Cowork needs first.
+      volumesWithoutLicence: ['projection.cohortUsers', 'projection.workingDaysPerMonth'],
+      needsLicence: [],
       // Everyone covered, people already using Cowork included, is modelled from their own work (#692).
       everyoneModelled: [],
       increment: [],

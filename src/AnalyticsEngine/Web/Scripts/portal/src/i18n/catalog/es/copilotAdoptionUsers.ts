@@ -111,6 +111,25 @@ const copilotAdoptionUsers: Record<keyof typeof en, string> = {
   'copilotAdoptionUsers.licensed.sourceComparisonSnapshotDate': ', {date}',
   'copilotAdoptionUsers.licensed.engagementFormula.unitWeight': 'frecuencia = min(1, diasActivos / diasActivosEsperados)\nconfianza  = min(1, diasActivos / {depthMinDays})\nprofundidad = min(1, interacciones / diasActivos / {depthTarget}) x confianza\namplitud   = min(1, appsUsadas / {breadthTarget})\npuntuacion = (frecuencia x {frequencyWeight} + profundidad x {depthWeight} + amplitud x {breadthWeight}) x 100',
   'copilotAdoptionUsers.licensed.engagementFormula.weighted': 'frecuencia = min(1, diasActivos / diasActivosEsperados)\nconfianza  = min(1, diasActivos / {depthMinDays})\nprofundidad = min(1, interacciones / diasActivos / {depthTarget}) x confianza\namplitud   = min(1, appsUsadas / {breadthTarget})\npuntuacion = (frecuencia x {frequencyWeight} + profundidad x {depthWeight} + amplitud x {breadthWeight})\n             / {weightSum} x 100',
+  'copilotAdoptionUsers.licensed.reclaimTierExpired': '{tier} - exclusión expirada',
+  // Fila ampliada de un titular de licencia
+  'copilotAdoptionUsers.licensed.detail.engagementTitle': 'Puntuación de interacción - {score}/100',
+  'copilotAdoptionUsers.licensed.detail.frequency': 'Frecuencia',
+  'copilotAdoptionUsers.licensed.detail.frequencySub': 'Activo {activeDays} de {expectedDays} días',
+  'copilotAdoptionUsers.licensed.detail.depth': 'Profundidad',
+  'copilotAdoptionUsers.licensed.detail.depthSub': 'Objetivo: {target} interacciones al día',
+  'copilotAdoptionUsers.licensed.detail.breadth': 'Cobertura',
+  'copilotAdoptionUsers.licensed.detail.breadthSub': '{apps} de {target} aplicaciones',
+  'copilotAdoptionUsers.licensed.detail.useTitle': 'Uso de Copilot en este período',
+  'copilotAdoptionUsers.licensed.detail.agentsSub': 'Agentes usados: {agents}',
+  'copilotAdoptionUsers.licensed.detail.firstUsed': 'Primer uso',
+  'copilotAdoptionUsers.licensed.detail.seatTitle': 'Puesto y recuperación',
+  'copilotAdoptionUsers.licensed.detail.noReclaimTier': 'Ninguno',
+  'copilotAdoptionUsers.licensed.detail.account': 'Cuenta',
+  'copilotAdoptionUsers.licensed.detail.accountEnabled': 'Habilitada',
+  'copilotAdoptionUsers.licensed.detail.licences': 'Licencias de Copilot',
+  'copilotAdoptionUsers.licensed.detail.reclaimReasonTitle': 'Evaluación de recuperación',
+  'copilotAdoptionUsers.licensed.detail.actionTitle': 'Siguiente paso - {action}',
 
 
   // Opportunities panel

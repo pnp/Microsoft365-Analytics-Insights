@@ -221,6 +221,25 @@ namespace Common.Entities.CopilotAdoption
         [JsonProperty("maxAgents")]
         public int MaxAgents { get; set; } = 5000;
 
+        /// <summary>
+        /// How many people the Agents tab lists as the heaviest agent users. Named people, so only a
+        /// reader with the See PII permission ever receives the list.
+        /// </summary>
+        [JsonProperty("topAgentUsers")]
+        public int TopAgentUsers { get; set; } = 25;
+
+        /// <summary>
+        /// How many agent users, heaviest first, the analysis keeps to pick the heaviest from.
+        /// </summary>
+        /// <remarks>
+        /// Far more than <see cref="TopAgentUsers"/> on purpose. The list is rebuilt for every filtered
+        /// view - one organisation, one department - from these rows, and a view's own heaviest users can
+        /// rank well down the tenant's list. Capped because each row is held in the cached analysis; a view
+        /// whose people all rank below the cap is told that its list may be incomplete.
+        /// </remarks>
+        [JsonProperty("maxAgentUsersScored")]
+        public int MaxAgentUsersScored { get; set; } = 20000;
+
         /// <summary>How many unlicensed Copilot users are pulled in to describe that population.</summary>
         [JsonProperty("maxUnlicensedUsersScored")]
         public int MaxUnlicensedUsersScored { get; set; } = 50000;
