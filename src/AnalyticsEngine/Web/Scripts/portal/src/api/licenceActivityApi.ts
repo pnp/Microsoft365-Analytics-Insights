@@ -199,23 +199,22 @@ export function fetchOverview(params: OverviewParams, signal?: AbortSignal): Pro
 }
 
 function usersQuery(params: UsersParams): URLSearchParams {
-  const qs = new URLSearchParams({
-    overviewId: params.overviewId,
-    licenceTypeId: String(params.licenceTypeId),
-    workload: params.workload,
-    top: String(params.top),
-    sort: params.sort,
-    direction: params.direction,
-    page: String(params.page),
-    pageSize: String(params.pageSize),
-  });
+  const qs = new URLSearchParams({ overviewId: params.overviewId });
+  // No licence = everyone holding any licence; the server ranks across the whole licensed population.
+  if (params.licenceTypeId != null) qs.set('licenceTypeId', String(params.licenceTypeId));
+  qs.set('workload', params.workload);
+  qs.set('top', String(params.top));
+  qs.set('sort', params.sort);
+  qs.set('direction', params.direction);
+  qs.set('page', String(params.page));
+  qs.set('pageSize', String(params.pageSize));
   if (params.search && params.search.trim()) qs.set('search', params.search.trim());
   return qs;
 }
 
 /**
- * The users list for the selected licence: one request returns the bounded most/least active
- * lists and the current browse page together.
+ * The users list for the selected licence (or everyone holding a licence): one request returns the
+ * bounded most/least active lists and the current browse page together.
  */
 export function fetchUsers(params: UsersParams, signal?: AbortSignal): Promise<LicenceActivityUsers> {
   return getJson<LicenceActivityUsers>(`/users?${usersQuery(params)}`, USERS_FAILURE_KEYS, signal);

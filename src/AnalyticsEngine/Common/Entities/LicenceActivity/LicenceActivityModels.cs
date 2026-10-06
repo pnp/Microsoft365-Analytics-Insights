@@ -33,6 +33,17 @@ namespace Common.Entities.LicenceActivity
 
         public LicenceActivityQuery Query { get; set; }
         public int DistinctAssignedUsers { get; set; }
+
+        /// <summary>
+        /// Everyone holding at least one licence, each person counted once: the baseline every licence is
+        /// compared with, and the "any licence" view of each service.
+        /// </summary>
+        /// <remarks>
+        /// Built by the read model (<see cref="LicenceActivityReadModel"/>), the path the portal uses. The direct
+        /// SQL path (<c>SqlLicenceActivityStore.LoadOverviewAsync</c>) leaves it null.
+        /// </remarks>
+        public LicenceActivityAllLicences AllLicences { get; set; }
+
         public List<LicenceActivitySku> Licences { get; set; } = new List<LicenceActivitySku>();
         public List<LicenceActivityCoverage> Coverage { get; set; } = new List<LicenceActivityCoverage>();
         public List<LicenceActivityDemographic> Departments { get; set; } = new List<LicenceActivityDemographic>();
@@ -48,6 +59,26 @@ namespace Common.Entities.LicenceActivity
         public string Name { get; set; }
         public string SkuId { get; set; }
         public int AssignedUsers { get; set; }
+
+        /// <summary>
+        /// The share of its holders' measured service-weeks that had activity, 0 to 100 - see
+        /// <see cref="LicenceActivityRules.AdoptionScore"/>. Null when nothing could be measured for any holder.
+        /// Built by the read model only; the direct SQL path leaves it null.
+        /// </summary>
+        public double? AdoptionScore { get; set; }
+
+        public List<LicenceActivityDistribution> Workloads { get; set; } = new List<LicenceActivityDistribution>();
+    }
+
+    /// <summary>Everyone holding any licence, each counted once. See <see cref="LicenceActivityOverview.AllLicences"/>.</summary>
+    [JsonObject(NamingStrategyType = typeof(CamelCaseNamingStrategy))]
+    public sealed class LicenceActivityAllLicences
+    {
+        public int AssignedUsers { get; set; }
+
+        /// <summary>As <see cref="LicenceActivitySku.AdoptionScore"/>, across everyone holding a licence.</summary>
+        public double? AdoptionScore { get; set; }
+
         public List<LicenceActivityDistribution> Workloads { get; set; } = new List<LicenceActivityDistribution>();
     }
 

@@ -92,8 +92,12 @@ namespace Common.Entities.LicenceActivity
             };
         }
 
+        /// <summary>
+        /// The individual-people query for this overview. A null licence asks for everyone holding any licence
+        /// (answered by the read model only - the direct SQL path still needs a licence).
+        /// </summary>
         public LicenceActivityQuery ForUsers(
-            int licenceTypeId, string workload, string search, string sort, string direction,
+            int? licenceTypeId, string workload, string search, string sort, string direction,
             int top, int page, int pageSize, DateTime nowUtc) =>
             Create(From, To, nowUtc, DepartmentId, CountryId, licenceTypeId, workload, search, sort, direction, top, page, pageSize)
                 .WithPeopleScope(PeopleScope, PeopleScopeKey);

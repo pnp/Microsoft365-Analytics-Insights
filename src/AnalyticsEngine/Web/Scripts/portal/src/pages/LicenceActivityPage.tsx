@@ -28,9 +28,9 @@ import Spinner from '../components/Spinner';
 import DateRangeControl from '../components/licenceActivity/DateRangeControl';
 import DataSourceSummary from '../components/licenceActivity/DataSourceSummary';
 import OverviewSummary from '../components/licenceActivity/OverviewSummary';
-import SkuAssignments from '../components/licenceActivity/SkuAssignments';
-import SelectedLicenceBar from '../components/licenceActivity/SelectedLicenceBar';
-import WorkloadDistributions from '../components/licenceActivity/WorkloadDistributions';
+import LicenceComparisonTable from '../components/licenceActivity/LicenceComparisonTable';
+import ServiceDetail from '../components/licenceActivity/ServiceDetail';
+import LicenceScopePicker from '../components/licenceActivity/LicenceScopePicker';
 import DemographicBreakdown from '../components/licenceActivity/DemographicBreakdown';
 import { demographicName } from '../components/licenceActivity/DemographicBreakdown';
 import UsersDrillDown from '../components/licenceActivity/UsersDrillDown';
@@ -38,6 +38,8 @@ import ApiErrorBar, { describeError } from '../components/licenceActivity/ApiErr
 import { serverMessageText } from '../components/licenceActivity/serverNotes';
 import { presetRange } from '../components/licenceActivity/dateRange';
 import { formatCount } from '../components/licenceActivity/format';
+import { ALL_LICENCES, scopeAssignedUsers, scopeLicence, type LicenceScope } from '../components/licenceActivity/scope';
+import HidableNotes from '../components/shared/HidableNotes';
 import {
   mergeDemographicOptions,
   EMPTY_CATALOGUE,
@@ -126,6 +128,9 @@ const useStyles = makeStyles({
   muted: {
     color: tokens.colorNeutralForeground3,
   },
+  scopeCard: {
+    padding: '10px 14px',
+  },
   center: {
     textAlign: 'center',
     padding: '32px',
@@ -133,22 +138,27 @@ const useStyles = makeStyles({
 });
 
 /**
- * The report's top-level sections, split into tabs so the default view answers "what is my licence
- * usage like?" without scrolling past the detail. The reporting window, demographic filters and the
- * data-source summary stay above the tabs because they scope every one of them.
+ * The report's top-level sections. The reporting window, demographic filters and the data-source summary
+ * stay above the tabs because they scope every one of them.
+ *
+ * - Licences: every licence compared side by side, with the chosen licence's services (or everyone's)
+ *   directly beneath - choosing a licence shows its detail in place, never on another tab.
+ * - People: the most and least active people, for everyone holding a licence by default (the champions,
+ *   whichever licence they hold) or for one licence.
+ * - By department & country: where the licences sit in the organisation.
  */
-type LaTab = 'overview' | 'byService' | 'byDemographic' | 'people';
+type LaTab = 'licences' | 'people' | 'byDemographic';
 
 /**
  * Licence activity report (issues #436 / #437).
  *
- * Answers, for a business leader or M365 admin: which licences are assigned, and how much are the
- * people who hold them actually using each Microsoft 365 service? It is deliberately an ACTIVITY
- * report - no blended "productivity" score, no "remove this licence" button; it surfaces the evidence
- * and leaves the decision with the reader.
+ * Answers, for a business leader or M365 admin: which licences are assigned, how much are the people
+ * who hold them actually using each Microsoft 365 service, and how does each licence compare with the
+ * others and with everyone holding a licence? It is deliberately an ACTIVITY report - no "productivity"
+ * figure, no "remove this licence" button. The adoption score ranks licences by how much their holders
+ * use their services; it surfaces the evidence and leaves the decision with the reader.
  *
- * Everyone who can open the portal sees the whole report, including the per-person lists. There is no
- * second permission level.
+ * The per-person lists need the portal's See PII permission; everything else is for every reader.
  */
 export default function LicenceActivityPage() {
   const styles = useStyles();
@@ -182,7 +192,10 @@ export default function LicenceActivityPage() {
   const [departmentOptions, setDepartmentOptions] = useState<DemographicCatalogue>(EMPTY_CATALOGUE);
   const [countryOptions, setCountryOptions] = useState<DemographicCatalogue>(EMPTY_CATALOGUE);
 
-  const [selectedLicenceTypeId, setSelectedLicenceTypeId] = useState<number | null>(null);
+  // Which population the licence detail and the People tab describe: everyone holding a licence by
+  // default, or one licence chosen from the table (or either picker). One choice for the whole page, so
+  // the licence chosen in the table is the one the People tab lists.
+  const [scope, setScope] = useState<LicenceScope>(ALL_LICENCES);
   const [usersId, setUsersId] = useState<string | null>(null);
   // Bumped to force the drill-down to re-mint its users snapshot after an expiry, without changing the
   // params (which stay put so the admin's licence/workload/page/filters are preserved).
@@ -193,11 +206,11 @@ export default function LicenceActivityPage() {
 
   // Which top-level tab is showing. Kept out of the overview scope key so it survives a date/filter
   // change - an admin reading the People tab stays on it when they widen the window.
-  const [tab, setTab] = useState<LaTab>('overview');
+  const [tab, setTab] = useState<LaTab>('licences');
   const onTabSelect: SelectTabEventHandler = (_e: unknown, data: { value: unknown }) => setTab(data.value as LaTab);
 
   useEffect(() => {
-    if (!canSeePii && tab === 'people') setTab('overview');
+    if (!canSeePii && tab === 'people') setTab('licences');
   }, [canSeePii, tab]);
 
   const overviewSeqRef = useRef(0);
@@ -281,12 +294,10 @@ export default function LicenceActivityPage() {
         selectedId: countryId,
       }),
     );
-    setSelectedLicenceTypeId((prev) => {
-      if (prev != null && overview.licences.some((s) => s.licenceTypeId === prev)) return prev;
-      // Default to the most-assigned licence so the distributions show something immediately.
-      const biggest = [...overview.licences].sort((a, b) => b.assignedUsers - a.assignedUsers)[0];
-      return biggest ? biggest.licenceTypeId : null;
-    });
+    // A licence that is no longer in the figures (a new window or filter) falls back to everyone.
+    setScope((prev) =>
+      prev === ALL_LICENCES || overview.licences.some((s) => s.licenceTypeId === prev) ? prev : ALL_LICENCES,
+    );
   }, [overview, departmentId, countryId]);
 
   // A new overview snapshot invalidates any users snapshot captured for the export.
@@ -311,14 +322,12 @@ export default function LicenceActivityPage() {
     setOverviewReloadKey((k) => k + 1);
   }, []);
 
-  const selectedLicence = useMemo(
-    () => overview?.licences.find((s) => s.licenceTypeId === selectedLicenceTypeId) ?? null,
-    [overview, selectedLicenceTypeId],
-  );
+  const selectedLicence = useMemo(() => (overview ? scopeLicence(overview, scope) : null), [overview, scope]);
+  const showPeople = useCallback(() => setTab('people'), []);
 
-  // Attach the current user list to the export whenever the reader is looking at a licence's list;
-  // otherwise the workbook is totals-only.
-  const exportUsersId = canSeePii && selectedLicence ? usersId ?? undefined : undefined;
+  // Attach the current people list to the export whenever the reader may see it; otherwise the workbook
+  // is totals-only.
+  const exportUsersId = canSeePii ? usersId ?? undefined : undefined;
 
   const onExport = async (): Promise<void> => {
     if (!overview || overviewLoading) return;
@@ -384,18 +393,6 @@ export default function LicenceActivityPage() {
 
       {availability?.available && (
         <>
-          {availability.messages.length > 0 && (
-            <MessageBar intent="info" style={{ marginTop: '16px' }}>
-              <MessageBarBody>
-                <ul style={{ margin: 0, paddingInlineStart: '20px' }}>
-                  {availability.messages.map((m) => (
-                    <li key={m}>{serverMessageText(t, m)}</li>
-                  ))}
-                </ul>
-              </MessageBarBody>
-            </MessageBar>
-          )}
-
           <Card className={styles.controlsCard}>
             <div className={styles.controlRow}>
               <div className={styles.field}>
@@ -493,6 +490,15 @@ export default function LicenceActivityPage() {
             )}
           </Card>
 
+          <HidableNotes
+            storageKey="licenceActivity"
+            style={{ marginTop: '16px' }}
+            notes={[
+              ...availability.messages.map((m) => serverMessageText(t, m)),
+              ...(overview ? overview.messages.map((m) => serverMessageText(t, m, overview.coverage)) : []),
+            ]}
+          />
+
           {overviewLoading && (
             <div className={styles.center}>
               <Spinner size={80} label={t('licenceActivity.page.loading')} />
@@ -517,66 +523,42 @@ export default function LicenceActivityPage() {
                 expiresUtc={overview.expiresUtc}
               />
 
-              {overview.messages.length > 0 && (
-                <MessageBar intent="info">
-                  <MessageBarBody>
-                    <ul style={{ margin: 0, paddingInlineStart: '20px' }}>
-                      {overview.messages.map((m) => (
-                        <li key={m}>{serverMessageText(t, m, overview.coverage)}</li>
-                      ))}
-                    </ul>
-                  </MessageBarBody>
-                </MessageBar>
-              )}
-
               <TabList selectedValue={tab} onTabSelect={onTabSelect}>
-                <Tab id="la-tab-overview" value="overview" aria-controls="la-panel-overview">
-                  {t('licenceActivity.page.tabOverview')}
-                </Tab>
-                <Tab id="la-tab-byService" value="byService" aria-controls="la-panel-byService">
-                  {t('licenceActivity.page.tabByService')}
-                </Tab>
-                <Tab id="la-tab-byDemographic" value="byDemographic" aria-controls="la-panel-byDemographic">
-                  {t('licenceActivity.page.tabByDemographic')}
+                <Tab id="la-tab-licences" value="licences" aria-controls="la-panel-licences">
+                  {t('licenceActivity.page.tabLicences')}
                 </Tab>
                 {canSeePii && (
                   <Tab id="la-tab-people" value="people" aria-controls="la-panel-people">
                     {t('licenceActivity.page.tabPeople')}
                   </Tab>
                 )}
+                <Tab id="la-tab-byDemographic" value="byDemographic" aria-controls="la-panel-byDemographic">
+                  {t('licenceActivity.page.tabByDemographic')}
+                </Tab>
               </TabList>
 
-              {/* Overview: the headline figures plus the assignments table, which doubles as the
-                  licence picker for the By service and People tabs. Panels stay mounted (toggled with
-                  `hidden`) so the drill-down keeps its page, workload and search when tabs change. */}
+              {/* Licences: the headline figures, every licence side by side, and the chosen licence's
+                  services directly beneath - so choosing a licence shows its detail in place. Panels
+                  stay mounted (toggled with `hidden`) so the drill-down keeps its page, workload and
+                  search when tabs change. */}
               <div
                 role="tabpanel"
-                id="la-panel-overview"
-                aria-labelledby="la-tab-overview"
-                hidden={tab !== 'overview'}
+                id="la-panel-licences"
+                aria-labelledby="la-tab-licences"
+                hidden={tab !== 'licences'}
               >
                 <div className={styles.panelInner}>
                   <OverviewSummary
                     distinctAssignedUsers={overview.distinctAssignedUsers}
-                    licenceCount={overview.licences.length}
-                    selectedLicence={selectedLicence}
-                  />
-                  <SkuAssignments
                     licences={overview.licences}
-                    selectedLicenceTypeId={selectedLicenceTypeId}
-                    onSelect={setSelectedLicenceTypeId}
+                    allLicences={overview.allLicences ?? null}
                   />
-                </div>
-              </div>
-
-              {/* By service: the selected licence's five workload distributions. */}
-              <div
-                role="tabpanel"
-                id="la-panel-byService"
-                aria-labelledby="la-tab-byService"
-                hidden={tab !== 'byService'}
-              >
-                <div className={styles.panelInner}>
+                  <LicenceComparisonTable
+                    licences={overview.licences}
+                    allLicences={overview.allLicences ?? null}
+                    selected={scope}
+                    onSelect={setScope}
+                  />
                   <div className={styles.sectionHead}>
                     <Text weight="semibold" size={500}>
                       {t('licenceActivity.page.activityByService')}
@@ -585,21 +567,59 @@ export default function LicenceActivityPage() {
                       {t('licenceActivity.page.activityByServiceSubtitle')}
                     </Text>
                   </div>
-                  {selectedLicence ? (
-                    <>
-                      <SelectedLicenceBar
-                        licences={overview.licences}
-                        selectedLicenceTypeId={selectedLicenceTypeId}
-                        onSelect={setSelectedLicenceTypeId}
-                      />
-                      <WorkloadDistributions workloads={selectedLicence.workloads} />
-                    </>
+                  <ServiceDetail
+                    overview={overview}
+                    scope={scope}
+                    onScopeChange={setScope}
+                    onShowPeople={canSeePii ? showPeople : undefined}
+                  />
+                </div>
+              </div>
+
+              {/* People: the most and least active, for everyone holding a licence or for one licence. */}
+              <div
+                role="tabpanel"
+                id="la-panel-people"
+                aria-labelledby="la-tab-people"
+                hidden={tab !== 'people'}
+              >
+                <div className={styles.panelInner}>
+                  <div className={styles.sectionHead}>
+                    <Text weight="semibold" size={500}>
+                      {t('licenceActivity.page.peopleTitle')}
+                    </Text>
+                    <Text size={200} className={styles.muted}>
+                      {t('licenceActivity.page.peopleSubtitle')}
+                    </Text>
+                  </div>
+                  {/* The panel stays mounted while hidden, so without the See PII permission the
+                      drill-down must not be rendered at all - it would request the people straight
+                      away, and the server refuses them. */}
+                  {!canSeePii ? (
+                    <PiiHiddenNote />
                   ) : (
-                    <Card>
-                      <Text className={styles.muted}>
-                        {t('licenceActivity.page.chooseLicenceOverview')}
-                      </Text>
-                    </Card>
+                    <>
+                      <Card className={styles.scopeCard}>
+                        <LicenceScopePicker
+                          licences={overview.licences}
+                          allAssignedUsers={scopeAssignedUsers(overview, ALL_LICENCES)}
+                          value={scope}
+                          onChange={setScope}
+                          label={t('licenceActivity.common.licence')}
+                        />
+                      </Card>
+                      <UsersDrillDown
+                        key={selectedLicence?.licenceTypeId ?? ALL_LICENCES}
+                        overviewId={overview.snapshotId}
+                        overviewScope={overviewKey ?? ''}
+                        licence={selectedLicence}
+                        allAssignedUsers={scopeAssignedUsers(overview, ALL_LICENCES)}
+                        coverage={overview.coverage}
+                        onUsersSnapshot={handleUsersSnapshot}
+                        onRefreshOverview={refreshSnapshots}
+                        refreshToken={usersRefreshToken}
+                      />
+                    </>
                   )}
                 </div>
               </div>
@@ -644,55 +664,6 @@ export default function LicenceActivityPage() {
                     <Card>
                       <Text className={styles.muted}>
                         {t('licenceActivity.page.noDemographicBreakdown')}
-                      </Text>
-                    </Card>
-                  )}
-                </div>
-              </div>
-
-              {/* People: the per-licence drill-down (most/least active and the browse table). */}
-              <div
-                role="tabpanel"
-                id="la-panel-people"
-                aria-labelledby="la-tab-people"
-                hidden={tab !== 'people'}
-              >
-                <div className={styles.panelInner}>
-                  <div className={styles.sectionHead}>
-                    <Text weight="semibold" size={500}>
-                      {t('licenceActivity.page.peopleHoldingLicence')}
-                    </Text>
-                    <Text size={200} className={styles.muted}>
-                      {t('licenceActivity.page.peopleSubtitle')}
-                    </Text>
-                  </div>
-                  {/* The panel stays mounted while hidden, so without the See PII permission the
-                      drill-down must not be rendered at all - it would request the people as soon as
-                      a licence was selected, and the server refuses them. */}
-                  {!canSeePii ? (
-                    <PiiHiddenNote />
-                  ) : selectedLicence ? (
-                    <>
-                      <SelectedLicenceBar
-                        licences={overview.licences}
-                        selectedLicenceTypeId={selectedLicenceTypeId}
-                        onSelect={setSelectedLicenceTypeId}
-                      />
-                      <UsersDrillDown
-                        key={selectedLicence.licenceTypeId}
-                        overviewId={overview.snapshotId}
-                        overviewScope={overviewKey ?? ''}
-                        licence={selectedLicence}
-                        coverage={overview.coverage}
-                        onUsersSnapshot={handleUsersSnapshot}
-                        onRefreshOverview={refreshSnapshots}
-                        refreshToken={usersRefreshToken}
-                      />
-                    </>
-                  ) : (
-                    <Card>
-                      <Text className={styles.muted}>
-                        {t('licenceActivity.page.selectLicenceForPeople')}
                       </Text>
                     </Card>
                   )}

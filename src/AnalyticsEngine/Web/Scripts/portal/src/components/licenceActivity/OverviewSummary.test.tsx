@@ -2,44 +2,53 @@ import { describe, it, expect } from 'vitest';
 import { screen } from '@testing-library/react';
 import { renderWithProvider } from '../../test/renderWithProvider';
 import OverviewSummary from './OverviewSummary';
-import type { LicenceActivitySku } from '../../types/licenceActivity';
+import type { LicenceActivityAllLicences, LicenceActivitySku } from '../../types/licenceActivity';
 
-const E5: LicenceActivitySku = {
-  licenceTypeId: 10,
-  name: 'E5',
-  skuId: 'ENTERPRISEPREMIUM',
-  assignedUsers: 1234,
+const sku = (licenceTypeId: number, assignedUsers: number): LicenceActivitySku => ({
+  licenceTypeId,
+  name: `Contoso licence ${licenceTypeId}`,
+  skuId: null,
+  assignedUsers,
   workloads: [],
-};
+});
+
+const everyone: LicenceActivityAllLicences = { assignedUsers: 9876, adoptionScore: 61.5, workloads: [] };
 
 describe('OverviewSummary', () => {
   it('shows the headline figures the report already computes', () => {
-    renderWithProvider(<OverviewSummary distinctAssignedUsers={9876} licenceCount={4} selectedLicence={E5} />);
+    renderWithProvider(
+      <OverviewSummary distinctAssignedUsers={9876} licences={[sku(1, 10), sku(2, 20), sku(3, 0)]} allLicences={everyone} />,
+    );
 
     expect(screen.getByText('People with a licence')).toBeInTheDocument();
     expect(screen.getByText('9,876')).toBeInTheDocument();
-    expect(screen.getByText('Licence types')).toBeInTheDocument();
-    expect(screen.getByText('4')).toBeInTheDocument();
 
-    // The selected licence and its own assigned count.
-    expect(screen.getByText('E5')).toBeInTheDocument();
-    expect(screen.getByText(/1,234 people hold it/)).toBeInTheDocument();
+    // Licences somebody holds are counted; the ones nobody holds are only mentioned.
+    expect(screen.getByText('Licences held')).toBeInTheDocument();
+    expect(screen.getByText('2')).toBeInTheDocument();
+    expect(screen.getByText('plus 1 that nobody holds')).toBeInTheDocument();
+
+    // The adoption score everyone holding a licence is compared with.
+    expect(screen.getByText('Adoption score')).toBeInTheDocument();
+    expect(screen.getByText('61.5')).toBeInTheDocument();
+    expect(screen.getByRole('img', { name: 'Adoption score 61.5 out of 100' })).toBeInTheDocument();
   });
 
-  it('prompts to choose a licence when none is selected', () => {
-    renderWithProvider(<OverviewSummary distinctAssignedUsers={10} licenceCount={1} selectedLicence={null} />);
-    expect(screen.getByText('None chosen')).toBeInTheDocument();
-    expect(screen.getByText(/Choose a licence below/)).toBeInTheDocument();
+  it('leaves the score out when the server sent no all-licence figures', () => {
+    renderWithProvider(<OverviewSummary distinctAssignedUsers={10} licences={[sku(1, 10)]} allLicences={null} />);
+    expect(screen.queryByText('Adoption score')).not.toBeInTheDocument();
+    expect(screen.getByText('assigned, each measured separately')).toBeInTheDocument();
   });
 
-  it('renders a non-Latin (Greek) licence name without corruption', () => {
+  it('shows an unmeasured score as a dash, never as zero', () => {
     renderWithProvider(
       <OverviewSummary
-        distinctAssignedUsers={5}
-        licenceCount={1}
-        selectedLicence={{ licenceTypeId: 30, name: 'Άδεια Καλημέρα', skuId: 'GREEK', assignedUsers: 5, workloads: [] }}
+        distinctAssignedUsers={10}
+        licences={[sku(1, 10)]}
+        allLicences={{ assignedUsers: 10, adoptionScore: null, workloads: [] }}
       />,
     );
-    expect(screen.getByText('Άδεια Καλημέρα')).toBeInTheDocument();
+    expect(screen.getByTitle('Not measured')).toHaveTextContent('\u2014');
+    expect(screen.queryByText('0')).not.toBeInTheDocument();
   });
 });
