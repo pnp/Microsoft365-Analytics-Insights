@@ -7,7 +7,7 @@ import { Logger } from './Logger';
 // AITracker.js function. That's where we drive the AppInsights telemetry.
 declare function modernPageNav(webUrl: string, webTitle: string, siteUrl: string, listTitle?: string, listItemId?: number): void;
 
-const AITRACKER_MODERN_VERSION: string = "1.0.1.56";
+const AITRACKER_MODERN_VERSION: string = "1.0.1.59";     // Keep in step with the version in config/package-solution.json
 const NAV_EVENT_DELAY_MS: number = 2000;
 
 declare global {
@@ -29,6 +29,25 @@ export default class AiTrackerModernApplicationCustomizer
   // Debug URLs: use "gulp serve" with serve.json properties
   public override async onInit(): Promise<void> {
 
+    // The installer enables this extension per site collection, giving it its settings. An instance without them, such as
+    // one from the tenant-wide extensions list, has nothing to track - and must not register the site below either, or the
+    // configured instance would take it for a duplicate and not track the site.
+    if (!this.properties?.appInsightsConnectionStringHash) {
+      if (this.properties && Object.keys(this.properties).length > 0) {
+        Logger.error(`[${this.runtimeId}]: version ${AITRACKER_MODERN_VERSION}: no 'appInsightsConnectionStringHash' in the extension properties, so not tracking. Re-run the installer for this site.`);
+      }
+      else {
+        Logger.verbose(`[${this.runtimeId}]: version ${AITRACKER_MODERN_VERSION}: no settings, so this instance isn't tracking the site.`);
+      }
+      return;
+    }
+    try {
+      atob(this.properties.appInsightsConnectionStringHash); // Validate base64 encoding
+    } catch {
+      Logger.error(`[${this.runtimeId}]: appInsightsConnectionStringHash is not valid base64. Aborting init.`);
+      return;
+    }
+
     Logger.info(`[${this.runtimeId}]: SPFx solution init.`);
 
     // Check for _spoInsightsLoaded global variable to avoid double-load...
@@ -46,55 +65,42 @@ export default class AiTrackerModernApplicationCustomizer
 
     Logger.info(`[${this.runtimeId}]: version ${AITRACKER_MODERN_VERSION} tracking page.`);
 
-    // Add _spPageContextInfo global variable if needed
-    const w = (window as Window);
-    if (!w._spPageContextInfo) {
-      this.updateLegacyPageContext();
+    // AITracker.js reads the page's site and list from this. Always this site's: after a navigation from another site it can still describe that one
+    this.updateLegacyPageContext();
+
+    // Insert AITracker into the page, giving it the AppInsights key from the extension properties
+    Logger.info(`[${this.runtimeId}]: Injecting AITracker with connection-string (hash present).`);
+    let aiTrackerUrl: string = this.context.pageContext.site.absoluteUrl + "/SPOInsights/AITracker.js";
+
+    // Append refresh token to AITracker.js url?
+    if (this.properties.cacheToken) {
+      aiTrackerUrl += `?ver=${encodeURIComponent(this.properties.cacheToken)}`;
     }
 
-    // Grab AppInsights key from SPFx extension properties & insert + AITracker into header
-    if (this.properties.appInsightsConnectionStringHash) {
-      try {
-        atob(this.properties.appInsightsConnectionStringHash); // Validate base64 encoding
-      } catch {
-        Logger.error(`[${this.runtimeId}]: appInsightsConnectionStringHash is not valid base64. Aborting init.`);
-        return;
-      }
-      Logger.info(`[${this.runtimeId}]: Injecting AITracker with connection-string (hash present).`);
-      let aiTrackerUrl: string = this.context.pageContext.site.absoluteUrl + "/SPOInsights/AITracker.js";
+    // Set AppInsights key as a window global (avoids CSP inline-script violation)
+    (window as unknown as Record<string, unknown>).appInsightsConnectionStringHash = this.properties.appInsightsConnectionStringHash;
 
-      // Append refresh token to AITracker.js url?
-      if (this.properties.cacheToken) {
-        aiTrackerUrl += `?ver=${encodeURIComponent(this.properties.cacheToken)}`;
-      }
-
-      // Set AppInsights key as a window global (avoids CSP inline-script violation)
-      (window as unknown as Record<string, unknown>).appInsightsConnectionStringHash = this.properties.appInsightsConnectionStringHash;
-
-      // Set root web key as a window global, if there is one
-      if (this.properties.insightsWebRootUrlHash) {
-        Logger.verbose(`[${this.runtimeId}]: We have an insightsWebRootUrlHash.`);
-        (window as unknown as Record<string, unknown>).insightsWebRootUrlHash = this.properties.insightsWebRootUrlHash;
-      }
-      else {
-        Logger.verbose(`[${this.runtimeId}]: No insightsWebRootUrlHash found.`);
-      }
-
-      // Load AITracker script via SPComponentLoader (CSP-safe)
-      try {
-        await SPComponentLoader.loadScript(aiTrackerUrl, { globalExportsName: 'modernPageNav' });
-        this.aiTrackerLoaded = true;
-        Logger.verbose(`[${this.runtimeId}]: AITracker.js loaded successfully.`);
-      } catch (e) {
-        Logger.error(`[${this.runtimeId}]: Failed to load AITracker.js from ${aiTrackerUrl}: ${(e as Error).message}`);
-      }
-
-      // Wire-up page-changed SPFx event
-      this.context.application.navigatedEvent.add(this, this.logNavigatedEvent);
+    // Set root web key as a window global, if there is one
+    if (this.properties.insightsWebRootUrlHash) {
+      Logger.verbose(`[${this.runtimeId}]: We have an insightsWebRootUrlHash.`);
+      (window as unknown as Record<string, unknown>).insightsWebRootUrlHash = this.properties.insightsWebRootUrlHash;
     }
     else {
-      Logger.error(`[${this.runtimeId}]: FATAL: No key 'appInsightsConnectionStringHash' found with extension properties.`);
+      Logger.verbose(`[${this.runtimeId}]: No insightsWebRootUrlHash found.`);
     }
+
+    // Load AITracker script via SPComponentLoader (CSP-safe). If another site's copy is already tracking this page
+    // (SharePoint navigated here without reloading), this copy leaves it to that one.
+    try {
+      await SPComponentLoader.loadScript(aiTrackerUrl, { globalExportsName: 'modernPageNav' });
+      this.aiTrackerLoaded = true;
+      Logger.verbose(`[${this.runtimeId}]: AITracker.js loaded successfully.`);
+    } catch (e) {
+      Logger.error(`[${this.runtimeId}]: Failed to load AITracker.js from ${aiTrackerUrl}: ${(e as Error).message}`);
+    }
+
+    // Wire-up page-changed SPFx event
+    this.context.application.navigatedEvent.add(this, this.logNavigatedEvent);
 
     // Remember site for dispose event
     this.lastSite = this.context.pageContext.site.absoluteUrl;
@@ -108,7 +114,7 @@ export default class AiTrackerModernApplicationCustomizer
       this.lastTrackedUrlFromSpfx = window.location.href;
       this.updateLegacyPageContext();
 
-      // Ignore initial navigation event as AITracker.js will pick that up
+      // AITracker.js tracks the page it loads on itself, and ignores a report of the page it has already tracked
       const existingSitesLoaded: SitesTrackedByExtension = this.getSitesConfigFromWindow();
       if (existingSitesLoaded.lastUrlTracked !== window.location.href) {
 
@@ -173,7 +179,7 @@ export default class AiTrackerModernApplicationCustomizer
       Logger.info(`[${this.runtimeId}]: Disposing for ${this.lastSite}.`);
     }
     else {
-      Logger.verbose(`[${this.runtimeId}]: Disposing duplicate extension.`);
+      Logger.verbose(`[${this.runtimeId}]: Disposing an instance that wasn't tracking.`);
       return;
     }
 
