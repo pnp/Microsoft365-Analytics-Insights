@@ -467,7 +467,8 @@ namespace DataUtils
             UserOrgCsvImport,
             UserScopePurge,
             CopilotAuditBackfill,
-            GlobalFilterChanged
+            GlobalFilterChanged,
+            ActivityAnalysisLoad
         }
 
         private static bool TryMarkExceptionAsTracked(Exception ex)

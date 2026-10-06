@@ -41,6 +41,10 @@ namespace Common.Entities.UserFilters
         public const string OfficeLocation = "officeLocation";
         public const string Country = "country";
         public const string StateOrProvince = "stateOrProvince";
+
+        /// <summary>The person's postal code (<c>dbo.users.postalcode</c>), as the user import copies it from Entra ID.</summary>
+        public const string PostalCode = "postalCode";
+
         public const string UsageLocation = "usageLocation";
 
         /// <summary>
@@ -82,6 +86,7 @@ namespace Common.Entities.UserFilters
             OfficeLocation,
             Country,
             StateOrProvince,
+            PostalCode,
             UsageLocation,
             UserType,
             AccountStatus,
@@ -175,6 +180,7 @@ namespace Common.Entities.UserFilters
                 case OfficeLocation: return "Office location";
                 case Country: return "Country or region";
                 case StateOrProvince: return "State or province";
+                case PostalCode: return "Postal code";
                 case UsageLocation: return "Usage location";
                 case EmailDomain: return "Email domain";
                 case UserType: return "User type";

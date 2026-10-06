@@ -255,7 +255,7 @@ any `data-print` value the stylesheet has never heard of.
 
 One filter control narrows a whole report to the people it matches: their standard **Entra ID
 attributes** (user name, email domain, department, job title, company, office location, country or
-region, state or province, usage location, user type, account status, manager, management chain) and
+region, state or province, postal code, usage location, user type, account status, manager, management chain) and
 every enabled **custom organisation type** an administrator has defined on the *User organisations*
 page. It is shown as pills, the way Azure Monitor shows metric filters: `Department = Sales, Marketing`,
 `Cost centre ≠ CC-100`, `User name contains “smith”`.
@@ -287,7 +287,7 @@ page. It is shown as pills, the way Azure Monitor shows metric filters: `Departm
   reads - `[{"d":"department","v":["Sales"]},{"j":"or","d":"org:12","op":"isNot","v":["CC-1"],"n":true}]`
   - passed as the `userFilter` query parameter. GET, because a report's CSV and Excel exports are
   plain links. The portal refuses a filter over 6,000 encoded characters; `Web.Template.config` lifts
-  the host's 2,048-character query-string default for `api/CopilotAdoption`.
+  the host's 2,048-character query-string default for `api/CopilotAdoption` and `api/ActivityAnalysis`.
 - **On the server** the filter is evaluated in memory against a shared directory snapshot
   (`IUserDirectorySource`, refreshed every few minutes and invalidated when an organisation type
   changes), so changing a filter never re-runs a report's SQL. The response echoes the filter it
