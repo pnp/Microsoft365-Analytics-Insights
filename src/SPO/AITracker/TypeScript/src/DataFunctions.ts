@@ -72,9 +72,9 @@ export function linkLabel(a: HTMLAnchorElement): string {
     return a.getAttribute('aria-label') || a.title || (img && img.getAttribute('alt')) || '';
 }
 
-// Whether two URLs are the same page: the same address, ignoring the query and #fragment. An in-page link only changes
-// the fragment, and a page can rewrite its own query string with history.replaceState without going anywhere.
+// Whether two URLs are the same page: the same address apart from the #fragment, which an in-page link changes. The query
+// counts: it's how the tracker tells pages apart everywhere else, and on a search page it is the search.
 export function isSamePage(url1: string, url2: string): boolean {
-    const page = (url: string) => (url || '').split(/[?#]/)[0].replace(/\/+$/, '').toLowerCase();
+    const page = (url: string) => (url || '').split('#')[0];
     return page(url1) === page(url2);
 }

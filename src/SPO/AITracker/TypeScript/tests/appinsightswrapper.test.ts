@@ -247,15 +247,25 @@ describe('AppInsightsWrapper', () => {
             expect(wrapper._clicksBeforeFirstPageView.length).toBe(0);
         });
 
-        test('a held click is still sent if only the fragment or query of the page changed', () => {
+        test('a held click is still sent if only the #fragment of the page changed: an in-page link', () => {
             wrapper.trackClick({ linkText: 'Section', altText: '', classNames: null, href: '#section' });
 
-            Object.defineProperty(document, 'URL', { value: 'https://contoso.sharepoint.com/sites/test?xsdata=1#section', writable: true, configurable: true });
+            Object.defineProperty(document, 'URL', { value: 'https://contoso.sharepoint.com/sites/test#section', writable: true, configurable: true });
             wrapper.trackCurrentPageView(100, null, 'https://web', 'https://site', 'Web');
 
             const clicks = (mockAI.trackEvent as jest.Mock).mock.calls.map(c => c[0]).filter(e => e.name === 'LinkClick');
             expect(clicks.length).toBe(1);
             expect(clicks[0].properties.pageRequestId).toBe(wrapper._pageRequestId);
+        });
+
+        test('a click held on one search\'s results is not sent for the next search', () => {
+            Object.defineProperty(document, 'URL', { value: 'https://contoso.sharepoint.com/_layouts/15/search.aspx/siteall?q=first', writable: true, configurable: true });
+            wrapper.trackClick({ linkText: 'Result', altText: '', classNames: null, href: 'https://contoso.sharepoint.com/sites/test/Shared Documents/Καλημέρα κόσμε.pdf' });
+
+            Object.defineProperty(document, 'URL', { value: 'https://contoso.sharepoint.com/_layouts/15/search.aspx/siteall?q=second', writable: true, configurable: true });
+            wrapper.trackCurrentPageView(0, null, 'https://web', 'https://site', 'Web');
+
+            expect((mockAI.trackEvent as jest.Mock).mock.calls.filter(c => c[0].name === 'LinkClick').length).toBe(0);
         });
     });
 

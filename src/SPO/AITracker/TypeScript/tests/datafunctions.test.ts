@@ -5,8 +5,12 @@ describe('isSamePage', () => {
         expect(isSamePage('https://contoso.sharepoint.com/sites/test/SitePages/Home.aspx', 'https://contoso.sharepoint.com/sites/test/SitePages/Home.aspx')).toBe(true);
     });
 
-    test('ignores the query, the fragment, a trailing slash and case', () => {
-        expect(isSamePage('https://contoso.sharepoint.com/sites/Test/', 'https://contoso.sharepoint.com/sites/test?xsdata=1#section')).toBe(true);
+    test('ignores the #fragment: an in-page link stays on the page', () => {
+        expect(isSamePage('https://contoso.sharepoint.com/sites/test/SitePages/Home.aspx?a=1', 'https://contoso.sharepoint.com/sites/test/SitePages/Home.aspx?a=1#section')).toBe(true);
+    });
+
+    test('a different query is a different page: on a search page it is another search', () => {
+        expect(isSamePage('https://contoso.sharepoint.com/_layouts/15/search.aspx/siteall?q=first', 'https://contoso.sharepoint.com/_layouts/15/search.aspx/siteall?q=second')).toBe(false);
     });
 
     test('a different path is a different page, including a non-Latin one', () => {
