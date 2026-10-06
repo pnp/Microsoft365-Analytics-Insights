@@ -26,6 +26,19 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Loaders
         private readonly bool _importCopilot;
         private readonly bool _importDlp;
         private int _reportDownloadErrors = 0;
+        private int _deserialisationFailures = 0;
+
+        /// <summary>
+        /// How many records that fail to deserialise are logged in full per loader. A loader lives for one
+        /// import cycle, so this is per cycle; later failures are only counted (<see cref="DeserialisationFailureCount"/>).
+        /// </summary>
+        internal const int MaxDeserialisationFailuresLoggedInFull = 5;
+
+        /// <summary>
+        /// Longest exception message logged for one failure. Newtonsoft quotes the offending value in the
+        /// message, and that value can be large.
+        /// </summary>
+        internal const int MaxLoggedFailureMessageLength = 1000;
 
         public ActivityReportWebLoader(AutoThrottleHttpClient httpClient, ILogger logger, string tenantId, bool importPowerPlatform = true, bool importCopilot = true, bool importDlp = true)
         {
@@ -41,6 +54,13 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Loaders
         /// Gets the count of report download errors that occurred
         /// </summary>
         public int ReportDownloadErrorCount => _reportDownloadErrors;
+
+        /// <summary>
+        /// Records skipped because they could not be deserialised. They are not retried: the content blob
+        /// they came from is still checkpointed when the rest of it commits, so this is data loss, and is
+        /// reported in the cycle summary rather than only in per-record warnings (issue #659).
+        /// </summary>
+        public int DeserialisationFailureCount => _deserialisationFailures;
 
         /// <summary>
         /// Load full activity reports from summary links
@@ -193,8 +213,9 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Loaders
             {
                 logBase = reportItem.ToObject<WorkloadOnlyAuditLogContent>();
             }
-            catch (JsonSerializationException)
+            catch (JsonSerializationException ex)
             {
+                RecordDeserialisationFailure("audit", ex);
                 return; // Skip this report if we can't determine workload
             }
 
@@ -212,18 +233,47 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Loaders
             }
             catch (JsonReaderException ex)
             {
-                _logger.LogWarning($"Failed to deserialize {logBase.Workload} log: {ex.Message}");
+                RecordDeserialisationFailure(logBase.Workload, ex);
                 return;
             }
             catch (JsonSerializationException ex)
             {
-                _logger.LogWarning($"Failed to deserialize {logBase.Workload} log: {ex.Message}");
+                RecordDeserialisationFailure(logBase.Workload, ex);
                 return;
             }
 
             if (thisAuditLogReport != null)
             {
                 logs.Add(thisAuditLogReport);
+            }
+        }
+
+        /// <summary>
+        /// Counts a record skipped because it could not be deserialised, and logs the first few of each
+        /// cycle in full. One unexpected field can fail every record of a kind, and the message quotes the
+        /// offending value, so logging all of them floods the traces without adding anything.
+        /// </summary>
+        private void RecordDeserialisationFailure(string workload, JsonException ex)
+        {
+            var failureNumber = Interlocked.Increment(ref _deserialisationFailures);
+            if (failureNumber > MaxDeserialisationFailuresLoggedInFull)
+            {
+                return;
+            }
+
+            var message = ex.Message ?? string.Empty;
+            if (message.Length > MaxLoggedFailureMessageLength)
+            {
+                message = message.Substring(0, MaxLoggedFailureMessageLength) + "... (truncated)";
+            }
+
+            _logger.LogWarning($"Failed to deserialize {workload} log: {message}");
+
+            if (failureNumber == MaxDeserialisationFailuresLoggedInFull)
+            {
+                _logger.LogWarning($"Audit import: {MaxDeserialisationFailuresLoggedInFull} audit records could not be deserialised so far this cycle. " +
+                    "Further failures this cycle are counted but not logged individually; the total is in the 'Finished activity import' " +
+                    "summary as 'records skipped (could not deserialise)'.");
             }
         }
     }

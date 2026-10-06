@@ -10,7 +10,11 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Dlp
     /// </summary>
     public enum CopilotDlpOutcome
     {
-        /// <summary>No policy detail on the resource - nothing to report.</summary>
+        /// <summary>
+        /// No policy detail on the resource - nothing to report. This includes a policy evaluation that
+        /// names no policy, such as <c>PolicyOutcomes: ["None"]</c> (issue #659), whatever the resource's
+        /// <c>Status</c>.
+        /// </summary>
         NotPolicyRelated = 0,
 
         /// <summary>
@@ -49,6 +53,18 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Dlp
     /// file, a permissions problem) and is NOT counted as DLP. A rule that lists <c>BlockAccess</c> while
     /// running in <c>RuleMode = "Audit only"</c> blocked nothing and is counted as audited, not blocked.
     /// Over-counting here would tell an admin their users are being blocked when they are not.
+    /// </para>
+    /// <para>
+    /// <c>PolicyDetails</c> also arrives as undocumented policy-<i>evaluation</i> entries
+    /// (<c>PolicyType</c> / <c>PolicyOutcomes</c> / <c>AuditLog</c>, issue #659), which say that a policy
+    /// engine looked at the resource, not that a policy matched. Every one seen so far had
+    /// <c>PolicyOutcomes: ["None"]</c> and no policy named in its <c>AuditLog</c>. Such an entry is reported
+    /// only through the documented detail it carries (<c>PolicyId</c> / <c>PolicyName</c> / <c>Rules</c>,
+    /// on the entry or in its decoded <c>AuditLog.PolicyDetails</c>), and only an enforcing rule with a
+    /// blocking action makes that detail a block: the resource's <c>Status</c> is not taken as the verdict
+    /// for it, and no <c>PolicyOutcomes</c> value counts as a block on its own, because the meaning of
+    /// those values is not documented. An entry with no such detail is not policy-related, whatever its
+    /// outcomes and whatever the resource's <c>Status</c>.
     /// </para>
     /// </remarks>
     public static class CopilotDlpRules
@@ -89,10 +105,102 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Dlp
             { "NotifyUser", 10 },
         };
 
-        /// <summary>True when the resource carries any policy detail at all.</summary>
+        /// <summary>
+        /// True when the resource carries policy detail the DLP report can use: a <c>PolicyDetails</c>
+        /// entry in the documented shape, or documented detail inside a policy-evaluation entry. An
+        /// evaluation entry that names no policy (e.g. <c>PolicyOutcomes: ["None"]</c> with an empty
+        /// <c>AuditLog</c>) is not policy detail.
+        /// </summary>
         public static bool HasPolicyDetail(AccessedResource resource)
         {
-            return resource?.PolicyDetails != null && resource.PolicyDetails.Any(p => p != null);
+            return ReportablePolicies(resource).Count > 0;
+        }
+
+        /// <summary>
+        /// True for an entry of the undocumented policy-evaluation shape (issue #659), which carries
+        /// <c>PolicyType</c>, <c>PolicyOutcomes</c> or <c>AuditLog</c>. The documented shape carries none of them.
+        /// </summary>
+        public static bool IsPolicyEvaluation(AccessedResourcePolicyDetail entry)
+        {
+            return entry != null
+                && (entry.PolicyType != null || entry.PolicyOutcomes != null || entry.AuditLog != null);
+        }
+
+        /// <summary>
+        /// True when the entry names a policy or carries rules - the documented <c>PolicyId</c> /
+        /// <c>PolicyName</c> / <c>Rules</c> detail.
+        /// </summary>
+        public static bool HasDocumentedDetail(AccessedResourcePolicyDetail entry)
+        {
+            return entry != null
+                && (!string.IsNullOrWhiteSpace(entry.PolicyId)
+                    || !string.IsNullOrWhiteSpace(entry.PolicyName)
+                    || (entry.Rules != null && entry.Rules.Any(r => r != null)));
+        }
+
+        /// <summary>
+        /// A policy the DLP report can name, and whether the resource's <c>Status</c> may decide its verdict.
+        /// </summary>
+        private sealed class ReportablePolicy
+        {
+            public AccessedResourcePolicyDetail Policy { get; set; }
+
+            /// <summary>
+            /// True for the documented shape, where a failed access with policy detail is a block. False for
+            /// detail found through a policy-evaluation entry, where only an enforcing blocking rule is.
+            /// </summary>
+            public bool StatusDecides { get; set; }
+        }
+
+        /// <summary>
+        /// The policies on a resource that the DLP report can use. Documented entries are taken as they are,
+        /// exactly as before #659 (including one that names nothing, which the manager later declines to
+        /// store). A policy-evaluation entry contributes only its documented detail: its own
+        /// <c>PolicyId</c> / <c>PolicyName</c> / <c>Rules</c> if it has any, and the documented elements of
+        /// its decoded <c>AuditLog.PolicyDetails</c>.
+        /// </summary>
+        private static List<ReportablePolicy> ReportablePolicies(AccessedResource resource)
+        {
+            var result = new List<ReportablePolicy>();
+            if (resource?.PolicyDetails == null)
+            {
+                return result;
+            }
+
+            foreach (var entry in resource.PolicyDetails)
+            {
+                if (entry == null)
+                {
+                    continue;
+                }
+
+                if (!IsPolicyEvaluation(entry))
+                {
+                    result.Add(new ReportablePolicy { Policy = entry, StatusDecides = true });
+                    continue;
+                }
+
+                if (HasDocumentedDetail(entry))
+                {
+                    result.Add(new ReportablePolicy { Policy = entry, StatusDecides = false });
+                }
+
+                var logged = entry.AuditLog?.PolicyDetails;
+                if (logged == null)
+                {
+                    continue;
+                }
+
+                foreach (var policy in logged)
+                {
+                    if (HasDocumentedDetail(policy))
+                    {
+                        result.Add(new ReportablePolicy { Policy = policy, StatusDecides = false });
+                    }
+                }
+            }
+
+            return result;
         }
 
         /// <summary>
@@ -133,22 +241,29 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Dlp
         /// access failed, or one of the matched rules was enforcing a blocking action. The two are
         /// deliberately OR'd: <c>Status</c> is the service's own verdict and is authoritative when
         /// present, while the rule inspection covers records that carry policy detail without a status.
+        /// <c>Status</c> is only taken as the verdict for documented entries; detail found through a
+        /// policy-evaluation entry is a block only when one of its rules is (see the class remarks).
         /// </remarks>
         public static CopilotDlpOutcome Classify(AccessedResource resource)
         {
-            if (!HasPolicyDetail(resource))
+            return Classify(resource, ReportablePolicies(resource));
+        }
+
+        private static CopilotDlpOutcome Classify(AccessedResource resource, List<ReportablePolicy> policies)
+        {
+            if (policies.Count == 0)
             {
                 return CopilotDlpOutcome.NotPolicyRelated;
             }
 
-            if (IsAccessFailure(resource))
+            if (IsAccessFailure(resource) && policies.Any(p => p.StatusDecides))
             {
                 return CopilotDlpOutcome.PolicyBlocked;
             }
 
-            var blockedByRule = resource.PolicyDetails
-                .Where(p => p?.Rules != null)
-                .SelectMany(p => p.Rules)
+            var blockedByRule = policies
+                .Where(p => p.Policy.Rules != null)
+                .SelectMany(p => p.Policy.Rules)
                 .Any(RuleBlocked);
 
             return blockedByRule ? CopilotDlpOutcome.PolicyBlocked : CopilotDlpOutcome.PolicyAudited;
@@ -204,15 +319,17 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Dlp
 
             foreach (var resource in resources)
             {
-                if (!HasPolicyDetail(resource))
+                var policies = ReportablePolicies(resource);
+                if (policies.Count == 0)
                 {
                     continue;
                 }
 
-                var outcome = Classify(resource);
+                var outcome = Classify(resource, policies);
 
-                foreach (var policy in resource.PolicyDetails.Where(p => p != null))
+                foreach (var reportable in policies)
                 {
+                    var policy = reportable.Policy;
                     var rules = policy.Rules?.Where(r => r != null).ToList();
 
                     if (rules == null || rules.Count == 0)
@@ -247,8 +364,10 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Dlp
                             // Per-rule verdict, so a policy with one enforcing and one auditing rule
                             // reports each rule honestly. The resource-level Status is authoritative
                             // when it says the access failed, because that is the service telling us
-                            // the user did not get the content whatever the rule metadata says.
-                            IsBlocked = IsAccessFailure(resource) || RuleBlocked(rule),
+                            // the user did not get the content whatever the rule metadata says - for a
+                            // documented entry. Detail from a policy-evaluation entry is judged by its
+                            // rule alone (see the class remarks).
+                            IsBlocked = (reportable.StatusDecides && IsAccessFailure(resource)) || RuleBlocked(rule),
                         });
                     }
                 }
