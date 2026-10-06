@@ -27,7 +27,7 @@ namespace Tests.UnitTests
     /// Runs the real <c>OutlookUserActivityLoader.SaveLoadedReportsToSql</c> against SQL Server with 200,000
     /// synthetic users (<c>lookupbench0000001@contoso.com</c> ...) and one synthetic report day per size,
     /// measuring elapsed time, the number of user-lookup SQL commands, the loader's own lookup counters and
-    /// the session's logical reads.
+    /// the session's logical reads and SQL Server CPU time.
     ///
     /// <para>
     /// Never runs in CI: it is Inconclusive unless <c>USAGE_REPORT_LOOKUP_BENCHMARK=1</c>. Optional:
@@ -96,15 +96,15 @@ namespace Tests.UnitTests
                 Emit(string.Empty);
             }
 
-            Emit("| Report rows | Run | Elapsed ms | Rows/s | User-lookup SQL commands | LookupDatabaseCallCount | LookupDatabaseCallMs | LookupResolveMs | ExistingRowLoadMs | Logical reads | Added | Unchanged |");
-            Emit("|---|---|---|---|---|---|---|---|---|---|---|---|");
+            Emit("| Report rows | Run | Elapsed ms | Rows/s | User-lookup SQL commands | LookupDatabaseCallCount | LookupDatabaseCallMs | LookupResolveMs | ExistingRowLoadMs | Logical reads | SQL CPU ms | Added | Unchanged |");
+            Emit("|---|---|---|---|---|---|---|---|---|---|---|---|---|");
 
             var summary = new StringBuilder();
             summary.AppendLine();
             summary.AppendLine("Medians (first run discarded):");
             summary.AppendLine();
-            summary.AppendLine("| Report rows | Elapsed ms | Rows/s | User-lookup SQL commands | LookupDatabaseCallCount | LookupDatabaseCallMs | Logical reads |");
-            summary.AppendLine("|---|---|---|---|---|---|---|");
+            summary.AppendLine("| Report rows | Elapsed ms | Rows/s | User-lookup SQL commands | LookupDatabaseCallCount | LookupDatabaseCallMs | Logical reads | SQL CPU ms |");
+            summary.AppendLine("|---|---|---|---|---|---|---|---|");
 
             var counter = new UserLookupCommandCounter();
             DbInterception.Add(counter);
@@ -137,14 +137,14 @@ namespace Tests.UnitTests
                     for (var run = 1; run <= runs; run++)
                     {
                         var result = await RunOnceAsync(rows, reportDate, counter);
-                        Emit($"| {size:N0} | {run}{(run == 1 ? " (discarded)" : string.Empty)} | {result.ElapsedMs:N0} | {result.RowsPerSecond:N0} | {result.LookupCommands:N0} | {result.Metric("LookupDatabaseCallCount"):N0} | {result.Metric("LookupDatabaseCallMs"):N0} | {result.Metric("LookupResolveMs"):N0} | {result.Metric("ExistingRowLoadMs"):N0} | {result.LogicalReads:N0} | {result.Metric("AddedRowCount"):N0} | {result.Metric("UnchangedRowCount"):N0} |");
+                        Emit($"| {size:N0} | {run}{(run == 1 ? " (discarded)" : string.Empty)} | {result.ElapsedMs:N0} | {result.RowsPerSecond:N0} | {result.LookupCommands:N0} | {result.Metric("LookupDatabaseCallCount"):N0} | {result.Metric("LookupDatabaseCallMs"):N0} | {result.Metric("LookupResolveMs"):N0} | {result.Metric("ExistingRowLoadMs"):N0} | {result.LogicalReads:N0} | {result.CpuMs:N0} | {result.Metric("AddedRowCount"):N0} | {result.Metric("UnchangedRowCount"):N0} |");
                         if (run > 1)
                         {
                             measured.Add(result);
                         }
                     }
 
-                    summary.AppendLine($"| {size:N0} | {Median(measured.Select(r => (double)r.ElapsedMs)):N0} | {Median(measured.Select(r => r.RowsPerSecond)):N0} | {Median(measured.Select(r => (double)r.LookupCommands)):N0} | {Median(measured.Select(r => r.Metric("LookupDatabaseCallCount"))):N0} | {Median(measured.Select(r => r.Metric("LookupDatabaseCallMs"))):N0} | {Median(measured.Select(r => (double)r.LogicalReads)):N0} |");
+                    summary.AppendLine($"| {size:N0} | {Median(measured.Select(r => (double)r.ElapsedMs)):N0} | {Median(measured.Select(r => r.RowsPerSecond)):N0} | {Median(measured.Select(r => (double)r.LookupCommands)):N0} | {Median(measured.Select(r => r.Metric("LookupDatabaseCallCount"))):N0} | {Median(measured.Select(r => r.Metric("LookupDatabaseCallMs"))):N0} | {Median(measured.Select(r => (double)r.LogicalReads)):N0} | {Median(measured.Select(r => (double)r.CpuMs)):N0} |");
                 }
             }
             finally
@@ -167,9 +167,9 @@ namespace Tests.UnitTests
                 db.Database.Initialize(false);
 
                 // One open connection for the whole save, so every command runs on one session whose
-                // cumulative logical reads can be read before and after.
+                // cumulative logical reads and CPU time can be read before and after.
                 await db.Database.Connection.OpenAsync();
-                var readsBefore = await SessionLogicalReadsAsync(db);
+                var before = await SessionCountersAsync(db);
 
                 var loader = new OutlookUserActivityLoader(null, Common.Entities.UserScope.UserImportScope.Unfiltered, AnalyticsLogger.ConsoleOnlyTracer())
                 {
@@ -184,21 +184,32 @@ namespace Tests.UnitTests
                 watch.Stop();
                 var lookupCommands = counter.Count;
 
-                var readsAfter = await SessionLogicalReadsAsync(db);
+                var after = await SessionCountersAsync(db);
                 var completed = recorder.Events.Single(e => e.Stage == UsageReportSaveStageIds.SaveCompleted);
                 return new RunResult
                 {
                     ElapsedMs = watch.ElapsedMilliseconds,
                     RowsPerSecond = rows.Count * 1000.0 / Math.Max(1, watch.ElapsedMilliseconds),
                     LookupCommands = lookupCommands,
-                    LogicalReads = readsAfter - readsBefore,
+                    LogicalReads = after.LogicalReads - before.LogicalReads,
+                    CpuMs = after.CpuMs - before.CpuMs,
                     Metrics = new Dictionary<string, double>(completed.Metrics),
                 };
             }
         }
 
-        private static async Task<long> SessionLogicalReadsAsync(AnalyticsEntitiesContext db)
-            => await db.Database.SqlQuery<long>("SELECT logical_reads FROM sys.dm_exec_sessions WHERE session_id = @@SPID").SingleAsync();
+        // sys.dm_exec_sessions is cumulative per session and updated as each request completes: logical_reads in
+        // pages, cpu_time in milliseconds of SQL Server CPU.
+        private static async Task<SessionCounters> SessionCountersAsync(AnalyticsEntitiesContext db)
+            => await db.Database.SqlQuery<SessionCounters>(
+                "SELECT logical_reads AS LogicalReads, CAST(cpu_time AS bigint) AS CpuMs FROM sys.dm_exec_sessions WHERE session_id = @@SPID").SingleAsync();
+
+        /// <summary>One row of <see cref="SessionCountersAsync"/>. Public only so EF can materialise it.</summary>
+        public sealed class SessionCounters
+        {
+            public long LogicalReads { get; set; }
+            public long CpuMs { get; set; }
+        }
 
         private static async Task<int> EnsureSyntheticUsersAsync(AnalyticsEntitiesContext db)
         {
@@ -246,6 +257,7 @@ WHERE c.object_id = OBJECT_ID('dbo.users') AND c.name = 'user_name'";
             public double RowsPerSecond;
             public long LookupCommands;
             public long LogicalReads;
+            public long CpuMs;
             public Dictionary<string, double> Metrics;
             public double Metric(string name) => Metrics.TryGetValue(name, out var v) ? v : 0;
         }
