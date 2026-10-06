@@ -30,6 +30,7 @@
   </Target>
   <ItemGroup>
     <Compile Remove="Generated\**" />
+    <Compile Include="ActivityAnalysisApiTests.cs" />
     <Compile Include="ActivityAnalysisCacheTests.cs" />
     <Compile Include="ActivityAnalysisFakeSource.cs" />
     <Compile Include="ActivityAnalysisQueryTests.cs" />
