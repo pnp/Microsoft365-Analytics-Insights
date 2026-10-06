@@ -43,6 +43,12 @@ const useStyles = makeStyles({
 /** People shown under an expanded department - the API's default page, most active first. */
 export const PEOPLE_PER_DEPARTMENT = 100;
 
+/**
+ * Departments drawn at a time. A large tenant can have thousands, each a row of two cells per selected
+ * metric, so the rest wait behind "Show more" rather than all being drawn at once.
+ */
+export const DEPARTMENTS_PER_PAGE = 100;
+
 type SortColumn = { kind: 'name' } | { kind: 'people' } | { kind: 'sum' | 'unique'; metric: string };
 type SortState = { column: SortColumn; descending: boolean };
 
@@ -294,6 +300,12 @@ export default function ResultsMatrix({
   const rows = useMemo(() => sortDepartments(report.departments, sort), [report.departments, sort]);
   const total = valueMap(report.total.values);
 
+  // How many rows are drawn, for the report it was raised for: a new report starts from one page again.
+  const [page, setPage] = useState({ departments: report.departments, count: DEPARTMENTS_PER_PAGE });
+  const drawn = page.departments === report.departments ? page.count : DEPARTMENTS_PER_PAGE;
+  const visibleRows = rows.length > drawn ? rows.slice(0, drawn) : rows;
+  const hiddenRows = rows.length - visibleRows.length;
+
   const onSort = (column: SortColumn) =>
     setSort((current) => {
       if (current && sameColumn(current.column, column)) return { column, descending: !current.descending };
@@ -396,7 +408,7 @@ export default function ResultsMatrix({
                 </td>
               </tr>
             )}
-            {rows.map((row) => {
+            {visibleRows.map((row) => {
               const key = departmentKey(row);
               const label = nameLabel(t, row, report.otherDepartments);
               const expandable = seePii && !row.other;
@@ -457,6 +469,29 @@ export default function ResultsMatrix({
                 </Fragment>
               );
             })}
+            {hiddenRows > 0 && (
+              <tr className={table.noteRow}>
+                <td className={table.td} colSpan={span}>
+                  <span className={table.noteContent}>
+                    <span>
+                      {t('activityAnalysis.matrix.showingRows', {
+                        shown: formatNumber(visibleRows.length),
+                        total: formatNumber(rows.length),
+                      })}
+                    </span>
+                    <Button
+                      size="small"
+                      data-print="hide"
+                      onClick={() => setPage({ departments: report.departments, count: drawn + DEPARTMENTS_PER_PAGE })}
+                    >
+                      {t('activityAnalysis.matrix.showMoreRows', {
+                        count: formatNumber(Math.min(DEPARTMENTS_PER_PAGE, hiddenRows)),
+                      })}
+                    </Button>
+                  </span>
+                </td>
+              </tr>
+            )}
           </tbody>
 
           <tfoot>

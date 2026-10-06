@@ -160,6 +160,8 @@ const activityAnalysis: Record<keyof typeof en, string> = {
   'activityAnalysis.matrix.showingPeople': 'Se muestran {shown} de {total} personas, primero las más activas en {metric}.',
   'activityAnalysis.matrix.noPeople': 'Nadie de este departamento coincide.',
   'activityAnalysis.matrix.empty': 'Nadie cumple los filtros en este periodo.',
+  'activityAnalysis.matrix.showingRows': 'Se muestran {shown} de {total} filas.',
+  'activityAnalysis.matrix.showMoreRows': 'Mostrar {count} más',
   'activityAnalysis.matrix.piiNote': 'Quienes tienen el rol de aplicación {role} pueden expandir cada departamento para ver sus personas.',
 
   'activityAnalysis.topPeople.title': 'Personas más activas',

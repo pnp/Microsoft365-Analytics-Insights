@@ -160,6 +160,8 @@ export const activityAnalysis = {
   'activityAnalysis.matrix.showingPeople': 'Showing {shown} of {total} people, most active in {metric} first.',
   'activityAnalysis.matrix.noPeople': 'Nobody in this department matches.',
   'activityAnalysis.matrix.empty': 'Nobody matches the filters in this period.',
+  'activityAnalysis.matrix.showingRows': 'Showing {shown} of {total} rows.',
+  'activityAnalysis.matrix.showMoreRows': 'Show {count} more',
   'activityAnalysis.matrix.piiNote': 'Readers with the {role} app role can expand each department to see its people.',
 
   'activityAnalysis.topPeople.title': 'Top people',
