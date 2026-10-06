@@ -1,6 +1,7 @@
 import type { ReactElement } from 'react';
 import {
   ChartMultiple20Regular,
+  DataLine20Regular,
   DatabaseSearch20Regular,
   DataTrending20Regular,
   DataUsage20Regular,
@@ -33,6 +34,7 @@ const TeamsExplorerPage = lazyWithReload(() => import('./pages/TeamsExplorerPage
 const WebActivityPage = lazyWithReload(() => import('./pages/WebActivityPage'));
 const AgentCostsPage = lazyWithReload(() => import('./pages/AgentCostsPage'));
 const LicenceActivityPage = lazyWithReload(() => import('./pages/LicenceActivityPage'));
+const ActivityAnalysisPage = lazyWithReload(() => import('./pages/ActivityAnalysisPage'));
 const DlpPage = lazyWithReload(() => import('./pages/DlpPage'));
 const TeamsPermissionsPage = lazyWithReload(() => import('./pages/TeamsPermissionsPage'));
 const UserLookupPage = lazyWithReload(() => import('./pages/UserLookupPage'));
@@ -140,6 +142,14 @@ export const ROUTES: PortalRoute[] = [
     labelKey: 'app.route.licenceActivity',
     icon: <DataUsage20Regular />,
     element: <LicenceActivityPage />,
+  },
+  {
+    area: 'insights',
+    path: '/insights/activity-analysis',
+    labelKey: 'app.route.activityAnalysis',
+    // A line chart: this page is about activity over time, week by week, as the Power BI view was.
+    icon: <DataLine20Regular />,
+    element: <ActivityAnalysisPage />,
   },
   {
     area: 'insights',

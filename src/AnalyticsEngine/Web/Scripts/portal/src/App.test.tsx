@@ -8,6 +8,7 @@ import App from './App';
 import { routesForArea } from './navigation';
 import { fetchAvailability } from './api/licenceActivityApi';
 import { fetchReportAreas } from './api/reportsApi';
+import { fetchActivityAnalysisAvailability, fetchActivityAnalysisReport } from './api/activityAnalysisApi';
 import type { PortalAccessProviderValue } from './access';
 
 // Every test here mounts the whole app shell (Fluent header, TabList and NavDrawer) and then waits
@@ -22,6 +23,11 @@ vi.mock('./api/licenceActivityApi', async (importOriginal) => ({
   fetchAvailability: vi.fn(),
 }));
 vi.mock('./api/reportsApi', () => ({ fetchReportAreas: vi.fn(), fetchReportArea: vi.fn() }));
+vi.mock('./api/activityAnalysisApi', () => ({
+  fetchActivityAnalysisAvailability: vi.fn(),
+  fetchActivityAnalysisReport: vi.fn(),
+  fetchActivityAnalysisPeople: vi.fn(),
+}));
 
 /** Records each distinct location react-router lands on, including duplicate pushes. */
 function LocationLog({ log }: { log: string[] }) {
@@ -94,6 +100,32 @@ describe('Licence activity navigation', () => {
     await user.click(within(screen.getByLabelText('Insights navigation')).getByText('Licence activity'));
     expect(await screen.findByText(/Licence activity reporting is not available on this deployment/)).toBeVisible();
     expect(screen.queryByText(/No built-in report charts are available yet/)).not.toBeInTheDocument();
+  });
+});
+
+describe('Activity analysis navigation', () => {
+  it('places Activity analysis directly below Licence activity in Insights', () => {
+    const paths = routesForArea('insights').map((r) => r.path);
+    expect(paths[paths.indexOf('/insights/licence-activity') + 1]).toBe('/insights/activity-analysis');
+  });
+
+  it('opens the page from its route and explains a deployment without the profiling tables', async () => {
+    vi.mocked(fetchActivityAnalysisAvailability).mockResolvedValue({
+      available: false,
+      reason: 'notInstalled',
+      earliestWeek: null,
+      latestWeek: null,
+      defaultFrom: null,
+      defaultTo: null,
+      maximumWeeks: 105,
+      categories: [],
+      metrics: [],
+    });
+    renderAt('/insights/activity-analysis');
+
+    expect(await screen.findByText('Activity analysis is not set up on this deployment')).toBeVisible();
+    expect(within(screen.getByLabelText('Insights navigation')).getByText('Activity analysis')).toBeVisible();
+    expect(fetchActivityAnalysisReport).not.toHaveBeenCalled();
   });
 });
 
