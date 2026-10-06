@@ -40,11 +40,11 @@ namespace Common.Entities.LookupCaches
         /// the collation.
         /// </para>
         /// <para>
-        /// Each query is one hash join of the requested keys against <c>users</c>. Where <c>user_name</c> is
-        /// <c>varchar</c> under a SQL collation (the Azure SQL default) the <c>nvarchar</c> comparison cannot seek
-        /// <c>IX_users</c> - which is also true of <see cref="Load"/>, so the old path scanned that index once per
-        /// user; this scans it once per 1,000. Measured before/after: see <c>PreResolveLookupIdsAsync</c> on
-        /// <c>AbstractDailyActivityLoader</c>.
+        /// One query per batch. Where <c>user_name</c> is <c>varchar</c> under a SQL collation (the Azure SQL default)
+        /// the <c>nvarchar</c> comparison cannot seek <c>IX_users</c> - true of <see cref="Load"/> too, so the old
+        /// path scanned that index once per user; this scans it once per 1,000 (hash join). Under a Windows
+        /// collation it is a merge join over one ordered range scan. Measured before/after: see
+        /// <c>PreResolveLookupIdsAsync</c> on <c>AbstractDailyActivityLoader</c>.
         /// </para>
         /// </remarks>
         public override async Task<IReadOnlyDictionary<string, int>> LoadExistingIdsAsync(IReadOnlyList<string> keys)

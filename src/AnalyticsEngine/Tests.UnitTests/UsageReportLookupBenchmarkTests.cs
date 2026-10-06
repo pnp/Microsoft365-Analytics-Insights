@@ -32,8 +32,9 @@ namespace Tests.UnitTests
     /// <para>
     /// Never runs in CI: it is Inconclusive unless <c>USAGE_REPORT_LOOKUP_BENCHMARK=1</c>. Optional:
     /// <c>USAGE_REPORT_LOOKUP_BENCHMARK_SIZES</c> (comma-separated report sizes, default <c>5000,20000</c>),
-    /// <c>USAGE_REPORT_LOOKUP_BENCHMARK_RUNS</c> (default 3) and <c>USAGE_REPORT_LOOKUP_BENCHMARK_LABEL</c> (names
-    /// the results file). The first run of each size inserts the day's rows and is discarded; the remaining runs
+    /// <c>USAGE_REPORT_LOOKUP_BENCHMARK_RUNS</c> (default 3), <c>USAGE_REPORT_LOOKUP_BENCHMARK_LABEL</c> (names
+    /// the results file) and <c>USAGE_REPORT_LOOKUP_BENCHMARK_KEEP_ROWS=1</c> (keep the day's rows from an earlier
+    /// run instead of deleting them first). The first run of each size inserts the day's rows and is discarded; the remaining runs
     /// re-save the same, unchanged day - the shape of the daily re-import of the recent window - so the dirty
     /// check skips every write and what is left is lookup resolution plus the existing-row read. Results are
     /// written to the console and, as each run finishes, to <c>usage-report-lookup-benchmark-{label}.md</c> next
@@ -42,7 +43,7 @@ namespace Tests.UnitTests
     /// <para>
     /// Mind the sizes on the per-user path: where <c>users.user_name</c> is <c>varchar</c> under a SQL collation
     /// (the Azure SQL default, and this database's), EF's <c>nvarchar</c> parameter makes every per-user query scan
-    /// the whole <c>IX_users</c> index, so 100,000 rows cost the old path the best part of 20 minutes a run.
+    /// the whole <c>IX_users</c> index, so 100,000 rows cost the old path close to half an hour a run.
     /// </para>
     /// </summary>
     [TestClass]
@@ -113,9 +114,14 @@ namespace Tests.UnitTests
                 {
                     var size = sizes[sizeIndex];
                     var reportDate = new DateTime(2000, 1, 1).AddDays(sizeIndex);
-                    using (var cleanDb = new AnalyticsEntitiesContext())
+                    // KEEP_ROWS=1 keeps a previous run's rows for the day, so the first run re-saves rows another
+                    // build wrote: Added = 0 then proves this build resolved every user to the same id.
+                    if (Environment.GetEnvironmentVariable(EnableVariable + "_KEEP_ROWS") != "1")
                     {
-                        await cleanDb.Database.ExecuteSqlCommandAsync($"DELETE FROM dbo.[{tableName}] WHERE [date] = @p0", reportDate);
+                        using (var cleanDb = new AnalyticsEntitiesContext())
+                        {
+                            await cleanDb.Database.ExecuteSqlCommandAsync($"DELETE FROM dbo.[{tableName}] WHERE [date] = @p0", reportDate);
+                        }
                     }
 
                     var rows = Enumerable.Range(1, size).Select(i => new OutlookUserActivityUserDetail

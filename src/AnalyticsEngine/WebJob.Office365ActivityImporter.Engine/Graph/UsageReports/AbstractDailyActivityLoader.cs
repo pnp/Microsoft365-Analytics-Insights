@@ -639,9 +639,24 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
         /// <para>
         /// Before this, a cold phase sent one query per distinct user, per report: up to ~9 x 200,000 = 1.8 million
         /// point queries a day at the 200k-user baseline. It is now about distinct users / 1,000 batches per phase,
-        /// plus one per-row query for each user not yet in SQL. Measured on SQL Server LocalDB, 200,000 synthetic
-        /// users, cold cache, medians with the first run discarded (<c>UsageReportLookupBenchmarkTests</c>):
-        /// see the table in the #705 pull request.
+        /// plus one per-row query for each user not yet in SQL.
+        /// </para>
+        /// <para>
+        /// Measured with <c>UsageReportLookupBenchmarkTests</c> (SQL Server LocalDB, 200,000 synthetic users, cold
+        /// cache, an unchanged Outlook day re-saved through this method; medians of two runs after a discarded first):
+        /// <list type="table">
+        /// <listheader><term>users.user_name collation / report rows</term><description>before -> after: elapsed, user-lookup queries, logical reads</description></listheader>
+        /// <item><term>SQL_Latin1_General_CP1_CI_AS (Azure SQL default) / 5,000</term><description>90.8 s, 5,000, 7.30M -> 0.47 s, 5, 7,559</description></item>
+        /// <item><term>SQL_Latin1_General_CP1_CI_AS / 20,000</term><description>346.7 s, 20,000, 29.2M -> 1.72 s, 20, 29,414</description></item>
+        /// <item><term>SQL_Latin1_General_CP1_CI_AS / 100,000</term><description>not run (~29 min a run by extrapolation) -> 8.9 s, 100, 148,323</description></item>
+        /// <item><term>Latin1_General_CI_AS / 20,000</term><description>10.3 s, 20,000, 120,385 -> 0.70 s, 20, 2,437</description></item>
+        /// <item><term>Latin1_General_CI_AS / 100,000</term><description>50.9 s, 100,000, 602,038 -> 3.68 s, 100, 29,574</description></item>
+        /// </list>
+        /// Under the SQL collation EF's <c>nvarchar</c> parameter against the <c>varchar</c> column makes each
+        /// per-user query scan <c>IX_users</c> (~1,460 reads); the batch scans it once per 1,000 keys (hash join).
+        /// Under the Windows collation the per-user query seeks (3 reads) and the batch is a merge join over one
+        /// ordered range scan. The rows the "after" runs re-saved were written by the old code and every one was
+        /// matched (0 added), so both paths resolved every user to the same id.
         /// </para>
         /// </remarks>
         private async Task<LookupPreResolution> PreResolveLookupIdsAsync(ConcurrentLookupDbIdsCache cache, CACHETYPE lookupCache)
