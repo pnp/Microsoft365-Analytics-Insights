@@ -296,6 +296,29 @@ namespace Tests.UnitTests
             Assert.IsTrue(CopilotDlpRules.ExtractMatches(auditOnlyParsed).Single().IsBlocked);
         }
 
+        /// <summary>
+        /// Only PolicyType / PolicyOutcomes mark the new shape. A documented entry that happens to carry an
+        /// AuditLog key too is classified exactly as before #659: a failed Status is still its verdict.
+        /// </summary>
+        [TestMethod]
+        public void DocumentedEntry_WithAnAuditLogButNoPolicyTypeOrOutcomes_IsClassifiedAsBefore()
+        {
+            const string documentedWithAuditLog = @"[{
+                ""PolicyId"": ""00000000-0000-0000-0000-000000000004"",
+                ""PolicyName"": ""Contoso policy"",
+                ""Rules"": [{ ""RuleId"": ""rule-1"", ""Actions"": [""NotifyUser""], ""RuleMode"": ""Audit only"" }],
+                ""AuditLog"": ""{\""PolicyDetails\"":[]}""
+            }]";
+
+            var parsed = CopilotAuditLogContent.FromJson(Record(documentedWithAuditLog, status: "failure"));
+            var resource = parsed.CopilotEventData.AccessedResources.Single();
+
+            Assert.IsNotNull(resource.PolicyDetails.Single().AuditLog, "The AuditLog is decoded on the model.");
+            Assert.IsFalse(CopilotDlpRules.IsPolicyEvaluation(resource.PolicyDetails.Single()));
+            Assert.AreEqual(CopilotDlpOutcome.PolicyBlocked, CopilotDlpRules.Classify(resource));
+            Assert.IsTrue(CopilotDlpRules.ExtractMatches(parsed).Single().IsBlocked);
+        }
+
         [TestMethod]
         public void AuditLog_IsDecodedTolerantly()
         {
@@ -384,7 +407,7 @@ namespace Tests.UnitTests
             Assert.AreEqual(0, CopilotDlpRules.ExtractMatches(parsed).Count);
         }
 
-        private static string EvaluationWithLoggedPolicy(string ruleMode, params string[] actions)
+        private static string EvaluationWithLoggedPolicy(string outcome, string ruleMode, params string[] actions)
         {
             var auditLog = JsonConvert.SerializeObject(new
             {
@@ -412,19 +435,95 @@ namespace Tests.UnitTests
 
             return JsonConvert.SerializeObject(new object[]
             {
-                new { PolicyType = "Purview", PolicyOutcomes = new[] { "None" }, AuditLog = auditLog },
+                new { PolicyType = "Purview", PolicyOutcomes = new[] { outcome }, AuditLog = auditLog },
             });
         }
 
         /// <summary>
-        /// Where the decoded AuditLog names a policy in the documented shape, it is classified through the
-        /// existing model.
+        /// Issue #659's acceptance criterion: <c>PolicyOutcomes: ["None"]</c> never produces a DLP match or a
+        /// block - not even when the decoded AuditLog names a policy whose rule enforces BlockAccess, and the
+        /// resource's access failed. The entry itself says the evaluation had no effect.
         /// </summary>
         [TestMethod]
-        public void AuditLogPolicy_WithAnEnforcedBlockingRule_IsABlock()
+        public async Task NoneOutcome_WithAnAuditLogNamingAnEnforcedBlockingPolicy_OnAFailedResource_IsNotPolicyRelated()
         {
             var parsed = CopilotAuditLogContent.FromJson(
-                RecordWithSerialisedPolicyDetails(EvaluationWithLoggedPolicy("Enforce", "BlockAccess", "NotifyUser"), status: "success"));
+                RecordWithSerialisedPolicyDetails(EvaluationWithLoggedPolicy("None", "Enforce", "BlockAccess"), status: "failure"));
+
+            foreach (var resource in BothResources(parsed))
+            {
+                Assert.AreEqual("Αποκλεισμός Copilot σε εμπιστευτικά",
+                    resource.PolicyDetails.Single().AuditLog.PolicyDetails.Single().PolicyName,
+                    "The AuditLog is still decoded; it is only not reported.");
+                Assert.AreEqual(CopilotDlpOutcome.NotPolicyRelated, CopilotDlpRules.Classify(resource));
+                Assert.IsFalse(CopilotDlpRules.HasPolicyDetail(resource));
+            }
+
+            Assert.AreEqual(0, CopilotDlpRules.ExtractMatches(parsed).Count, "\"None\" must never produce a DLP match.");
+
+            var writer = new RecordingDlpStagingWriter();
+            var manager = new DlpAuditEventManager(writer, new LoggerFactory().CreateLogger("CopilotPolicyDetailsShapeTests"));
+            await manager.SaveCopilotDlpMatchesToSqlStaging(parsed, new CommonAuditEvent { Id = Guid.NewGuid() });
+
+            Assert.AreEqual(0, writer.CopilotRows.Count, "Nothing may be staged.");
+            Assert.AreEqual(0, manager.StagedCopilotMatchCount);
+            Assert.AreEqual(0, manager.StagedCopilotBlockedCount);
+        }
+
+        /// <summary>
+        /// "None" is matched trimmed and in any case, and only when EVERY outcome is "None". A mixed list, an
+        /// empty list or no list at all keeps the rule-only classification.
+        /// </summary>
+        [TestMethod]
+        public void NoneOutcomes_AreMatchedTrimmedAndCaseInsensitively_AndOnlyWhenEveryOutcomeIsNone()
+        {
+            AccessedResource ResourceWithOutcomes(List<string> outcomes) => new AccessedResource
+            {
+                Name = GreekFileName,
+                Status = "failure",
+                PolicyDetails = new List<AccessedResourcePolicyDetail>
+                {
+                    new AccessedResourcePolicyDetail
+                    {
+                        PolicyType = "Purview",
+                        PolicyOutcomes = outcomes,
+                        PolicyId = "00000000-0000-0000-0000-000000000006",
+                        PolicyName = "Contoso policy",
+                        Rules = new List<AccessedResourcePolicyRule>
+                        {
+                            new AccessedResourcePolicyRule { RuleId = "rule-1", RuleMode = "Enforce", Actions = new List<string> { "BlockAccess" } }
+                        },
+                    }
+                }
+            };
+
+            foreach (var noEffect in new[] { new List<string> { "None" }, new List<string> { " none ", "NONE" } })
+            {
+                var resource = ResourceWithOutcomes(noEffect);
+                Assert.AreEqual(CopilotDlpOutcome.NotPolicyRelated, CopilotDlpRules.Classify(resource),
+                    $"Outcomes [{string.Join(",", noEffect)}] mean the evaluation had no effect.");
+                Assert.AreEqual(0, CopilotDlpRules.ExtractMatches(Wrap(resource)).Count);
+            }
+
+            foreach (var other in new[] { new List<string> { "None", "SomethingNew" }, new List<string>(), null })
+            {
+                var resource = ResourceWithOutcomes(other);
+                var label = other == null ? "(none)" : $"[{string.Join(",", other)}]";
+                Assert.AreEqual(CopilotDlpOutcome.PolicyBlocked, CopilotDlpRules.Classify(resource),
+                    $"Outcomes {label} keep the rule-only classification: the enforcing BlockAccess rule decides.");
+                Assert.IsTrue(CopilotDlpRules.ExtractMatches(Wrap(resource)).Single().IsBlocked);
+            }
+        }
+
+        /// <summary>
+        /// Where an evaluation entry with an outcome other than "None" has a decoded AuditLog naming a policy
+        /// in the documented shape, that policy is classified through the existing model.
+        /// </summary>
+        [TestMethod]
+        public void AuditLogPolicy_UnderAnUnknownOutcome_WithAnEnforcedBlockingRule_IsABlock()
+        {
+            var parsed = CopilotAuditLogContent.FromJson(
+                RecordWithSerialisedPolicyDetails(EvaluationWithLoggedPolicy("SomethingNew", "Enforce", "BlockAccess", "NotifyUser"), status: "success"));
             var resource = parsed.CopilotEventData.AccessedResources.Single();
 
             Assert.IsTrue(CopilotDlpRules.IsPolicyEvaluation(resource.PolicyDetails.Single()));
@@ -445,10 +544,10 @@ namespace Tests.UnitTests
         /// the entry carries its own outcome, whose meaning is undocumented, so only the rule decides.
         /// </summary>
         [TestMethod]
-        public void AuditLogPolicy_WithAnAuditOnlyRule_OnAFailedResource_IsAuditedNotBlocked()
+        public void AuditLogPolicy_UnderAnUnknownOutcome_WithAnAuditOnlyRule_OnAFailedResource_IsAuditedNotBlocked()
         {
             var parsed = CopilotAuditLogContent.FromJson(
-                RecordWithSerialisedPolicyDetails(EvaluationWithLoggedPolicy("Audit only", "BlockAccess"), status: "failure"));
+                RecordWithSerialisedPolicyDetails(EvaluationWithLoggedPolicy("SomethingNew", "Audit only", "BlockAccess"), status: "failure"));
 
             Assert.AreEqual(CopilotDlpOutcome.PolicyAudited, CopilotDlpRules.Classify(parsed.CopilotEventData.AccessedResources.Single()));
             var match = CopilotDlpRules.ExtractMatches(parsed).Single();
@@ -457,7 +556,7 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
-        public void EvaluationEntry_ThatNamesAPolicyItself_IsReportedButOnlyBlockedByARule()
+        public void EvaluationEntry_UnderAnUnknownOutcome_ThatNamesAPolicyItself_IsReportedButOnlyBlockedByARule()
         {
             var resource = new AccessedResource
             {
@@ -468,7 +567,7 @@ namespace Tests.UnitTests
                     new AccessedResourcePolicyDetail
                     {
                         PolicyType = "Purview",
-                        PolicyOutcomes = new List<string> { "None" },
+                        PolicyOutcomes = new List<string> { "SomethingNew" },
                         PolicyId = "00000000-0000-0000-0000-000000000006",
                         PolicyName = "Contoso policy",
                     }

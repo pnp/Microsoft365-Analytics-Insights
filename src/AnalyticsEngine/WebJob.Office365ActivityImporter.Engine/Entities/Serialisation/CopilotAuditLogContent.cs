@@ -493,8 +493,9 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities.Serialisation
         public string PolicyType { get; set; }
 
         /// <summary>
-        /// What the evaluation did, verbatim. Undocumented; only <c>None</c> has been seen, so no value is
-        /// treated as a block on its own - see <c>CopilotDlpRules</c>. Null on the documented shape.
+        /// What the evaluation did, verbatim. Undocumented; only <c>None</c> has been seen. An entry whose
+        /// outcomes are all <c>None</c> is never reported as DLP, and no other value is treated as a block
+        /// on its own - see <c>CopilotDlpRules</c>. Null on the documented shape.
         /// </summary>
         [JsonConverter(typeof(TolerantStringListConverter))]
         public List<string> PolicyOutcomes { get; set; }

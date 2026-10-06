@@ -11,8 +11,8 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Dlp
     public enum CopilotDlpOutcome
     {
         /// <summary>
-        /// No policy detail on the resource - nothing to report. This includes a policy evaluation that
-        /// names no policy, such as <c>PolicyOutcomes: ["None"]</c> (issue #659), whatever the resource's
+        /// No policy detail on the resource - nothing to report. This includes a policy evaluation whose
+        /// outcomes are all <c>None</c> (issue #659), whatever it names and whatever the resource's
         /// <c>Status</c>.
         /// </summary>
         NotPolicyRelated = 0,
@@ -58,13 +58,14 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Dlp
     /// <c>PolicyDetails</c> also arrives as undocumented policy-<i>evaluation</i> entries
     /// (<c>PolicyType</c> / <c>PolicyOutcomes</c> / <c>AuditLog</c>, issue #659), which say that a policy
     /// engine looked at the resource, not that a policy matched. Every one seen so far had
-    /// <c>PolicyOutcomes: ["None"]</c> and no policy named in its <c>AuditLog</c>. Such an entry is reported
-    /// only through the documented detail it carries (<c>PolicyId</c> / <c>PolicyName</c> / <c>Rules</c>,
-    /// on the entry or in its decoded <c>AuditLog.PolicyDetails</c>), and only an enforcing rule with a
-    /// blocking action makes that detail a block: the resource's <c>Status</c> is not taken as the verdict
-    /// for it, and no <c>PolicyOutcomes</c> value counts as a block on its own, because the meaning of
-    /// those values is not documented. An entry with no such detail is not policy-related, whatever its
-    /// outcomes and whatever the resource's <c>Status</c>.
+    /// <c>PolicyOutcomes: ["None"]</c> and no policy named in its <c>AuditLog</c>. An entry whose outcomes
+    /// are all <c>None</c> says the evaluation had no effect, so it is never reported - whatever it or its
+    /// <c>AuditLog</c> names, and whatever the resource's <c>Status</c>. Any other evaluation entry is
+    /// reported only through the documented detail it carries (<c>PolicyId</c> / <c>PolicyName</c> /
+    /// <c>Rules</c>, on the entry or in its decoded <c>AuditLog.PolicyDetails</c>), and only an enforcing
+    /// rule with a blocking action makes that detail a block: the resource's <c>Status</c> is not taken as
+    /// the verdict for it, and no other <c>PolicyOutcomes</c> value counts as a block on its own, because
+    /// the meaning of those values is not documented. An entry with no such detail is not policy-related.
     /// </para>
     /// </remarks>
     public static class CopilotDlpRules
@@ -107,9 +108,9 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Dlp
 
         /// <summary>
         /// True when the resource carries policy detail the DLP report can use: a <c>PolicyDetails</c>
-        /// entry in the documented shape, or documented detail inside a policy-evaluation entry. An
-        /// evaluation entry that names no policy (e.g. <c>PolicyOutcomes: ["None"]</c> with an empty
-        /// <c>AuditLog</c>) is not policy detail.
+        /// entry in the documented shape, or documented detail inside a policy-evaluation entry that
+        /// reported an effect. An evaluation entry whose outcomes are all <c>None</c> is never policy
+        /// detail, whatever it or its <c>AuditLog</c> names.
         /// </summary>
         public static bool HasPolicyDetail(AccessedResource resource)
         {
@@ -117,13 +118,29 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Dlp
         }
 
         /// <summary>
+        /// The <c>PolicyOutcomes</c> value meaning the evaluation had no effect - the only value seen so far.
+        /// </summary>
+        public const string POLICY_OUTCOME_NONE = "None";
+
+        /// <summary>
         /// True for an entry of the undocumented policy-evaluation shape (issue #659), which carries
-        /// <c>PolicyType</c>, <c>PolicyOutcomes</c> or <c>AuditLog</c>. The documented shape carries none of them.
+        /// <c>PolicyType</c> or <c>PolicyOutcomes</c>. The documented shape carries neither, and an entry
+        /// without them is classified exactly as before #659.
         /// </summary>
         public static bool IsPolicyEvaluation(AccessedResourcePolicyDetail entry)
         {
-            return entry != null
-                && (entry.PolicyType != null || entry.PolicyOutcomes != null || entry.AuditLog != null);
+            return entry != null && (entry.PolicyType != null || entry.PolicyOutcomes != null);
+        }
+
+        /// <summary>
+        /// True when an entry lists at least one outcome and every one is <c>None</c> (trimmed, any case):
+        /// the policy engine evaluated the resource and it had no effect.
+        /// </summary>
+        public static bool ReportsNoEffect(AccessedResourcePolicyDetail entry)
+        {
+            return entry?.PolicyOutcomes != null
+                && entry.PolicyOutcomes.Count > 0
+                && entry.PolicyOutcomes.All(o => string.Equals(o?.Trim(), POLICY_OUTCOME_NONE, StringComparison.OrdinalIgnoreCase));
         }
 
         /// <summary>
@@ -155,7 +172,9 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Dlp
         /// <summary>
         /// The policies on a resource that the DLP report can use. Documented entries are taken as they are,
         /// exactly as before #659 (including one that names nothing, which the manager later declines to
-        /// store). A policy-evaluation entry contributes only its documented detail: its own
+        /// store). A policy-evaluation entry whose outcomes are all <c>None</c> contributes nothing - not its
+        /// own detail and not its <c>AuditLog</c>'s - because the entry itself says the evaluation had no
+        /// effect. Any other evaluation entry contributes only its documented detail: its own
         /// <c>PolicyId</c> / <c>PolicyName</c> / <c>Rules</c> if it has any, and the documented elements of
         /// its decoded <c>AuditLog.PolicyDetails</c>.
         /// </summary>
@@ -177,6 +196,11 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Dlp
                 if (!IsPolicyEvaluation(entry))
                 {
                     result.Add(new ReportablePolicy { Policy = entry, StatusDecides = true });
+                    continue;
+                }
+
+                if (ReportsNoEffect(entry))
+                {
                     continue;
                 }
 
