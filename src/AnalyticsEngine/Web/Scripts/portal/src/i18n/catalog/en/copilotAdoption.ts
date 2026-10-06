@@ -92,7 +92,7 @@ export const copilotAdoption = {
   'copilotAdoption.server.warning.pastRangeNamedListsHidden': 'This period does not end today, so named reclaim and recommendation lists and their exports are hidden. Counts remain visible; named action lists are only shown for periods ending today.',
   'copilotAdoption.server.warning.currentOrgDataForPastRange': 'Department, manager, country, office, company, account status and reclaim exclusions are today\'s values, not historical values for the selected period.',
   'copilotAdoption.server.warning.agentInventoryAsOfNow': 'The agent inventory remains an as-of-now view even when the reporting period is historical.',
-  'copilotAdoption.server.warning.coworkEligibilityUnknown': 'Cowork adoption percentage is suppressed because Cowork eligibility is controlled by spending-policy scope and this import does not know that denominator. The deprecated Cowork agent entry is not used as an eligibility source.',
+  'copilotAdoption.server.warning.coworkEligibilityUnknown': "Cowork use is shown as a number of people, not as a percentage. Working out a percentage needs the number of people allowed to use Cowork. That is decided by your spending policies that include Cowork, not by the number of Copilot licences, and this tool can't read those policies. The Cowork entry in the Microsoft 365 admin centre (Agents > All Agents) no longer controls access, so it isn't used as a substitute. This is expected and needs no action.",
   'copilotAdoption.server.warning.purchasedSeatsUnknown': 'Purchased and unassigned Copilot seats are unknown because Graph subscribedSkus/prepaidUnits has not been imported. Grant Organization.Read.All and rerun the user metadata import; the report deliberately does not show zero for unassigned seats when the purchase inventory is missing.',
   'copilotAdoption.server.warning.skuSeatMismatch': 'Purchased and assigned Copilot seats disagree for {skuName}: Graph reports {purchased} purchased but {assigned} assigned, so unassigned seats are shown as Unknown rather than zero.',
   'copilotAdoption.server.warning.coworkFluencyMissingAll': 'Cowork readiness was measured, but the licensed-user analysis it takes Copilot fluency from did not complete, so the tab could not be scored. This is NOT a missing usage report import - the Cowork signals imported fine. Check the Health page and re-run.',
@@ -594,7 +594,7 @@ export const copilotAdoption = {
   'copilotAdoption.page.kpi.coworkUsageObserved': 'Cowork usage observed',
   'copilotAdoption.page.kpi.coworkAuditHint': '{interactions} Cowork interactions, from the Copilot audit log',
   'copilotAdoption.page.kpi.coworkHow': 'People with at least one Cowork interaction in the Copilot audit log in the period. Interactions are not Cowork tasks: Microsoft reports tasks in its Cowork usage report in the Microsoft 365 admin centre (Copilot > Cowork > Usage), which this product does not import.',
-  'copilotAdoption.page.kpi.coworkWhatUnknownEligibility': 'Cowork users are shown, but the adoption percentage is suppressed because spending-policy eligibility is unknown.',
+  'copilotAdoption.page.kpi.coworkWhatUnknownEligibility': "How many Copilot licence holders used Cowork in the period. It isn't shown as a percentage because this tool can't see how many people your spending policies allow to use Cowork.",
   'copilotAdoption.page.kpi.coworkWhatKnownEligibility': 'Cowork users as a share of known Cowork spending-policy eligibility.',
   'copilotAdoption.page.kpi.modelledBadge': 'Modelled',
   'copilotAdoption.page.kpi.hoursValue': '{range}\u00a0h',
@@ -625,7 +625,7 @@ export const copilotAdoption = {
   'copilotAdoption.page.kpi.coworkTimeSaved.open': 'See the Cowork tab',
 
 
-  'copilotAdoption.page.coworkEligibilityControlledSpendingPolicyScopeDeprecatedCoworkAgent': 'Cowork eligibility is controlled by spending-policy scope, not by the deprecated Cowork agent entry or by the Microsoft 365 Copilot licence count.',
+  'copilotAdoption.page.coworkEligibilityControlledSpendingPolicyScopeDeprecatedCoworkAgent': 'Who can use Cowork is decided by your spending policies that include Cowork, not by the number of Microsoft 365 Copilot licences. The Cowork entry in the Microsoft 365 admin centre (Agents > All Agents) no longer controls access.',
   'copilotAdoption.page.usingCopilotUnlicensed': 'Using Copilot unlicensed',
   'copilotAdoption.page.provenDemandAlreadyUsingCopilotChatNoLicence': 'Proven demand - already using Copilot Chat with no licence',
   'copilotAdoption.page.peopleNoMicrosoftCopilotLicenceNeverthelessUsedCopilotPeriod': 'People with no Microsoft 365 Copilot licence who nevertheless used Copilot in the period - in practice, Copilot Chat, which is available without a licence.',
