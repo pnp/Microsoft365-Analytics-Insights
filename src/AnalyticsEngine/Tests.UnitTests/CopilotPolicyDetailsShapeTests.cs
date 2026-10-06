@@ -516,6 +516,55 @@ namespace Tests.UnitTests
         }
 
         /// <summary>
+        /// "None" is honoured at every level: a policy INSIDE the decoded AuditLog that carries its own
+        /// all-"None" outcomes is never a match or a block, even under an outer entry whose outcome is not
+        /// "None" and on a resource whose access failed.
+        /// </summary>
+        [TestMethod]
+        public void NoneOutcome_OnAPolicyInsideTheAuditLog_IsNotPolicyRelated_EvenUnderAnUnknownOuterOutcome()
+        {
+            var auditLog = JsonConvert.SerializeObject(new
+            {
+                PolicyDetails = new[]
+                {
+                    new
+                    {
+                        PolicyId = "00000000-0000-0000-0000-000000000004",
+                        PolicyName = "Αποκλεισμός Copilot σε εμπιστευτικά",
+                        PolicyOutcomes = new[] { "None" },
+                        Rules = new[]
+                        {
+                            new
+                            {
+                                RuleId = "00000000-0000-0000-0000-000000000005",
+                                RuleName = "Εμπιστευτικό",
+                                Actions = new[] { "BlockAccess" },
+                                Severity = "High",
+                                RuleMode = "Enforce",
+                            }
+                        }
+                    }
+                },
+                AssociatedAdminUnits = new object[0],
+            });
+            var policyDetails = JsonConvert.SerializeObject(new object[]
+            {
+                new { PolicyType = "Purview", PolicyOutcomes = new[] { "SomethingNew" }, AuditLog = auditLog },
+            });
+
+            var parsed = CopilotAuditLogContent.FromJson(RecordWithSerialisedPolicyDetails(policyDetails, status: "failure"));
+
+            foreach (var resource in BothResources(parsed))
+            {
+                var inner = resource.PolicyDetails.Single().AuditLog.PolicyDetails.Single();
+                CollectionAssert.AreEqual(new[] { "None" }, inner.PolicyOutcomes.ToArray(), "The inner outcomes are bound.");
+                Assert.AreEqual(CopilotDlpOutcome.NotPolicyRelated, CopilotDlpRules.Classify(resource));
+            }
+
+            Assert.AreEqual(0, CopilotDlpRules.ExtractMatches(parsed).Count, "An inner \"None\" must never produce a DLP match.");
+        }
+
+        /// <summary>
         /// Where an evaluation entry with an outcome other than "None" has a decoded AuditLog naming a policy
         /// in the documented shape, that policy is classified through the existing model.
         /// </summary>

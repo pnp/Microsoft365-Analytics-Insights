@@ -176,7 +176,7 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Dlp
         /// own detail and not its <c>AuditLog</c>'s - because the entry itself says the evaluation had no
         /// effect. Any other evaluation entry contributes only its documented detail: its own
         /// <c>PolicyId</c> / <c>PolicyName</c> / <c>Rules</c> if it has any, and the documented elements of
-        /// its decoded <c>AuditLog.PolicyDetails</c>.
+        /// its decoded <c>AuditLog.PolicyDetails</c> - except an element whose own outcomes are all <c>None</c>.
         /// </summary>
         private static List<ReportablePolicy> ReportablePolicies(AccessedResource resource)
         {
@@ -217,6 +217,13 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Dlp
 
                 foreach (var policy in logged)
                 {
+                    // A policy inside the AuditLog can carry its own outcomes too; "None" there means no
+                    // effect, whatever the outer entry says.
+                    if (ReportsNoEffect(policy))
+                    {
+                        continue;
+                    }
+
                     if (HasDocumentedDetail(policy))
                     {
                         result.Add(new ReportablePolicy { Policy = policy, StatusDecides = false });
