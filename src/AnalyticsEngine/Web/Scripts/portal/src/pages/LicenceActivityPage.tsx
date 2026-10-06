@@ -35,7 +35,7 @@ import DemographicBreakdown from '../components/licenceActivity/DemographicBreak
 import { demographicName } from '../components/licenceActivity/DemographicBreakdown';
 import UsersDrillDown from '../components/licenceActivity/UsersDrillDown';
 import ApiErrorBar, { describeError } from '../components/licenceActivity/ApiErrorBar';
-import { serverMessageText } from '../components/licenceActivity/serverNotes';
+import { pageNotes, serverMessageText } from '../components/licenceActivity/serverNotes';
 import { presetRange } from '../components/licenceActivity/dateRange';
 import { formatCount } from '../components/licenceActivity/format';
 import { ALL_LICENCES, scopeAssignedUsers, scopeLicence, type LicenceScope } from '../components/licenceActivity/scope';
@@ -493,10 +493,7 @@ export default function LicenceActivityPage() {
           <HidableNotes
             storageKey="licenceActivity"
             style={{ marginTop: '16px' }}
-            notes={[
-              ...availability.messages.map((m) => serverMessageText(t, m)),
-              ...(overview ? overview.messages.map((m) => serverMessageText(t, m, overview.coverage)) : []),
-            ]}
+            notes={pageNotes(t, availability.messages, overview?.messages, overview?.coverage)}
           />
 
           {overviewLoading && (

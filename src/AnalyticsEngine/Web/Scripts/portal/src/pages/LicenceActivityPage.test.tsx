@@ -833,4 +833,26 @@ describe('LicenceActivityPage - notes about the figures', () => {
     fireEvent.click(show);
     expect(screen.getByText(PRIVACY)).toBeInTheDocument();
   });
+
+  it('shows the sign-in address note once when the availability check and the overview both carry it', async () => {
+    // The server's sentences, verbatim: LicenceActivityAPIController.Availability and
+    // LicenceActivityRules.Notes.NoDisplayNames.
+    const PRIVACY =
+      'People are identified by their sign-in address. Staff names are not collected, so search and the user lists show the sign-in address instead. Department and country come from your directory.';
+    const NO_DISPLAY_NAMES =
+      "Staff names aren't collected by this product, so people are listed by their sign-in address. Search also checks their stored email address.";
+    const CAVEAT = 'Past activity is shown against who holds each licence today.';
+    let resolveOverview: (value: LicenceActivityOverview) => void = () => undefined;
+    mockAvailability.mockResolvedValue(availability({ messages: [PRIVACY] }));
+    mockOverview.mockReturnValue(new Promise((resolve) => (resolveOverview = resolve)));
+    renderWithProvider(<LicenceActivityPage />);
+
+    // Until the overview arrives, the availability check's note is the only one there is.
+    expect(await screen.findByText(PRIVACY)).toBeInTheDocument();
+
+    await act(async () => resolveOverview(overview({ messages: [NO_DISPLAY_NAMES, CAVEAT] })));
+    expect(await screen.findByText(CAVEAT)).toBeInTheDocument();
+    expect(screen.getByText(NO_DISPLAY_NAMES)).toBeInTheDocument();
+    expect(screen.queryByText(PRIVACY)).not.toBeInTheDocument();
+  });
 });
