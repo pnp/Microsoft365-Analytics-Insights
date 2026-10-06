@@ -66,7 +66,7 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
-        public void ProductionSections_AreTheSixSectionsInTheOriginalOrder()
+        public void ProductionSections_AreTheSixSectionsInRunOrder()
         {
             var sections = BuildFactory(SettingsWithDistinctIntervals(), NeverCalled())
                 .CreateSections(SettingsWithDistinctIntervals());
@@ -75,15 +75,59 @@ namespace Tests.UnitTests
                 new[]
                 {
                     "User metadata refresh",
-                    "Usage reports",
                     "Copilot usage reports",
                     "Teams import",
                     "Sent emails import",
                     "Copilot interaction history import",
+                    "Usage reports",
                 },
                 sections.Select(s => s.Name).ToArray(),
                 "Section order is behaviour: user metadata runs before everything that joins to the users table, "
-                + "and the cheap tenant-aggregate Copilot reports run before the per-user one.");
+                + "the cheap tenant-aggregate Copilot reports run before the per-user one, and the usage reports - "
+                + "which run in the deferred pass, after the Activity API import (#706) - are listed last, where they run. "
+                + "The other five keep the order they had before #706.");
+        }
+
+        [TestMethod]
+        public void ProductionSections_OnlyTheUsageReportsAreDeferred()
+        {
+            var sections = BuildFactory(SettingsWithDistinctIntervals(), NeverCalled())
+                .CreateSections(SettingsWithDistinctIntervals());
+
+            CollectionAssert.AreEqual(new[] { "Usage reports" },
+                sections.Where(s => s.IsDeferred).Select(s => s.Name).ToArray(),
+                "Only the once-a-day usage-report phase waits for the Activity API import (#706). The user import must "
+                + "stay ahead of the audit import, and the Copilot usage reports are quick enough to stay where they are.");
+        }
+
+        [TestMethod]
+        public async Task UsageReportSection_RunsInTheDeferredPassOnly()
+        {
+            // Through the production composition AND the real orchestrator, not fakes: the main pass, which the
+            // WebJob runs before the Activity API import, must not start the usage reports, and the deferred pass,
+            // which it runs after, must start them exactly once (#706). Every other section is switched off, so
+            // nothing here reaches Graph, SQL or Azure Storage.
+            var settings = SettingsWithDistinctIntervals();
+            settings.ForceGraphMetadataImport = false;
+            settings.ImportJobSettings = new ImportTaskSettings { GraphUsageReports = true };
+
+            var runs = 0;
+            var factory = BuildFactory(settings, (days, client, userScope) =>
+            {
+                runs++;
+                return Task.FromResult(true);
+            });
+            var importer = new GraphImporter(AnalyticsLogger.ConsoleOnlyTracer(), settings, factory,
+                new RecordingImportLastRunStore(), new FixedClock(new DateTime(2026, 10, 6, 12, 0, 0, DateTimeKind.Utc)));
+
+            await importer.GetAndSaveNonDeferredGraphData(settings);
+            Assert.AreEqual(0, runs, "The main pass runs before the audit import, so it must not hold the audit import behind the usage reports.");
+
+            await importer.GetAndSaveDeferredGraphData(settings);
+            Assert.AreEqual(1, runs, "The deferred pass is where the usage reports now run.");
+
+            await importer.GetAndSaveAllGraphData(settings);
+            Assert.AreEqual(2, runs, "A one-shot caller still runs the usage reports.");
         }
 
         [TestMethod]

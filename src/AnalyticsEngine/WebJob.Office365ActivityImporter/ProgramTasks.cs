@@ -84,27 +84,60 @@ namespace WebJob.Office365ActivityImporter
         }
 
         /// <summary>
-        /// Graph data
+        /// Graph data: every Graph section except the deferred ones, user metadata first. Program runs this before
+        /// the Activity API import, and the deferred sections after it with <see cref="GetDeferredGraphData"/>.
         /// </summary>
         internal async Task GetGraphTeamsAndUserData()
         {
             _logger.LogInformation("Starting Teams & Graph import.");
 
+            if (await RunGraphImportPass(graphReader => graphReader.GetAndSaveNonDeferredGraphData(_settings),
+                "ERROR: Can't access Teams user data - are application permissions configured correctly?"))
+            {
+                _logger.LogInformation("Finished Graph API import tasks.");
+            }
+        }
+
+        /// <summary>
+        /// The deferred Graph sections: the once-a-day usage-report phase. Program runs this after the Activity API
+        /// import, so the hours that phase can take on a large tenant no longer delay the audit data - Copilot,
+        /// Power Platform, DLP and SharePoint audit (issue #706). The phase's own once-a-day throttle, its per-report
+        /// completion stamps, <c>ForceUsageReportsImport</c> and its log lines are unchanged; only its position in the
+        /// cycle is.
+        /// </summary>
+        internal async Task GetDeferredGraphData()
+        {
+            _logger.LogInformation("Starting deferred Graph import (usage reports), after the Activity API import.");
+
+            if (await RunGraphImportPass(graphReader => graphReader.GetAndSaveDeferredGraphData(_settings),
+                "ERROR: Can't access Graph usage reports - are application permissions configured correctly?"))
+            {
+                _logger.LogInformation("Finished deferred Graph API import tasks.");
+            }
+        }
+
+        /// <summary>
+        /// Runs one <see cref="GraphImporter"/> pass with a fresh importer, as each pass always has.
+        /// </summary>
+        /// <returns>False when Graph refused access (403), which is logged as a warning rather than thrown.</returns>
+        private async Task<bool> RunGraphImportPass(Func<GraphImporter, Task> pass, string forbiddenWarning)
+        {
             await InitAuth();
 
             var graphReader = new GraphImporter(_logger, _userScopeProvider, _graphAppIndentityOAuthContext, _graphClient, _settings, _activityReportsLastImportedStore, _graphLastRunStore, _sentEmailMailboxSkipList, clock: null, reportCompletionStore: _reportCompletionStore);
 
             try
             {
-                await graphReader.GetAndSaveAllGraphData(_settings);
+                await pass(graphReader);
+                return true;
             }
             catch (ODataError ex)
             {
                 // Don't make a drama if Graph permissions aren't assigned yet.
                 if (ex.ResponseStatusCode == (int)HttpStatusCode.Forbidden)
                 {
-                    _logger.LogWarning("ERROR: Can't access Teams user data - are application permissions configured correctly?");
-                    return;
+                    _logger.LogWarning(forbiddenWarning);
+                    return false;
                 }
                 else
                 {
@@ -112,8 +145,6 @@ namespace WebJob.Office365ActivityImporter
                     throw;
                 }
             }
-
-            _logger.LogInformation("Finished Graph API import tasks.");
         }
 
         async Task InitAuth()

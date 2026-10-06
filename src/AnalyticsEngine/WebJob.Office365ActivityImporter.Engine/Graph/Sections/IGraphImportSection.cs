@@ -45,6 +45,18 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Sections
         int IntervalHours { get; }
 
         /// <summary>
+        /// True for a section that runs in the <b>deferred pass</b>, <c>GraphImporter.GetAndSaveDeferredGraphData</c>,
+        /// instead of the main pass, <c>GraphImporter.GetAndSaveNonDeferredGraphData</c>. The WebJob runs the deferred
+        /// pass only after the Office 365 Management Activity API import, so a slow section here cannot hold back the
+        /// near-real-time audit data (Copilot, Power Platform, DLP and SharePoint audit). Today that is only the
+        /// once-a-day usage-report phase, which can take hours on a large tenant (issue #706).
+        ///
+        /// Deferral changes only <b>when</b> in the cycle a section runs. It is selected, cadence-gated, timed and
+        /// logged exactly as it would be in the main pass.
+        /// </summary>
+        bool IsDeferred { get; }
+
+        /// <summary>
         /// Whether the tenant has this import switched on.
         /// </summary>
         bool IsEnabled(ImportTaskSettings settings);
@@ -52,9 +64,10 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Sections
         /// <summary>
         /// Runs the section. Returns false when the section did not complete - the orchestrator then neither
         /// stamps the cadence gate nor emits a "finished section" event, so the section retries next cycle.
-        /// A section that throws is NOT isolated: the exception unwinds out of
-        /// <c>GraphImporter.GetAndSaveAllGraphData</c> and the sections after it are skipped for this cycle.
-        /// That is the pre-existing behaviour and is deliberately left unchanged here.
+        /// A section that throws is NOT isolated: the exception unwinds out of the <c>GraphImporter</c> pass
+        /// that is running it, and the sections after it in that pass are skipped for this cycle. That is the
+        /// pre-existing behaviour and is deliberately left unchanged here. The WebJob calls the main and the
+        /// deferred pass separately, each in its own try/catch, so a throw in one pass never skips the other.
         /// </summary>
         Task<bool> RunAsync();
     }

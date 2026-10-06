@@ -305,7 +305,8 @@ namespace WebJob.Office365ActivityImporter
 
                 try
                 {
-                    // Get Teams & user data
+                    // Get Teams & user data: every Graph section except the deferred usage reports, which run
+                    // after the Activity API import below (issue #706).
                     await tasks.GetGraphTeamsAndUserData();
                 }
                 catch (Exception ex)
@@ -341,6 +342,27 @@ namespace WebJob.Office365ActivityImporter
                 else
                 {
                     logger.LogInformation("Skipping Activity API import.");
+                }
+
+                // Deferred Graph sections: the once-a-day usage-report phase (issue #706). It used to run inside
+                // GetGraphTeamsAndUserData above, so on the cycle it was due the audit import (Copilot, Power
+                // Platform, DLP, SharePoint) waited for it - for hours on a large tenant, much of it honouring Graph's
+                // ~10-minute Retry-After. Those reports are 2-3 days behind at source while audit data is
+                // near-real-time, so the phase now runs here instead. It has its own try/catch, outside the Activity
+                // API gate and its try/catch, so it runs whether that import is disabled, skipped or failed, and a
+                // failure in either never skips the other. Everything after this still runs after the usage reports,
+                // as it did before.
+                try
+                {
+                    await tasks.GetDeferredGraphData();
+                }
+                catch (Exception ex)
+                {
+                    logger.TrackException(ex);
+                    logger.LogCritical($"Got exception on {nameof(ProgramTasks.GetDeferredGraphData)}: {ex.Message}");
+#if DEBUG
+                    throw;
+#endif
                 }
 
                 // Repair any Copilot interactions left without their denormalised user_id / time_stamp
