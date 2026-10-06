@@ -297,6 +297,11 @@ Canonical examples: `ShrinkUrlsFullUrlColumn` / `UrlFullUrlNvarchar` (`urls.full
    - Some tables are created **only by migrations**, not by `Common/Entities/Resources/Create DB.sql` — check which, and update `Create DB.sql` too if the table is defined there.
 9. **C# verbatim-string gotcha:** SQL held in a C# `@"..."` string must **double every `"`** (or avoid them) — a single stray `"` (e.g. inside a SQL comment) silently terminates the string and produces confusing compile errors far from the real spot.
 
+### Data repairs outside a migration: name them `repair_*.sql`
+Some fixes repair rows that an older build already wrote, with no schema change. The current ones are `repair_split_copilot_agents.sql` (#699) and `repair_denormalised_copilot_columns.sql`. They are not migrations: the Office 365 importer runs each one from `Program.cs` on every cycle, outside every gate. So there is no `.manual.sql` and no `__MigrationHistory` stamp.
+- **Name the file `repair_<what>.sql`.** The release process finds repair scripts by that name in the release diff, and attaches every added or changed one to the GitHub release for DBAs. A script with any other name ships only inside the importer.
+- **Keep it runnable by hand.** It takes no parameters and is idempotent. It does a bounded amount of work per run, is safe while the importer is running, and returns one row of counts. The two existing scripts are the reference examples.
+
 ## Installer (App.ControlPanel) UI automation & screenshots
 
 Hard-won lessons for driving / screenshotting the built installer (`AnalyticsInstaller.exe` — the `App.ControlPanel` WinForms app) with PowerShell + UI Automation. The app's UIA tree is **sparse** and many standard controls surface as pattern-less `Pane`s with no Invoke/Toggle/Value patterns, so prefer Win32 window messages over UIA patterns.
