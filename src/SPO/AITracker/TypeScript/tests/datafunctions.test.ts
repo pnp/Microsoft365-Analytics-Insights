@@ -1,4 +1,23 @@
-import { getSPRequestDuration, isValidGuid, uuidv4 } from '../src/DataFunctions';
+import { getSPRequestDuration, isSamePage, isValidGuid, uuidv4 } from '../src/DataFunctions';
+
+describe('isSamePage', () => {
+    test('the same address is the same page', () => {
+        expect(isSamePage('https://contoso.sharepoint.com/sites/test/SitePages/Home.aspx', 'https://contoso.sharepoint.com/sites/test/SitePages/Home.aspx')).toBe(true);
+    });
+
+    test('ignores the query, the fragment, a trailing slash and case', () => {
+        expect(isSamePage('https://contoso.sharepoint.com/sites/Test/', 'https://contoso.sharepoint.com/sites/test?xsdata=1#section')).toBe(true);
+    });
+
+    test('a different path is a different page, including a non-Latin one', () => {
+        expect(isSamePage('https://contoso.sharepoint.com/sites/test/SitePages/Home.aspx', 'https://contoso.sharepoint.com/sites/test/SitePages/News.aspx')).toBe(false);
+        expect(isSamePage('https://contoso.sharepoint.com/sites/test/SitePages/Καλημέρα.aspx', 'https://contoso.sharepoint.com/sites/test/SitePages/Home.aspx')).toBe(false);
+    });
+
+    test('another site is a different page', () => {
+        expect(isSamePage('https://contoso.sharepoint.com/', 'https://contoso.sharepoint.com/sites/test')).toBe(false);
+    });
+});
 
 describe('DataFunctions', () => {
 

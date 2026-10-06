@@ -4,7 +4,7 @@ import { ApplicationInsights } from '@microsoft/applicationinsights-web'
 import { AppInsightsWrapper } from './AppInsightsWrapper';
 import { debug, error, log, warn } from './Logger';
 import { linkLabel, uuidv4 } from './DataFunctions';
-import { CleanCookies, GetSessionCookieVal, SetSessionCookieVal } from './Cookies';
+import { CleanCookies, GetSessionCookieVal, RemoveRetiredCookies, SetSessionCookieVal } from './Cookies';
 import { PageViewTracker } from './PageViewTracker';
 import { SpoPagePropertyManager } from './PageProps/SpoImplementation/SpoPagePropertyManager';
 import { BasePageStateManager, InMemoryPageStateManager } from './PageProps/PageState';
@@ -87,34 +87,32 @@ function processLinkNodeAndRegisterIfNotDuplicate(target: HTMLAnchorElement) {
     clickHandler.registerClick(clickData, () => ai?.trackClick(clickData));
 }
 
-// Initialises AppInsights. Executes before doc-load if loaded on classic pages.
-function initAppInsights(): void {
+// Starts App Insights and the page tracker. False if App Insights couldn't start, such as with an invalid connection string.
+// Executes before doc-load if loaded on classic pages.
+function startAppInsights(): boolean {
+
+    RemoveRetiredCookies();
 
     // New session? Will create new session cookie if it is
     if (isNewSPOSession()) {
 
-        // Clean-up cookies from any previous session (except last page stat, if there is one)
-        // Last page stats could be from a previous session that got closed, and will be deleted once uploaded
+        // Clean-up cookies from any previous session (except last page stat, if there is one). Before App Insights starts:
+        // these include its own cookies, which it reads as it starts
         CleanCookies();
 
-        if (window.appInsightsConnectionStringHash) {
-            log("version " + AI_TRACKER_VER + ": New browsing session detected for '" + window._spPageContextInfo.userLoginName +
-                "' - starting SPOInsights session '" + GetSessionCookieVal() + "' with App Insights connection string '" + atob(window.appInsightsConnectionStringHash) + "'.");
-        }
+        log("version " + AI_TRACKER_VER + ": New browsing session detected for '" + window._spPageContextInfo.userLoginName +
+            "' - starting SPOInsights session '" + GetSessionCookieVal() + "' with App Insights connection string '" + atob(window.appInsightsConnectionStringHash!) + "'.");
     }
     else {
         debug("Resuming session '" + GetSessionCookieVal() + "' for '" + window._spPageContextInfo.userLoginName + "'.");
     }
 
-    // Do we have a valid AI key injected into the header?
-    if (!window.appInsightsConnectionStringHash) {
-        error("Fatal Error: No valid Application Insights connection string key found!");
-    }
-    else {
-        // Init AppInsights. Reference: https://github.com/Microsoft/ApplicationInsights-JS/blob/master/API-reference.md
-        const appInsights = new ApplicationInsights({
+    // Init AppInsights. Reference: https://github.com/Microsoft/ApplicationInsights-JS/blob/master/API-reference.md
+    let appInsights: ApplicationInsights;
+    try {
+        appInsights = new ApplicationInsights({
             config: {
-                connectionString: atob(window.appInsightsConnectionStringHash),
+                connectionString: atob(window.appInsightsConnectionStringHash!),
                 disableExceptionTracking: true,
                 disableAjaxTracking: true,
                 disableFetchTracking: true,     // Don't send every fetch SharePoint makes as a dependency: it's cost, and nothing reads it
@@ -126,43 +124,47 @@ function initAppInsights(): void {
 
         // Set auth context
         appInsights.setAuthenticatedUserContext(window._spPageContextInfo.userLoginName);
-        if (ai === null)
-            ai = new AppInsightsWrapper(appInsights, GetSessionCookieVal());
+    } catch (e) {
+        error("Couldn't start Application Insights with the connection string this site is configured with, so this page isn't tracked. Re-run the installer for this site.");
+        error(e);
+        return false;
+    }
 
-        // Construct page-prop registering system
-        if (pageTracker === null) {
-            // Use local storage for remembering pages properties sent for
-            let pageStateManager: BasePageStateManager;
-            if (LocalStorageUtils.isLocalStorageAvailable()) {
-                pageStateManager = new LocalStoragePageStateManager();
-                debug("Using LocalStoragePageStateManager for page metadata upload logic");
-            }
-            else {
-                pageStateManager = new InMemoryPageStateManager();
-                warn("Using InMemoryPageStateManager for page metadata upload logic - local storage not supported on this browser");
-            }
+    ai = new AppInsightsWrapper(appInsights, GetSessionCookieVal());
 
-            // Create new page-tracker. The web URL comes with each page tracked: SharePoint can navigate between sites without reloading
-            pageTracker = new PageViewTracker(ai, window._spPageContextInfo,
-                new SpoPagePropertyManager(pageStateManager, new WebPageDataService(ai)));
+    // Use local storage for remembering pages properties sent for
+    let pageStateManager: BasePageStateManager;
+    if (LocalStorageUtils.isLocalStorageAvailable()) {
+        pageStateManager = new LocalStoragePageStateManager();
+        debug("Using LocalStoragePageStateManager for page metadata upload logic");
+    }
+    else {
+        pageStateManager = new InMemoryPageStateManager();
+        warn("Using InMemoryPageStateManager for page metadata upload logic - local storage not supported on this browser");
+    }
 
-        }
+    // Create new page-tracker. The web URL comes with each page tracked: SharePoint can navigate between sites without reloading
+    pageTracker = new PageViewTracker(ai, window._spPageContextInfo,
+        new SpoPagePropertyManager(pageStateManager, new WebPageDataService(ai)));
 
-        // Track page on page load 
-        if (document.readyState !== "complete") {
-            debug("Waiting for document load to track current URL and last page stats");
-            window.addEventListener('load', () => {
+    return true;
+}
 
-                // Async so the load event can finish, and load timings are > 0
-                setTimeout(trackLoadedPage, 0);
-            });
-        }
-        else {
-            // The page finished loading before this script ran, so no "load" event is coming. On modern pages that happens when the
-            // SPFx extension started late, or when SharePoint navigated here from a site that wasn't tracked, without reloading the page.
-            debug("Document already loaded - tracking current URL and last page stats now");
+// Track the page this script was loaded on, once it has loaded
+function trackPageWhenLoaded(): void {
+    if (document.readyState !== "complete") {
+        debug("Waiting for document load to track current URL and last page stats");
+        window.addEventListener('load', () => {
+
+            // Async so the load event can finish, and load timings are > 0
             setTimeout(trackLoadedPage, 0);
-        }
+        });
+    }
+    else {
+        // The page finished loading before this script ran, so no "load" event is coming. On modern pages that happens when the
+        // SPFx extension started late, or when SharePoint navigated here from a site that wasn't tracked, without reloading the page.
+        debug("Document already loaded - tracking current URL and last page stats now");
+        setTimeout(trackLoadedPage, 0);
     }
 }
 
@@ -244,13 +246,15 @@ if (window.spoInsightsAITrackerVersion || typeof window.modernPageNav === "funct
 else if (!window.appInsightsConnectionStringHash) {
     error("Fatal Error: No valid Application Insights connection string key found!");
 }
-else {
+// Claim the page only once App Insights has started. A copy that couldn't start (an invalid connection string) mustn't stop a
+// correctly configured copy, loaded when SharePoint navigates to another site, from tracking the page.
+else if (startAppInsights()) {
     window.spoInsightsAITrackerVersion = AI_TRACKER_VER;
 
     // Do the things that can't wait until document loaded or if this JS file loads after page-load (modern pages, through SPFx extension loading the file)
     // Can't wait until pageload, as AppInsights needs to start timing page-load before that.
     initPageControls();
-    initAppInsights();
+    trackPageWhenLoaded();
     loadAndSetScriptConfig();
 
     log(`version ${AI_TRACKER_VER} tracking this page`);

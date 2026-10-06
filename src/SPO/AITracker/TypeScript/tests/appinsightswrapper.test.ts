@@ -236,6 +236,27 @@ describe('AppInsightsWrapper', () => {
             expect((mockAI.trackEvent as jest.Mock).mock.calls.filter(c => c[0].name === 'LinkClick').length).toBe(20);
             warnSpy.mockRestore();
         });
+
+        test('a held click is not sent for another page: SharePoint left the page it was made on before tracking it', () => {
+            wrapper.trackClick({ linkText: 'News', altText: '', classNames: null, href: 'https://contoso.sharepoint.com/sites/test/SitePages/News.aspx' });
+
+            Object.defineProperty(document, 'URL', { value: 'https://contoso.sharepoint.com/sites/test/SitePages/News.aspx', writable: true, configurable: true });
+            wrapper.trackCurrentPageView(0, null, 'https://web', 'https://site', 'Web');
+
+            expect((mockAI.trackEvent as jest.Mock).mock.calls.filter(c => c[0].name === 'LinkClick').length).toBe(0);
+            expect(wrapper._clicksBeforeFirstPageView.length).toBe(0);
+        });
+
+        test('a held click is still sent if only the fragment or query of the page changed', () => {
+            wrapper.trackClick({ linkText: 'Section', altText: '', classNames: null, href: '#section' });
+
+            Object.defineProperty(document, 'URL', { value: 'https://contoso.sharepoint.com/sites/test?xsdata=1#section', writable: true, configurable: true });
+            wrapper.trackCurrentPageView(100, null, 'https://web', 'https://site', 'Web');
+
+            const clicks = (mockAI.trackEvent as jest.Mock).mock.calls.map(c => c[0]).filter(e => e.name === 'LinkClick');
+            expect(clicks.length).toBe(1);
+            expect(clicks[0].properties.pageRequestId).toBe(wrapper._pageRequestId);
+        });
     });
 
     describe('page view result and page exit attribution', () => {

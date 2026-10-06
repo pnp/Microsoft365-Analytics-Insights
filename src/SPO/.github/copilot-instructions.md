@@ -20,10 +20,13 @@ SharePoint Online has two kinds of page and the tracker must work on both. So al
 ## Rules for `AITracker.js`
 
 - **One tracker per page.** SharePoint navigates between site collections without reloading the page, and the next site's extension then loads *that* site's copy into the same page. The first copy to start sets `window.spoInsightsAITrackerVersion`. A later copy must do nothing: no listeners, no second App Insights instance (it would replay the first one's session-storage send buffer as duplicates). Navigations reach the running copy through `window.modernPageNav`.
+  - **The extension checks first** and doesn't load another site's copy while one is running (`TrackerPresence.ts`). Copies before 1.6.0 have no check of their own, and a site keeps its old copy until the installer reaches it.
+  - **A copy claims the page only once App Insights has started.** One that can't start (an invalid connection string) must leave the page to the next copy.
 - **It may load after the page has loaded**: the SPFx extension started late, or SharePoint navigated here from an untracked site. Don't wait for a `load` event that has already fired. Publish `window.modernPageNav` only once the current page view is tracked.
-- **Every event carries the `pageRequestId` of the page it describes.** The importer joins on it (`hits.page_request_id`), and `PAGE_EXIT` overwrites that hit's `seconds_on_page`. Time saved for the previous page must go out with the previous page's ID, not the new one's.
+- **Every event carries the `pageRequestId` of the page it describes.** The importer joins on it (`hits.page_request_id`), and `PAGE_EXIT` overwrites that hit's `seconds_on_page`. Time saved for the previous page must go out with the previous page's ID, not the new one's. A click made before the first page view is held for it, and sent only if that page view is for the page the click was made on: SharePoint can navigate away before the first page has loaded.
 - **Per-page data uses the page's own web URL**, passed with each page view, never one captured when the script started. After a navigation the script is running in another site's page.
 - **Don't assign `window.onbeforeunload`** or any other `on*` handler property. SharePoint assigns them too, and whichever is set last silently replaces the other. Use `addEventListener` (`pagehide` to save state as the browser leaves).
+- **When the script stops writing a cookie, remove it on every start** (`RemoveRetiredCookies`), not only in a new session. Cookies go with every request to SharePoint, and a session cookie lasts as long as the browser — longer, in one that restores its last session.
 - **Keep the bundle lean.** It is downloaded and parsed on every tracked page load. Check the `npm run build:prod` output size when adding a dependency: `moment` with every locale was once two thirds of it.
 
 ## Bump the version with every change
@@ -36,7 +39,7 @@ Both parts log their version in the browser console, which is how you tell what 
 ## Building and testing
 
 - **AITracker**: Node 24 (the repository `.nvmrc`). In `AITracker/TypeScript`, run `npm ci`, `npx jest`, and `npm run build:prod`, which writes `../aitracker.js`. CI builds it into `AITrackerInstaller.zip`. `tests/aitracker.test.ts` loads fresh copies of the bootstrap with `jest.isolateModules`, to cover the classic, late-load and second-copy paths.
-- **SPFx extension**: Node 22 (its own `.nvmrc`; SPFx doesn't support Node 24). Run `npm ci`, then `npm run build`, which writes `solution/spoinsights-modern-ui-aitracker.sppkg`. **CI does not build it.** Copy the package to `AITracker/spoinsights-modern-ui-aitracker.sppkg` and commit it, or the release ships the old one. On a machine other work shares, don't switch the global Node: put a portable Node 22 on that one process's `PATH`.
+- **SPFx extension**: Node 22 (its own `.nvmrc`; SPFx doesn't support Node 24). Run `npm ci`, then `npm run build`, which runs the extension's tests (`src/**/*.test.ts`, with jest) and writes `solution/spoinsights-modern-ui-aitracker.sppkg`. **CI does not build it.** Copy the package to `AITracker/spoinsights-modern-ui-aitracker.sppkg` and commit it, or the release ships the old one. On a machine other work shares, don't switch the global Node: put a portable Node 22 on that one process's `PATH`.
 
 ## Validate on a dev tenant with Playwright
 
@@ -45,8 +48,9 @@ Unit tests can't see how SharePoint navigates. So validate every change on a dev
 | Scenario | Must hold |
 |---|---|
 | Full load of a tracked site | one page view, `pageLoad` > 0; one tracker (`window.spoInsightsAITrackerVersion`); no `PAGE_EXIT` for the page before it is left |
-| Click through to another tracked site (no reload) | new page view, `pageLoad` 0; `PAGE_EXIT` under the `pageRequestId` of the page **left**; the second site's copy stands down |
-| Back button, then reload | each `PAGE_EXIT` carries the ID of the page it timed |
+| Click through to another tracked site (no reload) | new page view, `pageLoad` 0; `PAGE_EXIT` under the `pageRequestId` of the page **left**; the second site's extension doesn't load its copy (`already tracking this page, so this site's copy isn't loaded`) |
+| Back button, then reload | each `PAGE_EXIT` carries the ID of the page it timed; a retired cookie set before the reload is gone after it |
+| A pre-1.6.0 `AITracker.js` on the second site (take one from an earlier release's `AITrackerInstaller.zip`) | still one tracker: no second copy hooking clicks, no `Can't track` |
 | Untracked site → tracked site (no reload) | the late-loaded tracker tracks the page at once, `pageLoad` 0 |
 | The site search box | `UserSearch` with the results page's `pageRequestId` |
 | Two tabs | `PAGE_EXIT.url` is this tab's page |

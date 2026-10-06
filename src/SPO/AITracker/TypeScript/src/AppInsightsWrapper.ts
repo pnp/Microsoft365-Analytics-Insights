@@ -3,7 +3,7 @@ import { debug, debugObj, error, log, warn } from "./Logger";
 import { PageProps } from "./PageProps/Models/PageProps";
 import { ClickData, ClickEventProps, PageViewDataProperties, SearchEventProperties, TimingEventProperties } from "./Definitions";
 import { AI_TRACKER_VER, EVENT_CLICK, EVENT_METADATA_UPDATE, EVENT_PAGE_EXIT } from "./AiTrackerConstants";
-import { uuidv4 } from "./DataFunctions";
+import { isSamePage, uuidv4 } from "./DataFunctions";
 
 // Clicks made before the page's first page view is tracked are held for it, up to this many
 const MAX_CLICKS_BEFORE_FIRST_PAGE_VIEW = 20;
@@ -14,7 +14,7 @@ export class AppInsightsWrapper {
     _sessionId: string;
     _pageRequestId: string | null = null;               // Page request GUID to join before & after AI events together on import
     _lastTrackedUrl: string | null = null;
-    _clicksBeforeFirstPageView: { data: ClickData, timeStamp: string }[] = [];
+    _clicksBeforeFirstPageView: { data: ClickData, timeStamp: string, pageUrl: string }[] = [];
 
     constructor(instance: ApplicationInsights, sessionId: string) {
         this._ai = instance;
@@ -95,8 +95,17 @@ export class AppInsightsWrapper {
             debugObj('Page view telemetry:', pv);
         }
 
-        // Clicks made before this page view was tracked belong to this page
-        this._clicksBeforeFirstPageView.splice(0).forEach(c => this.sendClick(c.data, this._pageRequestId!, c.timeStamp));
+        // Clicks made before this page view was tracked belong to this page - if they were made on it. SharePoint can navigate to
+        // another page before the first has loaded, and so before it was tracked: those clicks have no page view to belong to,
+        // and counting them against this page would put them on the wrong page in the reports.
+        this._clicksBeforeFirstPageView.splice(0).forEach(c => {
+            if (isSamePage(c.pageUrl, document.URL)) {
+                this.sendClick(c.data, this._pageRequestId!, c.timeStamp);
+            }
+            else {
+                debug(`Not sending ${EVENT_CLICK} on "${c.data.linkText}": it was made on ${c.pageUrl}, which was left before it was tracked`);
+            }
+        });
 
         return true;
     }
@@ -168,7 +177,7 @@ export class AppInsightsWrapper {
         else if (this._clicksBeforeFirstPageView.length < MAX_CLICKS_BEFORE_FIRST_PAGE_VIEW) {
             // The page view is tracked once the page has loaded. Hold the click for it rather than drop it
             debug(`Holding ${EVENT_CLICK} on "${d.linkText}" until this page's page view is tracked`);
-            this._clicksBeforeFirstPageView.push({ data: d, timeStamp: timeStamp });
+            this._clicksBeforeFirstPageView.push({ data: d, timeStamp: timeStamp, pageUrl: document.URL });
         }
         else {
             warn(`Can't track ${EVENT_CLICK}: no page request ID yet, and ${MAX_CLICKS_BEFORE_FIRST_PAGE_VIEW} clicks are already waiting for one`);

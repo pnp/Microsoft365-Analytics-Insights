@@ -15,7 +15,10 @@ jest.mock('@microsoft/applicationinsights-web', () => ({
     ApplicationInsights: jest.fn().mockImplementation((settings: any) => {
         const instance = {
             config: settings.config,
-            loadAppInsights: jest.fn(),
+            // As the SDK does for a connection string without an instrumentation key
+            loadAppInsights: jest.fn(() => {
+                if (settings.config.connectionString.indexOf('InstrumentationKey=') === -1) throw new Error('Please provide instrumentation key');
+            }),
             setAuthenticatedUserContext: jest.fn(),
             trackPageView: jest.fn(),
             trackEvent: jest.fn(),
@@ -149,6 +152,55 @@ describe('AITracker page bootstrap', () => {
         expect(clicks.length).toBe(1);
         expect(clicks[0].properties.pageRequestId).toBe(pageRequestIdOf(ai, 0));
         expect(noPageRequestIdErrors(errorSpy)).toEqual([]);
+    });
+
+    test('a click on a page SharePoint leaves before it has loaded is not counted against the next page', async () => {
+        jest.spyOn(console, 'error').mockImplementation();
+        readyState = 'interactive';
+        loadTrackerCopy();
+        mousedownOnLink('News');
+
+        // SharePoint navigates to the next page without reloading, before the first one's load event
+        setUrl('https://contoso.sharepoint.com/sites/test/SitePages/News.aspx');
+        readyState = 'complete';
+        window.dispatchEvent(new Event('load'));
+        await settle();
+
+        const ai = mockAiInstances[0];
+        expect(ai.trackPageView).toHaveBeenCalledTimes(1);
+        expect(ai.trackPageView.mock.calls[0][0].uri).toBe('https://contoso.sharepoint.com/sites/test/SitePages/News.aspx');
+        expect(eventsNamed(ai, 'LinkClick').length).toBe(0);
+    });
+
+    test('a copy whose App Insights can\'t start leaves the page to a correctly configured copy', async () => {
+        const errorSpy = jest.spyOn(console, 'error').mockImplementation();
+        (window as any).appInsightsConnectionStringHash = btoa('IngestionEndpoint=https://example.invalid/');
+        loadTrackerCopy();
+        await settle();
+
+        expect((window as any).spoInsightsAITrackerVersion).toBeUndefined();
+        expect((window as any).modernPageNav).toBeUndefined();
+        expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining("Couldn't start Application Insights"));
+
+        // SharePoint navigates to another site, whose copy is configured correctly
+        (window as any).appInsightsConnectionStringHash = CONNECTION_STRING_HASH;
+        loadTrackerCopy();
+        await settle();
+
+        expect(mockAiInstances.length).toBe(2);
+        expect(mockAiInstances[1].trackPageView).toHaveBeenCalledTimes(1);
+        expect((window as any).spoInsightsAITrackerVersion).toBe(AI_TRACKER_VER);
+    });
+
+    test('removes the page-address cookie earlier versions wrote, in a browser session that started before the upgrade', async () => {
+        Cookies.set('SPOInsightsSessionID', '00000000-0000-0000-0000-000000000001');
+        Cookies.set('SPOInsightsLastTrackedUrl', PAGE_URL);
+        loadTrackerCopy();
+        await settle();
+
+        expect(Cookies.get('SPOInsightsLastTrackedUrl')).toBeUndefined();
+        expect(Cookies.get('SPOInsightsSessionID')).toBe('00000000-0000-0000-0000-000000000001');
+        expect(mockAiInstances[0].trackPageView).toHaveBeenCalledTimes(1);
     });
 
     test('loaded after the page has loaded: tracks the page straight away and can track clicks', async () => {

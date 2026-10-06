@@ -3,11 +3,12 @@ import { Guid, SPEventArgs } from '@microsoft/sp-core-library';
 import { SPComponentLoader } from '@microsoft/sp-loader';
 import { IAiTrackerModernApplicationCustomizerProperties, SitesTrackedByExtension, SpPageContextInfo } from './definitions';
 import { Logger } from './Logger';
+import { trackerAlreadyRunning } from './TrackerPresence';
 
 // AITracker.js function. That's where we drive the AppInsights telemetry.
 declare function modernPageNav(webUrl: string, webTitle: string, siteUrl: string, listTitle?: string, listItemId?: number): void;
 
-const AITRACKER_MODERN_VERSION: string = "1.0.1.60";     // Keep in step with the version in config/package-solution.json
+const AITRACKER_MODERN_VERSION: string = "1.0.1.61";     // Keep in step with the version in config/package-solution.json
 const NAV_EVENT_DELAY_MS: number = 2000;
 
 declare global {
@@ -89,14 +90,22 @@ export default class AiTrackerModernApplicationCustomizer
       Logger.verbose(`[${this.runtimeId}]: No insightsWebRootUrlHash found.`);
     }
 
-    // Load AITracker script via SPComponentLoader (CSP-safe). If another site's copy is already tracking this page
-    // (SharePoint navigated here without reloading), this copy leaves it to that one.
-    try {
-      await SPComponentLoader.loadScript(aiTrackerUrl, { globalExportsName: 'modernPageNav' });
+    // Load AITracker script via SPComponentLoader (CSP-safe) - unless a copy is already tracking this page. SharePoint navigates
+    // between site collections without reloading, and each has its own copy: use the one that's running. A copy before 1.6.0
+    // doesn't check for another, so loading one here would put two trackers in the page.
+    const runningTracker = trackerAlreadyRunning(window);
+    if (runningTracker) {
       this.aiTrackerLoaded = true;
-      Logger.verbose(`[${this.runtimeId}]: AITracker.js loaded successfully.`);
-    } catch (e) {
-      Logger.error(`[${this.runtimeId}]: Failed to load AITracker.js from ${aiTrackerUrl}: ${(e as Error).message}`);
+      Logger.verbose(`[${this.runtimeId}]: AITracker ${runningTracker} is already tracking this page, so this site's copy isn't loaded.`);
+    }
+    else {
+      try {
+        await SPComponentLoader.loadScript(aiTrackerUrl, { globalExportsName: 'modernPageNav' });
+        this.aiTrackerLoaded = true;
+        Logger.verbose(`[${this.runtimeId}]: AITracker.js loaded successfully.`);
+      } catch (e) {
+        Logger.error(`[${this.runtimeId}]: Failed to load AITracker.js from ${aiTrackerUrl}: ${(e as Error).message}`);
+      }
     }
 
     // Wire-up page-changed SPFx event

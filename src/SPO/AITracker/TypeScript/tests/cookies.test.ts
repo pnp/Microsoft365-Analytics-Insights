@@ -5,7 +5,7 @@
 import {
     GetSessionCookieVal, SetSessionCookieVal,
     GetLastPageStatsVal, SetLastPageStatsVal, ClearLastPageStatsVal,
-    CleanCookies
+    CleanCookies, RemoveRetiredCookies
 } from '../src/Cookies';
 import { PageStats } from '../src/Definitions';
 import Cookies from 'js-cookie';
@@ -99,13 +99,19 @@ describe('Cookies', () => {
             // Should not remove SPOInsights cookies
             expect(Cookies.get('SPOInsightsSessionID')).toBe('keep-me');
         });
+    });
 
-        test('removes the last-tracked-URL cookie earlier versions wrote', () => {
+    describe('RemoveRetiredCookies', () => {
+        test('removes the last-tracked-URL cookie earlier versions wrote, and nothing this version uses', () => {
             Cookies.set('SPOInsightsLastTrackedUrl', 'https://contoso.sharepoint.com/sites/test/SitePages/Home.aspx');
+            Cookies.set('SPOInsightsSessionID', 'keep-me');
+            Cookies.set('SPOInsightsLastPageStats', '{"url":"keep-me"}');
 
-            CleanCookies();
+            RemoveRetiredCookies();
 
             expect(Cookies.get('SPOInsightsLastTrackedUrl')).toBeUndefined();
+            expect(Cookies.get('SPOInsightsSessionID')).toBe('keep-me');
+            expect(Cookies.get('SPOInsightsLastPageStats')).toBe('{"url":"keep-me"}');
         });
     });
 });
