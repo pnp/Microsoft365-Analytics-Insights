@@ -57,7 +57,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Sections
         }
 
         /// <summary>
-        /// This section, moved to the deferred pass that the WebJob runs after the Activity API import (see
+        /// This section, moved to the deferred pass that the WebJob runs in the background (see
         /// <see cref="IGraphImportSection.IsDeferred"/>). Everything else about it - name, message, gating and body -
         /// is unchanged. A method rather than another optional parameter on <see cref="Gated"/> /
         /// <see cref="Ungated"/>, because a trailing optional argument is baked in by the calling compiler and so is

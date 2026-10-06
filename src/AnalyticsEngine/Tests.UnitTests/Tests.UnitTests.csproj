@@ -294,6 +294,7 @@
     <Compile Include="GraphBoundedRequestAndDeltaTests.cs" />
     <Compile Include="GraphImportOrchestrationTests.cs" />
     <Compile Include="GraphImportSectionCompositionTests.cs" />
+    <Compile Include="SingleFlightBackgroundRunnerTests.cs" />
     <Compile Include="ImportRuntimeOptionsTests.cs" />
     <Compile Include="ImportStatTests.cs" />
     <Compile Include="FakeLoaderClasses\FakeTeamsPorts.cs" />

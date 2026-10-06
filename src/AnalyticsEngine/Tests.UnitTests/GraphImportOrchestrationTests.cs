@@ -403,8 +403,9 @@ namespace Tests.UnitTests
         }
 
         // ---- Deferred pass (issue #706) ----------------------------------------------------------------------
-        // The WebJob calls GetAndSaveNonDeferredGraphData, then the Activity API import, then
-        // GetAndSaveDeferredGraphData, so the once-a-day usage reports cannot hold the audit import back.
+        // The WebJob runs GetAndSaveNonDeferredGraphData in its import cycle and starts GetAndSaveDeferredGraphData
+        // in the background (SingleFlightBackgroundRunner), so the once-a-day usage reports cannot hold the audit
+        // import back.
 
         private static FakeGraphImportSection Deferred(FakeGraphImportSection section)
         {
@@ -445,7 +446,7 @@ namespace Tests.UnitTests
         public async Task GraphImporter_GetAndSaveAllGraphData_StillRunsEverySection_DeferredOnesLast()
         {
             // The one-shot entry point must not quietly drop the usage reports for a caller that never calls the
-            // deferred pass. It runs them in the same order as the WebJob cycle, minus the Activity API import.
+            // deferred pass. It runs the main pass first and the deferred sections after it.
             var order = new List<string>();
             var users = RecordingRunsIn(order, FakeGraphImportSection.Gated("User metadata refresh", FirstSectionCadence, 24));
             var usageReports = RecordingRunsIn(order, Deferred(FakeGraphImportSection.Ungated("Usage reports")));
@@ -544,8 +545,8 @@ namespace Tests.UnitTests
         [TestMethod]
         public async Task GraphImporter_MainPassThrowing_DoesNotStopTheDeferredPass()
         {
-            // The WebJob calls the deferred pass in its own try/catch after the Activity API import. That only
-            // helps if the deferred pass does not depend on the main pass having succeeded.
+            // The WebJob starts the deferred pass separately, in the background, whether or not the cycle's main pass
+            // succeeded. That only works if the deferred pass does not depend on the main pass having succeeded.
             var throwing = FakeGraphImportSection.Gated("Throwing section", FirstSectionCadence, 24);
             throwing.FailWith = new InvalidOperationException("main pass blew up");
             var usageReports = Deferred(FakeGraphImportSection.Ungated("Usage reports"));

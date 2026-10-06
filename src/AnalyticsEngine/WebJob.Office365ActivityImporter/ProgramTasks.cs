@@ -84,8 +84,8 @@ namespace WebJob.Office365ActivityImporter
         }
 
         /// <summary>
-        /// Graph data: every Graph section except the deferred ones, user metadata first. Program runs this before
-        /// the Activity API import, and the deferred sections after it with <see cref="GetDeferredGraphData"/>.
+        /// Graph data: every Graph section except the deferred ones, user metadata first. Program runs this at the
+        /// start of each cycle; the deferred sections run in the background via <see cref="GetDeferredGraphData"/>.
         /// </summary>
         internal async Task GetGraphTeamsAndUserData()
         {
@@ -99,15 +99,16 @@ namespace WebJob.Office365ActivityImporter
         }
 
         /// <summary>
-        /// The deferred Graph sections: the once-a-day usage-report phase. Program runs this after the Activity API
-        /// import, so the hours that phase can take on a large tenant no longer delay the audit data - Copilot,
-        /// Power Platform, DLP and SharePoint audit (issue #706). The phase's own once-a-day throttle, its per-report
-        /// completion stamps, <c>ForceUsageReportsImport</c> and its log lines are unchanged; only its position in the
-        /// cycle is.
+        /// The deferred Graph sections: the once-a-day usage-report phase. Program starts this in the background on
+        /// its own <see cref="ProgramTasks"/> instance (single-flight, see <see cref="SingleFlightBackgroundRunner"/>),
+        /// so the hours that phase can take on a large tenant no longer hold up the import cycle - the audit import of
+        /// Copilot, Power Platform, DLP and SharePoint events above all (issue #706). The phase's own once-a-day
+        /// throttle, its per-report completion stamps, <c>ForceUsageReportsImport</c> and its log lines are
+        /// unchanged; only when it runs is.
         /// </summary>
         internal async Task GetDeferredGraphData()
         {
-            _logger.LogInformation("Starting deferred Graph import (usage reports), after the Activity API import.");
+            _logger.LogInformation("Starting deferred Graph import (usage reports) in the background.");
 
             if (await RunGraphImportPass(graphReader => graphReader.GetAndSaveDeferredGraphData(_settings),
                 "ERROR: Can't access Graph usage reports - are application permissions configured correctly?"))

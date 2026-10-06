@@ -46,13 +46,14 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Sections
 
         /// <summary>
         /// True for a section that runs in the <b>deferred pass</b>, <c>GraphImporter.GetAndSaveDeferredGraphData</c>,
-        /// instead of the main pass, <c>GraphImporter.GetAndSaveNonDeferredGraphData</c>. The WebJob runs the deferred
-        /// pass only after the Office 365 Management Activity API import, so a slow section here cannot hold back the
-        /// near-real-time audit data (Copilot, Power Platform, DLP and SharePoint audit). Today that is only the
-        /// once-a-day usage-report phase, which can take hours on a large tenant (issue #706).
+        /// instead of the main pass, <c>GraphImporter.GetAndSaveNonDeferredGraphData</c>. The WebJob starts the deferred
+        /// pass in the background once a cycle's main pass and audit import are done, and does not wait for it, so a
+        /// slow section here cannot hold back the near-real-time audit data (Copilot, Power Platform, DLP and SharePoint
+        /// audit) of this or any later cycle. Today that is only the once-a-day usage-report phase, which can take hours
+        /// on a large tenant (issue #706).
         ///
-        /// Deferral changes only <b>when</b> in the cycle a section runs. It is selected, cadence-gated, timed and
-        /// logged exactly as it would be in the main pass.
+        /// Deferral changes only <b>when</b> a section runs. It is selected, cadence-gated, timed and logged exactly as
+        /// it would be in the main pass.
         /// </summary>
         bool IsDeferred { get; }
 

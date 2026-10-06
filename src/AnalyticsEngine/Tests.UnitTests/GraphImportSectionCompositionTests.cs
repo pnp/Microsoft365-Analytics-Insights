@@ -84,7 +84,7 @@ namespace Tests.UnitTests
                 sections.Select(s => s.Name).ToArray(),
                 "Section order is behaviour: user metadata runs before everything that joins to the users table, "
                 + "the cheap tenant-aggregate Copilot reports run before the per-user one, and the usage reports - "
-                + "which run in the deferred pass, after the Activity API import (#706) - are listed last, where they run. "
+                + "which run in the deferred pass, started in the background at the end of a cycle (#706) - are listed last. "
                 + "The other five keep the order they had before #706.");
         }
 
@@ -96,7 +96,7 @@ namespace Tests.UnitTests
 
             CollectionAssert.AreEqual(new[] { "Usage reports" },
                 sections.Where(s => s.IsDeferred).Select(s => s.Name).ToArray(),
-                "Only the once-a-day usage-report phase waits for the Activity API import (#706). The user import must "
+                "Only the once-a-day usage-report phase is taken off the import cycle (#706). The user import must "
                 + "stay ahead of the audit import, and the Copilot usage reports are quick enough to stay where they are.");
         }
 
@@ -104,8 +104,8 @@ namespace Tests.UnitTests
         public async Task UsageReportSection_RunsInTheDeferredPassOnly()
         {
             // Through the production composition AND the real orchestrator, not fakes: the main pass, which the
-            // WebJob runs before the Activity API import, must not start the usage reports, and the deferred pass,
-            // which it runs after, must start them exactly once (#706). Every other section is switched off, so
+            // WebJob runs in its import cycle, must not start the usage reports, and the deferred pass, which it
+            // starts in the background, must start them exactly once (#706). Every other section is switched off, so
             // nothing here reaches Graph, SQL or Azure Storage.
             var settings = SettingsWithDistinctIntervals();
             settings.ForceGraphMetadataImport = false;

@@ -235,12 +235,12 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Sections
                         return interactionLog != null && string.IsNullOrEmpty(interactionLog.Error);
                     }),
 
-                // Deferred (issue #706): the WebJob runs this after the Office 365 Management Activity API import
-                // rather than second in the cycle, as it used to. On the cycle it is due it can take hours on a large
-                // tenant - Graph answers bursts of report requests with 429 and a Retry-After of about ten minutes -
-                // and the near-real-time audit data (Copilot, Power Platform, DLP, SharePoint) used to wait for it,
-                // although these reports are already 2-3 days behind at source. Listed last because that is where
-                // it runs. Its gating, completion stamps and log lines are unchanged.
+                // Deferred (issue #706): the WebJob starts this in the background, single-flight, once a cycle's main
+                // pass and audit import are done, instead of running it second in the cycle as it used to. On the
+                // cycle it is due it can take hours on a large tenant - Graph answers bursts of report requests with
+                // 429 and a Retry-After of about ten minutes - and the near-real-time audit data (Copilot, Power
+                // Platform, DLP, SharePoint) used to wait for it, although these reports are already 2-3 days behind
+                // at source. Listed last because it runs last. Its gating, completion stamps and log lines are unchanged.
                 //
                 // Not cadence-gated: the activity/usage-report phase owns its own once-a-day throttle via
                 // ISingleDateStore, and reports "did I import" itself.

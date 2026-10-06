@@ -177,10 +177,9 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
 
         /// <summary>
         /// One-shot entry point: runs every enabled section in a single call - the main pass, then the deferred
-        /// pass - for a caller with no Activity API import to fit in between. Sections run in the same order as
-        /// in the WebJob, which calls <see cref="GetAndSaveNonDeferredGraphData"/> and
-        /// <see cref="GetAndSaveDeferredGraphData"/> separately, with the Activity API import in between
-        /// (issue #706).
+        /// pass - for a caller that does not run them separately. The WebJob calls
+        /// <see cref="GetAndSaveNonDeferredGraphData"/> in its import cycle and starts
+        /// <see cref="GetAndSaveDeferredGraphData"/> in the background (issue #706).
         ///
         /// A section that returns false is recorded as not done and the following sections still run. A
         /// section that <b>throws</b> unwinds out of here and the sections after it, deferred ones included, are
@@ -198,7 +197,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
 
         /// <summary>
         /// The main pass: every enabled section that is not <see cref="IGraphImportSection.IsDeferred"/>, in factory
-        /// order, user metadata first. The WebJob runs it before the Activity API import. Error handling is that of
+        /// order, user metadata first. The WebJob runs it at the start of each import cycle. Error handling is that of
         /// <see cref="GetAndSaveAllGraphData"/>, limited to this pass.
         /// </summary>
         public async Task GetAndSaveNonDeferredGraphData(AppConfig settings)
@@ -208,10 +207,10 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
 
         /// <summary>
         /// The deferred pass: only the sections marked <see cref="IGraphImportSection.IsDeferred"/> - the once-a-day
-        /// usage-report phase. The WebJob runs it after the Activity API import, so the hours that phase can take on
-        /// a large tenant no longer delay the audit data (issue #706). Sections are selected, gated, timed and logged
-        /// exactly as in the main pass. Builds its own sections, so it does not depend on the main pass having run or
-        /// succeeded.
+        /// usage-report phase. The WebJob starts it in the background, single-flight, and does not wait for it, so the
+        /// hours that phase can take on a large tenant no longer hold up the import cycle and its audit import (issue
+        /// #706). Sections are selected, gated, timed and logged exactly as in the main pass. Builds its own sections,
+        /// so it does not depend on the main pass having run or succeeded.
         /// </summary>
         public async Task GetAndSaveDeferredGraphData(AppConfig settings)
         {
