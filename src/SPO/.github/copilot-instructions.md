@@ -38,12 +38,13 @@ SharePoint Online has two kinds of page and the tracker must work on both. So al
 Both parts log their version in the browser console, which is how you tell what a page is actually running:
 
 - **`AI_TRACKER_VER`** in `AITracker/TypeScript/src/AiTrackerConstants.ts`. It is also sent with every page view and `PAGE_EXIT`.
-- **The SPFx solution**: `version` in `ModernPagesAITrackerExtension/config/package-solution.json` **and** `AITRACKER_MODERN_VERSION` in `AiTrackerModernApplicationCustomizer.ts`. Keep the two identical.
+- **The SPFx solution**: `version` in `ModernPagesAITrackerExtension/config/package-solution.json` **and** `AITRACKER_MODERN_VERSION` in `AiTrackerModernApplicationCustomizer.ts`. Keep the two identical. CI checks they match, and that the committed package was built with that version (see below). That check only works if the version changes with every change.
 
 ## Building and testing
 
 - **AITracker**: Node 24 (the repository `.nvmrc`). In `AITracker/TypeScript`, run `npm ci`, `npx jest`, and `npm run build:prod`, which writes `../aitracker.js`. CI builds it into `AITrackerInstaller.zip`. `tests/aitracker.test.ts` loads fresh copies of the bootstrap with `jest.isolateModules`, to cover the classic, late-load and second-copy paths.
-- **SPFx extension**: Node 22 (its own `.nvmrc`; SPFx doesn't support Node 24). Run `npm ci`, then `npm run build`, which runs the extension's tests (`src/**/*.test.ts`, with jest) and writes `solution/spoinsights-modern-ui-aitracker.sppkg`. **CI does not build it.** Copy the package to `AITracker/spoinsights-modern-ui-aitracker.sppkg` and commit it, or the release ships the old one. On a machine other work shares, don't switch the global Node: put a portable Node 22 on that one process's `PATH`.
+- **SPFx extension**: Node 22 (its own `.nvmrc`; SPFx doesn't support Node 24). Run `npm ci`, then `npm run build`, which runs the extension's tests (`src/**/*.test.ts`, with jest) and writes `solution/spoinsights-modern-ui-aitracker.sppkg`. **CI does not build it.** Copy the package to `AITracker/spoinsights-modern-ui-aitracker.sppkg` and commit it, or the release ships the old one: CI zips the committed file into `AITrackerInstaller.zip`, and the installer deploys it as it is. On a machine other work shares, don't switch the global Node: put a portable Node 22 on that one process's `PATH`.
+  - **CI fails a package that doesn't match its source.** `.github/scripts/Test-SpfxPackage.ps1` checks four things carry the same version: `package-solution.json`, `AITRACKER_MODERN_VERSION`, the committed package's `AppManifest.xml`, and the bundle inside that package. It runs in the required `test_aitracker` check when the extension, the package or the script changes, and in the release build. Run it before committing: `./.github/scripts/Test-SpfxPackage.ps1`.
 
 ## Validate on a dev tenant with Playwright
 
