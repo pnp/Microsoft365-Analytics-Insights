@@ -37,3 +37,25 @@ Both parts log their version in the browser console, which is how you tell what 
 
 - **AITracker**: Node 24 (the repository `.nvmrc`). In `AITracker/TypeScript`, run `npm ci`, `npx jest`, and `npm run build:prod`, which writes `../aitracker.js`. CI builds it into `AITrackerInstaller.zip`. `tests/aitracker.test.ts` loads fresh copies of the bootstrap with `jest.isolateModules`, to cover the classic, late-load and second-copy paths.
 - **SPFx extension**: Node 22 (its own `.nvmrc`; SPFx doesn't support Node 24). Run `npm ci`, then `npm run build`, which writes `solution/spoinsights-modern-ui-aitracker.sppkg`. **CI does not build it.** Copy the package to `AITracker/spoinsights-modern-ui-aitracker.sppkg` and commit it, or the release ships the old one. On a machine other work shares, don't switch the global Node: put a portable Node 22 on that one process's `PATH`.
+
+## Validate on a dev tenant with Playwright
+
+Unit tests can't see how SharePoint navigates. So validate every change on a dev tenant too. Drive a signed-in Edge with Playwright (`playwright-core`, `connectOverCDP`), use real clicks on SharePoint's own links, and **check the App Insights payloads the browser sends**, not just the console.
+
+| Scenario | Must hold |
+|---|---|
+| Full load of a tracked site | one page view, `pageLoad` > 0; one tracker (`window.spoInsightsAITrackerVersion`); no `PAGE_EXIT` for the page before it is left |
+| Click through to another tracked site (no reload) | new page view, `pageLoad` 0; `PAGE_EXIT` under the `pageRequestId` of the page **left**; the second site's copy stands down |
+| Back button, then reload | each `PAGE_EXIT` carries the ID of the page it timed |
+| Untracked site → tracked site (no reload) | the late-loaded tracker tracks the page at once, `pageLoad` 0 |
+| The site search box | `UserSearch` with the results page's `pageRequestId` |
+| Two tabs | `PAGE_EXIT.url` is this tab's page |
+| **Classic** pages (`_layouts/15/settings.aspx` → `user.aspx`) | AITracker loaded by the `ScriptLink` action alone, no SPFx; clicks and `PAGE_EXIT` attributed as above |
+| The whole run | no `Can't track`, no `console.error` from either part, no `RemoteDependencyData`, no item sent twice by one page, every upload answered 200 |
+
+Gotchas, each of which cost a run:
+
+- **Unload sends don't show on the network.** As a page unloads, the App Insights SDK sends its queue with `fetch(..., { keepalive: true })` or `sendBeacon`, with a `Blob` body Playwright can't read. Without in-page capture, a click on a link that leaves the page looks lost. Record those batches in the page: an init script that wraps `window.Blob` and logs any batch containing `"baseType"`.
+- **Keep the page active.** TimeMe stops counting time on page after 30 s without user activity, or while a popup has focus. Move the mouse while waiting, and `bringToFront()` after closing a popup.
+- **Find links by their resolved URL.** SharePoint writes hrefs with the host in another case and no trailing slash (`https://CONTOSO.sharepoint.com`), so a CSS `a[href="..."]` selector misses them.
+- **Classic pages need custom scripts.** The installer can only add the `ScriptLink` action where custom scripts are allowed, and modern sites block them by default. On a dev tenant, allow them on one site (`DenyAddAndCustomizePages` = Disabled). Add the action exactly as `SpoSiteInstallAdaptor.AddAITrackerCustomActionToWeb` does, then remove it and block custom scripts again afterwards.

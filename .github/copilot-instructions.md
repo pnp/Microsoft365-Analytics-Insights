@@ -61,7 +61,7 @@ The SharePoint tracker has two parts that must keep working together. `AITracker
 
 - [`src/SPO/.github/copilot-instructions.md`](../src/SPO/.github/copilot-instructions.md)
 
-It covers that dual mode, the intended deployment (the package is deployed tenant-wide; tracking is enabled per site collection by the installer), the rules the tracker must keep, and how to build the SPFx package, which CI doesn't. **Bump the version with every change**: `AI_TRACKER_VER` for `AITracker.js`, and the SPFx solution version together with `AITRACKER_MODERN_VERSION`. Both are logged in the browser console, which is how anyone tells what a page is running.
+It covers that dual mode, the intended deployment (the package is deployed tenant-wide; tracking is enabled per site collection by the installer), the rules the tracker must keep, how to build the SPFx package, which CI doesn't, and how to validate a change on a dev tenant with Playwright. **Bump the version with every change**: `AI_TRACKER_VER` for `AITracker.js`, and the SPFx solution version together with `AITRACKER_MODERN_VERSION`. Both are logged in the browser console, which is how anyone tells what a page is running.
 
 ## External APIs: prove they exist before coding against them
 
