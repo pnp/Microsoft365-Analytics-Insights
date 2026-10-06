@@ -38,11 +38,11 @@ namespace Tests.UnitTests
 
         private static ConcurrentLookupDbIdsCache SeededIdCache()
         {
-            // Pre-seeded so lookup resolution never needs the DB-backed lookup cache. Keyed by the report
-            // ENTITY type and the RAW LookupFieldValue, exactly as ResolveLookupIdAsync does.
+            // Pre-seeded so lookup resolution never needs the DB-backed lookup cache. Keyed by the LOOKUP type
+            // (User) and the RAW LookupFieldValue, exactly as ResolveLookupIdAsync does (#705).
             var cache = new ConcurrentLookupDbIdsCache();
-            cache.AddOrUpdateForName<FakeUserUsageActivityLog>(UserA, UserAId);
-            cache.AddOrUpdateForName<FakeUserUsageActivityLog>(UserB, UserBId);
+            cache.AddOrUpdateForName<User>(UserA, UserAId);
+            cache.AddOrUpdateForName<User>(UserB, UserBId);
             return cache;
         }
 
@@ -215,7 +215,7 @@ namespace Tests.UnitTests
             for (var user = 1; user <= 5; user++)
             {
                 var upn = $"user{user}@contoso.com";
-                idCache.AddOrUpdateForName<FakeUserUsageActivityLog>(upn, user);
+                idCache.AddOrUpdateForName<User>(upn, user);
                 pages.Add(Page(upn, user));
             }
             loader.LoadedReportPages[Day1] = pages;

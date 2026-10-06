@@ -461,6 +461,8 @@
     <Compile Include="UserScopePurgeTests.cs" />
     <Compile Include="SiteIdToUrlCacheTests.cs" />
     <Compile Include="DailyActivityLoaderTests.cs" />
+    <Compile Include="UsageReportLookupBenchmarkTests.cs" />
+    <Compile Include="UsageReportLookupBatchingTests.cs" />
     <Compile Include="SharePointSiteUsageStoreTests.cs" />
     <Compile Include="UsageReportRefreshPolicyTests.cs" />
     <Compile Include="UserImportTests.cs" />
