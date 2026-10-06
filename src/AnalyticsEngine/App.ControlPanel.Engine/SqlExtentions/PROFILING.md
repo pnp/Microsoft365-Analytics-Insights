@@ -108,7 +108,8 @@ read those tables; they are internal helpers of the compile pipeline.
   so it never reads more than half the period's people. It reads `sys.columns` on every load, so a metric column an older
   install lacks is reported as unavailable rather than failing the query. It **never** reads
   `profiling.ActivitiesWeekly` - the same data one row per user × week × metric, zeros included - and it
-  adds no index: the read of each period is cached instead (15 minutes idle, at most two periods).
+  adds no index: the read of each period is cached instead (15 minutes idle, at most two periods, and read
+  again once a run of the runbooks has changed the table's first or last week).
 - **Freshness only** (MIN/MAX date, row counts): `ProfilingStatusAPIController` (the SPA "Profiling" tab)
   and `Aggregation_Status.ps1`.
 - **External BI** (Power BI) reads everything.

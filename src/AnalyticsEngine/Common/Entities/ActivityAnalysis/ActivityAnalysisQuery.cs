@@ -58,6 +58,16 @@ namespace Common.Entities.ActivityAnalysis
 
         public static string Format(DateTime? date) => date.HasValue ? Format(date.Value) : null;
 
+        /// <summary>
+        /// Which weeks the weekly table held when it was read - its first and last week - as one value to compare. A run
+        /// of the profiling runbooks adds the new week and deletes every week past its retention, so figures read before
+        /// a run differ from the table after it at one end or the other. A rebuild that recompiles weeks in the middle
+        /// and leaves both ends alone is not seen.
+        /// </summary>
+        public static string DataVersion(DateTime? earliest, DateTime? latest) =>
+            (earliest.HasValue ? Format(MondayOnOrBefore(earliest.Value)) : "-") + "/"
+            + (latest.HasValue ? Format(MondayOnOrBefore(latest.Value)) : "-");
+
         /// <summary>A <c>yyyy-MM-dd</c> date, exactly. Anything else - a time, another format - is not a date here.</summary>
         public static bool TryParse(string text, out DateTime date)
         {
@@ -450,6 +460,9 @@ namespace Common.Entities.ActivityAnalysis
         public DateTime? EarliestWeek { get; }
 
         public DateTime? LatestWeek { get; }
+
+        /// <summary>The table's first and last week, to tell figures read before a run of the runbooks from those after it.</summary>
+        public string DataVersion => ActivityAnalysisWeeks.DataVersion(EarliestWeek, LatestWeek);
 
         /// <summary>The latest compiled week and the 51 before it, but never before the earliest compiled week.</summary>
         public DateTime? DefaultFrom

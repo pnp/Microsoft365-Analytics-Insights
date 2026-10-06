@@ -81,7 +81,7 @@ namespace Common.Entities.ActivityAnalysis
                 if (!schema.Installed) throw new ActivityAnalysisNotInstalledException();
 
                 var metrics = schema.AvailableMetrics;
-                var builder = new ActivityAnalysisReadModelBuilder(period, metrics);
+                var builder = new ActivityAnalysisReadModelBuilder(period, metrics) { DataVersion = schema.DataVersion };
                 var indexes = metrics.Select(m => m.Index).ToArray();
                 var count = indexes.Length;
 
@@ -186,6 +186,13 @@ namespace Common.Entities.ActivityAnalysis
                                 var active = reader.IsDBNull(1 + count + i) ? 0 : reader.GetInt32(1 + count + i);
                                 totals.Add(week, metrics[i].Index, sum, active);
                             }
+                        }
+
+                        if (await reader.NextResultAsync(cancellationToken).ConfigureAwait(false) && reader.Read())
+                        {
+                            totals.DataVersion = ActivityAnalysisWeeks.DataVersion(
+                                reader.IsDBNull(0) ? (DateTime?)null : reader.GetDateTime(0),
+                                reader.IsDBNull(1) ? (DateTime?)null : reader.GetDateTime(1));
                         }
                     }
                 }

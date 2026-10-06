@@ -475,6 +475,14 @@ namespace Common.Entities.ActivityAnalysis
                 shown.RemoveRange(limit, shown.Count - limit);
             }
 
+            // After the tail: folding it may already have made the rest large enough.
+            foreach (var group in AlsoFold(shown, people, _matching.Length - shown.Sum(g => people[g]), column, notSet))
+            {
+                shown.Remove(group);
+                chart.OtherGroups++;
+                otherActive += active[group];
+            }
+
             chart.Rows = shown.Select(group => new ActivityAnalysisGroupRow
             {
                 Name = NameOf(column, group, notSet),
@@ -500,26 +508,33 @@ namespace Common.Entities.ActivityAnalysis
             var otherPeople = 0;
             var otherSums = new long[s];
             var otherUnique = new int[s];
-            otherDepartments = 0;
+
+            var otherDepartmentCount = 0;
+            void Fold(int group)
+            {
+                otherDepartmentCount++;
+                otherPeople += people[group];
+                for (var i = 0; i < s; i++)
+                {
+                    otherSums[i] += sums[group * s + i];
+                    otherUnique[i] += unique[group * s + i];
+                }
+            }
 
             for (var group = 0; group < people.Length; group++)
             {
                 if (people[group] == 0) continue;
-                if (IsSmall(people[group]))
-                {
-                    otherDepartments++;
-                    otherPeople += people[group];
-                    for (var i = 0; i < s; i++)
-                    {
-                        otherSums[i] += sums[group * s + i];
-                        otherUnique[i] += unique[group * s + i];
-                    }
-                }
-                else
-                {
-                    named.Add(group);
-                }
+                if (IsSmall(people[group])) Fold(group);
+                else named.Add(group);
             }
+
+            foreach (var group in AlsoFold(named, people, otherPeople, column, notSet))
+            {
+                named.Remove(group);
+                Fold(group);
+            }
+
+            otherDepartments = otherDepartmentCount;
 
             // Sorted by name, "not set" after every named department.
             named.Sort((a, b) =>
@@ -571,6 +586,32 @@ namespace Common.Entities.ActivityAnalysis
 
         /// <summary>A group a reader without See PII may not see by name - fewer people than the floor.</summary>
         private bool IsSmall(int people) => !Audience.SeesIndividuals && people < Audience.MinimumPeopleWithoutSeePii;
+
+        /// <summary>
+        /// The shown groups to fold as well, smallest first, so that what is folded is not itself a handful of people.
+        /// Every shown row and the total are on the page, so everyone not in a shown row can always be worked out as
+        /// their difference - when the small groups come to 1-4 people, that difference is those few people's own
+        /// figures. Nothing to do for a reader with See PII, or when nobody is left out.
+        /// </summary>
+        /// <param name="unshownPeople">The matching people in no shown group.</param>
+        private List<int> AlsoFold(List<int> shown, int[] people, int unshownPeople, UserDirectoryColumn column, int notSet)
+        {
+            var also = new List<int>();
+            if (unshownPeople <= 0 || !IsSmall(unshownPeople)) return also;
+
+            var smallestFirst = new List<int>(shown);
+            smallestFirst.Sort((a, b) => people[a] != people[b]
+                ? people[a].CompareTo(people[b])
+                : CompareNames(NameOf(column, a, notSet), NameOf(column, b, notSet)));
+            foreach (var group in smallestFirst)
+            {
+                also.Add(group);
+                unshownPeople += people[group];
+                if (!IsSmall(unshownPeople)) break;
+            }
+
+            return also;
+        }
 
         private static List<ActivityAnalysisMetricValue> Values(
             IReadOnlyList<ActivityAnalysisMetric> metrics, long[] sums, int[] unique, int offset)

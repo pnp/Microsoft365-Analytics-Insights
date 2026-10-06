@@ -99,6 +99,8 @@ GROUP BY o.[user_id], o.license_type_id;");
         /// <summary>
         /// Every metric's weekly figures for exactly the people in <c>@people</c> - a JSON array of user ids, the form
         /// <c>ReportScopeSql</c> sends a scope in. Every available metric, so changing the selection never reads again.
+        /// Then the table's first and last week - two seeks on <c>IX_date</c> - so the figures can be checked against
+        /// the read model they will be combined with.
         /// </summary>
         /// <remarks>
         /// The ids go into a temporary table rather than a table variable so the optimiser knows how many there are -
@@ -125,7 +127,10 @@ SELECT c.[date]");
 FROM profiling.ActivitiesWeeklyColumns AS c
 JOIN #people AS p ON p.[user_id] = c.[user_id]
 WHERE c.[date] BETWEEN @from AND @to
-GROUP BY c.[date];");
+GROUP BY c.[date];
+
+SELECT MIN(w.[date]) AS earliest, MAX(w.[date]) AS latest
+FROM profiling.ActivitiesWeeklyColumns AS w;");
             return sql.ToString();
         }
 

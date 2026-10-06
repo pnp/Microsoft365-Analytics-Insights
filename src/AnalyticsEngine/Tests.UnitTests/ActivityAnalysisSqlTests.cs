@@ -187,6 +187,11 @@ INSERT INTO profiling.ActivitiesWeeklyColumns ([user_id], [date], [Teams Calls])
 
             var nobody = await source.LoadWeeklyTotalsAsync(model, new int[0], CancellationToken.None);
             Assert.AreEqual(0, nobody.SumOf(0, calls));
+
+            // The read says which weeks the table held, in the form the model recorded: if the two ever disagreed for an
+            // unchanged table, a filtered series would never be worked out from the others and always read in full.
+            Assert.IsNotNull(model.DataVersion);
+            Assert.AreEqual(model.DataVersion, weeks.DataVersion);
         }
 
         [TestMethod]

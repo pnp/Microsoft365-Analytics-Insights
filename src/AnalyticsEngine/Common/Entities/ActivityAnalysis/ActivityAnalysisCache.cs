@@ -248,9 +248,10 @@ namespace Common.Entities.ActivityAnalysis
         public const int WeeklyTotalsCapacity = 64;
 
         /// <summary>
-        /// Both kinds of result are dropped after a quarter of an hour unused. A compiled week never changes once written
-        /// (the runbooks only ever add weeks), and a newly compiled one moves the default period - a different key - so a
-        /// read model in constant use is never stale enough to be worth re-scanning the table for.
+        /// Both kinds of result are dropped after a quarter of an hour unused. A read model is also keyed by the weeks the
+        /// table holds (<see cref="ActivityAnalysisSchema.DataVersion"/>): a run of the runbooks adds a week and deletes
+        /// the weeks past their retention, so a period read before it is read again once the schema is next checked,
+        /// rather than kept for as long as somebody is using it.
         /// </summary>
         public static readonly TimeSpan IdleLifetime = TimeSpan.FromMinutes(15);
 
@@ -308,8 +309,16 @@ namespace Common.Entities.ActivityAnalysis
         public Task<ActivityAnalysisReadModel> GetReadModelAsync(ActivityAnalysisPeriod period, CancellationToken cancellationToken)
         {
             if (period == null) throw new ArgumentNullException(nameof(period));
-            return _caches.ReadModels.GetAsync(
-                _scope + "\n" + period.Key, token => _source.LoadReadModelAsync(period, token), cancellationToken);
+            return GetCurrentReadModelAsync(period, cancellationToken);
+        }
+
+        private async Task<ActivityAnalysisReadModel> GetCurrentReadModelAsync(ActivityAnalysisPeriod period, CancellationToken cancellationToken)
+        {
+            var schema = await GetSchemaAsync(cancellationToken).ConfigureAwait(false);
+            return await _caches.ReadModels.GetAsync(
+                _scope + "\n" + period.Key + "\n" + schema.DataVersion,
+                token => _source.LoadReadModelAsync(period, token),
+                cancellationToken).ConfigureAwait(false);
         }
 
         /// <summary>
@@ -330,7 +339,9 @@ namespace Common.Entities.ActivityAnalysis
         /// <summary>
         /// Reads the smaller side. When most of the model's people match - a licence most staff hold, "at least one
         /// Teams call" - reading them would send nearly every id and aggregate nearly every row, so it reads everybody
-        /// else and takes their figures from the population's, which the model already holds.
+        /// else and takes their figures from the population's, which the model already holds. That subtraction is only
+        /// sound against the table the model was read from: when the runbooks have changed the weeks since, the
+        /// matching people are read after all.
         /// </summary>
         private async Task<ActivityAnalysisWeeklyTotals> LoadWeeklyTotalsAsync(
             ActivityAnalysisEvaluation evaluation, int[] matching, CancellationToken cancellationToken)
@@ -343,6 +354,11 @@ namespace Common.Entities.ActivityAnalysis
 
             var others = await _source.LoadWeeklyTotalsAsync(model, evaluation.UnmatchedUserIds(), cancellationToken)
                 .ConfigureAwait(false);
+            if (others.DataVersion == null || others.DataVersion != model.DataVersion)
+            {
+                return await _source.LoadWeeklyTotalsAsync(model, matching, cancellationToken).ConfigureAwait(false);
+            }
+
             return ActivityAnalysisWeeklyTotals.Except(model.PopulationWeeks, others);
         }
 

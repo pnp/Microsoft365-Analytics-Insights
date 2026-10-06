@@ -69,6 +69,25 @@ namespace Tests.UnitTests
             return this;
         }
 
+        /// <summary>What a run of the runbooks does past the retention date: deletes every week before <paramref name="monday"/>.</summary>
+        public ActivityAnalysisFakeSource DeleteWeeksBefore(DateTime monday)
+        {
+            foreach (var weeks in _rows.Values)
+            {
+                foreach (var week in weeks.Keys.Where(w => w < monday).ToList()) weeks.Remove(week);
+            }
+
+            return this;
+        }
+
+        /// <summary>The table's first and last week, as the SQL source reports them.</summary>
+        private string DataVersion()
+        {
+            var weeks = _rows.Values.SelectMany(w => w.Keys).ToList();
+            return ActivityAnalysisWeeks.DataVersion(
+                weeks.Count == 0 ? (DateTime?)null : weeks.Min(), weeks.Count == 0 ? (DateTime?)null : weeks.Max());
+        }
+
         public Task<ActivityAnalysisSchema> ReadSchemaAsync(CancellationToken cancellationToken)
         {
             Interlocked.Increment(ref _schemaReads);
@@ -93,7 +112,7 @@ namespace Tests.UnitTests
         public ActivityAnalysisReadModel Build(ActivityAnalysisPeriod period, IEnumerable<ActivityAnalysisMetric> available = null, DateTime? loadedUtc = null)
         {
             var metrics = (available ?? ActivityAnalysisMetricCatalogue.All).ToList();
-            var builder = new ActivityAnalysisReadModelBuilder(period, metrics);
+            var builder = new ActivityAnalysisReadModelBuilder(period, metrics) { DataVersion = DataVersion() };
             foreach (var user in _rows.OrderBy(u => u.Key))
             {
                 var inPeriod = user.Value.Where(w => period.WeekIndexOf(w.Key) >= 0).ToList();
@@ -128,7 +147,9 @@ namespace Tests.UnitTests
         {
             Interlocked.Increment(ref _weeklyTotalsLoads);
             lock (WeeklyTotalsRequests) WeeklyTotalsRequests.Add(userIds.ToArray());
-            return Task.FromResult(WeeklyTotals(model.Period, model.AvailableMetrics, userIds));
+            var totals = WeeklyTotals(model.Period, model.AvailableMetrics, userIds);
+            totals.DataVersion = DataVersion();
+            return Task.FromResult(totals);
         }
 
         private ActivityAnalysisWeeklyTotals WeeklyTotals(

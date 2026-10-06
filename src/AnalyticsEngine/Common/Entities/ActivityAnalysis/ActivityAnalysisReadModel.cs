@@ -44,6 +44,12 @@ namespace Common.Entities.ActivityAnalysis
 
         public int Weeks { get; }
 
+        /// <summary>
+        /// The weeks the table held when these figures were read (<see cref="ActivityAnalysisWeeks.DataVersion"/>);
+        /// <c>null</c> when no read said.
+        /// </summary>
+        public string DataVersion { get; set; }
+
         public long SumOf(int week, int metricIndex) => _sums[week * MetricCount + metricIndex];
 
         public int ActivePeopleOf(int week, int metricIndex) => _activePeople[week * MetricCount + metricIndex];
@@ -112,12 +118,13 @@ namespace Common.Entities.ActivityAnalysis
 
         internal ActivityAnalysisReadModel(
             ActivityAnalysisPeriod period, DateTime loadedUtc, bool[] available, int[][] chunks, int[] userIds,
-            ActivityAnalysisWeeklyTotals populationWeeks, bool populationWeeksExact, List<ActivityAnalysisLicence> licences,
-            int[] licenceStart, int[] licenceIndexes)
+            ActivityAnalysisWeeklyTotals populationWeeks, bool populationWeeksExact, string dataVersion,
+            List<ActivityAnalysisLicence> licences, int[] licenceStart, int[] licenceIndexes)
         {
             Id = Guid.NewGuid().ToString("N");
             Period = period;
             LoadedUtc = loadedUtc;
+            DataVersion = dataVersion;
             _available = available;
             _chunks = chunks;
             _userIds = userIds;
@@ -149,6 +156,12 @@ namespace Common.Entities.ActivityAnalysis
 
         /// <summary>When the figures were read from the database.</summary>
         public DateTime LoadedUtc { get; }
+
+        /// <summary>
+        /// The weeks the table held when the period was read (<see cref="ActivityAnalysisWeeks.DataVersion"/>), so figures
+        /// read later can be told apart from figures read after the runbooks have changed the table.
+        /// </summary>
+        public string DataVersion { get; }
 
         /// <summary>Everyone in <c>profiling.users</c> with at least one compiled week in the period.</summary>
         public int PeopleCount => _userIds.Length;
@@ -268,6 +281,9 @@ namespace Common.Entities.ActivityAnalysis
         /// <summary>The population's weekly totals, filled with <see cref="AddWeek"/>.</summary>
         public ActivityAnalysisWeeklyTotals Weeks { get; }
 
+        /// <summary>The weeks the table held when the period was read (<see cref="ActivityAnalysisWeeks.DataVersion"/>).</summary>
+        public string DataVersion { get; set; }
+
         public int PeopleCount => _userIds.Count;
 
         /// <summary>The person index for a user id, adding them with all-zero totals the first time.</summary>
@@ -359,7 +375,7 @@ namespace Common.Entities.ActivityAnalysis
 
             return new ActivityAnalysisReadModel(
                 Period, loadedUtc, (bool[])_available.Clone(), _chunks.ToArray(), _userIds.ToArray(), Weeks,
-                _peopleLeftOut == 0, _licences, start, indexes.ToArray());
+                _peopleLeftOut == 0, DataVersion, _licences, start, indexes.ToArray());
         }
 
         private int LicenceIndex(int id)

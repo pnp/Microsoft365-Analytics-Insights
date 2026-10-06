@@ -266,13 +266,43 @@ namespace Tests.UnitTests
                 report.ByDepartment.Rows.Select(r => (r.Name, r.Other, r.ActivePeople)).ToList());
             Assert.AreEqual(3, report.ByDepartment.OtherGroups);
 
-            CollectionAssert.AreEqual(new[] { ("Contoso", false, 6), ((string)null, true, 3) },
+            CollectionAssert.AreEqual(new[] { ((string)null, true, 9) },
                 report.ByCompany.Rows.Select(r => (r.Name, r.Other, r.ActivePeople)).ToList(),
-                "Fabrikam (2 people) and \"not set\" (1) are folded; Contoso has 7 matching people.");
-            Assert.AreEqual(2, report.ByCompany.OtherGroups);
+                "Fabrikam (2 people) and \"not set\" (1) are folded - and as the total less Contoso would be those three's own " +
+                "figures, Contoso (7) is folded with them.");
+            Assert.AreEqual(3, report.ByCompany.OtherGroups);
 
             Assert.AreEqual(Value(report.Total.Values, "teams.calls").Sum, report.Departments.Sum(d => Value(d.Values, "teams.calls").Sum),
                 "Folding moves figures, it never drops them.");
+        }
+
+        [TestMethod]
+        public void ReaderWithoutSeePii_NeverGetsAFoldedRowOfAHandfulOfPeople_TheSmallestNamedGroupsJoinIt()
+        {
+            // Licences 7 or 8: nine people - Sales' five, and four in departments of one or two. Folded alone, those four
+            // would be a row of their own figures - and the total less Sales gives them anyway - so Sales joins them.
+            var report = Report(Model(), Query(licences: "7,8"), Audience(seePii: false));
+
+            Assert.IsFalse(report.Suppressed);
+            Assert.AreEqual(9, report.MatchingPeople);
+            var other = report.Departments.Single();
+            Assert.IsTrue(other.Other);
+            Assert.AreEqual(9, other.People);
+            Assert.AreEqual(4, report.OtherDepartments, "Marketing, the Greek department, \"not set\" and Sales.");
+            Assert.AreEqual(33, Value(other.Values, "teams.calls").Sum);
+            Assert.AreEqual(Value(report.Total.Values, "teams.calls").Sum, Value(other.Values, "teams.calls").Sum);
+
+            CollectionAssert.AreEqual(new[] { ((string)null, true, 8) },
+                report.ByDepartment.Rows.Select(r => (r.Name, r.Other, r.ActivePeople)).ToList());
+            Assert.AreEqual(4, report.ByDepartment.OtherGroups);
+            CollectionAssert.AreEqual(new[] { ((string)null, true, 8) },
+                report.ByCompany.Rows.Select(r => (r.Name, r.Other, r.ActivePeople)).ToList(),
+                "Contoso's six would leave Fabrikam's two and the one person missing from the directory.");
+
+            var named = Report(Model(), Query(licences: "7,8"), Audience(seePii: true));
+            Assert.AreEqual(4, named.Departments.Count, "A reader with See PII sees every department by name.");
+            Assert.IsFalse(named.Departments.Any(d => d.Other));
+            Assert.AreEqual(0, named.OtherDepartments);
         }
 
         [TestMethod]
@@ -471,6 +501,48 @@ namespace Tests.UnitTests
             CollectionAssert.AreEqual(new[] { 1, 2, 3, 5, 7, 8, 9, 10 }, source.WeeklyTotalsRequests.Single(),
                 "Everyone's figures less the others' would include the person left out.");
             CollectionAssert.AreEqual(new long[] { 4, 3, 6, 9, 4 }, report.Series.Single(s => s.Metric == "teams.calls").Sum);
+        }
+
+        [TestMethod]
+        public async Task FilteredSeries_IsReadDirectly_OnceARunOfTheRunbooksHasChangedTheWeeks()
+        {
+            var source = Source();
+            var service = new ActivityAnalysisService(source, "synthetic", new ActivityAnalysisCaches());
+            await service.GetReportAsync(Query(), Audience(true), null, CancellationToken.None);
+
+            // The run deletes every week past the retention date, the period's first among them - but the period was read
+            // before it, so everyone's figures for that week are still in the model.
+            source.DeleteWeeksBefore(Week0.AddDays(7));
+            var report = await service.GetReportAsync(Query(licences: "7"), Audience(true), null, CancellationToken.None);
+
+            Assert.AreEqual(2, source.WeeklyTotalsLoads, "The others, then - the weeks having changed - the matching people.");
+            CollectionAssert.AreEqual(new[] { 4, 6 }, source.WeeklyTotalsRequests[0]);
+            CollectionAssert.AreEqual(new[] { 1, 2, 3, 5, 7, 8, 9, 10 }, source.WeeklyTotalsRequests[1]);
+            CollectionAssert.AreEqual(new long[] { 0, 3, 6, 9, 4 }, report.Series.Single(s => s.Metric == "teams.calls").Sum,
+                "Not everyone's 6 calls in the deleted week, less the others' none.");
+        }
+
+        [TestMethod]
+        public async Task APeriodInConstantUse_IsReadAgain_OnceARunOfTheRunbooksHasChangedTheWeeks()
+        {
+            var now = new DateTime(2026, 2, 9, 9, 0, 0, DateTimeKind.Utc);
+            var source = Source();
+            var service = new ActivityAnalysisService(source, "synthetic", new ActivityAnalysisCaches(utcNow: () => now));
+            await service.GetReportAsync(Query(), Audience(true), null, CancellationToken.None);
+            Assert.AreEqual(1, source.ReadModelLoads);
+
+            source.DeleteWeeksBefore(Week0);
+            now = now.AddMinutes(1);
+            await service.GetReportAsync(Query(), Audience(true), null, CancellationToken.None);
+            Assert.AreEqual(1, source.ReadModelLoads, "Until the schema is next checked, the period already read is used.");
+
+            now = now.Add(ActivityAnalysisCaches.SchemaLifetime);
+            await service.GetReportAsync(Query(), Audience(true), null, CancellationToken.None);
+            Assert.AreEqual(2, source.ReadModelLoads, "Used every minute, the period would otherwise never be read again.");
+
+            now = now.AddMinutes(1);
+            await service.GetReportAsync(Query(), Audience(true), null, CancellationToken.None);
+            Assert.AreEqual(2, source.ReadModelLoads, "Read once for the table as it now is.");
         }
 
         [TestMethod]
