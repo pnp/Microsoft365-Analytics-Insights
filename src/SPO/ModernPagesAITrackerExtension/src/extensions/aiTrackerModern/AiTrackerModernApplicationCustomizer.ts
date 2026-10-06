@@ -7,7 +7,7 @@ import { Logger } from './Logger';
 // AITracker.js function. That's where we drive the AppInsights telemetry.
 declare function modernPageNav(webUrl: string, webTitle: string, siteUrl: string, listTitle?: string, listItemId?: number): void;
 
-const AITRACKER_MODERN_VERSION: string = "1.0.1.59";     // Keep in step with the version in config/package-solution.json
+const AITRACKER_MODERN_VERSION: string = "1.0.1.60";     // Keep in step with the version in config/package-solution.json
 const NAV_EVENT_DELAY_MS: number = 2000;
 
 declare global {
@@ -121,9 +121,14 @@ export default class AiTrackerModernApplicationCustomizer
         Logger.verbose(`[${this.runtimeId}]: Will invoke 'modernPageNav' on AITracker.js...`);
         // Wait for the DOM to sort itself out, otherwise things like document.title won't have the new value
         setTimeout(() => {
-          // Guard: ensure AITracker.js has loaded and modernPageNav is available
-          if (!this.aiTrackerLoaded || typeof modernPageNav !== "function") {
-            Logger.warn(`[${this.runtimeId}]: modernPageNav not available yet. Navigation event skipped.`);
+          if (!this.aiTrackerLoaded) {
+            Logger.warn(`[${this.runtimeId}]: AITracker.js didn't load, so this navigation isn't tracked.`);
+            return;
+          }
+          // AITracker.js publishes modernPageNav once it has tracked the page it loaded on, after that page's load event, and
+          // tracks that page itself. So while the page is still loading there's nothing for this report to do.
+          if (typeof modernPageNav !== "function") {
+            Logger.verbose(`[${this.runtimeId}]: AITracker.js is still waiting for the page to load, and will track it then.`);
             return;
           }
 

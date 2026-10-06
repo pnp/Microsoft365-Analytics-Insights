@@ -3,7 +3,7 @@ import { ApplicationInsights } from '@microsoft/applicationinsights-web'
 
 import { AppInsightsWrapper } from './AppInsightsWrapper';
 import { debug, error, log, warn } from './Logger';
-import { uuidv4 } from './DataFunctions';
+import { linkLabel, uuidv4 } from './DataFunctions';
 import { CleanCookies, GetSessionCookieVal, SetSessionCookieVal } from './Cookies';
 import { PageViewTracker } from './PageViewTracker';
 import { SpoPagePropertyManager } from './PageProps/SpoImplementation/SpoPagePropertyManager';
@@ -81,7 +81,7 @@ function interceptClickEvent(e: MouseEvent) {
 }
 function processLinkNodeAndRegisterIfNotDuplicate(target: HTMLAnchorElement) {
     const classNames = target.getAttribute('class');
-    const clickData: ClickData = { linkText: target.text, altText: target.title, classNames: classNames, href: target.href };
+    const clickData: ClickData = { linkText: linkLabel(target), altText: target.title, classNames: classNames, href: target.href };
 
     // Only register clicks that aren't duplicate (because they came via click & mousedown)
     clickHandler.registerClick(clickData, () => ai?.trackClick(clickData));

@@ -61,3 +61,13 @@ export function isValidGuid(str : string | null) : boolean
 
     return uuid.validate(str);
 }
+
+// The link's text. A link with none, such as an icon or image link, by its accessible label instead: the importer skips a
+// click without a label, so clicks on SharePoint's own icon links (the site logo, the header home link) were all lost.
+export function linkLabel(a: HTMLAnchorElement): string {
+    if (a.text && a.text.trim() !== '') {
+        return a.text;      // As it always was, so labels already stored still match
+    }
+    const img = a.querySelector('img[alt]');
+    return a.getAttribute('aria-label') || a.title || (img && img.getAttribute('alt')) || '';
+}

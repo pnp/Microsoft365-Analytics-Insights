@@ -201,6 +201,22 @@ describe('AITracker page bootstrap', () => {
         expect(mockAiInstances.length).toBe(0);
     });
 
+    test('a click on an icon link without text is sent with its accessible label, so the importer keeps it', async () => {
+        loadTrackerCopy();
+        await settle();
+
+        const a = document.createElement('a');
+        a.href = 'https://contoso.sharepoint.com';
+        a.setAttribute('aria-label', 'Contoso');
+        a.innerHTML = '<svg></svg>';
+        document.body.appendChild(a);
+        a.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+
+        const clicks = eventsNamed(mockAiInstances[0], 'LinkClick');
+        expect(clicks.length).toBe(1);
+        expect(clicks[0].properties.linkText).toBe('Contoso');
+    });
+
     test('forwards SharePoint page navigations from the SPFx extension, ignoring its report of the current page', async () => {
         loadTrackerCopy();
         await settle();
