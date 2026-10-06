@@ -148,22 +148,47 @@ namespace Tests.UnitTests
                 Assert.AreEqual(true, (bool)folded["departments"][1]["other"]);
                 Assert.AreEqual(3, (int)folded["otherDepartments"]);
 
-                var marketing = Uri.EscapeDataString("[{\"d\":\"department\",\"v\":[\"Marketing\"]}]");
-                var suppressed = await app.Json(Report + "&userFilter=" + marketing);
+                // Licence 8 is held by two people: a filter open to every reader, narrowed to a handful.
+                var suppressed = await app.Json(Report + "&licences=8");
                 Assert.AreEqual(true, (bool)suppressed["suppressed"]);
                 Assert.AreEqual(2, (int)suppressed["matchingPeople"]);
                 Assert.AreEqual(10, (int)suppressed["populationPeople"]);
                 Assert.AreEqual(0, suppressed["series"].Count());
                 Assert.AreEqual(0, suppressed["departments"].Count());
                 Assert.AreEqual(0, suppressed["total"]["values"].Count());
-                Assert.AreEqual("department", (string)suppressed["userFilter"]["clauses"][0]["dimension"], "The filter is echoed as applied.");
                 Assert.AreEqual(0, app.Source.WeeklyTotalsLoads, "Nothing is read for figures that are not shown.");
 
                 app.Host.Principal = PortalTestHost.SignedIn(PortalRoles.SeePii);
-                var named = await app.Json(Report + "&userFilter=" + marketing);
+                var named = await app.Json(Report + "&licences=8");
                 Assert.AreEqual(false, (bool)named["suppressed"]);
-                CollectionAssert.AreEqual(new[] { "Marketing" }, named["departments"].Select(d => (string)d["name"]).ToList());
+                CollectionAssert.AreEqual(new[] { "Sales" }, named["departments"].Select(d => (string)d["name"]).ToList());
                 Assert.AreEqual(1, app.Source.WeeklyTotalsLoads);
+            }
+        }
+
+        [TestMethod]
+        public async Task ThePeopleFilter_NeedsSeePii()
+        {
+            using (var app = new Harness())
+            {
+                var marketing = Uri.EscapeDataString("[{\"d\":\"department\",\"v\":[\"Marketing\"]}]");
+
+                // Five named people, then each set of four, would give each one's figures: refused outright.
+                var refused = await app.Host.Client.GetAsync(Report + "&userFilter=" + marketing);
+                Assert.AreEqual(HttpStatusCode.Forbidden, refused.StatusCode);
+                var refusal = JObject.Parse(await refused.Content.ReadAsStringAsync());
+                Assert.AreEqual("portalPermissionRequired", (string)refusal["code"]);
+                Assert.AreEqual("seePii", (string)refusal["permission"]);
+                Assert.AreEqual(0, app.Source.ReadModelLoads, "A refused request reads nothing.");
+
+                var unfiltered = await app.Json(Report + "&userFilter=" + Uri.EscapeDataString("[]"));
+                Assert.AreEqual(10, (int)unfiltered["matchingPeople"], "An empty filter narrows nothing, so it is not refused.");
+
+                app.Host.Principal = PortalTestHost.SignedIn(PortalRoles.SeePii);
+                var named = await app.Json(Report + "&userFilter=" + marketing);
+                Assert.AreEqual(2, (int)named["matchingPeople"]);
+                CollectionAssert.AreEqual(new[] { "Marketing" }, named["departments"].Select(d => (string)d["name"]).ToList());
+                Assert.AreEqual("department", (string)named["userFilter"]["clauses"][0]["dimension"], "The filter is echoed as applied.");
             }
         }
 

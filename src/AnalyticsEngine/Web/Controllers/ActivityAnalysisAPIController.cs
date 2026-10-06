@@ -24,7 +24,8 @@ namespace Web.AnalyticsWeb.Controllers
     /// week, company and department - the portal's version of the Power BI report's "Analytics" page.
     /// </summary>
     /// <remarks>
-    /// <para><b>Who sees what (#661).</b> The availability and the report are for every signed-in reader. A reader
+    /// <para><b>Who sees what (#661).</b> The availability and the report are for every signed-in reader, but narrowing the
+    /// report by the people filter needs See PII, as everything that picks people out by name does. A reader
     /// without See PII cannot single anybody out: when 1 to 4 people match their filters every figure is suppressed,
     /// and companies and departments of fewer than 5 matching people are folded into one unnamed row. The people
     /// themselves - <c>people</c> - need See PII.</para>
@@ -81,6 +82,13 @@ namespace Web.AnalyticsWeb.Controllers
                 if (!CopilotAdoptionAPIController.TryParseUserFilter(userFilter, out var filter, out var filterError))
                 {
                     return Refuse(HttpStatusCode.BadRequest, ActivityAnalysisErrorCodes.InvalidFilter, filterError);
+                }
+
+                // The people filter is See PII's, as on Copilot Adoption: aggregates of a set the reader picked by
+                // name are those people's records - five named people, then each set of four, give each one's figures.
+                if (filter != null && !filter.IsEmpty && !PortalAccess.Evaluate(Request, User).SeePii)
+                {
+                    return ResponseMessage(PortalPermissionDenied.Response(Request, PortalPermission.SeePii));
                 }
 
                 var parsed = ActivityAnalysisQuery.Parse(from, to, metrics, ranges, licences);
