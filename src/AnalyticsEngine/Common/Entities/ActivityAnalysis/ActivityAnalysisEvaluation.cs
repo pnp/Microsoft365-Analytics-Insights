@@ -39,8 +39,11 @@ namespace Common.Entities.ActivityAnalysis
     /// </remarks>
     public sealed class ActivityAnalysisEvaluation
     {
-        /// <summary>Groups beyond this many, largest first, are folded into the charts' "other" row.</summary>
-        public const int MaximumChartGroups = 50;
+        /// <summary>
+        /// The most rows a company or department chart holds, the folded "other" row included: past it, the smallest
+        /// groups are folded into that row.
+        /// </summary>
+        public const int MaximumChartRows = 50;
 
         private static readonly int MetricCount = ActivityAnalysisMetricCatalogue.Count;
 
@@ -435,15 +438,17 @@ namespace Common.Entities.ActivityAnalysis
                 return CompareNames(NameOf(column, a, notSet), NameOf(column, b, notSet));
             });
 
-            if (shown.Count > MaximumChartGroups)
+            // At most MaximumChartRows rows in all: when anything is folded, the folded row takes the last place.
+            var limit = chart.OtherGroups > 0 || shown.Count > MaximumChartRows ? MaximumChartRows - 1 : MaximumChartRows;
+            if (shown.Count > limit)
             {
-                for (var i = MaximumChartGroups; i < shown.Count; i++)
+                for (var i = limit; i < shown.Count; i++)
                 {
                     chart.OtherGroups++;
                     otherActive += active[shown[i]];
                 }
 
-                shown.RemoveRange(MaximumChartGroups, shown.Count - MaximumChartGroups);
+                shown.RemoveRange(limit, shown.Count - limit);
             }
 
             chart.Rows = shown.Select(group => new ActivityAnalysisGroupRow

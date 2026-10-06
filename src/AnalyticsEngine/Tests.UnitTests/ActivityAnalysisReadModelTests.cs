@@ -276,7 +276,7 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
-        public void Charts_ShowFiftyGroups_AndFoldTheRest()
+        public void Charts_HoldAtMostFiftyRows_TheFoldedRowIncluded()
         {
             var source = new ActivityAnalysisFakeSource();
             var people = new List<(int, string, string, string)>();
@@ -288,13 +288,47 @@ namespace Tests.UnitTests
 
             var report = Report(source.Build(FiveWeeks), Query(), Audience(true, ActivityAnalysisTestDirectory.Build(people.ToArray())));
 
-            Assert.AreEqual(51, report.ByDepartment.Rows.Count, "Fifty groups and the folded row.");
+            Assert.AreEqual(50, report.ByDepartment.Rows.Count, "Forty-nine groups and the folded row.");
             Assert.AreEqual("Department 01", report.ByDepartment.Rows[0].Name, "Equal counts, so by name.");
-            Assert.AreEqual("Department 50", report.ByDepartment.Rows[49].Name);
-            Assert.IsTrue(report.ByDepartment.Rows[50].Other);
-            Assert.AreEqual(10, report.ByDepartment.Rows[50].ActivePeople);
-            Assert.AreEqual(10, report.ByDepartment.OtherGroups);
+            Assert.AreEqual("Department 49", report.ByDepartment.Rows[48].Name);
+            Assert.IsTrue(report.ByDepartment.Rows[49].Other);
+            Assert.IsNull(report.ByDepartment.Rows[49].Name);
+            Assert.AreEqual(11, report.ByDepartment.Rows[49].ActivePeople);
+            Assert.AreEqual(11, report.ByDepartment.OtherGroups);
             Assert.AreEqual(60, report.Departments.Count, "The matrix lists every department.");
+
+            var fifty = new ActivityAnalysisFakeSource();
+            for (var i = 1; i <= 50; i++) fifty.Week(i, Week0, ("teams.calls", 1));
+            var exactly = Report(fifty.Build(FiveWeeks), Query(), Audience(true, ActivityAnalysisTestDirectory.Build(people.Take(50).ToArray())));
+            Assert.AreEqual(50, exactly.ByDepartment.Rows.Count, "Fifty groups fit without folding any.");
+            Assert.IsFalse(exactly.ByDepartment.Rows.Any(r => r.Other));
+        }
+
+        [TestMethod]
+        public void Charts_ForAReaderWithoutSeePii_FoldSmallGroupsAndTheTailIntoTheSameRow()
+        {
+            var source = new ActivityAnalysisFakeSource();
+            var people = new List<(int, string, string, string)>();
+            var userId = 0;
+            for (var department = 1; department <= 55; department++)
+            {
+                for (var member = 0; member < 5; member++)
+                {
+                    source.Week(++userId, Week0, ("teams.calls", 1));
+                    people.Add((userId, "user" + userId + "@contoso.com", "Department " + department.ToString("00"), "Contoso"));
+                }
+            }
+
+            source.Week(++userId, Week0, ("teams.calls", 1));
+            people.Add((userId, "user" + userId + "@contoso.com", "Small team", "Contoso"));
+
+            var report = Report(source.Build(FiveWeeks), Query(), Audience(false, ActivityAnalysisTestDirectory.Build(people.ToArray())));
+
+            Assert.AreEqual(50, report.ByDepartment.Rows.Count);
+            Assert.IsTrue(report.ByDepartment.Rows.Last().Other);
+            Assert.AreEqual(7, report.ByDepartment.OtherGroups, "The one-person team, and the six departments after the 49th.");
+            Assert.AreEqual(31, report.ByDepartment.Rows.Last().ActivePeople);
+            Assert.AreEqual(userId, report.ByDepartment.Rows.Sum(r => r.ActivePeople), "Folding moves people, it never drops them.");
         }
 
         #endregion
