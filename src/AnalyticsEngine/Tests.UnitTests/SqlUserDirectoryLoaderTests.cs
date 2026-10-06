@@ -22,6 +22,7 @@ namespace Tests.UnitTests
     {
         private const string GreekDepartment = "Καλημέρα κόσμε";
         private const string GreekOrgValue = "Αθήνα Λειτουργίες";
+        private const string GreekPostalCode = "ΤΚ 123 45";
 
         private const string UsersSchema = @"
 CREATE TABLE dbo.user_departments (id int IDENTITY(1,1) NOT NULL PRIMARY KEY, name nvarchar(100) NULL);
@@ -44,7 +45,8 @@ CREATE TABLE dbo.users (
     country_or_region_id int NULL,
     state_or_province_id int NULL,
     usage_location_id int NULL,
-    azure_ad_id nvarchar(max) NULL
+    azure_ad_id nvarchar(max) NULL,
+    postalcode nvarchar(50) NULL
 );";
 
         private const string Data = @"
@@ -66,7 +68,11 @@ VALUES
     -- A department id with no lookup row: must read as not set rather than fail the load.
     (104, 'orphan@contoso.com', NULL, NULL, 999, 42, NULL, NULL, NULL, NULL, NULL, NULL);
 SET IDENTITY_INSERT dbo.users OFF;
-UPDATE dbo.users SET azure_ad_id = N'00000000-0000-0000-0000-000000000102' WHERE id = 102;";
+UPDATE dbo.users SET azure_ad_id = N'00000000-0000-0000-0000-000000000102' WHERE id = 102;
+UPDATE dbo.users SET postalcode = N'AB1 2CD' WHERE id = 102;
+UPDATE dbo.users SET postalcode = N'" + GreekPostalCode + @"' WHERE id = 103;
+-- The user import writes an empty string, not NULL, for somebody Entra has no postal code for.
+UPDATE dbo.users SET postalcode = N'' WHERE id = 101;";
 
         private static ScratchDatabase _db;
         private static ScratchDatabase _legacy;
@@ -112,6 +118,7 @@ INSERT INTO dbo.user_org_assignments (user_id, org_type_id, org_value_id) VALUES
             AssertValue(snapshot, UserFilterDimensions.OfficeLocation, 102, "Reading");
             AssertValue(snapshot, UserFilterDimensions.Country, 102, "United Kingdom");
             AssertValue(snapshot, UserFilterDimensions.StateOrProvince, 102, "Berkshire");
+            AssertValue(snapshot, UserFilterDimensions.PostalCode, 102, "AB1 2CD");
             AssertValue(snapshot, UserFilterDimensions.UsageLocation, 102, "GB");
             AssertValue(snapshot, UserFilterDimensions.Manager, 102, "boss@contoso.com");
             AssertValue(snapshot, UserFilterDimensions.AccountStatus, 103, UserFilterTokens.Disabled);
@@ -124,6 +131,14 @@ INSERT INTO dbo.user_org_assignments (user_id, org_type_id, org_value_id) VALUES
             AssertValue(snapshot, UserFilterDimensions.Department, 104, null);
             AssertValue(snapshot, UserFilterDimensions.Manager, 104, null);
             AssertValue(snapshot, UserFilterDimensions.AccountStatus, 104, null);
+
+            // So does a postal code the import stored as an empty string, and one it never stored at all.
+            AssertValue(snapshot, UserFilterDimensions.PostalCode, 101, null);
+            AssertValue(snapshot, UserFilterDimensions.PostalCode, 104, null);
+
+            var byPostalCode = UserFilterCompiler.Compile(UserFilterCodec.Parse("[{\"d\":\"postalCode\",\"op\":\"contains\",\"v\":[\"ab1\"]}]"), snapshot);
+            Assert.IsTrue(byPostalCode.Matches(102), "A postal code can be matched as text, like any other free-text attribute.");
+            Assert.AreEqual(1, byPostalCode.MatchedPeople);
         }
 
         [TestMethod]
@@ -133,6 +148,7 @@ INSERT INTO dbo.user_org_assignments (user_id, org_type_id, org_value_id) VALUES
 
             AssertValue(snapshot, UserFilterDimensions.Department, 103, GreekDepartment);
             AssertValue(snapshot, UserFilterDimensions.ForOrgType(1), 103, GreekOrgValue);
+            AssertValue(snapshot, UserFilterDimensions.PostalCode, 103, GreekPostalCode);
 
             var filter = UserFilterCompiler.Compile(
                 UserFilterCodec.Parse("[{\"d\":\"org:1\",\"v\":[\"" + GreekOrgValue + "\"]}]"), snapshot);
