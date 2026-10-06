@@ -8,7 +8,7 @@ import { loadTrackerUnlessRunning } from './TrackerPresence';
 // AITracker.js function. That's where we drive the AppInsights telemetry.
 declare function modernPageNav(webUrl: string, webTitle: string, siteUrl: string, listTitle?: string, listItemId?: number): void;
 
-const AITRACKER_MODERN_VERSION: string = "1.0.1.62";     // Keep in step with the version in config/package-solution.json
+const AITRACKER_MODERN_VERSION: string = "1.0.1.64";     // Keep in step with the version in config/package-solution.json
 const NAV_EVENT_DELAY_MS: number = 2000;
 
 declare global {
@@ -26,6 +26,8 @@ export default class AiTrackerModernApplicationCustomizer
   private readonly runtimeId: Guid = Guid.newGuid();
   private lastTrackedUrlFromSpfx: string = "";
   private aiTrackerLoaded: boolean = false;
+  private registeredSite: string | undefined = undefined;    // This instance's entry in _o365AnalyticsInfo.siteUrls
+  private disposed: boolean = false;
 
   // Debug URLs: use "gulp serve" with serve.json properties
   public override async onInit(): Promise<void> {
@@ -51,14 +53,19 @@ export default class AiTrackerModernApplicationCustomizer
 
     Logger.info(`[${this.runtimeId}]: SPFx solution init.`);
 
+    // This instance's site. Read it now: SharePoint updates the page context when it navigates, which it can do while this
+    // instance waits for AITracker below
+    const site: string = this.context.pageContext.site.absoluteUrl;
+
     // Check for _spoInsightsLoaded global variable to avoid double-load...
     const existingSitesLoaded = this.getSitesConfigFromWindow();
-    if (existingSitesLoaded.siteUrls.indexOf(this.context.pageContext.site.absoluteUrl) === -1) {
-      existingSitesLoaded.siteUrls.push(this.context.pageContext.site.absoluteUrl);
-      Logger.verbose(`[${this.runtimeId}]: Registered loaded for site ${this.context.pageContext.site.absoluteUrl}`);
+    if (existingSitesLoaded.siteUrls.indexOf(site) === -1) {
+      existingSitesLoaded.siteUrls.push(site);
+      this.registeredSite = site;
+      Logger.verbose(`[${this.runtimeId}]: Registered loaded for site ${site}`);
     }
     else {
-      Logger.warn(`[${this.runtimeId}]: Already loaded SPFx extension for site ${this.context.pageContext.site.absoluteUrl} with another instance. Extension installed twice?`);
+      Logger.warn(`[${this.runtimeId}]: Already loaded SPFx extension for site ${site} with another instance. Extension installed twice?`);
 
       // OnInit seems to fire twice, or maybe the extension is installed more than once. Make sure we continue only once.
       return;
@@ -71,7 +78,7 @@ export default class AiTrackerModernApplicationCustomizer
 
     // Insert AITracker into the page, giving it the AppInsights key from the extension properties
     Logger.info(`[${this.runtimeId}]: Injecting AITracker with connection-string (hash present).`);
-    let aiTrackerUrl: string = this.context.pageContext.site.absoluteUrl + "/SPOInsights/AITracker.js";
+    let aiTrackerUrl: string = site + "/SPOInsights/AITracker.js";
 
     // Append refresh token to AITracker.js url?
     if (this.properties.cacheToken) {
@@ -105,11 +112,17 @@ export default class AiTrackerModernApplicationCustomizer
       Logger.error(`[${this.runtimeId}]: Failed to load AITracker.js from ${aiTrackerUrl}: ${(e as Error).message}`);
     }
 
+    // SharePoint can dispose of this instance while it waits for AITracker, if it moves on. Then the next instance follows
+    if (this.disposed) {
+      Logger.verbose(`[${this.runtimeId}]: Disposed while AITracker.js loaded, so not following navigations.`);
+      return;
+    }
+
     // Wire-up page-changed SPFx event
     this.context.application.navigatedEvent.add(this, this.logNavigatedEvent);
 
     // Remember site for dispose event
-    this.lastSite = this.context.pageContext.site.absoluteUrl;
+    this.lastSite = site;
   }
 
   private logNavigatedEvent(_args: SPEventArgs): void {
@@ -185,21 +198,23 @@ export default class AiTrackerModernApplicationCustomizer
 
   // Clean-up
   protected override onDispose(): void {
+    this.disposed = true;
 
     if (this.lastSite) {
       Logger.info(`[${this.runtimeId}]: Disposing for ${this.lastSite}.`);
+      this.context.application.navigatedEvent.remove(this, this.logNavigatedEvent);
     }
     else {
-      Logger.verbose(`[${this.runtimeId}]: Disposing an instance that wasn't tracking.`);
-      return;
+      Logger.verbose(`[${this.runtimeId}]: Disposing an instance that wasn't following navigations.`);
     }
 
-    this.context.application.navigatedEvent.remove(this, this.logNavigatedEvent);
-
-    const existingSitesLoaded: SitesTrackedByExtension = this.getSitesConfigFromWindow();
-    const siteIndex = existingSitesLoaded.siteUrls.indexOf(this.lastSite);
-    if (siteIndex > -1) {
-      existingSitesLoaded.siteUrls.splice(siteIndex, 1);
+    // Unregister the site this instance registered, or the next instance for it takes itself for a duplicate and doesn't track
+    if (this.registeredSite) {
+      const existingSitesLoaded: SitesTrackedByExtension = this.getSitesConfigFromWindow();
+      const siteIndex = existingSitesLoaded.siteUrls.indexOf(this.registeredSite);
+      if (siteIndex > -1) {
+        existingSitesLoaded.siteUrls.splice(siteIndex, 1);
+      }
     }
   }
 }

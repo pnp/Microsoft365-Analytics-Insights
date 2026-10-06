@@ -21,10 +21,6 @@ export function trackerAlreadyRunning(w: Window): string | undefined {
   return undefined;
 }
 
-// The longest an instance of this extension waits for another's copy. A load that never finishes mustn't stop the next site
-// from loading its own.
-const MAX_WAIT_MS: number = 30000;
-
 /**
  * Loads this site's copy of AITracker.js with `load`, unless a copy is already tracking the page. Returns the version of the
  * copy found running, or undefined if this site's copy was loaded. Rejects if `load` does.
@@ -34,12 +30,14 @@ const MAX_WAIT_MS: number = 30000;
  * before 1.6.0 doesn't check for another, so it would start a second tracker. Such a copy only shows itself once it has
  * tracked the page, just after the page's load event. So when a copy shows nothing while the page is still loading, the
  * next instance waits until then; if it still shows nothing, it couldn't start, and the next instance loads its own.
+ *
+ * The wait has no time limit of its own. SharePoint's loader gives up on a script after 90 seconds (RequireJS waitSeconds),
+ * which ends it; a shorter limit here would load the next copy while the first could still arrive.
  */
-export async function loadTrackerUnlessRunning(w: Window, load: () => Promise<unknown>, maxWaitMs: number = MAX_WAIT_MS): Promise<string | undefined> {
+export async function loadTrackerUnlessRunning(w: Window, load: () => Promise<unknown>): Promise<string | undefined> {
   const page = w as unknown as WindowWithTracker;
-  const waitUntil = Date.now() + maxWaitMs;
-  while (page.spoInsightsAITrackerLoading && Date.now() < waitUntil) {
-    await settledOrTimedOut(w, page.spoInsightsAITrackerLoading, waitUntil - Date.now());
+  while (page.spoInsightsAITrackerLoading) {
+    await page.spoInsightsAITrackerLoading;
   }
 
   const running = trackerAlreadyRunning(w);
@@ -69,15 +67,4 @@ function untilTrackerWouldShow(w: Window): Promise<void> {
     return Promise.resolve();
   }
   return new Promise<void>(resolve => w.addEventListener("load", () => w.setTimeout(resolve, 0), { once: true }));
-}
-
-function settledOrTimedOut(w: Window, pending: Promise<void>, ms: number): Promise<void> {
-  return new Promise<void>(resolve => {
-    const timer = w.setTimeout(resolve, ms);
-    const done = (): void => {
-      w.clearTimeout(timer);
-      resolve();
-    };
-    pending.then(done, done);
-  });
 }

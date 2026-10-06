@@ -35,8 +35,7 @@ function fakePage(readyState: string): IFakePage {
         loadListeners.push(listener);
       }
     },
-    setTimeout: (handler: () => void, ms: number): ReturnType<typeof setTimeout> => setTimeout(handler, ms),
-    clearTimeout: (timer: ReturnType<typeof setTimeout>): void => clearTimeout(timer)
+    setTimeout: (handler: () => void, ms: number): ReturnType<typeof setTimeout> => setTimeout(handler, ms)
   };
   return {
     window: state as unknown as Window,
@@ -77,6 +76,13 @@ function scriptLoad(): IScriptLoad {
 // Lets pending promise callbacks and zero-length timeouts run
 async function settle(): Promise<void> {
   await new Promise<void>(resolve => setTimeout(resolve, 20));
+}
+
+// Lets pending promise callbacks run, without timers (for fake timers)
+async function flushPromises(): Promise<void> {
+  for (let i = 0; i < 20; i++) {
+    await Promise.resolve();
+  }
 }
 
 describe('loadTrackerUnlessRunning', () => {
@@ -206,25 +212,30 @@ describe('loadTrackerUnlessRunning', () => {
     expect(third.load).not.toHaveBeenCalled();
   });
 
-  it('stops waiting for a load that never finishes', async () => {
-    const page = fakePage('complete');
-    const stuck = scriptLoad();
-    const next = scriptLoad();
-    const stuckResult = loadTrackerUnlessRunning(page.window, stuck.load);
-    const nextResult = loadTrackerUnlessRunning(page.window, next.load, 50);
-    await settle();
-    expect(next.load).not.toHaveBeenCalled();
+  it('keeps waiting for a copy still on its way however long it takes, until the loader gives up on it', async () => {
+    // A copy can still arrive and run until the loader gives up on it (after 90 s), so giving up any sooner here could put
+    // a second tracker in the page
+    jest.useFakeTimers();
+    try {
+      const page = fakePage('complete');
+      const slow = scriptLoad();
+      const next = scriptLoad();
+      const slowResult = loadTrackerUnlessRunning(page.window, slow.load);
+      const nextResult = loadTrackerUnlessRunning(page.window, next.load);
 
-    await new Promise<void>(resolve => setTimeout(resolve, 100));
-    expect(next.load).toHaveBeenCalledTimes(1);
+      jest.advanceTimersByTime(85000);
+      await flushPromises();
+      expect(next.load).not.toHaveBeenCalled();
 
-    // The stuck load finishing late leaves the page to the copy now loading
-    stuck.arrive();
-    expect(await stuckResult).toBeUndefined();
-    await settle();
-    expect(page.state.spoInsightsAITrackerLoading).toBeDefined();
-
-    next.arrive(() => { page.state.spoInsightsAITrackerVersion = '1.6.3'; });
-    expect(await nextResult).toBeUndefined();
+      slow.fail();
+      await expect(slowResult).rejects.toThrow('404 Not Found');
+      await flushPromises();
+      expect(next.load).toHaveBeenCalledTimes(1);
+      next.arrive(() => { page.state.spoInsightsAITrackerVersion = '1.6.3'; });
+      expect(await nextResult).toBeUndefined();
+    }
+    finally {
+      jest.useRealTimers();
+    }
   });
 });
