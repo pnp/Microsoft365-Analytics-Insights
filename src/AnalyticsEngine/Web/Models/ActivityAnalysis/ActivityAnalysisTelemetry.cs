@@ -17,7 +17,8 @@ namespace Web.AnalyticsWeb.Models.ActivityAnalysis
     /// it without turning on SQL logging.
     /// </summary>
     /// <remarks>
-    /// Facts only: the stage, how long it took, how many weeks and people it covered, and on failure the exception's type
+    /// Facts only: the stage, how long it took, how many weeks and people it read (for a weekly series, the matching
+    /// people - or everybody else, when most match), and on failure the exception's type
     /// and SQL error number. Never a name, an id, a filter or a SQL message. Telemetry never fails a load.
     /// <code>
     /// customEvents | where name == "ActivityAnalysisLoad"

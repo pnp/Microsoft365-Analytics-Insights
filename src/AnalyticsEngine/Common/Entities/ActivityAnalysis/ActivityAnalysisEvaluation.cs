@@ -109,6 +109,30 @@ namespace Common.Entities.ActivityAnalysis
             return ids;
         }
 
+        /// <summary>
+        /// The user ids of everyone else the model holds, ascending - outside the administrator's filter as well as
+        /// outside the reader's conditions. With <see cref="MatchingUserIds"/> they make up every person in the model.
+        /// </summary>
+        public int[] UnmatchedUserIds()
+        {
+            var ids = new int[Model.PeopleCount - _matching.Length];
+            var next = 0;
+            var m = 0;
+            for (var person = 0; person < Model.PeopleCount; person++)
+            {
+                if (m < _matching.Length && _matching[m] == person)
+                {
+                    m++;
+                    continue;
+                }
+
+                ids[next++] = Model.UserIdAt(person);
+            }
+
+            Array.Sort(ids);
+            return ids;
+        }
+
         internal static ActivityAnalysisEvaluation Run(
             ActivityAnalysisReadModel model, ActivityAnalysisQuery query, ActivityAnalysisAudience audience,
             CancellationToken cancellationToken)

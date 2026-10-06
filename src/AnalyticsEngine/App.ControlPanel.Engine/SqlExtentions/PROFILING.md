@@ -103,7 +103,9 @@ read those tables; they are internal helpers of the compile pipeline.
   (which SQL Server evaluates as two passes over the period's rows of the clustered index) into an
   in-memory read model (per-person totals + the population's weekly figures), cached and shared by every
   reader; the weekly series of a filtered set of people is a second query that joins a `#people` temp
-  table filled from one JSON parameter. It reads `sys.columns` on every load, so a metric column an older
+  table filled from one JSON parameter. When most people match (a licence most staff hold, "at least one
+  Teams call"), that query reads everybody else instead and their figures are taken from the population's,
+  so it never reads more than half the period's people. It reads `sys.columns` on every load, so a metric column an older
   install lacks is reported as unavailable rather than failing the query. It **never** reads
   `profiling.ActivitiesWeekly` - the same data one row per user × week × metric, zeros included - and it
   adds no index: the read of each period is cached instead (15 minutes idle, at most two periods).

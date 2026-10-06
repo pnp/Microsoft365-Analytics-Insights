@@ -57,6 +57,26 @@ namespace Common.Entities.ActivityAnalysis
             _sums[slot] += sum;
             _activePeople[slot] += activePeople;
         }
+
+        /// <summary>
+        /// The figures of the people in <paramref name="whole"/> who are not in <paramref name="part"/>: a week's sum and
+        /// its count of active people both add up across separate sets of people. Never below zero.
+        /// </summary>
+        public static ActivityAnalysisWeeklyTotals Except(ActivityAnalysisWeeklyTotals whole, ActivityAnalysisWeeklyTotals part)
+        {
+            if (whole == null) throw new ArgumentNullException(nameof(whole));
+            if (part == null) throw new ArgumentNullException(nameof(part));
+            if (whole.Weeks != part.Weeks) throw new ArgumentException("Both series must cover the same weeks.", nameof(part));
+
+            var result = new ActivityAnalysisWeeklyTotals(whole.Weeks);
+            for (var slot = 0; slot < result._sums.Length; slot++)
+            {
+                result._sums[slot] = Math.Max(0L, whole._sums[slot] - part._sums[slot]);
+                result._activePeople[slot] = Math.Max(0, whole._activePeople[slot] - part._activePeople[slot]);
+            }
+
+            return result;
+        }
     }
 
     /// <summary>
@@ -92,7 +112,7 @@ namespace Common.Entities.ActivityAnalysis
 
         internal ActivityAnalysisReadModel(
             ActivityAnalysisPeriod period, DateTime loadedUtc, bool[] available, int[][] chunks, int[] userIds,
-            ActivityAnalysisWeeklyTotals populationWeeks, List<ActivityAnalysisLicence> licences,
+            ActivityAnalysisWeeklyTotals populationWeeks, bool populationWeeksExact, List<ActivityAnalysisLicence> licences,
             int[] licenceStart, int[] licenceIndexes)
         {
             Id = Guid.NewGuid().ToString("N");
@@ -102,6 +122,7 @@ namespace Common.Entities.ActivityAnalysis
             _chunks = chunks;
             _userIds = userIds;
             PopulationWeeks = populationWeeks;
+            PopulationWeeksExact = populationWeeksExact;
             Licences = licences.AsReadOnly();
             _licenceStart = licenceStart;
             _licenceIndexes = licenceIndexes;
@@ -137,6 +158,12 @@ namespace Common.Entities.ActivityAnalysis
 
         /// <summary>Every metric's weekly total over all <see cref="PeopleCount"/> people - the unfiltered series.</summary>
         public ActivityAnalysisWeeklyTotals PopulationWeeks { get; }
+
+        /// <summary>
+        /// True when <see cref="PopulationWeeks"/> counts exactly the people the model holds - nobody counted in the weeks
+        /// was left out of the people - so one set's weekly figures are everyone's less everybody else's.
+        /// </summary>
+        public bool PopulationWeeksExact { get; }
 
         /// <summary>The metrics whose columns existed when the period was read, in catalogue order.</summary>
         public IReadOnlyList<ActivityAnalysisMetric> AvailableMetrics { get; }
@@ -227,6 +254,7 @@ namespace Common.Entities.ActivityAnalysis
         private readonly List<ActivityAnalysisLicence> _licences = new List<ActivityAnalysisLicence>();
         private readonly Dictionary<int, int> _licenceIndexById = new Dictionary<int, int>();
         private readonly List<long> _holdings = new List<long>();
+        private int _peopleLeftOut;
 
         public ActivityAnalysisReadModelBuilder(ActivityAnalysisPeriod period, IEnumerable<ActivityAnalysisMetric> availableMetrics)
         {
@@ -257,6 +285,12 @@ namespace Common.Entities.ActivityAnalysis
             _personByUserId.Add(userId, person);
             return person;
         }
+
+        /// <summary>
+        /// Records that somebody counted in the weekly figures could not be added as a person, so those figures are no
+        /// longer exactly the people's (<see cref="ActivityAnalysisReadModel.PopulationWeeksExact"/>).
+        /// </summary>
+        public void LeaveOutPerson() => _peopleLeftOut++;
 
         /// <summary>Adds to a person's total of one metric, saturating. Ignored for a metric whose column does not exist.</summary>
         public void AddTotal(int person, ActivityAnalysisMetric metric, long value)
@@ -325,7 +359,7 @@ namespace Common.Entities.ActivityAnalysis
 
             return new ActivityAnalysisReadModel(
                 Period, loadedUtc, (bool[])_available.Clone(), _chunks.ToArray(), _userIds.ToArray(), Weeks,
-                _licences, start, indexes.ToArray());
+                _peopleLeftOut == 0, _licences, start, indexes.ToArray());
         }
 
         private int LicenceIndex(int id)

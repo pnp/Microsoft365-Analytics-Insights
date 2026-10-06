@@ -324,7 +324,26 @@ namespace Common.Entities.ActivityAnalysis
             var ids = evaluation.MatchingUserIds();
             var key = _scope + "\n" + evaluation.Model.Id + "\n" + ids.Length + ":" + Hash(ids);
             return _caches.WeeklyTotals.GetAsync(
-                key, token => _source.LoadWeeklyTotalsAsync(evaluation.Model, ids, token), cancellationToken);
+                key, token => LoadWeeklyTotalsAsync(evaluation, ids, token), cancellationToken);
+        }
+
+        /// <summary>
+        /// Reads the smaller side. When most of the model's people match - a licence most staff hold, "at least one
+        /// Teams call" - reading them would send nearly every id and aggregate nearly every row, so it reads everybody
+        /// else and takes their figures from the population's, which the model already holds.
+        /// </summary>
+        private async Task<ActivityAnalysisWeeklyTotals> LoadWeeklyTotalsAsync(
+            ActivityAnalysisEvaluation evaluation, int[] matching, CancellationToken cancellationToken)
+        {
+            var model = evaluation.Model;
+            if (!model.PopulationWeeksExact || matching.Length <= model.PeopleCount / 2)
+            {
+                return await _source.LoadWeeklyTotalsAsync(model, matching, cancellationToken).ConfigureAwait(false);
+            }
+
+            var others = await _source.LoadWeeklyTotalsAsync(model, evaluation.UnmatchedUserIds(), cancellationToken)
+                .ConfigureAwait(false);
+            return ActivityAnalysisWeeklyTotals.Except(model.PopulationWeeks, others);
         }
 
         /// <summary>The report for a resolved query and one reader.</summary>

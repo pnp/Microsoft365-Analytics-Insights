@@ -109,9 +109,21 @@ namespace Common.Entities.ActivityAnalysis
                             }
                             else
                             {
-                                if (reader.IsDBNull(1)) continue;
+                                // Somebody the weekly figures counted but the people cannot hold: the figures are no
+                                // longer exactly the people's, so a filtered series is read rather than worked out.
+                                if (reader.IsDBNull(1))
+                                {
+                                    builder.LeaveOutPerson();
+                                    continue;
+                                }
+
                                 var userId = reader.GetInt64(1);
-                                if (userId < int.MinValue || userId > int.MaxValue) continue;
+                                if (userId < int.MinValue || userId > int.MaxValue)
+                                {
+                                    builder.LeaveOutPerson();
+                                    continue;
+                                }
+
                                 var person = builder.AddPerson((int)userId);
                                 for (var i = 0; i < count; i++)
                                 {

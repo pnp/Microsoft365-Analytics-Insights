@@ -25,6 +25,12 @@ namespace Tests.UnitTests
         /// <summary>When set, the schema returned instead of one describing the rows.</summary>
         public ActivityAnalysisSchema Schema { get; set; }
 
+        /// <summary>
+        /// When set, the read model is built as if somebody counted in its weekly figures could not be held as a person -
+        /// the case <see cref="ActivityAnalysisReadModelBuilder.LeaveOutPerson"/> records.
+        /// </summary>
+        public bool LeaveOutSomebody { get; set; }
+
         /// <summary>Awaited at the start of every read-model load - to hold one open.</summary>
         public Func<Task> BeforeReadModel { get; set; }
 
@@ -113,6 +119,7 @@ namespace Tests.UnitTests
 
             foreach (var licence in _licenceTypes) builder.AddLicenceType(licence.Id, licence.Name, licence.SkuId);
             foreach (var holding in _holdings) builder.AddHolding(holding.Key, holding.Value);
+            if (LeaveOutSomebody) builder.LeaveOutPerson();
             return builder.Build(loadedUtc ?? new DateTime(2026, 2, 9, 8, 30, 15, DateTimeKind.Utc));
         }
 

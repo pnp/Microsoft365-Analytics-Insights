@@ -423,6 +423,87 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public async Task FilteredSeries_WhenMostPeopleMatch_ReadsEverybodyElse_AndTakesThemFromThePopulation()
+        {
+            var source = Source();
+            var service = new ActivityAnalysisService(source, "synthetic", new ActivityAnalysisCaches());
+
+            // Eight of the ten people in the period hold licence 7.
+            var report = await service.GetReportAsync(Query(licences: "7"), Audience(true), null, CancellationToken.None);
+
+            Assert.AreEqual(8, report.MatchingPeople);
+            CollectionAssert.AreEqual(new[] { 4, 6 }, source.WeeklyTotalsRequests.Single(), "Only the two who do not match are read.");
+            var calls = report.Series.Single(s => s.Metric == "teams.calls");
+            CollectionAssert.AreEqual(new long[] { 4, 3, 6, 9, 4 }, calls.Sum);
+            CollectionAssert.AreEqual(new[] { 2, 2, 1, 1, 1 }, calls.ActivePeople);
+            var meetings = report.Series.Single(s => s.Metric == "teams.meetings");
+            CollectionAssert.AreEqual(new long[] { 0, 5, 0, 0, 2 }, meetings.Sum);
+            CollectionAssert.AreEqual(new[] { 0, 1, 0, 0, 1 }, meetings.ActivePeople);
+            AssertSameSeries(Report(Model(), Query(licences: "7"), Audience(true)), report);
+        }
+
+        [TestMethod]
+        public async Task FilteredSeries_WorkedOutFromTheOthers_CountsThoseOutsideTheAdministratorsFilterAsOthers()
+        {
+            var source = Source();
+            var service = new ActivityAnalysisService(source, "synthetic", new ActivityAnalysisCaches());
+
+            // The administrator admits Contoso's seven people; the reader asks for nothing more.
+            var audience = Audience(true, population: "[{\"d\":\"companyName\",\"v\":[\"Contoso\"]}]");
+            var report = await service.GetReportAsync(Query(), audience, null, CancellationToken.None);
+
+            Assert.AreEqual(7, report.MatchingPeople);
+            CollectionAssert.AreEqual(new[] { 5, 7, 10 }, source.WeeklyTotalsRequests.Single(),
+                "Fabrikam's two and the person missing from the directory.");
+            CollectionAssert.AreEqual(new long[] { 6, 3, 6, 7, 0 }, report.Series.Single(s => s.Metric == "teams.calls").Sum);
+            AssertSameSeries(Report(Model(), Query(), audience), report);
+        }
+
+        [TestMethod]
+        public async Task FilteredSeries_IsReadDirectly_WhenThePopulationsWeeksCountSomebodyThePeopleDoNot()
+        {
+            var source = Source();
+            source.LeaveOutSomebody = true;
+            var service = new ActivityAnalysisService(source, "synthetic", new ActivityAnalysisCaches());
+
+            var report = await service.GetReportAsync(Query(licences: "7"), Audience(true), null, CancellationToken.None);
+
+            CollectionAssert.AreEqual(new[] { 1, 2, 3, 5, 7, 8, 9, 10 }, source.WeeklyTotalsRequests.Single(),
+                "Everyone's figures less the others' would include the person left out.");
+            CollectionAssert.AreEqual(new long[] { 4, 3, 6, 9, 4 }, report.Series.Single(s => s.Metric == "teams.calls").Sum);
+        }
+
+        [TestMethod]
+        public void WeeklyTotals_Except_TakesAwaySlotBySlot_AndNeverGoesBelowZero()
+        {
+            var whole = new ActivityAnalysisWeeklyTotals(2);
+            whole.Add(0, 3, 10, 4);
+            whole.Add(1, 3, 5, 2);
+            var part = new ActivityAnalysisWeeklyTotals(2);
+            part.Add(0, 3, 4, 1);
+            part.Add(1, 3, 7, 3);
+
+            var rest = ActivityAnalysisWeeklyTotals.Except(whole, part);
+
+            Assert.AreEqual(6L, rest.SumOf(0, 3));
+            Assert.AreEqual(3, rest.ActivePeopleOf(0, 3));
+            Assert.AreEqual(0L, rest.SumOf(1, 3), "A week rewritten between the two reads is never negative.");
+            Assert.AreEqual(0, rest.ActivePeopleOf(1, 3));
+            Assert.ThrowsException<ArgumentException>(() => ActivityAnalysisWeeklyTotals.Except(whole, new ActivityAnalysisWeeklyTotals(3)));
+        }
+
+        private static void AssertSameSeries(ActivityAnalysisReport expected, ActivityAnalysisReport actual)
+        {
+            Assert.AreEqual(expected.Series.Count, actual.Series.Count);
+            for (var i = 0; i < expected.Series.Count; i++)
+            {
+                Assert.AreEqual(expected.Series[i].Metric, actual.Series[i].Metric);
+                CollectionAssert.AreEqual(expected.Series[i].Sum, actual.Series[i].Sum, expected.Series[i].Metric);
+                CollectionAssert.AreEqual(expected.Series[i].ActivePeople, actual.Series[i].ActivePeople, expected.Series[i].Metric);
+            }
+        }
+
+        [TestMethod]
         public void FilteredSeries_MustBeSupplied()
         {
             var evaluation = Model().Evaluate(Query(), Audience(true, userFilter: "[{\"d\":\"department\",\"v\":[\"Sales\"]}]"));
