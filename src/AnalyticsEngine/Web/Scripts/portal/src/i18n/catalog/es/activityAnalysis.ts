@@ -194,6 +194,7 @@ const activityAnalysis: Record<keyof typeof en, string> = {
   'activityAnalysis.error.busy': 'Ahora mismo se está cargando otro periodo de actividad. Inténtelo de nuevo en unos segundos.',
   'activityAnalysis.error.forbidden': 'Se ha denegado este análisis de actividad para su cuenta.',
   'activityAnalysis.error.badRequest': 'La solicitud no era válida. Vuelva a cargar la página e inténtelo de nuevo.',
+  'activityAnalysis.error.failed': 'No se pudo preparar el análisis de actividad. El error ha quedado registrado; inténtelo de nuevo en breve.',
 
   'activityAnalysis.category.teams': 'Teams',
   'activityAnalysis.category.outlook': 'Outlook',

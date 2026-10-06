@@ -194,6 +194,7 @@ export const activityAnalysis = {
   'activityAnalysis.error.busy': 'Another period of activity is being loaded right now. Try again in a few seconds.',
   'activityAnalysis.error.forbidden': 'This activity analysis was refused for your account.',
   'activityAnalysis.error.badRequest': 'The request wasn’t valid. Reload the page and try again.',
+  'activityAnalysis.error.failed': 'The activity analysis couldn’t be prepared. The failure has been logged; try again shortly.',
 
   'activityAnalysis.category.teams': 'Teams',
   'activityAnalysis.category.outlook': 'Outlook',

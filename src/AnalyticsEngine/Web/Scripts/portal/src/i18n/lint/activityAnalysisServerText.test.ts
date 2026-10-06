@@ -57,6 +57,18 @@ function staleCodes(source: string): string[] {
   return [...ACTIVITY_ANALYSIS_ERROR_KEYS.keys(), ...CATEGORIES, ...REASONS].filter((code) => !source.includes(`"${code}"`));
 }
 
+/**
+ * Error codes the server sends that the portal has no words for: every constant of
+ * `ActivityAnalysisErrorCodes`, and the controller's own catch-all `FailedCode`. Without this, a new
+ * refusal would reach a Spanish reader as the generic "the request wasn't valid".
+ */
+function unwordedCodes(source: string): string[] {
+  const block = /class ActivityAnalysisErrorCodes\s*\{([\s\S]*?)\}/.exec(source)?.[1] ?? '';
+  const codes = [...block.matchAll(/=\s*"([^"]+)"/g)].map((m) => m[1]);
+  const failed = /const string FailedCode\s*=\s*"([^"]+)"/.exec(source)?.[1];
+  return [...codes, ...(failed ? [failed] : [])].filter((code) => !ACTIVITY_ANALYSIS_ERROR_KEYS.has(code));
+}
+
 describe.skipIf(!SERVER_PRESENT)('Activity analysis keys the server sends', () => {
   const source = SERVER_PRESENT ? serverSource() : '';
 
@@ -70,6 +82,11 @@ describe.skipIf(!SERVER_PRESENT)('Activity analysis keys the server sends', () =
 
   it('words only codes, categories and reasons the server still sends', () => {
     expect(staleCodes(source)).toEqual([]);
+  });
+
+  it('words every error code the server can send', () => {
+    expect(source, 'ActivityAnalysisErrorCodes not found').toContain('class ActivityAnalysisErrorCodes');
+    expect(unwordedCodes(source), 'Map it in ACTIVITY_ANALYSIS_ERROR_KEYS with en and es text').toEqual([]);
   });
 });
 
@@ -99,6 +116,17 @@ describe('Activity analysis key checks', () => {
     it('reports a code the portal words but the source no longer sends', () => {
       expect(staleCodes(sample)).toContain('invalidMetric');
       expect(staleCodes(sample)).not.toContain('invalidPeriod');
+    });
+
+    it('reports a code the server sends that the portal does not word', () => {
+      const codes = `
+        public static class ActivityAnalysisErrorCodes
+        {
+            public const string InvalidPeriod = "invalidPeriod";
+            public const string Holograms = "hologramsRefused";
+        }
+        internal const string FailedCode = "activityAnalysisFailed";`;
+      expect(unwordedCodes(codes)).toEqual(['hologramsRefused']);
     });
   });
 });

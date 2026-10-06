@@ -52,6 +52,7 @@ export const ACTIVITY_ANALYSIS_ERROR_KEYS: ReadonlyMap<string, TranslationKey> =
   ['invalidFilter', 'activityAnalysis.error.invalidFilter'],
   ['notInstalled', 'activityAnalysis.error.notInstalled'],
   ['activityAnalysisBusy', 'activityAnalysis.error.busy'],
+  ['activityAnalysisFailed', 'activityAnalysis.error.failed'],
 ]);
 
 /** The server's code for "another load is in progress"; answered with a Retry-After. */
