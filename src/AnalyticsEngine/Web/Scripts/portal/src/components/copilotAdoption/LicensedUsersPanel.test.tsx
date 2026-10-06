@@ -226,6 +226,85 @@ describe('LicensedUsersPanel source reconciliation', () => {
     expect(await screen.findByText('idle@contoso.com')).toBeInTheDocument();
     expect(within(screen.getByRole('table')).getByText('Probable reclaim')).toBeInTheDocument();
   });
+
+  it('does not repeat the action under its own badge when the reclaim tier is the action', async () => {
+    vi.mocked(fetchLicensedUsers).mockResolvedValue({
+      total: 3,
+      skip: 0,
+      take: 50,
+      warnings: [],
+      rows: [
+        row({
+          userId: 1,
+          userPrincipalName: 'starter@contoso.com',
+          band: AdoptionBand.NeverUsed,
+          reclaimEligibility: 'review',
+          recommendedActionCode: 'review',
+          recommendedActionLabel: 'Review before reclaim',
+        }),
+        row({
+          userId: 2,
+          userPrincipalName: 'dormant@contoso.com',
+          band: AdoptionBand.Dormant,
+          reclaimEligibility: 'review',
+          recommendedActionCode: 'reengage',
+          recommendedActionLabel: 'Win back',
+        }),
+        row({
+          userId: 3,
+          userPrincipalName: 'excluded@contoso.com',
+          reclaimEligibility: 'excluded',
+          reclaimExclusionReason: 'Parental leave',
+          reclaimExclusionExpired: true,
+          recommendedActionCode: 'excluded',
+          recommendedActionLabel: 'Excluded from reclaim',
+        }),
+      ],
+    });
+
+    renderWithProvider(<LicensedUsersPanel windowDays={28} filterOptions={null} actionPlan={[]} options={OPTIONS} />);
+
+    const starter = within((await screen.findByText('starter@contoso.com')).closest('tr')!);
+    expect(starter.getAllByText('Review before reclaim')).toHaveLength(1);
+
+    // A different action still gets the tier that qualifies it.
+    const dormant = within(screen.getByText('dormant@contoso.com').closest('tr')!);
+    expect(dormant.getByText('Win back')).toBeInTheDocument();
+    expect(dormant.getByText('Review before reclaim')).toBeInTheDocument();
+
+    // The badge already says "excluded"; the line under it says what the badge cannot.
+    const excluded = within(screen.getByText('excluded@contoso.com').closest('tr')!);
+    expect(excluded.getAllByText('Excluded from reclaim')).toHaveLength(1);
+    expect(excluded.getByText('exclusion expired')).toBeInTheDocument();
+  });
+
+  it('says "Revisar antes de recuperar" once, not twice, on a Spanish page', async () => {
+    vi.mocked(fetchLicensedUsers).mockResolvedValue({
+      total: 1,
+      skip: 0,
+      take: 50,
+      warnings: [],
+      rows: [
+        row({
+          userPrincipalName: 'starter@contoso.com',
+          band: AdoptionBand.NeverUsed,
+          reclaimEligibility: 'review',
+          recommendedActionCode: 'review',
+          recommendedActionLabel: 'Review before reclaim',
+        }),
+      ],
+    });
+
+    renderWithProvider(<LicensedUsersPanel windowDays={28} filterOptions={null} actionPlan={[]} options={OPTIONS} />, { language: 'es' });
+
+    // The Spanish catalog arrives after the first render, and the list reloads when it does, so the row
+    // is looked up afresh on every attempt rather than held from before the switch.
+    await waitFor(() => {
+      const starter = within(screen.getByText('starter@contoso.com').closest('tr')!);
+      expect(starter.getAllByText('Revisar antes de recuperar')).toHaveLength(1);
+      expect(starter.queryByText('Review before reclaim')).toBeNull();
+    });
+  });
 });
 
 // Rendering a hundred-odd rows through Fluent in jsdom takes seconds, and a CI runner is slower.

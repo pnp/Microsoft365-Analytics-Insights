@@ -47,6 +47,10 @@ const useStyles = makeStyles({
   /**
    * For a table that must fit the page: a long label - and some translations of these are long - breaks
    * onto a second line instead of widening its column. A badge has a fixed height, so it grows with it.
+   *
+   * The corners are capped at half the one-line height, so a one-line badge is still exactly a pill.
+   * Fluent's circular radius would round a two-line badge into an oval whose curved ends cut into
+   * its first and last letters, which is how "Revisar antes de recuperar" looked in Spanish.
    */
   badgeWrap: {
     whiteSpace: 'normal',
@@ -56,6 +60,7 @@ const useStyles = makeStyles({
     paddingTop: '1px',
     paddingBottom: '1px',
     textAlign: 'start',
+    borderRadius: '8px',
   },
   count: {
     fontVariantNumeric: 'tabular-nums',
