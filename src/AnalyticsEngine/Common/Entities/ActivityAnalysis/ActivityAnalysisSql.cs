@@ -9,7 +9,7 @@ namespace Common.Entities.ActivityAnalysis
     /// </summary>
     internal static class ActivityAnalysisSql
     {
-        /// <summary>Generous for one scan of a period of the weekly table on a large tenant, but bounded.</summary>
+        /// <summary>Generous for reading a period of the weekly table on a large tenant, but bounded.</summary>
         internal const int CommandTimeoutSeconds = 180;
 
         /// <summary>
@@ -42,13 +42,16 @@ BEGIN
 END";
 
         /// <summary>
-        /// One period, in one round trip: every person's totals and the population's weekly figures from a single
-        /// scan of the weekly table, then the licence types and who holds them.
+        /// One period, in one round trip: every person's totals and the population's weekly figures from one
+        /// <c>GROUPING SETS</c> statement over the weekly table, then the licence types and who holds them.
         /// </summary>
         /// <remarks>
-        /// <para><b>One scan, two groupings.</b> <c>GROUPING SETS ((user_id), (date))</c> aggregates the period's rows
-        /// once into a row per person (<c>is_week = 0</c>, the <c>p</c> columns) and a row per week (<c>is_week = 1</c>,
-        /// the <c>w</c> and <c>a</c> columns). Each grouping's columns are NULL on the other's rows.</para>
+        /// <para><b>One statement, two groupings.</b> <c>GROUPING SETS ((user_id), (date))</c> aggregates the period's
+        /// rows into a row per person (<c>is_week = 0</c>, the <c>p</c> columns) and a row per week (<c>is_week = 1</c>,
+        /// the <c>w</c> and <c>a</c> columns). Each grouping's columns are NULL on the other's rows. Measured on a
+        /// 940,000-row synthetic table, SQL Server runs it as two passes over the clustered index joined by a
+        /// Concatenation (logical reads are twice the table's pages) and within about 15% of two plain
+        /// <c>GROUP BY</c> statements; the weekly hash aggregate - 116 aggregates per row - is most of the cost.</para>
         /// <para><b>Small on the wire.</b> A person's totals are sent as <c>int</c>, saturated - no person's total over two
         /// years approaches 2^31 - and a zero total as NULL, which costs one byte rather than nine. Most people have no
         /// activity in most of the 58 metrics, so this is most of the data.</para>

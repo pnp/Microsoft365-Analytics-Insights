@@ -113,7 +113,7 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
-        public async Task AModel_ExpiresAfterFifteenIdleMinutes_AndIsReReadHourlyEvenInUse()
+        public async Task AResult_ExpiresAfterFifteenIdleMinutes_AndAtItsMaximumAgeWhenOneIsSet()
         {
             var cache = Cache(maximumAge: TimeSpan.FromHours(1));
             var loads = 0;
@@ -163,13 +163,48 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
-        public void TheSharedCaches_HoldTwoPeriods_AndOneLoadsAtATime()
+        public async Task TheSharedCaches_HoldTwoPeriods_LoadOneAtATime_AndKeepAPeriodInUse()
         {
             Assert.AreEqual(2, ActivityAnalysisCaches.ReadModelCapacity);
             Assert.AreEqual(64, ActivityAnalysisCaches.WeeklyTotalsCapacity);
             Assert.AreEqual(TimeSpan.FromMinutes(15), ActivityAnalysisCaches.IdleLifetime);
             Assert.AreEqual(TimeSpan.FromSeconds(90), ActivityAnalysisCaches.LoadWait);
             Assert.AreEqual(TimeSpan.FromMinutes(5), ActivityAnalysisCaches.SchemaLifetime);
+
+            var caches = new ActivityAnalysisCaches(() => _now);
+            var loads = 0;
+            Func<CancellationToken, Task<ActivityAnalysisReadModel>> load = _ =>
+            {
+                Interlocked.Increment(ref loads);
+                return Task.FromResult(new ActivityAnalysisFakeSource().Build(
+                    ActivityAnalysisPeriod.Create(new DateTime(2026, 1, 5), new DateTime(2026, 1, 5))));
+            };
+
+            for (var i = 0; i < 13; i++)
+            {
+                await caches.ReadModels.GetAsync("period", load, CancellationToken.None);
+                _now = _now.AddMinutes(10);
+            }
+
+            Assert.AreEqual(1, loads, "Two hours in constant use: the weeks it holds never change, so it is never re-read.");
+            _now = _now.AddMinutes(16);
+            await caches.ReadModels.GetAsync("period", load, CancellationToken.None);
+            Assert.AreEqual(2, loads, "A quarter of an hour unused, and it is gone.");
+
+            var schemaLoads = 0;
+            Func<CancellationToken, Task<ActivityAnalysisSchema>> readSchema = _ =>
+            {
+                Interlocked.Increment(ref schemaLoads);
+                return Task.FromResult(ActivityAnalysisSchema.Complete(null, null));
+            };
+
+            for (var i = 0; i < 4; i++)
+            {
+                await caches.Schemas.GetAsync("scope", readSchema, CancellationToken.None);
+                _now = _now.AddMinutes(2);
+            }
+
+            Assert.AreEqual(2, schemaLoads, "The availability is re-read every five minutes, in use or not.");
         }
     }
 

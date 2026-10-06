@@ -39,7 +39,7 @@ namespace Common.Entities.ActivityAnalysis
     /// <remarks>
     /// Never <c>profiling.ActivitiesWeekly</c>: that is the same data one row per user, week and metric - zeros included,
     /// some 600 million rows a year at 200,000 users - which the wide table answers in a fraction of the reads.
-    /// No new index: the period is read with one scan (<see cref="ActivityAnalysisSql.BuildReadModel"/>), cached, and
+    /// No new index: the period is read with one statement (<see cref="ActivityAnalysisSql.BuildReadModel"/>), cached, and
     /// shared by every reader.
     /// </remarks>
     public sealed class SqlActivityAnalysisSource : IActivityAnalysisSource

@@ -85,7 +85,7 @@ flowchart LR
   end
   F --> H[External Power BI dashboards]
   G --> H
-  F -->|ActivitiesWeeklyColumns + profiling.users,<br/>one scan per period, cached| J[ActivityAnalysisAPIController<br/>portal Activity analysis page]
+  F -->|ActivitiesWeeklyColumns + profiling.users,<br/>one statement per period, cached| J[ActivityAnalysisAPIController<br/>portal Activity analysis page]
   F -. freshness only .-> I[ProfilingStatusAPIController<br/>Aggregation_Status.ps1]
   G -. freshness only .-> I
 ```
@@ -99,13 +99,14 @@ read those tables; they are internal helpers of the compile pipeline.
 - **The web app's Activity analysis page** (`Web/Controllers/ActivityAnalysisAPIController.cs`,
   `Common/Entities/ActivityAnalysis/*`) reads the aggregated values: `profiling.ActivitiesWeeklyColumns`
   joined to `profiling.users`, plus `dbo.license_types` / `dbo.user_license_type_lookups` for the
-  licence filter. A period is read with **one** `GROUP BY GROUPING SETS ((user_id), (date))` scan into an
+  licence filter. A period is read with **one** `GROUP BY GROUPING SETS ((user_id), (date))` statement
+  (which SQL Server evaluates as two passes over the period's rows of the clustered index) into an
   in-memory read model (per-person totals + the population's weekly figures), cached and shared by every
   reader; the weekly series of a filtered set of people is a second query that joins a `#people` temp
   table filled from one JSON parameter. It reads `sys.columns` on every load, so a metric column an older
   install lacks is reported as unavailable rather than failing the query. It **never** reads
   `profiling.ActivitiesWeekly` - the same data one row per user × week × metric, zeros included - and it
-  adds no index: the one scan per period is cached instead.
+  adds no index: the read of each period is cached instead (15 minutes idle, at most two periods).
 - **Freshness only** (MIN/MAX date, row counts): `ProfilingStatusAPIController` (the SPA "Profiling" tab)
   and `Aggregation_Status.ps1`.
 - **External BI** (Power BI) reads everything.

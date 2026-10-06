@@ -13,7 +13,7 @@ using System.Threading.Tasks;
 namespace Tests.UnitTests
 {
     /// <summary>
-    /// The Activity analysis SQL against a throwaway LocalDB database: the schema probe, the one-scan read model and the
+    /// The Activity analysis SQL against a throwaway LocalDB database: the schema probe, the GROUPING SETS read model and the
     /// filtered weekly series.
     /// </summary>
     /// <remarks>
@@ -34,7 +34,7 @@ namespace Tests.UnitTests
         private static readonly ActivityAnalysisPeriod Period =
             ActivityAnalysisPeriod.Create(new DateTime(2026, 1, 5), new DateTime(2026, 1, 26));
 
-        private const string DboSchema = @"
+        internal const string DboSchema = @"
 CREATE TABLE dbo.user_departments (id int IDENTITY(1,1) NOT NULL PRIMARY KEY, name nvarchar(100) NULL);
 CREATE TABLE dbo.user_job_titles (id int IDENTITY(1,1) NOT NULL PRIMARY KEY, name nvarchar(100) NULL);
 CREATE TABLE dbo.user_company_name (id int IDENTITY(1,1) NOT NULL PRIMARY KEY, name nvarchar(100) NULL);
@@ -137,7 +137,7 @@ INSERT INTO profiling.ActivitiesWeeklyColumns ([user_id], [date], [Teams Calls])
         }
 
         [TestMethod]
-        public async Task ReadModel_TotalsEachPersonOverThePeriod_FromOneScan()
+        public async Task ReadModel_TotalsEachPersonOverThePeriod_InOneStatement()
         {
             var model = await Source().LoadReadModelAsync(Period, CancellationToken.None);
 

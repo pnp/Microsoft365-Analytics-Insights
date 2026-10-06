@@ -247,12 +247,12 @@ namespace Common.Entities.ActivityAnalysis
         /// <summary>Filtered weekly series are about 75 KB each.</summary>
         public const int WeeklyTotalsCapacity = 64;
 
-        public static readonly TimeSpan IdleLifetime = TimeSpan.FromMinutes(15);
-
         /// <summary>
-        /// A period in constant use is still re-read hourly, so weeks the runbooks compile into it meanwhile appear.
+        /// Both kinds of result are dropped after a quarter of an hour unused. A compiled week never changes once written
+        /// (the runbooks only ever add weeks), and a newly compiled one moves the default period - a different key - so a
+        /// read model in constant use is never stale enough to be worth re-scanning the table for.
         /// </summary>
-        public static readonly TimeSpan ReadModelMaximumAge = TimeSpan.FromHours(1);
+        public static readonly TimeSpan IdleLifetime = TimeSpan.FromMinutes(15);
 
         public static readonly TimeSpan SchemaLifetime = TimeSpan.FromMinutes(5);
 
@@ -271,7 +271,7 @@ namespace Common.Entities.ActivityAnalysis
             // One period loads at a time: each is a scan of the weekly table, and several administrators choosing
             // different periods at once must not multiply that.
             ReadModels = new ActivityAnalysisLoadCache<ActivityAnalysisReadModel>(
-                ReadModelCapacity, IdleLifetime, ReadModelMaximumAge, 1, wait, utcNow, pruneInterval);
+                ReadModelCapacity, IdleLifetime, null, 1, wait, utcNow, pruneInterval);
             WeeklyTotals = new ActivityAnalysisLoadCache<ActivityAnalysisWeeklyTotals>(
                 WeeklyTotalsCapacity, IdleLifetime, null, 2, wait, utcNow, pruneInterval);
         }
