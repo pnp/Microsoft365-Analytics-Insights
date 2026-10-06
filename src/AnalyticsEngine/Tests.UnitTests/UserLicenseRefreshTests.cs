@@ -1,6 +1,10 @@
 using Common.Entities;
 using Common.Entities.Config;
 using DataUtils;
+using Microsoft.ApplicationInsights;
+using Microsoft.ApplicationInsights.Channel;
+using Microsoft.ApplicationInsights.DataContracts;
+using Microsoft.ApplicationInsights.Extensibility;
 using Microsoft.Graph.Models;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System;
@@ -784,6 +788,54 @@ namespace Tests.UnitTests
         }
 
         /// <summary>
+        /// Issue #708: a SKU missing from Microsoft's licensing CSV is expected - some current SKUs are missing from
+        /// Microsoft's own published copy too - and its licences are still filed under the part number. It used to be
+        /// a Warning on every import, and on the per-user fallback one per user holding the SKU.
+        /// </summary>
+        [TestMethod]
+        public async Task UserLicenseProcessor_UnknownSku_IsLoggedOnceAtInformation_NotAsAWarning()
+        {
+            var skuPartNumber = $"UNKNOWN_TEST_SKU_{Guid.NewGuid():N}";
+            var channel = new RecordingTelemetryChannel();
+
+            try
+            {
+                using (var configuration = new TelemetryConfiguration
+                {
+                    TelemetryChannel = channel,
+                    ConnectionString = "InstrumentationKey=00000000-0000-0000-0000-000000000001",
+                })
+                using (var db = new AnalyticsEntitiesContext())
+                {
+                    var processor = new UserLicenseProcessor(
+                        new AnalyticsLogger(new TelemetryClient(configuration), "UserLicenseTest"),
+                        new FakeUserMetadataLoader(null, null, null),
+                        new UserMetadataCache(db),
+                        new FixedLicenseNameResolver(null));
+
+                    // The per-user fallback resolves the SKU once for every user holding it.
+                    for (var user = 0; user < 3; user++)
+                    {
+                        var licence = await processor.GetLicenseType(skuPartNumber);
+
+                        Assert.AreEqual(skuPartNumber, licence.Name, "Still filed under its part number.");
+                        Assert.AreEqual(skuPartNumber, licence.SKUID);
+                    }
+                }
+
+                var traces = channel.Sent.OfType<TraceTelemetry>().Where(t => t.Message.Contains(skuPartNumber)).ToList();
+                Assert.AreEqual(1, traces.Count, "Once per SKU per import, however many users hold it.");
+                Assert.AreEqual(SeverityLevel.Information, traces[0].SeverityLevel);
+                StringAssert.Contains(traces[0].Message, "no display name in Microsoft's licensing CSV");
+                StringAssert.Contains(traces[0].Message, "filed under the part number");
+            }
+            finally
+            {
+                await RemoveTestLicences(skuPartNumber);
+            }
+        }
+
+        /// <summary>
         /// <c>license_types.name</c> is <c>[MaxLength(100)]</c> and a few of Microsoft's own product
         /// names are longer (the GCC High and DoD Power Pages capacity packs). Every tenant SKU is
         /// resolved and then saved together, so one such name would fail validation and abort the
@@ -1228,6 +1280,42 @@ namespace Tests.UnitTests
             }
 
             public string GetDisplayNameFor(string id) => _displayName;
+        }
+
+        private sealed class RecordingTelemetryChannel : ITelemetryChannel
+        {
+            private readonly object _gate = new object();
+            private readonly List<ITelemetry> _sent = new List<ITelemetry>();
+
+            public IList<ITelemetry> Sent
+            {
+                get
+                {
+                    lock (_gate)
+                    {
+                        return _sent.ToList();
+                    }
+                }
+            }
+
+            public bool? DeveloperMode { get; set; }
+            public string EndpointAddress { get; set; }
+
+            public void Send(ITelemetry item)
+            {
+                lock (_gate)
+                {
+                    _sent.Add(item);
+                }
+            }
+
+            public void Flush()
+            {
+            }
+
+            public void Dispose()
+            {
+            }
         }
 
         private static FakeUserMetadataLoader BuildLoader(

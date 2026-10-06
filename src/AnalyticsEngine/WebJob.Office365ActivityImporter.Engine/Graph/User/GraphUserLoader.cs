@@ -508,6 +508,12 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             }
         }
 
+        /// <summary>
+        /// The page size requested when listing a SKU's holders: 999 is the documented maximum <c>$top</c> for
+        /// <c>GET /users</c>. <c>/users/delta</c> has no documented page-size option, so this applies here only.
+        /// </summary>
+        private const int UsersBySkuPageSize = 999;
+
         public async Task<List<Microsoft.Graph.Models.User>> LoadUsersBySku(Guid skuId)
         {
             // Per-iteration safety cap: at 200k-user scale a runaway nextLink could allocate
@@ -520,6 +526,11 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             {
                 rc.QueryParameters.Select = new[] { "userPrincipalName" };
                 rc.QueryParameters.Filter = $"assignedLicenses/any(u:u/skuId eq {skuId})";
+
+                // Without $top Graph pages /users 100 at a time, so a SKU with N holders costs N / 100
+                // sequential requests, every cycle. Graph keeps the page size in each @odata.nextLink,
+                // which the iterator below follows unchanged. Issue #707.
+                rc.QueryParameters.Top = UsersBySkuPageSize;
             });
 
             // The licence refresh removes any assignment this list does not report, so an
