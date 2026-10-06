@@ -7,19 +7,19 @@ import { AITrackerConfig } from "../src/Models";
 import { ConfigLoadResult, IConfigLoader } from "../src/Config/interfaces";
 
 export class TestPagePropertyManager extends PagePropertyManager {
-    loadLikes(listTitle: string, pageItemId: number, url: string): Promise<LikesUserEntity[]> {
+    loadLikes(webUrl: string, listTitle: string, pageItemId: number, url: string): Promise<LikesUserEntity[]> {
         const c: LikesUserEntity = { email: "testuser@whatevs.local", creationDate: new Date(), id: "1" }
 
         return Promise.resolve([c]);
     }
-    loadComments(listTitle: string, pageItemId: number, url: string): Promise<PageComment[]> {
+    loadComments(webUrl: string, listTitle: string, pageItemId: number, url: string): Promise<PageComment[]> {
         const c: PageComment = { email: "testuser@whatevs.local", comment: "Test comment", isReply: false, id: "1", creationDate: new Date() }
         return Promise.resolve([c])
     }
     _testValForProps: string;
 
     // Fake loading props
-    loadPropsRaw(listTitle: string, pageItemId: number): Promise<PageProps> {
+    loadPropsRaw(webUrl: string, listTitle: string, pageItemId: number): Promise<PageProps> {
 
         return Promise.resolve(new PageProps("https://whatever", {
             randoProp1: this._testValForProps,

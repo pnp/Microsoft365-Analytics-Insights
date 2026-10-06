@@ -1,30 +1,32 @@
 import { ApplicationInsights, IEventTelemetry, IPageViewTelemetry } from "@microsoft/applicationinsights-web";
-import { SetLastTrackedPageVal } from "./Cookies";
-import { debug, debugObj, error, log } from "./Logger";
+import { debug, debugObj, error, log, warn } from "./Logger";
 import { PageProps } from "./PageProps/Models/PageProps";
 import { ClickData, ClickEventProps, PageViewDataProperties, SearchEventProperties, TimingEventProperties } from "./Definitions";
 import { AI_TRACKER_VER, EVENT_CLICK, EVENT_METADATA_UPDATE, EVENT_PAGE_EXIT } from "./AiTrackerConstants";
 import { uuidv4 } from "./DataFunctions";
 
+// Clicks made before the page's first page view is tracked are held for it, up to this many
+const MAX_CLICKS_BEFORE_FIRST_PAGE_VIEW = 20;
+
 export class AppInsightsWrapper {
 
     _ai: ApplicationInsights;
     _sessionId: string;
-    _lastGeneratedPageRequestId: string = '';            // Page request GUID to join before & after AI events together on import
-    _pageRequestId: string | null = null;
+    _pageRequestId: string | null = null;               // Page request GUID to join before & after AI events together on import
     _lastTrackedUrl: string | null = null;
+    _clicksBeforeFirstPageView: { data: ClickData, timeStamp: string }[] = [];
 
     constructor(instance: ApplicationInsights, sessionId: string) {
         this._ai = instance;
         this._sessionId = sessionId;
     }
 
-    // Page views
-    trackCurrentPageView(pageLoadDuration: number | undefined, spRequestDuration: number | null, webUrl: string, siteUrl: string, webTitle: string) {
+    // Page views. Returns false if the URL was the page already tracked
+    trackCurrentPageView(pageLoadDuration: number | undefined, spRequestDuration: number | null, webUrl: string, siteUrl: string, webTitle: string): boolean {
 
         if (this._lastTrackedUrl === document.URL) {
             debug("Ignoring duplicate pageview with request Id: " + this._pageRequestId);
-            return;
+            return false;
         }
 
         this._lastTrackedUrl = document.URL;
@@ -93,19 +95,21 @@ export class AppInsightsWrapper {
             debugObj('Page view telemetry:', pv);
         }
 
-        // Remember last tracked page. 
-        SetLastTrackedPageVal(document.URL);
+        // Clicks made before this page view was tracked belong to this page
+        this._clicksBeforeFirstPageView.splice(0).forEach(c => this.sendClick(c.data, this._pageRequestId!, c.timeStamp));
 
+        return true;
     }
 
-    // Track Time on Page
-    trackTimingEvent(pageUrl: string, secondsOnPage: number) {
+    // Track Time on Page. pageRequestId is the page the time was spent on; the current page if not given
+    trackTimingEvent(pageUrl: string, secondsOnPage: number, pageRequestId?: string) {
 
-        if (this._pageRequestId) {
+        const timedPageRequestId = pageRequestId ?? this._pageRequestId;
+        if (timedPageRequestId) {
 
             const customProps: TimingEventProperties =
             {
-                pageRequestId: this._pageRequestId,
+                pageRequestId: timedPageRequestId,
                 url: pageUrl,
                 activeTime: secondsOnPage,
                 aiTrackerVersion: AI_TRACKER_VER,
@@ -119,7 +123,7 @@ export class AppInsightsWrapper {
                 name: EVENT_PAGE_EXIT,
                 properties: customProps
             };
-            log(`Uploaded page-stats for previous URL ${pageUrl} and pageRequestId ${this._pageRequestId}: seconds on page: ${secondsOnPage}`);
+            log(`Uploaded page-stats for previous URL ${pageUrl} and pageRequestId ${timedPageRequestId}: seconds on page: ${secondsOnPage}`);
 
             this._ai.trackEvent(e);
             debugObj('Timing event telemetry:', e);
@@ -157,33 +161,44 @@ export class AppInsightsWrapper {
     // Click event receiver
     trackClick(d: ClickData) {
 
+        const timeStamp = new Date().toISOString();
         if (this._pageRequestId) {
-            log(`Link click detected: pageRequestId: ${this._pageRequestId}, title "${d.linkText}"; alt "${d.altText}"; classes "${d.classNames}"`);
-            const props: ClickEventProps = { sessionId: this._sessionId, pageRequestId: this._pageRequestId, timeStamp: new Date().toISOString() };
-            const e: IEventTelemetry =
-            {
-                name: EVENT_CLICK, properties: props
-            };
-
-            if (d.linkText && d.linkText !== "") {
-                props.linkText = d.linkText;
-            }
-            if (d.altText && d.altText !== "") {
-                props.altText = d.altText;         // Currently not actually stored in SQL
-            }
-            if (d.href && d.href !== "") {
-                props.href = d.href;
-            }
-            if (d.classNames && d.classNames !== "") {
-                props.classNames = d.classNames;
-            }
-
-            this._ai.trackEvent(e);
-            debugObj('Click event telemetry:', e);
+            this.sendClick(d, this._pageRequestId, timeStamp);
+        }
+        else if (this._clicksBeforeFirstPageView.length < MAX_CLICKS_BEFORE_FIRST_PAGE_VIEW) {
+            // The page view is tracked once the page has loaded. Hold the click for it rather than drop it
+            debug(`Holding ${EVENT_CLICK} on "${d.linkText}" until this page's page view is tracked`);
+            this._clicksBeforeFirstPageView.push({ data: d, timeStamp: timeStamp });
         }
         else {
-            error(`Can't track ${EVENT_CLICK}: no page request ID`);
+            warn(`Can't track ${EVENT_CLICK}: no page request ID yet, and ${MAX_CLICKS_BEFORE_FIRST_PAGE_VIEW} clicks are already waiting for one`);
         }
+    }
+
+    sendClick(d: ClickData, pageRequestId: string, timeStamp: string) {
+
+        log(`Link click detected: pageRequestId: ${pageRequestId}, title "${d.linkText}"; alt "${d.altText}"; classes "${d.classNames}"`);
+        const props: ClickEventProps = { sessionId: this._sessionId, pageRequestId: pageRequestId, timeStamp: timeStamp };
+        const e: IEventTelemetry =
+        {
+            name: EVENT_CLICK, properties: props
+        };
+
+        if (d.linkText && d.linkText !== "") {
+            props.linkText = d.linkText;
+        }
+        if (d.altText && d.altText !== "") {
+            props.altText = d.altText;         // Currently not actually stored in SQL
+        }
+        if (d.href && d.href !== "") {
+            props.href = d.href;
+        }
+        if (d.classNames && d.classNames !== "") {
+            props.classNames = d.classNames;
+        }
+
+        this._ai.trackEvent(e);
+        debugObj('Click event telemetry:', e);
     }
 
     updatePageProps(props: PageProps): void {

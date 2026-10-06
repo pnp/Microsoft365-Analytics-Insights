@@ -4,7 +4,6 @@
 
 import {
     GetSessionCookieVal, SetSessionCookieVal,
-    GetLastTrackedPageVal, SetLastTrackedPageVal,
     GetLastPageStatsVal, SetLastPageStatsVal, ClearLastPageStatsVal,
     CleanCookies
 } from '../src/Cookies';
@@ -32,18 +31,6 @@ describe('Cookies', () => {
             SetSessionCookieVal('session-1');
             SetSessionCookieVal('session-2');
             expect(GetSessionCookieVal()).toBe('session-2');
-        });
-    });
-
-    describe('Last tracked page cookie', () => {
-        test('GetLastTrackedPageVal returns empty string when no cookie set', () => {
-            expect(GetLastTrackedPageVal()).toBe('');
-        });
-
-        test('SetLastTrackedPageVal and GetLastTrackedPageVal round-trip', () => {
-            const url = 'https://contoso.sharepoint.com/sites/test/SitePages/Home.aspx';
-            SetLastTrackedPageVal(url);
-            expect(GetLastTrackedPageVal()).toBe(url);
         });
     });
 
@@ -111,6 +98,14 @@ describe('Cookies', () => {
             expect(Cookies.get('ai_user')).toBeUndefined();
             // Should not remove SPOInsights cookies
             expect(Cookies.get('SPOInsightsSessionID')).toBe('keep-me');
+        });
+
+        test('removes the last-tracked-URL cookie earlier versions wrote', () => {
+            Cookies.set('SPOInsightsLastTrackedUrl', 'https://contoso.sharepoint.com/sites/test/SitePages/Home.aspx');
+
+            CleanCookies();
+
+            expect(Cookies.get('SPOInsightsLastTrackedUrl')).toBeUndefined();
         });
     });
 });

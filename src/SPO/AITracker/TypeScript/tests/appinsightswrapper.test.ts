@@ -204,6 +204,62 @@ describe('AppInsightsWrapper', () => {
             expect(callArg.properties!.classNames).toBeUndefined();
             expect(callArg.properties!.href).toBe('http://x.com');
         });
+
+        test('holds clicks made before the first page view, then sends them for that page', () => {
+            const errorSpy = jest.spyOn(console, 'error').mockImplementation();
+            const clickData: ClickData = { linkText: 'Early link', altText: '', classNames: null, href: 'https://target.com' };
+
+            wrapper.trackClick(clickData);
+            const heldTimeStamp = wrapper._clicksBeforeFirstPageView[0].timeStamp;
+            expect(mockAI.trackEvent).not.toHaveBeenCalled();
+            expect(errorSpy).not.toHaveBeenCalled();
+
+            wrapper.trackCurrentPageView(100, null, 'https://web', 'https://site', 'Web');
+
+            const clicks = (mockAI.trackEvent as jest.Mock).mock.calls.map(c => c[0] as IEventTelemetry).filter(e => e.name === 'LinkClick');
+            expect(clicks.length).toBe(1);
+            expect(clicks[0].properties!.pageRequestId).toBe(wrapper._pageRequestId);
+            expect(clicks[0].properties!.timeStamp).toBe(heldTimeStamp);
+            expect(wrapper._clicksBeforeFirstPageView.length).toBe(0);
+            errorSpy.mockRestore();
+        });
+
+        test('holds a bounded number of clicks before the first page view', () => {
+            const warnSpy = jest.spyOn(console, 'warn').mockImplementation();
+            for (let i = 0; i < 25; i++) {
+                wrapper.trackClick({ linkText: `Link ${i}`, altText: '', classNames: null, href: '' });
+            }
+            expect(wrapper._clicksBeforeFirstPageView.length).toBe(20);
+            expect(warnSpy).toHaveBeenCalledTimes(5);
+
+            wrapper.trackCurrentPageView(100, null, 'https://web', 'https://site', 'Web');
+            expect((mockAI.trackEvent as jest.Mock).mock.calls.filter(c => c[0].name === 'LinkClick').length).toBe(20);
+            warnSpy.mockRestore();
+        });
+    });
+
+    describe('page view result and page exit attribution', () => {
+        test('trackCurrentPageView reports whether it tracked a new page', () => {
+            expect(wrapper.trackCurrentPageView(100, null, 'https://web', 'https://site', 'Web')).toBe(true);
+            expect(wrapper.trackCurrentPageView(100, null, 'https://web', 'https://site', 'Web')).toBe(false);
+        });
+
+        test('trackTimingEvent uses the page request ID it is given, not the current page', () => {
+            wrapper.trackCurrentPageView(100, null, 'https://web', 'https://site', 'Web');
+            (mockAI.trackEvent as jest.Mock).mockClear();
+
+            wrapper.trackTimingEvent('https://contoso.sharepoint.com/sites/test/SitePages/Previous.aspx', 30, '11111111-1111-1111-1111-111111111111');
+
+            const callArg = (mockAI.trackEvent as jest.Mock).mock.calls[0][0] as IEventTelemetry;
+            expect(callArg.name).toBe('PAGE_EXIT');
+            expect(callArg.properties!.pageRequestId).toBe('11111111-1111-1111-1111-111111111111');
+            expect(callArg.properties!.pageRequestId).not.toBe(wrapper._pageRequestId);
+        });
+
+        test('trackTimingEvent with a page request ID works before any page view', () => {
+            wrapper.trackTimingEvent('https://contoso.sharepoint.com/sites/test', 12, '22222222-2222-2222-2222-222222222222');
+            expect(mockAI.trackEvent).toHaveBeenCalledTimes(1);
+        });
     });
 
     describe('updatePageProps', () => {

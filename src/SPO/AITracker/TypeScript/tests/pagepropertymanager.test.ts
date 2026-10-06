@@ -27,16 +27,18 @@ class ControllablePagePropertyManager extends PagePropertyManager {
         this.commentsResult = commentsResult ?? (() => Promise.resolve([]));
     }
 
-    loadPropsRaw(listTitle: string, pageItemId: number, url: string): Promise<PageProps> {
+    loadPropsRaw(webUrl: string, listTitle: string, pageItemId: number, url: string): Promise<PageProps> {
         return this.propsResult();
     }
-    loadLikes(listTitle: string, pageItemId: number, url: string): Promise<LikesUserEntity[]> {
+    loadLikes(webUrl: string, listTitle: string, pageItemId: number, url: string): Promise<LikesUserEntity[]> {
         return this.likesResult();
     }
-    loadComments(listTitle: string, pageItemId: number, url: string): Promise<PageComment[]> {
+    loadComments(webUrl: string, listTitle: string, pageItemId: number, url: string): Promise<PageComment[]> {
         return this.commentsResult();
     }
 }
+
+const WEB = 'https://contoso.sharepoint.com/sites/test';
 
 describe('PagePropertyManager.handleNewPage', () => {
     let stateManager: InMemoryPageStateManager;
@@ -49,46 +51,46 @@ describe('PagePropertyManager.handleNewPage', () => {
 
     test('returns false when listTitle is empty', async () => {
         const manager = new TestPagePropertyManager('val', stateManager, dataService);
-        const result = await manager.handleNewPage(1, 'http://url', '');
+        const result = await manager.handleNewPage(WEB, 1, 'http://url', '');
         expect(result).toBe(false);
     });
 
     test('returns false when listTitle is undefined', async () => {
         const manager = new TestPagePropertyManager('val', stateManager, dataService);
-        const result = await manager.handleNewPage(1, 'http://url', undefined);
+        const result = await manager.handleNewPage(WEB, 1, 'http://url', undefined);
         expect(result).toBe(false);
     });
 
     test('returns false when pageItemId is less than 1', async () => {
         const manager = new TestPagePropertyManager('val', stateManager, dataService);
-        const result = await manager.handleNewPage(0, 'http://url', 'Site Pages');
+        const result = await manager.handleNewPage(WEB, 0, 'http://url', 'Site Pages');
         expect(result).toBe(false);
     });
 
     test('returns false when pageItemId is -1', async () => {
         const manager = new TestPagePropertyManager('val', stateManager, dataService);
-        const result = await manager.handleNewPage(-1, 'http://url', 'Site Pages');
+        const result = await manager.handleNewPage(WEB, -1, 'http://url', 'Site Pages');
         expect(result).toBe(false);
     });
 
     test('returns true when all data loads successfully', async () => {
         const manager = new TestPagePropertyManager('val', stateManager, dataService);
-        const result = await manager.handleNewPage(1, 'http://url', 'Site Pages');
+        const result = await manager.handleNewPage(WEB, 1, 'http://url', 'Site Pages');
         expect(result).toBe(true);
     });
 
     test('records page as seen after successful load', async () => {
         const manager = new TestPagePropertyManager('val', stateManager, dataService);
-        await manager.handleNewPage(1, 'http://url', 'Site Pages');
-        expect(stateManager.pageSeen('Site Pages', 1)).not.toBeNull();
+        await manager.handleNewPage(WEB, 1, 'http://url', 'Site Pages');
+        expect(stateManager.pageSeen(WEB, 'Site Pages', 1)).not.toBeNull();
     });
 
     test('returns false when page was recently seen (within interval)', async () => {
         const manager = new TestPagePropertyManager('val', stateManager, dataService);
         // First load succeeds and registers page
-        await manager.handleNewPage(1, 'http://url', 'Site Pages');
+        await manager.handleNewPage(WEB, 1, 'http://url', 'Site Pages');
         // Second call should skip because page was recently seen
-        const result = await manager.handleNewPage(1, 'http://url', 'Site Pages');
+        const result = await manager.handleNewPage(WEB, 1, 'http://url', 'Site Pages');
         expect(result).toBe(false);
     });
 
@@ -97,7 +99,7 @@ describe('PagePropertyManager.handleNewPage', () => {
             stateManager, dataService,
             () => Promise.reject('API error')
         );
-        const result = await manager.handleNewPage(1, 'http://url', 'Site Pages');
+        const result = await manager.handleNewPage(WEB, 1, 'http://url', 'Site Pages');
         expect(result).toBe(false);
     });
 
@@ -106,8 +108,8 @@ describe('PagePropertyManager.handleNewPage', () => {
             stateManager, dataService,
             () => Promise.reject('API error')
         );
-        await manager.handleNewPage(1, 'http://url', 'Site Pages');
-        expect(stateManager.pageSeen('Site Pages', 1)).toBeNull();
+        await manager.handleNewPage(WEB, 1, 'http://url', 'Site Pages');
+        expect(stateManager.pageSeen(WEB, 'Site Pages', 1)).toBeNull();
     });
 
     test('still returns true when likes fail but props succeed', async () => {
@@ -117,7 +119,7 @@ describe('PagePropertyManager.handleNewPage', () => {
             () => Promise.reject('likes error'),
             () => Promise.resolve([])
         );
-        const result = await manager.handleNewPage(1, 'http://url', 'Site Pages');
+        const result = await manager.handleNewPage(WEB, 1, 'http://url', 'Site Pages');
         expect(result).toBe(true);
     });
 
@@ -128,14 +130,14 @@ describe('PagePropertyManager.handleNewPage', () => {
             () => Promise.resolve([]),
             () => Promise.reject('comments error')
         );
-        const result = await manager.handleNewPage(1, 'http://url', 'Site Pages');
+        const result = await manager.handleNewPage(WEB, 1, 'http://url', 'Site Pages');
         expect(result).toBe(true);
     });
 
     test('invokes newPagePropsLoaded callback when provided', async () => {
         const manager = new TestPagePropertyManager('val', stateManager, dataService);
         let receivedProps: PageProps | null = null;
-        await manager.handleNewPage(1, 'http://url', 'Site Pages', (props: PageProps) => {
+        await manager.handleNewPage(WEB, 1, 'http://url', 'Site Pages', (props: PageProps) => {
             receivedProps = props;
         });
         expect(receivedProps).not.toBeNull();
@@ -145,7 +147,7 @@ describe('PagePropertyManager.handleNewPage', () => {
     test('records page props via data service', async () => {
         const recordSpy = jest.spyOn(dataService, 'recordPageProps');
         const manager = new TestPagePropertyManager('val', stateManager, dataService);
-        await manager.handleNewPage(1, 'http://url', 'Site Pages');
+        await manager.handleNewPage(WEB, 1, 'http://url', 'Site Pages');
         expect(recordSpy).toHaveBeenCalled();
     });
 
@@ -161,7 +163,7 @@ describe('PagePropertyManager.handleNewPage', () => {
             () => Promise.resolve(likes),
             () => Promise.resolve([])
         );
-        await manager.handleNewPage(1, 'http://url', 'Site Pages', (props: PageProps) => {
+        await manager.handleNewPage(WEB, 1, 'http://url', 'Site Pages', (props: PageProps) => {
             capturedProps = props;
         });
         expect(capturedProps!.pageLikes.length).toBe(2);
@@ -179,7 +181,7 @@ describe('PagePropertyManager.handleNewPage', () => {
             () => Promise.resolve([]),
             () => Promise.resolve(comments)
         );
-        await manager.handleNewPage(1, 'http://url', 'Site Pages', (props: PageProps) => {
+        await manager.handleNewPage(WEB, 1, 'http://url', 'Site Pages', (props: PageProps) => {
             capturedProps = props;
         });
         expect(capturedProps!.pageComments.length).toBe(1);
@@ -190,5 +192,40 @@ describe('PagePropertyManager.handleNewPage', () => {
         const manager = new TestPagePropertyManager('val', stateManager, dataService);
         manager.setPageUpdateIntervalMinutes(120);
         expect(manager.pageUpdateIntervalMinutes).toBe(120);
+    });
+
+    test('loads the same list item again for a page in another web', async () => {
+        const manager = new TestPagePropertyManager('val', stateManager, dataService);
+        expect(await manager.handleNewPage(WEB, 1, 'http://url', 'Site Pages')).toBe(true);
+        expect(await manager.handleNewPage('https://contoso.sharepoint.com/sites/other', 1, 'http://url2', 'Site Pages')).toBe(true);
+    });
+
+    test('passes the page web to every load', async () => {
+        const manager = new TestPagePropertyManager('val', stateManager, dataService);
+        const props = jest.spyOn(manager, 'loadPropsRaw');
+        const likes = jest.spyOn(manager, 'loadLikes');
+        const comments = jest.spyOn(manager, 'loadComments');
+
+        await manager.handleNewPage('https://contoso.sharepoint.com/sites/other', 4, 'http://url', 'Site Pages');
+
+        expect(props).toHaveBeenCalledWith('https://contoso.sharepoint.com/sites/other', 'Site Pages', 4, 'http://url');
+        expect(likes).toHaveBeenCalledWith('https://contoso.sharepoint.com/sites/other', 'Site Pages', 4, 'http://url');
+        expect(comments).toHaveBeenCalledWith('https://contoso.sharepoint.com/sites/other', 'Site Pages', 4, 'http://url');
+    });
+
+    test('returns false without a web URL', async () => {
+        const manager = new TestPagePropertyManager('val', stateManager, dataService);
+        expect(await manager.handleNewPage('', 1, 'http://url', 'Site Pages')).toBe(false);
+    });
+
+    test('forgets pages last seen before the update interval when it records one', async () => {
+        const manager = new TestPagePropertyManager('val', stateManager, dataService);
+        stateManager.registerPageSeen(WEB, 'Site Pages', 9);
+        stateManager.pages[0].seenOn = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000);
+
+        await manager.handleNewPage(WEB, 1, 'http://url', 'Site Pages');
+
+        expect(stateManager.pageSeen(WEB, 'Site Pages', 9)).toBeNull();
+        expect(stateManager.pages.length).toBe(1);
     });
 });

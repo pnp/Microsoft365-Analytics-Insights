@@ -1,4 +1,3 @@
-import moment from "moment";
 import { IPageDataService, LikesUserEntity, PageComment } from "../Definitions";
 import { debug, log, warn } from "../Logger";
 import { PageProps } from "./Models/PageProps";
@@ -18,12 +17,12 @@ export abstract class PagePropertyManager {
         this.dataService = pageDataService;
     }
 
-    // Get list of page props in raw form, i.e. don't parse taxonomy fields
-    abstract loadPropsRaw(listTitle: string, pageItemId: number, url: string): Promise<PageProps>;
+    // Get list of page props in raw form, i.e. don't parse taxonomy fields. webUrl is the web the page's list is in
+    abstract loadPropsRaw(webUrl: string, listTitle: string, pageItemId: number, url: string): Promise<PageProps>;
 
-    abstract loadLikes(listTitle: string, pageItemId: number, url: string): Promise<LikesUserEntity[]>;
+    abstract loadLikes(webUrl: string, listTitle: string, pageItemId: number, url: string): Promise<LikesUserEntity[]>;
 
-    abstract loadComments(listTitle: string, pageItemId: number, url: string): Promise<PageComment[]>;
+    abstract loadComments(webUrl: string, listTitle: string, pageItemId: number, url: string): Promise<PageComment[]>;
 
     setPageUpdateIntervalMinutes(interval: number) {
         log(`Setting page update interval to ${interval} minutes`);
@@ -32,24 +31,23 @@ export abstract class PagePropertyManager {
 
     // Decide whether to register page properties or not.
     // Return if props were loaded or not
-    handleNewPage(pageItemId: number, url: string, listTitle?: string, newPagePropsLoaded?: Function): Promise<boolean> {
+    handleNewPage(webUrl: string, pageItemId: number, url: string, listTitle?: string, newPagePropsLoaded?: Function): Promise<boolean> {
 
-        if (!listTitle || pageItemId < 1) {
-            debug(`Skipping page properties - listTitle: '${listTitle || ''}', pageItemId: ${pageItemId}`);
+        if (!webUrl || !listTitle || pageItemId < 1) {
+            debug(`Skipping page properties - webUrl: '${webUrl || ''}', listTitle: '${listTitle || ''}', pageItemId: ${pageItemId}`);
             return Promise.resolve(false);
         }
 
-        const pageResult = this.stateManager.pageSeen(listTitle, pageItemId);
-        const expiryThreshold = moment().subtract(this.pageUpdateIntervalMinutes, 'minutes');
-        const expiryDate = expiryThreshold.toDate();
+        const pageResult = this.stateManager.pageSeen(webUrl, listTitle, pageItemId);
+        const expiryDate = new Date(Date.now() - this.pageUpdateIntervalMinutes * 60 * 1000);
 
         if (!pageResult || pageResult < expiryDate) {
             debug("Not read & submitted page properties recently...");
 
             // Load all page props, comments, and likes
-            const pagePropsLoadPromise = this.loadPropsRaw(listTitle, pageItemId, url);
-            const likesLoadPromise = this.loadLikes(listTitle, pageItemId, url);
-            const commentsLoadPromise = this.loadComments(listTitle, pageItemId, url);
+            const pagePropsLoadPromise = this.loadPropsRaw(webUrl, listTitle, pageItemId, url);
+            const likesLoadPromise = this.loadLikes(webUrl, listTitle, pageItemId, url);
+            const commentsLoadPromise = this.loadComments(webUrl, listTitle, pageItemId, url);
 
             // Combine into one result
             return Promise.allSettled([pagePropsLoadPromise, likesLoadPromise, commentsLoadPromise]).then(loadResults => {
@@ -95,8 +93,8 @@ export abstract class PagePropertyManager {
                         this.dataService.recordPageProps(pageProps);
                     });
 
-                    // Don't keep registering page props
-                    this.stateManager.registerPageSeen(listTitle, pageItemId);
+                    // Don't keep registering page props. Pages seen before the expiry would be read again anyway, so forget them
+                    this.stateManager.registerPageSeen(webUrl, listTitle, pageItemId, expiryDate);
                     return Promise.resolve(true);
                 } else {
                     warn(`Failed to load page properties for page id ${pageItemId} on list ${listTitle}: ${(loadedPagePropsResult as PromiseRejectedResult).reason}`);
