@@ -175,6 +175,7 @@
     <Compile Include="LookupCaches\Discrete\CountryOrRegionCache.cs" />
     <Compile Include="LookupCaches\Discrete\DBLookupCache.cs" />
     <Compile Include="LookupCaches\Discrete\EmailAddressCache.cs" />
+    <Compile Include="LookupCaches\Discrete\ExistingUserIds.cs" />
     <Compile Include="LookupCaches\Discrete\KeywordCache.cs" />
     <Compile Include="LookupCaches\Discrete\LanguageCache.cs" />
     <Compile Include="LookupCaches\Discrete\LicenseTypeCache.cs" />

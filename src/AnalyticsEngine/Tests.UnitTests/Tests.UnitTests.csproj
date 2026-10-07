@@ -282,6 +282,7 @@
     <Compile Include="CopilotExtendedDataTests.cs" />
     <Compile Include="DBLookupCacheDuplicateKeyErrorTests.cs" />
     <Compile Include="DBLookupCacheTests.cs" />
+    <Compile Include="ConcurrentUserInsertTests.cs" />
     <Compile Include="FakeLoaderClasses\FakeUserMetadataLoader.cs" />
     <Compile Include="FakeLoaderClasses\FakeUsageReportStorageInspector.cs" />
     <Compile Include="FakeLoaderClasses\InMemorySiteUrlStore.cs" />
