@@ -65,6 +65,8 @@ namespace Common.Entities
             // With database null semantics the predicate becomes a plain `col = @p` that can seek the index.
             // Trade-off: a `col == @p` where @p is null no longer matches rows with a NULL column (SQL, not
             // C#, semantics) - which these lookups never rely on (you never resolve a user by a null UPN).
+            // A seek also needs @p to be the column's type: users.user_name is varchar but mapped as Unicode,
+            // so lookups by UPN wrap the value in DbFunctions.AsNonUnicode (see UserCache.Load, #713).
             this.Configuration.UseDatabaseNullSemantics = true;
 
         }
