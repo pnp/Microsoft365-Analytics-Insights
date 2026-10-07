@@ -67,6 +67,18 @@ export interface LicenceActivitySku {
   name: string | null;
   skuId: string | null;
   assignedUsers: number;
+  /**
+   * The share of its holders' measured service-weeks that had activity, 0-100 (one decimal). Null when
+   * nothing could be measured for any holder. Absent from older servers.
+   */
+  adoptionScore?: number | null;
+  workloads: LicenceActivityDistribution[];
+}
+
+/** Everyone holding any licence, each person counted once: the baseline every licence is compared with. */
+export interface LicenceActivityAllLicences {
+  assignedUsers: number;
+  adoptionScore: number | null;
   workloads: LicenceActivityDistribution[];
 }
 
@@ -128,6 +140,8 @@ export interface LicenceActivityAvailability {
 export interface LicenceActivityOverview extends SnapshotEnvelope {
   query: LicenceActivityQueryEcho;
   distinctAssignedUsers: number;
+  /** Everyone holding a licence, counted once. Null/absent from a server that predates it. */
+  allLicences?: LicenceActivityAllLicences | null;
   licences: LicenceActivitySku[];
   coverage: LicenceActivityCoverage[];
   departments: LicenceActivityDemographic[];
@@ -195,7 +209,8 @@ export interface OverviewParams {
 /** Parameters for the users request (one call returns most/least/browse). */
 export interface UsersParams {
   overviewId: string;
-  licenceTypeId: number;
+  /** The licence to list, or null for everyone holding any licence. */
+  licenceTypeId: number | null;
   workload: WorkloadKey;
   /** Bounds the most/least active lists (1..100). */
   top: number;

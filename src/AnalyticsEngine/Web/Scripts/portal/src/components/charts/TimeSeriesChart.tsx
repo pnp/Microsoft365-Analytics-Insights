@@ -1,5 +1,5 @@
-import { useMemo, useRef, useState } from 'react';
-import { makeStyles, tokens, Text } from '@fluentui/react-components';
+import { useMemo, useRef, useState, type CSSProperties } from 'react';
+import { makeStyles, mergeClasses, tokens, Text } from '@fluentui/react-components';
 import type { ReportSeries, ReportTimePoint } from '../../types/reports';
 import { useT } from '../../i18n';
 import { serverPlaceholderText } from '../shared/serverPlaceholder';
@@ -8,13 +8,16 @@ import {
   formatValue,
   formatWeek,
   formatWeekLong,
+  lineSeriesStyle,
   niceTicks,
-  seriesColor,
 } from './chartCommon';
 
 // Logical (viewBox) geometry. The SVG scales to the container width, keeping these coordinates.
 const W = 960;
 const MARGIN = { top: 16, right: 18, bottom: 44, left: 52 };
+
+/** Above this many series the hover readout switches to columns beside the cursor. */
+const MANY_SERIES = 12;
 
 const useStyles = makeStyles({
   root: {
@@ -71,6 +74,16 @@ const useStyles = makeStyles({
     justifyContent: 'space-between',
     gap: '12px',
   },
+  // Many series: the readout runs in columns beside the cursor, rather than as one column taller
+  // than the chart it describes.
+  tooltipGrid: {
+    display: 'grid',
+    columnGap: '18px',
+    rowGap: '1px',
+  },
+  tooltipBeside: {
+    transform: 'none',
+  },
   tooltipLabel: {
     display: 'inline-flex',
     alignItems: 'center',
@@ -102,6 +115,27 @@ function isIsolatedPoint(points: ReportTimePoint[], i: number): boolean {
   const before = i > 0 ? points[i - 1].value : null;
   const after = i < points.length - 1 ? points[i + 1].value : null;
   return before === null && after === null;
+}
+
+/**
+ * The key beside a series' name: a colour square, or - once the palette has gone round and the line is
+ * dashed - a short sample of the line itself, because a square cannot show which of two blue lines is
+ * the dashed one.
+ */
+function SeriesSwatch({ index, className }: { index: number; className: string }) {
+  const { color, dash } = lineSeriesStyle(index);
+  if (!dash) return <span className={className} style={{ backgroundColor: color }} />;
+
+  // The pattern at half scale, so a whole repeat or two fits in the sample.
+  const sample = dash
+    .split(' ')
+    .map((n) => Number(n) / 2)
+    .join(' ');
+  return (
+    <svg width="18" height="12" viewBox="0 0 18 12" aria-hidden="true" focusable="false" style={{ flexShrink: 0 }}>
+      <line x1="1" x2="17" y1="6" y2="6" stroke={color} strokeWidth={2.5} strokeDasharray={sample} />
+    </svg>
+  );
 }
 
 /**
@@ -166,6 +200,18 @@ export default function TimeSeriesChart({ series, valueLabel, height = 300, gapN
   const hasGaps = series.some((s) => s.points.some((p) => p.value === null));
   const showLegend = series.length > 1 || (hasGaps && !!gapNote);
   const tooltipLeft = hover ? Math.max(70, Math.min((rootRef.current?.clientWidth ?? W) - 70, hover.xPx)) : 0;
+
+  // With many series the readout is laid out in columns and kept to one side of the cursor, so it
+  // never covers the week being read. A handful of series keep the centred single column.
+  const manySeries = series.length > MANY_SERIES;
+  const chartWidth = rootRef.current?.clientWidth ?? W;
+  const tooltipPosition: CSSProperties = !hover
+    ? {}
+    : !manySeries
+      ? { left: tooltipLeft }
+      : hover.xPx < chartWidth / 2
+        ? { left: hover.xPx + 14 }
+        : { right: chartWidth - hover.xPx + 14 };
 
   return (
     <div className={styles.root} ref={rootRef}>
@@ -239,14 +285,22 @@ export default function TimeSeriesChart({ series, valueLabel, height = 300, gapN
         {/* Series lines + points. A null value means "no data for this week", so the line is drawn
             as separate segments either side of the gap rather than dipping to zero. */}
         {series.map((s, si) => {
-          const color = seriesColor(si);
+          const { color, dash } = lineSeriesStyle(si);
           const path = s.points
             .map((p, i) => (p.value === null ? '' : `${isSegmentStart(s.points, i) ? 'M' : 'L'} ${x(i)} ${y(p.value)}`))
             .filter((segment) => segment !== '')
             .join(' ');
           return (
             <g key={s.name}>
-              <path d={path} fill="none" stroke={color} strokeWidth={2.5} strokeLinejoin="round" strokeLinecap="round" />
+              <path
+                d={path}
+                fill="none"
+                stroke={color}
+                strokeWidth={2.5}
+                strokeDasharray={dash}
+                strokeLinejoin="round"
+                strokeLinecap={dash ? 'butt' : 'round'}
+              />
               {s.points.map((p, i) =>
                 p.value === null ? null : hover?.index === i ? (
                   <circle key={`pt-${s.name}-${i}`} cx={x(i)} cy={y(p.value)} r={5} fill={color} stroke={tokens.colorNeutralBackground1} strokeWidth={2} />
@@ -271,23 +325,28 @@ export default function TimeSeriesChart({ series, valueLabel, height = 300, gapN
       </svg>
 
       {hover && (
-        <div className={styles.tooltip} style={{ left: tooltipLeft }}>
+        <div className={mergeClasses(styles.tooltip, manySeries && styles.tooltipBeside)} style={tooltipPosition}>
           <Text size={200} weight="semibold" block style={{ marginBottom: 4 }}>
             {formatWeekLong(weeks[hover.index])}
           </Text>
-          {series.map((s, si) => (
-            <div key={s.name} className={styles.tooltipRow}>
-              <span className={styles.tooltipLabel}>
-                <span className={styles.swatch} style={{ backgroundColor: seriesColor(si) }} />
-                <Text size={200}>{series.length > 1 ? serverPlaceholderText(t, s.name) : valueLabel}</Text>
-              </span>
-              <Text size={200} weight="semibold">
-                {s.points[hover.index]?.value == null
-                  ? t('charts.timeSeries.noData')
-                  : formatValue(s.points[hover.index].value as number)}
-              </Text>
-            </div>
-          ))}
+          <div
+            className={manySeries ? styles.tooltipGrid : undefined}
+            style={manySeries ? { gridTemplateColumns: `repeat(${series.length > 30 ? 3 : 2}, max-content)` } : undefined}
+          >
+            {series.map((s, si) => (
+              <div key={s.name} className={styles.tooltipRow}>
+                <span className={styles.tooltipLabel}>
+                  <SeriesSwatch index={si} className={styles.swatch} />
+                  <Text size={200}>{series.length > 1 ? serverPlaceholderText(t, s.name) : valueLabel}</Text>
+                </span>
+                <Text size={200} weight="semibold">
+                  {s.points[hover.index]?.value == null
+                    ? t('charts.timeSeries.noData')
+                    : formatValue(s.points[hover.index].value as number)}
+                </Text>
+              </div>
+            ))}
+          </div>
         </div>
       )}
 
@@ -295,7 +354,7 @@ export default function TimeSeriesChart({ series, valueLabel, height = 300, gapN
         <div className={styles.legend}>
           {series.map((s, si) => (
             <span key={s.name} className={styles.legendItem}>
-              <span className={styles.swatch} style={{ backgroundColor: seriesColor(si) }} />
+              <SeriesSwatch index={si} className={styles.swatch} />
               <Text size={200}>{serverPlaceholderText(t, s.name)}</Text>
             </span>
           ))}

@@ -33,6 +33,9 @@ namespace Common.Entities.LicenceActivity
                     report.AddRow("Administrator's filter", XlsxCell.Wrapped(peopleScopeDescription ?? "Applied"),
                         XlsxCell.Wrapped("Set by a portal administrator for everyone who views this report. Every figure here covers only the people it matches."));
                 report.AddRow("People holding a licence", overview.DistinctAssignedUsers, "Each person counted once across the selected population.");
+                if (overview.AllLicences != null)
+                    report.AddRow("Adoption score, everyone holding a licence", overview.AllLicences.AdoptionScore,
+                        XlsxCell.Wrapped(LicenceActivityRules.AdoptionScore + " Blank = nothing could be measured."));
                 report.AddRow("Department/country lists capped", overview.DemographicsTruncated, "TRUE means only the largest departments and countries are listed.");
                 report.AddRow("Who holds each licence", null, XlsxCell.Wrapped(LicenceActivityRules.AssignmentCaveat));
                 report.AddRow("How to read this", null, XlsxCell.Wrapped(LicenceActivityRules.InterpretationCaveat));
@@ -40,13 +43,18 @@ namespace Common.Entities.LicenceActivity
                 foreach (var message in overview.Messages) report.AddRow("Note", null, XlsxCell.Wrapped(message));
 
                 var licences = book.AddSheet("Licences");
-                licences.AddHeaderRow("Licence", "Licence code", "People assigned", "Service", "High", "Moderate", "Low", "No activity", "Unknown");
+                licences.AddHeaderRow("Licence", "Licence code", "People assigned", "Adoption score", "Service", "High", "Moderate", "Low", "No activity", "Unknown");
+                if (overview.AllLicences != null)
+                    foreach (var distribution in overview.AllLicences.Workloads)
+                        licences.AddRow("Everyone holding a licence", null, overview.AllLicences.AssignedUsers, overview.AllLicences.AdoptionScore,
+                            LicenceActivityRules.WorkloadLabel(distribution.Workload),
+                            distribution.High, distribution.Moderate, distribution.Low, distribution.Zero, distribution.Unknown);
                 foreach (var sku in overview.Licences)
                     foreach (var distribution in sku.Workloads)
-                        licences.AddRow(sku.Name, sku.SkuId, sku.AssignedUsers, LicenceActivityRules.WorkloadLabel(distribution.Workload),
+                        licences.AddRow(sku.Name, sku.SkuId, sku.AssignedUsers, sku.AdoptionScore, LicenceActivityRules.WorkloadLabel(distribution.Workload),
                             distribution.High, distribution.Moderate, distribution.Low, distribution.Zero, distribution.Unknown);
-                FormatTable(licences, 9);
-                report.AddRow("Licences sheet", null, "One row per licence and service. The \"People assigned\" figure repeats on each of that licence's rows, so do not add that column up.");
+                FormatTable(licences, 10);
+                report.AddRow("Licences sheet", null, "One row per licence and service, after the rows for everyone holding a licence. The \"People assigned\" and \"Adoption score\" figures repeat on each of that licence's rows, so do not add those columns up.");
 
                 var coverage = book.AddSheet("Where the figures come from");
                 coverage.AddHeaderRow("Service", "Data", "Source", "What was measured", "How often it was measured", "Data from (UTC)",
@@ -71,7 +79,10 @@ namespace Common.Entities.LicenceActivity
                         || users.Users.Count > LicenceActivityQuery.MaximumRows)
                         throw new ArgumentException("User snapshot exceeds the export row limit.", nameof(users));
                     report.AddRow("People list prepared (UTC)", users.GeneratedUtc.ToString("O"), "The lists and page currently on screen, not everyone holding the licence.");
-                    report.AddRow("Selected licence ID", users.Query.LicenceTypeId);
+                    if (users.Query.LicenceTypeId.HasValue)
+                        report.AddRow("Selected licence ID", users.Query.LicenceTypeId);
+                    else
+                        report.AddRow("Selected licence", "Everyone holding a licence", "People holding any licence, each listed once.");
                     report.AddRow("Ranked by service", LicenceActivityRules.WorkloadLabel(users.Query.Workload), "Services are never combined into a single score.");
                     report.AddRow("Size of each list", users.Query.Top);
                     report.AddRow("Search", users.Query.Search);

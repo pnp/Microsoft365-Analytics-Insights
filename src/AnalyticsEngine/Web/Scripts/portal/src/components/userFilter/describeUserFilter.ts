@@ -30,6 +30,7 @@ export const ENTRA_DIMENSION_LABEL_KEYS: Record<EntraDimensionKey, TranslationKe
   officeLocation: 'userFilter.dimension.officeLocation',
   country: 'userFilter.dimension.country',
   stateOrProvince: 'userFilter.dimension.stateOrProvince',
+  postalCode: 'userFilter.dimension.postalCode',
   usageLocation: 'userFilter.dimension.usageLocation',
   emailDomain: 'userFilter.dimension.emailDomain',
   userType: 'userFilter.dimension.userType',

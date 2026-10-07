@@ -44,7 +44,7 @@ const useStyles = makeStyles({
  * The aria-label and title carry the exact per-band counts, so the bar is never colour-only - a
  * screen reader (and a hover) get the numbers, satisfying "accessible legend + text evidence".
  */
-export function MiniDistribution({ distribution }: { distribution: LicenceActivityDistribution }) {
+export function MiniDistribution({ distribution, width }: { distribution: LicenceActivityDistribution; width?: number }) {
   const styles = useStyles();
   const t = useT();
   const total = distributionTotal(distribution);
@@ -56,7 +56,7 @@ export function MiniDistribution({ distribution }: { distribution: LicenceActivi
   ).join(', ');
 
   return (
-    <div className={styles.bar} role="img" aria-label={label} title={label}>
+    <div className={styles.bar} style={width ? { width: `${width}px` } : undefined} role="img" aria-label={label} title={label}>
       {total <= 0 ? (
         <div className={styles.seg} style={{ width: '100%', backgroundColor: '#8a8886' }} />
       ) : (
