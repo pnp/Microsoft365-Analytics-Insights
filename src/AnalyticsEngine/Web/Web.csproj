@@ -291,6 +291,7 @@
     <Compile Include="Models\LicenceActivity\LicenceActivitySnapshotCache.cs" />
     <Compile Include="Models\LicenceActivity\LicenceActivityTelemetry.cs" />
     <Compile Include="Models\CopilotAdoption\CopilotAdoptionAnalysisCoordinator.cs" />
+    <Compile Include="Models\Dlp\DlpGovernanceModels.cs" />
     <Compile Include="Models\Dlp\DlpModels.cs" />
     <Compile Include="Models\CopilotAdoption\CopilotAdoptionTelemetry.cs" />
     <Compile Include="Models\InstallLogModels.cs" />

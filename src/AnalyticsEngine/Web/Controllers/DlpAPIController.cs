@@ -9,6 +9,7 @@ using System.Data.Entity;
 using System.Data.Entity.SqlServer;
 using System.Globalization;
 using System.Linq;
+using System.Runtime.Caching;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Web.Http;
@@ -129,6 +130,42 @@ namespace Web.AnalyticsWeb.Controllers
                 includeIndividuals: PortalAccess.Evaluate(Request, User).SeePii,
                 scope: scope.IsRestricted ? scope.Sql : null));
         }
+
+        /// <summary>
+        /// The page's governance section (#648): Microsoft's prompt-safety and grounding signals for the Copilot
+        /// interactions in the window. Its own call rather than part of <see cref="Summary"/>, because it reads
+        /// the largest Copilot tables: the DLP figures render without waiting for it, and a failure here costs
+        /// the section, not the page.
+        /// </summary>
+        /// <remarks>
+        /// Aggregates only - no person, no prompt text - so it is open to every signed-in reader, narrowed by the
+        /// administrator's global filter exactly as the rest of the page is.
+        /// </remarks>
+        // GET: api/Dlp/governance?days=28
+        [HttpGet]
+        [Route("governance")]
+        public async Task<IHttpActionResult> Governance(int days = 28)
+        {
+            var scope = await _scopes.ResolveAsync(Request, User, null, CancellationToken.None);
+
+            // Keyed by window and by who the figures describe, so readers under different filters never share an
+            // answer and readers under the same one do.
+            var key = "DlpGovernance::" + SnapWindow(days).ToString(CultureInfo.InvariantCulture) + "::" + scope.Key;
+            if (MemoryCache.Default.Get(key) is DlpGovernanceSummary cached)
+            {
+                return Ok(cached);
+            }
+
+            var model = await BuildGovernanceAsync(days, scope.IsRestricted ? scope.Sql : null);
+            MemoryCache.Default.Set(key, model, DateTimeOffset.UtcNow.AddMinutes(GovernanceCacheMinutes));
+            return Ok(model);
+        }
+
+        /// <summary>
+        /// How long a window's governance figures are reused. They read the largest Copilot tables, and a
+        /// tenant-level rate does not move in minutes, so a reload or a second reader in that time costs nothing.
+        /// </summary>
+        private const int GovernanceCacheMinutes = 10;
 
         /// <summary>
         /// The query work behind <see cref="Summary"/>, separated so it can be executed against a real
@@ -730,6 +767,233 @@ GROUP BY p.policy_id, p.name;";
                 AuditedCount = p.Audited,
                 UsersAffected = countUsers ? (int?)p.Users : null,
             }).ToList();
+        }
+
+        // ---------------------------------------------------------------------------------------------------
+        // Governance signals (#648)
+        //
+        // One statement per detail table. Each starts from the window's interactions, read through
+        // IX_copilot_chats_time_stamp_user_id, is narrowed by the same scope marker as the rest of the page, and
+        // returns one row - or one row per model or plugin name - so nothing per interaction leaves SQL.
+        // OPTION (RECOMPILE) because the windows differ by 25x in size: a plan compiled for 7 days must not be
+        // reused for 180, nor the reverse.
+        //
+        // No index carries the two flags, so each detail table is read with ONE scan of its clustered index and
+        // hash-joined to the window. That was measured against the alternatives at synthetic 200,000-user scale
+        // (4M interactions over 180 days, 8.4M messages, 7M accessed resources) by
+        // Benchmarks/Invoke-CopilotGovernanceBenchmark.ps1, which reads these constants out of this file - keep
+        // their names starting with "Governance". The rejected shape matters most: reducing each interaction with
+        // OUTER APPLY ("aggregate per interaction, seek through the time_stamp index") made the optimiser spool
+        // both tables and probe the spool once per interaction - 54M logical reads and 52 s at 28 days, against
+        // 68k reads and 1.7 s for the resources statement below. Results in the PR for #648.
+        // ---------------------------------------------------------------------------------------------------
+
+        /// <summary>
+        /// The window's interactions, and the jailbreak flag (<c>copilot_event_messages.jailbreak_detected</c>) as
+        /// reported and flagged interaction counts.
+        /// </summary>
+        /// <remarks>
+        /// <para><b>A NULL flag is not reported, not clean.</b> An interaction is in the denominator only if at least
+        /// one of its messages carries the flag, true or false, and in the numerator only if one carries it true.
+        /// One whose messages are all NULL - every row imported before #570, and any payload that omits the field -
+        /// is in neither.</para>
+        /// <para>Semi-joins rather than a per-interaction <c>GROUP BY</c>: each counts an interaction once however
+        /// many messages it has, without aggregating the join. Measured: the grouped form spilled its hash
+        /// aggregate to tempdb (the optimiser cannot see that the flags are concentrated in recent rows) and ran
+        /// 12-33% slower with three times the variance, for half the logical reads. The flagged count reads few rows:
+        /// the scan keeps only <c>= 1</c> and seeks each interaction by its key.</para>
+        /// </remarks>
+        internal const string GovernanceMessagesSql = @"
+SELECT w.Interactions, r.JailbreakReported, f.JailbreakFlagged
+FROM (
+    SELECT COUNT_BIG(*) AS Interactions
+    FROM dbo.copilot_chats AS c
+    WHERE c.time_stamp >= @from AND c.time_stamp <= @to/*scope: AND c.user_id IN {scopeUsers}*/
+) AS w
+CROSS JOIN (
+    SELECT COUNT_BIG(*) AS JailbreakReported
+    FROM dbo.copilot_chats AS c
+    WHERE c.time_stamp >= @from AND c.time_stamp <= @to/*scope: AND c.user_id IN {scopeUsers}*/
+      AND EXISTS (SELECT 1 FROM dbo.copilot_event_messages AS m
+                  WHERE m.copilot_chat_id = c.event_id AND m.jailbreak_detected IS NOT NULL)
+) AS r
+CROSS JOIN (
+    SELECT COUNT_BIG(*) AS JailbreakFlagged
+    FROM dbo.copilot_chats AS c
+    WHERE c.time_stamp >= @from AND c.time_stamp <= @to/*scope: AND c.user_id IN {scopeUsers}*/
+      AND EXISTS (SELECT 1 FROM dbo.copilot_event_messages AS m
+                  WHERE m.copilot_chat_id = c.event_id AND m.jailbreak_detected = 1)
+) AS f
+OPTION (RECOMPILE);";
+
+        /// <summary>
+        /// The resources Copilot used in the window: the XPIA flag
+        /// (<c>copilot_event_accessed_resources.xpia_detected</c>) as reported and flagged interaction counts, and
+        /// how many of the resources carried a sensitivity label.
+        /// </summary>
+        /// <remarks>
+        /// Each interaction's resources are reduced to one row first, so it counts once in the XPIA figures however
+        /// many resources it used. <c>MAX</c> ignores NULLs, so an interaction whose resources all left the flag out
+        /// gets a NULL maximum, which <c>COUNT_BIG</c> skips: not reported, so in neither side of the rate. The label
+        /// share counts every resource, because an absent <c>SensitivityLabelId</c> means the content carried no label.
+        /// </remarks>
+        internal const string GovernanceResourcesSql = @"
+SELECT COUNT_BIG(*) AS InteractionsWithResources,
+       ISNULL(SUM(x.Resources), 0) AS Resources,
+       ISNULL(SUM(x.Labelled), 0) AS LabelledResources,
+       COUNT_BIG(x.XpiaFlagged) AS XpiaReported,
+       ISNULL(SUM(CAST(x.XpiaFlagged AS bigint)), 0) AS XpiaFlagged
+FROM (
+    SELECT a.copilot_chat_id,
+           COUNT_BIG(*) AS Resources,
+           COUNT_BIG(a.sensitivity_label_id) AS Labelled,
+           MAX(CAST(a.xpia_detected AS int)) AS XpiaFlagged
+    FROM dbo.copilot_chats AS c
+    INNER JOIN dbo.copilot_event_accessed_resources AS a ON a.copilot_chat_id = c.event_id
+    WHERE c.time_stamp >= @from AND c.time_stamp <= @to/*scope: AND c.user_id IN {scopeUsers}*/
+    GROUP BY a.copilot_chat_id
+) AS x
+OPTION (RECOMPILE);";
+
+        /// <summary>
+        /// Interactions per AI model name, and - on the grand-total row - interactions with any model at all.
+        /// Grouped by name, so a model reported under several versions or providers is one row.
+        /// </summary>
+        /// <remarks>
+        /// The junction tables are small - Microsoft names a model on few interactions - so the cost is the hash
+        /// join with the window. <c>GROUPING SETS</c> computes both distinct counts from one pass over it, through
+        /// an in-memory spool; a <c>DISTINCT</c>-first rewrite read 15 times fewer pages but joined the window twice
+        /// and was measured 35-50% slower.
+        /// </remarks>
+        internal const string GovernanceModelsSql = @"
+SELECT x.Name,
+       CAST(GROUPING(x.Name) AS bit) AS IsTotal,
+       COUNT_BIG(DISTINCT x.copilot_chat_id) AS Interactions
+FROM (
+    SELECT em.copilot_chat_id, m.[name] AS Name
+    FROM dbo.copilot_chats AS c
+    INNER JOIN dbo.copilot_event_ai_models AS em ON em.copilot_chat_id = c.event_id
+    INNER JOIN dbo.copilot_ai_models AS m ON m.id = em.model_id
+    WHERE c.time_stamp >= @from AND c.time_stamp <= @to/*scope: AND c.user_id IN {scopeUsers}*/
+) AS x
+GROUP BY GROUPING SETS ((x.Name), ())
+OPTION (RECOMPILE);";
+
+        /// <summary>
+        /// Interactions per AI system plugin, and - on the grand-total row - interactions with any plugin. A
+        /// plugin is named by its id ("BingWebSearch"), falling back to its name when the payload had no id.
+        /// </summary>
+        internal const string GovernancePluginsSql = @"
+SELECT x.Name,
+       CAST(GROUPING(x.Name) AS bit) AS IsTotal,
+       COUNT_BIG(DISTINCT x.copilot_chat_id) AS Interactions
+FROM (
+    SELECT ep.copilot_chat_id, COALESCE(p.plugin_id, p.[name]) AS Name
+    FROM dbo.copilot_chats AS c
+    INNER JOIN dbo.copilot_event_ai_system_plugins AS ep ON ep.copilot_chat_id = c.event_id
+    INNER JOIN dbo.copilot_ai_system_plugins AS p ON p.id = ep.ai_system_plugin_id
+    WHERE c.time_stamp >= @from AND c.time_stamp <= @to/*scope: AND c.user_id IN {scopeUsers}*/
+) AS x
+GROUP BY GROUPING SETS ((x.Name), ())
+OPTION (RECOMPILE);";
+
+        /// <summary>One row of <see cref="GovernanceMessagesSql"/>.</summary>
+        private sealed class GovernanceMessagesRow
+        {
+            public long Interactions { get; set; }
+            public long JailbreakReported { get; set; }
+            public long JailbreakFlagged { get; set; }
+        }
+
+        /// <summary>One row of <see cref="GovernanceResourcesSql"/>.</summary>
+        private sealed class GovernanceResourcesRow
+        {
+            public long InteractionsWithResources { get; set; }
+            public long Resources { get; set; }
+            public long LabelledResources { get; set; }
+            public long XpiaReported { get; set; }
+            public long XpiaFlagged { get; set; }
+        }
+
+        /// <summary>One row of <see cref="GovernanceModelsSql"/> or <see cref="GovernancePluginsSql"/>.</summary>
+        private sealed class GovernanceMixQueryRow
+        {
+            public string Name { get; set; }
+            public bool IsTotal { get; set; }
+            public long Interactions { get; set; }
+        }
+
+        /// <summary>
+        /// The query work behind <see cref="Governance"/>, separated so it can run against a real database in
+        /// tests. <paramref name="scope"/> is the administrator's global filter, or <c>null</c> for everyone.
+        /// </summary>
+        internal async Task<DlpGovernanceSummary> BuildGovernanceAsync(int days, ReportUserScope scope = null)
+        {
+            var windowDays = SnapWindow(days);
+            var toUtc = DateTime.UtcNow;
+            var fromUtc = toUtc.Date.AddDays(-windowDays);
+            var restricted = scope != null && scope.IsRestricted;
+            var effectiveScope = restricted ? scope : ReportUserScope.Everyone;
+
+            using (var db = _contextFactory.Create())
+            {
+                // Opened here, not by EF, so a scope's temporary table lives for every statement below - the same
+                // session pattern as BuildScopedSummaryAsync.
+                await AzureSqlTokenAuth.OpenAsync(db.Database.Connection);
+                if (restricted)
+                {
+                    await db.Database.ExecuteSqlCommandAsync(TransactionalBehavior.DoNotEnsureTransaction, ReportScopeSql.SessionCreateSql);
+                    await db.Database.ExecuteSqlCommandAsync(
+                        TransactionalBehavior.DoNotEnsureTransaction, ReportScopeSql.SessionFillSql, ReportScopeSql.CreateParameter(scope));
+                }
+
+                Task<List<T>> QueryAsync<T>(string sql)
+                {
+                    return db.Database.SqlQuery<T>(
+                        ReportScopeSql.ApplyInSession(sql, effectiveScope),
+                        new SqlParameter("@from", fromUtc),
+                        new SqlParameter("@to", toUtc)).ToListAsync();
+                }
+
+                var messages = (await QueryAsync<GovernanceMessagesRow>(GovernanceMessagesSql)).Single();
+                var resources = (await QueryAsync<GovernanceResourcesRow>(GovernanceResourcesSql)).Single();
+                var models = await QueryAsync<GovernanceMixQueryRow>(GovernanceModelsSql);
+                var plugins = await QueryAsync<GovernanceMixQueryRow>(GovernancePluginsSql);
+
+                return new DlpGovernanceSummary
+                {
+                    FromUtc = fromUtc,
+                    ToUtc = toUtc,
+                    Interactions = messages.Interactions,
+                    Jailbreak = new DlpGovernanceRate
+                    {
+                        FlaggedInteractions = messages.JailbreakFlagged,
+                        ReportedInteractions = messages.JailbreakReported,
+                    },
+                    Xpia = new DlpGovernanceRate
+                    {
+                        FlaggedInteractions = resources.XpiaFlagged,
+                        ReportedInteractions = resources.XpiaReported,
+                    },
+                    SensitivityLabels = new DlpGovernanceLabelShare
+                    {
+                        LabelledResources = resources.LabelledResources,
+                        Resources = resources.Resources,
+                        InteractionsWithResources = resources.InteractionsWithResources,
+                    },
+                    InteractionsWithModel = models.Where(r => r.IsTotal).Select(r => r.Interactions).SingleOrDefault(),
+                    Models = DlpGovernanceMaths.Mix(MixRows(models), messages.Interactions),
+                    InteractionsWithPlugin = plugins.Where(r => r.IsTotal).Select(r => r.Interactions).SingleOrDefault(),
+                    Plugins = DlpGovernanceMaths.Mix(MixRows(plugins), messages.Interactions),
+                };
+            }
+        }
+
+        private static IEnumerable<DlpGovernanceMixRow> MixRows(IEnumerable<GovernanceMixQueryRow> rows)
+        {
+            return rows
+                .Where(r => !r.IsTotal)
+                .Select(r => new DlpGovernanceMixRow { Name = r.Name, Interactions = r.Interactions });
         }
 
         /// <summary>Snaps an arbitrary day count to the nearest offered window.</summary>

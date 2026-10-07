@@ -330,6 +330,7 @@
     <Compile Include="CopilotPolicyDetailsShapeTests.cs" />
     <Compile Include="DlpApiContractTests.cs" />
     <Compile Include="DlpApiSqlIntegrationTests.cs" />
+    <Compile Include="DlpGovernanceTests.cs" />
     <Compile Include="OfficeAppsReportContractTests.cs" />
     <Compile Include="OfficeAppsReportSqlIntegrationTests.cs" />
     <Compile Include="IndexPlatformUserActivityLogDateMigrationTests.cs" />
