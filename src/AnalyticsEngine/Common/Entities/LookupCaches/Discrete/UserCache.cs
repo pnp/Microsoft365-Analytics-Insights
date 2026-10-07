@@ -47,9 +47,15 @@ namespace Common.Entities.LookupCaches
         /// <c>PreResolveLookupIdsAsync</c> on <c>AbstractDailyActivityLoader</c>.
         /// </para>
         /// <para>
-        /// The keys are <c>nvarchar</c> on purpose, even if <see cref="Load"/> moves to <c>varchar</c> (#713); the two
-        /// would still find the same user for every ASCII UPN (Entra UPNs are ASCII by policy) and could differ only
-        /// for a character outside the database's code page. <c>varchar</c> keys were measured (PR #712; 200,000
+        /// The keys are <c>nvarchar</c> on purpose, even if <see cref="Load"/> moves to <c>varchar</c> (#713). The two
+        /// find the same user whenever both the key and the stored <c>user_name</c> are ASCII, as Entra UPNs are by
+        /// policy. They can differ for non-ASCII text. Under a SQL collation <c>varchar</c> is compared with the
+        /// non-Unicode sort order, which does not treat the sharp s (U+00DF) or the ae ligature (U+00E6) as "ss" or
+        /// "ae", while the <c>nvarchar</c> comparison here does - so an ASCII key can match a stored non-ASCII
+        /// <c>user_name</c> here that a <c>varchar</c> <see cref="Load"/>, and the unique index <c>IX_users</c> (which
+        /// compares as <c>varchar</c> does), treat as a different user. Under a Windows collation both compare by
+        /// Unicode rules and differ only for characters outside the code page.
+        /// <c>varchar</c> keys were measured (PR #712; 200,000
         /// synthetic users, 1,000-key batches) and are not better under both collations. Under a SQL collation they
         /// cut SQL CPU from ~59 ms a batch to 1-19 ms. Under a Windows collation, which compares <c>varchar</c> by
         /// Unicode rules, the same merge join over the index took 30-50% more CPU (26-31 ms against 21 ms for keys
