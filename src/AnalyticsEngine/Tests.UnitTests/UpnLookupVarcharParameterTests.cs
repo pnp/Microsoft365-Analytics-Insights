@@ -34,8 +34,10 @@ namespace Tests.UnitTests
     /// customer's CPU graph.
     /// </para>
     /// <para>
-    /// The UPNs are ASCII because Entra restricts <c>userPrincipalName</c> to ASCII; what a non-ASCII input does is
-    /// a storage question, recorded in <c>UpnLookupBenchmarkTests</c> and in the PR, not asserted here.
+    /// The UPNs looked up are ASCII because Entra restricts <c>userPrincipalName</c> to ASCII; what a non-ASCII input
+    /// does is a storage question, recorded in <c>UpnLookupBenchmarkTests</c> and in the PR, not asserted here. One
+    /// test stores a row containing ß, which code page 1252 holds as is, only to show which row an ASCII key
+    /// resolves to.
     /// </para>
     /// </remarks>
     [TestClass]
@@ -64,10 +66,11 @@ namespace Tests.UnitTests
         }
 
         /// <summary>
-        /// Changing the parameter type must not change who is found. Every key is looked up twice on the same
-        /// rows - through <see cref="UserCache.Load"/>, and through the query it used to be (a plain
+        /// For ASCII keys and rows, changing the parameter type must not change who is found. Every key is looked up
+        /// twice on the same rows - through <see cref="UserCache.Load"/>, and through the query it used to be (a plain
         /// <c>nvarchar</c> parameter) - and both must land on the same user: different case, a trailing space on
-        /// either side, duplicates (lowest id wins) and a UPN nobody has.
+        /// either side, duplicates (lowest id wins) and a UPN nobody has. Where the two genuinely differ, the old
+        /// query was wrong: see <see cref="UserCacheLoad_MatchesUsersExactlyAsTheUniqueIndexDoes"/>.
         /// </summary>
         /// <remarks>
         /// Production has a unique index on <c>user_name</c>, so the duplicates are inserted inside a transaction
@@ -127,6 +130,59 @@ namespace Tests.UnitTests
                         Assert.AreEqual(2, sent.Count, $"'{key}' should have been compared with user_name twice: once by Load, once by the nvarchar query.");
                         Assert.AreEqual(1, sent.Count(c => c.DbType == DbType.AnsiString), $"Load must send '{key}' as varchar: {string.Join(", ", sent)}");
                         Assert.AreEqual(1, sent.Count(c => c.DbType == DbType.String), $"The comparison query is the nvarchar one Load used to send: {string.Join(", ", sent)}");
+                    }
+                }
+            }
+        }
+
+        /// <summary>
+        /// <see cref="UserCache.Load"/> matches users exactly as the unique index on <c>user_name</c> does. Under a SQL
+        /// collation <c>varchar</c> is compared with the code page's sort order, but the <c>nvarchar</c> parameter Load
+        /// used to send made SQL Server compare with Unicode rules, which expand ß to "ss" (and æ to "ae"). So
+        /// <c>Load("strasse...")</c> also matched a stored <c>"straße..."</c> - a row <c>IX_users</c> holds as a
+        /// different user - and with both stored, <c>OrderBy(ID)</c> returned the ß row whenever it was older.
+        /// </summary>
+        /// <remarks>
+        /// Only meaningful under a SQL collation: a Windows collation compares <c>varchar</c> by Unicode rules too, so
+        /// <c>IX_users</c> would reject the second row, and the test is Inconclusive there. ß is in code page 1252, so
+        /// nothing here depends on a character being lost at the <c>varchar</c> boundary; the test asserts only which
+        /// row an ASCII key resolves to.
+        /// </remarks>
+        [TestMethod]
+        public async Task UserCacheLoad_MatchesUsersExactlyAsTheUniqueIndexDoes()
+        {
+            using (var db = new AnalyticsEntitiesContext())
+            {
+                db.Database.Initialize(false);
+                await db.Database.Connection.OpenAsync();
+                var collation = await db.Database.SqlQuery<string>(
+                    "SELECT collation_name FROM sys.columns WHERE object_id = OBJECT_ID('dbo.users') AND name = 'user_name' "
+                    + "AND collation_name LIKE 'SQL[_]%' AND COLLATIONPROPERTY(collation_name, 'CodePage') = 1252")
+                    .SingleOrDefaultAsync();
+                if (collation == null)
+                {
+                    Assert.Inconclusive("users.user_name does not have a code page 1252 SQL collation. Under a Windows collation varchar and nvarchar both compare by Unicode rules, so the unique index will not hold both rows.");
+                    return;
+                }
+
+                using (var transaction = db.Database.BeginTransaction())
+                {
+                    try
+                    {
+                        var token = Guid.NewGuid().ToString("N").Substring(0, 12);
+                        var sharpSId = await db.Database.SqlQuery<int>(
+                            "INSERT INTO dbo.users (user_name) OUTPUT INSERTED.id VALUES ('stra' + CHAR(223) + 'e.' + @p0 + '@contoso.com')", token).SingleAsync();
+                        var asciiId = await InsertUserAsync(db, $"strasse.{token}@contoso.com");
+                        Assert.IsTrue(sharpSId < asciiId, "Precondition: the ß row is the older one, so lowest-id-wins would pick it.");
+
+                        var loaded = await new UserCache(db).Load($"strasse.{token}@contoso.com");
+
+                        Assert.AreEqual(asciiId, loaded?.ID,
+                            $"Load must resolve an ASCII UPN to the row the unique index says is that user ({collation}), not to the 'ß' row Unicode rules also match.");
+                    }
+                    finally
+                    {
+                        transaction.Rollback();
                     }
                 }
             }

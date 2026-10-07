@@ -16,9 +16,9 @@ namespace Common.Entities.LookupCaches
         }
 
         /// <summary>
-        /// The user with this UPN, or null. Matching follows the column's collation (case-insensitive on every
-        /// supported install) and ignores trailing spaces; duplicate UPNs (possible only where the unique
-        /// <c>IX_users</c> is missing) resolve to the lowest id.
+        /// The user with this UPN, or null. Users are matched exactly as the unique index <c>IX_users</c> matches them:
+        /// by the column's collation (case-insensitive on every supported install), ignoring trailing spaces. Duplicate
+        /// UPNs, possible only where that index is missing, resolve to the lowest id.
         /// </summary>
         /// <remarks>
         /// <para>
@@ -26,21 +26,29 @@ namespace Common.Entities.LookupCaches
         /// column Unicode, so a plain parameter goes as <c>nvarchar(4000)</c>, and <c>nvarchar</c> wins on data-type
         /// precedence: SQL Server converts the COLUMN to compare. Under a SQL collation - the Azure SQL Database
         /// default - that conversion cannot be turned into a seek, so every call scanned the whole of
-        /// <c>IX_users</c>. A Windows collation could still seek through the conversion; it now seeks without one.
-        /// This runs once for every UPN a cache has not seen yet: the get-or-create path for users who are not in SQL
-        /// yet, and the user import caching each user it has just inserted.
+        /// <c>IX_users</c>. A Windows collation could still seek, through a range computed from the converted value
+        /// and a residual conversion; it is now a plain seek. This runs once for every UPN a cache has not seen yet:
+        /// the get-or-create path for users who are not in SQL yet, and the user import caching each user it has just
+        /// inserted.
         /// </para>
         /// <para>
-        /// Measured with 200,000 synthetic users on LocalDB, 1,000 calls a run, median of 5 runs after a discarded
-        /// first, before -&gt; after (reproduce with <c>UpnLookupBenchmarkTests</c>):
+        /// Users are matched exactly as the unique index matches them. Under a SQL collation <c>varchar</c> is compared
+        /// with the code page's sort order - what <c>IX_users</c> uses - but the converted column was compared with
+        /// Unicode rules, which treat ß as "ss" and æ as "ae". So the old query also matched a stored "straße@..." for
+        /// "strasse@...", a row the unique index holds as a different user, and with both stored returned whichever was
+        /// older. Under a Windows collation both forms compare by Unicode rules.
+        /// </para>
+        /// <para>
+        /// Measured with 200,000 synthetic users on LocalDB, before -&gt; after, median of 5 runs after a discarded
+        /// first: 1,000 calls a run under the SQL collation, 20,000 under the Windows one. Server CPU is the statement's
+        /// own <c>sys.dm_exec_query_stats</c> time per execution. Reproduce with <c>UpnLookupBenchmarkTests</c>.
         /// <code>
-        ///   user_name collation           call   IX_users plan        reads per call   ms per 1,000   SQL CPU ms per 1,000
-        ///   SQL_Latin1_General_CP1_CI_AS  hit    Index Scan -> Seek   1,460 -> 6       17,237 -> 380  17,906 -> 16
-        ///   SQL_Latin1_General_CP1_CI_AS  miss   Index Scan -> Seek   1,457 -> 3       17,536 -> 292  17,890 -> 31
-        ///   Latin1_General_CI_AS          hit    Seek -> Seek             6 -> 6          468 -> 370      63 -> 31
-        ///   Latin1_General_CI_AS          miss   Seek -> Seek             3 -> 3          379 -> 325      47 -> 16
+        ///   user_name collation           call   plan on IX_users     reads per call   server CPU per call   ms per 1,000 calls
+        ///   SQL_Latin1_General_CP1_CI_AS  hit    Index Scan -> Seek   1,460 -> 6       17,367 -> 12.6 us     18,146 -> 401
+        ///   SQL_Latin1_General_CP1_CI_AS  miss   Index Scan -> Seek   1,457 -> 3       17,374 -> 7.8 us      18,103 -> 303
+        ///   Latin1_General_CI_AS          hit    Seek -> Seek             6 -> 6           56.0 -> 11.6 us        505 -> 361
+        ///   Latin1_General_CI_AS          miss   Seek -> Seek             3 -> 3           30.0 -> 7.7 us         376 -> 296
         /// </code>
-        /// CPU figures under about 50 ms are at the resolution of the server's timer.
         /// </para>
         /// <para>
         /// A non-ASCII value is now converted to the column's code page by the client, exactly as SQL Server converted

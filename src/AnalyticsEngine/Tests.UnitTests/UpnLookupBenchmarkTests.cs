@@ -43,8 +43,10 @@ namespace Tests.UnitTests
     /// </para>
     /// <para>
     /// Each run uses one connection, so the session's logical reads and SQL Server CPU time can be read before and
-    /// after from <c>sys.dm_exec_sessions</c>. The actual plan comes from replaying the command EF generated -
-    /// same text, same parameter types - with <c>SET STATISTICS XML ON</c>.
+    /// after from <c>sys.dm_exec_sessions</c>. That CPU figure is in milliseconds, too coarse for a single seek, so
+    /// each run also reads the statement's own <c>sys.dm_exec_query_stats</c> entry, which times every execution
+    /// in microseconds. The actual plan comes from replaying the command EF generated - same text, same parameter
+    /// types - with <c>SET STATISTICS XML ON</c>.
     /// </para>
     /// </remarks>
     [TestClass]
@@ -96,12 +98,12 @@ namespace Tests.UnitTests
                 string.Empty,
                 "Medians (first run discarded):",
                 string.Empty,
-                "| Database | user_name | Scenario | Elapsed ms | Logical reads | Reads per query | SQL CPU ms | Parameter sent | Actual plan |",
-                "|---|---|---|---|---|---|---|---|---|",
+                "| Database | user_name | Scenario | Elapsed ms | Logical reads | Reads per query | SQL CPU ms | Server CPU us per query | Server elapsed us per query | Parameter sent | Actual plan |",
+                "|---|---|---|---|---|---|---|---|---|---|---|",
             };
 
-            Emit("| Database | Scenario | Run | Elapsed ms | Logical reads | SQL CPU ms | SQL commands | Found |");
-            Emit("|---|---|---|---|---|---|---|---|");
+            Emit("| Database | Scenario | Run | Elapsed ms | Logical reads | SQL CPU ms | SQL commands | Found | Server executions | Server CPU us | Server elapsed us |");
+            Emit("|---|---|---|---|---|---|---|---|---|---|---|");
 
             var recorder = new CommandRecorder();
             DbInterception.Add(recorder);
@@ -142,23 +144,42 @@ namespace Tests.UnitTests
                     foreach (var scenario in scenarios)
                     {
                         var measured = new List<RunResult>();
-                        for (var run = 1; run <= runs; run++)
+                        // The first run finds out which statement EF sends; later runs read that statement's own
+                        // execution statistics, which time each execution in microseconds.
+                        StatementStatsReader stats = null;
+                        try
                         {
-                            recorder.Clear();
-                            var result = await RunAsync(connectionString, scenario, recorder);
-                            Emit($"| {database} | {scenario.Name} | {run}{(run == 1 ? " (discarded)" : string.Empty)} | {result.ElapsedMs:N0} | {result.LogicalReads:N0} | {result.CpuMs:N0} | {result.Commands:N0} | {result.Found:N0} |");
-                            Assert.AreEqual(scenario.ExpectedFound, result.Found, $"{scenario.Name} on {database} found the wrong number of users.");
-                            if (run > 1)
+                            for (var run = 1; run <= runs; run++)
                             {
-                                measured.Add(result);
+                                recorder.Clear();
+                                var result = await RunAsync(connectionString, scenario, recorder, stats);
+                                if (stats == null && recorder.First() != null)
+                                {
+                                    stats = await StatementStatsReader.OpenAsync(connectionString, recorder.First().Text);
+                                }
+
+                                Emit($"| {database} | {scenario.Name} | {run}{(run == 1 ? " (discarded)" : string.Empty)} | {result.ElapsedMs:N0} | {result.LogicalReads:N0} | {result.CpuMs:N0} | {result.Commands:N0} | {result.Found:N0} | {result.ServerExecutions:N0} | {result.ServerWorkerUs:N0} | {result.ServerElapsedUs:N0} |");
+                                Assert.AreEqual(scenario.ExpectedFound, result.Found, $"{scenario.Name} on {database} found the wrong number of users.");
+                                if (run > 1)
+                                {
+                                    Assert.AreEqual(result.Commands, result.ServerExecutions,
+                                        $"{scenario.Name} on {database}: the statement's execution statistics must cover every command the run sent.");
+                                    measured.Add(result);
+                                }
                             }
+                        }
+                        finally
+                        {
+                            stats?.Dispose();
                         }
 
                         var captured = recorder.First();
                         var plan = captured == null ? "(no command captured)" : await ActualPlanAsync(connectionString, captured);
                         var reads = Median(measured.Select(r => (double)r.LogicalReads));
                         var queries = Median(measured.Select(r => (double)r.Commands));
-                        summary.Add($"| {database} | {column} | {scenario.Name} | {Median(measured.Select(r => r.ElapsedMs)):N0} | {reads:N0} | {reads / Math.Max(1, queries):N1} | {Median(measured.Select(r => (double)r.CpuMs)):N0} | {captured?.ParameterSummary ?? "-"} | {plan} |");
+                        var serverCpu = Median(measured.Select(r => (double)r.ServerWorkerUs / Math.Max(1, r.ServerExecutions)));
+                        var serverElapsed = Median(measured.Select(r => (double)r.ServerElapsedUs / Math.Max(1, r.ServerExecutions)));
+                        summary.Add($"| {database} | {column} | {scenario.Name} | {Median(measured.Select(r => r.ElapsedMs)):N0} | {reads:N0} | {reads / Math.Max(1, queries):N1} | {Median(measured.Select(r => (double)r.CpuMs)):N0} | {serverCpu:N1} | {serverElapsed:N1} | {captured?.ParameterSummary ?? "-"} | {plan} |");
                     }
                 }
             }
@@ -271,11 +292,13 @@ namespace Tests.UnitTests
 
         private static string Hex(byte[] bytes) => bytes == null ? "null" : BitConverter.ToString(bytes.Take(12).ToArray()).Replace("-", " ") + (bytes.Length > 12 ? " ..." : string.Empty);
 
-        private static async Task<RunResult> RunAsync(string connectionString, Scenario scenario, CommandRecorder recorder)
+        private static async Task<RunResult> RunAsync(string connectionString, Scenario scenario, CommandRecorder recorder, StatementStatsReader stats)
         {
             using (var db = OpenReadOnly(connectionString))
             {
                 await db.Database.Connection.OpenAsync();
+
+                var statsBefore = stats == null ? null : await stats.ReadAsync();
                 var before = await SessionCountersAsync(db);
 
                 recorder.Counting = true;
@@ -285,6 +308,7 @@ namespace Tests.UnitTests
                 recorder.Counting = false;
 
                 var after = await SessionCountersAsync(db);
+                var statsAfter = stats == null ? null : await stats.ReadAsync();
                 return new RunResult
                 {
                     ElapsedMs = watch.Elapsed.TotalMilliseconds,
@@ -292,8 +316,93 @@ namespace Tests.UnitTests
                     CpuMs = after.CpuMs - before.CpuMs,
                     Commands = recorder.Count,
                     Found = found,
+                    ServerExecutions = stats == null ? 0 : statsAfter.Executions - statsBefore.Executions,
+                    ServerWorkerUs = stats == null ? 0 : statsAfter.WorkerMicroseconds - statsBefore.WorkerMicroseconds,
+                    ServerElapsedUs = stats == null ? 0 : statsAfter.ElapsedMicroseconds - statsBefore.ElapsedMicroseconds,
                 };
             }
+        }
+
+        private sealed class StatementStats
+        {
+            public long Executions;
+            public long WorkerMicroseconds;
+            public long ElapsedMicroseconds;
+        }
+
+        /// <summary>
+        /// Reads the cumulative <c>sys.dm_exec_query_stats</c> of one statement in one database, which times every
+        /// execution in microseconds - the session's millisecond <c>cpu_time</c> is far too coarse for a single seek.
+        /// </summary>
+        /// <remarks>
+        /// Runs on its own connection, so none of its cost lands in the measured session's counters. The statement is
+        /// found once by its text (the cached text also carries the parameter declarations, so the old and new forms
+        /// are separate entries; <c>CHARINDEX</c> takes at most 8,000 characters, enough to tell them apart), and is
+        /// then read by <c>sql_handle</c>, which is a hash of the text and so survives a recompile.
+        /// </remarks>
+        private sealed class StatementStatsReader : IDisposable
+        {
+            private readonly SqlConnection _connection;
+            private readonly List<byte[]> _handles = new List<byte[]>();
+
+            private StatementStatsReader(SqlConnection connection)
+            {
+                _connection = connection;
+            }
+
+            public static async Task<StatementStatsReader> OpenAsync(string connectionString, string statement)
+            {
+                var connection = new SqlConnection(connectionString);
+                await connection.OpenAsync();
+                var reader = new StatementStatsReader(connection);
+                using (var command = new SqlCommand(@"
+SELECT DISTINCT qs.sql_handle
+FROM sys.dm_exec_query_stats AS qs
+CROSS APPLY sys.dm_exec_sql_text(qs.sql_handle) AS st
+CROSS APPLY sys.dm_exec_plan_attributes(qs.plan_handle) AS pa
+WHERE pa.attribute = 'dbid' AND CAST(pa.value AS int) = DB_ID() AND CHARINDEX(@statement, st.text) > 0;", connection))
+                {
+                    command.CommandTimeout = 300;
+                    command.Parameters.Add("@statement", SqlDbType.NVarChar, 4000).Value = statement.Length > 4000 ? statement.Substring(0, 4000) : statement;
+                    using (var rows = await command.ExecuteReaderAsync())
+                    {
+                        while (await rows.ReadAsync())
+                        {
+                            reader._handles.Add((byte[])rows[0]);
+                        }
+                    }
+                }
+
+                Assert.IsTrue(reader._handles.Count > 0, "The statement EF sent is not in the plan cache.");
+                return reader;
+            }
+
+            public async Task<StatementStats> ReadAsync()
+            {
+                var names = _handles.Select((h, i) => "@h" + i).ToList();
+                using (var command = new SqlCommand($@"
+SELECT CAST(ISNULL(SUM(qs.execution_count), 0) AS bigint),
+       CAST(ISNULL(SUM(qs.total_worker_time), 0) AS bigint),
+       CAST(ISNULL(SUM(qs.total_elapsed_time), 0) AS bigint)
+FROM sys.dm_exec_query_stats AS qs
+CROSS APPLY sys.dm_exec_plan_attributes(qs.plan_handle) AS pa
+WHERE qs.sql_handle IN ({string.Join(", ", names)}) AND pa.attribute = 'dbid' AND CAST(pa.value AS int) = DB_ID();", _connection))
+                {
+                    command.CommandTimeout = 300;
+                    for (var i = 0; i < _handles.Count; i++)
+                    {
+                        command.Parameters.Add(names[i], SqlDbType.VarBinary, 64).Value = _handles[i];
+                    }
+
+                    using (var rows = await command.ExecuteReaderAsync())
+                    {
+                        await rows.ReadAsync();
+                        return new StatementStats { Executions = rows.GetInt64(0), WorkerMicroseconds = rows.GetInt64(1), ElapsedMicroseconds = rows.GetInt64(2) };
+                    }
+                }
+            }
+
+            public void Dispose() => _connection.Dispose();
         }
 
         /// <summary>
@@ -461,6 +570,9 @@ SELECT COUNT_BIG(*) FROM dbo.users WHERE user_name LIKE 'lookupbench%';";
             public long CpuMs;
             public long Commands;
             public int Found;
+            public long ServerExecutions;
+            public long ServerWorkerUs;
+            public long ServerElapsedUs;
         }
 
         private sealed class CapturedParameter
