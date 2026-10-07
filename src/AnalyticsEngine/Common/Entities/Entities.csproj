@@ -112,6 +112,7 @@
     <Compile Include="CopilotAdoption\CopilotAdoptionExports.cs" />
     <Compile Include="CopilotAdoption\CopilotAdoptionGuidanceCatalogue.cs" />
     <Compile Include="CopilotAdoption\CopilotAdoptionDateRange.cs" />
+    <Compile Include="CopilotAdoption\CopilotAdoptionManagerModelling.cs" />
     <Compile Include="CopilotAdoption\CopilotAdoptionOptions.cs" />
     <Compile Include="CopilotAdoption\CopilotAdoptionScope.cs" />
     <Compile Include="CopilotAdoption\CopilotAdoptionScoring.cs" />

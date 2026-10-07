@@ -29,6 +29,19 @@ namespace Common.Entities.CopilotAdoption
 
         public string ManagerUserPrincipalName { get; set; }
 
+        /// <summary>
+        /// The direct manager's user id (<c>users.manager_id</c>), so the manager-modelling figures can
+        /// find the manager among the rows the analysis already loaded by id rather than by matching
+        /// sign-in names. Null when no manager is recorded.
+        /// </summary>
+        public int? ManagerUserId { get; set; }
+
+        /// <summary>
+        /// The direct manager's <c>account_enabled</c>, read from the manager join the query already
+        /// makes. The only enabled flag available for a manager who holds no Copilot seat.
+        /// </summary>
+        public bool? ManagerAccountEnabled { get; set; }
+
         public bool? AccountEnabled { get; set; }
 
         public bool? HoldsSeatToday { get; set; }
@@ -148,6 +161,18 @@ namespace Common.Entities.CopilotAdoption
 
         [JsonProperty("manager")]
         public string ManagerUserPrincipalName { get; set; }
+
+        /// <summary>
+        /// The direct manager's user id. Internal to the manager-modelling aggregates (#641) and never
+        /// serialised: those figures are aggregate-only, and nothing about a manager's own Copilot use is
+        /// attached to a person's row.
+        /// </summary>
+        [JsonIgnore]
+        public int? ManagerUserId { get; set; }
+
+        /// <summary>The direct manager's <c>account_enabled</c>; see <see cref="ManagerUserId"/>.</summary>
+        [JsonIgnore]
+        public bool? ManagerAccountEnabled { get; set; }
 
         [JsonProperty("accountEnabled")]
         public bool? AccountEnabled { get; set; }

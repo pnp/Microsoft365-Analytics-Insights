@@ -561,6 +561,12 @@ namespace Common.Entities.CopilotAdoption
                 "       office.name AS OfficeLocation,\r\n" +
                 "       company.name AS CompanyName,\r\n" +
                 "       manager.user_name AS ManagerUserPrincipalName,\r\n" +
+                // The manager by user id, for the manager-modelling figures (#641): matched in memory
+                // against the licensed and unlicensed rows this analysis already loads, never by UPN.
+                // Both columns come from rows this query already reads - u itself, and the manager join
+                // above - so they add width to the result, not a lookup or a scan.
+                "       u.manager_id AS ManagerUserId,\r\n" +
+                "       manager.account_enabled AS ManagerAccountEnabled,\r\n" +
                 "       u.account_enabled AS AccountEnabled,\r\n" +
                 "       u.created_utc AS AccountCreatedUtc,\r\n" +
                 holdsSeatTodaySelect +

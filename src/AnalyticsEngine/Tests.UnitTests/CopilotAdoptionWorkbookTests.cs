@@ -711,6 +711,72 @@ namespace Tests.UnitTests
             StringAssert.Contains(text, "manager@contoso.com");
         }
 
+        /// <summary>
+        /// The manager-modelling figures (#641): per department on the department sheet, defined on the
+        /// method sheet with the caveat that they are an association and not a cause, and on Snapshot
+        /// facts as top-level keys - never keyed by a department name, which is tenant data.
+        /// </summary>
+        [TestMethod]
+        public void Workbook_CarriesManagerModellingByDepartment_WithItsDefinitionsAndCaveat()
+        {
+            var analysis = SyntheticAnalysis();
+            // Ten of the sixty synthetic seat holders manage the other fifty, five each. The fixture
+            // names a manager on every row by sign-in name only, so give each row a manager by id.
+            foreach (var user in analysis.LicensedUsers)
+            {
+                user.ManagerUserId = user.UserId < 10 ? (int?)null : user.UserId % 10;
+                user.ManagerAccountEnabled = user.ManagerUserId.HasValue ? (bool?)true : null;
+            }
+            new CopilotAdoptionService(analysis.Summary.Options).FinaliseSummary(analysis);
+            Assert.IsNotNull(analysis.Summary.ManagersActivePct, "The control: the fixture has enough managers to publish the figure.");
+
+            var bytes = CopilotAdoptionWorkbook.Build(analysis);
+
+            var departments = SheetCells(bytes, "Departments and apps");
+            CollectionAssert.Contains(departments, "Managers using Copilot %");
+            CollectionAssert.Contains(departments, "Active % - manager does not");
+            CollectionAssert.Contains(departments, "Habit % - uses Copilot, no seat");
+            Assert.IsTrue(departments.Any(c => c.Contains("association, not a cause")));
+
+            var firstTable = departments
+                .SkipWhile(c => c != "Managers using Copilot %")
+                .TakeWhile(c => !c.StartsWith("The same comparison, split by whether the manager holds a Copilot seat", StringComparison.Ordinal))
+                .ToList();
+            CollectionAssert.Contains(firstTable, "Whole tenant", "The whole population heads the department rows.");
+            CollectionAssert.Contains(firstTable, GreekDepartment,
+                "The Greek department name must reach the manager table verbatim, as on every other table.");
+
+            var method = string.Join("\n", SheetCells(bytes, "How this is calculated"));
+            StringAssert.Contains(method, "Do managers use Copilot themselves?");
+            StringAssert.Contains(method, "Managers and their teams: an association, not a cause");
+            StringAssert.Contains(method, "managersActivePct = managersActive / managersStatusKnown x 100");
+            StringAssert.Contains(method, "Disabled accounts are left out on both sides");
+            StringAssert.Contains(method, "Unknown is never counted as not active");
+
+            var facts = SheetCells(bytes, "Snapshot facts");
+            foreach (var key in new[] { "managersActivePct", "managersStatusUnknown", "reportsActiveRatePctManagerInactive", "reportsHabitRatePctManagerActiveLicensed", "managerModellingByDepartment.count" })
+            {
+                CollectionAssert.Contains(facts, key);
+            }
+
+            var keys = SheetKeyColumn(bytes);
+            Assert.IsFalse(keys.Any(k => k.Contains(GreekDepartment) || k.Contains("Fish & Chips")),
+                "A department name is tenant data and must never become a Snapshot facts key.");
+        }
+
+        [TestMethod]
+        public void Workbook_LeavesSuppressedManagerFiguresBlank_NeverZero()
+        {
+            // The fixture records no manager by id at all, so nothing can be said about any manager.
+            var bytes = CopilotAdoptionWorkbook.Build(SyntheticAnalysis());
+
+            var cells = SheetCells(bytes, "Snapshot facts");
+            var index = cells.IndexOf("managersActivePct");
+            Assert.AreNotEqual(-1, index);
+            Assert.AreNotEqual("0", cells.ElementAtOrDefault(index + 1),
+                "With no manager whose use is known the figure is unknown - blank, never a measured 0%.");
+        }
+
         [TestMethod]
         public void Workbook_WithoutIndividualData_NamesNobody_ButKeepsEveryAggregate()
         {
