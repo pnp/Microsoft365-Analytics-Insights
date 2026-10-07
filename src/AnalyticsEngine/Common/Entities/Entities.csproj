@@ -81,6 +81,14 @@
   <ItemGroup>
     <Compile Include="BaseEntity.cs" />
     <Compile Include="BuildConstants.cs" />
+    <Compile Include="ActivityAnalysis\ActivityAnalysisCache.cs" />
+    <Compile Include="ActivityAnalysis\ActivityAnalysisEvaluation.cs" />
+    <Compile Include="ActivityAnalysis\ActivityAnalysisMetrics.cs" />
+    <Compile Include="ActivityAnalysis\ActivityAnalysisModels.cs" />
+    <Compile Include="ActivityAnalysis\ActivityAnalysisQuery.cs" />
+    <Compile Include="ActivityAnalysis\ActivityAnalysisReadModel.cs" />
+    <Compile Include="ActivityAnalysis\ActivityAnalysisSql.cs" />
+    <Compile Include="ActivityAnalysis\SqlActivityAnalysisSource.cs" />
     <Compile Include="LicenceActivity\ILicenceActivityStore.cs" />
     <Compile Include="LicenceActivity\LicenceActivityModels.cs" />
     <Compile Include="LicenceActivity\LicenceActivityQuery.cs" />
@@ -175,6 +183,7 @@
     <Compile Include="LookupCaches\Discrete\CountryOrRegionCache.cs" />
     <Compile Include="LookupCaches\Discrete\DBLookupCache.cs" />
     <Compile Include="LookupCaches\Discrete\EmailAddressCache.cs" />
+    <Compile Include="LookupCaches\Discrete\ExistingUserIds.cs" />
     <Compile Include="LookupCaches\Discrete\KeywordCache.cs" />
     <Compile Include="LookupCaches\Discrete\LanguageCache.cs" />
     <Compile Include="LookupCaches\Discrete\LicenseTypeCache.cs" />

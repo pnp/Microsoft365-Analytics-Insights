@@ -159,24 +159,16 @@ export const licenceActivity = {
   'licenceActivity.dateRange.error.rangeAtLeastDays': 'The range must be at least {days} days.',
   'licenceActivity.dateRange.error.rangeNoLongerThanDays': 'The range cannot be longer than {days} days.',
 
-  // Overview and selected licence
+  // Overview headline figures
   'licenceActivity.overview.peopleWithLicence': 'People with a licence',
   'licenceActivity.overview.countingEachPersonOnce': 'in this selection, counting each person once',
-  'licenceActivity.overview.licenceTypes': 'Licence types',
-  'licenceActivity.overview.assignedOne': 'assigned in this selection',
   'licenceActivity.overview.assignedMany': 'assigned, each measured separately',
-  'licenceActivity.overview.selectedLicence': 'Selected licence',
-  'licenceActivity.overview.peopleHoldItSeeTabs': '{count} people hold it \u00b7 see By service and People',
-  'licenceActivity.overview.noneChosen': 'None chosen',
-  'licenceActivity.overview.chooseLicenceBelow': 'Choose a licence below to see its services and people',
-  'licenceActivity.selectedLicence.aria': 'Selected licence',
-  'licenceActivity.selectedLicence.choose': 'Choose a licence',
-  'licenceActivity.selectedLicence.peopleHold': '{count} people hold this licence',
+  'licenceActivity.overview.licencesHeld': 'Licences held',
+  'licenceActivity.overview.licencesNobodyHolds': 'plus {count} that nobody holds',
+  'licenceActivity.overview.scoreAcrossEveryone': 'across everyone holding a licence',
 
   // Assignments and demographic breakdowns
   'licenceActivity.assignments.empty': 'No licence assignments were found for this selection.',
-  'licenceActivity.assignments.title': 'Licence assignments',
-  'licenceActivity.assignments.description': 'Select a licence to see how much each service is used, and who holds it.',
   'licenceActivity.assignments.showingOf': 'Showing {shown} of {total}.',
   'licenceActivity.assignments.filterPlaceholder': 'Filter by licence name or code',
   'licenceActivity.assignments.filterAria': 'Filter licences',
@@ -206,6 +198,8 @@ export const licenceActivity = {
   'licenceActivity.users.topCountAria': 'Number of people in each list',
   'licenceActivity.users.holdLicenceChooseService':
     '{count} people hold this licence. Choose a service to rank them by how much they use it.',
+  'licenceActivity.users.holdAnyLicenceChooseService':
+    '{count} people hold at least one licence. Choose a service to find your most and least active people, whichever licence they hold.',
   'licenceActivity.users.showTop': 'Show top',
   'licenceActivity.users.ofEach': 'of each',
   'licenceActivity.users.refreshAria': 'Refresh the list',
@@ -218,6 +212,7 @@ export const licenceActivity = {
   'licenceActivity.users.leastActive': 'Least active',
   'licenceActivity.users.bottomN': 'bottom {count}',
   'licenceActivity.users.everyoneWithLicence': 'Everyone with this licence',
+  'licenceActivity.users.everyoneWithAnyLicence': 'Everyone holding a licence',
   'licenceActivity.users.peopleCount': '{count} people',
   'licenceActivity.users.noStaffNames':
     'Staff names aren\u2019t collected by this product, so people are listed and searched by their sign-in address.',
@@ -248,7 +243,7 @@ export const licenceActivity = {
   'licenceActivity.page.title': 'Licence activity',
   'licenceActivity.page.preview': 'Preview',
   'licenceActivity.page.intro':
-    'Which licences are assigned, and how much are the people who hold them actually using each Microsoft 365 service. Each service is shown on its own and never blended into a single score. Missing or incomplete reporting data is shown as "Unknown", not proof of no activity.',
+    'Which licences are assigned, and how much the people who hold them actually use each Microsoft 365 service. Compare licences side by side by their adoption score and service by service, then find your most and least active people. Missing or incomplete reporting data is shown as "Unknown", not proof of no activity.',
   'licenceActivity.page.previewNote':
     "This report is in preview. Figures are kept for up to 5 minutes before being worked out again, so a very recent import may not appear straight away, and the first look at a new date range takes longer. Nothing here is a judgement of anyone's productivity, or a recommendation to take a licence away \u2014 it is evidence of activity only.",
   'licenceActivity.page.checkingAvailability': 'Checking availability...',
@@ -272,15 +267,12 @@ export const licenceActivity = {
   'licenceActivity.page.tryAgain': 'Try again',
   'licenceActivity.page.loading': 'Loading licence activity...',
   'licenceActivity.page.overviewFailed': 'Failed to load the licence activity overview.',
-  'licenceActivity.page.tabOverview': 'Overview',
-  'licenceActivity.page.tabByService': 'By service',
+  'licenceActivity.page.tabLicences': 'Licences',
   'licenceActivity.page.tabByDemographic': 'By department & country',
   'licenceActivity.page.tabPeople': 'People',
   'licenceActivity.page.activityByService': 'Activity by service',
   'licenceActivity.page.activityByServiceSubtitle':
-    'Each Microsoft 365 service on its own, never blended into a single score',
-  'licenceActivity.page.chooseLicenceOverview':
-    'Choose a licence on the Overview tab to see how much each service is used.',
+    'Each Microsoft 365 service on its own, read against everyone holding a licence or against another licence',
   'licenceActivity.page.activityByDemographic': 'Activity by department and country',
   'licenceActivity.page.activityByDemographicSubtitle':
     'Where the licences sit in the organisation, and how much they are being used',
@@ -290,10 +282,47 @@ export const licenceActivity = {
   'licenceActivity.page.byCountry': 'By country',
   'licenceActivity.page.noDemographicBreakdown':
     'No department or country breakdown is available for this selection.',
-  'licenceActivity.page.peopleHoldingLicence': 'People holding this licence',
-  'licenceActivity.page.peopleSubtitle': "Who is and isn't using a licence",
-  'licenceActivity.page.selectLicenceForPeople':
-    'Select a licence on the Overview tab to see who is most and least active, or to browse everyone who holds it.',
+  'licenceActivity.page.peopleTitle': 'Most and least active people',
+  'licenceActivity.page.peopleSubtitle': "Who is and isn't using their licences - across everyone holding a licence, or for one licence",
+
+  // Licence scope: everyone holding a licence, or one licence
+  'licenceActivity.scope.allLicensedUsers': 'Everyone holding a licence',
+  'licenceActivity.scope.allLicensedUsersCaption': 'Each person counted once, whichever licences they hold',
+  'licenceActivity.scope.optionWithCount': '{name} ({count})',
+
+  // Licence comparison table and adoption score
+  'licenceActivity.compare.title': 'Compare licences',
+  'licenceActivity.compare.description':
+    'Sort by any column to find the licences whose holders use each service the most and the least. Select a licence to see its services below.',
+  'licenceActivity.compare.sortBy': 'Sort by {column}',
+  'licenceActivity.compare.hideEmpty': 'Hide licences nobody holds ({count})',
+  'licenceActivity.compare.rateTitle': '{rate} of the holders measured for {service} were active',
+  'licenceActivity.compare.adoptionScore': 'Adoption score',
+  'licenceActivity.compare.adoptionScoreWhat':
+    'How much the people holding a licence use their Microsoft 365 services, from 0 to 100, so that licences of very different sizes can be compared with each other.',
+  'licenceActivity.compare.adoptionScoreHow':
+    'The share of measured weeks in which the holders were active, across every service that could be measured for them. 100 means every holder used every measured service in every week of the period; 0 means no recorded activity at all. A service that could not be measured for someone is left out of their score rather than counted as unused. It measures use, not value or productivity.',
+  'licenceActivity.compare.adoptionScoreFormula':
+    'Adoption score = 100 \u00d7 weeks active \u00f7 weeks measured\n(added up over every holder and every service that could be measured)',
+  'licenceActivity.compare.scoreAria': 'Adoption score {score} out of 100',
+  'licenceActivity.compare.scoreWithBaselineAria':
+    'Adoption score {score} out of 100; everyone holding a licence scores {baseline}',
+  'licenceActivity.compare.compareWith': 'Compare with',
+  'licenceActivity.compare.comparisonBarAria': '{label} activity distribution for {comparison}',
+  'licenceActivity.compare.comparisonRate': '{comparison}: {rate} active',
+  'licenceActivity.compare.comparisonNotMeasured': '{comparison}: not measured',
+  'licenceActivity.compare.points': '{points} pts',
+  'licenceActivity.compare.rank': 'Ranks {rank} of {of} licences for {service}',
+
+  // The selected licence's (or everyone's) detail
+  'licenceActivity.detail.showPeople': 'See who holds it',
+  'licenceActivity.detail.showChampions': 'See the most active people',
+  'licenceActivity.detail.holdThisLicence': 'hold this licence',
+  'licenceActivity.detail.holdAnyLicence': 'hold at least one licence',
+  'licenceActivity.detail.scoreAgainstEveryone': 'Everyone holding a licence: {score}',
+  'licenceActivity.detail.scoreOutOf100': 'out of 100',
+  'licenceActivity.detail.scoreRank': 'ranks {rank} of {of} licences',
+  'licenceActivity.detail.servicesFor': 'Each service for {name}',
 } as const;
 
 export default licenceActivity;

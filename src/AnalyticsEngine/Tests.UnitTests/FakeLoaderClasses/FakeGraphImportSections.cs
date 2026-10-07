@@ -36,6 +36,9 @@ namespace UnitTests.FakeLoaderClasses
         public string CadenceKey { get; }
         public int IntervalHours { get; }
 
+        /// <summary>Whether the section belongs to the deferred pass (issue #706). Defaults to the main pass.</summary>
+        public bool IsDeferred { get; set; }
+
         /// <summary>Whether the tenant has this import switched on. Defaults to on.</summary>
         public bool Enabled { get; set; } = true;
 

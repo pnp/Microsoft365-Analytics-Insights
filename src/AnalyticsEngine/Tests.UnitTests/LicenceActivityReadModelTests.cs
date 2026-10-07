@@ -269,8 +269,9 @@ namespace Tests.UnitTests
                 Query().ForUsers(1, "teams", null, "upn", "asc", 10, 1, 50, Now), CancellationToken.None);
             Assert.AreEqual(0, empty.TotalUsers);
             Assert.AreEqual(0, empty.Users.Count);
-            Assert.ThrowsException<ArgumentException>(() =>
-                model.BuildUsers(overview, Query(), CancellationToken.None));
+            // No licence asks for everyone holding any licence - here the one person holding licence 2.
+            var everyone = model.BuildUsers(overview, Query(), CancellationToken.None);
+            Assert.AreEqual(1, everyone.TotalUsers);
             Assert.ThrowsException<ArgumentException>(() =>
                 model.BuildUsers(overview,
                     Query().ForUsers(99, "teams", null, "upn", "asc", 10, 1, 50, Now), CancellationToken.None));
@@ -374,6 +375,125 @@ namespace Tests.UnitTests
                 .Workloads.Single(item => item.Workload == workload);
             Assert.AreEqual(status, evidence.Status);
             Assert.AreEqual(band, evidence.Band);
+        }
+
+        /// <summary>
+        /// Three people, two overlapping licences: user 1 holds both, user 2 only the first, user 3 only the
+        /// second (and sits in another department). Teams and Outlook have readings; OneDrive and SharePoint
+        /// are fully measured with nobody active; Copilot comes from the presence-gated usage report and
+        /// nobody is in it, so it is Unknown for everyone.
+        /// </summary>
+        private static LicenceActivityReadModel ScoredModel() => Model(
+            new[] { Sku(1, "Contoso E3"), Sku(2, "Contoso F3"), Sku(3, "Contoso unused") },
+            new[] { User(1), User(2), User(3, departmentId: 2, department: "Contoso Sales") },
+            new[] { Member(1, 1), Member(1, 2), Member(2, 1), Member(3, 2) },
+            AvailableCoverage(),
+            Scores(("teams", 1, Score(4, 4)), ("teams", 2, Score(2, 4)), ("outlook", 1, Score(4, 4))));
+
+        [TestMethod]
+        public void Overview_ComparesEveryLicenceWithEveryoneHoldingALicence_CountingEachPersonOnce()
+        {
+            var overview = ScoredModel().BuildOverview(Query(), CancellationToken.None);
+
+            var everyone = overview.AllLicences;
+            Assert.IsNotNull(everyone);
+            Assert.AreEqual(3, everyone.AssignedUsers, "User 1 holds two licences but is one person.");
+            var teams = everyone.Workloads.Single(item => item.Workload == "teams");
+            Assert.AreEqual(1, teams.High);
+            Assert.AreEqual(1, teams.Moderate);
+            Assert.AreEqual(1, teams.Zero);
+            Assert.AreEqual(0, teams.Unknown);
+            Assert.AreEqual(3, everyone.Workloads.Single(item => item.Workload == "copilot").Unknown);
+            Assert.AreEqual(overview.DistinctAssignedUsers, everyone.AssignedUsers);
+        }
+
+        [TestMethod]
+        public void AdoptionScore_IsActiveOverMeasuredWeeks_LeavingUnmeasuredServicesOut()
+        {
+            var overview = ScoredModel().BuildOverview(Query(), CancellationToken.None);
+
+            // Four measured services of four weeks each per person; Copilot is unmeasured and left out
+            // rather than counted as unused. User 1: 4 + 4 active weeks; user 2: 2; user 3: none.
+            Assert.AreEqual(31.3, overview.Licences.Single(sku => sku.LicenceTypeId == 1).AdoptionScore,
+                "(8 + 2) / 32 = 31.25%, rounded half away from zero.");
+            Assert.AreEqual(25.0, overview.Licences.Single(sku => sku.LicenceTypeId == 2).AdoptionScore, "(8 + 0) / 32");
+            Assert.AreEqual(20.8, overview.AllLicences.AdoptionScore, "(8 + 2 + 0) / 48 = 20.83%");
+            Assert.IsNull(overview.Licences.Single(sku => sku.LicenceTypeId == 3).AdoptionScore,
+                "Nobody holds it, so there is nothing to score - not a score of zero.");
+        }
+
+        [TestMethod]
+        public void AdoptionScore_AndEveryoneFollowTheDemographicFilter()
+        {
+            var model = ScoredModel();
+            var filtered = model.BuildOverview(
+                LicenceActivityQuery.Create(Query().From, Query().To, Now, departmentId: 1), CancellationToken.None);
+
+            Assert.AreEqual(2, filtered.AllLicences.AssignedUsers);
+            Assert.AreEqual(31.3, filtered.AllLicences.AdoptionScore, "Users 1 and 2 only: (8 + 2) / 32.");
+            Assert.AreEqual(50.0, filtered.Licences.Single(sku => sku.LicenceTypeId == 2).AdoptionScore,
+                "Only user 1 holds the second licence in this department: 8 / 16.");
+        }
+
+        [TestMethod]
+        public void AdoptionScore_IsNullWhenNothingCouldBeMeasured()
+        {
+            var coverage = AvailableCoverage();
+            foreach (var item in coverage) item.Status = "disabled";
+            var model = Model(new[] { Sku(1, "Contoso") }, Users(1), new[] { Member(1, 1) }, coverage, Scores());
+
+            var overview = model.BuildOverview(Query(), CancellationToken.None);
+
+            Assert.IsNull(overview.Licences.Single().AdoptionScore);
+            Assert.IsNull(overview.AllLicences.AdoptionScore);
+            Assert.IsNull(LicenceActivityRules.Score(0, 0));
+            Assert.AreEqual(0d, LicenceActivityRules.Score(0, 16));
+            Assert.AreEqual(100d, LicenceActivityRules.Score(16, 16));
+        }
+
+        [TestMethod]
+        public void Users_WithoutALicence_RankEveryoneHoldingAnyLicence()
+        {
+            var model = ScoredModel();
+            var overview = model.BuildOverview(Query(), CancellationToken.None);
+            var query = Query().ForUsers(null, "teams", null, "activity", "desc", 10, 1, 100, Now);
+
+            var result = model.BuildUsers(overview, query, CancellationToken.None);
+
+            Assert.IsNull(result.Query.LicenceTypeId);
+            Assert.AreEqual(3, result.TotalUsers, "Each person once, whichever licences they hold.");
+            CollectionAssert.AreEqual(new[] { 1, 2, 3 }, result.MostActive.Select(user => user.UserId).ToArray());
+            CollectionAssert.AreEqual(new[] { 3, 2, 1 }, result.LeastActive.Select(user => user.UserId).ToArray());
+            CollectionAssert.AreEqual(new[] { 1, 2, 3 }, result.Users.Select(user => user.UserId).ToArray());
+
+            var sales = model.BuildUsers(
+                model.BuildOverview(LicenceActivityQuery.Create(Query().From, Query().To, Now, departmentId: 2), CancellationToken.None),
+                LicenceActivityQuery.Create(Query().From, Query().To, Now, departmentId: 2)
+                    .ForUsers(null, "teams", null, "upn", "asc", 10, 1, 100, Now),
+                CancellationToken.None);
+            CollectionAssert.AreEqual(new[] { 3 }, sales.Users.Select(user => user.UserId).ToArray());
+        }
+
+        [TestMethod]
+        public void Workbook_CarriesEveryoneAndTheAdoptionScores()
+        {
+            var model = ScoredModel();
+            var overview = model.BuildOverview(Query(), CancellationToken.None);
+            overview.SnapshotId = "synthetic-overview";
+            var users = model.BuildUsers(
+                overview, Query().ForUsers(null, "teams", null, "activity", "desc", 10, 1, 100, Now), CancellationToken.None);
+            users.OverviewId = overview.SnapshotId;
+
+            using (var archive = new System.IO.Compression.ZipArchive(
+                new System.IO.MemoryStream(LicenceActivityWorkbook.Build(overview, users))))
+            {
+                var xml = string.Join("\n", archive.Entries
+                    .Where(e => e.FullName.StartsWith("xl/worksheets/", StringComparison.Ordinal))
+                    .Select(e => new System.IO.StreamReader(e.Open()).ReadToEnd()));
+                StringAssert.Contains(xml, "Everyone holding a licence");
+                StringAssert.Contains(xml, "Adoption score");
+                StringAssert.Contains(xml, "31.3");
+            }
         }
 
         private static LicenceActivityReadModel Model(

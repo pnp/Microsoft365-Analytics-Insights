@@ -391,7 +391,7 @@ namespace Tests.UnitTests
             Assert.AreEqual(1, analysis.Summary.CoworkUsers);
             Assert.IsNull(analysis.Summary.CoworkAdoptionPct,
                 "Eligibility is spending-policy scope. Until that denominator is imported, the percentage must be unknown rather than licensed-user based.");
-            Assert.IsTrue(analysis.Summary.Warnings.Any(w => w.IndexOf("deprecated Cowork agent", StringComparison.OrdinalIgnoreCase) >= 0));
+            Assert.IsTrue(analysis.Summary.WarningDetails.Any(w => w.Key == CopilotAdoptionWarningKeys.CoworkEligibilityUnknown));
         }
 
         [TestMethod]

@@ -1,9 +1,12 @@
 using Common.Entities;
 using Common.Entities.Entities.UsageReports;
+using Common.Entities.LookupCaches;
+using DataUtils.Sql;
 using Microsoft.Extensions.Logging;
 using System;
 using System.Collections.Generic;
 using System.Data.Entity;
+using System.Data.Entity.Infrastructure;
 using System.Linq;
 using System.Threading.Tasks;
 
@@ -75,6 +78,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Copilot
 
             _logger.LogInformation($"Copilot per-user report: creating {plan.ToCreate.Count} user record(s) not yet known to the database.");
 
+            var createdMeanwhile = 0;
             var autoDetectWasEnabled = _db.Configuration.AutoDetectChangesEnabled;
             _db.Configuration.AutoDetectChangesEnabled = false;
             try
@@ -90,19 +94,32 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Copilot
 
                     if (newUsers.Count >= SaveBatchSize)
                     {
-                        await FlushNewUsers(_db, newUsers, idsByUpn);
+                        createdMeanwhile += await FlushNewUsers(_db, newUsers, idsByUpn);
                     }
                 }
 
-                await FlushNewUsers(_db, newUsers, idsByUpn);
+                createdMeanwhile += await FlushNewUsers(_db, newUsers, idsByUpn);
             }
             finally
             {
                 _db.Configuration.AutoDetectChangesEnabled = autoDetectWasEnabled;
             }
 
-            return new CopilotUserIdResolution(idsByUpn, plan.ToCreate.Count, plan.SkippedUnknownDomain);
+            return new CopilotUserIdResolution(idsByUpn, plan.ToCreate.Count - createdMeanwhile, plan.SkippedUnknownDomain);
         }
+
+        /// <summary>
+        /// Save attempts per batch of new users. Each failed attempt leaves out the users another import has created
+        /// since <see cref="ResolveUserIdsAsync"/> loaded the existing ones, so a further attempt only fails if yet
+        /// another one appears in the meantime.
+        /// </summary>
+        internal const int MaxNewUserSaveAttempts = 3;
+
+        /// <summary>
+        /// Test seam: runs before each attempt to save a batch of new users, with the users about to be saved, so a
+        /// test can create one of them first, exactly as a concurrent import would.
+        /// </summary>
+        internal Func<IReadOnlyList<Common.Entities.User>, Task> BeforeNewUsersSaveAttemptAsync { get; set; }
 
         /// <summary>
         /// Commits a batch of new users, records their ids, then DETACHES them.
@@ -111,12 +128,49 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Copilot
         /// would make the per-batch scan O(total x batches) and hold them all in memory for the rest of the
         /// import. The ids are all we need afterwards.
         /// </summary>
-        private static async Task FlushNewUsers(AnalyticsEntitiesContext db, List<Common.Entities.User> newUsers, Dictionary<string, int> idsByUpn)
+        /// <remarks>
+        /// <c>user_name</c> is unique (<c>IX_users</c>), and other imports create users too, so a user can be created
+        /// between <see cref="ResolveUserIdsAsync"/> loading the existing users and this save. Its INSERT then fails
+        /// with a duplicate key, and SaveChanges rolls the whole batch back. That used to fail this report's save for
+        /// the cycle; now the batch is set aside, the ids of the users that exist now are recorded, and the rest are
+        /// saved again (#714). At most <see cref="MaxNewUserSaveAttempts"/> attempts. A duplicate-key error that none
+        /// of the batch's users explains, and every other error, is rethrown unchanged.
+        /// </remarks>
+        /// <returns>How many of the batch another import had created meanwhile.</returns>
+        private async Task<int> FlushNewUsers(AnalyticsEntitiesContext db, List<Common.Entities.User> newUsers, Dictionary<string, int> idsByUpn)
         {
-            if (newUsers.Count == 0) return;
+            if (newUsers.Count == 0) return 0;
 
-            db.ChangeTracker.DetectChanges();
-            await db.SaveChangesAsync();
+            var createdMeanwhile = 0;
+            for (var attempt = 1; ; attempt++)
+            {
+                if (BeforeNewUsersSaveAttemptAsync != null)
+                {
+                    await BeforeNewUsersSaveAttemptAsync(newUsers);
+                }
+
+                try
+                {
+                    db.ChangeTracker.DetectChanges();
+                    await db.SaveChangesAsync();
+                    break;
+                }
+                catch (DbUpdateException ex) when (attempt < MaxNewUserSaveAttempts && SqlDuplicateKey.IsViolation(ex))
+                {
+                    var setAside = await SetAsideUsersCreatedMeanwhile(db, newUsers, idsByUpn);
+                    if (setAside == 0)
+                    {
+                        // None of the batch's users exists, so this is not the race above.
+                        throw;
+                    }
+
+                    createdMeanwhile += setAside;
+                    if (newUsers.Count == 0)
+                    {
+                        return createdMeanwhile;
+                    }
+                }
+            }
 
             foreach (var user in newUsers)
             {
@@ -125,6 +179,50 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Copilot
             }
 
             newUsers.Clear();
+            return createdMeanwhile;
+        }
+
+        /// <summary>
+        /// After a duplicate-key failure: detaches the batch, records the ids of its users that exist now, and adds
+        /// the others back to be saved again. Returns how many existed; when none did, the batch is left detached.
+        /// </summary>
+        private async Task<int> SetAsideUsersCreatedMeanwhile(AnalyticsEntitiesContext db, List<Common.Entities.User> newUsers, Dictionary<string, int> idsByUpn)
+        {
+            // The failed SaveChanges rolled back every INSERT in the batch, and left the users Added.
+            foreach (var user in newUsers)
+            {
+                db.Entry(user).State = EntityState.Detached;
+            }
+
+            var existingIds = await ExistingUserIds.FindAsync(db, newUsers.Select(u => u.UserPrincipalName).ToList());
+            var notYetCreated = new List<Common.Entities.User>(newUsers.Count);
+            for (var i = 0; i < newUsers.Count; i++)
+            {
+                if (existingIds[i].HasValue)
+                {
+                    idsByUpn[newUsers[i].UserPrincipalName] = existingIds[i].Value;
+                }
+                else
+                {
+                    notYetCreated.Add(newUsers[i]);
+                }
+            }
+
+            var createdMeanwhile = newUsers.Count - notYetCreated.Count;
+            if (createdMeanwhile == 0)
+            {
+                return 0;
+            }
+
+            _logger.LogInformation($"Copilot per-user report: {createdMeanwhile} of the {newUsers.Count} new user record(s) in this batch were created by another import since the existing users were loaded; using those records as they are. Saving the other {notYetCreated.Count}.");
+
+            newUsers.Clear();
+            foreach (var user in notYetCreated)
+            {
+                db.users.Add(user);
+                newUsers.Add(user);
+            }
+            return createdMeanwhile;
         }
 
         #endregion

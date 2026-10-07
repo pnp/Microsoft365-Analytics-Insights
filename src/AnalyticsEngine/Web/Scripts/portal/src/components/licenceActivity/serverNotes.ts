@@ -57,3 +57,30 @@ export function serverMessageText(
 
   return message;
 }
+
+/**
+ * Availability notes an overview note repeats, each with the overview note that repeats it. The
+ * availability check's privacy note and the overview's "no display names" note both say people are listed
+ * by sign-in address, and the page gathers every note into one panel, so once the overview's note is there
+ * the availability's copy is left out. Before the overview loads, and on a page that is not available,
+ * the availability's note still shows.
+ */
+const REPEATED_BY_OVERVIEW: ReadonlyArray<readonly [TranslationKey, TranslationKey]> = [
+  ['licenceActivity.note.privacy', 'licenceActivity.note.noDisplayNames'],
+];
+
+/** The page's notes - the availability check's, then the overview's - each once, in the reader's language. */
+export function pageNotes(
+  t: TFunction,
+  availabilityMessages: readonly string[],
+  overviewMessages: readonly string[] = [],
+  coverage: readonly LicenceActivityCoverage[] = [],
+): string[] {
+  const repeated = new Set(
+    REPEATED_BY_OVERVIEW.filter(([, by]) => overviewMessages.includes(EN_CATALOG[by])).map(([note]) => EN_CATALOG[note]),
+  );
+  return [
+    ...availabilityMessages.filter((m) => !repeated.has(m)).map((m) => serverMessageText(t, m)),
+    ...overviewMessages.map((m) => serverMessageText(t, m, coverage)),
+  ];
+}

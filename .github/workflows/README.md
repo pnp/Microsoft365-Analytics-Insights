@@ -46,6 +46,28 @@ The dependency rules exist because every package references `Common/DataUtils` a
 `Common/Entities`: a package reference added there ships in all four zips. If the check fails, move
 the reference to the project that actually needs it rather than relaxing the rule.
 
+## SPFx package
+
+CI never builds the SharePoint Framework extension (`src/SPO/ModernPagesAITrackerExtension`). The
+release zips the package committed at `src/SPO/AITracker/spoinsights-modern-ui-aitracker.sppkg` into
+`AITrackerInstaller.zip`, and the installer deploys it as it is. So a change to the extension that wasn't
+rebuilt and committed would ship the old package.
+[`.github/scripts/Test-SpfxPackage.ps1`](../scripts/Test-SpfxPackage.ps1) fails the job unless these all
+carry the same version:
+
+* `package-solution.json`;
+* `AITRACKER_MODERN_VERSION`;
+* the committed package's `AppManifest.xml`;
+* the bundle inside that package.
+
+It runs in two places:
+
+* in `tests`' required `test_aitracker` check, when the extension, the package or the script changes;
+* in `ci`'s `build_aitracker`, before the installer zip is built.
+
+If it fails, rebuild the extension and commit the package, as
+[`src/SPO/.github/copilot-instructions.md`](../../src/SPO/.github/copilot-instructions.md) describes.
+
 ## tests
 
 * Run tests on pushes to `main`, `dev` and PRs ready for review.

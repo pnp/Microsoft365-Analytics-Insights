@@ -258,6 +258,12 @@ namespace WebJob.Office365ActivityImporter
             // retried on the next cycle exactly as before.
             CallQueueProcessor callQueueProcessor = null;
 
+            // The deferred Graph pass - the once-a-day usage reports - runs in the background, single-flight (issue
+            // #706). Running it inline anywhere in this loop only moves the wait: each step waits for the one
+            // before, so on report day the NEXT cycle's audit import would wait hours for it instead. Created ONCE
+            // here, outside the loop like callQueueProcessor, because a run outlives the cycle that started it.
+            var deferredGraphImport = new SingleFlightBackgroundRunner(logger, "Deferred Graph import (usage reports)");
+
             // Run app
             while (runAgain)
             {
@@ -305,7 +311,8 @@ namespace WebJob.Office365ActivityImporter
 
                 try
                 {
-                    // Get Teams & user data
+                    // Get Teams & user data: every Graph section except the deferred usage reports, which are
+                    // started in the background at the end of the cycle (issue #706).
                     await tasks.GetGraphTeamsAndUserData();
                 }
                 catch (Exception ex)
@@ -371,7 +378,28 @@ namespace WebJob.Office365ActivityImporter
                 // others. The phase handles its own errors and cadence gating.
                 await tasks.ImportAgentCosts();
 
+                // Deferred Graph sections: the once-a-day usage-report phase (issue #706). It used to run inside
+                // GetGraphTeamsAndUserData above, so on the cycle it was due the audit import (Copilot, Power
+                // Platform, DLP, SharePoint), the Copilot repairs and the agent-cost import all waited for it - for
+                // hours on a large tenant, much of it honouring Graph's ~10-minute Retry-After. Those reports are
+                // 2-3 days behind at source while everything above is near-real-time.
+                //
+                // So it is started in the background and NOT awaited: the following cycles, audit import included,
+                // run on time while it works. Single-flight: while a run is still going, later cycles log that and
+                // start no other. Started here, after this cycle's main pass, so a run never overlaps the user
+                // import of the cycle that starts it (on a fresh install, the full directory insert). Each run gets
+                // its own ProgramTasks - its own OAuth context, Graph clients and GraphImporter - and its own
+                // telemetry operation; the runner catches, tracks and logs its exceptions. The process-lifetime
+                // stores it shares are only used by this pass (the report throttle and completion stamps) or are
+                // safe for concurrent use (the user scope provider, the cadence store).
+                deferredGraphImport.TryStart(() =>
+                    new ProgramTasks(logger, configuredSettings, activityReportsLastImportedStore, graphLastRunStore,
+                        sentEmailMailboxSkipList, reportCompletionStore, userScopeProvider)
+                    .GetDeferredGraphData());
+
 #if DEBUG
+                // Debug runs a single cycle and then exits, so let the background run finish first.
+                await deferredGraphImport.InFlight;
                 runAgain = false; // Debug only runs once; release runs forever. 
 #endif
 

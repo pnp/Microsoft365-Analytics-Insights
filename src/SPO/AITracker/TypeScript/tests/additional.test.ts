@@ -13,6 +13,8 @@ import { InMemoryPageStateManager } from '../src/PageProps/PageState';
 import { LocalStoragePageStateManager } from '../src/PageProps/SpoImplementation/LocalStoragePageStateManager';
 import { splitIntoJsonArraysOfMaxBytes } from '../src/functions';
 
+const WEB = 'https://contoso.sharepoint.com/sites/test';
+
 // ===== LocalStorageUtils =====
 describe('LocalStorageUtils', () => {
     test('isLocalStorageAvailable returns true in jsdom', () => {
@@ -328,43 +330,72 @@ describe('PageProps additional tests', () => {
 describe('InMemoryPageStateManager additional tests', () => {
     test('pageSeen returns null for unseen page', () => {
         const m = new InMemoryPageStateManager();
-        expect(m.pageSeen('list', 99)).toBeNull();
+        expect(m.pageSeen(WEB, 'list', 99)).toBeNull();
     });
 
     test('registerPageSeen updates existing entry', () => {
         const m = new InMemoryPageStateManager();
-        const d1 = m.registerPageSeen('list', 1);
-        const d2 = m.registerPageSeen('list', 1);
+        const d1 = m.registerPageSeen(WEB, 'list', 1);
+        const d2 = m.registerPageSeen(WEB, 'list', 1);
         expect(d2.getTime()).toBeGreaterThanOrEqual(d1.getTime());
     });
 
     test('clear removes all entries', () => {
         const m = new InMemoryPageStateManager();
-        m.registerPageSeen('list', 1);
-        m.registerPageSeen('list', 2);
+        m.registerPageSeen(WEB, 'list', 1);
+        m.registerPageSeen(WEB, 'list', 2);
         m.clear();
-        expect(m.pageSeen('list', 1)).toBeNull();
-        expect(m.pageSeen('list', 2)).toBeNull();
+        expect(m.pageSeen(WEB, 'list', 1)).toBeNull();
+        expect(m.pageSeen(WEB, 'list', 2)).toBeNull();
     });
 
     test('different lists are tracked independently', () => {
         const m = new InMemoryPageStateManager();
-        m.registerPageSeen('list-a', 1);
-        expect(m.pageSeen('list-a', 1)).not.toBeNull();
-        expect(m.pageSeen('list-b', 1)).toBeNull();
+        m.registerPageSeen(WEB, 'list-a', 1);
+        expect(m.pageSeen(WEB, 'list-a', 1)).not.toBeNull();
+        expect(m.pageSeen(WEB, 'list-b', 1)).toBeNull();
     });
 
     test('getPageId is deterministic', () => {
         const m = new InMemoryPageStateManager();
-        const id1 = m.getPageId('list', 1);
-        const id2 = m.getPageId('list', 1);
+        const id1 = m.getPageId(WEB, 'list', 1);
+        const id2 = m.getPageId(WEB, 'list', 1);
         expect(id1).toBe(id2);
     });
 
     test('getPageId differs for different inputs', () => {
         const m = new InMemoryPageStateManager();
-        expect(m.getPageId('list', 1)).not.toBe(m.getPageId('list', 2));
-        expect(m.getPageId('list-a', 1)).not.toBe(m.getPageId('list-b', 1));
+        expect(m.getPageId(WEB, 'list', 1)).not.toBe(m.getPageId(WEB, 'list', 2));
+        expect(m.getPageId(WEB, 'list-a', 1)).not.toBe(m.getPageId(WEB, 'list-b', 1));
+    });
+
+    test('getPageId differs for the same list item in different webs', () => {
+        const m = new InMemoryPageStateManager();
+        expect(m.getPageId('https://contoso.sharepoint.com', 'Site Pages', 1))
+            .not.toBe(m.getPageId('https://contoso.sharepoint.com/sites/Καλημέρα', 'Site Pages', 1));
+    });
+
+    test('getPageId ignores a trailing slash and case in the web URL', () => {
+        const m = new InMemoryPageStateManager();
+        expect(m.getPageId('https://contoso.sharepoint.com/sites/Test/', 'Site Pages', 1))
+            .toBe(m.getPageId('https://contoso.sharepoint.com/sites/test', 'Site Pages', 1));
+    });
+
+    test('a page seen in one web is not seen in another', () => {
+        const m = new InMemoryPageStateManager();
+        m.registerPageSeen('https://contoso.sharepoint.com', 'Site Pages', 1);
+        expect(m.pageSeen('https://contoso.sharepoint.com/sites/other', 'Site Pages', 1)).toBeNull();
+    });
+
+    test('registerPageSeen forgets pages seen before the cut-off', () => {
+        const m = new InMemoryPageStateManager();
+        m.registerPageSeen(WEB, 'list', 1);
+        m.pages[0].seenOn = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000);
+
+        m.registerPageSeen(WEB, 'list', 2, new Date(Date.now() - 24 * 60 * 60 * 1000));
+
+        expect(m.pageSeen(WEB, 'list', 1)).toBeNull();
+        expect(m.pageSeen(WEB, 'list', 2)).not.toBeNull();
     });
 });
 
@@ -379,37 +410,62 @@ describe('LocalStoragePageStateManager additional tests', () => {
         localStorage.setItem(LocalStoragePageStateManager.PAGES_SEEN_STORAGE_KEY, '{not valid json');
         const m = new LocalStoragePageStateManager();
         // Should not throw, should return null
-        expect(m.pageSeen('list', 1)).toBeNull();
+        expect(m.pageSeen(WEB, 'list', 1)).toBeNull();
     });
 
     test('handles invalid structure in localStorage gracefully', () => {
         localStorage.setItem(LocalStoragePageStateManager.PAGES_SEEN_STORAGE_KEY, '{"pagesUploadedFor": "not an array"}');
         const m = new LocalStoragePageStateManager();
-        expect(m.pageSeen('list', 1)).toBeNull();
+        expect(m.pageSeen(WEB, 'list', 1)).toBeNull();
     });
 
     test('clear followed by pageSeen returns null', () => {
         const m = new LocalStoragePageStateManager();
-        m.registerPageSeen('list', 1);
+        m.registerPageSeen(WEB, 'list', 1);
         m.clear();
-        expect(m.pageSeen('list', 1)).toBeNull();
+        expect(m.pageSeen(WEB, 'list', 1)).toBeNull();
     });
 
     test('persists across instances', () => {
         const m1 = new LocalStoragePageStateManager();
-        m1.registerPageSeen('list', 42);
+        m1.registerPageSeen(WEB, 'list', 42);
 
         const m2 = new LocalStoragePageStateManager();
-        expect(m2.pageSeen('list', 42)).not.toBeNull();
+        expect(m2.pageSeen(WEB, 'list', 42)).not.toBeNull();
     });
 
     test('registerPageSeen updates existing date', () => {
         const m = new LocalStoragePageStateManager();
-        m.registerPageSeen('list', 1);
-        const d1 = m.pageSeen('list', 1);
-        m.registerPageSeen('list', 1);
-        const d2 = m.pageSeen('list', 1);
+        m.registerPageSeen(WEB, 'list', 1);
+        const d1 = m.pageSeen(WEB, 'list', 1);
+        m.registerPageSeen(WEB, 'list', 1);
+        const d2 = m.pageSeen(WEB, 'list', 1);
         expect(d2!.getTime()).toBeGreaterThanOrEqual(d1!.getTime());
+    });
+
+    test('registerPageSeen forgets pages seen before the cut-off, so local storage does not grow forever', () => {
+        const old = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString();
+        localStorage.setItem(LocalStoragePageStateManager.PAGES_SEEN_STORAGE_KEY, JSON.stringify({
+            pagesUploadedFor: [
+                { pageId: "List 'Site Pages': item ID: '7'", seenOn: old },                // Key format before 1.6.0
+                { pageId: 'not a date', seenOn: 'garbage' },
+            ]
+        }));
+        const m = new LocalStoragePageStateManager();
+
+        m.registerPageSeen(WEB, 'list', 1, new Date(Date.now() - 24 * 60 * 60 * 1000));
+
+        const stored = JSON.parse(localStorage.getItem(LocalStoragePageStateManager.PAGES_SEEN_STORAGE_KEY)!);
+        expect(stored.pagesUploadedFor.length).toBe(1);
+        expect(stored.pagesUploadedFor[0].pageId).toBe(m.getPageId(WEB, 'list', 1));
+    });
+
+    test('registerPageSeen without a cut-off keeps every page', () => {
+        const m = new LocalStoragePageStateManager();
+        m.registerPageSeen(WEB, 'list', 1);
+        m.registerPageSeen('https://contoso.sharepoint.com/sites/other', 'list', 1);
+        expect(m.pageSeen(WEB, 'list', 1)).not.toBeNull();
+        expect(m.pageSeen('https://contoso.sharepoint.com/sites/other', 'list', 1)).not.toBeNull();
     });
 });
 

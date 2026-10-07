@@ -401,5 +401,222 @@ namespace Tests.UnitTests
 
             Assert.AreEqual(2, factory.CreateSectionsCallCount);
         }
+
+        // ---- Deferred pass (issue #706) ----------------------------------------------------------------------
+        // The WebJob runs GetAndSaveNonDeferredGraphData in its import cycle and starts GetAndSaveDeferredGraphData
+        // in the background (SingleFlightBackgroundRunner), so the once-a-day usage reports cannot hold the audit
+        // import back.
+
+        private static FakeGraphImportSection Deferred(FakeGraphImportSection section)
+        {
+            section.IsDeferred = true;
+            return section;
+        }
+
+        private static FakeGraphImportSection RecordingRunsIn(List<string> order, FakeGraphImportSection section)
+        {
+            section.OnRun = () => order.Add(section.Name);
+            return section;
+        }
+
+        [TestMethod]
+        public async Task GraphImporter_MainPassSkipsDeferredSections_AndTheDeferredPassRunsOnlyThem()
+        {
+            // The deferred section sits in the MIDDLE of the factory list on purpose: the split must follow the
+            // flag, not the position.
+            var order = new List<string>();
+            var users = RecordingRunsIn(order, FakeGraphImportSection.Gated("User metadata refresh", FirstSectionCadence, 24));
+            var usageReports = RecordingRunsIn(order, Deferred(FakeGraphImportSection.Ungated("Usage reports")));
+            var teams = RecordingRunsIn(order, FakeGraphImportSection.Gated("Teams import", SecondSectionCadence, 24));
+
+            var importer = BuildImporter(GatingSettings(), new RecordingImportLastRunStore(), new FixedClock(Now), users, usageReports, teams);
+
+            await importer.GetAndSaveNonDeferredGraphData(GatingSettings());
+
+            CollectionAssert.AreEqual(new[] { "User metadata refresh", "Teams import" }, order,
+                "The main pass runs before the Activity API import: everything except the deferred sections, in factory order.");
+
+            await importer.GetAndSaveDeferredGraphData(GatingSettings());
+
+            CollectionAssert.AreEqual(new[] { "User metadata refresh", "Teams import", "Usage reports" }, order,
+                "The deferred pass runs the deferred sections only, and does not run the main-pass sections a second time.");
+        }
+
+        [TestMethod]
+        public async Task GraphImporter_GetAndSaveAllGraphData_StillRunsEverySection_DeferredOnesLast()
+        {
+            // The one-shot entry point must not quietly drop the usage reports for a caller that never calls the
+            // deferred pass. It runs the main pass first and the deferred sections after it.
+            var order = new List<string>();
+            var users = RecordingRunsIn(order, FakeGraphImportSection.Gated("User metadata refresh", FirstSectionCadence, 24));
+            var usageReports = RecordingRunsIn(order, Deferred(FakeGraphImportSection.Ungated("Usage reports")));
+            var teams = RecordingRunsIn(order, FakeGraphImportSection.Gated("Teams import", SecondSectionCadence, 24));
+            var factory = new FakeGraphImportSectionFactory(users, usageReports, teams);
+
+            await new GraphImporter(AnalyticsLogger.ConsoleOnlyTracer(), GatingSettings(), factory, new RecordingImportLastRunStore(), new FixedClock(Now))
+                .GetAndSaveAllGraphData(GatingSettings());
+
+            CollectionAssert.AreEqual(new[] { "User metadata refresh", "Teams import", "Usage reports" }, order);
+            Assert.AreEqual(1, factory.CreateSectionsCallCount, "A one-shot run builds its sections once, as it always has.");
+        }
+
+        [TestMethod]
+        public async Task GraphImporter_DeferredDisabledSection_IsNotRun_AndEachSkippedLineIsLoggedOnceByItsOwnPass()
+        {
+            var users = FakeGraphImportSection.Gated("User metadata refresh", FirstSectionCadence, 24);
+            users.Enabled = false;
+            users.DisabledMessage = "Skipping user metadata import";
+
+            var usageReports = Deferred(FakeGraphImportSection.Ungated("Usage reports"));
+            usageReports.Enabled = false;
+            usageReports.DisabledMessage = "Skipping usage reports import";
+
+            var importer = BuildImporter(GatingSettings(), new RecordingImportLastRunStore(), new FixedClock(Now), users, usageReports);
+
+            var mainPassOutput = await CaptureConsole(() => importer.GetAndSaveNonDeferredGraphData(GatingSettings()));
+            var deferredPassOutput = await CaptureConsole(() => importer.GetAndSaveDeferredGraphData(GatingSettings()));
+
+            Assert.AreEqual(0, usageReports.RunCount, "A deferred section the tenant has switched off must not run.");
+            StringAssert.Contains(deferredPassOutput, "Skipping usage reports import",
+                "Operators grep for this line; the deferred pass must still log it.");
+            Assert.IsFalse(mainPassOutput.Contains("Skipping usage reports import"),
+                "The main pass must not report on a section it does not run, or the line would appear twice per cycle.");
+            StringAssert.Contains(mainPassOutput, "Skipping user metadata import");
+            Assert.IsFalse(deferredPassOutput.Contains("Skipping user metadata import"),
+                "The deferred pass must not repeat the main pass's 'Skipping' lines.");
+        }
+
+        [TestMethod]
+        public async Task GraphImporter_DeferredGatedSection_IsCadenceGatedExactlyAsInTheMainPass()
+        {
+            var due = Deferred(FakeGraphImportSection.Gated("Due deferred section", FirstSectionCadence, 24));
+            var notDue = Deferred(FakeGraphImportSection.Gated("Not-due deferred section", SecondSectionCadence, 24));
+
+            var store = new RecordingImportLastRunStore()
+                .Seed(FirstSectionCadence, Now.AddHours(-25))
+                .Seed(SecondSectionCadence, Now.AddHours(-23));
+
+            var importer = BuildImporter(GatingSettings(), store, new FixedClock(Now), due, notDue);
+
+            await importer.GetAndSaveNonDeferredGraphData(GatingSettings());
+            Assert.AreEqual(0, store.Reads.Count, "The main pass must not even look up a deferred section's cadence stamp.");
+
+            await importer.GetAndSaveDeferredGraphData(GatingSettings());
+
+            Assert.AreEqual(1, due.RunCount, "25h into a 24h window the deferred section is due.");
+            Assert.AreEqual(0, notDue.RunCount, "23h into a 24h window the deferred section must be skipped.");
+            Assert.AreEqual(1, store.Writes.Count, "Only the section that ran and succeeded re-stamps its gate.");
+            Assert.AreEqual(FirstSectionCadence, store.Writes[0].Key);
+            Assert.AreEqual(Now, store.Writes[0].Value, "The stamp must come from the injected clock.");
+
+            var forced = GatingSettings();
+            forced.ForceGraphMetadataImport = true;
+            await BuildImporter(forced, store, new FixedClock(Now), notDue).GetAndSaveDeferredGraphData(forced);
+
+            Assert.AreEqual(1, notDue.RunCount, "ForceGraphMetadataImport must bypass the gate in the deferred pass too.");
+        }
+
+        [TestMethod]
+        public async Task GraphImporter_DeferredUngatedSectionReturningFalse_NeitherWarnsNorStamps()
+        {
+            // "Throttled, nothing imported" is the usage-report phase's ordinary answer on most cycles. Moving it to
+            // the deferred pass must not turn that into a warning, a completion event or cadence-store traffic.
+            var usageReports = Deferred(FakeGraphImportSection.Ungated("Usage reports"));
+            usageReports.Result = false;
+            var store = new RecordingImportLastRunStore();
+
+            var output = await CaptureConsole(() => BuildImporter(GatingSettings(), store, new FixedClock(Now), usageReports)
+                .GetAndSaveDeferredGraphData(GatingSettings()));
+
+            Assert.AreEqual(1, usageReports.RunCount);
+            Assert.AreEqual(0, store.Reads.Count + store.Writes.Count, "An ungated section never touches the cadence store.");
+            Assert.IsFalse(output.Contains("Usage reports did not complete successfully"));
+            Assert.IsFalse(output.Contains("New event '" + nameof(AnalyticsLogger.AnalyticsEvent.FinishedSectionImport) + "'"),
+                "A section that returned false must not report itself as finished.");
+
+            usageReports.Result = true;
+            output = await CaptureConsole(() => BuildImporter(GatingSettings(), store, new FixedClock(Now), usageReports)
+                .GetAndSaveDeferredGraphData(GatingSettings()));
+
+            StringAssert.Contains(output, "context=Usage reports:",
+                "A successful deferred section still reports its FinishedSectionImport event under its own name.");
+        }
+
+        [TestMethod]
+        public async Task GraphImporter_MainPassThrowing_DoesNotStopTheDeferredPass()
+        {
+            // The WebJob starts the deferred pass separately, in the background, whether or not the cycle's main pass
+            // succeeded. That only works if the deferred pass does not depend on the main pass having succeeded.
+            var throwing = FakeGraphImportSection.Gated("Throwing section", FirstSectionCadence, 24);
+            throwing.FailWith = new InvalidOperationException("main pass blew up");
+            var usageReports = Deferred(FakeGraphImportSection.Ungated("Usage reports"));
+
+            var importer = BuildImporter(GatingSettings(), new RecordingImportLastRunStore(), new FixedClock(Now), throwing, usageReports);
+
+            await CaptureConsole(() => Assert.ThrowsExceptionAsync<InvalidOperationException>(
+                () => importer.GetAndSaveNonDeferredGraphData(GatingSettings())));
+            Assert.AreEqual(0, usageReports.RunCount, "The main pass never runs a deferred section, even when it fails.");
+
+            await importer.GetAndSaveDeferredGraphData(GatingSettings());
+
+            Assert.AreEqual(1, usageReports.RunCount, "A failed main pass must not stop the deferred pass.");
+        }
+
+        [TestMethod]
+        public async Task GraphImporter_DeferredPassThrowing_DoesNotAffectTheMainPass()
+        {
+            var users = FakeGraphImportSection.Gated("User metadata refresh", FirstSectionCadence, 0);
+            var usageReports = Deferred(FakeGraphImportSection.Ungated("Usage reports"));
+            usageReports.FailWith = new InvalidOperationException("deferred pass blew up");
+
+            var importer = BuildImporter(GatingSettings(), new RecordingImportLastRunStore(), new FixedClock(Now), users, usageReports);
+
+            await importer.GetAndSaveNonDeferredGraphData(GatingSettings());
+            await CaptureConsole(() => Assert.ThrowsExceptionAsync<InvalidOperationException>(
+                () => importer.GetAndSaveDeferredGraphData(GatingSettings())));
+            Assert.AreEqual(1, users.RunCount, "The deferred pass must not re-run a main-pass section, even when it fails.");
+
+            // The next cycle.
+            await importer.GetAndSaveNonDeferredGraphData(GatingSettings());
+
+            Assert.AreEqual(2, users.RunCount, "A failed deferred pass must leave nothing behind that stops the next main pass.");
+        }
+
+        [TestMethod]
+        public async Task GraphImporter_OneShotRun_ThrowingSection_StillSkipsEverythingAfterIt_DeferredSectionsIncluded()
+        {
+            // Pins the one-shot contract: unchanged per-section error handling, so a throw unwinds out of
+            // GetAndSaveAllGraphData. Only the WebJob, which calls the two passes separately, isolates them.
+            var throwing = FakeGraphImportSection.Gated("Throwing section", FirstSectionCadence, 24);
+            throwing.FailWith = new InvalidOperationException("section blew up");
+            var usageReports = Deferred(FakeGraphImportSection.Ungated("Usage reports"));
+
+            var importer = BuildImporter(GatingSettings(), new RecordingImportLastRunStore(), new FixedClock(Now), throwing, usageReports);
+
+            await CaptureConsole(() => Assert.ThrowsExceptionAsync<InvalidOperationException>(
+                () => importer.GetAndSaveAllGraphData(GatingSettings())));
+
+            Assert.AreEqual(0, usageReports.RunCount);
+        }
+
+        [TestMethod]
+        public async Task GraphImporter_DeferredPass_UsesTheSettingsPassedToIt_AndBuildsItsOwnSections()
+        {
+            var usageReports = Deferred(FakeGraphImportSection.Ungated("Usage reports"));
+            var factory = new FakeGraphImportSectionFactory(usageReports);
+
+            var fieldSettings = GatingSettings();
+            var argumentSettings = GatingSettings();
+            var importer = new GraphImporter(AnalyticsLogger.ConsoleOnlyTracer(), fieldSettings, factory, new RecordingImportLastRunStore(), new FixedClock(Now));
+
+            await importer.GetAndSaveNonDeferredGraphData(argumentSettings);
+            await importer.GetAndSaveDeferredGraphData(argumentSettings);
+
+            Assert.AreEqual(2, factory.CreateSectionsCallCount,
+                "Each pass builds its own sections, so the deferred pass does not depend on the main pass's.");
+            Assert.AreSame(argumentSettings, factory.LastSettingsArgument, "The factory must be given the per-cycle settings argument.");
+            Assert.AreSame(argumentSettings.ImportJobSettings, usageReports.LastEnabledCheckArgument,
+                "Deferred-section selection must use the per-cycle settings argument.");
+        }
     }
 }

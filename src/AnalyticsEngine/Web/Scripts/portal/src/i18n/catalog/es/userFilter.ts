@@ -77,6 +77,7 @@ const userFilter: Record<keyof typeof en, string> = {
   'userFilter.dimension.officeLocation': 'Ubicación de la oficina',
   'userFilter.dimension.country': 'País o región',
   'userFilter.dimension.stateOrProvince': 'Estado o provincia',
+  'userFilter.dimension.postalCode': 'Código postal',
   'userFilter.dimension.usageLocation': 'Ubicación de uso',
   'userFilter.dimension.emailDomain': 'Dominio de correo electrónico',
   'userFilter.dimension.userType': 'Tipo de usuario',

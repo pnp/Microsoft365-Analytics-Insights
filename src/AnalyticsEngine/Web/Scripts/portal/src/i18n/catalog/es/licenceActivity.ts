@@ -159,24 +159,16 @@ const licenceActivity: Record<keyof typeof en, string> = {
   'licenceActivity.dateRange.error.rangeAtLeastDays': 'El intervalo debe ser de al menos {days} días.',
   'licenceActivity.dateRange.error.rangeNoLongerThanDays': 'El intervalo no puede ser de más de {days} días.',
 
-  // Overview and selected licence
+  // Overview headline figures
   'licenceActivity.overview.peopleWithLicence': 'Personas con licencia',
   'licenceActivity.overview.countingEachPersonOnce': 'en esta selección, contando cada persona una vez',
-  'licenceActivity.overview.licenceTypes': 'Tipos de licencia',
-  'licenceActivity.overview.assignedOne': 'asignada en esta selección',
   'licenceActivity.overview.assignedMany': 'asignadas, cada una medida por separado',
-  'licenceActivity.overview.selectedLicence': 'Licencia seleccionada',
-  'licenceActivity.overview.peopleHoldItSeeTabs': '{count} personas la tienen \u00b7 consulte Por servicio y Personas',
-  'licenceActivity.overview.noneChosen': 'Ninguna elegida',
-  'licenceActivity.overview.chooseLicenceBelow': 'Elija una licencia abajo para ver sus servicios y personas',
-  'licenceActivity.selectedLicence.aria': 'Licencia seleccionada',
-  'licenceActivity.selectedLicence.choose': 'Elegir una licencia',
-  'licenceActivity.selectedLicence.peopleHold': '{count} personas tienen esta licencia',
+  'licenceActivity.overview.licencesHeld': 'Licencias asignadas',
+  'licenceActivity.overview.licencesNobodyHolds': 'más {count} que nadie tiene',
+  'licenceActivity.overview.scoreAcrossEveryone': 'entre todas las personas con licencia',
 
   // Assignments and demographic breakdowns
   'licenceActivity.assignments.empty': 'No se encontraron asignaciones de licencias para esta selección.',
-  'licenceActivity.assignments.title': 'Asignaciones de licencias',
-  'licenceActivity.assignments.description': 'Seleccione una licencia para ver cuánto se usa cada servicio y quién la tiene.',
   'licenceActivity.assignments.showingOf': 'Mostrando {shown} de {total}.',
   'licenceActivity.assignments.filterPlaceholder': 'Filtrar por nombre o código de licencia',
   'licenceActivity.assignments.filterAria': 'Filtrar licencias',
@@ -206,6 +198,8 @@ const licenceActivity: Record<keyof typeof en, string> = {
   'licenceActivity.users.topCountAria': 'Número de personas en cada lista',
   'licenceActivity.users.holdLicenceChooseService':
     '{count} personas tienen esta licencia. Elija un servicio para clasificarlas por cuánto lo usan.',
+  'licenceActivity.users.holdAnyLicenceChooseService':
+    '{count} personas tienen al menos una licencia. Elija un servicio para encontrar a las personas con más y menos actividad, tengan la licencia que tengan.',
   'licenceActivity.users.showTop': 'Mostrar los primeros',
   'licenceActivity.users.ofEach': 'de cada uno',
   'licenceActivity.users.refreshAria': 'Actualizar la lista',
@@ -218,6 +212,7 @@ const licenceActivity: Record<keyof typeof en, string> = {
   'licenceActivity.users.leastActive': 'Menos activos',
   'licenceActivity.users.bottomN': 'últimos {count}',
   'licenceActivity.users.everyoneWithLicence': 'Todos con esta licencia',
+  'licenceActivity.users.everyoneWithAnyLicence': 'Todas las personas con licencia',
   'licenceActivity.users.peopleCount': '{count} personas',
   'licenceActivity.users.noStaffNames':
     'Este producto no recopila los nombres del personal, por lo que las personas se muestran y se buscan por su dirección de inicio de sesión.',
@@ -248,7 +243,7 @@ const licenceActivity: Record<keyof typeof en, string> = {
   'licenceActivity.page.title': 'Actividad de licencias',
   'licenceActivity.page.preview': 'Versión preliminar',
   'licenceActivity.page.intro':
-    'Qué licencias están asignadas y cuánto usan realmente las personas que las tienen cada servicio de Microsoft 365. Cada servicio se muestra por separado y nunca se combina en una sola puntuación. Los datos de informe que faltan o están incompletos se muestran como "Desconocido", no como prueba de ausencia de actividad.',
+    'Qué licencias están asignadas y cuánto usan realmente las personas que las tienen cada servicio de Microsoft 365. Compare las licencias entre sí por su puntuación de adopción y servicio a servicio, y encuentre a las personas con más y menos actividad. Los datos de informe que faltan o están incompletos se muestran como "Desconocido", no como prueba de ausencia de actividad.',
   'licenceActivity.page.previewNote':
     'Este informe está en versión preliminar. Las cifras se conservan hasta 5 minutos antes de volver a calcularse, por lo que una importación muy reciente puede no aparecer inmediatamente y la primera vista de un intervalo de fechas nuevo tarda más. Nada de esto es un juicio sobre la productividad de nadie ni una recomendación para quitar una licencia: solo es evidencia de actividad.',
   'licenceActivity.page.checkingAvailability': 'Comprobando disponibilidad...',
@@ -272,15 +267,12 @@ const licenceActivity: Record<keyof typeof en, string> = {
   'licenceActivity.page.tryAgain': 'Intentarlo de nuevo',
   'licenceActivity.page.loading': 'Cargando actividad de licencias...',
   'licenceActivity.page.overviewFailed': 'No se pudo cargar la información general de actividad de licencias.',
-  'licenceActivity.page.tabOverview': 'Información general',
-  'licenceActivity.page.tabByService': 'Por servicio',
+  'licenceActivity.page.tabLicences': 'Licencias',
   'licenceActivity.page.tabByDemographic': 'Por departamento y país',
   'licenceActivity.page.tabPeople': 'Personas',
   'licenceActivity.page.activityByService': 'Actividad por servicio',
   'licenceActivity.page.activityByServiceSubtitle':
-    'Cada servicio de Microsoft 365 por separado, nunca combinado en una sola puntuación',
-  'licenceActivity.page.chooseLicenceOverview':
-    'Elija una licencia en la pestaña Información general para ver cuánto se usa cada servicio.',
+    'Cada servicio de Microsoft 365 por separado, comparado con todas las personas con licencia o con otra licencia',
   'licenceActivity.page.activityByDemographic': 'Actividad por departamento y país',
   'licenceActivity.page.activityByDemographicSubtitle':
     'Dónde están las licencias en la organización y cuánto se están usando',
@@ -290,10 +282,48 @@ const licenceActivity: Record<keyof typeof en, string> = {
   'licenceActivity.page.byCountry': 'Por país',
   'licenceActivity.page.noDemographicBreakdown':
     'No hay desglose por departamento o país disponible para esta selección.',
-  'licenceActivity.page.peopleHoldingLicence': 'Personas con esta licencia',
-  'licenceActivity.page.peopleSubtitle': 'Quién usa y quién no usa una licencia',
-  'licenceActivity.page.selectLicenceForPeople':
-    'Seleccione una licencia en la pestaña Información general para ver quién tiene más y menos actividad, o para explorar todos los usuarios que la tienen.',
+  'licenceActivity.page.peopleTitle': 'Personas con más y menos actividad',
+  'licenceActivity.page.peopleSubtitle':
+    'Quién usa y quién no usa sus licencias, entre todas las personas con licencia o para una sola licencia',
+
+  // Ámbito de licencia: todas las personas con licencia o una sola licencia
+  'licenceActivity.scope.allLicensedUsers': 'Todas las personas con licencia',
+  'licenceActivity.scope.allLicensedUsersCaption': 'Cada persona se cuenta una vez, tenga las licencias que tenga',
+  'licenceActivity.scope.optionWithCount': '{name} ({count})',
+
+  // Tabla comparativa de licencias y puntuación de adopción
+  'licenceActivity.compare.title': 'Comparar licencias',
+  'licenceActivity.compare.description':
+    'Ordene por cualquier columna para encontrar las licencias cuyos titulares más y menos usan cada servicio. Seleccione una licencia para ver sus servicios debajo.',
+  'licenceActivity.compare.sortBy': 'Ordenar por {column}',
+  'licenceActivity.compare.hideEmpty': 'Ocultar las licencias que nadie tiene ({count})',
+  'licenceActivity.compare.rateTitle': 'El {rate} de los titulares medidos en {service} tuvo actividad',
+  'licenceActivity.compare.adoptionScore': 'Puntuación de adopción',
+  'licenceActivity.compare.adoptionScoreWhat':
+    'Cuánto usan sus servicios de Microsoft 365 las personas que tienen una licencia, de 0 a 100, para poder comparar entre sí licencias de tamaños muy distintos.',
+  'licenceActivity.compare.adoptionScoreHow':
+    'La proporción de semanas medidas en las que los titulares tuvieron actividad, en todos los servicios que se pudieron medir para ellos. 100 significa que todos los titulares usaron todos los servicios medidos todas las semanas del periodo; 0 significa que no hay ninguna actividad registrada. Un servicio que no se pudo medir para alguien se deja fuera de su puntuación en lugar de contarse como no usado. Mide el uso, no el valor ni la productividad.',
+  'licenceActivity.compare.adoptionScoreFormula':
+    'Puntuación de adopción = 100 \u00d7 semanas con actividad \u00f7 semanas medidas\n(sumadas para todos los titulares y todos los servicios que se pudieron medir)',
+  'licenceActivity.compare.scoreAria': 'Puntuación de adopción de {score} sobre 100',
+  'licenceActivity.compare.scoreWithBaselineAria':
+    'Puntuación de adopción de {score} sobre 100; todas las personas con licencia obtienen {baseline}',
+  'licenceActivity.compare.compareWith': 'Comparar con',
+  'licenceActivity.compare.comparisonBarAria': 'Distribución de la actividad de {label} para {comparison}',
+  'licenceActivity.compare.comparisonRate': '{comparison}: {rate} con actividad',
+  'licenceActivity.compare.comparisonNotMeasured': '{comparison}: no medido',
+  'licenceActivity.compare.points': '{points} p. p.',
+  'licenceActivity.compare.rank': 'Puesto {rank} de {of} licencias en {service}',
+
+  // Detalle de la licencia seleccionada (o de todas las personas)
+  'licenceActivity.detail.showPeople': 'Ver quién la tiene',
+  'licenceActivity.detail.showChampions': 'Ver las personas con más actividad',
+  'licenceActivity.detail.holdThisLicence': 'tienen esta licencia',
+  'licenceActivity.detail.holdAnyLicence': 'tienen al menos una licencia',
+  'licenceActivity.detail.scoreAgainstEveryone': 'Todas las personas con licencia: {score}',
+  'licenceActivity.detail.scoreOutOf100': 'sobre 100',
+  'licenceActivity.detail.scoreRank': 'puesto {rank} de {of} licencias',
+  'licenceActivity.detail.servicesFor': 'Cada servicio para {name}',
 };
 
 export default licenceActivity;

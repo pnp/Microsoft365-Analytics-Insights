@@ -4,9 +4,8 @@
 
 import {
     GetSessionCookieVal, SetSessionCookieVal,
-    GetLastTrackedPageVal, SetLastTrackedPageVal,
     GetLastPageStatsVal, SetLastPageStatsVal, ClearLastPageStatsVal,
-    CleanCookies
+    CleanCookies, RemoveRetiredCookies
 } from '../src/Cookies';
 import { PageStats } from '../src/Definitions';
 import Cookies from 'js-cookie';
@@ -32,18 +31,6 @@ describe('Cookies', () => {
             SetSessionCookieVal('session-1');
             SetSessionCookieVal('session-2');
             expect(GetSessionCookieVal()).toBe('session-2');
-        });
-    });
-
-    describe('Last tracked page cookie', () => {
-        test('GetLastTrackedPageVal returns empty string when no cookie set', () => {
-            expect(GetLastTrackedPageVal()).toBe('');
-        });
-
-        test('SetLastTrackedPageVal and GetLastTrackedPageVal round-trip', () => {
-            const url = 'https://contoso.sharepoint.com/sites/test/SitePages/Home.aspx';
-            SetLastTrackedPageVal(url);
-            expect(GetLastTrackedPageVal()).toBe(url);
         });
     });
 
@@ -111,6 +98,20 @@ describe('Cookies', () => {
             expect(Cookies.get('ai_user')).toBeUndefined();
             // Should not remove SPOInsights cookies
             expect(Cookies.get('SPOInsightsSessionID')).toBe('keep-me');
+        });
+    });
+
+    describe('RemoveRetiredCookies', () => {
+        test('removes the last-tracked-URL cookie earlier versions wrote, and nothing this version uses', () => {
+            Cookies.set('SPOInsightsLastTrackedUrl', 'https://contoso.sharepoint.com/sites/test/SitePages/Home.aspx');
+            Cookies.set('SPOInsightsSessionID', 'keep-me');
+            Cookies.set('SPOInsightsLastPageStats', '{"url":"keep-me"}');
+
+            RemoveRetiredCookies();
+
+            expect(Cookies.get('SPOInsightsLastTrackedUrl')).toBeUndefined();
+            expect(Cookies.get('SPOInsightsSessionID')).toBe('keep-me');
+            expect(Cookies.get('SPOInsightsLastPageStats')).toBe('{"url":"keep-me"}');
         });
     });
 });

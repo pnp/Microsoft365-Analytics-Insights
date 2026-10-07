@@ -1,4 +1,3 @@
-import moment from "moment";
 import { ClickData } from "./Definitions";
 import { debug } from "./Logger";
 
@@ -17,10 +16,8 @@ export class DuplicateClickHandler {
                 d.href === this._lastClick.href &&
                 d.linkText === this._lastClick.linkText) {
 
-                // All attribs are the same. Did we just click on this?
-                let now = moment();
-                let secondsSinceLastClick = now.diff(moment(this._lastDate), 'seconds');
-                dupClick = secondsSinceLastClick === 0;
+                // All attribs are the same. Did we just click on this? (Within the same second, as this always meant)
+                dupClick = Date.now() - this._lastDate.getTime() < 1000;
             }
         }
 

@@ -1,5 +1,6 @@
 using Common.Entities;
 using Microsoft.Extensions.Logging;
+using Newtonsoft.Json;
 using System.Collections.Generic;
 using System.Threading.Tasks;
 using WebJob.Office365ActivityImporter.Engine.ActivityAPI;
@@ -32,8 +33,11 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities.Serialisation
         /// <summary>
         /// The policies that matched, each with the rules that fired. Mandatory in the published schema,
         /// but treated as optional here so a record with an unexpected shape degrades to "no policy
-        /// detail" rather than throwing away the audit event.
+        /// detail" rather than throwing away the audit event. Bound by the same
+        /// <see cref="TolerantPolicyDetailsConverter"/> as the Copilot field (issue #659); the documented
+        /// array binds exactly as it did before.
         /// </summary>
+        [JsonConverter(typeof(TolerantPolicyDetailsConverter))]
         public List<AccessedResourcePolicyDetail> PolicyDetails { get; set; }
 
         /// <summary>

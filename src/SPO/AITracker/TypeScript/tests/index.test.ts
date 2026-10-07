@@ -13,15 +13,16 @@ import { ClickData } from '../src/Definitions';
 const listTitle: string = "list 1";
 const pageItemId: number = 2;
 const url: string = 'https://whatever';
+const webUrl: string = 'https://contoso.sharepoint.com/sites/test';
 
 describe('Page metadata tests', () => {
   test('InMemoryPageStateManager', () => {
 
     const m = new InMemoryPageStateManager();
 
-    expect(m.pageSeen(listTitle, pageItemId)).toBeFalsy();
-    const dateRegistered = m.registerPageSeen(listTitle, pageItemId).getTime();
-    const dateSeen = m.pageSeen(listTitle, pageItemId)!.getTime();
+    expect(m.pageSeen(webUrl, listTitle, pageItemId)).toBeFalsy();
+    const dateRegistered = m.registerPageSeen(webUrl, listTitle, pageItemId).getTime();
+    const dateSeen = m.pageSeen(webUrl, listTitle, pageItemId)!.getTime();
     expect(dateSeen === dateRegistered).toBeTruthy();
 
   });
@@ -30,9 +31,9 @@ describe('Page metadata tests', () => {
     const m = new LocalStoragePageStateManager();
 
     m.clear();
-    expect(m.pageSeen(listTitle, pageItemId)).toBeFalsy();
-    const dateRegistered = m.registerPageSeen(listTitle, pageItemId).getTime();
-    const dateSeen = m.pageSeen(listTitle, pageItemId);
+    expect(m.pageSeen(webUrl, listTitle, pageItemId)).toBeFalsy();
+    const dateRegistered = m.registerPageSeen(webUrl, listTitle, pageItemId).getTime();
+    const dateSeen = m.pageSeen(webUrl, listTitle, pageItemId);
     expect(dateSeen).toBeDefined(); // Not null
 
     const dateSeenTime = dateSeen!.getTime();
@@ -48,33 +49,33 @@ describe('Page metadata tests', () => {
     const m = new TestPagePropertyManager(testVal, stateManager, new TestPageDataService());
 
     // Make sure page hasn't been seen before
-    expect(stateManager.pageSeen(listTitle, pageItemId) === null).toBeTruthy();
+    expect(stateManager.pageSeen(webUrl, listTitle, pageItemId) === null).toBeTruthy();
 
     // Handle new page nav & then check statemanager has seen page
     let loadedPropsFromCallback: PageProps | undefined;
-    const pagePropsLoaded = await m.handleNewPage(pageItemId, url, listTitle, (loadedProps: PageProps) => {
+    const pagePropsLoaded = await m.handleNewPage(webUrl, pageItemId, url, listTitle, (loadedProps: PageProps) => {
       loadedPropsFromCallback = loadedProps;
     });
     expect(loadedPropsFromCallback).toBeDefined();
-    expect(stateManager.pageSeen(listTitle, pageItemId)).toBeTruthy();
+    expect(stateManager.pageSeen(webUrl, listTitle, pageItemId)).toBeTruthy();
     expect(pagePropsLoaded).toBeTruthy();
 
     // Handle same legit page nav as before. This time we shouldn't load the page props again
-    const pagePropsLoadedAgain = await m.handleNewPage(pageItemId, url, listTitle);
+    const pagePropsLoadedAgain = await m.handleNewPage(webUrl, pageItemId, url, listTitle);
     expect(pagePropsLoadedAgain).toBeFalsy();
 
     // Now override the page update interval to make sure page cache marker will have expired in value and check we load again properties
     m.setPageUpdateIntervalMinutes(-1);
 
-    const pagePropsLoadedOneMoreTime = await m.handleNewPage(pageItemId, url, listTitle);
+    const pagePropsLoadedOneMoreTime = await m.handleNewPage(webUrl, pageItemId, url, listTitle);
     expect(pagePropsLoadedOneMoreTime).toBeTruthy();
 
     // Try navigating to a url that's not got a page ID - pagePropsLoaded should be false
-    const noIdResult = await m.handleNewPage(-1, url);
+    const noIdResult = await m.handleNewPage(webUrl, -1, url);
     expect(noIdResult).toBeFalsy();
 
     // ..or title
-    const noTitleResult = await m.handleNewPage(1, url);
+    const noTitleResult = await m.handleNewPage(webUrl, 1, url);
     expect(noTitleResult).toBeFalsy();
   });
 });

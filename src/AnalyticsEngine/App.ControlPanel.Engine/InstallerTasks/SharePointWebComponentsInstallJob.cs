@@ -1,4 +1,5 @@
 ﻿using App.ControlPanel.Engine.Entities;
+using App.ControlPanel.Engine.SPO;
 using App.ControlPanel.Engine.SPO.AppCatalog;
 using App.ControlPanel.Engine.SPO.Auth;
 using App.ControlPanel.Engine.SPO.Rest;
@@ -121,6 +122,21 @@ namespace App.ControlPanel.Engine.InstallerTasks
                     var appId = await appCatalog.AddAsync(sharePointInstallConfig.AppCatalogueURL, packagePath);
                     await appCatalog.DeployAsync(sharePointInstallConfig.AppCatalogueURL, appId);
                     success = true;
+
+                    // Packages before 1.0.1.59 also enabled the extension on every site in the tenant, with no settings
+                    try
+                    {
+                        var removed = await appCatalog.RemoveUnconfiguredTenantWideExtensionsAsync(sharePointInstallConfig.AppCatalogueURL, ModernAppCustomAction.COMPONENT_ID);
+                        if (removed > 0)
+                        {
+                            _logger.LogInformation($"Removed {removed} tenant-wide registration(s) of the extension left by an earlier version. It is enabled on the target site collections only.");
+                        }
+                    }
+                    catch (SpoAppCatalogException ex)
+                    {
+                        // Not fatal: the extension ignores a registration without settings
+                        _logger.LogWarning($"Couldn't check the app catalog for a tenant-wide registration of the extension left by an earlier version: {ex.Message}");
+                    }
                 }
             }
             catch (SpoAppCatalogException ex)

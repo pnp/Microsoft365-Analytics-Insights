@@ -11,16 +11,6 @@ export function SetSessionCookieVal(sessionId: string)
     Cookies.set("SPOInsightsSessionID", sessionId);
 }
 
-// Remember last page URL in a cookie. Used so previous URL stats can be uploaded in next page nav
-export function GetLastTrackedPageVal() : string
-{
-    return Cookies.get("SPOInsightsLastTrackedUrl") ?? '';
-}
-export function SetLastTrackedPageVal(url: string)
-{
-    Cookies.set("SPOInsightsLastTrackedUrl", url);
-}
-
 export function GetLastPageStatsVal() : PageStats | null
 {
     const s = Cookies.get("SPOInsightsLastPageStats");
@@ -53,4 +43,11 @@ export function CleanCookies() : void
     Cookies.remove("ai_authUser");
     Cookies.remove("ai_session");
     Cookies.remove("ai_user");
+}
+
+// Cookies this script no longer writes. Removed whenever it starts, not only in a new session: they were session cookies, so
+// they last until the browser closes - and in a browser that restores its last session, longer.
+export function RemoveRetiredCookies() : void
+{
+    Cookies.remove("SPOInsightsLastTrackedUrl");    // Written by AITracker before 1.6.0; sent with every request to SharePoint
 }

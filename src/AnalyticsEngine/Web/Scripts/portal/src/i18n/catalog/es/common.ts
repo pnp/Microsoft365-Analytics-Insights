@@ -58,6 +58,10 @@ const common: Record<keyof typeof en, string> = {
   'common.warnings.show.one': 'Mostrar 1 aviso sobre los datos',
   'common.warnings.show.other': 'Mostrar {count} avisos sobre los datos',
   'common.warnings.hide': 'Ocultar estos avisos',
+  'common.notes.title': 'Acerca de estas cifras',
+  'common.notes.show.one': 'Acerca de estas cifras (1 nota)',
+  'common.notes.show.other': 'Acerca de estas cifras ({count} notas)',
+  'common.notes.hide': 'Ocultar estas notas',
 
   // Bot\u00f3n Imprimir
   'common.print.preparing': 'Preparando\u2026',

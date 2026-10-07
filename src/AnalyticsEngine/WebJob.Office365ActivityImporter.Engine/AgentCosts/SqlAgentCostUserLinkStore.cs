@@ -90,8 +90,9 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
             {
                 // UPN first. Users arrive in dbo.users from several places - the audit-activity staging merge
                 // inserts them by user name with no object id - so someone can easily already be here with an
-                // empty azure_ad_id. Inserting on object id alone would duplicate them.
-                var existing = await db.users.FirstOrDefaultAsync(u => u.UserPrincipalName == upn);
+                // empty azure_ad_id. Inserting on object id alone would duplicate them. Sent as varchar, like
+                // user_name, so the lookup can seek IX_users (see UserCache.Load, #713).
+                var existing = await db.users.FirstOrDefaultAsync(u => u.UserPrincipalName == DbFunctions.AsNonUnicode(upn));
 
                 if (existing != null)
                 {

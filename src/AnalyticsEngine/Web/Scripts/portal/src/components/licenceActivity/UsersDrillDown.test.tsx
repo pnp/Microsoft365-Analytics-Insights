@@ -120,6 +120,7 @@ function renderDrill(
       overviewId="ov1"
       overviewScope="scope-a"
       licence={licence}
+      allAssignedUsers={250}
       coverage={coverage}
       onUsersSnapshot={vi.fn()}
       onRefreshOverview={vi.fn()}
@@ -129,6 +130,18 @@ function renderDrill(
 }
 
 describe('UsersDrillDown', () => {
+  it('lists everyone holding any licence when no licence is chosen, without naming one', async () => {
+    renderDrill([], { licence: null });
+    await waitFor(() => expect(mockUsers).toHaveBeenCalled());
+    expect(mockUsers.mock.calls[0][0].licenceTypeId).toBeNull();
+    expect(screen.getAllByText('Everyone holding a licence').length).toBeGreaterThan(0);
+    expect(
+      screen.getByText(
+        '250 people hold at least one licence. Choose a service to find your most and least active people, whichever licence they hold.',
+      ),
+    ).toBeInTheDocument();
+  });
+
   it('issues one activity-ranked request by default, and re-requests when top changes (clamped 1..100)', async () => {
     renderDrill();
     await waitFor(() => expect(mockUsers).toHaveBeenCalled());
@@ -337,6 +350,7 @@ describe('UsersDrillDown', () => {
         overviewId="ov2"
         overviewScope="scope-a"
         licence={licence}
+        allAssignedUsers={250}
         coverage={[]}
         onUsersSnapshot={onUsersSnapshot}
         onRefreshOverview={vi.fn()}
@@ -385,6 +399,7 @@ describe('UsersDrillDown', () => {
         overviewId="ov2"
         overviewScope="scope-a"
         licence={licence}
+        allAssignedUsers={250}
         coverage={[]}
         onUsersSnapshot={onUsersSnapshot}
         onRefreshOverview={vi.fn()}
@@ -418,6 +433,7 @@ describe('UsersDrillDown', () => {
         overviewId="ov2"
         overviewScope="scope-b"
         licence={licence}
+        allAssignedUsers={250}
         coverage={[]}
         onUsersSnapshot={vi.fn()}
         onRefreshOverview={vi.fn()}

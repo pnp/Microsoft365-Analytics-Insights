@@ -86,8 +86,9 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         /// because a trailing optional argument is baked in by the calling compiler and so is binary-breaking
         /// for already-compiled callers.
         ///
-        /// <b>Internal deliberately.</b> An instance built this way is composed only for
-        /// <see cref="GetAndSaveAllGraphData"/>: it has no <see cref="GraphServiceClient"/> and no
+        /// <b>Internal deliberately.</b> An instance built this way is composed only for the section passes
+        /// (<see cref="GetAndSaveAllGraphData"/>, <see cref="GetAndSaveNonDeferredGraphData"/> and
+        /// <see cref="GetAndSaveDeferredGraphData"/>): it has no <see cref="GraphServiceClient"/> and no
         /// <see cref="ISingleDateStore"/>, so the still-public
         /// <see cref="GetAndSaveActivityReportsMultiThreaded"/> is not supported on it.
         /// <c>InternalsVisibleTo("Tests.UnitTests")</c> makes it reachable from the test project, which
@@ -110,8 +111,9 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         /// bypasses it for one run. Store failures are fail-open (the section still runs).
         ///
         /// The section reports success itself instead of throwing. Returning false records the section as not
-        /// done, so the cadence gate lets it retry next cycle, without an exception unwinding out of
-        /// <see cref="GetAndSaveAllGraphData"/> and skipping the sections that come after it.
+        /// done, so the cadence gate lets it retry next cycle, without an exception unwinding out of the pass
+        /// that is running it (<see cref="GetAndSaveAllGraphData"/>, <see cref="GetAndSaveNonDeferredGraphData"/>
+        /// or <see cref="GetAndSaveDeferredGraphData"/>) and skipping the sections that come after it.
         /// </summary>
         private async Task RunGraphSectionIfDueAsync(string key, int intervalHours, string sectionName, Func<Task<bool>> sectionWork)
         {
@@ -174,18 +176,60 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         }
 
         /// <summary>
-        /// Main entry-point. Runs every enabled section in factory order.
+        /// One-shot entry point: runs every enabled section in a single call - the main pass, then the deferred
+        /// pass - for a caller that does not run them separately. The WebJob calls
+        /// <see cref="GetAndSaveNonDeferredGraphData"/> in its import cycle and starts
+        /// <see cref="GetAndSaveDeferredGraphData"/> in the background (issue #706).
         ///
         /// A section that returns false is recorded as not done and the following sections still run. A
-        /// section that <b>throws</b> unwinds out of here and the sections after it are skipped for this
-        /// cycle - that is the long-standing behaviour and is left unchanged: adding per-section exception
-        /// isolation would silently convert a hard failure into a logged warning, which is a behavioural
+        /// section that <b>throws</b> unwinds out of here and the sections after it, deferred ones included, are
+        /// skipped for this cycle - that is the long-standing behaviour and is left unchanged: adding per-section
+        /// exception isolation would silently convert a hard failure into a logged warning, which is a behavioural
         /// change and belongs in its own issue.
         /// </summary>
         public async Task GetAndSaveAllGraphData(AppConfig settings)
         {
-            foreach (var section in _sectionFactory.CreateSections(settings))
+            var sections = _sectionFactory.CreateSections(settings);
+
+            await RunSectionsAsync(sections, settings, deferredPass: false);
+            await RunSectionsAsync(sections, settings, deferredPass: true);
+        }
+
+        /// <summary>
+        /// The main pass: every enabled section that is not <see cref="IGraphImportSection.IsDeferred"/>, in factory
+        /// order, user metadata first. The WebJob runs it at the start of each import cycle. Error handling is that of
+        /// <see cref="GetAndSaveAllGraphData"/>, limited to this pass.
+        /// </summary>
+        public async Task GetAndSaveNonDeferredGraphData(AppConfig settings)
+        {
+            await RunSectionsAsync(_sectionFactory.CreateSections(settings), settings, deferredPass: false);
+        }
+
+        /// <summary>
+        /// The deferred pass: only the sections marked <see cref="IGraphImportSection.IsDeferred"/> - the once-a-day
+        /// usage-report phase. The WebJob starts it in the background, single-flight, and does not wait for it, so the
+        /// hours that phase can take on a large tenant no longer hold up the import cycle and its audit import (issue
+        /// #706). Sections are selected, gated, timed and logged exactly as in the main pass. Builds its own sections,
+        /// so it does not depend on the main pass having run or succeeded.
+        /// </summary>
+        public async Task GetAndSaveDeferredGraphData(AppConfig settings)
+        {
+            await RunSectionsAsync(_sectionFactory.CreateSections(settings), settings, deferredPass: true);
+        }
+
+        /// <summary>
+        /// Runs the enabled sections of one pass, in factory order. A section belongs to exactly one pass, so its
+        /// "Skipping ..." line is still logged once per cycle.
+        /// </summary>
+        private async Task RunSectionsAsync(IReadOnlyList<IGraphImportSection> sections, AppConfig settings, bool deferredPass)
+        {
+            foreach (var section in sections)
             {
+                if (section.IsDeferred != deferredPass)
+                {
+                    continue;
+                }
+
                 if (!section.IsEnabled(settings.ImportJobSettings))
                 {
                     _logger.LogInformation(section.DisabledMessage);

@@ -217,6 +217,7 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI
             if (ReportLoader is ActivityReportWebLoader webReportLoader)
             {
                 allStats.ReportDownloadErrors = webReportLoader.ReportDownloadErrorCount;
+                allStats.RecordsSkippedDeserialisation = webReportLoader.DeserialisationFailureCount;
             }
 
 #if DEBUG
@@ -231,6 +232,15 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI
                 _logger.LogWarning($"Audit events import: DOWNLOAD ERRORS DETECTED - {allStats.MetadataDownloadErrors} metadata download failures, " +
                     $"{allStats.ReportDownloadErrors} report download failures. Some data may be missing from this import cycle. " +
                     $"These items will be retried on the next import cycle.");
+            }
+
+            // Unlike a download error, a record that cannot be deserialised is gone for good: its blob is still
+            // checkpointed. Say so once per cycle, as the per-record warnings are capped.
+            if (allStats.RecordsSkippedDeserialisation > 0)
+            {
+                _logger.LogWarning($"Audit events import: {allStats.RecordsSkippedDeserialisation.ToString("n0")} audit record(s) were SKIPPED this cycle " +
+                    $"because they could not be deserialised, and will not be retried. The first {ActivityReportWebLoader.MaxDeserialisationFailuresLoggedInFull} " +
+                    $"are logged as 'Failed to deserialize ... log' warnings.");
             }
 
             // Make a partial import unmistakable in the traces. Before batch isolation, a save failure aborted
