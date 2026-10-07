@@ -377,22 +377,22 @@ namespace Tests.UnitTests
         [TestMethod]
         public void TheHost_LetsThroughTheLongestQueryThePortalBuilds()
         {
-            // A query string over the host's 2,048-character default fails in IIS with a bare 404.15 before the
-            // controller can explain anything - and every metric selected is close to that on its own.
+            // A request line over the host's limit is refused before the controller can explain anything - and every
+            // metric selected comes close to IIS's 2,048-character query-string default on its own.
+            // net10: the host is Kestrel, whose request line defaults to 8 KB. Program.cs raises it to 16 KB for every
+            // endpoint, as it already did for Copilot Adoption's filters, so there is no Web.Template.config <location>
+            // to raise it in: stable build 1850's api/ActivityAnalysis allowance is deliberately not carried over.
             var directory = new System.IO.DirectoryInfo(AppDomain.CurrentDomain.BaseDirectory);
-            string config = null;
-            while (directory != null && config == null)
+            string program = null;
+            while (directory != null && program == null)
             {
-                var candidate = System.IO.Path.Combine(directory.FullName, "Web", "Web.Template.config");
-                config = System.IO.File.Exists(candidate) ? System.IO.File.ReadAllText(candidate) : null;
+                var candidate = System.IO.Path.Combine(directory.FullName, "Web", "Program.cs");
+                program = System.IO.File.Exists(candidate) ? System.IO.File.ReadAllText(candidate) : null;
                 directory = directory.Parent;
             }
 
-            Assert.IsNotNull(config, "Web.Template.config was not found.");
-            var location = Regex.Match(config, "<location path=\"api/ActivityAnalysis\">(.*?)</location>", RegexOptions.Singleline);
-            Assert.IsTrue(location.Success);
-            StringAssert.Contains(location.Groups[1].Value, "maxQueryStringLength=\"16384\"");
-            StringAssert.Contains(location.Groups[1].Value, "maxQueryString=\"16384\"");
+            Assert.IsNotNull(program, "Web/Program.cs was not found.");
+            StringAssert.Contains(program, "options.Limits.MaxRequestLineSize = 16 * 1024");
 
             var keys = ActivityAnalysisMetricCatalogue.All.Select(m => m.Key).ToList();
             var query = Period
@@ -401,7 +401,10 @@ namespace Tests.UnitTests
                 + "&licences=" + Uri.EscapeDataString(string.Join(",", Enumerable.Range(1000, 100)))
                 + "&userFilter=" + new string('x', 6000);
             Console.WriteLine("Longest realistic query string: {0:N0} characters.", query.Length);
-            Assert.IsTrue(query.Length < 12000, "The figure Web.Template.config quotes.");
+            Assert.IsTrue(query.Length < 12000, "The figure main's Web.Template.config quotes.");
+
+            var requestLine = "GET /api/ActivityAnalysis/report?" + query + " HTTP/1.1";
+            Assert.IsTrue(requestLine.Length < 16 * 1024, "The longest request line must fit Kestrel's 16 KB limit.");
         }
 
         private sealed class Harness : IDisposable

@@ -1,18 +1,16 @@
 using Common.Entities.ActivityAnalysis;
 using Common.Entities.Config;
 using Common.Entities.UserFilters;
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.Data.SqlClient;
 using System;
 using System.Linq;
 using System.Net;
-using System.Net.Http;
-using System.Net.Http.Formatting;
-using System.Net.Http.Headers;
 using System.Security.Cryptography;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
-using System.Web.Http;
 using Web.AnalyticsWeb.Models.ActivityAnalysis;
 using Web.AnalyticsWeb.Models.UserFilters;
 using Web.AnalyticsWeb.Security;
@@ -36,10 +34,15 @@ namespace Web.AnalyticsWeb.Controllers
     /// PII, by their user filter, licences and activity ranges, all applied in memory to a read model of the period shared
     /// by every reader (<see cref="ActivityAnalysisReadModel"/>).</para>
     /// <para>Errors carry a stable <c>code</c> the portal words, and English for anyone else.</para>
+    /// <para><b>net10:</b> the ASP.NET Core port of the Web API 2 controller on <c>main</c> (stable build 1850), with the
+    /// same routes, refusals and replies. <c>ApiReplyException</c> stands in for <c>HttpResponseException</c>, and the
+    /// query-string allowance <c>Web.Template.config</c> gives <c>api/ActivityAnalysis</c> on <c>main</c> has no
+    /// counterpart here: the host is Kestrel, whose request line <c>Program.cs</c> raises to 16 KB for every endpoint.</para>
     /// </remarks>
     [Authorize]
-    [RoutePrefix("api/ActivityAnalysis")]
-    public sealed class ActivityAnalysisAPIController : ApiController
+    [Route("api/ActivityAnalysis")]
+    [ApiReplyExceptionFilter]
+    public sealed class ActivityAnalysisAPIController : ControllerBase
     {
         /// <summary>The people list's default and largest page.</summary>
         internal const int DefaultTop = 100;
@@ -66,7 +69,7 @@ namespace Web.AnalyticsWeb.Controllers
         /// <summary>Whether there are figures, for which weeks, and which metrics this database has compiled.</summary>
         // GET: api/ActivityAnalysis/availability
         [HttpGet, Route("availability")]
-        public Task<IHttpActionResult> Availability(CancellationToken cancellationToken = default(CancellationToken)) =>
+        public Task<IActionResult> Availability(CancellationToken cancellationToken = default(CancellationToken)) =>
             ExecuteAsync("Availability", async () =>
             {
                 var schema = await _service().GetSchemaAsync(cancellationToken);
@@ -76,7 +79,7 @@ namespace Web.AnalyticsWeb.Controllers
         /// <summary>Every figure on the page for one period, metric selection and set of filters.</summary>
         // GET: api/ActivityAnalysis/report?from=2025-10-06&to=2026-09-28&metrics=teams.calls,teams.meetings&ranges=teams.calls:5:
         [HttpGet, Route("report")]
-        public Task<IHttpActionResult> Report(
+        public Task<IActionResult> Report(
             string from = null, string to = null, string metrics = null, string userFilter = null,
             string licences = null, string ranges = null, CancellationToken cancellationToken = default(CancellationToken)) =>
             ExecuteAsync("Report", async () =>
@@ -94,7 +97,7 @@ namespace Web.AnalyticsWeb.Controllers
                 // then the difference. Only the report of everyone the administrator's filter admits stays open.
                 if (((filter != null && !filter.IsEmpty) || parsed.HasConditions) && !PortalAccess.Evaluate(Request, User).SeePii)
                 {
-                    return ResponseMessage(PortalPermissionDenied.Response(Request, PortalPermission.SeePii));
+                    return PortalPermissionDenied.Result(Request, PortalPermission.SeePii);
                 }
 
                 var request = await PrepareAsync(parsed, filter, cancellationToken);
@@ -112,7 +115,7 @@ namespace Web.AnalyticsWeb.Controllers
         // GET: api/ActivityAnalysis/people?metrics=teams.calls&department=Sales&sort=teams.calls&top=100
         [HttpGet, Route("people")]
         [RequirePortalPermission(PortalPermission.SeePii)]
-        public Task<IHttpActionResult> People(
+        public Task<IActionResult> People(
             string from = null, string to = null, string metrics = null, string userFilter = null,
             string licences = null, string ranges = null, string department = null, bool noDepartment = false,
             string sort = null, int top = DefaultTop, CancellationToken cancellationToken = default(CancellationToken)) =>
@@ -190,7 +193,7 @@ namespace Web.AnalyticsWeb.Controllers
             }
         }
 
-        private async Task<IHttpActionResult> ExecuteAsync(string action, Func<Task<IHttpActionResult>> run)
+        private async Task<IActionResult> ExecuteAsync(string action, Func<Task<IActionResult>> run)
         {
             if (!ModelState.IsValid)
             {
@@ -214,7 +217,7 @@ namespace Web.AnalyticsWeb.Controllers
             {
                 return Refuse(HttpStatusCode.ServiceUnavailable, ActivityAnalysisErrorCodes.Busy, ex.Message, retry: true);
             }
-            catch (HttpResponseException)
+            catch (ApiReplyException)
             {
                 // A refusal already worded for the portal - the global filter's, or the permission check's.
                 throw;
@@ -236,21 +239,19 @@ namespace Web.AnalyticsWeb.Controllers
             }
         }
 
-        private IHttpActionResult NotInstalled() =>
+        private IActionResult NotInstalled() =>
             Refuse(HttpStatusCode.PreconditionFailed, ActivityAnalysisErrorCodes.NotInstalled,
                 "This page reads the weekly profiling tables that the profiling runbooks compile, and they are not installed in this database.");
 
-        private IHttpActionResult Refuse(HttpStatusCode status, string code, string message, bool retry = false) =>
+        private IActionResult Refuse(HttpStatusCode status, string code, string message, bool retry = false) =>
             Reply(status, new ActivityAnalysisError { Code = code, Message = message }, retry);
 
         /// <summary>Always JSON, never cached: the figures depend on who is asking.</summary>
-        private IHttpActionResult Reply(HttpStatusCode status, object body, bool retry = false)
+        private IActionResult Reply(HttpStatusCode status, object body, bool retry = false)
         {
-            var formatter = (MediaTypeFormatter)Request.GetConfiguration()?.Formatters.JsonFormatter ?? new JsonMediaTypeFormatter();
-            var response = Request.CreateResponse(status, body, formatter);
-            response.Headers.CacheControl = new CacheControlHeaderValue { NoStore = true, Private = true };
-            if (retry) response.Headers.RetryAfter = new RetryConditionHeaderValue(TimeSpan.FromSeconds(5));
-            return ResponseMessage(response);
+            Response.Headers.CacheControl = "no-store, private";
+            if (retry) Response.Headers.RetryAfter = "5";
+            return new JsonResult(body) { StatusCode = (int)status };
         }
 
         private static ActivityAnalysisService CreateService()
@@ -277,18 +278,18 @@ namespace Web.AnalyticsWeb.Controllers
                 Audience = audience;
             }
 
-            private PreparedRequest(IHttpActionResult refusal)
+            private PreparedRequest(IActionResult refusal)
             {
                 Refusal = refusal;
             }
 
-            internal static PreparedRequest Refused(IHttpActionResult refusal) => new PreparedRequest(refusal);
+            internal static PreparedRequest Refused(IActionResult refusal) => new PreparedRequest(refusal);
 
             internal ActivityAnalysisService Service { get; }
             internal ActivityAnalysisQuery Query { get; }
             internal ReportScope Scope { get; }
             internal ActivityAnalysisAudience Audience { get; }
-            internal IHttpActionResult Refusal { get; }
+            internal IActionResult Refusal { get; }
         }
     }
 
