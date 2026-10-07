@@ -81,6 +81,8 @@
     <Compile Include="CopilotPrewarmExtractionTests.cs" />
     <Compile Include="CopilotEventManagerSaveTests.cs" />
     <Compile Include="CopilotAgentIdentityTests.cs" />
+    <Compile Include="CopilotTurnPairingTests.cs" />
+    <Compile Include="CopilotTurnPairingMigrationScriptTests.cs" />
     <Compile Include="CopilotTestBase.cs" />
     <Compile Include="WorkloadToggleTests.cs" />
     <Compile Include="PageUpdateManagerPerfTests.cs" />

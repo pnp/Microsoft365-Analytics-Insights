@@ -1709,6 +1709,8 @@ BEGIN
         JOIN #EligibleUsers AS eligible ON eligible.user_id = chats.user_id
         WHERE chats.time_stamp >= @from
           AND chats.time_stamp < @endExclusive
+          AND " + global::Common.Entities.Copilot.CopilotTurnSql.CountedTurn("chats") + @"
+          AND " + global::Common.Entities.Copilot.CopilotTurnSql.NotMakerTesting("chats.app_host") + @"
         GROUP BY chats.user_id,
                  DATEADD(DAY,
                     -(((DATEDIFF(DAY, CONVERT(date, '19000101', 112), CAST(chats.time_stamp AS date)) % 7) + 7) % 7),
@@ -2836,6 +2838,8 @@ OPTION (RECOMPILE);
     JOIN #ActivityScope AS eligible ON eligible.user_id = chats.user_id
     WHERE chats.time_stamp >= @from
       AND chats.time_stamp < @endExclusive
+      AND " + global::Common.Entities.Copilot.CopilotTurnSql.CountedTurn("chats") + @"
+      AND " + global::Common.Entities.Copilot.CopilotTurnSql.NotMakerTesting("chats.app_host") + @"
     GROUP BY chats.user_id,
              DATEADD(DAY,
                 -(((DATEDIFF(DAY, CONVERT(date, '19000101', 112), CAST(chats.time_stamp AS date)) % 7) + 7) % 7),

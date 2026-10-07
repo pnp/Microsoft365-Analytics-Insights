@@ -145,6 +145,7 @@
     <Compile Include="TeamsExplorer\TeamsExplorerScoring.cs" />
     <Compile Include="TeamsExplorer\TeamsExplorerSql.cs" />
     <Compile Include="Copilot\CopilotAccessedResourceTaxonomy.cs" />
+    <Compile Include="Copilot\CopilotTurnSql.cs" />
     <Compile Include="Config\ImportConfig.cs" />
     <Compile Include="Config\UserGroupsFilterModel.cs" />
     <Compile Include="UserScope\GroupDirectoryReader.cs" />
@@ -534,6 +535,10 @@
     <Compile Include="Migrations\202610021200001_LicenceHistory.Designer.cs">
       <DependentUpon>202610021200001_LicenceHistory.cs</DependentUpon>
     </Compile>
+    <Compile Include="Migrations\202610071400001_CopilotTurnPairing.cs" />
+    <Compile Include="Migrations\202610071400001_CopilotTurnPairing.Designer.cs">
+      <DependentUpon>202610071400001_CopilotTurnPairing.cs</DependentUpon>
+    </Compile>
     <Compile Include="Migrations\202609190900001_IndexPlatformUserActivityLogDate.cs" />
     <Compile Include="Migrations\202609190900001_IndexPlatformUserActivityLogDate.Designer.cs">
       <DependentUpon>202609190900001_IndexPlatformUserActivityLogDate.cs</DependentUpon>
@@ -849,6 +854,9 @@
     </EmbeddedResource>
     <EmbeddedResource Include="Migrations\202610021200001_LicenceHistory.resx">
       <DependentUpon>202610021200001_LicenceHistory.cs</DependentUpon>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Migrations\202610071400001_CopilotTurnPairing.resx">
+      <DependentUpon>202610071400001_CopilotTurnPairing.cs</DependentUpon>
     </EmbeddedResource>
     <EmbeddedResource Include="Migrations\202609190900001_IndexPlatformUserActivityLogDate.resx">
       <DependentUpon>202609190900001_IndexPlatformUserActivityLogDate.cs</DependentUpon>
