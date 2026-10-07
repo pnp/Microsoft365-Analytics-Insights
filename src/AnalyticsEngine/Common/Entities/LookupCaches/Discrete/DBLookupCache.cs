@@ -1,5 +1,6 @@
 ﻿using DataUtils;
 using System;
+using System.Collections.Generic;
 using System.Data.Entity;
 using System.Data.Entity.Infrastructure;
 using System.Linq;
@@ -96,6 +97,26 @@ namespace Common.Entities
 
 
         public abstract DbSet<T> EntityStore { get; }
+
+        /// <summary>
+        /// The most keys <see cref="LoadExistingIdsAsync"/> takes in one call. Each key is one SQL parameter, so
+        /// this stays well under SQL Server's 2,100-parameter limit.
+        /// </summary>
+        public const int MaxKeysPerIdBatch = 1000;
+
+        /// <summary>
+        /// Finds the ids of EXISTING records for up to <see cref="MaxKeysPerIdBatch"/> keys in one round trip,
+        /// for callers that know their keys up front (the daily usage-report save, #705). Read-only: it never
+        /// creates a record.
+        /// </summary>
+        /// <returns>
+        /// Each key that matched a record, mapped to the id <see cref="ObjectByIdCache{T}.Load"/> returns for that
+        /// key. Keys with no record are absent, so the caller creates them through
+        /// <see cref="GetOrCreateNewResource(string, T, bool)"/> exactly as before. Null when this cache has no
+        /// set-based lookup, in which case the caller resolves key by key.
+        /// </returns>
+        public virtual Task<IReadOnlyDictionary<string, int>> LoadExistingIdsAsync(IReadOnlyList<string> keys)
+            => Task.FromResult<IReadOnlyDictionary<string, int>>(null);
 
     }
 
