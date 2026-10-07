@@ -289,14 +289,34 @@ namespace Tests.UnitTests
                 if (graphUser.UserPrincipalName == upns[3])
                 {
                     Assert.AreEqual(existingId, row.Id, "The other import's row is kept...");
-                    Assert.IsNull(row.AzureAdId, "...and not written over.");
+                    Assert.IsNull(row.AzureAdId, "...and not written over: phase 2, not this insert, applies its Graph metadata.");
                     Assert.AreEqual(OtherImportMail, row.Mail);
+                    Assert.AreEqual(GraphAccountCreated, row.CreatedUtc, "Only the account-creation date it lacked is filled in.");
                 }
                 else
                 {
                     Assert.AreEqual(graphUser.Id, row.AzureAdId);
+                    Assert.AreEqual(GraphAccountCreated, row.CreatedUtc);
                 }
             }
+        }
+
+        [TestMethod]
+        public async Task BulkInsert_AUserCreatedMeanwhile_KeepsAnAccountCreationDateItAlreadyHas()
+        {
+            var upns = Enumerable.Range(1, 2).Select(Upn).ToList();
+            var otherImportsDate = new DateTime(2025, 6, 7, 8, 9, 10, DateTimeKind.Utc);
+            var existingId = InsertUserDirectly(upns[0], otherImportsDate);
+
+            using (var log = new RecordedLog())
+            {
+                await NewProcessor(log.Logger).BulkInsertUsers(ConnectionString, upns.Select(NewGraphUser).ToList(), batchSize: 10);
+            }
+
+            var stored = ReadRunUsers();
+            Assert.AreEqual(2, stored.Count);
+            Assert.AreEqual(otherImportsDate, stored.Single(r => r.Id == existingId).CreatedUtc, "A value is never overwritten.");
+            Assert.AreEqual(GraphAccountCreated, stored.Single(r => r.Id != existingId).CreatedUtc);
         }
 
         [TestMethod]
@@ -443,6 +463,7 @@ namespace Tests.UnitTests
             Assert.AreEqual(existingId, other.Id, "Not inserted a second time.");
             Assert.AreEqual(graphUsers[1].Id, other.AzureAdId, "Phase 2 still writes its Graph metadata.");
             Assert.AreEqual(graphUsers[1].Mail, other.Mail);
+            Assert.AreEqual(GraphAccountCreated, other.CreatedUtc, "Phase 1 fills the account-creation date, which phase 2 cannot write.");
         }
 
         #endregion
@@ -629,7 +650,10 @@ namespace Tests.UnitTests
         private string AnchorUpn() => $"anchor.{_run}@contoso.com";
 
         private static GraphUser NewGraphUser(string upn)
-            => new GraphUser { Id = Guid.NewGuid().ToString(), UserPrincipalName = upn, AccountEnabled = true, Mail = upn, PostalCode = "10001" };
+            => new GraphUser { Id = Guid.NewGuid().ToString(), UserPrincipalName = upn, AccountEnabled = true, Mail = upn, PostalCode = "10001", CreatedDateTime = GraphAccountCreated };
+
+        /// <summary>Synthetic Graph <c>createdDateTime</c> for every test user.</summary>
+        private static readonly DateTime GraphAccountCreated = new DateTime(2026, 1, 2, 3, 4, 5, DateTimeKind.Utc);
 
         private static UserInsertProcessor NewProcessor(AnalyticsLogger logger)
             => new UserInsertProcessor(logger, new UserBatchProcessor(logger));
@@ -658,13 +682,16 @@ namespace Tests.UnitTests
         }
 
         /// <summary>Creates a user over its own connection, as another import would, and returns its id.</summary>
-        private static int InsertUserDirectly(string upn)
+        private static int InsertUserDirectly(string upn) => InsertUserDirectly(upn, null);
+
+        private static int InsertUserDirectly(string upn, DateTime? createdUtc)
         {
             using (var connection = OpenConnection())
-            using (var command = new SqlCommand("INSERT INTO dbo.users (user_name, mail) VALUES (@upn, @mail); SELECT CAST(SCOPE_IDENTITY() AS int);", connection))
+            using (var command = new SqlCommand("INSERT INTO dbo.users (user_name, mail, created_utc) VALUES (@upn, @mail, @created); SELECT CAST(SCOPE_IDENTITY() AS int);", connection))
             {
                 command.Parameters.Add("@upn", SqlDbType.VarChar, 400).Value = upn;
                 command.Parameters.Add("@mail", SqlDbType.NVarChar, 250).Value = OtherImportMail;
+                command.Parameters.Add("@created", SqlDbType.DateTime2).Value = (object)createdUtc ?? DBNull.Value;
                 return (int)command.ExecuteScalar();
             }
         }
@@ -673,7 +700,7 @@ namespace Tests.UnitTests
         {
             var users = new List<StoredUser>();
             using (var connection = OpenConnection())
-            using (var command = new SqlCommand("SELECT id, user_name, azure_ad_id, mail FROM dbo.users WHERE user_name LIKE @pattern ORDER BY id;", connection))
+            using (var command = new SqlCommand("SELECT id, user_name, azure_ad_id, mail, created_utc FROM dbo.users WHERE user_name LIKE @pattern ORDER BY id;", connection))
             {
                 command.Parameters.Add("@pattern", SqlDbType.VarChar, 250).Value = "%" + _run + "%";
                 using (var reader = command.ExecuteReader())
@@ -686,6 +713,7 @@ namespace Tests.UnitTests
                             UserName = reader.GetString(1),
                             AzureAdId = reader.IsDBNull(2) ? null : reader.GetString(2),
                             Mail = reader.IsDBNull(3) ? null : reader.GetString(3),
+                            CreatedUtc = reader.IsDBNull(4) ? (DateTime?)null : reader.GetDateTime(4),
                         });
                     }
                 }
@@ -745,6 +773,7 @@ namespace Tests.UnitTests
             public string UserName { get; set; }
             public string AzureAdId { get; set; }
             public string Mail { get; set; }
+            public DateTime? CreatedUtc { get; set; }
         }
 
         /// <summary>An <see cref="AnalyticsLogger"/> whose traces can be read back.</summary>

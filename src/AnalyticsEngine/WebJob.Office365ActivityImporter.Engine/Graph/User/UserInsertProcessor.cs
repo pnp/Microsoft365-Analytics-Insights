@@ -9,6 +9,7 @@ using System.Data.Entity;
 using Microsoft.Data.SqlClient;
 using System.Diagnostics;
 using System.Linq;
+using System.Text;
 using System.Threading.Tasks;
 
 namespace WebJob.Office365ActivityImporter.Engine.Graph
@@ -23,6 +24,9 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         private readonly UserBatchProcessor _batchProcessor;
         private const int BULK_INSERT_BATCH_SIZE = 10000;
         private const int METADATA_BATCH_SIZE = 500;
+
+        /// <summary>Two parameters each, so well under SQL Server's 2,100-parameter limit.</summary>
+        private const int CREATED_DATES_PER_STATEMENT = 500;
 
         /// <summary>
         /// Bulk-copy attempts per batch. Each failed attempt leaves out the users another import has created since
@@ -180,8 +184,9 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         /// </para>
         /// <para>
         /// On a duplicate-key error the database is asked which of the batch's users exist now, by the comparison
-        /// <c>IX_users</c> itself uses, and the batch is written again without them. They are left as they are here;
-        /// phase 2 reloads every user of this insert by UPN, so they still get their metadata. At most
+        /// <c>IX_users</c> itself uses, and the batch is written again without them. Their rows are kept, not written
+        /// over: phase 2 reloads every user of this insert by UPN, so they still get their Graph metadata, and
+        /// <see cref="FillAccountCreatedDates"/> gives them the one column phase 2 cannot write. At most
         /// <see cref="MaxBulkInsertAttemptsPerBatch"/> attempts. A duplicate-key error that none of the batch's users
         /// explains, and every other error, is rethrown unchanged.
         /// </para>
@@ -219,13 +224,59 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                         throw;
                     }
 
-                    _logger.LogInformation($"User import - {createdMeanwhile.ToString("N0")} of the {batch.Count.ToString("N0")} users in this bulk-insert batch were created by another import since the user list was loaded; left as they are. Inserting the other {notYetCreated.Count.ToString("N0")}.");
+                    await FillAccountCreatedDates(connection, batch, existingIds);
+                    _logger.LogInformation($"User import - {createdMeanwhile.ToString("N0")} of the {batch.Count.ToString("N0")} users in this bulk-insert batch were created by another import since the user list was loaded, so they are not inserted again (they still get their Graph metadata). Inserting the other {notYetCreated.Count.ToString("N0")}.");
 
                     batch = notYetCreated;
                     if (batch.Count == 0)
                     {
                         return 0;
                     }
+                }
+            }
+        }
+
+        /// <summary>
+        /// Gives the users another import created meanwhile the account-creation date this insert would have written,
+        /// where they have none. Never overwrites a value.
+        /// </summary>
+        /// <remarks>
+        /// Phase 2 writes every other column the bulk copy does, but <c>created_utc</c> is not in the EF model.
+        /// Without this it would stay NULL until the existing-user update next sees the user - for a delta import,
+        /// not until the account changes - and Copilot Adoption reads it as the account-age proxy for the reclaim
+        /// grace period, which is exactly what the new accounts that meet this race need.
+        /// </remarks>
+        private static async Task FillAccountCreatedDates(SqlConnection connection, List<GraphUser> batch, int?[] existingIds)
+        {
+            var dates = new List<KeyValuePair<int, DateTime>>();
+            for (var i = 0; i < batch.Count; i++)
+            {
+                if (existingIds[i].HasValue && batch[i].CreatedDateTime.HasValue)
+                {
+                    dates.Add(new KeyValuePair<int, DateTime>(existingIds[i].Value, batch[i].CreatedDateTime.Value));
+                }
+            }
+
+            for (var offset = 0; offset < dates.Count; offset += CREATED_DATES_PER_STATEMENT)
+            {
+                var count = Math.Min(CREATED_DATES_PER_STATEMENT, dates.Count - offset);
+                using (var command = new SqlCommand { Connection = connection, CommandTimeout = 600 })
+                {
+                    var sql = new StringBuilder("UPDATE u SET created_utc = v.created_utc FROM dbo.users AS u INNER JOIN (VALUES ");
+                    for (var i = 0; i < count; i++)
+                    {
+                        if (i > 0)
+                        {
+                            sql.Append(',');
+                        }
+                        sql.Append("(@i").Append(i).Append(",@c").Append(i).Append(')');
+                        command.Parameters.Add("@i" + i, SqlDbType.Int).Value = dates[offset + i].Key;
+                        command.Parameters.Add("@c" + i, SqlDbType.DateTime2).Value = dates[offset + i].Value;
+                    }
+                    sql.Append(") AS v(id, created_utc) ON u.id = v.id WHERE u.created_utc IS NULL;");
+
+                    command.CommandText = sql.ToString();
+                    await command.ExecuteNonQueryAsync();
                 }
             }
         }
