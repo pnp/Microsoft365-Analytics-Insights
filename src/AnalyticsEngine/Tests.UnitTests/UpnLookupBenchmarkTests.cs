@@ -1,10 +1,10 @@
 using Common.Entities;
+using Common.Entities.Config;
 using Common.Entities.LookupCaches;
 using Microsoft.Data.SqlClient;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System;
 using System.Collections.Generic;
-using System.Configuration;
 using System.Data;
 using System.Data.Common;
 using System.Data.Entity;
@@ -416,7 +416,8 @@ WHERE qs.sql_handle IN ({string.Join(", ", names)}) AND pa.attribute = 'dbid' AN
             return db;
         }
 
-        private static string ConfiguredConnectionString() => ConfigurationManager.ConnectionStrings["SPOInsightsEntities"].ConnectionString;
+        // net10: through AnalyticsConfig (appsettings.json + environment variables); ConfigurationManager finds nothing here.
+        private static string ConfiguredConnectionString() => AnalyticsConfig.ConnectionStrings["SPOInsightsEntities"].ConnectionString;
 
         private static string ConfiguredDatabase() => new SqlConnectionStringBuilder(ConfiguredConnectionString()).InitialCatalog;
 
