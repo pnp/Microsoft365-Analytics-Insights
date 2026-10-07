@@ -293,7 +293,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
                     Telemetry.LogInformation($"{loaderType}: resolved {preResolved.KeysResolved:N0} of {preResolved.DistinctKeys:N0} distinct lookups " +
                         $"in {preResolved.Batches:N0} batched quer{(preResolved.Batches == 1 ? "y" : "ies")} ({preResolveWatch.ElapsedMilliseconds:N0} ms) before saving.");
                 }
-                totals?.Add(preResolved, preResolveWatch.ElapsedMilliseconds);
+                totals?.Add(preResolved, preResolveWatch.ElapsedTicks);
 
                 using (store.BeginBulkWrite())
                 {
@@ -313,7 +313,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
 
                         if (instrumentationEnabled)
                         {
-                            totals.ExistingRowLoadMs += existingLoadWatch.ElapsedMilliseconds;
+                            totals.ExistingRowLoadTicks += existingLoadWatch.ElapsedTicks;
                             TrackSaveStage(instrumentation, UsageReportSaveStageIds.ExistingRowsLoaded, loaderType, reportTable, "Completed", m =>
                             {
                                 m["DateIndex"] = dateIndex;
@@ -348,9 +348,9 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
                             var inScope = await IdInScope(reportPage.LookupFieldValue);
                             if (instrumentationEnabled)
                             {
-                                var elapsed = ElapsedMillisecondsSince(scopeTicks);
-                                dateMetrics.ScopeFilterMs += elapsed;
-                                totals.ScopeFilterMs += elapsed;
+                                var elapsed = ElapsedTicksSince(scopeTicks);
+                                dateMetrics.ScopeFilterTicks += elapsed;
+                                totals.ScopeFilterTicks += elapsed;
                             }
                             if (!inScope)
                             {
@@ -365,9 +365,9 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
                             var lookupId = await ResolveLookupIdAsync(reportPage, userEmailToDbIdCache, lookupCache, lookupStats);
                             if (instrumentationEnabled)
                             {
-                                var elapsed = ElapsedMillisecondsSince(lookupTicks);
-                                dateMetrics.LookupResolveMs += elapsed;
-                                totals.LookupResolveMs += elapsed;
+                                var elapsed = ElapsedTicksSince(lookupTicks);
+                                dateMetrics.LookupResolveTicks += elapsed;
+                                totals.LookupResolveTicks += elapsed;
                                 dateMetrics.Add(lookupStats);
                                 totals.Add(lookupStats);
                             }
@@ -402,18 +402,18 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
                             }
                             if (instrumentationEnabled)
                             {
-                                var elapsed = ElapsedMillisecondsSince(parseTicks);
-                                dateMetrics.DateParseMs += elapsed;
-                                totals.DateParseMs += elapsed;
+                                var elapsed = ElapsedTicksSince(parseTicks);
+                                dateMetrics.DateParseTicks += elapsed;
+                                totals.DateParseTicks += elapsed;
                             }
 
                             var projectionTicks = instrumentationEnabled ? Stopwatch.GetTimestamp() : 0;
                             PopulateReportSpecificMetadata(dateRequestedLog, reportPage);
                             if (instrumentationEnabled)
                             {
-                                var elapsed = ElapsedMillisecondsSince(projectionTicks);
-                                dateMetrics.ProjectionMs += elapsed;
-                                totals.ProjectionMs += elapsed;
+                                var elapsed = ElapsedTicksSince(projectionTicks);
+                                dateMetrics.ProjectionTicks += elapsed;
+                                totals.ProjectionTicks += elapsed;
                             }
 
                             // Auto-detect is off, so state the change explicitly. Only write when something actually
@@ -445,9 +445,9 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
                             }
                             if (instrumentationEnabled)
                             {
-                                var elapsed = ElapsedMillisecondsSince(dirtyTicks);
-                                dateMetrics.DirtyCheckMs += elapsed;
-                                totals.DirtyCheckMs += elapsed;
+                                var elapsed = ElapsedTicksSince(dirtyTicks);
+                                dateMetrics.DirtyCheckTicks += elapsed;
+                                totals.DirtyCheckTicks += elapsed;
                             }
 
                             i++;
@@ -483,7 +483,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
                             TrackSaveStage(instrumentation, UsageReportSaveStageIds.RowsReleased, loaderType, reportTable, "Completed", m =>
                             {
                                 m["DateIndex"] = dateIndex;
-                                m["DurationMs"] = ElapsedMillisecondsSince(releaseTicks);
+                                m["DurationMs"] = TicksToMilliseconds(ElapsedTicksSince(releaseTicks));
                                 m["TrackedEntityCountBeforeRelease"] = trackedBeforeRelease;
                                 m["TrackedEntityCountAfterRelease"] = store.TrackedEntityCount;
                             });
@@ -564,7 +564,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
             Monitor.Enter(userEmailToDbIdCache);
             try
             {
-                stats?.AddSynchronizationWait(ElapsedMillisecondsSince(lockStart));
+                stats?.AddSynchronizationWait(ElapsedTicksSince(lockStart));
                 // Keyed by the LOOKUP type (User / YammerGroup), not the report table, so a user resolved by one
                 // loader is reused by every other loader in the phase (#705). A value maps to the same record
                 // whichever report it came from: every user-keyed report resolves it with the same GetOrCreateLookup.
@@ -583,7 +583,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
             stats?.RecordMiss();
             var dbCallStart = stats == null ? 0 : Stopwatch.GetTimestamp();
             var lookup = await reportPage.GetOrCreateLookup(lookupCache);
-            stats?.RecordDatabaseCall(ElapsedMillisecondsSince(dbCallStart));
+            stats?.RecordDatabaseCall(ElapsedTicksSince(dbCallStart));
             if (!lookup.IsSavedToDB)
             {
                 throw new InvalidOperationException("Cannot use unsaved lookups for activity records");
@@ -593,7 +593,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
             Monitor.Enter(userEmailToDbIdCache);
             try
             {
-                stats?.AddSynchronizationWait(ElapsedMillisecondsSince(lockStart));
+                stats?.AddSynchronizationWait(ElapsedTicksSince(lockStart));
                 // Re-check in case another thread populated it while we were resolving.
                 lookupId = userEmailToDbIdCache.GetCachedIdForName<TLookupType>(reportPage.LookupFieldValue);
                 if (lookupId == null)
@@ -613,11 +613,15 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
             return lookupId.Value;
         }
 
-        private static long ElapsedMillisecondsSince(long startTimestamp)
-        {
-            if (startTimestamp == 0) return 0;
-            return (long)((Stopwatch.GetTimestamp() - startTimestamp) * 1000.0 / Stopwatch.Frequency);
-        }
+        // The save diagnostics keep elapsed time as raw Stopwatch ticks, sum it as ticks and turn it into
+        // milliseconds once, when a metric is written. Truncating every interval to whole milliseconds first, as this
+        // loop used to, reported any stage that costs well under a millisecond per row - most of them - as about 0
+        // however many rows it ran for.
+        private static long ElapsedTicksSince(long startTimestamp)
+            => startTimestamp == 0 ? 0 : Stopwatch.GetTimestamp() - startTimestamp;
+
+        private static double TicksToMilliseconds(long stopwatchTicks)
+            => stopwatchTicks * 1000.0 / Stopwatch.Frequency;
 
         /// <summary>
         /// Resolves, before the row loop, every lookup in <see cref="LoadedReportPages"/> that already exists in SQL,
@@ -740,7 +744,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
                 }
 
                 result.Batches++;
-                result.BatchMs += batchWatch.ElapsedMilliseconds;
+                result.BatchTicks += batchWatch.ElapsedTicks;
                 result.KeysRequested += pending.Count;
                 lock (cache)
                 {
@@ -767,7 +771,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
         {
             public long DistinctKeys;
             public long Batches;
-            public long BatchMs;
+            public long BatchTicks;
             public long KeysRequested;
             public long KeysResolved;
         }
@@ -794,26 +798,29 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
             instrumentation.Track(point);
         }
 
+        // Times are Stopwatch ticks, converted to milliseconds only by SaveLoopMetrics.WriteTo.
         private sealed class LookupResolutionStats
         {
             public long CacheHits;
             public long CacheMisses;
             public long DatabaseCalls;
             public long DuplicateConcurrentMisses;
-            public long SynchronizationWaitMs;
-            public long DatabaseCallMs;
+            public long SynchronizationWaitTicks;
+            public long DatabaseCallTicks;
 
             public void RecordHit() => CacheHits++;
             public void RecordMiss() => CacheMisses++;
             public void RecordDuplicateConcurrentMiss() => DuplicateConcurrentMisses++;
-            public void AddSynchronizationWait(long milliseconds) => SynchronizationWaitMs += milliseconds;
-            public void RecordDatabaseCall(long milliseconds)
+            public void AddSynchronizationWait(long ticks) => SynchronizationWaitTicks += ticks;
+            public void RecordDatabaseCall(long ticks)
             {
                 DatabaseCalls++;
-                DatabaseCallMs += milliseconds;
+                DatabaseCallTicks += ticks;
             }
         }
 
+        // Every *Ticks field is a sum of Stopwatch ticks; WriteTo reports it in milliseconds under the metric's
+        // existing *Ms name.
         private sealed class SaveLoopMetrics
         {
             public long InputRows;
@@ -822,20 +829,20 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
             public long AddedRows;
             public long ChangedRows;
             public long UnchangedRows;
-            public long ExistingRowLoadMs;
-            public long ScopeFilterMs;
-            public long LookupResolveMs;
-            public long DateParseMs;
-            public long ProjectionMs;
-            public long DirtyCheckMs;
+            public long ExistingRowLoadTicks;
+            public long ScopeFilterTicks;
+            public long LookupResolveTicks;
+            public long DateParseTicks;
+            public long ProjectionTicks;
+            public long DirtyCheckTicks;
             public long LookupCacheHits;
             public long LookupCacheMisses;
             public long LookupDatabaseCalls;
             public long DuplicateConcurrentMisses;
-            public long LookupSynchronizationWaitMs;
-            public long LookupDatabaseCallMs;
+            public long LookupSynchronizationWaitTicks;
+            public long LookupDatabaseCallTicks;
             public long LookupBatchCount;
-            public long LookupBatchMs;
+            public long LookupBatchTicks;
             public long LookupBatchKeyCount;
             public long LookupBatchResolvedCount;
 
@@ -853,22 +860,22 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
                 LookupCacheMisses += stats.CacheMisses;
                 LookupDatabaseCalls += stats.DatabaseCalls;
                 DuplicateConcurrentMisses += stats.DuplicateConcurrentMisses;
-                LookupSynchronizationWaitMs += stats.SynchronizationWaitMs;
-                LookupDatabaseCallMs += stats.DatabaseCallMs;
+                LookupSynchronizationWaitTicks += stats.SynchronizationWaitTicks;
+                LookupDatabaseCallTicks += stats.DatabaseCallTicks;
             }
 
             // The batches are lookup database calls too, so LookupDatabaseCallCount / LookupDatabaseCallMs and
             // LookupResolveMs stay the totals for the save; the LookupBatch* metrics say how much of it was batched.
-            public void Add(LookupPreResolution preResolution, long elapsedMs)
+            public void Add(LookupPreResolution preResolution, long elapsedTicks)
             {
                 if (preResolution == null) return;
                 LookupBatchCount += preResolution.Batches;
-                LookupBatchMs += preResolution.BatchMs;
+                LookupBatchTicks += preResolution.BatchTicks;
                 LookupBatchKeyCount += preResolution.KeysRequested;
                 LookupBatchResolvedCount += preResolution.KeysResolved;
                 LookupDatabaseCalls += preResolution.Batches;
-                LookupDatabaseCallMs += preResolution.BatchMs;
-                LookupResolveMs += elapsedMs;
+                LookupDatabaseCallTicks += preResolution.BatchTicks;
+                LookupResolveTicks += elapsedTicks;
             }
 
             public void WriteTo(Dictionary<string, double> metrics, int? dateIndex)
@@ -880,23 +887,23 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
                 metrics["AddedRowCount"] = AddedRows;
                 metrics["ChangedRowCount"] = ChangedRows;
                 metrics["UnchangedRowCount"] = UnchangedRows;
-                metrics["ExistingRowLoadMs"] = ExistingRowLoadMs;
-                metrics["ScopeFilterMs"] = ScopeFilterMs;
-                metrics["LookupResolveMs"] = LookupResolveMs;
-                metrics["DateParseMs"] = DateParseMs;
-                metrics["ProjectionMs"] = ProjectionMs;
-                metrics["DirtyCheckMs"] = DirtyCheckMs;
+                metrics["ExistingRowLoadMs"] = TicksToMilliseconds(ExistingRowLoadTicks);
+                metrics["ScopeFilterMs"] = TicksToMilliseconds(ScopeFilterTicks);
+                metrics["LookupResolveMs"] = TicksToMilliseconds(LookupResolveTicks);
+                metrics["DateParseMs"] = TicksToMilliseconds(DateParseTicks);
+                metrics["ProjectionMs"] = TicksToMilliseconds(ProjectionTicks);
+                metrics["DirtyCheckMs"] = TicksToMilliseconds(DirtyCheckTicks);
                 metrics["LookupCacheHitCount"] = LookupCacheHits;
                 metrics["LookupCacheMissCount"] = LookupCacheMisses;
                 metrics["LookupDatabaseCallCount"] = LookupDatabaseCalls;
                 metrics["DuplicateConcurrentMissCount"] = DuplicateConcurrentMisses;
-                metrics["LookupSynchronizationWaitMs"] = LookupSynchronizationWaitMs;
-                metrics["LookupDatabaseCallMs"] = LookupDatabaseCallMs;
+                metrics["LookupSynchronizationWaitMs"] = TicksToMilliseconds(LookupSynchronizationWaitTicks);
+                metrics["LookupDatabaseCallMs"] = TicksToMilliseconds(LookupDatabaseCallTicks);
                 if (!dateIndex.HasValue)
                 {
                     // Pre-resolution runs once per save, before the per-date loop, so only the save totals carry it.
                     metrics["LookupBatchCount"] = LookupBatchCount;
-                    metrics["LookupBatchMs"] = LookupBatchMs;
+                    metrics["LookupBatchMs"] = TicksToMilliseconds(LookupBatchTicks);
                     metrics["LookupBatchKeyCount"] = LookupBatchKeyCount;
                     metrics["LookupBatchResolvedCount"] = LookupBatchResolvedCount;
                 }

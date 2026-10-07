@@ -6,6 +6,7 @@ using System;
 using Common.Entities;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 using System.Threading.Tasks;
 using Tests.UnitTests.FakeLoaderClasses;
@@ -478,6 +479,73 @@ namespace Tests.UnitTests
             Assert.AreEqual(1, lookupCalls["loader2only@contoso.com"], "Non-overlapping users still resolve independently.");
             Assert.AreEqual(1d, instrumentation.Events.Where(e => e.Stage == UsageReportSaveStageIds.SaveCompleted).Sum(e => Metric(e, "DuplicateConcurrentMissCount")),
                 "The second resolver must record that another loader populated the cache while it awaited the lookup.");
+        }
+
+        [TestMethod]
+        public async Task DailyActivityLoader_InstrumentationSumsSubMillisecondPerRowTimings_InsteadOfTruncatingEachToZero()
+        {
+            // 1,000 rows, each spending ~20 microseconds in the scope filter and ~20 in the lookup: real time, all of
+            // it far below a millisecond per row. The per-row timings used to be truncated to whole milliseconds
+            // BEFORE they were summed, so a save like this reported ~0 ms for both stages.
+            if (!Stopwatch.IsHighResolution)
+            {
+                Assert.Inconclusive("Needs a high-resolution Stopwatch to time sub-millisecond intervals.");
+            }
+            const int rows = 1000;
+            var spinTicks = Math.Max(1, Stopwatch.Frequency / 50000);
+            long scopeTicks = 0, lookupTicks = 0;
+            void Spin(ref long measuredTicks)
+            {
+                var start = Stopwatch.GetTimestamp();
+                while (Stopwatch.GetTimestamp() - start < spinTicks) { }
+                measuredTicks += Stopwatch.GetTimestamp() - start;
+            }
+
+            CountingUserActivityDetail.ResolveAsync = upn =>
+            {
+                Spin(ref lookupTicks);
+                return Task.FromResult(int.Parse(upn.Substring(4, 4)));
+            };
+            var instrumentation = new RecordingUsageReportSaveInstrumentation();
+            var loader = new InMemoryDailyActivityLoader(NullLogger.Instance)
+            {
+                SaveInstrumentation = instrumentation,
+                InScopeRule = upn =>
+                {
+                    Spin(ref scopeTicks);
+                    return true;
+                },
+            };
+            loader.LoadedReportPages[Day1] = Enumerable.Range(1000, rows)
+                .Select(i => new CountingUserActivityDetail($"user{i}@contoso.com", i))
+                .Cast<FakeUserActivityDetail>()
+                .ToList();
+            loader.ReportStore = new InMemoryUsageReportStore<FakeUserUsageActivityLog>();
+
+            // A cold cache and a lookup cache with no batch query: every row resolves through the per-row lookup.
+            await loader.SaveLoadedReportsToSql(new ConcurrentLookupDbIdsCache(), new UserCache(null));
+
+            // Each loader interval encloses the callback that measured itself, so a total that is summed without
+            // truncation can never be less than what the callbacks measured.
+            var scopeMs = scopeTicks * 1000.0 / Stopwatch.Frequency;
+            var lookupMs = lookupTicks * 1000.0 / Stopwatch.Frequency;
+            Assert.IsTrue(scopeMs > 0 && lookupMs > 0);
+            var completed = instrumentation.Single(UsageReportSaveStageIds.SaveCompleted);
+            var perDate = instrumentation.Single(UsageReportSaveStageIds.RowsProcessed);
+            foreach (var point in new[] { completed, perDate })
+            {
+                AssertMetric(point, "LookupDatabaseCallCount", rows);
+                Assert.IsTrue(Metric(point, "ScopeFilterMs") >= scopeMs,
+                    $"{point.Stage}: ScopeFilterMs {Metric(point, "ScopeFilterMs")} must include the {scopeMs} ms the scope filter took.");
+                Assert.IsTrue(Metric(point, "LookupDatabaseCallMs") >= lookupMs,
+                    $"{point.Stage}: LookupDatabaseCallMs {Metric(point, "LookupDatabaseCallMs")} must include the {lookupMs} ms the lookups took.");
+                Assert.IsTrue(Metric(point, "LookupResolveMs") >= Metric(point, "LookupDatabaseCallMs"),
+                    $"{point.Stage}: resolving a lookup includes its database call.");
+                foreach (var stage in new[] { "DateParseMs", "ProjectionMs", "DirtyCheckMs", "LookupSynchronizationWaitMs" })
+                {
+                    Assert.IsTrue(Metric(point, stage) > 0, $"{point.Stage}: {stage} ran for {rows} rows, so it cannot total exactly 0 ms.");
+                }
+            }
         }
 
         [TestMethod]
