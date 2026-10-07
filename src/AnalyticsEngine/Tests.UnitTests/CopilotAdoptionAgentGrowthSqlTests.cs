@@ -85,7 +85,7 @@ namespace Tests.UnitTests
                     Seed(db, window.FromUtc.AddDays(14), userId: 9, agentId: null, appHost: "Teams");
                 }
 
-                var rows = Query<AgentGrowthQueryRow>(db, CopilotAdoptionSql.AgentGrowthSql(null), Parameters());
+                var rows = Query<AgentGrowthQueryRow>(db, CopilotAdoptionSql.AgentGrowthSql, GrowthParameters(null));
 
                 Assert.AreEqual(14, rows.Count, "Every window gets a row, data or not.");
                 CollectionAssert.AreEqual(Enumerable.Range(0, 14).ToList(), rows.Select(r => r.WindowsAgo).ToList());
@@ -105,18 +105,72 @@ namespace Tests.UnitTests
                 Assert.IsNull(built[7].ActiveAgents, "The audit log holds nothing for window 7: blank, not zero.");
                 Assert.AreEqual(1, built[13].ActiveAgents, "The agent used only a year ago counts there.");
 
-                // The scope seam: the agents the scope rejects are left out of every figure.
-                var scoped = Query<AgentGrowthQueryRow>(db, CopilotAdoptionSql.AgentGrowthSql(new[] { 2, 2 }), Parameters());
+                // The scope seam: an agent left out as out of scope is left out of every figure.
+                var scoped = Query<AgentGrowthQueryRow>(db,
+                    CopilotAdoptionSql.AgentGrowthSql,
+                    GrowthParameters(new[] { new AgentGrowthExclusion { AgentId = 2, UnknownOrigin = false } }));
                 AssertRow(scoped[0], activeAgents: 1, users: 1, interactions: 1, hasData: true);
                 AssertRow(scoped[1], activeAgents: 0, users: 0, interactions: 0, hasData: true);
                 AssertRow(scoped[13], activeAgents: 1, users: 1, interactions: 2, hasData: true);
+                Assert.IsTrue(scoped.All(r => r.UnknownOriginAgents == 0), "Out of scope is not the unknown-origin gap.");
 
                 var agents = Query<AgentGrowthAgentRow>(db, CopilotAdoptionSql.AgentGrowthAgentsSql);
                 Assert.AreEqual(3, agents.Count);
-                Assert.AreEqual("Καλημέρα κόσμε", agents.Single(a => a.AgentId == 2).Name,
-                    "Agent names are customer text and must survive as Unicode.");
-                Assert.IsNull(agents.Single(a => a.AgentId == 2).IsCustomAgent);
-                Assert.AreEqual(0, CopilotAdoptionAgentGrowth.ExcludedAgentIds(agents).Count);
+                Assert.AreEqual("SPO_00000000-0000-0000-0000-000000000002", agents.Single(a => a.AgentId == 2).AgentKey);
+                Assert.IsNull(agents.Single(a => a.AgentId == 2).IsCustomAgent, "A stored NULL reaches the classifier as NULL.");
+                Assert.IsTrue(agents.Single(a => a.AgentId == 1).IsCustomAgent == true);
+            }
+        }
+
+        [TestMethod]
+        public void AgentGrowthSql_CustomerBuiltScope_LeavesOutMicrosoftAndUnknownOriginAgents_AndCountsTheGap()
+        {
+            using (var db = ScratchDatabase.Create("AgentGrowthScope"))
+            {
+                CreateCopilotTables(db);
+                var windows = CopilotAdoptionAgentGrowth.Windows(LastSettled);
+
+                db.Execute(
+                    @"INSERT INTO dbo.copilot_agents (id, name, agent_id, is_custom_agent) VALUES
+                          (1, N'Contoso Expenses', N'CopilotStudio.Declarative.00000000-0000-0000-0000-000000000001', NULL),
+                          (2, N'Καλημέρα κόσμε', N'SPO_00000000-0000-0000-0000-000000000002', NULL),
+                          (3, N'Copilot Cowork', N'Copilot.M365Copilot.CoworkChat', NULL),
+                          (4, N'Contoso declared custom', N'T_00000000-0000-0000-0000-000000000004', 1),
+                          (5, N'Contoso built-in', N'BuiltIn_Contoso', 0);");
+
+                Seed(db, new DateTime(2025, 1, 15, 9, 0, 0), userId: 9, agentId: null, appHost: "Teams");
+
+                // Window 0: two customer-built agents (one only by its stored flag), two of unknown origin, and
+                // Microsoft's Cowork.
+                Seed(db, windows[0].FromUtc.AddDays(1), userId: 1, agentId: 1, appHost: "Teams");
+                Seed(db, windows[0].FromUtc.AddDays(2), userId: 1, agentId: 1, appHost: "Word");
+                Seed(db, windows[0].FromUtc.AddDays(3), userId: 4, agentId: 4, appHost: "Teams");
+                Seed(db, windows[0].FromUtc.AddDays(4), userId: 2, agentId: 2, appHost: "Teams");
+                Seed(db, windows[0].FromUtc.AddDays(5), userId: 1, agentId: 5, appHost: "Teams");
+                Seed(db, windows[0].FromUtc.AddDays(6), userId: 3, agentId: 3, appHost: "cowork");
+
+                // Window 13: only Microsoft's agent was used - a measured zero, not a gap.
+                Seed(db, windows[13].FromUtc.AddDays(1), userId: 5, agentId: 3, appHost: "cowork");
+
+                var agents = Query<AgentGrowthAgentRow>(db, CopilotAdoptionSql.AgentGrowthAgentsSql);
+                var exclusions = CopilotAdoptionAgentGrowth.Exclusions(agents, CopilotAdoptionAgentGrowth.Scope);
+                CollectionAssert.AreEqual(new[] { 2, 3, 5 }, exclusions.Select(x => x.AgentId).ToArray());
+                CollectionAssert.AreEqual(new[] { true, false, true }, exclusions.Select(x => x.UnknownOrigin).ToArray(),
+                    "The SharePoint agent and the built-in are of unknown origin; Cowork is Microsoft's.");
+
+                var rows = Query<AgentGrowthQueryRow>(db, CopilotAdoptionSql.AgentGrowthSql, GrowthParameters(exclusions));
+
+                AssertRow(rows[0], activeAgents: 2, users: 2, interactions: 3, hasData: true);
+                Assert.AreEqual(2, rows[0].UnknownOriginAgents,
+                    "Agents of unknown origin are counted on their own, not added to the active agents.");
+                AssertRow(rows[13], activeAgents: 0, users: 0, interactions: 0, hasData: true);
+                Assert.AreEqual(0, rows[13].UnknownOriginAgents, "Microsoft's own agent is out of scope, not part of the gap.");
+
+                var built = CopilotAdoptionAgentGrowth.Build(LastSettled, rows, billing: null);
+                Assert.AreEqual(2, built[0].ActiveAgents);
+                Assert.AreEqual(2, built[0].UnknownOriginAgents);
+                Assert.AreEqual(1.5, built[0].InteractionsPerAgentUser);
+                Assert.AreEqual(0, built[13].ActiveAgents, "Cowork alone a year ago: a measured zero for customer-built agents.");
             }
         }
 
@@ -176,6 +230,12 @@ namespace Tests.UnitTests
                 new SqlParameter("@seriesFrom", CopilotAdoptionAgentGrowth.SeriesFromUtc(LastSettled)),
                 new SqlParameter("@seriesToExclusive", CopilotAdoptionAgentGrowth.SeriesToExclusiveUtc(LastSettled)),
             };
+        }
+
+        /// <summary>The window parameters plus the scope's, exactly as the service sends them.</summary>
+        private static SqlParameter[] GrowthParameters(IEnumerable<AgentGrowthExclusion> exclusions)
+        {
+            return Parameters().Concat(CopilotAdoptionSql.AgentGrowthScopeParameters(exclusions)).ToArray();
         }
 
         private static void AssertRow(AgentGrowthQueryRow row, int activeAgents, int users, long interactions, bool hasData)

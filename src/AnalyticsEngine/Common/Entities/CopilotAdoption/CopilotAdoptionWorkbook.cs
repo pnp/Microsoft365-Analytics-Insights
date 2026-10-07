@@ -1303,11 +1303,10 @@ namespace Common.Entities.CopilotAdoption
             if (growth == null || growth.Count == 0) return;
 
             var latest = CopilotAdoptionAgentGrowth.Latest(growth);
-            var scope = CopilotAdoptionAgentGrowth.ScopeNoun(estate.GrowthScope);
             var lagDays = (summary.Options ?? CopilotAdoptionOptions.Default).UsageReportLagDays;
 
             var sheet = workbook.AddSheet("Agent growth");
-            sheet.SetColumnWidths(14, 13, 13, 14, 14, 16, 16, 24);
+            sheet.SetColumnWidths(14, 13, 13, 14, 18, 14, 16, 16, 24);
 
             sheet.AddTitle("Agent growth, year on year");
             sheet.AddRow(XlsxCell.Wrapped(
@@ -1316,13 +1315,14 @@ namespace Common.Entities.CopilotAdoption
                 + $", the last settled day: {lagDays} days before the analysis ran, because the Copilot audit "
                 + "feed and Copilot Studio billing arrive late. Window 0 is the most recent; window "
                 + $"{CopilotAdoptionAgentGrowth.YearAgoWindow} covers the same 28 days a year earlier, so comparing "
-                + $"the two is the year-on-year change. Counts {scope}. A blank cell is a window that was not "
-                + "measured - never zero."));
+                + "the two is the year-on-year change. " + AgentGrowthScopeSentence(estate.GrowthScope)
+                + " A blank cell is a window that was not measured - never zero."));
             sheet.AddRow(XlsxCell.Wrapped(AgentGrowthCaveat));
             sheet.AddBlankRow();
 
-            sheet.AddHeaderRow("Windows ago", "From", "To", "Active agents", "Agent users", "Agent interactions",
-                "Interactions per agent user", "Copilot Studio billed agents (separate: autonomous-run evidence)");
+            sheet.AddHeaderRow("Windows ago", "From", "To", "Active agents", "Agents of unknown origin (not counted)",
+                "Agent users", "Agent interactions", "Interactions per agent user",
+                "Copilot Studio billed agents (separate: autonomous-run evidence)");
 
             var headerRow = sheet.CurrentRow;
             var first = headerRow + 1;
@@ -1333,6 +1333,7 @@ namespace Common.Entities.CopilotAdoption
                     XlsxCell.Date(window.FromUtc),
                     XlsxCell.Date(window.ToUtc),
                     window.ActiveAgents,
+                    window.UnknownOriginAgents,
                     window.AgentUsers,
                     window.AgentInteractions,
                     window.InteractionsPerAgentUser,
@@ -1343,9 +1344,11 @@ namespace Common.Entities.CopilotAdoption
 
             sheet.AddBlankRow();
             sheet.AddRow(XlsxCell.Wrapped(
-                "Sources. Active agents, agent users and agent interactions: the Copilot audit log (copilot_chats), "
-                + "user-initiated use only. Copilot Studio billed agents: the Power Platform billing import "
-                + "(copilot_studio_credit_daily) - a separate series that is never added to the active agents. "
+                "Sources. Active agents, agents of unknown origin, agent users and agent interactions: the Copilot "
+                + "audit log (copilot_chats), user-initiated use only, with each agent's origin from the agent-origin "
+                + "classifier (the Agents sheet's Type column). Copilot Studio billed agents: the Power Platform "
+                + "billing import (copilot_studio_credit_daily) - a separate series that is never added to the "
+                + "active agents. "
                 + (estate.GrowthAuditHistoryStartUtc.HasValue
                     ? $"The Copilot audit history starts on {estate.GrowthAuditHistoryStartUtc.Value:yyyy-MM-dd}."
                     : "The Copilot audit log holds no interactions.")));
@@ -1355,7 +1358,7 @@ namespace Common.Entities.CopilotAdoption
                 Type = XlsxChartType.Line,
                 Title = "Active agents per 28-day window",
                 CategoryRange = sheet.RangeReference(first, 3, last, 3),
-                AnchorCell = "J3",
+                AnchorCell = "K3",
                 WidthCells = 11,
                 HeightCells = 16,
                 ShowLegend = true,
@@ -1369,12 +1372,22 @@ namespace Common.Entities.CopilotAdoption
             chart.Series.Add(new XlsxChartSeries
             {
                 Name = "Copilot Studio billed agents",
-                NameRange = sheet.RangeReference(headerRow, 8, headerRow, 8),
-                ValueRange = sheet.RangeReference(first, 8, last, 8),
+                NameRange = sheet.RangeReference(headerRow, 9, headerRow, 9),
+                ValueRange = sheet.RangeReference(first, 9, last, 9),
             });
             sheet.AddChart(chart);
 
             sheet.FreezeTopRows(headerRow);
+        }
+
+        /// <summary>Which agents the growth series counts, in a sentence, for the English-only workbook.</summary>
+        private static string AgentGrowthScopeSentence(string scope)
+        {
+            return string.Equals(scope, AgentGrowthScopes.CustomerBuilt, StringComparison.Ordinal)
+                ? "Counts customer-built agents only, as the report does. Agents Microsoft ships are left out, and "
+                  + "so are agents of unknown origin - the audit log does not say who made them (SharePoint agents, "
+                  + "for example) - which are counted in their own column, so the figures are a floor by that much."
+                : "Counts every agent, Microsoft's own included.";
         }
 
         /// <summary>
@@ -2497,11 +2510,18 @@ namespace Common.Entities.CopilotAdoption
                 + $"{CopilotAdoptionAgentGrowth.YearAgoWindow} is the year-on-year change. The series always ends at the "
                 + "last settled day before the analysis ran, whatever reporting period is selected, like the agent "
                 + "inventory.\n"
-                + $"It counts {CopilotAdoptionAgentGrowth.ScopeNoun(summary.Agents?.GrowthScope)}: every interaction "
-                + "the Copilot audit log attributes to an agent and to a person, licensed or not, Cowork included - "
-                + "the same agents as the Agents sheet. An agent is active in a window when someone used it on at "
-                + "least one day in it, the Work Trend Index's definition of user-initiated use. Agent users are "
-                + "distinct people; interactions per agent user is interactions divided by agent users.\n"
+                + (string.Equals(summary.Agents?.GrowthScope, AgentGrowthScopes.CustomerBuilt, StringComparison.Ordinal)
+                    ? "It counts customer-built agents only, as the report does, with each agent's origin taken from the "
+                      + "agent-origin classifier behind the Agents sheet's Type column. Agents Microsoft ships, Cowork "
+                      + "among them, are left out. Agents of unknown origin - the audit log does not say who made them, "
+                      + "SharePoint agents for example - are left out too, and counted on their own per window, so the "
+                      + "figures are a floor by that much. An interaction counts when the Copilot audit log attributes it "
+                      + "to one of the counted agents and to a person, licensed or not."
+                    : "It counts every agent: every interaction the Copilot audit log attributes to an agent and to a "
+                      + "person, licensed or not, Cowork included - the same agents as the Agents sheet.")
+                + " An agent is active in a window when someone used it on at least one day in it, the Work Trend "
+                + "Index's definition of user-initiated use. Agent users are distinct people; interactions per agent "
+                + "user is interactions divided by agent users.\n"
                 + "A window is measured only when the Copilot audit log holds an interaction inside it and its "
                 + "history reaches back to the window's first day. Otherwise every figure is left blank, never "
                 + "zero: a window the import did not cover would read as nobody using an agent, and in the year-ago "

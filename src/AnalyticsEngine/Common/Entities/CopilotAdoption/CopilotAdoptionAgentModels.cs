@@ -264,12 +264,20 @@ namespace Common.Entities.CopilotAdoption
         public DateTime ToUtc { get; set; }
 
         /// <summary>
-        /// Agents with at least one day of user-initiated use in the window: the Work Trend Index's
-        /// definition of an active agent, less its autonomous-run half, which is
-        /// <see cref="CopilotStudioBilledAgents"/>.
+        /// Customer-built agents with at least one day of user-initiated use in the window: the Work Trend
+        /// Index's definition of an active agent, less its autonomous-run half, which is
+        /// <see cref="CopilotStudioBilledAgents"/>. The scope is <see cref="AgentEstateSummary.GrowthScope"/>.
         /// </summary>
         [JsonProperty("activeAgents")]
         public int? ActiveAgents { get; set; }
+
+        /// <summary>
+        /// Agents of unknown origin used in the window - left out of <see cref="ActiveAgents"/>, agent users
+        /// and interactions because the audit log does not say who made them (SharePoint agents, for
+        /// example), and counted here so the gap is visible: the figures are a floor by this much.
+        /// </summary>
+        [JsonProperty("unknownOriginAgents")]
+        public int? UnknownOriginAgents { get; set; }
 
         /// <summary>Distinct people who used at least one of those agents in the window.</summary>
         [JsonProperty("agentUsers")]

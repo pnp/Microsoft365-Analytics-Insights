@@ -1064,13 +1064,23 @@ namespace Common.Entities.CopilotAdoption
         [JsonProperty("agentGrowthSettledThroughUtc")]
         public DateTime? AgentGrowthSettledThroughUtc => CopilotAdoptionAgentGrowth.Latest(Agents?.Growth)?.ToUtc;
 
-        /// <summary>Agents with user-initiated use in the most recent closed 28-day window.</summary>
+        /// <summary>
+        /// Agents in the series' scope (<see cref="AgentGrowthScope"/>: customer-built) with user-initiated use
+        /// in the most recent closed 28-day window.
+        /// </summary>
         [JsonProperty("agentGrowthActiveAgentsWindow0")]
         public int? AgentGrowthActiveAgentsWindow0 => CopilotAdoptionAgentGrowth.Latest(Agents?.Growth)?.ActiveAgents;
 
         /// <summary>The same, for the same 28 days a year earlier.</summary>
         [JsonProperty("agentGrowthActiveAgentsWindow13")]
         public int? AgentGrowthActiveAgentsWindow13 => CopilotAdoptionAgentGrowth.YearAgo(Agents?.Growth)?.ActiveAgents;
+
+        /// <summary>Agents of unknown origin used in window 0, left out of the figures beside it: the size of the floor.</summary>
+        [JsonProperty("agentGrowthUnknownOriginAgentsWindow0")]
+        public int? AgentGrowthUnknownOriginAgentsWindow0 => CopilotAdoptionAgentGrowth.Latest(Agents?.Growth)?.UnknownOriginAgents;
+
+        [JsonProperty("agentGrowthUnknownOriginAgentsWindow13")]
+        public int? AgentGrowthUnknownOriginAgentsWindow13 => CopilotAdoptionAgentGrowth.YearAgo(Agents?.Growth)?.UnknownOriginAgents;
 
         [JsonProperty("agentGrowthAgentUsersWindow0")]
         public int? AgentGrowthAgentUsersWindow0 => CopilotAdoptionAgentGrowth.Latest(Agents?.Growth)?.AgentUsers;

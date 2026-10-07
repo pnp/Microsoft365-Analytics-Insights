@@ -17,6 +17,7 @@ function windows(overrides: Partial<Record<number, Partial<AgentGrowthWindow>>> 
       fromUtc: new Date(to - 27 * day).toISOString(),
       toUtc: new Date(to).toISOString(),
       activeAgents: 30 - 2 * n,
+      unknownOriginAgents: 0,
       agentUsers: 1200 - 50 * n,
       agentInteractions: 15000 - 500 * n,
       interactionsPerAgentUser: 12.5,
@@ -32,6 +33,7 @@ function estate(growth: AgentGrowthWindow[], over: Partial<AgentEstateSummary> =
     activeAgents: 30,
     knownAgents: 40,
     customAgents: 20,
+    unknownOriginAgents: 5,
     agentUsers: 1200,
     licensedAgentUsers: 600,
     agentInteractions: 15000,
@@ -42,7 +44,7 @@ function estate(growth: AgentGrowthWindow[], over: Partial<AgentEstateSummary> =
     usageByDepartment: [],
     usageByAgent: [],
     agents: [],
-    growthScope: 'allAgents',
+    growthScope: 'customerBuilt',
     growthAuditHistoryStartUtc: '2025-01-15T09:00:00Z',
     growth,
     ...over,
@@ -59,7 +61,7 @@ describe('AgentGrowthLine', () => {
 
     expect(screen.getByText('Agent growth, year on year')).toBeInTheDocument();
     expect(screen.getByText(
-      'Agents used on at least one day in the 28 days to 4 Oct 2026, against the same 28 days a year earlier, to 5 Oct 2025.',
+      'Agents your organisation built, used on at least one day in the 28 days to 4 Oct 2026, against the same 28 days a year earlier, to 5 Oct 2025.',
     )).toBeInTheDocument();
 
     expect(within(figure('Active agents')).getByText('30')).toBeInTheDocument();
@@ -116,11 +118,29 @@ describe('AgentGrowthLine', () => {
     expect(within(evidence).getByText('No Copilot Studio billing data covers these windows.')).toBeInTheDocument();
   });
 
-  it('names the customer-built scope once the series is counted that way', () => {
-    renderWithProvider(<AgentGrowthLine estate={estate(windows(), { growthScope: 'customerBuilt' })} lagDays={3} />);
+  it('says how many agents of unknown origin it left out, so the figures read as a floor', () => {
+    const growth = windows({ 0: { unknownOriginAgents: 6 }, 13: { unknownOriginAgents: 1 } });
+    renderWithProvider(<AgentGrowthLine estate={estate(growth)} lagDays={3} />);
 
-    expect(screen.getByText(/^Agents your organisation built, used on at least one day in the 28 days to 4 Oct 2026/))
-      .toBeInTheDocument();
+    expect(screen.getByText(
+      'Agents of unknown origin, not counted: 6 in the latest window and 1 a year earlier. The audit log does not say who made them - SharePoint agents, for example - so the figures above are a floor.',
+    )).toBeInTheDocument();
+    expect(within(figure('Active agents')).getByText('30'), 'They are never added to the active agents.').toBeInTheDocument();
+  });
+
+  it('says nothing about unknown origin when there is no gap to declare', () => {
+    renderWithProvider(<AgentGrowthLine estate={estate(windows())} lagDays={3} />);
+
+    expect(screen.queryByText(/^Agents of unknown origin, not counted/)).toBeNull();
+  });
+
+  it('names the every-agent scope when the server counts that way', () => {
+    renderWithProvider(
+      <AgentGrowthLine estate={estate(windows({ 0: { unknownOriginAgents: 6 } }), { growthScope: 'allAgents' })} lagDays={3} />,
+    );
+
+    expect(screen.getByText(/^Agents used on at least one day in the 28 days to 4 Oct 2026/)).toBeInTheDocument();
+    expect(screen.queryByText(/^Agents of unknown origin, not counted/), 'Every agent counts, so nothing is left out.').toBeNull();
   });
 
   it('renders nothing when the series was not computed', () => {
@@ -132,17 +152,21 @@ describe('AgentGrowthLine', () => {
 
   it('reads in Spanish, with Spanish number and date formats', async () => {
     await loadCatalog('es');
-    renderWithProvider(<AgentGrowthLine estate={estate(windows())} lagDays={3} />, { language: 'es' });
+    const growth = windows({ 0: { unknownOriginAgents: 6 }, 13: { unknownOriginAgents: 1 } });
+    renderWithProvider(<AgentGrowthLine estate={estate(growth)} lagDays={3} />, { language: 'es' });
 
     expect(screen.getByText('Crecimiento de agentes, interanual')).toBeInTheDocument();
     expect(screen.getByText(
-      'Agentes usados al menos un día en los 28 días hasta el 4 oct 2026, frente a los mismos 28 días un año antes, hasta el 5 oct 2025.',
+      'Agentes creados por su organización y usados al menos un día en los 28 días hasta el 4 oct 2026, frente a los mismos 28 días un año antes, hasta el 5 oct 2025.',
     )).toBeInTheDocument();
     expect(within(figure('Agentes activos')).getByText('Un año antes: 4')).toBeInTheDocument();
     expect(within(figure('Usuarios de agentes')).getByText('1200')).toBeInTheDocument();
     expect(within(figure('Interacciones de agentes')).getByText('15.000')).toBeInTheDocument();
     expect(within(figure('Interacciones por usuario de agente')).getByText('12,5')).toBeInTheDocument();
     expect(within(figure('Agentes facturados en Copilot Studio')).getByText('Sin medir un año antes')).toBeInTheDocument();
+    expect(screen.getByText(
+      'Agentes de origen desconocido, no contados: 6 en el periodo más reciente y 1 un año antes. El registro de auditoría no indica quién los creó (los agentes de SharePoint, por ejemplo), así que las cifras anteriores son un mínimo.',
+    )).toBeInTheDocument();
     expect(screen.getByText(/^Esta comparación es de su organización consigo misma\. El crecimiento interanual de 15 veces/))
       .toBeInTheDocument();
     expect(screen.getByRole('img', { name: /^Agentes activos en cada uno de los últimos 14 periodos de 28 días/ }))

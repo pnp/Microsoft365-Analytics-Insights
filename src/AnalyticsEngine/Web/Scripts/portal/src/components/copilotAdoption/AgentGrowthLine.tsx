@@ -144,7 +144,11 @@ export default function AgentGrowthLine({
           <InfoTip
             title={t('copilotAdoptionAgents.agents.growth.title')}
             content={{
-              what: t('copilotAdoptionAgents.agents.growth.what'),
+              what: t(
+                customerBuilt
+                  ? 'copilotAdoptionAgents.agents.growth.what.customerBuilt'
+                  : 'copilotAdoptionAgents.agents.growth.what.allAgents',
+              ),
               how: t('copilotAdoptionAgents.agents.growth.how', { lagDays }),
               source: t('copilotAdoptionAgents.agents.growth.source'),
             }}
@@ -184,6 +188,14 @@ export default function AgentGrowthLine({
       </div>
 
       <div className={styles.notes}>
+        {customerBuilt && [latest, yearAgo].some((w) => (w?.unknownOriginAgents ?? 0) > 0) && (
+          <Text size={200} className={styles.muted}>
+            {t('copilotAdoptionAgents.agents.growth.unknownOrigin', {
+              latest: show(latest?.unknownOriginAgents, formatCount),
+              yearAgo: show(yearAgo?.unknownOriginAgents, formatCount),
+            })}
+          </Text>
+        )}
         {unmeasured && (
           <Text size={200} className={styles.muted}>
             {historyStartsLate

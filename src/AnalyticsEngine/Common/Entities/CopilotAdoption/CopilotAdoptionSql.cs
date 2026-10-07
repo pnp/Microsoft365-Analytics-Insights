@@ -1,5 +1,7 @@
-﻿using System;
+using Microsoft.Data.SqlClient;
+using System;
 using System.Collections.Generic;
+using System.Data;
 using System.Globalization;
 using System.Linq;
 
@@ -1659,31 +1661,59 @@ namespace Common.Entities.CopilotAdoption
 
         /// <summary>
         /// Every agent the audit log has ever named, for the growth series' scope decision
-        /// (<see cref="CopilotAdoptionAgentGrowth.Counts"/>). One row per agent, so it is small: an agent
-        /// table is nothing like the size of a user table, and it is read without touching the interactions.
+        /// (<see cref="CopilotAdoptionAgentGrowth.Exclusions"/>). One row per agent and only the columns the
+        /// classifier reads, so it is small: an agent table is nothing like the size of a user table, and it
+        /// is read without touching the interactions.
         /// </summary>
         public const string AgentGrowthAgentsSql =
             "SELECT ag.id AS AgentId,\r\n" +
             "       ag.agent_id AS AgentKey,\r\n" +
-            "       ag.name AS Name,\r\n" +
             "       ag.is_custom_agent AS IsCustomAgent\r\n" +
             "FROM dbo.copilot_agents AS ag;";
 
         /// <summary>
-        /// User-initiated agent use in each of the <see cref="CopilotAdoptionAgentGrowth.WindowCount"/>
-        /// consecutive 28-day windows ending on <c>@lastSettledDay</c> (#645): active agents, agent users and
-        /// agent interactions, with what the C# needs to decide whether the audit log covered each window.
+        /// The parameter carrying, as a JSON array of <c>dbo.copilot_agents</c> ids, the agents
+        /// <see cref="AgentGrowthSql"/> leaves out of every figure: those the scope does not count although
+        /// their origin is known - Microsoft's own, for the customer-built scope.
         /// </summary>
-        /// <param name="excludedAgentIds">
-        /// The agents <see cref="CopilotAdoptionAgentGrowth.Counts"/> rejected. Empty or null leaves the
-        /// query reading every agent, exactly as if there were no scope at all.
-        /// </param>
+        public const string AgentGrowthExcludedAgentsParameter = "@agentGrowthExcludedAgents";
+
+        /// <summary>
+        /// The parameter carrying, as a JSON array of <c>dbo.copilot_agents</c> ids, the agents
+        /// <see cref="AgentGrowthSql"/> leaves out because nobody can say who made them, and counts on their
+        /// own instead (<c>UnknownOriginAgents</c>).
+        /// </summary>
+        public const string AgentGrowthUnknownOriginAgentsParameter = "@agentGrowthUnknownOriginAgents";
+
+        /// <summary>
+        /// The most left-out agents the SQL popover writes out. Up to this many, the displayed query declares
+        /// the very lists it ran with, so pasting it reproduces the figures. Beyond it the lists are described
+        /// rather than carried, as a report scope's people are (<c>ReportScopeSql.DescribeScope</c>): a tenant
+        /// with tens of thousands of SharePoint agents would otherwise add hundreds of kilobytes to every
+        /// summary.
+        /// </summary>
+        public const int MaxDisplayedAgentGrowthExclusions = 1000;
+
+        /// <summary>
+        /// User-initiated agent use in each of the <see cref="CopilotAdoptionAgentGrowth.WindowCount"/>
+        /// consecutive 28-day windows ending on <c>@lastSettledDay</c> (#645): active agents, agents of
+        /// unknown origin, agent users and agent interactions, with what the C# needs to decide whether the
+        /// audit log covered each window. Run it with <see cref="AgentGrowthScopeParameters"/>.
+        /// </summary>
         /// <remarks>
         /// <para><b>Same agents as the inventory.</b> An agent is <c>copilot_chats.agent_id</c>, and an
         /// interaction counts when it carries one and is attributed to a person - the agent identity and the
-        /// exclusions of <see cref="AgentUsersSql"/>. Cowork counts, licensed and unlicensed people alike,
-        /// guests included, as on the Agents tab. "Active" is the Work Trend Index's "at least one day of
-        /// user-initiated use in the 28-day period", which is one interaction in the window.</para>
+        /// exclusions of <see cref="AgentUsersSql"/>: licensed and unlicensed people alike, guests included.
+        /// "Active" is the Work Trend Index's "at least one day of user-initiated use in the 28-day period",
+        /// which is one interaction in the window.</para>
+        /// <para><b>The scope is decided in C#</b> - <see cref="Common.Entities.Copilot.CopilotAgentClassifier"/>
+        /// is not SQL - from the whole agent table, and arrives as two JSON arrays of agent ids, read into a
+        /// keyed temp table with <c>OPENJSON</c>: the way <c>ReportScopeSql</c> sends a report's people, and a
+        /// function the Copilot import's own merge already runs on every database that holds Copilot data. No
+        /// IN-list and no literals, so the statement, and its cached plan, are the same whatever the agent table
+        /// holds. An agent left out because it is Microsoft's never enters the grain. One left out because its
+        /// origin is unknown does, so it can be counted on its own, and is then kept out of every other
+        /// figure.</para>
         /// <para><b>One range seek, not fourteen.</b> The windows are contiguous, so reading the whole series
         /// is one seek on <c>IX_copilot_chats_time_stamp_user_id (time_stamp, user_id) INCLUDE (app_host,
         /// agent_id)</c> - the same pages fourteen per-window seeks would read, without the nested loop -
@@ -1698,45 +1728,27 @@ namespace Common.Entities.CopilotAdoption
         /// <para><b>Coverage.</b> <c>HasCopilotData</c> is one <c>TOP (1)</c>-style existence seek per
         /// window over every Copilot interaction, agent or not, and <c>FirstCopilotInteractionUtc</c> is a
         /// seek to the head of the same index. Neither reads the series again.</para>
-        /// <para><b>The scope.</b> Excluded agents are written to a keyed temp table in INSERTs of at most
-        /// 1,000 rows - the <c>VALUES</c> limit - and anti-joined, so the agent table can be any size without
-        /// an IN-list.</para>
         /// </remarks>
-        public static string AgentGrowthSql(IReadOnlyCollection<int> excludedAgentIds)
+        public static readonly string AgentGrowthSql = BuildAgentGrowthSql();
+
+        private static string BuildAgentGrowthSql()
         {
-            var excluded = (excludedAgentIds ?? (IReadOnlyCollection<int>)new int[0])
-                .Distinct()
-                .OrderBy(id => id)
-                .ToList();
-            var scoped = excluded.Count > 0;
             var days = CopilotAdoptionAgentGrowth.WindowDays.ToString(CultureInfo.InvariantCulture);
             var lastDayOffset = (CopilotAdoptionAgentGrowth.WindowDays - 1).ToString(CultureInfo.InvariantCulture);
             var spine = string.Join(", ", Enumerable.Range(0, CopilotAdoptionAgentGrowth.WindowCount)
                 .Select(n => "(" + n.ToString(CultureInfo.InvariantCulture) + ")"));
 
-            var scope = string.Empty;
-            if (scoped)
-            {
-                var inserts = new List<string>();
-                for (var i = 0; i < excluded.Count; i += 1000)
-                {
-                    var chunk = excluded.GetRange(i, Math.Min(1000, excluded.Count - i));
-                    inserts.Add("INSERT INTO #agent_growth_excluded (agent_id) VALUES "
-                        + string.Join(", ", chunk.Select(id => "(" + id.ToString(CultureInfo.InvariantCulture) + ")"))
-                        + ";\r\n");
-                }
-
-                scope =
-                    "IF OBJECT_ID('tempdb..#agent_growth_excluded') IS NOT NULL DROP TABLE #agent_growth_excluded;\r\n" +
-                    "CREATE TABLE #agent_growth_excluded (agent_id int NOT NULL PRIMARY KEY);\r\n" +
-                    string.Concat(inserts) +
-                    "\r\n";
-            }
-
             return
                 "SET NOCOUNT ON;\r\n" +
                 "IF OBJECT_ID('tempdb..#agent_growth_grain') IS NOT NULL DROP TABLE #agent_growth_grain;\r\n" +
-                scope +
+                "IF OBJECT_ID('tempdb..#agent_growth_excluded') IS NOT NULL DROP TABLE #agent_growth_excluded;\r\n" +
+                // The agents the scope leaves out; unknown_origin = 1 for those left out only because nobody can
+                // say who made them.
+                "CREATE TABLE #agent_growth_excluded (agent_id int NOT NULL PRIMARY KEY, unknown_origin bit NOT NULL);\r\n" +
+                "INSERT INTO #agent_growth_excluded (agent_id, unknown_origin)\r\n" +
+                $"SELECT CAST([value] AS int), 0 FROM OPENJSON({AgentGrowthExcludedAgentsParameter});\r\n" +
+                "INSERT INTO #agent_growth_excluded (agent_id, unknown_origin)\r\n" +
+                $"SELECT CAST([value] AS int), 1 FROM OPENJSON({AgentGrowthUnknownOriginAgentsParameter});\r\n" +
                 "DECLARE @firstCopilotInteraction datetime = (SELECT MIN(c.time_stamp) FROM dbo.copilot_chats AS c);\r\n" +
                 "\r\n" +
                 // ONE pass over the whole series, collapsed to (window, agent, person). DATEDIFF counts day
@@ -1751,14 +1763,13 @@ namespace Common.Entities.CopilotAdoption
                 "  AND c.time_stamp < @seriesToExclusive\r\n" +
                 "  AND c.agent_id IS NOT NULL\r\n" +
                 "  AND c.user_id IS NOT NULL\r\n" +
-                (scoped
-                    ? "  AND NOT EXISTS (SELECT 1 FROM #agent_growth_excluded AS x WHERE x.agent_id = c.agent_id)\r\n"
-                    : string.Empty) +
+                "  AND NOT EXISTS (SELECT 1 FROM #agent_growth_excluded AS x WHERE x.agent_id = c.agent_id AND x.unknown_origin = 0)\r\n" +
                 $"GROUP BY DATEDIFF(DAY, c.time_stamp, @lastSettledDay) / {days}, c.agent_id, c.user_id\r\n" +
                 "OPTION (RECOMPILE);\r\n" +
                 "\r\n" +
                 "SELECT w.n AS WindowsAgo,\r\n" +
                 "       ISNULL(a.ActiveAgents, 0) AS ActiveAgents,\r\n" +
+                "       ISNULL(a.UnknownOriginAgents, 0) AS UnknownOriginAgents,\r\n" +
                 "       ISNULL(u.AgentUsers, 0) AS AgentUsers,\r\n" +
                 "       ISNULL(u.AgentInteractions, CAST(0 AS bigint)) AS AgentInteractions,\r\n" +
                 "       CAST(CASE WHEN EXISTS (SELECT 1 FROM dbo.copilot_chats AS c\r\n" +
@@ -1767,18 +1778,103 @@ namespace Common.Entities.CopilotAdoption
                 "                 THEN 1 ELSE 0 END AS bit) AS HasCopilotData,\r\n" +
                 "       @firstCopilotInteraction AS FirstCopilotInteractionUtc\r\n" +
                 $"FROM (VALUES {spine}) AS w(n)\r\n" +
-                "LEFT JOIN (SELECT windows_ago, COUNT(*) AS ActiveAgents\r\n" +
+                "LEFT JOIN (SELECT d.windows_ago,\r\n" +
+                "                  SUM(CASE WHEN x.agent_id IS NULL THEN 1 ELSE 0 END) AS ActiveAgents,\r\n" +
+                "                  SUM(CASE WHEN x.unknown_origin = 1 THEN 1 ELSE 0 END) AS UnknownOriginAgents\r\n" +
                 "           FROM (SELECT DISTINCT windows_ago, agent_id FROM #agent_growth_grain) AS d\r\n" +
-                "           GROUP BY windows_ago) AS a ON a.windows_ago = w.n\r\n" +
+                "           LEFT JOIN #agent_growth_excluded AS x ON x.agent_id = d.agent_id\r\n" +
+                "           GROUP BY d.windows_ago) AS a ON a.windows_ago = w.n\r\n" +
                 "LEFT JOIN (SELECT windows_ago, COUNT(*) AS AgentUsers, SUM(interactions) AS AgentInteractions\r\n" +
-                "           FROM (SELECT windows_ago, user_id, SUM(interactions) AS interactions\r\n" +
-                "                 FROM #agent_growth_grain GROUP BY windows_ago, user_id) AS p\r\n" +
+                "           FROM (SELECT g.windows_ago, g.user_id, SUM(g.interactions) AS interactions\r\n" +
+                "                 FROM #agent_growth_grain AS g\r\n" +
+                "                 WHERE NOT EXISTS (SELECT 1 FROM #agent_growth_excluded AS x WHERE x.agent_id = g.agent_id)\r\n" +
+                "                 GROUP BY g.windows_ago, g.user_id) AS p\r\n" +
                 "           GROUP BY windows_ago) AS u ON u.windows_ago = w.n\r\n" +
                 "ORDER BY w.n\r\n" +
                 "OPTION (RECOMPILE);\r\n" +
                 "\r\n" +
-                "DROP TABLE #agent_growth_grain;" +
-                (scoped ? "\r\nDROP TABLE #agent_growth_excluded;" : string.Empty);
+                "DROP TABLE #agent_growth_grain;\r\n" +
+                "DROP TABLE #agent_growth_excluded;";
+        }
+
+        /// <summary>
+        /// The scope parameters <see cref="AgentGrowthSql"/> runs with: the agents
+        /// <see cref="CopilotAdoptionAgentGrowth.Exclusions"/> left out, as two JSON arrays of ids in
+        /// <c>nvarchar(max)</c> parameters - empty arrays when the scope counts every agent. New parameters on
+        /// every call, because a parameter can belong to one command only.
+        /// </summary>
+        public static SqlParameter[] AgentGrowthScopeParameters(IEnumerable<AgentGrowthExclusion> exclusions)
+        {
+            var excluded = DistinctAgentGrowthExclusions(exclusions);
+
+            return new[]
+            {
+                new SqlParameter(AgentGrowthExcludedAgentsParameter, SqlDbType.NVarChar, -1)
+                {
+                    Value = AgentIdsJson(excluded.Where(x => !x.UnknownOrigin)),
+                },
+                new SqlParameter(AgentGrowthUnknownOriginAgentsParameter, SqlDbType.NVarChar, -1)
+                {
+                    Value = AgentIdsJson(excluded.Where(x => x.UnknownOrigin)),
+                },
+            };
+        }
+
+        /// <summary>
+        /// <see cref="AgentGrowthSql"/> as the SQL popover shows it: <see cref="ForDisplay"/>, preceded by the
+        /// scope's two lists - declared with the ids it ran with when there are at most
+        /// <see cref="MaxDisplayedAgentGrowthExclusions"/> of them, so the query can be pasted and re-run as
+        /// is, and only counted beyond that.
+        /// </summary>
+        public static string AgentGrowthForDisplay(
+            IEnumerable<AgentGrowthExclusion> exclusions,
+            IDictionary<string, object> parameters)
+        {
+            var excluded = DistinctAgentGrowthExclusions(exclusions);
+            var unknownOrigin = excluded.Count(x => x.UnknownOrigin);
+            var shown = excluded.Count <= MaxDisplayedAgentGrowthExclusions;
+
+            var lines = new List<string>
+            {
+                string.Format(
+                    CultureInfo.InvariantCulture,
+                    "-- Agents the series does not count, decided in C# by the agent-origin classifier from dbo.copilot_agents: {0:N0} left out of every figure and {1:N0} of unknown origin, which are counted on their own.",
+                    excluded.Count - unknownOrigin,
+                    unknownOrigin),
+            };
+
+            if (!shown)
+            {
+                lines.Add(string.Format(
+                    CultureInfo.InvariantCulture,
+                    "-- Their ids are not shown here; set {0} and {1} to them as JSON arrays to reproduce the figures.",
+                    AgentGrowthExcludedAgentsParameter,
+                    AgentGrowthUnknownOriginAgentsParameter));
+            }
+
+            lines.Add($"DECLARE {AgentGrowthExcludedAgentsParameter} nvarchar(max) = N'{(shown ? AgentIdsJson(excluded.Where(x => !x.UnknownOrigin)) : "[]")}';");
+            lines.Add($"DECLARE {AgentGrowthUnknownOriginAgentsParameter} nvarchar(max) = N'{(shown ? AgentIdsJson(excluded.Where(x => x.UnknownOrigin)) : "[]")}';");
+
+            return string.Join("\r\n", lines) + "\r\n" + ForDisplay(AgentGrowthSql, parameters);
+        }
+
+        /// <summary>
+        /// Each agent once, in id order: the temp table's primary key would refuse a duplicate, and an agent in
+        /// both lists would be counted as two kinds of exclusion at once.
+        /// </summary>
+        private static List<AgentGrowthExclusion> DistinctAgentGrowthExclusions(IEnumerable<AgentGrowthExclusion> exclusions)
+        {
+            return (exclusions ?? Enumerable.Empty<AgentGrowthExclusion>())
+                .Where(x => x != null)
+                .GroupBy(x => x.AgentId)
+                .Select(g => g.First())
+                .OrderBy(x => x.AgentId)
+                .ToList();
+        }
+
+        private static string AgentIdsJson(IEnumerable<AgentGrowthExclusion> exclusions)
+        {
+            return "[" + string.Join(",", exclusions.Select(x => x.AgentId.ToString(CultureInfo.InvariantCulture))) + "]";
         }
 
         /// <summary>

@@ -23,6 +23,7 @@ namespace Tests.UnitTests
         private static readonly string[] GrowthKeys =
         {
             "agentGrowthActiveAgentsWindow0", "agentGrowthActiveAgentsWindow13",
+            "agentGrowthUnknownOriginAgentsWindow0", "agentGrowthUnknownOriginAgentsWindow13",
             "agentGrowthAgentUsersWindow0", "agentGrowthAgentUsersWindow13",
             "agentGrowthInteractionsWindow0", "agentGrowthInteractionsWindow13",
             "agentGrowthInteractionsPerAgentUserWindow0", "agentGrowthInteractionsPerAgentUserWindow13",
@@ -38,9 +39,10 @@ namespace Tests.UnitTests
 
             var header = rows.Single(r => r.Value.TryGetValue("A", out var a) && a == "Windows ago");
             CollectionAssert.AreEqual(
-                new[] { "Windows ago", "From", "To", "Active agents", "Agent users", "Agent interactions",
-                        "Interactions per agent user", "Copilot Studio billed agents (separate: autonomous-run evidence)" },
-                new[] { "A", "B", "C", "D", "E", "F", "G", "H" }.Select(c => header.Value[c]).ToArray());
+                new[] { "Windows ago", "From", "To", "Active agents", "Agents of unknown origin (not counted)",
+                        "Agent users", "Agent interactions", "Interactions per agent user",
+                        "Copilot Studio billed agents (separate: autonomous-run evidence)" },
+                new[] { "A", "B", "C", "D", "E", "F", "G", "H", "I" }.Select(c => header.Value[c]).ToArray());
 
             var data = rows.Where(r => r.Key > header.Key && r.Key <= header.Key + 14).Select(r => r.Value).ToList();
             Assert.AreEqual(14, data.Count);
@@ -51,17 +53,19 @@ namespace Tests.UnitTests
 
             var latest = data.Last();
             Assert.AreEqual("12", latest["D"]);
-            Assert.AreEqual("40", latest["E"]);
-            Assert.AreEqual("100", latest["F"]);
-            Assert.AreEqual("2.5", latest["G"]);
-            Assert.AreEqual("2", latest["H"]);
+            Assert.AreEqual("2", latest["E"], "The unknown-origin gap has its own column, beside the figure it qualifies.");
+            Assert.AreEqual("40", latest["F"]);
+            Assert.AreEqual("100", latest["G"]);
+            Assert.AreEqual("2.5", latest["H"]);
+            Assert.AreEqual("2", latest["I"]);
 
             var yearAgo = data.First();
             Assert.AreEqual("3", yearAgo["D"]);
-            Assert.IsFalse(yearAgo.ContainsKey("H"), "No billing rows a year ago: the cell is blank, not 0.");
+            Assert.AreEqual("0", yearAgo["E"]);
+            Assert.IsFalse(yearAgo.ContainsKey("I"), "No billing rows a year ago: the cell is blank, not 0.");
 
             var unmeasured = data.Single(r => r["A"] == "6");
-            foreach (var column in new[] { "D", "E", "F", "G", "H" })
+            foreach (var column in new[] { "D", "E", "F", "G", "H", "I" })
             {
                 Assert.IsFalse(unmeasured.ContainsKey(column),
                     $"Window 6 was not measured, so column {column} must be blank - a zero would read as a collapse.");
@@ -76,8 +80,11 @@ namespace Tests.UnitTests
             var text = string.Join("\n", SheetCells(CopilotAdoptionWorkbook.Build(AnalysisWithGrowth()), "Agent growth"));
 
             StringAssert.Contains(text, "ending on 2026-10-04, the last settled day: 3 days before the analysis ran");
-            StringAssert.Contains(text, "Counts agents.");
+            StringAssert.Contains(text, "Counts customer-built agents only, as the report does.");
+            StringAssert.Contains(text, "agents of unknown origin");
+            StringAssert.Contains(text, "so the figures are a floor by that much");
             StringAssert.Contains(text, "the Copilot audit log (copilot_chats)");
+            StringAssert.Contains(text, "the agent-origin classifier");
             StringAssert.Contains(text, "the Power Platform billing import (copilot_studio_credit_daily)");
             StringAssert.Contains(text, "never added to the active agents");
             StringAssert.Contains(text, "This compares the tenant with itself.");
@@ -94,7 +101,9 @@ namespace Tests.UnitTests
             StringAssert.Contains(growth, "14 consecutive, closed 28-day windows");
             StringAssert.Contains(growth, "ending on the last settled day - 3 days before the analysis ran");
             StringAssert.Contains(growth, "window 13 starts 364 days earlier");
-            StringAssert.Contains(growth, "It counts agents:");
+            StringAssert.Contains(growth, "It counts customer-built agents only, as the report does");
+            StringAssert.Contains(growth, "Agents Microsoft ships, Cowork among them, are left out.");
+            StringAssert.Contains(growth, "Agents of unknown origin");
             StringAssert.Contains(growth, "at least one day in it");
             StringAssert.Contains(growth, "never zero");
             StringAssert.Contains(growth, "removing old Copilot interactions from the database blanks the windows they fed");
@@ -115,12 +124,15 @@ namespace Tests.UnitTests
             var measured = SnapshotFacts(CopilotAdoptionWorkbook.Build(AnalysisWithGrowth()));
             Assert.AreEqual("12", measured["agentGrowthActiveAgentsWindow0"]);
             Assert.AreEqual("3", measured["agentGrowthActiveAgentsWindow13"]);
+            Assert.AreEqual("2", measured["agentGrowthUnknownOriginAgentsWindow0"]);
+            Assert.AreEqual("0", measured["agentGrowthUnknownOriginAgentsWindow13"]);
             Assert.AreEqual("40", measured["agentGrowthAgentUsersWindow0"]);
             Assert.AreEqual("100", measured["agentGrowthInteractionsWindow0"]);
             Assert.AreEqual("2", measured["agentGrowthCopilotStudioBilledAgentsWindow0"]);
             Assert.AreEqual(string.Empty, measured["agentGrowthCopilotStudioBilledAgentsWindow13"],
                 "No billing rows a year ago: blank.");
-            Assert.AreEqual(AgentGrowthScopes.AllAgents, measured["agentGrowthScope"]);
+            Assert.AreEqual(AgentGrowthScopes.CustomerBuilt, measured["agentGrowthScope"],
+                "The scope is on the file, so a reader can tell which agents the figures count.");
 
             var notComputed = AnalysisWithGrowth();
             notComputed.Summary.Agents.Growth = new List<AgentGrowthWindow>();
@@ -158,6 +170,7 @@ namespace Tests.UnitTests
                 {
                     WindowsAgo = n,
                     ActiveAgents = n == 0 ? 12 : n == 13 ? 3 : 5,
+                    UnknownOriginAgents = n == 0 ? 2 : 0,
                     AgentUsers = n == 0 ? 40 : n == 13 ? 8 : 10,
                     AgentInteractions = n == 0 ? 100 : n == 13 ? 20 : 30,
                     HasCopilotData = n != 6,

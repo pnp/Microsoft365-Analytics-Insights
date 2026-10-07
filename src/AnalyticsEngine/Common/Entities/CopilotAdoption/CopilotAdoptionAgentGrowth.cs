@@ -1,3 +1,4 @@
+using Common.Entities.Copilot;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -14,8 +15,9 @@ namespace Common.Entities.CopilotAdoption
         public const string AllAgents = "allAgents";
 
         /// <summary>
-        /// Agents the organisation built - the Work Trend Index's scope (Agent Builder, the Agents Toolkit and
-        /// SharePoint agents). Needs the agent-origin classifier from #639.
+        /// Agents the organisation built - the Work Trend Index's scope - as far as the agent-origin
+        /// classifier from #639 can tell. It never guesses, so an agent it cannot place (a SharePoint agent,
+        /// for one) is not counted, and is reported on its own instead.
         /// </summary>
         public const string CustomerBuilt = "customerBuilt";
     }
@@ -31,6 +33,10 @@ namespace Common.Entities.CopilotAdoption
     /// data Microsoft is still delivering, because the audit feed and the Copilot Studio billing both
     /// arrive late. Window 0 is the most recent; window 13 starts 364 days earlier, so the two cover the
     /// same weekdays a year apart. That pair is the year-on-year comparison.</para>
+    /// <para><b>Customer-built agents only</b>, as the report counts them. Agents Microsoft ships are left out.
+    /// Agents whose origin the audit log does not reveal are left out too - the classifier never guesses -
+    /// but they are counted on their own per window, so a reader can see how much of a floor the figures
+    /// are.</para>
     /// <para><b>A window is measured or it is blank.</b> Its user-initiated figures are reported only when
     /// the Copilot audit log holds at least one interaction inside it and its history reaches back to the
     /// window's first day. Otherwise every figure is null - never zero - because a window the import never
@@ -54,29 +60,44 @@ namespace Common.Entities.CopilotAdoption
 
         /// <summary>
         /// Which agents the series counts - the ONE place that decides it, together with
-        /// <see cref="Counts"/>. Every agent until the agent-origin classifier from #639 lands; then
-        /// customer-built agents only, which is the Work Trend Index's scope.
+        /// <see cref="Counts"/>: customer-built agents only, the Work Trend Index's scope.
         /// </summary>
-        public static readonly string Scope = AgentGrowthScopes.AllAgents;
+        public static readonly string Scope = AgentGrowthScopes.CustomerBuilt;
 
         /// <summary>
-        /// Whether the series counts this agent. Applied in C# to the whole agent table before the windows
-        /// are queried, and the agents it rejects are left out in SQL - see
-        /// <see cref="CopilotAdoptionSql.AgentGrowthSql"/>.
+        /// Whether the series counts this agent under <paramref name="scope"/>. Applied in C# to the whole
+        /// agent table before the windows are queried - the classifier is C#, not SQL - and the agents it
+        /// rejects are left out in SQL: see <see cref="CopilotAdoptionSql.AgentGrowthSql"/>.
         /// </summary>
-        public static bool Counts(AgentGrowthAgentRow agent)
+        /// <remarks>
+        /// <see cref="CopilotAgentClassifier.IsCustomerBuilt"/> decides from the agent id, and only a stored
+        /// <c>is_custom_agent = 1</c> settles an id it cannot place; a stored 0 is never taken as evidence.
+        /// </remarks>
+        public static bool Counts(AgentGrowthAgentRow agent, string scope)
         {
-            return agent != null;
+            if (agent == null) return false;
+
+            return string.Equals(scope, AgentGrowthScopes.AllAgents, StringComparison.Ordinal)
+                || CopilotAgentClassifier.IsCustomerBuilt(agent.AgentKey, agent.IsCustomAgent);
         }
 
-        /// <summary>The agents <see cref="Counts"/> rejects, or an empty list when it counts all of them.</summary>
-        public static List<int> ExcludedAgentIds(IEnumerable<AgentGrowthAgentRow> agents)
+        /// <summary>
+        /// The agents <paramref name="scope"/> leaves out, each saying whether that is because nobody can tell
+        /// who made it. Empty when the scope counts every agent.
+        /// </summary>
+        public static List<AgentGrowthExclusion> Exclusions(IEnumerable<AgentGrowthAgentRow> agents, string scope)
         {
             return (agents ?? Enumerable.Empty<AgentGrowthAgentRow>())
-                .Where(a => a != null && !Counts(a))
-                .Select(a => a.AgentId)
-                .Distinct()
-                .OrderBy(id => id)
+                .Where(a => a != null && !Counts(a, scope))
+                .GroupBy(a => a.AgentId)
+                .Select(g => g.First())
+                .OrderBy(a => a.AgentId)
+                .Select(a => new AgentGrowthExclusion
+                {
+                    AgentId = a.AgentId,
+                    UnknownOrigin = CopilotAgentClassifier.ResolveStoredOrigin(a.AgentKey, a.IsCustomAgent)
+                        == CopilotAgentOrigin.Unknown,
+                })
                 .ToList();
         }
 
@@ -161,6 +182,7 @@ namespace Common.Entities.CopilotAdoption
                 if (usageByWindow.TryGetValue(window.WindowsAgo, out var row) && IsMeasured(window, row))
                 {
                     window.ActiveAgents = row.ActiveAgents;
+                    window.UnknownOriginAgents = row.UnknownOriginAgents;
                     window.AgentUsers = row.AgentUsers;
                     window.AgentInteractions = row.AgentInteractions;
                     window.InteractionsPerAgentUser = row.AgentUsers > 0
@@ -203,14 +225,6 @@ namespace Common.Entities.CopilotAdoption
         {
             return windows?.FirstOrDefault(w => w != null && w.WindowsAgo == 0);
         }
-
-        /// <summary>The scope in words, for the English-only workbook. The portal words it from its catalog.</summary>
-        public static string ScopeNoun(string scope)
-        {
-            return string.Equals(scope, AgentGrowthScopes.CustomerBuilt, StringComparison.Ordinal)
-                ? "customer-built agents"
-                : "agents";
-        }
     }
 
     /// <summary>One agent, as the growth series' scope decision sees it. Every agent the audit log ever named.</summary>
@@ -221,9 +235,23 @@ namespace Common.Entities.CopilotAdoption
         /// <summary>The agent's identifier from the audit payload (<c>copilot_agents.agent_id</c>).</summary>
         public string AgentKey { get; set; }
 
-        public string Name { get; set; }
-
+        /// <summary>
+        /// <c>copilot_agents.is_custom_agent</c> as stored, NULL included: only a stored 1 settles an id the
+        /// classifier cannot place (<see cref="CopilotAgentClassifier.ResolveStoredOrigin"/>).
+        /// </summary>
         public bool? IsCustomAgent { get; set; }
+    }
+
+    /// <summary>An agent the growth series' scope leaves out, for <see cref="CopilotAdoptionSql.AgentGrowthSql"/>.</summary>
+    public class AgentGrowthExclusion
+    {
+        public int AgentId { get; set; }
+
+        /// <summary>
+        /// True when the agent is left out because nobody can say who made it, rather than because it is
+        /// Microsoft's. Those are still counted, on their own, as the gap that makes the series a floor.
+        /// </summary>
+        public bool UnknownOrigin { get; set; }
     }
 
     /// <summary>One window's user-initiated agent use, as <see cref="CopilotAdoptionSql.AgentGrowthSql"/> returns it.</summary>
@@ -232,6 +260,9 @@ namespace Common.Entities.CopilotAdoption
         public int WindowsAgo { get; set; }
 
         public int ActiveAgents { get; set; }
+
+        /// <summary>Agents of unknown origin used in the window, which <see cref="ActiveAgents"/> leaves out.</summary>
+        public int UnknownOriginAgents { get; set; }
 
         public int AgentUsers { get; set; }
 

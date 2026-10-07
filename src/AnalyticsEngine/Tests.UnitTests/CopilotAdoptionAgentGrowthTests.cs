@@ -4,7 +4,6 @@ using Newtonsoft.Json.Linq;
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Text.RegularExpressions;
 
 namespace Tests.UnitTests
 {
@@ -236,27 +235,85 @@ namespace Tests.UnitTests
 
         #region Scope
 
-        [TestMethod]
-        public void Scope_CountsEveryAgentUntilTheOriginClassifierLands()
+        /// <summary>
+        /// One of each shape the classifier from #639 resolves: customer-built by id, Microsoft's by id, of
+        /// unknown origin, and the stored-flag cases - only a stored 1 settles an id the classifier cannot
+        /// place, and a stored 0 is never evidence. Synthetic ids only.
+        /// </summary>
+        private static List<AgentGrowthAgentRow> ClassifierShapes()
         {
-            Assert.AreEqual(AgentGrowthScopes.AllAgents, CopilotAdoptionAgentGrowth.Scope);
-
-            var agents = new List<AgentGrowthAgentRow>
+            return new List<AgentGrowthAgentRow>
             {
-                new AgentGrowthAgentRow { AgentId = 1, AgentKey = "CopilotStudio.Declarative.00000000-0000-0000-0000-000000000000", Name = "Contoso Expenses", IsCustomAgent = true },
-                new AgentGrowthAgentRow { AgentId = 2, AgentKey = "Copilot.M365Copilot.CoworkChat", Name = "Copilot Cowork", IsCustomAgent = null },
-                new AgentGrowthAgentRow { AgentId = 3, AgentKey = null, Name = "Καλημέρα κόσμε", IsCustomAgent = false },
+                new AgentGrowthAgentRow { AgentId = 1, AgentKey = "CopilotStudio.Declarative.00000000-0000-0000-0000-000000000001", IsCustomAgent = null },
+                new AgentGrowthAgentRow { AgentId = 2, AgentKey = "CopilotStudio.CustomEngine.00000000-0000-0000-0000-000000000002", IsCustomAgent = false },
+                new AgentGrowthAgentRow { AgentId = 3, AgentKey = "Copilot.M365Copilot.CoworkChat", IsCustomAgent = null },
+                new AgentGrowthAgentRow { AgentId = 4, AgentKey = "SPO_00000000-0000-0000-0000-000000000004", IsCustomAgent = null },
+                new AgentGrowthAgentRow { AgentId = 5, AgentKey = "BuiltIn_Contoso", IsCustomAgent = false },
+                new AgentGrowthAgentRow { AgentId = 6, AgentKey = "T_00000000-0000-0000-0000-000000000006", IsCustomAgent = true },
             };
+        }
 
-            Assert.IsTrue(agents.All(CopilotAdoptionAgentGrowth.Counts));
-            Assert.AreEqual(0, CopilotAdoptionAgentGrowth.ExcludedAgentIds(agents).Count,
-                "Nothing excluded means the windowing query reads every agent, with no scope table at all.");
-            Assert.AreEqual(0, CopilotAdoptionAgentGrowth.ExcludedAgentIds(null).Count);
-
-            Assert.AreEqual(AgentGrowthScopes.AllAgents, new AgentEstateSummary().GrowthScope,
+        [TestMethod]
+        public void Scope_CountsCustomerBuiltAgentsOnly_ThroughTheOriginClassifier()
+        {
+            Assert.AreEqual(AgentGrowthScopes.CustomerBuilt, CopilotAdoptionAgentGrowth.Scope,
+                "The Work Trend Index counts customer-built agents only, and so does the series.");
+            Assert.AreEqual(AgentGrowthScopes.CustomerBuilt, new AgentEstateSummary().GrowthScope,
                 "The estate names the scope the series was counted under.");
-            Assert.AreEqual("agents", CopilotAdoptionAgentGrowth.ScopeNoun(AgentGrowthScopes.AllAgents));
-            Assert.AreEqual("customer-built agents", CopilotAdoptionAgentGrowth.ScopeNoun(AgentGrowthScopes.CustomerBuilt));
+
+            var agents = ClassifierShapes().ToDictionary(a => a.AgentId);
+            var scope = CopilotAdoptionAgentGrowth.Scope;
+
+            Assert.IsTrue(CopilotAdoptionAgentGrowth.Counts(agents[1], scope), "CopilotStudio.Declarative.* is customer-built.");
+            Assert.IsTrue(CopilotAdoptionAgentGrowth.Counts(agents[2], scope),
+                "CopilotStudio.CustomEngine.* is customer-built, and a stored 0 does not overrule the id.");
+            Assert.IsFalse(CopilotAdoptionAgentGrowth.Counts(agents[3], scope), "Cowork is Microsoft's, so it is left out.");
+            Assert.IsFalse(CopilotAdoptionAgentGrowth.Counts(agents[4], scope), "A SharePoint agent's origin is unknown, so it is left out.");
+            Assert.IsFalse(CopilotAdoptionAgentGrowth.Counts(agents[5], scope), "An unplaceable id with a stored 0 stays unknown.");
+            Assert.IsTrue(CopilotAdoptionAgentGrowth.Counts(agents[6], scope),
+                "Only a stored is_custom_agent = 1 settles an id the classifier cannot place.");
+            Assert.IsFalse(CopilotAdoptionAgentGrowth.Counts(null, scope));
+        }
+
+        [TestMethod]
+        public void Exclusions_LeaveOutMicrosoftAndUnknownOriginAgents_AndSayWhichOriginIsUnknown()
+        {
+            var exclusions = CopilotAdoptionAgentGrowth.Exclusions(ClassifierShapes(), AgentGrowthScopes.CustomerBuilt);
+
+            CollectionAssert.AreEqual(new[] { 3, 4, 5 }, exclusions.Select(x => x.AgentId).ToArray(),
+                "Every agent the scope does not count is excluded, in id order.");
+            Assert.IsFalse(exclusions.Single(x => x.AgentId == 3).UnknownOrigin,
+                "Cowork is out of scope because it is Microsoft's - not part of the gap.");
+            Assert.IsTrue(exclusions.Single(x => x.AgentId == 4).UnknownOrigin,
+                "An agent nobody can place is the gap, counted on its own.");
+            Assert.IsTrue(exclusions.Single(x => x.AgentId == 5).UnknownOrigin);
+
+            var duplicated = ClassifierShapes();
+            duplicated.Add(new AgentGrowthAgentRow { AgentId = 3, AgentKey = "Copilot.M365Copilot.CoworkChat" });
+            Assert.AreEqual(3, CopilotAdoptionAgentGrowth.Exclusions(duplicated, AgentGrowthScopes.CustomerBuilt).Count,
+                "Each agent is excluded once, so the scope table's primary key holds.");
+
+            Assert.AreEqual(0, CopilotAdoptionAgentGrowth.Exclusions(ClassifierShapes(), AgentGrowthScopes.AllAgents).Count,
+                "Under the all-agents scope nothing is excluded.");
+            Assert.AreEqual(0, CopilotAdoptionAgentGrowth.Exclusions(null, AgentGrowthScopes.CustomerBuilt).Count);
+        }
+
+        [TestMethod]
+        public void Build_CarriesTheUnknownOriginCount_BlankWhenTheWindowWasNotMeasured()
+        {
+            var usage = Covered(window: 0, activeAgents: 4, users: 9, interactions: 30);
+            usage.Single(r => r.WindowsAgo == 0).UnknownOriginAgents = 2;
+            usage.Single(r => r.WindowsAgo == 13).UnknownOriginAgents = 1;
+            usage.Single(r => r.WindowsAgo == 6).HasCopilotData = false;
+            usage.Single(r => r.WindowsAgo == 6).UnknownOriginAgents = 5;
+
+            var windows = CopilotAdoptionAgentGrowth.Build(LastSettled, usage, billing: null);
+
+            Assert.AreEqual(4, windows[0].ActiveAgents, "Agents of unknown origin are never added to the active agents.");
+            Assert.AreEqual(2, windows[0].UnknownOriginAgents);
+            Assert.AreEqual(1, windows[13].UnknownOriginAgents);
+            Assert.AreEqual(0, windows[1].UnknownOriginAgents, "A covered window with no such agent is a real zero.");
+            Assert.IsNull(windows[6].UnknownOriginAgents, "An unmeasured window is blank throughout.");
         }
 
         #endregion
@@ -266,7 +323,7 @@ namespace Tests.UnitTests
         [TestMethod]
         public void AgentGrowthSql_ReadsTheSeriesInOneSeekWithNoTwoDistinctCountsInAGrouping()
         {
-            var sql = CopilotAdoptionSql.AgentGrowthSql(null);
+            var sql = CopilotAdoptionSql.AgentGrowthSql;
 
             Assert.AreEqual(0, CountOccurrences(sql, "COUNT(DISTINCT"),
                 "Two COUNT(DISTINCT ...) in one grouping spool the input and process each distinct separately - "
@@ -288,31 +345,95 @@ namespace Tests.UnitTests
             StringAssert.Contains(sql, "(VALUES (0), (1), (2), (3), (4), (5), (6), (7), (8), (9), (10), (11), (12), (13)) AS w(n)");
             StringAssert.Contains(sql, "AS HasCopilotData");
             StringAssert.Contains(sql, "AS FirstCopilotInteractionUtc");
-
-            Assert.IsFalse(sql.Contains("#agent_growth_excluded"),
-                "With nothing excluded the query must be exactly the unscoped one: no scope table, no anti-join.");
+            StringAssert.Contains(sql, "AS UnknownOriginAgents");
         }
 
         [TestMethod]
-        public void AgentGrowthSql_ExcludedAgents_GoThroughAKeyedTempTableInChunksOfAtMostAThousand()
+        public void AgentGrowthSql_TakesTheScopeAsJsonParameters_IntoAKeyedTempTable_NeverAsLiterals()
         {
-            var excluded = Enumerable.Range(1, 2500).Select(i => i * 3).ToList();
-            excluded.Add(3); // a duplicate must not break the PRIMARY KEY
+            var sql = CopilotAdoptionSql.AgentGrowthSql;
 
-            var sql = CopilotAdoptionSql.AgentGrowthSql(excluded);
-
-            StringAssert.Contains(sql, "CREATE TABLE #agent_growth_excluded (agent_id int NOT NULL PRIMARY KEY);");
-            StringAssert.Contains(sql, "AND NOT EXISTS (SELECT 1 FROM #agent_growth_excluded AS x WHERE x.agent_id = c.agent_id)");
+            StringAssert.Contains(sql, "CREATE TABLE #agent_growth_excluded (agent_id int NOT NULL PRIMARY KEY, unknown_origin bit NOT NULL);");
+            StringAssert.Contains(sql, "SELECT CAST([value] AS int), 0 FROM OPENJSON(@agentGrowthExcludedAgents);");
+            StringAssert.Contains(sql, "SELECT CAST([value] AS int), 1 FROM OPENJSON(@agentGrowthUnknownOriginAgents);");
+            StringAssert.Contains(sql,
+                "AND NOT EXISTS (SELECT 1 FROM #agent_growth_excluded AS x WHERE x.agent_id = c.agent_id AND x.unknown_origin = 0)",
+                "An agent out of scope because it is Microsoft's never enters the grain...");
+            StringAssert.Contains(sql, "SUM(CASE WHEN x.unknown_origin = 1 THEN 1 ELSE 0 END) AS UnknownOriginAgents",
+                "...while one of unknown origin does, so it can be counted on its own...");
+            StringAssert.Contains(sql, "WHERE NOT EXISTS (SELECT 1 FROM #agent_growth_excluded AS x WHERE x.agent_id = g.agent_id)",
+                "...and is then kept out of the agent users and interactions.");
             StringAssert.Contains(sql, "DROP TABLE #agent_growth_excluded;");
+            Assert.AreEqual(0, CountOccurrences(sql, " IN ("), "No IN-list, however large the agent table.");
+            Assert.AreEqual(1, CountOccurrences(sql, "VALUES ("),
+                "The window spine is the only VALUES list: no agent id is written into the statement, so its text and "
+                + "cached plan never vary with the agent table.");
+        }
 
-            var inserts = Regex.Matches(sql, @"INSERT INTO #agent_growth_excluded \(agent_id\) VALUES ([^;]*);")
-                .Cast<Match>()
-                .Select(m => m.Groups[1].Value.Split(',').Length)
+        [TestMethod]
+        public void AgentGrowthScopeParameters_SplitTheExclusionsIntoTwoJsonArrays_EachAgentOnce()
+        {
+            var excluded = Enumerable.Range(1, 2500)
+                .Select(i => new AgentGrowthExclusion { AgentId = i * 3, UnknownOrigin = i % 2 == 0 })
+                .ToList();
+            excluded.Add(new AgentGrowthExclusion { AgentId = 3, UnknownOrigin = true }); // a duplicate must not break the PRIMARY KEY
+            excluded.Add(null);
+
+            var parameters = CopilotAdoptionSql.AgentGrowthScopeParameters(excluded);
+
+            CollectionAssert.AreEqual(
+                new[] { "@agentGrowthExcludedAgents", "@agentGrowthUnknownOriginAgents" },
+                parameters.Select(p => p.ParameterName).ToArray());
+            Assert.IsTrue(parameters.All(p => p.SqlDbType == System.Data.SqlDbType.NVarChar && p.Size == -1),
+                "nvarchar(max), so the parameter declaration - and the plan cache entry - never varies with the list.");
+
+            var leftOut = JArray.Parse((string)parameters[0].Value).Select(t => (int)t).ToList();
+            var unknownOrigin = JArray.Parse((string)parameters[1].Value).Select(t => (int)t).ToList();
+
+            Assert.AreEqual(1250, leftOut.Count);
+            Assert.AreEqual(1250, unknownOrigin.Count);
+            Assert.AreEqual(3, leftOut[0], "The first entry for an agent wins, and the duplicate is dropped.");
+            Assert.IsFalse(unknownOrigin.Contains(3), "An agent is in one list only.");
+            CollectionAssert.AreEqual(leftOut.OrderBy(i => i).ToList(), leftOut, "In id order.");
+            Assert.AreEqual(6, unknownOrigin[0]);
+
+            var none = CopilotAdoptionSql.AgentGrowthScopeParameters(null);
+            Assert.AreEqual("[]", none[0].Value, "Nothing left out is an empty array, never NULL.");
+            Assert.AreEqual("[]", none[1].Value);
+            Assert.AreNotSame(none[0], CopilotAdoptionSql.AgentGrowthScopeParameters(null)[0],
+                "A parameter belongs to one command, so every call makes new ones.");
+        }
+
+        [TestMethod]
+        public void AgentGrowthForDisplay_DeclaresTheListsItRanWith_UntilTheyAreTooLongToCarry()
+        {
+            var parameters = new Dictionary<string, object> { { "@lastSettledDay", LastSettled } };
+            var few = new[]
+            {
+                new AgentGrowthExclusion { AgentId = 3, UnknownOrigin = false },
+                new AgentGrowthExclusion { AgentId = 4, UnknownOrigin = true },
+                new AgentGrowthExclusion { AgentId = 5, UnknownOrigin = true },
+            };
+
+            var shown = CopilotAdoptionSql.AgentGrowthForDisplay(few, parameters);
+
+            StringAssert.Contains(shown, "1 left out of every figure and 2 of unknown origin");
+            StringAssert.Contains(shown, "DECLARE @agentGrowthExcludedAgents nvarchar(max) = N'[3]';");
+            StringAssert.Contains(shown, "DECLARE @agentGrowthUnknownOriginAgents nvarchar(max) = N'[4,5]';");
+            StringAssert.Contains(shown, "DECLARE @lastSettledDay datetime = '2026-10-04 00:00:00';");
+            Assert.IsTrue(shown.EndsWith(CopilotAdoptionSql.AgentGrowthSql, StringComparison.Ordinal),
+                "The popover shows the statement that ran, unchanged.");
+
+            var many = Enumerable.Range(1, CopilotAdoptionSql.MaxDisplayedAgentGrowthExclusions + 1)
+                .Select(i => new AgentGrowthExclusion { AgentId = i, UnknownOrigin = true })
                 .ToList();
 
-            CollectionAssert.AreEqual(new List<int> { 1000, 1000, 500 }, inserts,
-                "A VALUES list holds at most 1,000 rows, and each id is written once.");
-            Assert.AreEqual(0, CountOccurrences(sql, " IN ("), "No IN-list, however large the agent table.");
+            var described = CopilotAdoptionSql.AgentGrowthForDisplay(many, parameters);
+
+            StringAssert.Contains(described, "0 left out of every figure and 1,001 of unknown origin");
+            StringAssert.Contains(described, "Their ids are not shown here; set @agentGrowthExcludedAgents and @agentGrowthUnknownOriginAgents");
+            StringAssert.Contains(described, "DECLARE @agentGrowthUnknownOriginAgents nvarchar(max) = N'[]';");
+            Assert.IsFalse(described.Contains("[1,2,3"), "A list too long to read is described, not carried.");
         }
 
         [TestMethod]
@@ -344,6 +465,7 @@ namespace Tests.UnitTests
             {
                 "agentGrowthSettledThroughUtc",
                 "agentGrowthActiveAgentsWindow0", "agentGrowthActiveAgentsWindow13",
+                "agentGrowthUnknownOriginAgentsWindow0", "agentGrowthUnknownOriginAgentsWindow13",
                 "agentGrowthAgentUsersWindow0", "agentGrowthAgentUsersWindow13",
                 "agentGrowthInteractionsWindow0", "agentGrowthInteractionsWindow13",
                 "agentGrowthInteractionsPerAgentUserWindow0", "agentGrowthInteractionsPerAgentUserWindow13",
@@ -357,9 +479,10 @@ namespace Tests.UnitTests
                 Assert.AreEqual(JTokenType.Null, value.Type, $"{key} must be null - a blank cell - when the series was not computed, never 0.");
             }
 
-            Assert.AreEqual(AgentGrowthScopes.AllAgents, (string)emptyJson["agentGrowthScope"]);
+            Assert.AreEqual(AgentGrowthScopes.CustomerBuilt, (string)emptyJson["agentGrowthScope"]);
 
             var usage = Covered(window: 0, activeAgents: 12, users: 40, interactions: 100);
+            usage.Single(r => r.WindowsAgo == 0).UnknownOriginAgents = 4;
             var yearAgo = usage.Single(r => r.WindowsAgo == 13);
             yearAgo.ActiveAgents = 3;
             yearAgo.AgentUsers = 8;
@@ -372,6 +495,8 @@ namespace Tests.UnitTests
             Assert.AreEqual(LastSettled, summary.AgentGrowthSettledThroughUtc);
             Assert.AreEqual(12, summary.AgentGrowthActiveAgentsWindow0);
             Assert.AreEqual(3, summary.AgentGrowthActiveAgentsWindow13);
+            Assert.AreEqual(4, summary.AgentGrowthUnknownOriginAgentsWindow0);
+            Assert.AreEqual(0, summary.AgentGrowthUnknownOriginAgentsWindow13);
             Assert.AreEqual(40, summary.AgentGrowthAgentUsersWindow0);
             Assert.AreEqual(8, summary.AgentGrowthAgentUsersWindow13);
             Assert.AreEqual(100L, summary.AgentGrowthInteractionsWindow0);

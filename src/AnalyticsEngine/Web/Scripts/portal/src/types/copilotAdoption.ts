@@ -321,8 +321,8 @@ export interface AgentEstateSummary {
   usageByAgent: ReportCategory[];
   agents: AgentUsageRow[];
   /**
-   * Which agents `growth` counts: 'allAgents', or 'customerBuilt' once the agent-origin classifier is in.
-   * A key, so the page words it. Optional only so fixtures written before #645 still type-check.
+   * Which agents `growth` counts: 'customerBuilt' (the Work Trend Index's scope), or 'allAgents'. A key, so
+   * the page words it. Optional only so fixtures written before #645 still type-check.
    */
   growthScope?: string;
   /** The first Copilot interaction the audit log holds - what explains a blank year-ago window. */
@@ -341,6 +341,11 @@ export interface AgentGrowthWindow {
   fromUtc: string;
   toUtc: string;
   activeAgents: number | null;
+  /**
+   * Agents of unknown origin used in the window, left out of every other figure because nobody can say who
+   * made them: the figures are a floor by this much. Optional only so fixtures written before it still type-check.
+   */
+  unknownOriginAgents?: number | null;
   agentUsers: number | null;
   agentInteractions: number | null;
   interactionsPerAgentUser: number | null;

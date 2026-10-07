@@ -845,11 +845,14 @@ namespace Common.Entities.CopilotAdoption
                 { "@seriesToExclusive", CopilotAdoptionAgentGrowth.SeriesToExclusiveUtc(lastSettledDay) },
             };
 
-            var sql = CopilotAdoptionSql.AgentGrowthSql(CopilotAdoptionAgentGrowth.ExcludedAgentIds(agents));
-            output.Sql["agentGrowth"] = CopilotAdoptionSql.ForDisplay(sql, parameters);
+            var exclusions = CopilotAdoptionAgentGrowth.Exclusions(agents, CopilotAdoptionAgentGrowth.Scope);
+            output.Sql["agentGrowth"] = CopilotAdoptionSql.AgentGrowthForDisplay(exclusions, parameters);
 
             var usage = await SafeAsync(
-                () => QueryAsync<AgentGrowthQueryRow>(sql, cancellationToken, ToSqlParameters(parameters)),
+                () => QueryAsync<AgentGrowthQueryRow>(
+                    CopilotAdoptionSql.AgentGrowthSql,
+                    cancellationToken,
+                    ToSqlParameters(parameters).Concat(CopilotAdoptionSql.AgentGrowthScopeParameters(exclusions)).ToArray()),
                 CopilotAdoptionSteps.AgentGrowth,
                 CopilotAdoptionQueries.AgentGrowth,
                 output,
