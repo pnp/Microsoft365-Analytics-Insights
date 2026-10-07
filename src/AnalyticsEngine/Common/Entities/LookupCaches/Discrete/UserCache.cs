@@ -36,7 +36,10 @@ namespace Common.Entities.LookupCaches
         /// with the code page's sort order - what <c>IX_users</c> uses - but the converted column was compared with
         /// Unicode rules, which treat ß as "ss" and æ as "ae". So the old query also matched a stored "straße@..." for
         /// "strasse@...", a row the unique index holds as a different user, and with both stored returned whichever was
-        /// older. Under a Windows collation both forms compare by Unicode rules.
+        /// older. Under a Windows collation both forms compare by Unicode rules. This is exact for <see cref="Load"/>
+        /// itself; <c>GetOrCreateNewResource</c> consults its in-process <c>ObjectByIdCache</c> first, whose
+        /// linguistic, case-insensitive comparer also equates "ß" with "ss", so within one cache's lifetime the
+        /// spelling seen first still decides the row for both.
         /// </para>
         /// <para>
         /// Measured with 200,000 synthetic users on LocalDB, before -&gt; after, median of 5 runs after a discarded
