@@ -5,7 +5,7 @@ import { join } from 'node:path';
 
 import { loadCatalog, translateStatic, type TFunction } from '..';
 import { EN_CATALOG } from '../catalog';
-import { COPILOT_ADOPTION_WARNING_KEYS, COWORK_TIER_LABEL_KEYS, GUIDANCE_LINK_TITLE_KEYS, TENURE_BASIS_LABEL_KEYS } from '../../components/copilotAdoption/serverText';
+import { COPILOT_ADOPTION_WARNING_KEYS, COWORK_TIER_LABEL_KEYS, TENURE_BASIS_LABEL_KEYS } from '../../components/copilotAdoption/serverText';
 import {
   BLOB_CHECKPOINT_REASON_KEYS,
   HEALTH_COMPONENT_LABEL_KEYS,
@@ -28,6 +28,7 @@ import { BLOCKING_KEYS, CSV_DELIMITER_KEYS, ROW_PROBLEM_KEYS } from '../../compo
 import { ACCOUNTABILITY_DIMENSION_TEXT, ACCOUNTABILITY_EMPTY_SEGMENT_KEYS } from '../../pages/CopilotAdoptionPage';
 import { ENABLED_IMPORT_LABELS_BY_SETTING_PROPERTY } from '../../pages/InsightsOverviewPage';
 import { OFFICE_PLATFORM_LABEL_KEYS } from '../../pages/ReportsPage';
+import { GUIDANCE_LINK_TITLE_KEYS } from '../../components/copilotAdoption/serverText';
 import { WORKLOADS } from '../../types/licenceActivity';
 import { PORTAL_PERMISSION_ERROR_CODE } from '../../access';
 import { GLOBAL_FILTER_ERROR_KEYS } from '../../api/globalFilterApi';

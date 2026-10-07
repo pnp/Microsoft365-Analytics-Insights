@@ -1,5 +1,4 @@
 import type {
-  AdoptionGuidanceLink,
   AgentUsageRow,
   CopilotAdoptionAvailability,
   CopilotAdoptionOptions,
@@ -311,7 +310,7 @@ export const GUIDANCE_LINK_TITLE_KEYS = {
 } as const satisfies Record<string, TranslationKey>;
 
 /** A guidance link's title in the reader's language; the server's English for a key this build does not know. */
-export function guidanceLinkTitle(t: TFunction, link: Pick<AdoptionGuidanceLink, 'titleKey' | 'title'>): string {
+export function guidanceLinkTitle(t: TFunction, link: { titleKey?: string; title: string }): string {
   const key = link.titleKey ? GUIDANCE_LINK_TITLE_KEYS[link.titleKey as keyof typeof GUIDANCE_LINK_TITLE_KEYS] : undefined;
   return key ? catalogText(t, key, link.title) : link.title;
 }
