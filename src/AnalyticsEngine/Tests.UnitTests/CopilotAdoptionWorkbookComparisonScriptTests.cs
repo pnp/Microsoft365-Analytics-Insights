@@ -305,14 +305,14 @@ namespace Tests.UnitTests
         public void DifferentBuild_IsRefused_UnlessForced()
         {
             var earlier = Earlier();
-            var after = SetReportValue(CopilotAdoptionWorkbook.Build(LaterOf(earlier)), "Product build", "9999");
+            var after = SetReportValue(CopilotAdoptionWorkbook.Build(LaterOf(earlier)), "Product build", "synthetic-build");
             var beforePath = Save("before.xlsx", earlier);
             var afterPath = Save("after.xlsx", after);
 
             var refused = Compare(beforePath, afterPath);
 
             AssertRefused(refused, "Product build");
-            StringAssert.Contains(refused.Error, "after '9999'");
+            StringAssert.Contains(refused.Error, "after 'synthetic-build'");
             StringAssert.Contains(refused.Error, "-Force");
 
             var forced = Compare(beforePath, afterPath, "-Force");

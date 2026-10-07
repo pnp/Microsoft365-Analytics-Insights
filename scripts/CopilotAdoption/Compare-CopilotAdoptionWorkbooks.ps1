@@ -505,7 +505,8 @@ function Read-SheetRows($Package, [string] $SheetName) {
         throw "The '$SheetName' sheet of the $($Package.Role) file is missing from the package. $($Package.Path)"
     }
 
-    # Each row as a number and its cells by column number. Only the first three columns are ever read.
+    # Each row as a number and its cells by column number. Only the first two columns - the key or label,
+    # and its value - are ever read, so nothing else is decoded.
     $rows = New-Object System.Collections.Generic.List[object]
     $rowNumber = 0
     foreach ($sheetData in (Get-ChildElements $document.DocumentElement 'sheetData')) {
@@ -518,7 +519,7 @@ function Read-SheetRows($Package, [string] $SheetName) {
             foreach ($cell in (Get-ChildElements $row 'c')) {
                 $reference = [regex]::Match($cell.GetAttribute('r'), '^([A-Za-z]+)([0-9]+)$')
                 $column = if ($reference.Success) { ConvertFrom-ColumnName $reference.Groups[1].Value.ToUpperInvariant() } else { $column + 1 }
-                if ($column -le 3) {
+                if ($column -le 2) {
                     $cells[$column] = ConvertTo-CellValue $Package $cell
                 }
             }
