@@ -733,6 +733,40 @@ VALUES (@p0, N'Word', @userId, @p1);",
             Assert.AreEqual("invalidAuditData", mapped.ErrorCode);
         }
 
+        /// <summary>
+        /// Issue #659: the backfill sends each payload through the same AuditLogContentDispatcher ->
+        /// CopilotAuditLogContent.FromJson as the live import, so an interaction whose
+        /// AccessedResources[].PolicyDetails arrives as a JSON string was mapped to "invalidAuditData" and
+        /// could not be recovered this way either. It must now map.
+        /// </summary>
+        [TestMethod]
+        public void Mapper_StringEncodedPolicyDetailsMapsInsteadOfInvalidAuditData()
+        {
+            var id = "00000000-0000-0000-0000-000000000055";
+            var record = SyntheticRecord(id);
+            record.AuditData["CopilotEventData"]["AccessedResources"] = new JArray(new JObject
+            {
+                ["Name"] = "Καλημέρα κόσμε.docx",
+                ["Type"] = "docx",
+                ["Status"] = "failure",
+                ["PolicyDetails"] = "[{\"PolicyType\":\"Purview\",\"PolicyOutcomes\":[\"None\"],\"AuditLog\":\"{\\u0022PolicyDetails\\u0022:[],\\u0022AssociatedAdminUnits\\u0022:[]}\"}]",
+            });
+
+            var mapped = CopilotAuditSearchRecordMapper.Map(record, NullLogger.Instance);
+
+            Assert.IsNull(mapped.ErrorCode, "A new-shape PolicyDetails must not make the record unmappable.");
+            var content = mapped.Content as CopilotAuditLogContent;
+            Assert.IsNotNull(content);
+            Assert.AreEqual(new Guid(id), content.Id);
+
+            var resource = content.CopilotEventData.AccessedResources.Single();
+            Assert.AreEqual("Καλημέρα κόσμε.docx", resource.Name);
+            Assert.AreEqual("Purview", resource.PolicyDetails.Single().PolicyType);
+            Assert.AreEqual(0, resource.PolicyDetails.Single().AuditLog.PolicyDetails.Count);
+            Assert.AreEqual(0, WebJob.Office365ActivityImporter.Engine.ActivityAPI.Dlp.CopilotDlpRules.ExtractMatches(content).Count,
+                "A policy evaluation with no effect is not a DLP match, even on a failed resource.");
+        }
+
         [TestMethod]
         public void Mapper_AcceptsDefensiveStringAuditDataForm()
         {

@@ -33,6 +33,13 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities
         public int ReportDownloadErrors { get; set; }
 
         /// <summary>
+        /// Number of audit records skipped this cycle because they could not be deserialised. Unlike a
+        /// download error these are not retried - their content blob is still checkpointed - so a non-zero
+        /// value is data loss and must not hide behind "errors: 0" (issue #659).
+        /// </summary>
+        public int RecordsSkippedDeserialisation { get; set; }
+
+        /// <summary>
         /// Number of save batches that permanently failed this cycle (after transient-SQL retries) and were
         /// skipped so the rest of the cycle could continue. Their content blobs are NOT checkpointed, so they
         /// are retried on the next import cycle.
@@ -93,6 +100,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities
             this.DownloadErrors += statsToAdd.DownloadErrors;
             this.MetadataDownloadErrors += statsToAdd.MetadataDownloadErrors;
             this.ReportDownloadErrors += statsToAdd.ReportDownloadErrors;
+            this.RecordsSkippedDeserialisation += statsToAdd.RecordsSkippedDeserialisation;
             this.BlobsSkipped += statsToAdd.BlobsSkipped;
             this.FailedBatches += statsToAdd.FailedBatches;
             this.FailedBatchEvents += statsToAdd.FailedBatchEvents;
@@ -119,6 +127,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities
                 $"errors: {this.DownloadErrors.ToString("n0")}, " +
                 $"metadata download errors: {this.MetadataDownloadErrors.ToString("n0")}, " +
                 $"report download errors: {this.ReportDownloadErrors.ToString("n0")}, " +
+                $"records skipped (could not deserialise): {this.RecordsSkippedDeserialisation.ToString("n0")}, " +
                 $"total: {this.Total.ToString("n0")}";
         }
     }

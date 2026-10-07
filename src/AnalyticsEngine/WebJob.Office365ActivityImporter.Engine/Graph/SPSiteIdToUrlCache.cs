@@ -23,6 +23,14 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             _graphServiceClient = graphServiceClient;
         }
 
+        /// <summary>
+        /// As above, with the local cache supplied, so the Graph half can be tested without SQL Server.
+        /// </summary>
+        public GraphSPSiteIdToUrlCache(GraphServiceClient graphServiceClient, ISiteUrlStore store, ILogger logger) : base(store, logger)
+        {
+            _graphServiceClient = graphServiceClient;
+        }
+
         public override async Task<Microsoft.Graph.Models.Site> LoadSite(string id)
         {
             try
@@ -30,8 +38,9 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 return await _graphServiceClient.Sites[id]
                     .GetAsync(rc => { rc.QueryParameters.Select = new[] { "WebUrl" }; });
             }
-            catch (Exception ex)
+            catch (Exception ex) when (!IsSiteNotFound(ex))
             {
+                // A site that no longer exists is reported once, by Load. Issue #708.
                 base._logger.LogWarning(ex, $"{nameof(GraphSPSiteIdToUrlCache)}: Error loading site URL for {id}: {ex.Message}");
                 throw;
             }
@@ -88,6 +97,14 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                     SiteUrl = site.WebUrl
                 };
             }
+            catch (ODataError ex) when (IsSiteNotFound(ex))
+            {
+                // Expected, not a fault: the weekly site-usage report still lists sites deleted since. Not cached,
+                // exactly as before. Issue #708.
+                _logger.LogInformation($"{nameof(SPSiteIdToUrlCache)}: Site with ID '{id}' no longer exists (Graph: {ex.ResponseStatusCode} {ex.Error?.Code}), so its URL can't be resolved. No action is needed.");
+
+                return null;
+            }
             catch (ODataError ex) when (ex.ResponseStatusCode == (int)HttpStatusCode.NotFound)
             {
                 _logger.LogWarning($"{nameof(SPSiteIdToUrlCache)}: Site with ID '{id}' not found");
@@ -100,6 +117,20 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 return null;
             }
         }
+
+        /// <summary>
+        /// Graph's answer for a site that does not exist (any more): <c>404</c> with error code <c>itemNotFound</c>
+        /// ("Requested site could not be found"). Any other failure, including a 404 with another code, is not
+        /// recognised as a deleted site and keeps its warning.
+        /// </summary>
+        internal static bool IsSiteNotFound(Exception ex)
+        {
+            return ex is ODataError odataError
+                && odataError.ResponseStatusCode == (int)HttpStatusCode.NotFound
+                && string.Equals(odataError.Error?.Code, SiteNotFoundErrorCode, StringComparison.OrdinalIgnoreCase);
+        }
+
+        private const string SiteNotFoundErrorCode = "itemNotFound";
     }
 
     public class SPSiteIdToUrl

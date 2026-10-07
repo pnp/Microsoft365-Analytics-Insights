@@ -3,11 +3,12 @@ import { Guid, SPEventArgs } from '@microsoft/sp-core-library';
 import { SPComponentLoader } from '@microsoft/sp-loader';
 import { IAiTrackerModernApplicationCustomizerProperties, SitesTrackedByExtension, SpPageContextInfo } from './definitions';
 import { Logger } from './Logger';
+import { loadTrackerUnlessRunning } from './TrackerPresence';
 
 // AITracker.js function. That's where we drive the AppInsights telemetry.
 declare function modernPageNav(webUrl: string, webTitle: string, siteUrl: string, listTitle?: string, listItemId?: number): void;
 
-const AITRACKER_MODERN_VERSION: string = "1.0.1.56";
+const AITRACKER_MODERN_VERSION: string = "1.0.1.64";     // Keep in step with the version in config/package-solution.json
 const NAV_EVENT_DELAY_MS: number = 2000;
 
 declare global {
@@ -25,20 +26,46 @@ export default class AiTrackerModernApplicationCustomizer
   private readonly runtimeId: Guid = Guid.newGuid();
   private lastTrackedUrlFromSpfx: string = "";
   private aiTrackerLoaded: boolean = false;
+  private registeredSite: string | undefined = undefined;    // This instance's entry in _o365AnalyticsInfo.siteUrls
+  private disposed: boolean = false;
 
   // Debug URLs: use "gulp serve" with serve.json properties
   public override async onInit(): Promise<void> {
 
+    // The installer enables this extension per site collection, giving it its settings. An instance without them, such as
+    // one from the tenant-wide extensions list, has nothing to track - and must not register the site below either, or the
+    // configured instance would take it for a duplicate and not track the site.
+    if (!this.properties?.appInsightsConnectionStringHash) {
+      if (this.properties && Object.keys(this.properties).length > 0) {
+        Logger.error(`[${this.runtimeId}]: version ${AITRACKER_MODERN_VERSION}: no 'appInsightsConnectionStringHash' in the extension properties, so not tracking. Re-run the installer for this site.`);
+      }
+      else {
+        Logger.verbose(`[${this.runtimeId}]: version ${AITRACKER_MODERN_VERSION}: no settings, so this instance isn't tracking the site.`);
+      }
+      return;
+    }
+    try {
+      atob(this.properties.appInsightsConnectionStringHash); // Validate base64 encoding
+    } catch {
+      Logger.error(`[${this.runtimeId}]: appInsightsConnectionStringHash is not valid base64. Aborting init.`);
+      return;
+    }
+
     Logger.info(`[${this.runtimeId}]: SPFx solution init.`);
+
+    // This instance's site. Read it now: SharePoint updates the page context when it navigates, which it can do while this
+    // instance waits for AITracker below
+    const site: string = this.context.pageContext.site.absoluteUrl;
 
     // Check for _spoInsightsLoaded global variable to avoid double-load...
     const existingSitesLoaded = this.getSitesConfigFromWindow();
-    if (existingSitesLoaded.siteUrls.indexOf(this.context.pageContext.site.absoluteUrl) === -1) {
-      existingSitesLoaded.siteUrls.push(this.context.pageContext.site.absoluteUrl);
-      Logger.verbose(`[${this.runtimeId}]: Registered loaded for site ${this.context.pageContext.site.absoluteUrl}`);
+    if (existingSitesLoaded.siteUrls.indexOf(site) === -1) {
+      existingSitesLoaded.siteUrls.push(site);
+      this.registeredSite = site;
+      Logger.verbose(`[${this.runtimeId}]: Registered loaded for site ${site}`);
     }
     else {
-      Logger.warn(`[${this.runtimeId}]: Already loaded SPFx extension for site ${this.context.pageContext.site.absoluteUrl} with another instance. Extension installed twice?`);
+      Logger.warn(`[${this.runtimeId}]: Already loaded SPFx extension for site ${site} with another instance. Extension installed twice?`);
 
       // OnInit seems to fire twice, or maybe the extension is installed more than once. Make sure we continue only once.
       return;
@@ -46,58 +73,56 @@ export default class AiTrackerModernApplicationCustomizer
 
     Logger.info(`[${this.runtimeId}]: version ${AITRACKER_MODERN_VERSION} tracking page.`);
 
-    // Add _spPageContextInfo global variable if needed
-    const w = (window as Window);
-    if (!w._spPageContextInfo) {
-      this.updateLegacyPageContext();
+    // AITracker.js reads the page's site and list from this. Always this site's: after a navigation from another site it can still describe that one
+    this.updateLegacyPageContext();
+
+    // Insert AITracker into the page, giving it the AppInsights key from the extension properties
+    Logger.info(`[${this.runtimeId}]: Injecting AITracker with connection-string (hash present).`);
+    let aiTrackerUrl: string = site + "/SPOInsights/AITracker.js";
+
+    // Append refresh token to AITracker.js url?
+    if (this.properties.cacheToken) {
+      aiTrackerUrl += `?ver=${encodeURIComponent(this.properties.cacheToken)}`;
     }
 
-    // Grab AppInsights key from SPFx extension properties & insert + AITracker into header
-    if (this.properties.appInsightsConnectionStringHash) {
-      try {
-        atob(this.properties.appInsightsConnectionStringHash); // Validate base64 encoding
-      } catch {
-        Logger.error(`[${this.runtimeId}]: appInsightsConnectionStringHash is not valid base64. Aborting init.`);
-        return;
-      }
-      Logger.info(`[${this.runtimeId}]: Injecting AITracker with connection-string (hash present).`);
-      let aiTrackerUrl: string = this.context.pageContext.site.absoluteUrl + "/SPOInsights/AITracker.js";
+    // Set AppInsights key as a window global (avoids CSP inline-script violation)
+    (window as unknown as Record<string, unknown>).appInsightsConnectionStringHash = this.properties.appInsightsConnectionStringHash;
 
-      // Append refresh token to AITracker.js url?
-      if (this.properties.cacheToken) {
-        aiTrackerUrl += `?ver=${encodeURIComponent(this.properties.cacheToken)}`;
-      }
-
-      // Set AppInsights key as a window global (avoids CSP inline-script violation)
-      (window as unknown as Record<string, unknown>).appInsightsConnectionStringHash = this.properties.appInsightsConnectionStringHash;
-
-      // Set root web key as a window global, if there is one
-      if (this.properties.insightsWebRootUrlHash) {
-        Logger.verbose(`[${this.runtimeId}]: We have an insightsWebRootUrlHash.`);
-        (window as unknown as Record<string, unknown>).insightsWebRootUrlHash = this.properties.insightsWebRootUrlHash;
-      }
-      else {
-        Logger.verbose(`[${this.runtimeId}]: No insightsWebRootUrlHash found.`);
-      }
-
-      // Load AITracker script via SPComponentLoader (CSP-safe)
-      try {
-        await SPComponentLoader.loadScript(aiTrackerUrl, { globalExportsName: 'modernPageNav' });
-        this.aiTrackerLoaded = true;
-        Logger.verbose(`[${this.runtimeId}]: AITracker.js loaded successfully.`);
-      } catch (e) {
-        Logger.error(`[${this.runtimeId}]: Failed to load AITracker.js from ${aiTrackerUrl}: ${(e as Error).message}`);
-      }
-
-      // Wire-up page-changed SPFx event
-      this.context.application.navigatedEvent.add(this, this.logNavigatedEvent);
+    // Set root web key as a window global, if there is one
+    if (this.properties.insightsWebRootUrlHash) {
+      Logger.verbose(`[${this.runtimeId}]: We have an insightsWebRootUrlHash.`);
+      (window as unknown as Record<string, unknown>).insightsWebRootUrlHash = this.properties.insightsWebRootUrlHash;
     }
     else {
-      Logger.error(`[${this.runtimeId}]: FATAL: No key 'appInsightsConnectionStringHash' found with extension properties.`);
+      Logger.verbose(`[${this.runtimeId}]: No insightsWebRootUrlHash found.`);
     }
 
+    // Load AITracker script via SPComponentLoader (CSP-safe), unless a copy is already tracking this page. SharePoint navigates
+    // between site collections without reloading, and each has its own copy: use the one that's running, or on its way.
+    try {
+      const runningTracker = await loadTrackerUnlessRunning(window, () => SPComponentLoader.loadScript(aiTrackerUrl, { globalExportsName: 'modernPageNav' }));
+      this.aiTrackerLoaded = true;
+      if (runningTracker) {
+        Logger.verbose(`[${this.runtimeId}]: AITracker ${runningTracker} is already tracking this page, so this site's copy isn't loaded.`);
+      }
+      else {
+        Logger.verbose(`[${this.runtimeId}]: AITracker.js loaded successfully.`);
+      }
+    } catch (e) {
+      Logger.error(`[${this.runtimeId}]: Failed to load AITracker.js from ${aiTrackerUrl}: ${(e as Error).message}`);
+    }
+
+    // SharePoint can dispose of this instance while it waits for AITracker, if it moves on. Then the next instance follows
+    if (this.disposed) {
+      Logger.verbose(`[${this.runtimeId}]: Disposed while AITracker.js loaded, so not following navigations.`);
+      return;
+    }
+
+    // Wire-up page-changed SPFx event
+    this.context.application.navigatedEvent.add(this, this.logNavigatedEvent);
+
     // Remember site for dispose event
-    this.lastSite = this.context.pageContext.site.absoluteUrl;
+    this.lastSite = site;
   }
 
   private logNavigatedEvent(_args: SPEventArgs): void {
@@ -108,16 +133,21 @@ export default class AiTrackerModernApplicationCustomizer
       this.lastTrackedUrlFromSpfx = window.location.href;
       this.updateLegacyPageContext();
 
-      // Ignore initial navigation event as AITracker.js will pick that up
+      // AITracker.js tracks the page it loads on itself, and ignores a report of the page it has already tracked
       const existingSitesLoaded: SitesTrackedByExtension = this.getSitesConfigFromWindow();
       if (existingSitesLoaded.lastUrlTracked !== window.location.href) {
 
         Logger.verbose(`[${this.runtimeId}]: Will invoke 'modernPageNav' on AITracker.js...`);
         // Wait for the DOM to sort itself out, otherwise things like document.title won't have the new value
         setTimeout(() => {
-          // Guard: ensure AITracker.js has loaded and modernPageNav is available
-          if (!this.aiTrackerLoaded || typeof modernPageNav !== "function") {
-            Logger.warn(`[${this.runtimeId}]: modernPageNav not available yet. Navigation event skipped.`);
+          if (!this.aiTrackerLoaded) {
+            Logger.warn(`[${this.runtimeId}]: AITracker.js didn't load, so this navigation isn't tracked.`);
+            return;
+          }
+          // AITracker.js publishes modernPageNav once it has tracked the page it loaded on, after that page's load event, and
+          // tracks that page itself. So while the page is still loading there's nothing for this report to do.
+          if (typeof modernPageNav !== "function") {
+            Logger.verbose(`[${this.runtimeId}]: AITracker.js is still waiting for the page to load, and will track it then.`);
             return;
           }
 
@@ -168,21 +198,23 @@ export default class AiTrackerModernApplicationCustomizer
 
   // Clean-up
   protected override onDispose(): void {
+    this.disposed = true;
 
     if (this.lastSite) {
       Logger.info(`[${this.runtimeId}]: Disposing for ${this.lastSite}.`);
+      this.context.application.navigatedEvent.remove(this, this.logNavigatedEvent);
     }
     else {
-      Logger.verbose(`[${this.runtimeId}]: Disposing duplicate extension.`);
-      return;
+      Logger.verbose(`[${this.runtimeId}]: Disposing an instance that wasn't following navigations.`);
     }
 
-    this.context.application.navigatedEvent.remove(this, this.logNavigatedEvent);
-
-    const existingSitesLoaded: SitesTrackedByExtension = this.getSitesConfigFromWindow();
-    const siteIndex = existingSitesLoaded.siteUrls.indexOf(this.lastSite);
-    if (siteIndex > -1) {
-      existingSitesLoaded.siteUrls.splice(siteIndex, 1);
+    // Unregister the site this instance registered, or the next instance for it takes itself for a duplicate and doesn't track
+    if (this.registeredSite) {
+      const existingSitesLoaded: SitesTrackedByExtension = this.getSitesConfigFromWindow();
+      const siteIndex = existingSitesLoaded.siteUrls.indexOf(this.registeredSite);
+      if (siteIndex > -1) {
+        existingSitesLoaded.siteUrls.splice(siteIndex, 1);
+      }
     }
   }
 }

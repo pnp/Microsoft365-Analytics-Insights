@@ -1,5 +1,1 @@
 /*! js-cookie v3.0.5 | MIT */
-
-//! moment.js
-
-//! moment.js locale configuration

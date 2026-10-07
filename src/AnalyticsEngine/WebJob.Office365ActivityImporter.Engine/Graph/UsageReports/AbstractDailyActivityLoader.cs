@@ -45,6 +45,13 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
         public int SaveBatchSize { get; set; } = 1000;
 
         /// <summary>
+        /// How many distinct lookup values (UPNs) the save resolves per SQL query before its row loop (#705). Capped
+        /// at <see cref="DBLookupCache{T}.MaxKeysPerIdBatch"/>, which keeps each query far under SQL Server's
+        /// 2,100-parameter limit. Settable so tests can exercise the batch boundary cheaply.
+        /// </summary>
+        public int LookupBatchSize { get; set; } = DBLookupCache<TLookupType>.MaxKeysPerIdBatch;
+
+        /// <summary>
         /// Recent-day window (in days) during which Graph usage data can still change and therefore must be
         /// re-imported every run. Graph usage reports have a ~2-3 day latency and are stable once finalized, so
         /// dates older than this can be treated as final. A date is skipped only when it was already inside the
@@ -274,6 +281,20 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
             var store = StoreFor(db);
             try
             {
+                // Resolve every user (or group) this report names that already exists in SQL in set-based batches,
+                // BEFORE the row loop, instead of one query per user, per report, inside it (#705). The row loop
+                // below is unchanged: pre-resolved values are cache hits, and anything left - a user not yet in
+                // SQL, or a lookup type with no batch query - takes the per-row get-or-create path as before.
+                var preResolveWatch = Stopwatch.StartNew();
+                var preResolved = await PreResolveLookupIdsAsync(userEmailToDbIdCache, lookupCache);
+                preResolveWatch.Stop();
+                if (preResolved.Batches > 0)
+                {
+                    Telemetry.LogInformation($"{loaderType}: resolved {preResolved.KeysResolved:N0} of {preResolved.DistinctKeys:N0} distinct lookups " +
+                        $"in {preResolved.Batches:N0} batched quer{(preResolved.Batches == 1 ? "y" : "ies")} ({preResolveWatch.ElapsedMilliseconds:N0} ms) before saving.");
+                }
+                totals?.Add(preResolved, preResolveWatch.ElapsedTicks);
+
                 using (store.BeginBulkWrite())
                 {
                     var dateIndex = 0;
@@ -292,7 +313,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
 
                         if (instrumentationEnabled)
                         {
-                            totals.ExistingRowLoadMs += existingLoadWatch.ElapsedMilliseconds;
+                            totals.ExistingRowLoadTicks += existingLoadWatch.ElapsedTicks;
                             TrackSaveStage(instrumentation, UsageReportSaveStageIds.ExistingRowsLoaded, loaderType, reportTable, "Completed", m =>
                             {
                                 m["DateIndex"] = dateIndex;
@@ -327,9 +348,9 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
                             var inScope = await IdInScope(reportPage.LookupFieldValue);
                             if (instrumentationEnabled)
                             {
-                                var elapsed = ElapsedMillisecondsSince(scopeTicks);
-                                dateMetrics.ScopeFilterMs += elapsed;
-                                totals.ScopeFilterMs += elapsed;
+                                var elapsed = ElapsedTicksSince(scopeTicks);
+                                dateMetrics.ScopeFilterTicks += elapsed;
+                                totals.ScopeFilterTicks += elapsed;
                             }
                             if (!inScope)
                             {
@@ -344,9 +365,9 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
                             var lookupId = await ResolveLookupIdAsync(reportPage, userEmailToDbIdCache, lookupCache, lookupStats);
                             if (instrumentationEnabled)
                             {
-                                var elapsed = ElapsedMillisecondsSince(lookupTicks);
-                                dateMetrics.LookupResolveMs += elapsed;
-                                totals.LookupResolveMs += elapsed;
+                                var elapsed = ElapsedTicksSince(lookupTicks);
+                                dateMetrics.LookupResolveTicks += elapsed;
+                                totals.LookupResolveTicks += elapsed;
                                 dateMetrics.Add(lookupStats);
                                 totals.Add(lookupStats);
                             }
@@ -381,18 +402,18 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
                             }
                             if (instrumentationEnabled)
                             {
-                                var elapsed = ElapsedMillisecondsSince(parseTicks);
-                                dateMetrics.DateParseMs += elapsed;
-                                totals.DateParseMs += elapsed;
+                                var elapsed = ElapsedTicksSince(parseTicks);
+                                dateMetrics.DateParseTicks += elapsed;
+                                totals.DateParseTicks += elapsed;
                             }
 
                             var projectionTicks = instrumentationEnabled ? Stopwatch.GetTimestamp() : 0;
                             PopulateReportSpecificMetadata(dateRequestedLog, reportPage);
                             if (instrumentationEnabled)
                             {
-                                var elapsed = ElapsedMillisecondsSince(projectionTicks);
-                                dateMetrics.ProjectionMs += elapsed;
-                                totals.ProjectionMs += elapsed;
+                                var elapsed = ElapsedTicksSince(projectionTicks);
+                                dateMetrics.ProjectionTicks += elapsed;
+                                totals.ProjectionTicks += elapsed;
                             }
 
                             // Auto-detect is off, so state the change explicitly. Only write when something actually
@@ -424,9 +445,9 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
                             }
                             if (instrumentationEnabled)
                             {
-                                var elapsed = ElapsedMillisecondsSince(dirtyTicks);
-                                dateMetrics.DirtyCheckMs += elapsed;
-                                totals.DirtyCheckMs += elapsed;
+                                var elapsed = ElapsedTicksSince(dirtyTicks);
+                                dateMetrics.DirtyCheckTicks += elapsed;
+                                totals.DirtyCheckTicks += elapsed;
                             }
 
                             i++;
@@ -462,7 +483,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
                             TrackSaveStage(instrumentation, UsageReportSaveStageIds.RowsReleased, loaderType, reportTable, "Completed", m =>
                             {
                                 m["DateIndex"] = dateIndex;
-                                m["DurationMs"] = ElapsedMillisecondsSince(releaseTicks);
+                                m["DurationMs"] = TicksToMilliseconds(ElapsedTicksSince(releaseTicks));
                                 m["TrackedEntityCountBeforeRelease"] = trackedBeforeRelease;
                                 m["TrackedEntityCountAfterRelease"] = store.TrackedEntityCount;
                             });
@@ -543,8 +564,11 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
             Monitor.Enter(userEmailToDbIdCache);
             try
             {
-                stats?.AddSynchronizationWait(ElapsedMillisecondsSince(lockStart));
-                lookupId = userEmailToDbIdCache.GetCachedIdForName<TReportDbType>(reportPage.LookupFieldValue);
+                stats?.AddSynchronizationWait(ElapsedTicksSince(lockStart));
+                // Keyed by the LOOKUP type (User / YammerGroup), not the report table, so a user resolved by one
+                // loader is reused by every other loader in the phase (#705). A value maps to the same record
+                // whichever report it came from: every user-keyed report resolves it with the same GetOrCreateLookup.
+                lookupId = userEmailToDbIdCache.GetCachedIdForName<TLookupType>(reportPage.LookupFieldValue);
             }
             finally
             {
@@ -559,7 +583,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
             stats?.RecordMiss();
             var dbCallStart = stats == null ? 0 : Stopwatch.GetTimestamp();
             var lookup = await reportPage.GetOrCreateLookup(lookupCache);
-            stats?.RecordDatabaseCall(ElapsedMillisecondsSince(dbCallStart));
+            stats?.RecordDatabaseCall(ElapsedTicksSince(dbCallStart));
             if (!lookup.IsSavedToDB)
             {
                 throw new InvalidOperationException("Cannot use unsaved lookups for activity records");
@@ -569,13 +593,13 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
             Monitor.Enter(userEmailToDbIdCache);
             try
             {
-                stats?.AddSynchronizationWait(ElapsedMillisecondsSince(lockStart));
+                stats?.AddSynchronizationWait(ElapsedTicksSince(lockStart));
                 // Re-check in case another thread populated it while we were resolving.
-                lookupId = userEmailToDbIdCache.GetCachedIdForName<TReportDbType>(reportPage.LookupFieldValue);
+                lookupId = userEmailToDbIdCache.GetCachedIdForName<TLookupType>(reportPage.LookupFieldValue);
                 if (lookupId == null)
                 {
                     lookupId = lookup.ID;
-                    userEmailToDbIdCache.AddOrUpdateForName<TReportDbType>(reportPage.LookupFieldValue, lookupId.Value);
+                    userEmailToDbIdCache.AddOrUpdateForName<TLookupType>(reportPage.LookupFieldValue, lookupId.Value);
                 }
                 else
                 {
@@ -589,10 +613,167 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
             return lookupId.Value;
         }
 
-        private static long ElapsedMillisecondsSince(long startTimestamp)
+        // The save diagnostics keep elapsed time as raw Stopwatch ticks, sum it as ticks and turn it into
+        // milliseconds once, when a metric is written. Truncating every interval to whole milliseconds first, as this
+        // loop used to, reported any stage that costs well under a millisecond per row - most of them - as about 0
+        // however many rows it ran for.
+        private static long ElapsedTicksSince(long startTimestamp)
+            => startTimestamp == 0 ? 0 : Stopwatch.GetTimestamp() - startTimestamp;
+
+        private static double TicksToMilliseconds(long stopwatchTicks)
+            => stopwatchTicks * 1000.0 / Stopwatch.Frequency;
+
+        /// <summary>
+        /// Resolves, before the row loop, every lookup in <see cref="LoadedReportPages"/> that already exists in SQL,
+        /// in set-based batches of at most <see cref="LookupBatchSize"/> distinct keys per query, and adds the ids to
+        /// the shared cache - keyed by LOOKUP type, so the phase's other loaders reuse them (#705).
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// Read-only. Keys with no record are left alone: the row loop's per-row get-or-create path creates them
+        /// exactly as before, and only for rows that pass the scope filter. Resolving an out-of-scope user here only
+        /// caches an id that no out-of-scope row ever reads. A lookup cache with no batch query (Yammer groups)
+        /// answers null and the whole report resolves per row, as it always has.
+        /// </para>
+        /// <para>
+        /// Each batch first drops keys another loader resolved since this one started, so loaders that save at the
+        /// same time do not re-query each other's users. Chunked with <see cref="List{T}.GetRange"/>, not
+        /// Skip/Take, which would walk the list from the start for every chunk.
+        /// </para>
+        /// <para>
+        /// Before this, a cold phase sent one query per distinct user, per report: up to ~9 x 200,000 = 1.8 million
+        /// point queries a day at the 200k-user baseline. It is now about distinct users / 1,000 batches per phase,
+        /// plus one per-row query for each user not yet in SQL.
+        /// </para>
+        /// <para>
+        /// Measured with <c>UsageReportLookupBenchmarkTests</c> (SQL Server LocalDB, 200,000 synthetic users, cold
+        /// cache, an unchanged Outlook day re-saved through this method; medians of two runs after a discarded first).
+        /// SQL CPU is the session's <c>sys.dm_exec_sessions.cpu_time</c> delta, from a second, shorter run of the
+        /// same builds on the same databases:
+        /// <list type="table">
+        /// <listheader><term>users.user_name collation / report rows</term><description>before -> after: elapsed, user-lookup queries, logical reads, SQL CPU</description></listheader>
+        /// <item><term>SQL_Latin1_General_CP1_CI_AS (Azure SQL default) / 5,000</term><description>90.8 s, 5,000, 7.30M, 89.6 s -> 0.47 s, 5, 7,559, 0.31 s</description></item>
+        /// <item><term>SQL_Latin1_General_CP1_CI_AS / 20,000</term><description>346.7 s, 20,000, 29.2M, CPU not re-run -> 1.72 s, 20, 29,414, 1.26 s</description></item>
+        /// <item><term>SQL_Latin1_General_CP1_CI_AS / 100,000</term><description>not run (~29 min a run by extrapolation) -> 8.9 s, 100, 148,323, CPU not re-run</description></item>
+        /// <item><term>Latin1_General_CI_AS / 20,000</term><description>10.3 s, 20,000, 120,385, 1.03 s -> 0.70 s, 20, 2,437, 0.14 s</description></item>
+        /// <item><term>Latin1_General_CI_AS / 100,000</term><description>50.9 s, 100,000, 602,038, CPU not re-run -> 3.68 s, 100, 29,574, 1.04 s</description></item>
+        /// </list>
+        /// Actual plans (SET STATISTICS XML, one warm execution each): under the SQL collation EF's <c>nvarchar</c>
+        /// parameter against the <c>varchar</c> column makes each per-user query an Index Scan of <c>IX_users</c>
+        /// plus a key lookup (1,460 reads, 19 ms CPU); the batch is one Index Scan and a Hash Match per 1,000 keys
+        /// (1,457 reads, ~64 ms CPU, for contiguous and spread keys alike). Under the Windows collation the per-user
+        /// query is an Index Seek plus a key lookup (6 reads, under 1 ms CPU) and the batch is a Merge Join over one
+        /// ordered Index Scan (15 reads and 1 ms for 1,000 contiguous keys; 1,100 reads and 29 ms for 1,000 keys
+        /// spread across the index). The rows the "after" runs re-saved were written by the old code and every one
+        /// was matched (0 added), so both paths resolved every user to the same id.
+        /// </para>
+        /// </remarks>
+        private async Task<LookupPreResolution> PreResolveLookupIdsAsync(ConcurrentLookupDbIdsCache cache, CACHETYPE lookupCache)
         {
-            if (startTimestamp == 0) return 0;
-            return (long)((Stopwatch.GetTimestamp() - startTimestamp) * 1000.0 / Stopwatch.Frequency);
+            var result = new LookupPreResolution();
+
+            // Distinct normalised keys (what GetOrCreateLookup would look up), each with the raw report values that
+            // map to it - the shared cache is keyed by the raw value, as the per-row path keys it.
+            var valuesByKey = new Dictionary<string, List<string>>(StringComparer.Ordinal);
+            var seenValues = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var page in LoadedReportPages.Values)
+            {
+                foreach (var row in page)
+                {
+                    var value = row.LookupFieldValue;
+                    if (string.IsNullOrWhiteSpace(value) || !seenValues.Add(value))
+                    {
+                        continue;
+                    }
+
+                    // DBLookupCache trims the key before it reaches SQL; do the same so both paths ask for one key.
+                    var key = row.LookupKey?.Trim();
+                    if (string.IsNullOrEmpty(key))
+                    {
+                        continue;
+                    }
+
+                    if (!valuesByKey.TryGetValue(key, out var values))
+                    {
+                        values = new List<string>(1);
+                        valuesByKey.Add(key, values);
+                    }
+                    values.Add(value);
+                }
+            }
+
+            result.DistinctKeys = valuesByKey.Count;
+            if (valuesByKey.Count == 0)
+            {
+                return result;
+            }
+
+            var keys = new List<string>(valuesByKey.Keys);
+            var batchSize = Math.Max(1, Math.Min(LookupBatchSize, DBLookupCache<TLookupType>.MaxKeysPerIdBatch));
+            for (var start = 0; start < keys.Count; start += batchSize)
+            {
+                var chunk = keys.GetRange(start, Math.Min(batchSize, keys.Count - start));
+
+                var pending = new List<string>(chunk.Count);
+                lock (cache)
+                {
+                    foreach (var key in chunk)
+                    {
+                        foreach (var value in valuesByKey[key])
+                        {
+                            if (cache.GetCachedIdForName<TLookupType>(value) == null)
+                            {
+                                pending.Add(key);
+                                break;
+                            }
+                        }
+                    }
+                }
+                if (pending.Count == 0)
+                {
+                    continue;
+                }
+
+                var batchWatch = Stopwatch.StartNew();
+                var found = await lookupCache.LoadExistingIdsAsync(pending);
+                batchWatch.Stop();
+                if (found == null)
+                {
+                    // No set-based lookup for this type: leave the whole report to the per-row path.
+                    break;
+                }
+
+                result.Batches++;
+                result.BatchTicks += batchWatch.ElapsedTicks;
+                result.KeysRequested += pending.Count;
+                lock (cache)
+                {
+                    foreach (var key in pending)
+                    {
+                        if (!found.TryGetValue(key, out var id))
+                        {
+                            continue;
+                        }
+
+                        result.KeysResolved++;
+                        foreach (var value in valuesByKey[key])
+                        {
+                            cache.AddOrUpdateForName<TLookupType>(value, id);
+                        }
+                    }
+                }
+            }
+
+            return result;
+        }
+
+        private sealed class LookupPreResolution
+        {
+            public long DistinctKeys;
+            public long Batches;
+            public long BatchTicks;
+            public long KeysRequested;
+            public long KeysResolved;
         }
 
         private static void TrackSaveStage(
@@ -617,26 +798,29 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
             instrumentation.Track(point);
         }
 
+        // Times are Stopwatch ticks, converted to milliseconds only by SaveLoopMetrics.WriteTo.
         private sealed class LookupResolutionStats
         {
             public long CacheHits;
             public long CacheMisses;
             public long DatabaseCalls;
             public long DuplicateConcurrentMisses;
-            public long SynchronizationWaitMs;
-            public long DatabaseCallMs;
+            public long SynchronizationWaitTicks;
+            public long DatabaseCallTicks;
 
             public void RecordHit() => CacheHits++;
             public void RecordMiss() => CacheMisses++;
             public void RecordDuplicateConcurrentMiss() => DuplicateConcurrentMisses++;
-            public void AddSynchronizationWait(long milliseconds) => SynchronizationWaitMs += milliseconds;
-            public void RecordDatabaseCall(long milliseconds)
+            public void AddSynchronizationWait(long ticks) => SynchronizationWaitTicks += ticks;
+            public void RecordDatabaseCall(long ticks)
             {
                 DatabaseCalls++;
-                DatabaseCallMs += milliseconds;
+                DatabaseCallTicks += ticks;
             }
         }
 
+        // Every *Ticks field is a sum of Stopwatch ticks; WriteTo reports it in milliseconds under the metric's
+        // existing *Ms name.
         private sealed class SaveLoopMetrics
         {
             public long InputRows;
@@ -645,18 +829,22 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
             public long AddedRows;
             public long ChangedRows;
             public long UnchangedRows;
-            public long ExistingRowLoadMs;
-            public long ScopeFilterMs;
-            public long LookupResolveMs;
-            public long DateParseMs;
-            public long ProjectionMs;
-            public long DirtyCheckMs;
+            public long ExistingRowLoadTicks;
+            public long ScopeFilterTicks;
+            public long LookupResolveTicks;
+            public long DateParseTicks;
+            public long ProjectionTicks;
+            public long DirtyCheckTicks;
             public long LookupCacheHits;
             public long LookupCacheMisses;
             public long LookupDatabaseCalls;
             public long DuplicateConcurrentMisses;
-            public long LookupSynchronizationWaitMs;
-            public long LookupDatabaseCallMs;
+            public long LookupSynchronizationWaitTicks;
+            public long LookupDatabaseCallTicks;
+            public long LookupBatchCount;
+            public long LookupBatchTicks;
+            public long LookupBatchKeyCount;
+            public long LookupBatchResolvedCount;
 
             public void RecordInputRow() => InputRows++;
             public void RecordMissingLookupValue() => MissingLookupValueRows++;
@@ -672,8 +860,22 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
                 LookupCacheMisses += stats.CacheMisses;
                 LookupDatabaseCalls += stats.DatabaseCalls;
                 DuplicateConcurrentMisses += stats.DuplicateConcurrentMisses;
-                LookupSynchronizationWaitMs += stats.SynchronizationWaitMs;
-                LookupDatabaseCallMs += stats.DatabaseCallMs;
+                LookupSynchronizationWaitTicks += stats.SynchronizationWaitTicks;
+                LookupDatabaseCallTicks += stats.DatabaseCallTicks;
+            }
+
+            // The batches are lookup database calls too, so LookupDatabaseCallCount / LookupDatabaseCallMs and
+            // LookupResolveMs stay the totals for the save; the LookupBatch* metrics say how much of it was batched.
+            public void Add(LookupPreResolution preResolution, long elapsedTicks)
+            {
+                if (preResolution == null) return;
+                LookupBatchCount += preResolution.Batches;
+                LookupBatchTicks += preResolution.BatchTicks;
+                LookupBatchKeyCount += preResolution.KeysRequested;
+                LookupBatchResolvedCount += preResolution.KeysResolved;
+                LookupDatabaseCalls += preResolution.Batches;
+                LookupDatabaseCallTicks += preResolution.BatchTicks;
+                LookupResolveTicks += elapsedTicks;
             }
 
             public void WriteTo(Dictionary<string, double> metrics, int? dateIndex)
@@ -685,18 +887,26 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
                 metrics["AddedRowCount"] = AddedRows;
                 metrics["ChangedRowCount"] = ChangedRows;
                 metrics["UnchangedRowCount"] = UnchangedRows;
-                metrics["ExistingRowLoadMs"] = ExistingRowLoadMs;
-                metrics["ScopeFilterMs"] = ScopeFilterMs;
-                metrics["LookupResolveMs"] = LookupResolveMs;
-                metrics["DateParseMs"] = DateParseMs;
-                metrics["ProjectionMs"] = ProjectionMs;
-                metrics["DirtyCheckMs"] = DirtyCheckMs;
+                metrics["ExistingRowLoadMs"] = TicksToMilliseconds(ExistingRowLoadTicks);
+                metrics["ScopeFilterMs"] = TicksToMilliseconds(ScopeFilterTicks);
+                metrics["LookupResolveMs"] = TicksToMilliseconds(LookupResolveTicks);
+                metrics["DateParseMs"] = TicksToMilliseconds(DateParseTicks);
+                metrics["ProjectionMs"] = TicksToMilliseconds(ProjectionTicks);
+                metrics["DirtyCheckMs"] = TicksToMilliseconds(DirtyCheckTicks);
                 metrics["LookupCacheHitCount"] = LookupCacheHits;
                 metrics["LookupCacheMissCount"] = LookupCacheMisses;
                 metrics["LookupDatabaseCallCount"] = LookupDatabaseCalls;
                 metrics["DuplicateConcurrentMissCount"] = DuplicateConcurrentMisses;
-                metrics["LookupSynchronizationWaitMs"] = LookupSynchronizationWaitMs;
-                metrics["LookupDatabaseCallMs"] = LookupDatabaseCallMs;
+                metrics["LookupSynchronizationWaitMs"] = TicksToMilliseconds(LookupSynchronizationWaitTicks);
+                metrics["LookupDatabaseCallMs"] = TicksToMilliseconds(LookupDatabaseCallTicks);
+                if (!dateIndex.HasValue)
+                {
+                    // Pre-resolution runs once per save, before the per-date loop, so only the save totals carry it.
+                    metrics["LookupBatchCount"] = LookupBatchCount;
+                    metrics["LookupBatchMs"] = TicksToMilliseconds(LookupBatchTicks);
+                    metrics["LookupBatchKeyCount"] = LookupBatchKeyCount;
+                    metrics["LookupBatchResolvedCount"] = LookupBatchResolvedCount;
+                }
             }
         }
 

@@ -29,6 +29,7 @@ import { statusMeta } from './statuses';
 import { coverageMessage } from './sources';
 import { serverMessageText } from './serverNotes';
 import { formatCount, licenceName } from './format';
+import HidableNotes from '../shared/HidableNotes';
 
 const PAGE_SIZE = 50;
 const MIN_TOP = 1;
@@ -173,7 +174,10 @@ interface UsersDrillDownProps {
    *  recovery - must NOT, or an admin browsing page 2 is silently bounced back to page 1 by a
    *  refresh that changed nothing they can see. */
   overviewScope: string;
-  licence: LicenceActivitySku;
+  /** The licence whose holders to list, or null for everyone holding any licence. */
+  licence: LicenceActivitySku | null;
+  /** How many people hold any licence - the "everyone" population's size, for its heading. */
+  allAssignedUsers: number;
   /** The overview's per-workload coverage, used to explain why a workload can't be ranked. */
   coverage: LicenceActivityCoverage[];
   /** Reports the snapshot id of the loaded users list, for the exact-snapshot export. Null while
@@ -190,14 +194,16 @@ interface UsersDrillDownProps {
 }
 
 /**
- * The per-licence drill-down. One workload at a time; a single request returns the top-N most and
- * least active users AND the current browse page together, so their shared snapshot id is an
- * unambiguous "current bounded rows" for the export. All fetching is cancellable and stale-safe.
+ * The people drill-down, for one licence or for everyone holding any licence (the champions whichever
+ * licence they hold). One workload at a time; a single request returns the top-N most and least active
+ * users AND the current browse page together, so their shared snapshot id is an unambiguous "current
+ * bounded rows" for the export. All fetching is cancellable and stale-safe.
  */
 export default function UsersDrillDown({
   overviewId,
   overviewScope,
   licence,
+  allAssignedUsers,
   coverage,
   onUsersSnapshot,
   onRefreshOverview,
@@ -249,7 +255,8 @@ export default function UsersDrillDown({
   // reset off it would bounce an admin on page 2 back to page 1 on every recovery. `overviewId` still
   // flows through `params` below, so a re-mint re-fetches the current page against the fresh snapshot
   // without discarding the admin's place, workload, search or sort.
-  const scopeKey = `${overviewScope}\n${licence.licenceTypeId}\n${workload}\n${search}\n${sort}\n${direction}`;
+  const licenceTypeId = licence?.licenceTypeId ?? null;
+  const scopeKey = `${overviewScope}\n${licenceTypeId ?? 'all'}\n${workload}\n${search}\n${sort}\n${direction}`;
   const [scope, setScope] = useState(scopeKey);
   if (scope !== scopeKey) {
     setScope(scopeKey);
@@ -259,7 +266,7 @@ export default function UsersDrillDown({
   const params = useMemo<UsersParams>(
     () => ({
       overviewId,
-      licenceTypeId: licence.licenceTypeId,
+      licenceTypeId,
       workload,
       top,
       search,
@@ -268,7 +275,7 @@ export default function UsersDrillDown({
       page,
       pageSize: PAGE_SIZE,
     }),
-    [overviewId, licence.licenceTypeId, workload, top, search, sort, direction, page],
+    [overviewId, licenceTypeId, workload, top, search, sort, direction, page],
   );
 
   const { data, loading, error, reload } = useUsersQuery(params);
@@ -303,10 +310,12 @@ export default function UsersDrillDown({
       <div className={styles.head}>
         <div className={styles.headText}>
           <Text weight="semibold" size={400}>
-            {licenceName(licence)}
+            {licence ? licenceName(licence) : t('licenceActivity.scope.allLicensedUsers')}
           </Text>
           <Text size={200} className={styles.muted}>
-            {t('licenceActivity.users.holdLicenceChooseService', { count: formatCount(licence.assignedUsers) })}
+            {licence
+              ? t('licenceActivity.users.holdLicenceChooseService', { count: formatCount(licence.assignedUsers) })
+              : t('licenceActivity.users.holdAnyLicenceChooseService', { count: formatCount(allAssignedUsers) })}
           </Text>
         </div>
         <div className={styles.controls}>
@@ -386,15 +395,10 @@ export default function UsersDrillDown({
       )}
 
       {data && data.messages.length > 0 && (
-        <MessageBar intent="info">
-          <MessageBarBody>
-            <ul style={{ margin: 0, paddingInlineStart: '20px' }}>
-              {data.messages.map((m) => (
-                <li key={m}>{serverMessageText(t, m, workloadCoverage ? [workloadCoverage] : [])}</li>
-              ))}
-            </ul>
-          </MessageBarBody>
-        </MessageBar>
+        <HidableNotes
+          storageKey="licenceActivity.people"
+          notes={data.messages.map((m) => serverMessageText(t, m, workloadCoverage ? [workloadCoverage] : []))}
+        />
       )}
 
       {loading && !data && (
@@ -445,7 +449,7 @@ export default function UsersDrillDown({
           <div className={styles.browse}>
             <div className={styles.panelHead}>
               <Text weight="semibold" size={300}>
-                {t('licenceActivity.users.everyoneWithLicence')}
+                {licence ? t('licenceActivity.users.everyoneWithLicence') : t('licenceActivity.users.everyoneWithAnyLicence')}
               </Text>
               <Text size={200} className={styles.muted}>
                 {t('licenceActivity.users.peopleCount', { count: formatCount(data.totalUsers) })}

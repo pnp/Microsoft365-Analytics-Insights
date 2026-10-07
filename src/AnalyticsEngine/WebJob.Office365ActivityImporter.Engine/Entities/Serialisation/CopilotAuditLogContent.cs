@@ -441,12 +441,23 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities.Serialisation
         /// https://learn.microsoft.com/en-us/purview/audit-copilot
         /// </summary>
         /// <remarks>
+        /// <para>
         /// Microsoft describes this field only in prose ("can include details like PolicyId, PolicyName,
         /// list of rules, etc.") and omits it entirely from the published OData schema for
         /// CopilotInteraction, so the exact shape is not contractual. Every member is therefore optional
         /// and nothing is required to deserialise - an unexpected payload must degrade to "no policy
         /// detail" rather than throwing away the whole interaction.
+        /// </para>
+        /// <para>
+        /// It also arrives in a second, undocumented shape: a <b>string</b> holding a JSON array of
+        /// <c>PolicyType</c> / <c>PolicyOutcomes</c> / <c>AuditLog</c> entries (issue #659). Binding that to a
+        /// list used to throw, which dropped the whole interaction, so the value is bound by
+        /// <see cref="TolerantPolicyDetailsConverter"/>, which accepts both shapes and turns anything else
+        /// into <c>null</c>. <see cref="CopilotAuditEvent"/> shares this class, so both of
+        /// <see cref="CopilotAuditLogContent.FromJson"/>'s deserialisations get the same result.
+        /// </para>
         /// </remarks>
+        [JsonConverter(typeof(TolerantPolicyDetailsConverter))]
         public List<AccessedResourcePolicyDetail> PolicyDetails { get; set; }
 
         /// <summary>
@@ -457,7 +468,9 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities.Serialisation
 
     /// <summary>
     /// A policy that blocked or restricted Copilot's access to one accessed resource, as carried inside
-    /// <see cref="AccessedResource.PolicyDetails"/>.
+    /// <see cref="AccessedResource.PolicyDetails"/>. Also used for the policy-evaluation entries of the
+    /// undocumented string shape (issue #659), which carry <see cref="PolicyType"/>,
+    /// <see cref="PolicyOutcomes"/> and <see cref="AuditLog"/> instead.
     /// </summary>
     /// <remarks>
     /// Field names mirror the Management Activity API's DLP schema <c>PolicyDetails</c> complex type,
@@ -471,6 +484,43 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities.Serialisation
         public string PolicyName { get; set; }
 
         public List<AccessedResourcePolicyRule> Rules { get; set; }
+
+        /// <summary>
+        /// Which policy engine evaluated the resource. Undocumented; values seen are <c>Purview</c>,
+        /// <c>InformationRightsManagement</c>, <c>RightsManagementService</c> and <c>ConditionalAccess</c>.
+        /// Null on the documented shape.
+        /// </summary>
+        public string PolicyType { get; set; }
+
+        /// <summary>
+        /// What the evaluation did, verbatim. Undocumented; only <c>None</c> has been seen. An entry whose
+        /// outcomes are all <c>None</c> is never reported as DLP, and no other value is treated as a block
+        /// on its own - see <c>CopilotDlpRules</c>. Null on the documented shape.
+        /// </summary>
+        [JsonConverter(typeof(TolerantStringListConverter))]
+        public List<string> PolicyOutcomes { get; set; }
+
+        /// <summary>
+        /// The engine's own detail, decoded from the JSON document it arrives as (a string, with its quotes
+        /// escaped as <c>\u0022</c>). Null when the string is empty or cannot be decoded.
+        /// </summary>
+        [JsonConverter(typeof(TolerantPolicyAuditLogConverter))]
+        public AccessedResourcePolicyAuditLog AuditLog { get; set; }
+    }
+
+    /// <summary>
+    /// The decoded <see cref="AccessedResourcePolicyDetail.AuditLog"/> of a policy-evaluation entry. Every
+    /// one seen so far was <c>{"PolicyDetails":[],"AssociatedAdminUnits":[]}</c>, so the shape of a populated
+    /// one is unknown. Only <see cref="PolicyDetails"/> is read; other members are ignored.
+    /// </summary>
+    public class AccessedResourcePolicyAuditLog
+    {
+        /// <summary>
+        /// The policies the engine reports. An element in the documented shape (<c>PolicyId</c> /
+        /// <c>PolicyName</c> / <c>Rules</c>) is classified by <c>CopilotDlpRules</c> like any other.
+        /// </summary>
+        [JsonConverter(typeof(TolerantPolicyDetailsConverter))]
+        public List<AccessedResourcePolicyDetail> PolicyDetails { get; set; }
     }
 
     /// <summary>

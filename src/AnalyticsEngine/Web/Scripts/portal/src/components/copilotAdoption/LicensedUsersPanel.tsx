@@ -622,6 +622,7 @@ export default function LicensedUsersPanel({
                 const open = isExpanded(row.userId);
                 const disabled = row.accountEnabled === false;
                 const reclaimTier = reclaimTierText(t, row.reclaimEligibility);
+                const tierLine = reclaimTierLine(t, row, reclaimTier);
                 return (
                   <Fragment key={row.userId}>
                     <tr>
@@ -673,11 +674,9 @@ export default function LicensedUsersPanel({
                         </Tooltip>
                         {/* The reclaim tier lost its column, but a seat that is in one is the reason many
                             readers open this list, so it stays on the row - under the action it qualifies. */}
-                        {reclaimTier && (
+                        {tierLine && (
                           <Text size={100} block className={table.tdSub}>
-                            {row.reclaimExclusionExpired
-                              ? t('copilotAdoptionUsers.licensed.reclaimTierExpired', { tier: reclaimTier })
-                              : reclaimTier}
+                            {tierLine}
                           </Text>
                         )}
                       </td>
@@ -866,6 +865,25 @@ function reclaimTierText(t: TFunction, tier: string | null): string {
   if (!tier) return '';
   const option = RECLAIM_OPTIONS.find((o) => o.value === tier);
   return option ? t(option.labelKey) : reclaimEligibilityLabel(t, tier);
+}
+
+/**
+ * The line under a row's action badge: the reclaim tier the seat is in. Empty for a seat in no tier.
+ *
+ * Also empty when the tier IS the action. A never-used seat that cannot be judged yet is recommended
+ * "Review before reclaim" from the "Review before reclaim" tier, and an excluded seat is "Excluded from
+ * reclaim" in both, so the line would repeat the badge word for word. An expired exclusion is the one
+ * thing the badge cannot say, so that still gets a line of its own.
+ */
+function reclaimTierLine(t: TFunction, row: LicensedUserAdoptionRow, tierText: string): string {
+  if (!tierText) return '';
+  const repeatsAction = row.reclaimEligibility === row.recommendedActionCode;
+  if (row.reclaimExclusionExpired) {
+    return repeatsAction
+      ? t('copilotAdoptionUsers.licensed.exclusionExpired')
+      : t('copilotAdoptionUsers.licensed.reclaimTierExpired', { tier: tierText });
+  }
+  return repeatsAction ? '' : tierText;
 }
 
 /**

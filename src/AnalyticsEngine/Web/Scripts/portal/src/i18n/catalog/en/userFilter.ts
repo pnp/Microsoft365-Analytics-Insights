@@ -86,6 +86,7 @@ const userFilter = {
   'userFilter.dimension.officeLocation': 'Office location',
   'userFilter.dimension.country': 'Country or region',
   'userFilter.dimension.stateOrProvince': 'State or province',
+  'userFilter.dimension.postalCode': 'Postal code',
   'userFilter.dimension.usageLocation': 'Usage location',
   'userFilter.dimension.emailDomain': 'Email domain',
   'userFilter.dimension.userType': 'User type',

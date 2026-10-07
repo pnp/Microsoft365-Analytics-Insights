@@ -17,7 +17,8 @@ The product imports **raw per-user, per-day Microsoft 365 activity/usage** from 
 usage reports and Copilot audit into `dbo.*_user_activity_log` tables (written by EF, see
 §4). The `profiling` schema is a **weekly roll-up layer** on top of that raw data: a set of
 stored procedures aggregate each ISO week (Mon–Sun) into three wide "weekly" tables that
-downstream **business-intelligence dashboards** (Power BI, external to this repo) read. It is
+downstream **business-intelligence dashboards** (Power BI, external to this repo) and the
+portal's **Activity analysis** page read. It is
 a classic ELT batch: raw daily rows in → weekly aggregates out.
 
 It is deliberately **decoupled** from the importer: it is plain T-SQL, installed as a
@@ -84,6 +85,7 @@ flowchart LR
   end
   F --> H[External Power BI dashboards]
   G --> H
+  F -->|ActivitiesWeeklyColumns + profiling.users,<br/>one statement per period, cached| J[ActivityAnalysisAPIController<br/>portal Activity analysis page]
   F -. freshness only .-> I[ProfilingStatusAPIController<br/>Aggregation_Status.ps1]
   G -. freshness only .-> I
 ```
@@ -93,9 +95,24 @@ flowchart LR
 `AbstractDailyActivityLoader`), **not** by the `usp_Upsert*` procs. The `usp_Upsert*` procs
 read those tables; they are internal helpers of the compile pipeline.
 
-**Consumers:** nothing in *this repo* reads the aggregated values — only freshness
-(MIN/MAX date, row counts) is read by `ProfilingStatusAPIController` (the SPA "Profiling" tab)
-and `Aggregation_Status.ps1`. The metric data itself is consumed by **external BI**.
+**Consumers:**
+- **The web app's Activity analysis page** (`Web/Controllers/ActivityAnalysisAPIController.cs`,
+  `Common/Entities/ActivityAnalysis/*`) reads the aggregated values: `profiling.ActivitiesWeeklyColumns`
+  joined to `profiling.users`, plus `dbo.license_types` / `dbo.user_license_type_lookups` for the
+  licence filter. A period is read with **one** `GROUP BY GROUPING SETS ((user_id), (date))` statement
+  (which SQL Server evaluates as two passes over the period's rows of the clustered index) into an
+  in-memory read model (per-person totals + the population's weekly figures), cached and shared by every
+  reader; the weekly series of a filtered set of people is a second query that joins a `#people` temp
+  table filled from one JSON parameter. When most people match (a licence most staff hold, "at least one
+  Teams call"), that query reads everybody else instead and their figures are taken from the population's,
+  so it never reads more than half the period's people. It reads `sys.columns` on every load, so a metric column an older
+  install lacks is reported as unavailable rather than failing the query. It **never** reads
+  `profiling.ActivitiesWeekly` - the same data one row per user × week × metric, zeros included - and it
+  adds no index: the read of each period is cached instead (15 minutes idle, at most two periods, and read
+  again once a run of the runbooks has changed the table's first or last week).
+- **Freshness only** (MIN/MAX date, row counts): `ProfilingStatusAPIController` (the SPA "Profiling" tab)
+  and `Aggregation_Status.ps1`.
+- **External BI** (Power BI) reads everything.
 
 ---
 
@@ -242,6 +259,12 @@ week in one pass.
   (`ut_*` type + `INSERT`/`UPDATE` lists), the `usp_CompileWeekActivityColumns` insert+select
   lists, and the `usp_CompileWeekActivityRows` `UNPIVOT` list. Miss one and you get a silent
   gap or a swallowed error. There is no single source of truth for the column set.
+- **...and the Activity analysis page.** Its metric catalogue
+  (`Common/Entities/ActivityAnalysis/ActivityAnalysisMetrics.cs`, stable keys such as `teams.calls`) must
+  name exactly the metric columns this script creates - `Catalogue_NamesExactlyTheMetricColumnsTheShippedProfilingScriptCreates`
+  fails until it does - and the portal needs the new key's label in English and Spanish
+  (`activityAnalysis.metric.<key>`). Never rename a column the catalogue names: older installs keep the old name, and
+  the page reports a metric whose column is missing as unavailable.
 - **New Copilot `app_host` values** must be added to the `PIVOT` list in `usp_UpsertCopilot`
   *and* the corresponding column plumbing above — unmapped hosts are silently dropped.
 - Keep everything `nvarchar`-safe and don't reintroduce `GO` inside a procedure body.

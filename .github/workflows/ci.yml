@@ -228,6 +228,11 @@ jobs:
     steps:
       - name: Checkout source
         uses: actions/checkout@v6
+      # CI never builds the SPFx extension, so the release ships the package committed in src/SPO/AITracker as it is.
+      # Don't release one that isn't the build of the extension's current source version.
+      - name: Check the committed SPFx package matches its source
+        shell: pwsh
+        run: ./.github/scripts/Test-SpfxPackage.ps1
       - name: Setup Node
         uses: actions/setup-node@v7
         with:

@@ -22,6 +22,13 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities.Serialisation.UsageRe
         /// Field-value that points to the activity record lookup name
         /// </summary>
         public abstract string LookupFieldValue { get; }
+
+        /// <summary>
+        /// The key <see cref="GetOrCreateLookup"/> resolves the lookup by: <see cref="LookupFieldValue"/> after
+        /// any normalisation the record applies. The save path's batched pre-resolution (#705) asks for exactly
+        /// this key, so it finds the same record the per-row path would.
+        /// </summary>
+        public virtual string LookupKey => LookupFieldValue;
     }
 
     public abstract class AbstractUserActivityUserDetail : AbstractActivityRecord<User>
@@ -34,9 +41,11 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities.Serialisation.UsageRe
 
         public override string LookupFieldValue => UserEmailFieldVal;
 
+        public override string LookupKey => UserEmailFieldVal?.ToLower();
+
         public override async Task<AbstractEFEntity> GetOrCreateLookup(DBLookupCache<User> lookupCache)
         {
-            return await lookupCache.GetOrCreateNewResource(UserEmailFieldVal.ToLower(), new User { UserPrincipalName = UserEmailFieldVal.ToLower() }, true);
+            return await lookupCache.GetOrCreateNewResource(LookupKey, new User { UserPrincipalName = LookupKey }, true);
         }
     }
 

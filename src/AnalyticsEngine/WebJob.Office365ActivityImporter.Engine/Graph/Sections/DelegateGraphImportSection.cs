@@ -20,7 +20,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Sections
         private readonly Func<Task<bool>> _run;
 
         private DelegateGraphImportSection(string name, string disabledMessage, string cadenceKey, int intervalHours,
-            Func<ImportTaskSettings, bool> isEnabled, Func<Task<bool>> run)
+            Func<ImportTaskSettings, bool> isEnabled, Func<Task<bool>> run, bool isDeferred = false)
         {
             if (string.IsNullOrWhiteSpace(name)) throw new ArgumentException("A section needs a name.", nameof(name));
             if (string.IsNullOrWhiteSpace(disabledMessage)) throw new ArgumentException("A section needs a disabled message.", nameof(disabledMessage));
@@ -29,6 +29,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Sections
             DisabledMessage = disabledMessage;
             CadenceKey = cadenceKey;
             IntervalHours = intervalHours;
+            IsDeferred = isDeferred;
             _isEnabled = isEnabled ?? throw new ArgumentNullException(nameof(isEnabled));
             _run = run ?? throw new ArgumentNullException(nameof(run));
         }
@@ -55,10 +56,23 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Sections
             return new DelegateGraphImportSection(name, disabledMessage, null, 0, isEnabled, run);
         }
 
+        /// <summary>
+        /// This section, moved to the deferred pass that the WebJob runs in the background (see
+        /// <see cref="IGraphImportSection.IsDeferred"/>). Everything else about it - name, message, gating and body -
+        /// is unchanged. A method rather than another optional parameter on <see cref="Gated"/> /
+        /// <see cref="Ungated"/>, because a trailing optional argument is baked in by the calling compiler and so is
+        /// binary-breaking for already-compiled callers.
+        /// </summary>
+        public DelegateGraphImportSection Deferred()
+        {
+            return new DelegateGraphImportSection(Name, DisabledMessage, CadenceKey, IntervalHours, _isEnabled, _run, isDeferred: true);
+        }
+
         public string Name { get; }
         public string DisabledMessage { get; }
         public string CadenceKey { get; }
         public int IntervalHours { get; }
+        public bool IsDeferred { get; }
 
         public bool IsEnabled(ImportTaskSettings settings) => _isEnabled(settings);
 

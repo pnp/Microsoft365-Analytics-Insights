@@ -3,6 +3,7 @@ using DataUtils;
 using Microsoft.Graph;
 using Microsoft.Graph.Models;
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Data.Entity;
 using Microsoft.Data.SqlClient;
@@ -21,6 +22,10 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         private readonly IUserMetadataLoader _userLoader;
         private readonly UserMetadataCache _userMetaCache;
         private readonly Func<AnalyticsEntitiesContext, IUserLicenseStore> _licenseStoreFactory;
+
+        /// <summary>SKU part numbers already reported as having no display name, so each is logged once.</summary>
+        private readonly ConcurrentDictionary<string, byte> _reportedSkusWithoutDisplayName =
+            new ConcurrentDictionary<string, byte>(StringComparer.OrdinalIgnoreCase);
 
         public UserLicenseProcessor(
             AnalyticsLogger logger,
@@ -515,7 +520,13 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             var productName = _officeLicenseNameResolver.GetDisplayNameFor(skuPartNumber);
             if (string.IsNullOrEmpty(productName))
             {
-                _logger.LogWarning($"User import - unexpected SKU part-number '{skuPartNumber}'. Couldn't find a corresponding display-name.");
+                // Expected, and nothing an admin can act on: some current SKUs (e.g. CDS_API_CAPACITY) are missing
+                // from Microsoft's own published CSV too. Information, once per SKU per import - the per-user
+                // fallback calls this for every user holding the SKU. Issue #708.
+                if (_reportedSkusWithoutDisplayName.TryAdd(skuPartNumber ?? string.Empty, 0))
+                {
+                    _logger.LogInformation($"User import - SKU part-number '{skuPartNumber}' has no display name in Microsoft's licensing CSV (Product_names_and_service_plan_identifiers_for_licensing.csv), so its licences are filed under the part number.");
+                }
 
                 // Set display name as SKU ID
                 productName = skuPartNumber;

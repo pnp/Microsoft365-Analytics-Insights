@@ -92,10 +92,12 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Sections
         }
 
         /// <summary>
-        /// Builds the sections for one import cycle, in the order they must run.
+        /// Builds the sections for one import cycle, in the order they must run. Sections marked
+        /// <see cref="IGraphImportSection.IsDeferred"/> run in the later, deferred pass whatever their position,
+        /// so they are listed last to keep this list in run order.
         /// </summary>
         /// <param name="settings">
-        /// The per-cycle settings passed to <c>GetAndSaveAllGraphData</c>. In production this is the same
+        /// The per-cycle settings passed to the <c>GraphImporter</c> pass being run. In production this is the same
         /// object as the <see cref="AppConfig"/> given to the constructor; the distinction is preserved
         /// because the original code read <c>DaysBeforeNowToDownload</c> and the <c>ImportJobSettings</c>
         /// flags from the method argument and everything else from the field.
@@ -104,7 +106,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Sections
         {
             // Shared across sections and built unconditionally, exactly as before. The UserGroupsFilter scope is NOT
             // built here: each section asks the process-lifetime provider when it runs, so every import in the process
-            // applies the same, cached resolution.
+            // applies the same, cached resolution. The WebJob builds the sections once per pass, so this client is
+            // built twice per cycle: once for the main pass and once for the deferred one.
             var httpClient = new ManualGraphCallClient(_graphAppIndentityOAuthContext, _logger);
 
             return new List<IGraphImportSection>
@@ -127,15 +130,6 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Sections
                         // instead of throwing also lets the sections after this one run.
                         return await userUpdater.InsertAndUpdateDatabaseFromExternalUsers();
                     }),
-
-                // Not cadence-gated: the activity/usage-report phase owns its own once-a-day throttle via
-                // ISingleDateStore, and reports "did I import" itself.
-                DelegateGraphImportSection.Ungated(
-                    "Usage reports",
-                    "Skipping usage reports import",
-                    s => s.GraphUsageReports,
-                    // Global user activity report. Each thread creates own context.
-                    async () => await _activityReportsImport(settings.DaysBeforeNowToDownload, httpClient, await _userScopeProvider.GetScopeAsync())),
 
                 // Refreshed daily by default. Microsoft publishes these reports roughly 48 hours behind,
                 // so polling more often costs a full re-download and re-process of every licensed user
@@ -240,6 +234,23 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Sections
                         var interactionLog = await interactionImporter.ImportAsync();
                         return interactionLog != null && string.IsNullOrEmpty(interactionLog.Error);
                     }),
+
+                // Deferred (issue #706): the WebJob starts this in the background, single-flight, once a cycle's main
+                // pass and audit import are done, instead of running it second in the cycle as it used to. On the
+                // cycle it is due it can take hours on a large tenant - Graph answers bursts of report requests with
+                // 429 and a Retry-After of about ten minutes - and the near-real-time audit data (Copilot, Power
+                // Platform, DLP, SharePoint) used to wait for it, although these reports are already 2-3 days behind
+                // at source. Listed last because it runs last. Its gating, completion stamps and log lines are unchanged.
+                //
+                // Not cadence-gated: the activity/usage-report phase owns its own once-a-day throttle via
+                // ISingleDateStore, and reports "did I import" itself.
+                DelegateGraphImportSection.Ungated(
+                    "Usage reports",
+                    "Skipping usage reports import",
+                    s => s.GraphUsageReports,
+                    // Global user activity report. Each thread creates own context.
+                    async () => await _activityReportsImport(settings.DaysBeforeNowToDownload, httpClient, await _userScopeProvider.GetScopeAsync()))
+                    .Deferred(),
             };
         }
 

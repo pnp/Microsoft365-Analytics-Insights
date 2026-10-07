@@ -18,16 +18,13 @@ namespace DataUtils
         {
             lock (this)
             {
-                var cacheName = typeof(T).FullName;
+                // GetOrAdd with a factory: the per-name dictionary is only allocated the first time a type is seen,
+                // not on every call - this is called once per usage-report row.
+                var cache = typeCache.GetOrAdd(typeof(T).FullName, _ => new ConcurrentDictionary<string, int>());
 
-                var newDic = new ConcurrentDictionary<string, int>();
-                typeCache.AddOrUpdate(cacheName, newDic, (index, oldVal) => typeCache[cacheName]);
-
-                var cache = typeCache[cacheName];
-
-                if (cache.ContainsKey(name))
+                if (cache.TryGetValue(name, out var id))
                 {
-                    return cache[name];
+                    return id;
                 }
                 else return null;
             }
@@ -42,12 +39,7 @@ namespace DataUtils
 
             lock (this)
             {
-                var cacheName = typeof(T).FullName;
-
-                var newDic = new ConcurrentDictionary<string, int>();
-                typeCache.AddOrUpdate(cacheName, newDic, (index, oldVal) => typeCache[cacheName]);
-
-                var cache = typeCache[cacheName];
+                var cache = typeCache.GetOrAdd(typeof(T).FullName, _ => new ConcurrentDictionary<string, int>());
 
                 cache.AddOrUpdate(name, id, (index, val) => val);
             }

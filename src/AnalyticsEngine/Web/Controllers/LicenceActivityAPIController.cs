@@ -97,7 +97,7 @@ namespace Web.AnalyticsWeb.Controllers
         [HttpGet, Route("users")]
         [RequirePortalPermission(PortalPermission.SeePii)]
         public Task<IActionResult> Users(
-            string overviewId, int licenceTypeId, string workload = "teams", int top = 10, string search = null,
+            string overviewId, int? licenceTypeId = null, string workload = "teams", int top = 10, string search = null,
             string sort = "upn", string direction = "asc", int page = 1, int pageSize = 50,
             CancellationToken cancellationToken = default(CancellationToken)) =>
             ExecuteAsync(async () =>
@@ -106,7 +106,8 @@ namespace Web.AnalyticsWeb.Controllers
                 if (!context.Sources.UserMetadata) return MissingMetadata();
                 var overview = _overviews.Find(context.Scope, overviewId);
                 await RequireSamePeopleScopeAsync(overview, cancellationToken).ConfigureAwait(false);
-                if (!overview.Licences.Any(sku => sku.LicenceTypeId == licenceTypeId))
+                // No licence = everyone holding any licence (the champions across the whole licensed population).
+                if (licenceTypeId.HasValue && !overview.Licences.Any(sku => sku.LicenceTypeId == licenceTypeId.Value))
                     return Reply(HttpStatusCode.NotFound, Error("licenceNotOnScreen", "That licence is not part of the figures currently on screen. Refresh the report and try again."));
                 var query = overview.Query.ForUsers(licenceTypeId, workload, search, sort, direction, top, page, pageSize, context.Sources.NowUtc);
                 var task = _users.GetAsync(context.Scope, overviewId + "\n" + query.CacheKey(), async (diagnostics, lifetime) =>

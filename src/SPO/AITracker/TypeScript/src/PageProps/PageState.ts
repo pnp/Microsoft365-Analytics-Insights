@@ -1,12 +1,15 @@
 
 
 export abstract class BasePageStateManager {
-    abstract pageSeen(listTitle: string, pageItemId: number): Date | null;
-    abstract registerPageSeen(listTitle: string, pageItemId: number): Date;
+    abstract pageSeen(webUrl: string, listTitle: string, pageItemId: number): Date | null;
+
+    // forgetSeenBefore drops pages last seen before then, so the record doesn't grow forever
+    abstract registerPageSeen(webUrl: string, listTitle: string, pageItemId: number, forgetSeenBefore?: Date): Date;
     abstract clear(): void;
 
-    getPageId(listTitle: string, pageItemId: number): string {
-        return `List '${listTitle}': item ID: '${pageItemId}'`;
+    // Lists belong to a web, and every web has a "Site Pages" list numbering its pages from 1, so the web is part of the ID
+    getPageId(webUrl: string, listTitle: string, pageItemId: number): string {
+        return `Web '${webUrl.replace(/\/+$/, '').toLowerCase()}': list '${listTitle}': item ID: '${pageItemId}'`;
     }
 }
 
@@ -15,21 +18,27 @@ export class InMemoryPageStateManager extends BasePageStateManager {
         this.pages = [];
     }
 
-    registerPageSeen(listTitle: string, pageItemId: number): Date {
+    registerPageSeen(webUrl: string, listTitle: string, pageItemId: number, forgetSeenBefore?: Date): Date {
+
+        if (forgetSeenBefore) {
+            this.pages = this.pages.filter(p => p.seenOn >= forgetSeenBefore);
+        }
 
         const date = new Date();
-        const r = this.pages.find(p => p.pageId === this.getPageId(listTitle, pageItemId));
+        const pageId = this.getPageId(webUrl, listTitle, pageItemId);
+        const r = this.pages.find(p => p.pageId === pageId);
         if (r != null) {
             r.seenOn = date;
         } else
-            this.pages.push({ pageId: this.getPageId(listTitle, pageItemId), seenOn: date });
+            this.pages.push({ pageId: pageId, seenOn: date });
 
         return date;
     }
     pages: pageSeenOn[] = []
 
-    pageSeen(listTitle: string, pageItemId: number): Date | null {
-        const r = this.pages.find(p => p.pageId === this.getPageId(listTitle, pageItemId));
+    pageSeen(webUrl: string, listTitle: string, pageItemId: number): Date | null {
+        const pageId = this.getPageId(webUrl, listTitle, pageItemId);
+        const r = this.pages.find(p => p.pageId === pageId);
         return r != null ? r.seenOn : null;
     }
 }
