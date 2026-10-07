@@ -78,22 +78,23 @@ namespace Common.Entities.LookupCaches
         /// </summary>
         /// <remarks>
         /// <para>
-        /// Matches exactly as <see cref="Load"/> does, because SQL Server does the matching in both: each key is an
-        /// <c>nvarchar</c> parameter, as EF sends <see cref="Load"/>'s, compared with <c>=</c> under the column's
-        /// collation (case-insensitive, trailing spaces ignored), and duplicate UPNs resolve to the lowest id
-        /// (<c>MIN(id)</c> here, <c>OrderBy(ID).First</c> there). The result comes back by the key's POSITION in
-        /// the request, not by its text, so there is no second, in-memory comparison that could disagree with
-        /// the collation.
+        /// Matches as <see cref="Load"/> does for every ASCII UPN, because SQL Server does the matching in both: each
+        /// key here is an <c>nvarchar</c> parameter compared with <c>=</c> under the column's collation
+        /// (case-insensitive, trailing spaces ignored), and duplicate UPNs resolve to the lowest id (<c>MIN(id)</c>
+        /// here, <c>OrderBy(ID).First</c> there). <see cref="Load"/> sends <c>varchar</c> since #713; where that can
+        /// make the two differ, for non-ASCII text only, is described below. The result comes back by the key's
+        /// POSITION in the request, not by its text, so there is no second, in-memory comparison that could disagree
+        /// with the collation.
         /// </para>
         /// <para>
         /// One query per batch. Where <c>user_name</c> is <c>varchar</c> under a SQL collation (the Azure SQL default)
-        /// the <c>nvarchar</c> comparison cannot seek <c>IX_users</c> - true of <see cref="Load"/> too, so the old
-        /// path scanned that index once per user; this scans it once per 1,000 (hash join). Under a Windows
-        /// collation it is a merge join over one ordered range scan. Measured before/after: see
-        /// <c>PreResolveLookupIdsAsync</c> on <c>AbstractDailyActivityLoader</c>.
+        /// the <c>nvarchar</c> comparison cannot seek <c>IX_users</c>, so this scans it once per 1,000 keys (hash
+        /// join); the per-user path it replaces scanned it once per user until #713 moved <see cref="Load"/> to
+        /// <c>varchar</c>. Under a Windows collation it is a merge join over one ordered range scan. Measured
+        /// before/after: see <c>PreResolveLookupIdsAsync</c> on <c>AbstractDailyActivityLoader</c>.
         /// </para>
         /// <para>
-        /// The keys are <c>nvarchar</c> on purpose, even if <see cref="Load"/> moves to <c>varchar</c> (#713). The two
+        /// The keys are <c>nvarchar</c> on purpose, although <see cref="Load"/> sends <c>varchar</c> (#713). The two
         /// find the same user whenever both the key and the stored <c>user_name</c> are ASCII, as Entra UPNs are by
         /// policy. They can differ for non-ASCII text. Under a SQL collation <c>varchar</c> is compared with the
         /// non-Unicode sort order, which does not treat the sharp s (U+00DF) or the ae ligature (U+00E6) as "ss" or
