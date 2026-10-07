@@ -778,14 +778,14 @@ GROUP BY p.policy_id, p.name;";
         // OPTION (RECOMPILE) because the windows differ by 25x in size: a plan compiled for 7 days must not be
         // reused for 180, nor the reverse.
         //
-        // No index carries the two flags, so each detail table is read with ONE scan of its clustered index and
-        // hash-joined to the window. That was measured against the alternatives at synthetic 200,000-user scale
-        // (4M interactions over 180 days, 8.4M messages, 7M accessed resources) by
+        // No index carries the two flags, so each detail table is read by scanning its clustered index (messages
+        // twice, once per count) and hash-joined to the window. That was measured against the alternatives at
+        // synthetic 200,000-user scale (4M interactions over 180 days, 8.4M messages, 7M accessed resources) by
         // Benchmarks/Invoke-CopilotGovernanceBenchmark.ps1, which reads these constants out of this file - keep
         // their names starting with "Governance". The rejected shape matters most: reducing each interaction with
         // OUTER APPLY ("aggregate per interaction, seek through the time_stamp index") made the optimiser spool
         // both tables and probe the spool once per interaction - 54M logical reads and 52 s at 28 days, against
-        // 68k reads and 1.7 s for the resources statement below. Results in the PR for #648.
+        // 251k reads and about 4 s for the two statements below that replace it. Results in the PR for #648.
         // ---------------------------------------------------------------------------------------------------
 
         /// <summary>
@@ -798,10 +798,10 @@ GROUP BY p.policy_id, p.name;";
         /// One whose messages are all NULL - every row imported before #570, and any payload that omits the field -
         /// is in neither.</para>
         /// <para>Semi-joins rather than a per-interaction <c>GROUP BY</c>: each counts an interaction once however
-        /// many messages it has, without aggregating the join. Measured: the grouped form spilled its hash
-        /// aggregate to tempdb (the optimiser cannot see that the flags are concentrated in recent rows) and ran
-        /// 12-33% slower with three times the variance, for half the logical reads. The flagged count reads few rows:
-        /// the scan keeps only <c>= 1</c> and seeks each interaction by its key.</para>
+        /// many messages it has, without aggregating the join. The grouped form reads the table once rather than
+        /// twice, but its hash aggregate spills to tempdb (the optimiser cannot see that the flags sit in recent
+        /// rows): in every interleaved A/B on the benchmark fixture it was slower, by 8-63%, for half the logical reads.
+        /// The flagged count reads few rows: its scan keeps only <c>= 1</c> and seeks each interaction by its key.</para>
         /// </remarks>
         internal const string GovernanceMessagesSql = @"
 SELECT w.Interactions, r.JailbreakReported, f.JailbreakFlagged
@@ -862,8 +862,8 @@ OPTION (RECOMPILE);";
         /// <remarks>
         /// The junction tables are small - Microsoft names a model on few interactions - so the cost is the hash
         /// join with the window. <c>GROUPING SETS</c> computes both distinct counts from one pass over it, through
-        /// an in-memory spool; a <c>DISTINCT</c>-first rewrite read 15 times fewer pages but joined the window twice
-        /// and was measured 35-50% slower.
+        /// an in-memory spool. A <c>DISTINCT</c>-first rewrite has no spool and read 15-23 times fewer pages, but it
+        /// joins the window twice: in an interleaved A/B it was 13-41% slower here and 24-34% slower for plugins.
         /// </remarks>
         internal const string GovernanceModelsSql = @"
 SELECT x.Name,

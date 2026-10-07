@@ -116,7 +116,7 @@ function GovernanceRateCard({
       <Text size={200} className={styles.muted}>
         {title}
       </Text>
-      <span className={`${styles.governanceValue} ${known && rate.flaggedInteractions > 0 ? styles.blocked : ''}`}>
+      <span className={styles.governanceValue}>
         {known
           ? t('dlp.governance.rate.value', { rate: formatNumber(rate.ratePer10000 as number, { maximumFractionDigits: 1 }) })
           : t('dlp.governance.rate.notReported')}
@@ -302,7 +302,7 @@ function GovernanceSection({
               <Text size={200} className={styles.muted}>
                 {t('dlp.governance.agents.title')}
               </Text>
-              <span className={`${styles.governanceValue} ${summary.agentsImpacted > 0 ? styles.blocked : ''}`}>
+              <span className={styles.governanceValue}>
                 {formatNumber(summary.agentsImpacted)}
               </span>
               {blockedAgents.length === 0 ? (

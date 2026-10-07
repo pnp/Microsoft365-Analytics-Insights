@@ -50,6 +50,11 @@
 .PARAMETER Only
     Optional regular expression: measure only the statements whose name matches it.
 
+.PARAMETER Interleave
+    Run every statement once per round, alternating the order, instead of each statement's runs back to
+    back. Use it whenever two shapes are being COMPARED on a shared machine: load drift then lands on both
+    alike. A back-to-back run once reported a rewrite as faster that interleaving showed to be 13-41% slower.
+
 .EXAMPLE
     .\Invoke-CopilotGovernanceBenchmark.ps1 -DatabaseName MyDevCatalog
 
@@ -57,7 +62,7 @@
     .\Invoke-CopilotGovernanceBenchmark.ps1 -DatabaseName MyDevCatalog -SkipFixture -KeepFixture -Repeats 6
 
 .EXAMPLE
-    .\Invoke-CopilotGovernanceBenchmark.ps1 -DatabaseName MyDevCatalog -SkipFixture -KeepFixture -CandidatesPath .\shapes.sql -Only 'Signals'
+    .\Invoke-CopilotGovernanceBenchmark.ps1 -DatabaseName MyDevCatalog -SkipFixture -KeepFixture -Interleave -CandidatesPath .\CopilotGovernanceRejectedShapes.sql -Only 'Models'
 
 .NOTES
     Never paste real names, row counts or plans into a PR or a release note. The fixture is synthetic
@@ -76,6 +81,7 @@ param(
     [string]$LocalDbInstance = "(localdb)\MSSQLLocalDB",
     [string]$CandidatesPath,
     [string]$Only,
+    [switch]$Interleave,
     [switch]$SkipFixture,
     [switch]$KeepFixture
 )
@@ -289,30 +295,58 @@ function Get-Median {
     return ($sorted[$count / 2 - 1] + $sorted[$count / 2]) / 2
 }
 
-<# Median over $Repeats warm runs; run 0 is the cold run and is discarded. #>
-function Measure-Case {
-    param([System.Data.SqlClient.SqlConnection]$Connection, [string]$Sql, [datetime]$From, [datetime]$To)
-
-    $samples = @()
-    for ($run = 0; $run -le $Repeats; $run++) {
-        $sample = Measure-Statement -Connection $Connection -Sql $Sql -From $From -To $To
-        if ($run -eq 0) { continue }
-        $samples += $sample
-    }
+<# The medians (and range) of a set of warm samples. #>
+function Get-Summary {
+    param([object[]]$Samples)
 
     $perTable = @{}
-    foreach ($table in ($samples | ForEach-Object { $_.PerTable.Keys } | Sort-Object -Unique)) {
-        $perTable[$table] = Get-Median -Values ($samples | ForEach-Object { if ($_.PerTable.ContainsKey($table)) { $_.PerTable[$table] } else { 0 } })
+    foreach ($table in ($Samples | ForEach-Object { $_.PerTable.Keys } | Sort-Object -Unique)) {
+        $perTable[$table] = Get-Median -Values ($Samples | ForEach-Object { if ($_.PerTable.ContainsKey($table)) { $_.PerTable[$table] } else { 0 } })
     }
 
     return [pscustomobject]@{
-        Reads         = Get-Median -Values ($samples | ForEach-Object { $_.Reads })
-        PhysicalReads = Get-Median -Values ($samples | ForEach-Object { $_.PhysicalReads })
-        ElapsedMs     = Get-Median -Values ($samples | ForEach-Object { $_.ElapsedMs })
-        MinMs         = ($samples | ForEach-Object { $_.ElapsedMs } | Measure-Object -Minimum).Minimum
-        MaxMs         = ($samples | ForEach-Object { $_.ElapsedMs } | Measure-Object -Maximum).Maximum
+        Reads         = Get-Median -Values ($Samples | ForEach-Object { $_.Reads })
+        PhysicalReads = Get-Median -Values ($Samples | ForEach-Object { $_.PhysicalReads })
+        ElapsedMs     = Get-Median -Values ($Samples | ForEach-Object { $_.ElapsedMs })
+        MinMs         = ($Samples | ForEach-Object { $_.ElapsedMs } | Measure-Object -Minimum).Minimum
+        MaxMs         = ($Samples | ForEach-Object { $_.ElapsedMs } | Measure-Object -Maximum).Maximum
         PerTable      = $perTable
     }
+}
+
+<#
+    Median over $Repeats warm runs of every statement at one window; round 0 is the cold run and is
+    discarded. With -Interleave each round runs every statement once, in alternating order, so load
+    drift on a shared machine lands on all of them alike; without it each statement's runs are back
+    to back, which is quicker to read but can favour whichever statement ran during a quiet spell.
+#>
+function Measure-Window {
+    param([System.Data.SqlClient.SqlConnection]$Connection, [object[]]$Statements, [datetime]$From, [datetime]$To)
+
+    $samples = @{}
+    foreach ($statement in $Statements) { $samples[$statement.Key] = @() }
+
+    if ($Interleave) {
+        for ($run = 0; $run -le $Repeats; $run++) {
+            $order = if ($run % 2 -eq 0) { $Statements } else { $reversed = @($Statements); [array]::Reverse($reversed); $reversed }
+            foreach ($statement in $order) {
+                $sample = Measure-Statement -Connection $Connection -Sql $statement.FixtureSql -From $From -To $To
+                if ($run -gt 0) { $samples[$statement.Key] += $sample }
+            }
+        }
+    }
+    else {
+        foreach ($statement in $Statements) {
+            for ($run = 0; $run -le $Repeats; $run++) {
+                $sample = Measure-Statement -Connection $Connection -Sql $statement.FixtureSql -From $From -To $To
+                if ($run -gt 0) { $samples[$statement.Key] += $sample }
+            }
+        }
+    }
+
+    $result = @{}
+    foreach ($statement in $Statements) { $result[$statement.Key] = Get-Summary -Samples $samples[$statement.Key] }
+    return $result
 }
 
 # ------------------------------------------------------------------------------------------------
@@ -341,19 +375,24 @@ $statements = @(Get-ShippedStatements) + @($prototype) + @(Get-CandidateStatemen
 if ($Only) {
     $statements = @($statements | Where-Object { $_.Key -match $Only })
 }
+foreach ($statement in $statements) {
+    $statement | Add-Member -NotePropertyName FixtureSql -NotePropertyValue (ConvertTo-FixtureSql -Sql $statement.Sql)
+}
+
 $connection = New-BenchConnection
 $results = @()
 
 try {
     # The controller's window: from midnight N days ago to now.
     $to = [DateTime]::UtcNow
-    foreach ($statement in $statements) {
-        $sql = ConvertTo-FixtureSql -Sql $statement.Sql
-        foreach ($days in $WindowDays) {
-            $from = $to.Date.AddDays(-$days)
-            Write-Host "Measuring $($statement.Key) over $days days..."
-            $metrics = Measure-Case -Connection $connection -Sql $sql -From $from -To $to
-            $operators = Get-PlanOperators -Connection $connection -Sql $sql -From $from -To $to
+    foreach ($days in $WindowDays) {
+        $from = $to.Date.AddDays(-$days)
+        Write-Host "Measuring $($statements.Count) statement(s) over $days days$(if ($Interleave) { ', interleaved' })..."
+        $window = Measure-Window -Connection $connection -Statements $statements -From $from -To $to
+
+        foreach ($statement in $statements) {
+            $metrics = $window[$statement.Key]
+            $operators = Get-PlanOperators -Connection $connection -Sql $statement.FixtureSql -From $from -To $to
             $results += [pscustomobject]@{
                 Statement     = $statement.Key
                 WindowDays    = $days
@@ -370,6 +409,8 @@ try {
 finally {
     $connection.Close()
 }
+
+$results = @($results | Sort-Object Statement, WindowDays)
 
 $reportPath = Join-Path $artifactRoot "copilot-governance-benchmark.txt"
 $results | Format-List | Out-String -Width 400 | Tee-Object -FilePath $reportPath
