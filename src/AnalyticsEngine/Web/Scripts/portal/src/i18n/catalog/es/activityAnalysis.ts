@@ -68,8 +68,8 @@ const activityAnalysis: Record<keyof typeof en, string> = {
   'activityAnalysis.filters.title': 'Filtros',
   'activityAnalysis.filters.intro': 'Acote el análisis a las personas que le interesan. No cambia nada hasta que seleccione Aplicar filtros.',
   'activityAnalysis.filters.people.heading': 'Personas',
-  'activityAnalysis.filters.people.piiHidden':
-    'Para filtrar por departamento, puesto, empresa y otros atributos del directorio se necesita el rol de aplicación {role}, porque esas listas nombran a personas. Los filtros de licencias y de actividad están disponibles para todos.',
+  'activityAnalysis.filters.piiHidden':
+    'Para filtrar por departamento, puesto y otros atributos del directorio, por licencia o por actividad se necesita el rol de aplicación {role}, porque cualquier filtro puede reducir las cifras a una sola persona. Sin él, el análisis abarca a todas las personas con actividad registrada en el periodo, y los grupos de menos de 5 personas se combinan.',
   'activityAnalysis.filters.licences.heading': 'Licencias',
   'activityAnalysis.filters.licences.hint': 'Mantiene a las personas que tienen cualquiera de las licencias seleccionadas.',
   'activityAnalysis.filters.licences.search': 'Buscar una licencia',
@@ -176,7 +176,7 @@ const activityAnalysis: Record<keyof typeof en, string> = {
 
   'activityAnalysis.suppressed.title': 'Cifras ocultas',
   'activityAnalysis.suppressed.body':
-    'Menos de 5 personas cumplen estos filtros, así que las cifras se ocultan para proteger su privacidad. Amplíe los filtros para ver resultados.',
+    'Menos de 5 personas tienen actividad registrada en este periodo, así que las cifras se ocultan para proteger su privacidad. Pruebe con un periodo más largo.',
 
   'activityAnalysis.print.scope': 'Periodo: {period}. Métricas: {metrics}.',
   'activityAnalysis.print.filters': 'Filtrado por: {filters}.',

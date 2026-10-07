@@ -63,7 +63,7 @@ namespace Tests.UnitTests
         private static readonly Dictionary<string, string> ExpectedAccess = new Dictionary<string, string>(StringComparer.Ordinal)
         {
             ["ActivityAnalysisAPIController.Availability"] = Any,
-            ["ActivityAnalysisAPIController.Report"] = Any,            // folds small groups; the people filter needs See PII
+            ["ActivityAnalysisAPIController.Report"] = Any,            // everyone in the period, small groups folded; any user filter, licence or range needs See PII
             ["ActivityAnalysisAPIController.People"] = Pii,
 
             ["AgentCostsAPIController.Availability"] = Any,
@@ -611,7 +611,9 @@ namespace Tests.UnitTests
             (HttpMethod.Get, "api/LicenceActivity/export?overviewId=synthetic&usersId=synthetic", "seePii"),
             (HttpMethod.Get, "api/AgentCosts/users", "seePii"),
             (HttpMethod.Get, "api/ActivityAnalysis/people", "seePii"),
-            (HttpMethod.Get, "api/ActivityAnalysis/report?userFilter=%5B%7B%22d%22%3A%22userName%22%2C%22v%22%3A%5B%22person1%40contoso.com%22%5D%7D%5D", "seePii"),
+            (HttpMethod.Get, "api/ActivityAnalysis/report?metrics=teams.calls&userFilter=%5B%7B%22d%22%3A%22userName%22%2C%22v%22%3A%5B%22person1%40contoso.com%22%5D%7D%5D", "seePii"),
+            (HttpMethod.Get, "api/ActivityAnalysis/report?metrics=teams.calls&licences=1", "seePii"),
+            (HttpMethod.Get, "api/ActivityAnalysis/report?metrics=teams.calls&ranges=teams.calls%3A5%3A", "seePii"),
             (HttpMethod.Get, "api/TeamsExplorer/export/people", "seePii"),
             (HttpMethod.Get, "api/TeamsExplorer/export/dormant", "seePii"),
             (HttpMethod.Get, "api/TeamsExplorer/export/PEOPLE", "seePii"),

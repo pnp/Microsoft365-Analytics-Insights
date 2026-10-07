@@ -118,7 +118,7 @@ export interface ActivityAnalysisReport {
   populationPeople: number;
   matchingPeople: number;
   activePeople: number;
-  /** True when a reader without See PII matches 1-4 people: every figure is then empty. */
+  /** True when a reader without See PII would see 1-4 people: every figure is then empty. */
   suppressed: boolean;
   series: ActivityAnalysisSeries[];
   byCompany: ActivityAnalysisGroupBreakdown;
@@ -127,6 +127,7 @@ export interface ActivityAnalysisReport {
   otherDepartments: number;
   total: ActivityAnalysisTotal;
   licences: ActivityAnalysisLicence[];
+  /** Empty for a reader without See PII: each maximum is one person's total. */
   rangeMaxima: ActivityAnalysisRangeMaximum[];
   userFilter: UserFilterEcho | null;
 }

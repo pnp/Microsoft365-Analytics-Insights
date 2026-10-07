@@ -363,7 +363,7 @@ describe('ActivityAnalysisPage figures', () => {
     renderWithProvider(<ActivityAnalysisPage />, { access: NO_PII });
 
     expect(await screen.findByText('Figures hidden')).toBeVisible();
-    expect(screen.getByText(/Fewer than 5 people match these filters/)).toBeVisible();
+    expect(screen.getByText(/Fewer than 5 people have recorded activity in this period/)).toBeVisible();
     expect(screen.queryByText('Active people by company')).not.toBeInTheDocument();
     expect(screen.queryByText('Metrics by week')).not.toBeInTheDocument();
     expect(screen.queryByText('Results by department')).not.toBeInTheDocument();
@@ -531,6 +531,33 @@ describe('ActivityAnalysisPage people', () => {
 
     expect(peopleMock).not.toHaveBeenCalled();
     expect(fetchUserFilterDimensions).not.toHaveBeenCalled();
+  });
+
+  it('never offers or sends a licence or activity filter to a reader without See PII', async () => {
+    const user = userEvent.setup();
+    renderWithProvider(<ActivityAnalysisPage />, { access: NO_PII });
+    await screen.findByText('95 matching people');
+
+    // Any condition can be differenced against the report without it, so the server refuses them all:
+    // the panel explains why there is nothing to choose, and offers nothing that could be applied.
+    await user.click(screen.getByRole('button', { name: 'Filters' }));
+    const panel = screen.getByRole('region', { name: 'Filters' });
+    expect(within(panel).queryByRole('checkbox')).not.toBeInTheDocument();
+    expect(within(panel).queryByRole('spinbutton')).not.toBeInTheDocument();
+    expect(within(panel).queryByRole('switch')).not.toBeInTheDocument();
+    expect(within(panel).queryByRole('button', { name: 'Apply filters' })).not.toBeInTheDocument();
+    expect(within(panel).queryByText('Licences')).not.toBeInTheDocument();
+    expect(within(panel).queryByText('Activity ranges')).not.toBeInTheDocument();
+    expect(within(panel).queryByText(/Up to/)).not.toBeInTheDocument();
+    expect(within(panel).getByText(/by licence or by activity needs the Portal.SeePII app role/)).toBeVisible();
+
+    // A changed period or metric selection still asks again - never with a condition.
+    await user.click(screen.getByRole('button', { name: 'Last 3 months' }));
+    await waitFor(() => expect(reportMock).toHaveBeenCalledTimes(2));
+    for (const [query] of reportMock.mock.calls) {
+      expect(query).toMatchObject({ userFilter: null, licences: [], ranges: [] });
+    }
+    expect(screen.getByRole('button', { name: 'Filters' })).toBeVisible();
   });
 
   it('lets a reader with See PII expand a department to its people', async () => {

@@ -68,8 +68,8 @@ export const activityAnalysis = {
   'activityAnalysis.filters.title': 'Filters',
   'activityAnalysis.filters.intro': 'Narrow the analysis to the people you are interested in. Nothing changes until you select Apply filters.',
   'activityAnalysis.filters.people.heading': 'People',
-  'activityAnalysis.filters.people.piiHidden':
-    'Filtering by department, job title, company and other directory attributes needs the {role} app role, because those lists name people. The licence and activity filters are available to everyone.',
+  'activityAnalysis.filters.piiHidden':
+    'Filtering by department, job title and other directory attributes, by licence or by activity needs the {role} app role, because any filter can narrow the figures down to a single person. Without it, the analysis covers everyone with recorded activity in the period, with groups of fewer than 5 people combined.',
   'activityAnalysis.filters.licences.heading': 'Licences',
   'activityAnalysis.filters.licences.hint': 'Keep people who hold any of the selected licences.',
   'activityAnalysis.filters.licences.search': 'Find a licence',
@@ -176,7 +176,7 @@ export const activityAnalysis = {
 
   'activityAnalysis.suppressed.title': 'Figures hidden',
   'activityAnalysis.suppressed.body':
-    'Fewer than 5 people match these filters, so the figures are hidden to protect their privacy. Widen the filters to see results.',
+    'Fewer than 5 people have recorded activity in this period, so the figures are hidden to protect their privacy. Try a longer period.',
 
   'activityAnalysis.print.scope': 'Period: {period}. Metrics: {metrics}.',
   'activityAnalysis.print.filters': 'Filtered by: {filters}.',

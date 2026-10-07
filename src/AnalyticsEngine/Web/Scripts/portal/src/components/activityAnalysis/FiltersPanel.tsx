@@ -188,9 +188,9 @@ interface FiltersPanelProps {
  * Edits stay a draft until "Apply filters", so a reader can set several conditions without the page
  * re-running the analysis after every keystroke.
  *
- * The people filter needs See PII: its value lists name people, and its API refuses everyone else. The
- * licence and activity filters are open to every reader, and the server hides the figures from a reader
- * without See PII when they would describe fewer than five people.
+ * The people filter, the licences and the activity ranges all need See PII: any condition the reader
+ * chooses can be differenced against the report without it to single one person out, so the API refuses
+ * them all for anyone else. Without See PII the panel only says so - nothing in it could be applied.
  */
 export default function FiltersPanel({
   id,
@@ -269,189 +269,187 @@ export default function FiltersPanel({
           {t('activityAnalysis.filters.title')}
         </Text>
         <Text size={200} className={styles.muted}>
-          {t('activityAnalysis.filters.intro')}
+          {access.seePii ? t('activityAnalysis.filters.intro') : t('activityAnalysis.filters.piiHidden', { role: access.roles.seePii })}
         </Text>
       </div>
 
-      <section className={styles.section} aria-labelledby={`${id}-people`}>
-        <Text id={`${id}-people`} as="h3" weight="semibold" size={400} style={{ margin: 0 }}>
-          {t('activityAnalysis.filters.people.heading')}
-        </Text>
-        {access.seePii ? (
-          <UserFilterBar
-            filter={draft.userFilter}
-            onChange={(userFilter) => onDraftChange({ ...draft, userFilter })}
-            echoNames={echoNames}
-          />
-        ) : (
-          <Text size={200} className={styles.muted}>
-            {t('activityAnalysis.filters.people.piiHidden', { role: access.roles.seePii })}
-          </Text>
-        )}
-      </section>
-
-      <section className={styles.section} aria-labelledby={`${id}-licences`}>
-        <div className={styles.sectionHead}>
-          <div>
-            <Text id={`${id}-licences`} as="h3" weight="semibold" size={400} block style={{ margin: 0 }}>
-              {t('activityAnalysis.filters.licences.heading')}
+      {access.seePii && (
+        <>
+          <section className={styles.section} aria-labelledby={`${id}-people`}>
+            <Text id={`${id}-people`} as="h3" weight="semibold" size={400} style={{ margin: 0 }}>
+              {t('activityAnalysis.filters.people.heading')}
             </Text>
-            <Text size={200} className={styles.muted}>
-              {t('activityAnalysis.filters.licences.hint')}
-            </Text>
-          </div>
-          {licenceOptions.length > LICENCE_SEARCH_THRESHOLD && (
-            <Input
-              className={styles.search}
-              size="small"
-              contentBefore={<Search16Regular />}
-              value={licenceSearch}
-              placeholder={t('activityAnalysis.filters.licences.search')}
-              aria-label={t('activityAnalysis.filters.licences.search')}
-              onChange={(_e, data) => setLicenceSearch(data.value)}
+            <UserFilterBar
+              filter={draft.userFilter}
+              onChange={(userFilter) => onDraftChange({ ...draft, userFilter })}
+              echoNames={echoNames}
             />
-          )}
-        </div>
+          </section>
 
-        {licenceOptions.length === 0 ? (
-          <Text size={200} className={styles.muted}>
-            {t('activityAnalysis.filters.licences.none')}
-          </Text>
-        ) : shownLicences.length === 0 ? (
-          <Text size={200} className={styles.muted}>
-            {t('activityAnalysis.filters.licences.noMatch', { search: licenceSearch.trim() })}
-          </Text>
-        ) : (
-          <div
-            className={mergeClasses(styles.licenceList, shownLicences.length > LICENCE_SEARCH_THRESHOLD * 2 ? styles.licenceListLong : undefined)}
-            role="group"
-            aria-labelledby={`${id}-licences`}
-          >
-            {shownLicences.map((licence) => (
-              <Checkbox
-                key={licence.id}
-                checked={draft.licences.includes(licence.id)}
-                onChange={() => toggleLicence(licence.id)}
-                label={
-                  <>
-                    {licence.name}
-                    <span className={styles.licenceCount} title={t('activityAnalysis.filters.licences.peopleTitle')}>
-                      {formatNumber(licence.people)}
-                    </span>
-                  </>
-                }
-              />
-            ))}
-          </div>
-        )}
-      </section>
-
-      <section className={styles.section} aria-labelledby={`${id}-ranges`}>
-        <div className={styles.sectionHead}>
-          <div>
-            <Text id={`${id}-ranges`} as="h3" weight="semibold" size={400} block style={{ margin: 0 }}>
-              {t('activityAnalysis.filters.ranges.heading')}
-            </Text>
-            <Text size={200} className={styles.muted}>
-              {t('activityAnalysis.filters.ranges.hint')}
-            </Text>
-          </div>
-          <Switch
-            checked={showAllMetrics}
-            onChange={(_e, data) => setShowAllMetrics(data.checked)}
-            label={t('activityAnalysis.filters.ranges.showAll')}
-          />
-        </div>
-
-        <div className={styles.rangeGroups}>
-          {rangeGroups.map((group) => (
-            <fieldset key={group.category} className={styles.rangeGroup}>
-              <legend className={styles.legend}>{categoryLabel(t, group.category)}</legend>
-              <div className={styles.rangeHeader} aria-hidden="true">
-                <span />
-                <Text size={200}>{t('activityAnalysis.filters.ranges.min')}</Text>
-                <Text size={200}>{t('activityAnalysis.filters.ranges.max')}</Text>
+          <section className={styles.section} aria-labelledby={`${id}-licences`}>
+            <div className={styles.sectionHead}>
+              <div>
+                <Text id={`${id}-licences`} as="h3" weight="semibold" size={400} block style={{ margin: 0 }}>
+                  {t('activityAnalysis.filters.licences.heading')}
+                </Text>
+                <Text size={200} className={styles.muted}>
+                  {t('activityAnalysis.filters.licences.hint')}
+                </Text>
               </div>
-              {group.metrics.map((metric) => {
-                const text = draft.ranges[metric.key] ?? { min: '', max: '' };
-                const error = errors[metric.key];
-                const label = metricLabelWithUnit(t, metric.key, metric);
-                const step = isDuration(metric) ? 0.5 : 1;
-                return (
-                  <div key={metric.key} className={styles.rangeRow}>
-                    <Text size={300} className={styles.rangeLabel} title={label}>
-                      {label}
-                    </Text>
-                    <Input
-                      className={styles.rangeInput}
-                      type="number"
-                      size="small"
-                      min={0}
-                      step={step}
-                      inputMode="decimal"
-                      value={text.min}
-                      aria-label={t('activityAnalysis.filters.ranges.minAria', { metric: label })}
-                      aria-invalid={error ? true : undefined}
-                      onChange={(_e, data) => setRange(metric.key, { ...text, min: data.value })}
-                    />
-                    <Input
-                      className={styles.rangeInput}
-                      type="number"
-                      size="small"
-                      min={0}
-                      step={step}
-                      inputMode="decimal"
-                      value={text.max}
-                      placeholder={maxPlaceholder(metric)}
-                      aria-label={t('activityAnalysis.filters.ranges.maxAria', { metric: label })}
-                      aria-invalid={error ? true : undefined}
-                      onChange={(_e, data) => setRange(metric.key, { ...text, max: data.value })}
-                    />
-                    {error && (
-                      <Text size={200} role="alert" className={styles.rangeError}>
-                        {t(RANGE_ERROR_KEYS[error])}
-                      </Text>
-                    )}
-                  </div>
-                );
-              })}
-            </fieldset>
-          ))}
-        </div>
-      </section>
+              {licenceOptions.length > LICENCE_SEARCH_THRESHOLD && (
+                <Input
+                  className={styles.search}
+                  size="small"
+                  contentBefore={<Search16Regular />}
+                  value={licenceSearch}
+                  placeholder={t('activityAnalysis.filters.licences.search')}
+                  aria-label={t('activityAnalysis.filters.licences.search')}
+                  onChange={(_e, data) => setLicenceSearch(data.value)}
+                />
+              )}
+            </div>
 
-      <div className={styles.footer}>
-        <div className={styles.footerText}>
-          {matchingPeople != null && (
-            <Text size={200}>
-              {t(plural(matchingPeople, 'activityAnalysis.filters.matching.one', 'activityAnalysis.filters.matching.other'), {
-                count: formatNumber(matchingPeople),
-              })}
-            </Text>
-          )}
-          {invalid ? (
-            <Text size={200} className={styles.error}>
-              {t('activityAnalysis.filters.invalid')}
-            </Text>
-          ) : dirty ? (
-            <Text size={200} className={styles.warning} aria-live="polite">
-              {t('activityAnalysis.filters.pending')}
-            </Text>
-          ) : null}
-        </div>
-        <div className={styles.buttons}>
-          <Button
-            icon={<ArrowReset20Regular />}
-            title={t('activityAnalysis.filters.resetHint')}
-            onClick={() => onDraftChange(draftFrom(NO_FILTERS, metrics))}
-          >
-            {t('activityAnalysis.filters.reset')}
-          </Button>
-          <Button appearance="primary" disabled={!dirty || invalid} onClick={() => onApply(next)}>
-            {t('activityAnalysis.filters.apply')}
-          </Button>
-        </div>
-      </div>
+            {licenceOptions.length === 0 ? (
+              <Text size={200} className={styles.muted}>
+                {t('activityAnalysis.filters.licences.none')}
+              </Text>
+            ) : shownLicences.length === 0 ? (
+              <Text size={200} className={styles.muted}>
+                {t('activityAnalysis.filters.licences.noMatch', { search: licenceSearch.trim() })}
+              </Text>
+            ) : (
+              <div
+                className={mergeClasses(styles.licenceList, shownLicences.length > LICENCE_SEARCH_THRESHOLD * 2 ? styles.licenceListLong : undefined)}
+                role="group"
+                aria-labelledby={`${id}-licences`}
+              >
+                {shownLicences.map((licence) => (
+                  <Checkbox
+                    key={licence.id}
+                    checked={draft.licences.includes(licence.id)}
+                    onChange={() => toggleLicence(licence.id)}
+                    label={
+                      <>
+                        {licence.name}
+                        <span className={styles.licenceCount} title={t('activityAnalysis.filters.licences.peopleTitle')}>
+                          {formatNumber(licence.people)}
+                        </span>
+                      </>
+                    }
+                  />
+                ))}
+              </div>
+            )}
+          </section>
+
+          <section className={styles.section} aria-labelledby={`${id}-ranges`}>
+            <div className={styles.sectionHead}>
+              <div>
+                <Text id={`${id}-ranges`} as="h3" weight="semibold" size={400} block style={{ margin: 0 }}>
+                  {t('activityAnalysis.filters.ranges.heading')}
+                </Text>
+                <Text size={200} className={styles.muted}>
+                  {t('activityAnalysis.filters.ranges.hint')}
+                </Text>
+              </div>
+              <Switch
+                checked={showAllMetrics}
+                onChange={(_e, data) => setShowAllMetrics(data.checked)}
+                label={t('activityAnalysis.filters.ranges.showAll')}
+              />
+            </div>
+
+            <div className={styles.rangeGroups}>
+              {rangeGroups.map((group) => (
+                <fieldset key={group.category} className={styles.rangeGroup}>
+                  <legend className={styles.legend}>{categoryLabel(t, group.category)}</legend>
+                  <div className={styles.rangeHeader} aria-hidden="true">
+                    <span />
+                    <Text size={200}>{t('activityAnalysis.filters.ranges.min')}</Text>
+                    <Text size={200}>{t('activityAnalysis.filters.ranges.max')}</Text>
+                  </div>
+                  {group.metrics.map((metric) => {
+                    const text = draft.ranges[metric.key] ?? { min: '', max: '' };
+                    const error = errors[metric.key];
+                    const label = metricLabelWithUnit(t, metric.key, metric);
+                    const step = isDuration(metric) ? 0.5 : 1;
+                    return (
+                      <div key={metric.key} className={styles.rangeRow}>
+                        <Text size={300} className={styles.rangeLabel} title={label}>
+                          {label}
+                        </Text>
+                        <Input
+                          className={styles.rangeInput}
+                          type="number"
+                          size="small"
+                          min={0}
+                          step={step}
+                          inputMode="decimal"
+                          value={text.min}
+                          aria-label={t('activityAnalysis.filters.ranges.minAria', { metric: label })}
+                          aria-invalid={error ? true : undefined}
+                          onChange={(_e, data) => setRange(metric.key, { ...text, min: data.value })}
+                        />
+                        <Input
+                          className={styles.rangeInput}
+                          type="number"
+                          size="small"
+                          min={0}
+                          step={step}
+                          inputMode="decimal"
+                          value={text.max}
+                          placeholder={maxPlaceholder(metric)}
+                          aria-label={t('activityAnalysis.filters.ranges.maxAria', { metric: label })}
+                          aria-invalid={error ? true : undefined}
+                          onChange={(_e, data) => setRange(metric.key, { ...text, max: data.value })}
+                        />
+                        {error && (
+                          <Text size={200} role="alert" className={styles.rangeError}>
+                            {t(RANGE_ERROR_KEYS[error])}
+                          </Text>
+                        )}
+                      </div>
+                    );
+                  })}
+                </fieldset>
+              ))}
+            </div>
+          </section>
+
+          <div className={styles.footer}>
+            <div className={styles.footerText}>
+              {matchingPeople != null && (
+                <Text size={200}>
+                  {t(plural(matchingPeople, 'activityAnalysis.filters.matching.one', 'activityAnalysis.filters.matching.other'), {
+                    count: formatNumber(matchingPeople),
+                  })}
+                </Text>
+              )}
+              {invalid ? (
+                <Text size={200} className={styles.error}>
+                  {t('activityAnalysis.filters.invalid')}
+                </Text>
+              ) : dirty ? (
+                <Text size={200} className={styles.warning} aria-live="polite">
+                  {t('activityAnalysis.filters.pending')}
+                </Text>
+              ) : null}
+            </div>
+            <div className={styles.buttons}>
+              <Button
+                icon={<ArrowReset20Regular />}
+                title={t('activityAnalysis.filters.resetHint')}
+                onClick={() => onDraftChange(draftFrom(NO_FILTERS, metrics))}
+              >
+                {t('activityAnalysis.filters.reset')}
+              </Button>
+              <Button appearance="primary" disabled={!dirty || invalid} onClick={() => onApply(next)}>
+                {t('activityAnalysis.filters.apply')}
+              </Button>
+            </div>
+          </div>
+        </>
+      )}
     </Card>
   );
 }

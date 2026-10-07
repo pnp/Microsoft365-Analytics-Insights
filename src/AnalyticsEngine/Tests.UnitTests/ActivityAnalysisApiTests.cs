@@ -148,21 +148,92 @@ namespace Tests.UnitTests
                 Assert.AreEqual(true, (bool)folded["departments"][1]["other"]);
                 Assert.AreEqual(3, (int)folded["otherDepartments"]);
 
-                // Licence 8 is held by two people: a filter open to every reader, narrowed to a handful.
-                var suppressed = await app.Json(Report + "&licences=8");
+                // No filter of the reader's own: the last two weeks of the period are only three people's, so the report
+                // of everyone in them is a handful of people's records.
+                const string lastTwoWeeks = "api/ActivityAnalysis/report?from=2026-01-26&to=2026-02-02&metrics=teams.calls,teams.meetings";
+                var suppressed = await app.Json(lastTwoWeeks);
                 Assert.AreEqual(true, (bool)suppressed["suppressed"]);
-                Assert.AreEqual(2, (int)suppressed["matchingPeople"]);
-                Assert.AreEqual(10, (int)suppressed["populationPeople"]);
+                Assert.AreEqual(3, (int)suppressed["matchingPeople"]);
+                Assert.AreEqual(3, (int)suppressed["populationPeople"]);
+                Assert.AreEqual(0, (int)suppressed["activePeople"]);
                 Assert.AreEqual(0, suppressed["series"].Count());
                 Assert.AreEqual(0, suppressed["departments"].Count());
                 Assert.AreEqual(0, suppressed["total"]["values"].Count());
+                Assert.AreEqual(0, suppressed["rangeMaxima"].Count(), "Each bound would be one of the three's own total.");
                 Assert.AreEqual(0, app.Source.WeeklyTotalsLoads, "Nothing is read for figures that are not shown.");
 
                 app.Host.Principal = PortalTestHost.SignedIn(PortalRoles.SeePii);
-                var named = await app.Json(Report + "&licences=8");
+                var named = await app.Json(lastTwoWeeks);
                 Assert.AreEqual(false, (bool)named["suppressed"]);
-                CollectionAssert.AreEqual(new[] { "Sales" }, named["departments"].Select(d => (string)d["name"]).ToList());
-                Assert.AreEqual(1, app.Source.WeeklyTotalsLoads);
+                Assert.AreEqual(3, (int)named["matchingPeople"]);
+                CollectionAssert.AreEqual(new[] { "Sales", null }, named["departments"].Select(d => (string)d["name"]).ToList(),
+                    "Two in Sales, and one missing from the directory - each shown to a reader with See PII.");
+                Assert.AreEqual(false, (bool)named["departments"][1]["other"]);
+            }
+        }
+
+        /// <summary>
+        /// Any condition the reader chooses can be differenced against the report without it: "every licence but X", or
+        /// a range one below the top total, leaves out exactly one person, whose figures are then the difference.
+        /// </summary>
+        [DataTestMethod]
+        [DataRow("&licences=8", 2)]
+        [DataRow("&licences=7,9", 9)]
+        [DataRow("&ranges=teams.calls:5:", 4)]
+        [DataRow("&ranges=teams.calls::8", 9)]
+        [DataRow("&ranges=teams.calls:0:", 10)]
+        [DataRow("&licences=7&ranges=teams.calls:1:", 6)]
+        public async Task LicenceAndActivityFilters_NeedSeePii(string conditions, int matchingWithSeePii)
+        {
+            using (var app = new Harness())
+            {
+                var refused = await app.Host.Client.GetAsync(Report + conditions);
+                Assert.AreEqual(HttpStatusCode.Forbidden, refused.StatusCode, conditions);
+                var refusal = JObject.Parse(await refused.Content.ReadAsStringAsync());
+                Assert.AreEqual("portalPermissionRequired", (string)refusal["code"]);
+                Assert.AreEqual("seePii", (string)refusal["permission"]);
+                Assert.AreEqual(0, app.Source.ReadModelLoads, "A refused request reads nothing.");
+
+                app.Host.Principal = PortalTestHost.SignedIn(PortalRoles.SeePii);
+                var named = await app.Json(Report + conditions);
+                Assert.AreEqual(10, (int)named["populationPeople"]);
+                Assert.AreEqual(matchingWithSeePii, (int)named["matchingPeople"], conditions);
+            }
+        }
+
+        [TestMethod]
+        public async Task AReaderWithoutSeePii_MayStillSendConditionsThatNarrowNothing()
+        {
+            using (var app = new Harness())
+            {
+                // A range with neither bound is no condition at all.
+                var report = await app.Json(Report + "&ranges=teams.calls::");
+                Assert.AreEqual(10, (int)report["matchingPeople"]);
+                Assert.AreEqual(false, (bool)report["suppressed"]);
+            }
+        }
+
+        [TestMethod]
+        public async Task RangeMaxima_AreSeePiis_DecidedPerRequest_OverTheSharedReadModel()
+        {
+            using (var app = new Harness())
+            {
+                app.Host.Principal = PortalTestHost.SignedIn(PortalRoles.SeePii);
+                var named = await app.Json(Report);
+                Assert.AreEqual(ActivityAnalysisMetricCatalogue.Count, named["rangeMaxima"].Count());
+                Assert.AreEqual(9, (long)named["rangeMaxima"].Single(m => (string)m["metric"] == "teams.calls")["max"],
+                    "user10's nine calls: one person's total.");
+
+                // The same period from the same caches, straight after: nothing the first reader was sent is reused.
+                app.Host.Principal = PortalTestHost.SignedIn();
+                var anonymous = await app.Json(Report);
+                Assert.AreEqual(JTokenType.Array, anonymous["rangeMaxima"].Type);
+                Assert.AreEqual(0, anonymous["rangeMaxima"].Count());
+                Assert.AreEqual(10, (int)anonymous["matchingPeople"], "The report of everyone is still every reader's.");
+
+                app.Host.Principal = PortalTestHost.SignedIn(PortalRoles.SeePii);
+                Assert.AreEqual(ActivityAnalysisMetricCatalogue.Count, (await app.Json(Report))["rangeMaxima"].Count());
+                Assert.AreEqual(1, app.Source.ReadModelLoads, "One read model, shared by both readers.");
             }
         }
 

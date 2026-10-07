@@ -185,7 +185,8 @@ namespace Common.Entities.ActivityAnalysis
             var rangeMaximum = query.Ranges.Select(r => r.Maximum ?? long.MaxValue).ToArray();
 
             var available = model.AvailableMetrics.Select(m => m.Index).ToArray();
-            var maximumTotals = population == null ? null : new int[MetricCount];
+            // Range bounds are only reported to a reader with See PII (see BuildReport), so only they need the population's.
+            var maximumTotals = population == null || !audience.SeesIndividuals ? null : new int[MetricCount];
             var licenceHolders = new int[model.Licences.Count];
             var chunks = model.Chunks;
             var matching = new List<int>();
@@ -254,11 +255,7 @@ namespace Common.Entities.ActivityAnalysis
                 MatchingPeople = MatchingPeople,
                 Suppressed = Suppressed,
                 Licences = BuildLicences(),
-                RangeMaxima = Model.AvailableMetrics.Select(m => new ActivityAnalysisRangeMaximum
-                {
-                    Metric = m.Key,
-                    Max = _maximumTotals != null ? _maximumTotals[m.Index] : Model.MaximumTotalOf(m.Index),
-                }).ToList(),
+                RangeMaxima = BuildRangeMaxima(),
                 UserFilter = userFilter,
                 Total = new ActivityAnalysisTotal { People = MatchingPeople },
             };
@@ -563,6 +560,22 @@ namespace Common.Entities.ActivityAnalysis
             }
 
             return rows;
+        }
+
+        /// <summary>
+        /// The range sliders' bounds: the highest total of every available metric over the population. Each one is a
+        /// single person's total, so a reader without See PII - who cannot set a range either - gets none. Decided
+        /// here, per request: the read model and the weekly series are shared by every reader, the report never is.
+        /// </summary>
+        private List<ActivityAnalysisRangeMaximum> BuildRangeMaxima()
+        {
+            if (!Audience.SeesIndividuals) return new List<ActivityAnalysisRangeMaximum>();
+
+            return Model.AvailableMetrics.Select(m => new ActivityAnalysisRangeMaximum
+            {
+                Metric = m.Key,
+                Max = _maximumTotals != null ? _maximumTotals[m.Index] : Model.MaximumTotalOf(m.Index),
+            }).ToList();
         }
 
         private List<ActivityAnalysisLicenceModel> BuildLicences()

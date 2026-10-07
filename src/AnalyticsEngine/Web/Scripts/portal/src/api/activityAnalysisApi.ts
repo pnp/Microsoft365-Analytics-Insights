@@ -224,7 +224,9 @@ export function fetchActivityAnalysisAvailability(signal?: AbortSignal): Promise
 
 /**
  * The figures for a period, the selected metrics and the applied filters. Aggregates only, so any
- * signed-in reader may ask; the server hides small groups from a reader without See PII.
+ * signed-in reader may ask for everyone in the period; the server hides small groups from a reader
+ * without See PII. Any filter - `userFilter`, `licences` or `ranges` - needs See PII and is refused
+ * (403) without it, so never send one for a reader without it.
  */
 export function fetchActivityAnalysisReport(query: ActivityAnalysisQuery, signal?: AbortSignal): Promise<ActivityAnalysisReport> {
   return getJson<ActivityAnalysisReport>(`/report?${queryString(reportParams(query))}`, REPORT_KEYS, signal);

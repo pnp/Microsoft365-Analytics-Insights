@@ -365,12 +365,10 @@ function ActivityAnalysisView({ availability }: { availability: ActivityAnalysis
   const [draft, setDraft] = useState<FilterDraft>(() => draftFrom(NO_FILTERS, metrics));
   const [filtersOpen, setFiltersOpen] = useState(false);
   const filtersButtonRef = useRef<HTMLButtonElement>(null);
-  // The people filter needs See PII: without it there is no filter bar, and nothing is sent.
+  // Every filter needs See PII - any condition can be differenced to single one person out, so the API
+  // refuses them all to anyone else. Without it there is nothing to edit, and nothing is ever sent.
   const userFilterParam = seePii ? serializeUserFilter(applied.userFilter) : null;
-  const effectiveFilters = useMemo<AppliedFilters>(
-    () => (seePii ? applied : { ...applied, userFilter: NO_FILTERS.userFilter }),
-    [applied, seePii],
-  );
+  const effectiveFilters = useMemo<AppliedFilters>(() => (seePii ? applied : NO_FILTERS), [applied, seePii]);
   const filterCount = activeFilterCount(effectiveFilters);
 
   // --- The report ----------------------------------------------------------------------------------------
@@ -381,10 +379,10 @@ function ActivityAnalysisView({ availability }: { availability: ActivityAnalysis
       to: period.to,
       metrics: requested,
       userFilter: userFilterParam,
-      licences: applied.licences,
-      ranges: applied.ranges,
+      licences: effectiveFilters.licences,
+      ranges: effectiveFilters.ranges,
     };
-  }, [period, requested, userFilterParam, applied.licences, applied.ranges]);
+  }, [period, requested, userFilterParam, effectiveFilters.licences, effectiveFilters.ranges]);
   const queryKey = query ? JSON.stringify(query) : null;
 
   const [attempt, setAttempt] = useState(0);

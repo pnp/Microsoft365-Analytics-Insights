@@ -24,15 +24,17 @@ namespace Web.AnalyticsWeb.Controllers
     /// week, company and department - the portal's version of the Power BI report's "Analytics" page.
     /// </summary>
     /// <remarks>
-    /// <para><b>Who sees what (#661).</b> The availability and the report are for every signed-in reader, but narrowing the
-    /// report by the people filter needs See PII, as everything that picks people out by name does. A reader
-    /// without See PII cannot single anybody out: when 1 to 4 people match their filters every figure is suppressed,
-    /// and companies and departments of fewer than 5 matching people are folded into one unnamed row. The people
-    /// themselves - <c>people</c> - need See PII.</para>
+    /// <para><b>Who sees what (#661).</b> The availability and the report of everyone in the period are for every signed-in
+    /// reader, but narrowing the report at all - the people filter, licences or activity ranges - needs See PII, as
+    /// everything that picks people out does: two reports that differ by one condition differ by the people it
+    /// excludes, so a chosen condition can leave out exactly one person. A reader without See PII cannot single anybody
+    /// out: they get no range bounds (each is one person's total), companies and departments of fewer than 5 people
+    /// are folded into one unnamed row, and when the administrator's filter and the period leave only 1 to 4 people
+    /// every figure is suppressed. The people themselves - <c>people</c> - need See PII.</para>
     /// <para><b>Who is counted.</b> Everyone in <c>profiling.users</c> (enabled, with an Entra ID and a licence) with at
-    /// least one compiled week in the period, narrowed by the administrator's global filter - then by the reader's
-    /// user filter, licences and activity ranges, all applied in memory to a read model of the period shared by
-    /// every reader (<see cref="ActivityAnalysisReadModel"/>).</para>
+    /// least one compiled week in the period, narrowed by the administrator's global filter - then, for a reader with See
+    /// PII, by their user filter, licences and activity ranges, all applied in memory to a read model of the period shared
+    /// by every reader (<see cref="ActivityAnalysisReadModel"/>).</para>
     /// <para>Errors carry a stable <c>code</c> the portal words, and English for anyone else.</para>
     /// </remarks>
     [Authorize]
@@ -84,14 +86,17 @@ namespace Web.AnalyticsWeb.Controllers
                     return Refuse(HttpStatusCode.BadRequest, ActivityAnalysisErrorCodes.InvalidFilter, filterError);
                 }
 
-                // The people filter is See PII's, as on Copilot Adoption: aggregates of a set the reader picked by
-                // name are those people's records - five named people, then each set of four, give each one's figures.
-                if (filter != null && !filter.IsEmpty && !PortalAccess.Evaluate(Request, User).SeePii)
+                var parsed = ActivityAnalysisQuery.Parse(from, to, metrics, ranges, licences);
+
+                // Narrowing the people at all is See PII's, as the people filter is on Copilot Adoption. Any condition
+                // the reader chooses can be differenced: the whole population against "every licence but X", or a range
+                // one below the top total, differ by one person - whose totals, weekly series and department row are
+                // then the difference. Only the report of everyone the administrator's filter admits stays open.
+                if (((filter != null && !filter.IsEmpty) || parsed.HasConditions) && !PortalAccess.Evaluate(Request, User).SeePii)
                 {
                     return ResponseMessage(PortalPermissionDenied.Response(Request, PortalPermission.SeePii));
                 }
 
-                var parsed = ActivityAnalysisQuery.Parse(from, to, metrics, ranges, licences);
                 var request = await PrepareAsync(parsed, filter, cancellationToken);
                 if (request.Refusal != null) return request.Refusal;
 

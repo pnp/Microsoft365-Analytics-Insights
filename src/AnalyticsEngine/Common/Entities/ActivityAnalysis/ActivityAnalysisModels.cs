@@ -151,7 +151,10 @@ namespace Common.Entities.ActivityAnalysis
         [JsonProperty("licences")]
         public List<ActivityAnalysisLicenceModel> Licences { get; set; } = new List<ActivityAnalysisLicenceModel>();
 
-        /// <summary>The highest per-person total of every available metric over the population - the range sliders' bounds.</summary>
+        /// <summary>
+        /// The highest per-person total of every available metric over the population - the range sliders' bounds. Empty
+        /// for a reader without See PII: each value is one person's total, and only See PII may set a range.
+        /// </summary>
         [JsonProperty("rangeMaxima")]
         public List<ActivityAnalysisRangeMaximum> RangeMaxima { get; set; } = new List<ActivityAnalysisRangeMaximum>();
 

@@ -383,12 +383,27 @@ namespace Tests.UnitTests
             Assert.AreEqual(0, report.Total.Values.Count);
             Assert.AreEqual(2, report.Total.People);
             Assert.AreEqual(3, report.Licences.Count, "The picker's licences describe the population, not the matching people.");
-            Assert.AreEqual(ActivityAnalysisMetricCatalogue.Count, report.RangeMaxima.Count);
+            Assert.AreEqual(0, report.RangeMaxima.Count, "Each bound is one person's total: never sent without See PII.");
 
             var withSeePii = Report(model, Query(), Audience(seePii: true, userFilter: marketing));
             Assert.IsFalse(withSeePii.Suppressed);
             Assert.AreEqual(2, withSeePii.ActivePeople);
             CollectionAssert.AreEqual(new[] { "Marketing" }, withSeePii.Departments.Select(d => d.Name).ToList());
+            Assert.AreEqual(ActivityAnalysisMetricCatalogue.Count, withSeePii.RangeMaxima.Count);
+        }
+
+        [TestMethod]
+        public void RangeMaxima_AreOnlyForAReaderWithSeePii_WithOrWithoutAGlobalFilter()
+        {
+            var model = Model();
+            var sales = "[{\"d\":\"department\",\"v\":[\"Sales\"]}]";
+
+            Assert.AreEqual(0, Report(model, Query(), Audience(seePii: false)).RangeMaxima.Count,
+                "The top total of a metric is one person's figure.");
+            Assert.AreEqual(0, Report(model, Query(), Audience(seePii: false, population: sales)).RangeMaxima.Count);
+
+            Assert.AreEqual(9, Report(model, Query(), Audience(seePii: true)).RangeMaxima.Single(m => m.Metric == "teams.calls").Max);
+            Assert.AreEqual(7, Report(model, Query(), Audience(seePii: true, population: sales)).RangeMaxima.Single(m => m.Metric == "teams.calls").Max);
         }
 
         [TestMethod]
