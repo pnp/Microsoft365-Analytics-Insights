@@ -28,6 +28,7 @@ export const COPILOT_ADOPTION_WARNING_KEYS = {
   NoCopilotData: 'noCopilotData',
   AuditMissingUsingUsageReport: 'auditMissingUsingUsageReport',
   AgentInventoryCapped: 'agentInventoryCapped',
+  AgentReachTooLarge: 'agentReachTooLarge',
   UnlicensedUsageCapped: 'unlicensedUsageCapped',
   LicensedUserDetailCapped: 'licensedUserDetailCapped',
   LicensedUsersSubset: 'licensedUsersSubset',

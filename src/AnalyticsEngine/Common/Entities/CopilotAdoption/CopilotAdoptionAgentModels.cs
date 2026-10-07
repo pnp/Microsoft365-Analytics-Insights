@@ -140,6 +140,120 @@ namespace Common.Entities.CopilotAdoption
         /// <summary>Why this agent got this verdict, in plain English.</summary>
         [JsonProperty("healthReason")]
         public string HealthReason { get; set; }
+
+        /// <summary>
+        /// Distinct people who used this agent inside the reporting period - the denominator of
+        /// <see cref="HomeDepartmentSharePct"/>. Not the same as <see cref="Users"/>, which counts the
+        /// inventory's longer history window. Null when the reach query did not run or failed (#647).
+        /// </summary>
+        [JsonProperty("windowUsers")]
+        public int? WindowUsers { get; set; }
+
+        /// <summary>
+        /// How many departments had at least one person using this agent inside the reporting period
+        /// (#647). People with no department are not a department, so they are not counted here, but they
+        /// are in <see cref="WindowUsers"/>. Null when the reach query did not run or failed.
+        /// </summary>
+        [JsonProperty("departments")]
+        public int? Departments { get; set; }
+
+        /// <summary>
+        /// The department with the most of this agent's users in the period - the team it most likely
+        /// came from. Left null, for privacy, when that department contributed fewer than
+        /// <see cref="CopilotAdoptionOptions.MinSeatsPerSegment"/> of them, and when nobody who used it has
+        /// a department. Tenant data: shown as stored, never translated.
+        /// </summary>
+        [JsonProperty("homeDepartment")]
+        public string HomeDepartment { get; set; }
+
+        /// <summary>
+        /// The share of <see cref="WindowUsers"/> who are in the home department, 0-100. Published even when
+        /// the department's name is withheld: a share names nobody, and it is what says whether the agent
+        /// has spread beyond the team that made it.
+        /// </summary>
+        [JsonProperty("homeDepartmentSharePct")]
+        public double? HomeDepartmentSharePct { get; set; }
+    }
+
+    /// <summary>
+    /// One (agent, person) pair from the reporting period, with the person's department id - the one grain
+    /// the agent breadth, depth and reach figures are all derived from (#646, #647).
+    /// </summary>
+    /// <remarks>
+    /// Held as rows rather than aggregated in SQL so the agent-inclusion rule
+    /// (<see cref="CopilotAgentFigureScope"/>) is applied in exactly one place in C#, and so a filtered view
+    /// can narrow it person by person like every other per-person list. Internal: never serialised.
+    /// </remarks>
+    public class AgentReachRow
+    {
+        /// <summary><c>copilot_agents.id</c>, the same key as <see cref="AgentUsageRow.AgentId"/>.</summary>
+        public int AgentId { get; set; }
+
+        public int UserId { get; set; }
+
+        /// <summary><c>users.department_id</c>; null for someone with no department.</summary>
+        public int? DepartmentId { get; set; }
+
+        /// <summary>This person's interactions with this agent in the period.</summary>
+        public long Interactions { get; set; }
+    }
+
+    /// <summary>One <c>user_departments</c> row, to name the departments in <see cref="AgentReachRow"/>.</summary>
+    public class DepartmentNameRow
+    {
+        public int Id { get; set; }
+
+        public string Name { get; set; }
+    }
+
+    /// <summary>
+    /// Someone who created, published or shared a Copilot Studio agent in the reporting period (#647).
+    /// </summary>
+    /// <remarks>
+    /// Internal: the analysis keeps these rows only so a filtered view can narrow them like any other
+    /// per-person list. Only counts ever leave the service - nothing here names a builder on screen, in an
+    /// export or in telemetry.
+    /// </remarks>
+    public class AgentBuilderRow
+    {
+        public int UserId { get; set; }
+
+        public string UserPrincipalName { get; set; }
+
+        public string Mail { get; set; }
+
+        public string Department { get; set; }
+
+        /// <summary>Derived after the query, like every other per-person row; see <see cref="CopilotAdoptionEmailDomain"/>.</summary>
+        public string EmailDomain { get; set; }
+    }
+
+    /// <summary>
+    /// Which agents the breadth, depth and reach figures count (#646, #647) - in ONE place, so narrowing them
+    /// to customer-built agents once agent origin is classified (#639) is a change to this class alone.
+    /// </summary>
+    /// <remarks>
+    /// The scope travels with the figures as a stable key (<see cref="CopilotAdoptionSummary.AgentFiguresScope"/>)
+    /// so the portal and the workbook can say which agents a figure counts, in the reader's language, rather
+    /// than leaving it to be guessed.
+    /// </remarks>
+    public static class CopilotAgentFigureScope
+    {
+        /// <summary>Every agent, Microsoft's and the tenant's own.</summary>
+        public const string AllAgents = "allAgents";
+
+        /// <summary>The scope the figures are currently computed over.</summary>
+        public const string Current = AllAgents;
+
+        /// <summary>
+        /// Whether one agent counts towards breadth, depth and reach. <paramref name="agent"/> is the agent's
+        /// inventory row, or null for an agent the inventory does not hold (it stopped at
+        /// <see cref="CopilotAdoptionOptions.MaxAgents"/>).
+        /// </summary>
+        public static bool Includes(AgentUsageRow agent)
+        {
+            return true;
+        }
     }
 
     /// <summary>The agent estate at a glance.</summary>

@@ -232,6 +232,17 @@ namespace Common.Entities.CopilotAdoption
                 AgentUsers = Narrow(analysis.AgentUsers, u => u.UserId, u => u.EmailDomain, scope),
                 AgentUsersCapped = analysis.AgentUsersCapped,
 
+                // The (agent, person) pairs are shared, not narrowed: agent breadth and depth only count the
+                // people this slice's own licensed and unlicensed rows hold, which narrows them already. The
+                // inventory's reach is tenant-wide and computed once, so a slice is not given its pairs.
+                AgentReachRows = analysis.AgentReachRows,
+                AgentInventoryReachRows = null,
+                AgentReachDepartments = analysis.AgentReachDepartments,
+
+                // People, so narrowed - and only ever counted.
+                AgentBuilders = Narrow(analysis.AgentBuilders, b => b.UserId, b => b.EmailDomain, scope),
+                AgentBuildersAssessed = analysis.AgentBuildersAssessed,
+
                 LicensedUsers = licensedUsers,
                 // Like the opportunity cap below: the licensed-user query's cap was applied to the whole
                 // tenant, so a slice of it is just as short of the people past it.
@@ -490,6 +501,11 @@ namespace Common.Entities.CopilotAdoption
             // "12 agents, 40 agent users" where only the second number is about this domain is worse
             // than one that is wholly tenant-wide and says so.
             scoped.Agents = tenant.Agents;
+
+            // The reach count is a statement about that same inventory (#647), so it travels with it. The
+            // agent breadth and depth figures beside it are NOT carried: they count people, and the scoring
+            // pass has already narrowed them to this view's own.
+            scoped.AgentsInThreeOrMoreDepartments = tenant.AgentsInThreeOrMoreDepartments;
 
             scoped.UnscopedSections = new List<string>
             {

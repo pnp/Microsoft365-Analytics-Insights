@@ -456,6 +456,11 @@ namespace Common.Entities.CopilotAdoption
             {
                 steps.Add(new AnalysisStep(CopilotAdoptionSteps.AgentEstate,
                     output => BuildAgentEstateAsync(analysis, output, seatIds, windowStart, toExclusive, nowUtc, cancellationToken)));
+
+                // Its own step so it runs beside the inventory rather than after it: nothing here needs the
+                // inventory until the summary is assembled.
+                steps.Add(new AnalysisStep(CopilotAdoptionSteps.AgentReach,
+                    output => BuildAgentReachAsync(analysis, output, windowStart, toExclusive, nowUtc, summary.DataSources.AuditAvailable, cancellationToken)));
             }
 
             await RunStepsAsync(analysis, steps, _maxConcurrentSteps, cancellationToken);
@@ -797,6 +802,158 @@ namespace Common.Entities.CopilotAdoption
                 analysis.AgentUsers = agentUsers;
                 analysis.AgentUsersCapped = agentUsers.Count >= _options.MaxAgentUsersScored;
             }
+        }
+
+        /// <summary>
+        /// Agents used in this many departments or more count as having spread beyond the team that made
+        /// them (#647): two is a team and its neighbour, three is the beginning of a pattern.
+        /// </summary>
+        public const int AgentReachDepartmentThreshold = 3;
+
+        /// <summary>
+        /// The (agent, person) pairs behind the agent breadth and depth figures (#646) and each agent's reach
+        /// across departments (#647), and the people who build agents in Copilot Studio (#647).
+        /// </summary>
+        /// <remarks>
+        /// <para>Breadth and depth describe the reporting period, like the department table they are columns
+        /// of. Reach describes the agent inventory, which reads up to now even for a past range (see
+        /// <see cref="BuildAgentEstateAsync"/>), so a past range reads the pairs once for each period; every
+        /// other period is read once and shared.</para>
+        /// <para>Builders come from Copilot Studio's authoring events, a different feed from the interactions
+        /// above, and are never joined to them: see <see cref="CopilotAdoptionSql.AgentBuildersSql"/>.</para>
+        /// </remarks>
+        private async Task BuildAgentReachAsync(
+            CopilotAdoptionAnalysis analysis,
+            StepOutput output,
+            DateTime windowStart,
+            DateTime toExclusive,
+            DateTime nowUtc,
+            bool auditAvailableInWindow,
+            CancellationToken cancellationToken)
+        {
+            var agentWindowStart = _options.UsesExplicitDates
+                ? CopilotAdoptionScoring.WindowStartUtc(nowUtc, _options.WindowDays)
+                : windowStart;
+            var agentToExclusive = _options.UsesExplicitDates ? nowUtc : toExclusive;
+            var sql = CopilotAdoptionSql.AgentReachSql();
+            var warnedTooLarge = false;
+
+            List<AgentReachRow> WithinCap(List<AgentReachRow> rows)
+            {
+                if (rows == null || rows.Count <= CopilotAdoptionSql.MaxAgentReachRows) return rows;
+
+                // Withheld rather than computed from whichever rows arrived first: a figure computed from an
+                // arbitrary part of the pairs would look exact and be wrong.
+                if (!warnedTooLarge)
+                {
+                    output.AddWarning(
+                        CopilotAdoptionWarningKeys.AgentReachTooLarge,
+                        new Dictionary<string, object> { { "maxRows", CopilotAdoptionSql.MaxAgentReachRows } });
+                    warnedTooLarge = true;
+                }
+
+                return null;
+            }
+
+            Dictionary<string, object> ReachParameters(DateTime from, DateTime to)
+            {
+                return new Dictionary<string, object>
+                {
+                    { "@from", from },
+                    { "@toExclusive", to },
+                    { "@maxRows", CopilotAdoptionSql.MaxAgentReachRows + 1 },
+                };
+            }
+
+            if (auditAvailableInWindow)
+            {
+                var parameters = ReachParameters(windowStart, toExclusive);
+                output.Sql["agentReach"] = CopilotAdoptionSql.ForDisplay(sql, parameters);
+
+                analysis.AgentReachRows = WithinCap(await SafeAsync(
+                    () => QueryAsync<AgentReachRow>(sql, cancellationToken, ToSqlParameters(parameters)),
+                    CopilotAdoptionSteps.AgentReach,
+                    CopilotAdoptionQueries.AgentReach,
+                    output,
+                    "agent use per person and department", cancellationToken));
+            }
+
+            if (agentWindowStart == windowStart && agentToExclusive == toExclusive)
+            {
+                analysis.AgentInventoryReachRows = analysis.AgentReachRows;
+            }
+            else
+            {
+                var parameters = ReachParameters(agentWindowStart, agentToExclusive);
+                output.Sql["agentInventoryReach"] = CopilotAdoptionSql.ForDisplay(sql, parameters);
+
+                analysis.AgentInventoryReachRows = WithinCap(await SafeAsync(
+                    () => QueryAsync<AgentReachRow>(sql, cancellationToken, ToSqlParameters(parameters)),
+                    CopilotAdoptionSteps.AgentReach,
+                    CopilotAdoptionQueries.AgentInventoryReach,
+                    output,
+                    "agent reach across departments", cancellationToken));
+            }
+
+            if (analysis.AgentInventoryReachRows != null)
+            {
+                var departments = await SafeAsync(
+                    () => QueryAsync<DepartmentNameRow>(CopilotAdoptionSql.AgentReachDepartmentsSql, cancellationToken),
+                    CopilotAdoptionSteps.AgentReach,
+                    CopilotAdoptionQueries.AgentReachDepartments,
+                    output,
+                    "department names", cancellationToken);
+
+                if (departments == null)
+                {
+                    // Reach without department names would count departments it cannot name, and pick a home
+                    // department it cannot show. Unknown is the honest answer.
+                    analysis.AgentInventoryReachRows = null;
+                }
+                else
+                {
+                    analysis.AgentReachDepartments = departments
+                        .GroupBy(d => d.Id)
+                        .ToDictionary(g => g.Key, g => g.First().Name);
+                }
+            }
+
+            var authoringImported = await SafeScalarAsync(
+                CopilotAdoptionSql.CopilotStudioAuthoringImportedSql,
+                CopilotAdoptionSteps.AgentReach,
+                CopilotAdoptionQueries.AgentBuildersProbe,
+                output,
+                "Copilot Studio authoring events probe",
+                null,
+                cancellationToken) == 1;
+
+            // Never imported is not "nobody builds agents": the builder figures stay unknown.
+            if (!authoringImported) return;
+
+            var buildersSql = CopilotAdoptionSql.AgentBuildersSql();
+            var buildersParameters = new Dictionary<string, object>
+            {
+                { "@from", windowStart },
+                { "@toExclusive", toExclusive },
+            };
+            output.Sql["agentBuilders"] = CopilotAdoptionSql.ForDisplay(buildersSql, buildersParameters);
+
+            var builders = await SafeAsync(
+                () => QueryAsync<AgentBuilderRow>(buildersSql, cancellationToken, ToSqlParameters(buildersParameters)),
+                CopilotAdoptionSteps.AgentReach,
+                CopilotAdoptionQueries.AgentBuilders,
+                output,
+                "Copilot Studio agent builders", cancellationToken);
+
+            if (builders == null) return;
+
+            foreach (var builder in builders)
+            {
+                builder.EmailDomain = CopilotAdoptionEmailDomain.From(builder.UserPrincipalName, builder.Mail);
+            }
+
+            analysis.AgentBuilders = builders;
+            analysis.AgentBuildersAssessed = true;
         }
 
         /// <summary>
@@ -1792,7 +1949,9 @@ namespace Common.Entities.CopilotAdoption
             FinaliseUnlicensed(analysis);
             FinaliseCowork(analysis);
             FinaliseSeatHolderTimeSaved(analysis);
-            summary.CombinedByDepartment = BuildCombinedSegments(analysis);
+            var agentFigures = BuildAgentAdoptionFigures(analysis);
+            summary.CombinedByDepartment = BuildCombinedSegments(analysis, agentFigures);
+            ApplyAgentAdoptionFigures(summary, agentFigures);
 
             var opportunities = analysis.Opportunities ?? new List<LicenceOpportunityRow>();
             var recommended = opportunities.Where(o => o.Recommended).ToList();
@@ -2294,6 +2453,20 @@ namespace Common.Entities.CopilotAdoption
 
             estate.Agents = agents;
 
+            // Reach is a property of the tenant-wide inventory, written onto its rows once, by the tenant
+            // analysis. A filtered view shares those rows and has no pairs of its own here, so it leaves them
+            // alone and carries the tenant count across with the rest of the inventory (CarryUnscopedSections).
+            if (analysis.AgentInventoryReachRows != null)
+            {
+                AssignAgentReach(
+                    agents,
+                    analysis.AgentInventoryReachRows,
+                    analysis.AgentReachDepartments,
+                    _options.MinSeatsPerSegment);
+                summary.AgentsInThreeOrMoreDepartments = agents.Count(a =>
+                    CopilotAgentFigureScope.Includes(a) && (a.Departments ?? 0) >= AgentReachDepartmentThreshold);
+            }
+
             // On the summary itself rather than on the estate: the estate is tenant-level and a filtered
             // view carries it whole, but these are people, and a filtered view lists its own.
             summary.TopAgentUsers = (analysis.AgentUsers ?? new List<AgentUserRow>())
@@ -2302,6 +2475,279 @@ namespace Common.Entities.CopilotAdoption
                 .Take(Math.Max(0, _options.TopAgentUsers))
                 .ToList();
             summary.TopAgentUsersCapped = analysis.AgentUsersCapped;
+        }
+
+        /// <summary>
+        /// Writes each inventory agent's reach across departments onto its row (#647): how many departments
+        /// it had a user in during the period, which department most of its users came from, and what share
+        /// of its users that is.
+        /// </summary>
+        /// <remarks>
+        /// <para>The home department is the one with the most of the agent's users; a tie goes to the one with
+        /// more interactions, then alphabetically, so the same data always names the same department. Its name
+        /// is withheld when it contributed fewer than <paramref name="minSeatsPerSegment"/> users - the same
+        /// privacy floor as every department breakdown here, so a home department of one or two people never
+        /// points at them. The share is still published: it names nobody.</para>
+        /// <para>People with no department are counted in the agent's users but are not a department, so
+        /// they can neither be its home nor add to its department count.</para>
+        /// <para>An inventory agent with no use in the period reaches no department. Internal and static so it
+        /// can be tested from hand-built rows.</para>
+        /// </remarks>
+        internal static void AssignAgentReach(
+            IEnumerable<AgentUsageRow> agents,
+            IEnumerable<AgentReachRow> rows,
+            IReadOnlyDictionary<int, string> departmentNames,
+            int minSeatsPerSegment)
+        {
+            var byAgent = (rows ?? Enumerable.Empty<AgentReachRow>())
+                .GroupBy(r => r.AgentId)
+                .ToDictionary(g => g.Key, g => g.ToList());
+
+            foreach (var agent in agents ?? Enumerable.Empty<AgentUsageRow>())
+            {
+                if (!byAgent.TryGetValue(agent.AgentId, out var pairs))
+                {
+                    agent.WindowUsers = 0;
+                    agent.Departments = 0;
+                    agent.HomeDepartment = null;
+                    agent.HomeDepartmentSharePct = null;
+                    continue;
+                }
+
+                var users = pairs.Select(p => p.UserId).Distinct().Count();
+                var departments = pairs
+                    .Select(p => new { Pair = p, Department = NamedDepartment(p.DepartmentId, departmentNames) })
+                    .Where(x => x.Department != null)
+                    .GroupBy(x => x.Department, StringComparer.OrdinalIgnoreCase)
+                    .Select(g => new
+                    {
+                        Department = g.Key,
+                        Users = g.Select(x => x.Pair.UserId).Distinct().Count(),
+                        Interactions = g.Sum(x => x.Pair.Interactions),
+                    })
+                    .OrderByDescending(d => d.Users)
+                    .ThenByDescending(d => d.Interactions)
+                    .ThenBy(d => d.Department, StringComparer.OrdinalIgnoreCase)
+                    .ToList();
+
+                var home = departments.FirstOrDefault();
+                agent.WindowUsers = users;
+                agent.Departments = departments.Count;
+                agent.HomeDepartmentSharePct = home == null
+                    ? (double?)null
+                    : CopilotAdoptionScoring.Percentage(home.Users, users);
+                agent.HomeDepartment = home != null && home.Users >= minSeatsPerSegment ? home.Department : null;
+            }
+        }
+
+        /// <summary>A department id's name as every department breakdown here keys it, or null for "no department".</summary>
+        private static string NamedDepartment(int? departmentId, IReadOnlyDictionary<int, string> names)
+        {
+            if (!departmentId.HasValue || names == null) return null;
+            return names.TryGetValue(departmentId.Value, out var name) && !string.IsNullOrWhiteSpace(name)
+                ? name.Trim()
+                : null;
+        }
+
+        /// <summary>The department bucket every department breakdown in this service groups a person into.</summary>
+        private static string DepartmentKey(string department)
+        {
+            return string.IsNullOrWhiteSpace(department) ? "(no department)" : department.Trim();
+        }
+
+        /// <summary>One department's agent breadth, depth and builder counts (#646, #647).</summary>
+        private sealed class DepartmentAgentFigures
+        {
+            public int ActiveUsers { get; set; }
+
+            public int AgentUsers { get; set; }
+
+            public HashSet<int> Agents { get; } = new HashSet<int>();
+
+            public long Interactions { get; set; }
+
+            public int Builders { get; set; }
+        }
+
+        /// <summary>
+        /// Agent breadth and depth for the population this analysis holds, by department and in total (#646),
+        /// with the builder counts beside them (#647).
+        /// </summary>
+        private sealed class AgentAdoptionFigures
+        {
+            /// <summary>False when the (agent, person) pairs are unknown, so breadth and depth are too.</summary>
+            public bool Measured { get; set; }
+
+            public int ActiveUsers { get; set; }
+
+            public int AgentUsers { get; set; }
+
+            public HashSet<int> Agents { get; } = new HashSet<int>();
+
+            public long Interactions { get; set; }
+
+            /// <summary>False when no Copilot Studio authoring event was ever imported, or the query failed.</summary>
+            public bool BuildersMeasured { get; set; }
+
+            public int Builders { get; set; }
+
+            /// <summary>Departments large enough to report on - see <see cref="BuildCombinedSegments"/>.</summary>
+            public HashSet<string> ReportableDepartments { get; } = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            public Dictionary<string, DepartmentAgentFigures> ByDepartment { get; } =
+                new Dictionary<string, DepartmentAgentFigures>(StringComparer.OrdinalIgnoreCase);
+
+            public DepartmentAgentFigures For(string department)
+            {
+                if (!ByDepartment.TryGetValue(department, out var figures))
+                {
+                    figures = new DepartmentAgentFigures();
+                    ByDepartment[department] = figures;
+                }
+
+                return figures;
+            }
+        }
+
+        /// <summary>
+        /// Counts agent breadth and depth over the active Copilot users the audit log can see, and the
+        /// Copilot Studio builders, by department (#646, #647).
+        /// </summary>
+        /// <remarks>
+        /// <para><b>The population.</b> Every active seat holder scored from the audit import, and every
+        /// unlicensed user. A seat holder scored from Microsoft's usage report is left out of both sides:
+        /// that report carries no agent identity, so counting them would read as "active, and never used an
+        /// agent". Numerator and denominator therefore always describe the same people, and the same people
+        /// as the rest of the department table.</para>
+        /// <para><b>Filtered views.</b> The pairs are tenant-wide, but only pairs whose person is in this
+        /// analysis's own licensed or unlicensed rows are counted, so a filtered view narrows every figure
+        /// here to its own people without a second list.</para>
+        /// <para><b>Which agents.</b> Those <see cref="CopilotAgentFigureScope"/> includes - the one place that
+        /// decides.</para>
+        /// <para>Cost: one pass over the pairs and one over the people, with hash lookups - linear in both, a
+        /// few tens of milliseconds at 200,000 users.</para>
+        /// </remarks>
+        private AgentAdoptionFigures BuildAgentAdoptionFigures(CopilotAdoptionAnalysis analysis)
+        {
+            var figures = new AgentAdoptionFigures();
+
+            var departmentOf = new Dictionary<int, string>();
+            foreach (var user in analysis.LicensedUsers ?? new List<LicensedUserAdoptionRow>())
+            {
+                if (IsUsageReportSourced(user) || !CopilotAdoptionScoring.IsActive(user)) continue;
+                departmentOf[user.UserId] = DepartmentKey(user.Department);
+            }
+
+            foreach (var user in analysis.UnlicensedUsers ?? new List<UnlicensedUsageQueryRow>())
+            {
+                if (!departmentOf.ContainsKey(user.UserId)) departmentOf[user.UserId] = DepartmentKey(user.Department);
+            }
+
+            foreach (var department in departmentOf.Values)
+            {
+                figures.For(department).ActiveUsers++;
+            }
+
+            figures.ActiveUsers = departmentOf.Count;
+
+            if (analysis.AgentReachRows != null)
+            {
+                figures.Measured = true;
+
+                var inventory = (analysis.Agents ?? new List<AgentUsageRow>())
+                    .GroupBy(a => a.AgentId)
+                    .ToDictionary(g => g.Key, g => g.First());
+                var agentUsers = new HashSet<int>();
+
+                foreach (var pair in analysis.AgentReachRows)
+                {
+                    if (!departmentOf.TryGetValue(pair.UserId, out var department)) continue;
+
+                    inventory.TryGetValue(pair.AgentId, out var agent);
+                    if (!CopilotAgentFigureScope.Includes(agent)) continue;
+
+                    var byDepartment = figures.For(department);
+                    if (agentUsers.Add(pair.UserId)) byDepartment.AgentUsers++;
+                    byDepartment.Agents.Add(pair.AgentId);
+                    byDepartment.Interactions += pair.Interactions;
+                    figures.Agents.Add(pair.AgentId);
+                    figures.Interactions += pair.Interactions;
+                }
+
+                figures.AgentUsers = agentUsers.Count;
+            }
+
+            if (analysis.AgentBuildersAssessed)
+            {
+                figures.BuildersMeasured = true;
+
+                foreach (var builder in (analysis.AgentBuilders ?? new List<AgentBuilderRow>())
+                             .GroupBy(b => b.UserId)
+                             .Select(g => g.First()))
+                {
+                    figures.Builders++;
+                    figures.For(DepartmentKey(builder.Department)).Builders++;
+                }
+            }
+
+            return figures;
+        }
+
+        /// <summary>
+        /// Publishes the tenant-level breadth, depth and builder figures (#646, #647). Anything that could not
+        /// be measured stays null, so Snapshot facts writes it blank rather than as a zero.
+        /// </summary>
+        private void ApplyAgentAdoptionFigures(CopilotAdoptionSummary summary, AgentAdoptionFigures figures)
+        {
+            summary.AgentFiguresScope = CopilotAgentFigureScope.Current;
+            summary.AgentBuilders = figures.BuildersMeasured ? figures.Builders : (int?)null;
+
+            if (!figures.Measured)
+            {
+                summary.AgentActiveUsers = null;
+                summary.AgentBreadthAgentUsers = null;
+                summary.AgentBreadthUserPct = null;
+                summary.AgentBreadthDepartments = null;
+                summary.AgentBreadthDepartmentsWithAgentUsers = null;
+                summary.AgentBreadthDepartmentPct = null;
+                summary.AgentDepthDistinctAgents = null;
+                summary.AgentDepthAgentsPer100ActiveUsers = null;
+                summary.AgentDepthInteractions = null;
+                summary.AgentDepthInteractionsPerActiveAgent = null;
+                return;
+            }
+
+            // "(no department)" is a bucket of people, not a department, so it never counts here.
+            var departments = figures.ReportableDepartments
+                .Where(d => !string.Equals(d, DepartmentKey(null), StringComparison.OrdinalIgnoreCase))
+                .ToList();
+            var withAgentUsers = departments.Count(d => figures.ByDepartment.TryGetValue(d, out var f) && f.AgentUsers > 0);
+
+            summary.AgentActiveUsers = figures.ActiveUsers;
+            summary.AgentBreadthAgentUsers = figures.AgentUsers;
+            summary.AgentBreadthUserPct = PercentageOrNull(figures.AgentUsers, figures.ActiveUsers);
+            summary.AgentBreadthDepartments = departments.Count;
+            summary.AgentBreadthDepartmentsWithAgentUsers = withAgentUsers;
+            summary.AgentBreadthDepartmentPct = PercentageOrNull(withAgentUsers, departments.Count);
+            summary.AgentDepthDistinctAgents = figures.Agents.Count;
+            summary.AgentDepthAgentsPer100ActiveUsers = PerHundredOrNull(figures.Agents.Count, figures.ActiveUsers);
+            summary.AgentDepthInteractions = figures.Interactions;
+            summary.AgentDepthInteractionsPerActiveAgent = PerAgentOrNull(figures.Interactions, figures.Agents.Count);
+        }
+
+        private static double? PercentageOrNull(int part, int total)
+        {
+            return total <= 0 ? (double?)null : CopilotAdoptionScoring.Percentage(part, total);
+        }
+
+        private static double? PerHundredOrNull(int count, int users)
+        {
+            return users <= 0 ? (double?)null : Math.Round(count * 100d / users, 1, MidpointRounding.AwayFromZero);
+        }
+
+        private static double? PerAgentOrNull(long interactions, int agents)
+        {
+            return agents <= 0 ? (double?)null : Math.Round(interactions / (double)agents, 1, MidpointRounding.AwayFromZero);
         }
 
         /// <summary>
@@ -2668,8 +3114,13 @@ namespace Common.Entities.CopilotAdoption
         /// This is the view that turns two separate reports into a decision: a department with idle
         /// seats <i>and</i> heavy unlicensed Chat use is not an adoption problem, it is a
         /// seat-allocation problem, and it can usually be fixed at no cost.
+        ///
+        /// It also carries each department's agent breadth, depth and builders (#646, #647) from
+        /// <paramref name="agentFigures"/>, which records here every department large enough to report on -
+        /// the denominator of the tenant's department breadth.
         /// </summary>
-        private List<AdoptionCombinedSegmentRow> BuildCombinedSegments(CopilotAdoptionAnalysis analysis)
+        private List<AdoptionCombinedSegmentRow> BuildCombinedSegments(
+            CopilotAdoptionAnalysis analysis, AgentAdoptionFigures agentFigures)
         {
             var licensed = (analysis.LicensedUsers ?? new List<LicensedUserAdoptionRow>())
                 .GroupBy(u => string.IsNullOrWhiteSpace(u.Department) ? "(no department)" : u.Department.Trim())
@@ -2704,6 +3155,11 @@ namespace Common.Entities.CopilotAdoption
                     continue;
                 }
 
+                agentFigures.ReportableDepartments.Add(segment);
+                agentFigures.ByDepartment.TryGetValue(segment, out var agents);
+                agents = agents ?? new DepartmentAgentFigures();
+                var measured = agentFigures.Measured;
+
                 rows.Add(new AdoptionCombinedSegmentRow
                 {
                     Segment = segment,
@@ -2723,6 +3179,14 @@ namespace Common.Entities.CopilotAdoption
                     InteractionsPerUnlicensedUser = PerUserPerMonth(chat.Sum(u => (double)u.Interactions), chat.Count),
                     UnlicensedAgentUserPct = CopilotAdoptionScoring.Percentage(
                         chat.Count(u => u.AgentsUsed > 0), chat.Count),
+                    AgentActiveUsers = measured ? agents.ActiveUsers : (int?)null,
+                    AgentUsers = measured ? agents.AgentUsers : (int?)null,
+                    AgentUserPct = measured ? PercentageOrNull(agents.AgentUsers, agents.ActiveUsers) : null,
+                    DistinctAgents = measured ? agents.Agents.Count : (int?)null,
+                    AgentsPer100ActiveUsers = measured ? PerHundredOrNull(agents.Agents.Count, agents.ActiveUsers) : null,
+                    AgentInteractions = measured ? agents.Interactions : (long?)null,
+                    InteractionsPerActiveAgent = measured ? PerAgentOrNull(agents.Interactions, agents.Agents.Count) : null,
+                    AgentBuilders = agentFigures.BuildersMeasured ? agents.Builders : (int?)null,
                 });
             }
 

@@ -1057,16 +1057,39 @@ namespace Common.Entities.CopilotAdoption
                     + "is a licence-allocation problem, not an adoption problem, and can usually be fixed at no cost. "
                     + "Interactions per licence divides by all licences including idle ones - that is the point of the "
                     + "comparison. Both per-user columns are normalised to a month."));
+                sheet.AddRow(XlsxCell.Wrapped(
+                    "Agent breadth and depth (" + AgentFiguresScopeLabel(summary.AgentFiguresScope) + "): breadth is the "
+                    + "share of the department's active Copilot users seen in the audit log who used at least one agent; "
+                    + "depth is how many distinct agents they used per 100 of them, and how many interactions each of "
+                    + "those agents had. Builders are people who created, published or shared a Copilot Studio agent. "
+                    + "Blank means not measured. Definitions are on 'How this is calculated'."));
                 sheet.AddHeaderRow("Department", "Seats", "Active licences", "Interactions per licence",
                     "Licences using agents %", "Unlicensed users", "Interactions per unlicensed user",
-                    "Unlicensed using agents %");
+                    "Unlicensed using agents %", "Active users (audit)", "Using agents %", "Distinct agents",
+                    "Agents per 100 active users", "Interactions per agent", "Agent builders");
 
                 foreach (var row in summary.CombinedByDepartment)
                 {
                     sheet.AddRow(row.Segment, row.LicensedUsers, row.LicensedActiveUsers,
                         row.InteractionsPerLicensedUser, row.LicensedAgentUserPct, row.UnlicensedActiveUsers,
-                        row.InteractionsPerUnlicensedUser, row.UnlicensedAgentUserPct);
+                        row.InteractionsPerUnlicensedUser, row.UnlicensedAgentUserPct, row.AgentActiveUsers,
+                        row.AgentUserPct, row.DistinctAgents, row.AgentsPer100ActiveUsers,
+                        row.InteractionsPerActiveAgent, row.AgentBuilders);
                 }
+
+                sheet.AddBlankRow();
+                sheet.AddHeaderRow("Agent breadth and depth across the tenant", "Value");
+                sheet.AddRow("Departments counted", summary.AgentBreadthDepartments);
+                sheet.AddRow("Of which with at least one agent user", summary.AgentBreadthDepartmentsWithAgentUsers);
+                sheet.AddRow("Departments with an agent user %", summary.AgentBreadthDepartmentPct);
+                sheet.AddRow("Active Copilot users (audit)", summary.AgentActiveUsers);
+                sheet.AddRow("Of which used an agent", summary.AgentBreadthAgentUsers);
+                sheet.AddRow("Active users who used an agent %", summary.AgentBreadthUserPct);
+                sheet.AddRow("Distinct agents used", summary.AgentDepthDistinctAgents);
+                sheet.AddRow("Distinct agents per 100 active users", summary.AgentDepthAgentsPer100ActiveUsers);
+                sheet.AddRow("Agent interactions", summary.AgentDepthInteractions);
+                sheet.AddRow("Interactions per active agent", summary.AgentDepthInteractionsPerActiveAgent);
+                sheet.AddRow("Agent builders", summary.AgentBuilders);
             }
 
             if (summary.AccountabilityRollup.Count > 0)
@@ -1178,7 +1201,7 @@ namespace Common.Entities.CopilotAdoption
             if (estate == null || estate.KnownAgents == 0) return;
 
             var sheet = workbook.AddSheet("Agents");
-            sheet.SetColumnWidths(34, 12, 12, 14, 16, 12, 14, 14, 14, 14, 46);
+            sheet.SetColumnWidths(34, 12, 12, 14, 16, 12, 14, 14, 14, 14, 46, 14, 14, 30, 14);
 
             sheet.AddTitle("Copilot agent estate");
             sheet.AddRow(XlsxCell.Wrapped(
@@ -1201,6 +1224,11 @@ namespace Common.Entities.CopilotAdoption
             sheet.AddRow("Interactions per agent user", estate.InteractionsPerAgentUser);
             sheet.AddRow("Most used agent", estate.MostPopularAgent ?? "-");
             sheet.AddRow("Most versatile agent", estate.MostVersatileAgent ?? "-");
+            sheet.AddRow(
+                $"Agents used in {CopilotAdoptionService.AgentReachDepartmentThreshold} or more departments "
+                + "(" + AgentFiguresScopeLabel(summary.AgentFiguresScope) + ")",
+                summary.AgentsInThreeOrMoreDepartments);
+            sheet.AddRow("Agent builders (Copilot Studio)", summary.AgentBuilders);
 
             if (estate.HealthBreakdown.Count > 0)
             {
@@ -1231,8 +1259,14 @@ namespace Common.Entities.CopilotAdoption
             if (estate.Agents.Count > 0)
             {
                 sheet.AddBlankRow();
+                sheet.AddRow(XlsxCell.Wrapped(
+                    "Reach: 'Users this period', 'Departments', 'Home department' and 'Home share %' cover the reporting "
+                    + "period. The home department is the one most of the agent's users are in; its name is left blank "
+                    + $"when fewer than {summary.Options.MinSeatsPerSegment} of them are, so it never points at one or "
+                    + "two people. A low home share means the agent has spread beyond the team that made it."));
                 sheet.AddHeaderRow("Agent", "Type", "Users", "Licensed users", "Interactions",
-                    "Per user", "Surfaces", "Last used", "Days since", "Verdict", "Why");
+                    "Per user", "Surfaces", "Last used", "Days since", "Verdict", "Why",
+                    "Users this period", "Departments", "Home department", "Home share %");
 
                 var headerRow = sheet.CurrentRow;
                 foreach (var agent in estate.Agents)
@@ -1248,10 +1282,14 @@ namespace Common.Entities.CopilotAdoption
                         agent.LastUsedUtc.HasValue ? XlsxCell.Date(agent.LastUsedUtc.Value) : (object)"-",
                         agent.DaysSinceLastUse.HasValue ? (object)agent.DaysSinceLastUse.Value : "-",
                         agent.HealthName,
-                        XlsxCell.Wrapped(agent.HealthReason));
+                        XlsxCell.Wrapped(agent.HealthReason),
+                        agent.WindowUsers,
+                        agent.Departments,
+                        agent.HomeDepartment,
+                        agent.HomeDepartmentSharePct);
                 }
 
-                sheet.AddAutoFilter(headerRow, sheet.CurrentRow, 1, 11);
+                sheet.AddAutoFilter(headerRow, sheet.CurrentRow, 1, 15);
             }
         }
 
@@ -1283,6 +1321,21 @@ namespace Common.Entities.CopilotAdoption
                     return $"Unused for {o.AgentRetireInactiveDays} days or more. Confirm with its owner, then remove it.";
                 default:
                     return string.Empty;
+            }
+        }
+
+        /// <summary>
+        /// Which agents the breadth, depth and reach figures count, in words (#646, #647) - so every sheet that
+        /// shows one names its scope. See <see cref="CopilotAgentFigureScope"/>.
+        /// </summary>
+        internal static string AgentFiguresScopeLabel(string scope)
+        {
+            switch (scope)
+            {
+                case CopilotAgentFigureScope.AllAgents:
+                    return "all agents, Microsoft's and your own";
+                default:
+                    return "agents in scope '" + scope + "'";
             }
         }
 
@@ -2386,6 +2439,50 @@ namespace Common.Entities.CopilotAdoption
                 + $"people; Keep when used within {o.AgentReviewInactiveDays} days by at least {o.AgentMinUsers} "
                 + $"people. Any agent first seen within {o.AgentNewDays} days is New and exempt from review - a "
                 + "brand-new agent with two users has not failed, it has not started.");
+
+            var agentScope = AgentFiguresScopeLabel(summary.AgentFiguresScope);
+
+            AddMethod(sheet, "Agent breadth",
+                $"Counts {agentScope}, over the active Copilot users the audit log can see: seat holders whose "
+                + "Copilot activity comes from the audit log, and every unlicensed Copilot Chat user. Seat holders "
+                + "scored from Microsoft's usage report are left out of both sides, because that report carries no "
+                + "agent identity.\n"
+                + "Departments with an agent user % = departments with at least one person who used an agent / "
+                + $"departments counted. A department is counted when it has at least {o.MinSeatsPerSegment} Copilot "
+                + $"seat holders or at least {o.MinSeatsPerSegment} active unlicensed Copilot users - the rule that "
+                + "gives a department a row in the department table. People with no department are not a department.\n"
+                + "Active users who used an agent % = active users who used at least one agent / active users. The "
+                + "same share, per department, is the department table's 'Using agents %'.");
+
+            AddMethod(sheet, "Agent depth",
+                $"Counts {agentScope}, over the same active users as breadth.\n"
+                + "Distinct agents per 100 active users = distinct agents those users used x 100 / active users.\n"
+                + "Interactions per active agent = their interactions with those agents / distinct agents.\n"
+                + "Both are given for the tenant and per department. Read them against breadth: many departments with "
+                + "an agent user but few agents each is breadth without depth, and a few departments using many "
+                + "agents is depth without breadth - the two call for different programmes.");
+
+            AddMethod(sheet, "Agent builders",
+                "People who created, published or shared a Copilot Studio agent in the period - Microsoft's "
+                + "Copilot Studio authoring operations " + string.Join(", ", CopilotAdoptionSql.AgentBuilderOperations)
+                + ", from the Power Platform audit feed. Editing a topic, a component or a setting does not count. A "
+                + "count, tenant-wide and per department, and never a name. Blank when no Copilot Studio authoring "
+                + "event has been imported, so a missing feed does not read as nobody building agents.\n"
+                + "Copilot Studio identifies an agent differently from the Copilot interaction log, and nothing "
+                + "proves the two identifiers equal, so builders are reported beside agent use rather than joined "
+                + "to it: this report does not say who built which agent.");
+
+            AddMethod(sheet, "Agent reach",
+                "For each agent, over the reporting period: the departments with at least one of its users; its "
+                + "home department, the one most of its users are in (a tie goes to the department with more "
+                + "interactions, then alphabetically); and its home share, the share of its users in that "
+                + $"department. The home department is named only when at least {o.MinSeatsPerSegment} of the "
+                + "agent's users are in it. People with no department count towards an agent's users but are not "
+                + $"a department.\nAgents used in {CopilotAdoptionService.AgentReachDepartmentThreshold} or more "
+                + $"departments counts {agentScope} with that reach: local wins that have spread beyond the team "
+                + "that made them. Like the rest of the agent inventory, reach describes the latest period when the "
+                + "report covers past dates, and stays tenant-wide in a filtered view; breadth, depth and builders "
+                + "describe the filtered people.");
 
             AddMethod(sheet, "Why our figures differ from Microsoft's",
                 "The Copilot audit log and Microsoft's Copilot usage report answer different questions. "

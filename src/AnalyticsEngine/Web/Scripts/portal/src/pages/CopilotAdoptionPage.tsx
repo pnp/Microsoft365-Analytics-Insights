@@ -1941,7 +1941,11 @@ function AnalystTab({
             />
           </div>
           <div className={styles.cardBody}>
-            <CombinedSegmentTable rows={summary.combinedByDepartment} />
+            <CombinedSegmentTable
+              rows={summary.combinedByDepartment}
+              agentTotals={summary}
+              minSeatsPerSegment={o.minSeatsPerSegment}
+            />
           </div>
         </Card>
       )}
