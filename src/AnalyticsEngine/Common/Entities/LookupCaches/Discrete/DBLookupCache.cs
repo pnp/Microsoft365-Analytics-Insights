@@ -2,7 +2,6 @@
 using System;
 using System.Data.Entity;
 using System.Data.Entity.Infrastructure;
-using Microsoft.Data.SqlClient;
 using System.Linq;
 using System.Threading.Tasks;
 
@@ -68,8 +67,7 @@ namespace Common.Entities
                 {
                     // Handle duplicate key constraint violations that can occur in batch processing scenarios
                     // Check if it's a unique constraint/index violation
-                    var sqlException = ex.InnerException?.InnerException as SqlException;
-                    if (sqlException != null && (sqlException.Number == 2601 || sqlException.Number == 2627))
+                    if (DataUtils.Sql.SqlDuplicateKey.IsViolation(ex))
                     {
                         // SQL Error 2601: Cannot insert duplicate key row with unique index
                         // SQL Error 2627: Violation of %ls constraint '%.*ls'. Cannot insert duplicate key

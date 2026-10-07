@@ -1,4 +1,5 @@
 ﻿using Common.Entities;
+using Common.Entities.LookupCaches;
 using DataUtils;
 using DataUtils.Sql;
 using System;
@@ -22,6 +23,18 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         private readonly UserBatchProcessor _batchProcessor;
         private const int BULK_INSERT_BATCH_SIZE = 10000;
         private const int METADATA_BATCH_SIZE = 500;
+
+        /// <summary>
+        /// Bulk-copy attempts per batch. Each failed attempt leaves out the users another import has created since
+        /// the user list was loaded, so a further attempt only fails if yet another one appears in the meantime.
+        /// </summary>
+        internal const int MaxBulkInsertAttemptsPerBatch = 3;
+
+        /// <summary>
+        /// Test seam: runs before each bulk-copy attempt with the users about to be written, so a test can create
+        /// one of them first, exactly as a concurrent import would.
+        /// </summary>
+        internal Func<IReadOnlyList<GraphUser>, Task> BeforeBulkInsertAttemptAsync { get; set; }
 
         public UserInsertProcessor(AnalyticsLogger logger, UserBatchProcessor batchProcessor)
         {
@@ -110,7 +123,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         }
 
         /// <summary>
-        /// Bulk-inserts <paramref name="graphUsers"/> into <c>dbo.users</c> over one connection.
+        /// Bulk-inserts <paramref name="graphUsers"/> into <c>dbo.users</c> over one connection, leaving out any
+        /// that another import creates in the meantime (see <see cref="BulkInsertBatch"/>).
         /// </summary>
         /// <remarks>
         /// The connection is created through <see cref="AzureSqlTokenAuth.CreateConnection"/> and handed
@@ -126,6 +140,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         internal async Task BulkInsertUsers(string connectionString, List<GraphUser> graphUsers, int batchSize)
         {
             var totalInserted = 0;
+            var totalCreatedMeanwhile = 0;
 
             using (var connection = AzureSqlTokenAuth.CreateConnection(connectionString))
             {
@@ -139,31 +154,100 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 {
                     var batchCount = Math.Min(batchSize, graphUsers.Count - batchStart);
                     var batch = graphUsers.GetRange(batchStart, batchCount);
-                    var dataTable = CreateUserDataTable(batch);
 
-                    using (var bulkCopy = new SqlBulkCopy(connection))
+                    var inserted = await BulkInsertBatch(connection, batch, batchSize);
+
+                    totalInserted += inserted;
+                    totalCreatedMeanwhile += batchCount - inserted;
+                    _logger.LogInformation(totalCreatedMeanwhile == 0
+                        ? $"User import - Bulk inserted {totalInserted.ToString("N0")}/{graphUsers.Count.ToString("N0")} users to SQL"
+                        : $"User import - Bulk inserted {totalInserted.ToString("N0")}/{graphUsers.Count.ToString("N0")} users to SQL ({totalCreatedMeanwhile.ToString("N0")} already created by another import)");
+                }
+            }
+        }
+
+        /// <summary>
+        /// Writes one batch, leaving out any of its users that another import has created since the user list was
+        /// loaded, and returns how many it inserted (#714).
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// <c>dbo.users.user_name</c> is unique (<c>IX_users</c>), and other imports create users too: the usage
+        /// reports, the Copilot per-user report, the audit merges, the Teams call processor and the App Insights
+        /// importer. A full directory read can hold the user list for many minutes before this insert, so one of its
+        /// users can be created in between. A bulk-copy batch is all-or-nothing, so that single duplicate used to fail
+        /// the whole batch, the user import, and every Graph section after it in that cycle.
+        /// </para>
+        /// <para>
+        /// On a duplicate-key error the database is asked which of the batch's users exist now, by the comparison
+        /// <c>IX_users</c> itself uses, and the batch is written again without them. They are left as they are here;
+        /// phase 2 reloads every user of this insert by UPN, so they still get their metadata. At most
+        /// <see cref="MaxBulkInsertAttemptsPerBatch"/> attempts. A duplicate-key error that none of the batch's users
+        /// explains, and every other error, is rethrown unchanged.
+        /// </para>
+        /// </remarks>
+        private async Task<int> BulkInsertBatch(SqlConnection connection, List<GraphUser> batch, int batchSize)
+        {
+            for (var attempt = 1; ; attempt++)
+            {
+                if (BeforeBulkInsertAttemptAsync != null)
+                {
+                    await BeforeBulkInsertAttemptAsync(batch);
+                }
+
+                try
+                {
+                    await WriteBatch(connection, batch, batchSize);
+                    return batch.Count;
+                }
+                catch (Exception ex) when (attempt < MaxBulkInsertAttemptsPerBatch && SqlDuplicateKey.IsViolation(ex))
+                {
+                    var existingIds = await ExistingUserIds.FindAsync(connection, batch.Select(u => u.UserPrincipalName).ToList());
+                    var notYetCreated = new List<GraphUser>(batch.Count);
+                    for (var i = 0; i < batch.Count; i++)
                     {
-                        bulkCopy.DestinationTableName = "dbo.users";
-                        bulkCopy.BatchSize = batchSize;
-                        bulkCopy.BulkCopyTimeout = 600; // 10 minutes
-
-                        // Map only columns that exist in both GraphUser and the User table
-                        bulkCopy.ColumnMappings.Add("UserPrincipalName", "user_name");
-                        bulkCopy.ColumnMappings.Add("AzureAdId", "azure_ad_id");
-                        bulkCopy.ColumnMappings.Add("AccountEnabled", "account_enabled");
-                        bulkCopy.ColumnMappings.Add("CreatedDateTime", "created_utc");
-                        bulkCopy.ColumnMappings.Add("Mail", "mail");
-                        bulkCopy.ColumnMappings.Add("PostalCode", "postalcode");
-
-                        await bulkCopy.WriteToServerAsync(dataTable);
+                        if (!existingIds[i].HasValue)
+                        {
+                            notYetCreated.Add(batch[i]);
+                        }
                     }
 
-                    totalInserted += batch.Count;
-                    _logger.LogInformation($"User import - Bulk inserted {totalInserted.ToString("N0")}/{graphUsers.Count.ToString("N0")} users to SQL");
+                    var createdMeanwhile = batch.Count - notYetCreated.Count;
+                    if (createdMeanwhile == 0)
+                    {
+                        // None of the batch's users exists, so this is not the race above.
+                        throw;
+                    }
 
-                    dataTable.Clear();
-                    dataTable.Dispose();
+                    _logger.LogInformation($"User import - {createdMeanwhile.ToString("N0")} of the {batch.Count.ToString("N0")} users in this bulk-insert batch were created by another import since the user list was loaded; left as they are. Inserting the other {notYetCreated.Count.ToString("N0")}.");
+
+                    batch = notYetCreated;
+                    if (batch.Count == 0)
+                    {
+                        return 0;
+                    }
                 }
+            }
+        }
+
+        private async Task WriteBatch(SqlConnection connection, List<GraphUser> batch, int batchSize)
+        {
+            using (var dataTable = CreateUserDataTable(batch))
+            using (var bulkCopy = new SqlBulkCopy(connection))
+            {
+                bulkCopy.DestinationTableName = "dbo.users";
+                bulkCopy.BatchSize = batchSize;
+                bulkCopy.BulkCopyTimeout = 600; // 10 minutes
+
+                // Map only columns that exist in both GraphUser and the User table
+                bulkCopy.ColumnMappings.Add("UserPrincipalName", "user_name");
+                bulkCopy.ColumnMappings.Add("AzureAdId", "azure_ad_id");
+                bulkCopy.ColumnMappings.Add("AccountEnabled", "account_enabled");
+                bulkCopy.ColumnMappings.Add("CreatedDateTime", "created_utc");
+                bulkCopy.ColumnMappings.Add("Mail", "mail");
+                bulkCopy.ColumnMappings.Add("PostalCode", "postalcode");
+
+                await bulkCopy.WriteToServerAsync(dataTable);
             }
         }
 
