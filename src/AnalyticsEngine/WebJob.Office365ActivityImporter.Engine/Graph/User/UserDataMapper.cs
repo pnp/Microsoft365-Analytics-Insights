@@ -306,12 +306,13 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                             // Drop LOWER() from the column predicate - the default code-first
                             // collation (Latin1_General_CI_AS) is case-insensitive, so leaving
                             // the column un-lowered keeps the predicate SARGable and lets the
-                            // index on user_name be used.
+                            // index on user_name be used. AsNonUnicode sends the UPN as varchar,
+                            // like the column, for the same reason - see UserCache.Load (#713).
                             if (!_managerPrefetch.TryGet(managerUpn, out dbManager))
                             {
                                 dbManager = await db.users
                                     .Include(u => u.LicenseLookups)
-                                    .FirstOrDefaultAsync(u => u.UserPrincipalName == managerUpn);
+                                    .FirstOrDefaultAsync(u => u.UserPrincipalName == DbFunctions.AsNonUnicode(managerUpn));
                             }
 
                             if (dbManager != null)
@@ -368,7 +369,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             // If the entity has no ID, try to find it by UPN in the database
             // This can happen if the entity was created from a template but actually exists in DB.
             // No LOWER() on the column - CI collation handles case-insensitive matching and
-            // keeps the predicate SARGable against the user_name index.
+            // keeps the predicate SARGable against the user_name index - and a varchar
+            // parameter, like the column, for the same reason (UserCache.Load, #713).
             if (user.ID == 0 && !string.IsNullOrEmpty(user.UserPrincipalName))
             {
                 var upn = user.UserPrincipalName;
@@ -378,7 +380,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 {
                     existingUser = await db.users
                         .Include(u => u.LicenseLookups)
-                        .FirstOrDefaultAsync(u => u.UserPrincipalName == upn);
+                        .FirstOrDefaultAsync(u => u.UserPrincipalName == DbFunctions.AsNonUnicode(upn));
                 }
                 if (existingUser != null)
                 {

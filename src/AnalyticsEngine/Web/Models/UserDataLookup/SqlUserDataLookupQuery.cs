@@ -13,8 +13,9 @@ namespace Web.AnalyticsWeb.Models.UserDataLookup
     /// </summary>
     /// <remarks>
     /// Designed for large tenants (~200k users): the user is found by a direct equality compare on the
-    /// indexed, case-insensitive user_name column (no LOWER()/ToLower(), which would force a scan),
-    /// counts hit indexed FK columns, and every detail query is bounded by Take(n).
+    /// indexed, case-insensitive user_name column (no LOWER()/ToLower(), which would force a scan, and a
+    /// varchar parameter like the column, without which SQL collations scan too - #713), counts hit
+    /// indexed FK columns, and every detail query is bounded by Take(n).
     /// </remarks>
     public class SqlUserDataLookupQuery : IUserDataLookupQuery
     {
@@ -34,7 +35,8 @@ namespace Web.AnalyticsWeb.Models.UserDataLookup
             using (var db = _contextFactory.Create())
             {
                 // Direct, case-insensitive equality compare - do NOT use ToLower() (it would make
-                // the predicate non-SARGable and scan the whole users table on a big tenant).
+                // the predicate non-SARGable and scan the whole users table on a big tenant). The UPN
+                // goes as varchar, like user_name, for the same reason (UserCache.Load, #713).
                 var user = await db.users
                     .Include(u => u.Department)
                     .Include(u => u.JobTitle)
@@ -45,7 +47,7 @@ namespace Web.AnalyticsWeb.Models.UserDataLookup
                     .Include(u => u.StateOrProvince)
                     .Include(u => u.Manager)
                     .Include(u => u.LicenseLookups.Select(l => l.License))
-                    .FirstOrDefaultAsync(u => u.UserPrincipalName == upn);
+                    .FirstOrDefaultAsync(u => u.UserPrincipalName == DbFunctions.AsNonUnicode(upn));
 
                 if (user == null)
                 {
@@ -114,7 +116,7 @@ ORDER BY t.name;";
             using (var db = _contextFactory.Create())
             {
                 return await db.users
-                    .Where(u => u.UserPrincipalName == upn)
+                    .Where(u => u.UserPrincipalName == DbFunctions.AsNonUnicode(upn))
                     .Select(u => (int?)u.ID)
                     .FirstOrDefaultAsync();
             }
