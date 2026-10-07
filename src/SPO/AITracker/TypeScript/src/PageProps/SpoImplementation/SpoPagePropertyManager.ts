@@ -8,19 +8,21 @@ import { WebPageDataService } from "./WebPageDataService";
 
 // SPO implementation
 export class SpoPagePropertyManager extends PagePropertyManager {
-    _webAbsoluteUrl: string;
 
-    constructor(pageStateManager: BasePageStateManager, pageDataService: WebPageDataService, webAbsoluteUrl: string) {
+    constructor(pageStateManager: BasePageStateManager, pageDataService: WebPageDataService) {
         super(pageStateManager, pageDataService);
-        this._webAbsoluteUrl = webAbsoluteUrl;
     }
 
-    loadLikes(listTitle: string, pageItemId: number, url: string): Promise<LikesUserEntity[]> {
+    // REST URL for a list item in the page's own web
+    listItemApiUrl(webUrl: string, listTitle: string, pageItemId: number): string {
+        return webUrl.replace(/\/+$/, '') +
+            "/_api/web/lists/getbytitle('" + encodeURIComponent(listTitle) + "')/items(" + pageItemId + ")";
+    }
+
+    loadLikes(webUrl: string, listTitle: string, pageItemId: number, url: string): Promise<LikesUserEntity[]> {
         debug(`Loading likes count for page ID ${pageItemId}`);
 
-        const encodedListTitle = encodeURIComponent(listTitle);
-        const apiUrlPageLikesUrl = this._webAbsoluteUrl +
-            "/_api/web/lists/getbytitle('" + encodedListTitle + "')/items(" + pageItemId + ")/likedByInformation?$expand=likedby";
+        const apiUrlPageLikesUrl = this.listItemApiUrl(webUrl, listTitle, pageItemId) + "/likedByInformation?$expand=likedby";
 
         return getApiReturnJson<ListItemPropsResponse<PageLikesListData>>(apiUrlPageLikesUrl)
             .then((likesResponse: ListItemPropsResponse<PageLikesListData>) => {
@@ -37,11 +39,9 @@ export class SpoPagePropertyManager extends PagePropertyManager {
     }
 
 
-    loadComments(listTitle: string, pageItemId: number, url: string): Promise<PageComment[]> {
+    loadComments(webUrl: string, listTitle: string, pageItemId: number, url: string): Promise<PageComment[]> {
         debug(`Loading comments for page ID ${pageItemId}`);
-        const encodedListTitle = encodeURIComponent(listTitle);
-        const apiUrlPageComments = this._webAbsoluteUrl +
-            "/_api/web/lists/getbytitle('" + encodedListTitle + "')/items(" + pageItemId + ")/comments?$expand=replies";
+        const apiUrlPageComments = this.listItemApiUrl(webUrl, listTitle, pageItemId) + "/comments?$expand=replies";
 
         return getApiReturnJson<ListItemPropsResponse<CommentsListData>>(apiUrlPageComments)
             .then((commentsResponse: ListItemPropsResponse<CommentsListData>) => {
@@ -62,11 +62,9 @@ export class SpoPagePropertyManager extends PagePropertyManager {
 
 
     // Override base. Get page metadata from SP page properties API
-    loadPropsRaw(listTitle: string, pageItemId: number, url: string): Promise<PageProps> {
+    loadPropsRaw(webUrl: string, listTitle: string, pageItemId: number, url: string): Promise<PageProps> {
         debug(`Loading properties for page ID ${pageItemId}`);
-        const encodedListTitle = encodeURIComponent(listTitle);
-        const apiUrlPageProps = this._webAbsoluteUrl +
-            "/_api/web/lists/getbytitle('" + encodedListTitle + "')/items(" + pageItemId + ")/properties";
+        const apiUrlPageProps = this.listItemApiUrl(webUrl, listTitle, pageItemId) + "/properties";
 
         return getApiReturnJson<ListItemPropsResponse<any>>(apiUrlPageProps)
             .then((r: any) => this.processPageProps(url, r));

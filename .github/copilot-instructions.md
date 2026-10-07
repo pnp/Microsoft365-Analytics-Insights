@@ -55,6 +55,14 @@ That file is the source of truth for:
 
 Always read it before making changes under `src/AnalyticsEngine/`.
 
+## SharePoint web components (`src/SPO`)
+
+The SharePoint tracker has two parts that must keep working together. `AITracker.js` holds all the tracking logic and runs on its own on **classic** pages, which have no SPFx. The SPFx extension only bootstraps it on **modern** pages. For any change under `src/SPO/` (or to how the installer deploys it), follow:
+
+- [`src/SPO/.github/copilot-instructions.md`](../src/SPO/.github/copilot-instructions.md)
+
+It covers that dual mode, the intended deployment (the package is deployed tenant-wide; tracking is enabled per site collection by the installer), the rules the tracker must keep, how to build the SPFx package, which CI doesn't, and how to validate a change on a dev tenant with Playwright. **Bump the version with every change**: `AI_TRACKER_VER` for `AITracker.js`, and the SPFx solution version together with `AITRACKER_MODERN_VERSION`. Both are logged in the browser console, which is how anyone tells what a page is running.
+
 ## External APIs: prove they exist before coding against them
 
 PR #588 shipped an import for a Microsoft Graph function, `getMicrosoft365CopilotCoworkUsageUserDetail`, that does not exist. Its name was made up by analogy with the real `getMicrosoft365CopilotUsageUserDetail`, and every test passed because the tests used synthetic fixtures. #632 then classified Graph's rejection as "not available on this tenant", which hid the problem. Two stable releases went on to describe fixes and symptoms that no tenant could have seen. The incident is #692.

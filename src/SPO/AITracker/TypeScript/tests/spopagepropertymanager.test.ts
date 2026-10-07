@@ -35,7 +35,7 @@ describe('SpoPagePropertyManager', () => {
         stateManager = new InMemoryPageStateManager();
         wrapper = new AppInsightsWrapper(createMockAI(), 'session-1');
         dataService = new WebPageDataService(wrapper);
-        manager = new SpoPagePropertyManager(stateManager, dataService, webAbsoluteUrl);
+        manager = new SpoPagePropertyManager(stateManager, dataService);
     });
 
     describe('loadPropsRaw', () => {
@@ -44,7 +44,7 @@ describe('SpoPagePropertyManager', () => {
                 d: { Title: 'Test Page', Author: 'admin' }
             });
 
-            const result = await manager.loadPropsRaw('Site Pages', 1, 'https://test.com');
+            const result = await manager.loadPropsRaw(webAbsoluteUrl, 'Site Pages', 1, 'https://test.com');
 
             expect(mockGetApiReturnJson).toHaveBeenCalledWith(
                 expect.stringContaining("/_api/web/lists/getbytitle('Site%20Pages')/items(1)/properties")
@@ -56,7 +56,7 @@ describe('SpoPagePropertyManager', () => {
         test('encodes list title with special characters in URL', async () => {
             mockGetApiReturnJson.mockResolvedValueOnce({ d: { Title: 'Test' } });
 
-            await manager.loadPropsRaw("Pages Library's & More", 5, 'https://test.com');
+            await manager.loadPropsRaw(webAbsoluteUrl, "Pages Library's & More", 5, 'https://test.com');
 
             const calledUrl = mockGetApiReturnJson.mock.calls[0][0];
             expect(calledUrl).toContain(encodeURIComponent("Pages Library's & More"));
@@ -66,8 +66,19 @@ describe('SpoPagePropertyManager', () => {
         test('rejects when API fails', async () => {
             mockGetApiReturnJson.mockRejectedValueOnce('Not found');
 
-            await expect(manager.loadPropsRaw('Site Pages', 99, 'https://test.com'))
+            await expect(manager.loadPropsRaw(webAbsoluteUrl, 'Site Pages', 99, 'https://test.com'))
                 .rejects.toBe('Not found');
+        });
+
+        test('calls the web it is given, so a page reached by navigating from another site is read from its own site', async () => {
+            mockGetApiReturnJson.mockResolvedValue({ d: { Title: 'Other', likedBy: { results: [] }, likeCount: 0, results: [] } });
+
+            await manager.loadPropsRaw('https://contoso.sharepoint.com/sites/other/', 'Site Pages', 3, 'https://test.com');
+            await manager.loadLikes('https://contoso.sharepoint.com/sites/other', 'Site Pages', 3, 'https://test.com');
+            await manager.loadComments('https://contoso.sharepoint.com/sites/other', 'Site Pages', 3, 'https://test.com');
+
+            const urls = mockGetApiReturnJson.mock.calls.map(c => c[0]);
+            urls.forEach(u => expect(u.startsWith("https://contoso.sharepoint.com/sites/other/_api/web/lists/getbytitle('Site%20Pages')/items(3)/")).toBe(true));
         });
     });
 
@@ -86,7 +97,7 @@ describe('SpoPagePropertyManager', () => {
                 }
             });
 
-            const likes = await manager.loadLikes('Site Pages', 1, 'https://test.com');
+            const likes = await manager.loadLikes(webAbsoluteUrl, 'Site Pages', 1, 'https://test.com');
 
             expect(mockGetApiReturnJson).toHaveBeenCalledWith(
                 expect.stringContaining("/_api/web/lists/getbytitle('Site%20Pages')/items(1)/likedByInformation")
@@ -101,7 +112,7 @@ describe('SpoPagePropertyManager', () => {
                 d: { likeCount: 0, isLikedByUser: false, likedBy: { results: [] } }
             });
 
-            const likes = await manager.loadLikes('Site Pages', 1, 'https://test.com');
+            const likes = await manager.loadLikes(webAbsoluteUrl, 'Site Pages', 1, 'https://test.com');
             expect(likes).toEqual([]);
         });
 
@@ -110,7 +121,7 @@ describe('SpoPagePropertyManager', () => {
                 d: { likeCount: 0, isLikedByUser: false, likedBy: { results: [] } }
             });
 
-            await manager.loadLikes("Test's List", 1, 'https://test.com');
+            await manager.loadLikes(webAbsoluteUrl, "Test's List", 1, 'https://test.com');
             const calledUrl = mockGetApiReturnJson.mock.calls[0][0];
             expect(calledUrl).toContain(encodeURIComponent("Test's List"));
         });
@@ -132,7 +143,7 @@ describe('SpoPagePropertyManager', () => {
                 }
             });
 
-            const comments = await manager.loadComments('Site Pages', 1, 'https://test.com');
+            const comments = await manager.loadComments(webAbsoluteUrl, 'Site Pages', 1, 'https://test.com');
 
             expect(mockGetApiReturnJson).toHaveBeenCalledWith(
                 expect.stringContaining("/_api/web/lists/getbytitle('Site%20Pages')/items(1)/comments")
@@ -167,7 +178,7 @@ describe('SpoPagePropertyManager', () => {
                 }
             });
 
-            const comments = await manager.loadComments('Site Pages', 1, 'https://test.com');
+            const comments = await manager.loadComments(webAbsoluteUrl, 'Site Pages', 1, 'https://test.com');
 
             expect(comments.length).toBe(2);
             expect(comments[0].isReply).toBe(false);
@@ -182,7 +193,7 @@ describe('SpoPagePropertyManager', () => {
                 d: { results: [] }
             });
 
-            const comments = await manager.loadComments('Site Pages', 1, 'https://test.com');
+            const comments = await manager.loadComments(webAbsoluteUrl, 'Site Pages', 1, 'https://test.com');
             expect(comments).toEqual([]);
         });
 
@@ -191,7 +202,7 @@ describe('SpoPagePropertyManager', () => {
                 d: { results: [] }
             });
 
-            await manager.loadComments("Test's List", 1, 'https://test.com');
+            await manager.loadComments(webAbsoluteUrl, "Test's List", 1, 'https://test.com');
             const calledUrl = mockGetApiReturnJson.mock.calls[0][0];
             expect(calledUrl).toContain(encodeURIComponent("Test's List"));
         });

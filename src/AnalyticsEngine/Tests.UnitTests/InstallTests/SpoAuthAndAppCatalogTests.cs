@@ -229,6 +229,75 @@ namespace Tests.UnitTests.InstallTests
         }
 
         [TestMethod]
+        public async Task RemovesOnlyThisComponentsTenantWideEntriesThatHaveNoProperties()
+        {
+            // AITracker packages before 1.0.1.59 created a property-less tenant-wide entry on deployment, running the extension
+            // on every site; upgrading the package doesn't remove it. Anything with properties is someone's own registration.
+            var componentId = Guid.Parse("a4e24884-9cfd-41ac-87af-747a47055f25");
+            var deleted = new List<string>();
+            string listRead = null;
+            var handler = new FakeHandler(request =>
+            {
+                var url = Uri.UnescapeDataString(request.RequestUri.ToString());
+                if (request.Method == HttpMethod.Get)
+                {
+                    listRead = url;
+                    return Respond(HttpStatusCode.OK, @"{""value"":[
+                        {""Id"":2,""TenantWideExtensionComponentId"":""a4e24884-9cfd-41ac-87af-747a47055f25"",""TenantWideExtensionComponentProperties"":""{}""},
+                        {""Id"":3,""TenantWideExtensionComponentId"":""a4e24884-9cfd-41ac-87af-747a47055f25"",""TenantWideExtensionComponentProperties"":""{\""appInsightsConnectionStringHash\"":\""eA==\""}""},
+                        {""Id"":4,""TenantWideExtensionComponentId"":""00000000-0000-0000-0000-000000000001"",""TenantWideExtensionComponentProperties"":""""},
+                        {""Id"":5,""TenantWideExtensionComponentId"":""A4E24884-9CFD-41AC-87AF-747A47055F25"",""TenantWideExtensionComponentProperties"":null},
+                        {""Id"":6,""TenantWideExtensionComponentId"":""a4e24884-9cfd-41ac-87af-747a47055f25"",""TenantWideExtensionComponentProperties"":""not json""}
+                    ]}");
+                }
+
+                Assert.AreEqual(HttpMethod.Post, request.Method);
+                Assert.AreEqual("DELETE", request.Headers.GetValues("X-HTTP-Method").Single());
+                Assert.AreEqual("*", request.Headers.GetValues("IF-MATCH").Single());
+                deleted.Add(url.Substring(url.IndexOf("items(")).Split('?')[0]);
+                return Respond(HttpStatusCode.OK, string.Empty);
+            });
+
+            using (var manager = new TenantAppCatalogManager(new FakeAuthenticator(), _logger, new HttpClient(handler)))
+            {
+                var removed = await manager.RemoveUnconfiguredTenantWideExtensionsAsync("https://contoso.sharepoint.com/sites/appcatalog/", componentId);
+                Assert.AreEqual(2, removed);
+            }
+
+            StringAssert.Contains(listRead, "https://contoso.sharepoint.com/sites/appcatalog/_api/web/GetList(@list)/items?");
+            StringAssert.Contains(listRead, "@list='/sites/appcatalog/Lists/TenantWideExtensions'", "By URL: the list's title is localised");
+            CollectionAssert.AreEqual(new[] { "items(2)", "items(5)" }, deleted);
+        }
+
+        [TestMethod]
+        public async Task NoUnconfiguredTenantWideEntriesMeansNothingIsChanged()
+        {
+            var handler = new FakeHandler(request =>
+            {
+                Assert.AreEqual(HttpMethod.Get, request.Method, "Nothing to remove, so nothing but the read");
+                return Respond(HttpStatusCode.OK, "{\"value\":[]}");
+            });
+
+            using (var manager = new TenantAppCatalogManager(new FakeAuthenticator(), _logger, new HttpClient(handler)))
+            {
+                Assert.AreEqual(0, await manager.RemoveUnconfiguredTenantWideExtensionsAsync("https://contoso.sharepoint.com/sites/appcatalog",
+                    Guid.Parse("a4e24884-9cfd-41ac-87af-747a47055f25")));
+            }
+        }
+
+        [TestMethod]
+        public async Task UnreadableTenantWideExtensionsListIsReportedAsAnAppCatalogProblem()
+        {
+            var handler = new FakeHandler(_ => Respond(HttpStatusCode.Forbidden, "Access denied."));
+
+            using (var manager = new TenantAppCatalogManager(new FakeAuthenticator(), _logger, new HttpClient(handler)))
+            {
+                await Assert.ThrowsExceptionAsync<SpoAppCatalogException>(() => manager.RemoveUnconfiguredTenantWideExtensionsAsync(
+                    "https://contoso.sharepoint.com/sites/appcatalog", Guid.Parse("a4e24884-9cfd-41ac-87af-747a47055f25")));
+            }
+        }
+
+        [TestMethod]
         public async Task DeployCallsTheDeployEndpointWithSkipFeatureDeployment()
         {
             string body = null;

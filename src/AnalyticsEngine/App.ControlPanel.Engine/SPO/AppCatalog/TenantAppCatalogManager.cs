@@ -180,6 +180,75 @@ namespace App.ControlPanel.Engine.SPO.AppCatalog
             _logger.LogInformation($"Deployed SPFx extension {appId} to the tenant from '{appCatalogUrl}'.");
         }
 
+        /// <summary>
+        /// Removes a component's entries in the app catalog's Tenant Wide Extensions list that have no properties.
+        /// The AITracker package carried a <c>ClientSideInstance.xml</c> until 1.0.1.59, so deploying it created one, which ran
+        /// the extension on every site in the tenant with nothing to track. Deploying a newer package doesn't remove it.
+        /// Tracking is enabled per site collection by the installer's custom actions instead, so an entry that does have
+        /// properties is somebody's own registration, and is left alone.
+        /// </summary>
+        /// <returns>How many entries were removed.</returns>
+        public async Task<int> RemoveUnconfiguredTenantWideExtensionsAsync(string appCatalogUrl, Guid componentId)
+        {
+            // By URL rather than title: list titles are localised
+            var listPath = new Uri(appCatalogUrl.TrimEnd('/') + "/Lists/TenantWideExtensions").AbsolutePath;
+            var listApi = $"{appCatalogUrl.TrimEnd('/')}/_api/web/GetList(@list)";
+            var listParameter = "@list='" + Uri.EscapeDataString(listPath.Replace("'", "''")) + "'";
+
+            string responseBody;
+            using (var request = new HttpRequestMessage(HttpMethod.Get,
+                $"{listApi}/items?$select=Id,TenantWideExtensionComponentId,TenantWideExtensionComponentProperties&$top=5000&{listParameter}"))
+            {
+                responseBody = await SendAsync(request, appCatalogUrl, "read the tenant-wide extensions list");
+            }
+
+            JArray items;
+            try
+            {
+                items = JObject.Parse(responseBody)["value"] as JArray ?? new JArray();
+            }
+            catch (Newtonsoft.Json.JsonException ex)
+            {
+                throw new SpoAppCatalogException($"The app catalog returned an unreadable tenant-wide extensions list: {responseBody}", ex);
+            }
+
+            var removed = 0;
+            foreach (var item in items)
+            {
+                if (!Guid.TryParse(item["TenantWideExtensionComponentId"]?.ToString(), out var itemComponentId) || itemComponentId != componentId
+                    || !HasNoProperties(item["TenantWideExtensionComponentProperties"]?.ToString()))
+                {
+                    continue;
+                }
+
+                var id = item["Id"]?.ToString();
+                using (var request = new HttpRequestMessage(HttpMethod.Post, $"{listApi}/items({id})?{listParameter}"))
+                {
+                    request.Headers.Add("X-HTTP-Method", "DELETE");
+                    request.Headers.Add("IF-MATCH", "*");
+                    await SendAsync(request, appCatalogUrl, $"remove tenant-wide extension entry {id}");
+                }
+                removed++;
+            }
+            return removed;
+        }
+
+        static bool HasNoProperties(string properties)
+        {
+            if (string.IsNullOrWhiteSpace(properties))
+            {
+                return true;
+            }
+            try
+            {
+                return JToken.Parse(properties) is JObject o && !o.HasValues;
+            }
+            catch (Newtonsoft.Json.JsonException)
+            {
+                return false;   // Not ours to judge: leave it
+            }
+        }
+
         async Task<string> GetTokenAsync(string appCatalogUrl)
         {
             try

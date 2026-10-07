@@ -71,6 +71,7 @@ jobs:
     outputs:
       run_dotnet: ${{ inputs.force_run || steps.changes.outputs.code == 'true' }}
       run_aitracker: ${{ inputs.force_run || steps.changes.outputs.aitracker == 'true' }}
+      run_spfx: ${{ inputs.force_run || steps.changes.outputs.spfx == 'true' }}
     steps:
       - name: Checkout source
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # 6.0.2
@@ -83,6 +84,10 @@ jobs:
               - 'src/AnalyticsEngine/**'
             aitracker:
               - 'src/SPO/AITracker/**'
+            spfx:
+              - 'src/SPO/ModernPagesAITrackerExtension/**'
+              - 'src/SPO/AITracker/spoinsights-modern-ui-aitracker.sppkg'
+              - '.github/scripts/Test-SpfxPackage.ps1'
 
   test_aitracker:
     runs-on: ubuntu-latest
@@ -93,8 +98,15 @@ jobs:
     # always ran when it had not. See issue #270.
     steps:
       - name: Checkout source
-        if: needs.setup_tests.outputs.run_aitracker == 'true'
+        if: needs.setup_tests.outputs.run_aitracker == 'true' || needs.setup_tests.outputs.run_spfx == 'true'
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # 6.0.2
+      # CI never builds the SPFx extension: the release ships the package committed in src/SPO/AITracker as it is. So
+      # a change to the extension must come with its rebuilt package, which this checks by version. Its own path
+      # filter, as the mistake it catches is a change to the extension alone.
+      - name: Check the committed SPFx package matches its source
+        if: needs.setup_tests.outputs.run_spfx == 'true'
+        shell: pwsh
+        run: ./.github/scripts/Test-SpfxPackage.ps1
       # Same pinned Node as every other npm step in the repo, read from the repo-root .nvmrc.
       # Left to the runner image this job would test the tracker on whatever Node ubuntu-latest
       # currently ships, which is not necessarily the version the release build uses.

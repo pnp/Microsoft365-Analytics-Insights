@@ -1,5 +1,5 @@
 import { AppInsightsWrapper } from "./AppInsightsWrapper";
-import { ClearLastPageStatsVal, GetLastPageStatsVal, GetLastTrackedPageVal, SetLastPageStatsVal } from "./Cookies";
+import { ClearLastPageStatsVal, GetLastPageStatsVal, SetLastPageStatsVal } from "./Cookies";
 import { getSPRequestDuration } from "./DataFunctions";
 import { debug, error, log, warn } from "./Logger";
 import TimeMe from 'timeme.js'
@@ -13,9 +13,6 @@ export class PageViewTracker {
     _context: spPageContextInfo;
     _pagePropLoader: PagePropertyManager;
 
-    _lastGeneratedPageRequestId: string | null = null;               // Page request GUID to join before & after AI events together on import
-    _lastUrl: string | null = null;
-
     constructor(ai: AppInsightsWrapper, context: spPageContextInfo, pagePropLoader: PagePropertyManager) {
         this._ai = ai;
         this._context = context;
@@ -26,8 +23,9 @@ export class PageViewTracker {
         this._context = context;
     }
 
-    // Track the page view & previous saved page stats. Normally run before "load", but not for modern page reloads
-    trackCurrentPageViewAndLastPageExit(url: string, listTitle: string, listItemId?: number): void {
+    // Track the page the browser loaded, then the time spent on the page before it (saved to a cookie as the browser left it).
+    // A pageLoadDuration of 0 means SharePoint navigated here without the browser loading a page.
+    trackCurrentPageViewAndLastPageExit(url: string, listTitle: string, listItemId?: number, pageLoadDuration?: number): void {
 
         if (typeof window._spPageContextInfo === 'undefined') {
             error(`Didn't find legacy _spPageContextInfo on page.`);
@@ -35,7 +33,7 @@ export class PageViewTracker {
         }
 
         // Track new page view
-        this.trackCurrentPageView(undefined, window._spPageContextInfo.webAbsoluteUrl,
+        this.trackCurrentPageView(pageLoadDuration, window._spPageContextInfo.webAbsoluteUrl,
             window._spPageContextInfo.siteAbsoluteUrl, window._spPageContextInfo.webTitle, url, listTitle, listItemId);
 
 
@@ -43,9 +41,11 @@ export class PageViewTracker {
         const lastPageStats = GetLastPageStatsVal();
 
         // Was there a last page to track? Do we have all the right properties?
-        if (lastPageStats !== null && lastPageStats.secondsOnPage !== null && lastPageStats.pageRequestId !== null && lastPageStats.url !== null) {
+        if (lastPageStats !== null && lastPageStats.secondsOnPage && lastPageStats.pageRequestId && lastPageStats.url) {
             var pageUrl = decodeURI(lastPageStats.url);
-            this._ai.trackTimingEvent(pageUrl, lastPageStats.secondsOnPage);
+
+            // The time belongs to the page request it was saved for, not the one just tracked: the importer applies it to that hit
+            this._ai.trackTimingEvent(pageUrl, lastPageStats.secondsOnPage, lastPageStats.pageRequestId);
         } else if (lastPageStats !== null) {
             warn("Last page stats cookie found but missing required properties (secondsOnPage, pageRequestId, or url)");
         } else {
@@ -62,14 +62,22 @@ export class PageViewTracker {
 
     // Save last page stats to cookie, then track page view same as classic page
     handleModernPageNav(webUrl: string, webTitle: string, siteUrl: string, url: string, listTitle?: string, listItemId?: number) {
+
+        // The SPFx extension also reports the page that was tracked when it loaded. That isn't a navigation: don't end
+        // the page's time-on-page after a couple of seconds and restart it, which would undercount it.
+        const lastUrl = this._ai._lastTrackedUrl;
+        if (url === lastUrl) {
+            debug(`Ignoring navigation to the page already tracked: ${url}`);
+            return;
+        }
         log('Modern page navigation called from SPFx component. New URL: ' + url);
 
         // As HandleModernUIPageNav can be called a lot in a single load, subtract the time of the last "page exits"
         var timeOnPage = this.getTimeOnPageAndResetLastTotalTime();
 
-        // Track "page exit" of previous URL
-        const lastUrl = GetLastTrackedPageVal();
-        if (lastUrl !== '') {
+        // Track "page exit" of previous URL. Before tracking the new page, so it goes to the previous page's request ID.
+        // This page's own last URL, rather than a cookie that every open tab writes to.
+        if (lastUrl) {
             this._ai.trackTimingEvent(lastUrl, timeOnPage);
         }
 
@@ -97,12 +105,32 @@ export class PageViewTracker {
 
         debug(`Tracking page view for URL: ${url}, listTitle: ${listTitle || 'none'}, listItemId: ${listItemId ?? 'none'}`);
 
-        // If needed, log page metadata
-        this._pagePropLoader.handleNewPage(listItemId ?? -1, url, listTitle);
+        // SPRequestDuration is in the HTML SharePoint served for the document, so it only describes a page the browser loaded:
+        // after a page navigation it's the duration of the first page's request. Not an officially supported API either.
+        const spRequestDuration = pageLoadDuration === 0 ? null : getSPRequestDuration(document.body.innerHTML);
+        if (!this._ai.trackCurrentPageView(pageLoadDuration, spRequestDuration, webUrl, siteUrl, webTitle)) {
+            return;     // Same page as last time
+        }
 
-        // Try get performance metrics. Have a feeling it doesn't work properly as not using any officially supported API. 
-        var spRequestDuration = getSPRequestDuration(document.body.innerHTML);
-        this._ai.trackCurrentPageView(pageLoadDuration, spRequestDuration, webUrl, siteUrl, webTitle);
+        // If needed, log page metadata. Read from this page's own web: it's not the one the script loaded in after a navigation
+        this._pagePropLoader.handleNewPage(webUrl, listItemId ?? -1, url, listTitle);
+
+        this.trackSearchInUrl(url);
+    }
+
+    // Search results pages carry the search in the URL. Modern search uses "q", classic search "k".
+    trackSearchInUrl(url: string): void {
+        let searchParams: URLSearchParams;
+        try {
+            searchParams = new URL(url).searchParams;
+        } catch {
+            return;
+        }
+
+        const searchTerm = searchParams.get("k") ?? searchParams.get("q");
+        if (searchTerm !== null) {
+            this._ai.trackSearch(searchTerm);
+        }
     }
 
     // Track the page exit with an event. Run on page "unload" only

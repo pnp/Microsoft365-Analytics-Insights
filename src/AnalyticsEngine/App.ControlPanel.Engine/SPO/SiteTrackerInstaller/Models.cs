@@ -23,7 +23,10 @@ namespace App.ControlPanel.Engine.SPO
         public string Name { get; } = "AiTrackerModernApplicationCustomizer";
         public string Description { get; } = DESCRIPTION;
         public string Title { get; } = "AiTrackerModernApplicationCustomizer";
-        public Guid ClientSideComponentId { get; } = Guid.Parse("a4e24884-9cfd-41ac-87af-747a47055f25");
+
+        /// <summary>The SPFx application customizer's component ID (its manifest "id").</summary>
+        public static readonly Guid COMPONENT_ID = Guid.Parse("a4e24884-9cfd-41ac-87af-747a47055f25");
+        public Guid ClientSideComponentId { get; } = COMPONENT_ID;
         public string ClientSideComponentProperties { get; internal set; }
         public string Location { get; } = LOCATION;
     }

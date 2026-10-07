@@ -1,4 +1,27 @@
-import { getSPRequestDuration, isValidGuid, uuidv4 } from '../src/DataFunctions';
+import { getSPRequestDuration, isSamePage, isValidGuid, uuidv4 } from '../src/DataFunctions';
+
+describe('isSamePage', () => {
+    test('the same address is the same page', () => {
+        expect(isSamePage('https://contoso.sharepoint.com/sites/test/SitePages/Home.aspx', 'https://contoso.sharepoint.com/sites/test/SitePages/Home.aspx')).toBe(true);
+    });
+
+    test('ignores the #fragment: an in-page link stays on the page', () => {
+        expect(isSamePage('https://contoso.sharepoint.com/sites/test/SitePages/Home.aspx?a=1', 'https://contoso.sharepoint.com/sites/test/SitePages/Home.aspx?a=1#section')).toBe(true);
+    });
+
+    test('a different query is a different page: on a search page it is another search', () => {
+        expect(isSamePage('https://contoso.sharepoint.com/_layouts/15/search.aspx/siteall?q=first', 'https://contoso.sharepoint.com/_layouts/15/search.aspx/siteall?q=second')).toBe(false);
+    });
+
+    test('a different path is a different page, including a non-Latin one', () => {
+        expect(isSamePage('https://contoso.sharepoint.com/sites/test/SitePages/Home.aspx', 'https://contoso.sharepoint.com/sites/test/SitePages/News.aspx')).toBe(false);
+        expect(isSamePage('https://contoso.sharepoint.com/sites/test/SitePages/Καλημέρα.aspx', 'https://contoso.sharepoint.com/sites/test/SitePages/Home.aspx')).toBe(false);
+    });
+
+    test('another site is a different page', () => {
+        expect(isSamePage('https://contoso.sharepoint.com/', 'https://contoso.sharepoint.com/sites/test')).toBe(false);
+    });
+});
 
 describe('DataFunctions', () => {
 

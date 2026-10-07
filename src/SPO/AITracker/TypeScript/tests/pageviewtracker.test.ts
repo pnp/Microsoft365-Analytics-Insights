@@ -220,4 +220,116 @@ describe('PageViewTracker', () => {
             expect(spy).toHaveBeenCalledWith(120);
         });
     });
+
+    describe('page exit attribution', () => {
+        const homeUrl = 'https://contoso.sharepoint.com/sites/test/SitePages/Home.aspx';
+        const aboutUrl = 'https://contoso.sharepoint.com/sites/test/SitePages/About.aspx';
+        const events = () => (mockAppInsights.trackEvent as jest.Mock).mock.calls.map(c => c[0]);
+
+        test('time saved as the browser left a page goes to that page request, not the page just loaded', () => {
+            Cookies.set('SPOInsightsLastPageStats', JSON.stringify({
+                pageRequestId: '33333333-3333-3333-3333-333333333333',
+                secondsOnPage: 30,
+                url: encodeURI('https://contoso.sharepoint.com/sites/test/SitePages/Old.aspx')
+            }));
+
+            tracker.trackCurrentPageViewAndLastPageExit(homeUrl, 'Site Pages', 1);
+
+            const exits = events().filter(e => e.name === 'PAGE_EXIT');
+            expect(exits.length).toBe(1);
+            expect(exits[0].properties.pageRequestId).toBe('33333333-3333-3333-3333-333333333333');
+            expect(exits[0].properties.pageRequestId).not.toBe(wrapper._pageRequestId);
+            expect(exits[0].properties.activeTime).toBe(30);
+        });
+
+        test('ignores the SPFx extension reporting the page that is already tracked', () => {
+            tracker.trackCurrentPageViewAndLastPageExit(homeUrl, 'Site Pages', 1);
+            (mockAppInsights.trackEvent as jest.Mock).mockClear();
+            (mockAppInsights.trackPageView as jest.Mock).mockClear();
+
+            tracker.handleModernPageNav('https://contoso.sharepoint.com/sites/test', 'Test Site', 'https://contoso.sharepoint.com', homeUrl, 'Site Pages', 1);
+
+            expect(mockAppInsights.trackEvent).not.toHaveBeenCalled();
+            expect(mockAppInsights.trackPageView).not.toHaveBeenCalled();
+            expect(tracker._lastTimeTotalOnPages).toBe(0);      // Time on page keeps counting
+        });
+
+        test('a page navigation ends the previous page, from this page\'s own record rather than a cookie other tabs write', () => {
+            tracker.trackCurrentPageViewAndLastPageExit(homeUrl, 'Site Pages', 1);
+            const homeRequestId = wrapper._pageRequestId;
+            Cookies.set('SPOInsightsLastTrackedUrl', 'https://contoso.sharepoint.com/sites/other/SitePages/OtherTab.aspx');
+            (mockAppInsights.trackEvent as jest.Mock).mockClear();
+
+            Object.defineProperty(document, 'URL', { value: aboutUrl, writable: true, configurable: true });
+            tracker.handleModernPageNav('https://contoso.sharepoint.com/sites/test', 'Test Site', 'https://contoso.sharepoint.com', aboutUrl, 'Site Pages', 2);
+
+            const exits = events().filter(e => e.name === 'PAGE_EXIT');
+            expect(exits.length).toBe(1);
+            expect(exits[0].properties.url).toBe(homeUrl);
+            expect(exits[0].properties.pageRequestId).toBe(homeRequestId);
+            expect(wrapper._pageRequestId).not.toBe(homeRequestId);
+        });
+    });
+
+    describe('page details', () => {
+        const pageViews = () => (mockAppInsights.trackPageView as jest.Mock).mock.calls.map(c => c[0]);
+        const searches = () => (mockAppInsights.trackEvent as jest.Mock).mock.calls.map(c => c[0]).filter(e => e.name === 'UserSearch');
+
+        afterEach(() => {
+            document.body.innerHTML = '';
+        });
+
+        test('spRequestDuration is only sent for the page the browser loaded', () => {
+            document.body.innerHTML = '<script>var x = {"perf":{"spRequestDuration":519,"IsSPO":true},"y":2};</script>';
+
+            tracker.trackCurrentPageViewAndLastPageExit('https://contoso.sharepoint.com/sites/test/SitePages/Home.aspx', 'Site Pages', 1);
+
+            Object.defineProperty(document, 'URL', { value: 'https://contoso.sharepoint.com/sites/other', writable: true, configurable: true });
+            tracker.handleModernPageNav('https://contoso.sharepoint.com/sites/other', 'Other', 'https://contoso.sharepoint.com/sites/other',
+                'https://contoso.sharepoint.com/sites/other', 'Site Pages', 2);
+
+            expect(pageViews()[0].properties.spRequestDuration).toBe(519);
+            expect(pageViews()[1].properties.spRequestDuration).toBeUndefined();
+        });
+
+        test('tracks the search on a modern search results page the browser loaded', () => {
+            const url = 'https://contoso.sharepoint.com/sites/test/_layouts/15/search.aspx/siteall?q=Καλημέρα%20κόσμε';
+            Object.defineProperty(document, 'URL', { value: url, writable: true, configurable: true });
+
+            tracker.trackCurrentPageViewAndLastPageExit(url, '', undefined);
+
+            expect(searches().length).toBe(1);
+            expect(searches()[0].properties.userSearch).toBe('Καλημέρα κόσμε');
+            expect(searches()[0].properties.pageRequestId).toBe(wrapper._pageRequestId);
+        });
+
+        test('tracks the search on a classic search results page', () => {
+            const url = 'https://contoso.sharepoint.com/sites/test/_layouts/15/osssearchresults.aspx?u=x&k=quarterly%20report';
+            Object.defineProperty(document, 'URL', { value: url, writable: true, configurable: true });
+
+            tracker.trackCurrentPageViewAndLastPageExit(url, '', undefined);
+
+            expect(searches().map(s => s.properties.userSearch)).toEqual(['quarterly report']);
+        });
+
+        test('does not track the same search again for the same page', () => {
+            const url = 'https://contoso.sharepoint.com/sites/test/_layouts/15/search.aspx/siteall?q=contoso';
+            Object.defineProperty(document, 'URL', { value: url, writable: true, configurable: true });
+
+            tracker.trackCurrentPageViewAndLastPageExit(url, '', undefined);
+            tracker.handleModernPageNav('https://contoso.sharepoint.com/sites/test', 'Test Site', 'https://contoso.sharepoint.com', url);
+
+            expect(searches().length).toBe(1);
+        });
+
+        test('reads page metadata from the web of the page navigated to', () => {
+            const spy = jest.spyOn(pagePropManager, 'handleNewPage');
+            const url = 'https://contoso.sharepoint.com/sites/other/SitePages/News.aspx';
+            Object.defineProperty(document, 'URL', { value: url, writable: true, configurable: true });
+
+            tracker.handleModernPageNav('https://contoso.sharepoint.com/sites/other', 'Other', 'https://contoso.sharepoint.com/sites/other', url, 'Site Pages', 3);
+
+            expect(spy).toHaveBeenCalledWith('https://contoso.sharepoint.com/sites/other', 3, url, 'Site Pages');
+        });
+    });
 });

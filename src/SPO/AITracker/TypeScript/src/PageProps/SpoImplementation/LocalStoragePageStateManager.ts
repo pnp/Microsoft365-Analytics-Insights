@@ -10,15 +10,21 @@ export class LocalStoragePageStateManager extends BasePageStateManager {
 
     static PAGES_SEEN_STORAGE_KEY = "AITrackerPagesMetadataUploaded";
 
-    registerPageSeen(listTitle: string, pageItemId: number): Date {
+    registerPageSeen(webUrl: string, listTitle: string, pageItemId: number, forgetSeenBefore?: Date): Date {
         const pagesConfig = this.loadCurrentOrDefault();
 
+        // Local storage is shared with SharePoint itself, so don't let this grow with every page ever visited
+        if (forgetSeenBefore) {
+            pagesConfig.pagesUploadedFor = pagesConfig.pagesUploadedFor.filter(p => new Date(p.seenOn) >= forgetSeenBefore);
+        }
+
         const date = new Date();
-        const r = pagesConfig.pagesUploadedFor.find(p => p.pageId === this.getPageId(listTitle, pageItemId));
+        const pageId = this.getPageId(webUrl, listTitle, pageItemId);
+        const r = pagesConfig.pagesUploadedFor.find(p => p.pageId === pageId);
         if (r != null) {
             r.seenOn = date;
         } else
-            pagesConfig.pagesUploadedFor.push({ pageId: this.getPageId(listTitle, pageItemId), seenOn: new Date() });
+            pagesConfig.pagesUploadedFor.push({ pageId: pageId, seenOn: date });
 
         try {
             localStorage.setItem(LocalStoragePageStateManager.PAGES_SEEN_STORAGE_KEY, JSON.stringify(pagesConfig));
@@ -30,10 +36,11 @@ export class LocalStoragePageStateManager extends BasePageStateManager {
         return date;
     }
 
-    pageSeen(listTitle: string, pageItemId: number): Date | null {
+    pageSeen(webUrl: string, listTitle: string, pageItemId: number): Date | null {
         const pagesConfig = this.loadCurrentOrDefault();
 
-        const r = pagesConfig.pagesUploadedFor.find(p => p.pageId === this.getPageId(listTitle, pageItemId));
+        const pageId = this.getPageId(webUrl, listTitle, pageItemId);
+        const r = pagesConfig.pagesUploadedFor.find(p => p.pageId === pageId);
 
         return r != null ? new Date(r.seenOn) : null;
     }
