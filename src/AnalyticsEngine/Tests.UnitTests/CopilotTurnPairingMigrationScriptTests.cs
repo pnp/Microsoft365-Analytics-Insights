@@ -89,6 +89,7 @@ VALUES ('00000000-0000-0000-0000-000000000001', N'Office', 1, '2026-10-01T09:00:
                 Assert.AreEqual(1, Convert.ToInt32(db.Scalar(
                     "SELECT COUNT(*) FROM sys.foreign_keys WHERE name = 'FK_copilot_chat_duplicates_copilot_chats' AND delete_referential_action_desc = 'CASCADE'")));
                 Assert.IsTrue(db.IndexHasColumn("copilot_chat_duplicates", "IX_copilot_chat_duplicates_counted_event_id", "counted_event_id", 1, included: false));
+                Assert.IsTrue(db.IndexHasColumn("copilot_chat_duplicates", "IX_copilot_chat_duplicates_time_stamp", "time_stamp", 1, included: false));
                 Assert.AreEqual(1, Convert.ToInt32(db.Scalar("SELECT COUNT(*) FROM dbo.copilot_chats")), "No row is touched.");
                 Assert.AreEqual(0, Convert.ToInt32(db.Scalar(
                     "SELECT COUNT(*) FROM sys.indexes WHERE object_id = OBJECT_ID('dbo.copilot_chats') AND index_id > 1")),
@@ -111,8 +112,8 @@ VALUES ('00000000-0000-0000-0000-000000000001', N'Office', 1, '2026-10-01T09:00:
                 db.ExecuteScript(Script(), quotedIdentifierOn: false);
                 db.Execute(@"INSERT INTO dbo.copilot_chats (event_id, app_host, conversation_id)
                              VALUES ('00000000-0000-0000-0000-000000000002', N'm365copilot', N'44444444-4444-4444-4444-444444444444');
-                             INSERT INTO dbo.copilot_chat_duplicates (event_id, counted_event_id, reason)
-                             VALUES ('00000000-0000-0000-0000-000000000002', '00000000-0000-0000-0000-000000000001', 1);");
+                             INSERT INTO dbo.copilot_chat_duplicates (event_id, time_stamp, counted_event_id, reason)
+                             VALUES ('00000000-0000-0000-0000-000000000002', '2026-10-01T08:59:55', '00000000-0000-0000-0000-000000000001', 1);");
 
                 db.ExecuteScript(Script(), quotedIdentifierOn: false);
 
@@ -165,8 +166,8 @@ VALUES ('00000000-0000-0000-0000-000000000001', N'Office', 1, '2026-10-01T09:00:
                 StampPredecessor(db);
                 db.ExecuteScript(Script(), quotedIdentifierOn: false);
                 db.Execute(@"INSERT INTO dbo.copilot_chats (event_id, app_host) VALUES ('00000000-0000-0000-0000-000000000002', N'm365copilot');
-                             INSERT INTO dbo.copilot_chat_duplicates (event_id, counted_event_id, reason)
-                             VALUES ('00000000-0000-0000-0000-000000000002', '00000000-0000-0000-0000-000000000001', 1);
+                             INSERT INTO dbo.copilot_chat_duplicates (event_id, time_stamp, counted_event_id, reason)
+                             VALUES ('00000000-0000-0000-0000-000000000002', '2026-10-01T08:59:55', '00000000-0000-0000-0000-000000000001', 1);
                              DELETE FROM dbo.copilot_chats WHERE event_id = '00000000-0000-0000-0000-000000000002';");
 
                 Assert.AreEqual(0, Convert.ToInt32(db.Scalar("SELECT COUNT(*) FROM dbo.copilot_chat_duplicates")));

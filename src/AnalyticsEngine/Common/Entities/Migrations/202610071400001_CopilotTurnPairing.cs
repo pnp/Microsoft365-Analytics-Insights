@@ -24,10 +24,12 @@ namespace Common.Entities.Migrations
     /// the existing <c>IX_copilot_chats_time_stamp_user_id</c> (see <c>common_upsert_copilot_agents.sql</c>).</item>
     /// <item><c>copilot_chat_duplicates</c>, a new and empty table: one row per audit record that is an
     /// additional record of a turn counted on another record. <c>event_id</c> is the extra record (primary key,
-    /// cascading foreign key to <c>copilot_chats</c>), <c>counted_event_id</c> the record the turn is counted on
-    /// and <c>reason</c> why: 1 for the runtime twin of a Microsoft 365 Copilot record, 2 for an extra runtime
-    /// record of the same turn. Both rows stay in <c>copilot_chats</c>. A report counts a turn once by leaving
-    /// out the rows listed here.</item>
+    /// cascading foreign key to <c>copilot_chats</c>), <c>time_stamp</c> its <c>copilot_chats.time_stamp</c>,
+    /// <c>counted_event_id</c> the record the turn is counted on and <c>reason</c> why: 1 for the runtime twin
+    /// of a Microsoft 365 Copilot record, 2 for an extra runtime record of the same turn. Both rows stay in
+    /// <c>copilot_chats</c>. A report counts a turn once by leaving out the rows listed here; matching on
+    /// <c>time_stamp</c> as well as <c>event_id</c> lets it read only its window's slice of this table, through
+    /// <c>IX_copilot_chat_duplicates_time_stamp</c>, rather than all of it.</item>
     /// </list>
     ///
     /// <para>
@@ -100,6 +102,7 @@ BEGIN
     CREATE TABLE [dbo].[copilot_chat_duplicates]
     (
         [event_id] uniqueidentifier NOT NULL,
+        [time_stamp] datetime NOT NULL,
         [counted_event_id] uniqueidentifier NOT NULL,
         [reason] tinyint NOT NULL,
         CONSTRAINT [PK_copilot_chat_duplicates] PRIMARY KEY CLUSTERED ([event_id] ASC),
@@ -125,6 +128,19 @@ BEGIN
 END
 ELSE
     RAISERROR('CopilotTurnPairing: IX_copilot_chat_duplicates_counted_event_id already exists; skipping.', 0, 1) WITH NOWAIT;
+
+-- Lets a report read only its window's slice of this table (see CopilotTurnSql.CountedTurn).
+IF OBJECT_ID(N'dbo.copilot_chat_duplicates', N'U') IS NOT NULL
+   AND NOT EXISTS (SELECT 1 FROM sys.indexes
+                   WHERE object_id = OBJECT_ID(N'dbo.copilot_chat_duplicates')
+                     AND name = N'IX_copilot_chat_duplicates_time_stamp')
+BEGIN
+    CREATE NONCLUSTERED INDEX [IX_copilot_chat_duplicates_time_stamp]
+        ON [dbo].[copilot_chat_duplicates] ([time_stamp] ASC);
+    RAISERROR('CopilotTurnPairing: created IX_copilot_chat_duplicates_time_stamp.', 0, 1) WITH NOWAIT;
+END
+ELSE
+    RAISERROR('CopilotTurnPairing: IX_copilot_chat_duplicates_time_stamp already exists; skipping.', 0, 1) WITH NOWAIT;
 
 RAISERROR('CopilotTurnPairing: schema is present.', 0, 1) WITH NOWAIT;";
 

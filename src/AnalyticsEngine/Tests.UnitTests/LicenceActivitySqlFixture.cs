@@ -681,6 +681,7 @@ CREATE INDEX IX_copilot_chats_time_stamp_user_id
 CREATE TABLE dbo.copilot_chat_duplicates
 (
     event_id uniqueidentifier NOT NULL CONSTRAINT PK_copilot_chat_duplicates PRIMARY KEY,
+    time_stamp datetime NOT NULL,
     counted_event_id uniqueidentifier NOT NULL,
     reason tinyint NOT NULL
 );

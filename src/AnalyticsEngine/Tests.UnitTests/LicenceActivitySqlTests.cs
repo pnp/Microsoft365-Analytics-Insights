@@ -1196,8 +1196,8 @@ VALUES
     ('00000000-0000-0000-0000-000000000002', N'Office', 1, '2000-06-20T09:00:05'),
     ('00000000-0000-0000-0000-000000000003', N'Copilot Studio', 1, '2000-06-21T09:00:00'),
     ('00000000-0000-0000-0000-000000000004', N'Copilot Studio', 2, '2000-06-21T09:00:00');
-INSERT dbo.copilot_chat_duplicates (event_id, counted_event_id, reason)
-VALUES ('00000000-0000-0000-0000-000000000001', '00000000-0000-0000-0000-000000000002', 1);");
+INSERT dbo.copilot_chat_duplicates (event_id, time_stamp, counted_event_id, reason)
+VALUES ('00000000-0000-0000-0000-000000000001', '2000-06-20T09:00:00', '00000000-0000-0000-0000-000000000002', 1);");
 
                 var sources = Sources(
                     usageReports: false, copilotReports: true, copilotAudit: true);

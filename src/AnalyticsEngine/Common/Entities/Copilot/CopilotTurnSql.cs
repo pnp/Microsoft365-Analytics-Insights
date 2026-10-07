@@ -11,9 +11,10 @@ namespace Common.Entities.Copilot
     /// lists in <c>dbo.copilot_chat_duplicates</c> each record that is an extra record of a turn counted on
     /// another one: the Copilot Studio runtime's twin of a Microsoft 365 Copilot record, and an extra runtime
     /// record logged a few seconds after the first (see <c>common_upsert_copilot_agents.sql</c>).
-    /// <see cref="CountedTurn"/> leaves those out. It is a NOT EXISTS on the table's primary key, keyed on
-    /// <c>event_id</c>, which is the clustering key of <c>copilot_chats</c> and so is carried by every one of
-    /// its indexes: a query that is covered by <c>IX_copilot_chats_time_stamp_user_id</c> stays covered.
+    /// <see cref="CountedTurn"/> leaves those out. It is a NOT EXISTS on <c>(time_stamp, event_id)</c>:
+    /// <c>event_id</c> is the clustering key of <c>copilot_chats</c>, so every one of its indexes carries it, and
+    /// <c>time_stamp</c> is the key of <c>IX_copilot_chats_time_stamp_user_id</c>, so a query that is covered by
+    /// that index stays covered.
     /// </para>
     /// <para>
     /// <b>Maker testing.</b> A chat in the Copilot Studio test pane is logged like any other turn, with
@@ -40,9 +41,18 @@ namespace Common.Entities.Copilot
         /// True when the <c>copilot_chats</c> row aliased <paramref name="chatAlias"/> counts as a turn: it is not
         /// an extra record of a turn counted on another row.
         /// </summary>
+        /// <remarks>
+        /// Matches on <c>time_stamp</c> as well as <c>event_id</c>. Every extra record's row carries its own
+        /// <c>copilot_chats.time_stamp</c>, so the answer is the same, but the optimiser carries the report's
+        /// window over to the table through the equality and reads only that slice of it, through
+        /// <c>IX_copilot_chat_duplicates_time_stamp</c>, instead of the whole history. Measured on a synthetic
+        /// 200k-user bench (6.6M interactions, 624k extra records): the agent inventory read 888 pages of this
+        /// table for 28 days and 2,334 for 90, against 7,960 for every window when matching on
+        /// <c>event_id</c> alone.
+        /// </remarks>
         public static string CountedTurn(string chatAlias)
         {
-            return $"NOT EXISTS (SELECT 1 FROM {DuplicatesTable} AS turn_dup WHERE turn_dup.event_id = {chatAlias}.event_id)";
+            return $"NOT EXISTS (SELECT 1 FROM {DuplicatesTable} AS turn_dup WHERE turn_dup.time_stamp = {chatAlias}.time_stamp AND turn_dup.event_id = {chatAlias}.event_id)";
         }
 
         /// <summary>
@@ -56,12 +66,13 @@ namespace Common.Entities.Copilot
         }
 
         /// <summary>
-        /// The join that <see cref="ResourceCountedOnce"/> reads: the accessed-resource row's record, when that
-        /// record is an extra record of a turn. A small table, so it is hashed once rather than probed per row.
+        /// The join that <see cref="ResourceCountedOnce"/> reads: the accessed-resource row's record (the
+        /// <c>copilot_chats</c> row aliased <paramref name="chatAlias"/>), when that record is an extra record of a
+        /// turn. Matched on <c>time_stamp</c> too, for the reason given on <see cref="CountedTurn"/>.
         /// </summary>
-        public static string ResourceTurnJoin(string resourceAlias, string duplicateAlias)
+        public static string ResourceTurnJoin(string chatAlias, string duplicateAlias)
         {
-            return $"LEFT JOIN {DuplicatesTable} AS {duplicateAlias} ON {duplicateAlias}.event_id = {resourceAlias}.copilot_chat_id";
+            return $"LEFT JOIN {DuplicatesTable} AS {duplicateAlias} ON {duplicateAlias}.time_stamp = {chatAlias}.time_stamp AND {duplicateAlias}.event_id = {chatAlias}.event_id";
         }
 
         /// <summary>

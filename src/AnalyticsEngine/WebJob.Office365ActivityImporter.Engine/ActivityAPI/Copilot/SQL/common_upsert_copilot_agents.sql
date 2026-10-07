@@ -323,7 +323,10 @@ BEGIN TRY
           AND NOT EXISTS (SELECT 1 FROM dbo.copilot_chat_duplicates AS d WHERE d.counted_event_id = t.event_id AND d.reason = 1)
           AND NOT EXISTS (SELECT 1 FROM dbo.copilot_chat_duplicates AS d WHERE d.event_id = t.event_id);
 
-        CREATE TABLE #turn_pairs (runtime_event_id uniqueidentifier NOT NULL PRIMARY KEY, client_event_id uniqueidentifier NOT NULL UNIQUE);
+        CREATE TABLE #turn_pairs (
+            runtime_event_id uniqueidentifier NOT NULL PRIMARY KEY,
+            client_event_id uniqueidentifier NOT NULL UNIQUE,
+            runtime_time_stamp datetime NOT NULL);
 
         WHILE @turnRound < 50 AND EXISTS (SELECT 1 FROM #turn_runtime) AND EXISTS (SELECT 1 FROM #turn_client)
         BEGIN
@@ -332,6 +335,7 @@ BEGIN TRY
             ;WITH proposals AS (
                 SELECT cl.event_id AS client_event_id,
                        rt.event_id AS runtime_event_id,
+                       rt.time_stamp AS runtime_time,
                        cl.time_stamp AS client_time,
                        ROW_NUMBER() OVER (
                            PARTITION BY cl.event_id
@@ -348,13 +352,13 @@ BEGIN TRY
                 WHERE NOT EXISTS (SELECT 1 FROM #turn_pairs AS p WHERE p.client_event_id = cl.event_id)
                   AND NOT EXISTS (SELECT 1 FROM #turn_pairs AS p WHERE p.runtime_event_id = rt.event_id)
             ), accepted AS (
-                SELECT client_event_id, runtime_event_id,
+                SELECT client_event_id, runtime_event_id, runtime_time,
                        ROW_NUMBER() OVER (PARTITION BY runtime_event_id ORDER BY client_time, client_event_id) AS acceptance
                 FROM proposals
                 WHERE preference = 1
             )
-            INSERT INTO #turn_pairs (runtime_event_id, client_event_id)
-            SELECT runtime_event_id, client_event_id
+            INSERT INTO #turn_pairs (runtime_event_id, client_event_id, runtime_time_stamp)
+            SELECT runtime_event_id, client_event_id, runtime_time
             FROM accepted
             WHERE acceptance = 1;
 
@@ -367,8 +371,8 @@ BEGIN TRY
         FROM dbo.copilot_chat_duplicates AS d
         INNER JOIN #turn_pairs AS p ON p.runtime_event_id = d.event_id;
 
-        INSERT INTO dbo.copilot_chat_duplicates (event_id, counted_event_id, reason)
-        SELECT p.runtime_event_id, p.client_event_id, 1
+        INSERT INTO dbo.copilot_chat_duplicates (event_id, time_stamp, counted_event_id, reason)
+        SELECT p.runtime_event_id, p.runtime_time_stamp, p.client_event_id, 1
         FROM #turn_pairs AS p
         WHERE NOT EXISTS (SELECT 1 FROM dbo.copilot_chat_duplicates AS d WHERE d.event_id = p.runtime_event_id);
 
@@ -413,6 +417,7 @@ BEGIN TRY
         CREATE CLUSTERED INDEX IX_turn_bursts ON #turn_bursts (user_id, agent_id, host_kind, burst, position);
 
         SELECT x.event_id,
+               x.time_stamp,
                COALESCE(twin.counted_event_id,
                         CASE WHEN first_record.reason = 2 THEN first_record.counted_event_id ELSE first_record.event_id END) AS counted_event_id
         INTO #turn_extra
@@ -432,8 +437,8 @@ BEGIN TRY
         WHERE x.reason IS NULL
           AND (twin.counted_event_id IS NOT NULL OR x.position > 1);
 
-        INSERT INTO dbo.copilot_chat_duplicates (event_id, counted_event_id, reason)
-        SELECT e.event_id, e.counted_event_id, 2
+        INSERT INTO dbo.copilot_chat_duplicates (event_id, time_stamp, counted_event_id, reason)
+        SELECT e.event_id, e.time_stamp, e.counted_event_id, 2
         FROM #turn_extra AS e
         WHERE e.counted_event_id IS NOT NULL
           AND e.counted_event_id <> e.event_id

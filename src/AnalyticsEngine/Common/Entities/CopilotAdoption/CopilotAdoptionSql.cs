@@ -1786,7 +1786,7 @@ namespace Common.Entities.CopilotAdoption
                 "LEFT JOIN dbo.copilot_event_accessed_resource_types AS rt ON rt.id = ar.resource_type_id\r\n" +
                 // Both audit records of one turn can list the same resource (a web-search result on both records
                 // of a Microsoft 365 Copilot pair, #699); it was one access, so it counts once.
-                Copilot.CopilotTurnSql.ResourceTurnJoin("ar", "ar_dup") + "\r\n" +
+                Copilot.CopilotTurnSql.ResourceTurnJoin("c", "ar_dup") + "\r\n" +
                 "WHERE c.time_stamp >= @from\r\n  AND c.time_stamp < @toExclusive\r\n" +
                 "  AND " + Copilot.CopilotTurnSql.ResourceCountedOnce("ar", "ar_dup") + "\r\n" +
                 "GROUP BY ISNULL(rt.name, '" + Copilot.CopilotAccessedResourceTaxonomy.UnknownTypeLabel + "')\r\n" +

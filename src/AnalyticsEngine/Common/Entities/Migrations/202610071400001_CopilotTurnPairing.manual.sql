@@ -61,6 +61,7 @@ BEGIN
     CREATE TABLE [dbo].[copilot_chat_duplicates]
     (
         [event_id] uniqueidentifier NOT NULL,
+        [time_stamp] datetime NOT NULL,
         [counted_event_id] uniqueidentifier NOT NULL,
         [reason] tinyint NOT NULL,
         CONSTRAINT [PK_copilot_chat_duplicates] PRIMARY KEY CLUSTERED ([event_id] ASC),
@@ -87,6 +88,19 @@ END
 ELSE
     RAISERROR('CopilotTurnPairing: IX_copilot_chat_duplicates_counted_event_id already exists; skipping.', 0, 1) WITH NOWAIT;
 
+-- Lets a report read only its window's slice of this table (see CopilotTurnSql.CountedTurn).
+IF OBJECT_ID(N'dbo.copilot_chat_duplicates', N'U') IS NOT NULL
+   AND NOT EXISTS (SELECT 1 FROM sys.indexes
+                   WHERE object_id = OBJECT_ID(N'dbo.copilot_chat_duplicates')
+                     AND name = N'IX_copilot_chat_duplicates_time_stamp')
+BEGIN
+    CREATE NONCLUSTERED INDEX [IX_copilot_chat_duplicates_time_stamp]
+        ON [dbo].[copilot_chat_duplicates] ([time_stamp] ASC);
+    RAISERROR('CopilotTurnPairing: created IX_copilot_chat_duplicates_time_stamp.', 0, 1) WITH NOWAIT;
+END
+ELSE
+    RAISERROR('CopilotTurnPairing: IX_copilot_chat_duplicates_time_stamp already exists; skipping.', 0, 1) WITH NOWAIT;
+
 RAISERROR('CopilotTurnPairing: schema is present.', 0, 1) WITH NOWAIT;
 GO
 
@@ -105,8 +119,11 @@ IF COL_LENGTH('dbo.copilot_chats', 'conversation_id') IS NULL
    OR NOT EXISTS (SELECT 1 FROM sys.indexes
                   WHERE object_id = OBJECT_ID(N'dbo.copilot_chat_duplicates')
                     AND name = N'IX_copilot_chat_duplicates_counted_event_id')
+   OR NOT EXISTS (SELECT 1 FROM sys.indexes
+                  WHERE object_id = OBJECT_ID(N'dbo.copilot_chat_duplicates')
+                    AND name = N'IX_copilot_chat_duplicates_time_stamp')
 BEGIN
-    RAISERROR('CopilotTurnPairing: NOT stamped - the schema work did not complete: dbo.copilot_chats.conversation_id, dbo.copilot_chat_duplicates or IX_copilot_chat_duplicates_counted_event_id is missing. Re-run this script and read the messages above.', 16, 1);
+    RAISERROR('CopilotTurnPairing: NOT stamped - the schema work did not complete: dbo.copilot_chats.conversation_id, dbo.copilot_chat_duplicates or one of its indexes is missing. Re-run this script and read the messages above.', 16, 1);
 END
 ELSE IF NOT EXISTS (SELECT 1 FROM [dbo].[__MigrationHistory] WHERE [MigrationId] = N'202610021200001_LicenceHistory')
 BEGIN

@@ -1937,8 +1937,9 @@ namespace Tests.UnitTests
         /// <summary>Lists <paramref name="eventId"/> as an extra audit record of the turn counted on <paramref name="countedEventId"/>.</summary>
         private static void MarkDuplicate(ScratchDatabase db, Guid eventId, Guid countedEventId, int reason)
         {
-            db.Execute($@"INSERT INTO dbo.copilot_chat_duplicates (event_id, counted_event_id, reason)
-                          VALUES ('{eventId}', '{countedEventId}', {reason});");
+            db.Execute($@"INSERT INTO dbo.copilot_chat_duplicates (event_id, time_stamp, counted_event_id, reason)
+                          SELECT event_id, time_stamp, '{countedEventId}', {reason}
+                          FROM dbo.copilot_chats WHERE event_id = '{eventId}';");
         }
 
         #endregion
@@ -2170,8 +2171,10 @@ namespace Tests.UnitTests
                   -- Migration CopilotTurnPairing (#699): extra audit records of a turn counted on another record.
                   CREATE TABLE dbo.copilot_chat_duplicates (
                       event_id uniqueidentifier NOT NULL PRIMARY KEY,
+                      time_stamp datetime NOT NULL,
                       counted_event_id uniqueidentifier NOT NULL,
                       reason tinyint NOT NULL);
+                  CREATE NONCLUSTERED INDEX IX_copilot_chat_duplicates_time_stamp ON dbo.copilot_chat_duplicates (time_stamp);
 
                   CREATE TABLE dbo.copilot_agents (
                       id int NOT NULL PRIMARY KEY,
