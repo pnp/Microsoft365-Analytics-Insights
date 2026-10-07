@@ -213,8 +213,8 @@ SET @t = SYSUTCDATETIME();
 --     That is how a quick runtime record whose client record arrives in a later import cycle ends up
 --     paired with the right twin. Nothing is ever un-marked, so the result only ever converges.
 --   * Order and cycles don't matter: the records can arrive in one batch or in different import cycles,
---     in either order, and again on re-import. Whichever arrives second does the pairing, and a record
---     already marked, or a client record already paired, is never considered again.
+--     in either order, and again on re-import. Whichever arrives second does the pairing, and a runtime
+--     record that is already a pair twin, or a client record already paired, is never considered again.
 --
 -- Finding a turn's other records without a new index on copilot_chats: the staged agent interactions
 -- (seeds) are turned into time ranges of +/- @turnReach seconds, overlapping ranges are merged, and each
@@ -222,7 +222,10 @@ SET @t = SYSUTCDATETIME();
 -- (app_host, agent_id), filtered on the seeds' (user_id, agent_id) inside the index. Only the rows that
 -- survive need a key lookup for conversation_id. Restricted to agents keyed on a bare GUID (the Entra
 -- Agent ID every Copilot Studio runtime record carries), so a tenant with no Copilot Studio agents
--- never runs the range seeks at all. Measured cost: see the pull request for #699.
+-- never runs the range seeks at all. Measured on a synthetic 200k-user bench (6.6M interactions, a
+-- quarter of each batch Copilot Studio agent records): about 5k logical reads for a 500-row batch and
+-- 140k-245k for a 20,000-row one, mostly the per-row primary-key seeks any design needs; a new index
+-- would save at most the ~18k key-lookup reads. Full figures are in the pull request for #699.
 --
 -- Pairing is derived data, so a failure here must never fail the import that saved the interactions.
 -- It is caught and logged to the optional step profiler, and the next import cycle that re-reads the
