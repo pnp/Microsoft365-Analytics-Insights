@@ -34,6 +34,9 @@ export const ALLOWED_LITERALS = new Set<string>([
   'Copilot',
   'Copilot Chat',
   'Copilot Studio',
+  // Microsoft's learning programme for Copilot in Viva Learning, attached to the Copilot Adoption
+  // action plan as guidance. Microsoft's Spanish Viva Learning keeps the English name.
+  'Copilot Academy',
   // The product's own name for agent-assisted work, used as a feature name throughout the Copilot
   // Adoption page. Not an English word being left untranslated - it is the name of the thing.
   'Cowork',

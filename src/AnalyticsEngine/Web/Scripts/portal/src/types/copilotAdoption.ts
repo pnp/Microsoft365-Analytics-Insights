@@ -228,6 +228,9 @@ export interface CopilotAdoptionOptions {
 /** One Microsoft-published resource attached to an adoption action. */
 export interface AdoptionGuidanceLink {
   actionCode: string;
+  /** Stable per-resource key; the SPA translates the title through it (see guidanceLinkTitle). */
+  titleKey?: string;
+  /** English title, shown only for a titleKey this build does not know. */
   title: string;
   url: string;
   expectedTitle: string;

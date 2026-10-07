@@ -1,4 +1,5 @@
 import type {
+  AdoptionGuidanceLink,
   AgentUsageRow,
   CopilotAdoptionAvailability,
   CopilotAdoptionOptions,
@@ -289,6 +290,30 @@ export function actionDescription(t: TFunction, code: string, fallback: string, 
     championScore: options.championScore,
   });
   return translated === key ? fallback : translated;
+}
+
+/**
+ * Catalog key for each Microsoft guidance resource, by the stable `titleKey` the server sends with
+ * every link (`CopilotAdoptionGuidanceCatalogue.cs`). `serverAuthoredText.test.ts` checks this map
+ * against the C# catalogue in both directions, and that each English entry is the server's title.
+ */
+export const GUIDANCE_LINK_TITLE_KEYS = {
+  licenseAllocationGuide: 'copilotAdoption.server.guidance.licenseAllocationGuide',
+  copilotAcademy: 'copilotAdoption.server.guidance.copilotAcademy',
+  scenarioLibrary: 'copilotAdoption.server.guidance.scenarioLibrary',
+  successKit: 'copilotAdoption.server.guidance.successKit',
+  essentialGuide: 'copilotAdoption.server.guidance.essentialGuide',
+  aiCouncil: 'copilotAdoption.server.guidance.aiCouncil',
+  workTrendIndex2026: 'copilotAdoption.server.guidance.workTrendIndex2026',
+  frontierFirmResources: 'copilotAdoption.server.guidance.frontierFirmResources',
+  copilotReadinessReport: 'copilotAdoption.server.guidance.copilotReadinessReport',
+  implementationSummaryGuide: 'copilotAdoption.server.guidance.implementationSummaryGuide',
+} as const satisfies Record<string, TranslationKey>;
+
+/** A guidance link's title in the reader's language; the server's English for a key this build does not know. */
+export function guidanceLinkTitle(t: TFunction, link: Pick<AdoptionGuidanceLink, 'titleKey' | 'title'>): string {
+  const key = link.titleKey ? GUIDANCE_LINK_TITLE_KEYS[link.titleKey as keyof typeof GUIDANCE_LINK_TITLE_KEYS] : undefined;
+  return key ? catalogText(t, key, link.title) : link.title;
 }
 
 function appsPhrase(t: TFunction, appsUsed: number): string {

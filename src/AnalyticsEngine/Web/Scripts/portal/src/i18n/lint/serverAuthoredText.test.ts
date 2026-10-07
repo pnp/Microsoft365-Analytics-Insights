@@ -5,7 +5,7 @@ import { join } from 'node:path';
 
 import { loadCatalog, translateStatic, type TFunction } from '..';
 import { EN_CATALOG } from '../catalog';
-import { COPILOT_ADOPTION_WARNING_KEYS, COWORK_TIER_LABEL_KEYS, TENURE_BASIS_LABEL_KEYS } from '../../components/copilotAdoption/serverText';
+import { COPILOT_ADOPTION_WARNING_KEYS, COWORK_TIER_LABEL_KEYS, GUIDANCE_LINK_TITLE_KEYS, TENURE_BASIS_LABEL_KEYS } from '../../components/copilotAdoption/serverText';
 import {
   BLOB_CHECKPOINT_REASON_KEYS,
   HEALTH_COMPONENT_LABEL_KEYS,
@@ -336,6 +336,81 @@ describe('Reports Office platform labels', () => {
     expect(Object.keys(OFFICE_PLATFORM_LABEL_KEYS).sort()).toEqual(translatableProductCategories);
     expect(translatableProductCategories.every((label) => serverLabels.includes(label))).toBe(true);
     expect(Object.values(OFFICE_PLATFORM_LABEL_KEYS).filter((key) => !(key in EN_CATALOG))).toEqual([]);
+  });
+});
+
+/**
+ * The Copilot Adoption action plan names Microsoft resources the server picks from a versioned
+ * catalogue. Each link carries a stable titleKey; the SPA translates through it and falls back to
+ * the server's English only for a key this build does not know - so a new resource added on the
+ * server without a catalog entry would put an English title on a Spanish page, silently.
+ */
+const GUIDANCE_CATALOGUE = join(
+  process.cwd(),
+  '..',
+  '..',
+  '..',
+  'Common',
+  'Entities',
+  'CopilotAdoption',
+  'CopilotAdoptionGuidanceCatalogue.cs',
+);
+
+function guidanceCatalogueTitles(): { links: number; expected: number; titles: Record<string, string[]> } {
+  const source = readFileSync(GUIDANCE_CATALOGUE, 'utf8');
+  // The same shape .github/scripts/Test-CopilotAdoptionGuidanceLinks.ps1 parses.
+  const link =
+    /Link\(\s*[^,]+,\s*"([^"]+)",\s*"([^"]+)",\s*"https?:\/\/[^"]+",\s*"[^"]+",\s*"[^"]+"\s*\)/g;
+  const titles: Record<string, string[]> = {};
+  let links = 0;
+  for (const match of source.matchAll(link)) {
+    links++;
+    titles[match[1]] = sortedUnique([...(titles[match[1]] ?? []), match[2]]);
+  }
+  const expected = Number(source.match(/const\s+int\s+ExpectedLinkCount\s*=\s*(\d+)\s*;/)?.[1] ?? NaN);
+  return { links, expected, titles };
+}
+
+describe('Copilot Adoption guidance link titles', () => {
+  it('parses every link in the server catalogue', () => {
+    const { links, expected } = guidanceCatalogueTitles();
+    // A changed Link(...) signature would otherwise make every assertion below vacuously pass.
+    expect(links).toBe(expected);
+  });
+
+  it('translates every resource the server can attach, with the server English as the English entry', () => {
+    const { titles } = guidanceCatalogueTitles();
+    const serverKeys = sortedUnique(Object.keys(titles));
+    const spaKeys = sortedUnique(Object.keys(GUIDANCE_LINK_TITLE_KEYS));
+    const keyMap = GUIDANCE_LINK_TITLE_KEYS as Record<string, string>;
+    const wrongEnglish = serverKeys
+      .filter((key) => key in keyMap)
+      .filter((key) => titles[key].length !== 1 || EN_CATALOG[keyMap[key]] !== titles[key][0])
+      .map((key) => `${key}: server "${titles[key].join('" | "')}" vs catalog "${EN_CATALOG[keyMap[key]]}"`);
+
+    expect(
+      {
+        missing: serverKeys.filter((key) => !spaKeys.includes(key)),
+        orphans: spaKeys.filter((key) => !serverKeys.includes(key)),
+        notInCatalog: Object.values(GUIDANCE_LINK_TITLE_KEYS).filter((key) => !(key in EN_CATALOG)),
+        wrongEnglish,
+      },
+      'CopilotAdoptionGuidanceCatalogue.cs and GUIDANCE_LINK_TITLE_KEYS (serverText.ts) must match both ways, ' +
+        "and each English catalog entry must be the server's title.",
+    ).toEqual({ missing: [], orphans: [], notInCatalog: [], wrongEnglish: [] });
+  });
+
+  it('has no catalog entry for a resource the server no longer links', () => {
+    const mapped = new Set<string>(Object.values(GUIDANCE_LINK_TITLE_KEYS));
+    expect(catalogKeys('copilotAdoption.server.guidance.').filter((key) => !mapped.has(key))).toEqual([]);
+  });
+
+  it('renders guidance titles through the map wherever the portal shows them', () => {
+    for (const file of ['ActionPlan.tsx', 'OpportunitiesPanel.tsx']) {
+      const source = readFileSync(join(process.cwd(), 'src', 'components', 'copilotAdoption', file), 'utf8');
+      expect(source, `${file} must render guidance titles with guidanceLinkTitle()`).toContain('guidanceLinkTitle(t, link)');
+      expect(source, `${file} renders a server guidance title verbatim`).not.toMatch(/\{\s*link\.title\s*\}/);
+    }
   });
 });
 
