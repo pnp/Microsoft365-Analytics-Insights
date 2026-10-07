@@ -294,6 +294,7 @@
     <Compile Include="KeyValueSingleDateStore.cs" />
     <Compile Include="ReportCompletionStore.cs" />
     <Compile Include="SingleDateStore.cs" />
+    <Compile Include="SingleFlightBackgroundRunner.cs" />
     <Compile Include="StatsUploader\AdoptionStatsCollector.cs" />
     <Compile Include="StatsUploader\AnonAdoptionStatsMapper.cs" />
     <Compile Include="StatsUploader\AnonUsageStatsModelLoader.cs" />
