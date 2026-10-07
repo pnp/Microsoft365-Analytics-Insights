@@ -1,3 +1,4 @@
+using Common.Entities.Copilot;
 using Common.Entities.CopilotAdoption;
 using Microsoft.Data.SqlClient;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
@@ -82,12 +83,13 @@ namespace Tests.UnitTests
             };
         }
 
-        private static AgentUsageRow Agent(int id, string name)
+        private static AgentUsageRow Agent(int id, string name, string origin = CopilotAgentOriginKeys.CustomerBuilt)
         {
             return new AgentUsageRow
             {
                 AgentId = id,
                 Name = name,
+                Origin = origin,
                 Users = 1,
                 Interactions = 10,
                 WindowInteractions = 10,
@@ -112,12 +114,16 @@ namespace Tests.UnitTests
             };
         }
 
-        /// <summary>Pairs for an analysis whose inventory and reporting periods coincide, as they do unless a past range is chosen.</summary>
+        /// <summary>
+        /// Pairs for an analysis whose inventory and reporting periods coincide, as they do unless a past range is
+        /// chosen. Every agent's stored origin is taken from its inventory row, as the classifier would give it.
+        /// </summary>
         private static void WithPairs(CopilotAdoptionAnalysis analysis, params AgentReachRow[] pairs)
         {
             analysis.AgentReachRows = pairs.ToList();
             analysis.AgentInventoryReachRows = analysis.AgentReachRows;
             analysis.AgentReachDepartments = new Dictionary<int, string>(DepartmentNames);
+            analysis.AgentOrigins = analysis.Agents.ToDictionary(a => a.AgentId, a => a.Origin);
         }
 
         /// <summary>
@@ -276,11 +282,108 @@ namespace Tests.UnitTests
                 Pair(10, 1, FinanceId), Pair(10, 7, LegalId), Pair(10, 12, SalesId),
             };
             analysis.AgentReachDepartments = new Dictionary<int, string>(DepartmentNames);
+            analysis.AgentOrigins = analysis.Agents.ToDictionary(a => a.AgentId, a => a.Origin);
 
             new CopilotAdoptionService().FinaliseSummary(analysis);
 
             Assert.AreEqual(3, analysis.Agents.Single(a => a.AgentId == 10).Departments);
             Assert.AreEqual(1, analysis.Summary.AgentBreadthAgentUsers, "Breadth stays on the reporting period.");
+        }
+
+        #endregion
+
+        #region Customer-built scope (#639)
+
+        [TestMethod]
+        public void BreadthAndDepth_CountCustomerBuiltAgentsOnly_AndSayHowManyOfUnknownOriginWereLeftOut()
+        {
+            var analysis = Population();
+            analysis.Agents.Clear();
+            analysis.Agents.Add(Agent(10, "Expenses helper"));
+            analysis.Agents.Add(Agent(50, "Researcher", CopilotAgentOriginKeys.Microsoft));
+            analysis.Agents.Add(Agent(60, "Site helper", CopilotAgentOriginKeys.Unknown));
+            WithPairs(analysis,
+                Pair(10, 1, FinanceId), Pair(10, 2, FinanceId),
+                // Microsoft's agent: used widely, and not what the Work Trend Index counts.
+                Pair(50, 1, FinanceId), Pair(50, 3, FinanceId), Pair(50, 7, LegalId),
+                // Unknown origin: the classifier does not guess, so it is not counted - but it is reported.
+                Pair(60, 4, FinanceId), Pair(60, 8, LegalId),
+                // An agent with no stored row at all has no origin either.
+                Pair(70, 5, FinanceId));
+
+            new CopilotAdoptionService().FinaliseSummary(analysis);
+            var summary = analysis.Summary;
+
+            Assert.AreEqual(CopilotAgentFigureScope.CustomerBuiltAgents, summary.AgentFiguresScope);
+            Assert.AreEqual(2, summary.AgentBreadthAgentUsers, "Only the two people who used the customer-built agent.");
+            Assert.AreEqual(1, summary.AgentDepthDistinctAgents);
+            Assert.AreEqual(8L, summary.AgentDepthInteractions);
+            Assert.AreEqual(2, summary.AgentUnknownOriginAgents,
+                "The unknown-origin agent and the one with no stored origin; Microsoft's agent is excluded by design, not a gap.");
+            Assert.AreEqual(1, summary.AgentBreadthDepartmentsWithAgentUsers,
+                "Legal's people used only Microsoft's agent and one of unknown origin.");
+
+            var finance = summary.CombinedByDepartment.Single(r => r.Segment == "Finance");
+            Assert.AreEqual(2, finance.AgentUsers);
+            Assert.AreEqual(1, finance.DistinctAgents);
+            Assert.AreEqual(0, summary.CombinedByDepartment.Single(r => r.Segment == "Legal").AgentUsers);
+        }
+
+        [TestMethod]
+        public void Reach_CountsCustomerBuiltAgentsAcrossThreeDepartments_AndUnknownOnesSeparately_ButShowsReachOnEveryAgent()
+        {
+            var analysis = new CopilotAdoptionAnalysis();
+            analysis.Agents.Add(Agent(10, "Expenses helper"));
+            analysis.Agents.Add(Agent(50, "Researcher", CopilotAgentOriginKeys.Microsoft));
+            analysis.Agents.Add(Agent(60, "Site helper", CopilotAgentOriginKeys.Unknown));
+            WithPairs(analysis,
+                Pair(10, 1, FinanceId), Pair(10, 2, LegalId), Pair(10, 3, SalesId),
+                Pair(50, 1, FinanceId), Pair(50, 2, LegalId), Pair(50, 3, SalesId),
+                Pair(60, 1, FinanceId), Pair(60, 2, LegalId), Pair(60, 3, SalesId), Pair(60, 4, GreekId));
+
+            new CopilotAdoptionService().FinaliseSummary(analysis);
+
+            Assert.AreEqual(1, analysis.Summary.AgentsInThreeOrMoreDepartments, "Only the customer-built agent counts.");
+            Assert.AreEqual(1, analysis.Summary.AgentsInThreeOrMoreDepartmentsUnknownOrigin);
+            Assert.AreEqual(3, analysis.Agents.Single(a => a.AgentId == 50).Departments,
+                "Reach is a fact about every agent in the inventory; only the tenant count is scoped.");
+            Assert.AreEqual(4, analysis.Agents.Single(a => a.AgentId == 60).Departments);
+        }
+
+        [TestMethod]
+        public void BreadthAndDepth_AreNotMeasured_WhenAgentOriginsCouldNotBeRead()
+        {
+            var analysis = PopulationWithPairs();
+            analysis.AgentOrigins = null;
+
+            new CopilotAdoptionService().FinaliseSummary(analysis);
+
+            Assert.IsNull(analysis.Summary.AgentBreadthAgentUsers,
+                "Without origins nothing can be counted honestly: unknown, not zero.");
+            Assert.IsNull(analysis.Summary.AgentDepthDistinctAgents);
+            Assert.IsNull(analysis.Summary.AgentUnknownOriginAgents);
+            Assert.IsNull(analysis.Summary.CombinedByDepartment.Single(r => r.Segment == "Finance").AgentUsers);
+            Assert.AreEqual(1, analysis.Summary.AgentsInThreeOrMoreDepartments,
+                "Reach takes each inventory agent's own origin, so it is still measured.");
+        }
+
+        [TestMethod]
+        public void AgentOrigins_ComeFromTheClassifier_NeverFromTheStoredFlagAlone()
+        {
+            var origins = CopilotAdoptionService.ResolveAgentOrigins(new[]
+            {
+                new AgentOriginRow { Id = 1, AgentKey = "CopilotStudio.Declarative.00000000-0000-0000-0000-000000000000", IsCustomAgent = null },
+                new AgentOriginRow { Id = 2, AgentKey = "Copilot.M365Copilot.Cowork", IsCustomAgent = true },
+                // A stored 0 is not evidence: builds before #639 wrote it inconsistently.
+                new AgentOriginRow { Id = 3, AgentKey = "BuiltIn_contoso", IsCustomAgent = false },
+                // Only a stored 1 settles an id the classifier cannot place.
+                new AgentOriginRow { Id = 4, AgentKey = "BuiltIn_contoso", IsCustomAgent = true },
+            });
+
+            Assert.AreEqual(CopilotAgentOriginKeys.CustomerBuilt, origins[1]);
+            Assert.AreEqual(CopilotAgentOriginKeys.Microsoft, origins[2], "The classifier's first-party list wins over a stored 1.");
+            Assert.AreEqual(CopilotAgentOriginKeys.Unknown, origins[3]);
+            Assert.AreEqual(CopilotAgentOriginKeys.CustomerBuilt, origins[4]);
         }
 
         #endregion
@@ -345,7 +448,8 @@ namespace Tests.UnitTests
             Assert.AreEqual(13.3, summary.AgentDepthAgentsPer100ActiveUsers);
             Assert.AreEqual(28L, summary.AgentDepthInteractions, "Seven counted pairs of four.");
             Assert.AreEqual(14d, summary.AgentDepthInteractionsPerActiveAgent);
-            Assert.AreEqual(CopilotAgentFigureScope.AllAgents, summary.AgentFiguresScope);
+            Assert.AreEqual(CopilotAgentFigureScope.CustomerBuiltAgents, summary.AgentFiguresScope);
+            Assert.AreEqual(0, summary.AgentUnknownOriginAgents, "Every agent here is customer-built.");
         }
 
         [TestMethod]
@@ -354,6 +458,7 @@ namespace Tests.UnitTests
             var analysis = new CopilotAdoptionAnalysis();
             analysis.LicensedUsers.AddRange(Enumerable.Range(1, 5).Select(i => Seat(i, null)));
             analysis.LicensedUsers.AddRange(Enumerable.Range(6, 5).Select(i => Seat(i, "Finance")));
+            analysis.Agents.Add(Agent(10, "Expenses helper"));
             WithPairs(analysis, Pair(10, 1, null), Pair(10, 6, FinanceId));
 
             new CopilotAdoptionService().FinaliseSummary(analysis);
@@ -507,13 +612,14 @@ namespace Tests.UnitTests
             analysis.Summary.Options = service.Options;
             // One agent with six Finance users, so a home department is named.
             analysis.Agents.Add(Agent(40, "Finance close"));
+            analysis.AgentOrigins[40] = CopilotAgentOriginKeys.CustomerBuilt;
             analysis.AgentReachRows.AddRange(Enumerable.Range(1, 6).Select(i => Pair(40, i, FinanceId)));
             service.FinaliseSummary(analysis);
 
             var bytes = CopilotAdoptionWorkbook.Build(analysis);
 
             var departments = WorkbookCells(bytes, "Departments and apps");
-            foreach (var header in new[] { "Using agents %", "Distinct agents", "Agents per 100 active users", "Interactions per agent", "Agent builders", "Departments counted" })
+            foreach (var header in new[] { "Using customer-built agents %", "Customer-built agents", "Agents per 100 active users", "Interactions per agent", "Agent builders", "Departments counted" })
             {
                 CollectionAssert.Contains(departments, header);
             }
@@ -525,8 +631,10 @@ namespace Tests.UnitTests
             }
 
             CollectionAssert.Contains(agents, "Finance", "The home department of an agent with six Finance users is named.");
-            Assert.IsTrue(agents.Any(c => c.StartsWith("Agents used in 3 or more departments (all agents, Microsoft's and your own)", StringComparison.Ordinal)),
+            Assert.IsTrue(agents.Any(c => c.StartsWith("Agents used in 3 or more departments (customer-built agents only", StringComparison.Ordinal)),
                 "The reach count names which agents it counts.");
+            Assert.IsTrue(agents.Any(c => c.StartsWith("Agents of unknown origin used in 3 or more departments", StringComparison.Ordinal)),
+                "The agents it leaves out for want of an origin are counted on their own line.");
 
             var method = string.Join("\n", WorkbookCells(bytes, "How this is calculated"));
             foreach (var expected in new[] { "Agent breadth", "Agent depth", "Agent builders", "Agent reach", "BotCreate", "BotUpdateOperation-BotPublish", "BotUpdateOperation-BotShare" })
@@ -632,6 +740,16 @@ namespace Tests.UnitTests
                           time_stamp datetime NULL);
                       CREATE NONCLUSTERED INDEX IX_copilot_chats_time_stamp_user_id
                           ON dbo.copilot_chats ([time_stamp], [user_id]) INCLUDE ([app_host], [agent_id]);
+                      CREATE TABLE dbo.copilot_agents (
+                          id int NOT NULL PRIMARY KEY,
+                          name nvarchar(100) NULL,
+                          agent_id nvarchar(max) NULL,
+                          is_custom_agent bit NULL);
+
+                      INSERT INTO dbo.copilot_agents (id, name, agent_id, is_custom_agent) VALUES
+                          (7, N'Contoso helper', N'CopilotStudio.Declarative.00000000-0000-0000-0000-000000000000', NULL),
+                          (8, N'Cowork', N'Copilot.M365Copilot.Cowork', 1),
+                          (9, N'Unplaced', N'BuiltIn_contoso', 0);
 
                       INSERT INTO dbo.user_departments (id, name) VALUES (1, N'Finance'), (3, N'Καλημέρα κόσμε');
                       INSERT INTO dbo.users (id, user_name, mail, department_id) VALUES
@@ -671,6 +789,11 @@ namespace Tests.UnitTests
                 var names = Query<DepartmentNameRow>(db, CopilotAdoptionSql.AgentReachDepartmentsSql);
                 Assert.AreEqual("Καλημέρα κόσμε", names.Single(n => n.Id == 3).Name,
                     "A non-Latin department name must survive the round trip.");
+
+                var origins = CopilotAdoptionService.ResolveAgentOrigins(Query<AgentOriginRow>(db, CopilotAdoptionSql.AgentOriginsSql));
+                Assert.AreEqual(CopilotAgentOriginKeys.CustomerBuilt, origins[7], "A NULL stored flag maps and the id decides.");
+                Assert.AreEqual(CopilotAgentOriginKeys.Microsoft, origins[8]);
+                Assert.AreEqual(CopilotAgentOriginKeys.Unknown, origins[9], "A stored 0 is not evidence.");
 
                 Assert.AreEqual(0, Query<int>(db, CopilotAdoptionSql.CopilotStudioAuthoringImportedSql).Single(),
                     "Nothing imported yet.");

@@ -77,6 +77,14 @@ namespace Common.Entities.CopilotAdoption
         internal Dictionary<int, string> AgentReachDepartments { get; set; }
 
         /// <summary>
+        /// Each stored agent's origin key (<see cref="Copilot.CopilotAgentOriginKeys"/>) by <c>copilot_agents.id</c>,
+        /// resolved with <see cref="Copilot.CopilotAgentClassifier.ResolveStoredOrigin"/> - what decides which of
+        /// <see cref="AgentReachRows"/> count (<see cref="CopilotAgentFigureScope"/>). Null when it could not be
+        /// read, in which case breadth and depth are not measured rather than counted over no agents.
+        /// </summary>
+        internal Dictionary<int, string> AgentOrigins { get; set; }
+
+        /// <summary>
         /// The people who created, published or shared a Copilot Studio agent in the period (#647). Held so a
         /// filtered view can narrow them; only ever counted.
         /// </summary>

@@ -54,7 +54,7 @@ const ROWS: AdoptionCombinedSegmentRow[] = [
 ];
 
 const TOTALS: AgentAdoptionTotals = {
-  agentFiguresScope: 'allAgents',
+  agentFiguresScope: 'customerBuiltAgents',
   agentBreadthDepartments: 3,
   agentBreadthDepartmentsWithAgentUsers: 2,
   agentBreadthDepartmentPct: 66.7,
@@ -63,8 +63,10 @@ const TOTALS: AgentAdoptionTotals = {
   agentBreadthUserPct: 40,
   agentDepthAgentsPer100ActiveUsers: 13.3,
   agentDepthInteractionsPerActiveAgent: 1234.5,
+  agentUnknownOriginAgents: 3,
   agentBuilders: null,
   agentsInThreeOrMoreDepartments: 4,
+  agentsInThreeOrMoreDepartmentsUnknownOrigin: 2,
 };
 
 function headerTexts(): string[] {
@@ -76,7 +78,7 @@ describe('Department table: agent breadth, depth and builders (#646, #647)', () 
     renderWithProvider(<CombinedSegmentTable rows={ROWS} agentTotals={TOTALS} minSeatsPerSegment={5} />);
 
     expect(headerTexts()).toEqual(expect.arrayContaining([
-      'Using agents', 'Distinct agents', 'Agents per 100 users', 'Interactions per agent', 'Agent builders',
+      'Using customer-built agents', 'Customer-built agents', 'Agents per 100 users', 'Interactions per agent', 'Agent builders',
     ]));
     expect(screen.getByRole('columnheader', { name: 'Agent builders' })).toHaveAttribute(
       'title',
@@ -96,7 +98,10 @@ describe('Department table: agent breadth, depth and builders (#646, #647)', () 
     renderWithProvider(<CombinedSegmentTable rows={ROWS} agentTotals={TOTALS} minSeatsPerSegment={5} />);
 
     expect(screen.getByText('Agent breadth and depth')).toBeInTheDocument();
-    expect(screen.getByText(/Agents counted: all agents, Microsoft's and your own\./)).toBeInTheDocument();
+    expect(screen.getByText(/Agents counted: customer-built agents only - Microsoft's agents and agents of unknown origin are not counted\./)).toBeInTheDocument();
+    expect(screen.getByTestId('agent-total-unknown')).toHaveTextContent(
+      '3 agents of unknown origin were used in this period and are not counted, so these figures are a floor.',
+    );
     expect(within(screen.getByTestId('agent-total-departments')).getByText('2 of 3 (66.7%)')).toBeInTheDocument();
     expect(within(screen.getByTestId('agent-total-users')).getByText('600 of 1,500 (40%)')).toBeInTheDocument();
     expect(within(screen.getByTestId('agent-total-per100')).getByText('13.3')).toBeInTheDocument();
@@ -104,6 +109,27 @@ describe('Department table: agent breadth, depth and builders (#646, #647)', () 
     expect(within(screen.getByTestId('agent-total-builders')).getByText('\u2014')).toBeInTheDocument();
     expect(within(screen.getByTestId('agent-total-reach')).getByText('Agents used in 3 or more departments')).toBeInTheDocument();
     expect(within(screen.getByTestId('agent-total-reach')).getByText('4')).toBeInTheDocument();
+    expect(within(screen.getByTestId('agent-total-reach')).getByText('+2 of unknown origin, not counted')).toBeInTheDocument();
+  });
+
+  it('says one agent of unknown origin in the singular, and nothing when there is none', () => {
+    const { unmount } = renderWithProvider(
+      <CombinedSegmentTable rows={ROWS} agentTotals={{ ...TOTALS, agentUnknownOriginAgents: 1 }} minSeatsPerSegment={5} />,
+    );
+    expect(screen.getByTestId('agent-total-unknown')).toHaveTextContent(
+      '1 agent of unknown origin was used in this period and is not counted, so these figures are a floor.',
+    );
+    unmount();
+
+    renderWithProvider(
+      <CombinedSegmentTable
+        rows={ROWS}
+        agentTotals={{ ...TOTALS, agentUnknownOriginAgents: 0, agentsInThreeOrMoreDepartmentsUnknownOrigin: 0 }}
+        minSeatsPerSegment={5}
+      />,
+    );
+    expect(screen.queryByTestId('agent-total-unknown')).toBeNull();
+    expect(screen.queryByText(/of unknown origin, not counted/)).toBeNull();
   });
 
   it('renders the same in Spanish, with Spanish number formatting and tenant data untouched', async () => {
@@ -112,14 +138,18 @@ describe('Department table: agent breadth, depth and builders (#646, #647)', () 
 
     expect(await screen.findByText('Amplitud y profundidad de los agentes', undefined, { timeout: 5000 })).toBeInTheDocument();
     expect(headerTexts()).toEqual(expect.arrayContaining([
-      'Usan agentes', 'Agentes distintos', 'Agentes por cada 100 usuarios', 'Interacciones por agente', 'Creadores de agentes',
+      'Usan agentes de su organización', 'Agentes de su organización', 'Agentes por cada 100 usuarios', 'Interacciones por agente', 'Creadores de agentes',
     ]));
-    expect(screen.getByText(/Agentes contabilizados: todos los agentes, los de Microsoft y los propios\./)).toBeInTheDocument();
+    expect(screen.getByText(/Agentes contabilizados: solo los agentes de su organización: no se cuentan los agentes de Microsoft ni los de origen desconocido\./)).toBeInTheDocument();
+    expect(screen.getByTestId('agent-total-unknown')).toHaveTextContent(
+      '3 agentes de origen desconocido se usaron en este periodo y no se cuentan, por lo que estas cifras son un mínimo.',
+    );
+    expect(within(screen.getByTestId('agent-total-reach')).getByText('+2 de origen desconocido, no contados')).toBeInTheDocument();
     expect(within(screen.getByTestId('agent-total-departments')).getByText('2 de 3 (66,7%)')).toBeInTheDocument();
     expect(within(screen.getByTestId('agent-total-perAgent')).getByText('1234,5')).toBeInTheDocument();
     expect(within(screen.getByText('Finance').closest('tr')!).getByText('18,8')).toBeInTheDocument();
     expect(screen.getByText(GREEK)).toBeInTheDocument();
-    expect(screen.queryByText('Using agents')).toBeNull();
+    expect(screen.queryByText('Using customer-built agents')).toBeNull();
   });
 });
 
@@ -168,6 +198,7 @@ function agent(over: Partial<AgentUsageRow>): AgentUsageRow {
     agentId: 1,
     name: 'Contoso Expenses Helper',
     agentKey: null,
+    origin: 'customerBuilt',
     isCustomAgent: true,
     interactions: 100,
     users: 11,
@@ -200,6 +231,7 @@ const ESTATE: AgentEstateSummary = {
   activeAgents: 3,
   knownAgents: 3,
   customAgents: 2,
+  unknownOriginAgents: 0,
   agentUsers: 25,
   licensedAgentUsers: 10,
   agentInteractions: 300,

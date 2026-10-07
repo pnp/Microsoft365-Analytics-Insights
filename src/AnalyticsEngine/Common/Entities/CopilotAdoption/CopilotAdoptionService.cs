@@ -811,6 +811,21 @@ namespace Common.Entities.CopilotAdoption
         public const int AgentReachDepartmentThreshold = 3;
 
         /// <summary>
+        /// Each stored agent's origin key, by <c>copilot_agents.id</c>, through the classifier the importer and the
+        /// inventory share (#639) - never through <c>is_custom_agent</c> alone. Internal and static so the mapping
+        /// can be tested without a database.
+        /// </summary>
+        internal static Dictionary<int, string> ResolveAgentOrigins(IEnumerable<AgentOriginRow> rows)
+        {
+            return (rows ?? Enumerable.Empty<AgentOriginRow>())
+                .GroupBy(o => o.Id)
+                .ToDictionary(
+                    g => g.Key,
+                    g => CopilotAgentOriginKeys.For(
+                        CopilotAgentClassifier.ResolveStoredOrigin(g.First().AgentKey, g.First().IsCustomAgent)));
+        }
+
+        /// <summary>
         /// The (agent, person) pairs behind the agent breadth and depth figures (#646) and each agent's reach
         /// across departments (#647), and the people who build agents in Copilot Studio (#647).
         /// </summary>
@@ -876,6 +891,26 @@ namespace Common.Entities.CopilotAdoption
                     CopilotAdoptionQueries.AgentReach,
                     output,
                     "agent use per person and department", cancellationToken));
+            }
+
+            if (analysis.AgentReachRows != null)
+            {
+                // Which of those agents count is decided in C# by the classifier #639 shares with the importer,
+                // never by is_custom_agent in SQL. Read for every stored agent, so an agent the inventory does
+                // not hold - past its row cap, or quiet since a past period - still gets its real origin.
+                output.Sql["agentOrigins"] = CopilotAdoptionSql.AgentOriginsSql;
+
+                var origins = await SafeAsync(
+                    () => QueryAsync<AgentOriginRow>(CopilotAdoptionSql.AgentOriginsSql, cancellationToken),
+                    CopilotAdoptionSteps.AgentReach,
+                    CopilotAdoptionQueries.AgentOrigins,
+                    output,
+                    "agent origins", cancellationToken);
+
+                if (origins != null)
+                {
+                    analysis.AgentOrigins = ResolveAgentOrigins(origins);
+                }
             }
 
             if (agentWindowStart == windowStart && agentToExclusive == toExclusive)
@@ -2464,7 +2499,9 @@ namespace Common.Entities.CopilotAdoption
                     analysis.AgentReachDepartments,
                     _options.MinSeatsPerSegment);
                 summary.AgentsInThreeOrMoreDepartments = agents.Count(a =>
-                    CopilotAgentFigureScope.Includes(a) && (a.Departments ?? 0) >= AgentReachDepartmentThreshold);
+                    CopilotAgentFigureScope.Includes(a.Origin) && (a.Departments ?? 0) >= AgentReachDepartmentThreshold);
+                summary.AgentsInThreeOrMoreDepartmentsUnknownOrigin = agents.Count(a =>
+                    IsUnknownOrigin(a.Origin) && (a.Departments ?? 0) >= AgentReachDepartmentThreshold);
             }
 
             // On the summary itself rather than on the estate: the estate is tenant-level and a filtered
@@ -2555,6 +2592,15 @@ namespace Common.Entities.CopilotAdoption
             return string.IsNullOrWhiteSpace(department) ? "(no department)" : department.Trim();
         }
 
+        /// <summary>
+        /// An origin the audit log does not settle - counted the way <see cref="AgentEstateSummary.UnknownOriginAgents"/>
+        /// counts it, so the "not counted" figures here and the estate's unknown count agree.
+        /// </summary>
+        private static bool IsUnknownOrigin(string origin)
+        {
+            return origin != CopilotAgentOriginKeys.CustomerBuilt && origin != CopilotAgentOriginKeys.Microsoft;
+        }
+
         /// <summary>One department's agent breadth, depth and builder counts (#646, #647).</summary>
         private sealed class DepartmentAgentFigures
         {
@@ -2585,6 +2631,9 @@ namespace Common.Entities.CopilotAdoption
             public HashSet<int> Agents { get; } = new HashSet<int>();
 
             public long Interactions { get; set; }
+
+            /// <summary>Agents of unknown origin the population used: not counted, so the figures are a floor.</summary>
+            public HashSet<int> UnknownOriginAgents { get; } = new HashSet<int>();
 
             /// <summary>False when no Copilot Studio authoring event was ever imported, or the query failed.</summary>
             public bool BuildersMeasured { get; set; }
@@ -2623,7 +2672,9 @@ namespace Common.Entities.CopilotAdoption
         /// analysis's own licensed or unlicensed rows are counted, so a filtered view narrows every figure
         /// here to its own people without a second list.</para>
         /// <para><b>Which agents.</b> Those <see cref="CopilotAgentFigureScope"/> includes - the one place that
-        /// decides.</para>
+        /// decides - from each agent's stored origin (<see cref="CopilotAdoptionAnalysis.AgentOrigins"/>), not from
+        /// the inventory, so an agent past the inventory's row cap or quiet since a past period is still placed.
+        /// Without the origins nothing can be counted honestly, so breadth and depth are then not measured.</para>
         /// <para>Cost: one pass over the pairs and one over the people, with hash lookups - linear in both, a
         /// few tens of milliseconds at 200,000 users.</para>
         /// </remarks>
@@ -2650,21 +2701,25 @@ namespace Common.Entities.CopilotAdoption
 
             figures.ActiveUsers = departmentOf.Count;
 
-            if (analysis.AgentReachRows != null)
+            if (analysis.AgentReachRows != null && analysis.AgentOrigins != null)
             {
                 figures.Measured = true;
-
-                var inventory = (analysis.Agents ?? new List<AgentUsageRow>())
-                    .GroupBy(a => a.AgentId)
-                    .ToDictionary(g => g.Key, g => g.First());
                 var agentUsers = new HashSet<int>();
 
                 foreach (var pair in analysis.AgentReachRows)
                 {
                     if (!departmentOf.TryGetValue(pair.UserId, out var department)) continue;
 
-                    inventory.TryGetValue(pair.AgentId, out var agent);
-                    if (!CopilotAgentFigureScope.Includes(agent)) continue;
+                    // An agent with no stored row has no evidence of who made it: unknown, like the classifier's own.
+                    var origin = analysis.AgentOrigins.TryGetValue(pair.AgentId, out var stored)
+                        ? stored
+                        : CopilotAgentOriginKeys.Unknown;
+
+                    if (!CopilotAgentFigureScope.Includes(origin))
+                    {
+                        if (IsUnknownOrigin(origin)) figures.UnknownOriginAgents.Add(pair.AgentId);
+                        continue;
+                    }
 
                     var byDepartment = figures.For(department);
                     if (agentUsers.Add(pair.UserId)) byDepartment.AgentUsers++;
@@ -2714,6 +2769,7 @@ namespace Common.Entities.CopilotAdoption
                 summary.AgentDepthAgentsPer100ActiveUsers = null;
                 summary.AgentDepthInteractions = null;
                 summary.AgentDepthInteractionsPerActiveAgent = null;
+                summary.AgentUnknownOriginAgents = null;
                 return;
             }
 
@@ -2733,6 +2789,7 @@ namespace Common.Entities.CopilotAdoption
             summary.AgentDepthAgentsPer100ActiveUsers = PerHundredOrNull(figures.Agents.Count, figures.ActiveUsers);
             summary.AgentDepthInteractions = figures.Interactions;
             summary.AgentDepthInteractionsPerActiveAgent = PerAgentOrNull(figures.Interactions, figures.Agents.Count);
+            summary.AgentUnknownOriginAgents = figures.UnknownOriginAgents.Count;
         }
 
         private static double? PercentageOrNull(int part, int total)

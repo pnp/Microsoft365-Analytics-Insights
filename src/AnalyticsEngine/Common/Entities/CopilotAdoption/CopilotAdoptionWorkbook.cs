@@ -1065,8 +1065,8 @@ namespace Common.Entities.CopilotAdoption
                     + "Blank means not measured. Definitions are on 'How this is calculated'."));
                 sheet.AddHeaderRow("Department", "Seats", "Active licences", "Interactions per licence",
                     "Licences using agents %", "Unlicensed users", "Interactions per unlicensed user",
-                    "Unlicensed using agents %", "Active users (audit)", "Using agents %", "Distinct agents",
-                    "Agents per 100 active users", "Interactions per agent", "Agent builders");
+                    "Unlicensed using agents %", "Active users (audit)", "Using customer-built agents %",
+                    "Customer-built agents", "Agents per 100 active users", "Interactions per agent", "Agent builders");
 
                 foreach (var row in summary.CombinedByDepartment)
                 {
@@ -1089,6 +1089,8 @@ namespace Common.Entities.CopilotAdoption
                 sheet.AddRow("Distinct agents per 100 active users", summary.AgentDepthAgentsPer100ActiveUsers);
                 sheet.AddRow("Agent interactions", summary.AgentDepthInteractions);
                 sheet.AddRow("Interactions per active agent", summary.AgentDepthInteractionsPerActiveAgent);
+                sheet.AddRow("Agents of unknown origin used (not counted, so the figures above are a floor)",
+                    summary.AgentUnknownOriginAgents);
                 sheet.AddRow("Agent builders", summary.AgentBuilders);
             }
 
@@ -1228,6 +1230,9 @@ namespace Common.Entities.CopilotAdoption
                 $"Agents used in {CopilotAdoptionService.AgentReachDepartmentThreshold} or more departments "
                 + "(" + AgentFiguresScopeLabel(summary.AgentFiguresScope) + ")",
                 summary.AgentsInThreeOrMoreDepartments);
+            sheet.AddRow(
+                $"Agents of unknown origin used in {CopilotAdoptionService.AgentReachDepartmentThreshold} or more departments (not counted above)",
+                summary.AgentsInThreeOrMoreDepartmentsUnknownOrigin);
             sheet.AddRow("Agent builders (Copilot Studio)", summary.AgentBuilders);
 
             if (estate.HealthBreakdown.Count > 0)
@@ -1332,6 +1337,8 @@ namespace Common.Entities.CopilotAdoption
         {
             switch (scope)
             {
+                case CopilotAgentFigureScope.CustomerBuiltAgents:
+                    return "customer-built agents only - Microsoft's agents and agents of unknown origin are not counted";
                 case CopilotAgentFigureScope.AllAgents:
                     return "all agents, Microsoft's and your own";
                 default:
@@ -2443,7 +2450,10 @@ namespace Common.Entities.CopilotAdoption
             var agentScope = AgentFiguresScopeLabel(summary.AgentFiguresScope);
 
             AddMethod(sheet, "Agent breadth",
-                $"Counts {agentScope}, over the active Copilot users the audit log can see: seat holders whose "
+                $"Counts {agentScope}. An agent's origin comes from its stored id, classified the same way as the "
+                + "agent inventory's Type column; the agents of unknown origin the people below used are counted "
+                + "separately ('Agents of unknown origin used'), so every breadth and depth figure is a floor.\n"
+                + "The people are the active Copilot users the audit log can see: seat holders whose "
                 + "Copilot activity comes from the audit log, and every unlicensed Copilot Chat user. Seat holders "
                 + "scored from Microsoft's usage report are left out of both sides, because that report carries no "
                 + "agent identity.\n"
@@ -2480,7 +2490,8 @@ namespace Common.Entities.CopilotAdoption
                 + "agent's users are in it. People with no department count towards an agent's users but are not "
                 + $"a department.\nAgents used in {CopilotAdoptionService.AgentReachDepartmentThreshold} or more "
                 + $"departments counts {agentScope} with that reach: local wins that have spread beyond the team "
-                + "that made them. Like the rest of the agent inventory, reach describes the latest period when the "
+                + "that made them. Agents of unknown origin with that reach are counted on their own line. Like the "
+                + "rest of the agent inventory, reach describes the latest period when the "
                 + "report covers past dates, and stays tenant-wide in a filtered view; breadth, depth and builders "
                 + "describe the filtered people.");
 

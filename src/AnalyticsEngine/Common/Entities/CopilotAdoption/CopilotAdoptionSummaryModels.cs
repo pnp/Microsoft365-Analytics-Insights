@@ -1110,6 +1110,14 @@ namespace Common.Entities.CopilotAdoption
         public double? AgentDepthInteractionsPerActiveAgent { get; set; }
 
         /// <summary>
+        /// Agents of unknown origin that <see cref="AgentActiveUsers"/> used in the period. Not counted by any
+        /// breadth or depth figure above - the classifier never guesses - so those figures are a floor, and this
+        /// says by how much it could matter.
+        /// </summary>
+        [JsonProperty("agentUnknownOriginAgents")]
+        public int? AgentUnknownOriginAgents { get; set; }
+
+        /// <summary>
         /// People who created, published or shared a Copilot Studio agent in the period, from the Copilot
         /// Studio authoring events of the Power Platform audit feed. A count only: no builder is ever named.
         /// Null when no Copilot Studio authoring event has ever been imported.
@@ -1124,6 +1132,13 @@ namespace Common.Entities.CopilotAdoption
         /// </summary>
         [JsonProperty("agentsInThreeOrMoreDepartments")]
         public int? AgentsInThreeOrMoreDepartments { get; set; }
+
+        /// <summary>
+        /// Inventory agents of unknown origin used in that many departments - left out of
+        /// <see cref="AgentsInThreeOrMoreDepartments"/>, which is therefore a floor.
+        /// </summary>
+        [JsonProperty("agentsInThreeOrMoreDepartmentsUnknownOrigin")]
+        public int? AgentsInThreeOrMoreDepartmentsUnknownOrigin { get; set; }
 
         /// <summary>Unlicensed Copilot Chat as a population in its own right.</summary>
         [JsonProperty("unlicensed")]

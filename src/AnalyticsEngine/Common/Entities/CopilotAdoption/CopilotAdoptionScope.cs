@@ -238,6 +238,7 @@ namespace Common.Entities.CopilotAdoption
                 AgentReachRows = analysis.AgentReachRows,
                 AgentInventoryReachRows = null,
                 AgentReachDepartments = analysis.AgentReachDepartments,
+                AgentOrigins = analysis.AgentOrigins,
 
                 // People, so narrowed - and only ever counted.
                 AgentBuilders = Narrow(analysis.AgentBuilders, b => b.UserId, b => b.EmailDomain, scope),
@@ -506,6 +507,7 @@ namespace Common.Entities.CopilotAdoption
             // agent breadth and depth figures beside it are NOT carried: they count people, and the scoring
             // pass has already narrowed them to this view's own.
             scoped.AgentsInThreeOrMoreDepartments = tenant.AgentsInThreeOrMoreDepartments;
+            scoped.AgentsInThreeOrMoreDepartmentsUnknownOrigin = tenant.AgentsInThreeOrMoreDepartmentsUnknownOrigin;
 
             scoped.UnscopedSections = new List<string>
             {

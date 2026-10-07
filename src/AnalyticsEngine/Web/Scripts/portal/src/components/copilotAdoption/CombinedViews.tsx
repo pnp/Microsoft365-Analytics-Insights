@@ -4,7 +4,7 @@ import type {
   AdoptionConcentrationBand,
   CopilotAdoptionSummary,
 } from '../../types/copilotAdoption';
-import { formatNumber, useT, type TFunction, type TranslationKey } from '../../i18n';
+import { formatNumber, plural, useT, type TFunction, type TranslationKey } from '../../i18n';
 import { concentrationLabel } from './serverText';
 import { formatCount, formatPct } from '../shared/KpiGrid';
 import { serverPlaceholderText } from '../shared/serverPlaceholder';
@@ -22,6 +22,7 @@ export const AGENT_REACH_DEPARTMENT_THRESHOLD = 3;
  */
 export const AGENT_FIGURES_SCOPE_KEYS: Record<string, TranslationKey> = {
   allAgents: 'copilotAdoption.combinedViews.agents.scope.allAgents',
+  customerBuiltAgents: 'copilotAdoption.combinedViews.agents.scope.customerBuiltAgents',
 };
 
 /** Which agents the breadth, depth and reach figures count, in the reader's language. */
@@ -42,8 +43,10 @@ export type AgentAdoptionTotals = Pick<
   | 'agentBreadthUserPct'
   | 'agentDepthAgentsPer100ActiveUsers'
   | 'agentDepthInteractionsPerActiveAgent'
+  | 'agentUnknownOriginAgents'
   | 'agentBuilders'
   | 'agentsInThreeOrMoreDepartments'
+  | 'agentsInThreeOrMoreDepartmentsUnknownOrigin'
 >;
 
 const NOT_MEASURED = '\u2014';
@@ -402,7 +405,10 @@ function AgentTotals({ totals, minSeatsPerSegment }: { totals: AgentAdoptionTota
           pct: pct === null || pct === undefined ? NOT_MEASURED : formatPct(pct),
         });
 
-  const items: { key: string; label: string; value: string; help: string }[] = [
+  const unknownAgents = totals.agentUnknownOriginAgents ?? 0;
+  const unknownReach = totals.agentsInThreeOrMoreDepartmentsUnknownOrigin ?? 0;
+
+  const items: { key: string; label: string; value: string; help: string; note?: string }[] = [
     {
       key: 'departments',
       label: t('copilotAdoption.combinedViews.agents.departments'),
@@ -438,6 +444,9 @@ function AgentTotals({ totals, minSeatsPerSegment }: { totals: AgentAdoptionTota
       label: t('copilotAdoption.combinedViews.agents.reach', { threshold: AGENT_REACH_DEPARTMENT_THRESHOLD }),
       value: formatOptionalCount(totals.agentsInThreeOrMoreDepartments),
       help: t('copilotAdoption.combinedViews.agents.reach.help', { threshold: AGENT_REACH_DEPARTMENT_THRESHOLD }),
+      note: unknownReach > 0
+        ? t('copilotAdoption.combinedViews.agents.reachUnknown', { count: formatCount(unknownReach) })
+        : undefined,
     },
   ];
 
@@ -449,11 +458,22 @@ function AgentTotals({ totals, minSeatsPerSegment }: { totals: AgentAdoptionTota
       <Text size={200} block className={styles.muted}>
         {t('copilotAdoption.combinedViews.agents.scope', { scope: agentFiguresScopeText(t, totals.agentFiguresScope) })}
       </Text>
+      {unknownAgents > 0 && (
+        <Text size={200} block className={styles.muted} data-testid="agent-total-unknown">
+          {t(
+            plural(unknownAgents, 'copilotAdoption.combinedViews.agents.unknownOrigin.one', 'copilotAdoption.combinedViews.agents.unknownOrigin.other'),
+            { count: formatCount(unknownAgents) },
+          )}
+        </Text>
+      )}
       <div className={styles.agentTotals}>
         {items.map((item) => (
           <div key={item.key} className={styles.agentTotal} title={item.help} data-testid={`agent-total-${item.key}`}>
             <Text size={200} className={styles.muted}>{item.label}</Text>
             <Text size={300} weight="semibold">{item.value}</Text>
+            {item.note && (
+              <Text size={100} className={styles.muted}>{item.note}</Text>
+            )}
           </div>
         ))}
       </div>

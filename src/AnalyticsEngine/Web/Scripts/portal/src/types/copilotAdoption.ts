@@ -603,8 +603,12 @@ export interface CopilotAdoptionSummary {
   agentDepthAgentsPer100ActiveUsers?: number | null;
   agentDepthInteractions?: number | null;
   agentDepthInteractionsPerActiveAgent?: number | null;
+  /** Agents of unknown origin the active users used in the period - not counted, so the figures above are a floor. */
+  agentUnknownOriginAgents?: number | null;
   agentBuilders?: number | null;
   agentsInThreeOrMoreDepartments?: number | null;
+  /** Inventory agents of unknown origin used in three or more departments - not counted in the figure above. */
+  agentsInThreeOrMoreDepartmentsUnknownOrigin?: number | null;
   unlicensed: UnlicensedPopulationSummary;
 
   options: CopilotAdoptionOptions;

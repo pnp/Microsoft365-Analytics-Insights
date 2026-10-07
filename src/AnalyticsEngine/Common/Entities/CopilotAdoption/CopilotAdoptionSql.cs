@@ -1718,6 +1718,17 @@ namespace Common.Entities.CopilotAdoption
             "FROM dbo.user_departments AS d;";
 
         /// <summary>
+        /// Every stored agent's id and the importer's flag, so each agent in <see cref="AgentReachSql"/> can be
+        /// classified with <see cref="Copilot.CopilotAgentClassifier.ResolveStoredOrigin"/> in C# (#639) - whether
+        /// or not the agent inventory holds it. A separate read of a small table rather than a column on every
+        /// pair, so an agent's id is not repeated on every row; the flag is never filtered on in SQL, because a
+        /// stored 0 is not evidence (see the classifier).
+        /// </summary>
+        public const string AgentOriginsSql =
+            "SELECT ag.id AS Id, ag.agent_id AS AgentKey, ag.is_custom_agent AS IsCustomAgent\r\n" +
+            "FROM dbo.copilot_agents AS ag;";
+
+        /// <summary>
         /// The Copilot Studio authoring operations that make someone an agent builder (#647): creating,
         /// publishing or sharing an agent. Microsoft's own operation names, as the Power Platform audit feed
         /// records them (see "View Copilot Studio audit logs in Purview"). Editing a topic, a component or a

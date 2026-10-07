@@ -207,6 +207,20 @@ namespace Common.Entities.CopilotAdoption
     }
 
     /// <summary>
+    /// One <c>copilot_agents</c> row as stored, for <see cref="CopilotAgentClassifier.ResolveStoredOrigin"/> - so
+    /// the agents in <see cref="AgentReachRow"/> get an origin whether or not the agent inventory holds them.
+    /// </summary>
+    public class AgentOriginRow
+    {
+        public int Id { get; set; }
+
+        public string AgentKey { get; set; }
+
+        /// <summary>The importer's stored flag: only a 1 is evidence; see <see cref="CopilotAgentClassifier.ResolveStoredOrigin"/>.</summary>
+        public bool? IsCustomAgent { get; set; }
+    }
+
+    /// <summary>
     /// Someone who created, published or shared a Copilot Studio agent in the reporting period (#647).
     /// </summary>
     /// <remarks>
@@ -229,30 +243,36 @@ namespace Common.Entities.CopilotAdoption
     }
 
     /// <summary>
-    /// Which agents the breadth, depth and reach figures count (#646, #647) - in ONE place, so narrowing them
-    /// to customer-built agents once agent origin is classified (#639) is a change to this class alone.
+    /// Which agents the breadth, depth and reach figures count (#646, #647) - decided in this ONE place.
     /// </summary>
     /// <remarks>
-    /// The scope travels with the figures as a stable key (<see cref="CopilotAdoptionSummary.AgentFiguresScope"/>)
+    /// <para>Customer-built agents only: the 2026 Work Trend Index counts a firm's own agents (#638), and agent
+    /// origin is classified again since #639 (<see cref="CopilotAgentClassifier"/>). Microsoft's agents are left
+    /// out by design. An agent of unknown origin is left out too - the classifier never guesses - and the
+    /// figures say how many were, so they read as a floor rather than a total.</para>
+    /// <para>The scope travels with the figures as a stable key (<see cref="CopilotAdoptionSummary.AgentFiguresScope"/>)
     /// so the portal and the workbook can say which agents a figure counts, in the reader's language, rather
-    /// than leaving it to be guessed.
+    /// than leaving it to be guessed.</para>
     /// </remarks>
     public static class CopilotAgentFigureScope
     {
-        /// <summary>Every agent, Microsoft's and the tenant's own.</summary>
+        /// <summary>Every agent, Microsoft's and the tenant's own. Not the current scope; kept as a known key.</summary>
         public const string AllAgents = "allAgents";
 
+        /// <summary>The agents the tenant built itself.</summary>
+        public const string CustomerBuiltAgents = "customerBuiltAgents";
+
         /// <summary>The scope the figures are currently computed over.</summary>
-        public const string Current = AllAgents;
+        public const string Current = CustomerBuiltAgents;
 
         /// <summary>
-        /// Whether one agent counts towards breadth, depth and reach. <paramref name="agent"/> is the agent's
-        /// inventory row, or null for an agent the inventory does not hold (it stopped at
-        /// <see cref="CopilotAdoptionOptions.MaxAgents"/>).
+        /// Whether an agent counts towards breadth, depth and reach, from its origin key
+        /// (<see cref="CopilotAgentOriginKeys"/>): <see cref="AgentUsageRow.Origin"/> for an inventory row, or
+        /// <see cref="CopilotAgentClassifier.ResolveStoredOrigin"/> for a stored agent.
         /// </summary>
-        public static bool Includes(AgentUsageRow agent)
+        public static bool Includes(string origin)
         {
-            return true;
+            return string.Equals(origin, CopilotAgentOriginKeys.CustomerBuilt, StringComparison.Ordinal);
         }
     }
 
