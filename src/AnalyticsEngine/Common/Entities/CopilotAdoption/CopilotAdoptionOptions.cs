@@ -738,6 +738,13 @@ namespace Common.Entities.CopilotAdoption
         /// report date for a short while after it appears, so snapshots newer than this are ignored.
         /// Mirrors the Reports area's <c>UsageReportLagDays</c>.
         /// </summary>
+        /// <remarks>
+        /// Also the last settled day of the agent growth series (#645): its 28-day windows end this many
+        /// days before today, because the Copilot audit feed and the Copilot Studio billing it reads arrive
+        /// late as well - audit content typically within a day, billing re-read by the importer for a week.
+        /// Reused rather than given an option of its own, so the series and the usage-report snapshots
+        /// always stop on the same settled day.
+        /// </remarks>
         [JsonProperty("usageReportLagDays")]
         public int UsageReportLagDays { get; set; } = 3;
 

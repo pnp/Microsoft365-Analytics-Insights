@@ -320,6 +320,32 @@ export interface AgentEstateSummary {
   usageByDepartment: ReportCategory[];
   usageByAgent: ReportCategory[];
   agents: AgentUsageRow[];
+  /**
+   * Which agents `growth` counts: 'allAgents', or 'customerBuilt' once the agent-origin classifier is in.
+   * A key, so the page words it. Optional only so fixtures written before #645 still type-check.
+   */
+  growthScope?: string;
+  /** The first Copilot interaction the audit log holds - what explains a blank year-ago window. */
+  growthAuditHistoryStartUtc?: string | null;
+  /** Agent use over consecutive closed 28-day windows, most recent first (#645). Empty when not computed. */
+  growth?: AgentGrowthWindow[];
+}
+
+/**
+ * One closed 28-day window of the agent growth series. Every figure is null when the window was not
+ * measured - never zero - so "not measured" and "nobody used an agent" stay distinguishable.
+ */
+export interface AgentGrowthWindow {
+  /** 0 for the most recent closed window, 13 for the same 28 days a year earlier. */
+  windowsAgo: number;
+  fromUtc: string;
+  toUtc: string;
+  activeAgents: number | null;
+  agentUsers: number | null;
+  agentInteractions: number | null;
+  interactionsPerAgentUser: number | null;
+  /** Separate evidence of autonomous runs: Copilot Studio agents with billed consumption. Never added to activeAgents. */
+  copilotStudioBilledAgents: number | null;
 }
 
 /**

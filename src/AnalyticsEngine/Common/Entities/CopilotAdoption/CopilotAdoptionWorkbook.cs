@@ -87,6 +87,7 @@ namespace Common.Entities.CopilotAdoption
                 WriteDepartmentSheet(workbook, summary);
                 WriteEmailDomainSheet(workbook, summary);
                 WriteAgentSheet(workbook, summary);
+                WriteAgentGrowthSheet(workbook, summary);
                 WriteUnlicensedSheet(workbook, summary);
                 WriteActionPlanSheet(workbook, summary);
                 if (includeIndividualData) WriteLicensedUsersSheet(workbook, analysis);
@@ -1286,6 +1287,105 @@ namespace Common.Entities.CopilotAdoption
             }
         }
 
+        /// <summary>
+        /// Year-on-year agent growth (#645): one row per closed 28-day window, oldest first so the chart
+        /// reads left to right, with the evidence of autonomous runs in its own labelled column.
+        /// </summary>
+        /// <remarks>
+        /// A blank cell is a window that was not measured and is never written as zero - in window 13 it is
+        /// the denominator of any growth ratio a reader works out. The definitions and the caveat are on
+        /// "How this is calculated" as well as here, because this sheet is the one that gets copied.
+        /// </remarks>
+        private static void WriteAgentGrowthSheet(XlsxWriter workbook, CopilotAdoptionSummary summary)
+        {
+            var estate = summary.Agents;
+            var growth = estate?.Growth;
+            if (growth == null || growth.Count == 0) return;
+
+            var latest = CopilotAdoptionAgentGrowth.Latest(growth);
+            var scope = CopilotAdoptionAgentGrowth.ScopeNoun(estate.GrowthScope);
+            var lagDays = (summary.Options ?? CopilotAdoptionOptions.Default).UsageReportLagDays;
+
+            var sheet = workbook.AddSheet("Agent growth");
+            sheet.SetColumnWidths(14, 13, 13, 14, 14, 16, 16, 24);
+
+            sheet.AddTitle("Agent growth, year on year");
+            sheet.AddRow(XlsxCell.Wrapped(
+                $"{CopilotAdoptionAgentGrowth.WindowCount} consecutive, closed {CopilotAdoptionAgentGrowth.WindowDays}-day windows"
+                + (latest == null ? string.Empty : $" ending on {latest.ToUtc:yyyy-MM-dd}")
+                + $", the last settled day: {lagDays} days before the analysis ran, because the Copilot audit "
+                + "feed and Copilot Studio billing arrive late. Window 0 is the most recent; window "
+                + $"{CopilotAdoptionAgentGrowth.YearAgoWindow} covers the same 28 days a year earlier, so comparing "
+                + $"the two is the year-on-year change. Counts {scope}. A blank cell is a window that was not "
+                + "measured - never zero."));
+            sheet.AddRow(XlsxCell.Wrapped(AgentGrowthCaveat));
+            sheet.AddBlankRow();
+
+            sheet.AddHeaderRow("Windows ago", "From", "To", "Active agents", "Agent users", "Agent interactions",
+                "Interactions per agent user", "Copilot Studio billed agents (separate: autonomous-run evidence)");
+
+            var headerRow = sheet.CurrentRow;
+            var first = headerRow + 1;
+            foreach (var window in growth.OrderByDescending(w => w.WindowsAgo))
+            {
+                sheet.AddRow(
+                    window.WindowsAgo,
+                    XlsxCell.Date(window.FromUtc),
+                    XlsxCell.Date(window.ToUtc),
+                    window.ActiveAgents,
+                    window.AgentUsers,
+                    window.AgentInteractions,
+                    window.InteractionsPerAgentUser,
+                    window.CopilotStudioBilledAgents);
+            }
+
+            var last = sheet.CurrentRow;
+
+            sheet.AddBlankRow();
+            sheet.AddRow(XlsxCell.Wrapped(
+                "Sources. Active agents, agent users and agent interactions: the Copilot audit log (copilot_chats), "
+                + "user-initiated use only. Copilot Studio billed agents: the Power Platform billing import "
+                + "(copilot_studio_credit_daily) - a separate series that is never added to the active agents. "
+                + (estate.GrowthAuditHistoryStartUtc.HasValue
+                    ? $"The Copilot audit history starts on {estate.GrowthAuditHistoryStartUtc.Value:yyyy-MM-dd}."
+                    : "The Copilot audit log holds no interactions.")));
+
+            var chart = new XlsxChart
+            {
+                Type = XlsxChartType.Line,
+                Title = "Active agents per 28-day window",
+                CategoryRange = sheet.RangeReference(first, 3, last, 3),
+                AnchorCell = "J3",
+                WidthCells = 11,
+                HeightCells = 16,
+                ShowLegend = true,
+            };
+            chart.Series.Add(new XlsxChartSeries
+            {
+                Name = "Active agents",
+                NameRange = sheet.RangeReference(headerRow, 4, headerRow, 4),
+                ValueRange = sheet.RangeReference(first, 4, last, 4),
+            });
+            chart.Series.Add(new XlsxChartSeries
+            {
+                Name = "Copilot Studio billed agents",
+                NameRange = sheet.RangeReference(headerRow, 8, headerRow, 8),
+                ValueRange = sheet.RangeReference(first, 8, last, 8),
+            });
+            sheet.AddChart(chart);
+
+            sheet.FreezeTopRows(headerRow);
+        }
+
+        /// <summary>
+        /// The caveat every surface of the growth series carries (#547): the series compares the tenant
+        /// with itself, and the Work Trend Index's headline is not a target or a benchmark for it.
+        /// </summary>
+        internal const string AgentGrowthCaveat =
+            "This compares the tenant with itself. The 2026 Work Trend Index's 15x is year-on-year growth in "
+            + "active agents across Microsoft's whole customer base - not a target, and not a benchmark for "
+            + "one organisation.";
+
         private static void WriteUnlicensedSheet(XlsxWriter workbook, CopilotAdoptionSummary summary)
         {
             var unlicensed = summary.Unlicensed;
@@ -2386,6 +2486,40 @@ namespace Common.Entities.CopilotAdoption
                 + $"people; Keep when used within {o.AgentReviewInactiveDays} days by at least {o.AgentMinUsers} "
                 + $"people. Any agent first seen within {o.AgentNewDays} days is New and exempt from review - a "
                 + "brand-new agent with two users has not failed, it has not started.");
+
+            AddMethod(sheet, "Agent growth (year on year)",
+                $"{CopilotAdoptionAgentGrowth.WindowCount} consecutive, closed {CopilotAdoptionAgentGrowth.WindowDays}-day "
+                + "windows of whole UTC days, ending on the last settled day - "
+                + $"{o.UsageReportLagDays} days before the analysis ran, the same margin the report gives Microsoft's "
+                + "usage reports, because the Copilot audit feed and Copilot Studio billing both arrive late. Window 0 "
+                + $"is the most recent; window {CopilotAdoptionAgentGrowth.YearAgoWindow} starts 364 days earlier and "
+                + "covers the same weekdays, so window 0 against window "
+                + $"{CopilotAdoptionAgentGrowth.YearAgoWindow} is the year-on-year change. The series always ends at the "
+                + "last settled day before the analysis ran, whatever reporting period is selected, like the agent "
+                + "inventory.\n"
+                + $"It counts {CopilotAdoptionAgentGrowth.ScopeNoun(summary.Agents?.GrowthScope)}: every interaction "
+                + "the Copilot audit log attributes to an agent and to a person, licensed or not, Cowork included - "
+                + "the same agents as the Agents sheet. An agent is active in a window when someone used it on at "
+                + "least one day in it, the Work Trend Index's definition of user-initiated use. Agent users are "
+                + "distinct people; interactions per agent user is interactions divided by agent users.\n"
+                + "A window is measured only when the Copilot audit log holds an interaction inside it and its "
+                + "history reaches back to the window's first day. Otherwise every figure is left blank, never "
+                + "zero: a window the import did not cover would read as nobody using an agent, and in the year-ago "
+                + "window that is the denominator of any growth ratio. The series is recomputed from the raw audit "
+                + "rows on every run - nothing is stored - so removing old Copilot interactions from the database "
+                + "blanks the windows they fed.\n"
+                + AgentGrowthCaveat);
+
+            AddMethod(sheet, "Autonomous-run evidence",
+                "Shown beside the growth series, never added to it: Copilot Studio agents with billed consumption in "
+                + "each window, from the Power Platform billing import (copilot_studio_credit_daily). The audit log "
+                + "records user-initiated use only, so an agent that runs on its own appears in billing but not in "
+                + "the active-agent count. Billing also covers conversations, so this is evidence that agents ran, "
+                + "not a count of autonomous runs, and its agent ids are the licensing API's, so the two series "
+                + "cannot be matched agent for agent. A window the billing import holds no rows for is blank. Cowork "
+                + "scheduled tasks would be the other evidence, but Microsoft reports them only in its Cowork usage "
+                + "report in the Microsoft 365 admin centre (Copilot > Cowork > Usage), which this product does not "
+                + "import.");
 
             AddMethod(sheet, "Why our figures differ from Microsoft's",
                 "The Copilot audit log and Microsoft's Copilot usage report answer different questions. "

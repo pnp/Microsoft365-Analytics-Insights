@@ -102,6 +102,7 @@
     <Compile Include="Config\AppConfig.cs" />
     <Compile Include="Config\AppConnectionStrings.cs" />
     <Compile Include="CopilotAdoption\AdoptionBand.cs" />
+    <Compile Include="CopilotAdoption\CopilotAdoptionAgentGrowth.cs" />
     <Compile Include="CopilotAdoption\CopilotAdoptionAgentModels.cs" />
     <Compile Include="CopilotAdoption\CopilotAdoptionAnalysis.cs" />
     <Compile Include="CopilotAdoption\CopilotAdoptionConcentrationModels.cs" />

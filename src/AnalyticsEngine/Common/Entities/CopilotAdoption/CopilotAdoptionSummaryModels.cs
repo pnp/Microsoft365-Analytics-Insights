@@ -1048,6 +1048,57 @@ namespace Common.Entities.CopilotAdoption
         [JsonProperty("topAgentUsersCapped")]
         public bool TopAgentUsersCapped { get; set; }
 
+        #region Agent growth (#645) - fixed Snapshot facts keys
+
+        // Windows 0 and 13 of Agents.Growth, lifted to the top level so they reach the Snapshot facts sheet
+        // as fixed keys - that sheet reflects over this type's scalars and does not descend into the estate.
+        // Read straight off the series rather than copied from it, so a summary carrying another summary's
+        // estate - a filtered view carries the tenant's whole - can never disagree with it. Null, and so a
+        // blank cell, whenever the window was not measured: never zero.
+
+        /// <summary>Which agents the growth series counts - an <see cref="AgentGrowthScopes"/> key.</summary>
+        [JsonProperty("agentGrowthScope")]
+        public string AgentGrowthScope => Agents?.GrowthScope;
+
+        /// <summary>The last day of window 0: the last settled day the growth series ends on.</summary>
+        [JsonProperty("agentGrowthSettledThroughUtc")]
+        public DateTime? AgentGrowthSettledThroughUtc => CopilotAdoptionAgentGrowth.Latest(Agents?.Growth)?.ToUtc;
+
+        /// <summary>Agents with user-initiated use in the most recent closed 28-day window.</summary>
+        [JsonProperty("agentGrowthActiveAgentsWindow0")]
+        public int? AgentGrowthActiveAgentsWindow0 => CopilotAdoptionAgentGrowth.Latest(Agents?.Growth)?.ActiveAgents;
+
+        /// <summary>The same, for the same 28 days a year earlier.</summary>
+        [JsonProperty("agentGrowthActiveAgentsWindow13")]
+        public int? AgentGrowthActiveAgentsWindow13 => CopilotAdoptionAgentGrowth.YearAgo(Agents?.Growth)?.ActiveAgents;
+
+        [JsonProperty("agentGrowthAgentUsersWindow0")]
+        public int? AgentGrowthAgentUsersWindow0 => CopilotAdoptionAgentGrowth.Latest(Agents?.Growth)?.AgentUsers;
+
+        [JsonProperty("agentGrowthAgentUsersWindow13")]
+        public int? AgentGrowthAgentUsersWindow13 => CopilotAdoptionAgentGrowth.YearAgo(Agents?.Growth)?.AgentUsers;
+
+        [JsonProperty("agentGrowthInteractionsWindow0")]
+        public long? AgentGrowthInteractionsWindow0 => CopilotAdoptionAgentGrowth.Latest(Agents?.Growth)?.AgentInteractions;
+
+        [JsonProperty("agentGrowthInteractionsWindow13")]
+        public long? AgentGrowthInteractionsWindow13 => CopilotAdoptionAgentGrowth.YearAgo(Agents?.Growth)?.AgentInteractions;
+
+        [JsonProperty("agentGrowthInteractionsPerAgentUserWindow0")]
+        public double? AgentGrowthInteractionsPerAgentUserWindow0 => CopilotAdoptionAgentGrowth.Latest(Agents?.Growth)?.InteractionsPerAgentUser;
+
+        [JsonProperty("agentGrowthInteractionsPerAgentUserWindow13")]
+        public double? AgentGrowthInteractionsPerAgentUserWindow13 => CopilotAdoptionAgentGrowth.YearAgo(Agents?.Growth)?.InteractionsPerAgentUser;
+
+        /// <summary>Evidence of autonomous runs, kept apart: Copilot Studio agents with billed consumption in window 0.</summary>
+        [JsonProperty("agentGrowthCopilotStudioBilledAgentsWindow0")]
+        public int? AgentGrowthCopilotStudioBilledAgentsWindow0 => CopilotAdoptionAgentGrowth.Latest(Agents?.Growth)?.CopilotStudioBilledAgents;
+
+        [JsonProperty("agentGrowthCopilotStudioBilledAgentsWindow13")]
+        public int? AgentGrowthCopilotStudioBilledAgentsWindow13 => CopilotAdoptionAgentGrowth.YearAgo(Agents?.Growth)?.CopilotStudioBilledAgents;
+
+        #endregion
+
         /// <summary>Unlicensed Copilot Chat as a population in its own right.</summary>
         [JsonProperty("unlicensed")]
         public UnlicensedPopulationSummary Unlicensed { get; set; } = new UnlicensedPopulationSummary();

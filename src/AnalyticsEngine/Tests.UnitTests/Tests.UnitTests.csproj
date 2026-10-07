@@ -365,6 +365,9 @@
     <Compile Include="CopilotAdoptionSeatTimeSavedTests.cs" />
     <Compile Include="CopilotAdoptionAgentUsersTests.cs" />
     <Compile Include="CopilotAdoptionAgentOriginTests.cs" />
+    <Compile Include="CopilotAdoptionAgentGrowthTests.cs" />
+    <Compile Include="CopilotAdoptionAgentGrowthSqlTests.cs" />
+    <Compile Include="CopilotAdoptionAgentGrowthWorkbookTests.cs" />
     <Compile Include="CopilotAdoptionSqlIntegrationTests.cs" />
     <Compile Include="CopilotAdoptionSynchronizationContextTests.cs" />
     <Compile Include="CopilotAdoptionTelemetryTests.cs" />

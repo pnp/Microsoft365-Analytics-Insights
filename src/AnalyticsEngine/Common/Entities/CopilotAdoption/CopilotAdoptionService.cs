@@ -136,7 +136,7 @@ namespace Common.Entities.CopilotAdoption
             var historyStart = _options.UsesExplicitDates
                 ? windowStart.AddDays(-Math.Max(0, _options.HistoryDays - windowDays))
                 : CopilotAdoptionScoring.WindowStartUtc(nowUtc, Math.Max(_options.WindowDays, _options.HistoryDays));
-            var latestSettled = nowUtc.Date.AddDays(-Math.Max(0, _options.UsageReportLagDays));
+            var latestSettled = CopilotAdoptionAgentGrowth.LastSettledDay(nowUtc, _options);
             var settled = _options.UsesExplicitDates
                 ? (toExclusive.Date.AddDays(-1) < latestSettled ? toExclusive.Date.AddDays(-1) : latestSettled)
                 : latestSettled;
@@ -456,6 +456,11 @@ namespace Common.Entities.CopilotAdoption
             {
                 steps.Add(new AnalysisStep(CopilotAdoptionSteps.AgentEstate,
                     output => BuildAgentEstateAsync(analysis, output, seatIds, windowStart, toExclusive, nowUtc, cancellationToken)));
+
+                // Its own step so it overlaps the inventory rather than queueing behind it. As of now even for
+                // a historical period, like the inventory beside it on the Agents tab.
+                steps.Add(new AnalysisStep(CopilotAdoptionSteps.AgentGrowth,
+                    output => BuildAgentGrowthAsync(analysis, output, latestSettled, cancellationToken)));
             }
 
             await RunStepsAsync(analysis, steps, _maxConcurrentSteps, cancellationToken);
@@ -797,6 +802,72 @@ namespace Common.Entities.CopilotAdoption
                 analysis.AgentUsers = agentUsers;
                 analysis.AgentUsersCapped = agentUsers.Count >= _options.MaxAgentUsersScored;
             }
+        }
+
+        /// <summary>
+        /// Year-on-year agent growth: user-initiated agent use over consecutive 28-day windows ending on
+        /// the last settled day, and Copilot Studio billing beside it as separate evidence of autonomous
+        /// runs (#645). See <see cref="CopilotAdoptionAgentGrowth"/> for the rules.
+        /// </summary>
+        /// <remarks>
+        /// Three reads: the agent table for the scope decision (one row per agent), one range seek over the
+        /// series on the interaction index, and the billing table's date range. A failed billing read blanks
+        /// only the billing evidence. A failed scope or usage read leaves the series empty, and the step's
+        /// warning says why: counting agents the scope was meant to leave out would be the wrong number with
+        /// the right label, and fourteen blank windows would read as "not measured" rather than "not loaded".
+        /// </remarks>
+        private async Task BuildAgentGrowthAsync(
+            CopilotAdoptionAnalysis analysis,
+            StepOutput output,
+            DateTime lastSettledDay,
+            CancellationToken cancellationToken)
+        {
+            var estate = analysis.Summary.Agents;
+            estate.GrowthScope = CopilotAdoptionAgentGrowth.Scope;
+
+            // Left empty unless the user-initiated figures load: a series of blank windows would read as
+            // "not measured" when the truth is "could not be loaded", which the step's warning says instead.
+            estate.Growth = new List<AgentGrowthWindow>();
+
+            var agents = await SafeAsync(
+                () => QueryAsync<AgentGrowthAgentRow>(CopilotAdoptionSql.AgentGrowthAgentsSql, cancellationToken),
+                CopilotAdoptionSteps.AgentGrowth,
+                CopilotAdoptionQueries.AgentGrowthAgents,
+                output,
+                "agents counted in agent growth", cancellationToken);
+
+            if (agents == null) return;
+
+            var parameters = new Dictionary<string, object>
+            {
+                { "@lastSettledDay", lastSettledDay },
+                { "@seriesFrom", CopilotAdoptionAgentGrowth.SeriesFromUtc(lastSettledDay) },
+                { "@seriesToExclusive", CopilotAdoptionAgentGrowth.SeriesToExclusiveUtc(lastSettledDay) },
+            };
+
+            var sql = CopilotAdoptionSql.AgentGrowthSql(CopilotAdoptionAgentGrowth.ExcludedAgentIds(agents));
+            output.Sql["agentGrowth"] = CopilotAdoptionSql.ForDisplay(sql, parameters);
+
+            var usage = await SafeAsync(
+                () => QueryAsync<AgentGrowthQueryRow>(sql, cancellationToken, ToSqlParameters(parameters)),
+                CopilotAdoptionSteps.AgentGrowth,
+                CopilotAdoptionQueries.AgentGrowth,
+                output,
+                "agent growth over 28-day windows", cancellationToken);
+
+            if (usage == null) return;
+
+            output.Sql["agentGrowthBilling"] = CopilotAdoptionSql.ForDisplay(CopilotAdoptionSql.AgentGrowthBillingSql, parameters);
+
+            var billing = await SafeAsync(
+                () => QueryAsync<AgentGrowthBillingRow>(CopilotAdoptionSql.AgentGrowthBillingSql, cancellationToken, ToSqlParameters(parameters)),
+                CopilotAdoptionSteps.AgentGrowth,
+                CopilotAdoptionQueries.AgentGrowthBilling,
+                output,
+                "Copilot Studio billed agents per 28-day window", cancellationToken);
+
+            estate.Growth = CopilotAdoptionAgentGrowth.Build(lastSettledDay, usage, billing);
+            estate.GrowthAuditHistoryStartUtc = usage.Select(r => r.FirstCopilotInteractionUtc).FirstOrDefault(d => d.HasValue);
         }
 
         /// <summary>
