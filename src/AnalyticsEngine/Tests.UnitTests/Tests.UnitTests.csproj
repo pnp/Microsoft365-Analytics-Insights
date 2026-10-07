@@ -369,6 +369,7 @@
     <Compile Include="ReleaseHardening20260917Tests.cs" />
     <Compile Include="AnonAdoptionStatsTests.cs" />
     <Compile Include="CopilotAdoptionTests.cs" />
+    <Compile Include="CopilotAdoptionWorkbookComparisonScriptTests.cs" />
     <Compile Include="CopilotAdoptionWorkbookTests.cs" />
     <Compile Include="CopilotAccessedResourceTaxonomyTests.cs" />
     <Compile Include="ReportsAPIControllerTests.cs" />

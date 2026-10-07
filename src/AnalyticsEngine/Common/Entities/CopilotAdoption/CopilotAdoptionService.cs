@@ -2174,6 +2174,7 @@ namespace Common.Entities.CopilotAdoption
                 {
                     Label = CopilotAdoptionScoring.BandDisplayName(band),
                     Value = users.Count(u => u.Band == band),
+                    Key = band.ToString(),
                 })
                 .ToList();
         }
@@ -2278,6 +2279,7 @@ namespace Common.Entities.CopilotAdoption
                 {
                     Label = CopilotAdoptionScoring.AgentHealthDisplayName(health),
                     Value = agents.Count(a => a.Health == health),
+                    Key = health.ToString(),
                 })
                 .ToList();
 
