@@ -145,6 +145,7 @@
     <Compile Include="TeamsExplorer\TeamsExplorerScoring.cs" />
     <Compile Include="TeamsExplorer\TeamsExplorerSql.cs" />
     <Compile Include="Copilot\CopilotAccessedResourceTaxonomy.cs" />
+    <Compile Include="Copilot\CopilotAgentClassifier.cs" />
     <Compile Include="Config\ImportConfig.cs" />
     <Compile Include="Config\UserGroupsFilterModel.cs" />
     <Compile Include="UserScope\GroupDirectoryReader.cs" />

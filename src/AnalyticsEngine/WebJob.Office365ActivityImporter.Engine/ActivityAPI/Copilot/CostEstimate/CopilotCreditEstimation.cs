@@ -40,6 +40,52 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot
     }
 
     /// <summary>
+    /// Why <see cref="CopilotCreditEstimation"/> did or did not price an interaction, from the kind and origin
+    /// of the agent it names (see <see cref="Common.Entities.Copilot.CopilotAgentClassifier"/>). Stored as a
+    /// string on the estimate, like <see cref="CopilotTenantGroundingBasis"/>, so an older reader of the
+    /// persisted JSON cannot coerce a value it does not know into the first enum member.
+    ///
+    /// The point of it is that a 0 is not always the same 0: an interaction the model prices at nothing is a
+    /// finding, and an interaction it could not assess is a gap. Estimates written before cost model 1.2.0.0
+    /// do not carry this property at all.
+    /// </summary>
+    public static class CopilotAgentCreditBasis
+    {
+        /// <summary>A customer-built custom-engine agent: the model priced its responses.</summary>
+        public const string CustomEngine = "CustomEngine";
+
+        /// <summary>
+        /// A custom-engine agent, but the record carries no Messages, so there was nothing to price. Copilot
+        /// Studio's runtime records look like this (#699). In Microsoft 365 Copilot the same turn is logged a
+        /// second time, with its Messages, by Microsoft 365 Copilot itself, and that record carries the
+        /// estimate - so the turn is never priced twice.
+        /// </summary>
+        public const string NoMessages = "NoMessages";
+
+        /// <summary>A declarative agent. The model does not price declarative agents, so this is a genuine 0.</summary>
+        public const string Declarative = "Declarative";
+
+        /// <summary>
+        /// One of Microsoft's own agents, such as Cowork. The model does not price them, so this is 0 by design.
+        /// That is not a statement that the interaction used no Copilot Credits: Cowork, for one, draws on the
+        /// tenant's credit pool (see <c>CopilotStudioHarnessClassifier</c>).
+        /// </summary>
+        public const string MicrosoftAgent = "MicrosoftAgent";
+
+        /// <summary>
+        /// The agent's kind is not known, so the interaction was not assessed. The 0 means "not assessed", not
+        /// "free" - count these to see how much agent use the estimate cannot cover.
+        /// </summary>
+        public const string NotAssessed = "NotAssessed";
+
+        /// <summary>
+        /// The record names no agent: ordinary Microsoft 365 Copilot use, which is not billed in Copilot
+        /// Credits.
+        /// </summary>
+        public const string NoAgent = "NoAgent";
+    }
+
+    /// <summary>
     /// Detailed billing report for a Copilot audit event.
     /// Calculates Copilot Credits consumed based on Microsoft Copilot Studio billing policies.
     /// 
@@ -66,8 +112,12 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot
         ///           this product cannot classify no longer silently produces the cheaper answer
         ///           (#469). Estimates for the same conversation can legitimately differ across this
         ///           boundary.
+        /// 1.2.0.0 - the agent's kind and origin decide whether an interaction is priced, and
+        ///           AgentCreditBasis records why (#639). From Stable build 1552 until this version no
+        ///           agent was ever classified, so every agent interaction was estimated at 0; custom-engine
+        ///           agents are priced again from here. Estimates stored before this are not recomputed.
         /// </summary>
-        private const string COST_ESTIMATION_VERSION = "1.1.0.0";
+        private const string COST_ESTIMATION_VERSION = "1.2.0.0";
 
         // Based on Microsoft Copilot Studio billing documentation (as of March 2025)
         // https://learn.microsoft.com/en-us/microsoft-copilot-studio/requirements-messages-management#copilot-credits-and-events-scenarios
@@ -118,6 +168,14 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot
         public string TenantGraphGroundingBasis { get; set; }
 
         /// <summary>
+        /// Why the interaction was or was not priced - one of the <see cref="CopilotAgentCreditBasis"/>
+        /// constants. Tells a genuine 0 (a declarative or Microsoft agent) apart from an unassessed one (an
+        /// agent whose kind is not known). Null on estimates written before cost model 1.2.0.0.
+        /// </summary>
+        [JsonProperty("AgentCreditBasis")]
+        public string AgentCreditBasis { get; set; }
+
+        /// <summary>
         /// How many accessed resources carried no evidence either way - neither positive evidence of a
         /// tenant resource nor a recognised marker for grounding from outside the tenant.
         ///
@@ -154,11 +212,16 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot
 
         #endregion
 
+        /// <summary>
+        /// The estimate for a record that names no agent: ordinary Microsoft 365 Copilot use, which is not
+        /// billed in Copilot Credits. Shared, so never modify it.
+        /// </summary>
         public static CopilotCreditEstimation NoCost = new CopilotCreditEstimation
         {
             CostModelVersion = COST_ESTIMATION_VERSION,
             TotalCredits = 0,
             TenantGraphGroundingBasis = CopilotTenantGroundingBasis.NotAssessed,
+            AgentCreditBasis = CopilotAgentCreditBasis.NoAgent,
             ResourceTypeBreakdown = new Dictionary<string, int>(),
             CreditBreakdown = new Dictionary<string, int>(),
             ModelsUsed = new List<string>()
@@ -167,32 +230,30 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot
         /// <summary>
         /// Analyzes a Copilot audit event JSON and calculates the total Copilot Credits consumed.
         /// This is an overload that deserializes the JSON string before analysis.
-        /// See <see cref="Analyze(CopilotAuditEvent, bool)"/> for detailed billing logic.
+        /// See <see cref="Analyze(CopilotAuditEvent, CopilotAgentClassification)"/> for detailed billing logic.
         /// </summary>
         /// <param name="json">JSON string containing the Copilot audit event data</param>
-        /// <param name="isCustomAgent">True if this is a custom Copilot Studio agent (billable), false for standard M365 Copilot (not billable via credits)</param>
+        /// <param name="agent">The kind and origin of the agent the record names, from <see cref="CopilotAgentClassifier"/>.</param>
         /// <returns>CreditReport with detailed billing breakdown</returns>
-        public static CopilotCreditEstimation Analyze(string json, bool isCustomAgent)
+        public static CopilotCreditEstimation Analyze(string json, CopilotAgentClassification agent)
         {
-            if (string.IsNullOrWhiteSpace(json))
-            {
-                return new CopilotCreditEstimation
-                {
-                    CostModelVersion = COST_ESTIMATION_VERSION,
-                    TotalCredits = 0,
-                    TenantGraphGroundingBasis = CopilotTenantGroundingBasis.NotAssessed,
-                    ResourceTypeBreakdown = new Dictionary<string, int>(),
-                    CreditBreakdown = new Dictionary<string, int>(),
-                    ModelsUsed = new List<string>()
-                };
-            }
-
-            var auditEvent = JsonConvert.DeserializeObject<CopilotAuditEvent>(json);
-            return Analyze(auditEvent, isCustomAgent);
+            var auditEvent = string.IsNullOrWhiteSpace(json)
+                ? null
+                : JsonConvert.DeserializeObject<CopilotAuditEvent>(json);
+            return Analyze(auditEvent, agent);
         }
 
         /// <summary>
         /// Analyzes a Copilot audit event object and calculates the total Copilot Credits consumed.
+        /// 
+        /// Which interactions are priced (#639), recorded in <see cref="AgentCreditBasis"/>:
+        /// - A Microsoft agent (Origin Microsoft, e.g. Cowork): 0. The model does not price Microsoft's agents.
+        /// - A declarative agent: 0. Declarative agents run on Microsoft 365 Copilot's own orchestrator, and
+        ///   this model does not price them.
+        /// - An agent whose kind is unknown: 0, recorded as NotAssessed - a gap, not a finding.
+        /// - A custom-engine agent: priced as below, provided the record carries Messages. Copilot Studio's
+        ///   runtime record carries none; the same Microsoft 365 Copilot turn is logged again, with Messages,
+        ///   by Microsoft 365 Copilot, and only that record is priced, so a turn is never priced twice.
         /// 
         /// Billing Logic (based on Microsoft documentation, effective March 25, 2025):
         /// - Only custom agents (Copilot Studio agents) incur Copilot Credit charges.
@@ -223,37 +284,32 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot
         /// - AI Tool Usages (premium tier billing) may be underestimated.
         /// - Flow Actions are NOT included in audit logs and cannot be calculated.
         /// - Classic vs. Generative answer types cannot be fully distinguished; all responses are billed as Generative.
+        /// - Declarative agents used by people without a Microsoft 365 Copilot licence are not priced. Whether
+        ///   they should be is a billing-model question this estimate does not answer.
         /// </summary>
         /// <param name="auditEvent">The Copilot audit event object to analyze</param>
-        /// <param name="isCustomAgent">True if this is a custom Copilot Studio agent (billable), false for standard M365 Copilot (not billable via credits)</param>
+        /// <param name="agent">The kind and origin of the agent the record names, from <see cref="CopilotAgentClassifier"/>.</param>
         /// <returns>CreditReport with detailed billing breakdown</returns>
-        public static CopilotCreditEstimation Analyze(CopilotAuditEvent auditEvent, bool isCustomAgent)
+        public static CopilotCreditEstimation Analyze(CopilotAuditEvent auditEvent, CopilotAgentClassification agent)
         {
-            if (auditEvent == null)
-            {
-                return new CopilotCreditEstimation
-                {
-                    CostModelVersion = COST_ESTIMATION_VERSION,
-                    TotalCredits = 0,
-                    TenantGraphGroundingBasis = CopilotTenantGroundingBasis.NotAssessed,
-                    ResourceTypeBreakdown = new Dictionary<string, int>(),
-                    CreditBreakdown = new Dictionary<string, int>(),
-                    ModelsUsed = new List<string>()
-                };
-            }
-
             var report = new CopilotCreditEstimation
             {
                 CostModelVersion = COST_ESTIMATION_VERSION,
                 TenantGraphGroundingBasis = CopilotTenantGroundingBasis.NotAssessed,
+                AgentCreditBasis = AgentBasis(agent, auditEvent),
                 ResourceTypeBreakdown = new Dictionary<string, int>(),
                 CreditBreakdown = new Dictionary<string, int>(),
                 ModelsUsed = new List<string>()
             };
 
+            if (auditEvent == null)
+            {
+                return report;
+            }
+
             // Only custom agents incur Copilot Credit charges
             // Standard Microsoft 365 Copilot (Word, Excel, Teams, etc.) is not charged via Copilot Credits
-            if (!isCustomAgent)
+            if (report.AgentCreditBasis != CopilotAgentCreditBasis.CustomEngine)
             {
                 // Build resource breakdown for analytics but don't charge any credits
                 report.ResourceTypeBreakdown = BuildResourceTypeBreakdown(auditEvent.AccessedResources);
@@ -345,6 +401,32 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot
             report.TotalCredits = totalCredits;
 
             return report;
+        }
+
+        /// <summary>
+        /// Decides whether an interaction is priced at all, from the agent's origin and kind. Origin comes
+        /// first: a Microsoft agent is never priced, whatever kind it is.
+        /// </summary>
+        private static string AgentBasis(CopilotAgentClassification agent, CopilotAuditEvent auditEvent)
+        {
+            if (agent.Origin == CopilotAgentOrigin.Microsoft)
+            {
+                return CopilotAgentCreditBasis.MicrosoftAgent;
+            }
+
+            switch (agent.Kind)
+            {
+                case CopilotAgentKind.Declarative:
+                    return CopilotAgentCreditBasis.Declarative;
+
+                case CopilotAgentKind.CustomEngine:
+                    return auditEvent?.Messages != null && auditEvent.Messages.Count > 0
+                        ? CopilotAgentCreditBasis.CustomEngine
+                        : CopilotAgentCreditBasis.NoMessages;
+
+                default:
+                    return CopilotAgentCreditBasis.NotAssessed;
+            }
         }
 
         /// <summary>

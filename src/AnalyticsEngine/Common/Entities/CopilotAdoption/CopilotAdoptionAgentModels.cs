@@ -1,3 +1,4 @@
+using Common.Entities.Copilot;
 using Newtonsoft.Json;
 using System;
 using System.Collections.Generic;
@@ -26,6 +27,12 @@ namespace Common.Entities.CopilotAdoption
         public int AgentId { get; set; }
         public string Name { get; set; }
         public string AgentKey { get; set; }
+
+        /// <summary>
+        /// True when the importer stored <c>copilot_agents.is_custom_agent = 1</c>; a stored 0 and NULL both read
+        /// as false. Only a hint for <see cref="CopilotAgentClassifier.ResolveStoredOrigin"/>, which decides the
+        /// origin from <see cref="AgentKey"/> first: builds before #639 wrote the flag inconsistently.
+        /// </summary>
         public bool IsCustomAgent { get; set; }
 
         /// <summary>Interactions across the whole inventory history window.</summary>
@@ -61,9 +68,29 @@ namespace Common.Entities.CopilotAdoption
         [JsonProperty("agentKey")]
         public string AgentKey { get; set; }
 
-        /// <summary>True for a customer-built agent, false for one Microsoft ships.</summary>
+        /// <summary>
+        /// Who made the agent, as a stable key: <c>customerBuilt</c>, <c>microsoft</c> or <c>unknown</c> (see
+        /// <see cref="CopilotAgentOriginKeys"/>). Derived when the inventory is read, from the agent's id and the
+        /// flag the importer stored (<see cref="CopilotAgentClassifier.ResolveStoredOrigin"/>), so agents imported
+        /// before #639 are labelled correctly without a backfill. The portal maps the key to its own text.
+        /// </summary>
+        [JsonProperty("origin")]
+        public string Origin { get; set; } = CopilotAgentOriginKeys.Unknown;
+
+        /// <summary>
+        /// True when the agent is customer-built - the question to ask in code. Not serialised: the API carries
+        /// <see cref="Origin"/>, and <see cref="IsCustomAgent"/> for older clients.
+        /// </summary>
+        [JsonIgnore]
+        public bool IsCustomerBuilt => Origin == CopilotAgentOriginKeys.CustomerBuilt;
+
+        /// <summary>
+        /// True for a customer-built agent, false for one Microsoft ships AND for one whose origin is unknown.
+        /// Kept so clients that read it keep working; new code should read <see cref="Origin"/>, which can tell
+        /// "Microsoft's" from "not known".
+        /// </summary>
         [JsonProperty("isCustomAgent")]
-        public bool IsCustomAgent { get; set; }
+        public bool IsCustomAgent => IsCustomerBuilt;
 
         [JsonProperty("interactions")]
         public long Interactions { get; set; }
@@ -134,8 +161,20 @@ namespace Common.Entities.CopilotAdoption
         [JsonProperty("knownAgents")]
         public int KnownAgents { get; set; }
 
+        /// <summary>
+        /// Agents in the inventory that are customer-built (<see cref="AgentUsageRow.Origin"/> is
+        /// <c>customerBuilt</c>). Agents of unknown origin are not counted here; see
+        /// <see cref="UnknownOriginAgents"/>.
+        /// </summary>
         [JsonProperty("customAgents")]
         public int CustomAgents { get; set; }
+
+        /// <summary>
+        /// Agents in the inventory whose origin could not be established from the audit log, so they are
+        /// counted neither as customer-built nor as Microsoft's. The size of the classification gap (#639).
+        /// </summary>
+        [JsonProperty("unknownOriginAgents")]
+        public int UnknownOriginAgents { get; set; }
 
         /// <summary>Distinct people who used any agent in the period.</summary>
         [JsonProperty("agentUsers")]

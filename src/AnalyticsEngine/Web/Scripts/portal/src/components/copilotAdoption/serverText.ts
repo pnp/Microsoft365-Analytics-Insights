@@ -1,4 +1,5 @@
 import type {
+  AgentOrigin,
   AgentUsageRow,
   CopilotAdoptionAvailability,
   CopilotAdoptionOptions,
@@ -488,6 +489,18 @@ export function agentHealthReason(t: TFunction, row: AgentUsageRow, options: Cop
     default:
       return row.healthReason;
   }
+}
+
+export const AGENT_ORIGIN_LABEL_KEYS = {
+  customerBuilt: 'copilotAdoptionAgents.agents.table.type.customerBuilt',
+  microsoft: 'copilotAdoptionAgents.agents.table.type.microsoft',
+  unknown: 'copilotAdoptionAgents.agents.table.type.unknown',
+} as const satisfies Record<AgentOrigin, TranslationKey>;
+
+/** The Type column's text for an agent's origin key. A key this build does not know reads as unknown. */
+export function agentOriginLabel(t: TFunction, origin: string | null | undefined): string {
+  const key = AGENT_ORIGIN_LABEL_KEYS[origin as AgentOrigin] ?? AGENT_ORIGIN_LABEL_KEYS.unknown;
+  return t(key);
 }
 
 export const COWORK_TIER_LABEL_KEYS = {

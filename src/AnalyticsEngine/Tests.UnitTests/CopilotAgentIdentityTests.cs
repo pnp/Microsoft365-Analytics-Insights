@@ -105,8 +105,8 @@ namespace Tests.UnitTests
 
             Assert.IsNull(runtime.AgentName, "The runtime record carries no display name, and none is made up for it.");
             Assert.AreEqual(SchemaName, runtime.AgentFallbackName);
-            Assert.AreSame(CopilotCreditEstimation.NoCost, runtime.Cost,
-                "The fallback name must not send the record through credit estimation; #639 owns that.");
+            Assert.AreEqual(0, runtime.Cost.TotalCredits, "The runtime record carries no Messages, so it is never priced (#639).");
+            Assert.AreEqual(CopilotAgentCreditBasis.NoMessages, runtime.Cost.AgentCreditBasis);
         }
 
         [TestMethod]

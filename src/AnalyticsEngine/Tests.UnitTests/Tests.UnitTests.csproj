@@ -81,6 +81,8 @@
     <Compile Include="CopilotPrewarmExtractionTests.cs" />
     <Compile Include="CopilotEventManagerSaveTests.cs" />
     <Compile Include="CopilotAgentIdentityTests.cs" />
+    <Compile Include="CopilotAgentClassifierTests.cs" />
+    <Compile Include="CopilotAgentCreditEstimateTests.cs" />
     <Compile Include="CopilotTestBase.cs" />
     <Compile Include="WorkloadToggleTests.cs" />
     <Compile Include="PageUpdateManagerPerfTests.cs" />
@@ -362,6 +364,7 @@
     <Compile Include="CopilotAdoptionLicenceEstimateTests.cs" />
     <Compile Include="CopilotAdoptionSeatTimeSavedTests.cs" />
     <Compile Include="CopilotAdoptionAgentUsersTests.cs" />
+    <Compile Include="CopilotAdoptionAgentOriginTests.cs" />
     <Compile Include="CopilotAdoptionSqlIntegrationTests.cs" />
     <Compile Include="CopilotAdoptionSynchronizationContextTests.cs" />
     <Compile Include="CopilotAdoptionTelemetryTests.cs" />

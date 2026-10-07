@@ -272,11 +272,20 @@ export enum AgentHealth {
   Keep = 3,
 }
 
+/**
+ * Who made an agent, as the stable key the server sends (C# `CopilotAgentOriginKeys`). `unknown` is a real
+ * answer: the audit log does not always say, and the product does not guess.
+ */
+export type AgentOrigin = 'customerBuilt' | 'microsoft' | 'unknown';
+
 /** One Copilot agent with the figures an inventory review needs, and the verdict on it. */
 export interface AgentUsageRow {
   agentId: number;
   name: string;
   agentKey: string | null;
+  /** Who made the agent. Map it to text with `agentOriginLabel`. */
+  origin: AgentOrigin;
+  /** True for a customer-built agent (`origin` is `customerBuilt`). Kept for older clients; prefer `origin`. */
   isCustomAgent: boolean;
   interactions: number;
   users: number;
@@ -297,7 +306,10 @@ export interface AgentEstateSummary {
   historyDays: number;
   activeAgents: number;
   knownAgents: number;
+  /** Customer-built agents only. */
   customAgents: number;
+  /** Agents whose origin the audit log does not reveal - counted separately rather than guessed. */
+  unknownOriginAgents: number;
   agentUsers: number;
   licensedAgentUsers: number;
   agentInteractions: number;

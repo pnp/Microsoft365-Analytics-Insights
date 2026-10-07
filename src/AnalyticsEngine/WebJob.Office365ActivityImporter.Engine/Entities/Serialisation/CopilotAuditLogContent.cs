@@ -1,4 +1,5 @@
 ﻿using Common.Entities;
+using Common.Entities.Copilot;
 using Microsoft.Extensions.Logging;
 using Newtonsoft.Json;
 using System.Collections.Generic;
@@ -31,12 +32,33 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities.Serialisation
         public string AgentFallbackName { get; set; }
 
         /// <summary>
-        /// Indicates whether this is a custom engine agent or a declarative agent.
-        /// False when AgentId starts with "CopilotStudio.Declarative." (declarative agent).
-        /// True when an agent is identified but is not declarative (custom engine agent).
-        /// Null when no agent is identified.
+        /// Whether the agent is customer-built, as stored in <c>copilot_agents.is_custom_agent</c>: true when
+        /// <see cref="AgentOrigin"/> is customer-built, false when it is Microsoft's, and null when its origin is
+        /// not known or the record identifies no agent. Set by <see cref="FromJson"/> from
+        /// <see cref="CopilotAgentClassifier"/>; it does not say whether the agent is custom-engine or
+        /// declarative - that is <see cref="AgentKind"/>. Issue #639.
         /// </summary>
         public bool? IsCustomAgent { get; set; }
+
+        /// <summary>
+        /// The platform that wrote the record. Copilot Studio's runtime writes "CopilotStudio" on its own
+        /// records, which carry the agent's id but no name and no Messages (#699).
+        /// </summary>
+        public string AgentPlatform { get; set; }
+
+        /// <summary>
+        /// What kind of agent the record names - the billing question the credit estimate needs answered.
+        /// Unknown when the record names no agent. Set by <see cref="FromJson"/>.
+        /// </summary>
+        [JsonIgnore]
+        public CopilotAgentKind AgentKind { get; set; }
+
+        /// <summary>
+        /// Who made the agent the record names - customer-built, Microsoft's, or unknown. Set by
+        /// <see cref="FromJson"/>; <see cref="IsCustomAgent"/> is the stored form of it.
+        /// </summary>
+        [JsonIgnore]
+        public CopilotAgentOrigin AgentOrigin { get; set; }
 
         public CopilotCreditEstimation Cost { get; set; }
 
@@ -151,6 +173,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities.Serialisation
             // the same logical agent is not split across id variants. Microsoft emits some agents under more than
             // one id string - notably SharePoint agents as both "SharePointAgents.Declarative.SPO_..." and bare
             // "SPO_..." - which would otherwise create duplicate copilot_agents rows and double-count usage.
+            var unnormalisedAgentId = thisAuditLogReport.AgentId;
             thisAuditLogReport.AgentId = NormalizeAgentId(thisAuditLogReport.AgentId);
 
             // Copilot Studio's runtime records name their agent only through AppIdentity. Without this, an
@@ -162,30 +185,32 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities.Serialisation
                 thisAuditLogReport.AgentFallbackName = fallbackName;
             }
 
-            if (!string.IsNullOrEmpty(thisAuditLogReport.AgentName))
-            {
-                // Calculate cost from the parsed event for agents
-                thisAuditLogReport.Cost = CopilotCreditEstimation.Analyze(thisAuditLogReport.EventRaw, thisAuditLogReport.IsCustomAgent.HasValue && thisAuditLogReport.IsCustomAgent.Value);
-            }
-            else
-            {
-                // No agent identified = no cost
-                thisAuditLogReport.Cost = CopilotCreditEstimation.NoCost;
-            }
+            // What kind of agent this is and who made it (#639). Classified from the id both before and after
+            // normalisation, because normalising discards shape: "T_{titleId}.{agentId}" becomes a bare GUID,
+            // and "SharePointAgents.Declarative.SPO_..." loses its wrapper.
+            var hasAgent = !string.IsNullOrEmpty(thisAuditLogReport.AgentId) || !string.IsNullOrEmpty(thisAuditLogReport.AgentName);
+            var agent = hasAgent
+                ? CopilotAgentClassifier.Classify(
+                    unnormalisedAgentId,
+                    thisAuditLogReport.AgentId,
+                    targetAgentName,
+                    thisAuditLogReport.AgentPlatform,
+                    thisAuditLogReport.AppIdentity)
+                : CopilotAgentClassification.Unclassified;
+
+            thisAuditLogReport.AgentKind = agent.Kind;
+            thisAuditLogReport.AgentOrigin = agent.Origin;
+            thisAuditLogReport.IsCustomAgent = string.IsNullOrEmpty(thisAuditLogReport.AgentId) ? null : agent.IsCustomAgentFlag;
+
+            // The agent's kind and origin decide whether the interaction is estimated; see
+            // CopilotCreditEstimation.Analyze. A record that names no agent is ordinary Microsoft 365 Copilot
+            // use, which is not billed in Copilot Credits.
+            thisAuditLogReport.Cost = hasAgent
+                ? CopilotCreditEstimation.Analyze(thisAuditLogReport.ParsedAuditEvent, agent)
+                : CopilotCreditEstimation.NoCost;
 
             return thisAuditLogReport;
         }
-
-        /// <summary>
-        /// Vetted first-party AppIdentity prefixes whose AppIdentity is known to be a stable, agent-specific
-        /// identifier. Only these are promoted to AgentId when a named agent arrives without its own AgentId
-        /// (see <see cref="FromJson"/>). Keep this list conservative: add a prefix only after confirming from
-        /// real payloads that its AppIdentity is a stable per-agent key, not a shared app-level or volatile value.
-        /// </summary>
-        internal static readonly string[] FirstPartyNamedAgentAppIdentityPrefixes = new[]
-        {
-            "Copilot.M365Copilot.",   // e.g. "Copilot.M365Copilot.CoworkChat" (Copilot Cowork)
-        };
 
         private const string SharePointDeclarativeAgentIdPrefix = "SharePointAgents.Declarative.";
 
@@ -201,57 +226,25 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities.Serialisation
             RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
         /// <summary>
-        /// The AppIdentity of Copilot Studio's runtime records: "Copilot.Studio.{environmentId}-{schemaName}".
-        /// The environment id is "Default-{tenantId}" for the default environment and a bare GUID for any other.
-        /// The schema name starts with the solution publisher's prefix, which varies (e.g. "new_" or "cr123_").
-        /// </summary>
-        private static readonly Regex CopilotStudioAppIdentityPattern = new Regex(
-            "^Copilot\\.Studio\\.(?:Default-)?" + GuidPattern + "-(?<schemaName>.+)$",
-            RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
-
-        /// <summary>
-        /// Reads the agent's schema name from a Copilot Studio runtime AppIdentity (see
-        /// <see cref="CopilotStudioAppIdentityPattern"/>). False for any other shape, including the
-        /// "Copilot.Studio.CustomEngine.T_{titleId}" AppIdentity on Microsoft 365 Copilot's records.
+        /// Reads the agent's schema name from a Copilot Studio runtime AppIdentity,
+        /// "Copilot.Studio.{environmentId}-{schemaName}". False for any other shape, including the
+        /// "Copilot.Studio.CustomEngine.T_{titleId}" AppIdentity on Microsoft 365 Copilot's records. The pattern
+        /// lives in <see cref="CopilotAgentClassifier"/>, which also uses it to recognise a Copilot Studio agent.
         /// </summary>
         internal static bool TryGetCopilotStudioSchemaName(string appIdentity, out string schemaName)
         {
-            schemaName = null;
-            if (string.IsNullOrEmpty(appIdentity))
-            {
-                return false;
-            }
-
-            var match = CopilotStudioAppIdentityPattern.Match(appIdentity);
-            if (!match.Success)
-            {
-                return false;
-            }
-
-            schemaName = match.Groups["schemaName"].Value;
-            return true;
+            return CopilotAgentClassifier.TryGetCopilotStudioSchemaName(appIdentity, out schemaName);
         }
 
         /// <summary>
-        /// True when <paramref name="appIdentity"/> starts with a vetted first-party prefix from
-        /// <see cref="FirstPartyNamedAgentAppIdentityPrefixes"/> and can therefore safely be used as an AgentId.
+        /// True when <paramref name="appIdentity"/> starts with a vetted first-party prefix
+        /// (<see cref="CopilotAgentClassifier.VettedFirstPartyAgentPrefixes"/>) and can therefore safely be used
+        /// as an AgentId. Only these are promoted when a named agent arrives without its own AgentId (see
+        /// <see cref="FromJson"/>), and the same list is what makes an agent Microsoft's.
         /// </summary>
         internal static bool IsVettedFirstPartyAppIdentity(string appIdentity)
         {
-            if (string.IsNullOrEmpty(appIdentity))
-            {
-                return false;
-            }
-
-            foreach (var prefix in FirstPartyNamedAgentAppIdentityPrefixes)
-            {
-                if (appIdentity.StartsWith(prefix, System.StringComparison.OrdinalIgnoreCase))
-                {
-                    return true;
-                }
-            }
-
-            return false;
+            return CopilotAgentClassifier.IsVettedFirstPartyAgentIdentity(appIdentity);
         }
 
         /// <summary>
