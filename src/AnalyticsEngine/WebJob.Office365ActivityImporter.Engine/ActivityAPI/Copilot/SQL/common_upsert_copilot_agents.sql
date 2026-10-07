@@ -256,6 +256,8 @@ BEGIN TRY
 
     IF EXISTS (SELECT 1 FROM #turn_seed)
     BEGIN
+        CREATE CLUSTERED INDEX IX_turn_seed ON #turn_seed (user_id, agent_id, time_stamp);
+
         -- Merged time ranges around the seeds (gaps and islands), one index seek each.
         ;WITH bounds AS (
             SELECT DATEADD(SECOND, -@turnReach, time_stamp) AS lo, DATEADD(SECOND, @turnReach, time_stamp) AS hi
@@ -272,9 +274,12 @@ BEGIN TRY
         FROM islands
         GROUP BY island;
 
-        -- Every interaction of the seeds' users with the seeds' agents inside those ranges, read from
-        -- IX_copilot_chats_time_stamp_user_id alone. host_kind: 1 the Microsoft 365 Copilot runtime record,
-        -- 2 the Teams runtime record, 3 the Copilot Studio test pane, 0 a record from the Copilot client.
+        -- Every interaction of a seed's user with the seed's agent within @turnReach of it, read from
+        -- IX_copilot_chats_time_stamp_user_id alone: every column used here is in that index. The APPLY with
+        -- TOP is deliberate. It keeps each merged range a seek on time_stamp; as a plain join the optimiser
+        -- was measured switching to a scan of the whole index once there were many ranges.
+        -- host_kind: 1 the Microsoft 365 Copilot runtime record, 2 the Teams runtime record, 3 the Copilot
+        -- Studio test pane, 0 a record from the Copilot client.
         SELECT c.event_id, c.user_id, c.agent_id, c.time_stamp,
                CAST(CASE WHEN c.app_host = N'm365copilot' THEN 1
                          WHEN c.app_host = N'Microsoft Teams' THEN 2
@@ -282,9 +287,16 @@ BEGIN TRY
                          ELSE 0 END AS tinyint) AS host_kind
         INTO #turn_near
         FROM #turn_ranges AS r
-        INNER JOIN dbo.copilot_chats AS c
-            ON c.time_stamp >= r.lo AND c.time_stamp <= r.hi
-        WHERE EXISTS (SELECT 1 FROM #turn_seed AS s WHERE s.user_id = c.user_id AND s.agent_id = c.agent_id)
+        CROSS APPLY (
+            SELECT TOP (2147483647) ic.event_id, ic.user_id, ic.agent_id, ic.time_stamp, ic.app_host
+            FROM dbo.copilot_chats AS ic
+            WHERE ic.time_stamp >= r.lo AND ic.time_stamp <= r.hi
+            ORDER BY ic.time_stamp
+        ) AS c
+        WHERE EXISTS (SELECT 1 FROM #turn_seed AS s
+                      WHERE s.user_id = c.user_id AND s.agent_id = c.agent_id
+                        AND s.time_stamp >= DATEADD(SECOND, -@turnReach, c.time_stamp)
+                        AND s.time_stamp <= DATEADD(SECOND, @turnReach, c.time_stamp))
         OPTION (RECOMPILE);
 
         -- ...narrowed to the seeds' conversations. The only key lookups in the pairing.
@@ -373,7 +385,8 @@ BEGIN TRY
         -- Extra runtime records. A burst is a run of runtime records of one agent, user, conversation and
         -- app_host, each within @echoSeconds of the one before. A record in a burst that already holds a
         -- pair twin belongs to the nearest twin's turn; otherwise every record after the burst's first
-        -- belongs to the first one's turn. Only records that still count are marked.
+        -- belongs to the first one's turn. Only records that still count are marked. The bursts are
+        -- materialised and indexed first: as a CTE read three ways it was re-evaluated per row.
         ;WITH runtime AS (
             SELECT t.event_id, t.user_id, t.agent_id, t.conversation_id, t.host_kind, t.time_stamp,
                    d.reason, d.counted_event_id,
@@ -383,42 +396,41 @@ BEGIN TRY
             LEFT JOIN dbo.copilot_chat_duplicates AS d ON d.event_id = t.event_id
             WHERE t.host_kind IN (1, 2, 3)
         ), runs AS (
-            SELECT *,
+            SELECT event_id, user_id, agent_id, conversation_id, host_kind, time_stamp, reason, counted_event_id,
                    SUM(CASE WHEN previous_time IS NULL
                               OR DATEDIFF_BIG(MILLISECOND, previous_time, time_stamp) > @echoSeconds * 1000
                             THEN 1 ELSE 0 END)
                        OVER (PARTITION BY user_id, agent_id, conversation_id, host_kind
-                             ORDER BY time_stamp, event_id ROWS UNBOUNDED PRECEDING) AS burst,
-                   ROW_NUMBER() OVER (PARTITION BY user_id, agent_id, conversation_id, host_kind
-                                      ORDER BY time_stamp, event_id) AS position
+                             ORDER BY time_stamp, event_id ROWS UNBOUNDED PRECEDING) AS burst
             FROM runtime
-        ), bursts AS (
-            SELECT *,
-                   MIN(position) OVER (PARTITION BY user_id, agent_id, conversation_id, host_kind, burst) AS first_position
-            FROM runs
         )
+        SELECT event_id, user_id, agent_id, conversation_id, host_kind, time_stamp, reason, counted_event_id, burst,
+               ROW_NUMBER() OVER (PARTITION BY user_id, agent_id, conversation_id, host_kind, burst
+                                  ORDER BY time_stamp, event_id) AS position
+        INTO #turn_bursts
+        FROM runs;
+
+        CREATE CLUSTERED INDEX IX_turn_bursts ON #turn_bursts (user_id, agent_id, host_kind, burst, position);
+
         SELECT x.event_id,
                COALESCE(twin.counted_event_id,
                         CASE WHEN first_record.reason = 2 THEN first_record.counted_event_id ELSE first_record.event_id END) AS counted_event_id
         INTO #turn_extra
-        FROM bursts AS x
+        FROM #turn_bursts AS x
+        INNER JOIN #turn_bursts AS first_record
+            ON first_record.user_id = x.user_id AND first_record.agent_id = x.agent_id
+           AND first_record.host_kind = x.host_kind AND first_record.conversation_id = x.conversation_id
+           AND first_record.burst = x.burst AND first_record.position = 1
         OUTER APPLY (
             SELECT TOP (1) b.counted_event_id
-            FROM bursts AS b
-            WHERE b.user_id = x.user_id AND b.agent_id = x.agent_id AND b.conversation_id = x.conversation_id
-              AND b.host_kind = x.host_kind AND b.burst = x.burst
+            FROM #turn_bursts AS b
+            WHERE b.user_id = x.user_id AND b.agent_id = x.agent_id AND b.host_kind = x.host_kind
+              AND b.conversation_id = x.conversation_id AND b.burst = x.burst
               AND b.reason = 1
             ORDER BY ABS(DATEDIFF_BIG(MILLISECOND, b.time_stamp, x.time_stamp)), b.event_id
         ) AS twin
-        OUTER APPLY (
-            SELECT TOP (1) b.event_id, b.reason, b.counted_event_id
-            FROM bursts AS b
-            WHERE b.user_id = x.user_id AND b.agent_id = x.agent_id AND b.conversation_id = x.conversation_id
-              AND b.host_kind = x.host_kind AND b.burst = x.burst
-              AND b.position = x.first_position
-        ) AS first_record
         WHERE x.reason IS NULL
-          AND (twin.counted_event_id IS NOT NULL OR x.position > x.first_position);
+          AND (twin.counted_event_id IS NOT NULL OR x.position > 1);
 
         INSERT INTO dbo.copilot_chat_duplicates (event_id, counted_event_id, reason)
         SELECT e.event_id, e.counted_event_id, 2
@@ -451,6 +463,7 @@ BEGIN TRY
         END
 
         DROP TABLE #turn_extra;
+        DROP TABLE #turn_bursts;
         DROP TABLE #turn_pairs;
         DROP TABLE #turn_client;
         DROP TABLE #turn_runtime;
@@ -466,6 +479,7 @@ BEGIN TRY
 END TRY
 BEGIN CATCH
     IF OBJECT_ID('tempdb..#turn_extra') IS NOT NULL DROP TABLE #turn_extra;
+    IF OBJECT_ID('tempdb..#turn_bursts') IS NOT NULL DROP TABLE #turn_bursts;
     IF OBJECT_ID('tempdb..#turn_pairs') IS NOT NULL DROP TABLE #turn_pairs;
     IF OBJECT_ID('tempdb..#turn_client') IS NOT NULL DROP TABLE #turn_client;
     IF OBJECT_ID('tempdb..#turn_runtime') IS NOT NULL DROP TABLE #turn_runtime;
