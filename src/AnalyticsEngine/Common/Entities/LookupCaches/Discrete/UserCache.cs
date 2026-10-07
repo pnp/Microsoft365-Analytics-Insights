@@ -46,6 +46,16 @@ namespace Common.Entities.LookupCaches
         /// collation it is a merge join over one ordered range scan. Measured before/after: see
         /// <c>PreResolveLookupIdsAsync</c> on <c>AbstractDailyActivityLoader</c>.
         /// </para>
+        /// <para>
+        /// The keys are <c>nvarchar</c> on purpose, even if <see cref="Load"/> moves to <c>varchar</c> (#713); the two
+        /// would still find the same user for every ASCII UPN (Entra UPNs are ASCII by policy) and could differ only
+        /// for a character outside the database's code page. <c>varchar</c> keys were measured (PR #712; 200,000
+        /// synthetic users, 1,000-key batches) and are not better under both collations. Under a SQL collation they
+        /// cut SQL CPU from ~59 ms a batch to 1-19 ms. Under a Windows collation, which compares <c>varchar</c> by
+        /// Unicode rules, the same merge join over the index took 30-50% more CPU (26-31 ms against 21 ms for keys
+        /// spread across the index), and the nested-loop plan chosen for adjacent keys read ~3,200 pages a batch
+        /// where the merge join read 15-563 (27x the reads over a 20,000-row save).
+        /// </para>
         /// </remarks>
         public override async Task<IReadOnlyDictionary<string, int>> LoadExistingIdsAsync(IReadOnlyList<string> keys)
         {
