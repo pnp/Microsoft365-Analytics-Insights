@@ -655,6 +655,55 @@ namespace Common.Entities.CopilotAdoption
 
         #endregion
 
+        #region Microsoft's own tenant figures (#642)
+
+        // Microsoft's figures exactly as its Microsoft 365 Copilot usage report states them, read from the
+        // user-count summary the usage-report import already stores (copilot_user_count_log). They answer a
+        // different question from every audit-derived figure above, in a different unit, over licensed users
+        // only, so they are published beside those figures and NEVER added to them (#534). Each is null - never
+        // zero - when the tenant only received version 1 of the report, when no summary has been imported, or
+        // in a view narrowed to part of the tenant (they are tenant totals and cannot be narrowed). See
+        // CopilotAdoptionSql.MicrosoftReportFiguresSql for which report is read and why.
+
+        /// <summary>
+        /// The report date of Microsoft's summary these figures come from: the last day of its report period.
+        /// Null when none has been imported.
+        /// </summary>
+        [JsonProperty("microsoftReportDate")]
+        public DateTime? MicrosoftReportDate { get; set; }
+
+        /// <summary>
+        /// The length of that report's period in days, as Microsoft stated it: 28 for version 2 of the report,
+        /// 30 when the tenant only received version 1. Published because the two are not interchangeable - a
+        /// 30-day figure is never a 28-day one.
+        /// </summary>
+        [JsonProperty("microsoftReportPeriodDays")]
+        public int? MicrosoftReportPeriodDays { get; set; }
+
+        /// <summary>
+        /// The report schema version ("v1" / "v2") the import recorded for that report, so a blank figure can
+        /// be traced to the version that did not carry it. Null when the import log has no record of it.
+        /// </summary>
+        [JsonProperty("microsoftReportVersion")]
+        public string MicrosoftReportVersion { get; set; }
+
+        /// <summary>
+        /// Microsoft's "Total prompts submitted" for the tenant over the report period - in Microsoft's words, the
+        /// prompts users sent to Microsoft Copilot Chat. Licensed users only, and not limited to agents. Null when
+        /// the report did not carry it (version 1).
+        /// </summary>
+        [JsonProperty("microsoftReportPromptsSubmitted")]
+        public long? MicrosoftReportPromptsSubmitted { get; set; }
+
+        /// <summary>
+        /// Microsoft's "Average prompts submitted" - the mean per active user, as Microsoft defines active, over
+        /// the same period. Null when the report did not carry it (version 1).
+        /// </summary>
+        [JsonProperty("microsoftReportAveragePromptsPerActiveUser")]
+        public double? MicrosoftReportAveragePromptsPerActiveUser { get; set; }
+
+        #endregion
+
         #region Cowork
 
         // Every Cowork figure here comes from the Copilot audit log, and counts interactions, never tasks.

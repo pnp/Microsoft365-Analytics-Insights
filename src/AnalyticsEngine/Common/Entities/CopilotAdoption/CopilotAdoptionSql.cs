@@ -1,4 +1,5 @@
-﻿using System;
+﻿using Common.Entities.Entities.UsageReports;
+using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
@@ -152,6 +153,86 @@ namespace Common.Entities.CopilotAdoption
             "FROM dbo.copilot_usage_report_import_log AS l\r\n" +
             "WHERE l.report_name = 'getMicrosoft365CopilotUsageUserDetail'\r\n" +
             "ORDER BY l.imported_utc DESC;";
+
+        /// <summary>
+        /// The report period, in days, that Microsoft's tenant-wide figures are read for: the stored period
+        /// closest to it wins. 28 days is the window the Microsoft 365 admin centre shows by default and the
+        /// rolling window Microsoft's 2026 Work Trend Index uses for prompts per user. Deliberately NOT the
+        /// selected analysis window: the importer only ever requests this one period of the summary report, so
+        /// following the page's window would change nothing but the wording, and the period actually read is
+        /// published next to the figures anyway.
+        /// </summary>
+        public const int MicrosoftReportTargetPeriodDays = 28;
+
+        /// <summary>
+        /// Microsoft's own tenant-wide prompt figures (#642): the "Any App" row of the latest
+        /// <c>getMicrosoft365CopilotUserCountSummary</c> roll-up the usage-report import stored in
+        /// <c>copilot_user_count_log</c>, for the stored report period closest to
+        /// <see cref="MicrosoftReportTargetPeriodDays"/>.
+        /// </summary>
+        /// <remarks>
+        /// <para><b>Which period.</b> Graph's version 2 report takes D7/D28/D90/D180 and version 1 takes D30
+        /// where version 2 takes D28. The importer requests D28 version 2 and falls back to D30 version 1, so
+        /// a tenant holds summary rows for 28 days, 30 days, or both. The period is pinned first - the closest
+        /// to 28, the shorter on a tie - and the latest report date for it is read second, so a later
+        /// version 1 fallback never displaces version 2 figures, and the period actually read is returned
+        /// rather than assumed.</para>
+        /// <para><b>Latest settled.</b> The most recent report date whose summary row set is complete, which
+        /// here means its "Any App" row exists: that row is where the tenant figures live, and the loader
+        /// writes a refresh date's whole summary in one batch, so a reader never sees half a set. Bounded by
+        /// <c>@reportTo</c> so a past range never reads a report from after it.</para>
+        /// <para><b>Null, never zero.</b> Version 1 has no prompt columns, so its row carries NULL prompts and
+        /// they are returned as NULL. No stored row returns no row at all. Concealed user information does not
+        /// apply: these are tenant totals with no identities, and the import records concealment only against
+        /// the per-user report (<see cref="CopilotReportObfuscatedSql"/>).</para>
+        /// <para><b>No agents surface.</b> Microsoft's published version 2 schema for this report lists Any App,
+        /// the Office apps, Copilot Chat, Edge, Microsoft 365 Copilot and Copilot Chat (work/web), plus the two
+        /// prompt totals - no agents surface, so there is no agent figure to read here. The only agent signal
+        /// in any Graph usage report is the per-user Copilot Agent last-activity date.</para>
+        /// <para><b>Version.</b> Taken from the import log row that recorded that refresh date's successful
+        /// summary import, so a figure can be traced to the report schema that produced it (#541).</para>
+        /// <para><b>Cost.</b> Both reads of <c>copilot_user_count_log</c> seek its unique index
+        /// <c>(report_type, report_period_days, report_date, app_name)</c>; the table holds one row per
+        /// Copilot surface per refresh date and is cleaned with the other usage reports, and the import log is
+        /// a handful of rows a day. Independent of tenant size.</para>
+        /// </remarks>
+        public const string MicrosoftReportFiguresSql =
+            "WITH SummaryPeriods AS (\r\n" +
+            "    SELECT DISTINCT s.report_period_days\r\n" +
+            "    FROM dbo.copilot_user_count_log AS s\r\n" +
+            "    WHERE s.report_type = N'" + CopilotUserCountReportTypes.Summary + "'\r\n" +
+            "      AND s.report_period_days IS NOT NULL\r\n" +
+            "      AND s.report_date <= @reportTo\r\n" +
+            "      AND s.app_name = N'" + CopilotAppNames.AnyApp + "'\r\n" +
+            "),\r\n" +
+            "PinnedPeriod AS (\r\n" +
+            "    SELECT TOP (1) p.report_period_days\r\n" +
+            "    FROM SummaryPeriods AS p\r\n" +
+            "    ORDER BY ABS(p.report_period_days - @targetPeriodDays), p.report_period_days\r\n" +
+            ")\r\n" +
+            "SELECT TOP (1)\r\n" +
+            "       s.report_date AS ReportDate,\r\n" +
+            "       s.report_period_days AS ReportPeriodDays,\r\n" +
+            "       s.prompts_submitted AS PromptsSubmitted,\r\n" +
+            "       s.average_prompts_submitted AS AveragePromptsSubmitted,\r\n" +
+            "       v.report_version AS ReportVersion\r\n" +
+            "FROM PinnedPeriod AS p\r\n" +
+            "JOIN dbo.copilot_user_count_log AS s\r\n" +
+            "  ON s.report_type = N'" + CopilotUserCountReportTypes.Summary + "'\r\n" +
+            " AND s.report_period_days = p.report_period_days\r\n" +
+            " AND s.report_date <= @reportTo\r\n" +
+            " AND s.app_name = N'" + CopilotAppNames.AnyApp + "'\r\n" +
+            "OUTER APPLY (\r\n" +
+            "    SELECT TOP (1) l.report_version\r\n" +
+            "    FROM dbo.copilot_usage_report_import_log AS l\r\n" +
+            "    WHERE l.report_name = N'" + CopilotUsageReportNames.UserCountSummary + "'\r\n" +
+            "      AND l.report_refresh_date = s.report_refresh_date\r\n" +
+            "      AND l.report_period = N'D' + CAST(s.report_period_days AS nvarchar(10))\r\n" +
+            "      AND l.error IS NULL\r\n" +
+            "    ORDER BY l.imported_utc DESC, l.id DESC\r\n" +
+            ") AS v\r\n" +
+            "ORDER BY s.report_date DESC\r\n" +
+            "OPTION (RECOMPILE);";
 
         /// <summary>Cheap existence probe: has any Copilot interaction been imported in the window?</summary>
         public const string HasCopilotAuditDataSql =
