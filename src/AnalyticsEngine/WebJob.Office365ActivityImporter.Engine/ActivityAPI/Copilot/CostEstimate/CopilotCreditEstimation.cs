@@ -307,8 +307,9 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot
                 return report;
             }
 
-            // Only custom agents incur Copilot Credit charges
-            // Standard Microsoft 365 Copilot (Word, Excel, Teams, etc.) is not charged via Copilot Credits
+            // Only a custom-engine agent's record that carries Messages is priced. Every other basis is a 0 -
+            // Microsoft's agents, declarative agents, unknown kinds and runtime twins - but the resource and
+            // model analytics are still recorded.
             if (report.AgentCreditBasis != CopilotAgentCreditBasis.CustomEngine)
             {
                 // Build resource breakdown for analytics but don't charge any credits

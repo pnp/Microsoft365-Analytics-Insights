@@ -1,4 +1,4 @@
-using Common.Entities.Copilot;
+﻿using Common.Entities.Copilot;
 using System;
 using System.Collections.Generic;
 using System.Globalization;
