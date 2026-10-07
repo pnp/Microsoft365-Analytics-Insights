@@ -20,4 +20,11 @@ describe('portal access navigation helpers', () => {
     expect(missingPermission(health, restricted)).toBe('administration');
     expect(missingPermission(lookup, { ...restricted, administration: true })).toBe('seePii');
   });
+
+  it('opens Activity analysis to every reader: it trims small groups itself and offers people only with See PII', () => {
+    const activity = ROUTES.find((route) => route.path === '/insights/activity-analysis')!;
+    expect(activity.labelKey).toBe('app.route.activityAnalysis');
+    expect(missingPermission(activity, restricted)).toBeNull();
+    expect(visibleRoutesForArea('insights', restricted).map((route) => route.path)).toContain('/insights/activity-analysis');
+  });
 });

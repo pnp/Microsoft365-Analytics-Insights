@@ -28,6 +28,7 @@ export const ENTRA_DIMENSION_KEYS = [
   'officeLocation',
   'country',
   'stateOrProvince',
+  'postalCode',
   'usageLocation',
   'userType',
   'accountStatus',

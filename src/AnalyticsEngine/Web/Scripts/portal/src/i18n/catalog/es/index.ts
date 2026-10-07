@@ -13,6 +13,7 @@ import copilotAdoptionUsers from './copilotAdoptionUsers';
 import teamsExplorer from './teamsExplorer';
 import webActivity from './webActivity';
 import licenceActivity from './licenceActivity';
+import activityAnalysis from './activityAnalysis';
 import agentCosts from './agentCosts';
 import dlp from './dlp';
 import errors from './errors';
@@ -53,6 +54,7 @@ export const ES_MODULES = {
   teamsExplorer,
   webActivity,
   licenceActivity,
+  activityAnalysis,
   agentCosts,
   dlp,
   errors,

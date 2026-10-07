@@ -14,6 +14,7 @@ import {
 } from '../api/licenceActivityApi';
 import { WORKLOADS } from '../types/licenceActivity';
 import type {
+  LicenceActivityAllLicences,
   LicenceActivityAvailability,
   LicenceActivityDistribution,
   LicenceActivityOverview,
@@ -74,6 +75,11 @@ function dist(workload: WorkloadKey): LicenceActivityDistribution {
 
 function availability(over: Partial<LicenceActivityAvailability> = {}): LicenceActivityAvailability {
   return { available: true, minimumDays: 7, maximumDays: 180, messages: [], ...over };
+}
+
+/** Everyone holding a licence, as the read model reports it. */
+function everyone(): LicenceActivityAllLicences {
+  return { assignedUsers: 120, adoptionScore: 55, workloads: WORKLOADS.map((w) => dist(w.key)) };
 }
 
 function overview(over: Partial<LicenceActivityOverview> = {}): LicenceActivityOverview {
@@ -258,7 +264,7 @@ describe('LicenceActivityPage - who sees the people', () => {
     mockAvailability.mockResolvedValue(availability());
     renderWithProvider(<LicenceActivityPage />);
 
-    expect(await screen.findByText('Licence assignments')).toBeInTheDocument();
+    expect(await screen.findByText('Compare licences')).toBeInTheDocument();
     expect(await screen.findByText('Activity by service')).toBeInTheDocument();
     // Non-Latin (Greek) demographic values render without corruption (in the filters and the breakdown).
     expect(screen.getAllByText(/Μηχανικοί/).length).toBeGreaterThan(0);
@@ -266,7 +272,7 @@ describe('LicenceActivityPage - who sees the people', () => {
 
     // With the portal's See PII permission the per-person list is part of the same report, and nothing
     // on the page mentions the report's old, removed role.
-    expect(await screen.findByText('People holding this licence')).toBeInTheDocument();
+    expect(await screen.findByText('Most and least active people')).toBeInTheDocument();
     expect((await screen.findAllByText('ada@contoso.com')).length).toBeGreaterThan(0);
     expect(mockUsers).toHaveBeenCalled();
     expect(screen.queryByText(/ReadUsers/)).not.toBeInTheDocument();
@@ -277,9 +283,11 @@ describe('LicenceActivityPage - who sees the people', () => {
     mockAvailability.mockResolvedValue(availability());
     renderWithProvider(<LicenceActivityPage />, { access: { administration: true, seePii: false } });
 
-    expect(await screen.findByText('Licence assignments')).toBeInTheDocument();
+    expect(await screen.findByText('Compare licences')).toBeInTheDocument();
     expect(await screen.findByText('Activity by service')).toBeInTheDocument();
     expect(screen.queryByRole('tab', { name: 'People' })).not.toBeInTheDocument();
+    // Nor the shortcut to them from the licence detail.
+    expect(screen.queryByRole('button', { name: 'See the most active people' })).not.toBeInTheDocument();
 
     const exportBtn = await screen.findByRole('button', { name: /Export to Excel/i });
     await waitFor(() => expect(exportBtn).toBeEnabled());
@@ -302,14 +310,14 @@ describe('LicenceActivityPage - who sees the people', () => {
 
     fireEvent.change(screen.getByLabelText('Service'), { target: { value: 'outlook' } });
     expect(await screen.findByText('Reporting is busy.')).toBeInTheDocument();
-    expect(screen.getByText('People holding this licence')).toBeInTheDocument();
+    expect(screen.getByText('Most and least active people')).toBeInTheDocument();
     // Availability is read once per page load: nothing about the viewer can change under them now.
     expect(mockAvailability).toHaveBeenCalledTimes(1);
   });
 });
 
 describe('LicenceActivityPage - scale (50 SKUs)', () => {
-  it('holds all SKUs but issues exactly one users request, for the default (biggest) licence', async () => {
+  it('holds all SKUs but issues exactly one users request, for everyone holding a licence', async () => {
     // The skewed distribution the load fixture uses: a few tenant-wide SKUs, many tiny ones.
     const sizes = [1, 5, 25, 50, 100, 500, 5000, 15000, 60000];
     const licences = Array.from({ length: 50 }, (_, i) => ({
@@ -319,18 +327,18 @@ describe('LicenceActivityPage - scale (50 SKUs)', () => {
       assignedUsers: sizes[i % sizes.length] + i, // varied, with a unique maximum
       workloads: WORKLOADS.map((w) => dist(w.key)),
     }));
-    const biggest = [...licences].sort((a, b) => b.assignedUsers - a.assignedUsers)[0];
 
     mockAvailability.mockResolvedValue(availability());
     mockOverview.mockResolvedValue(overview({ licences }));
     renderWithProvider(<LicenceActivityPage />);
 
-    // The drill-down loads for exactly ONE licence (the biggest), not one request per SKU. The
-    // longer timeout absorbs the heavier 50-SKU aggregate render under single-worker jsdom.
+    // The drill-down loads ONCE, for everyone holding a licence (the champions whichever licence they
+    // hold) - never one request per SKU. The longer timeout absorbs the heavier 50-SKU aggregate render
+    // under single-worker jsdom.
     await screen.findAllByText('ada@contoso.com', undefined, { timeout: 8000 });
     await act(async () => {});
     expect(mockUsers).toHaveBeenCalledTimes(1);
-    expect(mockUsers.mock.calls[0][0].licenceTypeId).toBe(biggest.licenceTypeId);
+    expect(mockUsers.mock.calls[0][0].licenceTypeId).toBeNull();
   });
 });
 
@@ -421,7 +429,7 @@ describe('LicenceActivityPage - export refresh after expiry', () => {
     expect(exportButton).toBeDisabled();
     fireEvent.click(exportButton);
     expect(mockDownload).toHaveBeenCalledTimes(1);
-    expect(screen.getByText('Licence assignments')).toBeInTheDocument();
+    expect(screen.getByText('Compare licences')).toBeInTheDocument();
     await waitFor(() => expect(mockOverview).toHaveBeenCalledTimes(2));
 
     await act(async () => { finishOverview(overview({ snapshotId: 'ov2' })); });
@@ -477,9 +485,9 @@ describe('LicenceActivityPage - export refresh after expiry', () => {
       expect(last.usersId).toBe(usersSnaps[usersSnaps.length - 1]);
       expect(last.usersId).not.toBe('us1');
     });
-    // Scope preserved across the refresh: still the same licence/overview.
+    // Scope preserved across the refresh: still everyone holding a licence, against the same overview.
     const lastUsers = mockUsers.mock.calls[mockUsers.mock.calls.length - 1][0];
-    expect(lastUsers).toMatchObject({ overviewId: 'ov1', licenceTypeId: 10 });
+    expect(lastUsers).toMatchObject({ overviewId: 'ov1', licenceTypeId: null });
   });
 });
 
@@ -636,7 +644,7 @@ describe('LicenceActivityPage - demographic filter options', () => {
     });
 
     renderWithProvider(<LicenceActivityPage />);
-    await screen.findByText('Licence assignments');
+    await screen.findByText('Compare licences');
 
     const deptSelect = await screen.findByLabelText('Filter by department');
     expect(screen.getByRole('option', { name: 'Sales' })).toBeInTheDocument();
@@ -677,32 +685,32 @@ describe('LicenceActivityPage - information architecture (tabs)', () => {
   // attribute, so exactly one panel is exposed to the accessibility tree at a time.
   const activePanel = () => screen.getByRole('tabpanel');
 
-  it('splits the report into four tabs and leads with a headline Overview', async () => {
+  it('splits the report into three tabs and leads with the licences, compared side by side', async () => {
     mockAvailability.mockResolvedValue(availability());
     renderWithProvider(<LicenceActivityPage />);
 
-    expect(await screen.findByRole('tab', { name: 'Overview' })).toBeInTheDocument();
-    expect(screen.getByRole('tab', { name: 'By service' })).toBeInTheDocument();
-    expect(screen.getByRole('tab', { name: /By department/ })).toBeInTheDocument();
+    expect(await screen.findByRole('tab', { name: 'Licences' })).toBeInTheDocument();
     expect(screen.getByRole('tab', { name: 'People' })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: /By department/ })).toBeInTheDocument();
+    expect(screen.queryByRole('tab', { name: 'By service' })).not.toBeInTheDocument();
 
-    const overview = activePanel();
-    expect(overview).toHaveAttribute('id', 'la-panel-overview');
-    expect(within(overview).getByText('People with a licence')).toBeVisible();
-    expect(within(overview).getByText('120')).toBeVisible(); // distinctAssignedUsers headline
-    expect(within(overview).getByText('Licence assignments')).toBeVisible();
-    expect(within(overview).getByRole('note')).toHaveTextContent(
+    const licences = activePanel();
+    expect(licences).toHaveAttribute('id', 'la-panel-licences');
+    expect(within(licences).getByText('People with a licence')).toBeVisible();
+    expect(within(licences).getAllByText('120').length).toBeGreaterThan(0); // distinctAssignedUsers headline
+    expect(within(licences).getByText('Compare licences')).toBeVisible();
+    expect(within(licences).getAllByRole('note')[0]).toHaveTextContent(
       'Unknown means insufficient data, not no activity. No activity means complete reporting data shows no usage.',
     );
-    fireEvent.click(within(overview).getByText('Why is activity Unknown?'));
-    expect(within(overview).getByText(/The official Copilot usage report covers Copilot-licensed users only/)).toBeVisible();
-    expect(within(overview).getByText(/Under Where these figures come from, select Show data sources/)).toBeVisible();
+    fireEvent.click(within(licences).getAllByText('Why is activity Unknown?')[0]);
+    expect(within(licences).getByText(/The official Copilot usage report covers Copilot-licensed users only/)).toBeVisible();
+    expect(within(licences).getByText(/Under Where these figures come from, select Show data sources/)).toBeVisible();
   });
 
   it('demotes the coverage panel to a collapsible summary that still reveals every field', async () => {
     mockAvailability.mockResolvedValue(availability());
     renderWithProvider(<LicenceActivityPage />);
-    await screen.findByRole('tab', { name: 'Overview' });
+    await screen.findByRole('tab', { name: 'Licences' });
 
     // Collapsed by default: the full provenance panel (its "held for up to" caption is unique to it)
     // is not in the primary flow until asked for.
@@ -713,27 +721,47 @@ describe('LicenceActivityPage - information architecture (tabs)', () => {
     expect(screen.getAllByText(/Usage reports/).length).toBeGreaterThan(0);
   });
 
-  it('keeps the per-service breakdown reachable, with the licence context, under By service', async () => {
+  it('shows the services for everyone holding a licence straight away, under the licence table', async () => {
     mockAvailability.mockResolvedValue(availability());
+    mockOverview.mockResolvedValue(overview({ allLicences: everyone() }));
     renderWithProvider(<LicenceActivityPage />);
-    await screen.findByRole('tab', { name: 'Overview' });
-
-    fireEvent.click(screen.getByRole('tab', { name: 'By service' }));
+    await screen.findByRole('tab', { name: 'Licences' });
 
     const panel = activePanel();
-    expect(panel).toHaveAttribute('id', 'la-panel-byService');
     expect(within(panel).getByText('Activity by service')).toBeVisible();
-    expect(within(panel).getByLabelText('Selected licence')).toBeVisible();
-    expect(within(panel).getAllByRole('note')).toHaveLength(WORKLOADS.length);
+    expect(within(panel).getByLabelText('Licence')).toHaveValue('all');
+    expect(within(panel).getByText('Each service for Everyone holding a licence')).toBeVisible();
     for (const w of WORKLOADS) {
       expect(within(panel).getAllByText(w.label).length).toBeGreaterThan(0);
     }
+    // No licence has been chosen, so nothing has been asked of the server beyond the one overview.
+    expect(mockOverview).toHaveBeenCalledTimes(1);
+  });
+
+  it('shows a chosen licence in place, against everyone, and lists its people on the People tab', async () => {
+    mockAvailability.mockResolvedValue(availability());
+    mockOverview.mockResolvedValue(overview({ allLicences: everyone() }));
+    renderWithProvider(<LicenceActivityPage />);
+    await screen.findByRole('tab', { name: 'Licences' });
+
+    // Choose F3 in the table: its detail appears below the table, on the same tab.
+    fireEvent.click(within(activePanel()).getByRole('button', { name: /F3/ }));
+    expect(activePanel()).toHaveAttribute('id', 'la-panel-licences');
+    expect(within(activePanel()).getByLabelText('Licence')).toHaveValue('20');
+    expect(within(activePanel()).getByLabelText('Compare with')).toHaveValue('all');
+    expect(within(activePanel()).getByText('Each service for F3')).toBeVisible();
+
+    // The shortcut to the people opens the People tab on the same licence.
+    fireEvent.click(within(activePanel()).getByRole('button', { name: 'See who holds it' }));
+    expect(activePanel()).toHaveAttribute('id', 'la-panel-people');
+    expect(within(activePanel()).getByLabelText('Licence')).toHaveValue('20');
+    await waitFor(() => expect(mockUsers.mock.calls.at(-1)?.[0].licenceTypeId).toBe(20));
   });
 
   it('keeps the department and country breakdowns reachable under their tab', async () => {
     mockAvailability.mockResolvedValue(availability());
     renderWithProvider(<LicenceActivityPage />);
-    await screen.findByRole('tab', { name: 'Overview' });
+    await screen.findByRole('tab', { name: 'Licences' });
 
     fireEvent.click(screen.getByRole('tab', { name: /By department/ }));
 
@@ -748,44 +776,83 @@ describe('LicenceActivityPage - information architecture (tabs)', () => {
     expect(within(panel).getByText('Ελλάδα')).toBeVisible();
   });
 
-  it('keeps the per-user drill-down reachable under the People tab', async () => {
+  it('lists the most and least active people across every licence on the People tab by default', async () => {
     mockAvailability.mockResolvedValue(availability());
     renderWithProvider(<LicenceActivityPage />);
-    await screen.findByRole('tab', { name: 'Overview' });
+    await screen.findByRole('tab', { name: 'Licences' });
 
     fireEvent.click(screen.getByRole('tab', { name: 'People' }));
 
     const panel = activePanel();
     expect(panel).toHaveAttribute('id', 'la-panel-people');
-    expect(within(panel).getByText('People holding this licence')).toBeVisible();
-    expect(within(panel).getByLabelText('Selected licence')).toBeVisible();
+    expect(within(panel).getByText('Most and least active people')).toBeVisible();
+    expect(within(panel).getByLabelText('Licence')).toHaveValue('all');
     await waitFor(() => expect(within(panel).getByText('Most active')).toBeVisible());
     expect(within(panel).getByText('Least active')).toBeVisible();
-    expect(within(panel).getByText('Everyone with this licence')).toBeVisible();
+    expect(within(panel).getAllByText('Everyone holding a licence').length).toBeGreaterThan(0);
     expect(within(panel).getAllByText('ada@contoso.com').length).toBeGreaterThan(0);
-  });
+    expect(mockUsers.mock.calls[0][0].licenceTypeId).toBeNull();
 
-  it('switches the selected licence from the By service tab without leaving it', async () => {
-    mockAvailability.mockResolvedValue(availability());
-    renderWithProvider(<LicenceActivityPage />);
-    await screen.findByRole('tab', { name: 'Overview' });
-
-    fireEvent.click(screen.getByRole('tab', { name: 'By service' }));
-    const select = within(activePanel()).getByLabelText('Selected licence') as HTMLSelectElement;
-    expect(select.value).toBe('10'); // defaults to the most-assigned licence (E5, 100 users)
-
-    fireEvent.change(select, { target: { value: '20' } });
-    expect(activePanel()).toHaveAttribute('id', 'la-panel-byService'); // still on By service
-    expect(within(activePanel()).getByLabelText('Selected licence')).toHaveValue('20');
+    // Narrowing to one licence re-asks for that licence's holders.
+    fireEvent.change(within(panel).getByLabelText('Licence'), { target: { value: '10' } });
+    await waitFor(() => expect(mockUsers.mock.calls.at(-1)?.[0].licenceTypeId).toBe(10));
   });
 
   it('keeps the reporting-window control visible above the tabs on every tab', async () => {
     mockAvailability.mockResolvedValue(availability());
     renderWithProvider(<LicenceActivityPage />);
-    await screen.findByRole('tab', { name: 'Overview' });
+    await screen.findByRole('tab', { name: 'Licences' });
 
     expect(screen.getByRole('button', { name: 'Last settled week' })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('tab', { name: 'People' }));
     expect(screen.getByRole('button', { name: 'Last settled week' })).toBeInTheDocument();
+  });
+});
+
+describe('LicenceActivityPage - notes about the figures', () => {
+  beforeEach(() => window.localStorage.clear());
+
+  it('gathers the notes into one panel the reader can hide, and remembers that they hid it', async () => {
+    const PRIVACY = 'People are identified by their sign-in address.';
+    const CAVEAT = 'Past activity is shown against who holds each licence today.';
+    mockAvailability.mockResolvedValue(availability({ messages: [PRIVACY] }));
+    mockOverview.mockResolvedValue(overview({ messages: [CAVEAT] }));
+    const first = renderWithProvider(<LicenceActivityPage />);
+
+    expect(await screen.findByText(CAVEAT)).toBeInTheDocument();
+    expect(screen.getByText(PRIVACY)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Hide these notes' }));
+    expect(screen.queryByText(CAVEAT)).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'About these figures (2 notes)' })).toBeInTheDocument();
+    first.unmount();
+
+    // A later visit keeps them out of the way, one click from coming back.
+    renderWithProvider(<LicenceActivityPage />);
+    const show = await screen.findByRole('button', { name: 'About these figures (2 notes)' });
+    expect(screen.queryByText(PRIVACY)).not.toBeInTheDocument();
+    fireEvent.click(show);
+    expect(screen.getByText(PRIVACY)).toBeInTheDocument();
+  });
+
+  it('shows the sign-in address note once when the availability check and the overview both carry it', async () => {
+    // The server's sentences, verbatim: LicenceActivityAPIController.Availability and
+    // LicenceActivityRules.Notes.NoDisplayNames.
+    const PRIVACY =
+      'People are identified by their sign-in address. Staff names are not collected, so search and the user lists show the sign-in address instead. Department and country come from your directory.';
+    const NO_DISPLAY_NAMES =
+      "Staff names aren't collected by this product, so people are listed by their sign-in address. Search also checks their stored email address.";
+    const CAVEAT = 'Past activity is shown against who holds each licence today.';
+    let resolveOverview: (value: LicenceActivityOverview) => void = () => undefined;
+    mockAvailability.mockResolvedValue(availability({ messages: [PRIVACY] }));
+    mockOverview.mockReturnValue(new Promise((resolve) => (resolveOverview = resolve)));
+    renderWithProvider(<LicenceActivityPage />);
+
+    // Until the overview arrives, the availability check's note is the only one there is.
+    expect(await screen.findByText(PRIVACY)).toBeInTheDocument();
+
+    await act(async () => resolveOverview(overview({ messages: [NO_DISPLAY_NAMES, CAVEAT] })));
+    expect(await screen.findByText(CAVEAT)).toBeInTheDocument();
+    expect(screen.getByText(NO_DISPLAY_NAMES)).toBeInTheDocument();
+    expect(screen.queryByText(PRIVACY)).not.toBeInTheDocument();
   });
 });

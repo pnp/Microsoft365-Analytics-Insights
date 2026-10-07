@@ -22,6 +22,8 @@ each other's tooling. The area switcher sits in the header; each area has its ow
 | `#/insights/copilot-adoption` | **Copilot Adoption** | Which licensed users aren't getting value from their licence, and which unlicensed heavy users have the strongest case for one. |
 | `#/insights/teams` | **Teams Explorer** | How Microsoft Teams is actually being used: adoption and reach, engagement segments, meeting load and patterns, team/channel health and governance, conversation insight, and champions. Replaces the archived `reports\Misc\Archive\Teams.pbit`. |
 | `#/insights/web-activity` | **Web activity** | What people do on the SharePoint intranet: visits and visitors, page views, where visitors arrive and give up (entry/exit pages, bounce, page-to-page journeys), geography, search terms and the terms that lead nowhere, and browser/device/load-time technology. Replaces the Power BI web-traffic report. |
+| `#/insights/licence-activity` | **Licence activity** | Whether assigned licences are being used. One sortable table compares every licence - people assigned, a 0-100 adoption score (the share of measured holder-weeks that were active, over the services with a known band) and per-service activity - against the all-licences baseline, with empty and unassigned licences hidden by default. Choosing a licence, or **All licences**, shows each service's activity bands next to the baseline and its rank among the licences, the most and least active people (See PII only, and available for all licences as well as one), and a department and country breakdown. Explanatory notes can be hidden and stay hidden. |
+| `#/insights/activity-analysis` | **Activity analysis** | Microsoft 365 activity week by week from the profiling runbooks' weekly roll-up (`profiling.ActivitiesWeeklyColumns`): a metric slicer over the 58 Teams, Outlook, OneDrive, SharePoint, Copilot and Viva Engage metrics, active people by company and department, metrics by week, and a department results matrix (Sum and Unique per metric) with a pinned total. Filters narrow the people by directory attributes, licences held and min/max ranges on each person's totals - all See PII only, because any condition can be differenced against the unfiltered report to single one person out; durations are entered and shown in hours. A department expands to its people, and a Top people list ranks the champions - both See PII only. Replaces the Power BI "Activity Analysis" and "Filter Settings" views. |
 
 **Administration** — running the service, for an IT operator.
 
@@ -159,6 +161,7 @@ auth cookie, so a token in the request body would be ignored.
 | _(none - origin-relative)_ | `api/GlobalFilter` | The administrator's global filter: `GET /effective` (how it applies to the signed-in reader, for the bar on every Insights page); and, for administrators with See PII, `GET` the definition, `POST` a new one (`{ filter, revision }`) and `POST /preview` a draft. The two POSTs are state-changing calls, so they go through `apiFetch` (see below). |
 | _(none - origin-relative)_ | `api/TeamsExplorer` | Teams Explorer: source availability, and one endpoint per tab (`/overview`, `/adoption`, `/meetings`, `/collaboration`, `/conversations`, `/people`) plus `/export/{section}` CSVs. |
 | _(none - origin-relative)_ | `api/WebActivity` | SharePoint web activity: source availability, and one endpoint per tab (`/overview`, `/visits`, `/pages`, `/journeys`, `/geography`, `/search`, `/technology`) plus `/export/{section}` CSVs. |
+| _(none - origin-relative)_ | `api/ActivityAnalysis` | Activity analysis: `/availability` (whether the profiling tables exist and hold weeks, the period bounds and the metric catalogue), `/report` (aggregates for a period and the selected `metrics`, open to every reader with small groups folded and 1-4 people suppressed for a reader without See PII; any `userFilter`, `licences` or `ranges` condition - and the `rangeMaxima` bounds, each one person's total - need See PII) and `/people` (a department's people or the top people; See PII only). The metric labels, categories, reasons and error codes are stable keys the portal translates. |
 | _(none - origin-relative)_ | `api/UserImportCheckpoint` | User import checkpoint: `GET` its state; `POST /clear` (body `{ "runOnNextCycle": bool }`) deletes it. The only state-changing call the portal makes to its own API, so the server requires the `X-Requested-With` header `apiFetch` sends (see below). |
 
 ### Calls that change something
@@ -253,7 +256,7 @@ any `data-print` value the stylesheet has never heard of.
 
 One filter control narrows a whole report to the people it matches: their standard **Entra ID
 attributes** (user name, email domain, department, job title, company, office location, country or
-region, state or province, usage location, user type, account status, manager, management chain) and
+region, state or province, postal code, usage location, user type, account status, manager, management chain) and
 every enabled **custom organisation type** an administrator has defined on the *User organisations*
 page. It is shown as pills, the way Azure Monitor shows metric filters: `Department = Sales, Marketing`,
 `Cost centre ≠ CC-100`, `User name contains “smith”`.
@@ -285,7 +288,7 @@ page. It is shown as pills, the way Azure Monitor shows metric filters: `Departm
   reads - `[{"d":"department","v":["Sales"]},{"j":"or","d":"org:12","op":"isNot","v":["CC-1"],"n":true}]`
   - passed as the `userFilter` query parameter. GET, because a report's CSV and Excel exports are
   plain links. The portal refuses a filter over 6,000 encoded characters; `Web.Template.config` lifts
-  the host's 2,048-character query-string default for `api/CopilotAdoption`.
+  the host's 2,048-character query-string default for `api/CopilotAdoption` and `api/ActivityAnalysis`.
 - **On the server** the filter is evaluated in memory against a shared directory snapshot
   (`IUserDirectorySource`, refreshed every few minutes and invalidated when an organisation type
   changes), so changing a filter never re-runs a report's SQL. The response echoes the filter it
