@@ -62,6 +62,9 @@
     <Compile Include="MessageTracingTests.cs" />
     <Compile Include="CopilotAuditLogContentSchemaTests.cs" />
     <Compile Include="CopilotAuditBackfillTests.cs" />
+    <Compile Include="LeadershipCohortComparisonTests.cs" />
+    <Compile Include="LeadershipCohortTests.cs" />
+    <Compile Include="LeadershipCohortTests.Fakes.cs" />
     <Compile Include="EntraOrgAttributeSpecTests.cs" />
     <Compile Include="UserOrgRulesTests.cs" />
     <Compile Include="UserOrgImportTests.cs" />

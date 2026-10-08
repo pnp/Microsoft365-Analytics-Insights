@@ -175,6 +175,28 @@ namespace WebJob.Office365ActivityImporter
         /// an <c>agent_cost_import_log</c> entry, but this is called from the cycle after the Copilot repair
         /// step, so it must not be able to abort a cycle that has already done useful work.</para>
         /// </remarks>
+        /// <summary>
+        /// Refreshes the Copilot Adoption leadership cohort's membership when it is due (#654). Does nothing when no
+        /// group is configured or there is no Storage account (the web app refuses to save the setting then, so there
+        /// is nothing to read). Never throws: the outcome, including a missing Graph permission, is recorded in the
+        /// cohort's status for the portal to show.
+        /// </summary>
+        internal async Task RefreshLeadershipCohortSafely()
+        {
+            try
+            {
+                var values = StateStore.TryOpen(_settings, StatePartitions.LeadershipCohort, _logger);
+                if (values == null) return;
+
+                var store = new Common.Entities.LeadershipCohort.LeadershipCohortStore(values, isDurable: true);
+                await Common.Entities.LeadershipCohort.LeadershipCohortRefresher.ForGraph(store, _settings, _logger).RefreshIfDueAsync();
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning($"Leadership cohort refresh skipped this cycle ({ex.GetType().Name}): {ex.Message}");
+            }
+        }
+
         internal async Task ImportAgentCosts()
         {
             if (!_settings.ImportJobSettings.CopilotStudioCredits && !_settings.ImportJobSettings.AzureCostManagement)

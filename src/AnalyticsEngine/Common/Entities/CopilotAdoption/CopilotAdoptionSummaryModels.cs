@@ -451,6 +451,26 @@ namespace Common.Entities.CopilotAdoption
             return Options?.UsesExplicitDates == true ? WithoutIndividualData() : this;
         }
 
+        /// <summary>
+        /// A copy of this summary carrying the leadership comparison (#654). Never modifies this instance: the
+        /// summary is cached and shared between readers, and the comparison depends on state outside the analysis
+        /// (the configured group and its last refresh).
+        /// </summary>
+        public CopilotAdoptionSummary WithLeadershipComparison(LeadershipCohort.LeadershipAdoptionComparison comparison)
+        {
+            var copy = (CopilotAdoptionSummary)MemberwiseClone();
+            copy.LeadershipComparison = comparison;
+            return copy;
+        }
+
+        /// <summary>
+        /// How the administrator-configured leadership group's adoption compares with the tenant's (#654). Aggregates
+        /// only, suppressed below a fixed minimum, and never part of the cached analysis: attached per response by
+        /// <see cref="WithLeadershipComparison"/>. Null on a cached summary.
+        /// </summary>
+        [JsonProperty("leadershipComparison")]
+        public LeadershipCohort.LeadershipAdoptionComparison LeadershipComparison { get; set; }
+
         [JsonProperty("generatedUtc")]
         public DateTime GeneratedUtc { get; set; }
 

@@ -54,6 +54,7 @@ import AgentsPanel from '../components/copilotAdoption/AgentsPanel';
 import UnlicensedPanel from '../components/copilotAdoption/UnlicensedPanel';
 import ResourceTypesPanel from '../components/copilotAdoption/ResourceTypesPanel';
 import EmailDomainPanel from '../components/copilotAdoption/EmailDomainPanel';
+import LeadershipComparisonCard from '../components/copilotAdoption/LeadershipComparisonCard';
 import { ConcentrationBar, CombinedSegmentTable } from '../components/copilotAdoption/CombinedViews';
 import InfoTip from '../components/shared/InfoTip';
 import PrintButton from '../components/shared/PrintButton';
@@ -1564,6 +1565,8 @@ function AnalystTab({
           )}
         </div>
       </Card>
+
+      <LeadershipComparisonCard comparison={summary.leadershipComparison} />
 
       <Card>
         <div className={styles.cardHead}>

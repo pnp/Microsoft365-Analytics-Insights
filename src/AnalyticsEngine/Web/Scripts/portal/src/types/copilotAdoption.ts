@@ -7,6 +7,7 @@
 import type { ReportCategory, ReportSeries } from './reports';
 import type { UserFilterEcho } from './userFilter';
 import type { GlobalFilterEcho } from './globalFilter';
+import type { LeadershipAdoptionComparison } from './leadershipCohort';
 
 /** Which parts of the adoption tool this deployment can show. */
 export interface CopilotAdoptionAvailability {
@@ -538,6 +539,8 @@ export interface CopilotAdoptionSummary {
   accountabilityDimension: string | null;
   accountabilityDimensionLabel: string | null;
   accountabilityRollup: AccountabilityRollupRow[];
+  /** The leadership group's aggregate comparison with the tenant (#654). Absent from an older server. */
+  leadershipComparison?: LeadershipAdoptionComparison | null;
   usageByApp: ReportCategory[];
   opportunityByDepartment: ReportCategory[];
   weeklyTrend: ReportSeries[];

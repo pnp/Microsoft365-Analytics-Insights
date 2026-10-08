@@ -26,6 +26,8 @@ import { USER_DATA_WORKLOADS_BY_FLAG } from '../../components/userlookup/Categor
 import { USER_ORG_MESSAGE_KEYS } from '../../components/userOrgs/userOrgShared';
 import { BLOCKING_KEYS, CSV_DELIMITER_KEYS, ROW_PROBLEM_KEYS } from '../../components/userOrgs/CsvImportPanel';
 import { ACCOUNTABILITY_DIMENSION_TEXT, ACCOUNTABILITY_EMPTY_SEGMENT_KEYS } from '../../pages/CopilotAdoptionPage';
+import { LEADERSHIP_REASON_KEYS, LEADERSHIP_STATUS_KEYS } from '../../components/copilotAdoption/LeadershipComparisonCard';
+import { LEADERSHIP_ERROR_KEYS, LEADERSHIP_FAILURE_KIND_KEYS, LEADERSHIP_REFRESH_STATUS_KEYS } from '../../pages/LeadershipCohortPage';
 import { ENABLED_IMPORT_LABELS_BY_SETTING_PROPERTY } from '../../pages/InsightsOverviewPage';
 import { OFFICE_PLATFORM_LABEL_KEYS } from '../../pages/ReportsPage';
 import { WORKLOADS } from '../../types/licenceActivity';
@@ -2554,5 +2556,82 @@ describe('Teams connection outcomes', () => {
     // RouteConfig maps "Account/{action}" to AccountController.
     expect(TEAMS_CONNECT_URL).toBe('/Account/ConnectTeams');
     expect(readFileSync(ACCOUNT_CONTROLLER, 'utf8')).toMatch(/public\s+void\s+ConnectTeams\s*\(\s*\)/);
+  });
+});
+
+/**
+ * The leadership comparison (#654) and its admin page receive only keys from the server: the comparison's status
+ * and reason, the membership refresh's status and failure kind, and the admin API's error codes. Each is a set of
+ * `public const string` values in one C# class. A value added on the server without a catalog entry here would show
+ * a Spanish (or English) reader the generic fallback instead of what actually went wrong.
+ */
+const LEADERSHIP_COMPARISON_CS = join(process.cwd(), '..', '..', '..', 'Common', 'Entities', 'LeadershipCohort', 'LeadershipAdoptionComparison.cs');
+const LEADERSHIP_COHORT_CS = join(process.cwd(), '..', '..', '..', 'Common', 'Entities', 'LeadershipCohort', 'LeadershipCohortModels.cs');
+const LEADERSHIP_WEB_MODELS_CS = join(process.cwd(), '..', '..', 'Models', 'LeadershipCohort', 'LeadershipCohortModels.cs');
+
+function csharpClassConstants(path: string, className: string): string[] {
+  const source = readFileSync(path, 'utf8');
+  const start = source.indexOf(`static class ${className}`);
+  expect(start, `Could not find ${className} in ${path}`).toBeGreaterThanOrEqual(0);
+  const brace = source.indexOf('{', start);
+  let depth = 0;
+  let end = brace;
+  for (; end < source.length; end++) {
+    if (source[end] === '{') depth++;
+    if (source[end] === '}') depth--;
+    if (depth === 0) break;
+  }
+  const body = source.slice(brace, end);
+  return sortedUnique([...body.matchAll(/public const string \w+\s*=\s*"([^"]+)"/g)].map((m) => m[1]));
+}
+
+function expectMapsExactly(map: Record<string, string>, serverKeys: string[], prefix: string, what: string) {
+  expect(sortedUnique(Object.keys(map)), `the SPA must map exactly the ${what} the server can send`).toEqual(serverKeys);
+  for (const [key, catalogKey] of Object.entries(map)) {
+    expect(catalogKey).toBe(`${prefix}${key}`);
+    expect(catalogKey in EN_CATALOG, `${catalogKey} has no catalog entry`).toBe(true);
+  }
+  const orphans = catalogKeys(prefix).map((key) => key.slice(prefix.length)).filter((key) => !serverKeys.includes(key));
+  expect(orphans, `catalog entries for ${what} the server no longer sends`).toEqual([]);
+}
+
+describe('Leadership comparison server keys', () => {
+  it('maps every comparison status except ok, which shows figures', () => {
+    const statuses = csharpClassConstants(LEADERSHIP_COMPARISON_CS, 'LeadershipComparisonStatuses');
+    expect(statuses).toContain('ok');
+    expectMapsExactly(LEADERSHIP_STATUS_KEYS, statuses.filter((s) => s !== 'ok'), 'copilotAdoption.leadership.status.', 'comparison statuses');
+  });
+
+  it('maps every reason a comparison can be unavailable', () => {
+    expectMapsExactly(
+      LEADERSHIP_REASON_KEYS,
+      csharpClassConstants(LEADERSHIP_COMPARISON_CS, 'LeadershipComparisonReasons'),
+      'copilotAdoption.leadership.reason.',
+      'unavailable reasons',
+    );
+  });
+
+  it('maps every membership refresh status and failure kind on the admin page', () => {
+    expectMapsExactly(
+      LEADERSHIP_REFRESH_STATUS_KEYS,
+      csharpClassConstants(LEADERSHIP_COHORT_CS, 'LeadershipCohortRefreshStatuses'),
+      'admin.leadershipCohort.refreshStatus.',
+      'refresh statuses',
+    );
+    expectMapsExactly(
+      LEADERSHIP_FAILURE_KIND_KEYS,
+      csharpClassConstants(LEADERSHIP_COHORT_CS, 'LeadershipCohortFailureKinds'),
+      'admin.leadershipCohort.failureKind.',
+      'failure kinds',
+    );
+  });
+
+  it('maps every error code the admin API can return', () => {
+    expectMapsExactly(
+      LEADERSHIP_ERROR_KEYS,
+      csharpClassConstants(LEADERSHIP_WEB_MODELS_CS, 'LeadershipCohortErrorCodes'),
+      'admin.leadershipCohort.error.',
+      'admin error codes',
+    );
   });
 });

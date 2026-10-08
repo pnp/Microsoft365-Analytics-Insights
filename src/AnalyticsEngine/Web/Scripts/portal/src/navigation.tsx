@@ -13,6 +13,7 @@ import {
   Organization20Regular,
   PeopleCommunity20Regular,
   PeopleAudience20Regular,
+  PeopleStar20Regular,
   PeopleSync20Regular,
   PeopleTeam20Regular,
   Pulse20Regular,
@@ -43,6 +44,7 @@ const UserImportPage = lazyWithReload(() => import('./pages/UserImportPage'));
 const UserScopePage = lazyWithReload(() => import('./pages/UserScopePage'));
 const GlobalFilterPage = lazyWithReload(() => import('./pages/GlobalFilterPage'));
 const CopilotAuditBackfillPage = lazyWithReload(() => import('./pages/CopilotAuditBackfillPage'));
+const LeadershipCohortPage = lazyWithReload(() => import('./pages/LeadershipCohortPage'));
 const ProfilingStatusPage = lazyWithReload(() => import('./pages/ProfilingStatusPage'));
 const InstallLogPage = lazyWithReload(() => import('./pages/InstallLogPage'));
 const HealthPage = lazyWithReload(() => import('./pages/HealthPage'));
@@ -248,6 +250,14 @@ export const ROUTES: PortalRoute[] = [
     groupKey: 'app.navGroup.manage',
     icon: <Sparkle20Regular />,
     element: <CopilotAuditBackfillPage />,
+  },
+  {
+    area: 'admin',
+    path: '/admin/leadership-cohort',
+    labelKey: 'app.route.leadershipCohort',
+    groupKey: 'app.navGroup.manage',
+    icon: <PeopleStar20Regular />,
+    element: <LeadershipCohortPage />,
   },
   {
     area: 'admin',

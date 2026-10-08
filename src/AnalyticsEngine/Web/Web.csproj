@@ -242,6 +242,7 @@
     <Compile Include="Controllers\ActivityAnalysisAPIController.cs" />
     <Compile Include="Controllers\BaseAPIController.cs" />
     <Compile Include="Controllers\CopilotAuditBackfillAPIController.cs" />
+    <Compile Include="Controllers\LeadershipCohortAPIController.cs" />
     <Compile Include="Controllers\CopilotAdoptionAPIController.cs" />
     <Compile Include="Controllers\AgentCostsAPIController.cs" />
     <Compile Include="Controllers\DlpAPIController.cs" />
@@ -288,6 +289,7 @@
       <DependentUpon>Global.asax</DependentUpon>
     </Compile>
     <Compile Include="Models\CopilotAuditBackfill\CopilotAuditBackfillModels.cs" />
+    <Compile Include="Models\LeadershipCohort\LeadershipCohortModels.cs" />
     <Compile Include="Models\AuthTeamRequest.cs" />
     <Compile Include="Models\LicenceActivity\LicenceActivitySnapshotCache.cs" />
     <Compile Include="Models\LicenceActivity\LicenceActivityTelemetry.cs" />

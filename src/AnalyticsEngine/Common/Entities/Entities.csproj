@@ -594,6 +594,10 @@
     <Compile Include="CopilotAuditBackfill\CopilotAuditBackfillSlicer.cs" />
     <Compile Include="CopilotAuditBackfill\CopilotAuditBackfillStateStore.cs" />
     <Compile Include="State\StateStore.cs" />
+    <Compile Include="LeadershipCohort\LeadershipAdoptionComparison.cs" />
+    <Compile Include="LeadershipCohort\LeadershipCohortModels.cs" />
+    <Compile Include="LeadershipCohort\LeadershipCohortRefresher.cs" />
+    <Compile Include="LeadershipCohort\LeadershipCohortStore.cs" />
     <Compile Include="State\StorageTableClientFactory.cs" />
     <Compile Include="State\TeamsTokenStore.cs" />
     <Compile Include="State\UserImportCheckpointKeys.cs" />
