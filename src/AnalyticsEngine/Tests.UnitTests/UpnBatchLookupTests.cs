@@ -4,7 +4,6 @@ using Microsoft.Data.SqlClient;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System;
 using System.Collections.Generic;
-using System.Configuration;
 using System.Data;
 using System.Data.Common;
 using System.Data.Entity;
@@ -69,6 +68,40 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public async Task EnabledScopeResolver_FiltersBeforeResolving_WithoutChangingWriterAnswers()
+        {
+            foreach (var collation in new[] { "SQL_Latin1_General_CP1_CI_AS", "Latin1_General_CI_AS", "Latin1_General_CS_AS" })
+            using (var fixture = await Fixture.CreateAsync(collation))
+            using (var db = new FixtureContext(fixture.ConnectionString))
+            {
+                await db.Database.ExecuteSqlCommandAsync("UPDATE dbo.users SET account_enabled = CASE WHEN id IN (1,3) THEN 0 WHEN id = 2 THEN 1 ELSE NULL END;");
+                var recorder = new ParameterRecorder();
+                DbInterception.Add(recorder);
+                try
+                {
+                    var names = new[] { "mixed@contoso.com", "MIXED@CONTOSO.COM", null, "", "trailing@contoso.com", "missing@contoso.com", new string('x', 5001) };
+                    CollectionAssert.AreEquivalent(new[] { 2, 4 }, await ExistingUserIds.FindEnabledIdsAsync(db, names),
+                        "Disabled, absent and unmatchable keys must not enter the eligible id set.");
+                    CollectionAssert.AreEqual(collation.Contains("_CS_") ? new int[0] : new[] { 2 },
+                        await ExistingUserIds.FindEnabledIdsAsync(db, new[] { "MIXED@CONTOSO.COM" }),
+                        "Scope membership must use the actual column's case comparison.");
+                    CollectionAssert.AreEqual(new int?[] { 1, 3 }, await ExistingUserIds.FindAsync(db, new[] { names[0], "" }),
+                        "The existing lowest-id API must include disabled rows as before.");
+                    var repeated = Enumerable.Repeat("mixed@contoso.com", 1001).ToList();
+                    CollectionAssert.AreEqual(new[] { 2 }, await ExistingUserIds.FindEnabledIdsAsync(db, repeated),
+                        "A repeated member across chunk boundaries must produce one eligible id.");
+                    Assert.AreEqual(0, (await ExistingUserIds.FindEnabledIdsAsync(db, new string[0])).Length);
+                    Assert.AreEqual(0, (await ExistingUserIds.FindEnabledIdsAsync(db, new string[] { null })).Length);
+                    var type = collation.StartsWith("SQL_") ? SqlDbType.VarChar : SqlDbType.NVarChar;
+                    Assert.IsTrue(recorder.Types.Count > 0 && recorder.Types.All(t => t == type),
+                        "Scope lookup must retain the column-driven parameter type, not convert the indexed column.");
+                    Assert.AreEqual(1, recorder.Probes, "Both resolution modes share the database-scoped collation probe.");
+                }
+                finally { DbInterception.Remove(recorder); }
+            }
+        }
+
+        [TestMethod]
         public void QueryBuilder_PreservesLongValuesAndRejectsUnknownCollation()
         {
             foreach (var type in new[] { SqlDbType.VarChar, SqlDbType.NVarChar })
@@ -113,7 +146,12 @@ namespace Tests.UnitTests
             }
             public static async Task<Fixture> CreateAsync(string collation, bool benchmark = false)
             {
-                var builder = new SqlConnectionStringBuilder(ConfigurationManager.ConnectionStrings["SPOInsightsEntities"].ConnectionString);
+                var builder = new SqlConnectionStringBuilder
+                {
+                    DataSource = @"(localdb)\MSSQLLocalDB",
+                    IntegratedSecurity = true,
+                    TrustServerCertificate = true
+                };
                 var catalog = "SyntheticUpn713_" + Guid.NewGuid().ToString("N");
                 builder.InitialCatalog = "master";
                 var master = builder.ConnectionString;

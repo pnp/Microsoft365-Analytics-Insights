@@ -4,6 +4,7 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Data;
 using System.Data.Entity;
+using System.Linq;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -110,6 +111,30 @@ namespace Common.Entities.LookupCaches
                 await db.Database.SqlQuery<Match>(query.Sql, query.Parameters).ToListAsync());
         }
 
+        /// <summary>
+        /// Resolves a scope to every matching enabled (or unknown-status) user id. Unlike <see cref="FindAsync(AnalyticsEntitiesContext, IReadOnlyList{string})"/>,
+        /// this is a set of eligible rows, not a lowest-id answer per name: legacy duplicates must not hide an
+        /// enabled account behind a disabled one, or discard another eligible row's watermark.
+        /// </summary>
+        public static async Task<int[]> FindEnabledIdsAsync(AnalyticsEntitiesContext db, IReadOnlyList<string> userPrincipalNames)
+        {
+            if (db == null) throw new ArgumentNullException(nameof(db));
+            if (userPrincipalNames == null) throw new ArgumentNullException(nameof(userPrincipalNames));
+            if (userPrincipalNames.Count == 0) return new int[0];
+            var type = await ParameterTypeAsync(db.Database.Connection, async () =>
+                await db.Database.SqlQuery<string>(CollationSql).SingleAsync());
+            var ids = new HashSet<int>();
+            for (var offset = 0; offset < userPrincipalNames.Count; offset += MaxNamesPerQuery)
+            {
+                var query = BuildQuery(userPrincipalNames, offset,
+                    Math.Min(MaxNamesPerQuery, userPrincipalNames.Count - offset), type, allEnabledMatches: true);
+                if (query == null) continue;
+                foreach (var match in await db.Database.SqlQuery<Match>(query.Sql, query.Parameters).ToListAsync())
+                    ids.Add(match.Id);
+            }
+            return ids.ToArray();
+        }
+
         private static async Task<SqlDbType> ParameterTypeAsync(System.Data.Common.DbConnection connection, Func<Task<string>> probe)
         {
             // An omitted initial catalog can resolve differently for different logins. Do not cache that
@@ -168,9 +193,11 @@ namespace Common.Entities.LookupCaches
         /// The query for <paramref name="count"/> names starting at <paramref name="offset"/>, or null when none of
         /// them can match. Slots are relative to <paramref name="offset"/>, so every full slice sends the same text.
         /// </summary>
-        internal static Query BuildQuery(IReadOnlyList<string> userPrincipalNames, int offset, int count, SqlDbType type = SqlDbType.VarChar)
+        internal static Query BuildQuery(IReadOnlyList<string> userPrincipalNames, int offset, int count, SqlDbType type = SqlDbType.VarChar, bool allEnabledMatches = false)
         {
-            var sql = new StringBuilder("SELECT k.slot AS Slot, MIN(u.id) AS Id FROM (VALUES ");
+            var sql = new StringBuilder(allEnabledMatches
+                ? "SELECT k.slot AS Slot, u.id AS Id FROM (VALUES "
+                : "SELECT k.slot AS Slot, MIN(u.id) AS Id FROM (VALUES ");
             var parameters = new List<SqlParameter>(count);
             for (var slot = 0; slot < count; slot++)
             {
@@ -194,7 +221,10 @@ namespace Common.Entities.LookupCaches
                 return null;
             }
 
-            sql.Append(") AS k(slot, upn) INNER JOIN dbo.users AS u ON u.user_name = k.upn GROUP BY k.slot;");
+            sql.Append(") AS k(slot, upn) INNER JOIN dbo.users AS u ON u.user_name = k.upn");
+            sql.Append(allEnabledMatches
+                ? " WHERE u.account_enabled IS NULL OR u.account_enabled = 1 GROUP BY k.slot, u.id;"
+                : " GROUP BY k.slot;");
             return new Query(sql.ToString(), parameters.ToArray());
         }
 
@@ -229,7 +259,7 @@ namespace Common.Entities.LookupCaches
             /// <summary>The name's position in its query, relative to the slice it was sent in.</summary>
             public int Slot { get; set; }
 
-            /// <summary>The lowest id of the rows the database matched to the name.</summary>
+            /// <summary>A matching id; <c>FindAsync</c> returns only the lowest per name.</summary>
             public int Id { get; set; }
         }
     }
