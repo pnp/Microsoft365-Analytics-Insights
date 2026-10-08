@@ -102,6 +102,28 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public async Task EnabledLegacyDuplicates_ReloadAboveTheParameterCeiling()
+        {
+            using (var fixture = await Fixture.CreateAsync("SQL_Latin1_General_CP1_CI_AS"))
+            using (var db = new FixtureContext(fixture.ConnectionString))
+            {
+                await db.Database.ExecuteSqlCommandAsync(@"
+WITH digits AS (SELECT v FROM (VALUES(0),(1),(2),(3),(4),(5),(6),(7),(8),(9)) AS d(v))
+INSERT dbo.users(user_name, account_enabled)
+SELECT TOP(3000) 'duplicate@contoso.com', 1 FROM digits a CROSS JOIN digits b CROSS JOIN digits c CROSS JOIN digits d;");
+                var ids = await ExistingUserIds.FindEnabledIdsAsync(db, new[] { "duplicate@contoso.com" });
+                Assert.AreEqual(3000, ids.Length, "One scoped UPN may have many eligible legacy rows.");
+                // EF6 expands integer Contains values as SQL literals, not one parameter per id.
+                // Execute the real reload predicate rather than infer its parameter count.
+                var query = db.users.Where(u => ids.Contains(u.ID) && (u.AccountEnabled == null || u.AccountEnabled == true));
+                var rows = await query.ToListAsync();
+                Assert.AreEqual(3000, rows.Count);
+                StringAssert.Contains(query.ToString(), " IN (");
+                Assert.IsFalse(query.ToString().Contains("@"), "The integer id list is not a parameter list.");
+            }
+        }
+
+        [TestMethod]
         public void QueryBuilder_PreservesLongValuesAndRejectsUnknownCollation()
         {
             foreach (var type in new[] { SqlDbType.VarChar, SqlDbType.NVarChar })
