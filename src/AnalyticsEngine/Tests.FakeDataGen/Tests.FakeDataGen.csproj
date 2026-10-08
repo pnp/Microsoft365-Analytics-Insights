@@ -41,6 +41,13 @@
     <WarningLevel>4</WarningLevel>
   </PropertyGroup>
   <ItemGroup>
+    <!-- Partial DemoTables field initializers register SQL tables in foreign-key dependency order. -->
+    <Compile Remove="Demo\DemoTables.cs;Demo\DemoCollaborationTables.cs;Demo\DemoPowerPlatformTables.cs" />
+    <Compile Include="Demo\DemoTables.cs" />
+    <Compile Include="Demo\DemoCollaborationTables.cs" />
+    <Compile Include="Demo\DemoPowerPlatformTables.cs" />
+  </ItemGroup>
+  <ItemGroup>
     <Reference Include="System" />
     <Reference Include="System.ComponentModel.DataAnnotations" />
     <Reference Include="System.Core" />
