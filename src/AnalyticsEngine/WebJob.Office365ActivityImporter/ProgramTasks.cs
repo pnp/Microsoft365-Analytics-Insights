@@ -164,18 +164,6 @@ namespace WebJob.Office365ActivityImporter
         }
 
         /// <summary>
-        /// Optional agent-cost imports: billed Copilot Studio Copilot Credits, and daily Azure spend from
-        /// Microsoft Cost Management.
-        /// </summary>
-        /// <remarks>
-        /// <para>Does not call <see cref="InitAuth"/>: neither import touches Graph. Each builds its own
-        /// OAuth context for its own audience, and does so <b>inside the lazy factory</b> so a deployment with
-        /// these toggles off never acquires a token for an API it does not use.</para>
-        /// <para>Never throws - <see cref="AgentCostImportPhase"/> already turns failures into a log row and
-        /// an <c>agent_cost_import_log</c> entry, but this is called from the cycle after the Copilot repair
-        /// step, so it must not be able to abort a cycle that has already done useful work.</para>
-        /// </remarks>
-        /// <summary>
         /// Refreshes the Copilot Adoption leadership cohort's membership when it is due (#654). Does nothing when no
         /// group is configured or there is no Storage account (the web app refuses to save the setting then, so there
         /// is nothing to read). Never throws: the outcome, including a missing Graph permission, is recorded in the
@@ -197,6 +185,18 @@ namespace WebJob.Office365ActivityImporter
             }
         }
 
+        /// <summary>
+        /// Optional agent-cost imports: billed Copilot Studio Copilot Credits, and daily Azure spend from
+        /// Microsoft Cost Management.
+        /// </summary>
+        /// <remarks>
+        /// <para>Does not call <see cref="InitAuth"/>: neither import touches Graph. Each builds its own
+        /// OAuth context for its own audience, and does so <b>inside the lazy factory</b> so a deployment with
+        /// these toggles off never acquires a token for an API it does not use.</para>
+        /// <para>Never throws - <see cref="AgentCostImportPhase"/> already turns failures into a log row and
+        /// an <c>agent_cost_import_log</c> entry, but this is called from the cycle after the Copilot repair
+        /// step, so it must not be able to abort a cycle that has already done useful work.</para>
+        /// </remarks>
         internal async Task ImportAgentCosts()
         {
             if (!_settings.ImportJobSettings.CopilotStudioCredits && !_settings.ImportJobSettings.AzureCostManagement)
