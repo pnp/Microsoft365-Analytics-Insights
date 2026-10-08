@@ -57,13 +57,22 @@ consumption behavior remains; a failed connected identity never silently falls b
 
 Setup for a build containing this page:
 
-1. On the **runtime** app registration, register a **Web** redirect URI
-   `https://<portal-host>/signin-agent-costs`. Keep the existing portal sign-in URI and Teams permissions.
+1. On the **runtime** app registration, open **Authentication** and add a **Web** redirect URI
+   `https://<portal-host>/signin-agent-costs`. The server builds it from `WebAppURL.TrimEnd('/')`
+   plus `/signin-agent-costs`. Register each hosted slot/local instance separately; for the synthetic
+   example `WebAppURL=https://localhost:44400/`, its callback is `https://localhost:44400/signin-agent-costs`.
+   Use your actual local port, not the example's. Keep the existing portal and Teams callbacks.
+   Do not select SPA/mobile, append a hash route, or add a trailing slash after the callback path.
    The callback uses a separate passive Katana OIDC v2 middleware; normal sign-in requests no billing scopes.
-2. Configure/admin-consent the delegated Power Platform API permissions advertised by the publisher for
-   your tenant. Select **Power Platform API**, application ID `8578e004-a5c6-46e7-913e-12f58912df43`,
-   not a similarly named legacy resource. The connection uses the documented
+2. Under **API permissions → Add a permission → APIs my organization uses**, search for
+   **Power Platform API**, application ID `8578e004-a5c6-46e7-913e-12f58912df43`,
+   not a similarly named legacy resource. Select **Delegated permissions**, add
+   **CopilotStudio.Licenses.Read** and **EnvironmentManagement.Environments.Read**, then
+   **Grant admin consent** and confirm the granted status. These are advertised read-only permissions;
+   if absent in your tenant, consult Microsoft rather than inventing a scope or substituting write access.
+   The connection uses the documented
    `https://api.powerplatform.com/.default` scope plus `openid profile offline_access`.
+   `.default` selects the app's configured delegated permissions; it is not a permission to add.
    The entitlement REST reference documents `.default`; it does **not** document a `Licensing.Read`
    scope, so this feature does not invent one or claim a generic allocation permission guarantees entitlement access.
    See Microsoft's [authentication guide](https://learn.microsoft.com/power-platform/admin/programmability-authentication-v2),
@@ -77,6 +86,19 @@ Setup for a build containing this page:
    **same account**. The server verifies MSAL can renew the credential and read consumption before publishing the connection.
 5. Keep the Copilot Studio credit import toggle enabled. A successful connection or disconnect changes the
    credit cadence generation, so the next cycle does not wait behind the previous 24-hour stamp.
+
+Setup failures:
+
+| Error | Fix |
+| --- | --- |
+| `AADSTS650057` / Invalid resource | Configure the **Power Platform API** delegated permissions and grant consent on the runtime registration. Power Platform Reader RBAC alone does not configure an Entra requested resource. |
+| `AADSTS50011` / Redirect URI mismatch | Add the exact callback shown in the error to **Authentication → Web**, including the instance's scheme, host, local port and path. A hosted callback does not cover localhost. If a hosted instance sends localhost, correct its `WebAppURL` instead. |
+| Administrator consent required | Grant consent using an authorized Entra administrator, then start a fresh connection attempt. |
+| Account mismatch / billing access refused | Connect the same account signed into the portal; it needs Administration and actual Power Platform billing read access. |
+
+After fixing registration, retry Connect, refresh status and verify the next credit import succeeds.
+Registration changes alone do not require a deployment or SQL migration; successful sign-in alone
+does not prove a successful connection/import.
 
 Security and operational contract:
 
