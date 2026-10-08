@@ -1380,6 +1380,50 @@ namespace Tests.UnitTests
 
         #region Credit importer behaviour
 
+        [DataTestMethod]
+        [DataRow(HttpStatusCode.Unauthorized, "capacity")]
+        [DataRow(HttpStatusCode.Forbidden, "capacity")]
+        [DataRow(HttpStatusCode.Unauthorized, "consumption")]
+        [DataRow(HttpStatusCode.Forbidden, "consumption")]
+        [DataRow(HttpStatusCode.Unauthorized, "users")]
+        [DataRow(HttpStatusCode.Forbidden, "users")]
+        public async Task CreditSource_RefusedRequest_DoesNotDiagnoseAMissingRoleOrAppOnlyRestriction(HttpStatusCode status, string route)
+        {
+            var handler = new RecordingPostHandler(new HttpResponseMessage(status)
+            {
+                Content = new StringContent("{}"),
+            });
+            using (var client = new DataUtils.Http.AutoThrottleHttpClient(handler, Logger))
+            {
+                var source = new PowerPlatformLicensingCreditSource(client, Logger);
+                Func<Task> read;
+                var day = new DateTime(2026, 1, 1);
+                switch (route)
+                {
+                    case "capacity": read = () => source.GetCapacityAsync(); break;
+                    case "consumption": read = () => source.GetConsumptionPageAsync(day, day, null); break;
+                    case "users": read = () => source.GetUserConsumptionPageAsync(day, day, null); break;
+                    default: throw new ArgumentOutOfRangeException(nameof(route));
+                }
+                var error = await Assert.ThrowsExceptionAsync<AgentCostAuthorisationException>(
+                    read);
+
+                StringAssert.Contains(error.Message, $"HTTP {(int)status} ({status})");
+                StringAssert.Contains(error.Message, "supports service-principal authentication via RBAC");
+                StringAssert.Contains(error.Message, "already verified");
+                StringAssert.Contains(error.Message, "same runtime app identity");
+                StringAssert.Contains(error.Message, "status alone cannot establish the cause");
+                StringAssert.Contains(error.Message, "other imports are unaffected");
+                Assert.IsFalse(error.Message.Contains("requires a signed-in"));
+                Assert.IsFalse(error.Message.Contains("Assign the 'Power Platform reader'"));
+                Assert.IsTrue(error.Message.Length <= 1000, "Guidance must fit the import log's SQL column.");
+                if (status == HttpStatusCode.Unauthorized)
+                    StringAssert.Contains(error.Message, "token audience (https://api.powerplatform.com)");
+                else
+                    StringAssert.Contains(error.Message, "does not prove that a role is missing");
+            }
+        }
+
         [TestMethod]
         public async Task CreditImporter_PagesUntilTheContinuationTokenRunsOut()
         {

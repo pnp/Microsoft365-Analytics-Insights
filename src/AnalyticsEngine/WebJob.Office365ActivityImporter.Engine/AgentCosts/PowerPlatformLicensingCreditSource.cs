@@ -15,13 +15,10 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
     /// (<c>api.powerplatform.com/licensing/entitlements/MCSMessages</c>).
     /// </summary>
     /// <remarks>
-    /// <para><b>Application-only access to these routes is not confirmed by Microsoft.</b> The Power Platform
-    /// API supports service principals through its tenant-scoped RBAC model, but Microsoft's own
-    /// authentication guidance has said the API uses delegated permissions only, and the licensing entitlement
-    /// routes specifically have not been documented as working with client credentials. That is why a 401 or
-    /// 403 here is translated into a precise instruction: it is the single most likely way this import fails
-    /// on a correctly-installed system, and "Forbidden" on its own would send an admin looking in the wrong
-    /// place.</para>
+    /// <para>Power Platform supports service-principal authentication through RBAC, independently of
+    /// delegated Entra API permissions. A verified role assignment does not prove access to the licensing
+    /// routes. Neither a 401 nor a 403 alone establishes a missing role or an application-only restriction,
+    /// so the error gives diagnostic steps rather than claiming either is the cause.</para>
     /// </remarks>
     public class PowerPlatformLicensingCreditSource : ICopilotStudioCreditSource
     {
@@ -179,12 +176,13 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
                 {
                     throw new AgentCostAuthorisationException(
                         $"The Power Platform licensing API refused the request for {what} with HTTP {(int)response.StatusCode} ({response.StatusCode}). "
-                        + "A valid token is not sufficient for these routes: the app registration's service principal must also hold a Power Platform "
-                        + "RBAC role at tenant scope. Assign the 'Power Platform reader' role to the service principal (POST "
-                        + "https://api.powerplatform.com/authorization/roleAssignments?api-version=2024-10-01, or use the Power Platform admin centre), "
-                        + "then re-run. Note that Microsoft has not confirmed application-only access to the licensing entitlement routes, so if the "
-                        + "role assignment is in place and this persists, the API may currently require a signed-in administrator - in which case leave "
-                        + "this import turned off. No other import is affected.");
+                        + (response.StatusCode == HttpStatusCode.Unauthorized
+                            ? "The API did not accept authentication. Check the runtime app's tenant and token audience (https://api.powerplatform.com). "
+                            : "This does not prove that a role is missing. Verify 'Power Platform reader' at tenant scope for the enterprise application the importer actually uses. ")
+                        + "Power Platform supports service-principal authentication via RBAC, but verifying a role assignment does not test access to these licensing endpoints. "
+                        + "If the assignment is already verified, do not recreate it or grant a broader role blindly. Test the failing endpoint with the same runtime app identity; "
+                        + "retain the API response and request/correlation ID privately for Microsoft support. The status alone cannot establish the cause. "
+                        + "You can disable only CopilotStudioCredits while investigating; other imports are unaffected.");
                 }
 
                 if (!response.IsSuccessStatusCode)
@@ -245,9 +243,8 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
     }
 
     /// <summary>
-    /// Thrown when a cost API rejects the request for authorisation reasons rather than because something is
-    /// broken. Typed separately so the importer can log the specific remedy - the fix is a role assignment,
-    /// which no amount of retrying will achieve.
+    /// Thrown when a cost API rejects authentication or authorisation. Typed separately so the importer
+    /// preserves actionable guidance without treating a refused read as an empty successful import.
     /// </summary>
     public class AgentCostAuthorisationException : Exception
     {

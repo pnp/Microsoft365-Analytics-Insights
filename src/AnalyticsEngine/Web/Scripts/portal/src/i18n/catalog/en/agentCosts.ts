@@ -55,7 +55,7 @@ export const agentCosts = {
   // Server-authored availability messages
 
   'agentCosts.availability.message.noImports': 'Neither agent cost import is switched on. Ask whoever installed the product to tick "Copilot Studio credits" and/or "Azure costs" in the installer.',
-  'agentCosts.availability.message.copilotImportFailing': 'The Copilot Studio credit import is switched on but is failing. Check the app registration holds a Power Platform role at tenant scope - but if it already does, this is most likely Microsoft refusing application-only access to the licensing API rather than anything left undone here, in which case the import cannot currently succeed and is best switched off. The error was: {error}',
+  'agentCosts.availability.message.copilotImportFailing': 'The Copilot Studio credit import is switched on but is failing. Check the recorded error below. A 401 or 403 alone does not prove a missing role or an application-only restriction. Verify the runtime app\'s identity and tenant-scoped Power Platform reader assignment. If already verified, investigate access to the failing licensing endpoint rather than assigning the role again. The error was: {error}',
   'agentCosts.availability.message.copilotNoUsage': 'The Copilot Studio credit import ran successfully but found no billed agent usage. That is the expected result for a tenant with no Copilot Studio agents, or none that have consumed credits yet.',
   'agentCosts.availability.message.copilotNotStoredYet': 'The Copilot Studio credit import is switched on but has not stored anything yet. It runs once a day, so allow a cycle before expecting figures.',
   'agentCosts.availability.message.azureImportFailing': 'The Azure cost import is switched on but is failing: {error}',

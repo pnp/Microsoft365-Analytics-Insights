@@ -115,18 +115,10 @@ namespace Common.Entities.AgentCosts
             {
                 if (!string.IsNullOrEmpty(result.CopilotStudioCreditsLastError))
                 {
-                    // Deliberately does NOT lead with "assign a Power Platform role". That advice sends an
-                    // admin who has ALREADY assigned it round in circles, which is the common case once the
-                    // obvious setup step has been done: the licensing entitlement routes have been observed
-                    // returning 403 to an application-only token whose service principal already holds
-                    // Power Platform Reader at tenant scope, and returning 403 for the per-agent route even
-                    // to a signed-in Global Administrator. Both possibilities are named so the reader can
-                    // tell "not finished setting up" apart from "cannot work on this tenant".
                     result.Messages.Add("The Copilot Studio credit import is switched on but is failing. Check the "
-                        + "app registration holds a Power Platform role at tenant scope - but if it already does, "
-                        + "this is most likely Microsoft refusing application-only access to the licensing API "
-                        + "rather than anything left undone here, in which case the import cannot currently "
-                        + "succeed and is best switched off. The error was: "
+                        + "recorded error below. A 401 or 403 alone does not prove a missing role or an application-only restriction. "
+                        + "Verify the runtime app's identity and tenant-scoped Power Platform reader assignment. "
+                        + "If already verified, investigate access to the failing licensing endpoint rather than assigning the role again. The error was: "
                         + result.CopilotStudioCreditsLastError);
                 }
                 else if (result.CopilotStudioCreditsHasRunCleanly)
