@@ -10,7 +10,7 @@ describe('ImportFailureBar', () => {
   it.each([
     ['agentCosts.import.reconnectNeeded', 'Vuelva a conectar'],
     ['agentCosts.import.tokenUnavailable', 'token delegado'],
-    ['agentCosts.import.userAccessDenied', 'lectura delegada'],
+    ['agentCosts.import.connectionRequired', 'ningún administrador conectado'],
   ])(
     'translates the stable delegated connection diagnosis %s into Spanish',
     async (error, translatedText) => {

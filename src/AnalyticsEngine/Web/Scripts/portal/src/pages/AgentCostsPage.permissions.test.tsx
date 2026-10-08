@@ -34,6 +34,7 @@ const availability: AgentCostAvailability = {
   azureCostsEnabled: false,
   hasCopilotStudioCreditData: true,
   hasPerUserCreditData: true,
+  copilotStudioConnectionRequired: false,
   hasAzureCostData: false,
   copilotStudioCreditsHasRunCleanly: true,
   azureCostsHaveRunCleanly: true,

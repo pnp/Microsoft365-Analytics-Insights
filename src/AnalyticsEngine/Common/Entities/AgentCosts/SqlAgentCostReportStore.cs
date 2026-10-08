@@ -66,18 +66,27 @@ namespace Common.Entities.AgentCosts
                 if (creditLog != null)
                 {
                     result.CopilotStudioCreditsLastImportUtc = creditLog.ImportedUtc;
-                    result.CopilotStudioCreditsLastError = creditLog.Error;
-                    result.CopilotStudioCreditsHasRunCleanly = string.IsNullOrEmpty(creditLog.Error);
+
+                    // "No delegated connection" is a state to act on, not a failure.
+                    if (creditLog.Error == AgentCostImportNames.ConnectionRequired)
+                    {
+                        result.CopilotStudioConnectionRequired = true;
+                    }
+                    else
+                    {
+                        result.CopilotStudioCreditsLastError = creditLog.Error;
+                        result.CopilotStudioCreditsHasRunCleanly = string.IsNullOrEmpty(creditLog.Error);
+                    }
                 }
 
                 // The per-user and capacity imports are separate runs with their own failure modes: the
-                // /users route can 403 while the per-agent read succeeds. Reading only the per-agent log
-                // would leave that invisible and let stale user rows look current.
+                // per-user read can fail while the per-agent derivation succeeds, or the reverse. Reading only
+                // one log would leave that invisible and let stale rows look current.
                 var userLog = await LatestLogAsync(db, AgentCostImportNames.CopilotStudioUserCredits);
                 if (userLog != null)
                 {
                     result.PerUserCreditsLastImportUtc = userLog.ImportedUtc;
-                    result.PerUserCreditsLastError = userLog.Error;
+                    result.PerUserCreditsLastError = userLog.Error == AgentCostImportNames.ConnectionRequired ? null : userLog.Error;
                 }
 
                 var capacityLog = await LatestLogAsync(db, AgentCostImportNames.CopilotStudioCapacity);
@@ -111,14 +120,19 @@ namespace Common.Entities.AgentCosts
                     + "\"Copilot Studio credits\" and/or \"Azure costs\" in the installer.");
             }
 
-            if (result.CopilotStudioCreditsEnabled && !result.HasCopilotStudioCreditData)
+            if (result.CopilotStudioCreditsEnabled && result.CopilotStudioConnectionRequired)
+            {
+                result.Messages.Add("Copilot Studio consumption is not being imported because no administrator is connected. "
+                    + "Microsoft only lets a signed-in administrator read it. Connect one in Administration > "
+                    + "Copilot Studio billing connection. The capacity figures are unaffected.");
+            }
+            else if (result.CopilotStudioCreditsEnabled && !result.HasCopilotStudioCreditData)
             {
                 if (!string.IsNullOrEmpty(result.CopilotStudioCreditsLastError))
                 {
                     result.Messages.Add("The Copilot Studio credit import is switched on but is failing. Check the "
-                        + "recorded error below. A 401 or 403 alone does not prove a missing role or an application-only restriction. "
-                        + "Verify the runtime app's identity and tenant-scoped Power Platform reader assignment. "
-                        + "If already verified, investigate access to the failing licensing endpoint rather than assigning the role again. The error was: "
+                        + "recorded error below. A 401 or 403 alone does not prove a missing role. If the "
+                        + "administrator connection is refused, reconnect it. The error was: "
                         + result.CopilotStudioCreditsLastError);
                 }
                 else if (result.CopilotStudioCreditsHasRunCleanly)
@@ -174,11 +188,11 @@ namespace Common.Entities.AgentCosts
             }
 
             // The most important caveat on this page, and the reason the two credit views do not add up.
-            result.Messages.Add("Copilot Studio spend is reported by Microsoft two ways: per agent, and per person. "
-                + "They come from different Microsoft endpoints rather than one being a breakdown of the other, so "
-                + "their totals will not always match exactly. The per-agent user counts are how many different people "
-                + "used an agent - those cannot be added together, because the same person appears under every agent "
-                + "they used.");
+            result.Messages.Add("Copilot Studio per-agent figures are built from each person's own consumption, which is "
+                + "what Microsoft's permitted APIs expose, so they cover only consumption Microsoft attributes to a "
+                + "person. The tenant's total consumed credits on the capacity view is the authoritative total. The "
+                + "per-agent user counts are how many different people used an agent - those cannot be added together, "
+                + "because the same person appears under every agent they used.");
 
             result.Messages.Add("Azure costs cannot be attributed to individual people. Azure bills by resource, and no "
                 + "Azure billing report - including the full cost export - records who caused a charge.");

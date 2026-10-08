@@ -228,6 +228,47 @@ namespace Tests.UnitTests
             Assert.IsFalse(AgentCostConsent.IsBound(properties, user));
         }
 
+        [DataTestMethod]
+        [DataRow(HttpStatusCode.OK, null)]
+        [DataRow(HttpStatusCode.Unauthorized, "accessDenied")]
+        [DataRow(HttpStatusCode.Forbidden, "accessDenied")]
+        [DataRow(HttpStatusCode.InternalServerError, "failed")]
+        public async Task ConsentVerification_ProbesThePerUserRouteNotTheTenantWideOne(HttpStatusCode status, string expectedCode)
+        {
+            var probe = new ProbeHandler(status);
+            var original = AgentCostConsent.VerificationClient;
+            AgentCostConsent.VerificationClient = new HttpClient(probe);
+            try
+            {
+                string code = null;
+                try { await AgentCostConsent.VerifyAccessAsync("synthetic-token"); }
+                catch (Common.Entities.State.AgentCostConnectionException ex) { code = ex.Message; }
+
+                Assert.AreEqual(expectedCode, code == null ? null : code.Replace("Copilot Studio billing connection: ", ""));
+                var uri = new Uri(probe.Requests.Single());
+                StringAssert.EndsWith(uri.AbsolutePath, "/MCSMessages/users");
+                StringAssert.Contains(uri.Query, "pageSize=1");
+                Assert.IsFalse(uri.AbsolutePath.EndsWith("/resources"), "The tenant-wide per-agent route is refused to every client.");
+            }
+            finally
+            {
+                AgentCostConsent.VerificationClient = original;
+            }
+        }
+
+        private sealed class ProbeHandler : HttpMessageHandler
+        {
+            private readonly HttpStatusCode _status;
+            public ProbeHandler(HttpStatusCode status) { _status = status; }
+            public List<string> Requests { get; } = new List<string>();
+
+            protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+            {
+                Requests.Add(request.RequestUri.ToString());
+                return Task.FromResult(new HttpResponseMessage(_status));
+            }
+        }
+
         [TestMethod]
         public async Task ConnectionApi_EnforcesRolesPerRequestAndNeverReturnsTokens()
         {

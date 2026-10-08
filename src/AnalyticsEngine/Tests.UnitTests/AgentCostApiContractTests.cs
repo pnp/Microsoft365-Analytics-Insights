@@ -57,13 +57,31 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public void Availability_ConnectionRequired_IsAnExplanationNotAFailure()
+        {
+            var availability = new AgentCostAvailability
+            {
+                CopilotStudioCreditsEnabled = true,
+                CopilotStudioConnectionRequired = true,
+            };
+
+            SqlAgentCostReportStore.AddMessages(availability);
+
+            Assert.IsTrue(availability.Messages.Any(m => m.Contains("no administrator is connected")));
+            Assert.IsFalse(availability.Messages.Any(m => m.Contains("is failing")),
+                "Nothing failed: no connection means no consumption call was made.");
+            Assert.IsTrue(availability.Messages.Any(m => m.Contains("attributes to a person")),
+                "The user-attribution caveat must always be shown.");
+        }
+
+        [TestMethod]
         public void Availability_SerialisesTheFieldNamesThePortalReads()
         {
             AssertKeys(new AgentCostAvailability(),
                 "copilotStudioCreditsEnabled", "azureCostsEnabled",
                 "hasCopilotStudioCreditData", "hasAzureCostData",
                 "copilotStudioCreditsHasRunCleanly", "azureCostsHaveRunCleanly",
-                "hasPerUserCreditData",
+                "hasPerUserCreditData", "copilotStudioConnectionRequired",
                 "copilotStudioCreditsLastImportUtc", "azureCostsLastImportUtc",
                 "copilotStudioCreditsLastError", "azureCostsLastError",
                 "perUserCreditsLastImportUtc", "perUserCreditsLastError", "capacityLastError",

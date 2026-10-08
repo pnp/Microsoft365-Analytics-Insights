@@ -50,19 +50,34 @@ the two cannot drift — adding a page means adding one entry to `ROUTES`.
 
 ## Copilot Studio billing administrator connection
 
-The optional credit import can use a delegated administrator when the Power Platform consumption routes
-refuse the runtime application's app-only access. Azure Cost Management stays app-only, and the
-Copilot Studio capacity read keeps its separate app-only source. With no connection, existing app-only
-consumption behavior remains; a failed connected identity never silently falls back or reports success.
+Copilot Studio credit **consumption** is read with a delegated administrator, because Microsoft's Power
+Platform licensing API refuses the runtime application's app-only identity on every consumption route.
+Only the tenant **capacity** read (and Azure Cost Management) stays app-only. With no connection the
+importer still imports capacity, makes no consumption calls and records a non-error
+"connection required" state (`agentCosts.import.connectionRequired`) instead of a 403 every cycle.
+A failed connected identity never silently falls back or reports success.
 
-**Known limitation:** Microsoft reports that resource-consumption endpoints have been restricted to
-internal clients such as PPAC, including the public API and Admins V2 actions
-([Power CAT maintainer clarification](https://github.com/microsoft/Power-CAT-Copilot-Studio-Kit/issues/855)).
-PPAC's delegated token succeeding does not prove that a customer-owned client's delegated token can
-read the same route. Capacity and per-user access can also differ from per-agent access. The connection
-requires the per-agent probe to succeed, so valid consent/sign-in may still end in `accessDenied`.
-Do not broaden roles to bypass this restriction. This feature has no supported replacement API or
-manual-export ingestion; PPAC manual export remains the operator fallback for per-agent figures.
+**How per-agent figures are built.** Microsoft restricted the tenant-wide per-agent route
+(`/MCSMessages/resources`) to its own clients
+([Power CAT maintainer clarification](https://github.com/microsoft/Power-CAT-Copilot-Studio-Kit/issues/855)),
+so the importer no longer calls it. Per day it reads `/MCSMessages/users` once, then
+`/MCSMessages/users/{userId}/resources` for every person with consumption, and sums those rows per
+agent/environment/feature. The per-agent user count is the number of distinct contributing people.
+Per-agent figures are tenant-wide (people outside the user-group filter are included, nothing identifying
+is stored); per-person rows still honour the filter.
+
+**Caveat:** per-agent figures cover only consumption Microsoft attributes to a person. Anything it does not
+attribute to a user is not visible through any permitted API; the capacity tile's tenant "consumed" total
+remains the authoritative total. Microsoft's last-refreshed stamp is not available, and
+`copilot_studio_credit_daily.last_refreshed_utc` is no longer populated.
+
+**API volume.** Calls per cycle are about *window days (default 7) × daily active Copilot Studio users*,
+plus a few paging calls (10,000 daily active users is roughly 70,000 calls), run with bounded
+concurrency (6) and the existing throttle/retry handling. The cadence is daily.
+
+Route access, verified live: capacity, `/users`, `/users/{id}/resources` and
+`/resources/{id}/users` succeed delegated; only capacity succeeds app-only; `/MCSMessages/resources` and
+the environment route are refused for both. The connection is verified by probing `/users`.
 
 Setup for a build containing this page:
 
@@ -104,7 +119,7 @@ Setup failures:
 | `AADSTS50011` / Redirect URI mismatch | Add the exact callback shown in the error to **Authentication → Web**, including the instance's scheme, host, local port and path. A hosted callback does not cover localhost. If a hosted instance sends localhost, correct its `WebAppURL` instead. |
 | Administrator consent required | Grant consent using an authorized Entra administrator, then start a fresh connection attempt. |
 | Account mismatch / billing access refused | Connect the same account signed into the portal; it needs Administration and actual Power Platform billing read access. |
-| Consumption probe denied despite correct consent/account | The custom client may be blocked by Microsoft's per-agent endpoint restriction even when PPAC, capacity or per-user reads succeed. Connection is not published. Escalate for a supported customer API rather than adding unrelated permissions. |
+| Consumption probe denied despite correct consent/account | The per-user read (`/users`) returned 401/403, so the connection is not published. Check the delegated permissions' consent, that the account has Power Platform billing read access and Conditional Access; do not add unrelated roles. |
 
 After fixing registration, retry Connect, refresh status and verify the next credit import succeeds.
 Registration changes alone do not require a deployment or SQL migration; successful sign-in alone

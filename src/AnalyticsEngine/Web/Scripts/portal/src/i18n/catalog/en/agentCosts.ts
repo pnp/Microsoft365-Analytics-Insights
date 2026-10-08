@@ -53,7 +53,7 @@ export const agentCosts = {
   'agentCosts.warning.azureCostImportFailing': 'Azure cost import is failing.',
   'agentCosts.import.reconnectNeeded': 'Reconnect the administrator in Administration > Copilot Studio billing connection after checking consent, account access and Conditional Access. Azure costs and the app-only capacity read are unaffected.',
   'agentCosts.import.tokenUnavailable': 'Delegated token acquisition is temporarily unavailable. The next due import will retry; the billing connection is retained.',
-  'agentCosts.import.userAccessDenied': 'The delegated per-user credit read was refused. Aggregate credits and app-only capacity remain independent. Check the administrator’s access and API consent; reconnect if these have changed.',
+  'agentCosts.import.connectionRequired': 'Copilot Studio consumption is not being imported because no administrator is connected. Connect one in Administration > Copilot Studio billing connection; capacity figures are unaffected.',
 
   // Server-authored availability messages
 
@@ -66,7 +66,8 @@ export const agentCosts = {
   'agentCosts.availability.message.azureNotStoredYet': 'The Azure cost import is switched on but has not stored anything yet. Check that a scope is set and allow a cycle before expecting figures.',
   'agentCosts.availability.message.perUserNotUpdating': 'The per-person Copilot Studio figures are not updating: {error} The per-agent figures above are unaffected, but anything shown per person may be out of date.',
   'agentCosts.availability.message.capacityNotUpdating': 'The Copilot Credits capacity snapshot is not updating: {error} Any remaining-capacity figure shown may be out of date.',
-  'agentCosts.availability.message.creditEndpointMismatch': 'Copilot Studio spend is reported by Microsoft two ways: per agent, and per person. They come from different Microsoft endpoints rather than one being a breakdown of the other, so their totals will not always match exactly. The per-agent user counts are how many different people used an agent - those cannot be added together, because the same person appears under every agent they used.',
+  'agentCosts.availability.message.perAgentFromPerUser': 'Copilot Studio per-agent figures are built from each person’s own consumption, which is what Microsoft’s permitted APIs expose, so they cover only consumption Microsoft attributes to a person. The tenant’s total consumed credits on the capacity tile is the authoritative total. The per-agent user counts are how many different people used an agent - those cannot be added together, because the same person appears under every agent they used.',
+  'agentCosts.availability.message.connectionRequired': 'Copilot Studio consumption is not being imported because no administrator is connected. Microsoft only lets a signed-in administrator read it. Connect one in Administration > Copilot Studio billing connection. Capacity figures are unaffected.',
   'agentCosts.availability.message.azureNoPeople': 'Azure costs cannot be attributed to individual people. Azure bills by resource, and no Azure billing report - including the full cost export - records who caused a charge.',
   'agentCosts.availability.message.azureEstimates': 'Azure costs are estimates until Microsoft closes the billing period, which can take a few days after month end. Figures marked as estimates can still change.',
 
@@ -158,7 +159,7 @@ export const agentCosts = {
   'agentCosts.users.descriptionStrong': 'The agent, feature, model, tool and channel filters do not apply here',
   'agentCosts.users.empty.importOff': 'The Copilot Studio credit import is switched off.',
   'agentCosts.users.empty.noUsage': 'No per-person credit usage in this period.',
-  'agentCosts.users.empty.noFigures': 'No per-person figures yet. Microsoft added these to the Power Platform licensing API in July 2026, so a tenant whose API does not offer them will only ever show the per-agent view above.',
+  'agentCosts.users.empty.noFigures': 'No per-person figures yet. They appear after the first successful import with an administrator connected.',
   'agentCosts.users.unresolvedUser': 'Unresolved user',
   'agentCosts.users.shareCaption': 'Shares are of the {credits} credits shown here, which is the top {people} people - not necessarily every person who used an agent.',
 

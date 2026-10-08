@@ -55,7 +55,7 @@ const agentCosts: Record<keyof typeof en, string> = {
   'agentCosts.warning.azureCostImportFailing': 'La importación de costes de Azure está fallando.',
   'agentCosts.import.reconnectNeeded': 'Vuelva a conectar al administrador en Administración > Conexión de facturación de Copilot Studio después de comprobar el consentimiento, el acceso de la cuenta y el acceso condicional. Los costes de Azure y la lectura de capacidad con identidad de aplicación no se ven afectados.',
   'agentCosts.import.tokenUnavailable': 'La obtención del token delegado no está disponible temporalmente. La próxima importación programada lo reintentará; se conserva la conexión de facturación.',
-  'agentCosts.import.userAccessDenied': 'Se ha rechazado la lectura delegada de créditos por usuario. Los créditos agregados y la capacidad con identidad de aplicación siguen siendo independientes. Compruebe el acceso del administrador y el consentimiento de la API; vuelva a conectar si han cambiado.',
+  'agentCosts.import.connectionRequired': 'El consumo de Copilot Studio no se está importando porque no hay ningún administrador conectado. Conecte uno en Administración > Conexión de facturación de Copilot Studio; las cifras de capacidad no se ven afectadas.',
 
 
   // Server-authored availability messages
@@ -68,7 +68,8 @@ const agentCosts: Record<keyof typeof en, string> = {
   'agentCosts.availability.message.azureNotStoredYet': 'La importación de costes de Azure está activada, pero aún no ha almacenado nada. Compruebe que se ha establecido un ámbito y espere un ciclo antes de esperar cifras.',
   'agentCosts.availability.message.perUserNotUpdating': 'Las cifras de Copilot Studio por persona no se están actualizando: {error} Las cifras por agente anteriores no se ven afectadas, pero cualquier dato mostrado por persona puede estar obsoleto.',
   'agentCosts.availability.message.capacityNotUpdating': 'La instantánea de capacidad de Copilot Credits no se está actualizando: {error} Cualquier cifra de capacidad restante mostrada puede estar obsoleta.',
-  'agentCosts.availability.message.creditEndpointMismatch': 'Microsoft informa el gasto de Copilot Studio de dos formas: por agente y por persona. Proceden de puntos de conexión de Microsoft diferentes, en lugar de que una sea un desglose de la otra, por lo que sus totales no siempre coincidirán exactamente. Los recuentos de usuarios por agente indican cuántas personas distintas usaron un agente; no se pueden sumar, porque la misma persona aparece bajo cada agente que utilizó.',
+  'agentCosts.availability.message.perAgentFromPerUser': 'Las cifras por agente de Copilot Studio se construyen a partir del consumo de cada persona, que es lo que exponen las API permitidas de Microsoft, por lo que solo cubren el consumo que Microsoft atribuye a una persona. El total de créditos consumidos del icono de capacidad es el total autorizado. Los recuentos de usuarios por agente indican cuántas personas distintas usaron un agente; no se pueden sumar, porque la misma persona aparece bajo cada agente que utilizó.',
+  'agentCosts.availability.message.connectionRequired': 'El consumo de Copilot Studio no se está importando porque no hay ningún administrador conectado. Microsoft solo permite leerlo a un administrador que haya iniciado sesión. Conecte uno en Administración > Conexión de facturación de Copilot Studio. Las cifras de capacidad no se ven afectadas.',
   'agentCosts.availability.message.azureNoPeople': 'Los costes de Azure no se pueden atribuir a personas individuales. Azure factura por recurso y ningún informe de facturación de Azure, incluida la exportación completa de costes, registra quién causó un cargo.',
   'agentCosts.availability.message.azureEstimates': 'Los costes de Azure son estimaciones hasta que Microsoft cierra el periodo de facturación, lo que puede tardar unos días después del fin de mes. Las cifras marcadas como estimaciones todavía pueden cambiar.',
 
@@ -160,7 +161,7 @@ const agentCosts: Record<keyof typeof en, string> = {
   'agentCosts.users.descriptionStrong': 'Los filtros de agente, característica, modelo, herramienta y canal no se aplican aquí',
   'agentCosts.users.empty.importOff': 'La importación de créditos de Copilot Studio está desactivada.',
   'agentCosts.users.empty.noUsage': 'No hay consumo de créditos por persona en este periodo.',
-  'agentCosts.users.empty.noFigures': 'Aún no hay cifras por persona. Microsoft las agregó a la API de licencias de Power Platform en julio de 2026, por lo que un inquilino cuya API no las ofrezca solo mostrará la vista por agente anterior.',
+  'agentCosts.users.empty.noFigures': 'Aún no hay cifras por persona. Aparecen tras la primera importación correcta con un administrador conectado.',
   'agentCosts.users.unresolvedUser': 'Usuario sin resolver',
   'agentCosts.users.shareCaption': 'Los porcentajes son sobre los {credits} créditos que se muestran aquí, que corresponden a las {people} personas principales; no necesariamente a todas las personas que usaron un agente.',
 

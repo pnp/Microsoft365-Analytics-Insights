@@ -158,7 +158,7 @@ export function importFailureWarning(t: TFunction, kind: 'copilotStudio' | 'azur
 export function importFailureDetail(t: TFunction, error: string): string {
   if (error === 'agentCosts.import.reconnectNeeded') return t('agentCosts.import.reconnectNeeded');
   if (error === 'agentCosts.import.tokenUnavailable') return t('agentCosts.import.tokenUnavailable');
-  if (error === 'agentCosts.import.userAccessDenied') return t('agentCosts.import.userAccessDenied');
+  if (error === 'agentCosts.import.connectionRequired') return t('agentCosts.import.connectionRequired');
   return error;
 }
 
@@ -202,7 +202,9 @@ function availabilityMessages(availability: AgentCostAvailability, t: TFunction)
     messages.push(t('agentCosts.availability.message.noImports'));
   }
 
-  if (availability.copilotStudioCreditsEnabled && !availability.hasCopilotStudioCreditData) {
+  if (availability.copilotStudioCreditsEnabled && availability.copilotStudioConnectionRequired) {
+    messages.push(t('agentCosts.availability.message.connectionRequired'));
+  } else if (availability.copilotStudioCreditsEnabled && !availability.hasCopilotStudioCreditData) {
     if (availability.copilotStudioCreditsLastError) {
       messages.push(t('agentCosts.availability.message.copilotImportFailing', { error: importFailureDetail(t, availability.copilotStudioCreditsLastError) }));
     } else if (availability.copilotStudioCreditsHasRunCleanly) {
@@ -234,7 +236,7 @@ function availabilityMessages(availability: AgentCostAvailability, t: TFunction)
     messages.push(t('agentCosts.availability.message.capacityNotUpdating', { error: availability.capacityLastError }));
   }
 
-  messages.push(t('agentCosts.availability.message.creditEndpointMismatch'));
+  messages.push(t('agentCosts.availability.message.perAgentFromPerUser'));
   messages.push(t('agentCosts.availability.message.azureNoPeople'));
   messages.push(t('agentCosts.availability.message.azureEstimates'));
   return messages;

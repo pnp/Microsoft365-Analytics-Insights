@@ -25,7 +25,7 @@ namespace Web.AnalyticsWeb
         public const string TenantProperty = "billing.tid";
         public const string ExpiresProperty = "billing.expires";
         private const string TicketPurpose = "AgentCostConnectIntent.v1";
-        private static readonly HttpClient VerificationClient = new HttpClient();
+        internal static HttpClient VerificationClient = new HttpClient();
 
         public static string ObjectId(ClaimsPrincipal user) => user?.FindFirst("oid")?.Value
             ?? user?.FindFirst("http://schemas.microsoft.com/identity/claims/objectidentifier")?.Value;
@@ -133,11 +133,14 @@ namespace Web.AnalyticsWeb
                 VerifyAccessAsync);
         }
 
-        private static async Task VerifyAccessAsync(string token)
+        // Replaceable so tests can observe the probe without a network call.
+        internal static async Task VerifyAccessAsync(string token)
         {
-            var date = DateTime.UtcNow.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture);
+            // The per-user route: it is the first read every import makes, and the one the delegated token is
+            // known to be accepted on (the tenant-wide per-agent route is refused to every client but Microsoft's).
+            var date = DateTime.UtcNow.AddDays(-1).ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture);
             using (var request = new HttpRequestMessage(HttpMethod.Get,
-                "https://api.powerplatform.com/licensing/entitlements/MCSMessages/resources"
+                "https://api.powerplatform.com/licensing/entitlements/MCSMessages/users"
                 + "?api-version=2024-10-01&pageSize=1&fromDate=" + date + "&toDate=" + date))
             {
                 request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
