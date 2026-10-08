@@ -25,7 +25,11 @@ namespace Common.Entities.LeadershipCohort
         [JsonProperty("status")]
         public string Status { get; set; }
 
-        /// <summary>For <see cref="LeadershipComparisonStatuses.Unavailable"/>: one of <see cref="LeadershipComparisonReasons"/>.</summary>
+        /// <summary>
+        /// For <see cref="LeadershipComparisonStatuses.Unavailable"/>, and for <see cref="LeadershipComparisonStatuses.Suppressed"/>
+        /// when the cause is the complement (<see cref="LeadershipComparisonReasons.ComplementTooSmall"/>): one of
+        /// <see cref="LeadershipComparisonReasons"/>. Null for a cohort below the minimum.
+        /// </summary>
         [JsonProperty("reason")]
         public string Reason { get; set; }
 
@@ -100,7 +104,10 @@ namespace Common.Entities.LeadershipCohort
         /// <summary>Figures are present.</summary>
         public const string Ok = "ok";
 
-        /// <summary>Fewer licensed leaders than the minimum: no figures, deliberately not even the count.</summary>
+        /// <summary>
+        /// No figures, deliberately not even the count: fewer licensed leaders than the minimum (no reason), or too few
+        /// licensed people outside the cohort (<see cref="LeadershipComparisonReasons.ComplementTooSmall"/>).
+        /// </summary>
         public const string Suppressed = "suppressed";
 
         /// <summary>The group was configured or changed and its membership has not been read yet.</summary>
@@ -130,6 +137,13 @@ namespace Common.Entities.LeadershipCohort
 
         /// <summary>A refresh was being written while the members were read. Clears on the next request.</summary>
         public const string MembershipChanging = "membershipChanging";
+
+        /// <summary>
+        /// With <see cref="LeadershipComparisonStatuses.Suppressed"/>: between one and minimum-minus-one licensed people are
+        /// NOT in the cohort, so subtracting the leaders' counts from the tenant's would describe that handful. See
+        /// <see cref="LeadershipAdoptionCalculator.Compare"/>.
+        /// </summary>
+        public const string ComplementTooSmall = "complementTooSmall";
 
         public static string ForRefreshStatus(string status)
         {
@@ -162,6 +176,17 @@ namespace Common.Entities.LeadershipCohort
         /// <summary>
         /// Compares <paramref name="leaders"/> (SQL user ids) with the analysis's whole population. O(licensed users).
         /// </summary>
+        /// <remarks>
+        /// <para><b>Both sides of the split must clear the minimum.</b> The tenant's figures are published next to the
+        /// leaders', over the same denominator (every scored licensed user, <see cref="CopilotAdoptionSummary.ScoredUsers"/>),
+        /// and the tenant's active and habitual counts are on the same report. So tenant minus leaders describes everyone
+        /// outside the cohort. When that complement is between 1 and minimum-minus-one people - a leadership group that is
+        /// almost every licensed user, typical of a small pilot - the subtraction would single them out exactly as a small
+        /// cohort would, so the comparison is suppressed with <see cref="LeadershipComparisonReasons.ComplementTooSmall"/>,
+        /// for every reader including See PII holders.</para>
+        /// <para>A complement of zero (every licensed user is a leader) exposes nobody beyond the cohort itself, which has
+        /// already cleared the minimum, so it is compared - the gaps are simply zero.</para>
+        /// </remarks>
         public static LeadershipAdoptionComparison Compare(CopilotAdoptionAnalysis analysis, IReadOnlyCollection<int> leaders, DateTime? membershipRefreshedUtc)
         {
             if (analysis == null) throw new ArgumentNullException(nameof(analysis));
@@ -169,11 +194,12 @@ namespace Common.Entities.LeadershipCohort
             var minimum = EffectiveMinimum(summary.Options);
             var members = leaders as ISet<int> ?? new HashSet<int>(leaders ?? Array.Empty<int>());
 
+            var licensedUsers = analysis.LicensedUsers ?? new List<LicensedUserAdoptionRow>();
             var count = 0;
             var active = 0;
             var habitual = 0;
             var scoreTotal = 0d;
-            foreach (var user in analysis.LicensedUsers ?? new List<LicensedUserAdoptionRow>())
+            foreach (var user in licensedUsers)
             {
                 if (user == null || !members.Contains(user.UserId)) continue;
                 count++;
@@ -188,6 +214,17 @@ namespace Common.Entities.LeadershipCohort
                 suppressed.MinimumCohort = minimum;
                 suppressed.MembershipRefreshedUtc = membershipRefreshedUtc;
                 return suppressed;
+            }
+
+            // The tenant's figures are over every scored row (ScoredUsers = LicensedUsers.Count), so this is the
+            // complement in the same denominator.
+            var complement = licensedUsers.Count - count;
+            if (complement > 0 && complement < minimum)
+            {
+                var withheld = LeadershipAdoptionComparison.WithStatus(LeadershipComparisonStatuses.Suppressed, LeadershipComparisonReasons.ComplementTooSmall);
+                withheld.MinimumCohort = minimum;
+                withheld.MembershipRefreshedUtc = membershipRefreshedUtc;
+                return withheld;
             }
 
             var leaderAdoption = CopilotAdoptionScoring.Percentage(active, count);

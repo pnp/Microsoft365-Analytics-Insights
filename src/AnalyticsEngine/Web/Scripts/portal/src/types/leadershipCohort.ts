@@ -22,7 +22,8 @@ export type LeadershipComparisonReason =
   | 'tooLarge'
   | 'refreshFailed'
   | 'stateUnavailable'
-  | 'membershipChanging';
+  | 'membershipChanging'
+  | 'complementTooSmall';
 
 /** Aggregates only: the report never receives the group's name, its id or any member. */
 export interface LeadershipAdoptionComparison {

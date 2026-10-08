@@ -35,6 +35,86 @@ namespace Tests.UnitTests
             Assert.AreEqual(10, ten.LicensedLeaders);
         }
 
+        /// <summary>
+        /// The tenant's figures sit beside the leaders' over the same denominator, so tenant minus leaders describes
+        /// everyone outside the cohort. A complement of 1..9 is suppressed like a cohort of 1..9; zero exposes nobody.
+        /// </summary>
+        [DataTestMethod]
+        [DataRow(0, LeadershipComparisonStatuses.Ok, null)]
+        [DataRow(1, LeadershipComparisonStatuses.Suppressed, LeadershipComparisonReasons.ComplementTooSmall)]
+        [DataRow(9, LeadershipComparisonStatuses.Suppressed, LeadershipComparisonReasons.ComplementTooSmall)]
+        [DataRow(10, LeadershipComparisonStatuses.Ok, null)]
+        public void Compare_ComplementOutsideTheCohortMustAlsoClearTheMinimum(int complement, string status, string reason)
+        {
+            const int leaders = 30;
+            var analysis = Analysis(leaders + complement);
+            // Members beyond the licensed population (unlicensed leaders) must not hide a small complement.
+            var members = Enumerable.Range(1, leaders).Concat(Enumerable.Range(500, 25)).ToList();
+
+            var comparison = LeadershipAdoptionCalculator.Compare(analysis, members, Now);
+
+            Assert.AreEqual(status, comparison.Status, "complement " + complement);
+            Assert.AreEqual(reason, comparison.Reason, "complement " + complement);
+            Assert.AreEqual(10, comparison.MinimumCohort);
+            if (status == LeadershipComparisonStatuses.Ok)
+            {
+                Assert.AreEqual(leaders, comparison.LicensedLeaders);
+                if (complement == 0)
+                {
+                    Assert.AreEqual(comparison.TenantAdoptionRatePct, comparison.LeaderAdoptionRatePct, "Every licensed user is a leader.");
+                    Assert.AreEqual(0d, comparison.AdoptionGapPts);
+                }
+                return;
+            }
+
+            AssertWithholdsEveryFigure(comparison);
+        }
+
+        [TestMethod]
+        public void Compare_ComplementFollowsAStricterSegmentMinimum()
+        {
+            var analysis = Analysis(40);
+            analysis.Summary.Options = new CopilotAdoptionOptions { MinSeatsPerSegment = 15 };
+            // 26 leaders, 14 outside: the cohort clears 15 but the complement does not.
+            var comparison = LeadershipAdoptionCalculator.Compare(analysis, Enumerable.Range(1, 26).ToList(), Now);
+            Assert.AreEqual(LeadershipComparisonStatuses.Suppressed, comparison.Status);
+            Assert.AreEqual(LeadershipComparisonReasons.ComplementTooSmall, comparison.Reason);
+            Assert.AreEqual(15, comparison.MinimumCohort);
+            Assert.AreEqual(LeadershipComparisonStatuses.Ok, LeadershipAdoptionCalculator.Compare(analysis, Enumerable.Range(1, 25).ToList(), Now).Status);
+        }
+
+        [TestMethod]
+        public void Compare_WithheldComplementSerialisesNoCountOrMembership()
+        {
+            var comparison = LeadershipAdoptionCalculator.Compare(Analysis(35), Enumerable.Range(1, 30).ToList(), Now);
+            var json = Newtonsoft.Json.Linq.JObject.FromObject(comparison);
+            foreach (var property in json.Properties())
+            {
+                if (property.Name == "status" || property.Name == "reason" || property.Name == "minimumCohort"
+                    || property.Name == "membershipRefreshedUtc" || property.Name == "figuresIncomplete") continue;
+                Assert.AreEqual(Newtonsoft.Json.Linq.JTokenType.Null, property.Value.Type, property.Name + " must be withheld.");
+            }
+            var text = json.ToString(Formatting.None);
+            Assert.IsFalse(text.Contains("30") || text.Contains("35") || text.Contains("contoso"), text);
+            Assert.IsFalse(comparison.FiguresIncomplete);
+        }
+
+        private static void AssertWithholdsEveryFigure(LeadershipAdoptionComparison comparison)
+        {
+            Assert.IsNull(comparison.LicensedLeaders);
+            Assert.IsNull(comparison.ActiveLeaders);
+            Assert.IsNull(comparison.HabitualLeaders);
+            Assert.IsNull(comparison.LeaderAdoptionRatePct);
+            Assert.IsNull(comparison.LeaderHabitRatePct);
+            Assert.IsNull(comparison.LeaderAverageScore);
+            Assert.IsNull(comparison.TenantAdoptionRatePct);
+            Assert.IsNull(comparison.TenantHabitRatePct);
+            Assert.IsNull(comparison.TenantAverageScore);
+            Assert.IsNull(comparison.AdoptionGapPts);
+            Assert.IsNull(comparison.HabitGapPts);
+            Assert.IsNull(comparison.ScoreGap);
+        }
+
         [TestMethod]
         public void Compare_LeadersWithoutALicenceDoNotCountTowardsTheMinimum()
         {

@@ -70,6 +70,18 @@ describe('LeadershipComparisonCard', () => {
     expect(screen.queryByRole('table')).not.toBeInTheDocument();
   });
 
+  it('withholds every figure when too few licensed people are outside the group', () => {
+    renderWithProvider(<LeadershipComparisonCard comparison={{ ...empty, status: 'suppressed', reason: 'complementTooSmall' }} />);
+    expect(screen.getByText('Hidden: fewer than 10 licensed people are outside the leadership group, so comparing it with the whole tenant would single them out.')).toBeInTheDocument();
+    expect(screen.queryByRole('table')).not.toBeInTheDocument();
+    expect(screen.queryByText(/members of the leadership group hold/)).not.toBeInTheDocument();
+  });
+
+  it('explains a too-small complement in Spanish', () => {
+    renderWithProvider(<LeadershipComparisonCard comparison={{ ...empty, status: 'suppressed', reason: 'complementTooSmall' }} />, { language: 'es' });
+    expect(screen.getByText(/menos de 10 personas con licencia quedan fuera del grupo directivo/)).toBeInTheDocument();
+  });
+
   it('explains why the comparison is unavailable', () => {
     renderWithProvider(<LeadershipComparisonCard comparison={{ ...empty, status: 'unavailable', reason: 'permissionMissing' }} />);
     expect(screen.getByText('The comparison is unavailable: the application is missing permission to read group members.')).toBeInTheDocument();

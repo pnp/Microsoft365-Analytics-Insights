@@ -2574,6 +2574,9 @@ namespace Common.Entities.CopilotAdoption
                 case LeadershipCohort.LeadershipComparisonStatuses.NotConfigured:
                     return "No leadership group is configured. An administrator can name one under Administration > Leadership cohort.";
                 case LeadershipCohort.LeadershipComparisonStatuses.Suppressed:
+                    if (leadership.Reason == LeadershipCohort.LeadershipComparisonReasons.ComplementTooSmall)
+                        return string.Format(CultureInfo.InvariantCulture,
+                            "Not shown: fewer than {0} licensed users are outside the leadership group, so comparing it with the whole tenant would single them out.", leadership.MinimumCohort);
                     return string.Format(CultureInfo.InvariantCulture,
                         "Not shown: fewer than {0} licensed leaders, too few to report without singling people out.", leadership.MinimumCohort);
                 case LeadershipCohort.LeadershipComparisonStatuses.PendingRefresh:

@@ -1092,6 +1092,24 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public async Task CopilotAdoptionLeadership_SmallComplementIsSuppressedEvenForSeePii()
+        {
+            // 12 leaders of 15 licensed users: the cohort clears the minimum, but tenant minus leaders would describe 3 people.
+            using (var host = CopilotAdoptionHost(SmallAnalysis(15), PortalTestHost.SignedIn(PortalRoles.SeePii, PortalRoles.Administration), await LeadershipProvider(12)))
+            {
+                var leadership = (JObject)JObject.Parse(await host.Client.GetStringAsync("api/CopilotAdoption/summary"))["leadershipComparison"];
+                Assert.AreEqual("suppressed", (string)leadership["status"]);
+                Assert.AreEqual("complementTooSmall", (string)leadership["reason"]);
+                foreach (var field in new[] { "licensedLeaders", "activeLeaders", "habitualLeaders", "leaderAdoptionRatePct", "tenantAdoptionRatePct", "adoptionGapPts", "scoreGap" })
+                    Assert.AreEqual(JTokenType.Null, leadership[field].Type, field);
+
+                var workbook = WorkbookText(await (await host.Client.GetAsync("api/CopilotAdoption/export/workbook")).Content.ReadAsByteArrayAsync());
+                StringAssert.Contains(workbook, "fewer than 10 licensed users are outside the leadership group");
+                Assert.IsFalse(workbook.Contains("Contoso Leadership"));
+            }
+        }
+
+        [TestMethod]
         public async Task CopilotAdoptionLeadership_NarrowedViewIsNotCompared()
         {
             using (var host = CopilotAdoptionHost(SmallAnalysis(12), PortalTestHost.SignedIn(PortalRoles.SeePii), await LeadershipProvider(12)))

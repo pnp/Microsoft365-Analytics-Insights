@@ -441,7 +441,11 @@ namespace Tests.UnitTests
             var suppressed = Common.Entities.LeadershipCohort.LeadershipAdoptionComparison.WithStatus(
                 Common.Entities.LeadershipCohort.LeadershipComparisonStatuses.Suppressed);
 
-            foreach (var comparison in new[] { ok, suppressed, null })
+            var complement = Common.Entities.LeadershipCohort.LeadershipAdoptionComparison.WithStatus(
+                Common.Entities.LeadershipCohort.LeadershipComparisonStatuses.Suppressed,
+                Common.Entities.LeadershipCohort.LeadershipComparisonReasons.ComplementTooSmall);
+
+            foreach (var comparison in new[] { ok, suppressed, complement, null })
             {
                 var cells = SheetCells(CopilotAdoptionWorkbook.Build(SyntheticAnalysis(), leadership: comparison), "Leadership comparison");
                 var keys = cells.Where(c => c.StartsWith(CopilotAdoptionWorkbook.LeadershipKeyPrefix, StringComparison.Ordinal)).ToList();
@@ -458,6 +462,15 @@ namespace Tests.UnitTests
             var next = suppressedCells[licensedIndex + 1];
             Assert.IsTrue(next == string.Empty || next == "LicensedLeaders",
                 "A suppressed comparison must leave the leader count blank, not '" + next + "'.");
+
+            var complementCells = SheetCells(CopilotAdoptionWorkbook.Build(SyntheticAnalysis(), leadership: complement), "Leadership comparison");
+            Assert.IsTrue(complementCells.Any(c => c.Contains("fewer than 10 licensed users are outside the leadership group")));
+            foreach (var key in new[] { "leadership.licensedLeaders", "leadership.activeLeaders", "leadership.tenantAdoptionRatePct", "leadership.adoptionGapPts" })
+            {
+                var value = complementCells[complementCells.IndexOf(key) + 1];
+                Assert.IsTrue(value == string.Empty || !value.Any(char.IsDigit),
+                    "A complement-suppressed comparison must leave " + key + " blank, not '" + value + "'.");
+            }
         }
 
         /// <summary>

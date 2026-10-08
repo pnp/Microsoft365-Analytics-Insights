@@ -22,6 +22,7 @@ export const LEADERSHIP_REASON_KEYS: Record<LeadershipComparisonReason, Translat
   refreshFailed: 'copilotAdoption.leadership.reason.refreshFailed',
   stateUnavailable: 'copilotAdoption.leadership.reason.stateUnavailable',
   membershipChanging: 'copilotAdoption.leadership.reason.membershipChanging',
+  complementTooSmall: 'copilotAdoption.leadership.reason.complementTooSmall',
 };
 
 const useStyles = makeStyles({
@@ -53,6 +54,10 @@ function scoreGap(value: number | null): string {
 }
 
 function statusMessage(t: TFunction, comparison: LeadershipAdoptionComparison): string {
+  // Suppressed because too few licensed people are outside the cohort: a sentence of its own, not a fragment.
+  if (comparison.status === 'suppressed' && comparison.reason === 'complementTooSmall') {
+    return t('copilotAdoption.leadership.reason.complementTooSmall', { min: formatNumber(comparison.minimumCohort) });
+  }
   const key = LEADERSHIP_STATUS_KEYS[comparison.status as Exclude<LeadershipComparisonStatus, 'ok'>]
     ?? 'copilotAdoption.leadership.status.unavailable';
   const reasonKey = comparison.reason ? LEADERSHIP_REASON_KEYS[comparison.reason as LeadershipComparisonReason] : undefined;
