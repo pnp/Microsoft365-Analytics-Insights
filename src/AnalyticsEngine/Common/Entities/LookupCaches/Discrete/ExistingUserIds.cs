@@ -1,9 +1,11 @@
 using Microsoft.Data.SqlClient;
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Data;
 using System.Data.Entity;
 using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace Common.Entities.LookupCaches
@@ -15,12 +17,12 @@ namespace Common.Entities.LookupCaches
     /// </summary>
     /// <remarks>
     /// <para>
-    /// The database does the matching, with the comparison the unique index <c>IX_users</c> itself uses: each name
-    /// is a <c>varchar</c> parameter, like <c>user_name</c>, compared with <c>=</c> under the column's collation
-    /// (case-insensitive by default, trailing spaces ignored). An <c>nvarchar</c> parameter would make SQL Server
-    /// convert the column instead, and under a SQL collation - the Azure SQL Database default - that comparison
-    /// cannot seek <c>IX_users</c> (#713). <c>user_name</c> is <c>varchar</c> by design: UPNs are ASCII by Entra
-    /// policy (#402).
+    /// The database does the matching under the actual column collation, not an in-memory UPN comparer.
+    /// SQL collations use varchar parameters (nvarchar would convert the column and prevent seeks).
+    /// Windows collations use nvarchar: their Unicode comparison supports the cheaper range/merge plan
+    /// measured at 200,000 synthetic users (#713). UPNs are ASCII by Entra policy; this does not change the
+    /// varchar storage boundary or promise that non-ASCII identifiers round-trip through it.
+    /// The column collation is probed once per server/catalog per process, not from the database default.
     /// </para>
     /// <para>
     /// Each match comes back by the name's POSITION in the list rather than by its text, so a caller never compares
@@ -43,19 +45,33 @@ namespace Common.Entities.LookupCaches
         /// <summary>Matches the user import's bulk-copy timeout, the operation this lookup recovers.</summary>
         private const int CommandTimeoutSeconds = 600;
 
+        private const string CollationSql = "SELECT collation_name FROM sys.columns WHERE object_id = OBJECT_ID(N'dbo.users') AND name = N'user_name'";
+        private static readonly ConcurrentDictionary<string, SqlDbType> ParameterTypes = new ConcurrentDictionary<string, SqlDbType>(StringComparer.Ordinal);
+        private static readonly ConcurrentDictionary<string, SemaphoreSlim> ProbeGates = new ConcurrentDictionary<string, SemaphoreSlim>(StringComparer.Ordinal);
+
         /// <summary>Looks the names up over a connection the caller has already opened.</summary>
         /// <returns>
         /// One entry per name, in the same order: the id of the row the database matched to that name, or null when
         /// there is none. A null name never matches.
         /// </returns>
-        public static Task<int?[]> FindAsync(SqlConnection openConnection, IReadOnlyList<string> userPrincipalNames)
+        public static async Task<int?[]> FindAsync(SqlConnection openConnection, IReadOnlyList<string> userPrincipalNames)
         {
             if (openConnection == null)
             {
                 throw new ArgumentNullException(nameof(openConnection));
             }
 
-            return FindAsync(userPrincipalNames, async query =>
+            if (userPrincipalNames == null) throw new ArgumentNullException(nameof(userPrincipalNames));
+            if (userPrincipalNames.Count == 0) return new int?[0];
+            var type = await ParameterTypeAsync(openConnection, async () =>
+            {
+                using (var command = new SqlCommand(CollationSql, openConnection))
+                {
+                    command.CommandTimeout = CommandTimeoutSeconds;
+                    return (string)await command.ExecuteScalarAsync();
+                }
+            });
+            return await FindAsync(userPrincipalNames, type, async query =>
             {
                 var matches = new List<Match>();
                 using (var command = new SqlCommand(query.Sql, openConnection))
@@ -79,18 +95,52 @@ namespace Common.Entities.LookupCaches
         /// access token included.
         /// </summary>
         /// <returns>As <see cref="FindAsync(SqlConnection, IReadOnlyList{string})"/>.</returns>
-        public static Task<int?[]> FindAsync(AnalyticsEntitiesContext db, IReadOnlyList<string> userPrincipalNames)
+        public static async Task<int?[]> FindAsync(AnalyticsEntitiesContext db, IReadOnlyList<string> userPrincipalNames)
         {
             if (db == null)
             {
                 throw new ArgumentNullException(nameof(db));
             }
 
-            return FindAsync(userPrincipalNames, async query =>
+            if (userPrincipalNames == null) throw new ArgumentNullException(nameof(userPrincipalNames));
+            if (userPrincipalNames.Count == 0) return new int?[0];
+            var type = await ParameterTypeAsync(db.Database.Connection, async () =>
+                await db.Database.SqlQuery<string>(CollationSql).SingleAsync());
+            return await FindAsync(userPrincipalNames, type, async query =>
                 await db.Database.SqlQuery<Match>(query.Sql, query.Parameters).ToListAsync());
         }
 
-        private static async Task<int?[]> FindAsync(IReadOnlyList<string> userPrincipalNames, Func<Query, Task<List<Match>>> run)
+        private static async Task<SqlDbType> ParameterTypeAsync(System.Data.Common.DbConnection connection, Func<Task<string>> probe)
+        {
+            // An omitted initial catalog can resolve differently for different logins. Do not cache that
+            // unresolved address; the open-connection entry point already has the actual catalog.
+            if (string.IsNullOrEmpty(connection.Database))
+                return TypeForCollation(await probe());
+
+            var key = connection.DataSource.Length + ":" + connection.DataSource + connection.Database;
+            if (ParameterTypes.TryGetValue(key, out var type)) return type;
+            var gate = ProbeGates.GetOrAdd(key, _ => new SemaphoreSlim(1, 1));
+            await gate.WaitAsync();
+            try
+            {
+                if (!ParameterTypes.TryGetValue(key, out type))
+                {
+                    type = TypeForCollation(await probe());
+                    ParameterTypes[key] = type;
+                }
+                return type;
+            }
+            finally { gate.Release(); }
+        }
+
+        internal static SqlDbType TypeForCollation(string collation)
+        {
+            if (string.IsNullOrEmpty(collation))
+                throw new InvalidOperationException("Cannot determine dbo.users.user_name collation.");
+            return collation.StartsWith("SQL_", StringComparison.OrdinalIgnoreCase) ? SqlDbType.VarChar : SqlDbType.NVarChar;
+        }
+
+        private static async Task<int?[]> FindAsync(IReadOnlyList<string> userPrincipalNames, SqlDbType type, Func<Query, Task<List<Match>>> run)
         {
             if (userPrincipalNames == null)
             {
@@ -100,7 +150,7 @@ namespace Common.Entities.LookupCaches
             var ids = new int?[userPrincipalNames.Count];
             for (var offset = 0; offset < userPrincipalNames.Count; offset += MaxNamesPerQuery)
             {
-                var query = BuildQuery(userPrincipalNames, offset, Math.Min(MaxNamesPerQuery, userPrincipalNames.Count - offset));
+                var query = BuildQuery(userPrincipalNames, offset, Math.Min(MaxNamesPerQuery, userPrincipalNames.Count - offset), type);
                 if (query == null)
                 {
                     continue;
@@ -118,7 +168,7 @@ namespace Common.Entities.LookupCaches
         /// The query for <paramref name="count"/> names starting at <paramref name="offset"/>, or null when none of
         /// them can match. Slots are relative to <paramref name="offset"/>, so every full slice sends the same text.
         /// </summary>
-        internal static Query BuildQuery(IReadOnlyList<string> userPrincipalNames, int offset, int count)
+        internal static Query BuildQuery(IReadOnlyList<string> userPrincipalNames, int offset, int count, SqlDbType type = SqlDbType.VarChar)
         {
             var sql = new StringBuilder("SELECT k.slot AS Slot, MIN(u.id) AS Id FROM (VALUES ");
             var parameters = new List<SqlParameter>(count);
@@ -136,7 +186,7 @@ namespace Common.Entities.LookupCaches
                     sql.Append(',');
                 }
                 sql.Append('(').Append(slot).Append(',').Append(parameterName).Append(')');
-                parameters.Add(UserNameParameter(parameterName, name));
+                parameters.Add(UserNameParameter(parameterName, name, type));
             }
 
             if (parameters.Count == 0)
@@ -149,15 +199,15 @@ namespace Common.Entities.LookupCaches
         }
 
         /// <summary>
-        /// A <c>varchar</c> parameter sized to the column, and never smaller than its value: SqlClient silently
+        /// A parameter sized for its type, and never smaller than its value: SqlClient silently
         /// truncates a value to its parameter's size, and a truncated name could match somebody else.
         /// </summary>
-        internal static SqlParameter UserNameParameter(string parameterName, string value)
+        internal static SqlParameter UserNameParameter(string parameterName, string value, SqlDbType type = SqlDbType.VarChar)
         {
-            var size = value.Length <= UserNameColumnLength
-                ? UserNameColumnLength
-                : (value.Length <= 8000 ? value.Length : -1);
-            return new SqlParameter(parameterName, SqlDbType.VarChar, size) { Value = value };
+            var normalSize = type == SqlDbType.VarChar ? UserNameColumnLength : 4000;
+            var maxSize = type == SqlDbType.VarChar ? 8000 : 4000;
+            var size = value.Length <= normalSize ? normalSize : (value.Length <= maxSize ? value.Length : -1);
+            return new SqlParameter(parameterName, type, size) { Value = value };
         }
 
         internal sealed class Query

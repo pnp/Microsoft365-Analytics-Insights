@@ -1,4 +1,5 @@
 ﻿using Common.Entities;
+using Common.Entities.LookupCaches;
 using System;
 using System.Collections.Generic;
 using System.Data.Entity;
@@ -14,10 +15,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
     internal class SqlUserLookupStore : IUserLookupStore
     {
         /// <summary>
-        /// How many UPNs go into one <c>IN (...)</c> list. SQL Server allows 2,100 parameters per
-        /// command, and EF6 sends each element of a <c>Contains</c> list as its own parameter, so
-        /// this has to stay comfortably below that. 1,000 is the size the rest of the user pipeline
-        /// already uses for the same reason (see the reload loop in <c>UserMetadataUpdater</c>).
+        /// How many UPNs are resolved and entities reloaded in each batch.
         /// </summary>
         public const int UpnChunkSize = 1000;
 
@@ -30,7 +28,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         {
             if (chunkSize < 1) throw new ArgumentOutOfRangeException(nameof(chunkSize));
             _db = db ?? throw new ArgumentNullException(nameof(db));
-            _chunkSize = chunkSize;
+            _chunkSize = Math.Min(chunkSize, ExistingUserIds.MaxNamesPerQuery);
         }
 
         public async Task<IReadOnlyList<Common.Entities.User>> GetUsersByUpnAsync(IReadOnlyCollection<string> upns)
@@ -47,6 +45,9 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             for (var i = 0; i < all.Count; i += _chunkSize)
             {
                 var chunk = all.GetRange(i, Math.Min(_chunkSize, all.Count - i));
+                var resolved = await ExistingUserIds.FindAsync(_db, chunk);
+                var ids = resolved.Where(id => id.HasValue).Select(id => id.Value).Distinct().ToList();
+                if (ids.Count == 0) continue;
 
                 // Tracked on purpose: callers assign the result to a navigation property.
                 //
@@ -63,11 +64,9 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 // on the unique (license_type_id, user_id) index. Loading the licences here keeps
                 // this instance at least as complete as the snapshot it can shadow.
                 //
-                // No LOWER() on the column - the default code-first collation is already
-                // case-insensitive, and lowering it would make the predicate non-SARGable and
-                // scan the whole table instead of seeking the user_name index.
+                // Reload by integer clustered key: EF's Unicode UPN IN-list scans under SQL collations.
                 var loaded = await _db.users
-                    .Where(u => chunk.Contains(u.UserPrincipalName))
+                    .Where(u => ids.Contains(u.ID))
                     .Include(u => u.LicenseLookups)
                     .ToListAsync();
 

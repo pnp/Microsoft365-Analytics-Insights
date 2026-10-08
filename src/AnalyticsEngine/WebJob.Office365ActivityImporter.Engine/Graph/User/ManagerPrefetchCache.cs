@@ -4,7 +4,7 @@ using System.Threading.Tasks;
 namespace WebJob.Office365ActivityImporter.Engine.Graph
 {
     /// <summary>
-    /// The managers referenced by the batch currently being processed, loaded in one query.
+    /// The managers referenced by the batch currently being processed, loaded in bulk.
     /// </summary>
     /// <remarks>
     /// This is the fix for the manager-resolution N+1 called out in #371. The database-by-UPN
@@ -13,7 +13,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
     /// inserted in a <b>later</b> batch than their report - the dictionary starts from pre-existing
     /// users and each batch adds its own before processing them - and Graph does not order the
     /// delta by reporting line, so on the first import of a large tenant it is a substantial share
-    /// of everyone who has a manager. One chunked query per batch replaces those round trips.
+    /// of everyone who has a manager. Batched id resolution and entity reload replace those round trips.
     ///
     /// Scope is deliberately one batch. The entities are tracked by the import's context and every
     /// batch ends by detaching them, so a cache kept across batches would hand out detached

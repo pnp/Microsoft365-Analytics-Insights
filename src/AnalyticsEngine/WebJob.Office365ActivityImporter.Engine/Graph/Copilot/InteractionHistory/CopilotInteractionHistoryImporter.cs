@@ -332,8 +332,10 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.InteractionHisto
             {
                 foreach (var upnChunk in ChunkStrings(memberUpns.ToList()))
                 {
+                    var resolved = await Common.Entities.LookupCaches.ExistingUserIds.FindAsync(db, upnChunk);
+                    var ids = resolved.Where(id => id.HasValue).Select(id => id.Value).Distinct().ToList();
                     var rows = await db.users
-                        .Where(u => upnChunk.Contains(u.UserPrincipalName)
+                        .Where(u => ids.Contains(u.ID)
                                     && (u.AccountEnabled == null || u.AccountEnabled == true))
                         .GroupJoin(
                             db.CopilotInteractionUserWatermarks,
