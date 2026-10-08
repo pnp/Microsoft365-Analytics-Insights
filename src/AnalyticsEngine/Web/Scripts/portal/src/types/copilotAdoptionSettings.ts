@@ -43,7 +43,6 @@ export interface CopilotAdoptionSettingsModel {
   updatedBy: string | null;
   updatedUtc: string | null;
   history: CopilotAdoptionScoreSettingsChange[];
-  propagationSeconds: number;
   minThreshold: number;
   maxThreshold: number;
 }

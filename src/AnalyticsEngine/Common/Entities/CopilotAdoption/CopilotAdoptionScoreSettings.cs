@@ -319,8 +319,10 @@ namespace Common.Entities.CopilotAdoption
     /// <remarks>
     /// <para>Saves carry the version the administrator edited, and are refused with
     /// <see cref="CopilotAdoptionScoreSettingsErrorCodes.VersionConflict"/> when somebody saved in between. The
-    /// check is read-then-write because <see cref="IKeyValueStore"/> has no conditional write, so two saves within
-    /// the same few milliseconds can still both succeed; the later one wins and both appear in the history.</para>
+    /// write itself is conditional on the row's ETag as it was read (<see cref="IConditionalKeyValueStore"/>), so
+    /// of two saves or resets made against the same version exactly one lands, whichever web instance handles them;
+    /// the other is refused rather than overwriting it. Each history entry's old values are therefore the values
+    /// of the version it replaced, and the versions in the history form one unbroken sequence.</para>
     /// <para>A store that is not durable (no Storage connection string) still answers reads with the defaults -
     /// there is nothing to read - but refuses to save, because a save that vanishes on the next restart and is
     /// never seen by the other instances would be worse than no save.</para>
@@ -332,11 +334,17 @@ namespace Common.Entities.CopilotAdoption
         private const int MaxNameLength = 256;
 
         private readonly IKeyValueStore _values;
+        private readonly IConditionalKeyValueStore _conditional;
         private readonly Func<DateTime> _utcNow;
 
+        /// <param name="values">Must support conditional writes when <paramref name="isDurable"/>: every
+        /// <see cref="StateStore"/> partition does.</param>
         public CopilotAdoptionScoreSettingsStore(IKeyValueStore values, bool isDurable, Func<DateTime> utcNow = null)
         {
             _values = values ?? throw new ArgumentNullException(nameof(values));
+            _conditional = values as IConditionalKeyValueStore;
+            if (isDurable && _conditional == null)
+                throw new ArgumentException("A durable settings store needs conditional writes, so concurrent saves cannot overwrite each other.", nameof(values));
             IsDurable = isDurable;
             _utcNow = utcNow ?? (() => DateTime.UtcNow);
         }
@@ -344,12 +352,23 @@ namespace Common.Entities.CopilotAdoption
         public bool IsDurable { get; }
 
         /// <summary>The stored document, or a version-0 default document when none has been saved.</summary>
-        public async Task<CopilotAdoptionScoreSettingsDocument> GetAsync()
+        public async Task<CopilotAdoptionScoreSettingsDocument> GetAsync() => (await ReadAsync().ConfigureAwait(false)).Document;
+
+        private async Task<(CopilotAdoptionScoreSettingsDocument Document, string VersionToken)> ReadAsync()
         {
-            string json;
+            string json, token = null;
             try
             {
-                json = await _values.GetStringAsync(DocumentKey).ConfigureAwait(false);
+                if (_conditional != null)
+                {
+                    var read = await _conditional.GetVersionedAsync(DocumentKey).ConfigureAwait(false);
+                    json = read.Value;
+                    token = read.VersionToken;
+                }
+                else
+                {
+                    json = await _values.GetStringAsync(DocumentKey).ConfigureAwait(false);
+                }
             }
             catch (Exception ex) when (!(ex is OperationCanceledException))
             {
@@ -357,7 +376,7 @@ namespace Common.Entities.CopilotAdoption
                     $"Couldn't read the Copilot Adoption score settings from {_values.Description}: {ex.Message}", ex);
             }
 
-            if (json == null) return new CopilotAdoptionScoreSettingsDocument();
+            if (json == null) return (new CopilotAdoptionScoreSettingsDocument(), token);
 
             CopilotAdoptionScoreSettingsDocument document;
             try
@@ -383,7 +402,7 @@ namespace Common.Entities.CopilotAdoption
                     "The stored Copilot Adoption score settings are invalid: " + string.Join(", ", errors));
 
             document.History = document.History ?? new List<CopilotAdoptionScoreSettingsChange>();
-            return document;
+            return (document, token);
         }
 
         public Task<CopilotAdoptionScoreSettingsDocument> SaveAsync(CopilotAdoptionScoreSettings settings, long expectedVersion, string changedBy)
@@ -402,7 +421,7 @@ namespace Common.Entities.CopilotAdoption
         {
             if (!IsDurable) throw new CopilotAdoptionScoreSettingsRejectedException(CopilotAdoptionScoreSettingsErrorCodes.StorageNotConfigured);
 
-            var current = await GetAsync().ConfigureAwait(false);
+            var (current, versionToken) = await ReadAsync().ConfigureAwait(false);
             if (current.Version != expectedVersion)
                 throw new CopilotAdoptionScoreSettingsRejectedException(CopilotAdoptionScoreSettingsErrorCodes.VersionConflict);
 
@@ -437,15 +456,21 @@ namespace Common.Entities.CopilotAdoption
                 }.Concat(current.History).Take(MaxHistory).ToList(),
             };
 
+            bool written;
             try
             {
-                await _values.SetStringAsync(DocumentKey, JsonConvert.SerializeObject(next)).ConfigureAwait(false);
+                written = await _conditional.TrySetStringAsync(DocumentKey, JsonConvert.SerializeObject(next), versionToken).ConfigureAwait(false);
             }
             catch (Exception ex) when (!(ex is OperationCanceledException))
             {
                 throw new CopilotAdoptionScoreSettingsUnavailableException(
                     $"Couldn't save the Copilot Adoption score settings to {_values.Description}: {ex.Message}", ex);
             }
+
+            // Another administrator's save or reset landed between the read and this write. Refused, not retried: the
+            // change was made against values that are no longer in force, so its author must see the new ones first.
+            if (!written)
+                throw new CopilotAdoptionScoreSettingsRejectedException(CopilotAdoptionScoreSettingsErrorCodes.VersionConflict);
             return next;
         }
     }

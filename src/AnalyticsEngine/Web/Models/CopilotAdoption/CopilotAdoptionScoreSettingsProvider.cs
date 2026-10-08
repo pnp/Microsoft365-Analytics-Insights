@@ -34,22 +34,21 @@ namespace Web.AnalyticsWeb.Models.CopilotAdoption
     }
 
     /// <summary>
-    /// Reads the score settings at most once per <see cref="DefaultRefreshInterval"/> per web instance, whatever
-    /// the number of requests, and shares one in-flight read between concurrent callers.
+    /// Reads the score settings afresh for every adoption report request, so the first request after a save -
+    /// on any instance of a scaled-out web app - starts an analysis with the new settings.
     /// </summary>
     /// <remarks>
-    /// <para>One point read of one table row, not per user and not per analysis step. The interval is what bounds
-    /// how long another instance of a scaled-out web app keeps scoring with the previous settings after a save:
-    /// the version is part of the analysis cache key, so the first request after the refresh starts a fresh
-    /// analysis everywhere. The instance that saved invalidates its own copy at once.</para>
+    /// <para>One point read of one table row per report request: not per user, not per analysis step, and not per
+    /// query the analysis runs. Requests are not merged onto a read already in flight, because a read that started
+    /// before another instance's save committed can return the old values to a request made after it - exactly the
+    /// staleness this provider exists to rule out. The version is part of the analysis cache key, so a request
+    /// carrying new settings never joins or reuses an analysis scored with the old ones.</para>
     /// <para>A failed read is not cached and is not papered over with the last good value or the defaults: the
     /// caller gets <see cref="CopilotAdoptionScoreSettingsUnavailableException"/>, the report answers 503, and the
     /// next request tries again.</para>
     /// </remarks>
     internal sealed class CopilotAdoptionScoreSettingsProvider : ICopilotAdoptionScoreSettingsSource
     {
-        public static readonly TimeSpan DefaultRefreshInterval = TimeSpan.FromSeconds(15);
-
         private static readonly Lazy<AnalyticsLogger> ProductionLogger = new Lazy<AnalyticsLogger>(
             () => new AnalyticsLogger(new AppConfig().AppInsightsConnectionString, "CopilotAdoptionSettings"));
 
@@ -66,80 +65,51 @@ namespace Web.AnalyticsWeb.Models.CopilotAdoption
             new CopilotAdoptionScoreSettingsProvider(() => ProductionStore.Value);
 
         private readonly Func<CopilotAdoptionScoreSettingsStore> _store;
-        private readonly TimeSpan _refreshInterval;
-        private readonly Func<DateTime> _utcNow;
-        private readonly SemaphoreSlim _readGate = new SemaphoreSlim(1, 1);
-        private volatile Cached _cached;
-        private long _invalidations;
+        private readonly object _lastKnownLock = new object();
+        private CopilotAdoptionEffectiveScoreSettings _lastKnown;
+        private long _lastKnownSequence;
+        private long _sequence;
 
-        public CopilotAdoptionScoreSettingsProvider(
-            Func<CopilotAdoptionScoreSettingsStore> store,
-            TimeSpan? refreshInterval = null,
-            Func<DateTime> utcNow = null)
+        public CopilotAdoptionScoreSettingsProvider(Func<CopilotAdoptionScoreSettingsStore> store)
         {
             _store = store ?? throw new ArgumentNullException(nameof(store));
-            _refreshInterval = refreshInterval ?? DefaultRefreshInterval;
-            _utcNow = utcNow ?? (() => DateTime.UtcNow);
         }
 
         public CopilotAdoptionScoreSettingsStore Store => _store();
 
-        public CopilotAdoptionEffectiveScoreSettings LastKnown => _cached?.Settings ?? CopilotAdoptionEffectiveScoreSettings.Defaults;
+        public CopilotAdoptionEffectiveScoreSettings LastKnown
+        {
+            get
+            {
+                lock (_lastKnownLock) return _lastKnown ?? CopilotAdoptionEffectiveScoreSettings.Defaults;
+            }
+        }
 
         public async Task<CopilotAdoptionEffectiveScoreSettings> GetAsync()
         {
-            var cached = _cached;
-            if (IsFresh(cached)) return cached.Settings;
-
-            await _readGate.WaitAsync().ConfigureAwait(false);
-            try
-            {
-                cached = _cached;
-                if (IsFresh(cached)) return cached.Settings;
-
-                var invalidationsBefore = Interlocked.Read(ref _invalidations);
-                var document = await _store().GetAsync().ConfigureAwait(false);
-                var settings = document.ToEffective();
-                // A save that landed while this read was in flight must not be overwritten by the older value.
-                if (Interlocked.Read(ref _invalidations) == invalidationsBefore)
-                {
-                    _cached = new Cached(settings, _utcNow());
-                }
-                return settings;
-            }
-            finally
-            {
-                _readGate.Release();
-            }
+            // Numbered when the read starts, so a slow read that finishes after a newer one cannot replace LastKnown.
+            var sequence = Interlocked.Increment(ref _sequence);
+            var document = await _store().GetAsync().ConfigureAwait(false);
+            var settings = document.ToEffective();
+            Remember(settings, sequence);
+            return settings;
         }
 
-        /// <summary>Forgets the cached settings, so this instance reads the new ones on its next request.</summary>
-        public void Invalidate()
-        {
-            Interlocked.Increment(ref _invalidations);
-            _cached = null;
-        }
-
-        /// <summary>Records settings just written by this instance, so its next report uses them at once.</summary>
+        /// <summary>Records settings just written by this instance as the last known ones.</summary>
         public void Publish(CopilotAdoptionScoreSettingsDocument document)
         {
-            Interlocked.Increment(ref _invalidations);
-            _cached = document == null ? null : new Cached(document.ToEffective(), _utcNow());
+            if (document == null) return;
+            Remember(document.ToEffective(), Interlocked.Increment(ref _sequence));
         }
 
-        private bool IsFresh(Cached cached) =>
-            cached != null && _utcNow() - cached.ReadUtc < _refreshInterval && _utcNow() >= cached.ReadUtc;
-
-        private sealed class Cached
+        private void Remember(CopilotAdoptionEffectiveScoreSettings settings, long sequence)
         {
-            public Cached(CopilotAdoptionEffectiveScoreSettings settings, DateTime readUtc)
+            lock (_lastKnownLock)
             {
-                Settings = settings;
-                ReadUtc = readUtc;
+                if (sequence < _lastKnownSequence) return;
+                _lastKnownSequence = sequence;
+                _lastKnown = settings;
             }
-
-            public CopilotAdoptionEffectiveScoreSettings Settings { get; }
-            public DateTime ReadUtc { get; }
         }
     }
 }

@@ -589,6 +589,7 @@
       <DependentUpon>Resources.resx</DependentUpon>
     </Compile>
     <Compile Include="State\AzureTableKeyValueStore.cs" />
+    <Compile Include="State\IConditionalKeyValueStore.cs" />
     <Compile Include="State\IKeyValueStore.cs" />
     <Compile Include="State\InMemoryKeyValueStore.cs" />
     <Compile Include="CopilotAuditBackfill\CopilotAuditBackfillModels.cs" />

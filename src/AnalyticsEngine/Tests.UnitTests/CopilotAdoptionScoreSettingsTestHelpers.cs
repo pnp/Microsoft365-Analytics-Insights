@@ -129,7 +129,7 @@ namespace Tests.UnitTests
         private static SettingsService Service(IKeyValueStore values, bool durable)
         {
             var store = new CopilotAdoptionScoreSettingsStore(values, durable);
-            return new SettingsService(new SettingsProvider(() => store, TimeSpan.FromSeconds(15), () => Now));
+            return new SettingsService(new SettingsProvider(() => store));
         }
 
         private static PortalTestHost SettingsHost(SettingsService service, IPrincipal principal, PortalAccessPolicy policy) =>
@@ -165,7 +165,7 @@ namespace Tests.UnitTests
         private static async Task<string> Code(HttpResponseMessage response) =>
             (string)JObject.Parse(await response.Content.ReadAsStringAsync())["code"];
 
-        private sealed class FailingStore : IKeyValueStore
+        private sealed class FailingStore : IConditionalKeyValueStore
         {
             internal volatile bool Fail = true;
 
@@ -173,6 +173,12 @@ namespace Tests.UnitTests
 
             public Task<string> GetStringAsync(string key, CancellationToken cancellationToken = default) =>
                 Fail ? Task.FromException<string>(new InvalidOperationException("Synthetic storage outage.")) : Task.FromResult<string>(null);
+
+            public Task<VersionedValue> GetVersionedAsync(string key, CancellationToken cancellationToken = default) =>
+                Fail ? Task.FromException<VersionedValue>(new InvalidOperationException("Synthetic storage outage.")) : Task.FromResult(new VersionedValue(null, null));
+
+            public Task<bool> TrySetStringAsync(string key, string value, string expectedVersionToken, CancellationToken cancellationToken = default) =>
+                Fail ? Task.FromException<bool>(new InvalidOperationException("Synthetic storage outage.")) : Task.FromResult(true);
 
             public Task SetStringAsync(string key, string value, TimeSpan? timeToLive = null, CancellationToken cancellationToken = default) =>
                 Fail ? Task.FromException(new InvalidOperationException("Synthetic storage outage.")) : Task.CompletedTask;
@@ -182,10 +188,25 @@ namespace Tests.UnitTests
             public Task<bool> ExistsAsync(string key, CancellationToken cancellationToken = default) => Task.FromResult(false);
         }
 
-        private sealed class CountingStore : IKeyValueStore
+        /// <summary>
+        /// Counts reads, and can hold a number of versioned reads (<see cref="HoldNext"/>) until all of them have been made,
+        /// so two writers are guaranteed to have read the same predecessor before either writes.
+        /// </summary>
+        private sealed class CountingStore : IConditionalKeyValueStore
         {
             private readonly InMemoryKeyValueStore _inner = new InMemoryKeyValueStore();
+            private readonly TaskCompletionSource<bool> _allHeldReadsMade = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
             private int _reads;
+            private int _versionedReads;
+            private int _holdFrom;
+            private int _holdReads;
+
+            /// <summary>Holds the next <paramref name="reads"/> versioned reads until all of them have been made.</summary>
+            internal void HoldNext(int reads)
+            {
+                _holdFrom = Volatile.Read(ref _versionedReads);
+                Volatile.Write(ref _holdReads, reads);
+            }
 
             internal int Reads => Volatile.Read(ref _reads);
 
@@ -197,6 +218,23 @@ namespace Tests.UnitTests
                 await Task.Delay(20, cancellationToken);
                 return await _inner.GetStringAsync(key, cancellationToken);
             }
+
+            public async Task<VersionedValue> GetVersionedAsync(string key, CancellationToken cancellationToken = default)
+            {
+                Interlocked.Increment(ref _reads);
+                var read = await _inner.GetVersionedAsync(key, cancellationToken);
+                var n = Interlocked.Increment(ref _versionedReads) - _holdFrom;
+                var hold = Volatile.Read(ref _holdReads);
+                if (n <= hold)
+                {
+                    if (n == hold) _allHeldReadsMade.TrySetResult(true);
+                    await _allHeldReadsMade.Task;
+                }
+                return read;
+            }
+
+            public Task<bool> TrySetStringAsync(string key, string value, string expectedVersionToken, CancellationToken cancellationToken = default) =>
+                _inner.TrySetStringAsync(key, value, expectedVersionToken, cancellationToken);
 
             public Task SetStringAsync(string key, string value, TimeSpan? timeToLive = null, CancellationToken cancellationToken = default) =>
                 _inner.SetStringAsync(key, value, timeToLive, cancellationToken);

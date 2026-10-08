@@ -36,9 +36,6 @@ namespace Web.AnalyticsWeb.Models.CopilotAdoption
         [JsonProperty("history")]
         public List<CopilotAdoptionScoreSettingsChange> History { get; set; }
 
-        /// <summary>How long another web instance may keep using the previous settings after a save.</summary>
-        [JsonProperty("propagationSeconds")]
-        public int PropagationSeconds { get; set; }
 
         [JsonProperty("minThreshold")]
         public int MinThreshold { get; set; } = CopilotAdoptionScoreSettings.MinThreshold;
@@ -77,12 +74,10 @@ namespace Web.AnalyticsWeb.Models.CopilotAdoption
     internal sealed class CopilotAdoptionSettingsService
     {
         private readonly CopilotAdoptionScoreSettingsProvider _provider;
-        private readonly TimeSpan _propagation;
 
-        public CopilotAdoptionSettingsService(CopilotAdoptionScoreSettingsProvider provider, TimeSpan? propagation = null)
+        public CopilotAdoptionSettingsService(CopilotAdoptionScoreSettingsProvider provider)
         {
             _provider = provider ?? throw new ArgumentNullException(nameof(provider));
-            _propagation = propagation ?? CopilotAdoptionScoreSettingsProvider.DefaultRefreshInterval;
         }
 
         public static CopilotAdoptionSettingsService ForThisDeployment() =>
@@ -114,7 +109,7 @@ namespace Web.AnalyticsWeb.Models.CopilotAdoption
             return ToModel(saved, store.IsDurable);
         }
 
-        private CopilotAdoptionSettingsModel ToModel(CopilotAdoptionScoreSettingsDocument document, bool durable) =>
+        private static CopilotAdoptionSettingsModel ToModel(CopilotAdoptionScoreSettingsDocument document, bool durable) =>
             new CopilotAdoptionSettingsModel
             {
                 Durable = durable,
@@ -125,7 +120,6 @@ namespace Web.AnalyticsWeb.Models.CopilotAdoption
                 UpdatedBy = document.UpdatedBy,
                 UpdatedUtc = document.UpdatedUtc,
                 History = (document.History ?? new List<CopilotAdoptionScoreSettingsChange>()).ToList(),
-                PropagationSeconds = (int)Math.Ceiling(_propagation.TotalSeconds),
             };
     }
 }

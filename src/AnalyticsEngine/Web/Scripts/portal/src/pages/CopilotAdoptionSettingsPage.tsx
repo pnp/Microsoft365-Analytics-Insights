@@ -108,7 +108,7 @@ export default function CopilotAdoptionSettingsPage() {
     setBusy(true); setError(null); setSaved(null);
     try {
       accept(await saveCopilotAdoptionSettings(model.version, values));
-      setSaved(t('admin.copilotAdoptionSettings.saved', { seconds: model.propagationSeconds }));
+      setSaved(t('admin.copilotAdoptionSettings.saved'));
     } catch (e) { report(e, 'saveFailed'); }
     finally { setBusy(false); }
   };
@@ -118,7 +118,7 @@ export default function CopilotAdoptionSettingsPage() {
     setBusy(true); setError(null); setSaved(null);
     try {
       accept(await resetCopilotAdoptionSettings(model.version));
-      setSaved(t('admin.copilotAdoptionSettings.resetDone', { seconds: model.propagationSeconds }));
+      setSaved(t('admin.copilotAdoptionSettings.resetDone'));
     } catch (e) { report(e, 'saveFailed'); }
     finally { setBusy(false); }
   };
@@ -182,7 +182,7 @@ export default function CopilotAdoptionSettingsPage() {
           <Text className={styles.muted}>{t('admin.copilotAdoptionSettings.thresholds.coworkIndependent')}</Text>
         </Card>
         {problems.length > 0 && <MessageBar intent="warning"><MessageBarBody>{problems.map((p) => errorText(t, p)).join(' ')}</MessageBarBody></MessageBar>}
-        <Text className={styles.muted}>{t('admin.copilotAdoptionSettings.effect', { seconds: model.propagationSeconds })}</Text>
+        <Text className={styles.muted}>{t('admin.copilotAdoptionSettings.effect')}</Text>
         <div className={styles.actions}>
           <Button appearance="primary" icon={<Save16Regular />} onClick={save} disabled={busy || !model.durable || !changed || problems.length > 0}>{t('admin.copilotAdoptionSettings.save')}</Button>
           <Button icon={<ArrowReset20Regular />} onClick={reset} disabled={busy || !model.durable || !customised}>{t('admin.copilotAdoptionSettings.reset')}</Button>

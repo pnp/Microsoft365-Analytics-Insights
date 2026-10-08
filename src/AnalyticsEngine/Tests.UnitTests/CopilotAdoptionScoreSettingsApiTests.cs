@@ -82,6 +82,49 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public async Task Coordinators_OnTwoInstances_UseASaveFromEitherOnTheirNextRequest()
+        {
+            // One table row shared by two web instances, each with its own provider, coordinator and process cache.
+            var table = new InMemoryKeyValueStore();
+            CopilotAdoptionScoreSettingsStore NewStore() => new CopilotAdoptionScoreSettingsStore(table, isDurable: true);
+            var storeA = NewStore();
+            var storeB = NewStore();
+            var providerA = new SettingsProvider(() => storeA);
+            var providerB = new SettingsProvider(() => storeB);
+            var runnerA = new RecordingRunner();
+            var runnerB = new RecordingRunner();
+            AdoptionCoordinator Coordinator(RecordingRunner runner, SettingsProvider provider) => new AdoptionCoordinator(
+                runner, new DictionaryCache(), (windowDays, hasOverride) => NullAnalysisTelemetry.Instance, TimeSpan.FromMinutes(10), settingsSource: provider);
+            var instanceA = Coordinator(runnerA, providerA);
+            var instanceB = Coordinator(runnerB, providerB);
+            var range = DateRange.Create(28, null, null, Now);
+
+            await instanceA.GetAsync(range, new List<int>());
+            await instanceB.GetAsync(range, new List<int>());
+            Assert.IsFalse(runnerA.Runs.Single().IsCustomised);
+
+            // An administrator saves through instance B; instance A is told nothing and no time passes.
+            var saved = await new SettingsService(providerB).SaveAsync(
+                new AnalyticsWeb::Web.AnalyticsWeb.Models.CopilotAdoption.CopilotAdoptionSettingsSaveRequest { ExpectedVersion = 0, Settings = With(s => s.ChampionScore = 90) },
+                "admin@contoso.com");
+            Assert.AreEqual(1, saved.Version);
+
+            var onA = await instanceA.GetAsync(range, new List<int>());
+            Assert.AreEqual(2, runnerA.Runs.Count, "Instance A's next request is a fresh analysis, not its cached default one.");
+            Assert.AreEqual(90, runnerA.Runs[1].GetValues().ChampionScore);
+            Assert.AreEqual(1, onA.Summary.Options.ScoreSettings.Version);
+            await instanceB.GetAsync(range, new List<int>());
+            Assert.AreEqual(90, runnerB.Runs[1].GetValues().ChampionScore);
+
+            // A reset through instance A: B's next request goes back to its cached default analysis.
+            await new SettingsService(providerA).ResetAsync(
+                new AnalyticsWeb::Web.AnalyticsWeb.Models.CopilotAdoption.CopilotAdoptionSettingsResetRequest { ExpectedVersion = 1 }, "admin@contoso.com");
+            var onB = await instanceB.GetAsync(range, new List<int>());
+            Assert.AreEqual(2, runnerB.Runs.Count, "The defaults' result is reused.");
+            Assert.IsFalse(onB.Summary.Options.ScoreSettings.Customised);
+        }
+
+        [TestMethod]
         public async Task Report_WhenTheSettingsCannotBeRead_IsRefusedWithAStableCode()
         {
             var coordinator = new AdoptionCoordinator(

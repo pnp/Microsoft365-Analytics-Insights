@@ -37,7 +37,6 @@ const model = (over: Partial<CopilotAdoptionSettingsModel> = {}): CopilotAdoptio
   updatedBy: null,
   updatedUtc: null,
   history: [],
-  propagationSeconds: 15,
   minThreshold: 1,
   maxThreshold: 100,
   ...over,
@@ -135,7 +134,7 @@ describe('CopilotAdoptionSettingsPage', () => {
     await waitFor(() => expect(mockSave).toHaveBeenCalledWith(0, {
       ...DEFAULTS, frequencyWeightPercent: 60, depthWeightPercent: 20, championScore: 90,
     }));
-    expect(await screen.findByText('Settings saved. Other web servers will use them within 15 seconds.')).toBeVisible();
+    expect(await screen.findByText('Settings saved. The next report on every web server uses them.')).toBeVisible();
     expect(screen.getByText('Customised')).toBeVisible();
     expect(screen.getByText('Champion from score: 75 → 90')).toBeVisible();
   });
