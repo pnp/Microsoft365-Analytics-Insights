@@ -1,6 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<Project ToolsVersion="15.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
-  <Import Project="$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props" Condition="Exists('$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props')" />
+<Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <Configuration Condition=" '$(Configuration)' == '' ">Debug</Configuration>
     <Platform Condition=" '$(Platform)' == '' ">AnyCPU</Platform>
@@ -8,7 +7,16 @@
     <OutputType>Exe</OutputType>
     <RootNamespace>Tests.FakeDataGen</RootNamespace>
     <AssemblyName>Tests.FakeDataGen</AssemblyName>
-    <TargetFrameworkVersion>v4.8</TargetFrameworkVersion>
+    <TargetFramework>net48</TargetFramework>
+    <GenerateSupportedRuntime>false</GenerateSupportedRuntime>
+    <!-- Legacy projects only exposed direct project references to the compiler. -->
+    <DisableTransitiveProjectReferences>true</DisableTransitiveProjectReferences>
+    <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <EnableDefaultEmbeddedResourceItems>false</EnableDefaultEmbeddedResourceItems>
+    <EnableDefaultNoneItems>false</EnableDefaultNoneItems>
+    <EmbeddedResourceUseDependentUponConvention>false</EmbeddedResourceUseDependentUponConvention>
+    <GenerateResourceUsePreserializedResources>false</GenerateResourceUsePreserializedResources>
     <FileAlignment>512</FileAlignment>
     <AutoGenerateBindingRedirects>true</AutoGenerateBindingRedirects>
     <Deterministic>true</Deterministic>
@@ -42,66 +50,6 @@
     <Reference Include="System.Data" />
     <Reference Include="System.Net.Http" />
     <Reference Include="System.Xml" />
-  </ItemGroup>
-  <ItemGroup>
-    <Compile Include="Copilot\CopilotActivityGenerator.cs" />
-    <Compile Include="Dlp\DlpActivityGenerator.cs" />
-    <Compile Include="Copilot\CopilotAdoptionPersonas.cs" />
-    <Compile Include="Copilot\CopilotAdoptionScenarioGenerator.cs" />
-    <Compile Include="Copilot\CopilotChatFactory.cs" />
-    <Compile Include="Copilot\CopilotEventDetailGenerator.cs" />
-    <Compile Include="Copilot\CopilotInteractionHistoryGenerator.cs" />
-    <Compile Include="Copilot\CopilotActivityGeneratorConfig.cs" />
-    <Compile Include="Copilot\CopilotLicenseManager.cs" />
-    <Compile Include="Copilot\CopilotResourceGenerator.cs" />
-    <Compile Include="Copilot\CopilotUserManager.cs" />
-    <Compile Include="Demo\DemoAgentCosts.cs" />
-    <Compile Include="Demo\DemoCalendar.cs" />
-    <Compile Include="Demo\DemoAreas.cs" />
-    <Compile Include="Demo\DemoCommand.cs" />
-    <Compile Include="Demo\DemoGenerator.cs" />
-    <Compile Include="Demo\DemoInteractive.cs" />
-    <Compile Include="Demo\DemoOptions.cs" />
-    <Compile Include="Demo\DemoPopulation.cs" />
-    <Compile Include="Demo\DemoPortalReadiness.cs" />
-    <Compile Include="Demo\DemoTables.cs" />
-    <Compile Include="Demo\DemoUserOrganisations.cs" />
-    <Compile Include="Demo\DemoWebCatalogue.cs" />
-    <Compile Include="Demo\DemoWebActivityGenerator.cs" />
-    <Compile Include="Demo\DemoCollaborationTables.cs" />
-    <Compile Include="Demo\DemoCollaborationGenerator.cs" />
-    <Compile Include="Demo\DemoPowerPlatformTables.cs" />
-    <Compile Include="Demo\DemoPowerPlatformGenerator.cs" />
-    <Compile Include="Demo\DemoTimeline.cs" />
-    <Compile Include="Demo\SqlDemoDatabase.cs" />
-    <Compile Include="Demo\SqlExistingDemoDatabase.cs" />
-    <Compile Include="Generation\ActivityTimestampGenerator.cs" />
-    <Compile Include="Office365\Office365ActivityGenerator.cs" />
-    <Compile Include="Office365\Office365ActivityGeneratorConfig.cs" />
-    <Compile Include="Program.cs" />
-    <Compile Include="Properties\AssemblyInfo.cs" />
-    <Compile Include="Seeding\SeedDataCatalogue.cs" />
-    <Compile Include="Seeding\UserMetadataSeeder.cs" />
-    <Compile Include="StressTests\ActivityAPIStressTest.cs" />
-    <Compile Include="StressTests\ActivityApiDbStressTest.cs" />
-    <Compile Include="StressTests\BaseStressTest.cs" />
-    <Compile Include="StressTests\CopilotAdoptionPerfTest.cs" />
-    <Compile Include="StressTests\CopilotStressTest.cs" />
-    <Compile Include="StressTests\MemoryMonitor.cs" />
-    <Compile Include="StressTests\PowerPlatformStressTest.cs" />
-    <Compile Include="StressTests\SentEmailImporterStressTest.cs" />
-    <Compile Include="StressTests\StressTestResult.cs" />
-    <Compile Include="StressTests\UserActivityStressTest.cs" />
-    <Compile Include="StressTests\FakeLoaders\FakeActivityImporterForStress.cs" />
-    <Compile Include="StressTests\FakeLoaders\FakeActivityReportLoaderForStress.cs" />
-    <Compile Include="StressTests\FakeLoaders\FakeActivitySubscriptionManagerForStress.cs" />
-    <Compile Include="StressTests\FakeLoaders\FakeAppConfig.cs" />
-    <Compile Include="StressTests\FakeLoaders\FakeContentMetaDataLoaderForStress.cs" />
-    <Compile Include="StressTests\FakeLoaders\FakeSentEmailSentimentScorer.cs" />
-    <Compile Include="StressTests\FakeLoaders\FakeSentEmailSourceLoader.cs" />
-    <Compile Include="StressTests\LoadTest\CpuSampler.cs" />
-    <Compile Include="StressTests\LoadTest\LoadTestActivityImporter.cs" />
-    <Compile Include="StressTests\LoadTest\LoadTestSuite.cs" />
   </ItemGroup>
   <ItemGroup>
     <None Include="App.config" />
@@ -155,5 +103,4 @@
       <Version>1.15.0</Version>
     </PackageReference>
   </ItemGroup>
-  <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
 </Project>

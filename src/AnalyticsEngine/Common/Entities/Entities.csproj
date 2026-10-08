@@ -1,6 +1,5 @@
-﻿<?xml version="1.0" encoding="utf-8"?>
-<Project ToolsVersion="15.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
-  <Import Project="$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props" Condition="Exists('$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props')" />
+<?xml version="1.0" encoding="utf-8"?>
+<Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <Configuration Condition=" '$(Configuration)' == '' ">Debug</Configuration>
     <Platform Condition=" '$(Platform)' == '' ">AnyCPU</Platform>
@@ -9,7 +8,13 @@
     <AppDesignerFolder>Properties</AppDesignerFolder>
     <RootNamespace>Common.Entities</RootNamespace>
     <AssemblyName>Common.Entities</AssemblyName>
-    <TargetFrameworkVersion>v4.8</TargetFrameworkVersion>
+    <TargetFramework>net48</TargetFramework>
+    <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <EnableDefaultEmbeddedResourceItems>false</EnableDefaultEmbeddedResourceItems>
+    <EnableDefaultNoneItems>false</EnableDefaultNoneItems>
+    <EmbeddedResourceUseDependentUponConvention>false</EmbeddedResourceUseDependentUponConvention>
+    <GenerateResourceUsePreserializedResources>false</GenerateResourceUsePreserializedResources>
     <FileAlignment>512</FileAlignment>
     <PublishUrl>publish\</PublishUrl>
     <Install>true</Install>
@@ -79,564 +84,239 @@
     <EmbeddedResource Include="..\..\..\Clean Old Data Data.sql" />
   </ItemGroup>
   <ItemGroup>
-    <Compile Include="BaseEntity.cs" />
-    <Compile Include="BuildConstants.cs" />
-    <Compile Include="ActivityAnalysis\ActivityAnalysisCache.cs" />
-    <Compile Include="ActivityAnalysis\ActivityAnalysisEvaluation.cs" />
-    <Compile Include="ActivityAnalysis\ActivityAnalysisMetrics.cs" />
-    <Compile Include="ActivityAnalysis\ActivityAnalysisModels.cs" />
-    <Compile Include="ActivityAnalysis\ActivityAnalysisQuery.cs" />
-    <Compile Include="ActivityAnalysis\ActivityAnalysisReadModel.cs" />
-    <Compile Include="ActivityAnalysis\ActivityAnalysisSql.cs" />
-    <Compile Include="ActivityAnalysis\SqlActivityAnalysisSource.cs" />
-    <Compile Include="LicenceActivity\ILicenceActivityStore.cs" />
-    <Compile Include="LicenceActivity\LicenceActivityModels.cs" />
-    <Compile Include="LicenceActivity\LicenceActivityQuery.cs" />
-    <Compile Include="LicenceActivity\LicenceActivityWorkbook.cs" />
-    <Compile Include="LicenceActivity\LicenceActivitySql.cs" />
-    <Compile Include="LicenceActivity\SqlLicenceActivityStore.cs" />
-    <Compile Include="LicenceActivity\SqlLicenceActivityReadModelLoader.cs" />
-    <Compile Include="LicenceActivity\LicenceActivityReadModel.cs" />
-    <Compile Include="LicenceActivity\LicenceActivityReadModelCache.cs" />
-    <Compile Include="Licences\LicenceHistorySql.cs" />
-    <Compile Include="LicenceActivity\CachedLicenceActivityStore.cs" />
-    <Compile Include="Calls\CallNotificationDispatcher.cs" />
-    <Compile Include="Calls\CallNotificationRules.cs" />
-    <Compile Include="Calls\CallRecordSubscriptionInfo.cs" />
-    <Compile Include="Calls\CallRecordSubscriptionStatus.cs" />
-    <Compile Include="Calls\CallSubscriptionRules.cs" />
-    <Compile Include="Calls\ICallNotificationQueueSender.cs" />
-    <Compile Include="Calls\ICallRecordSubscriptionReader.cs" />
-    <Compile Include="Config\AppConfig.cs" />
-    <Compile Include="Config\AppConnectionStrings.cs" />
-    <Compile Include="CopilotAdoption\AdoptionBand.cs" />
-    <Compile Include="CopilotAdoption\CopilotAdoptionAgentModels.cs" />
-    <Compile Include="CopilotAdoption\CopilotAdoptionAnalysis.cs" />
-    <Compile Include="CopilotAdoption\CopilotAdoptionConcentrationModels.cs" />
-    <Compile Include="CopilotAdoption\CopilotAdoptionCoworkActivities.cs" />
-    <Compile Include="CopilotAdoption\CopilotAdoptionCoworkModels.cs" />
-    <Compile Include="CopilotAdoption\CopilotAdoptionDiagnostics.cs" />
-    <Compile Include="CopilotAdoption\CopilotAdoptionEmailDomain.cs" />
-    <Compile Include="CopilotAdoption\CopilotAdoptionExports.cs" />
-    <Compile Include="CopilotAdoption\CopilotAdoptionGuidanceCatalogue.cs" />
-    <Compile Include="CopilotAdoption\CopilotAdoptionDateRange.cs" />
-    <Compile Include="CopilotAdoption\CopilotAdoptionOptions.cs" />
-    <Compile Include="CopilotAdoption\CopilotAdoptionScope.cs" />
-    <Compile Include="CopilotAdoption\CopilotAdoptionScoring.cs" />
-    <Compile Include="CopilotAdoption\CopilotAdoptionSeatTimeSavedModels.cs" />
-    <Compile Include="CopilotAdoption\CopilotAdoptionSeatTimeSql.cs" />
-    <Compile Include="CopilotAdoption\CopilotAdoptionService.cs" />
-    <Compile Include="CopilotAdoption\CopilotAdoptionSql.cs" />
-    <Compile Include="CopilotAdoption\CopilotAdoptionSummaryModels.cs" />
-    <Compile Include="CopilotAdoption\CopilotAdoptionTelemetry.cs" />
-    <Compile Include="CopilotAdoption\CopilotAdoptionTimeSavedModels.cs" />
-    <Compile Include="CopilotAdoption\CopilotAdoptionUnlicensedModels.cs" />
-    <Compile Include="CopilotAdoption\CopilotAdoptionUserModels.cs" />
-    <Compile Include="CopilotAdoption\CopilotAdoptionWorkbook.cs" />
-    <Compile Include="CopilotAdoption\CopilotLicenceClassifier.cs" />
-    <Compile Include="CopilotAdoption\CopilotLicenceModels.cs" />
-    <Compile Include="CopilotAdoption\CsvSerialiser.cs" />
-    <Compile Include="SpoWebActivity\SqlWebActivityStore.cs" />
-    <Compile Include="SpoWebActivity\WebActivityAvailability.cs" />
-    <Compile Include="SpoWebActivity\WebActivityExports.cs" />
-    <Compile Include="SpoWebActivity\WebActivityModels.cs" />
-    <Compile Include="SpoWebActivity\WebActivityQuery.cs" />
-    <Compile Include="SpoWebActivity\WebActivityRows.cs" />
-    <Compile Include="SpoWebActivity\WebActivityScoring.cs" />
-    <Compile Include="SpoWebActivity\WebActivitySql.cs" />
-    <Compile Include="TeamsExplorer\SqlTeamsExplorerStore.cs" />
-    <Compile Include="TeamsExplorer\TeamsExplorerAvailability.cs" />
-    <Compile Include="TeamsExplorer\TeamsExplorerExports.cs" />
-    <Compile Include="TeamsExplorer\TeamsExplorerModels.cs" />
-    <Compile Include="TeamsExplorer\TeamsExplorerQuery.cs" />
-    <Compile Include="TeamsExplorer\TeamsExplorerRows.cs" />
-    <Compile Include="TeamsExplorer\TeamsExplorerScoring.cs" />
-    <Compile Include="TeamsExplorer\TeamsExplorerSql.cs" />
-    <Compile Include="Copilot\CopilotAccessedResourceTaxonomy.cs" />
-    <Compile Include="Config\ImportConfig.cs" />
-    <Compile Include="Config\UserGroupsFilterModel.cs" />
-    <Compile Include="UserScope\GroupDirectoryReader.cs" />
-    <Compile Include="UserScope\GroupMembershipResolver.cs" />
-    <Compile Include="UserScope\UserImportScope.cs" />
-    <Compile Include="UserScope\UserImportScopeProvider.cs" />
-    <Compile Include="UserScope\Purge\UserScopePurgeDatabase.cs" />
-    <Compile Include="UserScope\Purge\UserScopePurgeEngine.cs" />
-    <Compile Include="UserScope\Purge\UserScopePurgeModels.cs" />
-    <Compile Include="UserScope\Purge\UserScopePurgePlan.cs" />
-    <Compile Include="UserScope\Purge\UserScopePurgeStateStore.cs" />
-    <Compile Include="Entities\AuditLog\CopilotEvents.cs" />
-    <Compile Include="Entities\AuditLog\DlpEvents.cs" />
-    <Compile Include="Entities\Copilot\CopilotInteractionHistory.cs" />
-    <Compile Include="Entities\Email\EmailAddress.cs" />
-    <Compile Include="Entities\Email\SentEmail.cs" />
-    <Compile Include="Entities\Email\SentEmailRecipient.cs" />
-    <Compile Include="Entities\OnlineMeeting.cs" />
-    <Compile Include="Entities\UsageReports\AppPlatformUserActivityLog.cs" />
-    <Compile Include="Entities\UsageReports\SharePointSitesFileWeeklyStats.cs" />
-    <Compile Include="Installer\BaseConfig.cs" />
-    <Compile Include="Installer\BaseSolutionInstallConfig.cs" />
-    <Compile Include="Installer\SqlDatabaseUser.cs" />
-    <Compile Include="Installer\TargetSolutionConfig.cs" />
-    <Compile Include="LookupCaches\Discrete\CallModalityCache.cs" />
-    <Compile Include="LookupCaches\Discrete\CallTypeCache.cs" />
-    <Compile Include="LookupCaches\Discrete\CompanyNameCache.cs" />
-    <Compile Include="LookupCaches\Discrete\CountryOrRegionCache.cs" />
-    <Compile Include="LookupCaches\Discrete\DBLookupCache.cs" />
-    <Compile Include="LookupCaches\Discrete\EmailAddressCache.cs" />
-    <Compile Include="LookupCaches\Discrete\ExistingUserIds.cs" />
-    <Compile Include="LookupCaches\Discrete\KeywordCache.cs" />
-    <Compile Include="LookupCaches\Discrete\LanguageCache.cs" />
-    <Compile Include="LookupCaches\Discrete\LicenseTypeCache.cs" />
-    <Compile Include="LookupCaches\Discrete\OfficeLocationCache.cs" />
-    <Compile Include="LookupCaches\Discrete\SiteCache.cs" />
-    <Compile Include="LookupCaches\Discrete\YammerGroupCache.cs" />
-    <Compile Include="LookupCaches\SharePointLookupManager.cs" />
-    <Compile Include="LookupCaches\SPWebResolver.cs" />
-    <Compile Include="LookupCaches\Discrete\StateOrProvinceCache.cs" />
-    <Compile Include="LookupCaches\TeamsAndCallsDBLookupManager.cs" />
-    <Compile Include="LookupCaches\Discrete\TeamsCache.cs" />
-    <Compile Include="LookupCaches\Discrete\TeamsChannelCache.cs" />
-    <Compile Include="LookupCaches\Discrete\TeamsReactionTypeCache.cs" />
-    <Compile Include="LookupCaches\Discrete\TeamsTabCache.cs" />
-    <Compile Include="LookupCaches\Discrete\UsageLocationCache.cs" />
-    <Compile Include="LookupCaches\Discrete\UserCache.cs" />
-    <Compile Include="LookupCaches\Discrete\UserDepartmentCache.cs" />
-    <Compile Include="LookupCaches\Discrete\UserJobTitleCache.cs" />
-    <Compile Include="Config\SiteFilterLoader.cs" />
-    <Compile Include="EFInsertBatch.cs" />
-    <Compile Include="Config\ConfigState.cs" />
-    <Compile Include="Entities\AuditLog\AzureADEventMetadata.cs" />
-    <Compile Include="Entities\AuditLog\BaseClasses.cs" />
-    <Compile Include="Entities\AuditLog\GeneralEventMetada.cs" />
-    <Compile Include="Entities\AuditLog\Office365Event.cs" />
-    <Compile Include="Entities\AuditLog\ExchangeEventMetadata.cs" />
-    <Compile Include="Entities\AuditLog\SharePointEventMetadata.cs" />
-    <Compile Include="Entities\BaseActivityClasses.cs" />
-    <Compile Include="Entities\FileAndMetadata.cs" />
-    <Compile Include="Entities\WebTraffic\Browser.cs" />
-    <Compile Include="Entities\WebTraffic\City.cs" />
-    <Compile Include="Entities\WebTraffic\Clicks.cs" />
-    <Compile Include="Entities\WebTraffic\Country.cs" />
-    <Compile Include="Entities\WebTraffic\Device.cs" />
-    <Compile Include="Entities\AuditLog\SPEventFileExtension.cs" />
-    <Compile Include="Entities\AuditLog\SPEventFileName.cs" />
-    <Compile Include="Entities\AuditLog\EventOperation.cs" />
-    <Compile Include="Entities\AuditLog\SPEventType.cs" />
-    <Compile Include="Entities\AuditLog\PowerPlatformEvents.cs" />
-    <Compile Include="Entities\AgentCosts\AgentCostClasses.cs" />
-    <Compile Include="Entities\AgentCosts\CopilotStudioHarnessClassifier.cs" />
-    <Compile Include="Config\AzureCostImportSettings.cs" />
-    <Compile Include="AgentCosts\AgentCostReportModels.cs" />
-    <Compile Include="AgentCosts\IAgentCostReportStore.cs" />
-    <Compile Include="AgentCosts\SqlAgentCostReportStore.cs" />
-    <Compile Include="Entities\WebTraffic\Hit.cs" />
-    <Compile Include="Entities\KeyWord.cs" />
-    <Compile Include="Entities\Language.cs" />
-    <Compile Include="Entities\O365ClientApplication.cs" />
-    <Compile Include="Entities\Site.cs" />
-    <Compile Include="Entities\Teams\BaseClasses.cs" />
-    <Compile Include="Entities\Teams\CallFailureReason.cs" />
-    <Compile Include="Entities\Teams\CallFeedback.cs" />
-    <Compile Include="Entities\Teams\CallModality.cs" />
-    <Compile Include="Entities\Teams\CallRecord.cs" />
-    <Compile Include="Entities\Teams\CallSession.cs" />
-    <Compile Include="Entities\Teams\CallType.cs" />
-    <Compile Include="Entities\Teams\ChannelLogLanguage.cs" />
-    <Compile Include="Entities\Teams\ChannelLogKeyword.cs" />
-    <Compile Include="Entities\Teams\ChannelStatsLog.cs" />
-    <Compile Include="Entities\Teams\ChannelUserLog.cs" />
-    <Compile Include="Entities\Teams\TeamDefinition.cs" />
-    <Compile Include="Entities\Teams\TeamChannelDefinition.cs" />
-    <Compile Include="Entities\Teams\TeamMembershipLog.cs" />
-    <Compile Include="Entities\Teams\TeamOwners.cs" />
-    <Compile Include="Entities\Teams\GroupsCrawlWhitelist.cs" />
-    <Compile Include="Entities\Teams\TeamTabDefinition.cs" />
-    <Compile Include="Entities\Teams\ChannelTabLog.cs" />
-    <Compile Include="Entities\Teams\UserReaction.cs" />
-    <Compile Include="Entities\UsageReports\OneDriveUsageLog.cs" />
-    <Compile Include="Entities\UsageReports\SharePointUserActivityLog.cs" />
-    <Compile Include="Entities\UsageReports\OneDriveUserActivityLog.cs" />
-    <Compile Include="Entities\UsageReports\OutlookUsageActivityLog.cs" />
-    <Compile Include="Entities\UsageReports\YammerActivityClasses.cs" />
-    <Compile Include="Entities\UsageReports\TeamsUsageActivityClasses.cs" />
-    <Compile Include="Entities\UsageReports\CopilotUsageReportClasses.cs" />
-    <Compile Include="Entities\TelemetryReport.cs" />
-    <Compile Include="Entities\Web.cs" />
-    <Compile Include="Entities\YammerGroup.cs" />
-    <Compile Include="ImportTaskSettings.cs" />
-    <Compile Include="Entities\ImportLog.cs" />
-    <Compile Include="Entities\WebTraffic\OperatingSystem.cs" />
-    <Compile Include="Entities\Org.cs" />
-    <Compile Include="Entities\OrgUrl.cs" />
-    <Compile Include="Entities\WebTraffic\PageTitle.cs" />
-    <Compile Include="Entities\AuditLog\IgnoredEvent.cs" />
-    <Compile Include="Migrations\201808231327312_v1-0-6.cs" />
-    <Compile Include="Migrations\201808231327312_v1-0-6.Designer.cs">
+    <Compile Update="Migrations\201808231327312_v1-0-6.Designer.cs">
       <DependentUpon>201808231327312_v1-0-6.cs</DependentUpon>
     </Compile>
-    <Compile Include="Migrations\202002061517489_v1-0-7.cs" />
-    <Compile Include="Migrations\202002061517489_v1-0-7.designer.cs">
+    <Compile Update="Migrations\202002061517489_v1-0-7.designer.cs">
       <DependentUpon>202002061517489_v1-0-7.cs</DependentUpon>
     </Compile>
-    <Compile Include="Migrations\202003121036383_v1-0-8.cs" />
-    <Compile Include="Migrations\202003121036383_v1-0-8.designer.cs">
+    <Compile Update="Migrations\202003121036383_v1-0-8.designer.cs">
       <DependentUpon>202003121036383_v1-0-8.cs</DependentUpon>
     </Compile>
-    <Compile Include="Migrations\202010271125334_v1-0-9.cs" />
-    <Compile Include="Migrations\202010271125334_v1-0-9.designer.cs">
+    <Compile Update="Migrations\202010271125334_v1-0-9.designer.cs">
       <DependentUpon>202010271125334_v1-0-9.cs</DependentUpon>
     </Compile>
-    <Compile Include="Migrations\202012101043042_v1-0-10.cs" />
-    <Compile Include="Migrations\202012101043042_v1-0-10.designer.cs">
+    <Compile Update="Migrations\202012101043042_v1-0-10.designer.cs">
       <DependentUpon>202012101043042_v1-0-10.cs</DependentUpon>
     </Compile>
-    <Compile Include="Migrations\202112171359330_TeamsExtraViews1.cs" />
-    <Compile Include="Migrations\202112171359330_TeamsExtraViews1.designer.cs">
+    <Compile Update="Migrations\202112171359330_TeamsExtraViews1.designer.cs">
       <DependentUpon>202112171359330_TeamsExtraViews1.cs</DependentUpon>
     </Compile>
-    <Compile Include="Migrations\202201101014269_TeamsExtraViews2.cs" />
-    <Compile Include="Migrations\202201101014269_TeamsExtraViews2.designer.cs">
+    <Compile Update="Migrations\202201101014269_TeamsExtraViews2.designer.cs">
       <DependentUpon>202201101014269_TeamsExtraViews2.cs</DependentUpon>
     </Compile>
-    <Compile Include="Migrations\202203091433062_UsageReportsEnhancements.cs" />
-    <Compile Include="Migrations\202203091433062_UsageReportsEnhancements.designer.cs">
+    <Compile Update="Migrations\202203091433062_UsageReportsEnhancements.designer.cs">
       <DependentUpon>202203091433062_UsageReportsEnhancements.cs</DependentUpon>
     </Compile>
-    <Compile Include="Migrations\202204061339174_MetadataConstraints.cs" />
-    <Compile Include="Migrations\202204061339174_MetadataConstraints.designer.cs">
+    <Compile Update="Migrations\202204061339174_MetadataConstraints.designer.cs">
       <DependentUpon>202204061339174_MetadataConstraints.cs</DependentUpon>
     </Compile>
-    <Compile Include="Migrations\202205101603006_UserMetadataV2.cs" />
-    <Compile Include="Migrations\202205101603006_UserMetadataV2.designer.cs">
+    <Compile Update="Migrations\202205101603006_UserMetadataV2.designer.cs">
       <DependentUpon>202205101603006_UserMetadataV2.cs</DependentUpon>
     </Compile>
-    <Compile Include="Migrations\202205241114535_SearchImportFix.cs" />
-    <Compile Include="Migrations\202205241114535_SearchImportFix.designer.cs">
+    <Compile Update="Migrations\202205241114535_SearchImportFix.designer.cs">
       <DependentUpon>202205241114535_SearchImportFix.cs</DependentUpon>
     </Compile>
-    <Compile Include="Migrations\202206171501050_TeamsExtraAnalyticsAndConfig.cs" />
-    <Compile Include="Migrations\202206171501050_TeamsExtraAnalyticsAndConfig.designer.cs">
+    <Compile Update="Migrations\202206171501050_TeamsExtraAnalyticsAndConfig.designer.cs">
       <DependentUpon>202206171501050_TeamsExtraAnalyticsAndConfig.cs</DependentUpon>
     </Compile>
-    <Compile Include="Migrations\202207291127095_OrgUrlsFilterOptions.cs" />
-    <Compile Include="Migrations\202207291127095_OrgUrlsFilterOptions.designer.cs">
+    <Compile Update="Migrations\202207291127095_OrgUrlsFilterOptions.designer.cs">
       <DependentUpon>202207291127095_OrgUrlsFilterOptions.cs</DependentUpon>
     </Compile>
-    <Compile Include="Migrations\202301160857218_EnhancedWebTracking.cs" />
-    <Compile Include="Migrations\202301160857218_EnhancedWebTracking.designer.cs">
+    <Compile Update="Migrations\202301160857218_EnhancedWebTracking.designer.cs">
       <DependentUpon>202301160857218_EnhancedWebTracking.cs</DependentUpon>
     </Compile>
-    <Compile Include="Migrations\202401191004335_PageCommentsAndLikes.cs" />
-    <Compile Include="Migrations\202401191004335_PageCommentsAndLikes.designer.cs">
+    <Compile Update="Migrations\202401191004335_PageCommentsAndLikes.designer.cs">
       <DependentUpon>202401191004335_PageCommentsAndLikes.cs</DependentUpon>
     </Compile>
-    <Compile Include="Migrations\202403131104274_ExtendedUsageReports.cs" />
-    <Compile Include="Migrations\202403131104274_ExtendedUsageReports.Designer.cs">
+    <Compile Update="Migrations\202403131104274_ExtendedUsageReports.Designer.cs">
       <DependentUpon>202403131104274_ExtendedUsageReports.cs</DependentUpon>
     </Compile>
-    <Compile Include="Migrations\202404031636545_ExtendedUsageReportsSpSiteUsageLogDbFixes.cs" />
-    <Compile Include="Migrations\202404031636545_ExtendedUsageReportsSpSiteUsageLogDbFixes.Designer.cs">
+    <Compile Update="Migrations\202404031636545_ExtendedUsageReportsSpSiteUsageLogDbFixes.Designer.cs">
       <DependentUpon>202404031636545_ExtendedUsageReportsSpSiteUsageLogDbFixes.cs</DependentUpon>
     </Compile>
-    <Compile Include="Migrations\202404101126333_CopilotEvents.cs" />
-    <Compile Include="Migrations\202404101126333_CopilotEvents.Designer.cs">
+    <Compile Update="Migrations\202404101126333_CopilotEvents.Designer.cs">
       <DependentUpon>202404101126333_CopilotEvents.cs</DependentUpon>
     </Compile>
-    <Compile Include="Migrations\202510231511508_CopilotAgents.cs" />
-    <Compile Include="Migrations\202510231511508_CopilotAgents.Designer.cs">
+    <Compile Update="Migrations\202510231511508_CopilotAgents.Designer.cs">
       <DependentUpon>202510231511508_CopilotAgents.cs</DependentUpon>
     </Compile>
-    <Compile Include="Migrations\202511211834002_CopilotExtendedData.cs" />
-    <Compile Include="Migrations\202511211834002_CopilotExtendedData.Designer.cs">
+    <Compile Update="Migrations\202511211834002_CopilotExtendedData.Designer.cs">
       <DependentUpon>202511211834002_CopilotExtendedData.cs</DependentUpon>
     </Compile>
-    <Compile Include="Migrations\202512011404129_CopilotExtendedDataAgentType.cs" />
-    <Compile Include="Migrations\202512011404129_CopilotExtendedDataAgentType.Designer.cs">
+    <Compile Update="Migrations\202512011404129_CopilotExtendedDataAgentType.Designer.cs">
       <DependentUpon>202512011404129_CopilotExtendedDataAgentType.cs</DependentUpon>
     </Compile>
-    <Compile Include="Migrations\202605141410030_PowerPlatformAuditLogging.cs" />
-    <Compile Include="Migrations\202605141410030_PowerPlatformAuditLogging.Designer.cs">
+    <Compile Update="Migrations\202605141410030_PowerPlatformAuditLogging.Designer.cs">
       <DependentUpon>202605141410030_PowerPlatformAuditLogging.cs</DependentUpon>
     </Compile>
-    <Compile Include="Migrations\202605201510051_RemovePowerAppTypesAndFlowRecurrenceTypes.cs" />
-    <Compile Include="Migrations\202605201510051_RemovePowerAppTypesAndFlowRecurrenceTypes.Designer.cs">
+    <Compile Update="Migrations\202605201510051_RemovePowerAppTypesAndFlowRecurrenceTypes.Designer.cs">
       <DependentUpon>202605201510051_RemovePowerAppTypesAndFlowRecurrenceTypes.cs</DependentUpon>
     </Compile>
-    <Compile Include="Migrations\202605290817012_AddSentEmailTables.cs" />
-    <Compile Include="Migrations\202605290817012_AddSentEmailTables.Designer.cs">
+    <Compile Update="Migrations\202605290817012_AddSentEmailTables.Designer.cs">
       <DependentUpon>202605290817012_AddSentEmailTables.cs</DependentUpon>
     </Compile>
-    <Compile Include="Migrations\202605291149290_AddAuditEventsOperationIndex.cs" />
-    <Compile Include="Migrations\202605291149290_AddAuditEventsOperationIndex.Designer.cs">
+    <Compile Update="Migrations\202605291149290_AddAuditEventsOperationIndex.Designer.cs">
       <DependentUpon>202605291149290_AddAuditEventsOperationIndex.cs</DependentUpon>
     </Compile>
-    <Compile Include="Migrations\202605291207010_AddAuditEventsOperationFK.cs" />
-    <Compile Include="Migrations\202605291207010_AddAuditEventsOperationFK.Designer.cs">
+    <Compile Update="Migrations\202605291207010_AddAuditEventsOperationFK.Designer.cs">
       <DependentUpon>202605291207010_AddAuditEventsOperationFK.cs</DependentUpon>
     </Compile>
-    <Compile Include="Migrations\202606011010001_RemoveDataverseTables.cs" />
-    <Compile Include="Migrations\202606011010001_RemoveDataverseTables.Designer.cs">
+    <Compile Update="Migrations\202606011010001_RemoveDataverseTables.Designer.cs">
       <DependentUpon>202606011010001_RemoveDataverseTables.cs</DependentUpon>
     </Compile>
-    <Compile Include="Migrations\202606011710001_ShrinkUrlsFullUrlColumn.cs" />
-    <Compile Include="Migrations\202606011710001_ShrinkUrlsFullUrlColumn.Designer.cs">
+    <Compile Update="Migrations\202606011710001_ShrinkUrlsFullUrlColumn.Designer.cs">
       <DependentUpon>202606011710001_ShrinkUrlsFullUrlColumn.cs</DependentUpon>
     </Compile>
-    <Compile Include="Migrations\202606011739254_UrlFullUrlVarcharMapping.cs" />
-    <Compile Include="Migrations\202606011739254_UrlFullUrlVarcharMapping.Designer.cs">
+    <Compile Update="Migrations\202606011739254_UrlFullUrlVarcharMapping.Designer.cs">
       <DependentUpon>202606011739254_UrlFullUrlVarcharMapping.cs</DependentUpon>
     </Compile>
-    <Compile Include="Migrations\202606141000001_UrlFullUrlNvarchar.cs" />
-    <Compile Include="Migrations\202606141000001_UrlFullUrlNvarchar.Designer.cs">
+    <Compile Update="Migrations\202606141000001_UrlFullUrlNvarchar.Designer.cs">
       <DependentUpon>202606141000001_UrlFullUrlNvarchar.cs</DependentUpon>
     </Compile>
-    <Compile Include="Migrations\202607101200001_IndexCopilotAccessedResourceLookups.cs" />
-    <Compile Include="Migrations\202607101200001_IndexCopilotAccessedResourceLookups.Designer.cs">
+    <Compile Update="Migrations\202607101200001_IndexCopilotAccessedResourceLookups.Designer.cs">
       <DependentUpon>202607101200001_IndexCopilotAccessedResourceLookups.cs</DependentUpon>
     </Compile>
-    <Compile Include="Migrations\202607130900001_DedupCopilotAccessedResourceSiteUrls.cs" />
-    <Compile Include="Migrations\202607130900001_DedupCopilotAccessedResourceSiteUrls.Designer.cs">
+    <Compile Update="Migrations\202607130900001_DedupCopilotAccessedResourceSiteUrls.Designer.cs">
       <DependentUpon>202607130900001_DedupCopilotAccessedResourceSiteUrls.cs</DependentUpon>
     </Compile>
-    <Compile Include="Migrations\202607141000001_IndexAuditEventsTimeStamp.cs" />
-    <Compile Include="Migrations\202607141000001_IndexAuditEventsTimeStamp.Designer.cs">
+    <Compile Update="Migrations\202607141000001_IndexAuditEventsTimeStamp.Designer.cs">
       <DependentUpon>202607141000001_IndexAuditEventsTimeStamp.cs</DependentUpon>
     </Compile>
-    <Compile Include="Migrations\202607231000001_IndexSitesSiteId.cs" />
-    <Compile Include="Migrations\202607231000001_IndexSitesSiteId.Designer.cs">
+    <Compile Update="Migrations\202607231000001_IndexSitesSiteId.Designer.cs">
       <DependentUpon>202607231000001_IndexSitesSiteId.cs</DependentUpon>
     </Compile>
-    <Compile Include="Migrations\202607231700001_CoverCopilotAccessedResourceDedup.cs" />
-    <Compile Include="Migrations\202607231700001_CoverCopilotAccessedResourceDedup.Designer.cs">
+    <Compile Update="Migrations\202607231700001_CoverCopilotAccessedResourceDedup.Designer.cs">
       <DependentUpon>202607231700001_CoverCopilotAccessedResourceDedup.cs</DependentUpon>
     </Compile>
-    <Compile Include="Migrations\202608131030001_IndexUsageReportSnapshots.cs" />
-    <Compile Include="Migrations\202608131030001_IndexUsageReportSnapshots.Designer.cs">
+    <Compile Update="Migrations\202608131030001_IndexUsageReportSnapshots.Designer.cs">
       <DependentUpon>202608131030001_IndexUsageReportSnapshots.cs</DependentUpon>
     </Compile>
-    <Compile Include="Migrations\202608131055001_IndexReportDateQueries.cs" />
-    <Compile Include="Migrations\202608131055001_IndexReportDateQueries.Designer.cs">
+    <Compile Update="Migrations\202608131055001_IndexReportDateQueries.Designer.cs">
       <DependentUpon>202608131055001_IndexReportDateQueries.cs</DependentUpon>
     </Compile>
-    <Compile Include="Migrations\202608190622001_CopilotDroppedAuditFields.cs" />
-    <Compile Include="Migrations\202608190622001_CopilotDroppedAuditFields.Designer.cs">
+    <Compile Update="Migrations\202608190622001_CopilotDroppedAuditFields.Designer.cs">
       <DependentUpon>202608190622001_CopilotDroppedAuditFields.cs</DependentUpon>
     </Compile>
-    <Compile Include="Migrations\202608190725064_AddCopilotUsageReports.cs" />
-    <Compile Include="Migrations\202608190725064_AddCopilotUsageReports.Designer.cs">
+    <Compile Update="Migrations\202608190725064_AddCopilotUsageReports.Designer.cs">
       <DependentUpon>202608190725064_AddCopilotUsageReports.cs</DependentUpon>
     </Compile>
-    <Compile Include="Migrations\202608191533567_DeprecateTeamsAddons.cs" />
-    <Compile Include="Migrations\202608191533567_DeprecateTeamsAddons.Designer.cs">
+    <Compile Update="Migrations\202608191533567_DeprecateTeamsAddons.Designer.cs">
       <DependentUpon>202608191533567_DeprecateTeamsAddons.cs</DependentUpon>
     </Compile>
-    <Compile Include="Migrations\202608200600001_AddCopilotInteractionHistory.cs" />
-    <Compile Include="Migrations\202608200600001_AddCopilotInteractionHistory.Designer.cs">
+    <Compile Update="Migrations\202608200600001_AddCopilotInteractionHistory.Designer.cs">
       <DependentUpon>202608200600001_AddCopilotInteractionHistory.cs</DependentUpon>
     </Compile>
-    <Compile Include="Migrations\202608210700001_WidenCopilotAccessedResourceDedupIndex.cs" />
-    <Compile Include="Migrations\202608210700001_WidenCopilotAccessedResourceDedupIndex.Designer.cs">
+    <Compile Update="Migrations\202608210700001_WidenCopilotAccessedResourceDedupIndex.Designer.cs">
       <DependentUpon>202608210700001_WidenCopilotAccessedResourceDedupIndex.cs</DependentUpon>
     </Compile>
-    <Compile Include="Migrations\202608210700002_IndexCopilotInteractionKeywordsByKeyword.cs" />
-    <Compile Include="Migrations\202608210700002_IndexCopilotInteractionKeywordsByKeyword.Designer.cs">
+    <Compile Update="Migrations\202608210700002_IndexCopilotInteractionKeywordsByKeyword.Designer.cs">
       <DependentUpon>202608210700002_IndexCopilotInteractionKeywordsByKeyword.cs</DependentUpon>
     </Compile>
-    <Compile Include="Migrations\202608210700003_IndexCopilotInteractionsDedupWindow.cs" />
-    <Compile Include="Migrations\202608210700003_IndexCopilotInteractionsDedupWindow.Designer.cs">
+    <Compile Update="Migrations\202608210700003_IndexCopilotInteractionsDedupWindow.Designer.cs">
       <DependentUpon>202608210700003_IndexCopilotInteractionsDedupWindow.cs</DependentUpon>
     </Compile>
-    <Compile Include="Migrations\202608250900001_IndexCopilotAccessedResourceFkColumns.cs" />
-    <Compile Include="Migrations\202608250900001_IndexCopilotAccessedResourceFkColumns.Designer.cs">
+    <Compile Update="Migrations\202608250900001_IndexCopilotAccessedResourceFkColumns.Designer.cs">
       <DependentUpon>202608250900001_IndexCopilotAccessedResourceFkColumns.cs</DependentUpon>
     </Compile>
-    <Compile Include="Migrations\202608310747353_DenormaliseCopilotChatUserAndTime.cs" />
-    <Compile Include="Migrations\202608310747353_DenormaliseCopilotChatUserAndTime.Designer.cs">
+    <Compile Update="Migrations\202608310747353_DenormaliseCopilotChatUserAndTime.Designer.cs">
       <DependentUpon>202608310747353_DenormaliseCopilotChatUserAndTime.cs</DependentUpon>
     </Compile>
-    <Compile Include="Migrations\202609090647151_AgentCostUserCredits.cs" />
-    <Compile Include="Migrations\202609090647151_AgentCostUserCredits.Designer.cs">
+    <Compile Update="Migrations\202609090647151_AgentCostUserCredits.Designer.cs">
       <DependentUpon>202609090647151_AgentCostUserCredits.cs</DependentUpon>
     </Compile>
-    <Compile Include="Migrations\202609090519337_AgentCostTables.cs" />
-    <Compile Include="Migrations\202609090519337_AgentCostTables.Designer.cs">
+    <Compile Update="Migrations\202609090519337_AgentCostTables.Designer.cs">
       <DependentUpon>202609090519337_AgentCostTables.cs</DependentUpon>
     </Compile>
-    <Compile Include="Migrations\202608310800001_ColumnstoreUsageReportMetrics.cs" />
-    <Compile Include="Migrations\202609100900001_DlpCopilotImpact.cs" />
-    <Compile Include="Migrations\202609100900001_DlpCopilotImpact.Designer.cs">
+    <Compile Update="Migrations\202609100900001_DlpCopilotImpact.Designer.cs">
       <DependentUpon>202609100900001_DlpCopilotImpact.cs</DependentUpon>
     </Compile>
-    <Compile Include="Migrations\202609101000001_RetireUnusedAuditYammerStreamTables.cs" />
-    <Compile Include="Migrations\202609101000001_RetireUnusedAuditYammerStreamTables.Designer.cs">
+    <Compile Update="Migrations\202609101000001_RetireUnusedAuditYammerStreamTables.Designer.cs">
       <DependentUpon>202609101000001_RetireUnusedAuditYammerStreamTables.cs</DependentUpon>
     </Compile>
-    <Compile Include="Migrations\202608310800001_ColumnstoreUsageReportMetrics.Designer.cs">
+    <Compile Update="Migrations\202608310800001_ColumnstoreUsageReportMetrics.Designer.cs">
       <DependentUpon>202608310800001_ColumnstoreUsageReportMetrics.cs</DependentUpon>
     </Compile>
-    <Compile Include="Migrations\202609131940001_CopilotReclaimEligibilityInputs.cs" />
-    <Compile Include="Migrations\202609131940001_CopilotReclaimEligibilityInputs.Designer.cs">
+    <Compile Update="Migrations\202609131940001_CopilotReclaimEligibilityInputs.Designer.cs">
       <DependentUpon>202609131940001_CopilotReclaimEligibilityInputs.cs</DependentUpon>
     </Compile>
-    <Compile Include="Migrations\202609101200001_RetireImportDbHacks.cs" />
-    <Compile Include="Migrations\202609101200001_RetireImportDbHacks.Designer.cs">
+    <Compile Update="Migrations\202609101200001_RetireImportDbHacks.Designer.cs">
       <DependentUpon>202609101200001_RetireImportDbHacks.cs</DependentUpon>
     </Compile>
-    <Compile Include="Migrations\202609161200001_IndexTeamsExplorerQueries.cs" />
-    <Compile Include="Migrations\202609161200001_IndexTeamsExplorerQueries.Designer.cs">
+    <Compile Update="Migrations\202609161200001_IndexTeamsExplorerQueries.Designer.cs">
       <DependentUpon>202609161200001_IndexTeamsExplorerQueries.cs</DependentUpon>
     </Compile>
-    <Compile Include="Migrations\202609151440027_CopilotPromptSafetyFields.cs" />
-    <Compile Include="Migrations\202609170900001_CopilotAdoptionPeriodFacts.cs" />
-    <Compile Include="Migrations\202609170900001_CopilotAdoptionPeriodFacts.Designer.cs">
+    <Compile Update="Migrations\202609170900001_CopilotAdoptionPeriodFacts.Designer.cs">
       <DependentUpon>202609170900001_CopilotAdoptionPeriodFacts.cs</DependentUpon>
     </Compile>
-    <Compile Include="Migrations\202609170920001_CopilotSubscribedSkuCapacity.cs" />
-    <Compile Include="Migrations\202609170920001_CopilotSubscribedSkuCapacity.Designer.cs">
+    <Compile Update="Migrations\202609170920001_CopilotSubscribedSkuCapacity.Designer.cs">
       <DependentUpon>202609170920001_CopilotSubscribedSkuCapacity.cs</DependentUpon>
     </Compile>
-    <Compile Include="Migrations\202609171000001_CopilotAdoptionTargets.cs" />
-    <Compile Include="Migrations\202609171000001_CopilotAdoptionTargets.Designer.cs">
+    <Compile Update="Migrations\202609171000001_CopilotAdoptionTargets.Designer.cs">
       <DependentUpon>202609171000001_CopilotAdoptionTargets.cs</DependentUpon>
     </Compile>
-    <Compile Include="Migrations\202609171020001_CopilotAdoptionCohorts.cs" />
-    <Compile Include="Migrations\202609171020001_CopilotAdoptionCohorts.Designer.cs">
+    <Compile Update="Migrations\202609171020001_CopilotAdoptionCohorts.Designer.cs">
       <DependentUpon>202609171020001_CopilotAdoptionCohorts.cs</DependentUpon>
     </Compile>
-    <Compile Include="Migrations\202609171020002_CopilotAdoptionInterventions.cs" />
-    <Compile Include="Migrations\202609171020002_CopilotAdoptionInterventions.Designer.cs">
+    <Compile Update="Migrations\202609171020002_CopilotAdoptionInterventions.Designer.cs">
       <DependentUpon>202609171020002_CopilotAdoptionInterventions.cs</DependentUpon>
     </Compile>
-    <Compile Include="Migrations\202609171030001_CopilotAdoptionDigest.cs" />
-    <Compile Include="Migrations\202609171030001_CopilotAdoptionDigest.Designer.cs">
+    <Compile Update="Migrations\202609171030001_CopilotAdoptionDigest.Designer.cs">
       <DependentUpon>202609171030001_CopilotAdoptionDigest.cs</DependentUpon>
     </Compile>
-    <Compile Include="Migrations\202609151440027_CopilotPromptSafetyFields.Designer.cs">
+    <Compile Update="Migrations\202609151440027_CopilotPromptSafetyFields.Designer.cs">
       <DependentUpon>202609151440027_CopilotPromptSafetyFields.cs</DependentUpon>
     </Compile>
-    <Compile Include="Migrations\202609170910001_GraphCopilotUsageApiV2.cs" />
-    <Compile Include="Migrations\202609170910001_GraphCopilotUsageApiV2.Designer.cs">
+    <Compile Update="Migrations\202609170910001_GraphCopilotUsageApiV2.Designer.cs">
       <DependentUpon>202609170910001_GraphCopilotUsageApiV2.cs</DependentUpon>
     </Compile>
-    <Compile Include="Migrations\202609170940001_CoworkUsageReportTables.cs" />
-    <Compile Include="Migrations\202609170940001_CoworkUsageReportTables.Designer.cs">
+    <Compile Update="Migrations\202609170940001_CoworkUsageReportTables.Designer.cs">
       <DependentUpon>202609170940001_CoworkUsageReportTables.cs</DependentUpon>
     </Compile>
-    <Compile Include="Migrations\202609171120001_AzureCostTagColumns.cs" />
-    <Compile Include="Migrations\202609171120001_AzureCostTagColumns.Designer.cs">
+    <Compile Update="Migrations\202609171120001_AzureCostTagColumns.Designer.cs">
       <DependentUpon>202609171120001_AzureCostTagColumns.cs</DependentUpon>
     </Compile>
-    <Compile Include="Migrations\202609201430001_DropCopilotAdoptionPeriodTables.cs" />
-    <Compile Include="Migrations\202609201430001_DropCopilotAdoptionPeriodTables.Designer.cs">
+    <Compile Update="Migrations\202609201430001_DropCopilotAdoptionPeriodTables.Designer.cs">
       <DependentUpon>202609201430001_DropCopilotAdoptionPeriodTables.cs</DependentUpon>
     </Compile>
-    <Compile Include="Migrations\202610011330001_PortalGlobalFilter.cs" />
-    <Compile Include="Migrations\202610011330001_PortalGlobalFilter.Designer.cs">
+    <Compile Update="Migrations\202610011330001_PortalGlobalFilter.Designer.cs">
       <DependentUpon>202610011330001_PortalGlobalFilter.cs</DependentUpon>
     </Compile>
-    <Compile Include="Migrations\202609221200001_UserOrganisations.cs" />
-    <Compile Include="Migrations\202609221200001_UserOrganisations.Designer.cs">
+    <Compile Update="Migrations\202609221200001_UserOrganisations.Designer.cs">
       <DependentUpon>202609221200001_UserOrganisations.cs</DependentUpon>
     </Compile>
-    <Compile Include="Migrations\202610021200001_LicenceHistory.cs" />
-    <Compile Include="Migrations\202610021200001_LicenceHistory.Designer.cs">
+    <Compile Update="Migrations\202610021200001_LicenceHistory.Designer.cs">
       <DependentUpon>202610021200001_LicenceHistory.cs</DependentUpon>
     </Compile>
-    <Compile Include="Migrations\202609190900001_IndexPlatformUserActivityLogDate.cs" />
-    <Compile Include="Migrations\202609190900001_IndexPlatformUserActivityLogDate.Designer.cs">
+    <Compile Update="Migrations\202609190900001_IndexPlatformUserActivityLogDate.Designer.cs">
       <DependentUpon>202609190900001_IndexPlatformUserActivityLogDate.cs</DependentUpon>
     </Compile>
-    <Compile Include="Migrations\202609171125117_DropUnreportedCopilotStudioCreditColumns.cs" />
-    <Compile Include="Migrations\202609171125117_DropUnreportedCopilotStudioCreditColumns.Designer.cs">
+    <Compile Update="Migrations\202609171125117_DropUnreportedCopilotStudioCreditColumns.Designer.cs">
       <DependentUpon>202609171125117_DropUnreportedCopilotStudioCreditColumns.cs</DependentUpon>
     </Compile>
-    <Compile Include="Migrations\202609101100001_UniqueUrlsFullUrlIndex.cs" />
-    <Compile Include="Migrations\202609101100001_UniqueUrlsFullUrlIndex.Designer.cs">
+    <Compile Update="Migrations\202609101100001_UniqueUrlsFullUrlIndex.Designer.cs">
       <DependentUpon>202609101100001_UniqueUrlsFullUrlIndex.cs</DependentUpon>
     </Compile>
-    <Compile Include="Migrations\v1-0-5.cs" />
-    <Compile Include="Migrations\v1-0-5.Designer.cs">
+    <Compile Update="Migrations\v1-0-5.Designer.cs">
       <DependentUpon>v1-0-5.cs</DependentUpon>
     </Compile>
-    <Compile Include="Migrations\v1-0-4.cs" />
-    <Compile Include="Migrations\v1-0-4.Designer.cs">
+    <Compile Update="Migrations\v1-0-4.Designer.cs">
       <DependentUpon>v1-0-4.cs</DependentUpon>
     </Compile>
-    <Compile Include="Migrations\v1-0-3.cs" />
-    <Compile Include="Migrations\v1-0-3.Designer.cs">
+    <Compile Update="Migrations\v1-0-3.Designer.cs">
       <DependentUpon>v1-0-3.cs</DependentUpon>
     </Compile>
-    <Compile Include="Migrations\v1.cs" />
-    <Compile Include="Migrations\v1.Designer.cs">
+    <Compile Update="Migrations\v1.Designer.cs">
       <DependentUpon>v1.cs</DependentUpon>
     </Compile>
-    <Compile Include="Migrations\v1-0-25.cs" />
-    <Compile Include="Migrations\v1-0-25.Designer.cs">
+    <Compile Update="Migrations\v1-0-25.Designer.cs">
       <DependentUpon>v1-0-25.cs</DependentUpon>
     </Compile>
-    <Compile Include="Migrations\Configuration.cs" />
-    <Compile Include="Models\AuthToken.cs" />
-    <Compile Include="Models\GraphChangeNotification.cs" />
-    <Compile Include="Properties\AssemblyInfo.cs" />
-    <Compile Include="Entities\WebTraffic\Province.cs" />
-    <Compile Include="Entities\Search.cs" />
-    <Compile Include="Entities\SearchTerm.cs" />
-    <Compile Include="Entities\WebTraffic\UserSession.cs" />
-    <Compile Include="Properties\Resources.Designer.cs">
+    <Compile Update="Properties\Resources.Designer.cs">
       <AutoGen>True</AutoGen>
       <DesignTime>True</DesignTime>
       <DependentUpon>Resources.resx</DependentUpon>
     </Compile>
-    <Compile Include="State\AzureTableKeyValueStore.cs" />
-    <Compile Include="State\IKeyValueStore.cs" />
-    <Compile Include="State\InMemoryKeyValueStore.cs" />
-    <Compile Include="CopilotAuditBackfill\CopilotAuditBackfillModels.cs" />
-    <Compile Include="CopilotAuditBackfill\CopilotAuditBackfillSlicer.cs" />
-    <Compile Include="CopilotAuditBackfill\CopilotAuditBackfillStateStore.cs" />
-    <Compile Include="State\StateStore.cs" />
-    <Compile Include="State\StorageTableClientFactory.cs" />
-    <Compile Include="State\TeamsTokenStore.cs" />
-    <Compile Include="State\UserImportCheckpointKeys.cs" />
-    <Compile Include="AnalyticsEntitiesContext.cs" />
-    <Compile Include="Sql\AzureSqlAccessTokenInterceptor.cs" />
-    <Compile Include="Sql\LegacyProviderNameAliasResolver.cs" />
-    <Compile Include="IAnalyticsDbContextFactory.cs" />
-    <Compile Include="Entities\Url.cs" />
-    <Compile Include="Entities\User.cs" />
-    <Compile Include="UserOrgs\EntraOrgAttributeSpec.cs" />
-    <Compile Include="UserOrgs\GraphUserOrgSelection.cs" />
-    <Compile Include="UserOrgs\IUserOrgStore.cs" />
-    <Compile Include="UserOrgs\SqlUserOrgAssignmentStore.cs" />
-    <Compile Include="UserOrgs\SqlUserOrgImportJobStore.cs" />
-    <Compile Include="UserOrgs\SqlUserOrgMembershipReader.cs" />
-    <Compile Include="UserOrgs\SqlUserOrgTypeStore.cs" />
-    <Compile Include="UserOrgs\UserOrgCsvParser.cs" />
-    <Compile Include="UserOrgs\UserOrgChangeLog.cs" />
-    <Compile Include="UserOrgs\UserOrgChangeLogShipper.cs" />
-    <Compile Include="UserOrgs\UserOrgImportRunner.cs" />
-    <Compile Include="UserOrgs\UserOrgImportTelemetry.cs" />
-    <Compile Include="UserOrgs\UserOrgMessageCodes.cs" />
-    <Compile Include="UserOrgs\UserOrgModels.cs" />
-    <Compile Include="UserOrgs\UserOrgRules.cs" />
-    <Compile Include="UserOrgs\UserOrgStores.cs" />
-    <Compile Include="UserFilters\GlobalFilterCodec.cs" />
-    <Compile Include="UserFilters\GlobalFilterDefinition.cs" />
-    <Compile Include="UserFilters\GlobalFilterModels.cs" />
-    <Compile Include="UserFilters\GlobalFilterResolver.cs" />
-    <Compile Include="UserFilters\ReportUserScope.cs" />
-    <Compile Include="UserFilters\SqlGlobalFilterStore.cs" />
-    <Compile Include="UserFilters\SqlUserDirectoryLoader.cs" />
-    <Compile Include="UserFilters\UserDirectorySnapshot.cs" />
-    <Compile Include="UserFilters\UserFilterCatalogue.cs" />
-    <Compile Include="UserFilters\UserFilterCodec.cs" />
-    <Compile Include="UserFilters\UserFilterCompiler.cs" />
-    <Compile Include="UserFilters\UserFilterDescriber.cs" />
-    <Compile Include="UserFilters\UserFilterDimensions.cs" />
-    <Compile Include="UserFilters\UserFilterModels.cs" />
-    <Compile Include="ResourceProxy.cs" />
-    <Compile Include="Xlsx\XlsxChart.cs" />
-    <Compile Include="Xlsx\XlsxSheet.cs" />
-    <Compile Include="Xlsx\XlsxWriter.cs" />
   </ItemGroup>
   <ItemGroup>
     <BootstrapperPackage Include=".NETFramework,Version=v4.5.2">
@@ -995,5 +675,4 @@
       <Version>10.0.11</Version>
     </PackageReference>
   </ItemGroup>
-  <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
 </Project>
