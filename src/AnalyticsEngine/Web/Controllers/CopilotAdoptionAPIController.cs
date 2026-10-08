@@ -89,6 +89,10 @@ namespace Web.AnalyticsWeb.Controllers
 
         internal CopilotAdoptionAnalysisCoordinator Coordinator { get; }
 
+        // ApiController is request-scoped. Keep the joined generation's identity, not a lookup using
+        // settings that another request may change during the wait.
+        private string _joinedRunId;
+
         /// <summary>The directory snapshot a <c>userFilter</c> is evaluated against.</summary>
         internal IUserDirectorySource Directory { get; }
 
@@ -346,11 +350,13 @@ namespace Web.AnalyticsWeb.Controllers
 
             try
             {
-                return await Coordinator.TryGetAsync(
+                var waited = await Coordinator.TryGetWithRunIdAsync(
                     range,
                     ParseIds(seatLicenceTypeIds),
                     budget,
                     cancellationToken);
+                _joinedRunId = waited.RunId;
+                return waited.Analysis;
             }
             catch (CopilotAdoptionScoreSettingsUnavailableException ex)
             {
@@ -381,9 +387,7 @@ namespace Web.AnalyticsWeb.Controllers
         /// </summary>
         private string InFlightRunId(int windowDays, string from, string to, string seatLicenceTypeIds)
         {
-            return Coordinator.InFlightRunId(
-                CopilotAdoptionDateRange.Create(windowDays, from, to, DateTime.UtcNow),
-                ParseIds(seatLicenceTypeIds));
+            return _joinedRunId;
         }
 
         /// <summary>The header carrying the analysis run id on 202s, "not ready" 503s and export downloads.</summary>

@@ -10,6 +10,18 @@ using System.Threading.Tasks;
 
 namespace Web.AnalyticsWeb.Models.CopilotAdoption
 {
+    internal sealed class CopilotAdoptionAnalysisWaitResult
+    {
+        internal CopilotAdoptionAnalysisWaitResult(CopilotAdoptionAnalysis analysis, string runId)
+        {
+            Analysis = analysis;
+            RunId = runId;
+        }
+
+        internal CopilotAdoptionAnalysis Analysis { get; }
+        internal string RunId { get; }
+    }
+
     internal interface ICopilotAdoptionAnalysisRunner
     {
         Task<CopilotAdoptionAnalysis> RunAsync(
@@ -253,9 +265,22 @@ namespace Web.AnalyticsWeb.Models.CopilotAdoption
             TimeSpan waitBudget,
             CancellationToken cancellationToken)
         {
+            return (await TryGetWithRunIdAsync(range, seatLicenceTypeIds, waitBudget, cancellationToken)).Analysis;
+        }
+
+        /// <summary>
+        /// Carries the identity of the generation this request actually joined through its wait.
+        /// Looking it up from LastKnown after waiting can name a different run after an administrator saves.
+        /// </summary>
+        internal async Task<CopilotAdoptionAnalysisWaitResult> TryGetWithRunIdAsync(
+            CopilotAdoptionDateRange range,
+            List<int> seatLicenceTypeIds,
+            TimeSpan waitBudget,
+            CancellationToken cancellationToken)
+        {
             var settings = await ScoreSettingsAsync().ConfigureAwait(false);
-            var task = Join(range, seatLicenceTypeIds, settings, out var interest);
-            if (task.IsCompleted) return await task;
+            var task = Join(range, seatLicenceTypeIds, settings, out var interest, out var generation);
+            if (task.IsCompleted) return new CopilotAdoptionAnalysisWaitResult(await task, generation?.RunId);
 
             // Joining already recorded this request, so a queued run cannot judge it absent in the gap
             // before this line. Waiting as well keeps a long wait - an export's 150 seconds - counted as
@@ -264,7 +289,7 @@ namespace Web.AnalyticsWeb.Models.CopilotAdoption
             try
             {
                 var finished = await Task.WhenAny(task, Task.Delay(waitBudget, cancellationToken));
-                return finished == task ? await task : null;
+                return new CopilotAdoptionAnalysisWaitResult(finished == task ? await task : null, generation?.RunId);
             }
             finally
             {
@@ -341,7 +366,18 @@ namespace Web.AnalyticsWeb.Models.CopilotAdoption
             CopilotAdoptionEffectiveScoreSettings settings,
             out AnalysisInterest interest)
         {
+            return Join(range, seatLicenceTypeIds, settings, out interest, out _);
+        }
+
+        private Task<CopilotAdoptionAnalysis> Join(
+            CopilotAdoptionDateRange range,
+            List<int> seatLicenceTypeIds,
+            CopilotAdoptionEffectiveScoreSettings settings,
+            out AnalysisInterest interest,
+            out Generation joinedGeneration)
+        {
             interest = null;
+            joinedGeneration = null;
             var ids = seatLicenceTypeIds ?? new List<int>();
             settings = settings ?? CopilotAdoptionEffectiveScoreSettings.Defaults;
             var cacheKey = CacheKey(range, ids, settings);
@@ -369,6 +405,7 @@ namespace Web.AnalyticsWeb.Models.CopilotAdoption
                 if (effective.Interest.TryTouch(_utcNow()))
                 {
                     interest = effective.Interest;
+                    joinedGeneration = effective;
                     return effective.Work.Value;
                 }
 

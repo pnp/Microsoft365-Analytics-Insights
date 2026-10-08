@@ -36,6 +36,70 @@ namespace Tests.UnitTests
         #region Analysis cache
 
         [TestMethod]
+        public async Task Report_StillBuildingNamesTheJoinedRun_WhenSettingsChangeDuringItsWait()
+        {
+            var source = new MutableSource();
+            var runner = new HeldSettingsRunner();
+            var serial = 0;
+            var coordinator = new AdoptionCoordinator(
+                runner, new DictionaryCache(),
+                (window, hasOverride) => new IdentifiedTelemetry("synthetic-run-" + Interlocked.Increment(ref serial)),
+                TimeSpan.FromMinutes(10), settingsSource: source);
+            using (var host = new PortalTestHost(
+                new[] { typeof(CopilotAdoptionAPIController) }, PortalTestHost.SignedIn(),
+                PortalAccessPolicy.Enforcing, _ => new CopilotAdoptionAPIController(coordinator)))
+            {
+                var responseTask = host.Client.GetAsync("api/CopilotAdoption/summary");
+                try
+                {
+                    await runner.FirstStarted.Task;
+                    source.Current = new CopilotAdoptionEffectiveScoreSettings(1, With(s => s.ChampionScore = 90), Now);
+                    var newerRun = coordinator.GetAsync(DateRange.Create(28, null, null, Now), new List<int>());
+                    await runner.SecondStarted.Task;
+                    var response = await responseTask;
+                    Assert.AreEqual(HttpStatusCode.Accepted, response.StatusCode);
+                    var body = JObject.Parse(await response.Content.ReadAsStringAsync());
+                    Assert.AreEqual("synthetic-run-1", (string)body["runId"],
+                        "This request joined the defaults, not the later customised generation.");
+                    Assert.AreEqual("synthetic-run-1", response.Headers.GetValues(CopilotAdoptionAPIController.RunIdHeader).Single());
+                    runner.Complete();
+                    await newerRun;
+                }
+                finally { runner.Complete(); }
+            }
+        }
+
+        private sealed class HeldSettingsRunner : AdoptionRunner
+        {
+            internal readonly TaskCompletionSource<bool> FirstStarted = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            internal readonly TaskCompletionSource<bool> SecondStarted = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            private readonly TaskCompletionSource<bool> _complete = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            private int _calls;
+            public async Task<CopilotAdoptionAnalysis> RunAsync(int windowDays, DateTime? fromUtc, DateTime? toUtc, DateTime? toExclusiveUtc, bool usesExplicitDates, List<int> seatLicenceTypeIds, CopilotAdoptionEffectiveScoreSettings scoreSettings, RunTelemetry telemetry)
+            {
+                (Interlocked.Increment(ref _calls) == 1 ? FirstStarted : SecondStarted).TrySetResult(true);
+                await _complete.Task;
+                return Analysis(scoreSettings);
+            }
+            internal void Complete() => _complete.TrySetResult(true);
+        }
+
+        private sealed class IdentifiedTelemetry : AnalyticsWeb::Web.AnalyticsWeb.Models.CopilotAdoption.ICopilotAdoptionAnalysisTelemetry
+        {
+            internal IdentifiedTelemetry(string runId) { RunId = runId; }
+            public string RunId { get; }
+            public long StepStarted(string step) => 0;
+            public void StepCompleted(long operationId, string step, long durationMs, bool failed, CopilotAdoptionFailure failure = null) { }
+            public long QueryStarted(string step, string query) => 0;
+            public void QueryCompleted(long operationId, string step, string query, long durationMs, bool failed, CopilotAdoptionFailure failure = null) { }
+            public void Checkpoint(string stage, long durationMs = 0) { }
+            public void QueueCompletion(CopilotAdoptionAnalysis analysis) { }
+            public bool QueueFailure(Exception exception) => true;
+            public void HostStopping(string reason) { }
+            public void Dispose() { }
+        }
+
+        [TestMethod]
         public void CacheKey_IsUnchangedForTheDefaults_AndDistinctPerCustomisedVersion()
         {
             var range = DateRange.Create(28, null, null, Now);
