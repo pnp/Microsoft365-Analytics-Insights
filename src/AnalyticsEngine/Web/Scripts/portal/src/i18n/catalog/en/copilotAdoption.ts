@@ -780,6 +780,11 @@ export const copilotAdoption = {
   'copilotAdoption.server.dataset.seatHolderTimeSavedInputs': 'seat-holder Copilot time-saved inputs',
   'copilotAdoption.server.query.SeatHolderTimeSaved': 'seat-holder Copilot time-saved inputs',
 
+  // Administrator score settings (#683, #684), shown on the report and the Method tab.
+  'copilotAdoption.scoreSettings.heading': 'Customised score settings.',
+  'copilotAdoption.scoreSettings.values': 'weights frequency {frequency}%, depth {depth}%, breadth {breadth}%; levels Developing from {developing}, Established from {established}, Champion from {champion}',
+  'copilotAdoption.scoreSettings.customised': 'An administrator has changed how adoption scores are calculated for this tenant. This report uses {current}. The defaults are {defaults}. Administrators can change these, or choose Reset to defaults, under Administration > Copilot Adoption settings.',
+  'copilotAdoption.scoreSettings.defaults': 'These are the default score settings: {current}. Administrators can change the weights and level thresholds under Administration > Copilot Adoption settings.',
 } as const;
 
 export default copilotAdoption;

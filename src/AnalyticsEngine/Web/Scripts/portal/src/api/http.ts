@@ -141,6 +141,8 @@ export const REPORT_SCOPE_ERROR_KEYS: ReadonlyMap<string, TranslationKey> = new 
   ['globalFilterUnavailable', 'errors.globalFilter.unavailable'],
   ['globalFilterInvalid', 'errors.globalFilter.invalid'],
   ['filterDirectoryUnavailable', 'errors.globalFilter.directoryUnavailable'],
+  // The Copilot Adoption score settings (#683, #684) could not be read, so the report was not scored.
+  ['copilotAdoptionSettingsUnavailable', 'errors.copilotAdoptionSettings.unavailable'],
 ]);
 
 /** Thrown when a report was refused because the administrator's global filter could not be applied. */

@@ -32,6 +32,7 @@ import { WORKLOADS } from '../../types/licenceActivity';
 import { PORTAL_PERMISSION_ERROR_CODE } from '../../access';
 import { GLOBAL_FILTER_ERROR_KEYS } from '../../api/globalFilterApi';
 import { REPORT_SCOPE_ERROR_KEYS } from '../../api/http';
+import { COPILOT_ADOPTION_SETTINGS_ERROR_KEYS } from '../../api/copilotAdoptionSettingsApi';
 
 function sortedUnique(values: string[]): string[] {
   return [...new Set(values)].sort((a, b) => a.localeCompare(b));
@@ -130,6 +131,15 @@ describe('API error-code drift checks', () => {
  */
 const GLOBAL_FILTER_CONTROLLER = join(process.cwd(), '..', '..', 'Controllers', 'GlobalFilterAPIController.cs');
 const REPORT_SCOPE_RESOLVER = join(process.cwd(), '..', '..', 'Models', 'UserFilters', 'ReportScopeResolver.cs');
+const SCORE_SETTINGS = join(process.cwd(), '..', '..', '..', 'Common', 'Entities', 'CopilotAdoption', 'CopilotAdoptionScoreSettings.cs');
+
+/** The codes in `CopilotAdoptionScoreSettingsErrorCodes`, by constant name. */
+function scoreSettingsCodes(): Map<string, string> {
+  const source = readFileSync(SCORE_SETTINGS, 'utf8');
+  const block = source.slice(source.indexOf('class CopilotAdoptionScoreSettingsErrorCodes'));
+  const body = block.slice(0, block.indexOf('}'));
+  return new Map([...body.matchAll(/public\s+const\s+string\s+(\w+)\s*=\s*"([^"]+)"/g)].map((m) => [m[1], m[2]]));
+}
 
 describe('Global filter error codes', () => {
   it('words every code the editor’s endpoints can send, and nothing they cannot', () => {
@@ -150,9 +160,19 @@ describe('Global filter error codes', () => {
       ),
     );
 
+    const settingsUnavailable = scoreSettingsCodes().get('ReportSettingsUnavailable');
     expect(server).toHaveLength(3);
-    expect(sortedUnique([...REPORT_SCOPE_ERROR_KEYS.keys()])).toEqual(server);
+    expect(settingsUnavailable).toBeTruthy();
+    expect(sortedUnique([...REPORT_SCOPE_ERROR_KEYS.keys()])).toEqual(sortedUnique([...server, settingsUnavailable!]));
     expect([...REPORT_SCOPE_ERROR_KEYS.values()].filter((key) => !(key in EN_CATALOG))).toEqual([]);
+  });
+
+  it('words every code the Copilot Adoption settings page can be refused with', () => {
+    const codes = scoreSettingsCodes();
+    codes.delete('ReportSettingsUnavailable');
+    expect(codes.size).toBeGreaterThanOrEqual(8);
+    expect(sortedUnique([...COPILOT_ADOPTION_SETTINGS_ERROR_KEYS.keys()].filter((c) => c !== 'loadFailed' && c !== 'saveFailed'))).toEqual(sortedUnique([...codes.values()]));
+    expect([...COPILOT_ADOPTION_SETTINGS_ERROR_KEYS.values()].filter((key) => !(key in EN_CATALOG))).toEqual([]);
   });
 
   it('sends a code with every error the editor’s endpoints answer', () => {

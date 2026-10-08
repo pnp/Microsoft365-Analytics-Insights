@@ -7,6 +7,7 @@
 import type { ReportCategory, ReportSeries } from './reports';
 import type { UserFilterEcho } from './userFilter';
 import type { GlobalFilterEcho } from './globalFilter';
+import type { CopilotAdoptionScoreSettingsInfo } from './copilotAdoptionSettings';
 
 /** Which parts of the adoption tool this deployment can show. */
 export interface CopilotAdoptionAvailability {
@@ -137,6 +138,8 @@ export interface CopilotAdoptionOptions {
   championScore: number;
   establishedScore: number;
   developingScore: number;
+  /** Whether an administrator customised the weights or band thresholds above. Absent from older servers. */
+  scoreSettings?: CopilotAdoptionScoreSettingsInfo;
 
   habitBucketNormalisationDays: number;
   habitModerateMinDays: number;

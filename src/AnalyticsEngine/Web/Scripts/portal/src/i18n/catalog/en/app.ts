@@ -50,6 +50,7 @@ export const app = {
   'app.route.userScope': 'User scope',
   'app.route.globalFilter': 'Report filter',
   'app.route.copilotAuditBackfill': 'Copilot audit backfill',
+  'app.route.copilotAdoptionSettings': 'Copilot Adoption settings',
   'app.route.configuration': 'Service configuration',
 } as const;
 

@@ -121,6 +121,7 @@
     <Compile Include="CopilotAdoption\CopilotAdoptionGuidanceCatalogue.cs" />
     <Compile Include="CopilotAdoption\CopilotAdoptionDateRange.cs" />
     <Compile Include="CopilotAdoption\CopilotAdoptionOptions.cs" />
+    <Compile Include="CopilotAdoption\CopilotAdoptionScoreSettings.cs" />
     <Compile Include="CopilotAdoption\CopilotAdoptionScope.cs" />
     <Compile Include="CopilotAdoption\CopilotAdoptionScoring.cs" />
     <Compile Include="CopilotAdoption\CopilotAdoptionSeatTimeSavedModels.cs" />

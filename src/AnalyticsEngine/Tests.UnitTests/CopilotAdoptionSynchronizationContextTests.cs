@@ -282,6 +282,7 @@ namespace Tests.UnitTests
                 DateTime? toExclusiveUtc,
                 bool usesExplicitDates,
                 List<int> seatLicenceTypeIds,
+                    Common.Entities.CopilotAdoption.CopilotAdoptionEffectiveScoreSettings scoreSettings,
                     ICopilotAdoptionRunTelemetry telemetry)
             {
                 Interlocked.Increment(ref _callCount);

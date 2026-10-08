@@ -781,6 +781,11 @@ const copilotAdoption: Record<keyof typeof en, string> = {
   'copilotAdoption.server.dataset.seatHolderTimeSavedInputs': 'entradas de tiempo ahorrado por titulares de licencia de Copilot',
   'copilotAdoption.server.query.SeatHolderTimeSaved': 'entradas de tiempo ahorrado por titulares de licencia de Copilot',
 
+  // Configuración de puntuación del administrador (#683, #684), en el informe y en la pestaña Método.
+  'copilotAdoption.scoreSettings.heading': 'Configuración de puntuación personalizada.',
+  'copilotAdoption.scoreSettings.values': 'pesos: frecuencia {frequency} %, profundidad {depth} %, amplitud {breadth} %; niveles: En desarrollo desde {developing}, Consolidado desde {established}, Campeón desde {champion}',
+  'copilotAdoption.scoreSettings.customised': 'Un administrador ha cambiado cómo se calculan las puntuaciones de adopción de este inquilino. Este informe usa {current}. Los valores predeterminados son {defaults}. Los administradores pueden cambiarlos, o elegir Restablecer valores predeterminados, en Administración > Configuración de adopción de Copilot.',
+  'copilotAdoption.scoreSettings.defaults': 'Esta es la configuración de puntuación predeterminada: {current}. Los administradores pueden cambiar los pesos y los umbrales de nivel en Administración > Configuración de adopción de Copilot.',
 };
 
 export default copilotAdoption;

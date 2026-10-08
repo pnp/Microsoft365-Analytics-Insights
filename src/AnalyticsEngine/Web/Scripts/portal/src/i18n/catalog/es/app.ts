@@ -50,6 +50,7 @@ const app: Record<keyof typeof en, string> = {
   'app.route.userScope': 'Ámbito de usuarios',
   'app.route.globalFilter': 'Filtro de informes',
   'app.route.copilotAuditBackfill': 'Relleno de auditoría de Copilot',
+  'app.route.copilotAdoptionSettings': 'Configuración de adopción de Copilot',
   'app.route.configuration': 'Configuraci\u00f3n del servicio',
 };
 

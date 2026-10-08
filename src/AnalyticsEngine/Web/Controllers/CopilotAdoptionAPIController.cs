@@ -344,12 +344,28 @@ namespace Web.AnalyticsWeb.Controllers
                     new ApiErrorModel(ex.Message, ex.Message)));
             }
 
-            return await Coordinator.TryGetAsync(
-                range,
-                ParseIds(seatLicenceTypeIds),
-                budget,
-                cancellationToken);
+            try
+            {
+                return await Coordinator.TryGetAsync(
+                    range,
+                    ParseIds(seatLicenceTypeIds),
+                    budget,
+                    cancellationToken);
+            }
+            catch (CopilotAdoptionScoreSettingsUnavailableException ex)
+            {
+                // Refused, not scored with the defaults: a report computed with rules the administrator did not
+                // choose would be published as if it were the tenant's. The next request reads the settings again.
+                WebExceptionTelemetry.Report(ex, "CopilotAdoptionScoreSettings");
+                throw ReportScopeFailure.Exception(
+                    Request,
+                    CopilotAdoptionScoreSettingsErrorCodes.ReportSettingsUnavailable,
+                    ScoreSettingsUnavailableMessage);
+            }
         }
+
+        internal const string ScoreSettingsUnavailableMessage =
+            "The Copilot Adoption score settings could not be read, so this report is not available right now. The failure has been logged. Try again shortly.";
 
         /// <summary>
         /// The 202 body. Deliberately the same shape for every endpoint so the SPA has one thing to detect.

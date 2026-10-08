@@ -265,16 +265,23 @@ namespace Common.Entities.CopilotAdoption
             sheet.AddBlankRow();
             sheet.AddHeaderRow("Threshold used", "Value", "What it controls");
             var o = summary.Options;
-            AddMeta(sheet, "Frequency weight", o.FrequencyWeight, "Share of the engagement score from days used.");
-            AddMeta(sheet, "Depth weight", o.DepthWeight, "Share from interactions per active day.");
-            AddMeta(sheet, "Breadth weight", o.BreadthWeight, "Share from number of Copilot surfaces used.");
+            AddMeta(sheet, "Score settings", ScoreSettingsStatus(o), ScoreSettingsExplanation(o));
+            AddMeta(sheet, "Frequency weight", o.FrequencyWeight, "Share of the engagement score from days used."
+                + CustomisedNote(o, CopilotAdoptionScoreSettingsFields.FrequencyWeightPercent, CopilotAdoptionScoreSettings.DefaultFrequencyWeightPercent / 100d));
+            AddMeta(sheet, "Depth weight", o.DepthWeight, "Share from interactions per active day."
+                + CustomisedNote(o, CopilotAdoptionScoreSettingsFields.DepthWeightPercent, CopilotAdoptionScoreSettings.DefaultDepthWeightPercent / 100d));
+            AddMeta(sheet, "Breadth weight", o.BreadthWeight, "Share from number of Copilot surfaces used."
+                + CustomisedNote(o, CopilotAdoptionScoreSettingsFields.BreadthWeightPercent, CopilotAdoptionScoreSettings.DefaultBreadthWeightPercent / 100d));
             AddMeta(sheet, "Frequency target", o.FrequencyTargetRatio, "Share of working days needed for full marks.");
             AddMeta(sheet, "Depth target", o.DepthTargetInteractionsPerActiveDay, "Interactions per active day for full marks.");
             AddMeta(sheet, "Depth minimum active days", o.DepthMinActiveDays, "Below this many active days the depth component is scaled down in proportion, so one busy afternoon cannot read as a habit.");
             AddMeta(sheet, "Breadth target", o.BreadthTargetApps, "Copilot surfaces for full marks.");
-            AddMeta(sheet, "Champion at", o.ChampionScore, "Engagement score for the Champion band.");
-            AddMeta(sheet, "Established at", o.EstablishedScore, "The 'habit formed' line - what 'habitual users' counts.");
-            AddMeta(sheet, "Developing at", o.DevelopingScore, "Engagement score for the Developing band.");
+            AddMeta(sheet, "Champion at", o.ChampionScore, "Engagement score for the Champion band."
+                + CustomisedNote(o, CopilotAdoptionScoreSettingsFields.ChampionScore, CopilotAdoptionScoreSettings.DefaultChampionScore));
+            AddMeta(sheet, "Established at", o.EstablishedScore, "The 'habit formed' line - what 'habitual users' counts."
+                + CustomisedNote(o, CopilotAdoptionScoreSettingsFields.EstablishedScore, CopilotAdoptionScoreSettings.DefaultEstablishedScore));
+            AddMeta(sheet, "Developing at", o.DevelopingScore, "Engagement score for the Developing band."
+                + CustomisedNote(o, CopilotAdoptionScoreSettingsFields.DevelopingScore, CopilotAdoptionScoreSettings.DefaultDevelopingScore));
             AddMeta(sheet, "Habit month length", o.HabitBucketNormalisationDays, "Active days are restated per this many days.");
             AddMeta(sheet, "Licence recommendation at", o.OpportunityRecommendScore, "Business-case score for a recommended candidate.");
             AddMeta(sheet, "Agent review after", $"{o.AgentReviewInactiveDays} days", "Inactivity before an agent is reviewed.");
@@ -2253,6 +2260,34 @@ namespace Common.Entities.CopilotAdoption
 
         #region Methodology
 
+        private static bool IsCustomised(CopilotAdoptionOptions o, string field) =>
+            o.ScoreSettings?.CustomisedFields?.Contains(field) == true;
+
+        /// <summary>" Customised (default X)." for a setting an administrator changed, otherwise nothing.</summary>
+        private static string CustomisedNote(CopilotAdoptionOptions o, string field, double defaultValue) =>
+            IsCustomised(o, field)
+                ? " Customised by an administrator (default " + defaultValue.ToString(System.Globalization.CultureInfo.InvariantCulture) + ")."
+                : string.Empty;
+
+        private static string ScoreSettingsStatus(CopilotAdoptionOptions o) =>
+            o.ScoreSettings?.Customised == true
+                ? "Customised (settings version " + o.ScoreSettings.Version.ToString(System.Globalization.CultureInfo.InvariantCulture) + ")"
+                : "Defaults";
+
+        private static string ScoreSettingsExplanation(CopilotAdoptionOptions o)
+        {
+            var defaults = "The defaults are weights of " + CopilotAdoptionScoreSettings.DefaultFrequencyWeightPercent + "% frequency, "
+                + CopilotAdoptionScoreSettings.DefaultDepthWeightPercent + "% depth and " + CopilotAdoptionScoreSettings.DefaultBreadthWeightPercent
+                + "% breadth, and bands starting at Developing " + CopilotAdoptionScoreSettings.DefaultDevelopingScore + ", Established "
+                + CopilotAdoptionScoreSettings.DefaultEstablishedScore + " and Champion " + CopilotAdoptionScoreSettings.DefaultChampionScore + ".";
+            return o.ScoreSettings?.Customised == true
+                ? "An administrator changed the engagement-score weights or band thresholds for this tenant (Administration > Copilot Adoption settings), "
+                  + "so scores and bands are not directly comparable with a report produced with the defaults. " + defaults
+                  + " Reset to defaults on that page restores them."
+                : "The engagement-score weights and band thresholds are the defaults. " + defaults
+                  + " An administrator can change them on Administration > Copilot Adoption settings.";
+        }
+
         /// <summary>
         /// The formulas, written out. Without these the workbook is a set of numbers whose provenance
         /// dies the moment it leaves the browser - and this file is explicitly meant to be circulated
@@ -2294,6 +2329,8 @@ namespace Common.Entities.CopilotAdoption
                 + $"The {targetDaysLabel}-day frequency target above is the full-window one. An account younger than the "
                 + "reporting period has its target prorated to the days it has actually existed, so each row's own "
                 + "'Expected active days' column is the number that row was scored against.");
+
+            AddMethod(sheet, "Score settings", ScoreSettingsStatus(o) + ". " + ScoreSettingsExplanation(o));
 
             AddMethod(sheet, "Why working days",
                 $"The frequency target is {o.FrequencyTargetRatio:P0} of the working days in the period, assuming "

@@ -19,6 +19,8 @@ const errors: Record<keyof typeof en, string> = {
   'errors.userOrgs.requestFailed': 'La solicitud ha fallado ({status})',
   'errors.userFilter.dimensionsFailed': 'No se han podido cargar los atributos para filtrar ({status}).',
   'errors.userFilter.valuesFailed': 'No se han podido cargar los valores de este atributo ({status}).',
+  'errors.copilotAdoptionSettings.unavailable':
+    'No se ha podido leer la configuración de puntuación de Adopción de Copilot, por lo que este informe no está disponible ahora. Vuelva a intentarlo en breve.',
   'errors.globalFilter.unavailable':
     'No se ha podido leer el filtro de informes que estableció un administrador del portal, por lo que este informe no está disponible ahora. Vuelva a intentarlo en breve.',
   'errors.globalFilter.invalid':

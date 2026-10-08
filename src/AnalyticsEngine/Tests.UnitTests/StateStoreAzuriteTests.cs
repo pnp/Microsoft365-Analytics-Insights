@@ -228,6 +228,38 @@ namespace Tests.UnitTests
             }
         }
 
+        /// <summary>
+        /// The Copilot Adoption score settings (#683, #684) in a real table: a save, its audit history and a reset
+        /// survive a fresh store instance - which is what another web app instance sees.
+        /// </summary>
+        [TestMethod]
+        public async Task CopilotAdoptionScoreSettings_RoundTripThroughTheTable()
+        {
+            var partition = "Test" + Guid.NewGuid().ToString("N");
+            var writer = new Common.Entities.CopilotAdoption.CopilotAdoptionScoreSettingsStore(
+                new AzureTableKeyValueStore(_table ?? Skip(), partition), isDurable: true);
+
+            var custom = Common.Entities.CopilotAdoption.CopilotAdoptionScoreSettings.Defaults;
+            custom.FrequencyWeightPercent = 40;
+            custom.DepthWeightPercent = 40;
+            custom.ChampionScore = 90;
+            await writer.SaveAsync(custom, 0, "admin@contoso.com");
+
+            var reader = new Common.Entities.CopilotAdoption.CopilotAdoptionScoreSettingsStore(
+                new AzureTableKeyValueStore(_table, partition), isDurable: true);
+            var stored = await reader.GetAsync();
+            Assert.AreEqual(1, stored.Version);
+            Assert.AreEqual(custom, stored.Settings);
+            Assert.AreEqual("admin@contoso.com", stored.History.Single().ChangedBy);
+            Assert.AreEqual(3, stored.History.Single().Changes.Count);
+
+            await reader.ResetAsync(1, "other.admin@contoso.com");
+            var reset = await writer.GetAsync();
+            Assert.AreEqual(2, reset.Version);
+            Assert.IsTrue(reset.Settings.IsDefault);
+            Assert.AreEqual(2, reset.History.Count);
+        }
+
         private static AzureTableKeyValueStore NewStore()
         {
             return new AzureTableKeyValueStore(_table ?? Skip(), "Test" + Guid.NewGuid().ToString("N"));

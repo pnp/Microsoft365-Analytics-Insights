@@ -170,5 +170,12 @@ namespace Common.Entities.State
         /// requests. The actual audit rows still go through the normal audit import tables.
         /// </summary>
         public const string CopilotAuditBackfill = "CopilotAuditBackfill";
+
+        /// <summary>
+        /// The tenant-wide Copilot Adoption engagement-score weights and band thresholds set on the portal's
+        /// Administration &gt; Copilot Adoption settings page, with their version and change history (who, when,
+        /// old and new values). One row; deleting it restores the defaults.
+        /// </summary>
+        public const string CopilotAdoptionSettings = "CopilotAdoptionSettings";
     }
 }

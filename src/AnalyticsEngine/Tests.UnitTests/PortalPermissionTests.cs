@@ -185,6 +185,9 @@ namespace Tests.UnitTests
             ["CopilotAuditBackfillAPIController.Get"] = Admin,
             ["CopilotAuditBackfillAPIController.Start"] = Admin,
             ["CopilotAuditBackfillAPIController.Cancel"] = Admin,
+            ["CopilotAdoptionSettingsAPIController.Get"] = Admin,
+            ["CopilotAdoptionSettingsAPIController.Save"] = Admin,
+            ["CopilotAdoptionSettingsAPIController.Reset"] = Admin,
 
             ["WebActivityAPIController.Availability"] = Any,
             ["WebActivityAPIController.Overview"] = Any,
@@ -600,6 +603,9 @@ namespace Tests.UnitTests
             (HttpMethod.Post, "api/UserScope/purge", "administration"),
             (HttpMethod.Get, "api/UserScope/purge/1", "administration"),
             (HttpMethod.Post, "api/UserScope/purge/1/cancel", "administration"),
+            (HttpMethod.Get, "api/CopilotAdoptionSettings", "administration"),
+            (HttpMethod.Post, "api/CopilotAdoptionSettings", "administration"),
+            (HttpMethod.Post, "api/CopilotAdoptionSettings/reset", "administration"),
 
             (HttpMethod.Get, "api/CopilotAdoption/licensed-users", "seePii"),
             (HttpMethod.Get, "api/CopilotAdoption/licensed-users/export", "seePii"),
@@ -1100,7 +1106,7 @@ namespace Tests.UnitTests
             private readonly CopilotAdoptionAnalysis _analysis;
             internal FixedRunner(CopilotAdoptionAnalysis analysis) { _analysis = analysis; }
 
-            public Task<CopilotAdoptionAnalysis> RunAsync(int windowDays, DateTime? fromUtc, DateTime? toUtc, DateTime? toExclusiveUtc, bool usesExplicitDates, List<int> seatLicenceTypeIds, ICopilotAdoptionRunTelemetry telemetry)
+            public Task<CopilotAdoptionAnalysis> RunAsync(int windowDays, DateTime? fromUtc, DateTime? toUtc, DateTime? toExclusiveUtc, bool usesExplicitDates, List<int> seatLicenceTypeIds, Common.Entities.CopilotAdoption.CopilotAdoptionEffectiveScoreSettings scoreSettings, ICopilotAdoptionRunTelemetry telemetry)
                 => Task.FromResult(_analysis);
         }
 

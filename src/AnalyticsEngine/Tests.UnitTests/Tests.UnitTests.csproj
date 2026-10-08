@@ -371,6 +371,10 @@
     <Compile Include="CopilotAdoptionAgentUsersTests.cs" />
     <Compile Include="CopilotAdoptionSqlIntegrationTests.cs" />
     <Compile Include="CopilotAdoptionSynchronizationContextTests.cs" />
+    <Compile Include="CopilotAdoptionScoreSettingsApiTests.cs" />
+    <Compile Include="CopilotAdoptionScoreSettingsStoreTests.cs" />
+    <Compile Include="CopilotAdoptionScoreSettingsTestHelpers.cs" />
+    <Compile Include="CopilotAdoptionScoreSettingsTests.cs" />
     <Compile Include="CopilotAdoptionTelemetryTests.cs" />
     <Compile Include="CopilotAdoptionMigrationScriptTests.cs" />
     <Compile Include="ReleaseHardening20260917Tests.cs" />

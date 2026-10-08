@@ -44,6 +44,7 @@ import StackedAreaChart from '../components/charts/StackedAreaChart';
 import GaugeRing, { bandTone, describeBands } from '../components/charts/GaugeRing';
 import RadarChart from '../components/charts/RadarChart';
 import AdoptionFunnel from '../components/copilotAdoption/AdoptionFunnel';
+import { ScoreSettingsBanner, ScoreSettingsMethodNote } from '../components/copilotAdoption/ScoreSettingsNotice';
 import LicensedUsersPanel from '../components/copilotAdoption/LicensedUsersPanel';
 import CoworkPanel from '../components/copilotAdoption/CoworkPanel';
 import OpportunitiesPanel from '../components/copilotAdoption/OpportunitiesPanel';
@@ -781,6 +782,9 @@ function CopilotAdoptionView({
                   onClear={() => setUserFilter(EMPTY_USER_FILTER)}
                 />
               )}
+
+              {/* Every tab, every reader: a customised score changes who counts as a Champion (#683, #684). */}
+              <ScoreSettingsBanner options={summary.options} />
 
               {tab === 'executive' &&
                 (summary.licensedUsers === 0 && !summary.figuresIncomplete && !isNarrowed(summary) ? (
@@ -2094,6 +2098,7 @@ function MethodTab({ summary }: { summary: CopilotAdoptionSummary }) {
           <AccordionHeader>{t('copilotAdoption.page.howEngagementScoreCalculated')}</AccordionHeader>
           <AccordionPanel>
             <div className={styles.method}>
+              <ScoreSettingsMethodNote options={o} />
               <Text>{t('copilotAdoption.page.eachLicensedUserGetsScoreOutBuiltThreeComponents')}</Text>
               <Text>
                 {tNode('copilotAdoption.page.howManyDistinctDaysUsedCopilotAgainstTargetWorking', {
