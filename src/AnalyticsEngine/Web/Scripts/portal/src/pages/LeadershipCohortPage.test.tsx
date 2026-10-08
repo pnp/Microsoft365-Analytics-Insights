@@ -96,7 +96,7 @@ describe('LeadershipCohortPage', () => {
       refresh: { ...ready().refresh!, status: 'permissionMissing', failureKind: 'graphError', httpStatus: 403, refreshedUtc: null, directMembers: 0, matchedUsers: 0 },
     }));
     renderWithProvider(<LeadershipCohortPage />);
-    expect(await screen.findByText('Permission missing: grant GroupMember.Read.All')).toBeInTheDocument();
+    expect(await screen.findByText('Permission missing: grant Group.Read.All or GroupMember.Read.All')).toBeInTheDocument();
     expect(screen.getByText(/Microsoft Graph returned an error/)).toBeInTheDocument();
     expect(screen.getByText('Never')).toBeInTheDocument();
     expect(screen.queryByText(/direct members,/)).not.toBeInTheDocument();

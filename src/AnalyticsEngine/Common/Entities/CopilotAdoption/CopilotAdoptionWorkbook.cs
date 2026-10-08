@@ -2599,7 +2599,7 @@ namespace Common.Entities.CopilotAdoption
                 case LeadershipCohort.LeadershipComparisonReasons.GroupNotFound:
                     return "the configured group was not found in Entra ID.";
                 case LeadershipCohort.LeadershipComparisonReasons.PermissionMissing:
-                    return "the application is not permitted to read the group's members (GroupMember.Read.All).";
+                    return "the application is not permitted to read the group's members (Group.Read.All or GroupMember.Read.All).";
                 case LeadershipCohort.LeadershipComparisonReasons.TooLarge:
                     return "the configured group has more members than a leadership comparison accepts.";
                 case LeadershipCohort.LeadershipComparisonReasons.StateUnavailable:
