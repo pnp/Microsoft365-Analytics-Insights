@@ -422,6 +422,13 @@ namespace Tests.UnitTests
             AssertMetric(completed, "OutOfScopeRowCount", 1);
             AssertMetric(completed, "AddedRowCount", 2);
             AssertMetric(completed, "ChangedRowCount", 1);
+            var firstDay = instrumentation.Events.Single(e =>
+                e.Stage == UsageReportSaveStageIds.RowsProcessed && e.ReportDateUtc == Day1);
+            AssertMetric(firstDay, "InputRowCount", 4);
+            AssertMetric(firstDay, "MissingLookupValueRowCount", 1);
+            AssertMetric(firstDay, "OutOfScopeRowCount", 1);
+            Assert.IsTrue(instrumentation.Events.Any(e =>
+                e.Stage == UsageReportSaveStageIds.RowsProcessed && e.ReportDateUtc == Day2));
 
             instrumentation.Events.Clear();
             lookupCalls.Clear();
@@ -433,6 +440,25 @@ namespace Tests.UnitTests
             AssertMetric(warm, "LookupCacheHitCount", 3);
             AssertMetric(warm, "UnchangedRowCount", 3);
             Assert.AreEqual(0, loader.LastSaveDbWriteCount);
+        }
+
+        [TestMethod]
+        public async Task DailyActivityLoader_EmptyDayHasDatedDiagnosticsWithoutInventingStoredRows()
+        {
+            var instrumentation = new RecordingUsageReportSaveInstrumentation();
+            var store = new InMemoryUsageReportStore<FakeUserUsageActivityLog>();
+            var loader = new InMemoryDailyActivityLoader(NullLogger.Instance)
+            {
+                SaveInstrumentation = instrumentation, ReportStore = store
+            };
+            loader.LoadedReportPages[Day1] = new List<FakeUserActivityDetail>();
+            await loader.SaveLoadedReportsToSql(new ConcurrentLookupDbIdsCache(), new UserCache(null));
+            var day = instrumentation.Single(UsageReportSaveStageIds.RowsProcessed);
+            Assert.AreEqual(Day1, day.ReportDateUtc);
+            AssertMetric(day, "InputRowCount", 0);
+            AssertMetric(day, "AddedRowCount", 0);
+            Assert.AreEqual(0, store.Stored.Count);
+            Assert.IsTrue(instrumentation.Events.Any(e => e.Stage == UsageReportSaveStageIds.SaveCompleted));
         }
 
         [TestMethod]

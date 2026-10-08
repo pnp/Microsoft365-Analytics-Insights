@@ -10,6 +10,7 @@ using Microsoft.VisualStudio.TestTools.UnitTesting;
 using Newtonsoft.Json;
 using System;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.IO;
 using System.IO.Compression;
 using System.Linq;
@@ -523,6 +524,55 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public void CoverageTelemetryContainsOnlyDatesVocabularyAndAggregateCounts()
+        {
+            var events = new ConcurrentQueue<LicenceActivityDiagnosticEvent>();
+            var diagnostics = new LicenceActivityRunDiagnostics("synthetic-run", item => { events.Enqueue(item); return true; });
+            var week = new LicenceActivityCoverageWeek
+            {
+                Workload = "outlook", FromUtc = new DateTime(2000, 1, 3),
+                ToUtc = new DateTime(2000, 1, 9), ExpectedDays = 7, PresentDays = 6, Settled = true
+            };
+            week.MissingDates.Add(new DateTime(2000, 1, 5));
+            diagnostics.CoverageWeek(week);
+            var coverage = new LicenceActivityCoverage
+            {
+                Workload = "outlook", Source = "microsoftGraphUsageReport", Status = "partial",
+                ExpectedSamples = 4, ObservedSamples = 3,
+                Message = "private payload", Measure = "private payload"
+            };
+            diagnostics.Evidence(coverage, 10, 8, 0, true);
+            Assert.AreEqual("2000-01-05", events.First().Dimensions["MissingDates"]);
+            Assert.AreEqual("true", events.Last().Dimensions["GroupFiltered"]);
+            Assert.AreEqual(8d, events.Last().Measurements["UsersWithActivity"]);
+            Assert.IsFalse(events.SelectMany(item => item.Dimensions.Values).Contains("private payload"));
+            week.Workload = "private payload";
+            Assert.ThrowsException<ArgumentException>(() => diagnostics.CoverageWeek(week));
+            coverage.Status = "private payload";
+            Assert.ThrowsException<ArgumentException>(() => diagnostics.Evidence(coverage, 10, 8, 0, false));
+            coverage.Status = "available";
+            coverage.Source = "private payload";
+            Assert.ThrowsException<ArgumentException>(() => diagnostics.Evidence(coverage, 10, 8, 0, false));
+            var channel = new FlushRecordingChannel();
+            using (var configuration = new TelemetryConfiguration
+            {
+                TelemetryChannel = channel,
+                ConnectionString = "InstrumentationKey=00000000-0000-0000-0000-000000000001"
+            })
+            {
+                var logger = new AnalyticsLogger(new TelemetryClient(configuration), "LicenceActivityTest");
+                LicenceActivityTelemetry.DrainEvents(events, () => logger, () => { });
+                var sent = channel.Items.OfType<Microsoft.ApplicationInsights.DataContracts.EventTelemetry>().ToArray();
+                Assert.AreEqual(2, sent.Length);
+                Assert.AreEqual("LicenceActivityLifecycle", sent[0].Name);
+                Assert.AreEqual("2000-01-05", sent[0].Properties["MissingDates"]);
+                Assert.AreEqual("IncompletePeriod", sent[1].Properties["Reason"]);
+                Assert.AreEqual(8d, sent[1].Metrics["UsersWithActivity"]);
+                Assert.AreEqual("synthetic-run", sent[1].Context.Operation.Id);
+            }
+        }
+
+        [TestMethod]
         public void DrainedTelemetry_FlushesItsChannelBeforeTheBoundedShutdownWait()
         {
             var channel = new FlushRecordingChannel();
@@ -555,9 +605,10 @@ namespace Tests.UnitTests
         {
             internal int Sent;
             internal int Flushed;
+            internal readonly List<ITelemetry> Items = new List<ITelemetry>();
             public bool? DeveloperMode { get; set; }
             public string EndpointAddress { get; set; }
-            public void Send(ITelemetry item) => Sent++;
+            public void Send(ITelemetry item) { Sent++; Items.Add(item); }
             public void Flush() => Flushed++;
             public void Dispose() { }
         }
