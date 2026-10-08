@@ -361,7 +361,9 @@ with or without See PII.
   filter changes, so no figures from before the change sit under a bar describing after it. The cookie is
   the browser's, not the tab's, so a tab coming back into view reads the filter again when the cookie no
   longer agrees with what it last read - switched off or on in another tab. The browser clears a stored
-  bypass when the server says the reader cannot bypass, including after a sign-in or permission change;
+  bypass only after a fresh server answer says the reader cannot bypass, including after a sign-in or
+  permission change: an older tab's cached denial must not undo an authorized sign-in's explicit switch.
+  A failed read leaves the shared cookie alone without granting a cached-denied reader bypass;
   a manually set or stale cookie never bypasses the server's permission checks.
 - **Not a security boundary without roles.** With `EnforcePortalRoles=false` everyone who can sign in is
   granted both permissions and can switch the filter off; the editor warns about this.

@@ -38,8 +38,18 @@ function clearCookie() {
   document.cookie = `${GLOBAL_FILTER_BYPASS_COOKIE}=; path=/; max-age=0`;
 }
 
+function pendingRead() {
+  let resolve!: (value: GlobalFilterEffective) => void;
+  let reject!: (reason: Error) => void;
+  const promise = new Promise<GlobalFilterEffective>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
 beforeEach(() => {
-  vi.clearAllMocks();
+  vi.resetAllMocks();
   clearCookie();
 });
 
@@ -75,11 +85,109 @@ describe('GlobalFilterProvider', () => {
     expect(fetchEffectiveGlobalFilter).toHaveBeenCalledTimes(1);
     expect(context.viewKey).toBe(0);
 
-    // A stale tab cannot reintroduce the browser-wide switch for this reader.
+    // A fresh denial, not this tab's cached capability, clears another tab's switch.
     document.cookie = `${GLOBAL_FILTER_BYPASS_COOKIE}=1; path=/`;
+    const read = pendingRead();
+    vi.mocked(fetchEffectiveGlobalFilter).mockReturnValueOnce(read.promise);
     act(() => window.dispatchEvent(new Event('focus')));
+    expect(document.cookie).toContain(`${GLOBAL_FILTER_BYPASS_COOKIE}=1`);
+    await act(async () => read.resolve(effective({ canBypass: false })));
     expect(document.cookie).not.toContain(`${GLOBAL_FILTER_BYPASS_COOKIE}=1`);
-    expect(fetchEffectiveGlobalFilter).toHaveBeenCalledTimes(1);
+    expect(fetchEffectiveGlobalFilter).toHaveBeenCalledTimes(2);
+    expect(context.effective?.applied).toBe(true);
+    expect(context.viewKey).toBe(1);
+  });
+
+  it.each(['focus', 'visibilitychange'])('refreshes cached denial on %s without clearing a newly authorized tab’s bypass', async (event) => {
+    vi.mocked(fetchEffectiveGlobalFilter).mockResolvedValueOnce(effective({ canBypass: false }));
+    renderProvider();
+    await waitFor(() => expect(context.status).toBe('ready'));
+
+    // Another tab signs in with both roles, then explicitly switches off the filter.
+    document.cookie = `${GLOBAL_FILTER_BYPASS_COOKIE}=1; path=/`;
+    const read = pendingRead();
+    vi.mocked(fetchEffectiveGlobalFilter).mockReturnValueOnce(read.promise);
+    act(() => {
+      (event === 'focus' ? window : document).dispatchEvent(new Event(event));
+      window.dispatchEvent(new Event('focus'));
+    });
+    expect(document.cookie).toContain(`${GLOBAL_FILTER_BYPASS_COOKIE}=1`);
+    expect(fetchEffectiveGlobalFilter).toHaveBeenCalledTimes(2);
+    await act(async () => read.resolve(effective({ bypassed: true, applied: false })));
+
+    expect(document.cookie).toContain(`${GLOBAL_FILTER_BYPASS_COOKIE}=1`);
+    expect(screen.getByTestId('state')).toHaveTextContent('ready:1:1:true');
+    expect(context.effective?.canBypass).toBe(true);
+    expect(context.effective?.applied).toBe(false);
+  });
+
+  it('refreshes cached denial even when the old sign-in had no active filter', async () => {
+    vi.mocked(fetchEffectiveGlobalFilter).mockResolvedValueOnce(effective({ canBypass: false, active: false, applied: false }));
+    renderProvider();
+    await waitFor(() => expect(context.status).toBe('ready'));
+
+    document.cookie = `${GLOBAL_FILTER_BYPASS_COOKIE}=1; path=/`;
+    vi.mocked(fetchEffectiveGlobalFilter).mockResolvedValueOnce(effective({ bypassed: true, applied: false }));
+    await act(async () => window.dispatchEvent(new Event('focus')));
+    expect(document.cookie).toContain(`${GLOBAL_FILTER_BYPASS_COOKIE}=1`);
+    expect(screen.getByTestId('state')).toHaveTextContent('ready:1:1:true');
+  });
+
+  it('preserves another tab’s cookie on a failed capability refresh without granting cached-denied bypass', async () => {
+    vi.mocked(fetchEffectiveGlobalFilter).mockResolvedValueOnce(effective({ canBypass: false }));
+    renderProvider();
+    await waitFor(() => expect(context.status).toBe('ready'));
+
+    document.cookie = `${GLOBAL_FILTER_BYPASS_COOKIE}=1; path=/`;
+    vi.mocked(fetchEffectiveGlobalFilter).mockRejectedValueOnce(new Error('offline'));
+    await act(async () => window.dispatchEvent(new Event('focus')));
+    expect(document.cookie).toContain(`${GLOBAL_FILTER_BYPASS_COOKIE}=1`);
+    expect(screen.getByTestId('state')).toHaveTextContent('error:1:1:false');
+    expect(context.effective?.canBypass).toBe(false);
+    expect(context.effective?.applied).toBe(true);
+
+    clearCookie();
+    await act(() => context.setBypassed(true));
+    expect(document.cookie).not.toContain(`${GLOBAL_FILTER_BYPASS_COOKIE}=1`);
+    expect(fetchEffectiveGlobalFilter).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not act on a denied response superseded by a newer capability read', async () => {
+    vi.mocked(fetchEffectiveGlobalFilter).mockResolvedValueOnce(effective({ canBypass: false }));
+    renderProvider();
+    await waitFor(() => expect(context.status).toBe('ready'));
+
+    document.cookie = `${GLOBAL_FILTER_BYPASS_COOKIE}=1; path=/`;
+    const stale = pendingRead();
+    vi.mocked(fetchEffectiveGlobalFilter).mockReturnValueOnce(stale.promise);
+    act(() => window.dispatchEvent(new Event('focus')));
+    const staleSignal = vi.mocked(fetchEffectiveGlobalFilter).mock.calls[1][0];
+    vi.mocked(fetchEffectiveGlobalFilter).mockResolvedValueOnce(effective({ bypassed: true, applied: false }));
+    await act(() => context.refresh());
+    expect(staleSignal?.aborted).toBe(true);
+    await act(async () => stale.resolve(effective({ canBypass: false })));
+
+    expect(document.cookie).toContain(`${GLOBAL_FILTER_BYPASS_COOKIE}=1`);
+    expect(screen.getByTestId('state')).toHaveTextContent('ready:1:1:true');
+  });
+
+  it.each(['denial', 'error'])('ignores an outstanding focus %s after unmount', async (outcome) => {
+    vi.mocked(fetchEffectiveGlobalFilter).mockResolvedValueOnce(effective({ canBypass: false }));
+    const rendered = renderProvider();
+    await waitFor(() => expect(context.status).toBe('ready'));
+
+    document.cookie = `${GLOBAL_FILTER_BYPASS_COOKIE}=1; path=/`;
+    const read = pendingRead();
+    vi.mocked(fetchEffectiveGlobalFilter).mockReturnValueOnce(read.promise);
+    act(() => window.dispatchEvent(new Event('focus')));
+    const signal = vi.mocked(fetchEffectiveGlobalFilter).mock.calls[1][0];
+    rendered.unmount();
+    expect(signal?.aborted).toBe(true);
+    await act(async () => {
+      if (outcome === 'denial') read.resolve(effective({ canBypass: false }));
+      else read.reject(new Error('offline'));
+    });
+    expect(document.cookie).toContain(`${GLOBAL_FILTER_BYPASS_COOKIE}=1`);
   });
 
   it('clears bypass when a permission is withdrawn, remounts filtered reports and does not restore it with the role', async () => {

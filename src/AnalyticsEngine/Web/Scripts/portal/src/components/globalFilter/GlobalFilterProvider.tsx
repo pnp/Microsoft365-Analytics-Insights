@@ -172,19 +172,17 @@ function LiveGlobalFilterProvider({ children }: { children: ReactNode }) {
   // The switch-off cookie is the browser's, not this tab's: switching the filter off in one tab changes what
   // every other tab's reports return. So when a tab comes back into view, a cookie that no longer agrees with
   // what it last read means its figures and its bar no longer match - read again and remount. Only while a
-  // filter is defined: with none, the server reports it "not switched off" whatever the cookie says.
+  // filter is defined for an authorized reader: with none, the server reports it "not switched off"
+  // whatever the cookie says. A cached denial must be refreshed before clearing another tab's switch,
+  // since that tab may have signed in with both permissions and explicitly switched the filter off.
   const effectiveRef = useRef<GlobalFilterEffective | null>(null);
   effectiveRef.current = state.effective;
   useEffect(() => {
     const check = () => {
       if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
       const current = effectiveRef.current;
-      if (!current) return;
-      if (!current.canBypass) {
-        writeGlobalFilterBypassCookie(false);
-        return;
-      }
-      if (!current.active || inFlight.current) return;
+      if (!current || inFlight.current) return;
+      if (current.canBypass && !current.active) return;
       const cookie = readGlobalFilterBypassCookie();
       if (cookie !== current.bypassed) void remountForCookie(cookie);
     };
