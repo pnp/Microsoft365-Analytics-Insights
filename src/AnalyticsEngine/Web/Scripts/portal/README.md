@@ -35,6 +35,7 @@ each other's tooling. The area switcher sits in the header; each area has its ow
 | `#/admin/teams-permissions` | **Teams permissions** | Authorise / de-authorise Teams for deep analytics (stores a delegated refresh token per Team in the `TeamsAuth` partition of the `AnalyticsState` Azure Table in the solution's storage account). Ported from the original app. |
 | `#/admin/user-lookup` | **User data lookup** | Enter a user's UPN to see all of their data held in SQL: profile, per-category record counts (broken down by workload, including Copilot and Power Platform; each row has a **SQL** button to view & copy the query behind its count), drill-down to recent rows, and which **import workloads** are enabled (so a legitimate 0 count is explained). |
 | `#/admin/user-import` | **User import** | Whether the Graph user import has a stored checkpoint (its `/users/delta` token, kept in the `UserImport` partition of the `AnalyticsState` Azure Table), where it is kept, when the import last completed and how often it runs - and a confirmed **Clear checkpoint** action so the next run reads every user again, optionally on the next import cycle. The in-product version of deleting the stored token by hand (issue #664). The token itself never reaches the browser. |
+| `#/admin/leadership-cohort` | **Leadership group** | Saves an explicit Entra ID group for the Copilot Adoption comparison and requests membership reads by the activity importer. The response acknowledges durable settings/request storage, not Graph completion. **Check status** retrieves the worker outcome without requesting another read. |
 | `#/admin/global-filter` | **Report filter** | The administrator's global report filter: conditions every Insights report applies for everyone, on top of their own filters, optionally compared with the viewer's own attributes. Previews the draft against the administrator's own account before saving. Needs See PII as well as Administration. See [The administrator's global filter](#the-administrators-global-filter). |
 | `#/admin/configuration` | **Service configuration** | What this deployment is pointed at: SQL, the storage account (which holds the runtime state table), Cognitive Services and Service Bus, plus the Teams calls import state and the Graph call webhook (with a live validation POST to test it). |
 
@@ -46,6 +47,24 @@ the two cannot drift — adding a page means adding one entry to `ROUTES`.
 
 > The pre-split routes (`#/home`, `#/reports`, `#/teams`, `#/health`, ...) are **not**
 > redirected. Anything unrecognised falls back to the Insights overview.
+
+## Leadership membership requests
+
+The leadership admin API does not run Graph or SQL in an HTTP request. Settings are durably saved in
+the `LeadershipCohort` partition of `AnalyticsState`; a new settings revision is due in the activity
+importer's next available cycle. Explicit read requests use a separate `RefreshRequest` row for
+the currently configured group, so they cannot overwrite a concurrently saved group. Each worker snapshot
+acknowledges the request ID it started with; a newer request remains pending. Requests survive
+web-app/importer restarts, and a failed outcome is still an acknowledged attempt (normally retried
+after one hour). No new SQL migration or installer configuration is needed.
+
+A save/read request returns the configured group with `refresh: null` (pending). Keep the
+Office 365 activity importer running and use **Check status** after its next cycle; Graph retries
+may delay that cycle. A membership failure is shown as a refresh outcome, not a settings-save
+error. Clearing the group immediately disables the comparison. Status/storage operations share
+a cancellable 30-second request deadline, below App Service's HTTP deadline. If storage cannot
+acknowledge a write, check status before retrying: as with any network write, an interrupted
+response does not prove that the write failed.
 
 ## Permissions
 

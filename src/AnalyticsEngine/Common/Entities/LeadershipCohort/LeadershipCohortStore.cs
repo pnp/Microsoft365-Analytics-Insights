@@ -4,6 +4,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace Common.Entities.LeadershipCohort
@@ -20,7 +21,8 @@ namespace Common.Entities.LeadershipCohort
     /// plus separators is about 22K characters).</para>
     /// <para><b>Bounded.</b> At most <see cref="MaxMembers"/> members, so at most <see cref="MaxPages"/> pages, in two
     /// alternating slots. A refresh writes the slot the current header does not point at, then the header, then deletes
-    /// that slot's surplus pages, so storage never grows beyond 2 x <see cref="MaxPages"/> pages plus two rows.</para>
+    /// that slot's surplus pages, so storage never grows beyond 2 x <see cref="MaxPages"/> pages plus three rows
+    /// (settings, snapshot and the latest durable refresh request).</para>
     /// <para><b>Coherent.</b> Each page carries the header version it was written for. Two refreshes racing for the same
     /// slot (the importer and an administrator's "Refresh now") can interleave pages, and a reader that finds a page from
     /// another version reports the membership as unavailable instead of comparing a mixture. The next refresh repairs it.</para>
@@ -31,6 +33,7 @@ namespace Common.Entities.LeadershipCohort
     {
         public const string SettingsKey = "Settings";
         public const string SnapshotKey = "Snapshot";
+        public const string RefreshRequestKey = "RefreshRequest";
 
         /// <summary>Member ids per stored page.</summary>
         public const int MembersPerPage = 2000;
@@ -57,24 +60,31 @@ namespace Common.Entities.LeadershipCohort
 
         public static string PageKey(string slot, int page) => "Members:" + slot + ":" + page.ToString("D3", CultureInfo.InvariantCulture);
 
-        public async Task<LeadershipCohortSettings> GetSettingsAsync()
+        public async Task<LeadershipCohortSettings> GetSettingsAsync(CancellationToken cancellationToken = default)
         {
-            var settings = await ReadAsync<LeadershipCohortSettings>(SettingsKey).ConfigureAwait(false);
+            var settings = await ReadAsync<LeadershipCohortSettings>(SettingsKey, cancellationToken).ConfigureAwait(false);
             return settings != null && !string.IsNullOrWhiteSpace(settings.GroupId) ? settings : null;
         }
 
         /// <summary>Saves the settings, or clears them (turning the feature off) when <paramref name="settings"/> is null.</summary>
-        public async Task SaveSettingsAsync(LeadershipCohortSettings settings)
+        public async Task SaveSettingsAsync(LeadershipCohortSettings settings, CancellationToken cancellationToken = default)
         {
             if (settings == null)
             {
-                await WriteAsync(SettingsKey, null).ConfigureAwait(false);
+                await WriteAsync(SettingsKey, null, cancellationToken).ConfigureAwait(false);
                 return;
             }
-            await WriteAsync(SettingsKey, JsonConvert.SerializeObject(settings)).ConfigureAwait(false);
+            await WriteAsync(SettingsKey, JsonConvert.SerializeObject(settings), cancellationToken).ConfigureAwait(false);
         }
 
-        public Task<LeadershipCohortSnapshot> GetSnapshotAsync() => ReadAsync<LeadershipCohortSnapshot>(SnapshotKey);
+        public Task<LeadershipCohortSnapshot> GetSnapshotAsync(CancellationToken cancellationToken = default) =>
+            ReadAsync<LeadershipCohortSnapshot>(SnapshotKey, cancellationToken);
+
+        public Task<LeadershipCohortRefreshRequest> GetRefreshRequestAsync(CancellationToken cancellationToken = default) =>
+            ReadAsync<LeadershipCohortRefreshRequest>(RefreshRequestKey, cancellationToken);
+
+        public Task RequestRefreshAsync(LeadershipCohortRefreshRequest request, CancellationToken cancellationToken = default) =>
+            WriteAsync(RefreshRequestKey, JsonConvert.SerializeObject(request), cancellationToken);
 
         /// <summary>
         /// Records a refresh that produced no usable members. The previous members are deliberately NOT carried forward:
@@ -149,13 +159,14 @@ namespace Common.Entities.LeadershipCohort
             return members;
         }
 
-        private async Task<T> ReadAsync<T>(string key) where T : class
+        private async Task<T> ReadAsync<T>(string key, CancellationToken cancellationToken = default) where T : class
         {
             string json;
             try
             {
-                json = await _values.GetStringAsync(key).ConfigureAwait(false);
+                json = await _values.GetStringAsync(key, cancellationToken).ConfigureAwait(false);
             }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
             catch (Exception ex)
             {
                 throw new LeadershipCohortStateUnavailableException($"Couldn't read '{key}' from {_values.Description}: {ex.Message}", ex);
@@ -171,12 +182,13 @@ namespace Common.Entities.LeadershipCohort
             }
         }
 
-        private async Task WriteAsync(string key, string value)
+        private async Task WriteAsync(string key, string value, CancellationToken cancellationToken = default)
         {
             try
             {
-                await _values.SetStringAsync(key, value).ConfigureAwait(false);
+                await _values.SetStringAsync(key, value, cancellationToken: cancellationToken).ConfigureAwait(false);
             }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
             catch (Exception ex)
             {
                 throw new LeadershipCohortStateUnavailableException($"Couldn't save '{key}' to {_values.Description}: {ex.Message}", ex);

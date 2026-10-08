@@ -57,7 +57,7 @@ describe('LeadershipCohortPage', () => {
     renderWithProvider(<LeadershipCohortPage />);
     expect(await screen.findByText(/No leadership group is configured/)).toBeInTheDocument();
     expect(screen.getByText(/fewer than 10 of its members hold a Copilot licence/)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /Read members now/ })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /^Request membership read$/ })).toBeDisabled();
     expect(screen.getByRole('button', { name: /Turn off/ })).toBeDisabled();
   });
 
@@ -66,20 +66,25 @@ describe('LeadershipCohortPage', () => {
     const input = await screen.findByRole('textbox');
     fireEvent.change(input, { target: { value: 'Leadership Team' } });
     expect(screen.getAllByText(/Enter a group object ID/).length).toBeGreaterThan(0);
-    expect(screen.getByRole('button', { name: /Save and read members/ })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /Save and request membership read/ })).toBeDisabled();
     expect(mockSave).not.toHaveBeenCalled();
   });
 
-  it('saves the group and shows the refresh outcome with the group name as stored', async () => {
-    mockSave.mockResolvedValue(ready());
+  it('acknowledges the saved group as pending then checks the worker outcome without requesting it again', async () => {
+    mockSave.mockResolvedValue(status({ configured: true, groupId: GROUP }));
     renderWithProvider(<LeadershipCohortPage />);
     fireEvent.change(await screen.findByRole('textbox'), { target: { value: ` ${GROUP} ` } });
-    fireEvent.click(screen.getByRole('button', { name: /Save and read members/ }));
+    fireEvent.click(screen.getByRole('button', { name: /Save and request membership read/ }));
 
     await waitFor(() => expect(mockSave).toHaveBeenCalledWith(GROUP));
+    expect(await screen.findByText(/Saved — awaiting the activity importer/)).toBeInTheDocument();
+    expect(screen.queryByText('Succeeded')).not.toBeInTheDocument();
+    mockFetch.mockResolvedValue(ready());
+    fireEvent.click(screen.getByRole('button', { name: /Check status/ }));
     expect(await screen.findByText('Contoso Leadership Team')).toBeInTheDocument();
     expect(screen.getByText('Succeeded')).toBeInTheDocument();
     expect(screen.getByText('42 direct members, 40 matched to users in the database')).toBeInTheDocument();
+    expect(mockRefresh).not.toHaveBeenCalled();
   });
 
   it('turns the comparison off by saving an empty group', async () => {
@@ -106,7 +111,7 @@ describe('LeadershipCohortPage', () => {
     mockFetch.mockResolvedValue(ready());
     mockRefresh.mockRejectedValue(new Error('refreshInProgress'));
     renderWithProvider(<LeadershipCohortPage />);
-    fireEvent.click(await screen.findByRole('button', { name: /Read members now/ }));
+    fireEvent.click(await screen.findByRole('button', { name: /^Request membership read$/ }));
     expect(await screen.findByText('The members are already being read. Try again in a minute.')).toBeInTheDocument();
   });
 
@@ -115,6 +120,6 @@ describe('LeadershipCohortPage', () => {
     renderWithProvider(<LeadershipCohortPage />);
     expect(await screen.findByText(/Azure Storage is not configured/)).toBeInTheDocument();
     fireEvent.change(screen.getByRole('textbox'), { target: { value: GROUP } });
-    expect(screen.getByRole('button', { name: /Save and read members/ })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /Save and request membership read/ })).toBeDisabled();
   });
 });

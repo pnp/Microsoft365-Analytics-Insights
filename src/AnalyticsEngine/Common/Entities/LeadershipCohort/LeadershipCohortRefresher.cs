@@ -144,13 +144,19 @@ namespace Common.Entities.LeadershipCohort
             return utcNow - snapshot.AttemptedUtc >= after;
         }
 
-        /// <summary>Refreshes when <see cref="IsDue"/>. Null when not configured, not due, or another refresh is running.</summary>
+        /// <summary>Whether the latest durable read request has not yet produced a saved outcome.</summary>
+        public static bool IsPending(LeadershipCohortSettings settings, LeadershipCohortSnapshot snapshot, LeadershipCohortRefreshRequest request) =>
+            settings != null && request != null &&
+            !string.Equals(request.Id, snapshot?.RefreshRequestId, StringComparison.Ordinal);
+
+        /// <summary>Refreshes when due or explicitly requested. Null when not configured, not due, or another refresh is running.</summary>
         public async Task<LeadershipCohortSnapshot> RefreshIfDueAsync()
         {
             var settings = await _store.GetSettingsAsync().ConfigureAwait(false);
             if (settings == null) return null;
             var snapshot = await _store.GetSnapshotAsync().ConfigureAwait(false);
-            if (!IsDue(settings, snapshot, _utcNow())) return null;
+            var request = await _store.GetRefreshRequestAsync().ConfigureAwait(false);
+            if (!IsDue(settings, snapshot, _utcNow()) && !IsPending(settings, snapshot, request)) return null;
             return await RefreshAsync().ConfigureAwait(false);
         }
 
@@ -165,12 +171,14 @@ namespace Common.Entities.LeadershipCohort
             {
                 var settings = await _store.GetSettingsAsync().ConfigureAwait(false);
                 if (settings == null || !Guid.TryParse(settings.GroupId, out var groupId)) return null;
+                var request = await _store.GetRefreshRequestAsync().ConfigureAwait(false);
 
                 var snapshot = new LeadershipCohortSnapshot
                 {
                     Version = Guid.NewGuid().ToString("N"),
                     GroupId = groupId.ToString("D"),
                     SettingsRevision = settings.Revision,
+                    RefreshRequestId = request?.Id,
                     AttemptedUtc = _utcNow(),
                 };
 

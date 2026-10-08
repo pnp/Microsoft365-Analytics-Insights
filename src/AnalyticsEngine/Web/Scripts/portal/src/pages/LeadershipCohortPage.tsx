@@ -121,9 +121,12 @@ export default function LeadershipCohortPage() {
             onClick={() => run(() => saveLeadershipCohort(''), 'admin.leadershipCohort.failed.save')}>
             {t('admin.leadershipCohort.clear')}
           </Button>
-          <Button icon={<ArrowClockwise16Regular />} disabled={busy || !status?.configured}
+          <Button icon={<ArrowClockwise16Regular />} disabled={busy || !durable || !status?.configured}
             onClick={() => run(refreshLeadershipCohort, 'admin.leadershipCohort.failed.refresh')}>
             {t('admin.leadershipCohort.refreshNow')}
+          </Button>
+          <Button disabled={busy} onClick={() => run(fetchLeadershipCohort, 'admin.leadershipCohort.failed.load')}>
+            {t('admin.leadershipCohort.status.check')}
           </Button>
         </div>
         <Text size={200} className={styles.muted}>{t('admin.leadershipCohort.permissionHint')}</Text>

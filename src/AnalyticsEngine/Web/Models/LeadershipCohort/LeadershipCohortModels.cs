@@ -1,9 +1,9 @@
 using Common.Entities.Config;
 using Common.Entities.LeadershipCohort;
-using DataUtils;
 using Newtonsoft.Json;
 using System;
 using System.Net;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace Web.AnalyticsWeb.Models.LeadershipCohort
@@ -111,20 +111,20 @@ namespace Web.AnalyticsWeb.Models.LeadershipCohort
 
     internal sealed class LeadershipCohortService
     {
-        private static readonly Lazy<AnalyticsLogger> ProductionLogger = new Lazy<AnalyticsLogger>(
-            () => new AnalyticsLogger(new AppConfig().AppInsightsConnectionString, "LeadershipCohort"));
-
+        internal static readonly TimeSpan RequestTimeout = TimeSpan.FromSeconds(30);
         private readonly LeadershipCohortStore _store;
-        private readonly Func<LeadershipCohortRefresher> _createRefresher;
         private readonly Action _invalidate;
         private readonly Func<DateTime> _utcNow;
+        private readonly TimeSpan _requestTimeout;
 
-        public LeadershipCohortService(LeadershipCohortStore store, Func<LeadershipCohortRefresher> createRefresher, Action invalidate, Func<DateTime> utcNow = null)
+        public LeadershipCohortService(LeadershipCohortStore store, Action invalidate, Func<DateTime> utcNow = null, TimeSpan? requestTimeout = null)
         {
             _store = store ?? throw new ArgumentNullException(nameof(store));
-            _createRefresher = createRefresher ?? throw new ArgumentNullException(nameof(createRefresher));
             _invalidate = invalidate ?? (() => { });
             _utcNow = utcNow ?? (() => DateTime.UtcNow);
+            _requestTimeout = requestTimeout ?? RequestTimeout;
+            if (_requestTimeout <= TimeSpan.Zero || _requestTimeout > RequestTimeout)
+                throw new ArgumentOutOfRangeException(nameof(requestTimeout));
         }
 
         public static LeadershipCohortService ForThisDeployment()
@@ -133,16 +133,25 @@ namespace Web.AnalyticsWeb.Models.LeadershipCohort
             var store = LeadershipComparisonProvider.OpenStore(config);
             return new LeadershipCohortService(
                 store,
-                () => LeadershipCohortRefresher.ForGraph(store, config, ProductionLogger.Value),
                 LeadershipComparisonProvider.Default.Invalidate);
         }
 
-        public async Task<LeadershipCohortStatusModel> GetStatusAsync()
-        {
-            var settings = await _store.GetSettingsAsync();
-            var snapshot = settings == null ? null : await _store.GetSnapshotAsync();
-            if (snapshot != null && !string.Equals(snapshot.SettingsRevision, settings.Revision, StringComparison.Ordinal)) snapshot = null;
+        public Task<LeadershipCohortStatusModel> GetStatusAsync(CancellationToken cancellationToken = default) =>
+            WithinDeadlineAsync(GetStatusCoreAsync, cancellationToken);
 
+        private async Task<LeadershipCohortStatusModel> GetStatusCoreAsync(CancellationToken cancellationToken)
+        {
+            var settings = await _store.GetSettingsAsync(cancellationToken);
+            var snapshot = settings == null ? null : await _store.GetSnapshotAsync(cancellationToken);
+            var request = settings == null ? null : await _store.GetRefreshRequestAsync(cancellationToken);
+            if (snapshot != null && !string.Equals(snapshot.SettingsRevision, settings.Revision, StringComparison.Ordinal)) snapshot = null;
+            if (LeadershipCohortRefresher.IsPending(settings, snapshot, request)) snapshot = null;
+
+            return Status(settings, snapshot);
+        }
+
+        private LeadershipCohortStatusModel Status(LeadershipCohortSettings settings, LeadershipCohortSnapshot snapshot = null)
+        {
             return new LeadershipCohortStatusModel
             {
                 StateDurable = _store.IsDurable,
@@ -169,49 +178,72 @@ namespace Web.AnalyticsWeb.Models.LeadershipCohort
         }
 
         /// <summary>
-        /// Saves the group (or clears it) and, when one is set, reads its membership straight away so the administrator
-        /// sees at once whether the group was found and the app may read it. The read is bounded (about eleven Graph
-        /// calls at most) and an unsuccessful one is a status, not an error.
+        /// Saves the group (or clears it). A new durable revision requests an importer refresh: IsDue compares it with
+        /// the snapshot revision, so a restart cannot lose the request. Success means settings saved, not members read.
+        /// Never starts Graph/SQL work in the HTTP request; its retries can exceed App Service's HTTP deadline.
         /// </summary>
-        public async Task<LeadershipCohortStatusModel> SaveAsync(LeadershipCohortSaveRequest request)
+        public Task<LeadershipCohortStatusModel> SaveAsync(LeadershipCohortSaveRequest request, CancellationToken cancellationToken = default) =>
+            WithinDeadlineAsync(token => SaveCoreAsync(request, token), cancellationToken);
+
+        private async Task<LeadershipCohortStatusModel> SaveCoreAsync(LeadershipCohortSaveRequest request, CancellationToken cancellationToken)
         {
             if (!_store.IsDurable) throw new LeadershipCohortRequestException(HttpStatusCode.Conflict, LeadershipCohortErrorCodes.StateNotDurable);
 
             var raw = request?.GroupId?.Trim();
             if (string.IsNullOrEmpty(raw))
             {
-                await _store.SaveSettingsAsync(null);
+                await _store.SaveSettingsAsync(null, cancellationToken);
                 _invalidate();
-                return await GetStatusAsync();
+                return Status(null);
             }
 
             if (!Guid.TryParse(raw, out var groupId) || groupId == Guid.Empty)
                 throw new LeadershipCohortRequestException(HttpStatusCode.BadRequest, LeadershipCohortErrorCodes.InvalidGroupId);
 
-            await _store.SaveSettingsAsync(new LeadershipCohortSettings
+            var settings = new LeadershipCohortSettings
             {
                 GroupId = groupId.ToString("D"),
                 Revision = Guid.NewGuid().ToString("N"),
                 UpdatedUtc = _utcNow(),
-            });
+            };
+            await _store.SaveSettingsAsync(settings, cancellationToken);
             _invalidate();
 
-            // A refresh already running finishes for the previous revision; the importer's next cycle picks this one up.
-            await _createRefresher().RefreshAsync();
-            _invalidate();
-            return await GetStatusAsync();
+            // Return the acknowledged write without another storage read that could turn a saved setting into an error.
+            return Status(settings);
         }
 
-        public async Task<LeadershipCohortStatusModel> RefreshAsync()
-        {
-            if (await _store.GetSettingsAsync() == null)
-                throw new LeadershipCohortRequestException(HttpStatusCode.Conflict, LeadershipCohortErrorCodes.NotConfigured);
+        public Task<LeadershipCohortStatusModel> RefreshAsync(CancellationToken cancellationToken = default) =>
+            WithinDeadlineAsync(RefreshCoreAsync, cancellationToken);
 
-            var result = await _createRefresher().RefreshAsync();
-            if (result == null)
-                throw new LeadershipCohortRequestException(HttpStatusCode.Conflict, LeadershipCohortErrorCodes.RefreshInProgress);
+        private async Task<LeadershipCohortStatusModel> RefreshCoreAsync(CancellationToken cancellationToken)
+        {
+            var settings = await _store.GetSettingsAsync(cancellationToken);
+            if (settings == null)
+                throw new LeadershipCohortRequestException(HttpStatusCode.Conflict, LeadershipCohortErrorCodes.NotConfigured);
+            if (!_store.IsDurable)
+                throw new LeadershipCohortRequestException(HttpStatusCode.Conflict, LeadershipCohortErrorCodes.StateNotDurable);
+
+            await _store.RequestRefreshAsync(new LeadershipCohortRefreshRequest
+            {
+                Id = Guid.NewGuid().ToString("N"),
+            }, cancellationToken);
             _invalidate();
-            return await GetStatusAsync();
+            return Status(settings);
+        }
+
+        private async Task<LeadershipCohortStatusModel> WithinDeadlineAsync(
+            Func<CancellationToken, Task<LeadershipCohortStatusModel>> action, CancellationToken cancellationToken)
+        {
+            using (var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken))
+            {
+                deadline.CancelAfter(_requestTimeout);
+                try { return await action(deadline.Token); }
+                catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested && deadline.IsCancellationRequested)
+                {
+                    throw new LeadershipCohortRequestException(HttpStatusCode.ServiceUnavailable, LeadershipCohortErrorCodes.StateUnavailable);
+                }
+            }
         }
     }
 }

@@ -32,6 +32,13 @@ namespace Common.Entities.LeadershipCohort
         public DateTime UpdatedUtc { get; set; }
     }
 
+    /// <summary>A durable request to refresh the currently configured group, independent of concurrent settings saves.</summary>
+    public sealed class LeadershipCohortRefreshRequest
+    {
+        [JsonProperty("id")]
+        public string Id { get; set; }
+    }
+
     /// <summary>The outcome of the last membership refresh, as recorded in <see cref="LeadershipCohortSnapshot.Status"/>.</summary>
     public static class LeadershipCohortRefreshStatuses
     {
@@ -94,6 +101,10 @@ namespace Common.Entities.LeadershipCohort
         /// <summary>The <see cref="LeadershipCohortSettings.Revision"/> this refresh was made for.</summary>
         [JsonProperty("settingsRevision")]
         public string SettingsRevision { get; set; }
+
+        /// <summary>The durable request consumed by this attempt, if any. Never clears a newer request.</summary>
+        [JsonProperty("refreshRequestId")]
+        public string RefreshRequestId { get; set; }
 
         /// <summary>One of <see cref="LeadershipCohortRefreshStatuses"/>.</summary>
         [JsonProperty("status")]

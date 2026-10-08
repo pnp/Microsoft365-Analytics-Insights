@@ -1,6 +1,7 @@
 using Common.Entities.LeadershipCohort;
 using System;
 using System.Net;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Web.Http;
 using Web.AnalyticsWeb.Models.LeadershipCohort;
@@ -28,18 +29,20 @@ namespace Web.AnalyticsWeb.Controllers
 
         [HttpGet]
         [Route("")]
-        public Task<IHttpActionResult> Get() => Answer(async service => Ok(await service.GetStatusAsync()));
+        public Task<IHttpActionResult> Get(CancellationToken cancellationToken = default) =>
+            Answer(async service => Ok(await service.GetStatusAsync(cancellationToken)));
 
         [HttpPut]
         [Route("")]
         [RequireSameOriginXhr]
-        public Task<IHttpActionResult> Save([FromBody] LeadershipCohortSaveRequest request)
-            => Answer(async service => Ok(await service.SaveAsync(request)));
+        public Task<IHttpActionResult> Save([FromBody] LeadershipCohortSaveRequest request, CancellationToken cancellationToken = default)
+            => Answer(async service => Ok(await service.SaveAsync(request, cancellationToken)));
 
         [HttpPost]
         [Route("refresh")]
         [RequireSameOriginXhr]
-        public Task<IHttpActionResult> Refresh() => Answer(async service => Ok(await service.RefreshAsync()));
+        public Task<IHttpActionResult> Refresh(CancellationToken cancellationToken = default) =>
+            Answer(async service => Ok(await service.RefreshAsync(cancellationToken)));
 
         private async Task<IHttpActionResult> Answer(Func<LeadershipCohortService, Task<IHttpActionResult>> action)
         {
