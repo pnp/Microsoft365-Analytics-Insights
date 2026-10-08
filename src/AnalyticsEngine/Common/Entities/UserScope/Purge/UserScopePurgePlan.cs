@@ -249,6 +249,7 @@ namespace Common.Entities.UserScope.Purge
                 Delete(usage, "cowork_usage_user_activity_log", "id", ByUser("user_id"), "user_id"),
 
                 Delete(UserScopePurgePhases.CopilotInteractions, "copilot_interaction_keywords", "id", ByInteraction("interaction_id"), "interaction_id"),
+                Delete(UserScopePurgePhases.CopilotInteractions, "copilot_prompt_classifications", "interaction_id", ByInteraction("interaction_id"), "interaction_id"),
                 Delete(UserScopePurgePhases.CopilotInteractions, "copilot_interactions", "id", ByUser("user_id"), "user_id", "session_id"),
                 Delete(UserScopePurgePhases.CopilotInteractions, "copilot_interaction_sessions", "id", ByUser("user_id"), "user_id"),
                 Delete(UserScopePurgePhases.CopilotInteractions, "copilot_interaction_user_watermarks", "id", ByUser("user_id"), "user_id"),

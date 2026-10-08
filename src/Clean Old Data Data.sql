@@ -119,6 +119,11 @@ if OBJECT_ID('dbo.copilot_interaction_keywords', 'U') is not null
 		inner join copilot_interactions i on i.id = k.interaction_id
 		where i.created_utc < @archiveDateMax
 
+if OBJECT_ID('dbo.copilot_prompt_classifications', 'U') is not null
+	delete c from dbo.copilot_prompt_classifications c
+		inner join dbo.copilot_interactions i on i.id = c.interaction_id
+		where i.created_utc < @archiveDateMax
+
 if OBJECT_ID('dbo.copilot_interactions', 'U') is not null
 	delete from copilot_interactions where created_utc < @archiveDateMax
 

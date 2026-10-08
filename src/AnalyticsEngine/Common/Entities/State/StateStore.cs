@@ -137,6 +137,8 @@ namespace Common.Entities.State
     /// </summary>
     public static class StatePartitions
     {
+        public const string PromptCategories = "PromptCategories";
+
         /// <summary>When each interval-gated import last ran (and when a failing usage report may next retry). Round-trip ("o") timestamps.</summary>
         public const string ImportSchedule = "ImportSchedule";
 

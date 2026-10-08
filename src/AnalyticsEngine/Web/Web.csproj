@@ -266,6 +266,7 @@
     <Compile Include="Controllers\UserOrgAPIController.cs" />
     <Compile Include="Controllers\UserFilterAPIController.cs" />
     <Compile Include="Controllers\GlobalFilterAPIController.cs" />
+    <Compile Include="Controllers\PromptCategoriesAPIController.cs" />
     <Compile Include="Models\UserFilters\GlobalFilterApiModels.cs" />
     <Compile Include="Models\UserFilters\GlobalFilterProvider.cs" />
     <Compile Include="Models\UserFilters\ReportScopeResolver.cs" />

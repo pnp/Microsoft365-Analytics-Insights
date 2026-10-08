@@ -105,7 +105,7 @@ namespace Tests.UnitTests
         // LicenceHistory then adds licence assignment-history, completed-refresh and per-refresh
         // seat-count tables. It is raw-SQL, additive, and reuses the predecessor snapshot verbatim. As the
         // chain head its snapshot is the one EF compares the live entity model against.
-        private const string LatestId = "202610021200001_LicenceHistory";
+        private const string LatestId = "202610080900001_AddPromptCategories";
         private const string IndexName = "IX_urls_full_url";
 
         // "Καλημέρα κόσμε" - the classic Greek charset sample (synthetic; no customer data).

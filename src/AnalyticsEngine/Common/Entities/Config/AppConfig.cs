@@ -95,6 +95,9 @@ namespace Common.Entities.Config
 
             this.CognitiveEndpoint = ConfigurationManager.AppSettings.Get("CognitiveEndpoint");
             this.CognitiveKey = ConfigurationManager.AppSettings.Get("CognitiveKey");
+            FoundryPromptEndpoint = ReadFoundryRuntimeSetting(nameof(FoundryPromptEndpoint));
+            FoundryPromptDeployment = ReadFoundryRuntimeSetting(nameof(FoundryPromptDeployment));
+            FoundryPromptKey = ReadFoundryRuntimeSetting(nameof(FoundryPromptKey));
 
 
             var importJobSettingsString = ConfigurationManager.AppSettings.Get("ImportJobSettings");
@@ -561,6 +564,15 @@ namespace Common.Entities.Config
         public int ImportStartStaggerMinutes { get; set; } = 0;
 
         #region Copilot AI interaction history
+
+        // Console WebJobs do not have ASP.NET's App Service appSettings override.
+        private static string ReadFoundryRuntimeSetting(string name) =>
+            Environment.GetEnvironmentVariable("APPSETTING_" + name) ??
+            Environment.GetEnvironmentVariable(name) ?? ConfigurationManager.AppSettings.Get(name);
+
+        public string FoundryPromptEndpoint { get; set; }
+        public string FoundryPromptDeployment { get; set; }
+        public string FoundryPromptKey { get; set; }
 
         /// <summary>Default cadence for the interaction-history import: once a day.</summary>
         public const int DefaultCopilotInteractionHistoryIntervalHours = 24;

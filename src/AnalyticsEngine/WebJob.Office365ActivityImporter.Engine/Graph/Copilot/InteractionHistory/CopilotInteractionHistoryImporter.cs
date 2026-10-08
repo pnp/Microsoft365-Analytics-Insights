@@ -2,6 +2,7 @@ using Common.Entities;
 using Common.Entities.Config;
 using Common.Entities.Entities;
 using Common.Entities.Entities.Copilot;
+using Common.Entities.PromptCategories;
 using DataUtils;
 using Microsoft.Extensions.Logging;
 using System;
@@ -107,6 +108,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.InteractionHisto
         private readonly IClock _clock;
         private readonly int _userChunkSize;
         private readonly int _graphLoadParallelism;
+        private PromptCategoryClassifier _promptClassifier;
 
         public CopilotInteractionHistoryImporter(
             AnalyticsLogger logger,
@@ -118,7 +120,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.InteractionHisto
             IAnalyticsDbContextFactory dbContextFactory = null,
             int userChunkSize = DefaultUserChunkSize,
             int graphLoadParallelism = DefaultGraphLoadParallelism,
-            IClock clock = null)
+            IClock clock = null,
+            PromptCategoryClassifier promptClassifier = null)
             : base(logger, settings)
         {
             _sourceLoader = sourceLoader ?? throw new ArgumentNullException(nameof(sourceLoader));
@@ -129,6 +132,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.InteractionHisto
             _clock = clock ?? SystemClock.Instance;
             _userChunkSize = userChunkSize > 0 ? userChunkSize : DefaultUserChunkSize;
             _graphLoadParallelism = graphLoadParallelism > 0 ? graphLoadParallelism : DefaultGraphLoadParallelism;
+            _promptClassifier = promptClassifier;
         }
 
         /// <summary>
@@ -151,6 +155,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.InteractionHisto
             }
 
             var runLog = new CopilotInteractionImportLog { RunStartedUtc = _clock.UtcNow };
+            _promptClassifier = _promptClassifier ?? await PromptCategoryClassifier.CreateAsync(_settings);
 
             try
             {
@@ -660,8 +665,11 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.InteractionHisto
 
         private async Task<int> EnrichChunkAsync(List<UserLoadResult> withData)
         {
-            if (!_cognitiveEnricher.IsEnabled)
+            if (!_cognitiveEnricher.IsEnabled && _promptClassifier?.Taxonomy?.Enabled != true)
+            {
+                foreach (var result in withData) result.PromptBodies = null;
                 return 0;
+            }
 
             // Flatten the chunk into one aligned pair of lists so batching happens across users rather than
             // per user - a 10-document Azure batch shouldn't be wasted on a user with two prompts.
@@ -677,7 +685,11 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.InteractionHisto
                 }
             }
 
-            return await _cognitiveEnricher.EnrichAsync(allStats, allBodies);
+            var scored = _cognitiveEnricher.IsEnabled ? await _cognitiveEnricher.EnrichAsync(allStats, allBodies) : 0;
+            if (_promptClassifier != null)
+                await _promptClassifier.EnrichAsync(allStats, allBodies);
+            foreach (var result in withData) result.PromptBodies = null;
+            return scored;
         }
 
         #endregion
@@ -694,6 +706,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.InteractionHisto
 
             var newInteractions = new List<CopilotInteraction>();
             var keyPhrasesByInteraction = new Dictionary<CopilotInteraction, List<string>>();
+            var categoryStats = new Dictionary<CopilotInteraction, InteractionStats>();
 
             // EF6 calls DetectChanges on every DbSet.Add by default, and DetectChanges walks the entire
             // change tracker - so adding N entities costs O(N^2) entity examinations. A full chunk can carry
@@ -743,6 +756,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.InteractionHisto
 
                         newInteractions.Add(interaction);
                         db.CopilotInteractions.Add(interaction);
+                        if (s.PromptCategoryId != null) categoryStats.Add(interaction, s);
 
                         if (s.KeyPhrases != null && s.KeyPhrases.Count > 0)
                             keyPhrasesByInteraction[interaction] = s.KeyPhrases;
@@ -764,6 +778,23 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.InteractionHisto
             }
 
             await SaveKeyPhrasesAsync(db, keyPhrasesByInteraction);
+            if (categoryStats.Count > 0)
+            {
+                try
+                {
+                    await PromptCategorySql.SaveFactsAsync(db, _promptClassifier.Taxonomy,
+                    categoryStats.Select(pair => new PromptCategoryFact
+                    {
+                        InteractionId = pair.Key.ID, CategoryId = pair.Value.PromptCategoryId,
+                        TaxonomyVersion = pair.Value.PromptTaxonomyVersion, HumanMode = pair.Value.PromptHumanMode
+                    }).ToList());
+                }
+                catch
+                {
+                    _promptClassifier.Run.Reason = "storage-failure";
+                    _logger.LogWarning("Prompt classification facts could not be saved. Interaction statistics are retained.");
+                }
+            }
 
             return newInteractions.Count;
         }
@@ -1118,6 +1149,13 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.InteractionHisto
             {
                 db.CopilotInteractionImportLogs.Add(runLog);
                 await db.SaveChangesAsync();
+                if (_promptClassifier != null)
+                {
+                    try { await PromptCategorySql.SaveRunAsync(db, runLog.ID, _promptClassifier.Run); }
+                    catch { _logger.LogWarning("Prompt classification counters could not be saved."); }
+                    _promptClassifier.Dispose();
+                    _promptClassifier = null;
+                }
             }
 
             _logger.LogInformation(

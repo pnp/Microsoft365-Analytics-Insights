@@ -120,6 +120,11 @@ namespace Tests.UnitTests
             ["LicenceActivityAPIController.Export"] = Any,             // refuses usersId without See PII
 
             ["PortalAccessAPIController.Get"] = Any,
+            ["PromptCategoriesAPIController.Get"] = Admin,
+            ["PromptCategoriesAPIController.Save"] = Admin,
+            ["PromptCategoriesAPIController.Reset"] = Admin,
+            ["PromptCategoriesAPIController.Runs"] = Admin,
+            ["PromptCategoriesAPIController.Report"] = Any,
 
             ["ProfilingStatusAPIController.Get"] = Admin,
             ["ProfilingStatusAPIController.TraceLogs"] = Admin,

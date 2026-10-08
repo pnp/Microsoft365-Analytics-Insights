@@ -47,6 +47,7 @@ const ProfilingStatusPage = lazyWithReload(() => import('./pages/ProfilingStatus
 const InstallLogPage = lazyWithReload(() => import('./pages/InstallLogPage'));
 const HealthPage = lazyWithReload(() => import('./pages/HealthPage'));
 const ServiceConfigurationPage = lazyWithReload(() => import('./pages/ServiceConfigurationPage'));
+const PromptCategoriesPage = lazyWithReload(() => import('./pages/PromptCategoriesPage'));
 
 /**
  * The portal is split into two areas so the two audiences it serves don't have to wade
@@ -248,6 +249,14 @@ export const ROUTES: PortalRoute[] = [
     groupKey: 'app.navGroup.manage',
     icon: <Sparkle20Regular />,
     element: <CopilotAuditBackfillPage />,
+  },
+  {
+    area: 'admin',
+    path: '/admin/prompt-categories',
+    labelKey: 'promptCategories.title',
+    groupKey: 'app.navGroup.manage',
+    icon: <Sparkle20Regular />,
+    element: <PromptCategoriesPage />,
   },
   {
     area: 'admin',

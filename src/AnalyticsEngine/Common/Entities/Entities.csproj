@@ -80,6 +80,16 @@
   </ItemGroup>
   <ItemGroup>
     <Compile Include="BaseEntity.cs" />
+    <Compile Include="PromptCategories\PromptCategoryConfiguration.cs" />
+    <Compile Include="PromptCategories\PromptCategorySql.cs" />
+    <Compile Include="PromptCategories\PromptCategoryReportSql.cs" />
+    <Compile Include="Migrations\202610080900001_AddPromptCategories.cs" />
+    <Compile Include="Migrations\202610080900001_AddPromptCategories.Designer.cs">
+      <DependentUpon>202610080900001_AddPromptCategories.cs</DependentUpon>
+    </Compile>
+    <EmbeddedResource Include="Migrations\202610080900001_AddPromptCategories.resx">
+      <DependentUpon>202610080900001_AddPromptCategories.cs</DependentUpon>
+    </EmbeddedResource>
     <Compile Include="BuildConstants.cs" />
     <Compile Include="ActivityAnalysis\ActivityAnalysisCache.cs" />
     <Compile Include="ActivityAnalysis\ActivityAnalysisEvaluation.cs" />
