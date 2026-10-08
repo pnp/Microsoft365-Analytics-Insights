@@ -77,6 +77,8 @@ type CategoryBarChartProps = {
    * counts: "62" against a department reads as sixty-two people unless it says 62%.
    */
   valueSuffix?: string | null;
+  /** Labels are tenant-authored or already localised, not server placeholder wording. */
+  literalLabels?: boolean;
 };
 
 /**
@@ -86,7 +88,7 @@ type CategoryBarChartProps = {
  * colour - flat rectangles read as functional, and these charts end up in board packs. The gradient
  * stays within one hue so it never changes which category a colour identifies.
  */
-export default function CategoryBarChart({ categories, valueLabel, showShare, valueSuffix }: CategoryBarChartProps) {
+export default function CategoryBarChart({ categories, valueLabel, showShare, valueSuffix, literalLabels }: CategoryBarChartProps) {
   const t = useT();
   const styles = useStyles();
 
@@ -103,7 +105,7 @@ export default function CategoryBarChart({ categories, valueLabel, showShare, va
       {categories.map((c, i) => {
         const pct = Math.max(1, (c.value / max) * 100);
         const share = total > 0 ? (c.value / total) * 100 : 0;
-        const label = serverPlaceholderText(t, c.label);
+        const label = literalLabels ? c.label : serverPlaceholderText(t, c.label);
 
         return (
           <div

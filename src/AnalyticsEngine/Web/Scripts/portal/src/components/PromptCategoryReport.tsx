@@ -51,11 +51,11 @@ export default function PromptCategoryReport({ months }: { months: number }) {
       </Field>
       {!report.mix.length && <Text>{t('promptCategories.empty')}</Text>}
       <Text weight="semibold">{t('promptCategories.mix')}</Text>
-      <CategoryBarChart categories={report.mix.map(row => ({ label: label(row.categoryId), value: row.prompts }))}
+      <CategoryBarChart literalLabels categories={report.mix.map(row => ({ label: label(row.categoryId), value: row.prompts }))}
         valueLabel={t('promptCategories.prompts')} />
       {report.mix.map(row => <Text key={row.categoryId}>{label(row.categoryId)}: {formatNumber(row.prompts)} {t('promptCategories.prompts')}</Text>)}
       <Text weight="semibold">{t('promptCategories.trend')}</Text>
-      <TimeSeriesChart valueLabel={t('promptCategories.prompts')}
+      <TimeSeriesChart literalLabels valueLabel={t('promptCategories.prompts')}
         series={report.mix.map(row => ({
           name: label(row.categoryId),
           points: weeks.map(week => ({

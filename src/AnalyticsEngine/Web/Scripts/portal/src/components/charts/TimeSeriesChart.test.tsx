@@ -3,6 +3,20 @@ import { renderWithProvider } from '../../test/renderWithProvider';
 import TimeSeriesChart from './TimeSeriesChart';
 import { CHART_PALETTE, lineSeriesStyle } from './chartCommon';
 import type { ReportSeries } from '../../types/reports';
+import { loadCatalog } from '../../i18n';
+
+it('still translates server placeholders unless literal labels are requested', async () => {
+  await loadCatalog('es');
+  const { getByText } = renderWithProvider(
+    <TimeSeriesChart valueLabel="Synthetic unit" series={[
+      { name: '(unknown)', points: [{ weekStart: '2026-01-05', value: 12 }] },
+      { name: '(none)', points: [{ weekStart: '2026-01-05', value: 15 }] },
+    ]} />,
+    { language: 'es' },
+  );
+  expect(getByText('(desconocido)')).toBeInTheDocument();
+  expect(getByText('(ninguno)')).toBeInTheDocument();
+}, 30000);
 
 describe('TimeSeriesChart many series', () => {
   const weeks = ['2026-09-07', '2026-09-14', '2026-09-21'];

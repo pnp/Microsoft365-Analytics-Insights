@@ -2,6 +2,7 @@ import { beforeEach, expect, it, vi } from 'vitest';
 import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { renderWithProvider } from '../test/renderWithProvider';
+import { loadCatalog } from '../i18n';
 import { fetchPromptCategoryReport } from '../api/promptCategoriesApi';
 import PromptCategoryReport from './PromptCategoryReport';
 
@@ -36,3 +37,25 @@ it('keeps an unavailable selection explicit so the reader can choose the sole el
   await userEvent.setup().selectOptions(select, 'version-b');
   await waitFor(() => expect(fetchPromptCategoryReport).toHaveBeenCalledWith(1, 'version-b'));
 });
+
+it('never translates administrator names that happen to match server placeholders', async () => {
+  await loadCatalog('es');
+  vi.mocked(fetchPromptCategoryReport).mockResolvedValue({
+    versions: ['version-a'], version: 'version-a',
+    categories: [
+      { id: 'custom-a', name: '(unknown)', description: 'Synthetic goal A', humanMode: null },
+      { id: 'custom-b', name: '(none)', description: 'Synthetic goal B', humanMode: null },
+    ],
+    mix: [{ categoryId: 'custom-a', prompts: 12 }, { categoryId: 'custom-b', prompts: 15 }],
+    trend: [
+      { categoryId: 'custom-a', weekStart: '2026-01-05T00:00:00Z', prompts: 12 },
+      { categoryId: 'custom-b', weekStart: '2026-01-05T00:00:00Z', prompts: 15 },
+    ],
+  });
+  renderWithProvider(<PromptCategoryReport months={3} />, { language: 'es' });
+  await screen.findByRole('option', { name: 'version-a' });
+  expect(screen.getAllByText('(unknown)')).toHaveLength(2);
+  expect(screen.getAllByText('(none)')).toHaveLength(2);
+  expect(screen.queryByText('(desconocido)')).not.toBeInTheDocument();
+  expect(screen.queryByText('(ninguno)')).not.toBeInTheDocument();
+}, 30000);
