@@ -54,6 +54,65 @@ describe('GlobalFilterProvider', () => {
     expect(fetchEffectiveGlobalFilter).toHaveBeenCalledTimes(1);
   });
 
+  it('cannot set a bypass before capability reporting has completed', async () => {
+    vi.mocked(fetchEffectiveGlobalFilter).mockImplementationOnce(() => new Promise(() => {}));
+    renderProvider();
+    await act(() => context.setBypassed(true));
+    expect(document.cookie).not.toContain(`${GLOBAL_FILTER_BYPASS_COOKIE}=1`);
+    expect(context.viewKey).toBe(0);
+    expect(fetchEffectiveGlobalFilter).toHaveBeenCalledTimes(1);
+  });
+
+  it('clears an old sign-in’s bypass and refuses to set it without both permissions', async () => {
+    document.cookie = `${GLOBAL_FILTER_BYPASS_COOKIE}=1; path=/`;
+    vi.mocked(fetchEffectiveGlobalFilter).mockResolvedValueOnce(effective({ canBypass: false }));
+    renderProvider();
+    await waitFor(() => expect(screen.getByTestId('state')).toHaveTextContent('ready:0:1:false'));
+    expect(document.cookie).not.toContain(`${GLOBAL_FILTER_BYPASS_COOKIE}=1`);
+
+    await act(() => context.setBypassed(true));
+    expect(document.cookie).not.toContain(`${GLOBAL_FILTER_BYPASS_COOKIE}=1`);
+    expect(fetchEffectiveGlobalFilter).toHaveBeenCalledTimes(1);
+    expect(context.viewKey).toBe(0);
+
+    // A stale tab cannot reintroduce the browser-wide switch for this reader.
+    document.cookie = `${GLOBAL_FILTER_BYPASS_COOKIE}=1; path=/`;
+    act(() => window.dispatchEvent(new Event('focus')));
+    expect(document.cookie).not.toContain(`${GLOBAL_FILTER_BYPASS_COOKIE}=1`);
+    expect(fetchEffectiveGlobalFilter).toHaveBeenCalledTimes(1);
+  });
+
+  it('clears bypass when a permission is withdrawn, remounts filtered reports and does not restore it with the role', async () => {
+    document.cookie = `${GLOBAL_FILTER_BYPASS_COOKIE}=1; path=/`;
+    vi.mocked(fetchEffectiveGlobalFilter).mockResolvedValueOnce(effective({ bypassed: true, applied: false }));
+    renderProvider();
+    await waitFor(() => expect(screen.getByTestId('state')).toHaveTextContent('ready:0:1:true'));
+
+    vi.mocked(fetchEffectiveGlobalFilter).mockResolvedValueOnce(effective({ canBypass: false }));
+    await act(() => context.refresh());
+    expect(screen.getByTestId('state')).toHaveTextContent('ready:1:1:false');
+    expect(document.cookie).not.toContain(`${GLOBAL_FILTER_BYPASS_COOKIE}=1`);
+    expect(context.effective?.applied).toBe(true);
+
+    vi.mocked(fetchEffectiveGlobalFilter).mockResolvedValueOnce(effective());
+    await act(() => context.refresh());
+    expect(document.cookie).not.toContain(`${GLOBAL_FILTER_BYPASS_COOKIE}=1`);
+    expect(screen.getByTestId('state')).toHaveTextContent('ready:1:1:false');
+  });
+
+  it('does not optimistically bypass an unauthorized reader after a failed refresh', async () => {
+    vi.mocked(fetchEffectiveGlobalFilter).mockResolvedValueOnce(effective({ canBypass: false }));
+    renderProvider();
+    await waitFor(() => expect(screen.getByTestId('state')).toHaveTextContent('ready:0:1:false'));
+    vi.mocked(fetchEffectiveGlobalFilter).mockRejectedValueOnce(new Error('offline'));
+    await act(() => context.refresh());
+    await act(() => context.setBypassed(true));
+    expect(screen.getByTestId('state')).toHaveTextContent('error:0:1:false');
+    expect(document.cookie).not.toContain(`${GLOBAL_FILTER_BYPASS_COOKIE}=1`);
+    expect(context.effective?.applied).toBe(true);
+    expect(fetchEffectiveGlobalFilter).toHaveBeenCalledTimes(2);
+  });
+
   it('sets the cookie, reads again and remounts the reports once when an administrator switches it off', async () => {
     vi.mocked(fetchEffectiveGlobalFilter).mockResolvedValueOnce(effective());
     renderProvider();
@@ -80,7 +139,7 @@ describe('GlobalFilterProvider', () => {
     vi.mocked(fetchEffectiveGlobalFilter).mockRejectedValueOnce(new Error('offline'));
     await act(() => context.setBypassed(true));
 
-    // The reports follow the cookie, which the server honours for an administrator, so the bar must not go on
+    // The reports follow the cookie, which requires Administration and See PII, so the bar must not go on
     // describing the filtered view; the status still says the read failed.
     expect(screen.getByTestId('state')).toHaveTextContent('error:1:1:true');
     expect(context.effective?.applied).toBe(false);

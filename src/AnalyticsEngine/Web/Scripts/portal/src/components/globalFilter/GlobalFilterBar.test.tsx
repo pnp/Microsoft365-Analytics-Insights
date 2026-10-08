@@ -102,11 +102,45 @@ describe('GlobalFilterBar', () => {
     expect(setBypassed).toHaveBeenCalledWith(true);
   });
 
-  it('does not offer the editor to an administrator without See PII, who may still switch it off', () => {
-    renderBar({ effective: effective({ canBypass: true }) }, { access: { administration: true, seePii: false } });
+  it.each([
+    { administration: false, seePii: false },
+    { administration: true, seePii: false },
+    { administration: false, seePii: true },
+  ])('offers neither editing nor bypass with incomplete permissions: %j', (access) => {
+    renderBar({ effective: effective({ canBypass: false }) }, { access });
 
     expect(screen.queryByRole('link', { name: 'Edit' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Switch off for my view' })).not.toBeInTheDocument();
+  });
+
+  it('offers bypass when role enforcement is disabled and the server grants both permissions', () => {
+    renderBar(
+      { effective: effective({ canBypass: true }) },
+      { access: { enforced: false, administration: true, seePii: true } },
+    );
+    expect(screen.getByRole('link', { name: 'Edit' })).toBeVisible();
     expect(screen.getByRole('button', { name: 'Switch off for my view' })).toBeVisible();
+  });
+
+  it('does not offer bypass around an invalid filter to an administrator without See PII', () => {
+    renderBar(
+      { effective: effective({ canBypass: false, invalid: true, filter: null }) },
+      { access: { administration: true, seePii: false } },
+    );
+    expect(screen.getByText(/reports aren’t available until an administrator fixes it/)).toBeVisible();
+    expect(screen.queryByRole('link', { name: 'Edit' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Switch off for my view' })).not.toBeInTheDocument();
+  });
+
+  it.each([
+    ['en', /This requires both Administration and See PII/],
+    ['es', /Se requieren los permisos Administración y Ver PII/],
+  ] as const)('explains both required permissions in %s', async (language, wording) => {
+    await loadCatalog(language);
+    renderBar({ effective: effective({ canBypass: true }) }, { language });
+    const label = language === 'en' ? 'Switch off for my view' : 'Desactivar en mi vista';
+    await userEvent.hover(screen.getByRole('button', { name: label }));
+    expect(await screen.findByRole('tooltip')).toHaveTextContent(wording);
   });
 
   it('says plainly when an administrator has switched it off for their own view', async () => {

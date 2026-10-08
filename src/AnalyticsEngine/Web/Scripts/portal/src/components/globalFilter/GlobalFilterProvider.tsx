@@ -5,7 +5,7 @@ import type { GlobalFilterEffective } from '../../types/globalFilter';
 
 /**
  * The cookie that switches the administrator's global filter off for one administrator's own view -
- * `ReportScopeResolver.BypassCookie` on the server, which honours it only for a portal administrator.
+ * `ReportScopeResolver.BypassCookie` on the server, which requires both Administration and See PII.
  *
  * A cookie rather than a request header, so the Excel exports - plain links, which cannot send a header -
  * follow the same switch as the page they were opened from.
@@ -126,6 +126,8 @@ function LiveGlobalFilterProvider({ children }: { children: ReactNode }) {
     try {
       const next = await fetchEffectiveGlobalFilter(controller.signal);
       if (controller.signal.aborted) return 'aborted';
+      // Do not retain another sign-in's switch, or reactivate it if a withdrawn permission is restored.
+      if (!next.canBypass) writeGlobalFilterBypassCookie(false);
       loadedAt.current = Date.now();
       setState((previous) => ({
         status: 'ready',
@@ -152,7 +154,7 @@ function LiveGlobalFilterProvider({ children }: { children: ReactNode }) {
 
   // Every remount the cookie causes - a switch in this tab, or one made in another - goes through here. When
   // the read that should confirm it fails, the reports still follow the cookie: the server honours it for an
-  // administrator, and only an administrator's cookie is acted on. So the bar follows it too, rather than go
+  // administrator with See PII, and only their cookie is acted on. So the bar follows it too, rather than go
   // on describing the view from before; the status stays 'error' until a read succeeds.
   const remountForCookie = useCallback(
     async (bypassed: boolean) => {
@@ -177,7 +179,12 @@ function LiveGlobalFilterProvider({ children }: { children: ReactNode }) {
     const check = () => {
       if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
       const current = effectiveRef.current;
-      if (!current?.canBypass || !current.active || inFlight.current) return;
+      if (!current) return;
+      if (!current.canBypass) {
+        writeGlobalFilterBypassCookie(false);
+        return;
+      }
+      if (!current.active || inFlight.current) return;
       const cookie = readGlobalFilterBypassCookie();
       if (cookie !== current.bypassed) void remountForCookie(cookie);
     };
@@ -205,6 +212,7 @@ function LiveGlobalFilterProvider({ children }: { children: ReactNode }) {
 
   const setBypassed = useCallback(
     async (bypassed: boolean) => {
+      if (bypassed && !state.effective?.canBypass) return;
       setSwitching(true);
       writeGlobalFilterBypassCookie(bypassed);
       try {
@@ -214,7 +222,7 @@ function LiveGlobalFilterProvider({ children }: { children: ReactNode }) {
         setSwitching(false);
       }
     },
-    [remountForCookie],
+    [remountForCookie, state.effective?.canBypass],
   );
 
   const contextValue = useMemo<GlobalFilterContextValue>(
