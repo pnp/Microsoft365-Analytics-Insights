@@ -18,12 +18,12 @@ describe('billing connection API transport', () => {
 
   it('maps stable storage errors to translated text', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({ code: 'storageUnavailable' }), { status: 503 })));
-    await expect(fetchAgentCostConnection()).rejects.toThrow(/Azure Table state/);
+    await expect(fetchAgentCostConnection()).rejects.toThrow(/saved to, or read from, Azure Storage/);
   });
 
   it('rejects a foreign redirect even if a malformed response provides one', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({ url: 'https://untrusted.example/Account/ConnectAgentCosts' }), { status: 200 })));
-    await expect(beginAgentCostConnection()).rejects.toThrow(/billing connection could not/);
+    await expect(beginAgentCostConnection()).rejects.toThrow(/connection couldn’t be completed/);
   });
 
   it('only accepts the fixed local connection endpoint', async () => {
