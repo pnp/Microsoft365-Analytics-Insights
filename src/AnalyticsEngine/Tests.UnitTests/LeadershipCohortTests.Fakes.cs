@@ -523,14 +523,21 @@ namespace Tests.UnitTests
         {
             private readonly InMemoryKeyValueStore _inner = new InMemoryKeyValueStore();
             public int Reads;
+            public string FailReadKey;
+            public Func<string, Task> BeforeWrite;
 
             public string Description => _inner.Description;
             public Task<string> GetStringAsync(string key, CancellationToken cancellationToken = default)
             {
                 Interlocked.Increment(ref Reads);
+                if (key == FailReadKey) throw new TimeoutException("synthetic request read failure");
                 return _inner.GetStringAsync(key, cancellationToken);
             }
-            public Task SetStringAsync(string key, string value, TimeSpan? timeToLive = null, CancellationToken cancellationToken = default) => _inner.SetStringAsync(key, value, timeToLive, cancellationToken);
+            public async Task SetStringAsync(string key, string value, TimeSpan? timeToLive = null, CancellationToken cancellationToken = default)
+            {
+                if (BeforeWrite != null) await BeforeWrite(key);
+                await _inner.SetStringAsync(key, value, timeToLive, cancellationToken);
+            }
             public Task<bool> DeleteAsync(string key, CancellationToken cancellationToken = default) => _inner.DeleteAsync(key, cancellationToken);
             public Task<bool> ExistsAsync(string key, CancellationToken cancellationToken = default) => _inner.ExistsAsync(key, cancellationToken);
         }

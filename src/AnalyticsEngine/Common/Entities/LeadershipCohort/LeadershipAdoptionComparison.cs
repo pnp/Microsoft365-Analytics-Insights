@@ -110,7 +110,7 @@ namespace Common.Entities.LeadershipCohort
         /// </summary>
         public const string Suppressed = "suppressed";
 
-        /// <summary>The group was configured or changed and its membership has not been read yet.</summary>
+        /// <summary>The group was configured or changed, or a requested membership refresh has not completed yet.</summary>
         public const string PendingRefresh = "pendingRefresh";
 
         /// <summary>The membership cannot be used - see <see cref="LeadershipAdoptionComparison.Reason"/>.</summary>
@@ -260,7 +260,7 @@ namespace Common.Entities.LeadershipCohort
     /// refresh and computing the comparison at most once per analysis and membership version.
     /// </summary>
     /// <remarks>
-    /// <para>Per request this costs two cached reads and a dictionary lookup. The settings and the snapshot header are
+    /// <para>Per request this costs three cached reads and a dictionary lookup. The settings, snapshot header and refresh request are
     /// re-read at most every <see cref="HeaderCacheDuration"/> (a failed read every <see cref="FailureCacheDuration"/>),
     /// the member pages only when the snapshot's version changes, and the comparison is computed once per cached
     /// analysis instance and membership version - so the O(licensed users) pass runs once, not per reader.</para>
@@ -334,7 +334,7 @@ namespace Common.Entities.LeadershipCohort
             if (scopedView) return LeadershipAdoptionComparison.WithStatus(LeadershipComparisonStatuses.ScopedView);
 
             var snapshot = state.Snapshot;
-            if (snapshot == null || !string.Equals(snapshot.SettingsRevision, state.Settings.Revision, StringComparison.Ordinal))
+            if (state.PendingRefresh || snapshot == null || !string.Equals(snapshot.SettingsRevision, state.Settings.Revision, StringComparison.Ordinal))
                 return LeadershipAdoptionComparison.WithStatus(LeadershipComparisonStatuses.PendingRefresh);
             if (!snapshot.IsReady)
                 return LeadershipAdoptionComparison.WithStatus(LeadershipComparisonStatuses.Unavailable, LeadershipComparisonReasons.ForRefreshStatus(snapshot.Status));
@@ -369,8 +369,10 @@ namespace Common.Entities.LeadershipCohort
                 var store = _openStore();
                 var settings = await store.GetSettingsAsync().ConfigureAwait(false);
                 var snapshot = settings == null ? null : await store.GetSnapshotAsync().ConfigureAwait(false);
+                var request = settings == null ? null : await store.GetRefreshRequestAsync().ConfigureAwait(false);
+                var pending = LeadershipCohortRefresher.IsPending(settings, snapshot, request);
                 IReadOnlyCollection<int> members = null;
-                if (snapshot != null && snapshot.IsReady)
+                if (!pending && snapshot != null && snapshot.IsReady)
                 {
                     members = previous != null && previous.Members != null && previous.Snapshot != null
                         && string.Equals(previous.Snapshot.Version, snapshot.Version, StringComparison.Ordinal)
@@ -378,8 +380,8 @@ namespace Common.Entities.LeadershipCohort
                         : await store.ReadMembersAsync(snapshot).ConfigureAwait(false);
                 }
                 // A version mismatch (a refresh mid-write) is retried soon rather than held for the full minute.
-                var hold = snapshot != null && snapshot.IsReady && members == null ? FailureCacheDuration : HeaderCacheDuration;
-                next = new State { Settings = settings, Snapshot = snapshot, Members = members, ExpiresUtc = now + hold };
+                var hold = !pending && snapshot != null && snapshot.IsReady && members == null ? FailureCacheDuration : HeaderCacheDuration;
+                next = new State { Settings = settings, Snapshot = snapshot, PendingRefresh = pending, Members = members, ExpiresUtc = now + hold };
             }
             catch (Exception)
             {
@@ -397,6 +399,7 @@ namespace Common.Entities.LeadershipCohort
             public bool Failed { get; set; }
             public LeadershipCohortSettings Settings { get; set; }
             public LeadershipCohortSnapshot Snapshot { get; set; }
+            public bool PendingRefresh { get; set; }
             public IReadOnlyCollection<int> Members { get; set; }
             public DateTime ExpiresUtc { get; set; }
         }

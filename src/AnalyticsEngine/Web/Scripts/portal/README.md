@@ -58,6 +58,15 @@ acknowledges the request ID it started with; a newer request remains pending. Re
 web-app/importer restarts, and a failed outcome is still an acknowledged attempt (normally retried
 after one hour). No new SQL migration or installer configuration is needed.
 
+The report comparison reads settings, the snapshot header and the durable request together whenever
+its 60-second header cache expires (or immediately after a local save/request invalidates it).
+An unacknowledged request yields `pendingRefresh` without loading member pages or returning the
+previous figures. Only a snapshot acknowledging that request clears pending: success exposes the
+new membership, failure exposes its unavailable reason. A newer request made during a worker write
+stays pending. Unreachable or malformed request state fails closed as `stateUnavailable`, cached for
+15 seconds. Other web instances can retain their previous cached comparison for up to 60 seconds;
+this bounded cache policy is unchanged.
+
 A save/read request returns the configured group with `refresh: null` (pending). Keep the
 Office 365 activity importer running and use **Check status** after its next cycle; Graph retries
 may delay that cycle. A membership failure is shown as a refresh outcome, not a settings-save

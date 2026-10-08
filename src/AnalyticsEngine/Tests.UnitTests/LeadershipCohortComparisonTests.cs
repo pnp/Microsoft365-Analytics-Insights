@@ -242,7 +242,8 @@ namespace Tests.UnitTests
             var store = new TestStore(counting);
             await Configure(store);
             await Refresher(store, new FakeDirectory(40), mapAll: true).RefreshAsync();
-            var provider = Provider(store);
+            var now = Now;
+            var provider = new LeadershipComparisonProvider(() => store.Store, () => now);
             var analysis = Analysis(40);
 
             counting.Reads = 0;
@@ -252,7 +253,11 @@ namespace Tests.UnitTests
 
             Assert.AreSame(first, second, "The O(N) pass runs once per cached analysis, not per reader.");
             Assert.AreEqual(readsForFirst, counting.Reads, "Within a minute no further state reads.");
-            Assert.AreEqual(3, readsForFirst, "Settings, header and one member page.");
+            Assert.AreEqual(4, readsForFirst, "Settings, header, refresh request and one member page.");
+
+            now += LeadershipComparisonProvider.HeaderCacheDuration;
+            Assert.AreSame(first, await provider.GetAsync(analysis, false));
+            Assert.AreEqual(readsForFirst + 3, counting.Reads, "After expiry only the three header rows are reread; unchanged members are reused.");
 
             var otherAnalysis = await provider.GetAsync(Analysis(40), false);
             Assert.AreNotSame(first, otherAnalysis);
@@ -272,6 +277,133 @@ namespace Tests.UnitTests
             Assert.AreEqual(20, (await provider.GetAsync(analysis, false)).LicensedLeaders, "Held for the header cache window.");
             provider.Invalidate();
             Assert.AreEqual(30, (await provider.GetAsync(analysis, false)).LicensedLeaders);
+        }
+
+        [DataTestMethod]
+        [DataRow(true)]
+        [DataRow(false)]
+        public async Task Provider_ManualRefreshIsPendingAfterFreshStateRead(bool invalidate)
+        {
+            var store = NewStore();
+            await Configure(store);
+            await Refresher(store, new FakeDirectory(20), mapAll: true).RefreshAsync();
+            var now = Now;
+            var provider = new LeadershipComparisonProvider(() => store.Store, () => now);
+            var analysis = Analysis(40);
+            var ready = await provider.GetAsync(analysis, false);
+            Assert.AreEqual(LeadershipComparisonStatuses.Ok, ready.Status);
+
+            var service = new LeadershipCohortService(store.Store, invalidate ? (Action)provider.Invalidate : null, () => now);
+            Assert.IsNull((await service.RefreshAsync()).Refresh, "The admin acknowledges a pending durable request.");
+            if (!invalidate)
+            {
+                Assert.AreSame(ready, await provider.GetAsync(analysis, false), "The header cache window remains intentional.");
+                now += LeadershipComparisonProvider.HeaderCacheDuration;
+            }
+
+            var pending = await provider.GetAsync(analysis, false);
+            Assert.AreEqual(LeadershipComparisonStatuses.PendingRefresh, pending.Status,
+                "A fresh state read must not reuse the previous comparison while its membership refresh is pending.");
+            AssertWithholdsEveryFigure(pending);
+
+            await Refresher(store, new FakeDirectory(30), mapAll: true).RefreshIfDueAsync();
+            provider.Invalidate();
+            var refreshed = await provider.GetAsync(analysis, false);
+            Assert.AreEqual(LeadershipComparisonStatuses.Ok, refreshed.Status);
+            Assert.AreEqual(30, refreshed.LicensedLeaders);
+        }
+
+        [DataTestMethod]
+        [DataRow(LeadershipCohortRefreshStatuses.Ready, LeadershipComparisonStatuses.Ok, null)]
+        [DataRow(LeadershipCohortRefreshStatuses.GroupNotFound, LeadershipComparisonStatuses.Unavailable, LeadershipComparisonReasons.GroupNotFound)]
+        [DataRow(LeadershipCohortRefreshStatuses.PermissionMissing, LeadershipComparisonStatuses.Unavailable, LeadershipComparisonReasons.PermissionMissing)]
+        [DataRow(LeadershipCohortRefreshStatuses.TooLarge, LeadershipComparisonStatuses.Unavailable, LeadershipComparisonReasons.TooLarge)]
+        [DataRow(LeadershipCohortRefreshStatuses.Failed, LeadershipComparisonStatuses.Unavailable, LeadershipComparisonReasons.RefreshFailed)]
+        public async Task Provider_MatchingRequestAcknowledgementExposesTheSavedOutcome(string refreshStatus, string expectedStatus, string expectedReason)
+        {
+            var values = new CountingStore();
+            var store = new TestStore(values);
+            await Configure(store);
+            await Refresher(store, new FakeDirectory(20), mapAll: true).RefreshAsync();
+            var snapshot = await store.GetSnapshotAsync();
+            await new LeadershipCohortService(store.Store, null, () => Now).RefreshAsync();
+            snapshot.RefreshRequestId = (await store.Store.GetRefreshRequestAsync()).Id;
+            snapshot.Status = refreshStatus;
+            if (snapshot.IsReady) await store.Store.SaveMembersAsync(snapshot, Enumerable.Range(1, 20).ToList());
+            else await store.Store.SaveFailureAsync(snapshot);
+
+            values.Reads = 0;
+            var comparison = await Provider(store).GetAsync(Analysis(40), false);
+            Assert.AreEqual(expectedStatus, comparison.Status);
+            Assert.AreEqual(expectedReason, comparison.Reason);
+            Assert.AreEqual(snapshot.IsReady ? 4 : 3, values.Reads, "Failed outcomes never load member pages.");
+            if (snapshot.IsReady) Assert.AreEqual(20, comparison.LicensedLeaders);
+            else AssertWithholdsEveryFigure(comparison);
+        }
+
+        [TestMethod]
+        public async Task Provider_RequestDuringSnapshotWriteRemainsPendingWithoutLoadingMembers()
+        {
+            var values = new CountingStore();
+            var store = new TestStore(values);
+            await Configure(store);
+            await Refresher(store, new FakeDirectory(20), mapAll: true).RefreshAsync();
+            var service = new LeadershipCohortService(store.Store, null, () => Now);
+            await service.RefreshAsync();
+            var firstRequest = await store.Store.GetRefreshRequestAsync();
+            values.BeforeWrite = key => key == LeadershipCohortStore.SnapshotKey ? (Task)service.RefreshAsync() : Task.CompletedTask;
+            var snapshot = await Refresher(store, new FakeDirectory(30), mapAll: true).RefreshIfDueAsync();
+            values.BeforeWrite = null;
+            Assert.AreEqual(firstRequest.Id, snapshot.RefreshRequestId);
+            Assert.AreNotEqual(firstRequest.Id, (await store.Store.GetRefreshRequestAsync()).Id);
+
+            values.Reads = 0;
+            var provider = Provider(store);
+            var analysis = Analysis(40);
+            var pending = await provider.GetAsync(analysis, false);
+            Assert.AreEqual(LeadershipComparisonStatuses.PendingRefresh, pending.Status);
+            AssertWithholdsEveryFigure(pending);
+            Assert.AreEqual(3, values.Reads, "Pending membership is not loaded.");
+            var scoped = await provider.GetAsync(analysis, true);
+            Assert.AreEqual(LeadershipComparisonStatuses.ScopedView, scoped.Status);
+            AssertWithholdsEveryFigure(scoped);
+            Assert.AreEqual(3, values.Reads, "Scope checks preserve the header cache.");
+
+            await Refresher(store, new FakeDirectory(30), mapAll: true).RefreshIfDueAsync();
+            provider.Invalidate();
+            Assert.AreEqual(30, (await provider.GetAsync(analysis, false)).LicensedLeaders);
+        }
+
+        [DataTestMethod]
+        [DataRow(false)]
+        [DataRow(true)]
+        public async Task Provider_UnknownRefreshRequestFailsClosedAndRecovers(bool malformed)
+        {
+            var values = new CountingStore();
+            var store = new TestStore(values);
+            await Configure(store);
+            await Refresher(store, new FakeDirectory(20), mapAll: true).RefreshAsync();
+            var now = Now;
+            var provider = new LeadershipComparisonProvider(() => store.Store, () => now);
+            var analysis = Analysis(40);
+            Assert.AreEqual(LeadershipComparisonStatuses.Ok, (await provider.GetAsync(analysis, false)).Status);
+            if (malformed) await values.SetStringAsync(LeadershipCohortStore.RefreshRequestKey, "{");
+            else values.FailReadKey = LeadershipCohortStore.RefreshRequestKey;
+            provider.Invalidate();
+            values.Reads = 0;
+
+            var unavailable = await provider.GetAsync(analysis, false);
+            Assert.AreEqual(LeadershipComparisonStatuses.Unavailable, unavailable.Status);
+            Assert.AreEqual(LeadershipComparisonReasons.StateUnavailable, unavailable.Reason);
+            AssertWithholdsEveryFigure(unavailable);
+            Assert.AreEqual(3, values.Reads, "Request-read failures never load member pages or reuse old figures.");
+            Assert.AreEqual(LeadershipComparisonStatuses.Unavailable, (await provider.GetAsync(analysis, true)).Status);
+            Assert.AreEqual(3, values.Reads, "Failures retain their shorter cache interval.");
+
+            values.FailReadKey = null;
+            await values.DeleteAsync(LeadershipCohortStore.RefreshRequestKey);
+            now += LeadershipComparisonProvider.FailureCacheDuration;
+            Assert.AreEqual(LeadershipComparisonStatuses.Ok, (await provider.GetAsync(analysis, false)).Status);
         }
 
         [TestMethod]
