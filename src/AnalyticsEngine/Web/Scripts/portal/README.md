@@ -55,6 +55,15 @@ refuse the runtime application's app-only access. Azure Cost Management stays ap
 Copilot Studio capacity read keeps its separate app-only source. With no connection, existing app-only
 consumption behavior remains; a failed connected identity never silently falls back or reports success.
 
+**Known limitation:** Microsoft reports that resource-consumption endpoints have been restricted to
+internal clients such as PPAC, including the public API and Admins V2 actions
+([Power CAT maintainer clarification](https://github.com/microsoft/Power-CAT-Copilot-Studio-Kit/issues/855)).
+PPAC's delegated token succeeding does not prove that a customer-owned client's delegated token can
+read the same route. Capacity and per-user access can also differ from per-agent access. The connection
+requires the per-agent probe to succeed, so valid consent/sign-in may still end in `accessDenied`.
+Do not broaden roles to bypass this restriction. This feature has no supported replacement API or
+manual-export ingestion; PPAC manual export remains the operator fallback for per-agent figures.
+
 Setup for a build containing this page:
 
 1. On the **runtime** app registration, open **Authentication** and add a **Web** redirect URI
@@ -95,6 +104,7 @@ Setup failures:
 | `AADSTS50011` / Redirect URI mismatch | Add the exact callback shown in the error to **Authentication → Web**, including the instance's scheme, host, local port and path. A hosted callback does not cover localhost. If a hosted instance sends localhost, correct its `WebAppURL` instead. |
 | Administrator consent required | Grant consent using an authorized Entra administrator, then start a fresh connection attempt. |
 | Account mismatch / billing access refused | Connect the same account signed into the portal; it needs Administration and actual Power Platform billing read access. |
+| Consumption probe denied despite correct consent/account | The custom client may be blocked by Microsoft's per-agent endpoint restriction even when PPAC, capacity or per-user reads succeed. Connection is not published. Escalate for a supported customer API rather than adding unrelated permissions. |
 
 After fixing registration, retry Connect, refresh status and verify the next credit import succeeds.
 Registration changes alone do not require a deployment or SQL migration; successful sign-in alone
