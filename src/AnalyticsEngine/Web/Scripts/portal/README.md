@@ -33,6 +33,7 @@ each other's tooling. The area switcher sits in the header; each area has its ow
 | `#/admin/install-log` | **Install log** | History of configurations applied to the solution (the `sys_configs` table): when, by whom, install messages, and the config JSON per entry. The most recent is the current configuration. |
 | `#/admin/profiling` | **Profiling** | Current state of the profiling data: earliest/latest dates for each compiled profiling table and the source activity tables that feed it (each with the **SQL** behind it), plus a paged view of the profiling runbooks' trace log (`profiling.TraceLogs`). Lets admins quickly check the runbooks have run, data is fresh, and spot errors. |
 | `#/admin/teams-permissions` | **Teams permissions** | Authorise / de-authorise Teams for deep analytics (stores a delegated refresh token per Team in the `TeamsAuth` partition of the `AnalyticsState` Azure Table in the solution's storage account). Ported from the original app. |
+| `#/admin/agent-cost-connection` | **Copilot Studio billing connection** | Connect/reconnect, disconnect and inspect the deployment-wide delegated billing administrator used for Copilot Studio consumption. Administration only; no tokens or named-user analytics are returned to the SPA. |
 | `#/admin/user-lookup` | **User data lookup** | Enter a user's UPN to see all of their data held in SQL: profile, per-category record counts (broken down by workload, including Copilot and Power Platform; each row has a **SQL** button to view & copy the query behind its count), drill-down to recent rows, and which **import workloads** are enabled (so a legitimate 0 count is explained). |
 | `#/admin/user-import` | **User import** | Whether the Graph user import has a stored checkpoint (its `/users/delta` token, kept in the `UserImport` partition of the `AnalyticsState` Azure Table), where it is kept, when the import last completed and how often it runs - and a confirmed **Clear checkpoint** action so the next run reads every user again, optionally on the next import cycle. The in-product version of deleting the stored token by hand (issue #664). The token itself never reaches the browser. |
 | `#/admin/global-filter` | **Report filter** | The administrator's global report filter: conditions every Insights report applies for everyone, on top of their own filters, optionally compared with the viewer's own attributes. Previews the draft against the administrator's own account before saving. Needs See PII as well as Administration. See [The administrator's global filter](#the-administrators-global-filter). |
@@ -46,6 +47,69 @@ the two cannot drift — adding a page means adding one entry to `ROUTES`.
 
 > The pre-split routes (`#/home`, `#/reports`, `#/teams`, `#/health`, ...) are **not**
 > redirected. Anything unrecognised falls back to the Insights overview.
+
+## Copilot Studio billing administrator connection
+
+The optional credit import can use a delegated administrator when the Power Platform consumption routes
+refuse the runtime application's app-only access. Azure Cost Management stays app-only, and the
+Copilot Studio capacity read keeps its separate app-only source. With no connection, existing app-only
+consumption behavior remains; a failed connected identity never silently falls back or reports success.
+
+Setup for a build containing this page:
+
+1. On the **runtime** app registration, register a **Web** redirect URI
+   `https://<portal-host>/signin-agent-costs`. Keep the existing portal sign-in URI and Teams permissions.
+   The callback uses a separate passive Katana OIDC v2 middleware; normal sign-in requests no billing scopes.
+2. Configure/admin-consent the delegated Power Platform API permissions advertised by the publisher for
+   your tenant. Select **Power Platform API**, application ID `8578e004-a5c6-46e7-913e-12f58912df43`,
+   not a similarly named legacy resource. The connection uses the documented
+   `https://api.powerplatform.com/.default` scope plus `openid profile offline_access`.
+   The entitlement REST reference documents `.default`; it does **not** document a `Licensing.Read`
+   scope, so this feature does not invent one or claim a generic allocation permission guarantees entitlement access.
+   See Microsoft's [authentication guide](https://learn.microsoft.com/power-platform/admin/programmability-authentication-v2),
+   [permission reference](https://learn.microsoft.com/power-platform/admin/programmability-permission-reference), and
+   [resources endpoint reference](https://learn.microsoft.com/rest/api/power-platform/licensing/entitlement-insight/get-tenant-resources-across-environments).
+3. Configure the existing `Storage` connection string, Table service reachability and the runtime identity's
+   **Storage Table Data Contributor** access. Both portal and importer must use the same Storage and runtime
+   credential. Missing/unreachable Storage is explicit; there is no browser-only or in-memory token fallback.
+4. Sign in to the portal with **Portal.Administration**, using an account with **Power Platform Administrator**
+   or equivalent billing read access. Under Administration → Copilot Studio billing connection, connect the
+   **same account**. The server verifies MSAL can renew the credential and read consumption before publishing the connection.
+5. Keep the Copilot Studio credit import toggle enabled. A successful connection or disconnect changes the
+   credit cadence generation, so the next cycle does not wait behind the previous 24-hour stamp.
+
+Security and operational contract:
+
+- Same-origin XHR POST issues the short-lived, protected connect intent; MVC refuses direct/tampered or
+  account-mismatched intents and separately enforces Administration. Katana validates the OIDC state,
+  ID-token issuer/audience and nonce; the callback also binds the tenant/object ID and Administration role
+  to the initiator and ignores any supplied return URL.
+- MSAL owns code redemption, refresh-token rotation and serialization. Its complete user cache is stored
+  encrypted and authenticated in `AnalyticsState`, partition **AgentCostDelegatedAuth**. The runtime secret
+  derives AES/HMAC keys; certificate mode wraps random AES/HMAC keys with the runtime certificate.
+  Neither credentials nor tenant response payloads enter the connection status, browser, or connection logs.
+- State addresses: **Connection** is the active generation pointer; **Cache_&lt;generation&gt;** and
+  **Error_&lt;generation&gt;** belong to that generation. Refresh writes cannot replace the pointer, so an old
+  refresh cannot undo disconnect/reconnect. Cache/error rows expire 90 days after their last write; old
+  replaced generations age out. Keep this partition restricted like credentials, including backups.
+- ImportSchedule retains the legacy **CopilotStudioCreditsLastImported** key when no connection has ever
+  existed. A changed connection uses **CopilotStudioCreditsLastImported_&lt;generation&gt;**.
+  **AzureCostLastImported** is unchanged. To force an existing connection's retry, clear its matching stamp.
+- Revocation, refresh expiry, consent/Conditional Access challenges or an aggregate consumption 401/403 set
+  **Reconnect required**. A transient token or Storage outage does not erase the connection. Reconnect with
+  an account whose access and policies permit unattended refresh; this flow does not bypass Conditional Access.
+  Credential replacement can make the saved cache unreadable and require reconnection.
+- Import diagnostics `agentCosts.import.reconnectNeeded` and `agentCosts.import.tokenUnavailable` are stable
+  keys, translated on the cost page. The first requires administrator reconnection; the second retries
+  on the next due cycle without deleting the connection.
+  `agentCosts.import.userAccessDenied` reports a refused best-effort per-user route without disabling
+  an independently working aggregate connection.
+- Disconnect stops new imports using the connection, not an import already in progress; it does not revoke Entra
+  consent or erase imported cost data. Manage the consent separately in Entra if that is also required.
+
+There is no SQL migration, installer configuration schema change or new app setting. Registration and
+live delegated authorization must be performed by the deployment administrator after upgrade; tests use
+synthetic identity-provider/API responses and do not prove access for a particular deployment.
 
 ## Permissions
 
@@ -151,6 +215,7 @@ auth cookie, so a token in the request body would be ignored.
 | --- | --- | --- |
 | `o365AnalyticsTokenAPI` | `api/SiteTokenAPI` | Fresh Graph access token for the signed-in admin (minted from the cookie refresh token). |
 | `o365AnalyticsAuthAPI` | `api/TeamsAuthAPI` | Get / set Teams deep-analytics authorisation. |
+| _(none - origin-relative)_ | `api/AgentCostConnection` | Administration-only delegated billing status, same-origin `/begin` and `/disconnect` POSTs. |
 | `o365AnalyticsUserLookupAPI` | `api/UserDataLookup` | User data lookup (summary + per-category detail). |
 | `o365AnalyticsSystemStatusAPI` | `api/SystemStatus` | System status / configuration for the Home page, plus the record counts for the imports this deployment runs. |
 | `o365AnalyticsInstallLogAPI` | `api/InstallLog` | Install log (config history from `sys_configs`) for the Install Log page. |

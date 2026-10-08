@@ -53,6 +53,9 @@ const agentCosts: Record<keyof typeof en, string> = {
   'agentCosts.notice.exportedRows': 'Se han exportado {rows} línea(s) facturada(s).',
   'agentCosts.warning.copilotStudioImportFailing': 'La importación de créditos de Copilot Studio está fallando.',
   'agentCosts.warning.azureCostImportFailing': 'La importación de costes de Azure está fallando.',
+  'agentCosts.import.reconnectNeeded': 'Vuelva a conectar al administrador en Administración > Conexión de facturación de Copilot Studio después de comprobar el consentimiento, el acceso de la cuenta y el acceso condicional. Los costes de Azure y la lectura de capacidad con identidad de aplicación no se ven afectados.',
+  'agentCosts.import.tokenUnavailable': 'La obtención del token delegado no está disponible temporalmente. La próxima importación programada lo reintentará; se conserva la conexión de facturación.',
+  'agentCosts.import.userAccessDenied': 'Se ha rechazado la lectura delegada de créditos por usuario. Los créditos agregados y la capacidad con identidad de aplicación siguen siendo independientes. Compruebe el acceso del administrador y el consentimiento de la API; vuelva a conectar si han cambiado.',
 
 
   // Server-authored availability messages

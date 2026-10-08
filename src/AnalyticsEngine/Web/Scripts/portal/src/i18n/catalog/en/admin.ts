@@ -5,6 +5,27 @@
  * makes a missing one a build failure.
  */
 export const admin = {
+  'admin.agentCostConnection.title': 'Copilot Studio billing connection',
+  'admin.agentCostConnection.description': 'Connect a billing administrator so the importer can read Copilot Studio credit consumption on their behalf when app-only access is refused. This connection is shared by the deployment, not just your browser session.',
+  'admin.agentCostConnection.status': 'Connection status',
+  'admin.agentCostConnection.loading': 'Loading connection status…',
+  'admin.agentCostConnection.connected': 'Connected. Access will be renewed automatically when Microsoft permits it.',
+  'admin.agentCostConnection.disconnected': 'No delegated connection. The importer uses app-only access where supported.',
+  'admin.agentCostConnection.reconnectNeeded': 'Reconnect required. The authorization expired, was revoked, or no longer permits billing access. Check the account’s access, consent and Conditional Access before reconnecting.',
+  'admin.agentCostConnection.storageNotConfigured': 'Azure Storage is not configured. Configure the Storage connection string and Table service access before connecting; a browser-only connection cannot be used by the importer.',
+  'admin.agentCostConnection.storageUnavailable': 'Azure Table state could not be read or saved. Check Table service connectivity and Storage Table Data Contributor access.',
+  'admin.agentCostConnection.prerequisites': 'Use the same account you use to administer this portal, with Power Platform Administrator or equivalent billing access. Configure and consent the runtime app’s delegated Power Platform API permissions and register the web redirect URI ending in /signin-agent-costs. The connection requests https://api.powerplatform.com/.default, using the configured permissions; it does not grant the account any new administrator role.',
+  'admin.agentCostConnection.persistence': 'The importer’s MSAL token cache is encrypted in Azure Table state using the runtime credential. Tokens are never returned to this page. Changing that credential can require reconnection.',
+  'admin.agentCostConnection.connect': 'Connect / reconnect administrator',
+  'admin.agentCostConnection.disconnect': 'Disconnect',
+  'admin.agentCostConnection.refresh': 'Refresh status',
+  'admin.agentCostConnection.disconnectConfirm': 'Disconnect the deployment’s billing administrator? Future imports will return to app-only access. An import already in progress may finish; this does not revoke consent in Microsoft Entra ID or delete previously imported figures.',
+  'admin.agentCostConnection.connectedOutcome': 'Administrator connected and consumption access verified. The next importer cycle can retry without waiting for the previous daily gate. The Copilot Studio credit import toggle must still be enabled.',
+  'admin.agentCostConnection.consentOrPolicy': 'Microsoft could not authorize this connection. Check the runtime app’s delegated Power Platform API consent and the account’s Conditional Access requirements, then reconnect.',
+  'admin.agentCostConnection.identityMismatch': 'The connection did not match the portal administrator who started it, or their Administration permission is missing. Sign in with the intended administrator and try again.',
+  'admin.agentCostConnection.accessDenied': 'Microsoft refused the administrator’s consumption read. Check Power Platform billing access and delegated API consent. The previous connection has not been replaced.',
+  'admin.agentCostConnection.failed': 'The billing connection could not be completed. Check the redirect URI, consent, Conditional Access and Azure Table connectivity, then try again. Other imports are unaffected.',
+  'admin.agentCostConnection.isolation': 'Azure Cost Management and the Copilot Studio capacity read continue using the runtime app. Disconnecting changes only delegated consumption access and allows a retry on the next importer cycle.',
   // Shared administration labels.
   'admin.common.enabled': 'Enabled',
   'admin.common.no': 'No',

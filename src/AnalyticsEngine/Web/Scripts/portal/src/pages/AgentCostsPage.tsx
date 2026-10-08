@@ -155,10 +155,17 @@ export function importFailureWarning(t: TFunction, kind: 'copilotStudio' | 'azur
     : 'agentCosts.warning.azureCostImportFailing');
 }
 
+export function importFailureDetail(t: TFunction, error: string): string {
+  if (error === 'agentCosts.import.reconnectNeeded') return t('agentCosts.import.reconnectNeeded');
+  if (error === 'agentCosts.import.tokenUnavailable') return t('agentCosts.import.tokenUnavailable');
+  if (error === 'agentCosts.import.userAccessDenied') return t('agentCosts.import.userAccessDenied');
+  return error;
+}
+
 /**
  * A failing import's warning bar. The label is the portal's own wording, so it is translated. The detail is
- * the importer's last error: diagnostic text, shown exactly as the importer wrote it, as `availabilityMessages`
- * already does with `{error}`. It must stay, because once some figures exist this bar is the only place the page
+ * the importer's last error: known connection keys are translated; other diagnostic text is preserved.
+ * It must stay, because once some figures exist this bar is the only place the page
  * says WHY the import is failing - `availabilityMessages` quotes the error only while there is no data at all.
  */
 export function ImportFailureBar({ kind, error }: { kind: 'copilotStudio' | 'azure'; error: string }) {
@@ -166,7 +173,7 @@ export function ImportFailureBar({ kind, error }: { kind: 'copilotStudio' | 'azu
   return (
     <MessageBar intent="warning">
       <MessageBarBody>
-        <strong>{importFailureWarning(t, kind)}</strong> {error}
+        <strong>{importFailureWarning(t, kind)}</strong> {importFailureDetail(t, error)}
       </MessageBarBody>
     </MessageBar>
   );
@@ -197,7 +204,7 @@ function availabilityMessages(availability: AgentCostAvailability, t: TFunction)
 
   if (availability.copilotStudioCreditsEnabled && !availability.hasCopilotStudioCreditData) {
     if (availability.copilotStudioCreditsLastError) {
-      messages.push(t('agentCosts.availability.message.copilotImportFailing', { error: availability.copilotStudioCreditsLastError }));
+      messages.push(t('agentCosts.availability.message.copilotImportFailing', { error: importFailureDetail(t, availability.copilotStudioCreditsLastError) }));
     } else if (availability.copilotStudioCreditsHasRunCleanly) {
       messages.push(t('agentCosts.availability.message.copilotNoUsage'));
     } else {
@@ -218,7 +225,7 @@ function availabilityMessages(availability: AgentCostAvailability, t: TFunction)
   if (availability.copilotStudioCreditsEnabled
     && !availability.copilotStudioCreditsLastError
     && availability.perUserCreditsLastError) {
-    messages.push(t('agentCosts.availability.message.perUserNotUpdating', { error: availability.perUserCreditsLastError }));
+    messages.push(t('agentCosts.availability.message.perUserNotUpdating', { error: importFailureDetail(t, availability.perUserCreditsLastError) }));
   }
 
   if (availability.copilotStudioCreditsEnabled

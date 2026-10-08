@@ -37,6 +37,7 @@ const LicenceActivityPage = lazyWithReload(() => import('./pages/LicenceActivity
 const ActivityAnalysisPage = lazyWithReload(() => import('./pages/ActivityAnalysisPage'));
 const DlpPage = lazyWithReload(() => import('./pages/DlpPage'));
 const TeamsPermissionsPage = lazyWithReload(() => import('./pages/TeamsPermissionsPage'));
+const AgentCostConnectionPage = lazyWithReload(() => import('./pages/AgentCostConnectionPage'));
 const UserLookupPage = lazyWithReload(() => import('./pages/UserLookupPage'));
 const UserOrgsPage = lazyWithReload(() => import('./pages/UserOrgsPage'));
 const UserImportPage = lazyWithReload(() => import('./pages/UserImportPage'));
@@ -256,6 +257,14 @@ export const ROUTES: PortalRoute[] = [
     groupKey: 'app.navGroup.manage',
     icon: <Settings20Regular />,
     element: <ServiceConfigurationPage />,
+  },
+  {
+    area: 'admin',
+    path: '/admin/agent-cost-connection',
+    labelKey: 'app.route.agentCostConnection',
+    groupKey: 'app.navGroup.manage',
+    icon: <Money20Regular />,
+    element: <AgentCostConnectionPage />,
   },
 ];
 

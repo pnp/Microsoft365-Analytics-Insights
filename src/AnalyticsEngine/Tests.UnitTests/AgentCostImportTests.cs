@@ -1,5 +1,6 @@
 using Common.Entities;
 using Common.Entities.Config;
+using Common.Entities.State;
 using Common.Entities.Entities.AgentCosts;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -1350,14 +1351,101 @@ namespace Tests.UnitTests
                 "The per-user failure must still reach agent_cost_import_log so an admin can see it.");
         }
 
+        [TestMethod]
+        public async Task Phase_ConnectionChangesBypassTheOldGateAndNeverChangeAzuresGate()
+        {
+            var settings = new AppConfig
+            {
+                ImportJobSettings = new ImportTaskSettings { CopilotStudioCredits = true, AzureCostManagement = true },
+                CopilotStudioCreditsIntervalHours = 24,
+                AzureCostImport = new AzureCostImportSettings { IntervalHours = 24 },
+            };
+            var stamps = new InMemoryImportLastRunStore();
+            var now = DateTime.UtcNow;
+            await stamps.SetLastRunUtc(AgentCostImportPhase.CopilotStudioCreditsLastImportedKey, now);
+            await stamps.SetLastRunUtc(AgentCostImportPhase.AzureCostLastImportedKey, now);
+            var source = new FakeCreditSource();
+            var store = new RecordingAgentCostStore();
+            var version = "synthetic-generation-1";
+            var phase = new AgentCostImportPhase(Logger, settings, stamps,
+                () => new CopilotStudioCreditImporter(Logger, source, store, 1),
+                () => throw new AssertFailedException("Azure's existing gate must be unchanged."),
+                creditConnectionVersion: () => Task.FromResult(version));
+            await phase.RunAsync();
+            Assert.AreEqual(1, source.Calls);
+            await phase.RunAsync();
+            Assert.AreEqual(1, source.Calls, "The same connection must keep its daily cadence.");
+            version = "synthetic-disconnected-generation";
+            await phase.RunAsync();
+            Assert.AreEqual(2, source.Calls, "Disconnect must allow the app-only path a prompt retry too.");
+            Assert.AreEqual(now, await stamps.GetLastRunUtc(AgentCostImportPhase.AzureCostLastImportedKey));
+        }
+
+        [TestMethod]
+        public async Task Phase_UnreachableDelegatedStateDoesNotStopAzureCosts()
+        {
+            var settings = new AppConfig
+            {
+                ImportJobSettings = new ImportTaskSettings { CopilotStudioCredits = true, AzureCostManagement = true },
+            };
+            var store = new RecordingAgentCostStore();
+            var azureConstructed = false;
+            var phase = new AgentCostImportPhase(Logger, settings, new InMemoryImportLastRunStore(),
+                () => throw new AssertFailedException("Do not silently fall back to app-only on a Storage outage."),
+                () =>
+                {
+                    azureConstructed = true;
+                    return new AzureCostImporter(Logger, new ThrowingAzureCostSource(), store, new AzureCostImportSettings());
+                },
+                creditConnectionVersion: () => throw new InvalidOperationException("Synthetic Storage outage"));
+            await phase.RunAsync();
+            Assert.IsTrue(azureConstructed);
+        }
+
+        [TestMethod]
+        public async Task DelegatedSource_RefusedConsumptionKeepsAppOnlyCapacityAndRequiresReconnect()
+        {
+            var store = new AgentCostConnectionStore(new InMemoryKeyValueStore());
+            await store.ConnectAsync("synthetic-encrypted-cache");
+            var head = await store.GetHeadAsync();
+            var source = new DelegatedAgentCostSource(
+                new FailingCreditSource(new AgentCostAuthorisationException("Synthetic delegated refusal")),
+                new FakeCreditSource(), store, head.Version);
+            var error = await Assert.ThrowsExceptionAsync<AgentCostAuthorisationException>(() =>
+                source.GetConsumptionPageAsync(DateTime.UtcNow, DateTime.UtcNow, null));
+            Assert.AreEqual(AgentCostDelegatedHttpClient.ReconnectDiagnostic, error.Message);
+            Assert.IsNull(await source.GetCapacityAsync(), "Capacity must use the independent app-only source.");
+            Assert.AreEqual("reconnectNeeded", await store.GetStatusAsync());
+        }
+
+        [TestMethod]
+        public async Task DelegatedSource_RefusedUserReadPreservesAggregateConnection()
+        {
+            var store = new AgentCostConnectionStore(new InMemoryKeyValueStore());
+            await store.ConnectAsync("synthetic-encrypted-cache");
+            var head = await store.GetHeadAsync();
+            var source = new DelegatedAgentCostSource(
+                new FailingUserRouteCreditSource(new AgentCostAuthorisationException("Synthetic per-user refusal")),
+                new FakeCreditSource(), store, head.Version);
+            var error = await Assert.ThrowsExceptionAsync<AgentCostAuthorisationException>(() =>
+                source.GetUserConsumptionPageAsync(DateTime.UtcNow, DateTime.UtcNow, null));
+            Assert.AreEqual(AgentCostDelegatedHttpClient.UserAccessDeniedDiagnostic, error.Message);
+            Assert.AreEqual("connected", await store.GetStatusAsync());
+            Assert.IsNotNull(await source.GetConsumptionPageAsync(DateTime.UtcNow, DateTime.UtcNow, null));
+        }
+
         /// <summary>Succeeds for the per-agent and capacity reads; the per-user route always throws.</summary>
         private class FailingUserRouteCreditSource : ICopilotStudioCreditSource
         {
+            private readonly Exception _error;
+            public FailingUserRouteCreditSource(Exception error = null) =>
+                _error = error ?? new System.Net.Http.HttpRequestException("The Power Platform licensing API returned HTTP 500.");
+
             public Task<CopilotStudioCreditPage> GetConsumptionPageAsync(DateTime fromDate, DateTime toDate, string continuationToken)
                 => Task.FromResult(new CopilotStudioCreditPage(new List<CopilotStudioCreditRow>(), null));
 
             public Task<CopilotStudioUserCreditPage> GetUserConsumptionPageAsync(DateTime fromDate, DateTime toDate, string continuationToken)
-                => throw new System.Net.Http.HttpRequestException("The Power Platform licensing API returned HTTP 500.");
+                => throw _error;
 
             public Task<CopilotStudioCapacitySnapshot> GetCapacityAsync()
                 => Task.FromResult<CopilotStudioCapacitySnapshot>(null);

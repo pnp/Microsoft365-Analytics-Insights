@@ -7,6 +7,27 @@ import type { admin as en } from '../en/admin';
  * build rather than reaching a customer as English text inside a Spanish page.
  */
 const admin: Record<keyof typeof en, string> = {
+  'admin.agentCostConnection.title': 'Conexión de facturación de Copilot Studio',
+  'admin.agentCostConnection.description': 'Conecte un administrador de facturación para que el importador lea el consumo de créditos de Copilot Studio en su nombre cuando se rechace el acceso de solo aplicación. Esta conexión se comparte en la implementación, no solo en su sesión del navegador.',
+  'admin.agentCostConnection.status': 'Estado de la conexión',
+  'admin.agentCostConnection.loading': 'Cargando el estado de la conexión…',
+  'admin.agentCostConnection.connected': 'Conectado. El acceso se renovará automáticamente cuando Microsoft lo permita.',
+  'admin.agentCostConnection.disconnected': 'No hay conexión delegada. El importador usa el acceso de solo aplicación donde se admite.',
+  'admin.agentCostConnection.reconnectNeeded': 'Se requiere volver a conectar. La autorización ha caducado, se ha revocado o ya no permite el acceso a facturación. Compruebe el acceso de la cuenta, el consentimiento y el acceso condicional antes de volver a conectar.',
+  'admin.agentCostConnection.storageNotConfigured': 'Azure Storage no está configurado. Configure la cadena de conexión Storage y el acceso al servicio Table antes de conectar; el importador no puede usar una conexión limitada al navegador.',
+  'admin.agentCostConnection.storageUnavailable': 'No se pudo leer o guardar el estado en Azure Table. Compruebe la conectividad del servicio Table y el acceso Storage Table Data Contributor.',
+  'admin.agentCostConnection.prerequisites': 'Use la misma cuenta con la que administra este portal, con el rol de administrador de Power Platform o un acceso de facturación equivalente. Configure y conceda consentimiento a los permisos delegados de Power Platform API de la aplicación de ejecución y registre el URI de redirección web terminado en /signin-agent-costs. La conexión solicita https://api.powerplatform.com/.default, con los permisos configurados; no concede a la cuenta ningún rol de administrador nuevo.',
+  'admin.agentCostConnection.persistence': 'La caché de tokens MSAL del importador se cifra en el estado de Azure Table con la credencial de ejecución. Los tokens nunca se envían a esta página. Cambiar esa credencial puede requerir volver a conectar.',
+  'admin.agentCostConnection.connect': 'Conectar / volver a conectar administrador',
+  'admin.agentCostConnection.disconnect': 'Desconectar',
+  'admin.agentCostConnection.refresh': 'Actualizar estado',
+  'admin.agentCostConnection.disconnectConfirm': '¿Desconectar al administrador de facturación de la implementación? Las importaciones futuras volverán al acceso de solo aplicación. Una importación en curso puede terminar; esto no revoca el consentimiento en Microsoft Entra ID ni elimina las cifras ya importadas.',
+  'admin.agentCostConnection.connectedOutcome': 'Administrador conectado y acceso al consumo verificado. El siguiente ciclo del importador puede reintentar sin esperar al límite diario anterior. La opción de importación de créditos de Copilot Studio debe seguir activada.',
+  'admin.agentCostConnection.consentOrPolicy': 'Microsoft no pudo autorizar esta conexión. Compruebe el consentimiento delegado de Power Platform API de la aplicación de ejecución y los requisitos de acceso condicional de la cuenta; después, vuelva a conectar.',
+  'admin.agentCostConnection.identityMismatch': 'La conexión no corresponde al administrador del portal que la inició, o falta su permiso de Administración. Inicie sesión con el administrador previsto y vuelva a intentarlo.',
+  'admin.agentCostConnection.accessDenied': 'Microsoft rechazó la lectura del consumo del administrador. Compruebe el acceso de facturación de Power Platform y el consentimiento delegado de la API. La conexión anterior no se ha sustituido.',
+  'admin.agentCostConnection.failed': 'No se pudo completar la conexión de facturación. Compruebe el URI de redirección, el consentimiento, el acceso condicional y la conectividad de Azure Table; después, vuelva a intentarlo. Las demás importaciones no se ven afectadas.',
+  'admin.agentCostConnection.isolation': 'Azure Cost Management y la lectura de capacidad de Copilot Studio siguen usando la aplicación de ejecución. Desconectar solo cambia el acceso delegado al consumo y permite reintentar en el siguiente ciclo del importador.',
   // Shared administration labels.
   'admin.common.enabled': 'Habilitado',
   'admin.common.no': 'No',

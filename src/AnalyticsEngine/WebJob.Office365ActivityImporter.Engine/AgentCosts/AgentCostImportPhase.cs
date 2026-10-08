@@ -38,6 +38,7 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
         private readonly IClock _clock;
         private readonly Func<CopilotStudioCreditImporter> _creditImporterFactory;
         private readonly Func<AzureCostImporter> _azureCostImporterFactory;
+        private readonly Func<Task<string>> _creditConnectionVersion;
 
         public AgentCostImportPhase(
             ILogger logger,
@@ -45,7 +46,8 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
             IImportLastRunStore lastRunStore,
             Func<CopilotStudioCreditImporter> creditImporterFactory,
             Func<AzureCostImporter> azureCostImporterFactory,
-            IClock clock = null)
+            IClock clock = null,
+            Func<Task<string>> creditConnectionVersion = null)
         {
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
             _settings = settings ?? throw new ArgumentNullException(nameof(settings));
@@ -53,6 +55,7 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
             _creditImporterFactory = creditImporterFactory ?? throw new ArgumentNullException(nameof(creditImporterFactory));
             _azureCostImporterFactory = azureCostImporterFactory ?? throw new ArgumentNullException(nameof(azureCostImporterFactory));
             _clock = clock ?? SystemClock.Instance;
+            _creditConnectionVersion = creditConnectionVersion;
         }
 
         /// <summary>
@@ -73,14 +76,13 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
                 return;
             }
 
-            if (!await IsDueAsync(CopilotStudioCreditsLastImportedKey, _settings.CopilotStudioCreditsIntervalHours,
-                    "Copilot Studio credit import"))
-            {
-                return;
-            }
-
             try
             {
+                // A new connection (including disconnect) gets its own gate. An older run cannot stamp it.
+                var version = _creditConnectionVersion == null ? null : await _creditConnectionVersion();
+                var cadenceKey = CopilotStudioCreditsLastImportedKey + (version == null ? "" : "_" + version);
+                if (!await IsDueAsync(cadenceKey, _settings.CopilotStudioCreditsIntervalHours, "Copilot Studio credit import"))
+                    return;
                 var importer = _creditImporterFactory();
 
                 var consumption = await importer.ImportAsync();
@@ -116,7 +118,7 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
 
                 // Back off ONLY when every failing part was refused. A transient failure alongside a refusal
                 // still deserves a prompt retry, so it must not be absorbed into "refused".
-                await StampOrRetry("Copilot Studio credit import", CopilotStudioCreditsLastImportedKey,
+                await StampOrRetry("Copilot Studio credit import", cadenceKey,
                     succeeded: parts.All(p => p.Succeeded),
                     isAuthorisationFailure: parts.Any(p => p.IsAuthorisationFailure) && !parts.Any(p => p.IsTransientFailure));
             }

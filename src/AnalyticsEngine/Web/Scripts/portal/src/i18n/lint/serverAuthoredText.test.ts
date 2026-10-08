@@ -37,6 +37,18 @@ function sortedUnique(values: string[]): string[] {
   return [...new Set(values)].sort((a, b) => a.localeCompare(b));
 }
 
+describe('Delegated billing import diagnostics', () => {
+  it('keeps server diagnostic keys, reader translations and both catalogs aligned', () => {
+    const server = readFileSync(join(process.cwd(), '..', '..', '..',
+      'WebJob.Office365ActivityImporter.Engine', 'AgentCosts', 'DelegatedAgentCostSource.cs'), 'utf8');
+    const page = readFileSync(join(process.cwd(), 'src', 'pages', 'AgentCostsPage.tsx'), 'utf8');
+    const keys = translationKeysIn(server, 'agentCosts.import.');
+    expect(keys.length).toBe(3);
+    expect(translationKeysIn(functionBody(page, 'importFailureDetail'), 'agentCosts.import.')).toEqual(keys);
+    expect(catalogKeys('agentCosts.import.')).toEqual(keys);
+  });
+});
+
 function catalogKeys(prefix: string): string[] {
   return sortedUnique(Object.keys(EN_CATALOG).filter((key) => key.startsWith(prefix)));
 }

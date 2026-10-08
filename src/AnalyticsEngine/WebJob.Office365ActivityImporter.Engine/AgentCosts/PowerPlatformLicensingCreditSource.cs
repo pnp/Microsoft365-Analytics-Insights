@@ -43,11 +43,13 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
 
         private readonly AutoThrottleHttpClient _httpClient;
         private readonly ILogger _logger;
+        private readonly bool _delegated;
 
-        public PowerPlatformLicensingCreditSource(AutoThrottleHttpClient httpClient, ILogger logger)
+        public PowerPlatformLicensingCreditSource(AutoThrottleHttpClient httpClient, ILogger logger, bool delegated = false)
         {
             _httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+            _delegated = delegated;
         }
 
         public async Task<CopilotStudioCreditPage> GetConsumptionPageAsync(DateTime fromDate, DateTime toDate, string continuationToken)
@@ -174,6 +176,14 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
 
                 if (response.StatusCode == HttpStatusCode.Unauthorized || response.StatusCode == HttpStatusCode.Forbidden)
                 {
+                    if (_delegated)
+                    {
+                        throw new AgentCostAuthorisationException(
+                            $"The Power Platform licensing API refused delegated billing access with HTTP {(int)response.StatusCode}. "
+                            + "Reconnect in Administration > Copilot Studio billing connection. Check that the connected administrator "
+                            + "still has Power Platform billing access and that consent and Conditional Access allow unattended renewal. "
+                            + "Azure Cost Management and app-only capacity reads are unaffected.");
+                    }
                     throw new AgentCostAuthorisationException(
                         $"The Power Platform licensing API refused the request for {what} with HTTP {(int)response.StatusCode} ({response.StatusCode}). "
                         + (response.StatusCode == HttpStatusCode.Unauthorized
@@ -182,14 +192,14 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
                         + "Power Platform supports service-principal authentication via RBAC, but verifying a role assignment does not test access to these licensing endpoints. "
                         + "If the assignment is already verified, do not recreate it or grant a broader role blindly. Test the failing endpoint with the same runtime app identity; "
                         + "retain the API response and request/correlation ID privately for Microsoft support. The status alone cannot establish the cause. "
+                        + "Where these consumption routes require an administrator, connect one in Administration > Copilot Studio billing connection. "
                         + "You can disable only CopilotStudioCredits while investigating; other imports are unaffected.");
                 }
 
                 if (!response.IsSuccessStatusCode)
                 {
-                    var body = await SafeReadAsync(response);
                     throw new HttpRequestException(
-                        $"The Power Platform licensing API returned HTTP {(int)response.StatusCode} ({response.StatusCode}) for {what}. {body}");
+                        $"The Power Platform licensing API returned HTTP {(int)response.StatusCode} ({response.StatusCode}) for {what}.");
                 }
 
                 var content = await response.Content.ReadAsStringAsync();
@@ -225,21 +235,6 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
             public bool RouteUnavailable { get; }
         }
 
-        private static async Task<string> SafeReadAsync(HttpResponseMessage response)
-        {
-            try
-            {
-                var body = await response.Content.ReadAsStringAsync();
-
-                // Truncated: this goes into a log and, via the import log, a 1000-character SQL column.
-                if (string.IsNullOrWhiteSpace(body)) return string.Empty;
-                return body.Length > 500 ? body.Substring(0, 500) + "..." : body;
-            }
-            catch
-            {
-                return string.Empty;
-            }
-        }
     }
 
     /// <summary>

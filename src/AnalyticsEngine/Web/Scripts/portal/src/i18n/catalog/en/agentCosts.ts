@@ -51,6 +51,9 @@ export const agentCosts = {
   'agentCosts.notice.exportedRows': 'Exported {rows} billed line(s).',
   'agentCosts.warning.copilotStudioImportFailing': 'Copilot Studio credit import is failing.',
   'agentCosts.warning.azureCostImportFailing': 'Azure cost import is failing.',
+  'agentCosts.import.reconnectNeeded': 'Reconnect the administrator in Administration > Copilot Studio billing connection after checking consent, account access and Conditional Access. Azure costs and the app-only capacity read are unaffected.',
+  'agentCosts.import.tokenUnavailable': 'Delegated token acquisition is temporarily unavailable. The next due import will retry; the billing connection is retained.',
+  'agentCosts.import.userAccessDenied': 'The delegated per-user credit read was refused. Aggregate credits and app-only capacity remain independent. Check the administrator’s access and API consent; reconnect if these have changed.',
 
   // Server-authored availability messages
 
