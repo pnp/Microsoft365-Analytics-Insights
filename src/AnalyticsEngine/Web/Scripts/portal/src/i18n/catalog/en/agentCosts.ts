@@ -51,14 +51,14 @@ export const agentCosts = {
   'agentCosts.notice.exportedRows': 'Exported {rows} billed line(s).',
   'agentCosts.warning.copilotStudioImportFailing': 'Copilot Studio credit import is failing.',
   'agentCosts.warning.azureCostImportFailing': 'Azure cost import is failing.',
-  'agentCosts.import.reconnectNeeded': 'Reconnect the administrator in Administration > Copilot Studio billing connection after checking consent, account access and Conditional Access. Azure costs and the app-only capacity read are unaffected.',
-  'agentCosts.import.tokenUnavailable': 'Delegated token acquisition is temporarily unavailable. The next due import will retry; the billing connection is retained.',
-  'agentCosts.import.connectionRequired': 'Copilot Studio consumption is not being imported because no administrator is connected. Connect one in Administration > Copilot Studio billing connection; capacity figures are unaffected.',
+  'agentCosts.import.reconnectNeeded': 'The billing administrator needs to reconnect. In Administration > Copilot Studio billing connection, check the account still has its role and isn’t blocked by Conditional Access, then reconnect. Azure costs and capacity figures are unaffected.',
+  'agentCosts.import.tokenUnavailable': 'Microsoft sign-in was temporarily unavailable, so Copilot Studio usage couldn’t be read. It will be tried again at the next scheduled run; the connection is kept.',
+  'agentCosts.import.connectionRequired': 'Copilot Studio usage isn’t being imported because no billing administrator is connected. Connect one in Administration > Copilot Studio billing connection. Capacity figures are unaffected.',
 
   // Server-authored availability messages
 
   'agentCosts.availability.message.noImports': 'Neither agent cost import is switched on. Ask whoever installed the product to tick "Copilot Studio credits" and/or "Azure costs" in the installer.',
-  'agentCosts.availability.message.copilotImportFailing': 'The Copilot Studio credit import is switched on but is failing. Check the recorded error below. A 401 or 403 alone does not prove a missing role or an application-only restriction. Verify the runtime app\'s identity and tenant-scoped Power Platform reader assignment. If already verified, investigate access to the failing licensing endpoint rather than assigning the role again. The error was: {error}',
+  'agentCosts.availability.message.copilotImportFailing': 'The Copilot Studio credit import is switched on but is failing. If the error says access was refused, reconnect the administrator in Administration > Copilot Studio billing connection. The error was: {error}',
   'agentCosts.availability.message.copilotNoUsage': 'The Copilot Studio credit import ran successfully but found no billed agent usage. That is the expected result for a tenant with no Copilot Studio agents, or none that have consumed credits yet.',
   'agentCosts.availability.message.copilotNotStoredYet': 'The Copilot Studio credit import is switched on but has not stored anything yet. It runs once a day, so allow a cycle before expecting figures.',
   'agentCosts.availability.message.azureImportFailing': 'The Azure cost import is switched on but is failing: {error}',
@@ -67,7 +67,7 @@ export const agentCosts = {
   'agentCosts.availability.message.perUserNotUpdating': 'The per-person Copilot Studio figures are not updating: {error} The per-agent figures above are unaffected, but anything shown per person may be out of date.',
   'agentCosts.availability.message.capacityNotUpdating': 'The Copilot Credits capacity snapshot is not updating: {error} Any remaining-capacity figure shown may be out of date.',
   'agentCosts.availability.message.perAgentFromPerUser': 'Copilot Studio per-agent figures are built from each person’s own consumption, which is what Microsoft’s permitted APIs expose, so they cover only consumption Microsoft attributes to a person. The tenant’s total consumed credits on the capacity tile is the authoritative total. The per-agent user counts are how many different people used an agent - those cannot be added together, because the same person appears under every agent they used.',
-  'agentCosts.availability.message.connectionRequired': 'Copilot Studio consumption is not being imported because no administrator is connected. Microsoft only lets a signed-in administrator read it. Connect one in Administration > Copilot Studio billing connection. Capacity figures are unaffected.',
+  'agentCosts.availability.message.connectionRequired': 'Copilot Studio usage isn’t being imported because no billing administrator is connected. Microsoft only lets a signed-in administrator read it. Connect one in Administration > Copilot Studio billing connection. Capacity figures are unaffected.',
   'agentCosts.availability.message.azureNoPeople': 'Azure costs cannot be attributed to individual people. Azure bills by resource, and no Azure billing report - including the full cost export - records who caused a charge.',
   'agentCosts.availability.message.azureEstimates': 'Azure costs are estimates until Microsoft closes the billing period, which can take a few days after month end. Figures marked as estimates can still change.',
 

@@ -201,10 +201,10 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
                     if (_delegated)
                     {
                         throw new AgentCostAuthorisationException(
-                            $"The Power Platform licensing API refused delegated billing access with HTTP {(int)response.StatusCode}. "
-                            + "Reconnect in Administration > Copilot Studio billing connection. Check that the connected administrator "
-                            + "still has Power Platform billing access and that consent and Conditional Access allow unattended renewal. "
-                            + "Azure Cost Management and app-only capacity reads are unaffected.");
+                            $"Microsoft refused to let the connected billing administrator read Copilot Studio usage (HTTP {(int)response.StatusCode}). "
+                            + "Check that the account still has the Power Platform Administrator role and isn't blocked by Conditional Access, "
+                            + "then reconnect in Administration > Copilot Studio billing connection. "
+                            + "Azure costs and Copilot Credits capacity are unaffected.");
                     }
                     // Consumption reads only run delegated, so an app-only refusal here is the capacity route.
                     throw new AgentCostAuthorisationException(

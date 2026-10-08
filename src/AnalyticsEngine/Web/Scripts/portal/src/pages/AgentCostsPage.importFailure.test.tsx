@@ -8,9 +8,9 @@ import { CapacityUsedHint, ImportFailureBar } from './AgentCostsPage';
 
 describe('ImportFailureBar', () => {
   it.each([
-    ['agentCosts.import.reconnectNeeded', 'Vuelva a conectar'],
-    ['agentCosts.import.tokenUnavailable', 'token delegado'],
-    ['agentCosts.import.connectionRequired', 'ningún administrador conectado'],
+    ['agentCosts.import.reconnectNeeded', 'tiene que volver a conectar'],
+    ['agentCosts.import.tokenUnavailable', 'no estaba disponible temporalmente'],
+    ['agentCosts.import.connectionRequired', 'ningún administrador de facturación conectado'],
   ])(
     'translates the stable delegated connection diagnosis %s into Spanish',
     async (error, translatedText) => {

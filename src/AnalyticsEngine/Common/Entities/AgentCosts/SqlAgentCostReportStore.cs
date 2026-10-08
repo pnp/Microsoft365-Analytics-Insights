@@ -122,17 +122,17 @@ namespace Common.Entities.AgentCosts
 
             if (result.CopilotStudioCreditsEnabled && result.CopilotStudioConnectionRequired)
             {
-                result.Messages.Add("Copilot Studio consumption is not being imported because no administrator is connected. "
+                result.Messages.Add("Copilot Studio usage isn't being imported because no billing administrator is connected. "
                     + "Microsoft only lets a signed-in administrator read it. Connect one in Administration > "
-                    + "Copilot Studio billing connection. The capacity figures are unaffected.");
+                    + "Copilot Studio billing connection. Capacity figures are unaffected.");
             }
             else if (result.CopilotStudioCreditsEnabled && !result.HasCopilotStudioCreditData)
             {
                 if (!string.IsNullOrEmpty(result.CopilotStudioCreditsLastError))
                 {
-                    result.Messages.Add("The Copilot Studio credit import is switched on but is failing. Check the "
-                        + "recorded error below. A 401 or 403 alone does not prove a missing role. If the "
-                        + "administrator connection is refused, reconnect it. The error was: "
+                    result.Messages.Add("The Copilot Studio credit import is switched on but is failing. If the error says "
+                        + "access was refused, reconnect the administrator in Administration > Copilot Studio billing "
+                        + "connection. The error was: "
                         + result.CopilotStudioCreditsLastError);
                 }
                 else if (result.CopilotStudioCreditsHasRunCleanly)

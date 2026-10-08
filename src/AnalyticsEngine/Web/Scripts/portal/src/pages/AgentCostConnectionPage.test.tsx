@@ -36,15 +36,15 @@ describe('billing administrator connection', () => {
   it('shows reconnect-needed without rendering a credential or named administrator', async () => {
     vi.mocked(fetchAgentCostConnection).mockResolvedValue({ state: 'reconnectNeeded' });
     renderPage();
-    expect(await screen.findByText(/Reconnect required/)).toBeVisible();
-    expect(screen.getByRole('button', { name: 'Connect / reconnect administrator' })).toBeEnabled();
+    expect(await screen.findByText(/Reconnect needed/)).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Connect or reconnect an administrator' })).toBeEnabled();
   });
 
   it('does not offer a non-durable connection without Storage', async () => {
     vi.mocked(fetchAgentCostConnection).mockResolvedValue({ state: 'storageNotConfigured' });
     renderPage();
-    await screen.findByText(/Azure Storage is not configured/);
-    expect(screen.getByRole('button', { name: 'Connect / reconnect administrator' })).toBeDisabled();
+    await screen.findByText(/no Azure Storage account configured/);
+    expect(screen.getByRole('button', { name: 'Connect or reconnect an administrator' })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Disconnect' })).toBeDisabled();
   });
 
@@ -57,7 +57,7 @@ describe('billing administrator connection', () => {
     fireEvent.click(button);
     expect(disconnectAgentCostConnection).not.toHaveBeenCalled();
     fireEvent.click(button);
-    expect(await screen.findByText(/No delegated connection/)).toBeVisible();
+    expect(await screen.findByText(/Not connected\./)).toBeVisible();
     expect(disconnectAgentCostConnection).toHaveBeenCalledOnce();
     confirm.mockRestore();
   });
@@ -65,7 +65,7 @@ describe('billing administrator connection', () => {
   it('keeps a failed begin visible instead of claiming success', async () => {
     vi.mocked(beginAgentCostConnection).mockRejectedValue(new Error('Synthetic failure'));
     renderPage();
-    const button = await screen.findByRole('button', { name: 'Connect / reconnect administrator' });
+    const button = await screen.findByRole('button', { name: 'Connect or reconnect an administrator' });
     await waitFor(() => expect(button).toBeEnabled());
     fireEvent.click(button);
     expect(await screen.findByText('Synthetic failure')).toBeVisible();
@@ -74,9 +74,9 @@ describe('billing administrator connection', () => {
   it('renders the callback and disconnected state in Spanish', async () => {
     vi.mocked(fetchAgentCostConnection).mockResolvedValue({ state: 'disconnected' });
     renderPage('es', '?connection=consentOrPolicy');
-    expect(await screen.findByText(/No hay conexión delegada/)).toBeVisible();
-    expect(screen.getByText(/Microsoft no pudo autorizar esta conexión/)).toBeVisible();
-    expect(screen.getByRole('button', { name: 'Conectar / volver a conectar administrador' })).toBeEnabled();
+    expect(await screen.findByText(/Sin conexión\./)).toBeVisible();
+    expect(screen.getByText(/Microsoft Entra ID no permitió este inicio de sesión/)).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Conectar o volver a conectar un administrador' })).toBeEnabled();
     expect(screen.queryByText(/Microsoft could not authorize/)).not.toBeInTheDocument();
   });
 });

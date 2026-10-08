@@ -143,7 +143,7 @@ Security and operational contract:
   existed. A changed connection uses **CopilotStudioCreditsLastImported_&lt;generation&gt;**.
   **AzureCostLastImported** is unchanged. To force an existing connection's retry, clear its matching stamp.
 - Revocation, refresh expiry, consent/Conditional Access challenges or an aggregate consumption 401/403 set
-  **Reconnect required**. A transient token or Storage outage does not erase the connection. Reconnect with
+  **Reconnect needed**. A transient token or Storage outage does not erase the connection. Reconnect with
   an account whose access and policies permit unattended refresh; this flow does not bypass Conditional Access.
   Credential replacement can make the saved cache unreadable and require reconnection.
 - Import diagnostics `agentCosts.import.reconnectNeeded` and `agentCosts.import.tokenUnavailable` are stable
