@@ -1682,7 +1682,7 @@ namespace Tests.UnitTests
                 Assert.IsTrue(error.Message.Length <= 1000, "Guidance must fit the import log's SQL column.");
                 if (route != "capacity")
                 {
-                    StringAssert.Contains(error.Message, "Reconnect in Administration");
+                    StringAssert.Contains(error.Message, "reconnect in Administration");
                     return;
                 }
 
