@@ -375,6 +375,8 @@
   </ItemGroup>
   <ItemGroup>
     <None Include="Resources\Copilot.png" />
+    <None Include="Resources\Cognitive.png" />
+    <None Include="Resources\Foundry.png" />
     <None Include="Resources\SharePoint.png" />
   </ItemGroup>
   <ItemGroup>

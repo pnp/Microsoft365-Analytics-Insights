@@ -110,6 +110,28 @@ namespace Tests.UnitTests.InstallTests
         }
 
         [TestMethod]
+        public void AzureAI_BothServicesHaveDistinctEmbeddedIcons()
+        {
+            RunOnSta(() =>
+            {
+                using (var ai = new AzureAIConfigControl())
+                {
+                    var cognitive = Find<PictureBox>(ai, "picCognitive");
+                    var foundry = Find<PictureBox>(ai, "picFoundry");
+                    Assert.IsNotNull(cognitive.Image);
+                    Assert.IsNotNull(foundry.Image);
+                    Assert.AreNotSame(cognitive.Image, foundry.Image);
+                    foreach (var icon in new[] { cognitive, foundry })
+                    {
+                        Assert.AreEqual(PictureBoxSizeMode.Zoom, icon.SizeMode);
+                        Assert.IsFalse(icon.TabStop);
+                        Assert.AreEqual(new System.Drawing.Size(56, 56), icon.Size);
+                    }
+                }
+            });
+        }
+
+        [TestMethod]
         public void AzureAI_DescriptionNamesGraphHistoryAndSeparatePortalOptIn()
         {
             RunOnSta(() =>

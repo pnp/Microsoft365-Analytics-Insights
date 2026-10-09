@@ -28,7 +28,8 @@ namespace App.ControlPanel.Frames.InstallWizard
             this.AutoScrollMinSize = new System.Drawing.Size(600, 430);
             AddHeading("Azure AI", 8, 8);
             AddLabel("Optional AI services are provisioned and connected to the runtime automatically.", 8, 36);
-            AddHeading("Cognitive Services (Optional)", 24, 78);
+            AddServiceIcon("picCognitive", global::App.ControlPanel.Properties.Resources.Cognitive, 74);
+            AddHeading("Cognitive Services (Optional)", 64, 78);
             this.chkCognitiveEnable.Name = "chkCognitiveEnable";
             this.chkCognitiveEnable.Text = "Enable cognitive analytics";
             this.chkCognitiveEnable.AutoSize = true;
@@ -41,7 +42,8 @@ namespace App.ControlPanel.Frames.InstallWizard
             this.lblCognitiveName.AutoSize = true;
             this.lblCognitiveName.Location = new System.Drawing.Point(156, 143);
             this.Controls.Add(this.lblCognitiveName);
-            AddHeading("Azure AI Foundry (Optional)", 24, 193);
+            AddServiceIcon("picFoundry", global::App.ControlPanel.Properties.Resources.Foundry, 189);
+            AddHeading("Azure AI Foundry (Optional)", 64, 193);
             this.chkFoundryEnable.Name = "chkFoundryEnable";
             this.chkFoundryEnable.Text = "Enable Foundry";
             this.chkFoundryEnable.AutoSize = true;
@@ -54,7 +56,7 @@ namespace App.ControlPanel.Frames.InstallWizard
                 Text = "The installer provisions Azure OpenAI and connects the runtime automatically.\r\n" +
                     "To categorise prompts, enable 'Copilot AI interaction history' on Targets,\r\n" +
                     "then enable categorisation in Administration > Prompt categories in the portal.",
-                Location = new System.Drawing.Point(24, 224), Size = new System.Drawing.Size(575, 55)
+                Location = new System.Drawing.Point(64, 224), Size = new System.Drawing.Size(535, 55)
             });
             AddField(this.txtFoundryResourceName, "txtFoundryResourceName", "Resource name:", 290, 3);
             this.txtFoundryResourceName.CharacterCasing = System.Windows.Forms.CharacterCasing.Lower;
@@ -88,6 +90,16 @@ namespace App.ControlPanel.Frames.InstallWizard
             });
         }
 
+        private void AddServiceIcon(string name, System.Drawing.Image image, int y)
+        {
+            this.Controls.Add(new System.Windows.Forms.PictureBox
+            {
+                Name = name, Image = image,
+                Location = new System.Drawing.Point(0, y), Size = new System.Drawing.Size(56, 56),
+                SizeMode = System.Windows.Forms.PictureBoxSizeMode.Zoom, TabStop = false
+            });
+        }
+
         private void AddHeading(string text, int x, int y)
         {
             this.Controls.Add(new System.Windows.Forms.Label
@@ -99,7 +111,7 @@ namespace App.ControlPanel.Frames.InstallWizard
 
         private void AddField(System.Windows.Forms.TextBox field, string name, string label, int y, int tabIndex)
         {
-            AddLabel(label, 24, y + 3);
+            AddLabel(label, 64, y + 3);
             field.Name = name;
             field.Location = new System.Drawing.Point(156, y);
             field.Size = new System.Drawing.Size(170, 20);
