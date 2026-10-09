@@ -1,6 +1,7 @@
 import type { ReactElement } from 'react';
 import {
   ChartMultiple20Regular,
+  DataLine20Regular,
   DatabaseSearch20Regular,
   DataTrending20Regular,
   DataUsage20Regular,
@@ -33,8 +34,10 @@ const TeamsExplorerPage = lazyWithReload(() => import('./pages/TeamsExplorerPage
 const WebActivityPage = lazyWithReload(() => import('./pages/WebActivityPage'));
 const AgentCostsPage = lazyWithReload(() => import('./pages/AgentCostsPage'));
 const LicenceActivityPage = lazyWithReload(() => import('./pages/LicenceActivityPage'));
+const ActivityAnalysisPage = lazyWithReload(() => import('./pages/ActivityAnalysisPage'));
 const DlpPage = lazyWithReload(() => import('./pages/DlpPage'));
 const TeamsPermissionsPage = lazyWithReload(() => import('./pages/TeamsPermissionsPage'));
+const AgentCostConnectionPage = lazyWithReload(() => import('./pages/AgentCostConnectionPage'));
 const UserLookupPage = lazyWithReload(() => import('./pages/UserLookupPage'));
 const UserOrgsPage = lazyWithReload(() => import('./pages/UserOrgsPage'));
 const UserImportPage = lazyWithReload(() => import('./pages/UserImportPage'));
@@ -143,6 +146,14 @@ export const ROUTES: PortalRoute[] = [
   },
   {
     area: 'insights',
+    path: '/insights/activity-analysis',
+    labelKey: 'app.route.activityAnalysis',
+    // A line chart: this page is about activity over time, week by week, as the Power BI view was.
+    icon: <DataLine20Regular />,
+    element: <ActivityAnalysisPage />,
+  },
+  {
+    area: 'insights',
     path: '/insights/agent-costs',
     labelKey: 'app.route.agentCosts',
     icon: <Money20Regular />,
@@ -246,6 +257,14 @@ export const ROUTES: PortalRoute[] = [
     groupKey: 'app.navGroup.manage',
     icon: <Settings20Regular />,
     element: <ServiceConfigurationPage />,
+  },
+  {
+    area: 'admin',
+    path: '/admin/agent-cost-connection',
+    labelKey: 'app.route.agentCostConnection',
+    groupKey: 'app.navGroup.manage',
+    icon: <Money20Regular />,
+    element: <AgentCostConnectionPage />,
   },
 ];
 

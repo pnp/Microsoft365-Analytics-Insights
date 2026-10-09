@@ -75,9 +75,11 @@ namespace Common.Entities.Entities.UsageReports
     /// getMicrosoft365CopilotUserCountSummary and getMicrosoft365CopilotUserCountTrend reports.
     ///
     /// Deliberately narrow/tall - one row per (report type, period, date, app) - rather than the ~40-column
-    /// wide shape the CSV uses. Microsoft adds Copilot surfaces regularly (Edge, Copilot Chat work/web and
-    /// Copilot agents all arrived in report version 2), and each one would otherwise mean two more columns
-    /// and another schema migration on every customer database.
+    /// wide shape the CSV uses. Microsoft adds Copilot surfaces regularly (Edge, Microsoft 365 Copilot and
+    /// Copilot Chat work/web all arrived in report version 2), and each one would otherwise mean two more
+    /// columns and another schema migration on every customer database. Microsoft's published schema for
+    /// these two reports has no agents surface: the only agent signal in its usage reports is the per-user
+    /// <see cref="CopilotUsageUserActivityLog.AgentLastActivityDate"/>.
     ///
     /// Counts here are Microsoft's own definition of "active" (a user-initiated action; merely opening the
     /// Copilot pane does not count) over licensed users only, which is what the Microsoft 365 admin centre

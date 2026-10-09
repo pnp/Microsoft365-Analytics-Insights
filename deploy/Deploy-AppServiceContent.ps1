@@ -33,6 +33,15 @@
     matching the installer's per-file FTP overwrite semantics. Pure HTTPS means it works
     where the installer's FTPS upload (or the exe itself) is blocked.
 
+    Website deployments stop the App Service through Azure Resource Manager, wait for
+    it to stop, upload the website, then restore its original running/stopped state.
+    This releases native DLL locks and causes brief website downtime. Restart is attempted
+    even if the upload fails; a failed extraction may leave mixed versions, so rerun it.
+    Kudu remains available while the main app is stopped (default SCM separation).
+    Website deployment requires -ResourceGroup and an Azure management token with
+    Microsoft.Web/sites/read, /stop/action and /start/action permissions. A publish
+    profile alone is insufficient; sign in with az/Az or supply -AccessToken.
+
     Authentication (in Auto mode, first available wins):
       1. -DeployUserName / -DeployPassword          (App Service publishing credentials, Basic auth)
       2. -PublishProfilePath <*.PublishSettings>     (download from the portal, parsed for creds + SCM host)
@@ -46,7 +55,13 @@
     Name of the target App Service (web app). Required.
 
 .PARAMETER ResourceGroup
-    Resource group of the web app. Required only for the Azure CLI / Az PowerShell auth fallback.
+    Resource group of the web app. Required for website deployment and for automatic
+    publishing-profile lookup.
+
+.PARAMETER SubscriptionId
+    Azure subscription containing the web app. Defaults to the current az/Az subscription.
+    Supply explicitly when using -AccessToken without az/Az, or to avoid depending on the
+    current subscription. The script never changes the shared Azure subscription context.
 
 .PARAMETER SourceFolder
     Folder containing pre-downloaded release zips. If supplied, GitHub is not contacted.
@@ -150,7 +165,8 @@
     Per-request timeout for uploads. Default 600.
 
 .PARAMETER RetryCount
-    Maximum attempts for transient (5xx / 408 / 429 / network) failures. Default 5.
+    Maximum attempts for transient (5xx / 408 / 429 / network) failures, including Kudu's
+    HTTP 400 file-in-use IOException during website extraction. Default 5.
 
 .PARAMETER VerifySiteReachable
     After deploying, diagnose how this machine reaches the App (main) and SCM hostnames:
@@ -172,7 +188,7 @@
 
 .EXAMPLE
     # Download latest stable release and deploy everything, auth via portal publish profile.
-    .\Deploy-AppServiceContent.ps1 -WebAppName contoso-analytics -PublishProfilePath .\contoso-analytics.PublishSettings
+    .\Deploy-AppServiceContent.ps1 -WebAppName contoso-analytics -ResourceGroup rg-analytics -PublishProfilePath .\contoso-analytics.PublishSettings
 
 .EXAMPLE
     # Use az/Az to auto-authenticate (works even if SCM basic auth is disabled).
@@ -184,7 +200,7 @@
 
 .EXAMPLE
     # Deploy and then diagnose whether the app is reachable privately from this machine.
-    .\Deploy-AppServiceContent.ps1 -WebAppName contoso-analytics -PublishProfilePath .\p.PublishSettings -VerifySiteReachable
+    .\Deploy-AppServiceContent.ps1 -WebAppName contoso-analytics -ResourceGroup rg-analytics -PublishProfilePath .\p.PublishSettings -VerifySiteReachable
 
 .EXAMPLE
     # Deploy nothing: find out why this machine cannot reach the SCM endpoint (DNS / HOSTS,
@@ -193,7 +209,7 @@
 
 .EXAMPLE
     # Deploy everything AND run the DB upgrade in one pass.
-    .\Deploy-AppServiceContent.ps1 -WebAppName contoso-analytics -PublishProfilePath .\contoso-analytics.PublishSettings -RunDbUpgrade
+    .\Deploy-AppServiceContent.ps1 -WebAppName contoso-analytics -ResourceGroup rg-analytics -PublishProfilePath .\contoso-analytics.PublishSettings -RunDbUpgrade
 
 .EXAMPLE
     # Run ONLY the DB upgrade (skip web-job/website content - binaries already current).
@@ -233,6 +249,7 @@ param(
     [string] $WebAppName,
 
     [string] $ResourceGroup,
+    [string] $SubscriptionId,
 
     # --- Source selection ---
     [string] $SourceFolder,
@@ -358,7 +375,8 @@ function Invoke-WithRetry {
         [Parameter(Mandatory = $true)][scriptblock] $Script,
         [string] $What = 'operation',
         [int] $MaxAttempts = $RetryCount,
-        [int] $InitialDelaySec = 3
+        [int] $InitialDelaySec = 3,
+        [switch] $RetryFileLocks
     )
     $attempt = 0
     while ($true) {
@@ -368,7 +386,17 @@ function Invoke-WithRetry {
         } catch {
             $status = Get-HttpStatus $_
             $isTransient = ($null -eq $status) -or ($status -ge 500) -or ($status -eq 408) -or ($status -eq 429)
-            if ($attempt -ge $MaxAttempts -or -not $isTransient) { throw }
+            if ($RetryFileLocks -and $status -eq 400) {
+                $body = Get-HttpErrorBody $_
+                # Preserve the PS 5.1 response stream for the final error report.
+                if ($body) { $_.ErrorDetails = New-Object System.Management.Automation.ErrorDetails($body) }
+                try {
+                    $failure = $body | ConvertFrom-Json -ErrorAction Stop
+                    $isTransient = ($failure.ExceptionType -eq 'System.IO.IOException' -and
+                        $failure.ExceptionMessage -like '*because it is being used by another process*')
+                } catch { $isTransient = $false }
+            }
+            if ($attempt -ge $MaxAttempts -or -not $isTransient) { throw $_ }
             $delay = [math]::Min(60, [int]($InitialDelaySec * [math]::Pow(2, $attempt - 1)))
             Write-WarnMsg ("$What failed (attempt $attempt/$MaxAttempts): $(Get-ExceptionSummary $_). Retrying in ${delay}s...")
             Start-Sleep -Seconds $delay
@@ -596,7 +624,9 @@ function Get-PublishProfileAuto {
     if (Get-Command az -ErrorAction SilentlyContinue) {
         Write-Info 'Fetching publish profile via Azure CLI...'
         try {
-            $xml = az webapp deployment list-publishing-profiles --name $WebAppName --resource-group $ResourceGroup --xml 2>$null
+            $subscriptionArgs = @()
+            if ($SubscriptionId) { $subscriptionArgs = @('--subscription', $SubscriptionId) }
+            $xml = az webapp deployment list-publishing-profiles --name $WebAppName --resource-group $ResourceGroup --xml @subscriptionArgs 2>$null
             if ($LASTEXITCODE -eq 0 -and $xml) { return ConvertFrom-PublishProfileXml -Xml ($xml -join "`n") }
         } catch { Write-WarnMsg "az publish-profile fetch failed: $($_.Exception.Message)" }
     }
@@ -605,7 +635,13 @@ function Get-PublishProfileAuto {
         try {
             $tmp = New-TemporaryFile
             try {
-                $null = Get-AzWebAppPublishingProfile -Name $WebAppName -ResourceGroupName $ResourceGroup -Format WebDeploy -OutputFile $tmp.FullName
+                $contextArgs = @{}
+                if ($SubscriptionId) {
+                    $contextArgs.DefaultProfile = Get-AzContext -ListAvailable |
+                        Where-Object { $_.Subscription.Id -eq $SubscriptionId } | Select-Object -First 1
+                    if (-not $contextArgs.DefaultProfile) { throw 'No Az context for -SubscriptionId. Sign in to that subscription first.' }
+                }
+                $null = Get-AzWebAppPublishingProfile -Name $WebAppName -ResourceGroupName $ResourceGroup -Format WebDeploy -OutputFile $tmp.FullName @contextArgs
                 return Read-PublishProfile $tmp.FullName
             } finally { Remove-Item -LiteralPath $tmp.FullName -Force -ErrorAction SilentlyContinue }
         } catch { Write-WarnMsg "Az publish-profile fetch failed: $($_.Exception.Message)" }
@@ -616,13 +652,21 @@ function Get-PublishProfileAuto {
 function Get-ArmAccessTokenAuto {
     if (Get-Command az -ErrorAction SilentlyContinue) {
         try {
-            $t = az account get-access-token --resource https://management.azure.com --query accessToken -o tsv 2>$null
+            $subscriptionArgs = @()
+            if ($SubscriptionId) { $subscriptionArgs = @('--subscription', $SubscriptionId) }
+            $t = az account get-access-token --resource https://management.azure.com --query accessToken -o tsv @subscriptionArgs 2>$null
             if ($LASTEXITCODE -eq 0 -and $t) { return ($t | Select-Object -First 1).Trim() }
         } catch { }
     }
     if (Get-Command Get-AzAccessToken -ErrorAction SilentlyContinue) {
         try {
-            $t = (Get-AzAccessToken -ResourceUrl 'https://management.azure.com' -ErrorAction Stop).Token
+            $contextArgs = @{}
+            if ($SubscriptionId) {
+                $contextArgs.DefaultProfile = Get-AzContext -ListAvailable |
+                    Where-Object { $_.Subscription.Id -eq $SubscriptionId } | Select-Object -First 1
+                if (-not $contextArgs.DefaultProfile) { throw 'No Az context for -SubscriptionId. Sign in to that subscription first.' }
+            }
+            $t = (Get-AzAccessToken -ResourceUrl 'https://management.azure.com' -ErrorAction Stop @contextArgs).Token
             if ($t) {
                 if ($t -is [System.Security.SecureString]) {
                     $t = [System.Net.NetworkCredential]::new('', $t).Password
@@ -759,15 +803,111 @@ function Test-KuduReachable {
 }
 
 function Invoke-KuduZipDeploy {
-    param([string] $ScmHost, [hashtable] $Headers, [string] $RemotePath, [string] $ZipPath)
+    param([string] $ScmHost, [hashtable] $Headers, [string] $RemotePath, [string] $ZipPath, [switch] $RetryFileLocks)
     $path = $RemotePath
     if (-not $path.EndsWith('/')) { $path += '/' }
     $uri = "https://$ScmHost/api/zip$path"
     $hdr = @{ } + $Headers
     $hdr['If-Match'] = '*'
-    Invoke-WithRetry -What "upload to $path" -Script {
+    Invoke-WithRetry -What "upload to $path" -RetryFileLocks:$RetryFileLocks -Script {
         Invoke-RestMethod -Method Put -Uri $uri -InFile $ZipPath -ContentType 'application/zip' -Headers $hdr -TimeoutSec $TimeoutSec
     } | Out-Null
+}
+
+function Resolve-AppServiceControl {
+    param($Auth)
+    if (-not $ResourceGroup) {
+        throw 'Website deployment requires -ResourceGroup so the App Service can be stopped safely. A publish profile alone cannot stop/start it.'
+    }
+    $subscription = $SubscriptionId
+    if (-not $subscription -and (Get-Command az -ErrorAction SilentlyContinue)) {
+        $value = az account show --query id -o tsv 2>$null
+        if ($LASTEXITCODE -eq 0 -and $value) { $subscription = ($value | Select-Object -First 1).Trim() }
+    }
+    if (-not $subscription -and (Get-Command Get-AzContext -ErrorAction SilentlyContinue)) {
+        $context = Get-AzContext -ErrorAction Stop
+        if ($context -and $context.Subscription) { $subscription = $context.Subscription.Id }
+    }
+    if (-not $subscription) { throw 'Website deployment requires -SubscriptionId or a signed-in az/Az subscription context.' }
+    # Pin token acquisition to the same subscription used by the management requests.
+    $SubscriptionId = $subscription
+    $headers = $null
+    if ($AccessToken) { $headers = @{ Authorization = "Bearer $AccessToken" } }
+    elseif ($Auth.Kind -eq 'Bearer') { $headers = $Auth.Headers }
+    else {
+        $token = Get-ArmAccessTokenAuto
+        if (-not $token) { throw 'Website deployment requires an Azure management token. Sign in with az/Az or supply -AccessToken; publishing credentials cannot stop/start the app.' }
+        $headers = @{ Authorization = "Bearer $token" }
+    }
+    $uri = 'https://management.azure.com/subscriptions/{0}/resourceGroups/{1}/providers/Microsoft.Web/sites/{2}' -f
+        [Uri]::EscapeDataString($subscription), [Uri]::EscapeDataString($ResourceGroup), [Uri]::EscapeDataString($WebAppName)
+    $control = [pscustomobject]@{ Uri = $uri; Headers = $headers }
+    $site = Invoke-WithRetry -What 'read App Service' -Script {
+        Invoke-RestMethod -Method Get -Uri "$uri`?api-version=2024-11-01" -Headers $headers -TimeoutSec 60
+    }
+    if ($site.properties.enabledHostNames -notcontains $Auth.ScmHost) {
+        throw 'The management resource does not match the SCM hostname. Check -WebAppName, -ResourceGroup, -SubscriptionId and -ScmHostName; deployment slots are not supported.'
+    }
+    return $control
+}
+
+function Get-AppServiceState {
+    param($Control)
+    $site = Invoke-WithRetry -What 'read App Service state' -Script {
+        Invoke-RestMethod -Method Get -Uri "$($Control.Uri)?api-version=2024-11-01" -Headers $Control.Headers -TimeoutSec 60
+    }
+    return $site.properties.state
+}
+
+function Set-AppServiceState {
+    param($Control, [ValidateSet('start', 'stop')][string] $Action)
+    Invoke-WithRetry -What "App Service $Action" -Script {
+        Invoke-RestMethod -Method Post -Uri "$($Control.Uri)/$Action`?api-version=2024-11-01" -Headers $Control.Headers -TimeoutSec 60
+    } | Out-Null
+    $desired = if ($Action -eq 'stop') { 'Stopped' } else { 'Running' }
+    $deadline = [DateTime]::UtcNow.AddMinutes(2)
+    do {
+        if ((Get-AppServiceState -Control $Control) -eq $desired) {
+            Write-Info "  App Service is $desired."
+            return
+        }
+        Start-Sleep -Seconds 3
+    } while ([DateTime]::UtcNow -lt $deadline)
+    throw "App Service did not reach '$desired' within two minutes."
+}
+
+function Invoke-WebsiteDeployment {
+    param($Auth, [string] $ZipPath)
+    $control = Resolve-AppServiceControl -Auth $Auth
+    $state = Get-AppServiceState -Control $control
+    if ($state -notin @('Running', 'Stopped')) { throw "Cannot safely deploy website while App Service state is '$state'." }
+    $restoreRunning = $state -eq 'Running'
+    $deploymentError = $null
+    $uploadStarted = $false
+    try {
+        if ($restoreRunning) {
+            Write-Info 'Stopping App Service to release website DLL locks...'
+            Set-AppServiceState -Control $control -Action stop
+        }
+        $uploadStarted = $true
+        Invoke-KuduZipDeploy -ScmHost $Auth.ScmHost -Headers $Auth.Headers -RemotePath '/site/wwwroot/' -ZipPath $ZipPath -RetryFileLocks
+    } catch {
+        $deploymentError = $_
+        if ($uploadStarted) {
+            Write-WarnMsg 'Website deployment failed; extraction may have partially updated files. Rerun the full deployment before relying on the website.'
+        }
+        throw $deploymentError
+    } finally {
+        if ($restoreRunning) {
+            try {
+                Write-Info 'Restoring App Service to Running...'
+                Set-AppServiceState -Control $control -Action start
+            } catch {
+                if (-not $deploymentError) { throw }
+                Write-ErrMsg "Could not restore App Service: $(Get-ExceptionSummary $_). Start it manually in the Azure portal."
+            }
+        }
+    }
 }
 
 function Set-WebJobState {
@@ -1508,13 +1648,18 @@ try {
     }
     foreach ($c in $deployComponents) {
         $target = "https://$($auth.ScmHost) => $($c.RemotePath)"
-        if (-not $PSCmdlet.ShouldProcess($target, "Deploy $($c.Name)")) {
+        $action = if ($c.Kind -eq 'website') { 'Stop App Service if running, deploy Website, and restore original state' } else { "Deploy $($c.Name)" }
+        if (-not $PSCmdlet.ShouldProcess($target, $action)) {
             Write-Info "  [WhatIf] would deploy $($c.Name) to $($c.RemotePath)"
             continue
         }
         Write-Info "Deploying $($c.Name) -> $($c.RemotePath)"
         if ($c.Kind -eq 'webjob' -and $RestartWebJobs) { Set-WebJobState -ScmHost $auth.ScmHost -Headers $auth.Headers -JobName $c.JobName -Action 'stop' }
-        Invoke-KuduZipDeploy -ScmHost $auth.ScmHost -Headers $auth.Headers -RemotePath $c.RemotePath -ZipPath $c.NormalizedZip
+        if ($c.Kind -eq 'website') {
+            Invoke-WebsiteDeployment -Auth $auth -ZipPath $c.NormalizedZip
+        } else {
+            Invoke-KuduZipDeploy -ScmHost $auth.ScmHost -Headers $auth.Headers -RemotePath $c.RemotePath -ZipPath $c.NormalizedZip
+        }
         if ($c.Kind -eq 'webjob' -and $RestartWebJobs) { Set-WebJobState -ScmHost $auth.ScmHost -Headers $auth.Headers -JobName $c.JobName -Action 'start' }
         Write-Ok "  Deployed $($c.Name)."
     }

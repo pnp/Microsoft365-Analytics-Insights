@@ -48,7 +48,7 @@ namespace Tests.UnitTests
             => $@"{{
                 ""RecordType"": 261, ""Operation"": ""CopilotInteraction"", ""Workload"": ""Copilot"",
                 ""AgentId"": ""{agentId}"",
-                ""AgentBlueprintId"": ""25664c89-cea5-4ab6-b924-a54fd8a19ae0"",
+                ""AgentBlueprintId"": ""00000000-0000-0000-0000-000000000000"",
                 ""AgentPlatform"": ""CopilotStudio"",
                 ""AppIdentity"": ""Copilot.Studio.{environmentId}-{SchemaName}"",
                 ""PlatformAgentId"": ""{environmentId}_{BotId}"",

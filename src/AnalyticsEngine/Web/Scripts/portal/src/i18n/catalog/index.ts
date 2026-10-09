@@ -14,6 +14,7 @@ import enCopilotUsers from './en/copilotAdoptionUsers';
 import enTeamsExplorer from './en/teamsExplorer';
 import enWebActivity from './en/webActivity';
 import enLicenceActivity from './en/licenceActivity';
+import enActivityAnalysis from './en/activityAnalysis';
 import enAgentCosts from './en/agentCosts';
 import enDlp from './en/dlp';
 import enErrors from './en/errors';
@@ -63,6 +64,7 @@ export const EN_MODULES = {
   teamsExplorer: enTeamsExplorer,
   webActivity: enWebActivity,
   licenceActivity: enLicenceActivity,
+  activityAnalysis: enActivityAnalysis,
   agentCosts: enAgentCosts,
   dlp: enDlp,
   errors: enErrors,

@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -18,6 +19,20 @@ namespace Common.Entities.LicenceActivity
     public interface ILicenceActivityDiagnostics
     {
         void Stage(string stage, long elapsedMs = 0);
+        void CoverageWeek(LicenceActivityCoverageWeek week);
+        void Evidence(LicenceActivityCoverage coverage, int usersWithRows, int usersWithActivity,
+            int usersWithCompleteEvidence, bool groupFiltered);
+    }
+
+    public sealed class LicenceActivityCoverageWeek
+    {
+        public string Workload { get; set; }
+        public DateTime FromUtc { get; set; }
+        public DateTime ToUtc { get; set; }
+        public int ExpectedDays { get; set; }
+        public int PresentDays { get; set; }
+        public bool Settled { get; set; }
+        public List<DateTime> MissingDates { get; } = new List<DateTime>();
     }
 
     public sealed class NullLicenceActivityDiagnostics : ILicenceActivityDiagnostics
@@ -25,6 +40,9 @@ namespace Common.Entities.LicenceActivity
         public static readonly NullLicenceActivityDiagnostics Instance = new NullLicenceActivityDiagnostics();
         private NullLicenceActivityDiagnostics() { }
         public void Stage(string stage, long elapsedMs = 0) { }
+        public void CoverageWeek(LicenceActivityCoverageWeek week) { }
+        public void Evidence(LicenceActivityCoverage coverage, int usersWithRows, int usersWithActivity,
+            int usersWithCompleteEvidence, bool groupFiltered) { }
     }
 
     public sealed class LicenceActivitySources
@@ -79,6 +97,31 @@ namespace Common.Entities.LicenceActivity
             if (activeSamples == 0) return "zero";
             if ((long)activeSamples * 4 < expectedSamples) return "low";
             return (long)activeSamples * 4 < (long)expectedSamples * 3 ? "moderate" : "high";
+        }
+
+        // Kept after Band rather than beside the caveats: serverAuthoredText.test.ts reads each caveat up to
+        // the next member that starts with an access modifier, so a doc comment straight after one would be
+        // read as part of its sentence.
+
+        /// <summary>
+        /// What the adoption score means. The score blends how many of the services people used with how
+        /// regularly they used them, so that licences of very different sizes can be ranked side by side - it
+        /// is a measure of use, never of value.
+        /// </summary>
+        public const string AdoptionScore =
+            "The adoption score is the share of measured weeks in which the people holding a licence were active, "
+            + "taken across every service that could be measured for them: 100 means every holder used every measured "
+            + "service in every week of the period, 0 means no recorded activity at all. A service that could not be "
+            + "measured for someone is left out of their score rather than counted as unused.";
+
+        /// <summary>
+        /// The adoption score for a set of people: active weeks over measured weeks, as a percentage to one
+        /// decimal place. Null when nothing could be measured.
+        /// </summary>
+        public static double? Score(long activeWeeks, long measuredWeeks)
+        {
+            if (measuredWeeks <= 0 || activeWeeks < 0) return null;
+            return Math.Round(100d * Math.Min(activeWeeks, measuredWeeks) / measuredWeeks, 1, MidpointRounding.AwayFromZero);
         }
 
         /// <summary>
