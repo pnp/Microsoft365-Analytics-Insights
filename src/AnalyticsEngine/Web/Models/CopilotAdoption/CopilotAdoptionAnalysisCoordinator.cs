@@ -10,6 +10,18 @@ using System.Threading.Tasks;
 
 namespace Web.AnalyticsWeb.Models.CopilotAdoption
 {
+    internal sealed class CopilotAdoptionAnalysisWaitResult
+    {
+        internal CopilotAdoptionAnalysisWaitResult(CopilotAdoptionAnalysis analysis, string runId)
+        {
+            Analysis = analysis;
+            RunId = runId;
+        }
+
+        internal CopilotAdoptionAnalysis Analysis { get; }
+        internal string RunId { get; }
+    }
+
     internal interface ICopilotAdoptionAnalysisRunner
     {
         Task<CopilotAdoptionAnalysis> RunAsync(
@@ -19,6 +31,7 @@ namespace Web.AnalyticsWeb.Models.CopilotAdoption
             DateTime? toExclusiveUtc,
             bool usesExplicitDates,
             List<int> seatLicenceTypeIds,
+            CopilotAdoptionEffectiveScoreSettings scoreSettings,
             ICopilotAdoptionRunTelemetry telemetry);
     }
 
@@ -31,9 +44,11 @@ namespace Web.AnalyticsWeb.Models.CopilotAdoption
             DateTime? toExclusiveUtc,
             bool usesExplicitDates,
             List<int> seatLicenceTypeIds,
+            CopilotAdoptionEffectiveScoreSettings scoreSettings,
             ICopilotAdoptionRunTelemetry telemetry)
         {
             var options = CopilotAdoptionOptions.Default;
+            (scoreSettings ?? CopilotAdoptionEffectiveScoreSettings.Defaults).ApplyTo(options);
             options.WindowDays = windowDays;
             options.FromUtc = fromUtc;
             options.ToUtc = toUtc;
@@ -186,7 +201,8 @@ namespace Web.AnalyticsWeb.Models.CopilotAdoption
                 new CopilotAdoptionAnalysisRunner(),
                 MemoryCopilotAdoptionAnalysisCache.Instance,
                 CopilotAdoptionTelemetryHost.Start,
-                TimeSpan.FromMinutes(10));
+                TimeSpan.FromMinutes(10),
+                settingsSource: CopilotAdoptionScoreSettingsProvider.Production);
 
         private readonly ConcurrentDictionary<string, Generation> _inFlight =
             new ConcurrentDictionary<string, Generation>(StringComparer.Ordinal);
@@ -202,6 +218,7 @@ namespace Web.AnalyticsWeb.Models.CopilotAdoption
         private readonly TimeSpan _queuePollInterval;
         private readonly int _maxQueuedAnalyses;
         private readonly Func<DateTime> _utcNow;
+        private readonly ICopilotAdoptionScoreSettingsSource _settingsSource;
         private int _queuedRuns;
 
         public CopilotAdoptionAnalysisCoordinator(
@@ -215,7 +232,8 @@ namespace Web.AnalyticsWeb.Models.CopilotAdoption
             TimeSpan? abandonAfter = null,
             Func<DateTime> utcNow = null,
             TimeSpan? queuePollInterval = null,
-            int maxQueuedAnalyses = DefaultMaxQueuedAnalyses)
+            int maxQueuedAnalyses = DefaultMaxQueuedAnalyses,
+            ICopilotAdoptionScoreSettingsSource settingsSource = null)
         {
             _runner = runner ?? throw new ArgumentNullException(nameof(runner));
             _cache = cache ?? throw new ArgumentNullException(nameof(cache));
@@ -230,7 +248,16 @@ namespace Web.AnalyticsWeb.Models.CopilotAdoption
             _queuePollInterval = queuePollInterval ?? DefaultQueuePollInterval;
             _maxQueuedAnalyses = Math.Max(0, maxQueuedAnalyses);
             _utcNow = utcNow ?? (() => DateTime.UtcNow);
+            _settingsSource = settingsSource ?? DefaultCopilotAdoptionScoreSettingsSource.Instance;
         }
+
+        /// <summary>
+        /// The administrator's score settings, read before the cache is consulted because their version is part of
+        /// the cache key. Throws <see cref="CopilotAdoptionScoreSettingsUnavailableException"/> when they cannot be
+        /// read, so a report is refused rather than scored with rules nobody chose.
+        /// </summary>
+        private Task<CopilotAdoptionEffectiveScoreSettings> ScoreSettingsAsync() =>
+            _settingsSource.GetAsync() ?? Task.FromResult(CopilotAdoptionEffectiveScoreSettings.Defaults);
 
         public async Task<CopilotAdoptionAnalysis> TryGetAsync(
             CopilotAdoptionDateRange range,
@@ -238,8 +265,22 @@ namespace Web.AnalyticsWeb.Models.CopilotAdoption
             TimeSpan waitBudget,
             CancellationToken cancellationToken)
         {
-            var task = Join(range, seatLicenceTypeIds, out var interest);
-            if (task.IsCompleted) return await task;
+            return (await TryGetWithRunIdAsync(range, seatLicenceTypeIds, waitBudget, cancellationToken)).Analysis;
+        }
+
+        /// <summary>
+        /// Carries the identity of the generation this request actually joined through its wait.
+        /// Looking it up from LastKnown after waiting can name a different run after an administrator saves.
+        /// </summary>
+        internal async Task<CopilotAdoptionAnalysisWaitResult> TryGetWithRunIdAsync(
+            CopilotAdoptionDateRange range,
+            List<int> seatLicenceTypeIds,
+            TimeSpan waitBudget,
+            CancellationToken cancellationToken)
+        {
+            var settings = await ScoreSettingsAsync().ConfigureAwait(false);
+            var task = Join(range, seatLicenceTypeIds, settings, out var interest, out var generation);
+            if (task.IsCompleted) return new CopilotAdoptionAnalysisWaitResult(await task, generation?.RunId);
 
             // Joining already recorded this request, so a queued run cannot judge it absent in the gap
             // before this line. Waiting as well keeps a long wait - an export's 150 seconds - counted as
@@ -248,7 +289,7 @@ namespace Web.AnalyticsWeb.Models.CopilotAdoption
             try
             {
                 var finished = await Task.WhenAny(task, Task.Delay(waitBudget, cancellationToken));
-                return finished == task ? await task : null;
+                return new CopilotAdoptionAnalysisWaitResult(finished == task ? await task : null, generation?.RunId);
             }
             finally
             {
@@ -271,7 +312,7 @@ namespace Web.AnalyticsWeb.Models.CopilotAdoption
         internal string InFlightRunId(CopilotAdoptionDateRange range, List<int> seatLicenceTypeIds)
         {
             return _inFlight.TryGetValue(
-                CacheKey(range, seatLicenceTypeIds ?? new List<int>()), out var generation)
+                CacheKey(range, seatLicenceTypeIds ?? new List<int>(), _settingsSource.LastKnown), out var generation)
                 ? generation.RunId
                 : null;
         }
@@ -283,7 +324,24 @@ namespace Web.AnalyticsWeb.Models.CopilotAdoption
             CopilotAdoptionDateRange range,
             List<int> seatLicenceTypeIds)
         {
-            return Join(range, seatLicenceTypeIds, out _);
+            // Joins synchronously when the settings are already to hand (the usual case, and always the case for
+            // the default source), so callers see the in-flight run registered as soon as this returns.
+            var settings = ScoreSettingsAsync();
+            if (settings.Status == TaskStatus.RanToCompletion)
+            {
+                return Join(range, seatLicenceTypeIds, settings.Result, out _);
+            }
+
+            return JoinAfterSettingsAsync(settings, range, seatLicenceTypeIds);
+        }
+
+        private async Task<CopilotAdoptionAnalysis> JoinAfterSettingsAsync(
+            Task<CopilotAdoptionEffectiveScoreSettings> settings,
+            CopilotAdoptionDateRange range,
+            List<int> seatLicenceTypeIds)
+        {
+            var effective = await settings.ConfigureAwait(false);
+            return await Join(range, seatLicenceTypeIds, effective, out _).ConfigureAwait(false);
         }
 
         internal Task<CopilotAdoptionAnalysis> GetAsync(
@@ -305,11 +363,24 @@ namespace Web.AnalyticsWeb.Models.CopilotAdoption
         private Task<CopilotAdoptionAnalysis> Join(
             CopilotAdoptionDateRange range,
             List<int> seatLicenceTypeIds,
+            CopilotAdoptionEffectiveScoreSettings settings,
             out AnalysisInterest interest)
         {
+            return Join(range, seatLicenceTypeIds, settings, out interest, out _);
+        }
+
+        private Task<CopilotAdoptionAnalysis> Join(
+            CopilotAdoptionDateRange range,
+            List<int> seatLicenceTypeIds,
+            CopilotAdoptionEffectiveScoreSettings settings,
+            out AnalysisInterest interest,
+            out Generation joinedGeneration)
+        {
             interest = null;
+            joinedGeneration = null;
             var ids = seatLicenceTypeIds ?? new List<int>();
-            var cacheKey = CacheKey(range, ids);
+            settings = settings ?? CopilotAdoptionEffectiveScoreSettings.Defaults;
+            var cacheKey = CacheKey(range, ids, settings);
 
             if (_cache.TryGet(cacheKey, out var cached))
             {
@@ -320,7 +391,7 @@ namespace Web.AnalyticsWeb.Models.CopilotAdoption
             // instant before this request; one created by this pass cannot be sealed before it has even started.
             for (var pass = 0; pass < 3; pass++)
             {
-                var candidate = NewGeneration(cacheKey, range, ids);
+                var candidate = NewGeneration(cacheKey, range, ids, settings);
                 var effective = _inFlight.GetOrAdd(cacheKey, candidate);
 
                 // A previous generation may have published between the first miss and GetOrAdd.
@@ -334,6 +405,7 @@ namespace Web.AnalyticsWeb.Models.CopilotAdoption
                 if (effective.Interest.TryTouch(_utcNow()))
                 {
                     interest = effective.Interest;
+                    joinedGeneration = effective;
                     return effective.Work.Value;
                 }
 
@@ -346,7 +418,8 @@ namespace Web.AnalyticsWeb.Models.CopilotAdoption
             return Task.FromResult<CopilotAdoptionAnalysis>(null);
         }
 
-        private Generation NewGeneration(string cacheKey, CopilotAdoptionDateRange range, List<int> ids)
+        private Generation NewGeneration(
+            string cacheKey, CopilotAdoptionDateRange range, List<int> ids, CopilotAdoptionEffectiveScoreSettings settings)
         {
             Generation generation = null;
             generation = new Generation(new Lazy<Task<CopilotAdoptionAnalysis>>(
@@ -367,19 +440,28 @@ namespace Web.AnalyticsWeb.Models.CopilotAdoption
                 // Starting the run on the thread pool gives it no ambient SynchronizationContext at all,
                 // which fixes this for every await in the analysis - including ones not yet written -
                 // rather than relying on ~32 separate ConfigureAwait(false) calls staying correct.
-                () => Task.Run(() => RunAndPublishAsync(cacheKey, generation, range, ids)),
+                () => Task.Run(() => RunAndPublishAsync(cacheKey, generation, range, ids, settings)),
                 LazyThreadSafetyMode.ExecutionAndPublication));
             return generation;
         }
 
-        internal static string CacheKey(CopilotAdoptionDateRange range, IEnumerable<int> seatLicenceTypeIds)
+        /// <remarks>
+        /// Customised score settings add their version and values (<see cref="CopilotAdoptionEffectiveScoreSettings.CacheKeySuffix"/>),
+        /// so an analysis scored with one set of rules is never served after another is saved. Default settings
+        /// add nothing: the key is exactly what it has always been.
+        /// </remarks>
+        internal static string CacheKey(
+            CopilotAdoptionDateRange range,
+            IEnumerable<int> seatLicenceTypeIds,
+            CopilotAdoptionEffectiveScoreSettings settings = null)
         {
             var ids = (seatLicenceTypeIds ?? Enumerable.Empty<int>())
                 .Distinct()
                 .OrderBy(id => id)
                 .ToList();
             return CacheKeyPrefix + range.WindowDays + "::" + (range.UsesExplicitDates ? range.FromUtc.ToString("yyyyMMdd", System.Globalization.CultureInfo.InvariantCulture) + "-" + range.ToInclusiveUtc.ToString("yyyyMMdd", System.Globalization.CultureInfo.InvariantCulture) : "rolling") + "::"
-                   + (ids.Count == 0 ? "auto" : string.Join(",", ids));
+                   + (ids.Count == 0 ? "auto" : string.Join(",", ids))
+                   + (settings?.CacheKeySuffix ?? string.Empty);
         }
 
         internal static string CacheKey(int windowDays, IEnumerable<int> seatLicenceTypeIds) =>
@@ -389,7 +471,8 @@ namespace Web.AnalyticsWeb.Models.CopilotAdoption
             string cacheKey,
             Generation generation,
             CopilotAdoptionDateRange range,
-            List<int> seatLicenceTypeIds)
+            List<int> seatLicenceTypeIds,
+            CopilotAdoptionEffectiveScoreSettings settings)
         {
             ICopilotAdoptionAnalysisTelemetry telemetry =
                 NullCopilotAdoptionAnalysisTelemetry.Instance;
@@ -480,6 +563,7 @@ namespace Web.AnalyticsWeb.Models.CopilotAdoption
                     range.UsesExplicitDates ? (DateTime?)range.ToExclusiveUtc : null,
                     range.UsesExplicitDates,
                     seatLicenceTypeIds,
+                    settings,
                     telemetry).ConfigureAwait(false);
                 var serviceDurationMs = serviceWatch.ElapsedMilliseconds;
 

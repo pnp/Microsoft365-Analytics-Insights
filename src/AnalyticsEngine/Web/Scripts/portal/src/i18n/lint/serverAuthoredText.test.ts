@@ -8,6 +8,7 @@ import { EN_CATALOG } from '../catalog';
 import { COPILOT_ADOPTION_WARNING_KEYS, COWORK_TIER_LABEL_KEYS, TENURE_BASIS_LABEL_KEYS } from '../../components/copilotAdoption/serverText';
 import {
   BLOB_CHECKPOINT_REASON_KEYS,
+  AGENT_COST_CONNECTION_REASON_KEYS,
   HEALTH_COMPONENT_LABEL_KEYS,
   translateHealthComponentDetailText,
   translateHealthReasonText,
@@ -30,14 +31,46 @@ import { LEADERSHIP_REASON_KEYS, LEADERSHIP_STATUS_KEYS } from '../../components
 import { LEADERSHIP_ERROR_KEYS, LEADERSHIP_FAILURE_KIND_KEYS, LEADERSHIP_REFRESH_STATUS_KEYS } from '../../pages/LeadershipCohortPage';
 import { ENABLED_IMPORT_LABELS_BY_SETTING_PROPERTY } from '../../pages/InsightsOverviewPage';
 import { OFFICE_PLATFORM_LABEL_KEYS } from '../../pages/ReportsPage';
+import { GUIDANCE_LINK_TITLE_KEYS } from '../../components/copilotAdoption/serverText';
 import { WORKLOADS } from '../../types/licenceActivity';
 import { PORTAL_PERMISSION_ERROR_CODE } from '../../access';
 import { GLOBAL_FILTER_ERROR_KEYS } from '../../api/globalFilterApi';
 import { REPORT_SCOPE_ERROR_KEYS } from '../../api/http';
+import { COPILOT_ADOPTION_SETTINGS_ERROR_KEYS } from '../../api/copilotAdoptionSettingsApi';
 
 function sortedUnique(values: string[]): string[] {
   return [...new Set(values)].sort((a, b) => a.localeCompare(b));
 }
+
+describe('Delegated billing import diagnostics', () => {
+  it('translates every billing connection health state and its overall roll-up', async () => {
+    await loadCatalog('es');
+    const source = readFileSync(join(process.cwd(), '..', '..', 'Models', 'Health', 'HealthService.cs'), 'utf8');
+    const states = [...source.matchAll(/row\.ReasonKey = "(agentCostConnection\.[^"]+)";\s*row\.Detail = "([^"]+)";/g)];
+    expect(states).toHaveLength(4);
+    expect(states.map((state) => state[1]).sort()).toEqual(Object.keys(AGENT_COST_CONNECTION_REASON_KEYS).sort());
+    const es: TFunction = (key, values) => translateStatic('es', key, values);
+    for (const [, reasonKey, detail] of states) {
+      const key = AGENT_COST_CONNECTION_REASON_KEYS[reasonKey];
+      expect(EN_CATALOG[key]).toBe(detail);
+      expect(translateHealthComponentDetailText(detail, es)).toBe(es(key));
+      expect(translateHealthReasonText(`PowerPlatformConnection is degraded: ${detail}`, es))
+        .toBe(es('health.reason.componentDegraded', {
+          component: es('health.component.PowerPlatformConnection'), detail: es(key),
+        }));
+    }
+  });
+
+  it('keeps server diagnostic keys, reader translations and both catalogs aligned', () => {
+    const server = readFileSync(join(process.cwd(), '..', '..', '..',
+      'WebJob.Office365ActivityImporter.Engine', 'AgentCosts', 'DelegatedAgentCostSource.cs'), 'utf8');
+    const page = readFileSync(join(process.cwd(), 'src', 'pages', 'AgentCostsPage.tsx'), 'utf8');
+    const keys = translationKeysIn(server, 'agentCosts.import.');
+    expect(keys.length).toBe(3);
+    expect(translationKeysIn(functionBody(page, 'importFailureDetail'), 'agentCosts.import.')).toEqual(keys);
+    expect(catalogKeys('agentCosts.import.')).toEqual(keys);
+  });
+});
 
 function catalogKeys(prefix: string): string[] {
   return sortedUnique(Object.keys(EN_CATALOG).filter((key) => key.startsWith(prefix)));
@@ -132,6 +165,15 @@ describe('API error-code drift checks', () => {
  */
 const GLOBAL_FILTER_CONTROLLER = join(process.cwd(), '..', '..', 'Controllers', 'GlobalFilterAPIController.cs');
 const REPORT_SCOPE_RESOLVER = join(process.cwd(), '..', '..', 'Models', 'UserFilters', 'ReportScopeResolver.cs');
+const SCORE_SETTINGS = join(process.cwd(), '..', '..', '..', 'Common', 'Entities', 'CopilotAdoption', 'CopilotAdoptionScoreSettings.cs');
+
+/** The codes in `CopilotAdoptionScoreSettingsErrorCodes`, by constant name. */
+function scoreSettingsCodes(): Map<string, string> {
+  const source = readFileSync(SCORE_SETTINGS, 'utf8');
+  const block = source.slice(source.indexOf('class CopilotAdoptionScoreSettingsErrorCodes'));
+  const body = block.slice(0, block.indexOf('}'));
+  return new Map([...body.matchAll(/public\s+const\s+string\s+(\w+)\s*=\s*"([^"]+)"/g)].map((m) => [m[1], m[2]]));
+}
 
 describe('Global filter error codes', () => {
   it('words every code the editor’s endpoints can send, and nothing they cannot', () => {
@@ -152,9 +194,19 @@ describe('Global filter error codes', () => {
       ),
     );
 
+    const settingsUnavailable = scoreSettingsCodes().get('ReportSettingsUnavailable');
     expect(server).toHaveLength(3);
-    expect(sortedUnique([...REPORT_SCOPE_ERROR_KEYS.keys()])).toEqual(server);
+    expect(settingsUnavailable).toBeTruthy();
+    expect(sortedUnique([...REPORT_SCOPE_ERROR_KEYS.keys()])).toEqual(sortedUnique([...server, settingsUnavailable!]));
     expect([...REPORT_SCOPE_ERROR_KEYS.values()].filter((key) => !(key in EN_CATALOG))).toEqual([]);
+  });
+
+  it('words every code the Copilot Adoption settings page can be refused with', () => {
+    const codes = scoreSettingsCodes();
+    codes.delete('ReportSettingsUnavailable');
+    expect(codes.size).toBeGreaterThanOrEqual(8);
+    expect(sortedUnique([...COPILOT_ADOPTION_SETTINGS_ERROR_KEYS.keys()].filter((c) => c !== 'loadFailed' && c !== 'saveFailed'))).toEqual(sortedUnique([...codes.values()]));
+    expect([...COPILOT_ADOPTION_SETTINGS_ERROR_KEYS.values()].filter((key) => !(key in EN_CATALOG))).toEqual([]);
   });
 
   it('sends a code with every error the editor’s endpoints answer', () => {
@@ -338,6 +390,81 @@ describe('Reports Office platform labels', () => {
     expect(Object.keys(OFFICE_PLATFORM_LABEL_KEYS).sort()).toEqual(translatableProductCategories);
     expect(translatableProductCategories.every((label) => serverLabels.includes(label))).toBe(true);
     expect(Object.values(OFFICE_PLATFORM_LABEL_KEYS).filter((key) => !(key in EN_CATALOG))).toEqual([]);
+  });
+});
+
+/**
+ * The Copilot Adoption action plan names Microsoft resources the server picks from a versioned
+ * catalogue. Each link carries a stable titleKey; the SPA translates through it and falls back to
+ * the server's English only for a key this build does not know - so a new resource added on the
+ * server without a catalog entry would put an English title on a Spanish page, silently.
+ */
+const GUIDANCE_CATALOGUE = join(
+  process.cwd(),
+  '..',
+  '..',
+  '..',
+  'Common',
+  'Entities',
+  'CopilotAdoption',
+  'CopilotAdoptionGuidanceCatalogue.cs',
+);
+
+function guidanceCatalogueTitles(): { links: number; expected: number; titles: Record<string, string[]> } {
+  const source = readFileSync(GUIDANCE_CATALOGUE, 'utf8');
+  // The same shape .github/scripts/Test-CopilotAdoptionGuidanceLinks.ps1 parses.
+  const link =
+    /Link\(\s*[^,]+,\s*"([^"]+)",\s*"([^"]+)",\s*"https?:\/\/[^"]+",\s*"[^"]+",\s*"[^"]+"\s*\)/g;
+  const titles: Record<string, string[]> = {};
+  let links = 0;
+  for (const match of source.matchAll(link)) {
+    links++;
+    titles[match[1]] = sortedUnique([...(titles[match[1]] ?? []), match[2]]);
+  }
+  const expected = Number(source.match(/const\s+int\s+ExpectedLinkCount\s*=\s*(\d+)\s*;/)?.[1] ?? NaN);
+  return { links, expected, titles };
+}
+
+describe('Copilot Adoption guidance link titles', () => {
+  it('parses every link in the server catalogue', () => {
+    const { links, expected } = guidanceCatalogueTitles();
+    // A changed Link(...) signature would otherwise make every assertion below vacuously pass.
+    expect(links).toBe(expected);
+  });
+
+  it('translates every resource the server can attach, with the server English as the English entry', () => {
+    const { titles } = guidanceCatalogueTitles();
+    const serverKeys = sortedUnique(Object.keys(titles));
+    const spaKeys = sortedUnique(Object.keys(GUIDANCE_LINK_TITLE_KEYS));
+    const keyMap = GUIDANCE_LINK_TITLE_KEYS as Record<string, string>;
+    const wrongEnglish = serverKeys
+      .filter((key) => key in keyMap)
+      .filter((key) => titles[key].length !== 1 || EN_CATALOG[keyMap[key]] !== titles[key][0])
+      .map((key) => `${key}: server "${titles[key].join('" | "')}" vs catalog "${EN_CATALOG[keyMap[key]]}"`);
+
+    expect(
+      {
+        missing: serverKeys.filter((key) => !spaKeys.includes(key)),
+        orphans: spaKeys.filter((key) => !serverKeys.includes(key)),
+        notInCatalog: Object.values(GUIDANCE_LINK_TITLE_KEYS).filter((key) => !(key in EN_CATALOG)),
+        wrongEnglish,
+      },
+      'CopilotAdoptionGuidanceCatalogue.cs and GUIDANCE_LINK_TITLE_KEYS (serverText.ts) must match both ways, ' +
+        "and each English catalog entry must be the server's title.",
+    ).toEqual({ missing: [], orphans: [], notInCatalog: [], wrongEnglish: [] });
+  });
+
+  it('has no catalog entry for a resource the server no longer links', () => {
+    const mapped = new Set<string>(Object.values(GUIDANCE_LINK_TITLE_KEYS));
+    expect(catalogKeys('copilotAdoption.server.guidance.').filter((key) => !mapped.has(key))).toEqual([]);
+  });
+
+  it('renders guidance titles through the map wherever the portal shows them', () => {
+    for (const file of ['ActionPlan.tsx', 'OpportunitiesPanel.tsx']) {
+      const source = readFileSync(join(process.cwd(), 'src', 'components', 'copilotAdoption', file), 'utf8');
+      expect(source, `${file} must render guidance titles with guidanceLinkTitle()`).toContain('guidanceLinkTitle(t, link)');
+      expect(source, `${file} renders a server guidance title verbatim`).not.toMatch(/\{\s*link\.title\s*\}/);
+    }
   });
 });
 
@@ -536,7 +663,7 @@ function healthComponentKeys(): string[] {
 describe('Health component display names', () => {
   it('translates every concrete component name the server can send today', () => {
     const serverKeys = healthComponentKeys();
-    expect(serverKeys).toEqual(['BlobCheckpoint', 'CopilotAuditBackfill', 'Credential', 'MessageTracing', 'ServiceBus']);
+    expect(serverKeys).toEqual(['BlobCheckpoint', 'CopilotAuditBackfill', 'Credential', 'MessageTracing', 'PowerPlatformConnection', 'ServiceBus']);
 
     const missingMapEntries = serverKeys.filter((key) => !(key in HEALTH_COMPONENT_LABEL_KEYS));
     const missingCatalogEntries = serverKeys

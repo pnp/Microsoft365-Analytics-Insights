@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -18,6 +19,20 @@ namespace Common.Entities.LicenceActivity
     public interface ILicenceActivityDiagnostics
     {
         void Stage(string stage, long elapsedMs = 0);
+        void CoverageWeek(LicenceActivityCoverageWeek week);
+        void Evidence(LicenceActivityCoverage coverage, int usersWithRows, int usersWithActivity,
+            int usersWithCompleteEvidence, bool groupFiltered);
+    }
+
+    public sealed class LicenceActivityCoverageWeek
+    {
+        public string Workload { get; set; }
+        public DateTime FromUtc { get; set; }
+        public DateTime ToUtc { get; set; }
+        public int ExpectedDays { get; set; }
+        public int PresentDays { get; set; }
+        public bool Settled { get; set; }
+        public List<DateTime> MissingDates { get; } = new List<DateTime>();
     }
 
     public sealed class NullLicenceActivityDiagnostics : ILicenceActivityDiagnostics
@@ -25,6 +40,9 @@ namespace Common.Entities.LicenceActivity
         public static readonly NullLicenceActivityDiagnostics Instance = new NullLicenceActivityDiagnostics();
         private NullLicenceActivityDiagnostics() { }
         public void Stage(string stage, long elapsedMs = 0) { }
+        public void CoverageWeek(LicenceActivityCoverageWeek week) { }
+        public void Evidence(LicenceActivityCoverage coverage, int usersWithRows, int usersWithActivity,
+            int usersWithCompleteEvidence, bool groupFiltered) { }
     }
 
     public sealed class LicenceActivitySources

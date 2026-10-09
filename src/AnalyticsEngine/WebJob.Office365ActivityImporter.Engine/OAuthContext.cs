@@ -39,8 +39,8 @@ namespace WebJob.Office365ActivityImporter.Engine
     /// <remarks>
     /// A token for this audience is not enough on its own: the service principal must also hold a Power
     /// Platform RBAC role (Power Platform reader is the least-privilege option) assigned at tenant scope.
-    /// Without it the licensing routes answer 401/403 even though the token itself is valid, which is why the
-    /// credit importer turns those two status codes into an explicit instruction rather than a generic error.
+    /// A 401/403 alone does not establish whether the token, role assignment or endpoint-specific access
+    /// caused the refusal; the credit importer preserves that uncertainty in its diagnostic guidance.
     /// </remarks>
     public class PowerPlatformAppIndentityOAuthContext : ImportAppIndentityOAuthContext
     {

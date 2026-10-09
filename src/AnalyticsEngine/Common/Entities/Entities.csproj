@@ -120,7 +120,9 @@
     <Compile Include="CopilotAdoption\CopilotAdoptionExports.cs" />
     <Compile Include="CopilotAdoption\CopilotAdoptionGuidanceCatalogue.cs" />
     <Compile Include="CopilotAdoption\CopilotAdoptionDateRange.cs" />
+    <Compile Include="CopilotAdoption\CopilotAdoptionManagerModelling.cs" />
     <Compile Include="CopilotAdoption\CopilotAdoptionOptions.cs" />
+    <Compile Include="CopilotAdoption\CopilotAdoptionScoreSettings.cs" />
     <Compile Include="CopilotAdoption\CopilotAdoptionScope.cs" />
     <Compile Include="CopilotAdoption\CopilotAdoptionScoring.cs" />
     <Compile Include="CopilotAdoption\CopilotAdoptionSeatTimeSavedModels.cs" />
@@ -588,6 +590,7 @@
       <DependentUpon>Resources.resx</DependentUpon>
     </Compile>
     <Compile Include="State\AzureTableKeyValueStore.cs" />
+    <Compile Include="State\IConditionalKeyValueStore.cs" />
     <Compile Include="State\IKeyValueStore.cs" />
     <Compile Include="State\InMemoryKeyValueStore.cs" />
     <Compile Include="CopilotAuditBackfill\CopilotAuditBackfillModels.cs" />
@@ -600,6 +603,9 @@
     <Compile Include="LeadershipCohort\LeadershipCohortStore.cs" />
     <Compile Include="State\StorageTableClientFactory.cs" />
     <Compile Include="State\TeamsTokenStore.cs" />
+    <Compile Include="State\AgentCostConnectionStore.cs" />
+    <Compile Include="State\AgentCostDelegatedTokenProvider.cs" />
+    <Compile Include="State\AgentCostTokenProtection.cs" />
     <Compile Include="State\UserImportCheckpointKeys.cs" />
     <Compile Include="AnalyticsEntitiesContext.cs" />
     <Compile Include="Sql\AzureSqlAccessTokenInterceptor.cs" />

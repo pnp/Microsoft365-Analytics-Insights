@@ -70,91 +70,57 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
 
         #endregion
 
-        public async Task<TeamDefinition> SaveToSQL(TeamsAndCallsDBLookupManager lookupManager, AppConfig appConfig, ILogger logger)
+        public Task<TeamDefinition> SaveToSQL(TeamsAndCallsDBLookupManager lookupManager, AppConfig appConfig, ILogger logger)
+            => SaveToSQL(lookupManager, appConfig, logger, null);
+
+        public async Task<TeamDefinition> SaveToSQL(TeamsAndCallsDBLookupManager lookupManager, AppConfig appConfig, ILogger logger,
+            ITeamsCognitiveStatsLoader cognitiveStatsLoader)
         {
             if (lookupManager is null) throw new ArgumentNullException(nameof(lookupManager));
             if (logger is null) throw new ArgumentNullException(nameof(logger));
 
+            using (var store = new SqlTeamsPersistenceStore(lookupManager))
+            {
+                return await SaveToSQLCore(store, cognitiveStatsLoader ?? new TeamsCognitiveStatsLoader(new AppConfig(), logger),
+                    () => new TeamTokenManager(this, appConfig, logger).ChannelDeltaTokenStore, logger);
+            }
+        }
+
+        /// <summary>
+        /// The same staged save and checkpoint ordering, without constructing SQL, AI or state clients.
+        /// </summary>
+        public Task<TeamDefinition> SaveToSQL(ITeamsPersistenceStore store, ITeamsCognitiveStatsLoader cognitiveStatsLoader,
+            ITeamChannelDeltaTokenStore deltaTokenStore, ILogger logger)
+            => SaveToSQLCore(store, cognitiveStatsLoader, () => deltaTokenStore, logger);
+
+        private async Task<TeamDefinition> SaveToSQLCore(ITeamsPersistenceStore store, ITeamsCognitiveStatsLoader cognitiveStatsLoader,
+            Func<ITeamChannelDeltaTokenStore> deltaTokenStoreFactory, ILogger logger)
+        {
+            if (store == null) throw new ArgumentNullException(nameof(store));
+            if (cognitiveStatsLoader == null) throw new ArgumentNullException(nameof(cognitiveStatsLoader));
+            if (logger == null) throw new ArgumentNullException(nameof(logger));
             logger.LogInformation($"Saving Team '{this.DisplayName}' to SQL...");
 
-            // Save to SQL if doesn't exist already
-            var dbTeam = await lookupManager.GetOrCreateTeam(this.Id, this.DisplayName);
-
-            if (!dbTeam.IsSavedToDB)
-            {
-                // Save so the lookup manager can find it later by ID
-                await lookupManager.Database.SaveChangesAsync();
-            }
-
-            // Add owners
-            foreach (var graphUser in this.OwnerUserAccounts)
-            {
-                var dbUser = await lookupManager.GetOrCreateUser(graphUser.UserPrincipalName, true);
-
-                var teamOwnerRecord = lookupManager.Database.TeamOwners.Where(to => to.TeamID == dbTeam.ID && to.OwnerID == dbUser.ID).SingleOrDefault();
-                if (teamOwnerRecord == null)
-                {
-                    lookupManager.Database.TeamOwners.Add(new Common.Entities.Entities.Teams.TeamOwners() { Owner = dbUser, Team = dbTeam, Discovered = DateTime.Now });
-                }
-            }
-            // Save members in each team
-            await this.Users.SaveStatsForToday(this, lookupManager);
-
-            // Channels
-            var dbChannels = new List<TeamChannel>();
-
-            var teamTokenManager = new TeamTokenManager(this, appConfig, logger);
+            var dbTeam = await store.GetOrCreateTeam(this);
+            await store.SaveOwners(this.OwnerUserAccounts, dbTeam);
+            await store.SaveMembers(this.Users, this);
+            // Resolve state at the original point: its "No Storage" warning must follow member saves.
+            var deltaTokenStore = deltaTokenStoreFactory();
             foreach (var channel in this.Channels)
             {
-                var dbChannel = await channel.SaveToSql(lookupManager, dbTeam);
+                await store.SaveChannel(channel, dbTeam);
             }
 
-            // Get & save channel stats for relevant chats found
-            var channelMessageStats = await this.Channels.GetMessagesStats(logger);
+            var channelMessageStats = await this.Channels.GetMessagesStats(logger, cognitiveStatsLoader);
             foreach (var channelStat in channelMessageStats)
             {
-                await channelStat.InsertOrAppendSqlStats(lookupManager, dbTeam);
+                await store.SaveStats(channelStat, dbTeam);
             }
+            await store.SaveReactions(AllReactions);
 
-            // Parse reactions
-            foreach (var r in AllReactions)
-            {
-                var reaction = await lookupManager.GetOrCreateTeamsReactionType(r.Reaction);
-                Common.Entities.User user = null;
-
-                // It's possible there was no user in AAD for this reaction
-                if (r.GraphUser != null)
-                {
-                    user = await lookupManager.GetOrCreateUser(r.GraphUser.UserPrincipalName, false);
-                }
-                else
-                {
-                    user = await lookupManager.GetOrCreateUnknownUser(false);
-                }
-
-                // We would've added it to cache previously
-                var channel = await lookupManager.GetTeamChannel(r.ChannelId);
-
-                lookupManager.Database.TeamsUserReactions.Add(
-                    new Common.Entities.Entities.Teams.TeamsUserReaction
-                    {
-                        Reaction = reaction,
-                        User = user,
-                        Channel = channel,
-                        Date = r.When
-                    }
-                );
-            }
-
-            // Update access-token stats for Team
-            dbTeam.HasRefreshToken = this.HasRefreshToken;
-            dbTeam.LastRefreshed = this.LastRefreshed;
-
-            // Save all changes
-            lookupManager.Database.ChangeTracker.DetectChanges();
             try
             {
-                await lookupManager.Database.SaveChangesAsync();
+                await store.SaveChanges(this, dbTeam);
             }
             catch (System.Data.Entity.Infrastructure.DbUpdateException ex)
             {
@@ -162,9 +128,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
                 return null;
             }
 
-            if (this.PendingChannelDeltaTokenCommits.Count > 0 && teamTokenManager.ChannelDeltaTokenStore != null)
+            if (this.PendingChannelDeltaTokenCommits.Count > 0 && deltaTokenStore != null)
             {
-                var deltaTokenStore = teamTokenManager.ChannelDeltaTokenStore;
                 await TeamChannelDeltaTokenCommitter.CommitPendingTokens(deltaTokenStore, this.Id, this.PendingChannelDeltaTokenCommits);
             }
 

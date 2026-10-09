@@ -232,6 +232,8 @@ namespace Common.Entities.CopilotAdoption
                 OfficeLocation = row.OfficeLocation,
                 CompanyName = row.CompanyName,
                 ManagerUserPrincipalName = row.ManagerUserPrincipalName,
+                ManagerUserId = row.ManagerUserId,
+                ManagerAccountEnabled = row.ManagerAccountEnabled,
                 AccountEnabled = row.AccountEnabled,
                 HoldsSeatToday = row.HoldsSeatToday,
                 AccountCreatedUtc = row.AccountCreatedUtc,

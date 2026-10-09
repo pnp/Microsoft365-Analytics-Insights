@@ -44,6 +44,7 @@ import StackedAreaChart from '../components/charts/StackedAreaChart';
 import GaugeRing, { bandTone, describeBands } from '../components/charts/GaugeRing';
 import RadarChart from '../components/charts/RadarChart';
 import AdoptionFunnel from '../components/copilotAdoption/AdoptionFunnel';
+import { ScoreSettingsBanner, ScoreSettingsMethodNote } from '../components/copilotAdoption/ScoreSettingsNotice';
 import LicensedUsersPanel from '../components/copilotAdoption/LicensedUsersPanel';
 import CoworkPanel from '../components/copilotAdoption/CoworkPanel';
 import OpportunitiesPanel from '../components/copilotAdoption/OpportunitiesPanel';
@@ -55,6 +56,7 @@ import UnlicensedPanel from '../components/copilotAdoption/UnlicensedPanel';
 import ResourceTypesPanel from '../components/copilotAdoption/ResourceTypesPanel';
 import EmailDomainPanel from '../components/copilotAdoption/EmailDomainPanel';
 import LeadershipComparisonCard from '../components/copilotAdoption/LeadershipComparisonCard';
+import MicrosoftReportFigures from '../components/copilotAdoption/MicrosoftReportFigures';
 import { ConcentrationBar, CombinedSegmentTable } from '../components/copilotAdoption/CombinedViews';
 import InfoTip from '../components/shared/InfoTip';
 import PrintButton from '../components/shared/PrintButton';
@@ -65,6 +67,7 @@ import AdoptionPeriodControl, { periodLabel, type FixedPeriod } from '../compone
 import SeatHolderTimeSavedModel from '../components/copilotAdoption/SeatHolderTimeSavedModel';
 import PiiHiddenNote from '../components/shared/PiiHiddenNote';
 import { SegmentTable, BAND_COLOUR_LIST } from '../components/copilotAdoption/adoptionShared';
+import { ManagerModellingLine, hasManagerModelling } from '../components/copilotAdoption/ManagerModelling';
 import { KpiGrid, formatCount, formatDate, formatPct, weightSharePct } from '../components/shared/KpiGrid';
 import type { KpiDefinition } from '../components/shared/KpiGrid';
 import { activeLocale, formatNumber, plural, useT, useTNode, type TFunction, type TranslationKey } from '../i18n';
@@ -204,6 +207,7 @@ const UNSCOPED_SECTION_LABEL_KEYS: Record<string, TranslationKey> = {
   agents: 'copilotAdoption.page.unscoped.agents',
   purchasedSeats: 'copilotAdoption.page.unscoped.purchasedSeats',
   coworkCredits: 'copilotAdoption.page.unscoped.coworkCredits',
+  microsoftReport: 'copilotAdoption.page.unscoped.microsoftReport',
 };
 
 /**
@@ -783,6 +787,9 @@ function CopilotAdoptionView({
                 />
               )}
 
+              {/* Every tab, every reader: a customised score changes who counts as a Champion (#683, #684). */}
+              <ScoreSettingsBanner options={summary.options} />
+
               {tab === 'executive' &&
                 (summary.licensedUsers === 0 && !summary.figuresIncomplete && !isNarrowed(summary) ? (
                   // Only a GENUINE zero means "nothing set up yet". When the licence queries timed out the
@@ -1073,6 +1080,7 @@ function ExecutiveTab({
   return (
     <>
       <KpiGrid items={kpis} />
+      <MicrosoftReportFigures summary={summary} />
 
       <SectionHead
         index={1}
@@ -1204,6 +1212,14 @@ function ExecutiveTab({
           </div>
         </Card>
       </div>
+
+      {/* Do people managers use Copilot themselves, and how do their teams compare (#641)? One line
+          with its caveat; the analyst view's department table carries the same figures per department. */}
+      {hasManagerModelling(summary) && (
+        <Card>
+          <ManagerModellingLine summary={summary} />
+        </Card>
+      )}
 
       {/* Only shown on a multi-domain tenant. On a single-domain one it is a table comparing an
           organisation with itself, which is noise on the board-pack view.
@@ -1409,6 +1425,7 @@ function AnalystTab({
   return (
     <>
       <KpiGrid items={kpis} />
+      <MicrosoftReportFigures summary={summary} sql={sql?.microsoftReportFigures} />
 
 
       <SectionHead
@@ -1587,7 +1604,17 @@ function AnalystTab({
           />
         </div>
         <div className={styles.cardBody}>
-          <SegmentTable rows={summary.adoptionByDepartment} segmentLabel={t('copilotAdoption.page.department')} bands={bandThresholds} />
+          {hasManagerModelling(summary) && (
+            <div style={{ marginBottom: '16px' }}>
+              <ManagerModellingLine summary={summary} detail />
+            </div>
+          )}
+          <SegmentTable
+            rows={summary.adoptionByDepartment}
+            segmentLabel={t('copilotAdoption.page.department')}
+            bands={bandThresholds}
+            managerModelling={summary.managerModellingByDepartment}
+          />
         </div>
       </Card>
 
@@ -2097,6 +2124,7 @@ function MethodTab({ summary }: { summary: CopilotAdoptionSummary }) {
           <AccordionHeader>{t('copilotAdoption.page.howEngagementScoreCalculated')}</AccordionHeader>
           <AccordionPanel>
             <div className={styles.method}>
+              <ScoreSettingsMethodNote options={o} />
               <Text>{t('copilotAdoption.page.eachLicensedUserGetsScoreOutBuiltThreeComponents')}</Text>
               <Text>
                 {tNode('copilotAdoption.page.howManyDistinctDaysUsedCopilotAgainstTargetWorking', {
@@ -2454,6 +2482,17 @@ function MethodTab({ summary }: { summary: CopilotAdoptionSummary }) {
                   ? t('copilotAdoption.page.snapshot', { v0: formatDate(summary.dataSources.copilotUsageReportDate) })
                   : t('copilotAdoption.page.notImported')}{' '}
                 {t('copilotAdoption.page.licensedUsersOnlyUnavailableEntirelyWhenTenantConcealsUser')}
+              </Text>
+              <Text>
+                {tNode('copilotAdoption.page.microsoftReport.method', {
+                  heading: <strong>{t('copilotAdoption.page.microsoftReport.methodHeading')}</strong>,
+                  status: summary.microsoftReportDate && summary.microsoftReportPeriodDays != null
+                    ? t('copilotAdoption.page.microsoftReport.period', {
+                        days: formatCount(summary.microsoftReportPeriodDays),
+                        date: formatDate(summary.microsoftReportDate),
+                      })
+                    : t('copilotAdoption.page.notImported'),
+                })}
               </Text>
               <Text>
                 <strong>{t('copilotAdoption.page.microsoftUsageReports')}</strong>{' '}

@@ -33,9 +33,11 @@ each other's tooling. The area switcher sits in the header; each area has its ow
 | `#/admin/install-log` | **Install log** | History of configurations applied to the solution (the `sys_configs` table): when, by whom, install messages, and the config JSON per entry. The most recent is the current configuration. |
 | `#/admin/profiling` | **Profiling** | Current state of the profiling data: earliest/latest dates for each compiled profiling table and the source activity tables that feed it (each with the **SQL** behind it), plus a paged view of the profiling runbooks' trace log (`profiling.TraceLogs`). Lets admins quickly check the runbooks have run, data is fresh, and spot errors. |
 | `#/admin/teams-permissions` | **Teams permissions** | Authorise / de-authorise Teams for deep analytics (stores a delegated refresh token per Team in the `TeamsAuth` partition of the `AnalyticsState` Azure Table in the solution's storage account). Ported from the original app. |
+| `#/admin/agent-cost-connection` | **Copilot Studio billing connection** | Connect/reconnect, disconnect and inspect the deployment-wide delegated billing administrator used for Copilot Studio consumption. Administration only; no tokens or named-user analytics are returned to the SPA. |
 | `#/admin/user-lookup` | **User data lookup** | Enter a user's UPN to see all of their data held in SQL: profile, per-category record counts (broken down by workload, including Copilot and Power Platform; each row has a **SQL** button to view & copy the query behind its count), drill-down to recent rows, and which **import workloads** are enabled (so a legitimate 0 count is explained). |
 | `#/admin/user-import` | **User import** | Whether the Graph user import has a stored checkpoint (its `/users/delta` token, kept in the `UserImport` partition of the `AnalyticsState` Azure Table), where it is kept, when the import last completed and how often it runs - and a confirmed **Clear checkpoint** action so the next run reads every user again, optionally on the next import cycle. The in-product version of deleting the stored token by hand (issue #664). The token itself never reaches the browser. |
 | `#/admin/leadership-cohort` | **Leadership group** | Saves an explicit Entra ID group for the Copilot Adoption comparison and requests membership reads by the activity importer. The response acknowledges durable settings/request storage, not Graph completion. **Check status** retrieves the worker outcome without requesting another read. |
+| `#/admin/copilot-adoption-settings` | **Copilot Adoption settings** | Configures the tenant-wide frequency, depth and breadth weights and adoption-level thresholds. Settings and change history are stored in the `CopilotAdoptionSettings` partition of `AnalyticsState`. |
 | `#/admin/global-filter` | **Report filter** | The administrator's global report filter: conditions every Insights report applies for everyone, on top of their own filters, optionally compared with the viewer's own attributes. Previews the draft against the administrator's own account before saving. Needs See PII as well as Administration. See [The administrator's global filter](#the-administrators-global-filter). |
 | `#/admin/configuration` | **Service configuration** | What this deployment is pointed at: SQL, the storage account (which holds the runtime state table), Cognitive Services and Service Bus, plus the Teams calls import state and the Graph call webhook (with a live validation POST to test it). |
 
@@ -74,6 +76,132 @@ error. Clearing the group immediately disables the comparison. Status/storage op
 a cancellable 30-second request deadline, below App Service's HTTP deadline. If storage cannot
 acknowledge a write, check status before retrying: as with any network write, an interrupted
 response does not prove that the write failed.
+
+## Copilot Studio billing administrator connection
+
+Copilot Studio credit **consumption** is read with a delegated administrator, because Microsoft's Power
+Platform licensing API refuses the runtime application's app-only identity on every consumption route.
+Only the tenant **capacity** read (and Azure Cost Management) stays app-only. With no connection the
+importer still imports capacity, makes no consumption calls and records a non-error
+"connection required" state (`agentCosts.import.connectionRequired`) instead of a 403 every cycle.
+A failed connected identity never silently falls back or reports success.
+
+**Prepaid credits and Azure charges are separate measures.** The report explicitly shows prepaid
+Copilot Credits consumed from the tenant capacity snapshot, including Microsoft's consumption period
+and timestamp, alongside Azure monetary spend for the selected date window. The snapshot is not
+recalculated for that window. Prepaid consumption is pooled, not attributed to individual purchased
+packs. Per-agent "billed credits" means chargeable usage, not necessarily an additional Azure charge.
+Pay-as-you-go credit consumption is shown only if the entitlement API supplies it; a missing value is
+not zero and is never inferred from `payGo.entitled` or by subtracting per-agent totals from capacity.
+Credits and money are never added together. Both import toggles can be enabled independently.
+
+**Health checks the billing connection only when Copilot Studio credit tracking is enabled.**
+Component health shows whether a Power Platform billing administrator connection is saved.
+A missing connection, a required reconnect, or an unreadable connection store degrades the overall
+health status and points to Administration > Agent costs. This is a saved-connection check, not a
+live Power Platform token validation. Azure-cost-only tracking does not require this connection
+and does not add the check.
+
+**How per-agent figures are built.** Microsoft restricted the tenant-wide per-agent route
+(`/MCSMessages/resources`) to its own clients
+([Power CAT maintainer clarification](https://github.com/microsoft/Power-CAT-Copilot-Studio-Kit/issues/855)),
+so the importer no longer calls it. Per day it reads `/MCSMessages/users` once, then
+`/MCSMessages/users/{userId}/resources` for every person with consumption, and sums those rows per
+agent/environment/feature. The per-agent user count is the number of distinct contributing people.
+Per-agent figures are tenant-wide (people outside the user-group filter are included, nothing identifying
+is stored); per-person rows still honour the filter.
+
+**Caveat:** per-agent figures cover only consumption Microsoft attributes to a person. Anything it does not
+attribute to a user is not visible through any permitted API; the capacity tile's tenant "consumed" total
+remains the authoritative total. Microsoft's last-refreshed stamp is not available, and
+`copilot_studio_credit_daily.last_refreshed_utc` is no longer populated.
+
+**API volume.** Calls per cycle are about *window days (default 7) × daily active Copilot Studio users*,
+plus a few paging calls (10,000 daily active users is roughly 70,000 calls), run with bounded
+concurrency (6) and the existing throttle/retry handling. The cadence is daily.
+
+Route access, verified live: capacity, `/users`, `/users/{id}/resources` and
+`/resources/{id}/users` succeed delegated; only capacity succeeds app-only; `/MCSMessages/resources` and
+the environment route are refused for both. The connection is verified by probing `/users`.
+
+Setup for a build containing this page:
+
+1. On the **runtime** app registration, open **Authentication** and add a **Web** redirect URI
+   `https://<portal-host>/signin-agent-costs`. The server builds it from `WebAppURL.TrimEnd('/')`
+   plus `/signin-agent-costs`. Register each hosted slot/local instance separately; for the synthetic
+   example `WebAppURL=https://localhost:44400/`, its callback is `https://localhost:44400/signin-agent-costs`.
+   Use your actual local port, not the example's. Keep the existing portal and Teams callbacks.
+   Do not select SPA/mobile, append a hash route, or add a trailing slash after the callback path.
+   The callback uses a separate passive Katana OIDC v2 middleware; normal sign-in requests no billing scopes.
+2. Under **API permissions → Add a permission → APIs my organization uses**, search for
+   **Power Platform API**, application ID `8578e004-a5c6-46e7-913e-12f58912df43`,
+   not a similarly named legacy resource. Select **Delegated permissions**, add
+   **CopilotStudio.Licenses.Read** and **EnvironmentManagement.Environments.Read**, then
+   **Grant admin consent** and confirm the granted status. These are advertised read-only permissions;
+   if absent in your tenant, consult Microsoft rather than inventing a scope or substituting write access.
+   The connection uses the documented
+   `https://api.powerplatform.com/.default` scope plus `openid profile offline_access`.
+   `.default` selects the app's configured delegated permissions; it is not a permission to add.
+   The entitlement REST reference documents `.default`; it does **not** document a `Licensing.Read`
+   scope, so this feature does not invent one or claim a generic allocation permission guarantees entitlement access.
+   See Microsoft's [authentication guide](https://learn.microsoft.com/power-platform/admin/programmability-authentication-v2),
+   [permission reference](https://learn.microsoft.com/power-platform/admin/programmability-permission-reference), and
+   [resources endpoint reference](https://learn.microsoft.com/rest/api/power-platform/licensing/entitlement-insight/get-tenant-resources-across-environments).
+3. Configure the existing `Storage` connection string, Table service reachability and the runtime identity's
+   **Storage Table Data Contributor** access. Both portal and importer must use the same Storage and runtime
+   credential. Missing/unreachable Storage is explicit; there is no browser-only or in-memory token fallback.
+4. Sign in to the portal with **Portal.Administration**, using an account with **Power Platform Administrator**
+   or equivalent billing read access. Under Administration → Copilot Studio billing connection, connect the
+   **same account**. The server verifies MSAL can renew the credential and read consumption before publishing the connection.
+5. Keep the Copilot Studio credit import toggle enabled. A successful connection or disconnect changes the
+   credit cadence generation, so the next cycle does not wait behind the previous 24-hour stamp.
+
+Setup failures:
+
+| Error | Fix |
+| --- | --- |
+| `AADSTS650057` / Invalid resource | Configure the **Power Platform API** delegated permissions and grant consent on the runtime registration. Power Platform Reader RBAC alone does not configure an Entra requested resource. |
+| `AADSTS50011` / Redirect URI mismatch | Add the exact callback shown in the error to **Authentication → Web**, including the instance's scheme, host, local port and path. A hosted callback does not cover localhost. If a hosted instance sends localhost, correct its `WebAppURL` instead. |
+| Administrator consent required | Grant consent using an authorized Entra administrator, then start a fresh connection attempt. |
+| Account mismatch / billing access refused | Connect the same account signed into the portal; it needs Administration and actual Power Platform billing read access. |
+| Consumption probe denied despite correct consent/account | The per-user read (`/users`) returned 401/403, so the connection is not published. Check the delegated permissions' consent, that the account has Power Platform billing read access and Conditional Access; do not add unrelated roles. |
+
+After fixing registration, retry Connect, refresh status and verify the next credit import succeeds.
+Registration changes alone do not require a deployment or SQL migration; successful sign-in alone
+does not prove a successful connection/import.
+
+Security and operational contract:
+
+- Same-origin XHR POST issues the short-lived, protected connect intent; MVC refuses direct/tampered or
+  account-mismatched intents and separately enforces Administration. Katana validates the OIDC state,
+  ID-token issuer/audience and nonce; the callback also binds the tenant/object ID and Administration role
+  to the initiator and ignores any supplied return URL.
+- MSAL owns code redemption, refresh-token rotation and serialization. Its complete user cache is stored
+  encrypted and authenticated in `AnalyticsState`, partition **AgentCostDelegatedAuth**. The runtime secret
+  derives AES/HMAC keys; certificate mode wraps random AES/HMAC keys with the runtime certificate.
+  Neither credentials nor tenant response payloads enter the connection status, browser, or connection logs.
+- State addresses: **Connection** is the active generation pointer; **Cache_&lt;generation&gt;** and
+  **Error_&lt;generation&gt;** belong to that generation. Refresh writes cannot replace the pointer, so an old
+  refresh cannot undo disconnect/reconnect. Cache/error rows expire 90 days after their last write; old
+  replaced generations age out. Keep this partition restricted like credentials, including backups.
+- ImportSchedule retains the legacy **CopilotStudioCreditsLastImported** key when no connection has ever
+  existed. A changed connection uses **CopilotStudioCreditsLastImported_&lt;generation&gt;**.
+  **AzureCostLastImported** is unchanged. To force an existing connection's retry, clear its matching stamp.
+- Revocation, refresh expiry, consent/Conditional Access challenges or an aggregate consumption 401/403 set
+  **Reconnect needed**. A transient token or Storage outage does not erase the connection. Reconnect with
+  an account whose access and policies permit unattended refresh; this flow does not bypass Conditional Access.
+  Credential replacement can make the saved cache unreadable and require reconnection.
+- Import diagnostics `agentCosts.import.reconnectNeeded` and `agentCosts.import.tokenUnavailable` are stable
+  keys, translated on the cost page. The first requires administrator reconnection; the second retries
+  on the next due cycle without deleting the connection.
+  `agentCosts.import.userAccessDenied` reports a refused best-effort per-user route without disabling
+  an independently working aggregate connection.
+- Disconnect stops new imports using the connection, not an import already in progress; it does not revoke Entra
+  consent or erase imported cost data. Manage the consent separately in Entra if that is also required.
+
+There is no SQL migration, installer configuration schema change or new app setting. Registration and
+live delegated authorization must be performed by the deployment administrator after upgrade; tests use
+synthetic identity-provider/API responses and do not prove access for a particular deployment.
 
 ## Permissions
 
@@ -179,6 +307,7 @@ auth cookie, so a token in the request body would be ignored.
 | --- | --- | --- |
 | `o365AnalyticsTokenAPI` | `api/SiteTokenAPI` | Fresh Graph access token for the signed-in admin (minted from the cookie refresh token). |
 | `o365AnalyticsAuthAPI` | `api/TeamsAuthAPI` | Get / set Teams deep-analytics authorisation. |
+| _(none - origin-relative)_ | `api/AgentCostConnection` | Administration-only delegated billing status, same-origin `/begin` and `/disconnect` POSTs. |
 | `o365AnalyticsUserLookupAPI` | `api/UserDataLookup` | User data lookup (summary + per-category detail). |
 | `o365AnalyticsSystemStatusAPI` | `api/SystemStatus` | System status / configuration for the Home page, plus the record counts for the imports this deployment runs. |
 | `o365AnalyticsInstallLogAPI` | `api/InstallLog` | Install log (config history from `sys_configs`) for the Install Log page. |
@@ -382,15 +511,19 @@ with or without See PII.
 - **What stays tenant-wide**, and says so beside the figures: the Overview page's data counts, Teams
   team-level figures (collaboration and conversations), agent and Azure cost figures, and the Copilot
   Adoption sections already marked as tenant-wide.
-- **Administrators** see the filter applied too, so they see what everyone sees. They can switch it off
-  for their own view from the bar, which sets the session cookie `GlobalFilterBypass=1`; the server
-  honours it only for a caller holding the Administration permission, and exports follow it because it
+- **Administrators** see the filter applied too, so they see what everyone sees. Only those with **both
+  Administration and See PII** can switch it off for their own view from the bar, which sets the session
+  cookie `GlobalFilterBypass=1`; the server requires both permissions, and exports follow it because it
   is a cookie. `GlobalFilterProvider` remounts the Insights pages (`viewKey`) whenever the switch or the
   filter changes, so no figures from before the change sit under a bar describing after it. The cookie is
   the browser's, not the tab's, so a tab coming back into view reads the filter again when the cookie no
-  longer agrees with what it last read - switched off or on in another tab.
+  longer agrees with what it last read - switched off or on in another tab. The browser clears a stored
+  bypass only after a fresh server answer says the reader cannot bypass, including after a sign-in or
+  permission change: an older tab's cached denial must not undo an authorized sign-in's explicit switch.
+  A failed read leaves the shared cookie alone without granting a cached-denied reader bypass;
+  a manually set or stale cookie never bypasses the server's permission checks.
 - **Not a security boundary without roles.** With `EnforcePortalRoles=false` everyone who can sign in is
-  an administrator and can switch the filter off; the editor warns about this.
+  granted both permissions and can switch the filter off; the editor warns about this.
 - **Where it is kept:** one row in `dbo.portal_global_filters` (migration
   `202610011330001_PortalGlobalFilter`, with its manual upgrade script). Each web process caches it for
   a minute, and a save is refused (`409`) if someone else saved since the editor opened it. Every save

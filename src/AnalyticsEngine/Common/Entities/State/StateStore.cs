@@ -155,6 +155,9 @@ namespace Common.Entities.State
         /// </summary>
         public const string TeamsAuth = "TeamsAuth";
 
+        /// <summary>Encrypted MSAL cache for the tenant-wide delegated Copilot Studio billing connection.</summary>
+        public const string AgentCostDelegatedAuth = "AgentCostDelegatedAuth";
+
         /// <summary>Azure AI Language results for Teams messages, kept for a day so the same text is not analysed twice.</summary>
         public const string CognitiveCache = "CognitiveCache";
 
@@ -178,5 +181,12 @@ namespace Common.Entities.State
         /// <c>Common.Entities.LeadershipCohort.LeadershipCohortStore</c>.
         /// </summary>
         public const string LeadershipCohort = "LeadershipCohort";
+
+        /// <summary>
+        /// The tenant-wide Copilot Adoption engagement-score weights and band thresholds set on the portal's
+        /// Administration &gt; Copilot Adoption settings page, with their version and change history (who, when,
+        /// old and new values). One row; deleting it restores the defaults.
+        /// </summary>
+        public const string CopilotAdoptionSettings = "CopilotAdoptionSettings";
     }
 }

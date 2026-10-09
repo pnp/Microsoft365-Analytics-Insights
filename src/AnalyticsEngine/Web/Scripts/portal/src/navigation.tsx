@@ -10,6 +10,7 @@ import {
   Globe20Regular,
   Home20Regular,
   Money20Regular,
+  Options20Regular,
   Organization20Regular,
   PeopleCommunity20Regular,
   PeopleAudience20Regular,
@@ -38,6 +39,7 @@ const LicenceActivityPage = lazyWithReload(() => import('./pages/LicenceActivity
 const ActivityAnalysisPage = lazyWithReload(() => import('./pages/ActivityAnalysisPage'));
 const DlpPage = lazyWithReload(() => import('./pages/DlpPage'));
 const TeamsPermissionsPage = lazyWithReload(() => import('./pages/TeamsPermissionsPage'));
+const AgentCostConnectionPage = lazyWithReload(() => import('./pages/AgentCostConnectionPage'));
 const UserLookupPage = lazyWithReload(() => import('./pages/UserLookupPage'));
 const UserOrgsPage = lazyWithReload(() => import('./pages/UserOrgsPage'));
 const UserImportPage = lazyWithReload(() => import('./pages/UserImportPage'));
@@ -45,6 +47,7 @@ const UserScopePage = lazyWithReload(() => import('./pages/UserScopePage'));
 const GlobalFilterPage = lazyWithReload(() => import('./pages/GlobalFilterPage'));
 const CopilotAuditBackfillPage = lazyWithReload(() => import('./pages/CopilotAuditBackfillPage'));
 const LeadershipCohortPage = lazyWithReload(() => import('./pages/LeadershipCohortPage'));
+const CopilotAdoptionSettingsPage = lazyWithReload(() => import('./pages/CopilotAdoptionSettingsPage'));
 const ProfilingStatusPage = lazyWithReload(() => import('./pages/ProfilingStatusPage'));
 const InstallLogPage = lazyWithReload(() => import('./pages/InstallLogPage'));
 const HealthPage = lazyWithReload(() => import('./pages/HealthPage'));
@@ -261,11 +264,27 @@ export const ROUTES: PortalRoute[] = [
   },
   {
     area: 'admin',
+    path: '/admin/copilot-adoption-settings',
+    labelKey: 'app.route.copilotAdoptionSettings',
+    groupKey: 'app.navGroup.manage',
+    icon: <Options20Regular />,
+    element: <CopilotAdoptionSettingsPage />,
+  },
+  {
+    area: 'admin',
     path: '/admin/configuration',
     labelKey: 'app.route.configuration',
     groupKey: 'app.navGroup.manage',
     icon: <Settings20Regular />,
     element: <ServiceConfigurationPage />,
+  },
+  {
+    area: 'admin',
+    path: '/admin/agent-cost-connection',
+    labelKey: 'app.route.agentCostConnection',
+    groupKey: 'app.navGroup.manage',
+    icon: <Money20Regular />,
+    element: <AgentCostConnectionPage />,
   },
 ];
 

@@ -332,8 +332,10 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.InteractionHisto
             {
                 foreach (var upnChunk in ChunkStrings(memberUpns.ToList()))
                 {
+                    // Scope selection keeps every eligible legacy duplicate, not the writer lookup's lowest id.
+                    var ids = await Common.Entities.LookupCaches.ExistingUserIds.FindEnabledIdsAsync(db, upnChunk);
                     var rows = await db.users
-                        .Where(u => upnChunk.Contains(u.UserPrincipalName)
+                        .Where(u => ids.Contains(u.ID)
                                     && (u.AccountEnabled == null || u.AccountEnabled == true))
                         .GroupJoin(
                             db.CopilotInteractionUserWatermarks,
