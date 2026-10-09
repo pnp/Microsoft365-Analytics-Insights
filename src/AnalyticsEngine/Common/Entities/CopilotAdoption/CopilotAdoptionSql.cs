@@ -1131,13 +1131,11 @@ namespace Common.Entities.CopilotAdoption
         }
 
         /// <summary>
-        /// Total Copilot Credits billed per user inside the window, for the seat holders on the Cowork tab.
+        /// Copilot Studio Credits billed per user inside the window, for the seat holders on the Cowork tab.
         ///
-        /// <para><b>This is not a Cowork figure and must never be labelled as one.</b> Microsoft meters
-        /// Cowork against the shared Copilot Credits pool and publishes no per-row workload discriminator,
-        /// so this is the user's total consumption across every credit-billed Copilot workload. It is worth
-        /// showing anyway - a rollout conversation needs to know who is already consuming credits - but only
-        /// with that caveat attached.</para>
+        /// <para><b>This is Copilot Studio usage, not a Cowork figure.</b> It comes from the Copilot Studio
+        /// per-user credit import and does not report Cowork funding, usage or spend. Keep it labelled as
+        /// Copilot Studio data wherever it is shown.</para>
         ///
         /// <para>Users with no row are absent from the result rather than returned as zero, so the caller
         /// can render "not attributable" instead of claiming the user costs nothing. The converse matters
@@ -1169,12 +1167,11 @@ namespace Common.Entities.CopilotAdoption
         }
 
         /// <summary>
-        /// The tenant's latest Copilot Credit capacity snapshot, used as rollout headroom on the Cowork tab.
+        /// The tenant's latest Copilot Studio credit-capacity snapshot, optionally shown on the Cowork tab.
         ///
-        /// <para><b>This is the shared Copilot Credits pool, not Cowork-only spend.</b> Cowork genuinely
-        /// consumes from it, which is what makes it valid headroom for a rollout decision - but Copilot
-        /// Studio and other credit-billed workloads draw on the same pool and Microsoft publishes no way to
-        /// separate them, so every label built from this must say so.</para>
+        /// <para><b>This is not Cowork funding, usage or rollout headroom.</b> It is a Copilot Studio
+        /// capacity snapshot; Cowork's usage-based billing and consumption are managed separately in the
+        /// Microsoft 365 admin center.</para>
         ///
         /// <para>Latest snapshot regardless of the reporting window, matching the Agent Costs page: it is a
         /// point-in-time tenant total, and an admin planning a rollout wants today's headroom rather than
@@ -1194,7 +1191,7 @@ namespace Common.Entities.CopilotAdoption
         /// <summary>
         /// Whether the Copilot Studio credit tables exist at all.
         ///
-        /// <para>The credit figures on the Cowork tab are optional decoration from a <i>separate</i>
+        /// <para>The Copilot Studio figures on the Cowork tab are optional data from a <i>separate</i>
         /// import, and a database that predates the agent-cost migration simply does not have these
         /// tables. Probing for them is not defensive clutter: without it, every Cowork analysis on such
         /// a database would surface "Could not load Copilot Credit capacity: Invalid object name..." as

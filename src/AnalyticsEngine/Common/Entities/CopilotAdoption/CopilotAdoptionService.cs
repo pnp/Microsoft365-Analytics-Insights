@@ -1844,13 +1844,11 @@ namespace Common.Entities.CopilotAdoption
         }
 
         /// <summary>
-        /// Attaches the optional Copilot Credit figures: the tenant's pool position, and each user's
-        /// total where the per-user import has rows for them.
+        /// Attaches optional Copilot Studio credit data: the tenant capacity snapshot and each user's
+        /// imported usage where per-user rows exist.
         ///
-        /// <para><b>Neither figure is Cowork-specific and neither is labelled as such.</b> Microsoft
-        /// meters Cowork against the shared Copilot Credits pool with no per-row workload discriminator,
-        /// so a Cowork-only figure cannot be produced - see
-        /// <see cref="Common.Entities.Entities.AgentCosts.CopilotStudioHarnessClassifier"/>.</para>
+        /// <para><b>Neither figure measures Cowork funding, usage or spend.</b> Both are from the separate
+        /// Copilot Studio credit import and must be labelled accordingly.</para>
         /// </summary>
         private async Task AddCoworkCreditsAsync(
             CopilotAdoptionAnalysis analysis,
@@ -1874,7 +1872,7 @@ namespace Common.Entities.CopilotAdoption
                 CopilotAdoptionSteps.CoworkReadiness,
                 CopilotAdoptionQueries.CoworkUserCredits,
                 output,
-                "Cowork per-user credits", cancellationToken);
+                "Copilot Studio per-user credits", cancellationToken);
 
             if (creditRows != null && creditRows.Count > 0)
             {
@@ -1904,7 +1902,7 @@ namespace Common.Entities.CopilotAdoption
                 CopilotAdoptionSteps.CoworkReadiness,
                 CopilotAdoptionQueries.CoworkCreditCapacity,
                 output,
-                "Copilot Credit capacity", cancellationToken);
+                "Copilot Studio credit capacity", cancellationToken);
 
             var snapshot = capacity?.FirstOrDefault();
             if (snapshot != null)
@@ -4065,10 +4063,10 @@ namespace Common.Entities.CopilotAdoption
         }
 
         /// <summary>
-        /// One user's total billed Copilot Credits in the window.
+        /// One user's Copilot Studio Credits in the window.
         ///
-        /// Users with no credit rows are simply absent, which is what lets the Cowork tab render "not
-        /// attributable" rather than a zero that would read as "this person costs nothing".
+        /// Users with no imported rows are absent so the Cowork tab can render "not attributable" rather
+        /// than implying zero Copilot Studio usage.
         /// </summary>
         public class UserCreditRow
         {
@@ -4078,7 +4076,7 @@ namespace Common.Entities.CopilotAdoption
         }
 
         /// <summary>
-        /// The tenant's Copilot Credit capacity snapshot. Every figure is nullable because the licensing
+        /// The tenant's Copilot Studio credit-capacity snapshot. Every figure is nullable because the licensing
         /// API legitimately omits some of them - notably pay-as-you-go consumption, which a tenant on
         /// pre-purchased capacity simply does not have.
         /// </summary>

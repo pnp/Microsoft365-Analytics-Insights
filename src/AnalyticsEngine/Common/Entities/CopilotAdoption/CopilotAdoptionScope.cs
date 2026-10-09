@@ -169,7 +169,7 @@ namespace Common.Entities.CopilotAdoption
         /// </summary>
         public const string PurchasedSeats = "purchasedSeats";
 
-        /// <summary>The Cowork credit balance. Entitlement and consumption are tenant-level.</summary>
+        /// <summary>The Copilot Studio credit-capacity snapshot; it is not Cowork funding or headroom.</summary>
         public const string CoworkCredits = "coworkCredits";
 
         /// <summary>

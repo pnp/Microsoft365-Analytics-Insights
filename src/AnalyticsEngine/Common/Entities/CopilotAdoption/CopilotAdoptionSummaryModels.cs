@@ -890,7 +890,7 @@ namespace Common.Entities.CopilotAdoption
         [JsonProperty("coworkByDepartment")]
         public List<CoworkSegmentRow> CoworkByDepartment { get; set; } = new List<CoworkSegmentRow>();
 
-        /// <summary>The tenant's shared Copilot Credit position, as rollout headroom.</summary>
+        /// <summary>The tenant's Copilot Studio capacity snapshot, separate from Cowork billing.</summary>
         [JsonProperty("coworkCreditPosition")]
         public CoworkCreditPosition CoworkCreditPosition { get; set; } = new CoworkCreditPosition();
 
