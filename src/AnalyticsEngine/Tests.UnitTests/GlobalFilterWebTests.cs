@@ -39,6 +39,7 @@ namespace Tests.UnitTests
     public class GlobalFilterWebTests
     {
         private const string MyDepartment = "[{\"d\":\"department\",\"v\":[],\"vu\":\"department\"}]";
+        private static long _snapshotVersion;
 
         #region Applying it to a report request
 
@@ -676,7 +677,9 @@ namespace Tests.UnitTests
                 ManagerUserId = 1,
                 EntraObjectId = "00000000-0000-0000-0000-000000000005",
             });
-            return builder.Build(new DateTime(2026, 9, 1, 8, 0, 0, DateTimeKind.Utc));
+            // SQL scopes are cached process-wide by directory-read time; other fixtures use this base date with different people.
+            return builder.Build(new DateTime(2026, 9, 1, 8, 0, 0, DateTimeKind.Utc)
+                .AddTicks(Interlocked.Increment(ref _snapshotVersion)));
         }
 
         private sealed class Directory : IUserDirectorySource

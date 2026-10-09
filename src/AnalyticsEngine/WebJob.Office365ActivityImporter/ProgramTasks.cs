@@ -164,6 +164,28 @@ namespace WebJob.Office365ActivityImporter
         }
 
         /// <summary>
+        /// Refreshes the Copilot Adoption leadership cohort's membership when it is due (#654). Does nothing when no
+        /// group is configured or there is no Storage account (the web app refuses to save the setting then, so there
+        /// is nothing to read). Never throws: the outcome, including a missing Graph permission, is recorded in the
+        /// cohort's status for the portal to show.
+        /// </summary>
+        internal async Task RefreshLeadershipCohortSafely()
+        {
+            try
+            {
+                var values = StateStore.TryOpen(_settings, StatePartitions.LeadershipCohort, _logger);
+                if (values == null) return;
+
+                var store = new Common.Entities.LeadershipCohort.LeadershipCohortStore(values, isDurable: true);
+                await Common.Entities.LeadershipCohort.LeadershipCohortRefresher.ForGraph(store, _settings, _logger).RefreshIfDueAsync();
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning($"Leadership cohort refresh skipped this cycle ({ex.GetType().Name}): {ex.Message}");
+            }
+        }
+
+        /// <summary>
         /// Optional agent-cost imports: billed Copilot Studio Copilot Credits, and daily Azure spend from
         /// Microsoft Cost Management.
         /// </summary>

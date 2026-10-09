@@ -44,6 +44,7 @@ import StackedAreaChart from '../components/charts/StackedAreaChart';
 import GaugeRing, { bandTone, describeBands } from '../components/charts/GaugeRing';
 import RadarChart from '../components/charts/RadarChart';
 import AdoptionFunnel from '../components/copilotAdoption/AdoptionFunnel';
+import { ScoreSettingsBanner, ScoreSettingsMethodNote } from '../components/copilotAdoption/ScoreSettingsNotice';
 import LicensedUsersPanel from '../components/copilotAdoption/LicensedUsersPanel';
 import CoworkPanel from '../components/copilotAdoption/CoworkPanel';
 import OpportunitiesPanel from '../components/copilotAdoption/OpportunitiesPanel';
@@ -54,6 +55,7 @@ import AgentsPanel from '../components/copilotAdoption/AgentsPanel';
 import UnlicensedPanel from '../components/copilotAdoption/UnlicensedPanel';
 import ResourceTypesPanel from '../components/copilotAdoption/ResourceTypesPanel';
 import EmailDomainPanel from '../components/copilotAdoption/EmailDomainPanel';
+import LeadershipComparisonCard from '../components/copilotAdoption/LeadershipComparisonCard';
 import MicrosoftReportFigures from '../components/copilotAdoption/MicrosoftReportFigures';
 import { ConcentrationBar, CombinedSegmentTable } from '../components/copilotAdoption/CombinedViews';
 import InfoTip from '../components/shared/InfoTip';
@@ -784,6 +786,9 @@ function CopilotAdoptionView({
                   onClear={() => setUserFilter(EMPTY_USER_FILTER)}
                 />
               )}
+
+              {/* Every tab, every reader: a customised score changes who counts as a Champion (#683, #684). */}
+              <ScoreSettingsBanner options={summary.options} />
 
               {tab === 'executive' &&
                 (summary.licensedUsers === 0 && !summary.figuresIncomplete && !isNarrowed(summary) ? (
@@ -1578,6 +1583,8 @@ function AnalystTab({
         </div>
       </Card>
 
+      <LeadershipComparisonCard comparison={summary.leadershipComparison} />
+
       <Card>
         <div className={styles.cardHead}>
           <div>
@@ -1964,7 +1971,11 @@ function AnalystTab({
             />
           </div>
           <div className={styles.cardBody}>
-            <CombinedSegmentTable rows={summary.combinedByDepartment} />
+            <CombinedSegmentTable
+              rows={summary.combinedByDepartment}
+              agentTotals={summary}
+              minSeatsPerSegment={o.minSeatsPerSegment}
+            />
           </div>
         </Card>
       )}
@@ -2117,6 +2128,7 @@ function MethodTab({ summary }: { summary: CopilotAdoptionSummary }) {
           <AccordionHeader>{t('copilotAdoption.page.howEngagementScoreCalculated')}</AccordionHeader>
           <AccordionPanel>
             <div className={styles.method}>
+              <ScoreSettingsMethodNote options={o} />
               <Text>{t('copilotAdoption.page.eachLicensedUserGetsScoreOutBuiltThreeComponents')}</Text>
               <Text>
                 {tNode('copilotAdoption.page.howManyDistinctDaysUsedCopilotAgainstTargetWorking', {

@@ -279,7 +279,7 @@ namespace App.ControlPanel.Frames.InstallWizard
             this.lblAllowPublicAccessHelp.Name = "lblAllowPublicAccessHelp";
             this.lblAllowPublicAccessHelp.Size = new System.Drawing.Size(550, 42);
             this.lblAllowPublicAccessHelp.TabIndex = 36;
-            this.lblAllowPublicAccessHelp.Text = "Uncheck to disable public access on SQL, Storage, Key Vault, Service Bus, App Service,\r\nAutomation, and Cognitive Services. Log Analytics and Application Insights always stay public —\r\nconfigure Azure Monitor Private Link Scope (AMPLS) manually if private access is required.";
+            this.lblAllowPublicAccessHelp.Text = "Uncheck to disable public access on SQL, Storage, Key Vault, Service Bus, App Service,\r\nAutomation, Cognitive Services, and Azure AI Foundry. Log Analytics and Application Insights always stay public —\r\nconfigure Azure Monitor Private Link Scope (AMPLS) manually if private access is required.";
             // 
             // grpEndpointNames
             // 

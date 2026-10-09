@@ -311,12 +311,10 @@ describe('CoworkPanel', () => {
   it('hides the credit block entirely when the credit import has not run', async () => {
     render(summary());
 
-    expect(screen.queryByText('Copilot Credit headroom')).toBeNull();
+    expect(screen.queryByText('Copilot Studio credit capacity')).toBeNull();
   });
 
-  it('labels the credit pool as shared rather than as Cowork spend', async () => {
-    // Microsoft meters Cowork against the shared Copilot Credits pool with no per-workload split, so
-    // presenting this as a Cowork bill would be a fabrication.
+  it('labels Copilot Studio capacity separately from Cowork billing', async () => {
     const user = userEvent.setup();
     render(
       summary({
@@ -334,8 +332,8 @@ describe('CoworkPanel', () => {
     );
 
     const rollout = await openSection(user, /Rollout plan/);
-    expect(within(rollout).getByText('Copilot Credit headroom')).toBeTruthy();
-    expect(within(rollout).getByText(/shared Copilot Credits pool, not Cowork-only spend/)).toBeTruthy();
+    expect(within(rollout).getByText('Copilot Studio credit capacity')).toBeTruthy();
+    expect(within(rollout).getByText(/not Cowork funding or rollout headroom/)).toBeTruthy();
   });
 
   it('never gives the optional per-user credit import a column, even when it has rows', async () => {
@@ -364,11 +362,11 @@ describe('CoworkPanel', () => {
     await waitFor(() => expect(within(people).getByText('aisha.rahman@contoso.com')).toBeTruthy());
 
     const header = within(within(people).getByRole('table')).getAllByRole('columnheader');
-    expect(header.map((h) => h.textContent)).not.toContain('All Copilot Credits');
+    expect(header.map((h) => h.textContent)).not.toContain('Copilot Studio Credits');
 
     await user.click(within(people).getByRole('button', { name: /Show the full assessment/ }));
 
-    expect(await within(people).findByText('All Copilot Credits')).toBeTruthy();
+    expect(await within(people).findByText('Copilot Studio Credits')).toBeTruthy();
   });
 
   it('omits the per-user credit figures entirely when no per-user rows exist', async () => {
@@ -377,14 +375,14 @@ describe('CoworkPanel', () => {
     const people = await openSection(user, /People to enable/);
     await waitFor(() => expect(within(people).getByText('aisha.rahman@contoso.com')).toBeTruthy());
 
-    expect(screen.queryByText('All Copilot Credits')).toBeNull();
+    expect(screen.queryByText('Copilot Studio Credits')).toBeNull();
 
     await user.click(within(people).getByRole('button', { name: /Show the full assessment/ }));
 
     // The expander opened - so the absence below is a real absence, not an unopened panel.
     expect(await within(people).findByText('Justification')).toBeTruthy();
     expect(screen.queryByText('Copilot Credits')).toBeNull();
-    expect(screen.queryByText('All Copilot Credits')).toBeNull();
+    expect(screen.queryByText('Copilot Studio Credits')).toBeNull();
   });
 
   /**
@@ -464,7 +462,7 @@ describe('CoworkPanel', () => {
     await user.click(within(people).getByRole('button', { name: /Show the full assessment/ }));
 
     // A zero here would read as "this person costs nothing", which is a different claim entirely.
-    const creditStat = (await within(people).findByText('All Copilot Credits')).closest('div');
+    const creditStat = (await within(people).findByText('Copilot Studio Credits')).closest('div');
     expect(creditStat).not.toBeNull();
     expect(within(creditStat as HTMLElement).getByText('\u2014')).toBeTruthy();
     expect(
@@ -984,7 +982,7 @@ describe('CoworkPanel without See PII', () => {
   it('keeps the estimate, readiness and rollout, but never asks for or shows the people', async () => {
     const user = userEvent.setup();
     const s = withEstimates();
-    renderWithProvider(<CoworkPanel windowDays={28} summary={s} filterOptions={null} options={s.options} canSeePii={false} />);
+    renderWithProvider(<CoworkPanel windowDays={28} summary={s} options={s.options} canSeePii={false} />);
 
     // The headline still leads - it is modelled from totals - but offers no list to open.
     expect(screen.getByRole('tab', { name: /Time saved/, selected: true })).toBeTruthy();

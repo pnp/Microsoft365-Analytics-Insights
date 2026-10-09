@@ -339,6 +339,15 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities.Serialisation
         public string ThreadId { get; set; }
 
         /// <summary>
+        /// Identifier of the conversation the interaction belongs to. Not in Microsoft's published schema, but
+        /// present on the records of Copilot Studio agents: the Copilot Studio runtime's record of a Microsoft 365
+        /// Copilot turn and Microsoft 365 Copilot's own record of it carry the same value, while their
+        /// <see cref="ThreadId"/>s differ. Every value seen so far is a GUID. A new chat gets a new one, so it
+        /// spans a conversation, not one turn. The merge pairs the two records on it (issue #699).
+        /// </summary>
+        public string ConversationId { get; set; }
+
+        /// <summary>
         /// Identifiers of the messages that participated in the interaction.
         /// </summary>
         public List<string> MessageIds { get; set; } = new List<string>();

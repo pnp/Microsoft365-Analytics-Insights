@@ -22,7 +22,7 @@ namespace Web.AnalyticsWeb.Models.Health
         /// usage-report import per report. Never throws: partial failures come back as
         /// <see cref="DatabaseCountsResult.CountsError"/> / <see cref="DatabaseCountsResult.DataError"/>.
         /// </summary>
-        Task<DatabaseCountsResult> GetDatabaseCountsAsync();
+        Task<DatabaseCountsResult> GetDatabaseCountsAsync(bool includeAgent365CatalogHealth);
 
         /// <summary>
         /// One-pass 24h + 7d count and newest-timestamp for a fact table. Never throws: a failure (or a
@@ -90,6 +90,8 @@ namespace Web.AnalyticsWeb.Models.Health
         /// <summary>The latest import per Copilot usage report, or null when that query didn't run.</summary>
         public IReadOnlyList<CopilotUsageReportImportRow> CopilotUsageReportImports { get; set; }
 
+        public Common.Entities.Agent365.Agent365CatalogImportHealth Agent365CatalogImportHealth { get; set; }
+        public string Agent365CatalogStatusError { get; set; }
 
         /// <summary>Set only on a hard failure (e.g. the database is unreachable).</summary>
         public string DataError { get; set; }

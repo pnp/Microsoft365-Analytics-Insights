@@ -26,6 +26,7 @@ import CategoryBarChart from '../components/charts/CategoryBarChart';
 import MatrixChart from '../components/charts/MatrixChart';
 import WordCloud from '../components/charts/WordCloud';
 import GlobalFilterBar from '../components/globalFilter/GlobalFilterBar';
+import PromptCategoryReport from '../components/PromptCategoryReport';
 import { EN_CATALOG, formatDateParts, formatNumber, plural, useT, useTNode, type TFunction, type TranslationKey } from '../i18n';
 
 /** The report areas in display order, with the enabled-flag they map to and their friendly copy. */
@@ -273,6 +274,7 @@ export default function ReportsPage() {
             topAgents={topAgents}
             agentName={agentNameFilter}
           />
+          {selectedTab === 'copilot' && <PromptCategoryReport months={months} />}
         </>
       ) : null}
     </div>

@@ -137,6 +137,8 @@ namespace Common.Entities.State
     /// </summary>
     public static class StatePartitions
     {
+        public const string PromptCategories = "PromptCategories";
+
         /// <summary>When each interval-gated import last ran (and when a failing usage report may next retry). Round-trip ("o") timestamps.</summary>
         public const string ImportSchedule = "ImportSchedule";
 
@@ -173,5 +175,20 @@ namespace Common.Entities.State
         /// requests. The actual audit rows still go through the normal audit import tables.
         /// </summary>
         public const string CopilotAuditBackfill = "CopilotAuditBackfill";
+
+        /// <summary>
+        /// The Copilot Adoption leadership comparison (#654): the one Entra group an administrator named as the
+        /// leadership cohort, the outcome of the last membership refresh, and the members as pages of SQL user ids -
+        /// never names or UPNs. Bounded: two slots of at most <c>LeadershipCohortStore.MaxPages</c> pages each. See
+        /// <c>Common.Entities.LeadershipCohort.LeadershipCohortStore</c>.
+        /// </summary>
+        public const string LeadershipCohort = "LeadershipCohort";
+
+        /// <summary>
+        /// The tenant-wide Copilot Adoption engagement-score weights and band thresholds set on the portal's
+        /// Administration &gt; Copilot Adoption settings page, with their version and change history (who, when,
+        /// old and new values). One row; deleting it restores the defaults.
+        /// </summary>
+        public const string CopilotAdoptionSettings = "CopilotAdoptionSettings";
     }
 }

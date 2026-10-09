@@ -471,6 +471,78 @@ namespace Tests.UnitTests
         }
 
         /// <summary>
+        /// Every serialised field of the leadership comparison (#654) reaches its sheet, whatever the status - a field
+        /// added to the comparison later cannot be left out of the export, and a suppressed comparison is blank, not
+        /// missing, so two files always line up.
+        /// </summary>
+        [TestMethod]
+        public void Workbook_LeadershipSheetCarriesEveryComparisonFieldWhateverTheStatus()
+        {
+            var expected = ExpectedFactKeys(typeof(Common.Entities.LeadershipCohort.LeadershipAdoptionComparison))
+                .Select(k => CopilotAdoptionWorkbook.LeadershipKeyPrefix + k)
+                .OrderBy(k => k, StringComparer.Ordinal)
+                .ToList();
+            Assert.IsTrue(expected.Count >= 15, "The reflection must see the comparison's fields.");
+
+            var ok = new Common.Entities.LeadershipCohort.LeadershipAdoptionComparison
+            {
+                Status = Common.Entities.LeadershipCohort.LeadershipComparisonStatuses.Ok,
+                MinimumCohort = 10,
+                LicensedLeaders = 12,
+                ActiveLeaders = 9,
+                HabitualLeaders = 4,
+                LeaderAdoptionRatePct = 75,
+                TenantAdoptionRatePct = 50,
+                AdoptionGapPts = 25,
+            };
+            var suppressed = Common.Entities.LeadershipCohort.LeadershipAdoptionComparison.WithStatus(
+                Common.Entities.LeadershipCohort.LeadershipComparisonStatuses.Suppressed);
+
+            var complement = Common.Entities.LeadershipCohort.LeadershipAdoptionComparison.WithStatus(
+                Common.Entities.LeadershipCohort.LeadershipComparisonStatuses.Suppressed,
+                Common.Entities.LeadershipCohort.LeadershipComparisonReasons.ComplementTooSmall);
+
+            foreach (var comparison in new[] { ok, suppressed, complement, null })
+            {
+                var cells = SheetCells(CopilotAdoptionWorkbook.Build(SyntheticAnalysis(), leadership: comparison), "Leadership comparison");
+                var keys = cells.Where(c => c.StartsWith(CopilotAdoptionWorkbook.LeadershipKeyPrefix, StringComparison.Ordinal)).ToList();
+                CollectionAssert.AreEqual(expected, keys, "Leadership keys must be every field, sorted, for status " + (comparison?.Status ?? "null"));
+            }
+
+            var okCells = SheetCells(CopilotAdoptionWorkbook.Build(SyntheticAnalysis(), leadership: ok), "Leadership comparison");
+            AssertFollowedBy(okCells, "leadership.licensedLeaders", "12");
+            AssertFollowedBy(okCells, "leadership.adoptionGapPts", "25");
+
+            var suppressedCells = SheetCells(CopilotAdoptionWorkbook.Build(SyntheticAnalysis(), leadership: suppressed), "Leadership comparison");
+            Assert.IsTrue(suppressedCells.Any(c => c.Contains("fewer than 10 licensed leaders")));
+            var licensedIndex = suppressedCells.IndexOf("leadership.licensedLeaders");
+            var next = suppressedCells[licensedIndex + 1];
+            Assert.IsTrue(next == string.Empty || next == "LicensedLeaders",
+                "A suppressed comparison must leave the leader count blank, not '" + next + "'.");
+
+            var complementCells = SheetCells(CopilotAdoptionWorkbook.Build(SyntheticAnalysis(), leadership: complement), "Leadership comparison");
+            Assert.IsTrue(complementCells.Any(c => c.Contains("fewer than 10 licensed users are outside the leadership group")));
+            foreach (var key in new[] { "leadership.licensedLeaders", "leadership.activeLeaders", "leadership.tenantAdoptionRatePct", "leadership.adoptionGapPts" })
+            {
+                var value = complementCells[complementCells.IndexOf(key) + 1];
+                Assert.IsTrue(value == string.Empty || !value.Any(char.IsDigit),
+                    "A complement-suppressed comparison must leave " + key + " blank, not '" + value + "'.");
+            }
+        }
+
+        /// <summary>
+        /// The leadership comparison is an object on the summary, so it must not add keys to Snapshot facts (it has its
+        /// own sheet), and the cached summary that the workbook reads never carries it.
+        /// </summary>
+        [TestMethod]
+        public void Workbook_LeadershipComparisonDoesNotAddSnapshotFactKeys()
+        {
+            var keys = SheetKeyColumn(CopilotAdoptionWorkbook.Build(SyntheticAnalysis()));
+            Assert.IsFalse(keys.Any(k => k.StartsWith("leadership", StringComparison.Ordinal)),
+                "Snapshot facts must not carry leadership rows: " + string.Join(", ", keys.Where(k => k.StartsWith("leadership", StringComparison.Ordinal))));
+        }
+
+        /// <summary>
         /// The facts sheet is sorted and unconditional so a lookup against the other snapshot always
         /// resolves. A run that emitted keys in reflection order would shift rows between files and
         /// quietly break every formula written against it.
@@ -1814,10 +1886,10 @@ namespace Tests.UnitTests
             return keys;
         }
 
-        /// <summary>The Snapshot facts keys: the whole summary, less the two parts that have sheets of their own.</summary>
+        /// <summary>The Snapshot facts keys: the whole summary, less the parts that have sheets of their own.</summary>
         private static List<string> ExpectedSnapshotFactKeys()
         {
-            return ExpectedFactKeys(typeof(CopilotAdoptionSummary), "options", "diagnostics");
+            return ExpectedFactKeys(typeof(CopilotAdoptionSummary), "options", "diagnostics", "leadershipComparison");
         }
 
         private static void CollectExpectedFactKeys(

@@ -92,6 +92,7 @@ namespace App.ControlPanel.Engine
                     azureBackeEndCreationJob.CreatedAutomationAccount,
                     azureBackeEndCreationJob.AppInsights,
                     azureBackeEndCreationJob.CognitiveServicesInfo,
+                    azureBackeEndCreationJob.FoundryPromptInfo,
                     azureBackeEndCreationJob.KeyVault,
                     azureBackeEndCreationJob.SBQueueWithConnectionString?.ConnectionString, azureBackeEndCreationJob.Subscription,
                     azureBackeEndCreationJob.CreatedSqlServer,

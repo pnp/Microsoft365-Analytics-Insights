@@ -140,6 +140,140 @@ namespace Common.Entities.CopilotAdoption
         /// <summary>Why this agent got this verdict, in plain English.</summary>
         [JsonProperty("healthReason")]
         public string HealthReason { get; set; }
+
+        /// <summary>
+        /// Distinct people who used this agent inside the reporting period - the denominator of
+        /// <see cref="HomeDepartmentSharePct"/>. Not the same as <see cref="Users"/>, which counts the
+        /// inventory's longer history window. Null when the reach query did not run or failed (#647).
+        /// </summary>
+        [JsonProperty("windowUsers")]
+        public int? WindowUsers { get; set; }
+
+        /// <summary>
+        /// How many departments had at least one person using this agent inside the reporting period
+        /// (#647). People with no department are not a department, so they are not counted here, but they
+        /// are in <see cref="WindowUsers"/>. Null when the reach query did not run or failed.
+        /// </summary>
+        [JsonProperty("departments")]
+        public int? Departments { get; set; }
+
+        /// <summary>
+        /// The department with the most of this agent's users in the period - the team it most likely
+        /// came from. Left null, for privacy, when that department contributed fewer than
+        /// <see cref="CopilotAdoptionOptions.MinSeatsPerSegment"/> of them, and when nobody who used it has
+        /// a department. Tenant data: shown as stored, never translated.
+        /// </summary>
+        [JsonProperty("homeDepartment")]
+        public string HomeDepartment { get; set; }
+
+        /// <summary>
+        /// The share of <see cref="WindowUsers"/> who are in the home department, 0-100. Published even when
+        /// the department's name is withheld: a share names nobody, and it is what says whether the agent
+        /// has spread beyond the team that made it.
+        /// </summary>
+        [JsonProperty("homeDepartmentSharePct")]
+        public double? HomeDepartmentSharePct { get; set; }
+    }
+
+    /// <summary>
+    /// One (agent, person) pair from the reporting period, with the person's department id - the one grain
+    /// the agent breadth, depth and reach figures are all derived from (#646, #647).
+    /// </summary>
+    /// <remarks>
+    /// Held as rows rather than aggregated in SQL so the agent-inclusion rule
+    /// (<see cref="CopilotAgentFigureScope"/>) is applied in exactly one place in C#, and so a filtered view
+    /// can narrow it person by person like every other per-person list. Internal: never serialised.
+    /// </remarks>
+    public class AgentReachRow
+    {
+        /// <summary><c>copilot_agents.id</c>, the same key as <see cref="AgentUsageRow.AgentId"/>.</summary>
+        public int AgentId { get; set; }
+
+        public int UserId { get; set; }
+
+        /// <summary><c>users.department_id</c>; null for someone with no department.</summary>
+        public int? DepartmentId { get; set; }
+
+        /// <summary>This person's interactions with this agent in the period.</summary>
+        public long Interactions { get; set; }
+    }
+
+    /// <summary>One <c>user_departments</c> row, to name the departments in <see cref="AgentReachRow"/>.</summary>
+    public class DepartmentNameRow
+    {
+        public int Id { get; set; }
+
+        public string Name { get; set; }
+    }
+
+    /// <summary>
+    /// One <c>copilot_agents</c> row as stored, for <see cref="CopilotAgentClassifier.ResolveStoredOrigin"/> - so
+    /// the agents in <see cref="AgentReachRow"/> get an origin whether or not the agent inventory holds them.
+    /// </summary>
+    public class AgentOriginRow
+    {
+        public int Id { get; set; }
+
+        public string AgentKey { get; set; }
+
+        /// <summary>The importer's stored flag: only a 1 is evidence; see <see cref="CopilotAgentClassifier.ResolveStoredOrigin"/>.</summary>
+        public bool? IsCustomAgent { get; set; }
+    }
+
+    /// <summary>
+    /// Someone who created, published or shared a Copilot Studio agent in the reporting period (#647).
+    /// </summary>
+    /// <remarks>
+    /// Internal: the analysis keeps these rows only so a filtered view can narrow them like any other
+    /// per-person list. Only counts ever leave the service - nothing here names a builder on screen, in an
+    /// export or in telemetry.
+    /// </remarks>
+    public class AgentBuilderRow
+    {
+        public int UserId { get; set; }
+
+        public string UserPrincipalName { get; set; }
+
+        public string Mail { get; set; }
+
+        public string Department { get; set; }
+
+        /// <summary>Derived after the query, like every other per-person row; see <see cref="CopilotAdoptionEmailDomain"/>.</summary>
+        public string EmailDomain { get; set; }
+    }
+
+    /// <summary>
+    /// Which agents the breadth, depth and reach figures count (#646, #647) - decided in this ONE place.
+    /// </summary>
+    /// <remarks>
+    /// <para>Customer-built agents only: the 2026 Work Trend Index counts a firm's own agents (#638), and agent
+    /// origin is classified again since #639 (<see cref="CopilotAgentClassifier"/>). Microsoft's agents are left
+    /// out by design. An agent of unknown origin is left out too - the classifier never guesses - and the
+    /// figures say how many were, so they read as a floor rather than a total.</para>
+    /// <para>The scope travels with the figures as a stable key (<see cref="CopilotAdoptionSummary.AgentFiguresScope"/>)
+    /// so the portal and the workbook can say which agents a figure counts, in the reader's language, rather
+    /// than leaving it to be guessed.</para>
+    /// </remarks>
+    public static class CopilotAgentFigureScope
+    {
+        /// <summary>Every agent, Microsoft's and the tenant's own. Not the current scope; kept as a known key.</summary>
+        public const string AllAgents = "allAgents";
+
+        /// <summary>The agents the tenant built itself.</summary>
+        public const string CustomerBuiltAgents = "customerBuiltAgents";
+
+        /// <summary>The scope the figures are currently computed over.</summary>
+        public const string Current = CustomerBuiltAgents;
+
+        /// <summary>
+        /// Whether an agent counts towards breadth, depth and reach, from its origin key
+        /// (<see cref="CopilotAgentOriginKeys"/>): <see cref="AgentUsageRow.Origin"/> for an inventory row, or
+        /// <see cref="CopilotAgentClassifier.ResolveStoredOrigin"/> for a stored agent.
+        /// </summary>
+        public static bool Includes(string origin)
+        {
+            return string.Equals(origin, CopilotAgentOriginKeys.CustomerBuilt, StringComparison.Ordinal);
+        }
     }
 
     /// <summary>The agent estate at a glance.</summary>
@@ -217,6 +351,90 @@ namespace Common.Entities.CopilotAdoption
         /// </summary>
         [JsonProperty("agents")]
         public List<AgentUsageRow> Agents { get; set; } = new List<AgentUsageRow>();
+
+        /// <summary>
+        /// Which agents <see cref="Growth"/> counts: one of the <see cref="AgentGrowthScopes"/> keys. A key
+        /// rather than a sentence, so the portal and the workbook can each name the scope in their own words.
+        /// </summary>
+        [JsonProperty("growthScope")]
+        public string GrowthScope { get; set; } = CopilotAdoptionAgentGrowth.Scope;
+
+        /// <summary>
+        /// The first Copilot interaction the audit log holds, or null when it holds none. A window that
+        /// starts before it is not measured, so this is what explains a blank year-ago window.
+        /// </summary>
+        [JsonProperty("growthAuditHistoryStartUtc")]
+        public DateTime? GrowthAuditHistoryStartUtc { get; set; }
+
+        /// <summary>
+        /// Agent use over <see cref="CopilotAdoptionAgentGrowth.WindowCount"/> consecutive, closed
+        /// 28-day windows, most recent first, ending at the last settled day (#645). Window 0 against
+        /// window 13 is the year-on-year comparison. Empty when the series was not computed.
+        /// </summary>
+        /// <remarks>
+        /// Tenant-wide like the rest of the estate, and as of now even for a historical reporting period,
+        /// like the inventory. Recomputed from the raw audit rows on every run: nothing is stored (#605).
+        /// </remarks>
+        [JsonProperty("growth")]
+        public List<AgentGrowthWindow> Growth { get; set; } = new List<AgentGrowthWindow>();
+    }
+
+    /// <summary>
+    /// One closed 28-day window of the agent growth series (#645). Every figure is null when the window
+    /// was not measured - never zero, so "we could not measure this" and "nobody used an agent" stay
+    /// distinguishable, which matters most in the year-ago window a growth ratio divides by.
+    /// </summary>
+    public class AgentGrowthWindow
+    {
+        /// <summary>0 for the most recent closed window, 13 for the same 28 days a year earlier.</summary>
+        [JsonProperty("windowsAgo")]
+        public int WindowsAgo { get; set; }
+
+        /// <summary>The window's first day (UTC, inclusive).</summary>
+        [JsonProperty("fromUtc")]
+        public DateTime FromUtc { get; set; }
+
+        /// <summary>The window's last day (UTC, inclusive).</summary>
+        [JsonProperty("toUtc")]
+        public DateTime ToUtc { get; set; }
+
+        /// <summary>
+        /// Customer-built agents with at least one day of user-initiated use in the window: the Work Trend
+        /// Index's definition of an active agent, less its autonomous-run half, which is
+        /// <see cref="CopilotStudioBilledAgents"/>. The scope is <see cref="AgentEstateSummary.GrowthScope"/>.
+        /// </summary>
+        [JsonProperty("activeAgents")]
+        public int? ActiveAgents { get; set; }
+
+        /// <summary>
+        /// Agents of unknown origin used in the window - left out of <see cref="ActiveAgents"/>, agent users
+        /// and interactions because the audit log does not say who made them (SharePoint agents, for
+        /// example), and counted here so the gap is visible: the figures are a floor by this much.
+        /// </summary>
+        [JsonProperty("unknownOriginAgents")]
+        public int? UnknownOriginAgents { get; set; }
+
+        /// <summary>Distinct people who used at least one of those agents in the window.</summary>
+        [JsonProperty("agentUsers")]
+        public int? AgentUsers { get; set; }
+
+        /// <summary>Copilot audit-log interactions with those agents in the window.</summary>
+        [JsonProperty("agentInteractions")]
+        public long? AgentInteractions { get; set; }
+
+        /// <summary>Interactions divided by agent users, to one decimal place. Null when nobody used an agent.</summary>
+        [JsonProperty("interactionsPerAgentUser")]
+        public double? InteractionsPerAgentUser { get; set; }
+
+        /// <summary>
+        /// Evidence of autonomous runs, kept apart from the user-initiated figures above and never added to
+        /// them: Copilot Studio agents with billed consumption in the window, from the Power Platform
+        /// billing import (<c>copilot_studio_credit_daily</c>). Billing covers conversations as well as
+        /// autonomous runs, so this is evidence that agents ran, not a count of autonomous runs. Null when
+        /// that import holds no rows for the window.
+        /// </summary>
+        [JsonProperty("copilotStudioBilledAgents")]
+        public int? CopilotStudioBilledAgents { get; set; }
     }
 
     /// <summary>

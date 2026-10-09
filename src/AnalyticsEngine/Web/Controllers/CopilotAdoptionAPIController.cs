@@ -1,6 +1,7 @@
 ﻿using Common.Entities;
 using Common.Entities.Config;
 using Common.Entities.CopilotAdoption;
+using Common.Entities.LeadershipCohort;
 using Common.Entities.UserFilters;
 using DataUtils;
 using System;
@@ -88,6 +89,10 @@ namespace Web.AnalyticsWeb.Controllers
         }
 
         internal CopilotAdoptionAnalysisCoordinator Coordinator { get; }
+
+        // ApiController is request-scoped. Keep the joined generation's identity, not a lookup using
+        // settings that another request may change during the wait.
+        private string _joinedRunId;
 
         /// <summary>The directory snapshot a <c>userFilter</c> is evaluated against.</summary>
         internal IUserDirectorySource Directory { get; }
@@ -254,17 +259,49 @@ namespace Web.AnalyticsWeb.Controllers
             int windowDays, string from, string to, string seatLicenceTypeIds, string emailDomain, UserFilterExpression userFilter,
             TimeSpan budget, CancellationToken cancellationToken)
         {
+            var scoped = await TryGetScopedAnalysisAsync(
+                windowDays, from, to, seatLicenceTypeIds, emailDomain, userFilter, budget, cancellationToken);
+            return scoped.Analysis;
+        }
+
+        /// <summary>As <see cref="TryGetScopedSummaryAsync"/>, also saying whether the population was narrowed.</summary>
+        private async Task<(CopilotAdoptionAnalysis Analysis, bool Narrowed)> TryGetScopedAnalysisAsync(
+            int windowDays, string from, string to, string seatLicenceTypeIds, string emailDomain, UserFilterExpression userFilter,
+            TimeSpan budget, CancellationToken cancellationToken)
+        {
             if (!userFilter.IsEmpty) Directory.Prefetch();
 
             var analysis = await TryGetAnalysisAsync(windowDays, from, to, seatLicenceTypeIds, budget, cancellationToken);
-            if (analysis == null) return null;
+            if (analysis == null) return (null, false);
 
             var scope = await ResolveScopeAsync(emailDomain, userFilter, cancellationToken);
-            if (!scope.IsNarrowed) return analysis;
+            if (!scope.IsNarrowed) return (analysis, false);
 
             var service = new CopilotAdoptionService(analysis.Summary.Options);
-            return CopilotAdoptionScopeFilter.Apply(analysis, scope, service.FinaliseSummary);
+            return (CopilotAdoptionScopeFilter.Apply(analysis, scope, service.FinaliseSummary), true);
         }
+
+        /// <summary>
+        /// The leadership comparison for this response (#654), or null when it cannot be produced. Compared with the
+        /// whole tenant only: under a domain, a reader's filter or the administrator's global filter it reports
+        /// <see cref="LeadershipComparisonStatuses.ScopedView"/> instead, because a narrowed population can leave a
+        /// handful of leaders to single out. Never throws - a comparison problem must not cost the reader the report.
+        /// </summary>
+        private async Task<LeadershipAdoptionComparison> LeadershipComparisonForAsync(CopilotAdoptionAnalysis analysis, bool narrowed)
+        {
+            try
+            {
+                return await (LeadershipComparisons ?? LeadershipComparisonProvider.Default).GetAsync(analysis, narrowed);
+            }
+            catch (Exception)
+            {
+                return LeadershipAdoptionComparison.WithStatus(
+                    LeadershipComparisonStatuses.Unavailable, LeadershipComparisonReasons.StateUnavailable);
+            }
+        }
+
+        /// <summary>The provider, replaceable by tests. Null means the process-wide one.</summary>
+        internal LeadershipComparisonProvider LeadershipComparisons { get; set; }
 
         /// <summary>
         /// Combines the email domain, the reader's user filter and the administrator's global filter into one
@@ -344,12 +381,30 @@ namespace Web.AnalyticsWeb.Controllers
                     new ApiErrorModel(ex.Message, ex.Message)));
             }
 
-            return await Coordinator.TryGetAsync(
-                range,
-                ParseIds(seatLicenceTypeIds),
-                budget,
-                cancellationToken);
+            try
+            {
+                var waited = await Coordinator.TryGetWithRunIdAsync(
+                    range,
+                    ParseIds(seatLicenceTypeIds),
+                    budget,
+                    cancellationToken);
+                _joinedRunId = waited.RunId;
+                return waited.Analysis;
+            }
+            catch (CopilotAdoptionScoreSettingsUnavailableException ex)
+            {
+                // Refused, not scored with the defaults: a report computed with rules the administrator did not
+                // choose would be published as if it were the tenant's. The next request reads the settings again.
+                WebExceptionTelemetry.Report(ex, "CopilotAdoptionScoreSettings");
+                throw ReportScopeFailure.Exception(
+                    Request,
+                    CopilotAdoptionScoreSettingsErrorCodes.ReportSettingsUnavailable,
+                    ScoreSettingsUnavailableMessage);
+            }
         }
+
+        internal const string ScoreSettingsUnavailableMessage =
+            "The Copilot Adoption score settings could not be read, so this report is not available right now. The failure has been logged. Try again shortly.";
 
         /// <summary>
         /// The 202 body. Deliberately the same shape for every endpoint so the SPA has one thing to detect.
@@ -365,9 +420,7 @@ namespace Web.AnalyticsWeb.Controllers
         /// </summary>
         private string InFlightRunId(int windowDays, string from, string to, string seatLicenceTypeIds)
         {
-            return Coordinator.InFlightRunId(
-                CopilotAdoptionDateRange.Create(windowDays, from, to, DateTime.UtcNow),
-                ParseIds(seatLicenceTypeIds));
+            return _joinedRunId;
         }
 
         /// <summary>The header carrying the analysis run id on 202s, "not ready" 503s and export downloads.</summary>
@@ -481,10 +534,11 @@ namespace Web.AnalyticsWeb.Controllers
             var permissionDenied = ScopePermissionDenied(emailDomain, filter);
             if (permissionDenied != null) return ResponseMessage(permissionDenied);
 
-            var analysis = await TryGetScopedSummaryAsync(
+            var (analysis, narrowed) = await TryGetScopedAnalysisAsync(
                 windowDays, from, to, seatLicenceTypeIds, emailDomain, filter, FirstResponseBudget, cancellationToken);
             if (analysis == null) return StillBuilding(windowDays, from, to, seatLicenceTypeIds);
-            return Ok(SummaryForCaller(analysis.Summary));
+            var leadership = await LeadershipComparisonForAsync(analysis, narrowed);
+            return Ok(SummaryForCaller(analysis.Summary.WithLeadershipComparison(leadership)));
         }
 
         /// <summary>Whether the caller holds the portal's See PII permission (#661).</summary>
@@ -1027,9 +1081,10 @@ namespace Web.AnalyticsWeb.Controllers
             // would just render the JSON body as the "file". So an export WAITS - but only up to
             // ExportWaitBudget, because waiting past the platform limit produced a 500 and a corrupt
             // download instead of an answer.
-            var analysis = await TryGetScopedSummaryAsync(
+            var (analysis, narrowed) = await TryGetScopedAnalysisAsync(
                 windowDays, from, to, seatLicenceTypeIds, emailDomain, filter, ExportWaitBudget, cancellationToken);
             if (analysis == null) return ExportNotReadyResponse(windowDays, from, to, seatLicenceTypeIds);
+            var leadership = await LeadershipComparisonForAsync(analysis, narrowed);
 
             var timeSaved = ParseTimeSavedOverrides(
                 copilotMinutesSavedPerMeeting,
@@ -1048,7 +1103,8 @@ namespace Web.AnalyticsWeb.Controllers
                 bytes = CopilotAdoptionWorkbook.Build(
                     analysis,
                     timeSaved.Any ? timeSaved : null,
-                    includeIndividualData: CanSeeIndividuals() && !analysis.Summary.Options.UsesExplicitDates);
+                    includeIndividualData: CanSeeIndividuals() && !analysis.Summary.Options.UsesExplicitDates,
+                    leadership: leadership);
             }
             catch (Exception ex)
             {

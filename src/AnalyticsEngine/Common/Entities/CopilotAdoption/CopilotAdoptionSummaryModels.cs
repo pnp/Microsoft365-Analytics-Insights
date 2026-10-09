@@ -516,6 +516,26 @@ namespace Common.Entities.CopilotAdoption
             return Options?.UsesExplicitDates == true ? WithoutIndividualData() : this;
         }
 
+        /// <summary>
+        /// A copy of this summary carrying the leadership comparison (#654). Never modifies this instance: the
+        /// summary is cached and shared between readers, and the comparison depends on state outside the analysis
+        /// (the configured group and its last refresh).
+        /// </summary>
+        public CopilotAdoptionSummary WithLeadershipComparison(LeadershipCohort.LeadershipAdoptionComparison comparison)
+        {
+            var copy = (CopilotAdoptionSummary)MemberwiseClone();
+            copy.LeadershipComparison = comparison;
+            return copy;
+        }
+
+        /// <summary>
+        /// How the administrator-configured leadership group's adoption compares with the tenant's (#654). Aggregates
+        /// only, suppressed below a fixed minimum, and never part of the cached analysis: attached per response by
+        /// <see cref="WithLeadershipComparison"/>. Null on a cached summary.
+        /// </summary>
+        [JsonProperty("leadershipComparison")]
+        public LeadershipCohort.LeadershipAdoptionComparison LeadershipComparison { get; set; }
+
         [JsonProperty("generatedUtc")]
         public DateTime GeneratedUtc { get; set; }
 
@@ -870,7 +890,7 @@ namespace Common.Entities.CopilotAdoption
         [JsonProperty("coworkByDepartment")]
         public List<CoworkSegmentRow> CoworkByDepartment { get; set; } = new List<CoworkSegmentRow>();
 
-        /// <summary>The tenant's shared Copilot Credit position, as rollout headroom.</summary>
+        /// <summary>The tenant's Copilot Studio capacity snapshot, separate from Cowork billing.</summary>
         [JsonProperty("coworkCreditPosition")]
         public CoworkCreditPosition CoworkCreditPosition { get; set; } = new CoworkCreditPosition();
 
@@ -1257,6 +1277,159 @@ namespace Common.Entities.CopilotAdoption
         [JsonProperty("topAgentUsersCapped")]
         public bool TopAgentUsersCapped { get; set; }
 
+        // ----- Agent breadth and depth (#646), builders and reach (#647) ----------------------------
+        // Tenant-level scalars, so each reaches the Snapshot facts sheet as its own key. Every one is null
+        // when it could not be measured - its query failed or its source was never imported - so a
+        // comparison of two exports never reads "not measured" as a fall to zero. Department names are
+        // tenant data and appear only in the department table, never as a key here.
+
+        /// <summary>
+        /// Which agents the figures below count: a <see cref="CopilotAgentFigureScope"/> key, worded by the
+        /// portal and the workbook in the reader's language.
+        /// </summary>
+        [JsonProperty("agentFiguresScope")]
+        public string AgentFiguresScope { get; set; } = CopilotAgentFigureScope.Current;
+
+        /// <summary>
+        /// Breadth denominator: departments large enough to report on - at least
+        /// <see cref="CopilotAdoptionOptions.MinSeatsPerSegment"/> Copilot seat holders, or at least that many
+        /// active unlicensed Copilot users, the same rule that gives a department a row in the department
+        /// table. People with no department are not a department.
+        /// </summary>
+        [JsonProperty("agentBreadthDepartments")]
+        public int? AgentBreadthDepartments { get; set; }
+
+        /// <summary>Of <see cref="AgentBreadthDepartments"/>, those with at least one agent user.</summary>
+        [JsonProperty("agentBreadthDepartmentsWithAgentUsers")]
+        public int? AgentBreadthDepartmentsWithAgentUsers { get; set; }
+
+        /// <summary>Breadth: <see cref="AgentBreadthDepartmentsWithAgentUsers"/> as a share of <see cref="AgentBreadthDepartments"/>, 0-100.</summary>
+        [JsonProperty("agentBreadthDepartmentPct")]
+        public double? AgentBreadthDepartmentPct { get; set; }
+
+        /// <summary>
+        /// Active Copilot users seen in the audit log: active seat holders scored from the audit import plus
+        /// every unlicensed user. The denominator of every per-user breadth and depth figure.
+        /// </summary>
+        [JsonProperty("agentActiveUsers")]
+        public int? AgentActiveUsers { get; set; }
+
+        /// <summary>Of <see cref="AgentActiveUsers"/>, how many used at least one agent.</summary>
+        [JsonProperty("agentBreadthAgentUsers")]
+        public int? AgentBreadthAgentUsers { get; set; }
+
+        /// <summary>Breadth: <see cref="AgentBreadthAgentUsers"/> as a share of <see cref="AgentActiveUsers"/>, 0-100.</summary>
+        [JsonProperty("agentBreadthUserPct")]
+        public double? AgentBreadthUserPct { get; set; }
+
+        /// <summary>Depth numerator: distinct agents <see cref="AgentActiveUsers"/> used in the period.</summary>
+        [JsonProperty("agentDepthDistinctAgents")]
+        public int? AgentDepthDistinctAgents { get; set; }
+
+        /// <summary>Depth: <see cref="AgentDepthDistinctAgents"/> per 100 of <see cref="AgentActiveUsers"/>.</summary>
+        [JsonProperty("agentDepthAgentsPer100ActiveUsers")]
+        public double? AgentDepthAgentsPer100ActiveUsers { get; set; }
+
+        /// <summary>Their interactions with those agents in the period.</summary>
+        [JsonProperty("agentDepthInteractions")]
+        public long? AgentDepthInteractions { get; set; }
+
+        /// <summary>Depth: <see cref="AgentDepthInteractions"/> per agent in <see cref="AgentDepthDistinctAgents"/>.</summary>
+        [JsonProperty("agentDepthInteractionsPerActiveAgent")]
+        public double? AgentDepthInteractionsPerActiveAgent { get; set; }
+
+        /// <summary>
+        /// Agents of unknown origin that <see cref="AgentActiveUsers"/> used in the period. Not counted by any
+        /// breadth or depth figure above - the classifier never guesses - so those figures are a floor, and this
+        /// says by how much it could matter.
+        /// </summary>
+        [JsonProperty("agentUnknownOriginAgents")]
+        public int? AgentUnknownOriginAgents { get; set; }
+
+        /// <summary>
+        /// People who created, published or shared a Copilot Studio agent in the period, from the Copilot
+        /// Studio authoring events of the Power Platform audit feed. A count only: no builder is ever named.
+        /// Null when no Copilot Studio authoring event has ever been imported.
+        /// </summary>
+        [JsonProperty("agentBuilders")]
+        public int? AgentBuilders { get; set; }
+
+        /// <summary>
+        /// Agents used by people in at least <see cref="CopilotAdoptionService.AgentReachDepartmentThreshold"/>
+        /// departments in the period - local wins that have spread. Counted over the agent inventory, like
+        /// the reach columns on each <see cref="AgentUsageRow"/>, so it is tenant-wide in a filtered view too.
+        /// </summary>
+        [JsonProperty("agentsInThreeOrMoreDepartments")]
+        public int? AgentsInThreeOrMoreDepartments { get; set; }
+
+        /// <summary>
+        /// Inventory agents of unknown origin used in that many departments - left out of
+        /// <see cref="AgentsInThreeOrMoreDepartments"/>, which is therefore a floor.
+        /// </summary>
+        [JsonProperty("agentsInThreeOrMoreDepartmentsUnknownOrigin")]
+        public int? AgentsInThreeOrMoreDepartmentsUnknownOrigin { get; set; }
+
+        #region Agent growth (#645) - fixed Snapshot facts keys
+
+        // Windows 0 and 13 of Agents.Growth, kept as fixed top-level comparison keys alongside the nested
+        // estate facts emitted by the recursive Snapshot facts writer.
+        // Read straight off the series rather than copied from it, so a summary carrying another summary's
+        // estate - a filtered view carries the tenant's whole - can never disagree with it. Null, and so a
+        // blank cell, whenever the window was not measured: never zero.
+
+        /// <summary>Which agents the growth series counts - an <see cref="AgentGrowthScopes"/> key.</summary>
+        [JsonProperty("agentGrowthScope")]
+        public string AgentGrowthScope => Agents?.GrowthScope;
+
+        /// <summary>The last day of window 0: the last settled day the growth series ends on.</summary>
+        [JsonProperty("agentGrowthSettledThroughUtc")]
+        public DateTime? AgentGrowthSettledThroughUtc => CopilotAdoptionAgentGrowth.Latest(Agents?.Growth)?.ToUtc;
+
+        /// <summary>
+        /// Agents in the series' scope (<see cref="AgentGrowthScope"/>: customer-built) with user-initiated use
+        /// in the most recent closed 28-day window.
+        /// </summary>
+        [JsonProperty("agentGrowthActiveAgentsWindow0")]
+        public int? AgentGrowthActiveAgentsWindow0 => CopilotAdoptionAgentGrowth.Latest(Agents?.Growth)?.ActiveAgents;
+
+        /// <summary>The same, for the same 28 days a year earlier.</summary>
+        [JsonProperty("agentGrowthActiveAgentsWindow13")]
+        public int? AgentGrowthActiveAgentsWindow13 => CopilotAdoptionAgentGrowth.YearAgo(Agents?.Growth)?.ActiveAgents;
+
+        /// <summary>Agents of unknown origin used in window 0, left out of the figures beside it: the size of the floor.</summary>
+        [JsonProperty("agentGrowthUnknownOriginAgentsWindow0")]
+        public int? AgentGrowthUnknownOriginAgentsWindow0 => CopilotAdoptionAgentGrowth.Latest(Agents?.Growth)?.UnknownOriginAgents;
+
+        [JsonProperty("agentGrowthUnknownOriginAgentsWindow13")]
+        public int? AgentGrowthUnknownOriginAgentsWindow13 => CopilotAdoptionAgentGrowth.YearAgo(Agents?.Growth)?.UnknownOriginAgents;
+
+        [JsonProperty("agentGrowthAgentUsersWindow0")]
+        public int? AgentGrowthAgentUsersWindow0 => CopilotAdoptionAgentGrowth.Latest(Agents?.Growth)?.AgentUsers;
+
+        [JsonProperty("agentGrowthAgentUsersWindow13")]
+        public int? AgentGrowthAgentUsersWindow13 => CopilotAdoptionAgentGrowth.YearAgo(Agents?.Growth)?.AgentUsers;
+
+        [JsonProperty("agentGrowthInteractionsWindow0")]
+        public long? AgentGrowthInteractionsWindow0 => CopilotAdoptionAgentGrowth.Latest(Agents?.Growth)?.AgentInteractions;
+
+        [JsonProperty("agentGrowthInteractionsWindow13")]
+        public long? AgentGrowthInteractionsWindow13 => CopilotAdoptionAgentGrowth.YearAgo(Agents?.Growth)?.AgentInteractions;
+
+        [JsonProperty("agentGrowthInteractionsPerAgentUserWindow0")]
+        public double? AgentGrowthInteractionsPerAgentUserWindow0 => CopilotAdoptionAgentGrowth.Latest(Agents?.Growth)?.InteractionsPerAgentUser;
+
+        [JsonProperty("agentGrowthInteractionsPerAgentUserWindow13")]
+        public double? AgentGrowthInteractionsPerAgentUserWindow13 => CopilotAdoptionAgentGrowth.YearAgo(Agents?.Growth)?.InteractionsPerAgentUser;
+
+        /// <summary>Evidence of autonomous runs, kept apart: Copilot Studio agents with billed consumption in window 0.</summary>
+        [JsonProperty("agentGrowthCopilotStudioBilledAgentsWindow0")]
+        public int? AgentGrowthCopilotStudioBilledAgentsWindow0 => CopilotAdoptionAgentGrowth.Latest(Agents?.Growth)?.CopilotStudioBilledAgents;
+
+        [JsonProperty("agentGrowthCopilotStudioBilledAgentsWindow13")]
+        public int? AgentGrowthCopilotStudioBilledAgentsWindow13 => CopilotAdoptionAgentGrowth.YearAgo(Agents?.Growth)?.CopilotStudioBilledAgents;
+
+        #endregion
+
         /// <summary>Unlicensed Copilot Chat as a population in its own right.</summary>
         [JsonProperty("unlicensed")]
         public UnlicensedPopulationSummary Unlicensed { get; set; } = new UnlicensedPopulationSummary();
@@ -1455,6 +1628,7 @@ namespace Common.Entities.CopilotAdoption
         public const string NoCopilotData = "noCopilotData";
         public const string AuditMissingUsingUsageReport = "auditMissingUsingUsageReport";
         public const string AgentInventoryCapped = "agentInventoryCapped";
+        public const string AgentReachTooLarge = "agentReachTooLarge";
         public const string UnlicensedUsageCapped = "unlicensedUsageCapped";
         public const string LicensedUserDetailCapped = "licensedUserDetailCapped";
         public const string LicensedUsersSubset = "licensedUsersSubset";
@@ -1494,6 +1668,7 @@ namespace Common.Entities.CopilotAdoption
             { CopilotAdoptionWarningKeys.NoCopilotData, "Neither the Copilot audit import nor Microsoft's Copilot usage report has any data for this period, so every licensed user will appear as unused. Check the Health page before acting on these numbers." },
             { CopilotAdoptionWarningKeys.AuditMissingUsingUsageReport, "The Copilot audit import has no data for this period, so per-user engagement is derived from Microsoft's own usage report. That report covers Microsoft's aggregation window rather than the period selected here, and excludes unlicensed Copilot Chat use entirely." },
             { CopilotAdoptionWarningKeys.AgentInventoryCapped, "The agent inventory was capped at {maxAgents} agents, so the agent figures are a floor rather than a total." },
+            { CopilotAdoptionWarningKeys.AgentReachTooLarge, "More than {maxRows} combinations of agent and person were used in this period, so agent breadth, depth and reach were not calculated rather than calculated from part of them." },
             { CopilotAdoptionWarningKeys.UnlicensedUsageCapped, "Unlicensed Copilot usage was capped at {maxUsers} users, so those figures are a floor rather than a total." },
             { CopilotAdoptionWarningKeys.LicensedUserDetailCapped, "Only the first {maxUsers} licensed users were analysed. The figures below therefore describe that subset, not the whole tenant. The subset is ordered by internal user id for reproducibility, so the oldest user records are over-represented and the newest user records are excluded first." },
             { CopilotAdoptionWarningKeys.LicensedUsersSubset, "This tenant holds {licensedUsers} Copilot licences, but only {scoredUsers} users could be analysed in one pass. Every rate and breakdown below describes those {scoredUsers} users, not the whole tenant - they are not tenant-wide figures and must not be quoted as such. Because the drill-down query is ordered by internal user id, the oldest user records are over-represented and the newest joiners or newly onboarded subsidiaries are excluded first; the subset is reproducible, but not representative." },

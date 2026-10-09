@@ -103,6 +103,8 @@ type TimeSeriesChartProps = {
   height?: number;
   /** Optional legend caveat shown when null points should be explained in-place. */
   gapNote?: string;
+  /** Labels are tenant-authored or already localised, not server placeholder wording. */
+  literalLabels?: boolean;
 };
 
 /** True when this point begins a new line segment (it is the first point, or follows a gap). */
@@ -143,7 +145,7 @@ function SeriesSwatch({ index, className }: { index: number; className: string }
  * its container, with a "nice" y-axis, thinned week labels, and an interactive hover tooltip that
  * reads out every series' value for the hovered week.
  */
-export default function TimeSeriesChart({ series, valueLabel, height = 300, gapNote }: TimeSeriesChartProps) {
+export default function TimeSeriesChart({ series, valueLabel, height = 300, gapNote, literalLabels }: TimeSeriesChartProps) {
   const t = useT();
   const styles = useStyles();
   const rootRef = useRef<HTMLDivElement>(null);
@@ -337,7 +339,7 @@ export default function TimeSeriesChart({ series, valueLabel, height = 300, gapN
               <div key={s.name} className={styles.tooltipRow}>
                 <span className={styles.tooltipLabel}>
                   <SeriesSwatch index={si} className={styles.swatch} />
-                  <Text size={200}>{series.length > 1 ? serverPlaceholderText(t, s.name) : valueLabel}</Text>
+                  <Text size={200}>{series.length > 1 ? (literalLabels ? s.name : serverPlaceholderText(t, s.name)) : valueLabel}</Text>
                 </span>
                 <Text size={200} weight="semibold">
                   {s.points[hover.index]?.value == null
@@ -355,7 +357,7 @@ export default function TimeSeriesChart({ series, valueLabel, height = 300, gapN
           {series.map((s, si) => (
             <span key={s.name} className={styles.legendItem}>
               <SeriesSwatch index={si} className={styles.swatch} />
-              <Text size={200}>{serverPlaceholderText(t, s.name)}</Text>
+              <Text size={200}>{literalLabels ? s.name : serverPlaceholderText(t, s.name)}</Text>
             </span>
           ))}
           {hasGaps && gapNote && (

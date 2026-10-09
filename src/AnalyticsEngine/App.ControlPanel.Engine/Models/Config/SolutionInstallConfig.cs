@@ -105,6 +105,7 @@ namespace App.ControlPanel.Engine
             c.SQLServerName = string.Empty;
             c.CognitiveServiceName = string.Empty;
             c.CognitiveServicesEnabled = true;
+            c.FoundryPromptEnabled = false;
             c.ServiceBusEnabled = true;
             c.ServiceBusName = string.Empty;
             c.TasksConfig.InstallLatestSolutionContent = true;
@@ -321,6 +322,37 @@ namespace App.ControlPanel.Engine
             if (string.IsNullOrWhiteSpace(this.AutomationAccountName))
             {
                 errs.Add("Provide an Automation account name.");
+            }
+
+            // Azure AI Foundry / Azure OpenAI
+            if (this.FoundryPromptEnabled)
+            {
+                if (string.IsNullOrWhiteSpace(this.FoundryPromptResourceName) ||
+                    !System.Text.RegularExpressions.Regex.IsMatch(this.FoundryPromptResourceName, @"\A[a-z0-9][a-z0-9-]{0,61}[a-z0-9]\z"))
+                {
+                    errs.Add("Provide a valid Azure AI Foundry resource name (2-63 lowercase letters, numbers, or hyphens; begin and end with a letter or number).");
+                }
+
+                if (!IsRegexExComplaint(this.FoundryPromptDeploymentName ?? string.Empty, @"\A[a-zA-Z0-9][a-zA-Z0-9_.-]{0,63}\z", false))
+                {
+                    errs.Add("Provide a valid Azure AI Foundry model deployment name (1-64 letters, numbers, periods, underscores, or hyphens).");
+                }
+
+                if (!IsRegexExComplaint(this.FoundryPromptModelName ?? string.Empty, @"\A[a-zA-Z0-9][a-zA-Z0-9_.-]{0,63}\z", false))
+                {
+                    errs.Add("Provide a valid Azure OpenAI model name.");
+                }
+
+                if (!string.IsNullOrWhiteSpace(this.FoundryPromptModelVersion) &&
+                    !IsRegexExComplaint(this.FoundryPromptModelVersion, @"\A[a-zA-Z0-9][a-zA-Z0-9_.-]{0,63}\z", false))
+                {
+                    errs.Add("Enter a valid Azure OpenAI model version, or leave it blank to use the Azure default.");
+                }
+
+                if (this.FoundryPromptCapacity < 1 || this.FoundryPromptCapacity > 10000)
+                {
+                    errs.Add("Azure OpenAI deployment capacity must be between 1 and 10000.");
+                }
             }
 
             // Key Vault

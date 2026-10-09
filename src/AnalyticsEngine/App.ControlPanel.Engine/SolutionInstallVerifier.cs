@@ -918,6 +918,9 @@ namespace App.ControlPanel.Engine
             new ImportToggleCoverage(nameof(ImportTaskSettings.GraphCopilotUsageReports),
                 "Microsoft 365 usage reports via Reports.Read.All"),
 
+            new ImportToggleCoverage(nameof(ImportTaskSettings.Agent365PackageCatalog),
+                "CopilotPackages.Read.All on the runtime Graph app token (Microsoft Agent 365 license is checked by the API at runtime)"),
+
             new ImportToggleCoverage(nameof(ImportTaskSettings.GraphTeams),
                 "Graph group enumeration and Teams channel read"),
 
@@ -1051,6 +1054,18 @@ namespace App.ControlPanel.Engine
                 await VerifyCopilotInteractionHistoryImport(auth, manualGraphClient);
             }
             else _logger.LogInformation("Skipping verifying Copilot AI interaction history import as not being targeted");
+
+            if (Config.SolutionConfig.ImportTaskSettings.Agent365PackageCatalog)
+            {
+                await VerifyRequiredTokenPermission(
+                    auth,
+                    new[] { "CopilotPackages.Read.All" },
+                    "CopilotPackages.Read.All",
+                    "Agent 365 package catalog import",
+                    "Microsoft Graph",
+                    "the Agent 365 catalog import will fail at runtime. A Microsoft Agent 365 license is also required and is checked by the API.");
+            }
+            else _logger.LogInformation("Skipping verifying Agent 365 package catalog import as not being targeted");
 
             // Graph user metadata. The user delta call needs User.Read.All; group membership reads also need
             // Directory.Read.All in real tenants. subscribedSkus/prepaidUnits needs Organization.Read.All;

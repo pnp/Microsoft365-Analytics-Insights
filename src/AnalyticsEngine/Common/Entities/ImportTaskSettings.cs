@@ -113,6 +113,16 @@ namespace Common.Entities
         public bool GraphCopilotUsageReports { get; set; } = false;
 
         /// <summary>
+        /// Import the tenant's Agent 365 package catalog and documented package usage metrics from Microsoft Graph.
+        /// </summary>
+        /// <remarks>
+        /// Opt-in and off by default. The Package Management API requires the Microsoft Agent 365 license and the
+        /// <c>CopilotPackages.Read.All</c> application permission with admin consent.
+        /// </remarks>
+        [ImportProp]
+        public bool Agent365PackageCatalog { get; set; } = false;
+
+        /// <summary>
         /// Import Microsoft 365 Copilot AI interaction history from Microsoft Graph
         /// (<c>/copilot/users/{id}/interactionHistory/getAllEnterpriseInteractions</c>).
         /// </summary>

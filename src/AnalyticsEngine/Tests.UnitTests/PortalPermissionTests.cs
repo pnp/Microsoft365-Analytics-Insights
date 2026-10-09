@@ -5,6 +5,8 @@ using AnalyticsWeb::Web.AnalyticsWeb.Controllers;
 using AnalyticsWeb::Web.AnalyticsWeb.Models;
 using AnalyticsWeb::Web.AnalyticsWeb.Security;
 using Common.Entities.CopilotAdoption;
+using Common.Entities.LeadershipCohort;
+using Common.Entities.State;
 using Common.Entities.TeamsExplorer;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using Newtonsoft.Json;
@@ -78,6 +80,8 @@ namespace Tests.UnitTests
             ["AgentCostConnectionAPIController.Begin"] = Admin,
             ["AgentCostConnectionAPIController.Disconnect"] = Admin,
 
+            ["Agent365PackageCatalogAPIController.Get"] = Admin,
+
             // Microsoft Graph's change-notification webhook: Graph cannot sign in, so it checks clientState instead.
             ["CallRecordWebhookController.Post"] = Public,
 
@@ -124,6 +128,11 @@ namespace Tests.UnitTests
             ["LicenceActivityAPIController.Export"] = Any,             // refuses usersId without See PII
 
             ["PortalAccessAPIController.Get"] = Any,
+            ["PromptCategoriesAPIController.Get"] = Admin,
+            ["PromptCategoriesAPIController.Save"] = Admin,
+            ["PromptCategoriesAPIController.Reset"] = Admin,
+            ["PromptCategoriesAPIController.Runs"] = Admin,
+            ["PromptCategoriesAPIController.Report"] = Any,
 
             ["ProfilingStatusAPIController.Get"] = Admin,
             ["ProfilingStatusAPIController.TraceLogs"] = Admin,
@@ -189,6 +198,12 @@ namespace Tests.UnitTests
             ["CopilotAuditBackfillAPIController.Get"] = Admin,
             ["CopilotAuditBackfillAPIController.Start"] = Admin,
             ["CopilotAuditBackfillAPIController.Cancel"] = Admin,
+            ["LeadershipCohortAPIController.Get"] = Admin,
+            ["LeadershipCohortAPIController.Save"] = Admin,
+            ["LeadershipCohortAPIController.Refresh"] = Admin,
+            ["CopilotAdoptionSettingsAPIController.Get"] = Admin,
+            ["CopilotAdoptionSettingsAPIController.Save"] = Admin,
+            ["CopilotAdoptionSettingsAPIController.Reset"] = Admin,
 
             ["WebActivityAPIController.Availability"] = Any,
             ["WebActivityAPIController.Overview"] = Any,
@@ -607,6 +622,9 @@ namespace Tests.UnitTests
             (HttpMethod.Post, "api/UserScope/purge", "administration"),
             (HttpMethod.Get, "api/UserScope/purge/1", "administration"),
             (HttpMethod.Post, "api/UserScope/purge/1/cancel", "administration"),
+            (HttpMethod.Get, "api/CopilotAdoptionSettings", "administration"),
+            (HttpMethod.Post, "api/CopilotAdoptionSettings", "administration"),
+            (HttpMethod.Post, "api/CopilotAdoptionSettings/reset", "administration"),
 
             (HttpMethod.Get, "api/CopilotAdoption/licensed-users", "seePii"),
             (HttpMethod.Get, "api/CopilotAdoption/licensed-users/export", "seePii"),
@@ -1025,8 +1043,10 @@ namespace Tests.UnitTests
             }
         }
 
-        private static PortalTestHost CopilotAdoptionHost(CopilotAdoptionAnalysis analysis, IPrincipal principal)
+        private static PortalTestHost CopilotAdoptionHost(CopilotAdoptionAnalysis analysis, IPrincipal principal, LeadershipComparisonProvider leadership = null)
         {
+            // Never the process-wide provider: that would read the test run's Storage account.
+            leadership = leadership ?? new LeadershipComparisonProvider(() => new LeadershipCohortStore(new InMemoryKeyValueStore(), isDurable: true));
             var coordinator = new AdoptionCoordinator(
                 new FixedRunner(analysis),
                 new DictionaryCache(),
@@ -1037,11 +1057,101 @@ namespace Tests.UnitTests
                 new[] { typeof(CopilotAdoptionAPIController) },
                 principal,
                 PortalAccessPolicy.Enforcing,
-                _ => new CopilotAdoptionAPIController(coordinator));
+                _ => new CopilotAdoptionAPIController(coordinator) { LeadershipComparisons = leadership });
+        }
+
+        /// <summary>A provider whose configured leadership group holds SQL user ids 1..<paramref name="leaders"/>.</summary>
+        private static async Task<LeadershipComparisonProvider> LeadershipProvider(int leaders)
+        {
+            var store = new LeadershipCohortStore(new InMemoryKeyValueStore(), isDurable: true);
+            await store.SaveSettingsAsync(new LeadershipCohortSettings { GroupId = "00000000-0000-0000-0000-000000000654", Revision = "r1", UpdatedUtc = DateTime.UtcNow });
+            await store.SaveMembersAsync(new LeadershipCohortSnapshot
+            {
+                Version = "v1",
+                GroupId = "00000000-0000-0000-0000-000000000654",
+                GroupDisplayName = "Contoso Leadership",
+                SettingsRevision = "r1",
+                Status = LeadershipCohortRefreshStatuses.Ready,
+                AttemptedUtc = DateTime.UtcNow,
+                RefreshedUtc = DateTime.UtcNow,
+            }, Enumerable.Range(1, leaders).ToList());
+            return new LeadershipComparisonProvider(() => store);
+        }
+
+        [TestMethod]
+        public async Task CopilotAdoptionLeadership_IsAnAggregateForEveryReaderAndNamesNobody()
+        {
+            var analysis = SmallAnalysis(12);
+            using (var host = CopilotAdoptionHost(analysis, PortalTestHost.SignedIn(), await LeadershipProvider(12)))
+            {
+                var body = await host.Client.GetStringAsync("api/CopilotAdoption/summary");
+                var leadership = (JObject)JObject.Parse(body)["leadershipComparison"];
+                Assert.AreEqual("ok", (string)leadership["status"], "Aggregates need no See PII.");
+                Assert.AreEqual(12, (int)leadership["licensedLeaders"]);
+                Assert.AreEqual(10, (int)leadership["minimumCohort"]);
+                var text = leadership.ToString(Formatting.None);
+                Assert.IsFalse(text.Contains("@contoso.com") || text.Contains("Contoso Leadership") || text.Contains("000000000654"), text);
+
+                var workbook = WorkbookText(await (await host.Client.GetAsync("api/CopilotAdoption/export/workbook")).Content.ReadAsByteArrayAsync());
+                StringAssert.Contains(workbook, "leadership.licensedLeaders");
+                Assert.IsFalse(workbook.Contains("Contoso Leadership"), "The group's name is configuration, not report content.");
+            }
+            Assert.IsNull(analysis.Summary.LeadershipComparison, "The cached summary must not be modified.");
+        }
+
+        [TestMethod]
+        public async Task CopilotAdoptionLeadership_SmallCohortIsSuppressedEvenForSeePii()
+        {
+            using (var host = CopilotAdoptionHost(SmallAnalysis(), PortalTestHost.SignedIn(PortalRoles.SeePii), await LeadershipProvider(6)))
+            {
+                var leadership = (JObject)JObject.Parse(await host.Client.GetStringAsync("api/CopilotAdoption/summary"))["leadershipComparison"];
+                Assert.AreEqual("suppressed", (string)leadership["status"]);
+                Assert.AreEqual(JTokenType.Null, leadership["licensedLeaders"].Type);
+                Assert.AreEqual(JTokenType.Null, leadership["leaderAdoptionRatePct"].Type);
+            }
+        }
+
+        [TestMethod]
+        public async Task CopilotAdoptionLeadership_SmallComplementIsSuppressedEvenForSeePii()
+        {
+            // 12 leaders of 15 licensed users: the cohort clears the minimum, but tenant minus leaders would describe 3 people.
+            using (var host = CopilotAdoptionHost(SmallAnalysis(15), PortalTestHost.SignedIn(PortalRoles.SeePii, PortalRoles.Administration), await LeadershipProvider(12)))
+            {
+                var leadership = (JObject)JObject.Parse(await host.Client.GetStringAsync("api/CopilotAdoption/summary"))["leadershipComparison"];
+                Assert.AreEqual("suppressed", (string)leadership["status"]);
+                Assert.AreEqual("complementTooSmall", (string)leadership["reason"]);
+                foreach (var field in new[] { "licensedLeaders", "activeLeaders", "habitualLeaders", "leaderAdoptionRatePct", "tenantAdoptionRatePct", "adoptionGapPts", "scoreGap" })
+                    Assert.AreEqual(JTokenType.Null, leadership[field].Type, field);
+
+                var workbook = WorkbookText(await (await host.Client.GetAsync("api/CopilotAdoption/export/workbook")).Content.ReadAsByteArrayAsync());
+                StringAssert.Contains(workbook, "fewer than 10 licensed users are outside the leadership group");
+                Assert.IsFalse(workbook.Contains("Contoso Leadership"));
+            }
+        }
+
+        [TestMethod]
+        public async Task CopilotAdoptionLeadership_NarrowedViewIsNotCompared()
+        {
+            using (var host = CopilotAdoptionHost(SmallAnalysis(12), PortalTestHost.SignedIn(PortalRoles.SeePii), await LeadershipProvider(12)))
+            {
+                var leadership = (JObject)JObject.Parse(await host.Client.GetStringAsync("api/CopilotAdoption/summary?emailDomain=contoso.com"))["leadershipComparison"];
+                Assert.AreEqual("scopedView", (string)leadership["status"]);
+                Assert.AreEqual(JTokenType.Null, leadership["licensedLeaders"].Type);
+            }
+        }
+
+        [TestMethod]
+        public async Task CopilotAdoptionLeadership_IsNotConfiguredByDefault()
+        {
+            using (var host = CopilotAdoptionHost(SmallAnalysis(), PortalTestHost.SignedIn()))
+            {
+                var leadership = JObject.Parse(await host.Client.GetStringAsync("api/CopilotAdoption/summary"))["leadershipComparison"];
+                Assert.AreEqual("notConfigured", (string)leadership["status"]);
+            }
         }
 
         /// <summary>Six seat holders reporting to one synthetic manager - enough to clear the roll-up's minimum.</summary>
-        private static CopilotAdoptionAnalysis SmallAnalysis()
+        private static CopilotAdoptionAnalysis SmallAnalysis(int people = 6)
         {
             var now = new DateTime(2026, 8, 23, 0, 0, 0, DateTimeKind.Utc);
             var options = CopilotAdoptionOptions.Default;
@@ -1055,7 +1165,7 @@ namespace Tests.UnitTests
             summary.DataSources.AuditAvailable = true;
             summary.DataSources.UserMetadataAvailable = true;
 
-            for (var i = 0; i < 6; i++)
+            for (var i = 0; i < people; i++)
             {
                 analysis.LicensedUsers.Add(CopilotAdoptionScoring.Score(
                     new LicensedUserUsageRow
@@ -1107,7 +1217,7 @@ namespace Tests.UnitTests
             private readonly CopilotAdoptionAnalysis _analysis;
             internal FixedRunner(CopilotAdoptionAnalysis analysis) { _analysis = analysis; }
 
-            public Task<CopilotAdoptionAnalysis> RunAsync(int windowDays, DateTime? fromUtc, DateTime? toUtc, DateTime? toExclusiveUtc, bool usesExplicitDates, List<int> seatLicenceTypeIds, ICopilotAdoptionRunTelemetry telemetry)
+            public Task<CopilotAdoptionAnalysis> RunAsync(int windowDays, DateTime? fromUtc, DateTime? toUtc, DateTime? toExclusiveUtc, bool usesExplicitDates, List<int> seatLicenceTypeIds, Common.Entities.CopilotAdoption.CopilotAdoptionEffectiveScoreSettings scoreSettings, ICopilotAdoptionRunTelemetry telemetry)
                 => Task.FromResult(_analysis);
         }
 

@@ -378,6 +378,11 @@ namespace WebJob.Office365ActivityImporter
                 // others. The phase handles its own errors and cadence gating.
                 await tasks.ImportAgentCosts();
 
+                // The Copilot Adoption leadership cohort (#654): re-reads the configured group's direct members when due
+                // (6 hours after a success, 1 hour after a failure). Off unless an administrator named a group; bounded
+                // to about eleven Graph calls; never throws.
+                await tasks.RefreshLeadershipCohortSafely();
+
                 // Deferred Graph sections: the once-a-day usage-report phase (issue #706). It used to run inside
                 // GetGraphTeamsAndUserData above, so on the cycle it was due the audit import (Copilot, Power
                 // Platform, DLP, SharePoint), the Copilot repairs and the agent-cost import all waited for it - for

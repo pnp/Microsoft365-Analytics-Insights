@@ -10,9 +10,11 @@ import {
   Globe20Regular,
   Home20Regular,
   Money20Regular,
+  Options20Regular,
   Organization20Regular,
   PeopleCommunity20Regular,
   PeopleAudience20Regular,
+  PeopleStar20Regular,
   PeopleSync20Regular,
   PeopleTeam20Regular,
   Pulse20Regular,
@@ -44,10 +46,14 @@ const UserImportPage = lazyWithReload(() => import('./pages/UserImportPage'));
 const UserScopePage = lazyWithReload(() => import('./pages/UserScopePage'));
 const GlobalFilterPage = lazyWithReload(() => import('./pages/GlobalFilterPage'));
 const CopilotAuditBackfillPage = lazyWithReload(() => import('./pages/CopilotAuditBackfillPage'));
+const LeadershipCohortPage = lazyWithReload(() => import('./pages/LeadershipCohortPage'));
+const CopilotAdoptionSettingsPage = lazyWithReload(() => import('./pages/CopilotAdoptionSettingsPage'));
 const ProfilingStatusPage = lazyWithReload(() => import('./pages/ProfilingStatusPage'));
 const InstallLogPage = lazyWithReload(() => import('./pages/InstallLogPage'));
 const HealthPage = lazyWithReload(() => import('./pages/HealthPage'));
 const ServiceConfigurationPage = lazyWithReload(() => import('./pages/ServiceConfigurationPage'));
+const PromptCategoriesPage = lazyWithReload(() => import('./pages/PromptCategoriesPage'));
+const Agent365CatalogPage = lazyWithReload(() => import('./pages/Agent365CatalogPage'));
 
 /**
  * The portal is split into two areas so the two audiences it serves don't have to wade
@@ -252,11 +258,43 @@ export const ROUTES: PortalRoute[] = [
   },
   {
     area: 'admin',
+    path: '/admin/leadership-cohort',
+    labelKey: 'app.route.leadershipCohort',
+    groupKey: 'app.navGroup.manage',
+    icon: <PeopleStar20Regular />,
+    element: <LeadershipCohortPage />,
+  },
+  {
+    area: 'admin',
+    path: '/admin/copilot-adoption-settings',
+    labelKey: 'app.route.copilotAdoptionSettings',
+    groupKey: 'app.navGroup.manage',
+    icon: <Options20Regular />,
+    element: <CopilotAdoptionSettingsPage />,
+  },
+  {
+    area: 'admin',
+    path: '/admin/prompt-categories',
+    labelKey: 'promptCategories.title',
+    groupKey: 'app.navGroup.manage',
+    icon: <Sparkle20Regular />,
+    element: <PromptCategoriesPage />,
+  },
+  {
+    area: 'admin',
     path: '/admin/configuration',
     labelKey: 'app.route.configuration',
     groupKey: 'app.navGroup.manage',
     icon: <Settings20Regular />,
     element: <ServiceConfigurationPage />,
+  },
+  {
+    area: 'admin',
+    path: '/admin/agent365-catalog',
+    labelKey: 'app.route.agent365Catalog',
+    groupKey: 'app.navGroup.manage',
+    icon: <DataUsage20Regular />,
+    element: <Agent365CatalogPage />,
   },
   {
     area: 'admin',

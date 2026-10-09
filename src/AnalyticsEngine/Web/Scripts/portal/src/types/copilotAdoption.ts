@@ -7,6 +7,8 @@
 import type { ReportCategory, ReportSeries } from './reports';
 import type { UserFilterEcho } from './userFilter';
 import type { GlobalFilterEcho } from './globalFilter';
+import type { LeadershipAdoptionComparison } from './leadershipCohort';
+import type { CopilotAdoptionScoreSettingsInfo } from './copilotAdoptionSettings';
 
 /** Which parts of the adoption tool this deployment can show. */
 export interface CopilotAdoptionAvailability {
@@ -137,6 +139,8 @@ export interface CopilotAdoptionOptions {
   championScore: number;
   establishedScore: number;
   developingScore: number;
+  /** Whether an administrator customised the weights or band thresholds above. Absent from older servers. */
+  scoreSettings?: CopilotAdoptionScoreSettingsInfo;
 
   habitBucketNormalisationDays: number;
   habitModerateMinDays: number;
@@ -302,6 +306,14 @@ export interface AgentUsageRow {
   health: AgentHealth;
   healthName: string;
   healthReason: string;
+  /** People who used it in the reporting period - the denominator of the home share (#647). */
+  windowUsers?: number | null;
+  /** Departments with at least one of its users in the period. Null when not measured. */
+  departments?: number | null;
+  /** The department most of its users are in; null when fewer than minSeatsPerSegment of them are. Tenant data. */
+  homeDepartment?: string | null;
+  /** The share of its period users in the home department, 0-100. */
+  homeDepartmentSharePct?: number | null;
 }
 
 /** The agent estate at a glance. */
@@ -323,6 +335,37 @@ export interface AgentEstateSummary {
   usageByDepartment: ReportCategory[];
   usageByAgent: ReportCategory[];
   agents: AgentUsageRow[];
+  /**
+   * Which agents `growth` counts: 'customerBuilt' (the Work Trend Index's scope), or 'allAgents'. A key, so
+   * the page words it. Optional only so fixtures written before #645 still type-check.
+   */
+  growthScope?: string;
+  /** The first Copilot interaction the audit log holds - what explains a blank year-ago window. */
+  growthAuditHistoryStartUtc?: string | null;
+  /** Agent use over consecutive closed 28-day windows, most recent first (#645). Empty when not computed. */
+  growth?: AgentGrowthWindow[];
+}
+
+/**
+ * One closed 28-day window of the agent growth series. Every figure is null when the window was not
+ * measured - never zero - so "not measured" and "nobody used an agent" stay distinguishable.
+ */
+export interface AgentGrowthWindow {
+  /** 0 for the most recent closed window, 13 for the same 28 days a year earlier. */
+  windowsAgo: number;
+  fromUtc: string;
+  toUtc: string;
+  activeAgents: number | null;
+  /**
+   * Agents of unknown origin used in the window, left out of every other figure because nobody can say who
+   * made them: the figures are a floor by this much. Optional only so fixtures written before it still type-check.
+   */
+  unknownOriginAgents?: number | null;
+  agentUsers: number | null;
+  agentInteractions: number | null;
+  interactionsPerAgentUser: number | null;
+  /** Separate evidence of autonomous runs: Copilot Studio agents with billed consumption. Never added to activeAgents. */
+  copilotStudioBilledAgents: number | null;
 }
 
 /**
@@ -386,6 +429,19 @@ export interface AdoptionCombinedSegmentRow {
   unlicensedActiveUsers: number;
   interactionsPerUnlicensedUser: number;
   unlicensedAgentUserPct: number;
+  /**
+   * Agent breadth and depth (#646) over the department's active Copilot users seen in the audit log, and its
+   * Copilot Studio builders (#647). Each is null when it could not be measured, and absent from a server
+   * that predates it.
+   */
+  agentActiveUsers?: number | null;
+  agentUsers?: number | null;
+  agentUserPct?: number | null;
+  distinctAgents?: number | null;
+  agentsPer100ActiveUsers?: number | null;
+  agentInteractions?: number | null;
+  interactionsPerActiveAgent?: number | null;
+  agentBuilders?: number | null;
 }
 
 /** Adoption, reclaim and next-action counts for one accountable unit. */
@@ -619,6 +675,8 @@ export interface CopilotAdoptionSummary extends Partial<ManagerModellingFigures>
   accountabilityDimension: string | null;
   accountabilityDimensionLabel: string | null;
   accountabilityRollup: AccountabilityRollupRow[];
+  /** The leadership group's aggregate comparison with the tenant (#654). Absent from an older server. */
+  leadershipComparison?: LeadershipAdoptionComparison | null;
   usageByApp: ReportCategory[];
   opportunityByDepartment: ReportCategory[];
   weeklyTrend: ReportSeries[];
@@ -635,6 +693,28 @@ export interface CopilotAdoptionSummary extends Partial<ManagerModellingFigures>
   topAgentUsers?: AgentUserRow[];
   /** The people that list was picked from stopped at the server's row cap, so a filtered view's list may be short. */
   topAgentUsersCapped?: boolean;
+  /**
+   * Which agents the breadth, depth and reach figures count (#646, #647): a stable key the page words in
+   * the reader's language - see `agentFiguresScopeText`.
+   */
+  agentFiguresScope?: string | null;
+  /** Tenant-level agent breadth and depth (#646), builders and reach (#647). Null when not measured. */
+  agentBreadthDepartments?: number | null;
+  agentBreadthDepartmentsWithAgentUsers?: number | null;
+  agentBreadthDepartmentPct?: number | null;
+  agentActiveUsers?: number | null;
+  agentBreadthAgentUsers?: number | null;
+  agentBreadthUserPct?: number | null;
+  agentDepthDistinctAgents?: number | null;
+  agentDepthAgentsPer100ActiveUsers?: number | null;
+  agentDepthInteractions?: number | null;
+  agentDepthInteractionsPerActiveAgent?: number | null;
+  /** Agents of unknown origin the active users used in the period - not counted, so the figures above are a floor. */
+  agentUnknownOriginAgents?: number | null;
+  agentBuilders?: number | null;
+  agentsInThreeOrMoreDepartments?: number | null;
+  /** Inventory agents of unknown origin used in three or more departments - not counted in the figure above. */
+  agentsInThreeOrMoreDepartmentsUnknownOrigin?: number | null;
   unlicensed: UnlicensedPopulationSummary;
 
   options: CopilotAdoptionOptions;
@@ -885,11 +965,10 @@ export interface CoworkSegmentRow {
 }
 
 /**
- * The tenant's Copilot Credit position.
+ * The tenant's Copilot Studio credit-capacity snapshot.
  *
- * This is the SHARED pool, not Cowork-only spend: Cowork draws on it, which makes it valid rollout
- * headroom, but Copilot Studio and other credit-billed workloads draw on the same pool and Microsoft
- * publishes no way to separate them. Every label built from this must say so.
+ * This is not Cowork funding, usage or spend. Manage Cowork billing separately in the Microsoft 365
+ * admin center under Copilot > Cost management.
  */
 export interface CoworkCreditPosition {
   available: boolean;

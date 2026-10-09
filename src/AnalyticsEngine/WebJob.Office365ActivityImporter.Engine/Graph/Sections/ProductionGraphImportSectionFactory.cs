@@ -1,4 +1,5 @@
 ﻿using Common.Entities;
+using Common.Entities.Agent365;
 using Common.Entities.Config;
 using Common.Entities.Entities.UsageReports;
 using Common.Entities.UserScope;
@@ -10,6 +11,7 @@ using System.Collections.Generic;
 using System.Data.Entity;
 using System.Threading.Tasks;
 using WebJob.Office365ActivityImporter.Engine.Graph.Copilot.InteractionHistory;
+using WebJob.Office365ActivityImporter.Engine.Graph.Agent365;
 using WebJob.Office365ActivityImporter.Engine.Graph.Email;
 using WebJob.Office365ActivityImporter.Engine.Graph.Teams;
 using WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Copilot;
@@ -43,6 +45,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Sections
         public const string GraphUsersMetadataLastImportedKey = Common.Entities.State.UserImportCheckpointKeys.LastCompleted;
         public const string GraphTeamsLastImportedKey = "GraphTeamsLastImported";
         public const string GraphCopilotUsageReportsLastImportedKey = "GraphCopilotUsageReportsLastImported";
+        public const string Agent365PackageCatalogLastImportedKey = "Agent365PackageCatalogLastImported";
         public const string GraphCopilotUsageReportUserCountTrendLastImportedKey = GraphCopilotUsageReportsLastImportedKey + ":UserCountTrend";
         public const string GraphCopilotUsageReportUserCountSummaryLastImportedKey = GraphCopilotUsageReportsLastImportedKey + ":UserCountSummary";
         public const string GraphCopilotUsageReportUsageUserDetailLastImportedKey = GraphCopilotUsageReportsLastImportedKey + ":UsageUserDetail";
@@ -142,6 +145,22 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Sections
                     _settings.GraphCopilotUsageReportsIntervalHours,
                     s => s.GraphCopilotUsageReports,
                     () => ImportCopilotUsageReports(httpClient)),
+
+                DelegateGraphImportSection.Gated(
+                    "Agent 365 package catalog",
+                    "Skipping Agent 365 package catalog import",
+                    Agent365PackageCatalogLastImportedKey,
+                    24,
+                    s => s.Agent365PackageCatalog,
+                    async () =>
+                    {
+                        var importer = new Agent365PackageCatalogImporter(
+                            _graphAppIndentityOAuthContext,
+                            httpClient,
+                            new Agent365PackageCatalogStore(_dbContextFactory),
+                            _logger);
+                        return await importer.ImportAsync();
+                    }),
 
                 DelegateGraphImportSection.Gated(
                     "Teams import",

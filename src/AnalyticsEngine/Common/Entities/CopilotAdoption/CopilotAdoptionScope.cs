@@ -169,7 +169,7 @@ namespace Common.Entities.CopilotAdoption
         /// </summary>
         public const string PurchasedSeats = "purchasedSeats";
 
-        /// <summary>The Cowork credit balance. Entitlement and consumption are tenant-level.</summary>
+        /// <summary>The Copilot Studio credit-capacity snapshot; it is not Cowork funding or headroom.</summary>
         public const string CoworkCredits = "coworkCredits";
 
         /// <summary>
@@ -238,6 +238,18 @@ namespace Common.Entities.CopilotAdoption
                 // view lists its own heaviest agent users. The cap was tenant-wide, so a slice inherits it.
                 AgentUsers = Narrow(analysis.AgentUsers, u => u.UserId, u => u.EmailDomain, scope),
                 AgentUsersCapped = analysis.AgentUsersCapped,
+
+                // The (agent, person) pairs are shared, not narrowed: agent breadth and depth only count the
+                // people this slice's own licensed and unlicensed rows hold, which narrows them already. The
+                // inventory's reach is tenant-wide and computed once, so a slice is not given its pairs.
+                AgentReachRows = analysis.AgentReachRows,
+                AgentInventoryReachRows = null,
+                AgentReachDepartments = analysis.AgentReachDepartments,
+                AgentOrigins = analysis.AgentOrigins,
+
+                // People, so narrowed - and only ever counted.
+                AgentBuilders = Narrow(analysis.AgentBuilders, b => b.UserId, b => b.EmailDomain, scope),
+                AgentBuildersAssessed = analysis.AgentBuildersAssessed,
 
                 LicensedUsers = licensedUsers,
                 // Like the opportunity cap below: the licensed-user query's cap was applied to the whole
@@ -508,6 +520,12 @@ namespace Common.Entities.CopilotAdoption
             scoped.MicrosoftReportVersion = tenant.MicrosoftReportVersion;
             scoped.MicrosoftReportPromptsSubmitted = tenant.MicrosoftReportPromptsSubmitted;
             scoped.MicrosoftReportAveragePromptsPerActiveUser = tenant.MicrosoftReportAveragePromptsPerActiveUser;
+
+            // The reach count is a statement about that same inventory (#647), so it travels with it. The
+            // agent breadth and depth figures beside it are NOT carried: they count people, and the scoring
+            // pass has already narrowed them to this view's own.
+            scoped.AgentsInThreeOrMoreDepartments = tenant.AgentsInThreeOrMoreDepartments;
+            scoped.AgentsInThreeOrMoreDepartmentsUnknownOrigin = tenant.AgentsInThreeOrMoreDepartmentsUnknownOrigin;
 
             scoped.UnscopedSections = new List<string>
             {

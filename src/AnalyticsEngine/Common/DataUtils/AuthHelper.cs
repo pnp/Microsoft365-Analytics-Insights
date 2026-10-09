@@ -4,6 +4,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Identity.Client;
 using System;
 using System.Security.Cryptography.X509Certificates;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace DataUtils
@@ -37,15 +38,17 @@ namespace DataUtils
             return app;
         }
 
-        public static async Task<X509Certificate2> RetrieveKeyVaultCertificate(string certName, string keyVaultUrl, ILogger logger)
+        public static async Task<X509Certificate2> RetrieveKeyVaultCertificate(string certName, string keyVaultUrl, ILogger logger,
+            CancellationToken cancellationToken = default)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             if (_cachedCert == null)
             {
                 logger.LogInformation($"Retrieving certificate {certName} from KeyVault {keyVaultUrl}");
                 var client = new CertificateClient(vaultUri: new Uri(keyVaultUrl), credential: new DefaultAzureCredential());
 
                 // Get private key
-                var secret = await client.DownloadCertificateAsync(certName);
+                var secret = await client.DownloadCertificateAsync(certName, cancellationToken: cancellationToken);
                 if (secret.Value != null)
                 {
                     _cachedCert = new X509Certificate2(secret.Value);
