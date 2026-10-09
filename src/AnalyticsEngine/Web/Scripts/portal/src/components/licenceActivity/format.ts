@@ -46,9 +46,24 @@ export function formatMaybeCount(value: number | null | undefined, unknown: stri
  * `toFixed` would always produce a full stop, which in Spanish is the thousands separator.
  */
 export function formatPct(value: number): string {
+  return `${formatScore(value)}%`;
+}
+
+/** An adoption score (0-100) to one decimal place, dropping a trailing ".0", in the reader's locale. */
+export function formatScore(value: number): string {
   const rounded = Math.round(value * 10) / 10;
   const digits = rounded % 1 === 0 ? 0 : 1;
-  return `${formatNumber(rounded, { minimumFractionDigits: digits, maximumFractionDigits: digits })}%`;
+  return formatNumber(rounded, { minimumFractionDigits: digits, maximumFractionDigits: digits });
+}
+
+/**
+ * A signed difference in percentage points, e.g. 4.5 -> "+4.5", -3 -> "−3", 0 -> "0". The minus is the
+ * typographic one so it lines up with the plus in a column of figures.
+ */
+export function formatPoints(value: number): string {
+  const rounded = Math.round(value * 10) / 10;
+  if (rounded === 0) return formatScore(0);
+  return `${rounded > 0 ? '+' : '\u2212'}${formatScore(Math.abs(rounded))}`;
 }
 
 /**

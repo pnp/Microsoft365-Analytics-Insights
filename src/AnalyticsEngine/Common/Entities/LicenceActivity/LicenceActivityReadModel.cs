@@ -234,6 +234,23 @@ namespace Common.Entities.LicenceActivity
                 Coverage = _coverage.Select(CloneCoverage).ToList()
             };
 
+            // The baseline every licence is compared with: each person holding any licence, counted once.
+            var everyone = NewDistributions();
+            var everyoneScore = new ScoreAccumulator();
+            for (var index = 0; index < _users.Length; index++)
+            {
+                if ((index & 4095) == 0) cancellationToken.ThrowIfCancellationRequested();
+                if (!included[index]) continue;
+                AddBands(everyone, index);
+                AddScore(ref everyoneScore, index);
+            }
+            overview.AllLicences = new LicenceActivityAllLicences
+            {
+                AssignedUsers = includedCount,
+                AdoptionScore = everyoneScore.Score,
+                Workloads = ToDistributions(everyone, includedCount)
+            };
+
             foreach (var licence in _licences)
             {
                 cancellationToken.ThrowIfCancellationRequested();
@@ -244,6 +261,7 @@ namespace Common.Entities.LicenceActivity
                     SkuId = licence.SkuId
                 };
                 var distributions = NewDistributions();
+                var score = new ScoreAccumulator();
                 int[] members;
                 if (_membersByLicence.TryGetValue(licence.LicenceTypeId, out members))
                 {
@@ -252,8 +270,10 @@ namespace Common.Entities.LicenceActivity
                         if (!included[user]) continue;
                         result.AssignedUsers++;
                         AddBands(distributions, user);
+                        AddScore(ref score, user);
                     }
                 }
+                result.AdoptionScore = score.Score;
                 result.Workloads = ToDistributions(distributions, result.AssignedUsers);
                 overview.Licences.Add(result);
             }
@@ -297,20 +317,24 @@ namespace Common.Entities.LicenceActivity
                 OverviewId = overview.SnapshotId,
                 Query = query
             };
-            if (!query.LicenceTypeId.HasValue)
-                throw new ArgumentException("A licenceTypeId is required for individual users.", nameof(query));
-            if (!overview.Licences.Any(licence => licence.LicenceTypeId == query.LicenceTypeId.Value))
-                throw new ArgumentException("The selected licence is not present in this overview.", nameof(query));
 
-            int[] members;
-            int licenceSlot;
-            if (!_membersByLicence.TryGetValue(query.LicenceTypeId.Value, out members)
-                || !_licenceSlotById.TryGetValue(query.LicenceTypeId.Value, out licenceSlot))
-                throw new ArgumentException("The selected licence is not present in this read model.", nameof(query));
+            // No licence means everyone holding any licence: the champions and the least active across the
+            // whole licensed population, whichever licence they hold.
+            int[] members = null;
+            var licenceSlot = -1;
+            if (query.LicenceTypeId.HasValue)
+            {
+                if (!overview.Licences.Any(licence => licence.LicenceTypeId == query.LicenceTypeId.Value))
+                    throw new ArgumentException("The selected licence is not present in this overview.", nameof(query));
+                if (!_membersByLicence.TryGetValue(query.LicenceTypeId.Value, out members)
+                    || !_licenceSlotById.TryGetValue(query.LicenceTypeId.Value, out licenceSlot))
+                    throw new ArgumentException("The selected licence is not present in this read model.", nameof(query));
+            }
 
             var workload = WorkloadIndex(query.Workload);
             var visited = 0;
-            foreach (var index in members)
+            var candidates = members ?? AllEligible();
+            foreach (var index in candidates)
             {
                 if ((visited++ & 4095) == 0) cancellationToken.ThrowIfCancellationRequested();
                 var user = _users[index];
@@ -325,17 +349,14 @@ namespace Common.Entities.LicenceActivity
             }
 
             var most = Pick(
-                GetRanking(workload, RankingKind.Most, null, null, cancellationToken)
-                    .ByLicence[licenceSlot],
+                GetRanking(workload, RankingKind.Most, null, null, cancellationToken).For(licenceSlot),
                 query, 0, query.Top, cancellationToken);
             var least = Pick(
-                GetRanking(workload, RankingKind.Least, null, null, cancellationToken)
-                    .ByLicence[licenceSlot],
+                GetRanking(workload, RankingKind.Least, null, null, cancellationToken).For(licenceSlot),
                 query, 0, query.Top, cancellationToken);
             var offset = (query.Page - 1) * query.PageSize;
             var page = Pick(
-                GetRanking(workload, RankingKind.Page, query.Sort, query.Direction, cancellationToken)
-                    .ByLicence[licenceSlot],
+                GetRanking(workload, RankingKind.Page, query.Sort, query.Direction, cancellationToken).For(licenceSlot),
                 query, offset, query.PageSize, cancellationToken);
 
             result.MostActive = most.Select(MaterializeUser).ToList();
@@ -480,7 +501,14 @@ namespace Common.Entities.LicenceActivity
                     byLicence[slot][counts[slot]++] = user;
                 }
             }
-            return new RankingIndex(byLicence);
+            return new RankingIndex(byLicence, built);
+        }
+
+        /// <summary>Every person holding any licence, as read-model indexes in ascending order.</summary>
+        private IEnumerable<int> AllEligible()
+        {
+            for (var index = 0; index < _users.Length; index++)
+                if (_eligible[index]) yield return index;
         }
 
         private List<int> Pick(
@@ -619,6 +647,29 @@ namespace Common.Entities.LicenceActivity
         {
             for (var workload = 0; workload < distributions.Length; workload++)
                 distributions[workload].Add(_bands[workload][user]);
+        }
+
+        /// <summary>
+        /// Adds one person's measured weeks to an adoption score. Only services whose activity level is known
+        /// count: a level is known exactly when every expected week was measured, so the person's measured
+        /// weeks for that service are the coverage's expected samples. Unknown services are left out rather
+        /// than counted as unused - the same rule as the distributions.
+        /// </summary>
+        private void AddScore(ref ScoreAccumulator score, int user)
+        {
+            for (var workload = 0; workload < _bands.Length; workload++)
+            {
+                if (_bands[workload][user] == UnknownBand) continue;
+                score.ActiveWeeks += _rankValues[workload][user].ActiveSamples;
+                score.MeasuredWeeks += _coverage[workload].ExpectedSamples;
+            }
+        }
+
+        private struct ScoreAccumulator
+        {
+            internal long ActiveWeeks;
+            internal long MeasuredWeeks;
+            internal double? Score => LicenceActivityRules.Score(ActiveWeeks, MeasuredWeeks);
         }
 
         private static DistributionAccumulator[] NewDistributions()
@@ -829,12 +880,19 @@ namespace Common.Entities.LicenceActivity
 
         private sealed class RankingIndex
         {
-            internal RankingIndex(int[][] byLicence)
+            internal RankingIndex(int[][] byLicence, int[] all)
             {
                 ByLicence = byLicence;
+                All = all;
             }
 
             internal int[][] ByLicence { get; }
+
+            /// <summary>The same ordering over everyone holding any licence.</summary>
+            internal int[] All { get; }
+
+            /// <summary>The ordering for one licence slot, or for everyone when the slot is negative.</summary>
+            internal int[] For(int licenceSlot) => licenceSlot < 0 ? All : ByLicence[licenceSlot];
         }
 
         private sealed class RankingComparer : IComparer<int>

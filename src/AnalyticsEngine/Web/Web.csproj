@@ -232,6 +232,7 @@
     <Compile Include="AllowCorsForOrgUrlsAttribute.cs" />
     <Compile Include="RequireSameOriginXhrAttribute.cs" />
     <Compile Include="App_Start\DelegatedGraphConsent.cs" />
+    <Compile Include="App_Start\AgentCostConsent.cs" />
     <Compile Include="App_Start\DelegatedGraphTokenCapture.cs" />
     <Compile Include="App_Start\FilterConfig.cs" />
     <Compile Include="App_Start\RouteConfig.cs" />
@@ -239,6 +240,8 @@
     <Compile Include="App_Start\WebApiConfig.cs" />
     <Compile Include="App_Start\WebExceptionTelemetry.cs" />
     <Compile Include="Controllers\AccountController.cs" />
+    <Compile Include="Controllers\AgentCostConnectionAPIController.cs" />
+    <Compile Include="Controllers\ActivityAnalysisAPIController.cs" />
     <Compile Include="Controllers\BaseAPIController.cs" />
     <Compile Include="Controllers\CopilotAuditBackfillAPIController.cs" />
     <Compile Include="Controllers\CopilotAdoptionAPIController.cs" />
@@ -290,7 +293,9 @@
     <Compile Include="Models\AuthTeamRequest.cs" />
     <Compile Include="Models\LicenceActivity\LicenceActivitySnapshotCache.cs" />
     <Compile Include="Models\LicenceActivity\LicenceActivityTelemetry.cs" />
+    <Compile Include="Models\ActivityAnalysis\ActivityAnalysisTelemetry.cs" />
     <Compile Include="Models\CopilotAdoption\CopilotAdoptionAnalysisCoordinator.cs" />
+    <Compile Include="Models\Dlp\DlpGovernanceModels.cs" />
     <Compile Include="Models\Dlp\DlpModels.cs" />
     <Compile Include="Models\CopilotAdoption\CopilotAdoptionTelemetry.cs" />
     <Compile Include="Models\InstallLogModels.cs" />

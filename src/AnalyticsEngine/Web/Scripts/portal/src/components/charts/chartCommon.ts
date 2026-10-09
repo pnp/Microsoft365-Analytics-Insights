@@ -41,6 +41,39 @@ export function seriesColor(i: number): string {
   return CHART_PALETTE[i % CHART_PALETTE.length];
 }
 
+/**
+ * A longer palette for line charts that can carry many series - the Activity analysis page can plot
+ * every one of its 58 metrics at once. It starts with `CHART_PALETTE`, so a chart of eight series or
+ * fewer looks exactly as it did; the rest are further Fluent-family hues, chosen to stay apart from
+ * their neighbours on the light theme.
+ */
+export const LINE_PALETTE = [
+  ...CHART_PALETTE,
+  '#e3008c', // magenta
+  '#00b7c3', // cyan
+  '#498205', // olive
+  '#a4262c', // cranberry
+  '#4f6bed', // cornflower
+  '#8e562e', // brown
+  '#7a7574', // warm grey
+  '#004e8c', // navy
+] as const;
+
+/**
+ * Stroke patterns for the second and later passes through `LINE_PALETTE`: solid, then dashed, short
+ * dashed and dash-dot. Sixteen colours by four patterns tell 64 lines apart, where colour alone would
+ * have repeated after eight.
+ */
+const LINE_DASHES = [undefined, '9 5', '3 3', '10 4 2 4'] as const;
+
+/** Colour and stroke pattern for the line at index i. */
+export function lineSeriesStyle(i: number): { color: string; dash: string | undefined } {
+  return {
+    color: LINE_PALETTE[i % LINE_PALETTE.length],
+    dash: LINE_DASHES[Math.floor(i / LINE_PALETTE.length) % LINE_DASHES.length],
+  };
+}
+
 /** The lighter partner of {@link seriesColor}, for the far end of a gradient fill. */
 export function seriesColorLight(i: number): string {
   return CHART_PALETTE_LIGHT[i % CHART_PALETTE_LIGHT.length];

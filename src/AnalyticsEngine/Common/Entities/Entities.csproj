@@ -81,6 +81,14 @@
   <ItemGroup>
     <Compile Include="BaseEntity.cs" />
     <Compile Include="BuildConstants.cs" />
+    <Compile Include="ActivityAnalysis\ActivityAnalysisCache.cs" />
+    <Compile Include="ActivityAnalysis\ActivityAnalysisEvaluation.cs" />
+    <Compile Include="ActivityAnalysis\ActivityAnalysisMetrics.cs" />
+    <Compile Include="ActivityAnalysis\ActivityAnalysisModels.cs" />
+    <Compile Include="ActivityAnalysis\ActivityAnalysisQuery.cs" />
+    <Compile Include="ActivityAnalysis\ActivityAnalysisReadModel.cs" />
+    <Compile Include="ActivityAnalysis\ActivityAnalysisSql.cs" />
+    <Compile Include="ActivityAnalysis\SqlActivityAnalysisSource.cs" />
     <Compile Include="LicenceActivity\ILicenceActivityStore.cs" />
     <Compile Include="LicenceActivity\LicenceActivityModels.cs" />
     <Compile Include="LicenceActivity\LicenceActivityQuery.cs" />
@@ -589,6 +597,9 @@
     <Compile Include="State\StateStore.cs" />
     <Compile Include="State\StorageTableClientFactory.cs" />
     <Compile Include="State\TeamsTokenStore.cs" />
+    <Compile Include="State\AgentCostConnectionStore.cs" />
+    <Compile Include="State\AgentCostDelegatedTokenProvider.cs" />
+    <Compile Include="State\AgentCostTokenProtection.cs" />
     <Compile Include="State\UserImportCheckpointKeys.cs" />
     <Compile Include="AnalyticsEntitiesContext.cs" />
     <Compile Include="Sql\AzureSqlAccessTokenInterceptor.cs" />

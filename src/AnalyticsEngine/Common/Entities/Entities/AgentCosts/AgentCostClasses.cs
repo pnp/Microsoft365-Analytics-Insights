@@ -126,13 +126,18 @@ namespace Common.Entities.Entities.AgentCosts
         public decimal? NonBilledCredits { get; set; }
 
         /// <summary>
-        /// How many distinct users contributed to this slice. A <b>count only</b> - the API never returns who
-        /// they were. Null when the caller did not request the users field or the API omitted it.
+        /// How many distinct users contributed to this slice: the number of different users whose per-user
+        /// consumption was summed into it. Null when no user contributed.
         /// </summary>
         [Column("distinct_users")]
         public int? DistinctUsers { get; set; }
 
-        /// <summary>When Microsoft last recalculated this row, if reported.</summary>
+        /// <summary>
+        /// No longer populated. It was Microsoft's own "last recalculated" stamp from the tenant-wide per-agent
+        /// route, which only Microsoft's admin center may call; the per-user route it is rebuilt from does not
+        /// carry one. The column stays (dropping it would need a migration for no benefit) and is always null for
+        /// new rows.
+        /// </summary>
         [Column("last_refreshed_utc")]
         public DateTime? LastRefreshedUtc { get; set; }
 
@@ -485,5 +490,12 @@ namespace Common.Entities.Entities.AgentCosts
         public const string CopilotStudioCapacity = "CopilotStudioCapacity";
         public const string CopilotStudioUserCredits = "CopilotStudioUserCredits";
         public const string AzureCostManagement = "AzureCostManagement";
+
+        /// <summary>
+        /// Stored in an import log's <c>Error</c> instead of a message when consumption was not attempted because
+        /// no delegated administrator connection exists. Read by the report store; equals the stable key the
+        /// portal translates.
+        /// </summary>
+        public const string ConnectionRequired = "agentCosts.import.connectionRequired";
     }
 }

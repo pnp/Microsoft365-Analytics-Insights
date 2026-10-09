@@ -381,15 +381,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 var batchCount = Math.Min(batchSize, insertedUserUpns.Count - batchStart);
                 var batchUpns = insertedUserUpns.GetRange(batchStart, batchCount);
 
-                // Load batch of newly inserted users from database WITH TRACKING for updates.
-                // No LOWER() on the column - the default code-first collation is case-insensitive
-                // (Latin1_General_CI_AS) so the comparison still matches mixed-case UPNs but the
-                // predicate stays SARGable against the user_name index. At 200k users this turns
-                // a clustered-index scan into an index seek per batch.
-                var batchUsers = await db.users
-                    .Where(u => batchUpns.Contains(u.UserPrincipalName))
-                    .Include(u => u.LicenseLookups)
-                    .ToListAsync();
+                var batchUsers = await new SqlUserLookupStore(db).GetUsersByUpnAsync(batchUpns);
 
                 // Update dbUsersByAadId with TRACKED entities from this batch
                 foreach (var trackedUser in batchUsers)
@@ -412,7 +404,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
 
                 // Update metadata for each user
                 //
-                // Resolve this batch's managers in ONE query first. Without it the manager
+                // Resolve this batch's managers in bulk first. Without it the manager
                 // resolution chain falls through to a per-user database lookup for every manager
                 // that is not already in dbUsersByAadId - which, since that dictionary is seeded
                 // from pre-existing users and then grows a batch at a time, means every manager

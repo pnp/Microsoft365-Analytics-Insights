@@ -38,6 +38,9 @@ namespace Common.Entities.UserFilters
 
         public string StateOrProvince { get; set; }
 
+        /// <summary><c>dbo.users.postalcode</c> - free text from Entra ID, so any script.</summary>
+        public string PostalCode { get; set; }
+
         public string UsageLocation { get; set; }
     }
 
@@ -451,6 +454,7 @@ namespace Common.Entities.UserFilters
             UserFilterDimensions.OfficeLocation,
             UserFilterDimensions.Country,
             UserFilterDimensions.StateOrProvince,
+            UserFilterDimensions.PostalCode,
             UserFilterDimensions.UsageLocation,
             UserFilterDimensions.EmailDomain,
             UserFilterDimensions.UserType,
@@ -506,6 +510,7 @@ namespace Common.Entities.UserFilters
             _text[UserFilterDimensions.OfficeLocation].Append(entry.OfficeLocation);
             _text[UserFilterDimensions.Country].Append(entry.Country);
             _text[UserFilterDimensions.StateOrProvince].Append(entry.StateOrProvince);
+            _text[UserFilterDimensions.PostalCode].Append(entry.PostalCode);
             _text[UserFilterDimensions.UsageLocation].Append(entry.UsageLocation);
             _text[UserFilterDimensions.EmailDomain].Append(CopilotAdoptionEmailDomain.From(entry.UserPrincipalName, entry.Mail));
             _text[UserFilterDimensions.UserType].Append(string.IsNullOrWhiteSpace(entry.UserPrincipalName)

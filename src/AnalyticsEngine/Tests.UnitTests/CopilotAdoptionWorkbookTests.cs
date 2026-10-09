@@ -13,6 +13,7 @@ using System.IO.Packaging;
 using System.Linq;
 using System.Reflection;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Xml.Linq;
 
 namespace Tests.UnitTests
@@ -276,6 +277,12 @@ namespace Tests.UnitTests
             later.Summary.ScoredUsers = earlier.Summary.ScoredUsers + 25;
             later.Summary.AdoptionRatePct = earlier.Summary.AdoptionRatePct + 6.5;
 
+            // #640: a whole nested section measured in one export and missing from the other. Its keys
+            // come from the TYPE, so the later file must still carry every agents.* row - blank - or each
+            // lookup below the first missing row resolves against its neighbour.
+            Assert.IsTrue(earlier.Summary.Agents.KnownAgents > 0, "The control: the earlier export really has an agent estate.");
+            later.Summary.Agents = null;
+
             // Run diagnostics are the one part of the file whose keys legitimately vary with the run -
             // a step only appears if it reported. They live on their own sheet for exactly this reason,
             // and this is the case that proves they stay off Snapshot facts: two runs that timed
@@ -297,6 +304,24 @@ namespace Tests.UnitTests
             CollectionAssert.AreEqual(earlierFacts, laterFacts,
                 "Two exports must carry the same Snapshot fact keys in the same order, whatever the data "
                 + "says. A key that appears in one file and not the other cannot be diffed by lookup.");
+
+            // The nested keys are really there in both, and the missing section reads as unknown rather
+            // than as a measured collapse to zero.
+            var earlierValues = SnapshotFactValues(CopilotAdoptionWorkbook.Build(earlier));
+            var laterValues = SnapshotFactValues(CopilotAdoptionWorkbook.Build(later));
+            var agentKeys = laterFacts.Where(k => k.StartsWith("agents.", StringComparison.Ordinal)).ToList();
+            CollectionAssert.IsSubsetOf(
+                new[] { "agents.activeAgents", "agents.knownAgents", "agents.agentUsers", "agents.healthBreakdown.count", "agents.healthBreakdown.Retire" },
+                agentKeys,
+                "Every agent figure must reach Snapshot facts, in both exports.");
+            Assert.AreEqual(
+                earlier.Summary.Agents.KnownAgents.ToString(CultureInfo.InvariantCulture),
+                earlierValues["agents.knownAgents"]);
+            foreach (var key in agentKeys)
+            {
+                Assert.AreEqual(string.Empty, laterValues[key],
+                    $"'{key}' must be blank when the agent estate is missing - unknown, never zero or 'No'.");
+            }
 
             // The WHOLE key column, not just the cells that happen to match a reflected summary
             // property. Filtering by the expected key list is exactly the blind spot that let the run
@@ -362,28 +387,56 @@ namespace Tests.UnitTests
                 "It must say the settings have to match for the comparison to be fair.");
             StringAssert.Contains(text, "Product build",
                 "It must say the build has to match for the comparison to be fair.");
+            StringAssert.Contains(text, "a key added in a later build has no value in an earlier export",
+                "It must say that a key added by a later build has no value in an earlier file (#640), so a "
+                + "key found in one file only is read as a product change rather than as a change in adoption.");
+            StringAssert.Contains(text, "agents.activeAgents",
+                "It must say how a figure inside a section is keyed.");
+            StringAssert.Contains(text, "Compare-CopilotAdoptionWorkbooks.ps1",
+                "It must point at the script that makes the four checks (#644).");
         }
 
         /// <summary>
-        /// Every scalar measure in the analysis must reach the Snapshot facts sheet.
+        /// Every scalar measure in the analysis must reach the Snapshot facts sheet, at every depth.
         ///
         /// Reflected rather than listed, because a hand-written expectation is precisely what failed
         /// before: twenty-four measures - among them every Cowork usage-report metric - existed in the
         /// summary for months without ever reaching the workbook, and no test noticed because no test
         /// knew they existed. This one cannot be out of date.
+        ///
+        /// Checked against the sheet's own key column rather than the whole workbook's text: a key that
+        /// happened to appear in a sentence on another sheet must not stand in for a missing row.
         /// </summary>
         [TestMethod]
         public void Workbook_SnapshotFactsCarryEveryScalarSummaryMetric()
         {
-            var text = SheetText(CopilotAdoptionWorkbook.Build(SyntheticAnalysis()));
+            var keys = new HashSet<string>(SheetKeyColumn(CopilotAdoptionWorkbook.Build(SyntheticAnalysis())), StringComparer.Ordinal);
+            var expected = ExpectedSnapshotFactKeys();
 
-            var missing = ExpectedFactKeys(typeof(CopilotAdoptionSummary))
-                .Where(key => text.IndexOf(key, StringComparison.Ordinal) < 0)
-                .ToList();
+            // The control: the mirror really does recurse. If it stopped at the top level again, every
+            // assertion below would pass with the nested figures missing, which is exactly how #640 hid.
+            CollectionAssert.IsSubsetOf(
+                new[]
+                {
+                    "agents.activeAgents", "agents.interactionsPerAgentUser", "agents.healthBreakdown.Keep",
+                    "unlicensed.activeUsers", "unlicensed.interactionsPerUserPerMonth",
+                    "dataSources.auditAvailable", "dataSources.copilotUsageReportDate",
+                    "coworkCreditPosition.available", "licenceOpportunityEstimate.addressableMeetings",
+                    "seatHolderTimeSavedEstimate.credits.outlookMinutesPerAction", "bandBreakdown.NeverUsed",
+                    "coworkValueEstimate.activities.sendEmail",
+                },
+                expected,
+                "The expected key list must include the nested figures.");
+
+            var missing = expected.Where(key => !keys.Contains(key)).ToList();
 
             Assert.AreEqual(0, missing.Count,
                 "Every scalar figure must reach the Snapshot facts sheet so two snapshots can be diffed. "
                 + "Missing: " + string.Join(", ", missing));
+
+            Assert.IsFalse(
+                keys.Any(k => k.StartsWith("options", StringComparison.Ordinal) || k.StartsWith("diagnostics", StringComparison.Ordinal)),
+                "The options have the Settings sheet and the run diagnostics their own sheet; neither belongs on Snapshot facts.");
         }
 
         [TestMethod]
@@ -403,51 +456,283 @@ namespace Tests.UnitTests
         [TestMethod]
         public void Workbook_SettingsSheetCarriesEveryOption()
         {
-            var text = SheetText(CopilotAdoptionWorkbook.Build(SyntheticAnalysis()));
-
-            var missing = ExpectedFactKeys(typeof(CopilotAdoptionOptions))
-                .Where(key => text.IndexOf(key, StringComparison.Ordinal) < 0)
+            var keys = SettingKeys(CopilotAdoptionWorkbook.Build(SyntheticAnalysis()))
+                .SkipWhile(k => k != "Setting")
+                .Skip(1)
                 .ToList();
 
-            Assert.AreEqual(0, missing.Count,
-                "Every option must reach the Settings sheet. Missing: " + string.Join(", ", missing));
+            // Exactly the options, in ordinal order: every option is there, and nothing else is. The
+            // options are all scalars today, so this also pins that the flattening #640 added to the
+            // shared writer left every existing Settings key exactly as it was.
+            CollectionAssert.AreEqual(
+                ExpectedFactKeys(typeof(CopilotAdoptionOptions)).OrderBy(k => k, StringComparer.Ordinal).ToList(),
+                keys,
+                "Every option must reach the Settings sheet, once, under its serialised name.");
         }
 
         /// <summary>
         /// The facts sheet is sorted and unconditional so a lookup against the other snapshot always
         /// resolves. A run that emitted keys in reflection order would shift rows between files and
         /// quietly break every formula written against it.
+        ///
+        /// The whole key column, not a filtered one: the nested keys (#640) and the enum breakdown rows
+        /// are on it too, and a dotted key sorted by its parts rather than ordinally would misalign.
         /// </summary>
         [TestMethod]
         public void Workbook_SnapshotFactKeysAreSortedAndUnique()
         {
-            var keys = SheetCells(CopilotAdoptionWorkbook.Build(SyntheticAnalysis()), "Snapshot facts")
-                .Where(c => ExpectedFactKeys(typeof(CopilotAdoptionSummary)).Contains(c))
-                .ToList();
+            var keys = SnapshotFactKeyColumn(CopilotAdoptionWorkbook.Build(SyntheticAnalysis()));
 
+            Assert.IsTrue(keys.Count(k => k.IndexOf('.') >= 0 && !k.EndsWith(".count", StringComparison.Ordinal)) > 50,
+                "The control: the nested figures are on the sheet, so their order is being tested.");
             CollectionAssert.AllItemsAreUnique(keys, "A key written twice makes a lookup ambiguous.");
             CollectionAssert.AreEqual(
                 keys.OrderBy(k => k, StringComparer.Ordinal).ToList(),
                 keys,
                 "Snapshot fact keys must be in a stable sort order, or two files will not line up.");
+            CollectionAssert.AreEquivalent(ExpectedSnapshotFactKeys(), keys,
+                "The sheet must carry exactly the keys the model defines - no more, no fewer.");
         }
 
         /// <summary>
         /// A null must never be written as a zero. Across this report a null means "not reported" or
         /// "not attributable", and in a file built for comparison a zero reads as a measured decline.
+        ///
+        /// Covers the nested figures too (#640): a section that was not measured at all writes every one
+        /// of its keys blank - including its flags, which must not turn into a confident "No".
         /// </summary>
         [TestMethod]
         public void Workbook_SnapshotFactsLeaveUnknownValuesEmptyRatherThanZero()
         {
             var analysis = SyntheticAnalysis();
             analysis.Summary.CoworkAdoptionPct = null;
+            analysis.Summary.Agents = null;
+            analysis.Summary.Unlicensed = null;
+            analysis.Summary.CoworkCreditPosition = null;
 
-            var cells = SheetCells(CopilotAdoptionWorkbook.Build(analysis), "Snapshot facts");
+            var bytes = CopilotAdoptionWorkbook.Build(analysis);
+            var cells = SheetCells(bytes, "Snapshot facts");
             var index = cells.IndexOf("coworkAdoptionPct");
 
             Assert.AreNotEqual(-1, index, "The key is missing from the Snapshot facts sheet.");
             Assert.AreNotEqual("0", cells.ElementAtOrDefault(index + 1),
                 "An unreported measure must be blank, never zero - zero would read as a measured fall to nothing.");
+
+            var values = SnapshotFactValues(bytes);
+            var nested = values.Keys
+                .Where(k => k.StartsWith("agents.", StringComparison.Ordinal)
+                         || k.StartsWith("unlicensed.", StringComparison.Ordinal)
+                         || k.StartsWith("coworkCreditPosition.", StringComparison.Ordinal))
+                .ToList();
+
+            CollectionAssert.IsSubsetOf(
+                new[] { "agents.activeAgents", "agents.healthBreakdown.Retire", "agents.agents.count", "unlicensed.truncated", "coworkCreditPosition.available" },
+                nested,
+                "A section that was not measured must still write every one of its keys.");
+            foreach (var key in nested)
+            {
+                Assert.AreEqual(string.Empty, values[key],
+                    $"'{key}' belongs to a section that was not measured, so it must be blank - not 0, not 'No'.");
+            }
+
+            // The control: a measured zero inside a section that WAS measured is still written as 0.
+            var measured = SyntheticAnalysis();
+            measured.Summary.Agents.CustomAgents = 0;
+            Assert.AreEqual("0", SnapshotFactValues(CopilotAdoptionWorkbook.Build(measured))["agents.customAgents"]);
+        }
+
+        /// <summary>
+        /// #640: the figures inside nested sections reach the sheet with their values, under dotted keys
+        /// made of the serialised names - the agent baselines the 2026 Work Trend Index asks a tenant to
+        /// take first among them.
+        /// </summary>
+        [TestMethod]
+        public void Workbook_SnapshotFactsFlattenNestedSectionsIntoDottedKeys()
+        {
+            var analysis = SyntheticAnalysis();
+            var summary = analysis.Summary;
+            summary.Unlicensed.ActiveUsers = 37;
+            summary.SeatHolderTimeSavedEstimate.Credits.OutlookMinutesPerAction = 6.5;
+
+            var values = SnapshotFactValues(CopilotAdoptionWorkbook.Build(analysis));
+
+            Assert.AreEqual(summary.Agents.ActiveAgents.ToString(CultureInfo.InvariantCulture), values["agents.activeAgents"]);
+            Assert.AreEqual(summary.Agents.KnownAgents.ToString(CultureInfo.InvariantCulture), values["agents.knownAgents"]);
+            Assert.AreEqual(summary.Agents.AgentInteractions.ToString(CultureInfo.InvariantCulture), values["agents.agentInteractions"]);
+            Assert.AreEqual(summary.Agents.Agents.Count.ToString(CultureInfo.InvariantCulture), values["agents.agents.count"],
+                "A list inside a section is written as its row count, like a top-level one.");
+            Assert.AreEqual("37", values["unlicensed.activeUsers"]);
+            Assert.AreEqual("Yes", values["dataSources.auditAvailable"]);
+            Assert.AreEqual("28", values["dataSources.copilotUsageReportPeriodDays"]);
+            Assert.AreEqual("6.5", values["seatHolderTimeSavedEstimate.credits.outlookMinutesPerAction"],
+                "Flattening must follow a section inside a section.");
+            Assert.IsFalse(values.ContainsKey("options.windowDays"), "The options belong on the Settings sheet.");
+            Assert.IsFalse(values.Keys.Any(k => k.StartsWith("diagnostics", StringComparison.Ordinal)),
+                "Run diagnostics belong on their own sheet - their keys vary from run to run.");
+        }
+
+        /// <summary>
+        /// A small, fixed breakdown the product defines gets a row per member, keyed by the member's stable
+        /// NAME - never by its display label, which can be reworded between builds, and never by a value.
+        /// </summary>
+        [TestMethod]
+        public void Workbook_FixedBreakdownsHaveARowPerMemberKeyedByName()
+        {
+            var analysis = SyntheticAnalysis();
+            var summary = analysis.Summary;
+            var bytes = CopilotAdoptionWorkbook.Build(analysis);
+            var values = SnapshotFactValues(bytes);
+
+            // Expected values read through the display label, not the Key the writer uses, so a breakdown
+            // whose Key named the wrong member would fail here rather than agree with itself.
+            foreach (AdoptionBand band in Enum.GetValues(typeof(AdoptionBand)))
+            {
+                var expected = summary.BandBreakdown.Single(b => b.Label == CopilotAdoptionScoring.BandDisplayName(band)).Value;
+                Assert.AreEqual(expected.ToString(CultureInfo.InvariantCulture), values["bandBreakdown." + band],
+                    $"bandBreakdown.{band} must carry the number of licensed users in that band.");
+            }
+
+            Assert.IsTrue(summary.Agents.HealthBreakdown.Sum(h => h.Value) > 0, "The control: the fixture has agents with verdicts.");
+            foreach (AgentHealth health in Enum.GetValues(typeof(AgentHealth)))
+            {
+                var expected = summary.Agents.HealthBreakdown.Single(h => h.Label == CopilotAdoptionScoring.AgentHealthDisplayName(health)).Value;
+                Assert.AreEqual(expected.ToString(CultureInfo.InvariantCulture), values["agents.healthBreakdown." + health]);
+            }
+
+            // A set keyed by string constants rather than an enum: the observed volumes the modelled Cowork
+            // hours rest on, one row per kind of work, in each of the three Cowork estimates.
+            Assert.IsTrue(summary.CoworkValueEstimate.Activities.Sum(a => a.VolumePerMonth) > 0, "The control: the fixture models Cowork work.");
+            foreach (var activity in CoworkActivities.All)
+            {
+                var expected = summary.CoworkValueEstimate.Activities.Single(a => a.Activity == activity.Key).VolumePerMonth;
+                Assert.AreEqual(expected.ToString(CultureInfo.InvariantCulture), values["coworkValueEstimate.activities." + activity.Key]);
+                Assert.IsTrue(values.ContainsKey("coworkFullRolloutEstimate.activities." + activity.Key));
+                Assert.IsTrue(values.ContainsKey("coworkWithoutLicenceEstimate.activities." + activity.Key));
+            }
+
+            // Keyed by the member, not by the label: rewording a label must not move a single key.
+            var reworded = SyntheticAnalysis();
+            foreach (var band in reworded.Summary.BandBreakdown) band.Label = "Reworded " + band.Label;
+            CollectionAssert.AreEqual(SnapshotFactKeyColumn(bytes), SnapshotFactKeyColumn(CopilotAdoptionWorkbook.Build(reworded)));
+
+            // A member with no row is unknown, not zero, and still has its key.
+            var partial = SyntheticAnalysis();
+            partial.Summary.BandBreakdown = partial.Summary.BandBreakdown.Where(b => b.Key != nameof(AdoptionBand.Champion)).ToList();
+            var partialValues = SnapshotFactValues(CopilotAdoptionWorkbook.Build(partial));
+            Assert.AreEqual(string.Empty, partialValues["bandBreakdown." + nameof(AdoptionBand.Champion)]);
+            Assert.IsTrue(summary.BandBreakdown.All(b => b.Key != null), "Every band row must say which band it counts.");
+        }
+
+        /// <summary>
+        /// Tenant data must never become a key. Department, app and agent names are values in lists that
+        /// are only ever counted, and every key is made of serialised property names and enum member
+        /// names - so a key is always plain identifier text, whatever the tenant's data contains.
+        /// </summary>
+        [TestMethod]
+        public void Workbook_SnapshotFactKeysAreNeverTenantData()
+        {
+            var keys = SnapshotFactKeyColumn(CopilotAdoptionWorkbook.Build(SyntheticAnalysis()));
+
+            var notIdentifiers = keys
+                .Where(k => !Regex.IsMatch(k, @"^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z][A-Za-z0-9_]*)*$"))
+                .ToList();
+            Assert.AreEqual(0, notIdentifiers.Count, "Keys must be identifiers: " + string.Join(", ", notIdentifiers));
+
+            foreach (var tenantText in new[] { GreekDepartment, AmpersandDepartment, "Finance", "Legal", "Contoso", "CITATION", "Never used" })
+            {
+                Assert.IsFalse(keys.Any(k => k.IndexOf(tenantText, StringComparison.OrdinalIgnoreCase) >= 0),
+                    $"'{tenantText}' is tenant data or a display label and must never be part of a key.");
+            }
+        }
+
+        /// <summary>
+        /// The flattener follows nested objects only so far, and never round a reference cycle - decided
+        /// by TYPE, so the same keys come out whatever the data looks like, including a null.
+        /// </summary>
+        [TestMethod]
+        public void ScalarFacts_StopsAtTheDepthLimitAndAtReferenceCycles()
+        {
+            var deep = CopilotAdoptionWorkbook.ScalarFacts(new DepthLevel0(), typeof(DepthLevel0), null).Select(f => f.Key).ToList();
+            CollectionAssert.AreEqual(
+                new[] { "a.b.c.d.x", "a.b.c.x", "a.b.x", "a.x", "x" },
+                deep,
+                $"Nested objects are followed {CopilotAdoptionWorkbook.MaxFactNesting} levels deep and no further.");
+
+            var empty = CopilotAdoptionWorkbook.ScalarFacts(null, typeof(DepthLevel0), null);
+            CollectionAssert.AreEqual(deep, empty.Select(f => f.Key).ToList(), "The keys come from the type, not the data.");
+            Assert.IsTrue(empty.All(f => string.Empty.Equals(f.Value)), "Nothing to read means every value is blank.");
+
+            var node = new CycleNode { Name = "Contoso", Child = new CycleChild { Value = 3 } };
+            node.Next = node;
+            node.Child.Parent = node;
+            var cycle = CopilotAdoptionWorkbook.ScalarFacts(node, typeof(CycleNode), null);
+            CollectionAssert.AreEqual(new[] { "child.value", "name" }, cycle.Select(f => f.Key).ToList(),
+                "A type already being flattened further up the path must not be entered again.");
+            Assert.AreEqual(3, cycle.Single(f => f.Key == "child.value").Value);
+
+            var awkward = CopilotAdoptionWorkbook.ScalarFacts(new AwkwardSection(), typeof(AwkwardSection), new[] { "skipped" });
+            CollectionAssert.AreEqual(new[] { "boom", "items.count", "ok" }, awkward.Select(f => f.Key).ToList(),
+                "A throwing getter keeps its key, a framework type is not crawled, a non-ICollection sequence is "
+                + "counted, and an excluded key goes with everything beneath it.");
+            Assert.AreEqual(string.Empty, awkward.Single(f => f.Key == "boom").Value);
+            Assert.AreEqual(2, awkward.Single(f => f.Key == "items.count").Value);
+        }
+
+        private class DepthLevel0
+        {
+            [JsonProperty("x")] public int X { get; set; }
+            [JsonProperty("a")] public DepthLevel1 A { get; set; } = new DepthLevel1();
+        }
+
+        private class DepthLevel1
+        {
+            [JsonProperty("x")] public int X { get; set; }
+            [JsonProperty("b")] public DepthLevel2 B { get; set; } = new DepthLevel2();
+        }
+
+        private class DepthLevel2
+        {
+            [JsonProperty("x")] public int X { get; set; }
+            [JsonProperty("c")] public DepthLevel3 C { get; set; } = new DepthLevel3();
+        }
+
+        private class DepthLevel3
+        {
+            [JsonProperty("x")] public int X { get; set; }
+            [JsonProperty("d")] public DepthLevel4 D { get; set; } = new DepthLevel4();
+        }
+
+        private class DepthLevel4
+        {
+            [JsonProperty("x")] public int X { get; set; }
+            [JsonProperty("e")] public DepthLevel5 E { get; set; } = new DepthLevel5();
+        }
+
+        private class DepthLevel5
+        {
+            [JsonProperty("x")] public int X { get; set; }
+        }
+
+        private class CycleNode
+        {
+            [JsonProperty("name")] public string Name { get; set; }
+            [JsonProperty("next")] public CycleNode Next { get; set; }
+            [JsonProperty("child")] public CycleChild Child { get; set; }
+        }
+
+        private class CycleChild
+        {
+            [JsonProperty("value")] public int Value { get; set; }
+            [JsonProperty("parent")] public CycleNode Parent { get; set; }
+        }
+
+        private class AwkwardSection
+        {
+            [JsonProperty("ok")] public int Ok => 1;
+            [JsonProperty("boom")] public int Boom => throw new InvalidOperationException("Synthetic getter failure.");
+            [JsonProperty("link")] public Uri Link { get; set; } = new Uri("https://contoso.example/");
+            [JsonProperty("items")] public IEnumerable<int> Items { get; set; } = Enumerable.Range(1, 2);
+            [JsonProperty("skipped")] public DepthLevel1 Skipped { get; set; } = new DepthLevel1();
         }
 
         #endregion
@@ -1511,22 +1796,41 @@ namespace Tests.UnitTests
 
         /// <summary>
         /// The keys the reflection-driven sheets are expected to write for a type: the serialised name
-        /// of every readable, non-ignored property, with collections keyed by their row count.
+        /// of every readable, non-ignored property, with collections keyed by their row count, nested
+        /// objects of the model flattened into dotted keys (<c>agents.activeAgents</c>), and a breakdown
+        /// marked <see cref="SnapshotFactsBreakdownAttribute"/> given a key per enum member.
         ///
         /// Mirrors the writer deliberately rather than sharing code with it. A test that called the
         /// production flattener would pass even if that flattener skipped half the model, which is the
-        /// failure this is here to catch.
+        /// failure this is here to catch - and did: before #640 both this and the writer stopped at the
+        /// top level, so every agent figure was missing from the sheet while the guard stayed green.
         /// </summary>
-        private static List<string> ExpectedFactKeys(Type type)
+        /// <param name="type">The root type: <see cref="CopilotAdoptionSummary"/> or <see cref="CopilotAdoptionOptions"/>.</param>
+        /// <param name="excludedKeys">Full keys the sheet leaves out on purpose, with everything beneath them.</param>
+        private static List<string> ExpectedFactKeys(Type type, params string[] excludedKeys)
         {
             var keys = new List<string>();
+            CollectExpectedFactKeys(type, string.Empty, 0, new List<Type> { type }, new HashSet<string>(excludedKeys), type.Assembly, keys);
+            return keys;
+        }
 
+        /// <summary>The Snapshot facts keys: the whole summary, less the two parts that have sheets of their own.</summary>
+        private static List<string> ExpectedSnapshotFactKeys()
+        {
+            return ExpectedFactKeys(typeof(CopilotAdoptionSummary), "options", "diagnostics");
+        }
+
+        private static void CollectExpectedFactKeys(
+            Type type, string prefix, int depth, List<Type> ancestors, HashSet<string> excludedKeys, Assembly model, List<string> keys)
+        {
             foreach (var property in type.GetProperties(BindingFlags.Public | BindingFlags.Instance))
             {
                 if (!property.CanRead || property.GetIndexParameters().Length > 0) continue;
                 if (property.GetCustomAttribute<JsonIgnoreAttribute>() != null) continue;
 
-                var name = property.GetCustomAttribute<JsonPropertyAttribute>()?.PropertyName ?? property.Name;
+                var name = prefix + (property.GetCustomAttribute<JsonPropertyAttribute>()?.PropertyName ?? property.Name);
+                if (excludedKeys.Contains(name)) continue;
+
                 var propertyType = Nullable.GetUnderlyingType(property.PropertyType) ?? property.PropertyType;
 
                 if (propertyType.IsPrimitive || propertyType.IsEnum || propertyType == typeof(string)
@@ -1534,13 +1838,30 @@ namespace Tests.UnitTests
                 {
                     keys.Add(name);
                 }
-                else if (typeof(ICollection).IsAssignableFrom(propertyType))
+                else if (typeof(IEnumerable).IsAssignableFrom(propertyType))
                 {
                     keys.Add(name + ".count");
+
+                    var breakdown = property.GetCustomAttribute<SnapshotFactsBreakdownAttribute>();
+                    if (breakdown != null)
+                    {
+                        // An enum's member names, or a static class's string constants (CoworkActivities).
+                        var members = breakdown.Members.IsEnum
+                            ? Enum.GetNames(breakdown.Members)
+                            : breakdown.Members.GetFields(BindingFlags.Public | BindingFlags.Static)
+                                .Where(f => f.IsLiteral && f.FieldType == typeof(string))
+                                .Select(f => (string)f.GetRawConstantValue())
+                                .ToArray();
+                        keys.AddRange(members.Select(member => name + "." + member));
+                    }
+                }
+                else if (propertyType.IsClass && propertyType.Assembly == model && depth < 4 && !ancestors.Contains(propertyType))
+                {
+                    ancestors.Add(propertyType);
+                    CollectExpectedFactKeys(propertyType, name + ".", depth + 1, ancestors, excludedKeys, model, keys);
+                    ancestors.Remove(propertyType);
                 }
             }
-
-            return keys;
         }
 
         private static void AssertSheetHasColumns(byte[] bytes, string sheetName, IEnumerable<string> headers)
@@ -1578,8 +1899,42 @@ namespace Tests.UnitTests
         /// </summary>
         private static List<string> SnapshotFactKeys(byte[] bytes)
         {
-            var expected = new HashSet<string>(ExpectedFactKeys(typeof(CopilotAdoptionSummary)), StringComparer.Ordinal);
+            var expected = new HashSet<string>(ExpectedSnapshotFactKeys(), StringComparer.Ordinal);
             return SheetCells(bytes, "Snapshot facts").Where(expected.Contains).ToList();
+        }
+
+        /// <summary>Column A of the <c>Snapshot facts</c> sheet below its header row: every key, in sheet order.</summary>
+        private static List<string> SnapshotFactKeyColumn(byte[] bytes)
+        {
+            return SheetKeyColumn(bytes).SkipWhile(k => k != "Key").Skip(1).ToList();
+        }
+
+        /// <summary>
+        /// Each Snapshot fact's value as written - column B of the key's own row, empty when blank - keyed
+        /// by the fact's key. Read by row number, so a blank value can never be mistaken for the next row.
+        /// </summary>
+        private static Dictionary<string, string> SnapshotFactValues(byte[] bytes)
+        {
+            var rows = new Dictionary<int, Dictionary<string, string>>();
+            foreach (var cell in SheetCellElements(bytes, "Snapshot facts"))
+            {
+                var reference = Regex.Match((string)cell.Attribute("r") ?? string.Empty, "^([A-Z]+)([0-9]+)$");
+                if (!reference.Success) continue;
+
+                var row = int.Parse(reference.Groups[2].Value, CultureInfo.InvariantCulture);
+                if (!rows.TryGetValue(row, out var columns))
+                {
+                    columns = new Dictionary<string, string>(StringComparer.Ordinal);
+                    rows.Add(row, columns);
+                }
+
+                columns[reference.Groups[1].Value] = string.Concat(cell.Descendants().Where(d => !d.HasElements).Select(d => d.Value));
+            }
+
+            var header = rows.Single(r => r.Value.TryGetValue("A", out var a) && a == "Key").Key;
+            return rows
+                .Where(r => r.Key > header && r.Value.ContainsKey("A"))
+                .ToDictionary(r => r.Value["A"], r => r.Value.TryGetValue("B", out var b) ? b : string.Empty, StringComparer.Ordinal);
         }
 
         /// <summary>The decoded text of every cell on one named sheet, in document order.</summary>
@@ -1679,9 +2034,10 @@ namespace Tests.UnitTests
         /// <summary>
         /// A complete analysis built entirely from synthetic values - no tenant data of any kind.
         /// Covers every section the workbook writes, so a section that throws is caught here rather
-        /// than by a customer.
+        /// than by a customer. Shared with <see cref="CopilotAdoptionWorkbookComparisonScriptTests"/>,
+        /// which compares real workbooks built from it.
         /// </summary>
-        private static CopilotAdoptionAnalysis SyntheticAnalysis()
+        internal static CopilotAdoptionAnalysis SyntheticAnalysis()
         {
             var options = CopilotAdoptionOptions.Default;
             var analysis = new CopilotAdoptionAnalysis();

@@ -62,6 +62,10 @@ export const common = {
   'common.warnings.show.one': 'Show 1 data warning',
   'common.warnings.show.other': 'Show {count} data warnings',
   'common.warnings.hide': 'Hide these warnings',
+  'common.notes.title': 'About these figures',
+  'common.notes.show.one': 'About these figures (1 note)',
+  'common.notes.show.other': 'About these figures ({count} notes)',
+  'common.notes.hide': 'Hide these notes',
 
   // Print button
   'common.print.preparing': 'Preparing\u2026',
