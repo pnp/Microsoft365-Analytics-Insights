@@ -75,6 +75,8 @@ namespace Tests.UnitTests
             ["AgentCostsAPIController.Filters"] = Any,
             ["AgentCostsAPIController.Users"] = Pii,
 
+            ["Agent365PackageCatalogAPIController.Get"] = Admin,
+
             // Microsoft Graph's change-notification webhook: Graph cannot sign in, so it checks clientState instead.
             ["CallRecordWebhookController.Post"] = Public,
 

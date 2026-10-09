@@ -52,6 +52,7 @@ namespace Web.AnalyticsWeb.Models.Health
                 { nameof(ImportTaskSettings.GraphUsersMetadata), "User metadata" },
                 { nameof(ImportTaskSettings.GraphUsageReports), "Usage reports" },
                 { nameof(ImportTaskSettings.GraphCopilotUsageReports), "Copilot usage reports (Graph)" },
+                { nameof(ImportTaskSettings.Agent365PackageCatalog), "Agent 365 package catalog" },
                 { nameof(ImportTaskSettings.GraphTeams), "Teams" },
                 { nameof(ImportTaskSettings.WebTraffic), "Web traffic" },
                 { nameof(ImportTaskSettings.SentEmails), "Sent emails" },
@@ -131,7 +132,11 @@ namespace Web.AnalyticsWeb.Models.Health
             => GetOrBuildAsync(SummaryKey, _summaryGate, () => BuildSummaryAsync(config));
 
         public Task<DataOverviewSection> LoadDataAsync()
-            => GetOrBuildAsync(DataKey, _dataGate, BuildDataAsync);
+            => LoadDataAsync(false);
+
+        public Task<DataOverviewSection> LoadDataAsync(bool agent365CatalogEnabled)
+            => GetOrBuildAsync(DataKey + (agent365CatalogEnabled ? ":agent365" : ":no-agent365"),
+                _dataGate, () => BuildDataAsync(agent365CatalogEnabled));
 
         public Task<LivenessSection> LoadLivenessAsync(AppConfig config)
             => GetOrBuildAsync(LivenessKey, _livenessGate, () => BuildLivenessAsync(config));
@@ -233,13 +238,13 @@ namespace Web.AnalyticsWeb.Models.Health
 
         // --- Data overview (SQL) ---
 
-        private async Task<DataOverviewSection> BuildDataAsync()
+        private async Task<DataOverviewSection> BuildDataAsync(bool agent365CatalogEnabled)
         {
             // Stamped before any SQL runs: the section's timestamp is "when this load started", which is
             // what the page has always shown, and the scans below can take tens of seconds.
             var loadedAtUtc = DateTime.UtcNow;
 
-            var counts = await _dataSource.GetDatabaseCountsAsync();
+            var counts = await _dataSource.GetDatabaseCountsAsync(agent365CatalogEnabled);
 
             // Recent volume + freshness on the two biggest fact tables, run in parallel on separate
             // contexts. Skipped entirely when the cheap block already failed hard (the database is
@@ -254,7 +259,7 @@ namespace Web.AnalyticsWeb.Models.Health
                 audit = auditTask.Result;
             }
 
-            return HealthDataSectionRules.BuildDataSection(counts, hits, audit, loadedAtUtc);
+            return HealthDataSectionRules.BuildDataSection(counts, hits, audit, loadedAtUtc, agent365CatalogEnabled);
         }
 
         // --- Configuration (config + schema + webhook) ---

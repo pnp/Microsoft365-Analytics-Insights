@@ -230,6 +230,7 @@
     <Compile Include="Graph\GraphRequestBudgetOptions.cs" />
     <Compile Include="Graph\GraphServiceClientFactory.cs" />
     <Compile Include="Graph\ManualGraphCallClient.cs" />
+    <Compile Include="Graph\Agent365\Agent365PackageCatalogImporter.cs" />
     <Compile Include="Graph\Teams\O365Team.cs" />
     <Compile Include="Graph\GraphLookupCache.cs" />
     <Compile Include="Graph\GraphImporter.cs" />

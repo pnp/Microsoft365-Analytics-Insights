@@ -24,9 +24,18 @@ namespace Web.AnalyticsWeb.Models.Health
         /// timestamp is shown on the Health page, and the scans that feed it can take tens of seconds -
         /// stamping it on completion would report a later time than the page has always reported.
         /// </param>
-        public static DataOverviewSection BuildDataSection(DatabaseCountsResult counts, RecentVolumeResult hits, RecentVolumeResult audit, DateTime loadedAtUtc)
+        public static DataOverviewSection BuildDataSection(
+            DatabaseCountsResult counts,
+            RecentVolumeResult hits,
+            RecentVolumeResult audit,
+            DateTime loadedAtUtc,
+            bool agent365CatalogEnabled = false)
         {
-            var section = new DataOverviewSection { LoadedAtUtc = loadedAtUtc };
+            var section = new DataOverviewSection
+            {
+                LoadedAtUtc = loadedAtUtc,
+                Agent365CatalogEnabled = agent365CatalogEnabled
+            };
             if (counts != null)
             {
                 section.ActivityCount = counts.ActivityCount;
@@ -46,6 +55,7 @@ namespace Web.AnalyticsWeb.Models.Health
                     ApplyCopilotImports(section, counts.CopilotUsageReportImports);
                 }
 
+                ApplyAgent365Import(section, counts);
 
             }
 
@@ -75,6 +85,42 @@ namespace Web.AnalyticsWeb.Models.Health
 
             ComputeDataStatus(section);
             return section;
+        }
+
+        private static void ApplyAgent365Import(DataOverviewSection section, DatabaseCountsResult counts)
+        {
+            if (!section.Agent365CatalogEnabled) return;
+
+            if (!string.IsNullOrEmpty(counts.Agent365CatalogStatusError))
+            {
+                section.Agent365CatalogIssue = "statusUnavailable";
+                section.Agent365CatalogError = counts.Agent365CatalogStatusError;
+                return;
+            }
+
+            var import = counts.Agent365CatalogImportHealth;
+            if (import == null || !import.LastAttemptUtc.HasValue)
+            {
+                section.Agent365CatalogIssue = "notStarted";
+                return;
+            }
+
+            section.Agent365CatalogLastAttemptUtc = import.LastAttemptUtc;
+            section.Agent365CatalogLastAttemptCompletedUtc = import.LastAttemptCompletedUtc;
+            section.Agent365CatalogLastAttemptSucceeded = import.LastAttemptSucceeded;
+            section.Agent365CatalogLastSuccessUtc = import.LastSuccessfulImportUtc;
+            section.Agent365CatalogPackageCount = import.PackageCount;
+            section.Agent365CatalogNeverUsedCount = import.NeverUsedCount;
+            section.Agent365CatalogError = import.LastAttemptError;
+
+            if (!import.LastAttemptCompletedUtc.HasValue)
+            {
+                section.Agent365CatalogIssue = "running";
+            }
+            else if (import.LastAttemptSucceeded != true)
+            {
+                section.Agent365CatalogIssue = "failed";
+            }
         }
 
         /// <summary>
@@ -132,6 +178,10 @@ namespace Web.AnalyticsWeb.Models.Health
             {
                 reasons.Add("Graph Copilot usage report import failed - " + copilotError);
             }
+            if (s.Agent365CatalogIssue != null && s.Agent365CatalogIssue != "running")
+            {
+                reasons.Add("agent365Catalog:" + s.Agent365CatalogIssue);
+            }
             if (reasons.Count > 0)
             {
                 s.Status = HealthStatusNames.Degraded;
@@ -140,7 +190,9 @@ namespace Web.AnalyticsWeb.Models.Health
             else
             {
                 s.Status = HealthStatusNames.Healthy;
-                s.Reasons = new List<string> { "All checks passing." };
+                s.Reasons = s.Agent365CatalogIssue == "running"
+                    ? new List<string>()
+                    : new List<string> { "All checks passing." };
             }
         }
 

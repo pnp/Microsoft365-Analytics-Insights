@@ -244,6 +244,7 @@
     <Compile Include="Controllers\CopilotAuditBackfillAPIController.cs" />
     <Compile Include="Controllers\CopilotAdoptionAPIController.cs" />
     <Compile Include="Controllers\AgentCostsAPIController.cs" />
+    <Compile Include="Controllers\Agent365PackageCatalogAPIController.cs" />
     <Compile Include="Controllers\DlpAPIController.cs" />
     <Compile Include="Controllers\TeamsExplorerAPIController.cs" />
     <Compile Include="Controllers\WebActivityAPIController.cs" />
@@ -304,6 +305,7 @@
     <Compile Include="Models\Health\HealthDataSectionRules.cs" />
     <Compile Include="Models\Health\HealthModels.cs" />
     <Compile Include="Models\Health\HealthService.cs" />
+    <Compile Include="Models\Agent365\Agent365PackageCatalogApiModels.cs" />
     <Compile Include="Models\Health\IHealthCache.cs" />
     <Compile Include="Models\Health\IHealthDataSource.cs" />
     <Compile Include="Models\Health\SqlHealthDataSource.cs" />

@@ -51,6 +51,7 @@ const app: Record<keyof typeof en, string> = {
   'app.route.globalFilter': 'Filtro de informes',
   'app.route.copilotAuditBackfill': 'Relleno de auditoría de Copilot',
   'app.route.configuration': 'Configuraci\u00f3n del servicio',
+  'app.route.agent365Catalog': 'Catálogo de Agent 365',
 };
 
 export default app;

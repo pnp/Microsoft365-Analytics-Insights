@@ -51,6 +51,7 @@ export const app = {
   'app.route.globalFilter': 'Report filter',
   'app.route.copilotAuditBackfill': 'Copilot audit backfill',
   'app.route.configuration': 'Service configuration',
+  'app.route.agent365Catalog': 'Agent 365 catalogue',
 } as const;
 
 export default app;

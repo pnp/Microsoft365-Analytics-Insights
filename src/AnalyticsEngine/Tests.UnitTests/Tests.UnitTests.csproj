@@ -95,6 +95,9 @@
     <Compile Include="SentEmailImporterDuplicateMessageIdTests.cs" />
     <Compile Include="SentEmailImporterPipelineTests.cs" />
     <Compile Include="SentEmailImportTests.cs" />
+    <Compile Include="Agent365CatalogHealthTests.cs" />
+    <Compile Include="Agent365PackageCatalogImporterTests.cs" />
+    <Compile Include="Agent365PackageCatalogMigrationScriptTests.cs" />
     <Compile Include="GraphPagingFailureTests.cs" />
     <Compile Include="GraphUserLoaderSkuPagingTests.cs" />
     <Compile Include="GraphUserDeltaTokenRecoveryTests.cs" />

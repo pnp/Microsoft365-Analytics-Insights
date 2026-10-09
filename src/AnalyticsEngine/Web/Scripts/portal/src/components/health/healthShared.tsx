@@ -414,7 +414,24 @@ export function healthReasonTexts(section: HealthSectionBase, t: TFunction): str
     for (const copilotError of section.copilotUsageReportErrors ?? []) {
       reasons.push(t('health.reason.graphCopilotUsageReportImportFailed', { error: copilotError }));
     }
+    if (section.agent365CatalogEnabled) {
+      const error = section.agent365CatalogError || t('health.reason.agent365CatalogUnknownError');
+      if (section.agent365CatalogIssue === 'notStarted') {
+        reasons.push(t('health.reason.agent365CatalogNotStarted'));
+      } else if (section.agent365CatalogIssue === 'failed') {
+        reasons.push(t('health.reason.agent365CatalogImportFailed', { error }));
+      } else if (section.agent365CatalogIssue === 'statusUnavailable') {
+        reasons.push(t('health.reason.agent365CatalogStatusUnavailable', { error }));
+      } else if (section.agent365CatalogIssue === 'running') {
+        reasons.push(t('health.reason.agent365CatalogRunning'));
+      }
+    }
 
+    for (const reason of section.reasons ?? []) {
+      if (!reason.startsWith('agent365Catalog:')) {
+        reasons.push(translateHealthReasonText(reason, t));
+      }
+    }
     if (reasons.length > 0) return reasons;
   }
 

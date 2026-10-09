@@ -38,6 +38,7 @@ namespace App.ControlPanel.Controls
                         CopilotInteractionHistory = chkCopilotInteractionHistory.Checked,
                         CopilotStudioCredits = chkCopilotStudioCredits.Checked,
                         AzureCostManagement = chkAzureCostManagement.Checked,
+                        Agent365PackageCatalog = chkAgent365Catalog.Checked,
                         ImportDlp = chkDlp.Checked
                     }
                 };
@@ -66,6 +67,7 @@ namespace App.ControlPanel.Controls
             chkDlp.Checked = value.ImportTaskSettings.ImportDlp;
             chkCopilotStudioCredits.Checked = value.ImportTaskSettings.CopilotStudioCredits;
             chkAzureCostManagement.Checked = value.ImportTaskSettings.AzureCostManagement;
+            chkAgent365Catalog.Checked = value.ImportTaskSettings.Agent365PackageCatalog;
         }
 
 
@@ -119,7 +121,7 @@ namespace App.ControlPanel.Controls
                 var delta = (lblCopilotDesc.Bottom + gap) - chkDlp.Top;
                 if (delta == 0) return;
 
-                foreach (var below in new Control[] { chkDlp, chkCopilotStudioCredits, chkAzureCostManagement })
+                foreach (var below in new Control[] { chkDlp, chkCopilotStudioCredits, chkAzureCostManagement, chkAgent365Catalog })
                 {
                     below.Top += delta;
                 }
@@ -147,6 +149,7 @@ namespace App.ControlPanel.Controls
             BindHelpLink(lnkDlpHelp, chkDlp);
             BindHelpLink(lnkStudioCreditsHelp, chkCopilotStudioCredits);
             BindHelpLink(lnkAzureCostsHelp, chkAzureCostManagement);
+            BindHelpLink(lnkAgent365CatalogHelp, chkAgent365Catalog);
         }
 
         private static void BindHelpLink(LinkLabel link, CheckBox owner)
