@@ -382,5 +382,6 @@ namespace Common.Entities.CopilotAdoption
         public const string UnlicensedUsage = "UnlicensedUsage";
         public const string UnlicensedUsageByApp = "UnlicensedUsageByApp";
         public const string ResourceTypes = "ResourceTypes";
+        public const string MicrosoftReportFigures = "MicrosoftReportFigures";
     }
 }

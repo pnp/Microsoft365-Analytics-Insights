@@ -472,7 +472,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
 
                         if (instrumentationEnabled)
                         {
-                            TrackSaveStage(instrumentation, UsageReportSaveStageIds.RowsProcessed, loaderType, reportTable, "Completed", m => dateMetrics.WriteTo(m, dateIndex));
+                            TrackSaveStage(instrumentation, UsageReportSaveStageIds.RowsProcessed, loaderType, reportTable,
+                                "Completed", m => dateMetrics.WriteTo(m, dateIndex), reportDateUtc: dateTime.Date);
                         }
 
                         var releaseTicks = instrumentationEnabled ? Stopwatch.GetTimestamp() : 0;
@@ -783,7 +784,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
             string reportTable,
             string outcome,
             Action<Dictionary<string, double>> populateMetrics,
-            string exceptionType = null)
+            string exceptionType = null,
+            DateTime? reportDateUtc = null)
         {
             var point = new UsageReportSaveTelemetryPoint
             {
@@ -793,6 +795,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
                 ReportTable = reportTable,
                 Outcome = outcome,
                 ExceptionType = exceptionType,
+                ReportDateUtc = reportDateUtc,
             };
             populateMetrics?.Invoke(point.Metrics);
             instrumentation.Track(point);

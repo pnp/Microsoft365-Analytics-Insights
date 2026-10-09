@@ -113,6 +113,16 @@ namespace Common.Entities
         public bool GraphCopilotUsageReports { get; set; } = false;
 
         /// <summary>
+        /// Import the tenant's Agent 365 package catalog and documented package usage metrics from Microsoft Graph.
+        /// </summary>
+        /// <remarks>
+        /// Opt-in and off by default. The Package Management API requires the Microsoft Agent 365 license and the
+        /// <c>CopilotPackages.Read.All</c> application permission with admin consent.
+        /// </remarks>
+        [ImportProp]
+        public bool Agent365PackageCatalog { get; set; } = false;
+
+        /// <summary>
         /// Import Microsoft 365 Copilot AI interaction history from Microsoft Graph
         /// (<c>/copilot/users/{id}/interactionHistory/getAllEnterpriseInteractions</c>).
         /// </summary>
@@ -166,9 +176,9 @@ namespace Common.Entities
         /// derives from Copilot audit events. This one is the vendor's own billing figure.</para>
         /// <para>Opt-in and off by default. It needs a token for the <c>api.powerplatform.com</c> audience
         /// <b>and</b> a Power Platform RBAC role assignment on the service principal, which the installer does
-        /// not create. Note that Microsoft has not confirmed application-only access to the licensing
-        /// entitlement routes, so on some tenants this may require a signed-in administrator and will report
-        /// an authorisation failure instead of importing.</para>
+        /// not create. Power Platform supports service-principal authentication via RBAC, but verifying the
+        /// assignment does not prove access to the licensing entitlement routes. A refused request is
+        /// recorded as a failure without inferring the cause from its HTTP status alone.</para>
         /// <para>Imports both the per-agent view and, where the tenant's API offers it, the per-user view
         /// Microsoft added in July 2026. The per-user figures come from Microsoft directly - nothing is
         /// apportioned or inferred - but they are a separate endpoint rather than a breakdown of the

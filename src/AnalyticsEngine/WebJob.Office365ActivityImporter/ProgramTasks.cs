@@ -187,6 +187,8 @@ namespace WebJob.Office365ActivityImporter
             try
             {
                 var store = new SqlAgentCostStore(DefaultAnalyticsDbContextFactory.Instance, _logger);
+                AgentCostConnectionStore connectionStore = null;
+                AgentCostConnectionHead connectionHead = null;
 
                 var phase = new AgentCostImportPhase(
                     _logger,
@@ -203,10 +205,19 @@ namespace WebJob.Office365ActivityImporter
                             _settings.UseClientCertificate);
 
                         var httpClient = new ConfidentialClientApplicationThrottledHttpClient(auth, false, _logger);
+                        ICopilotStudioCreditSource source = new PowerPlatformLicensingCreditSource(httpClient, _logger);
+                        if (connectionHead?.Connected == true)
+                        {
+                            var delegatedClient = new AgentCostDelegatedHttpClient(_logger,
+                                AgentCostDelegatedTokenProvider.Create(_settings, connectionStore), connectionHead.Version);
+                            source = new DelegatedAgentCostSource(new PowerPlatformLicensingCreditSource(
+                                delegatedClient, _logger, delegated: true),
+                                source, connectionStore, connectionHead.Version);
+                        }
 
                         return new CopilotStudioCreditImporter(
                             _logger,
-                            new PowerPlatformLicensingCreditSource(httpClient, _logger),
+                            source,
                             store,
                             _settings.CopilotStudioCreditsTrailingWindowDays,
                             clock: null,
@@ -220,6 +231,12 @@ namespace WebJob.Office365ActivityImporter
                                 _logger),
                             // Per-user credits for anyone outside UserGroupsFilter are not stored.
                             userScopeProvider: _userScopeProvider);
+                    },
+                    creditConnectionVersion: async () =>
+                    {
+                        connectionStore = AgentCostConnectionStore.TryOpen(_settings);
+                        connectionHead = connectionStore == null ? null : await connectionStore.GetHeadAsync();
+                        return connectionHead?.Version;
                     },
                     azureCostImporterFactory: () =>
                     {

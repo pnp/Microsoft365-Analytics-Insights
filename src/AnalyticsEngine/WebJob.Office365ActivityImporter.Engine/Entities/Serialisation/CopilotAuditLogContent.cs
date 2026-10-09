@@ -373,7 +373,11 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities.Serialisation
         /// <remarks>
         /// This is NOT a block - it is the opposite signal. A deferred evaluation means the tenant's DLP
         /// posture for that interaction is <i>unknown</i>, so it must never be counted as either "blocked"
-        /// or "allowed". Reported separately as a data-quality caveat on the DLP page.
+        /// or "allowed". Nothing about it is persisted and the web app does not show it:
+        /// <c>DlpAuditEventManager</c> counts the interactions with a non-zero bitmask in each batch, logs the
+        /// decoded stages and reason per interaction at Debug level, and logs the batch total when it commits
+        /// (<c>DeferredEvaluationCount</c>). Reporting it per interaction would need a new column, which #648
+        /// deliberately did not add.
         /// </remarks>
         [JsonProperty("DLPEvaluationDeferred")]
         public int? DlpEvaluationDeferred { get; set; }

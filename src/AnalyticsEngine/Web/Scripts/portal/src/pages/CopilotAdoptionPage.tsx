@@ -54,6 +54,7 @@ import AgentsPanel from '../components/copilotAdoption/AgentsPanel';
 import UnlicensedPanel from '../components/copilotAdoption/UnlicensedPanel';
 import ResourceTypesPanel from '../components/copilotAdoption/ResourceTypesPanel';
 import EmailDomainPanel from '../components/copilotAdoption/EmailDomainPanel';
+import MicrosoftReportFigures from '../components/copilotAdoption/MicrosoftReportFigures';
 import { ConcentrationBar, CombinedSegmentTable } from '../components/copilotAdoption/CombinedViews';
 import InfoTip from '../components/shared/InfoTip';
 import PrintButton from '../components/shared/PrintButton';
@@ -203,6 +204,7 @@ const UNSCOPED_SECTION_LABEL_KEYS: Record<string, TranslationKey> = {
   agents: 'copilotAdoption.page.unscoped.agents',
   purchasedSeats: 'copilotAdoption.page.unscoped.purchasedSeats',
   coworkCredits: 'copilotAdoption.page.unscoped.coworkCredits',
+  microsoftReport: 'copilotAdoption.page.unscoped.microsoftReport',
 };
 
 /**
@@ -1072,6 +1074,7 @@ function ExecutiveTab({
   return (
     <>
       <KpiGrid items={kpis} />
+      <MicrosoftReportFigures summary={summary} />
 
       <SectionHead
         index={1}
@@ -1408,6 +1411,7 @@ function AnalystTab({
   return (
     <>
       <KpiGrid items={kpis} />
+      <MicrosoftReportFigures summary={summary} sql={sql?.microsoftReportFigures} />
 
 
       <SectionHead
@@ -2451,6 +2455,17 @@ function MethodTab({ summary }: { summary: CopilotAdoptionSummary }) {
                   ? t('copilotAdoption.page.snapshot', { v0: formatDate(summary.dataSources.copilotUsageReportDate) })
                   : t('copilotAdoption.page.notImported')}{' '}
                 {t('copilotAdoption.page.licensedUsersOnlyUnavailableEntirelyWhenTenantConcealsUser')}
+              </Text>
+              <Text>
+                {tNode('copilotAdoption.page.microsoftReport.method', {
+                  heading: <strong>{t('copilotAdoption.page.microsoftReport.methodHeading')}</strong>,
+                  status: summary.microsoftReportDate && summary.microsoftReportPeriodDays != null
+                    ? t('copilotAdoption.page.microsoftReport.period', {
+                        days: formatCount(summary.microsoftReportPeriodDays),
+                        date: formatDate(summary.microsoftReportDate),
+                      })
+                    : t('copilotAdoption.page.notImported'),
+                })}
               </Text>
               <Text>
                 <strong>{t('copilotAdoption.page.microsoftUsageReports')}</strong>{' '}

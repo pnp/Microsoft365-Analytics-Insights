@@ -1,16 +1,19 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { screen, fireEvent } from '@testing-library/react';
+import { screen, fireEvent, waitFor } from '@testing-library/react';
 import { renderWithProvider } from '../test/renderWithProvider';
 import DlpPage from './DlpPage';
 import { GlobalFilterProvider } from '../components/globalFilter/GlobalFilterProvider';
-import type { DlpAvailability, DlpSummary } from '../types/dlp';
+import { formatNumber, loadCatalog, translateStatic } from '../i18n';
+import type { DlpAvailability, DlpGovernanceSummary, DlpSummary } from '../types/dlp';
 
 const mockAvailability = vi.fn();
 const mockSummary = vi.fn();
+const mockGovernance = vi.fn();
 
 vi.mock('../api/dlpApi', () => ({
   fetchDlpAvailability: (...args: unknown[]) => mockAvailability(...args),
   fetchDlpSummary: (...args: unknown[]) => mockSummary(...args),
+  fetchDlpGovernance: (...args: unknown[]) => mockGovernance(...args),
 }));
 
 const availability = (over: Partial<DlpAvailability> = {}): DlpAvailability => ({
@@ -67,10 +70,29 @@ const summary = (over: Partial<DlpSummary> = {}): DlpSummary => ({
   ...over,
 });
 
+/**
+ * 20,000 interactions; the jailbreak flag reported on 12,000 of them and raised on 3; the XPIA flag reported on
+ * none - so its rate is unknown, which must never be shown as zero.
+ */
+const governance = (over: Partial<DlpGovernanceSummary> = {}): DlpGovernanceSummary => ({
+  fromUtc: '2026-08-12T00:00:00Z',
+  toUtc: '2026-09-09T00:00:00Z',
+  interactions: 20000,
+  jailbreak: { flaggedInteractions: 3, reportedInteractions: 12000, ratePer10000: 2.5 },
+  xpia: { flaggedInteractions: 0, reportedInteractions: 0, ratePer10000: null },
+  sensitivityLabels: { labelledResources: 25, resources: 100, interactionsWithResources: 60, share: 0.25 },
+  interactionsWithModel: 900,
+  models: [{ name: 'DEEP_LEO', interactions: 600, share: 0.03 }],
+  interactionsWithPlugin: 2800,
+  plugins: [{ name: 'BingWebSearch', interactions: 2800, share: 0.14 }],
+  ...over,
+});
+
 beforeEach(() => {
   vi.clearAllMocks();
   mockAvailability.mockResolvedValue(availability());
   mockSummary.mockResolvedValue(summary());
+  mockGovernance.mockResolvedValue(governance());
 });
 
 describe('DlpPage', () => {
@@ -219,5 +241,115 @@ describe('DlpPage', () => {
     expect(screen.getByText('Policies (all workloads)')).toBeInTheDocument();
     expect(screen.queryByText('Tenant-wide DLP activity')).not.toBeInTheDocument();
     expect(screen.queryByText('Policies (tenant-wide)')).not.toBeInTheDocument();
+  });
+
+  describe('governance signals (#648)', () => {
+    it('shows each rate with its numerator, its denominator and how much of the period reported it', async () => {
+      renderWithProvider(<DlpPage />);
+
+      expect(await screen.findByText('Copilot governance signals')).toBeInTheDocument();
+      expect(mockGovernance).toHaveBeenCalledWith(28);
+
+      expect(screen.getByText('Jailbreak attempts')).toBeInTheDocument();
+      expect(screen.getByText('2.5 per 10,000')).toBeInTheDocument();
+      expect(screen.getByText('3 of the 12,000 interactions where Microsoft reported the signal')).toBeInTheDocument();
+      expect(screen.getByText('Reported on 12,000 of 20,000 interactions in this period (60%).')).toBeInTheDocument();
+    });
+
+    it('calls a rate with no reported flag unknown, never zero', async () => {
+      renderWithProvider(<DlpPage />);
+
+      expect(await screen.findByText('Cross-prompt injection (XPIA)')).toBeInTheDocument();
+      expect(screen.getByText('Not reported')).toBeInTheDocument();
+      expect(
+        screen.getByText('Microsoft reported this signal on none of the 20,000 interactions in this period, so there is no rate.'),
+      ).toBeInTheDocument();
+      expect(screen.queryByText('0 per 10,000')).not.toBeInTheDocument();
+    });
+
+    it('shows the share of labelled content with its denominator, and the model and plugin mix as Microsoft named it', async () => {
+      renderWithProvider(<DlpPage />);
+
+      expect(await screen.findByText('Labelled content used')).toBeInTheDocument();
+      expect(screen.getByText('25%')).toBeInTheDocument();
+      expect(screen.getByText('25 of the 100 resources Copilot used carried a sensitivity label')).toBeInTheDocument();
+
+      expect(screen.getByText('DEEP_LEO')).toBeInTheDocument();
+      expect(screen.getByText('3%')).toBeInTheDocument();
+      expect(screen.getByText('BingWebSearch')).toBeInTheDocument();
+      expect(screen.getByText('14%')).toBeInTheDocument();
+      expect(screen.getByText(/A model was named on 900 of them/)).toBeInTheDocument();
+    });
+
+    it('lists the agents DLP blocked and points to their verdicts in Copilot Adoption', async () => {
+      renderWithProvider(<DlpPage />);
+
+      expect(await screen.findByText('Agents with DLP blocks')).toBeInTheDocument();
+      expect(screen.getByText(/Contoso HR Agent · Blocked: 8/)).toBeInTheDocument();
+
+      const link = screen.getByRole('link', { name: 'Copilot Adoption > Agents' });
+      expect(link).toHaveAttribute('href', '#/insights/copilot-adoption');
+    });
+
+    it('keeps the DLP figures when the governance call fails, and says so in its own section', async () => {
+      mockGovernance.mockRejectedValue(new Error('governance boom'));
+      renderWithProvider(<DlpPage />);
+
+      expect(await screen.findByText('governance boom')).toBeInTheDocument();
+      expect(screen.getByText('Who and what is affected')).toBeInTheDocument();
+      expect(screen.getAllByText('Contoso HR Agent').length).toBeGreaterThan(0);
+    });
+
+    it('does not ask for the signals when the Copilot import is off', async () => {
+      mockAvailability.mockResolvedValue(availability({ copilotDlpAvailable: false }));
+      renderWithProvider(<DlpPage />);
+
+      expect(
+        await screen.findByText('The Copilot audit import is switched off, so there are no governance signals to show.'),
+      ).toBeInTheDocument();
+      expect(mockGovernance).not.toHaveBeenCalled();
+    });
+
+    it('asks again for the new period when the reader changes it', async () => {
+      renderWithProvider(<DlpPage />);
+      await screen.findByText('2.5 per 10,000');
+
+      fireEvent.change(screen.getByLabelText('Reporting period'), { target: { value: '90' } });
+
+      await waitFor(() => expect(mockGovernance).toHaveBeenLastCalledWith(90));
+    });
+
+    it('renders the whole section in Spanish, with Spanish numbers and Microsoft’s names untouched', async () => {
+      await loadCatalog('es');
+      const es = (key: Parameters<typeof translateStatic>[1], values?: Record<string, string>) =>
+        translateStatic('es', key, values);
+
+      renderWithProvider(<DlpPage />, { language: 'es' });
+
+      expect(await screen.findByText(es('dlp.governance.title'))).toBeInTheDocument();
+      expect(screen.getByText(es('dlp.governance.jailbreak.title'))).toBeInTheDocument();
+      expect(screen.getByText(es('dlp.governance.xpia.title'))).toBeInTheDocument();
+      expect(screen.getByText(es('dlp.governance.rate.notReported'))).toBeInTheDocument();
+
+      // Formatted in the page's language: 2,5 and 12.000 in Spanish, not 2.5 and 12,000.
+      expect(screen.getByText(es('dlp.governance.rate.value', { rate: formatNumber(2.5, { maximumFractionDigits: 1 }) }))).toBeInTheDocument();
+      expect(
+        screen.getByText(es('dlp.governance.rate.fraction', { flagged: formatNumber(3), reported: formatNumber(12000) })),
+      ).toBeInTheDocument();
+      expect(screen.getByText('2,5 por cada 10.000')).toBeInTheDocument();
+
+      expect(screen.getByRole('link', { name: es('dlp.governance.agents.pointerLink') })).toHaveAttribute(
+        'href',
+        '#/insights/copilot-adoption',
+      );
+
+      // Data Microsoft named is never translated.
+      expect(screen.getByText('DEEP_LEO')).toBeInTheDocument();
+      expect(screen.getByText('BingWebSearch')).toBeInTheDocument();
+
+      for (const english of ['Copilot governance signals', 'Jailbreak attempts', 'Not reported', 'per 10,000', 'Labelled content used']) {
+        expect(document.body.textContent).not.toContain(english);
+      }
+    });
   });
 });

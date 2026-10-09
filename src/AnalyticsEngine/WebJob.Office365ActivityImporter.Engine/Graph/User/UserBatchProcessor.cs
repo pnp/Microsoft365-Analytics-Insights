@@ -29,7 +29,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         /// <param name="prepareBatch">
         /// Called once with each batch before it is processed, so the caller can resolve everything
         /// the batch will need in bulk - in production that is <c>UserDataMapper</c> prefetching the
-        /// batch's managers in a single query instead of one query per user (#371). Optional; pass
+        /// batch's managers in bulk instead of one query per user (#371). Optional; pass
         /// null to skip.
         /// </param>
         public async Task<int> ProcessExistingUsersInBatches(

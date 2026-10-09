@@ -458,6 +458,14 @@ namespace Common.Entities.CopilotAdoption
                     output => BuildAgentEstateAsync(analysis, output, seatIds, windowStart, toExclusive, nowUtc, cancellationToken)));
             }
 
+            // Microsoft's own tenant figures stand on their own: they need neither a seat nor the audit import,
+            // so this step is never gated. Last, so the warnings of every step above keep their order.
+            var microsoftReportTo = _options.UsesExplicitDates && toExclusive.Date.AddDays(-1) < nowUtc.Date
+                ? toExclusive.Date.AddDays(-1)
+                : nowUtc.Date;
+            steps.Add(new AnalysisStep(CopilotAdoptionSteps.MicrosoftReportFigures,
+                output => BuildMicrosoftReportFiguresAsync(analysis, output, microsoftReportTo, cancellationToken)));
+
             await RunStepsAsync(analysis, steps, _maxConcurrentSteps, cancellationToken);
 
             var scoringOperation = _telemetry.StepStarted(CopilotAdoptionSteps.Scoring);
@@ -924,6 +932,61 @@ namespace Common.Entities.CopilotAdoption
                     Kind = CopilotAccessedResourceTaxonomy.Classify(r.Label),
                 })
                 .ToList();
+        }
+
+        #endregion
+
+        #region Microsoft's own tenant figures
+
+        /// <summary>
+        /// Microsoft's tenant-wide prompt figures from the usage-report import's stored user-count summary
+        /// (#642). One cheap query - see <see cref="CopilotAdoptionSql.MicrosoftReportFiguresSql"/>.
+        /// </summary>
+        /// <remarks>
+        /// A failure is a warning and leaves every figure unknown. It does not mark the page incomplete: no
+        /// other figure is derived from these, so the audit-derived figures are exactly as trustworthy without
+        /// them.
+        /// </remarks>
+        private async Task BuildMicrosoftReportFiguresAsync(
+            CopilotAdoptionAnalysis analysis,
+            StepOutput output,
+            DateTime reportTo,
+            CancellationToken cancellationToken)
+        {
+            var sql = CopilotAdoptionSql.MicrosoftReportFiguresSql;
+            var parameters = new Dictionary<string, object>
+            {
+                { "@reportTo", reportTo },
+                { "@targetPeriodDays", CopilotAdoptionSql.MicrosoftReportTargetPeriodDays },
+            };
+            output.Sql["microsoftReportFigures"] = CopilotAdoptionSql.ForDisplay(sql, parameters);
+
+            var rows = await SafeAsync(
+                () => QueryAsync<MicrosoftReportFiguresRow>(sql, cancellationToken, ToSqlParameters(parameters)),
+                CopilotAdoptionSteps.MicrosoftReportFigures,
+                CopilotAdoptionQueries.MicrosoftReportFigures,
+                output,
+                "Microsoft Copilot usage-report tenant figures", cancellationToken);
+
+            ApplyMicrosoftReportFigures(analysis.Summary, rows?.FirstOrDefault());
+        }
+
+        /// <summary>
+        /// Copies Microsoft's figures onto the summary exactly as the report stated them. A missing row - no
+        /// summary imported, or the query failed - leaves every figure null, and a null in the row stays null:
+        /// nothing here is ever coalesced to zero.
+        /// </summary>
+        internal static void ApplyMicrosoftReportFigures(CopilotAdoptionSummary summary, MicrosoftReportFiguresRow row)
+        {
+            if (summary == null) return;
+
+            // UTC because it is a calendar date: unmarked, it is serialised without an offset and a browser
+            // east of UTC reads midnight as the evening before.
+            summary.MicrosoftReportDate = row == null ? (DateTime?)null : DateTime.SpecifyKind(row.ReportDate.Date, DateTimeKind.Utc);
+            summary.MicrosoftReportPeriodDays = row?.ReportPeriodDays;
+            summary.MicrosoftReportVersion = string.IsNullOrWhiteSpace(row?.ReportVersion) ? null : row.ReportVersion.Trim();
+            summary.MicrosoftReportPromptsSubmitted = row?.PromptsSubmitted;
+            summary.MicrosoftReportAveragePromptsPerActiveUser = row?.AveragePromptsSubmitted;
         }
 
         #endregion
@@ -2174,6 +2237,7 @@ namespace Common.Entities.CopilotAdoption
                 {
                     Label = CopilotAdoptionScoring.BandDisplayName(band),
                     Value = users.Count(u => u.Band == band),
+                    Key = band.ToString(),
                 })
                 .ToList();
         }
@@ -2278,6 +2342,7 @@ namespace Common.Entities.CopilotAdoption
                 {
                     Label = CopilotAdoptionScoring.AgentHealthDisplayName(health),
                     Value = agents.Count(a => a.Health == health),
+                    Key = health.ToString(),
                 })
                 .ToList();
 
@@ -3449,6 +3514,23 @@ namespace Common.Entities.CopilotAdoption
         public class WeekCoverageRow
         {
             public DateTime WeekStart { get; set; }
+        }
+
+        /// <summary>
+        /// The "Any App" row of Microsoft's latest stored user-count summary. Every figure is nullable because a
+        /// version 1 report does not carry it, and a missing figure must stay missing.
+        /// </summary>
+        public class MicrosoftReportFiguresRow
+        {
+            public DateTime ReportDate { get; set; }
+
+            public int ReportPeriodDays { get; set; }
+
+            public long? PromptsSubmitted { get; set; }
+
+            public double? AveragePromptsSubmitted { get; set; }
+
+            public string ReportVersion { get; set; }
         }
 
         #endregion

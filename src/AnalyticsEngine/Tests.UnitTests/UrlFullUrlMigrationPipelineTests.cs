@@ -104,6 +104,8 @@ namespace Tests.UnitTests
         // It is raw-SQL, additive, and reuses the predecessor snapshot verbatim.
         // LicenceHistory then adds licence assignment-history, completed-refresh and per-refresh
         // seat-count tables. It is raw-SQL, additive, and reuses the predecessor snapshot verbatim.
+        // Agent365PackageCatalog then adds the Agent 365 catalog snapshot tables. Raw-SQL, additive, and
+        // reuses the predecessor snapshot verbatim because the tables are not exposed as DbSets.
         // CopilotTurnPairing then adds copilot_chats.conversation_id and the copilot_chat_duplicates table
         // (issue #699). It is raw-SQL, additive, and reuses the predecessor snapshot verbatim: neither is in
         // the EF model. As the chain head its snapshot is the one EF compares the live entity model against.

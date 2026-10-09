@@ -15,7 +15,7 @@ namespace Tests.UnitTests
     public class CopilotTurnPairingMigrationScriptTests
     {
         private const string MigrationId = "202610071400001_CopilotTurnPairing";
-        private const string PredecessorId = "202610021200001_LicenceHistory";
+        private const string PredecessorId = "202610071200001_Agent365PackageCatalog";
         private const string PredecessorModel = "0x1F8B0800AABBCCDD";
 
         private static string Script()

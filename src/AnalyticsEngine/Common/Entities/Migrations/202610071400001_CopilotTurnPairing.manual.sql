@@ -7,7 +7,7 @@
 
    RUN ORDER
      Run the release's manual scripts in migration-id order. This one requires
-     202610021200001_LicenceHistory to be stamped in __MigrationHistory first, and refuses to stamp
+     202610071200001_Agent365PackageCatalog to be stamped in __MigrationHistory first, and refuses to stamp
      itself otherwise.
 
    WHAT IT DOES (issue #699)
@@ -125,16 +125,16 @@ IF COL_LENGTH('dbo.copilot_chats', 'conversation_id') IS NULL
 BEGIN
     RAISERROR('CopilotTurnPairing: NOT stamped - the schema work did not complete: dbo.copilot_chats.conversation_id, dbo.copilot_chat_duplicates or one of its indexes is missing. Re-run this script and read the messages above.', 16, 1);
 END
-ELSE IF NOT EXISTS (SELECT 1 FROM [dbo].[__MigrationHistory] WHERE [MigrationId] = N'202610021200001_LicenceHistory')
+ELSE IF NOT EXISTS (SELECT 1 FROM [dbo].[__MigrationHistory] WHERE [MigrationId] = N'202610071200001_Agent365PackageCatalog')
 BEGIN
-    RAISERROR('CopilotTurnPairing: NOT stamped - prerequisite migration 202610021200001_LicenceHistory is not stamped in __MigrationHistory. Run its manual script first.', 16, 1);
+    RAISERROR('CopilotTurnPairing: NOT stamped - prerequisite migration 202610071200001_Agent365PackageCatalog is not stamped in __MigrationHistory. Run its manual script first.', 16, 1);
 END
 ELSE IF NOT EXISTS (SELECT 1 FROM [dbo].[__MigrationHistory] WHERE [MigrationId] = N'202610071400001_CopilotTurnPairing')
 BEGIN
     INSERT INTO [dbo].[__MigrationHistory] ([MigrationId], [ContextKey], [Model], [ProductVersion])
     SELECT N'202610071400001_CopilotTurnPairing', [ContextKey], [Model], [ProductVersion]
     FROM [dbo].[__MigrationHistory]
-    WHERE [MigrationId] = N'202610021200001_LicenceHistory';
+    WHERE [MigrationId] = N'202610071200001_Agent365PackageCatalog';
     RAISERROR('CopilotTurnPairing: stamped __MigrationHistory.', 0, 1) WITH NOWAIT;
 END
 ELSE

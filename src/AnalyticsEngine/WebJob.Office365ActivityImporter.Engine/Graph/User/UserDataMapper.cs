@@ -42,7 +42,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
 
         /// <param name="userLookupStore">
         /// Used by <see cref="PrefetchManagersForBatchAsync"/> to resolve a whole batch's managers in
-        /// one query instead of one query per user (#371).
+        /// bulk instead of one query per user (#371).
         /// </param>
         public UserDataMapper(AnalyticsLogger logger, UserMetadataCache userMetaCache, IUserLookupStore userLookupStore, IClock clock = null)
         {
@@ -75,7 +75,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         }
 
         /// <summary>
-        /// Loads every manager the given batch might have to look up by UPN, in a single query, so
+        /// Loads every manager the given batch might have to look up by UPN, in bulk, so
         /// the resolution chain below does not have to go to the database once per user.
         /// </summary>
         /// <remarks>

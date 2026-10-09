@@ -133,6 +133,7 @@
     <Compile Include="CopilotAdoption\CopilotAdoptionUnlicensedModels.cs" />
     <Compile Include="CopilotAdoption\CopilotAdoptionUserModels.cs" />
     <Compile Include="CopilotAdoption\CopilotAdoptionWorkbook.cs" />
+    <Compile Include="Agent365\Agent365PackageCatalogStore.cs" />
     <Compile Include="CopilotAdoption\CopilotLicenceClassifier.cs" />
     <Compile Include="CopilotAdoption\CopilotLicenceModels.cs" />
     <Compile Include="CopilotAdoption\CsvSerialiser.cs" />
@@ -543,6 +544,10 @@
     <Compile Include="Migrations\202610021200001_LicenceHistory.Designer.cs">
       <DependentUpon>202610021200001_LicenceHistory.cs</DependentUpon>
     </Compile>
+    <Compile Include="Migrations\202610071200001_Agent365PackageCatalog.cs" />
+    <Compile Include="Migrations\202610071200001_Agent365PackageCatalog.Designer.cs">
+      <DependentUpon>202610071200001_Agent365PackageCatalog.cs</DependentUpon>
+    </Compile>
     <Compile Include="Migrations\202610071400001_CopilotTurnPairing.cs" />
     <Compile Include="Migrations\202610071400001_CopilotTurnPairing.Designer.cs">
       <DependentUpon>202610071400001_CopilotTurnPairing.cs</DependentUpon>
@@ -601,6 +606,9 @@
     <Compile Include="State\StateStore.cs" />
     <Compile Include="State\StorageTableClientFactory.cs" />
     <Compile Include="State\TeamsTokenStore.cs" />
+    <Compile Include="State\AgentCostConnectionStore.cs" />
+    <Compile Include="State\AgentCostDelegatedTokenProvider.cs" />
+    <Compile Include="State\AgentCostTokenProtection.cs" />
     <Compile Include="State\UserImportCheckpointKeys.cs" />
     <Compile Include="AnalyticsEntitiesContext.cs" />
     <Compile Include="Sql\AzureSqlAccessTokenInterceptor.cs" />
@@ -863,6 +871,10 @@
     <EmbeddedResource Include="Migrations\202610021200001_LicenceHistory.resx">
       <DependentUpon>202610021200001_LicenceHistory.cs</DependentUpon>
     </EmbeddedResource>
+    <EmbeddedResource Include="Migrations\202610071200001_Agent365PackageCatalog.resx">
+      <DependentUpon>202610071200001_Agent365PackageCatalog.cs</DependentUpon>
+    </EmbeddedResource>
+    <None Include="Migrations\202610071200001_Agent365PackageCatalog.manual.sql" />
     <EmbeddedResource Include="Migrations\202610071400001_CopilotTurnPairing.resx">
       <DependentUpon>202610071400001_CopilotTurnPairing.cs</DependentUpon>
     </EmbeddedResource>
