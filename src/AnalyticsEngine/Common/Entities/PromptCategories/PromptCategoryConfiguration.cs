@@ -54,19 +54,21 @@ namespace Common.Entities.PromptCategories
         {
             Categories = new List<PromptCategoryDefinition>
             {
-                Category("meeting-summary", "Meeting summaries", "Summarise a meeting or extract its actions."),
-                Category("document-editing", "Document editing", "Revise, proofread or improve existing text."),
-                Category("information-lookup", "Information lookup", "Find information or answer a factual question."),
-                Category("content-drafting", "Content drafting", "Create new text, presentations or communications."),
-                Category("analysis", "Analysis", "Analyse information, reason or compare options."),
+                Category("meeting-summary", "Meeting summaries", "Summarise a meeting or extract its actions.", "directing"),
+                Category("document-editing", "Document editing", "Revise, proofread or improve existing text.", "directing"),
+                Category("information-lookup", "Information lookup", "Find information or answer a factual question.", "directing"),
+                Category("content-drafting", "Content drafting", "Create new text, presentations or communications.", "directing"),
+                Category("analysis", "Analysis", "Analyse information, reason or compare options.", "directing"),
+                Category("delegated-research", "Delegated research", "Delegate a multi-step investigation with autonomy to gather evidence, compare options and recommend a plan for human review.", "supervising"),
+                Category("delegated-problem-solving", "Delegated problem solving", "Delegate diagnosing a problem, implementing and checking a solution, and returning results for human approval.", "supervising"),
                 Category("other", "Other", "A goal that does not match another category.")
             }
         };
 
-        private static PromptCategoryDefinition Category(string id, string name, string description) =>
+        private static PromptCategoryDefinition Category(string id, string name, string description, string humanMode = null) =>
             new PromptCategoryDefinition
             {
-                Id = id, Name = name, Description = description,
+                Id = id, Name = name, Description = description, HumanMode = humanMode,
                 NameKey = "promptCategories.defaults." + id + ".name",
                 DescriptionKey = "promptCategories.defaults." + id + ".description"
             };

@@ -56,6 +56,36 @@ describe('prompt categorisation editor', () => {
     expect(within(tooltip).getByText(/la IA no detecta este comportamiento/)).toBeInTheDocument();
   }, 30000);
 
+  it('renders directing and supervising preset categories in Spanish with their saved modes', async () => {
+    await loadCatalog('es');
+    const config = configuration();
+    vi.mocked(fetchPromptCategoryAdmin).mockResolvedValue({
+      configuration: {
+        ...config,
+        categories: [
+          { ...config.categories[0], humanMode: 'directing' },
+          { id: 'delegated-research', name: 'Delegated research',
+            description: 'Delegate a multi-step investigation with autonomy to gather evidence, compare options and recommend a plan for human review.',
+            humanMode: 'supervising', nameKey: 'promptCategories.defaults.delegated-research.name',
+            descriptionKey: 'promptCategories.defaults.delegated-research.description' },
+          { id: 'delegated-problem-solving', name: 'Delegated problem solving',
+            description: 'Delegate diagnosing a problem, implementing and checking a solution, and returning results for human approval.',
+            humanMode: 'supervising', nameKey: 'promptCategories.defaults.delegated-problem-solving.name',
+            descriptionKey: 'promptCategories.defaults.delegated-problem-solving.description' },
+          config.categories[1],
+        ],
+      }, storageAvailable: true, backendConfigured: true,
+    });
+    renderWithProvider(<PromptCategoriesPage />, { language: 'es' });
+    expect(await screen.findByDisplayValue('Investigación delegada')).toBeInTheDocument();
+    expect(screen.getByDisplayValue('Resolución de problemas delegada')).toBeInTheDocument();
+    expect(screen.getByDisplayValue(/Delegar una investigación de varios pasos/)).toBeInTheDocument();
+    expect(screen.getByLabelText('Metadatos opcionales del modo humano, categoría 1')).toHaveValue('directing');
+    expect(screen.getByLabelText('Metadatos opcionales del modo humano, categoría 2')).toHaveValue('supervising');
+    expect(screen.getByLabelText('Metadatos opcionales del modo humano, categoría 3')).toHaveValue('supervising');
+    expect(screen.getByLabelText('Metadatos opcionales del modo humano, categoría 4')).toHaveValue('');
+  }, 30000);
+
   it('starts disabled, explains the new data flow, and saves an explicit opt-in', async () => {
     const user = userEvent.setup();
     renderWithProvider(<PromptCategoriesPage />);

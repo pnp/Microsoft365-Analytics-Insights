@@ -118,6 +118,12 @@ namespace App.ControlPanel.Frames
                 SharePointConfig = sharePointConfigControl1.SharePointInstallConfig,
                 KeyVaultName = azurePaaSConfigControl1.KeyVaultName,
                 AutomationAccountName = azurePaaSConfigControl1.AutomationAccountName,
+                FoundryPromptEnabled = azurePaaSConfigControl1.FoundryPromptEnabled,
+                FoundryPromptResourceName = azurePaaSConfigControl1.FoundryPromptResourceName,
+                FoundryPromptDeploymentName = azurePaaSConfigControl1.FoundryPromptDeploymentName,
+                FoundryPromptModelName = azurePaaSConfigControl1.FoundryPromptModelName,
+                FoundryPromptModelVersion = azurePaaSConfigControl1.FoundryPromptModelVersion,
+                FoundryPromptCapacity = azurePaaSConfigControl1.FoundryPromptCapacity,
                 ResourceGroupName = azureBaseConfigControl1.ResourceGroup,
                 Subscription = azureBaseConfigControl1.AzureSubscription,
                 AzureLocationName = azureBaseConfigControl1.AzureLocationString,
@@ -203,6 +209,12 @@ namespace App.ControlPanel.Frames
             azurePaaSConfigControl1.AppInsightsWorkspaceName = config.AppInsightsWorkspaceName;
             azurePaaSConfigControl1.KeyVaultName = config.KeyVaultName;
             azurePaaSConfigControl1.AutomationAccountName = config.AutomationAccountName;
+            azurePaaSConfigControl1.FoundryPromptEnabled = config.FoundryPromptEnabled;
+            azurePaaSConfigControl1.FoundryPromptResourceName = config.FoundryPromptResourceName;
+            azurePaaSConfigControl1.FoundryPromptDeploymentName = config.FoundryPromptDeploymentName;
+            azurePaaSConfigControl1.FoundryPromptModelName = config.FoundryPromptModelName;
+            azurePaaSConfigControl1.FoundryPromptModelVersion = config.FoundryPromptModelVersion;
+            azurePaaSConfigControl1.FoundryPromptCapacity = config.FoundryPromptCapacity;
 
             // Networking
             if (config.NetworkConfig != null)

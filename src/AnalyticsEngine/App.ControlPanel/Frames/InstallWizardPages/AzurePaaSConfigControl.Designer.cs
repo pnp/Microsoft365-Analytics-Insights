@@ -54,6 +54,20 @@
             this.lblGUIAzureHeaderAutomation = new System.Windows.Forms.Label();
             this.txtAutomationAccountName = new System.Windows.Forms.TextBox();
             this.lblGUIAutomationDesc = new System.Windows.Forms.Label();
+            this.lblGUIAzureHeaderFoundry = new System.Windows.Forms.Label();
+            this.lblGUIAzureFoundryDesc = new System.Windows.Forms.Label();
+            this.chkFoundryEnable = new System.Windows.Forms.CheckBox();
+            this.lblGUIFoundryResourceName = new System.Windows.Forms.Label();
+            this.txtFoundryResourceName = new System.Windows.Forms.TextBox();
+            this.lblFoundryEndpoint = new System.Windows.Forms.Label();
+            this.lblGUIFoundryDeploymentName = new System.Windows.Forms.Label();
+            this.txtFoundryDeploymentName = new System.Windows.Forms.TextBox();
+            this.lblGUIFoundryModelName = new System.Windows.Forms.Label();
+            this.txtFoundryModelName = new System.Windows.Forms.TextBox();
+            this.lblGUIFoundryModelVersion = new System.Windows.Forms.Label();
+            this.txtFoundryModelVersion = new System.Windows.Forms.TextBox();
+            this.lblGUIFoundryCapacity = new System.Windows.Forms.Label();
+            this.txtFoundryCapacity = new System.Windows.Forms.TextBox();
             this.pictureBox1 = new System.Windows.Forms.PictureBox();
             this.pictureBox2 = new System.Windows.Forms.PictureBox();
             this.pictureBox3 = new System.Windows.Forms.PictureBox();
@@ -298,7 +312,132 @@
             this.lblGUIAutomationDesc.Size = new System.Drawing.Size(38, 13);
             this.lblGUIAutomationDesc.TabIndex = 183;
             this.lblGUIAutomationDesc.Text = "Name:";
-            // 
+            //
+            // lblGUIAzureHeaderFoundry
+            //
+            this.lblGUIAzureHeaderFoundry.AutoSize = true;
+            this.lblGUIAzureHeaderFoundry.Font = new System.Drawing.Font("Calibri", 12F, System.Drawing.FontStyle.Bold, System.Drawing.GraphicsUnit.Point, ((byte)(0)));
+            this.lblGUIAzureHeaderFoundry.Location = new System.Drawing.Point(62, 463);
+            this.lblGUIAzureHeaderFoundry.Name = "lblGUIAzureHeaderFoundry";
+            this.lblGUIAzureHeaderFoundry.Size = new System.Drawing.Size(208, 19);
+            this.lblGUIAzureHeaderFoundry.TabIndex = 186;
+            this.lblGUIAzureHeaderFoundry.Text = "Azure AI Foundry (Optional)";
+            //
+            // lblGUIAzureFoundryDesc
+            //
+            this.lblGUIAzureFoundryDesc.AutoSize = true;
+            this.lblGUIAzureFoundryDesc.Location = new System.Drawing.Point(63, 487);
+            this.lblGUIAzureFoundryDesc.Name = "lblGUIAzureFoundryDesc";
+            this.lblGUIAzureFoundryDesc.Size = new System.Drawing.Size(544, 26);
+            this.lblGUIAzureFoundryDesc.TabIndex = 187;
+            this.lblGUIAzureFoundryDesc.Text = "Provision an Azure OpenAI resource and model deployment for optional prompt categorisation.\r\nThis does not enable categorisation; configure its separate opt-in after installation.";
+            //
+            // chkFoundryEnable
+            //
+            this.chkFoundryEnable.AutoSize = true;
+            this.chkFoundryEnable.Location = new System.Drawing.Point(355, 463);
+            this.chkFoundryEnable.Name = "chkFoundryEnable";
+            this.chkFoundryEnable.Size = new System.Drawing.Size(103, 17);
+            this.chkFoundryEnable.TabIndex = 172;
+            this.chkFoundryEnable.Text = "Enable Foundry";
+            this.chkFoundryEnable.UseVisualStyleBackColor = true;
+            this.chkFoundryEnable.CheckedChanged += new System.EventHandler(this.chkFoundryEnable_CheckedChanged);
+            //
+            // lblGUIFoundryResourceName
+            //
+            this.lblGUIFoundryResourceName.AutoSize = true;
+            this.lblGUIFoundryResourceName.Location = new System.Drawing.Point(63, 539);
+            this.lblGUIFoundryResourceName.Name = "lblGUIFoundryResourceName";
+            this.lblGUIFoundryResourceName.Size = new System.Drawing.Size(83, 13);
+            this.lblGUIFoundryResourceName.TabIndex = 188;
+            this.lblGUIFoundryResourceName.Text = "Resource name:";
+            //
+            // txtFoundryResourceName
+            //
+            this.txtFoundryResourceName.CharacterCasing = System.Windows.Forms.CharacterCasing.Lower;
+            this.txtFoundryResourceName.Location = new System.Drawing.Point(156, 536);
+            this.txtFoundryResourceName.Name = "txtFoundryResourceName";
+            this.txtFoundryResourceName.Size = new System.Drawing.Size(150, 20);
+            this.txtFoundryResourceName.TabIndex = 173;
+            this.txtFoundryResourceName.Text = "";
+            //
+            // lblFoundryEndpoint
+            //
+            this.lblFoundryEndpoint.AutoSize = true;
+            this.lblFoundryEndpoint.Location = new System.Drawing.Point(313, 539);
+            this.lblFoundryEndpoint.Name = "lblFoundryEndpoint";
+            this.lblFoundryEndpoint.Size = new System.Drawing.Size(201, 13);
+            this.lblFoundryEndpoint.TabIndex = 189;
+            this.lblFoundryEndpoint.Text = "Endpoint suffix: .openai.azure.com";
+            //
+            // lblGUIFoundryDeploymentName
+            //
+            this.lblGUIFoundryDeploymentName.AutoSize = true;
+            this.lblGUIFoundryDeploymentName.Location = new System.Drawing.Point(63, 565);
+            this.lblGUIFoundryDeploymentName.Name = "lblGUIFoundryDeploymentName";
+            this.lblGUIFoundryDeploymentName.Size = new System.Drawing.Size(88, 13);
+            this.lblGUIFoundryDeploymentName.TabIndex = 190;
+            this.lblGUIFoundryDeploymentName.Text = "Deployment:";
+            //
+            // txtFoundryDeploymentName
+            //
+            this.txtFoundryDeploymentName.Location = new System.Drawing.Point(156, 562);
+            this.txtFoundryDeploymentName.Name = "txtFoundryDeploymentName";
+            this.txtFoundryDeploymentName.Size = new System.Drawing.Size(150, 20);
+            this.txtFoundryDeploymentName.TabIndex = 174;
+            this.txtFoundryDeploymentName.Text = "prompt-categories";
+            //
+            // lblGUIFoundryModelName
+            //
+            this.lblGUIFoundryModelName.AutoSize = true;
+            this.lblGUIFoundryModelName.Location = new System.Drawing.Point(63, 591);
+            this.lblGUIFoundryModelName.Name = "lblGUIFoundryModelName";
+            this.lblGUIFoundryModelName.Size = new System.Drawing.Size(67, 13);
+            this.lblGUIFoundryModelName.TabIndex = 191;
+            this.lblGUIFoundryModelName.Text = "Model name:";
+            //
+            // txtFoundryModelName
+            //
+            this.txtFoundryModelName.Location = new System.Drawing.Point(156, 588);
+            this.txtFoundryModelName.Name = "txtFoundryModelName";
+            this.txtFoundryModelName.Size = new System.Drawing.Size(150, 20);
+            this.txtFoundryModelName.TabIndex = 175;
+            this.txtFoundryModelName.Text = "gpt-4o-mini";
+            //
+            // lblGUIFoundryModelVersion
+            //
+            this.lblGUIFoundryModelVersion.AutoSize = true;
+            this.lblGUIFoundryModelVersion.Location = new System.Drawing.Point(63, 617);
+            this.lblGUIFoundryModelVersion.Name = "lblGUIFoundryModelVersion";
+            this.lblGUIFoundryModelVersion.Size = new System.Drawing.Size(74, 13);
+            this.lblGUIFoundryModelVersion.TabIndex = 192;
+            this.lblGUIFoundryModelVersion.Text = "Model version:";
+            //
+            // txtFoundryModelVersion
+            //
+            this.txtFoundryModelVersion.Location = new System.Drawing.Point(156, 614);
+            this.txtFoundryModelVersion.Name = "txtFoundryModelVersion";
+            this.txtFoundryModelVersion.Size = new System.Drawing.Size(150, 20);
+            this.txtFoundryModelVersion.TabIndex = 176;
+            this.txtFoundryModelVersion.Text = "";
+            //
+            // lblGUIFoundryCapacity
+            //
+            this.lblGUIFoundryCapacity.AutoSize = true;
+            this.lblGUIFoundryCapacity.Location = new System.Drawing.Point(352, 565);
+            this.lblGUIFoundryCapacity.Name = "lblGUIFoundryCapacity";
+            this.lblGUIFoundryCapacity.Size = new System.Drawing.Size(51, 13);
+            this.lblGUIFoundryCapacity.TabIndex = 193;
+            this.lblGUIFoundryCapacity.Text = "Capacity:";
+            //
+            // txtFoundryCapacity
+            //
+            this.txtFoundryCapacity.Location = new System.Drawing.Point(438, 562);
+            this.txtFoundryCapacity.Name = "txtFoundryCapacity";
+            this.txtFoundryCapacity.Size = new System.Drawing.Size(50, 20);
+            this.txtFoundryCapacity.TabIndex = 177;
+            this.txtFoundryCapacity.Text = "1";
+            //
             // pictureBox1
             // 
             this.pictureBox1.Image = global::App.ControlPanel.Properties.Resources.automation;
@@ -307,7 +446,7 @@
             this.pictureBox1.Size = new System.Drawing.Size(56, 56);
             this.pictureBox1.TabIndex = 184;
             this.pictureBox1.TabStop = false;
-            // 
+            //
             // pictureBox2
             // 
             this.pictureBox2.Image = global::App.ControlPanel.Properties.Resources.keyvault;
@@ -316,7 +455,7 @@
             this.pictureBox2.Size = new System.Drawing.Size(56, 56);
             this.pictureBox2.TabIndex = 179;
             this.pictureBox2.TabStop = false;
-            // 
+            //
             // pictureBox3
             // 
             this.pictureBox3.Image = ((System.Drawing.Image)(resources.GetObject("pictureBox3.Image")));
@@ -325,7 +464,7 @@
             this.pictureBox3.Size = new System.Drawing.Size(56, 56);
             this.pictureBox3.TabIndex = 171;
             this.pictureBox3.TabStop = false;
-            // 
+            //
             // picAppService
             // 
             this.picAppService.Image = global::App.ControlPanel.Properties.Resources.AppService;
@@ -334,7 +473,7 @@
             this.picAppService.Size = new System.Drawing.Size(56, 56);
             this.picAppService.TabIndex = 165;
             this.picAppService.TabStop = false;
-            // 
+            //
             // picAppInsights
             // 
             this.picAppInsights.Image = global::App.ControlPanel.Properties.Resources.AppInsights;
@@ -343,11 +482,27 @@
             this.picAppInsights.Size = new System.Drawing.Size(56, 56);
             this.picAppInsights.TabIndex = 164;
             this.picAppInsights.TabStop = false;
-            // 
+            //
             // AzurePaaSConfigControl
             // 
             this.AutoScaleDimensions = new System.Drawing.SizeF(6F, 13F);
             this.AutoScaleMode = System.Windows.Forms.AutoScaleMode.Font;
+            this.AutoScroll = true;
+            this.AutoScrollMinSize = new System.Drawing.Size(613, 652);
+            this.Controls.Add(this.lblGUIAzureHeaderFoundry);
+            this.Controls.Add(this.lblGUIAzureFoundryDesc);
+            this.Controls.Add(this.chkFoundryEnable);
+            this.Controls.Add(this.lblGUIFoundryResourceName);
+            this.Controls.Add(this.txtFoundryResourceName);
+            this.Controls.Add(this.lblFoundryEndpoint);
+            this.Controls.Add(this.lblGUIFoundryDeploymentName);
+            this.Controls.Add(this.txtFoundryDeploymentName);
+            this.Controls.Add(this.lblGUIFoundryModelName);
+            this.Controls.Add(this.txtFoundryModelName);
+            this.Controls.Add(this.lblGUIFoundryModelVersion);
+            this.Controls.Add(this.txtFoundryModelVersion);
+            this.Controls.Add(this.lblGUIFoundryCapacity);
+            this.Controls.Add(this.txtFoundryCapacity);
             this.Controls.Add(this.lblGUIAzureHeaderAutomation);
             this.Controls.Add(this.txtAutomationAccountName);
             this.Controls.Add(this.lblGUIAutomationDesc);
@@ -422,5 +577,19 @@
         private System.Windows.Forms.TextBox txtAutomationAccountName;
         private System.Windows.Forms.Label lblGUIAutomationDesc;
         private System.Windows.Forms.PictureBox pictureBox1;
+        private System.Windows.Forms.Label lblGUIAzureHeaderFoundry;
+        private System.Windows.Forms.Label lblGUIAzureFoundryDesc;
+        private System.Windows.Forms.CheckBox chkFoundryEnable;
+        private System.Windows.Forms.Label lblGUIFoundryResourceName;
+        private System.Windows.Forms.TextBox txtFoundryResourceName;
+        private System.Windows.Forms.Label lblFoundryEndpoint;
+        private System.Windows.Forms.Label lblGUIFoundryDeploymentName;
+        private System.Windows.Forms.TextBox txtFoundryDeploymentName;
+        private System.Windows.Forms.Label lblGUIFoundryModelName;
+        private System.Windows.Forms.TextBox txtFoundryModelName;
+        private System.Windows.Forms.Label lblGUIFoundryModelVersion;
+        private System.Windows.Forms.TextBox txtFoundryModelVersion;
+        private System.Windows.Forms.Label lblGUIFoundryCapacity;
+        private System.Windows.Forms.TextBox txtFoundryCapacity;
     }
 }

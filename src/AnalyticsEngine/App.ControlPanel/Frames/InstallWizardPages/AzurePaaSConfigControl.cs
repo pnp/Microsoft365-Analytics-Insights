@@ -8,10 +8,16 @@ namespace App.ControlPanel.Frames.InstallWizard
         public AzurePaaSConfigControl()
         {
             InitializeComponent();
+            UpdateResponsiveUIControls();
         }
         private void UpdateResponsiveUIControls()
         {
             txtCognitiveName.Enabled = chkCognitiveEnable.Checked;
+            txtFoundryResourceName.Enabled = chkFoundryEnable.Checked;
+            txtFoundryDeploymentName.Enabled = chkFoundryEnable.Checked;
+            txtFoundryModelName.Enabled = chkFoundryEnable.Checked;
+            txtFoundryModelVersion.Enabled = chkFoundryEnable.Checked;
+            txtFoundryCapacity.Enabled = chkFoundryEnable.Checked;
             lblAppServiceWebAppName.Text = $"https://{txtAppServiceWebAppName.Text}.azurewebsites.net";
             lblCognitiveName.Text = $"https://{txtCognitiveName.Text}.cognitiveservices.azure.com";
             lblKVName.Text = $"https://{txtKeyVaultName.Text}.vault.azure.net";
@@ -33,6 +39,24 @@ namespace App.ControlPanel.Frames.InstallWizard
         public string AppInsightsWorkspaceName { get { return txtLogAnalyticsName.Text; } set { txtLogAnalyticsName.Text = value; } }
         public string KeyVaultName { get { return txtKeyVaultName.Text; } set { txtKeyVaultName.Text = value; } }
         public string AutomationAccountName { get { return txtAutomationAccountName.Text; } set { txtAutomationAccountName.Text = value; } }
+        public bool FoundryPromptEnabled
+        {
+            get { return chkFoundryEnable.Checked; }
+            set
+            {
+                chkFoundryEnable.Checked = value;
+                UpdateResponsiveUIControls();
+            }
+        }
+        public string FoundryPromptResourceName { get { return txtFoundryResourceName.Text; } set { txtFoundryResourceName.Text = value; } }
+        public string FoundryPromptDeploymentName { get { return txtFoundryDeploymentName.Text; } set { txtFoundryDeploymentName.Text = value; } }
+        public string FoundryPromptModelName { get { return txtFoundryModelName.Text; } set { txtFoundryModelName.Text = value; } }
+        public string FoundryPromptModelVersion { get { return txtFoundryModelVersion.Text; } set { txtFoundryModelVersion.Text = value; } }
+        public int FoundryPromptCapacity
+        {
+            get { return int.TryParse(txtFoundryCapacity.Text, out var capacity) ? capacity : 0; }
+            set { txtFoundryCapacity.Text = value.ToString(); }
+        }
 
         private void txtCognitiveName_TextChanged(object sender, EventArgs e)
         {
@@ -50,6 +74,11 @@ namespace App.ControlPanel.Frames.InstallWizard
         }
 
         private void chkCognitiveEnable_CheckedChanged(object sender, EventArgs e)
+        {
+            UpdateResponsiveUIControls();
+        }
+
+        private void chkFoundryEnable_CheckedChanged(object sender, EventArgs e)
         {
             UpdateResponsiveUIControls();
         }

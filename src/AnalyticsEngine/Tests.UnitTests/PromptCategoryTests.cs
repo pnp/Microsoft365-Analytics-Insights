@@ -37,7 +37,14 @@ namespace Tests.UnitTests
             var original = config.Version;
             Assert.IsFalse(config.Enabled);
             Assert.IsTrue(config.Categories.Any(c => c.Id == "other"));
-            Assert.IsTrue(config.Categories.All(c => c.HumanMode == null));
+            CollectionAssert.AreEquivalent(
+                new[] { "meeting-summary", "document-editing", "information-lookup", "content-drafting", "analysis" },
+                config.Categories.Where(c => c.HumanMode == "directing").Select(c => c.Id).ToArray());
+            CollectionAssert.AreEquivalent(
+                new[] { "delegated-research", "delegated-problem-solving" },
+                config.Categories.Where(c => c.HumanMode == "supervising").Select(c => c.Id).ToArray());
+            Assert.IsNull(config.Categories.Single(c => c.Id == "other").HumanMode);
+            Assert.AreEqual(8, config.Categories.Count);
             config.Enabled = true;
             config.MaxPromptsPerCycle = 500;
             config.ValidateAndVersion();
@@ -50,6 +57,22 @@ namespace Tests.UnitTests
             config.Categories[0].HumanMode = "supervising";
             config.ValidateAndVersion();
             Assert.AreNotEqual(original, config.Version);
+        }
+
+        [TestMethod]
+        public async Task Classifier_DefaultCategoriesCopyBothIllustrativeModes_AndLeaveOtherUnassigned()
+        {
+            var config = Enabled(10);
+            foreach (var category in config.Categories)
+            {
+                using (var classifier = new PromptCategoryClassifier(config, new FakeBackend { Id = category.Id }))
+                {
+                    var prompt = Prompt();
+                    await classifier.EnrichAsync(new[] { prompt }, new[] { "Synthetic prompt for " + category.Id });
+                    Assert.AreEqual(category.Id, prompt.PromptCategoryId);
+                    Assert.AreEqual(category.HumanMode, prompt.PromptHumanMode);
+                }
+            }
         }
 
         [TestMethod]
