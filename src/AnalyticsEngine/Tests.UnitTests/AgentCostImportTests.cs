@@ -1,5 +1,6 @@
 using Common.Entities;
 using Common.Entities.Config;
+using Common.Entities.State;
 using Common.Entities.Entities.AgentCosts;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -155,7 +156,6 @@ namespace Tests.UnitTests
             Assert.AreEqual("00000000-0000-0000-0000-000000000001", row.ResourceId);
             Assert.AreEqual(12.5m, row.Consumed);
             Assert.AreEqual(1.25m, row.NonBillableQuantity);
-            Assert.AreEqual(7, row.Users);
             Assert.AreEqual("Generative answer", row.FeatureName);
         }
 
@@ -291,22 +291,26 @@ namespace Tests.UnitTests
                 new CopilotStudioCreditRow
                 {
                     ResourceId = "agent-1", EnvironmentId = "env-1", FeatureName = "Generative answer",
-                    Consumed = 10m, NonBillableQuantity = 1m, Users = 5, AsOfDate = new DateTime(2026, 9, 3),
+                    Consumed = 10m, NonBillableQuantity = 1m, UserId = "u1", AsOfDate = new DateTime(2026, 9, 3),
                 },
                 new CopilotStudioCreditRow
                 {
                     ResourceId = "agent-1", EnvironmentId = "env-1", FeatureName = "Generative answer",
-                    Consumed = 4m, NonBillableQuantity = 2m, Users = 3, AsOfDate = new DateTime(2026, 9, 3),
+                    Consumed = 4m, NonBillableQuantity = 2m, UserId = "u2", AsOfDate = new DateTime(2026, 9, 3),
+                },
+                new CopilotStudioCreditRow
+                {
+                    ResourceId = "agent-1", EnvironmentId = "env-1", FeatureName = "Generative answer",
+                    Consumed = 1m, UserId = "u2", AsOfDate = new DateTime(2026, 9, 3),
                 },
             };
 
             var mapped = CopilotStudioCreditImporter.MapAndAggregate(rows, from, to, null, DateTime.UtcNow);
 
-            Assert.AreEqual(1, mapped.Count, "Two rows on the same dimension slice share an upsert key and must combine.");
-            Assert.AreEqual(14m, mapped[0].BilledCredits, "Credits are money: they add up.");
+            Assert.AreEqual(1, mapped.Count, "Rows on the same dimension slice share an upsert key and must combine.");
+            Assert.AreEqual(15m, mapped[0].BilledCredits, "Credits are money: they add up.");
             Assert.AreEqual(3m, mapped[0].NonBilledCredits);
-            Assert.AreEqual(5, mapped[0].DistinctUsers,
-                "User counts overlap between slices, so the combined value is the MAX - adding them would overstate reach.");
+            Assert.AreEqual(2, mapped[0].DistinctUsers, "The same person on two rows counts once.");
         }
 
         [TestMethod]
@@ -569,26 +573,20 @@ namespace Tests.UnitTests
         [TestMethod]
         public async Task CreditImporter_AsksForOneDayAtATime()
         {
-            // The licensing API aggregates over the range it is given: a seven-day request returns ONE
-            // consumed value per dimension slice covering the whole week, not seven daily rows. Asking for a
-            // range and then splitting it by the (undocumented) asOfDate would pile a week's spend onto a
-            // single day. One request per day makes the usage date a fact about the request.
-            var source = new FakeCreditSource();
+            // One request per day makes the usage date a fact about the request, not an inference about the
+            // response - for the /users read and for every per-user read.
+            var source = new ScriptedCreditSource();
             var clock = new FixedClock(new DateTime(2026, 9, 9, 6, 0, 0, DateTimeKind.Utc));
+            source.AddUsers(new DateTime(2026, 9, 8), null, null, new CopilotStudioUserCreditRow { UserId = "u1", Consumed = 1m });
 
-            await new CopilotStudioCreditImporter(Logger, source, new RecordingAgentCostStore(), 3, clock).ImportAsync();
-
-            Assert.AreEqual(3, source.RequestedRanges.Count, "A three-day window must be three requests.");
-            foreach (var range in source.RequestedRanges)
-            {
-                Assert.AreEqual(range.Item1, range.Item2,
-                    $"Every request must be for a single day, but got {range.Item1:yyyy-MM-dd}..{range.Item2:yyyy-MM-dd}.");
-            }
+            await new CopilotStudioCreditImporter(Logger, source, new RecordingAgentCostStore(), 3, clock).ImportConsumptionAsync();
 
             CollectionAssert.AreEquivalent(
                 new[] { new DateTime(2026, 9, 7), new DateTime(2026, 9, 8), new DateTime(2026, 9, 9) },
-                source.RequestedRanges.Select(r => r.Item1).ToList(),
-                "The trailing window must end today and cover exactly the configured number of days.");
+                source.UserCalls.Select(c => c.Item1).ToList(),
+                "The trailing window must end today and cover exactly the configured number of days, one /users read each.");
+            Assert.AreEqual(new DateTime(2026, 9, 8), source.ResourceCalls.Single().Item2,
+                "The per-user-by-agent read is for the single day the user was active.");
         }
 
         [TestMethod]
@@ -1074,37 +1072,36 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
-        public async Task CreditImporter_WhenThePerUserRouteIsUnavailable_TheImportStillSucceeds()
+        public async Task CreditImporter_WhenThePerUserRouteIsUnavailable_NothingIsStoredAndTheFailureIsRecorded()
         {
-            // These routes are new (July 2026). A tenant whose API does not offer them is a legitimate
-            // state, not a failure - and must not stop the per-agent figures being recorded as up to date.
-            var source = new FakeCreditSource(); // Its per-user method returns null.
+            // Without /users there is nothing to derive per-agent figures from, so the import must not claim
+            // success: a missing route is recorded as a retryable failure on both logs.
+            var source = new ScriptedCreditSource { UsersRouteMissing = true };
             var store = new RecordingAgentCostStore();
 
-            var outcome = await new CopilotStudioCreditImporter(Logger, source, store, 2).ImportUserCreditsAsync();
+            var result = await new CopilotStudioCreditImporter(Logger, source, store, 2).ImportConsumptionAsync();
 
-            Assert.IsTrue(outcome.Succeeded, "An unavailable route is not an error.");
-            Assert.AreEqual(0, outcome.Log.RowsRead);
+            Assert.IsFalse(result.Users.Succeeded);
+            Assert.IsFalse(result.Agents.Succeeded);
+            Assert.IsTrue(result.Agents.IsTransientFailure);
             Assert.AreEqual(0, store.UserCredits.Count);
+            Assert.AreEqual(0, store.Credits.Count);
         }
 
         [TestMethod]
         public async Task CreditImporter_ADayWithNoPerUserData_DoesNotDiscardTheOtherDays()
         {
-            // A quiet day comes back as 204 / an empty body, which is NOT the same as the route being
-            // absent. Treating the two alike let one empty day abort the window and throw away every row
-            // already read - and, because that path carries no error, report success while storing nothing.
-            var source = new UserCreditSource();
-            source.PagesByDay[new DateTime(2026, 9, 8)] = new CopilotStudioUserCreditPage(
-                new[] { new CopilotStudioUserCreditRow { UserId = "u1", Consumed = 5m } }, null);
+            // A quiet day comes back as an empty page, which is NOT the same as the route being absent.
+            var source = new ScriptedCreditSource();
+            source.AddUsers(new DateTime(2026, 9, 8), null, null, new CopilotStudioUserCreditRow { UserId = "u1", Consumed = 5m });
             // 2026-09-09 deliberately absent => an empty page for that day.
 
             var store = new RecordingAgentCostStore();
             var clock = new FixedClock(new DateTime(2026, 9, 9, 6, 0, 0, DateTimeKind.Utc));
 
-            var outcome = await new CopilotStudioCreditImporter(Logger, source, store, 2, clock).ImportUserCreditsAsync();
+            var result = await new CopilotStudioCreditImporter(Logger, source, store, 2, clock).ImportConsumptionAsync();
 
-            Assert.IsTrue(outcome.Succeeded);
+            Assert.IsTrue(result.Users.Succeeded);
             Assert.AreEqual(1, store.UserCredits.Count, "The day that DID have data must still be stored.");
             Assert.AreEqual(5m, store.UserCredits[0].BilledCredits);
         }
@@ -1112,50 +1109,231 @@ namespace Tests.UnitTests
         [TestMethod]
         public async Task CreditImporter_APersonWhoseRowsSpanTwoPages_KeepsTheCreditsFromBoth()
         {
-            // MapUserRows adds together rows for the same person and environment, but only within what it is given,
-            // and the store treats a second row with the same identity as a restatement and overwrites the first.
             // Mapped a page at a time, a person whose rows straddled a page boundary kept only the last page's credits.
             var day = new DateTime(2026, 9, 9);
-            var source = new PagedUserCreditSource();
-            source.Pages[Tuple.Create(day, string.Empty)] = new CopilotStudioUserCreditPage(
-                new[] { new CopilotStudioUserCreditRow { UserId = "u1", EnvironmentId = "env-1", Consumed = 2m } }, "page-2");
-            source.Pages[Tuple.Create(day, "page-2")] = new CopilotStudioUserCreditPage(
-                new[] { new CopilotStudioUserCreditRow { UserId = "u1", EnvironmentId = "env-1", Consumed = 3m } }, null);
+            var source = new ScriptedCreditSource();
+            source.AddUsers(day, null, "page-2", new CopilotStudioUserCreditRow { UserId = "u1", EnvironmentId = "env-1", Consumed = 2m });
+            source.AddUsers(day, "page-2", null, new CopilotStudioUserCreditRow { UserId = "u1", EnvironmentId = "env-1", Consumed = 3m });
 
             var store = new RecordingAgentCostStore();
             var clock = new FixedClock(new DateTime(2026, 9, 9, 6, 0, 0, DateTimeKind.Utc));
 
-            var outcome = await new CopilotStudioCreditImporter(Logger, source, store, 1, clock).ImportUserCreditsAsync();
+            var result = await new CopilotStudioCreditImporter(Logger, source, store, 1, clock).ImportConsumptionAsync();
 
-            Assert.IsTrue(outcome.Succeeded);
-            Assert.AreEqual(2, outcome.Log.RowsRead, "both pages must be read");
-            Assert.AreEqual(1, store.UserCredits.Count,
-                "one person-day in one environment is one identity; handing the store two would make it keep only the last");
+            Assert.IsTrue(result.Users.Succeeded);
+            Assert.AreEqual(2, result.Users.Log.RowsRead, "both pages must be read");
+            Assert.AreEqual(1, store.UserCredits.Count, "one person-day in one environment is one identity");
             Assert.AreEqual(5m, store.UserCredits[0].BilledCredits, "the credits from both pages must be kept");
+            Assert.AreEqual(1, source.ResourceCalls.Count, "The same user on two pages is fanned out once.");
         }
 
         [TestMethod]
-        public async Task CreditImporter_PerUserRowsOfPeopleOutsideUserGroupsFilter_AreNotStored()
+        public async Task CreditImporter_PerUserRowsOfPeopleOutsideUserGroupsFilter_AreNotStoredButStillCountInPerAgentFigures()
         {
-            // The licensing API names people by Entra object id; the per-agent and capacity figures carry nobody.
             const string pilotId = "bbbbbbbb-0000-0000-0000-000000000001";
             const string outsiderId = "bbbbbbbb-0000-0000-0000-000000000002";
-            var source = new UserCreditSource();
-            source.PagesByDay[new DateTime(2026, 9, 9)] = new CopilotStudioUserCreditPage(new[]
-            {
+            var day = new DateTime(2026, 9, 9);
+            var source = new ScriptedCreditSource();
+            source.AddUsers(day, null, null,
                 new CopilotStudioUserCreditRow { UserId = pilotId, EnvironmentId = "env-1", Consumed = 5m },
-                new CopilotStudioUserCreditRow { UserId = outsiderId, EnvironmentId = "env-1", Consumed = 7m },
-            }, null);
+                new CopilotStudioUserCreditRow { UserId = outsiderId, EnvironmentId = "env-1", Consumed = 7m });
+            source.AddResources(pilotId, day, null, null, AgentRow("agent-1", 5m));
+            source.AddResources(outsiderId, day, null, null, AgentRow("agent-1", 7m));
             var store = new RecordingAgentCostStore();
             var clock = new FixedClock(new DateTime(2026, 9, 9, 6, 0, 0, DateTimeKind.Utc));
             var scope = FakeLoaderClasses.TestUserScopes.OfMembers((pilotId, "pilot@contoso.com", "pilot@contoso.com"));
 
-            var outcome = await new CopilotStudioCreditImporter(Logger, source, store, 1, clock,
-                userScopeProvider: FakeLoaderClasses.TestUserScopes.Provider(scope)).ImportUserCreditsAsync();
+            var result = await new CopilotStudioCreditImporter(Logger, source, store, 1, clock,
+                userScopeProvider: FakeLoaderClasses.TestUserScopes.Provider(scope)).ImportConsumptionAsync();
 
-            Assert.IsTrue(outcome.Succeeded);
-            Assert.AreEqual(2, outcome.Log.RowsRead, "Both rows are read...");
-            Assert.AreEqual(5m, store.UserCredits.Single().BilledCredits, "...but only the credits of the person in scope are stored.");
+            Assert.IsTrue(result.Users.Succeeded);
+            Assert.AreEqual(2, result.Users.Log.RowsRead, "Both rows are read...");
+            Assert.AreEqual(5m, store.UserCredits.Single().BilledCredits, "...but only the credits of the person in scope are stored per person.");
+
+            var agent = store.Credits.Single();
+            Assert.AreEqual(12m, agent.BilledCredits, "Per-agent figures stay tenant-wide: no identities are stored there.");
+            Assert.AreEqual(2, agent.DistinctUsers);
+        }
+
+        private static CopilotStudioCreditRow AgentRow(string agentId, decimal consumed, string feature = "Generative answer",
+            string env = "env-1", decimal? nonBilled = null) => new CopilotStudioCreditRow
+            {
+                EnvironmentId = env,
+                ResourceId = agentId,
+                ResourceName = "Contoso " + agentId,
+                FeatureName = feature,
+                Consumed = consumed,
+                NonBillableQuantity = nonBilled,
+            };
+
+        [TestMethod]
+        public async Task CreditImporter_DerivesPerAgentFiguresFromPerUserReads_SummingCreditsAndCountingDistinctUsers()
+        {
+            var day = new DateTime(2026, 9, 9);
+            var source = new ScriptedCreditSource();
+            source.AddUsers(day, null, null,
+                new CopilotStudioUserCreditRow { UserId = "u1", Consumed = 3m },
+                new CopilotStudioUserCreditRow { UserId = "u2", Consumed = 4m },
+                new CopilotStudioUserCreditRow { UserId = "u3", Consumed = 0m, NonBillableQuantity = 2m });
+            source.AddResources("u1", day, null, null, AgentRow("a", 2m, nonBilled: 1m), AgentRow("b", 1m));
+            source.AddResources("u2", day, null, null, AgentRow("a", 4m, nonBilled: 3m));
+            source.AddResources("u3", day, null, null, AgentRow("a", 0m, nonBilled: 2m), AgentRow("a", 0m, feature: "Classic answer", nonBilled: 1m));
+            var store = new RecordingAgentCostStore();
+            var clock = new FixedClock(day.AddHours(6));
+
+            var result = await new CopilotStudioCreditImporter(Logger, source, store, 1, clock).ImportConsumptionAsync();
+
+            Assert.IsTrue(result.Agents.Succeeded);
+            Assert.AreEqual(3, store.Credits.Count, "Agent a/Generative answer, agent b, agent a/Classic answer.");
+
+            var a = store.Credits.Single(r => r.AgentId == "a" && r.FeatureName == "Generative answer");
+            Assert.AreEqual(6m, a.BilledCredits);
+            Assert.AreEqual(6m, a.NonBilledCredits, "1 + 3 + 2");
+            Assert.AreEqual(3, a.DistinctUsers, "u1, u2 and u3 all contributed.");
+            Assert.AreEqual(day, a.UsageDate);
+            Assert.AreEqual("Contoso a", a.AgentName);
+            Assert.IsNull(a.LastRefreshedUtc, "Microsoft's refresh stamp is not available from the per-user route.");
+
+            Assert.AreEqual(1, store.Credits.Single(r => r.AgentId == "b").DistinctUsers);
+            Assert.AreEqual(1, store.Credits.Single(r => r.FeatureName == "Classic answer").DistinctUsers);
+            Assert.IsTrue(store.Logs.Any(l => l.ImportName == AgentCostImportNames.CopilotStudioCredits && string.IsNullOrEmpty(l.Error)));
+            Assert.IsTrue(store.Logs.Any(l => l.ImportName == AgentCostImportNames.CopilotStudioUserCredits && string.IsNullOrEmpty(l.Error)));
+        }
+
+        [TestMethod]
+        public async Task CreditImporter_UsersWithNoConsumption_AreNotFannedOut()
+        {
+            var day = new DateTime(2026, 9, 9);
+            var source = new ScriptedCreditSource();
+            source.AddUsers(day, null, null,
+                new CopilotStudioUserCreditRow { UserId = "idle-1", Consumed = 0m },
+                new CopilotStudioUserCreditRow { UserId = "idle-2", Consumed = 0m, NonBillableQuantity = 0m, ResourceCount = 0m },
+                new CopilotStudioUserCreditRow { UserId = "free-only", Consumed = 0m, NonBillableQuantity = 1m },
+                new CopilotStudioUserCreditRow { UserId = "resources-only", Consumed = 0m, ResourceCount = 1m },
+                new CopilotStudioUserCreditRow { UserId = "billed", Consumed = 2m });
+
+            await new CopilotStudioCreditImporter(Logger, source, new RecordingAgentCostStore(), 1, new FixedClock(day.AddHours(6)))
+                .ImportConsumptionAsync();
+
+            CollectionAssert.AreEquivalent(new[] { "free-only", "resources-only", "billed" },
+                source.ResourceCalls.Select(c => c.Item1).ToList());
+        }
+
+        [TestMethod]
+        public async Task CreditImporter_APersonsAgentRowsSpanningPages_AreAllCounted()
+        {
+            var day = new DateTime(2026, 9, 9);
+            var source = new ScriptedCreditSource();
+            source.AddUsers(day, null, null, new CopilotStudioUserCreditRow { UserId = "u1", Consumed = 3m });
+            source.AddResources("u1", day, null, "t2", AgentRow("a", 1m));
+            source.AddResources("u1", day, "t2", null, AgentRow("a", 2m), AgentRow("b", 5m));
+            var store = new RecordingAgentCostStore();
+
+            await new CopilotStudioCreditImporter(Logger, source, store, 1, new FixedClock(day.AddHours(6))).ImportConsumptionAsync();
+
+            Assert.AreEqual(3m, store.Credits.Single(r => r.AgentId == "a").BilledCredits);
+            Assert.AreEqual(5m, store.Credits.Single(r => r.AgentId == "b").BilledCredits);
+            Assert.AreEqual(1, store.Credits.Single(r => r.AgentId == "a").DistinctUsers, "One user across two pages is one user.");
+        }
+
+        [TestMethod]
+        public async Task CreditImporter_RepeatedPerUserResourceContinuationToken_FailsWithoutStoringAPartialWindow()
+        {
+            var day = new DateTime(2026, 9, 9);
+            var source = new ScriptedCreditSource();
+            source.AddUsers(day, null, null, new CopilotStudioUserCreditRow { UserId = "u1", Consumed = 3m });
+            source.AddResources("u1", day, null, "same", AgentRow("a", 1m));
+            source.AddResources("u1", day, "same", "same", AgentRow("a", 1m));
+            var store = new RecordingAgentCostStore();
+
+            var result = await new CopilotStudioCreditImporter(Logger, source, store, 1, new FixedClock(day.AddHours(6))).ImportConsumptionAsync();
+
+            Assert.IsFalse(result.Agents.Succeeded);
+            StringAssert.Contains(result.Agents.Log.Error, "already returned");
+            Assert.AreEqual(0, store.Credits.Count, "A partial window must not be written.");
+            Assert.IsTrue(result.Users.Succeeded, "The per-user rows were complete and stay stored.");
+        }
+
+        [TestMethod]
+        public async Task CreditImporter_RepeatedUserListContinuationToken_FailsBothImports()
+        {
+            var day = new DateTime(2026, 9, 9);
+            var source = new ScriptedCreditSource();
+            source.AddUsers(day, null, "same", new CopilotStudioUserCreditRow { UserId = "u1", Consumed = 3m });
+            source.AddUsers(day, "same", "same", new CopilotStudioUserCreditRow { UserId = "u2", Consumed = 3m });
+            var store = new RecordingAgentCostStore();
+
+            var result = await new CopilotStudioCreditImporter(Logger, source, store, 1, new FixedClock(day.AddHours(6))).ImportConsumptionAsync();
+
+            Assert.IsFalse(result.Agents.Succeeded);
+            Assert.IsFalse(result.Users.Succeeded);
+            Assert.AreEqual(0, store.Credits.Count);
+            Assert.AreEqual(0, store.UserCredits.Count);
+            Assert.AreEqual(0, source.ResourceCalls.Count, "No fan-out from an incomplete user list.");
+        }
+
+        [TestMethod]
+        public async Task CreditImporter_APerUserResourceReadRefused_IsAnAuthorisationOutcome()
+        {
+            var day = new DateTime(2026, 9, 9);
+            var source = new ScriptedCreditSource
+            {
+                ResourcesError = new AgentCostAuthorisationException("Synthetic refusal"),
+            };
+            source.AddUsers(day, null, null,
+                new CopilotStudioUserCreditRow { UserId = "u1", Consumed = 3m },
+                new CopilotStudioUserCreditRow { UserId = "u2", Consumed = 3m });
+            var store = new RecordingAgentCostStore();
+
+            var result = await new CopilotStudioCreditImporter(Logger, source, store, 1, new FixedClock(day.AddHours(6))).ImportConsumptionAsync();
+
+            Assert.IsTrue(result.Agents.IsAuthorisationFailure);
+            Assert.AreEqual("Synthetic refusal", result.Agents.Log.Error);
+            Assert.AreEqual(0, store.Credits.Count);
+            Assert.IsTrue(result.Users.Succeeded, "The per-user rows were stored before the fan-out began.");
+        }
+
+        [TestMethod]
+        public async Task CreditImporter_FanOutConcurrencyIsBounded()
+        {
+            var day = new DateTime(2026, 9, 9);
+            var source = new ScriptedCreditSource { TrackConcurrency = true };
+            var users = Enumerable.Range(0, 40).Select(i => new CopilotStudioUserCreditRow { UserId = "u" + i, Consumed = 1m }).ToArray();
+            source.AddUsers(day, null, null, users);
+            foreach (var u in users) source.AddResources(u.UserId, day, null, null, AgentRow("a", 1m));
+            var store = new RecordingAgentCostStore();
+
+            await new CopilotStudioCreditImporter(Logger, source, store, 1, new FixedClock(day.AddHours(6))).ImportConsumptionAsync();
+
+            Assert.AreEqual(40, source.ResourceCalls.Count);
+            Assert.IsTrue(source.MaxConcurrency <= 8, $"Observed {source.MaxConcurrency} concurrent reads.");
+            Assert.AreEqual(40, store.Credits.Single().DistinctUsers);
+            Assert.AreEqual(40m, store.Credits.Single().BilledCredits);
+        }
+
+        [TestMethod]
+        public async Task CreditImporter_WithNoConnection_ReadsNothingAndRecordsConnectionRequired()
+        {
+            var source = new ScriptedCreditSource { CanRead = false };
+            var store = new RecordingAgentCostStore();
+
+            var result = await new CopilotStudioCreditImporter(Logger, source, store, 3).ImportConsumptionAsync();
+
+            Assert.AreEqual(0, source.UserCalls.Count);
+            Assert.AreEqual(0, source.ResourceCalls.Count);
+            Assert.AreEqual(0, source.EnvironmentNameCalls, "The application identity is refused on the environment route too.");
+            Assert.IsTrue(result.Agents.IsConnectionRequired);
+            Assert.IsTrue(result.Agents.Succeeded, "Not a failure: nothing was refused.");
+            Assert.IsFalse(result.Agents.IsTransientFailure);
+            Assert.IsFalse(result.Agents.IsAuthorisationFailure);
+            Assert.AreEqual(AgentCostImportNames.ConnectionRequired, store.Logs.Single(l => l.ImportName == AgentCostImportNames.CopilotStudioCredits).Error);
+            Assert.AreEqual(AgentCostImportNames.ConnectionRequired, store.Logs.Single(l => l.ImportName == AgentCostImportNames.CopilotStudioUserCredits).Error);
+        }
+
+        [TestMethod]
+        public void ConnectionRequiredKey_IsTheOneTheImporterAndPortalShare()
+        {
+            Assert.AreEqual(AgentCostDelegatedHttpClient.ConnectionRequiredDiagnostic, AgentCostImportNames.ConnectionRequired);
         }
 
         [TestMethod]
@@ -1251,28 +1429,6 @@ namespace Tests.UnitTests
             Assert.IsNotNull(store.AzureReplaceCalls[0].Item2, "The window must be passed even when no rows came back.");
         }
 
-        /// <summary>A per-user source that answers from a per-day map; an unlisted day yields an empty page.</summary>
-        private class UserCreditSource : ICopilotStudioCreditSource
-        {
-            public Dictionary<DateTime, CopilotStudioUserCreditPage> PagesByDay { get; }
-                = new Dictionary<DateTime, CopilotStudioUserCreditPage>();
-
-            public Task<CopilotStudioUserCreditPage> GetUserConsumptionPageAsync(DateTime fromDate, DateTime toDate, string continuationToken)
-            {
-                return Task.FromResult(PagesByDay.TryGetValue(fromDate.Date, out var page)
-                    ? page
-                    : new CopilotStudioUserCreditPage(new List<CopilotStudioUserCreditRow>(), null));
-            }
-
-            public Task<CopilotStudioCreditPage> GetConsumptionPageAsync(DateTime fromDate, DateTime toDate, string continuationToken)
-                => Task.FromResult(new CopilotStudioCreditPage(new List<CopilotStudioCreditRow>(), null));
-
-            public Task<CopilotStudioCapacitySnapshot> GetCapacityAsync() => Task.FromResult<CopilotStudioCapacitySnapshot>(null);
-
-            public Task<IReadOnlyDictionary<string, string>> GetEnvironmentNamesAsync()
-                => Task.FromResult<IReadOnlyDictionary<string, string>>(new Dictionary<string, string>());
-        }
-
         /// <summary>An Azure source that throws a configured exception per scope.</summary>
         private class PerScopeAzureCostSource : IAzureCostSource
         {
@@ -1285,50 +1441,23 @@ namespace Tests.UnitTests
             }
         }
 
-        /// <summary>
-        /// A per-user source keyed by (day, continuation token), the first page's token being empty, so a test can
-        /// return a day in several pages. An unlisted page is empty and final.
-        /// </summary>
-        private class PagedUserCreditSource : ICopilotStudioCreditSource
-        {
-            public Dictionary<Tuple<DateTime, string>, CopilotStudioUserCreditPage> Pages { get; }
-                = new Dictionary<Tuple<DateTime, string>, CopilotStudioUserCreditPage>();
-
-            public Task<CopilotStudioUserCreditPage> GetUserConsumptionPageAsync(DateTime fromDate, DateTime toDate, string continuationToken)
-            {
-                return Task.FromResult(Pages.TryGetValue(Tuple.Create(fromDate.Date, continuationToken ?? string.Empty), out var page)
-                    ? page
-                    : new CopilotStudioUserCreditPage(new List<CopilotStudioUserCreditRow>(), null));
-            }
-
-            public Task<CopilotStudioCreditPage> GetConsumptionPageAsync(DateTime fromDate, DateTime toDate, string continuationToken)
-                => Task.FromResult(new CopilotStudioCreditPage(new List<CopilotStudioCreditRow>(), null));
-
-            public Task<CopilotStudioCapacitySnapshot> GetCapacityAsync() => Task.FromResult<CopilotStudioCapacitySnapshot>(null);
-
-            public Task<IReadOnlyDictionary<string, string>> GetEnvironmentNamesAsync()
-                => Task.FromResult<IReadOnlyDictionary<string, string>>(new Dictionary<string, string>());
-        }
-
         [TestMethod]
-        public async Task Phase_APersistentlyFailingPerUserRoute_DoesNotBlockTheCadenceGate()
+        public async Task Phase_WithNoConnection_StampsTheGateAndStillImportsCapacity()
         {
-            // Measured against a real tenant: an unusable /users route can return a persistent HTTP 500 while
-            // its sibling routes return 403. A persistent 500 is indistinguishable from a transient one, so
-            // if it fed the cadence decision the whole import would be marked failed on every cycle - hitting
-            // Microsoft every few minutes for ever, and never recording the per-agent figures as up to date
-            // even though they imported perfectly.
+            // The application identity can only read capacity. Calling the consumption routes would be a 403 every
+            // cycle, so the importer records "connection required" and the cadence gate treats that as a clean run.
             var settings = new AppConfig
             {
                 ImportJobSettings = new ImportTaskSettings { CopilotStudioCredits = true },
                 CopilotStudioCreditsIntervalHours = 24,
             };
-
             var lastRunStore = new InMemoryImportLastRunStore();
             var store = new RecordingAgentCostStore();
-
-            // Consumption and capacity succeed; only the per-user route fails.
-            var source = new FailingUserRouteCreditSource();
+            var source = new ScriptedCreditSource
+            {
+                CanRead = false,
+                Capacity = new CopilotStudioCapacitySnapshot { Entitled = 100m, Consumed = 10m },
+            };
 
             var phase = new AgentCostImportPhase(
                 Logger,
@@ -1339,31 +1468,171 @@ namespace Tests.UnitTests
 
             await phase.RunAsync();
 
-            var stamped = await lastRunStore.GetLastRunUtc(AgentCostImportPhase.CopilotStudioCreditsLastImportedKey);
-            Assert.IsNotNull(stamped,
-                "The per-agent import succeeded, so the gate must be stamped - otherwise a broken per-user route "
-                + "re-runs the whole import every cycle indefinitely.");
-
-            // The failure must still be recorded, not swallowed.
-            Assert.IsTrue(store.Logs.Any(l => l.ImportName == AgentCostImportNames.CopilotStudioUserCredits
-                    && !string.IsNullOrEmpty(l.Error)),
-                "The per-user failure must still reach agent_cost_import_log so an admin can see it.");
+            Assert.IsNotNull(await lastRunStore.GetLastRunUtc(AgentCostImportPhase.CopilotStudioCreditsLastImportedKey),
+                "Connection-required is a settled state, not a failure to retry every cycle.");
+            Assert.AreEqual(0, source.UserCalls.Count);
+            Assert.AreEqual(0, source.ResourceCalls.Count);
+            Assert.AreEqual(1, store.Capacities.Count, "Capacity must still be imported app-only.");
         }
 
-        /// <summary>Succeeds for the per-agent and capacity reads; the per-user route always throws.</summary>
-        private class FailingUserRouteCreditSource : ICopilotStudioCreditSource
+        [TestMethod]
+        public async Task Phase_ConnectionChangesBypassTheOldGateAndNeverChangeAzuresGate()
         {
-            public Task<CopilotStudioCreditPage> GetConsumptionPageAsync(DateTime fromDate, DateTime toDate, string continuationToken)
-                => Task.FromResult(new CopilotStudioCreditPage(new List<CopilotStudioCreditRow>(), null));
+            var settings = new AppConfig
+            {
+                ImportJobSettings = new ImportTaskSettings { CopilotStudioCredits = true, AzureCostManagement = true },
+                CopilotStudioCreditsIntervalHours = 24,
+                AzureCostImport = new AzureCostImportSettings { IntervalHours = 24 },
+            };
+            var stamps = new InMemoryImportLastRunStore();
+            var now = DateTime.UtcNow;
+            await stamps.SetLastRunUtc(AgentCostImportPhase.CopilotStudioCreditsLastImportedKey, now);
+            await stamps.SetLastRunUtc(AgentCostImportPhase.AzureCostLastImportedKey, now);
+            var source = new ScriptedCreditSource();
+            var store = new RecordingAgentCostStore();
+            var version = "synthetic-generation-1";
+            var phase = new AgentCostImportPhase(Logger, settings, stamps,
+                () => new CopilotStudioCreditImporter(Logger, source, store, 1),
+                () => throw new AssertFailedException("Azure's existing gate must be unchanged."),
+                creditConnectionVersion: () => Task.FromResult(version));
+            await phase.RunAsync();
+            Assert.AreEqual(1, source.UserCalls.Count);
+            await phase.RunAsync();
+            Assert.AreEqual(1, source.UserCalls.Count, "The same connection must keep its daily cadence.");
+            version = "synthetic-disconnected-generation";
+            await phase.RunAsync();
+            Assert.AreEqual(2, source.UserCalls.Count, "Disconnect must allow the app-only path a prompt retry too.");
+            Assert.AreEqual(now, await stamps.GetLastRunUtc(AgentCostImportPhase.AzureCostLastImportedKey));
+        }
+
+        [TestMethod]
+        public async Task Phase_UnreachableDelegatedStateDoesNotStopAzureCosts()
+        {
+            var settings = new AppConfig
+            {
+                ImportJobSettings = new ImportTaskSettings { CopilotStudioCredits = true, AzureCostManagement = true },
+            };
+            var store = new RecordingAgentCostStore();
+            var azureConstructed = false;
+            var phase = new AgentCostImportPhase(Logger, settings, new InMemoryImportLastRunStore(),
+                () => throw new AssertFailedException("Do not silently fall back to app-only on a Storage outage."),
+                () =>
+                {
+                    azureConstructed = true;
+                    return new AzureCostImporter(Logger, new ThrowingAzureCostSource(), store, new AzureCostImportSettings());
+                },
+                creditConnectionVersion: () => throw new InvalidOperationException("Synthetic Storage outage"));
+            await phase.RunAsync();
+            Assert.IsTrue(azureConstructed);
+        }
+
+        [TestMethod]
+        public async Task DelegatedSource_RefusedConsumptionKeepsAppOnlyCapacityAndRequiresReconnect()
+        {
+            var store = new AgentCostConnectionStore(new InMemoryKeyValueStore());
+            await store.ConnectAsync("synthetic-encrypted-cache");
+            var head = await store.GetHeadAsync();
+            var source = new DelegatedAgentCostSource(
+                new FailingCreditSource(new AgentCostAuthorisationException("Synthetic delegated refusal")),
+                new ScriptedCreditSource(), store, head.Version);
+            var error = await Assert.ThrowsExceptionAsync<AgentCostAuthorisationException>(() =>
+                source.GetUserConsumptionPageAsync(DateTime.UtcNow, DateTime.UtcNow, null));
+            Assert.AreEqual(AgentCostDelegatedHttpClient.ReconnectDiagnostic, error.Message);
+            Assert.IsNull(await source.GetCapacityAsync(), "Capacity must use the independent app-only source.");
+            Assert.AreEqual("reconnectNeeded", await store.GetStatusAsync());
+        }
+
+        [TestMethod]
+        public async Task DelegatedSource_RefusedPerUserResourceReadRequiresReconnect()
+        {
+            var store = new AgentCostConnectionStore(new InMemoryKeyValueStore());
+            await store.ConnectAsync("synthetic-encrypted-cache");
+            var head = await store.GetHeadAsync();
+            var source = new DelegatedAgentCostSource(
+                new FailingCreditSource(new AgentCostAuthorisationException("Synthetic per-user refusal")),
+                new ScriptedCreditSource(), store, head.Version);
+            Assert.IsTrue(source.CanReadConsumption);
+            var error = await Assert.ThrowsExceptionAsync<AgentCostAuthorisationException>(() =>
+                source.GetUserResourceConsumptionPageAsync("u1", DateTime.UtcNow, null));
+            Assert.AreEqual(AgentCostDelegatedHttpClient.ReconnectDiagnostic, error.Message);
+            Assert.AreEqual("reconnectNeeded", await store.GetStatusAsync());
+        }
+
+        /// <summary>
+        /// A fully scriptable source. Pages are keyed by (day, continuation token) - the first page's token being
+        /// empty - so a test can return a day in several pages. An unlisted page is empty and final.
+        /// </summary>
+        private class ScriptedCreditSource : ICopilotStudioCreditSource
+        {
+            private readonly Dictionary<Tuple<DateTime, string>, CopilotStudioUserCreditPage> _users
+                = new Dictionary<Tuple<DateTime, string>, CopilotStudioUserCreditPage>();
+            private readonly Dictionary<Tuple<string, DateTime, string>, CopilotStudioCreditPage> _resources
+                = new Dictionary<Tuple<string, DateTime, string>, CopilotStudioCreditPage>();
+            private readonly object _gate = new object();
+            private int _current;
+
+            public bool CanRead { get; set; } = true;
+            public bool UsersRouteMissing { get; set; }
+            public Exception ResourcesError { get; set; }
+            public bool TrackConcurrency { get; set; }
+            public bool ThrowOnEnvironmentNames { get; set; }
+            public CopilotStudioCapacitySnapshot Capacity { get; set; }
+            public int EnvironmentNameCalls { get; private set; }
+            public int MaxConcurrency { get; private set; }
+
+            /// <summary>(from date, continuation token) of every /users read.</summary>
+            public List<Tuple<DateTime, string>> UserCalls { get; } = new List<Tuple<DateTime, string>>();
+
+            /// <summary>(user id, day, continuation token) of every per-user-by-agent read.</summary>
+            public List<Tuple<string, DateTime, string>> ResourceCalls { get; } = new List<Tuple<string, DateTime, string>>();
+
+            public bool CanReadConsumption => CanRead;
+
+            public void AddUsers(DateTime day, string token, string next, params CopilotStudioUserCreditRow[] rows)
+                => _users[Tuple.Create(day.Date, token ?? string.Empty)] = new CopilotStudioUserCreditPage(rows, next);
+
+            public void AddResources(string userId, DateTime day, string token, string next, params CopilotStudioCreditRow[] rows)
+                => _resources[Tuple.Create(userId, day.Date, token ?? string.Empty)] = new CopilotStudioCreditPage(rows, next);
 
             public Task<CopilotStudioUserCreditPage> GetUserConsumptionPageAsync(DateTime fromDate, DateTime toDate, string continuationToken)
-                => throw new System.Net.Http.HttpRequestException("The Power Platform licensing API returned HTTP 500.");
+            {
+                lock (_gate) UserCalls.Add(Tuple.Create(fromDate.Date, continuationToken));
+                if (UsersRouteMissing) return Task.FromResult<CopilotStudioUserCreditPage>(null);
+                return Task.FromResult(_users.TryGetValue(Tuple.Create(fromDate.Date, continuationToken ?? string.Empty), out var page)
+                    ? page
+                    : new CopilotStudioUserCreditPage(new List<CopilotStudioUserCreditRow>(), null));
+            }
 
-            public Task<CopilotStudioCapacitySnapshot> GetCapacityAsync()
-                => Task.FromResult<CopilotStudioCapacitySnapshot>(null);
+            public async Task<CopilotStudioCreditPage> GetUserResourceConsumptionPageAsync(string userId, DateTime day, string continuationToken)
+            {
+                lock (_gate)
+                {
+                    ResourceCalls.Add(Tuple.Create(userId, day.Date, continuationToken));
+                    _current++;
+                    if (_current > MaxConcurrency) MaxConcurrency = _current;
+                }
+                try
+                {
+                    if (TrackConcurrency) await Task.Delay(5);
+                    if (ResourcesError != null) throw ResourcesError;
+                    return _resources.TryGetValue(Tuple.Create(userId, day.Date, continuationToken ?? string.Empty), out var page)
+                        ? page
+                        : new CopilotStudioCreditPage(new List<CopilotStudioCreditRow>(), null);
+                }
+                finally
+                {
+                    lock (_gate) _current--;
+                }
+            }
+
+            public Task<CopilotStudioCapacitySnapshot> GetCapacityAsync() => Task.FromResult(Capacity);
 
             public Task<IReadOnlyDictionary<string, string>> GetEnvironmentNamesAsync()
-                => Task.FromResult<IReadOnlyDictionary<string, string>>(new Dictionary<string, string>());
+            {
+                EnvironmentNameCalls++;
+                if (ThrowOnEnvironmentNames) throw new InvalidOperationException("environment lookup failed");
+                return Task.FromResult<IReadOnlyDictionary<string, string>>(new Dictionary<string, string>());
+            }
         }
 
         /// <summary>A clock fixed at a known instant, so window arithmetic is assertable.</summary>
@@ -1380,72 +1649,138 @@ namespace Tests.UnitTests
 
         #region Credit importer behaviour
 
+        [DataTestMethod]
+        [DataRow(HttpStatusCode.Unauthorized, "capacity")]
+        [DataRow(HttpStatusCode.Forbidden, "capacity")]
+        [DataRow(HttpStatusCode.Unauthorized, "users")]
+        [DataRow(HttpStatusCode.Forbidden, "users")]
+        [DataRow(HttpStatusCode.Unauthorized, "userResources")]
+        [DataRow(HttpStatusCode.Forbidden, "userResources")]
+        public async Task CreditSource_RefusedRequest_DoesNotDiagnoseAMissingRole(HttpStatusCode status, string route)
+        {
+            var handler = new RecordingPostHandler(new HttpResponseMessage(status)
+            {
+                Content = new StringContent("{}"),
+            });
+            using (var client = new DataUtils.Http.AutoThrottleHttpClient(handler, Logger))
+            {
+                var source = new PowerPlatformLicensingCreditSource(client, Logger, delegated: route != "capacity");
+                Func<Task> read;
+                var day = new DateTime(2026, 1, 1);
+                switch (route)
+                {
+                    case "capacity": read = () => source.GetCapacityAsync(); break;
+                    case "users": read = () => source.GetUserConsumptionPageAsync(day, day, null); break;
+                    case "userResources": read = () => source.GetUserResourceConsumptionPageAsync("bbbbbbbb-0000-0000-0000-000000000001", day, null); break;
+                    default: throw new ArgumentOutOfRangeException(nameof(route));
+                }
+                var error = await Assert.ThrowsExceptionAsync<AgentCostAuthorisationException>(
+                    read);
+
+                StringAssert.Contains(error.Message, $"HTTP {(int)status}");
+                Assert.IsFalse(error.Message.Contains("tenant-wide per-agent"));
+                Assert.IsTrue(error.Message.Length <= 1000, "Guidance must fit the import log's SQL column.");
+                if (route != "capacity")
+                {
+                    StringAssert.Contains(error.Message, "reconnect in Administration");
+                    return;
+                }
+
+                StringAssert.Contains(error.Message, "HTTP " + (int)status + " (" + status + ")");
+                StringAssert.Contains(error.Message, "already verified");
+                StringAssert.Contains(error.Message, "same runtime app identity");
+                StringAssert.Contains(error.Message, "Other imports are unaffected");
+                Assert.IsFalse(error.Message.Contains("requires a signed-in"));
+                if (status == HttpStatusCode.Unauthorized)
+                    StringAssert.Contains(error.Message, "token audience (https://api.powerplatform.com)");
+                else
+                    StringAssert.Contains(error.Message, "does not prove that a role is missing");
+            }
+        }
+
+        [TestMethod]
+        public async Task CreditSource_UserResourceRead_AsksForOneUserAndOneDay()
+        {
+            var handler = new RecordingPostHandler(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("{\"value\":[{\"resources\":[]}]}"),
+            });
+            using (var client = new DataUtils.Http.AutoThrottleHttpClient(handler, Logger))
+            {
+                var source = new PowerPlatformLicensingCreditSource(client, Logger, delegated: true);
+                var page = await source.GetUserResourceConsumptionPageAsync(
+                    "bbbbbbbb-0000-0000-0000-000000000001", new DateTime(2026, 9, 9), null);
+
+                Assert.AreEqual(0, page.Rows.Count);
+                var uri = handler.Uris.Single();
+                StringAssert.Contains(uri, "/MCSMessages/users/bbbbbbbb-0000-0000-0000-000000000001/resources");
+                StringAssert.Contains(uri, "fromDate=2026-09-09");
+                StringAssert.Contains(uri, "toDate=2026-09-09");
+                Assert.IsFalse(uri.Contains("includeFields"));
+            }
+        }
+
+        [TestMethod]
+        public async Task CreditSource_AppOnly_NeverCallsConsumptionRoutes()
+        {
+            var handler = new RecordingPostHandler();
+            using (var client = new DataUtils.Http.AutoThrottleHttpClient(handler, Logger))
+            {
+                var source = new PowerPlatformLicensingCreditSource(client, Logger);
+                Assert.IsFalse(source.CanReadConsumption);
+                var names = await source.GetEnvironmentNamesAsync();
+                Assert.AreEqual(0, names.Count);
+                Assert.AreEqual(0, handler.Uris.Count, "No request may be sent by the application identity for consumption or names.");
+            }
+        }
+
         [TestMethod]
         public async Task CreditImporter_PagesUntilTheContinuationTokenRunsOut()
         {
-            // A one-day window, so this asserts PAGING alone rather than paging times the number of days.
-            var source = new FakeCreditSource();
-            source.Pages.Add(new CopilotStudioCreditPage(
-                new[] { new CopilotStudioCreditRow { ResourceId = "a", Consumed = 1m } }, "token-1"));
-            source.Pages.Add(new CopilotStudioCreditPage(
-                new[] { new CopilotStudioCreditRow { ResourceId = "b", Consumed = 2m } }, null));
+            var day = new DateTime(2026, 9, 9);
+            var source = new ScriptedCreditSource();
+            source.AddUsers(day, null, "token-1", new CopilotStudioUserCreditRow { UserId = "u1", Consumed = 1m });
+            source.AddUsers(day, "token-1", null, new CopilotStudioUserCreditRow { UserId = "u2", Consumed = 2m });
 
             var store = new RecordingAgentCostStore();
-            var outcome = await new CopilotStudioCreditImporter(Logger, source, store, trailingWindowDays: 1).ImportAsync();
-            var log = outcome.Log;
+            var result = await new CopilotStudioCreditImporter(Logger, source, store, 1, new FixedClock(day.AddHours(6))).ImportConsumptionAsync();
 
-            Assert.AreEqual(2, log.RowsRead);
-            Assert.AreEqual(2, source.Calls);
-            Assert.AreEqual("token-1", source.LastContinuationToken, "The second call must carry the first page's token.");
-            Assert.IsTrue(string.IsNullOrEmpty(log.Error));
+            Assert.AreEqual(2, result.Users.Log.RowsRead);
+            Assert.AreEqual(2, source.UserCalls.Count, "/users is read once per day, page by page, and never twice.");
+            Assert.AreEqual("token-1", source.UserCalls[1].Item2, "The second call must carry the first page's token.");
+            Assert.IsTrue(string.IsNullOrEmpty(result.Users.Log.Error));
         }
 
         [TestMethod]
-        public async Task CreditImporter_RepeatedContinuationToken_FailsInsteadOfStoringDuplicatedSpend()
-        {
-            // A server that keeps handing back the same token would otherwise page for ever while appending
-            // the same rows - and those rows aggregate by dimension hash, so the repeats would be SUMMED into
-            // inflated spend. Failing the run keeps the last good figures instead.
-            var source = new RepeatingTokenCreditSource();
-            var store = new RecordingAgentCostStore();
-
-            var outcome = await new CopilotStudioCreditImporter(Logger, source, store, 7).ImportAsync();
-            var log = outcome.Log;
-
-            Assert.IsTrue(source.Calls <= 3, $"Expected the importer to stop quickly, but it made {source.Calls} calls.");
-            Assert.IsFalse(string.IsNullOrEmpty(log.Error),
-                "An incomplete read must be recorded as a failure, not stamped as a successful import.");
-            Assert.AreEqual(0, store.Credits.Count, "A partial window must not be written.");
-        }
-
-        [TestMethod]
-        public async Task CreditImporter_AuthorisationFailure_IsRecordedWithTheRemedyAndDoesNotThrow()
+        public async Task CreditImporter_AuthorisationFailureOnTheUserList_IsRecordedWithTheRemedyAndDoesNotThrow()
         {
             var store = new RecordingAgentCostStore();
             var source = new FailingCreditSource(new AgentCostAuthorisationException(
                 "The Power Platform licensing API refused the request ... assign the 'Power Platform reader' role ..."));
 
-            var outcome = await new CopilotStudioCreditImporter(Logger, source, store, 7).ImportAsync();
-            var log = outcome.Log;
+            var result = await new CopilotStudioCreditImporter(Logger, source, store, 7).ImportConsumptionAsync();
 
-            Assert.IsFalse(string.IsNullOrEmpty(log.Error), "A refused import must not look like an empty one.");
-            StringAssert.Contains(log.Error, "Power Platform reader",
+            Assert.IsTrue(result.Agents.IsAuthorisationFailure);
+            StringAssert.Contains(result.Agents.Log.Error, "Power Platform reader",
                 "The stored error is the whole value of the log row - it must carry the fix, not just 'Forbidden'.");
-            Assert.AreEqual(1, store.Logs.Count);
+            Assert.IsFalse(string.IsNullOrEmpty(result.Users.Log.Error));
         }
 
         [TestMethod]
-        public async Task CreditImporter_EnvironmentNameLookupFailure_DoesNotCostTheBillingData()
+        public async Task CreditImporter_EnvironmentNameLookupFailure_IsSurfacedAndNothingIsStored()
         {
-            // An environment name is a nicety. Losing it must not lose the figures it decorates.
-            var source = new FakeCreditSource { ThrowOnEnvironmentNames = true };
-            source.Pages.Add(new CopilotStudioCreditPage(
-                new[] { new CopilotStudioCreditRow { ResourceId = "a", Consumed = 5m } }, null));
+            var day = new DateTime(2026, 9, 9);
+            var source = new ScriptedCreditSource { ThrowOnEnvironmentNames = true };
+            source.AddUsers(day, null, null, new CopilotStudioUserCreditRow { UserId = "u1", Consumed = 5m });
+            source.AddResources("u1", day, null, null, AgentRow("a", 5m));
+            var store = new RecordingAgentCostStore();
 
-            var log = (await new CopilotStudioCreditImporter(Logger, source, new RecordingAgentCostStore(), 7).ImportAsync()).Log;
+            var result = await new CopilotStudioCreditImporter(Logger, source, store, 1, new FixedClock(day.AddHours(6))).ImportConsumptionAsync();
 
-            Assert.IsFalse(string.IsNullOrEmpty(log.Error),
+            Assert.AreEqual(1, source.EnvironmentNameCalls);
+            Assert.IsFalse(result.Agents.Succeeded,
                 "The failure is still surfaced - it is the real adapter that swallows it, not the importer.");
+            Assert.AreEqual(0, store.Credits.Count);
         }
 
         #endregion
@@ -1481,66 +1816,17 @@ namespace Tests.UnitTests
 
         #region Fakes
 
-        private class FakeCreditSource : ICopilotStudioCreditSource
-        {
-            public List<CopilotStudioCreditPage> Pages { get; } = new List<CopilotStudioCreditPage>();
-            public int Calls { get; private set; }
-            public string LastContinuationToken { get; private set; }
-            public bool ThrowOnEnvironmentNames { get; set; }
-
-            /// <summary>Every (fromDate, toDate) pair the importer asked for, in order.</summary>
-            public List<Tuple<DateTime, DateTime>> RequestedRanges { get; } = new List<Tuple<DateTime, DateTime>>();
-
-            public Task<CopilotStudioCreditPage> GetConsumptionPageAsync(DateTime fromDate, DateTime toDate, string continuationToken)
-            {
-                LastContinuationToken = continuationToken;
-                RequestedRanges.Add(Tuple.Create(fromDate, toDate));
-                var page = Calls < Pages.Count ? Pages[Calls] : new CopilotStudioCreditPage(new List<CopilotStudioCreditRow>(), null);
-                Calls++;
-                return Task.FromResult(page);
-            }
-
-            public Task<CopilotStudioUserCreditPage> GetUserConsumptionPageAsync(DateTime fromDate, DateTime toDate, string continuationToken)
-                => Task.FromResult<CopilotStudioUserCreditPage>(null);
-            public Task<CopilotStudioCapacitySnapshot> GetCapacityAsync()
-                => Task.FromResult<CopilotStudioCapacitySnapshot>(null);
-
-            public Task<IReadOnlyDictionary<string, string>> GetEnvironmentNamesAsync()
-            {
-                if (ThrowOnEnvironmentNames) throw new InvalidOperationException("environment lookup failed");
-                return Task.FromResult<IReadOnlyDictionary<string, string>>(new Dictionary<string, string>());
-            }
-        }
-
-        /// <summary>Always returns the same continuation token, to prove the loop guard works.</summary>
-        private class RepeatingTokenCreditSource : ICopilotStudioCreditSource
-        {
-            public int Calls { get; private set; }
-
-            public Task<CopilotStudioCreditPage> GetConsumptionPageAsync(DateTime fromDate, DateTime toDate, string continuationToken)
-            {
-                Calls++;
-                return Task.FromResult(new CopilotStudioCreditPage(
-                    new[] { new CopilotStudioCreditRow { ResourceId = "a", Consumed = 1m } }, "same-token"));
-            }
-
-            public Task<CopilotStudioUserCreditPage> GetUserConsumptionPageAsync(DateTime fromDate, DateTime toDate, string continuationToken)
-                => Task.FromResult<CopilotStudioUserCreditPage>(null);
-            public Task<CopilotStudioCapacitySnapshot> GetCapacityAsync() => Task.FromResult<CopilotStudioCapacitySnapshot>(null);
-
-            public Task<IReadOnlyDictionary<string, string>> GetEnvironmentNamesAsync()
-                => Task.FromResult<IReadOnlyDictionary<string, string>>(new Dictionary<string, string>());
-        }
-
         private class FailingCreditSource : ICopilotStudioCreditSource
         {
             private readonly Exception _exception;
             public FailingCreditSource(Exception exception) { _exception = exception; }
 
-            public Task<CopilotStudioCreditPage> GetConsumptionPageAsync(DateTime fromDate, DateTime toDate, string continuationToken)
-                => throw _exception;
+            public bool CanReadConsumption => true;
 
             public Task<CopilotStudioUserCreditPage> GetUserConsumptionPageAsync(DateTime fromDate, DateTime toDate, string continuationToken)
+                => throw _exception;
+
+            public Task<CopilotStudioCreditPage> GetUserResourceConsumptionPageAsync(string userId, DateTime day, string continuationToken)
                 => throw _exception;
 
             public Task<CopilotStudioCapacitySnapshot> GetCapacityAsync() => throw _exception;
@@ -1617,9 +1903,11 @@ namespace Tests.UnitTests
             }
 
             public List<string> Bodies { get; } = new List<string>();
+            public List<string> Uris { get; } = new List<string>();
 
             protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
             {
+                Uris.Add(request.RequestUri.ToString());
                 Bodies.Add(request.Content == null ? null : await request.Content.ReadAsStringAsync());
                 return _responses.Count > 0 ? _responses.Dequeue() : new HttpResponseMessage(HttpStatusCode.InternalServerError);
             }

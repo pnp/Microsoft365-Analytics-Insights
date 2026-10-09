@@ -68,6 +68,21 @@ namespace Common.Entities.CopilotAdoption
         public List<UnlicensedUsageQueryRow> UnlicensedUsers { get; set; } = new List<UnlicensedUsageQueryRow>();
 
         /// <summary>
+        /// True only when the unlicensed-usage query completed. Without it an empty
+        /// <see cref="UnlicensedUsers"/> cannot be told apart from a query that failed or never ran (no
+        /// audit import) - and the manager-modelling figures read a manager's ABSENCE from that list as
+        /// "did not use Copilot", which is only true when the list is really there.
+        /// </summary>
+        internal bool UnlicensedUsageAssessed { get; set; }
+
+        /// <summary>
+        /// Every manager of a scored licensed user with their own Copilot status, resolved against the
+        /// whole tenant's rows (#641). Built by the finalise pass of the tenant analysis; a narrowed
+        /// analysis inherits it, so a report inside the slice whose manager is outside it is still resolved.
+        /// </summary>
+        internal CopilotAdoptionManagerDirectory ManagerDirectory { get; set; }
+
+        /// <summary>
         /// Observed Copilot actions per licensed user, already collapsed by SQL to one row per user for
         /// the modelled realised-value estimate. Internal only; never exposed as a per-person hours figure.
         /// </summary>

@@ -20,17 +20,18 @@ namespace Common.Entities.Entities.AgentCosts
     /// unclassified spend rather than as spend quietly attributed to the wrong harness.</para>
     ///
     /// <para><b>Microsoft 365 Copilot Cowork is deliberately absent from this mapping, and must stay
-    /// absent.</b> Cowork meters against the shared <i>Copilot Credits</i> pool - the same currency as
-    /// Copilot Studio and AI Builder - and Microsoft publishes no Cowork-specific meter, feature name or
-    /// workload discriminator. The licensing API reports an aggregate "AI" capacity category only. So
-    /// Cowork consumption genuinely <i>is</i> inside the tenant capacity figures, but it cannot be
-    /// separated out of them, and no per-row signal identifies it.</para>
+    /// absent.</b> Cowork is measured in the same currency, <i>Copilot Credits</i>, but it is not billed
+    /// against the Copilot Studio (<c>MCSMessages</c>) entitlement this classifier reads. It is billed
+    /// through a Microsoft 365 admin center pay-as-you-go billing policy to an Azure subscription, and
+    /// Microsoft documents prepaid Copilot Studio capacity as assignable (through Copilot credit policies)
+    /// only to Copilot Chat. So Cowork consumption never appears in these rows; its cost appears only in
+    /// the Azure Cost Management import, under the shared <c>Microsoft Copilot Studio</c> service, where
+    /// it can be separated only by billing scope or tag.</para>
     ///
-    /// <para>Inventing a Cowork feature name here to make a "Cowork spend" column possible would be
-    /// precisely the silent mis-attribution the paragraph above exists to prevent - and it would land on a
-    /// page used to justify spend. Cowork <i>usage</i> is reported from the audit log
-    /// (<c>CopilotAdoptionSql.CoworkPredicate</c>) instead, which is real evidence; Cowork <i>cost</i> is
-    /// reported only at the tenant-pool level, where it is honest.</para>
+    /// <para>Inventing a Cowork feature name here would be precisely the silent mis-attribution the
+    /// first paragraph exists to prevent - and it would land on a page used to justify spend. Cowork
+    /// <i>usage</i> is reported from the audit log (<c>CopilotAdoptionSql.CoworkPredicate</c>), which is
+    /// real evidence; Cowork <i>cost</i> is reported only by the Azure cost import.</para>
     /// </remarks>
     public static class CopilotStudioHarnessClassifier
     {

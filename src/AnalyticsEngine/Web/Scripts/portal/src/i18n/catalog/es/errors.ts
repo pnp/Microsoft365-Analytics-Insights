@@ -73,6 +73,7 @@ const errors: Record<keyof typeof en, string> = {
   // DLP API
   'errors.dlp.availabilityFailed': 'No se ha podido cargar la disponibilidad de DLP ({status}).',
   'errors.dlp.summaryFailed': 'No se ha podido cargar el resumen de DLP ({status}).',
+  'errors.dlp.governanceFailed': 'No se han podido cargar las señales de gobernanza de Copilot ({status}).',
 
   // Health API
   'errors.health.summaryFailed': 'No se ha podido cargar el estado del sistema ({status}).',

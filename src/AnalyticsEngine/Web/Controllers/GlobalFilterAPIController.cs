@@ -70,7 +70,8 @@ namespace Web.AnalyticsWeb.Controllers
         [Route("effective")]
         public async Task<IHttpActionResult> Effective(CancellationToken cancellationToken = default(CancellationToken))
         {
-            var canBypass = PortalAccess.Evaluate(Request, User).Administration;
+            var access = PortalAccess.Evaluate(Request, User);
+            var canBypass = access.Administration && access.SeePii;
             var global = await Resolver.DescribeAsync(Request, User, cancellationToken).ConfigureAwait(false);
             return NoStore(HttpStatusCode.OK, GlobalFilterEffectiveModel.From(global, canBypass));
         }

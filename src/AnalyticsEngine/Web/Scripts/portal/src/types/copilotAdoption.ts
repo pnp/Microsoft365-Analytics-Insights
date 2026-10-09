@@ -231,6 +231,9 @@ export interface CopilotAdoptionOptions {
 /** One Microsoft-published resource attached to an adoption action. */
 export interface AdoptionGuidanceLink {
   actionCode: string;
+  /** Stable per-resource key; the SPA translates the title through it (see guidanceLinkTitle). */
+  titleKey?: string;
+  /** English title, shown only for a titleKey this build does not know. */
   title: string;
   url: string;
   expectedTitle: string;
@@ -396,8 +399,56 @@ export interface AccountabilityRollupRow extends AdoptionSegmentRow {
   opportunityUsers: number;
 }
 
-/** The executive view. */
-export interface CopilotAdoptionSummary {
+/**
+ * Whether people managers use Copilot themselves, and how their direct reports compare (#641), for one
+ * population - the whole summary, or one department. Aggregates only: no manager is ever named. A null
+ * figure was withheld because the group was smaller than `minSeatsPerSegment` (or there was nothing to
+ * divide) - a blank, never a measured zero.
+ */
+export interface ManagerModellingFigures {
+  /** Licensed users counted as direct reports: enabled, with an enabled manager who is someone else. */
+  reportsWithManager: number;
+  /** People managers whose own Copilot use in the period is known: the denominator of `managersActivePct`. */
+  managersStatusKnown: number;
+  /** People managers whose own use the data cannot determine - never counted as "not active". */
+  managersStatusUnknown: number;
+  managersActive: number | null;
+  managersActivePct: number | null;
+  reportsManagerActive: number | null;
+  reportsActiveRatePctManagerActive: number | null;
+  reportsHabitRatePctManagerActive: number | null;
+  reportsManagerInactive: number | null;
+  reportsActiveRatePctManagerInactive: number | null;
+  reportsHabitRatePctManagerInactive: number | null;
+  reportsManagerUnknown: number;
+  reportsManagerActiveLicensed: number | null;
+  reportsActiveRatePctManagerActiveLicensed: number | null;
+  reportsHabitRatePctManagerActiveLicensed: number | null;
+  reportsManagerActiveUnlicensed: number | null;
+  reportsActiveRatePctManagerActiveUnlicensed: number | null;
+  reportsHabitRatePctManagerActiveUnlicensed: number | null;
+  reportsManagerInactiveLicensed: number | null;
+  reportsActiveRatePctManagerInactiveLicensed: number | null;
+  reportsHabitRatePctManagerInactiveLicensed: number | null;
+  reportsManagerInactiveUnlicensed: number | null;
+  reportsActiveRatePctManagerInactiveUnlicensed: number | null;
+  reportsHabitRatePctManagerInactiveUnlicensed: number | null;
+}
+
+/** The manager-modelling figures for one department of `adoptionByDepartment` - the report's own department. */
+export interface ManagerModellingSegmentRow extends ManagerModellingFigures {
+  /** Tenant data: rendered verbatim, never translated. */
+  segment: string;
+  licensedUsers: number;
+}
+
+/**
+ * The executive view.
+ *
+ * The manager-modelling figures (#641) are top-level, as the server sends them, and optional only so a
+ * fixture or a server that predates them still type-checks.
+ */
+export interface CopilotAdoptionSummary extends Partial<ManagerModellingFigures> {
   generatedUtc: string;
   windowDays: number;
   fromUtc: string;
@@ -436,6 +487,19 @@ export interface CopilotAdoptionSummary {
   averageAdoptionScore: number;
   medianAdoptionScore: number;
   totalInteractions: number;
+
+  /**
+   * Microsoft's own tenant figures from its Microsoft 365 Copilot usage report (#642), exactly as the
+   * report stated them: the report date and period they describe, the report version the import recorded,
+   * the prompts submitted and the average per active user. A different source, unit and population from
+   * every audit-derived figure here, so never added to them. Each is null - never zero - when the report did
+   * not carry it (version 1) or none has been imported; optional because an older server does not send them.
+   */
+  microsoftReportDate?: string | null;
+  microsoftReportPeriodDays?: number | null;
+  microsoftReportVersion?: string | null;
+  microsoftReportPromptsSubmitted?: number | null;
+  microsoftReportAveragePromptsPerActiveUser?: number | null;
 
   // Cowork use, from the Copilot audit log only: interactions, never tasks (#692).
   coworkUsers: number;
@@ -506,6 +570,11 @@ export interface CopilotAdoptionSummary {
   guidanceCatalogueVersion?: string;
   guidanceLinks?: AdoptionGuidanceLink[];
   adoptionByDepartment: AdoptionSegmentRow[];
+  /**
+   * The manager-modelling figures for each department of `adoptionByDepartment`, in its order (#641).
+   * Absent from a server that predates them.
+   */
+  managerModellingByDepartment?: ManagerModellingSegmentRow[];
   habitByDepartment: AdoptionSegmentRow[];
   adoptionByCountry: AdoptionSegmentRow[];
 
@@ -724,6 +793,7 @@ export const UNSCOPED_SECTIONS = {
   agents: 'agents',
   purchasedSeats: 'purchasedSeats',
   coworkCredits: 'coworkCredits',
+  microsoftReport: 'microsoftReport',
 } as const;
 
 /** Filter/sort state for the licensed-user list. */

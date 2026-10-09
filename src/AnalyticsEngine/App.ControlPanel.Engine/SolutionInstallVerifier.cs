@@ -941,9 +941,9 @@ namespace App.ControlPanel.Engine
             new ImportToggleCoverage(nameof(ImportTaskSettings.CopilotStudioCredits), null,
                 "no check exercises the Power Platform licensing API. It needs a token for a different audience "
                 + "(api.powerplatform.com) plus a Power Platform RBAC role assignment on the service principal, "
-                + "neither of which this installer creates - and Microsoft has not confirmed that the licensing "
-                + "entitlement routes accept an application-only token at all, so a failure here would not "
-                + "necessarily mean the install is wrong. The import records the outcome in "
+                + "neither of which this installer creates. Power Platform supports service-principal authentication "
+                + "via RBAC, but verifying a role assignment does not prove access to the licensing endpoints. "
+                + "A refused request alone does not establish a setup error or an application-only restriction. The import records the outcome in "
                 + "agent_cost_import_log, which is where to look after the first cycle."),
 
             new ImportToggleCoverage(nameof(ImportTaskSettings.AzureCostManagement), null,

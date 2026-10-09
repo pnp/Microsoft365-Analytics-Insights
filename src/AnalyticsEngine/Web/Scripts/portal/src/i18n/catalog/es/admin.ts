@@ -7,6 +7,27 @@ import type { admin as en } from '../en/admin';
  * build rather than reaching a customer as English text inside a Spanish page.
  */
 const admin: Record<keyof typeof en, string> = {
+  'admin.agentCostConnection.title': 'Conexión de facturación de Copilot Studio',
+  'admin.agentCostConnection.description': 'Microsoft solo permite que un administrador de Power Platform con la sesión iniciada lea el uso de Copilot Studio; la aplicación de análisis no puede leerlo por sí sola. Conecte aquí una cuenta de administrador una vez y la importación programada leerá el uso en nombre de esa cuenta. La conexión se comparte en toda la implementación, no solo en su navegador.',
+  'admin.agentCostConnection.status': 'Estado de la conexión',
+  'admin.agentCostConnection.loading': 'Cargando el estado de la conexión…',
+  'admin.agentCostConnection.connected': 'Conectado. La conexión se renueva sola; solo tendrá que volver a conectar si Microsoft pide a la cuenta que inicie sesión de nuevo.',
+  'admin.agentCostConnection.disconnected': 'Sin conexión. El uso de Copilot Studio no se importará hasta que se conecte un administrador. La capacidad de Copilot Credits se sigue importando.',
+  'admin.agentCostConnection.reconnectNeeded': 'Hay que volver a conectar. El inicio de sesión de la cuenta ha caducado, se ha revocado o ya no tiene acceso a los datos de facturación. Compruebe que la cuenta conserva su rol de Power Platform y que ninguna directiva de acceso condicional la bloquea; después, vuelva a conectar.',
+  'admin.agentCostConnection.storageNotConfigured': 'Esta implementación no tiene configurada ninguna cuenta de Azure Storage, así que la conexión no se puede guardar. Añada la cadena de conexión Storage y vuelva a intentarlo.',
+  'admin.agentCostConnection.storageUnavailable': 'No se pudo guardar ni leer la conexión en Azure Storage. Compruebe que la aplicación web puede llegar a la cuenta de almacenamiento y que el registro de aplicación de análisis tiene el rol Storage Table Data Contributor en ella.',
+  'admin.agentCostConnection.prerequisites': 'Antes de conectar: use una cuenta con el rol de administrador de Power Platform (o un acceso de facturación equivalente). En Microsoft Entra ID, el registro de aplicación de análisis necesita los permisos delegados de Power Platform API, con el consentimiento de administrador concedido, y la dirección de este sitio terminada en /signin-agent-costs añadida como URI de redirección web. Conectar no concede a la cuenta ningún rol nuevo.',
+  'admin.agentCostConnection.persistence': 'El inicio de sesión de la cuenta se guarda cifrado en la cuenta de Azure Storage de esta implementación y nunca se muestra en esta página. Si cambia el secreto o el certificado del registro de aplicación, tendrá que volver a conectar.',
+  'admin.agentCostConnection.connect': 'Conectar o volver a conectar un administrador',
+  'admin.agentCostConnection.disconnect': 'Desconectar',
+  'admin.agentCostConnection.refresh': 'Actualizar estado',
+  'admin.agentCostConnection.disconnectConfirm': '¿Desconectar al administrador de facturación? El uso de Copilot Studio dejará de importarse hasta que alguien vuelva a conectar. Una importación que ya esté en curso puede terminar. Las cifras ya importadas se conservan y no se retira el consentimiento de administrador en Microsoft Entra ID.',
+  'admin.agentCostConnection.connectedOutcome': 'Conectado, y Microsoft ha confirmado que la cuenta puede leer el uso de Copilot Studio. El uso se importará en la próxima ejecución programada; no hace falta esperar a mañana. "Copilot Studio credits" también debe estar activado en el instalador; de lo contrario, no se importará nada.',
+  'admin.agentCostConnection.consentOrPolicy': 'Microsoft Entra ID no permitió este inicio de sesión. Compruebe que se ha concedido el consentimiento de administrador para los permisos de Power Platform API del registro de aplicación y que ninguna directiva de acceso condicional bloquea la cuenta; después, vuelva a intentarlo.',
+  'admin.agentCostConnection.identityMismatch': 'La cuenta que inició sesión no es la del administrador del portal que comenzó la conexión, o no tiene el permiso de Administración del portal. Inicie sesión con la cuenta correcta y vuelva a intentarlo.',
+  'admin.agentCostConnection.accessDenied': 'La cuenta inició sesión, pero Microsoft no le permitió leer el uso de Copilot Studio. Compruebe que la cuenta tiene el rol de administrador de Power Platform y que se ha concedido el consentimiento de administrador para los permisos de Power Platform API del registro de aplicación. Cualquier conexión anterior se mantiene.',
+  'admin.agentCostConnection.failed': 'No se pudo completar la conexión. Compruebe el URI de redirección del registro de aplicación, el consentimiento de administrador, el acceso condicional y que la aplicación web puede llegar a Azure Storage; después, vuelva a intentarlo. Las demás importaciones no se ven afectadas.',
+  'admin.agentCostConnection.isolation': 'Los costes de Azure y la capacidad de Copilot Credits no usan esta conexión, así que siguen funcionando haya o no un administrador conectado. Desconectar solo detiene la importación del uso de Copilot Studio.',
   // Shared administration labels.
   'admin.common.enabled': 'Habilitado',
   'admin.common.no': 'No',

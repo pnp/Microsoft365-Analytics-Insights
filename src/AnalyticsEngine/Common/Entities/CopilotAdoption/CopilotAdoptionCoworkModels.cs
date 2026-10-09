@@ -507,7 +507,13 @@ namespace Common.Entities.CopilotAdoption
         /// Observed: per-active-day averages from Microsoft's usage reports, times working days a month,
         /// rounded as published.
         /// </summary>
+        /// <remarks>
+        /// The observed input the modelled hours rest on, so Snapshot facts carries each kind of work as a
+        /// row of its own (<c>coworkValueEstimate.activities.sendEmail</c>): a change in it is real even
+        /// though the hours are modelled.
+        /// </remarks>
         [JsonProperty("activities")]
+        [SnapshotFactsBreakdown(typeof(CoworkActivities))]
         public List<CoworkActivityVolume> Activities { get; set; } = new List<CoworkActivityVolume>();
 
         /// <summary>
@@ -562,7 +568,7 @@ namespace Common.Entities.CopilotAdoption
     /// What one cohort already does by hand of one kind of work Cowork could take on, a month.
     /// Observed, not modelled - see <see cref="CoworkActivities"/>.
     /// </summary>
-    public class CoworkActivityVolume
+    public class CoworkActivityVolume : ISnapshotFactsBreakdownRow
     {
         /// <summary>One of the <see cref="CoworkActivities"/> keys, e.g. <c>organiseMeetings</c>.</summary>
         [JsonProperty("activity")]
@@ -571,6 +577,10 @@ namespace Common.Entities.CopilotAdoption
         /// <summary>The work done by hand a month by the people the estimate covers.</summary>
         [JsonProperty("volumePerMonth")]
         public double VolumePerMonth { get; set; }
+
+        string ISnapshotFactsBreakdownRow.BreakdownMember => Activity;
+
+        object ISnapshotFactsBreakdownRow.BreakdownValue => VolumePerMonth;
     }
 
     /// <summary>

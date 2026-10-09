@@ -721,6 +721,55 @@ namespace Tests.UnitTests
             }
         }
 
+        /// <summary>
+        /// The manager-modelling figures (#641) find a manager by id, so the licensed-user query has to
+        /// carry each user's <c>manager_id</c> and the manager's account state - read from the manager
+        /// join it already makes - onto the DTO, for managers with and without a seat alike.
+        /// </summary>
+        [TestMethod]
+        public void LicensedUsersQuery_CarriesEachUsersManagerById_WithTheManagersAccountState()
+        {
+            using (var db = ScratchDatabase.Create("CopilotAdoptMgr"))
+            {
+                CreateUserTables(db);
+                CreateCopilotTables(db);
+
+                db.Execute(
+                    @"INSERT INTO dbo.license_types (id, name, sku_id)
+                          VALUES (1, N'Microsoft Copilot for Microsoft 365', N'Microsoft_365_Copilot');
+                      INSERT INTO dbo.users (id, user_name, account_enabled, manager_id)
+                          VALUES (1, 'seat.manager@contoso.com', 1, NULL),
+                                 (2, 'departed.manager@contoso.com', 0, NULL),
+                                 (3, 'unknown.state@contoso.com', NULL, NULL),
+                                 (10, 'report.one@contoso.com', 1, 1),
+                                 (11, 'report.two@contoso.com', 1, 2),
+                                 (12, 'own.manager@contoso.com', 1, 12),
+                                 (13, 'report.three@contoso.com', 1, 3);
+                      INSERT INTO dbo.user_license_type_lookups (id, user_id, license_type_id)
+                          VALUES (1, 1, 1), (2, 10, 1), (3, 11, 1), (4, 12, 1), (5, 13, 1);");
+
+                var rows = Query<LicensedUserUsageRow>(
+                    db,
+                    CopilotAdoptionSql.LicensedUsersSql(new[] { 1 }, new int[0], includeCopilotReport: false),
+                    new SqlParameter("@from", DateTime.UtcNow.Date.AddDays(-28)),
+                    new SqlParameter("@historyFrom", DateTime.UtcNow.Date.AddDays(-365)),
+                    new SqlParameter("@maxRows", 1000))
+                    .ToDictionary(r => r.UserId);
+
+                Assert.AreEqual(5, rows.Count, "Only the Copilot seat holders.");
+                Assert.IsNull(rows[1].ManagerUserId, "No manager recorded.");
+                Assert.IsNull(rows[1].ManagerAccountEnabled);
+                Assert.AreEqual(1, rows[10].ManagerUserId);
+                Assert.AreEqual(true, rows[10].ManagerAccountEnabled);
+                Assert.AreEqual(2, rows[11].ManagerUserId, "A manager with no seat of their own is still found by id.");
+                Assert.AreEqual(false, rows[11].ManagerAccountEnabled,
+                    "A disabled manager must be recognisable as disabled although they hold no seat and have no row here.");
+                Assert.AreEqual(12, rows[12].ManagerUserId, "Returned as recorded; the in-memory pass decides what a self-managed user means.");
+                Assert.AreEqual(3, rows[13].ManagerUserId);
+                Assert.IsNull(rows[13].ManagerAccountEnabled, "An unknown account state stays unknown, not disabled.");
+            }
+        }
+
         [TestMethod]
         public void LicensedUsersQuery_ReadsMicrosoftsPerUserReportSnapshot()
         {

@@ -248,6 +248,12 @@ namespace Common.Entities.CopilotAdoption
                 summary.DataSources.CopilotUsageReportDate.HasValue
                     ? $"Snapshot of {summary.DataSources.CopilotUsageReportDate.Value:yyyy-MM-dd}. Licensed users only."
                     : "Not imported.");
+            AddMeta(sheet, "Microsoft Copilot usage report - tenant summary", YesNo(summary.MicrosoftReportDate.HasValue),
+                summary.MicrosoftReportDate.HasValue
+                    ? $"Microsoft's tenant totals for {MicrosoftReportPeriodText(summary)}"
+                      + (string.IsNullOrWhiteSpace(summary.MicrosoftReportVersion) ? string.Empty : $", report version {summary.MicrosoftReportVersion}")
+                      + ". Licensed users only, tenant-wide."
+                    : "Not imported.");
             AddMeta(sheet, "Microsoft 365 usage reports", YesNo(summary.DataSources.M365UsageReportsAvailable),
                 summary.DataSources.M365UsageReportDate.HasValue
                     ? $"Daily reports read across the whole period, up to {summary.DataSources.M365UsageReportDate.Value:yyyy-MM-dd}. "
@@ -308,6 +314,29 @@ namespace Common.Entities.CopilotAdoption
         private static void AddMeta(XlsxSheet sheet, string name, object value, string notes)
         {
             sheet.AddRow(name, value, XlsxCell.Wrapped(notes));
+        }
+
+        /// <summary>
+        /// The report period Microsoft's tenant figures describe, in words: its real length and the date it
+        /// ends on - never "28 days" for a 30-day report.
+        /// </summary>
+        private static string MicrosoftReportPeriodText(CopilotAdoptionSummary summary)
+        {
+            if (!summary.MicrosoftReportDate.HasValue) return "no report period";
+
+            return summary.MicrosoftReportPeriodDays.HasValue
+                ? $"the {summary.MicrosoftReportPeriodDays.Value}-day report period to {summary.MicrosoftReportDate.Value:yyyy-MM-dd}"
+                : $"the report period to {summary.MicrosoftReportDate.Value:yyyy-MM-dd}";
+        }
+
+        /// <summary>
+        /// One of Microsoft's tenant figures as a cell: the number, or why there is none. Never a zero for a
+        /// figure Microsoft did not report.
+        /// </summary>
+        private static object MicrosoftReportValue<T>(T? value, CopilotAdoptionSummary summary) where T : struct
+        {
+            if (value.HasValue) return value.Value;
+            return summary.MicrosoftReportDate.HasValue ? "Not reported" : "Not imported";
         }
 
         /// <summary>
@@ -470,6 +499,26 @@ namespace Common.Entities.CopilotAdoption
                 "Licensed users whose score used Microsoft's per-user report because the audit import had no per-user signal for them.");
             AddMeta(sheet, "Scored from Microsoft report %", summary.UsageReportSourcedUserPct,
                 "The same figure as a share of the analysed users. The higher it is, the more of this report is pinned to Microsoft's reporting period rather than to the window on the Report sheet - which is what makes two snapshots taken over different windows less directly comparable.");
+
+            // Microsoft's own tenant figures, in their own block: a different source, unit and population
+            // from every figure above, so they sit beside them and are never added to them (#534, #642).
+            sheet.AddBlankRow();
+            var microsoftReportVersion1 = string.Equals(summary.MicrosoftReportVersion, "v1", StringComparison.OrdinalIgnoreCase);
+            AddMeta(sheet, "Microsoft report: prompts submitted", MicrosoftReportValue(summary.MicrosoftReportPromptsSubmitted, summary),
+                (summary.MicrosoftReportDate.HasValue
+                    ? $"Microsoft's own figure from its Copilot usage report, for {MicrosoftReportPeriodText(summary)}: "
+                    : "Microsoft's own figure from its Copilot usage report: ")
+                + "the prompts licensed users sent to Copilot Chat, as Microsoft counts them, across the whole tenant. "
+                + "Never added to the audit-log interactions above - a different source, unit and population."
+                + (microsoftReportVersion1 && !summary.MicrosoftReportPromptsSubmitted.HasValue
+                    ? " Version 1 of Microsoft's report has no prompt counts, so none is shown - never a zero."
+                    : string.Empty));
+            AddMeta(sheet, "Microsoft report: prompts per active user", MicrosoftReportValue(summary.MicrosoftReportAveragePromptsPerActiveUser, summary),
+                "Microsoft's average prompts per active user over the same period, with Microsoft's own definition of active. "
+                + "Not comparable with the audit-derived interactions per user, and licensed users only."
+                + (microsoftReportVersion1 && !summary.MicrosoftReportAveragePromptsPerActiveUser.HasValue
+                    ? " Version 1 of Microsoft's report has no prompt counts, so none is shown - never a zero."
+                    : string.Empty));
 
             sheet.AddBlankRow();
             AddMeta(sheet, "Using Copilot unlicensed", summary.UnlicensedActiveUsers,
@@ -806,6 +855,7 @@ namespace Common.Entities.CopilotAdoption
                 case CopilotAdoptionUnscopedSections.Agents: return "the agent inventory";
                 case CopilotAdoptionUnscopedSections.PurchasedSeats: return "purchased and unassigned seats";
                 case CopilotAdoptionUnscopedSections.CoworkCredits: return "the Cowork credit balance";
+                case CopilotAdoptionUnscopedSections.MicrosoftReport: return "Microsoft's usage-report figures";
                 default: return section;
             }
         }
@@ -1103,6 +1153,8 @@ namespace Common.Entities.CopilotAdoption
                 }
             }
 
+            WriteManagerModellingSection(sheet, summary);
+
             // Where unlicensed Copilot demand concentrates. Sits next to the licensed breakdowns on
             // purpose: a department high in both is an allocation problem rather than an adoption one,
             // and can usually be fixed by moving seats rather than by buying them.
@@ -1172,6 +1224,84 @@ namespace Common.Entities.CopilotAdoption
                 {
                     sheet.AddRow(type.Label, CopilotAccessedResourceTaxonomy.KindLabel(type.Kind), type.Value);
                 }
+            }
+        }
+
+        /// <summary>
+        /// Do people managers use Copilot themselves, and how do their direct reports compare (#641)? The
+        /// whole population first, then each department of the adoption table above.
+        /// </summary>
+        /// <remarks>
+        /// Aggregates only, by design: the roll-up by direct manager above carries none of this, because a
+        /// row per manager with that manager's own status would disclose one person's use. A blank cell is
+        /// a figure withheld for the minimum group size or with nothing to divide - never a zero.
+        /// </remarks>
+        private static void WriteManagerModellingSection(XlsxSheet sheet, CopilotAdoptionSummary summary)
+        {
+            var departments = summary.ManagerModellingByDepartment ?? new List<ManagerModellingSegmentRow>();
+            if (departments.Count == 0) return;
+
+            if (summary.ReportsWithManager == 0)
+            {
+                sheet.AddBlankRow();
+                sheet.AddRow(XlsxCell.Wrapped(
+                    "Do people managers use Copilot themselves? Not shown: no licensed user analysed has a recorded "
+                    + "manager with an enabled account, so there is no team to compare. Managers come from the user "
+                    + "metadata import."));
+                return;
+            }
+
+            var whole = new ManagerModellingSegmentRow { Segment = PopulationLabel(summary), LicensedUsers = summary.ScoredUsers };
+            whole.CopyFrom(summary);
+            var rows = new List<ManagerModellingSegmentRow> { whole };
+            rows.AddRange(departments);
+
+            sheet.AddBlankRow();
+            sheet.AddRow(XlsxCell.Wrapped(
+                "Do people managers use Copilot themselves, and how do their direct reports compare? A direct report is "
+                + "an enabled licensed user whose manager is someone else with an enabled account; a people manager is "
+                + "anyone who manages at least one, with or without a Copilot seat. A manager whose own use cannot be "
+                + "determined is counted as unknown and left out of both sides of the comparison. Each department "
+                + $"is the report's own. Figures for fewer than {summary.Options.MinSeatsPerSegment} people managers, "
+                + "or a rate over fewer reports than that, are left blank. This is an association, not a cause: teams "
+                + "whose manager uses Copilot may differ in function, seniority or seat coverage."));
+            sheet.AddHeaderRow(
+                "Department", "Seats", "Direct reports", "Managers, use known", "Managers, use unknown",
+                "Managers using Copilot %",
+                "Reports - manager uses Copilot", "Active % - manager uses Copilot", "Habit % - manager uses Copilot",
+                "Reports - manager does not", "Active % - manager does not", "Habit % - manager does not",
+                "Reports - manager unknown");
+
+            foreach (var row in rows)
+            {
+                sheet.AddRow(
+                    row.Segment, row.LicensedUsers, row.ReportsWithManager, row.ManagersStatusKnown,
+                    row.ManagersStatusUnknown, row.ManagersActivePct,
+                    row.ReportsManagerActive, row.ReportsActiveRatePctManagerActive, row.ReportsHabitRatePctManagerActive,
+                    row.ReportsManagerInactive, row.ReportsActiveRatePctManagerInactive, row.ReportsHabitRatePctManagerInactive,
+                    row.ReportsManagerUnknown);
+            }
+
+            sheet.AddBlankRow();
+            sheet.AddRow(XlsxCell.Wrapped(
+                "The same comparison, split by whether the manager holds a Copilot seat. A manager with a seat is more "
+                + "likely both to use Copilot and to lead a team that was given seats, which on its own would widen the "
+                + "gap above - so compare like with like: managers with a seat against managers with a seat."));
+            sheet.AddHeaderRow(
+                "Department",
+                "Reports - uses Copilot, seat", "Active % - uses Copilot, seat", "Habit % - uses Copilot, seat",
+                "Reports - uses Copilot, no seat", "Active % - uses Copilot, no seat", "Habit % - uses Copilot, no seat",
+                "Reports - does not, seat", "Active % - does not, seat", "Habit % - does not, seat",
+                "Reports - does not, no seat", "Active % - does not, no seat", "Habit % - does not, no seat");
+
+            foreach (var row in rows)
+            {
+                sheet.AddRow(
+                    row.Segment,
+                    row.ReportsManagerActiveLicensed, row.ReportsActiveRatePctManagerActiveLicensed, row.ReportsHabitRatePctManagerActiveLicensed,
+                    row.ReportsManagerActiveUnlicensed, row.ReportsActiveRatePctManagerActiveUnlicensed, row.ReportsHabitRatePctManagerActiveUnlicensed,
+                    row.ReportsManagerInactiveLicensed, row.ReportsActiveRatePctManagerInactiveLicensed, row.ReportsHabitRatePctManagerInactiveLicensed,
+                    row.ReportsManagerInactiveUnlicensed, row.ReportsActiveRatePctManagerInactiveUnlicensed, row.ReportsHabitRatePctManagerInactiveUnlicensed);
             }
         }
 
@@ -2379,6 +2509,37 @@ namespace Common.Entities.CopilotAdoption
                 + "Anyone whose domain cannot be worked out is grouped as \"(no domain)\" rather than dropped, so "
                 + "the breakdown still adds up to the seat count.");
 
+            AddMethod(sheet, "Do managers use Copilot themselves?",
+                "Direct reports are the licensed users analysed whose account is enabled and whose manager - the direct "
+                + "manager only, never the wider hierarchy - is someone else with an enabled account. A people manager is "
+                + "anyone who directly manages at least one of them, with or without a Copilot seat. Disabled accounts are "
+                + "left out on both sides, and so are the reports of a manager whose account is disabled.\n"
+                + "A manager is Active with any Copilot use in the period: a seat holder whose band is above Dormant, or "
+                + "someone without a seat who appears in the unlicensed Copilot Chat usage. Not active means the data shows "
+                + "no use. Unknown means the data cannot say: a seat holder beyond the analysis limit "
+                + "(maxLicensedUsersScored), someone without a seat when the unlicensed usage stopped at "
+                + "maxUnlicensedUsersScored, failed or could not run (it needs the Copilot audit import), or an external "
+                + "guest, whom the unlicensed usage leaves out. Unknown is never counted as not active: those managers and "
+                + "their reports are left out of both sides of the comparison.\n"
+                + "managersActivePct = managersActive / managersStatusKnown x 100\n"
+                + "reportsActiveRatePctManagerActive = reports active in the period / reportsManagerActive x 100, and "
+                + "likewise for reports whose manager is not active (reportsManagerInactive)\n"
+                + $"reportsHabitRatePctManagerActive = reports with a habit (engagement of {o.EstablishedScore} or more - "
+                + "the same rule as the habit rate) / reportsManagerActive x 100, and likewise for the inactive side\n"
+                + "Each comparison is repeated by whether the manager holds a Copilot seat (the ...Licensed and "
+                + "...Unlicensed figures), because a manager with a seat is more likely both to use Copilot and to lead a "
+                + "team that was given seats, which on its own would widen the gap.\n"
+                + $"Aggregates only. Every figure that depends on managers' own use needs at least {o.MinSeatsPerSegment} "
+                + $"people managers whose use is known, and every rate needs at least {o.MinSeatsPerSegment} reports "
+                + "behind it; anything smaller is left blank. Nothing about a manager's own use is attached to a person's "
+                + "row or to the roll-up by direct manager. On the department table each report counts in their own "
+                + "department, and the departments are those of the adoption-by-department table.");
+
+            AddMethod(sheet, "Managers and their teams: an association, not a cause",
+                "A gap between the two report rates says that teams whose manager uses Copilot use it more (or less). It "
+                + "does not say the manager caused it. Teams whose manager uses Copilot may differ in function, seniority "
+                + "or seat coverage, so compare like with like - the split by seat - before drawing a conclusion.");
+
             AddMethod(sheet, "Business case score",
                 "Unlicensed users score 0-100 on four weighted signals, weighted so evidence beats inference:\n"
                 // Written as the computation, not as a rounded product. Printing "64.3" at D90 would make
@@ -2430,6 +2591,28 @@ namespace Common.Entities.CopilotAdoption
                           + "is not included. ")
                 + "Do not average or silently reconcile them into one number.");
 
+            AddMethod(sheet, "Microsoft's tenant prompt figures",
+                "The figures labelled 'Microsoft report' are Microsoft's own, read unchanged from the tenant summary of "
+                + "its Microsoft 365 Copilot usage report that the usage-report import stores: 'Total prompts submitted' "
+                + "and 'Average prompts submitted' per active user, for the report period closest to 28 days - 28 days "
+                + "on version 2 of the report, 30 days when the tenant only receives version 1 - ending on the report "
+                + "date stated beside them. Microsoft's most recent report is used, as the Microsoft 365 admin centre "
+                + "shows it, so its period ends on Microsoft's date rather than on this workbook's.\n"
+                + "They differ from the audit-derived figures by design, for the reasons above: Microsoft counts the "
+                + "prompts licensed users sent to Copilot Chat, over Microsoft's own report period, while the audit log "
+                + "counts Copilot interactions by every user, including unlicensed Copilot Chat users, over the selected "
+                + "period. A prompt and an interaction are different units, so the two are never added together or "
+                + "averaged - the total interactions on the Headline figures sheet contain no Microsoft prompt count.\n"
+                + "They cover Copilot as Microsoft's report counts it, not agents alone, so they are not the agent "
+                + "measure charted in Microsoft's 2026 Work Trend Index, and no external benchmark is shown beside them. "
+                + "Microsoft's published schema for the tenant summary has no agents surface, so it supplies no agent "
+                + "figure: agent figures in this workbook come from the audit log.\n"
+                + "A figure Microsoft did not report - version 1 of the report has no prompt counts - is left blank on "
+                + "'Snapshot facts', never written as zero. Concealed user information does not affect these figures: "
+                + "they are tenant totals with no identities in them. They describe the whole tenant, so a workbook "
+                + "narrowed to part of it carries them unchanged and says so on the Report sheet. "
+                + "(https://learn.microsoft.com/en-us/microsoft-365/copilot/extensibility/api/admin-settings/reports/copilotreportroot-getmicrosoft365copilotusercountsummary)");
+
             AddMethod(sheet, "Comparing two exports",
                 "Comparison lives in these files, not in the product. There is no stored history, no saved "
                 + "baseline and no period-on-period view in the portal: to compare, export this workbook "
@@ -2439,6 +2622,12 @@ namespace Common.Entities.CopilotAdoption
                 + "conditional rows - so the two files line up row for row and the comparison is a key "
                 + "lookup rather than a hunt across sheets. A figure that is not known is left blank, never "
                 + "written as zero, so 'we could not measure this' and 'this was zero' stay distinguishable.\n"
+                + "Figures inside a section of the report are keyed by the section and the figure joined by a "
+                + "dot - agents.activeAgents, unlicensed.activeUsers, dataSources.copilotUsageReportDate - and "
+                + "a section that could not be measured still has every one of its keys, blank. The keys come "
+                + "from the product, not from the data, so they change only when the product does: a key added "
+                + "in a later build has no value in an earlier export, and a key that is in only one of the two "
+                + "files is a change in the product, not a change in adoption.\n"
                 + "Do not diff 'Run diagnostics'. That sheet carries the timings of the run that produced "
                 + "the file, and its rows depend on which steps reported rather than on the report's "
                 + "definition - so its keys legitimately differ between two exports. Read it to EXPLAIN a "
@@ -2453,6 +2642,10 @@ namespace Common.Entities.CopilotAdoption
                 + "otherwise 'adoption went up' can turn out to mean 'the bar moved' or 'the product "
                 + "started counting it differently'. If they differ, re-export the older period under "
                 + "the current build and settings instead of comparing across the change.\n"
+                + "The Compare-CopilotAdoptionWorkbooks.ps1 script in the product's GitHub repository "
+                + "(https://github.com/pnp/Microsoft365-Analytics-Insights/tree/main/scripts/CopilotAdoption) "
+                + "makes those four checks for you, refuses the comparison when one of them fails, and "
+                + "otherwise lists every key that changed with its before and after values.\n"
                 + "Rates carry their own denominator. Every percentage on Snapshot facts has the count it "
                 + "was taken over on the same sheet - scoredUsers, licensedUsers, activeUsers - so a rate "
                 + "that rose because the denominator shrank (reclaiming idle seats does exactly that) can "
@@ -2569,10 +2762,13 @@ namespace Common.Entities.CopilotAdoption
         /// <para>Generated by reflection rather than by a hand-written list, deliberately. A hand-written
         /// list is what let twenty-four measures - among them every Cowork usage-report metric - exist in
         /// the analysis for months without ever reaching the workbook. A measure added to
-        /// <see cref="CopilotAdoptionSummary"/> after this was written appears here automatically.</para>
+        /// <see cref="CopilotAdoptionSummary"/> after this was written appears here automatically, at
+        /// whatever depth it is added: nested objects are flattened into dotted keys (#640).</para>
         ///
         /// <para>Collections are skipped: they are tables, and each already has a sheet of its own. What
-        /// is written is the count, so a reader can still see that a list emptied between two runs.</para>
+        /// is written is the count, so a reader can still see that a list emptied between two runs. The
+        /// exception is a breakdown with one row per member of an enum, which also gets a row per member -
+        /// see <see cref="SnapshotFactsBreakdownAttribute"/>.</para>
         /// </summary>
         private static void WriteSnapshotFactsSheet(XlsxWriter workbook, CopilotAdoptionSummary summary)
         {
@@ -2585,7 +2781,12 @@ namespace Common.Entities.CopilotAdoption
                 + "sorted by that name. Built for comparison rather than for reading: open two snapshots and "
                 + "look each key up in the other file, and the difference is the change. No row here is "
                 + "conditional, so the same keys are present in every export whatever the tenant looks like. "
-                + "Lists are represented by their row count - their contents are on their own sheets."));
+                + "A figure inside a section is keyed by the section and the figure joined by a dot "
+                + "(agents.activeAgents), and a section that was not measured still has all of its rows, blank. "
+                + "A breakdown with a fixed set of values has a row per value, keyed by the value's stable name "
+                + "(bandBreakdown.Champion). Lists are represented by their row count - their contents are on "
+                + "their own sheets. A blank value is unknown, never zero. A key added in a later build has no "
+                + "value in an earlier export."));
             sheet.AddBlankRow();
             sheet.AddHeaderRow("Key", "Value", "Measure");
 
@@ -2666,7 +2867,9 @@ namespace Common.Entities.CopilotAdoption
         /// makes it a lookup.</para>
         ///
         /// <para>Reflected over <see cref="CopilotAdoptionOptions"/> for the same reason as the facts
-        /// sheet: an option added later is covered without anyone remembering to come back here.</para>
+        /// sheet: an option added later is covered without anyone remembering to come back here. It uses
+        /// the same flattener, so an option that is ever grouped into a nested object is written as dotted
+        /// keys too, and stays comparable. Today every option is a scalar, so the keys are unchanged.</para>
         /// </summary>
         private static void WriteSettingsSheet(
             XlsxWriter workbook,
@@ -2717,13 +2920,38 @@ namespace Common.Entities.CopilotAdoption
         }
 
         /// <summary>One flattened <c>key | value | label</c> row of a reflected object.</summary>
-        private class ScalarFact
+        internal class ScalarFact
         {
             public string Key { get; set; }
 
             public object Value { get; set; }
 
             public string Label { get; set; }
+        }
+
+        /// <summary>
+        /// Summary properties the Snapshot facts sheet leaves out on purpose, by key, because each has a
+        /// sheet of its own: <c>options</c> is the Settings sheet, and <c>diagnostics</c> is Run
+        /// diagnostics, whose keys vary from run to run - the one thing Snapshot facts must never do.
+        /// </summary>
+        private static readonly string[] SnapshotFactsExcludedKeys = { "options", "diagnostics" };
+
+        /// <summary>
+        /// How many objects deep the reflected sheets follow nested objects, so a key is at most
+        /// <c>a.b.c.d.figure</c>. The deepest key in the model today is two objects deep
+        /// (<c>seatHolderTimeSavedEstimate.credits.outlookMinutesPerAction</c>); the limit exists so a
+        /// model change can never turn the sheet into a crawl of an object graph.
+        /// </summary>
+        internal const int MaxFactNesting = 4;
+
+        private static List<ScalarFact> ScalarFacts(CopilotAdoptionSummary summary)
+        {
+            return ScalarFacts(summary, typeof(CopilotAdoptionSummary), SnapshotFactsExcludedKeys);
+        }
+
+        private static List<ScalarFact> ScalarFacts(CopilotAdoptionOptions options)
+        {
+            return ScalarFacts(options, typeof(CopilotAdoptionOptions), null);
         }
 
         /// <summary>
@@ -2734,16 +2962,61 @@ namespace Common.Entities.CopilotAdoption
         /// that key: reflection does not guarantee declaration order, and an export whose row order can
         /// shift between runs is useless for the one job this sheet has.</para>
         ///
-        /// <para>A property that throws is skipped rather than being allowed to lose the whole export -
-        /// the same bargain <c>CsvSerialiser.SafeValue</c> makes, and for the same reason.</para>
+        /// <para>A nested object is flattened into dotted keys made of the same names, recursively:
+        /// <c>agents.activeAgents</c>, and <c>agents.usageByAgent.count</c> for a list inside it. Before
+        /// #640 a nested object was skipped without a row, so every agent figure, the data-source dates and
+        /// the unlicensed population never reached the sheet that claims to carry every scalar figure.</para>
+        ///
+        /// <para><b>The key set comes from the TYPE, never from the data.</b> Properties are read from
+        /// the declared type, so a null nested object writes every one of its keys blank, exactly as a
+        /// null list writes a blank <c>.count</c>, and a getter that throws writes its key blank rather
+        /// than losing the export. Otherwise one export would carry rows the other lacks, and every lookup
+        /// below the first missing row would resolve against its neighbour.</para>
+        ///
+        /// <para>Only the model's own classes are followed - not strings, collections or framework types
+        /// such as <see cref="Uri"/>, whose properties are not figures - and only to
+        /// <see cref="MaxFactNesting"/> levels. A type already being flattened further up the same path is
+        /// not entered again, which stops a reference cycle; because the guard is by type, it decides the
+        /// same way in every export.</para>
         /// </summary>
-        private static IEnumerable<ScalarFact> ScalarFacts(object source)
+        /// <param name="source">The object to read, or null to write every key blank.</param>
+        /// <param name="type">The declared type, which alone decides the keys.</param>
+        /// <param name="excludedKeys">Full keys to leave out, together with everything beneath them.</param>
+        internal static List<ScalarFact> ScalarFacts(object source, Type type, IEnumerable<string> excludedKeys)
         {
-            if (source == null) return Enumerable.Empty<ScalarFact>();
+            if (type == null) throw new ArgumentNullException(nameof(type));
 
             var facts = new List<ScalarFact>();
+            var excluded = new HashSet<string>(excludedKeys ?? Enumerable.Empty<string>(), StringComparer.Ordinal);
+            AddScalarFacts(facts, type, source, string.Empty, string.Empty, 0, new HashSet<Type> { type }, excluded, type.Assembly);
 
-            foreach (var property in source.GetType().GetProperties(BindingFlags.Public | BindingFlags.Instance))
+            var sorted = facts.OrderBy(f => f.Key, StringComparer.Ordinal).ToList();
+            for (var i = 1; i < sorted.Count; i++)
+            {
+                // Deterministic for a given model, so any workbook test meets it long before a customer
+                // could: a key written twice would make every lookup against it ambiguous.
+                if (string.Equals(sorted[i - 1].Key, sorted[i].Key, StringComparison.Ordinal))
+                {
+                    throw new InvalidOperationException(
+                        "Two properties of " + type.Name + " flatten to the same key '" + sorted[i].Key + "'.");
+                }
+            }
+
+            return sorted;
+        }
+
+        private static void AddScalarFacts(
+            List<ScalarFact> facts,
+            Type type,
+            object source,
+            string keyPrefix,
+            string labelPrefix,
+            int nesting,
+            HashSet<Type> path,
+            HashSet<string> excludedKeys,
+            Assembly modelAssembly)
+        {
+            foreach (var property in type.GetProperties(BindingFlags.Public | BindingFlags.Instance))
             {
                 if (!property.CanRead || property.GetIndexParameters().Length > 0) continue;
 
@@ -2753,24 +3026,18 @@ namespace Common.Entities.CopilotAdoption
                 // would duplicate every warning under a second name and make the sheets disagree.
                 if (property.GetCustomAttribute<JsonIgnoreAttribute>() != null) continue;
 
-                object value;
-                try
-                {
-                    value = property.GetValue(source);
-                }
-                catch (Exception)
-                {
-                    continue;
-                }
+                var key = keyPrefix + (property.GetCustomAttribute<JsonPropertyAttribute>()?.PropertyName ?? property.Name);
+                if (excludedKeys.Contains(key)) continue;
 
-                var key = property.GetCustomAttribute<JsonPropertyAttribute>()?.PropertyName ?? property.Name;
-                var type = Nullable.GetUnderlyingType(property.PropertyType) ?? property.PropertyType;
+                var label = labelPrefix + property.Name;
+                var propertyType = Nullable.GetUnderlyingType(property.PropertyType) ?? property.PropertyType;
+                var value = ReadProperty(property, source);
 
-                if (IsScalar(type))
+                if (IsScalar(propertyType))
                 {
-                    facts.Add(new ScalarFact { Key = key, Value = ScalarCell(value), Label = property.Name });
+                    facts.Add(new ScalarFact { Key = key, Value = ScalarCell(value), Label = label });
                 }
-                else if (typeof(ICollection).IsAssignableFrom(type))
+                else if (IsCollection(propertyType))
                 {
                     // The count, not the contents. A list that emptied between two snapshots is a real
                     // finding and would otherwise be invisible here.
@@ -2781,17 +3048,107 @@ namespace Common.Entities.CopilotAdoption
                     // and not the other shifts every row below it and misaligns the diff the whole sheet
                     // exists for. A null list is written blank - unknown, not zero - exactly like a null
                     // scalar.
-                    var collection = value as ICollection;
                     facts.Add(new ScalarFact
                     {
                         Key = key + ".count",
-                        Value = collection == null ? (object)string.Empty : collection.Count,
-                        Label = property.Name + " (row count)",
+                        Value = CollectionCount(value),
+                        Label = label + " (row count)",
                     });
+
+                    var breakdown = property.GetCustomAttribute<SnapshotFactsBreakdownAttribute>();
+                    if (breakdown != null) AddBreakdownFacts(facts, key, label, breakdown.Members, value);
+                }
+                else if (IsNestedModel(propertyType, modelAssembly)
+                         && nesting < MaxFactNesting
+                         && path.Add(propertyType))
+                {
+                    try
+                    {
+                        AddScalarFacts(facts, propertyType, value, key + ".", label + ".", nesting + 1, path, excludedKeys, modelAssembly);
+                    }
+                    finally
+                    {
+                        path.Remove(propertyType);
+                    }
+                }
+            }
+        }
+
+        /// <summary>
+        /// One row per member of the set a <see cref="SnapshotFactsBreakdownAttribute"/> names, keyed by the
+        /// member's stable name and never by the row's display label. The members come from the type, so a
+        /// member with no row - or a list that is missing altogether - is written blank, not omitted.
+        /// </summary>
+        private static void AddBreakdownFacts(List<ScalarFact> facts, string key, string label, Type members, object value)
+        {
+            var byMember = new Dictionary<string, object>(StringComparer.Ordinal);
+            if (value is IEnumerable rows)
+            {
+                foreach (var row in rows.OfType<ISnapshotFactsBreakdownRow>())
+                {
+                    if (row.BreakdownMember != null && !byMember.ContainsKey(row.BreakdownMember))
+                    {
+                        byMember.Add(row.BreakdownMember, row.BreakdownValue);
+                    }
                 }
             }
 
-            return facts.OrderBy(f => f.Key, StringComparer.Ordinal).ToList();
+            foreach (var member in BreakdownMembers(members))
+            {
+                facts.Add(new ScalarFact
+                {
+                    Key = key + "." + member,
+                    Value = byMember.TryGetValue(member, out var figure) ? ScalarCell(figure) : string.Empty,
+                    Label = label + " (" + member + ")",
+                });
+            }
+        }
+
+        /// <summary>An enum's member names, or the values of a static class's string constants.</summary>
+        private static IEnumerable<string> BreakdownMembers(Type members)
+        {
+            if (members == null) return Enumerable.Empty<string>();
+            if (members.IsEnum) return Enum.GetNames(members);
+
+            return members.GetFields(BindingFlags.Public | BindingFlags.Static)
+                .Where(f => f.IsLiteral && f.FieldType == typeof(string))
+                .Select(f => (string)f.GetRawConstantValue());
+        }
+
+        /// <summary>
+        /// Reads a property for the sheet. Null when there is nothing to read it from, and null - so a
+        /// blank cell - when the getter throws: the same bargain <c>CsvSerialiser.SafeValue</c> makes, and
+        /// the key is still written, because the key set must not depend on what the data did.
+        /// </summary>
+        private static object ReadProperty(PropertyInfo property, object source)
+        {
+            if (source == null) return null;
+
+            try
+            {
+                return property.GetValue(source);
+            }
+            catch (Exception)
+            {
+                return null;
+            }
+        }
+
+        private static object CollectionCount(object value)
+        {
+            if (value == null) return string.Empty;
+            if (value is ICollection collection) return collection.Count;
+
+            try
+            {
+                var count = 0;
+                foreach (var unused in (IEnumerable)value) count++;
+                return count;
+            }
+            catch (Exception)
+            {
+                return string.Empty;
+            }
         }
 
         private static bool IsScalar(Type type)
@@ -2801,6 +3158,20 @@ namespace Common.Entities.CopilotAdoption
                    || type == typeof(string)
                    || type == typeof(decimal)
                    || type == typeof(DateTime);
+        }
+
+        private static bool IsCollection(Type type)
+        {
+            return type != typeof(string) && typeof(IEnumerable).IsAssignableFrom(type);
+        }
+
+        /// <summary>A class of the model itself, whose properties are figures in their own right.</summary>
+        private static bool IsNestedModel(Type type, Assembly modelAssembly)
+        {
+            return type.IsClass
+                   && type != typeof(string)
+                   && !typeof(Delegate).IsAssignableFrom(type)
+                   && type.Assembly == modelAssembly;
         }
 
         /// <summary>

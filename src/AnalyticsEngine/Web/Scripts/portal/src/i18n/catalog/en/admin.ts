@@ -5,6 +5,27 @@
  * makes a missing one a build failure.
  */
 export const admin = {
+  'admin.agentCostConnection.title': 'Copilot Studio billing connection',
+  'admin.agentCostConnection.description': 'Microsoft only lets a signed-in Power Platform administrator read Copilot Studio usage - the analytics app can’t read it on its own. Connect an administrator account here once, and the scheduled import reads usage on that account’s behalf. The connection is shared by the whole deployment, not just your browser.',
+  'admin.agentCostConnection.status': 'Connection status',
+  'admin.agentCostConnection.loading': 'Loading connection status…',
+  'admin.agentCostConnection.connected': 'Connected. The connection renews itself; you only need to reconnect if Microsoft asks the account to sign in again.',
+  'admin.agentCostConnection.disconnected': 'Not connected. Copilot Studio usage won’t be imported until an administrator connects. Copilot Credits capacity is still imported.',
+  'admin.agentCostConnection.reconnectNeeded': 'Reconnect needed. The account’s sign-in has expired, been revoked, or no longer has access to billing data. Check that the account still has its Power Platform role and isn’t blocked by a Conditional Access policy, then reconnect.',
+  'admin.agentCostConnection.storageNotConfigured': 'This deployment has no Azure Storage account configured, so the connection has nowhere to be saved. Add the Storage connection string, then try again.',
+  'admin.agentCostConnection.storageUnavailable': 'The connection couldn’t be saved to, or read from, Azure Storage. Check that the web app can reach the storage account and that the analytics app registration has the Storage Table Data Contributor role on it.',
+  'admin.agentCostConnection.prerequisites': 'Before you connect: use an account with the Power Platform Administrator role (or equivalent billing access). In Microsoft Entra ID, the analytics app registration needs the delegated Power Platform API permissions, with admin consent granted, and this site’s address ending in /signin-agent-costs added as a Web redirect URI. Connecting doesn’t give the account any new roles.',
+  'admin.agentCostConnection.persistence': 'The account’s sign-in is stored encrypted in this deployment’s Azure Storage account and is never shown on this page. If the app registration’s secret or certificate changes, you’ll need to reconnect.',
+  'admin.agentCostConnection.connect': 'Connect or reconnect an administrator',
+  'admin.agentCostConnection.disconnect': 'Disconnect',
+  'admin.agentCostConnection.refresh': 'Refresh status',
+  'admin.agentCostConnection.disconnectConfirm': 'Disconnect the billing administrator? Copilot Studio usage will stop being imported until someone connects again. An import that’s already running may still finish. Figures already imported are kept, and the admin consent in Microsoft Entra ID isn’t removed.',
+  'admin.agentCostConnection.connectedOutcome': 'Connected, and Microsoft confirmed the account can read Copilot Studio usage. Usage will be imported at the next scheduled run - there’s no need to wait until tomorrow. "Copilot Studio credits" must also be switched on in the installer, or nothing will be imported.',
+  'admin.agentCostConnection.consentOrPolicy': 'Microsoft Entra ID didn’t allow this sign-in. Check that admin consent has been granted for the app registration’s Power Platform API permissions and that no Conditional Access policy blocks the account, then try again.',
+  'admin.agentCostConnection.identityMismatch': 'The account that signed in isn’t the portal administrator who started the connection, or it doesn’t have the portal’s Administration permission. Sign in with the right account and try again.',
+  'admin.agentCostConnection.accessDenied': 'The account signed in, but Microsoft wouldn’t let it read Copilot Studio usage. Check that the account has the Power Platform Administrator role and that admin consent has been granted for the app registration’s Power Platform API permissions. Any previous connection is still in place.',
+  'admin.agentCostConnection.failed': 'The connection couldn’t be completed. Check the redirect URI on the app registration, admin consent, Conditional Access, and that the web app can reach Azure Storage, then try again. Other imports aren’t affected.',
+  'admin.agentCostConnection.isolation': 'Azure costs and Copilot Credits capacity don’t use this connection, so they keep working whether or not an administrator is connected. Disconnecting only stops Copilot Studio usage being imported.',
   // Shared administration labels.
   'admin.common.enabled': 'Enabled',
   'admin.common.no': 'No',

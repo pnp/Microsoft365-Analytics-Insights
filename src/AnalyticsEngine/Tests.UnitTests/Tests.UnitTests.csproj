@@ -187,6 +187,7 @@
     <Compile Include="ActivityImporterTests.cs" />
     <Compile Include="AgentCostApiContractTests.cs" />
     <Compile Include="AgentCostImportTests.cs" />
+    <Compile Include="AgentCostConnectionTests.cs" />
     <Compile Include="AgentCostUserResolutionTests.cs" />
     <Compile Include="AgentCostSqlIntegrationTests.cs" />
     <Compile Include="AzureSqlEntraAuthTests.cs" />
@@ -317,6 +318,8 @@
     <Compile Include="UserDataLookupServiceTests.cs" />
     <Compile Include="UserDataLookupSqlIntegrationTests.cs" />
     <Compile Include="UpnLookupBenchmarkTests.cs" />
+    <Compile Include="UpnBatchLookupTests.cs" />
+    <Compile Include="UpnBatchLookupBenchmarkTests.cs" />
     <Compile Include="UpnLookupVarcharParameterTests.cs" />
     <Compile Include="GraphFileMetadataLoaderTests.cs" />
     <Compile Include="GraphStringUtilsTests.cs" />
@@ -337,6 +340,7 @@
     <Compile Include="CopilotPolicyDetailsShapeTests.cs" />
     <Compile Include="DlpApiContractTests.cs" />
     <Compile Include="DlpApiSqlIntegrationTests.cs" />
+    <Compile Include="DlpGovernanceTests.cs" />
     <Compile Include="OfficeAppsReportContractTests.cs" />
     <Compile Include="OfficeAppsReportSqlIntegrationTests.cs" />
     <Compile Include="IndexPlatformUserActivityLogDateMigrationTests.cs" />
@@ -367,6 +371,8 @@
     <Compile Include="CopilotAdoptionCoworkTests.cs" />
     <Compile Include="CopilotAdoptionEmailDomainTests.cs" />
     <Compile Include="CopilotAdoptionLicenceEstimateTests.cs" />
+    <Compile Include="CopilotAdoptionManagerModellingTests.cs" />
+    <Compile Include="CopilotAdoptionMicrosoftReportTests.cs" />
     <Compile Include="CopilotAdoptionSeatTimeSavedTests.cs" />
     <Compile Include="CopilotAdoptionAgentUsersTests.cs" />
     <Compile Include="CopilotAdoptionSqlIntegrationTests.cs" />
@@ -380,6 +386,7 @@
     <Compile Include="ReleaseHardening20260917Tests.cs" />
     <Compile Include="AnonAdoptionStatsTests.cs" />
     <Compile Include="CopilotAdoptionTests.cs" />
+    <Compile Include="CopilotAdoptionWorkbookComparisonScriptTests.cs" />
     <Compile Include="CopilotAdoptionWorkbookTests.cs" />
     <Compile Include="CopilotAccessedResourceTaxonomyTests.cs" />
     <Compile Include="ReportsAPIControllerTests.cs" />
@@ -447,6 +454,8 @@
     <Compile Include="GraphRestCallRecordSubscriptionReaderTests.cs" />
     <Compile Include="ReportCompletionStoreTests.cs" />
     <Compile Include="TeamsCrawlTests.cs" />
+    <Compile Include="TeamsPersistencePortTests.cs" />
+    <Compile Include="TeamsPersistenceSqlTests.cs" />
     <Compile Include="InstallTests\FakeInstallClasses.cs" />
     <Compile Include="InstallTests\ImportToggleVerificationCoverageTests.cs" />
     <Compile Include="InstallTests\InstallEngineTests.cs" />

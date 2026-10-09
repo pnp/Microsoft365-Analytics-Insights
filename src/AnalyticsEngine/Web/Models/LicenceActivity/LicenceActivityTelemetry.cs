@@ -5,6 +5,8 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Globalization;
+using System.Linq;
 using System.Threading;
 
 namespace Web.AnalyticsWeb.Models.LicenceActivity
@@ -18,6 +20,8 @@ namespace Web.AnalyticsWeb.Models.LicenceActivity
         internal long DurationMs;
         internal long Sequence;
         internal DateTimeOffset OccurredUtc;
+        internal Dictionary<string, string> Dimensions;
+        internal Dictionary<string, double> Measurements;
     }
 
     internal sealed class LicenceActivityRunDiagnostics : ILicenceActivityDiagnostics, IDisposable
@@ -27,7 +31,7 @@ namespace Web.AnalyticsWeb.Models.LicenceActivity
             "Started", "ConnectionOpened", "CoverageStarted", "CoverageCompleted",
             "OverviewSqlStarted", "OverviewSqlCompleted", "UsersSqlStarted", "UsersSqlCompleted",
             "MaterialisationStarted", "MaterialisationCompleted", "ProjectionCompleted",
-            "CachePublished", "Failed", "HostStopping"
+            "CachePublished", "Failed", "HostStopping", "CoverageWeek", "WorkloadEvidence"
         };
         private readonly string _runId;
         private readonly Func<LicenceActivityDiagnosticEvent, bool> _enqueue;
@@ -49,9 +53,62 @@ namespace Web.AnalyticsWeb.Models.LicenceActivity
             Send(stage, elapsedMs, null);
         }
 
+        public void CoverageWeek(LicenceActivityCoverageWeek week)
+        {
+            RequireWorkload(week.Workload);
+            Send("CoverageWeek", 0, null, new Dictionary<string, string>
+            {
+                { "Workload", week.Workload },
+                { "FromUtc", Date(week.FromUtc) }, { "ToUtc", Date(week.ToUtc) },
+                { "MissingDates", string.Join(",", week.MissingDates.Select(Date)) },
+                { "Reason", !week.Settled ? "Unsettled" :
+                    week.PresentDays != week.ExpectedDays ? "MissingReportDays" : "Complete" }
+            }, new Dictionary<string, double>
+            {
+                { "ExpectedDays", week.ExpectedDays }, { "PresentDays", week.PresentDays },
+                { "MissingDays", week.ExpectedDays - week.PresentDays },
+                { "Settled", week.Settled ? 1 : 0 },
+                { "Selected", week.Settled && week.PresentDays == week.ExpectedDays ? 1 : 0 }
+            });
+        }
+
+        public void Evidence(LicenceActivityCoverage coverage, int usersWithRows, int usersWithActivity,
+            int usersWithCompleteEvidence, bool groupFiltered)
+        {
+            RequireWorkload(coverage.Workload);
+            if (!new[] { "available", "partial", "missingCoverage", "unmatchableIdentity", "notImported", "disabled" }
+                .Contains(coverage.Status, StringComparer.Ordinal))
+                throw new ArgumentException("Unknown licence activity coverage status.", nameof(coverage));
+            if (!new[] { "microsoftGraphUsageReport", "microsoftGraphCopilotUsageReport",
+                "copilotAudit", "copilotInteractions" }
+                .Contains(coverage.Source, StringComparer.Ordinal))
+                throw new ArgumentException("Unknown licence activity source.", nameof(coverage));
+            Send("WorkloadEvidence", 0, null, new Dictionary<string, string>
+            {
+                { "Workload", coverage.Workload }, { "CoverageStatus", coverage.Status },
+                { "Source", coverage.Source },
+                { "GroupFiltered", groupFiltered ? "true" : "false" },
+                { "Reason", coverage.Status == "partial" ? "IncompletePeriod" : coverage.Status }
+            }, new Dictionary<string, double>
+            {
+                { "ExpectedSamples", coverage.ExpectedSamples }, { "ObservedSamples", coverage.ObservedSamples },
+                { "UsersWithRows", usersWithRows }, { "UsersWithActivity", usersWithActivity },
+                { "UsersWithCompleteEvidence", usersWithCompleteEvidence }
+            });
+        }
+
+        private static string Date(DateTime date) => date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+
+        private static void RequireWorkload(string workload)
+        {
+            if (!LicenceActivityQuery.Workloads.Contains(workload, StringComparer.Ordinal))
+                throw new ArgumentException("Unknown licence activity workload.", nameof(workload));
+        }
+
         internal bool Failed(Exception exception) => Send("Failed", 0, exception.GetBaseException().GetType().Name);
 
-        private bool Send(string stage, long durationMs, string exceptionType)
+        private bool Send(string stage, long durationMs, string exceptionType,
+            Dictionary<string, string> dimensions = null, Dictionary<string, double> measurements = null)
         {
             try
             {
@@ -59,7 +116,8 @@ namespace Web.AnalyticsWeb.Models.LicenceActivity
                 {
                     RunId = _runId, Stage = stage, ExceptionType = exceptionType,
                     Sequence = Interlocked.Increment(ref _sequence), ElapsedMs = _watch.ElapsedMilliseconds,
-                    DurationMs = durationMs, OccurredUtc = DateTimeOffset.UtcNow
+                    DurationMs = durationMs, OccurredUtc = DateTimeOffset.UtcNow,
+                    Dimensions = dimensions, Measurements = measurements
                 });
             }
             catch (Exception)
@@ -139,13 +197,18 @@ namespace Web.AnalyticsWeb.Models.LicenceActivity
                             { "RunId", item.RunId }, { "InstanceId", InstanceId }, { "Stage", item.Stage }
                         };
                         if (item.ExceptionType != null) dimensions.Add("ExceptionType", item.ExceptionType);
+                        if (item.Dimensions != null)
+                            foreach (var pair in item.Dimensions) dimensions.Add(pair.Key, pair.Value);
+                        var measurements = new Dictionary<string, double>
+                        {
+                            { "ElapsedMs", item.ElapsedMs }, { "DurationMs", item.DurationMs },
+                            { "Sequence", item.Sequence }, { "DroppedEvents", Volatile.Read(ref _dropped) },
+                            { "ManagedHeapBytes", GC.GetTotalMemory(false) }
+                        };
+                        if (item.Measurements != null)
+                            foreach (var pair in item.Measurements) measurements.Add(pair.Key, pair.Value);
                         logger.TrackEvent(AnalyticsLogger.AnalyticsEvent.LicenceActivityLifecycle, dimensions,
-                            new Dictionary<string, double>
-                            {
-                                { "ElapsedMs", item.ElapsedMs }, { "DurationMs", item.DurationMs },
-                                { "Sequence", item.Sequence }, { "DroppedEvents", Volatile.Read(ref _dropped) },
-                                { "ManagedHeapBytes", GC.GetTotalMemory(false) }
-                            }, item.RunId, item.OccurredUtc);
+                            measurements, item.RunId, item.OccurredUtc);
                     }
                     catch (Exception)
                     {

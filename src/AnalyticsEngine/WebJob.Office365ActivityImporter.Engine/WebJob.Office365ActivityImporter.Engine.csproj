@@ -90,6 +90,7 @@
     <Compile Include="ActivityAPI\Rules\CopilotPrewarmPolicy.cs" />
     <Compile Include="ActivityAPI\PowerPlatform\PowerPlatformAuditEventManager.cs" />
     <Compile Include="AgentCosts\AgentCostImportPhase.cs" />
+    <Compile Include="AgentCosts\DelegatedAgentCostSource.cs" />
     <Compile Include="AgentCosts\AgentCostRowHasher.cs" />
     <Compile Include="AgentCosts\AgentCostUserResolver.cs" />
     <Compile Include="AgentCosts\GraphEntraUserLookup.cs" />
@@ -223,6 +224,9 @@
     <Compile Include="Graph\Calls\ICallRecordSubscriptionManager.cs" />
     <Compile Include="Graph\Teams\ChannelMessagesLoader.cs" />
     <Compile Include="Graph\Teams\Extensions\GraphUserExtensions.cs" />
+    <Compile Include="Graph\Teams\ITeamsPersistenceStore.cs" />
+    <Compile Include="Graph\Teams\ITeamsCognitiveStatsLoader.cs" />
+    <Compile Include="Graph\Teams\SqlTeamsPersistenceStore.cs" />
     <Compile Include="Graph\Teams\Extensions\TeamChannelExtensions.cs" />
     <Compile Include="Graph\Teams\Extensions\ItemBodyExtensions.cs" />
     <Compile Include="Graph\Teams\GraphReadExceptions.cs" />
