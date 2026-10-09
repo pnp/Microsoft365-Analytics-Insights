@@ -88,6 +88,13 @@ namespace Common.Entities.CopilotAdoption
         [JsonProperty("actionCode")]
         public string ActionCode { get; set; }
 
+        /// <summary>
+        /// Stable key for the resource, the same for every action it is attached to. The portal
+        /// translates the title through it; <see cref="Title"/> is the English fallback.
+        /// </summary>
+        [JsonProperty("titleKey")]
+        public string TitleKey { get; set; }
+
         [JsonProperty("title")]
         public string Title { get; set; }
 
@@ -184,13 +191,71 @@ namespace Common.Entities.CopilotAdoption
     }
 
     /// <summary>One bar of a categorical chart. Same JSON shape as the Reports area's <c>ReportCategory</c>.</summary>
-    public class AdoptionCategory
+    public class AdoptionCategory : ISnapshotFactsBreakdownRow
     {
         [JsonProperty("label")]
         public string Label { get; set; }
 
         [JsonProperty("value")]
         public double Value { get; set; }
+
+        /// <summary>
+        /// The bar's stable identity when the chart has one bar per member of an enum - the member's name,
+        /// e.g. <c>NeverUsed</c> - or <c>null</c> when the label is the identity (a department, an app, an
+        /// agent). <see cref="Label"/> is display text and can be reworded; this cannot.
+        /// </summary>
+        /// <remarks>
+        /// Left out of the JSON when null, so every other chart keeps exactly the shape the SPA's chart
+        /// components expect. The workbook's Snapshot facts sheet keys a breakdown's rows by it - see
+        /// <see cref="SnapshotFactsBreakdownAttribute"/>.
+        /// </remarks>
+        [JsonProperty("key", NullValueHandling = NullValueHandling.Ignore)]
+        public string Key { get; set; }
+
+        string ISnapshotFactsBreakdownRow.BreakdownMember => Key;
+
+        object ISnapshotFactsBreakdownRow.BreakdownValue => Value;
+    }
+
+    /// <summary>
+    /// Marks a list as a breakdown with exactly one row per member of a fixed set the product defines - the
+    /// engagement bands, the agent health verdicts, the kinds of work the Cowork estimate models - so the
+    /// workbook's Snapshot facts sheet writes one row per member, keyed by the member's stable name
+    /// (<c>bandBreakdown.Champion</c>, <c>coworkValueEstimate.activities.sendEmail</c>), as well as the
+    /// list's row count.
+    /// </summary>
+    /// <remarks>
+    /// <para>The set is named by a type: an enum, whose member NAMES are the keys, or a static class of
+    /// <c>public const string</c> keys, whose VALUES are (<see cref="CoworkActivities"/>). Either way the
+    /// keys come from the type, never from the rows: every member has a row in every export, blank when the
+    /// list is missing or carries no row for that member, so two exports line up whatever the data says.
+    /// The rows say which member they count through <see cref="ISnapshotFactsBreakdownRow"/>.</para>
+    /// <para>Only for a list that always carries a row for every member, zero included, so that a missing
+    /// row can only mean the list was not built. A list that leaves out its zero rows would turn a measured
+    /// zero into a blank. Never for a list whose rows are tenant data - departments, apps, agents - because a
+    /// key must never be derived from a value, and never keyed by a display label, which can be reworded
+    /// between builds.</para>
+    /// </remarks>
+    [AttributeUsage(AttributeTargets.Property, AllowMultiple = false)]
+    public sealed class SnapshotFactsBreakdownAttribute : Attribute
+    {
+        public SnapshotFactsBreakdownAttribute(Type members)
+        {
+            Members = members;
+        }
+
+        /// <summary>The enum, or the static class of string constants, whose members key the rows.</summary>
+        public Type Members { get; }
+    }
+
+    /// <summary>One row of a <see cref="SnapshotFactsBreakdownAttribute"/> breakdown.</summary>
+    public interface ISnapshotFactsBreakdownRow
+    {
+        /// <summary>The member this row counts - an enum member's name or a key constant - or null when it is not one of them.</summary>
+        string BreakdownMember { get; }
+
+        /// <summary>The figure for that member.</summary>
+        object BreakdownValue { get; }
     }
 
     /// <summary>
@@ -655,6 +720,55 @@ namespace Common.Entities.CopilotAdoption
 
         #endregion
 
+        #region Microsoft's own tenant figures (#642)
+
+        // Microsoft's figures exactly as its Microsoft 365 Copilot usage report states them, read from the
+        // user-count summary the usage-report import already stores (copilot_user_count_log). They answer a
+        // different question from every audit-derived figure above, in a different unit, over licensed users
+        // only, so they are published beside those figures and NEVER added to them (#534). Each is null - never
+        // zero - when the tenant only received version 1 of the report, when no summary has been imported, or
+        // in a view narrowed to part of the tenant (they are tenant totals and cannot be narrowed). See
+        // CopilotAdoptionSql.MicrosoftReportFiguresSql for which report is read and why.
+
+        /// <summary>
+        /// The report date of Microsoft's summary these figures come from: the last day of its report period.
+        /// Null when none has been imported.
+        /// </summary>
+        [JsonProperty("microsoftReportDate")]
+        public DateTime? MicrosoftReportDate { get; set; }
+
+        /// <summary>
+        /// The length of that report's period in days, as Microsoft stated it: 28 for version 2 of the report,
+        /// 30 when the tenant only received version 1. Published because the two are not interchangeable - a
+        /// 30-day figure is never a 28-day one.
+        /// </summary>
+        [JsonProperty("microsoftReportPeriodDays")]
+        public int? MicrosoftReportPeriodDays { get; set; }
+
+        /// <summary>
+        /// The report schema version ("v1" / "v2") the import recorded for that report, so a blank figure can
+        /// be traced to the version that did not carry it. Null when the import log has no record of it.
+        /// </summary>
+        [JsonProperty("microsoftReportVersion")]
+        public string MicrosoftReportVersion { get; set; }
+
+        /// <summary>
+        /// Microsoft's "Total prompts submitted" for the tenant over the report period - in Microsoft's words, the
+        /// prompts users sent to Microsoft Copilot Chat. Licensed users only, and not limited to agents. Null when
+        /// the report did not carry it (version 1).
+        /// </summary>
+        [JsonProperty("microsoftReportPromptsSubmitted")]
+        public long? MicrosoftReportPromptsSubmitted { get; set; }
+
+        /// <summary>
+        /// Microsoft's "Average prompts submitted" - the mean per active user, as Microsoft defines active, over
+        /// the same period. Null when the report did not carry it (version 1).
+        /// </summary>
+        [JsonProperty("microsoftReportAveragePromptsPerActiveUser")]
+        public double? MicrosoftReportAveragePromptsPerActiveUser { get; set; }
+
+        #endregion
+
         #region Cowork
 
         // Every Cowork figure here comes from the Copilot audit log, and counts interactions, never tasks.
@@ -864,6 +978,7 @@ namespace Common.Entities.CopilotAdoption
 
         /// <summary>How many licensed users fall in each <see cref="AdoptionBand"/>.</summary>
         [JsonProperty("bandBreakdown")]
+        [SnapshotFactsBreakdown(typeof(AdoptionBand))]
         public List<AdoptionCategory> BandBreakdown { get; set; } = new List<AdoptionCategory>();
 
         /// <summary>

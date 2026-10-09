@@ -228,6 +228,9 @@ export interface CopilotAdoptionOptions {
 /** One Microsoft-published resource attached to an adoption action. */
 export interface AdoptionGuidanceLink {
   actionCode: string;
+  /** Stable per-resource key; the SPA translates the title through it (see guidanceLinkTitle). */
+  titleKey?: string;
+  /** English title, shown only for a titleKey this build does not know. */
   title: string;
   url: string;
   expectedTitle: string;
@@ -433,6 +436,19 @@ export interface CopilotAdoptionSummary {
   averageAdoptionScore: number;
   medianAdoptionScore: number;
   totalInteractions: number;
+
+  /**
+   * Microsoft's own tenant figures from its Microsoft 365 Copilot usage report (#642), exactly as the
+   * report stated them: the report date and period they describe, the report version the import recorded,
+   * the prompts submitted and the average per active user. A different source, unit and population from
+   * every audit-derived figure here, so never added to them. Each is null - never zero - when the report did
+   * not carry it (version 1) or none has been imported; optional because an older server does not send them.
+   */
+  microsoftReportDate?: string | null;
+  microsoftReportPeriodDays?: number | null;
+  microsoftReportVersion?: string | null;
+  microsoftReportPromptsSubmitted?: number | null;
+  microsoftReportAveragePromptsPerActiveUser?: number | null;
 
   // Cowork use, from the Copilot audit log only: interactions, never tasks (#692).
   coworkUsers: number;
@@ -721,6 +737,7 @@ export const UNSCOPED_SECTIONS = {
   agents: 'agents',
   purchasedSeats: 'purchasedSeats',
   coworkCredits: 'coworkCredits',
+  microsoftReport: 'microsoftReport',
 } as const;
 
 /** Filter/sort state for the licensed-user list. */

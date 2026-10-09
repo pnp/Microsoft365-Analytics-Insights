@@ -39,12 +39,20 @@ export const MESSAGE_TRACING_REASON_KEYS: Record<string, TranslationKey> = {
   'messageTracing.storageUnavailable': 'health.reason.messageTracingStorageUnavailable',
 };
 
+export const AGENT_COST_CONNECTION_REASON_KEYS: Record<string, keyof typeof enHealth> = {
+  'agentCostConnection.connected': 'health.reason.agentCostConnectionConnected',
+  'agentCostConnection.disconnected': 'health.reason.agentCostConnectionDisconnected',
+  'agentCostConnection.reconnectNeeded': 'health.reason.agentCostConnectionReconnectNeeded',
+  'agentCostConnection.checkFailed': 'health.reason.agentCostConnectionCheckFailed',
+};
+
 export const HEALTH_COMPONENT_LABEL_KEYS: Record<string, TranslationKey> = {
   Credential: 'health.component.Credential',
   ServiceBus: 'health.component.ServiceBus',
   BlobCheckpoint: 'health.component.BlobCheckpoint',
   CopilotAuditBackfill: 'health.component.CopilotAuditBackfill',
   MessageTracing: 'health.component.MessageTracing',
+  PowerPlatformConnection: 'health.component.PowerPlatformConnection',
 };
 
 export const COPILOT_AUDIT_BACKFILL_REASON_KEYS: Record<string, TranslationKey> = {
@@ -286,6 +294,9 @@ export function translateHealthComponentDetailText(detail: string | null | undef
   if (detail === enHealth['health.reason.messageTracingDisabled']) return t('health.reason.messageTracingDisabled');
   if (detail === enHealth['health.reason.messageTracingInvalidPattern']) return t('health.reason.messageTracingInvalidPattern');
   if (detail === enHealth['health.reason.messageTracingStorageUnavailable']) return t('health.reason.messageTracingStorageUnavailable');
+  for (const key of Object.values(AGENT_COST_CONNECTION_REASON_KEYS)) {
+    if (detail === enHealth[key]) return t(key);
+  }
 
   const blobCheckpointUnavailable = BLOB_CHECKPOINT_UNAVAILABLE.exec(detail);
   if (blobCheckpointUnavailable) {
@@ -327,6 +338,8 @@ export function translateHealthComponentDetail(component: ComponentHealthRow, t:
   }
   const messageTracingKey = component.reasonKey ? MESSAGE_TRACING_REASON_KEYS[component.reasonKey] : null;
   if (messageTracingKey) return t(messageTracingKey);
+  const agentCostConnectionKey = component.reasonKey ? AGENT_COST_CONNECTION_REASON_KEYS[component.reasonKey] : null;
+  if (agentCostConnectionKey) return t(agentCostConnectionKey);
 
   return translateHealthComponentDetailText(component.detail, t);
 }
@@ -414,7 +427,24 @@ export function healthReasonTexts(section: HealthSectionBase, t: TFunction): str
     for (const copilotError of section.copilotUsageReportErrors ?? []) {
       reasons.push(t('health.reason.graphCopilotUsageReportImportFailed', { error: copilotError }));
     }
+    if (section.agent365CatalogEnabled) {
+      const error = section.agent365CatalogError || t('health.reason.agent365CatalogUnknownError');
+      if (section.agent365CatalogIssue === 'notStarted') {
+        reasons.push(t('health.reason.agent365CatalogNotStarted'));
+      } else if (section.agent365CatalogIssue === 'failed') {
+        reasons.push(t('health.reason.agent365CatalogImportFailed', { error }));
+      } else if (section.agent365CatalogIssue === 'statusUnavailable') {
+        reasons.push(t('health.reason.agent365CatalogStatusUnavailable', { error }));
+      } else if (section.agent365CatalogIssue === 'running') {
+        reasons.push(t('health.reason.agent365CatalogRunning'));
+      }
+    }
 
+    for (const reason of section.reasons ?? []) {
+      if (!reason.startsWith('agent365Catalog:')) {
+        reasons.push(translateHealthReasonText(reason, t));
+      }
+    }
     if (reasons.length > 0) return reasons;
   }
 

@@ -103,10 +103,11 @@ if (-not $countMatch.Success) {
 }
 $expectedLinkCount = [int]$countMatch.Groups["count"].Value
 
-$linkPattern = 'Link\(\s*(?<code>[^,]+),\s*"(?<title>[^"]+)",\s*"(?<url>https?://[^"]+)",\s*"(?<expectedTitle>[^"]+)",\s*"(?<audience>[^"]+)"\s*\)'
+$linkPattern = 'Link\(\s*(?<code>[^,]+),\s*"(?<titleKey>[^"]+)",\s*"(?<title>[^"]+)",\s*"(?<url>https?://[^"]+)",\s*"(?<expectedTitle>[^"]+)",\s*"(?<audience>[^"]+)"\s*\)'
 $links = [regex]::Matches($source, $linkPattern) | ForEach-Object {
     [pscustomobject]@{
         ActionCode = $_.Groups["code"].Value.Trim()
+        TitleKey = $_.Groups["titleKey"].Value
         Title = $_.Groups["title"].Value
         Url = $_.Groups["url"].Value
         ExpectedTitle = $_.Groups["expectedTitle"].Value

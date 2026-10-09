@@ -1,9 +1,9 @@
 -- Manual upgrade: purely additive empty tables, seconds at 1M/10M/100M existing interactions.
--- Prerequisite: 202610021200001_LicenceHistory. Run scripts in migration-id order.
+-- Prerequisite: 202610071400001_CopilotTurnPairing. Run scripts in migration-id order.
 -- No online/offline index rebuild, table rewrite or data backfill.
-IF NOT EXISTS (SELECT 1 FROM dbo.__MigrationHistory WHERE MigrationId=N'202610021200001_LicenceHistory')
+IF NOT EXISTS (SELECT 1 FROM dbo.__MigrationHistory WHERE MigrationId=N'202610071400001_CopilotTurnPairing')
 BEGIN
-    RAISERROR('AddPromptCategories: prerequisite 202610021200001_LicenceHistory is not stamped.',16,1);
+    RAISERROR('AddPromptCategories: prerequisite 202610071400001_CopilotTurnPairing is not stamped.',16,1);
     RETURN;
 END;
 SET NOCOUNT ON;
@@ -47,5 +47,5 @@ ELSE IF NOT EXISTS (SELECT 1 FROM dbo.__MigrationHistory WHERE MigrationId=N'202
 BEGIN
     INSERT dbo.__MigrationHistory(MigrationId,ContextKey,Model,ProductVersion)
     SELECT N'202610080900001_AddPromptCategories',ContextKey,Model,ProductVersion
-    FROM dbo.__MigrationHistory WHERE MigrationId=N'202610021200001_LicenceHistory';
+    FROM dbo.__MigrationHistory WHERE MigrationId=N'202610071400001_CopilotTurnPairing';
 END;

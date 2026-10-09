@@ -14,7 +14,11 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
         /// <summary>
         /// Generates stats where there aren't any already
         /// </summary>
-        public static async Task<List<MessageCognitiveStats>> GetMessagesStats(this List<ChannelWithReactions> channels, ILogger logger)
+        public static Task<List<MessageCognitiveStats>> GetMessagesStats(this List<ChannelWithReactions> channels, ILogger logger)
+            => GetMessagesStats(channels, logger, null);
+
+        public static async Task<List<MessageCognitiveStats>> GetMessagesStats(this List<ChannelWithReactions> channels, ILogger logger,
+            ITeamsCognitiveStatsLoader cognitiveStatsLoader)
         {
             var allStats = new List<MessageCognitiveStats>();
             if (channels is null)
@@ -22,9 +26,10 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
                 throw new ArgumentNullException(nameof(channels));
             }
 
+            var loader = cognitiveStatsLoader ?? new TeamsCognitiveStatsLoader(new Common.Entities.Config.AppConfig(), logger);
             foreach (var channel in channels)
             {
-                var channelStats = await channel.Messages.GetCognitiveDataStats(logger, channel);
+                var channelStats = await loader.LoadStats(channel, logger);
                 allStats.AddRange(channelStats);
             }
 

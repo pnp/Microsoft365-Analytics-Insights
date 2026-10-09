@@ -127,6 +127,26 @@ namespace Web.AnalyticsWeb.Models.Health
         /// <summary>Errors from the most recent import of each Graph Copilot usage report, if any.</summary>
         [JsonProperty("copilotUsageReportErrors")]
         public List<string> CopilotUsageReportErrors { get; set; } = new List<string>();
+        [JsonProperty("agent365CatalogEnabled")]
+        public bool Agent365CatalogEnabled { get; set; }
+        [JsonProperty("agent365CatalogIssue")]
+        public string Agent365CatalogIssue { get; set; }
+        [JsonProperty("agent365CatalogError")]
+        public string Agent365CatalogError { get; set; }
+        [JsonProperty("agent365CatalogLastAttemptUtc")]
+        public DateTime? Agent365CatalogLastAttemptUtc { get; set; }
+        [JsonProperty("agent365CatalogLastAttemptCompletedUtc")]
+        public DateTime? Agent365CatalogLastAttemptCompletedUtc { get; set; }
+        [JsonProperty("agent365CatalogLastAttemptSucceeded")]
+        public bool? Agent365CatalogLastAttemptSucceeded { get; set; }
+        [JsonProperty("agent365CatalogLastSuccessUtc")]
+        public DateTime? Agent365CatalogLastSuccessUtc { get; set; }
+        [JsonProperty("agent365CatalogPackageCount")]
+        public int Agent365CatalogPackageCount { get; set; }
+        [JsonProperty("agent365CatalogNeverUsedCount")]
+        public int Agent365CatalogNeverUsedCount { get; set; }
+        [JsonProperty("agent365CatalogStatusError")]
+        public string Agent365CatalogStatusError { get; set; }
         /// <summary>Set when the cheap DMV counts / DB size couldn't be read (e.g. no VIEW DATABASE STATE).</summary>
         [JsonProperty("countsError")]
         public string CountsError { get; set; }

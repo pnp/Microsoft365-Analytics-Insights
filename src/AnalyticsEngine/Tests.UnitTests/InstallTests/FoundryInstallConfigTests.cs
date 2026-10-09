@@ -40,7 +40,7 @@ namespace Tests.UnitTests.InstallTests
             Assert.AreEqual("gpt-4o-mini", loaded.FoundryPromptModelName);
             Assert.AreEqual("2024-07-18", loaded.FoundryPromptModelVersion);
             Assert.AreEqual(2, loaded.FoundryPromptCapacity);
-            Assert.AreEqual("3.1.0", loaded.ConfigSchemaVersion.ToString());
+            Assert.AreEqual("3.2.0", loaded.ConfigSchemaVersion.ToString());
         }
 
         [TestMethod]

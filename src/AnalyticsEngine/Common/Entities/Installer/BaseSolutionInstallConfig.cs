@@ -43,8 +43,9 @@ namespace Common.Entities.Installer
         //          because the solution no longer uses Azure Cache for Redis; runtime state moved to Azure
         //          Table storage in the existing storage account. Older configs still load; the properties
         //          are simply ignored.
-        //          3.0.0 -> 3.1.0 added optional Azure AI Foundry OpenAI resource and deployment settings.
-        const string CONFIG_VERSION = "3.1.0";
+        //          3.0.0 -> 3.1.0 added ImportTaskSettings.Agent365PackageCatalog (opt-in Agent 365 catalog import).
+        //          3.1.0 -> 3.2.0 added optional Azure AI Foundry OpenAI resource and deployment settings.
+        const string CONFIG_VERSION = "3.2.0";
 
         public BaseSolutionInstallConfig()
         {

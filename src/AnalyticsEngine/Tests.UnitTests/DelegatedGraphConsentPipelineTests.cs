@@ -2,6 +2,8 @@ extern alias AnalyticsWeb;
 
 using AnalyticsWeb::Web.AnalyticsWeb;
 using Common.Entities.Models;
+using Common.Entities.Config;
+using Common.Entities.State;
 using Microsoft.IdentityModel.Protocols.OpenIdConnect;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.Owin;
@@ -187,12 +189,43 @@ namespace Tests.UnitTests
         private static Task<RefreshOAuthToken> RedeemShouldNotHappen(string code, string scopes) =>
             throw new AssertFailedException("The authorisation code was not expected to be redeemed.");
 
+        [TestMethod]
+        public async Task BillingConnect_UsesSeparateCallbackAndPreservesThePortalCookie()
+        {
+            var site = new Site(RedeemShouldNotHappen, billing: true);
+            var signIn = await site.CallbackAsync(await site.SendAsync("GET", "/insights"));
+            var challenge = await site.SendAsync("GET", "/Account/ConnectAgentCosts", cookieHeader: signIn.AuthCookieHeader);
+            Assert.AreEqual("https://contoso.example/signin-agent-costs", challenge.LocationQuery["redirect_uri"]);
+            StringAssert.Contains(challenge.LocationQuery["scope"], AgentCostDelegatedTokenProvider.Scope);
+            var callback = await site.CallbackAsync(challenge);
+            Assert.AreEqual(AgentCostConsent.ReturnRoute + "?connection=connected", callback.Location);
+            Assert.AreEqual(1, site.BillingConnectCalls);
+            Assert.IsNull(callback.SignedInIdentity(), "A connection must not replace portal authentication or put tokens in its cookie.");
+            Assert.AreEqual(200, (await site.SendAsync("GET", "/insights", cookieHeader: signIn.AuthCookieHeader)).StatusCode);
+            Assert.AreEqual(0, site.RedeemCalls, "Neither billing nor plain sign-in may run Teams redemption.");
+        }
+
+        [DataTestMethod]
+        [DataRow("nonce")]
+        [DataRow("state")]
+        [DataRow("cookie")]
+        public async Task BillingConnect_RejectsCallbackCsrfBeforeCodeRedemption(string tamper)
+        {
+            var site = new Site(RedeemShouldNotHappen, billing: true);
+            var signIn = await site.CallbackAsync(await site.SendAsync("GET", "/insights"));
+            var challenge = await site.SendAsync("GET", "/Account/ConnectAgentCosts", cookieHeader: signIn.AuthCookieHeader);
+            var callback = await site.CallbackAsync(challenge, tamper);
+            Assert.AreEqual(0, site.BillingConnectCalls);
+            Assert.IsNull(callback.SignedInIdentity());
+            Assert.AreNotEqual(AgentCostConsent.ReturnRoute + "?connection=connected", callback.Location);
+        }
+
         /// <summary>The site's auth pipeline, hosted in memory.</summary>
         private sealed class Site
         {
             private readonly Func<IDictionary<string, object>, Task> _app;
 
-            public Site(Func<string, string, Task<RefreshOAuthToken>> redeem)
+            public Site(Func<string, string, Task<RefreshOAuthToken>> redeem, bool billing = false)
             {
                 var capture = new DelegatedGraphTokenCapture(
                     (code, scopes) =>
@@ -222,6 +255,21 @@ namespace Tests.UnitTests
                 var app = new AppBuilder();
                 app.SetDataProtectionProvider(new PassThroughProvider());
                 Startup.ConfigureAuth(app, Options);
+                if (billing)
+                {
+                    var billingOptions = AgentCostConsent.CreateOptions(new AppConfig
+                    {
+                        TenantGUID = Guid.Empty,
+                        ClientID = DelegatedGraphConsentTests.ClientId,
+                        WebAppURL = DelegatedGraphConsentTests.WebAppUrl,
+                    }, (ticket, code) =>
+                    {
+                        BillingConnectCalls++;
+                        return Task.CompletedTask;
+                    });
+                    billingOptions.Configuration = Options.Configuration;
+                    app.UseOpenIdConnectAuthentication(billingOptions);
+                }
                 app.Run(StandInForMvc);
                 _app = (Func<IDictionary<string, object>, Task>)app.Build(typeof(Func<IDictionary<string, object>, Task>));
             }
@@ -229,6 +277,7 @@ namespace Tests.UnitTests
             public OpenIdConnectAuthenticationOptions Options { get; }
 
             public int RedeemCalls { get; private set; }
+            public int BillingConnectCalls { get; private set; }
 
             /// <summary>What the MVC side does: <c>AccountController.ConnectTeams</c>, and [Authorize]'d pages.</summary>
             private static Task StandInForMvc(IOwinContext context)
@@ -240,6 +289,13 @@ namespace Tests.UnitTests
                         OpenIdConnectAuthenticationDefaults.AuthenticationType);
                     return Task.CompletedTask;
                 }
+                if (context.Request.Path.Equals(new PathString("/Account/ConnectAgentCosts")))
+                {
+                    context.Authentication.Challenge(
+                        AgentCostConsent.PropertiesFor(context.Authentication.User), AgentCostConsent.AuthenticationType);
+                    context.Response.StatusCode = 401;
+                    return Task.CompletedTask;
+                }
 
                 context.Response.StatusCode = context.Authentication.User?.Identity?.IsAuthenticated == true ? 200 : 401;
                 return Task.CompletedTask;
@@ -249,16 +305,16 @@ namespace Tests.UnitTests
             /// Plays the identity provider's side of a successful sign-in: posts back an authorisation code and an
             /// ID token for the challenge, carrying the nonce cookie the challenge set, as a browser would.
             /// </summary>
-            public Task<Response> CallbackAsync(Response challenge)
+            public Task<Response> CallbackAsync(Response challenge, string tamper = null)
             {
                 const string code = "synthetic-code";
-                return SendAsync("POST", "/", new Dictionary<string, string>
+                return SendAsync("POST", new Uri(challenge.LocationQuery["redirect_uri"]).AbsolutePath, new Dictionary<string, string>
                 {
                     ["code"] = code,
-                    ["id_token"] = IdToken(challenge.LocationQuery["nonce"], code),
-                    ["state"] = challenge.LocationQuery["state"],
+                    ["id_token"] = IdToken(tamper == "nonce" ? "foreign-nonce" : challenge.LocationQuery["nonce"], code),
+                    ["state"] = tamper == "state" ? "foreign-state" : challenge.LocationQuery["state"],
                     ["session_state"] = "synthetic-session",
-                }, challenge.CookieHeader);
+                }, tamper == "cookie" ? null : challenge.CookieHeader);
             }
 
             public async Task<Response> SendAsync(string method, string path, IDictionary<string, string> form = null, string cookieHeader = null)
@@ -318,6 +374,9 @@ namespace Tests.UnitTests
                     subject: new ClaimsIdentity(new[]
                     {
                         new Claim("sub", "synthetic-subject"),
+                        new Claim("oid", "00000000-0000-0000-0000-000000000001"),
+                        new Claim("tid", "00000000-0000-0000-0000-000000000000"),
+                        new Claim("roles", "Portal.Administration"),
                         new Claim("unique_name", DelegatedGraphConsentTests.AdminUpn),
                         new Claim("upn", DelegatedGraphConsentTests.AdminUpn),
                         new Claim("nonce", nonce),

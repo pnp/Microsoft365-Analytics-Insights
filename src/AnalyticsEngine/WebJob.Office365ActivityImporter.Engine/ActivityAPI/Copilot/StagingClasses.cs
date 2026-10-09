@@ -55,6 +55,13 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot
         [Column("thread_id", true)]
         public string ThreadId { get; set; }
 
+        // The conversation the interaction belongs to (CopilotEventData.ConversationId). The only value the
+        // Copilot Studio runtime's record and Microsoft 365 Copilot's record of the same turn share, so the
+        // merge pairs them on it (#699). Left as the default nvarchar(max) staging column and trimmed with
+        // LEFT() in the merge, for the same reason as thread_id.
+        [Column("conversation_id", true)]
+        public string ConversationId { get; set; }
+
         // Region of the Copilot service that served the interaction (audit record ClientRegion)
         [Column("client_region", true)]
         public string ClientRegion { get; set; }

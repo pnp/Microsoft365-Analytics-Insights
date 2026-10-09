@@ -46,6 +46,17 @@ namespace Web.AnalyticsWeb.Controllers
                 OpenIdConnectAuthenticationDefaults.AuthenticationType);
         }
 
+        [HttpGet]
+        [Authorize]
+        [RequirePortalMvcPermission(PortalPermission.Administration)]
+        public ActionResult ConnectAgentCosts(string intent)
+        {
+            var properties = AgentCostConsent.ReadIntent(intent, User as System.Security.Claims.ClaimsPrincipal);
+            if (properties == null) return new HttpStatusCodeResult(403);
+            HttpContext.GetOwinContext().Authentication.Challenge(properties, AgentCostConsent.AuthenticationType);
+            return new HttpUnauthorizedResult();
+        }
+
         public void SignOut()
         {
             string callbackUrl = Url.Action("SignOutCallback", "Account", routeValues: null, protocol: Request.Url.Scheme);

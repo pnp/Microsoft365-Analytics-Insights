@@ -17,8 +17,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
     /// later batch is not. Graph does not order the delta by reporting line, so on the first import
     /// of a large tenant that is a substantial share of everyone who has a manager - on the order
     /// of tens of thousands of individual queries per cycle at the ~200,000-user design target.
-    /// Resolving a whole batch in one chunked <c>Contains(...)</c> query makes it one query per
-    /// batch instead.
+    /// Resolving a whole batch replaces those per-user queries with two statements per chunk:
+    /// collation-aware UPN-to-id resolution, then a tracked entity reload by integer id (#713).
     ///
     /// Implementations must return entities that are <b>tracked</b> by the same context the caller
     /// is saving through, because the caller assigns them straight to a navigation property; a

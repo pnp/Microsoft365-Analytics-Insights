@@ -171,6 +171,13 @@ namespace Common.Entities.CopilotAdoption
 
         /// <summary>The Cowork credit balance. Entitlement and consumption are tenant-level.</summary>
         public const string CoworkCredits = "coworkCredits";
+
+        /// <summary>
+        /// Microsoft's own tenant figures from its Copilot usage report (#642) - the prompt totals and the
+        /// report date and period they describe. Microsoft publishes them for the tenant as a whole, with no
+        /// per-person detail to narrow.
+        /// </summary>
+        public const string MicrosoftReport = "microsoftReport";
     }
 
     /// <summary>
@@ -491,6 +498,14 @@ namespace Common.Entities.CopilotAdoption
             // than one that is wholly tenant-wide and says so.
             scoped.Agents = tenant.Agents;
 
+            // Microsoft's tenant totals, carried whole and named like the rest: there is no per-person
+            // detail in Microsoft's summary to narrow them with.
+            scoped.MicrosoftReportDate = tenant.MicrosoftReportDate;
+            scoped.MicrosoftReportPeriodDays = tenant.MicrosoftReportPeriodDays;
+            scoped.MicrosoftReportVersion = tenant.MicrosoftReportVersion;
+            scoped.MicrosoftReportPromptsSubmitted = tenant.MicrosoftReportPromptsSubmitted;
+            scoped.MicrosoftReportAveragePromptsPerActiveUser = tenant.MicrosoftReportAveragePromptsPerActiveUser;
+
             scoped.UnscopedSections = new List<string>
             {
                 CopilotAdoptionUnscopedSections.UsageByApp,
@@ -499,6 +514,7 @@ namespace Common.Entities.CopilotAdoption
                 CopilotAdoptionUnscopedSections.Agents,
                 CopilotAdoptionUnscopedSections.PurchasedSeats,
                 CopilotAdoptionUnscopedSections.CoworkCredits,
+                CopilotAdoptionUnscopedSections.MicrosoftReport,
             };
 
             // The unlicensed population's app breakdown is the same kind of SQL aggregate as the

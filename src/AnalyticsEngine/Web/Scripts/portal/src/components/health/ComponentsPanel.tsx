@@ -34,46 +34,49 @@ export default function ComponentsPanel({ active }: { active: boolean }) {
       state={state}
     >
       {(data) =>
-        data.componentHealthError ? (
-          <MessageBar intent="warning">
-            <MessageBarBody>{t('health.components.loadError', { error: data.componentHealthError })}</MessageBarBody>
-          </MessageBar>
-        ) : data.componentHealth.length > 0 ? (
-          <Table size="small" aria-label={t('health.components.ariaLabel')}>
-            <TableHeader>
-              <TableRow>
-                <TableHeaderCell>{t('health.components.columnComponent')}</TableHeaderCell>
-                <TableHeaderCell>{t('health.components.columnStatus')}</TableHeaderCell>
-                <TableHeaderCell>{t('health.components.columnDetail')}</TableHeaderCell>
-                <TableHeaderCell>{t('health.components.columnDaysToExpiry')}</TableHeaderCell>
-                <TableHeaderCell>{t('health.components.columnLastChecked')}</TableHeaderCell>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {data.componentHealth.map((c, i) => (
-                <TableRow key={(c.component ?? '') + i}>
-                  <TableCell>{translateHealthComponentName(c.component, t)}</TableCell>
-                  <TableCell>
-                    <Badge appearance="filled" color={statusColor(c.status)}>
-                      {healthStatusText(c.status, t)}
-                    </Badge>
-                  </TableCell>
-                  <TableCell>
-                    <Text size={200}>{translateHealthComponentDetail(c, t)}</Text>
-                  </TableCell>
-                  <TableCell>{c.daysToExpiry ?? ''}</TableCell>
-                  <TableCell>
-                    <Text size={200}>{howLongAgo(c.lastSeenUtc, t)}</Text>
-                  </TableCell>
+        <>
+          {data.componentHealthError && (
+            <MessageBar intent="warning">
+              <MessageBarBody>{t('health.components.loadError', { error: data.componentHealthError })}</MessageBarBody>
+            </MessageBar>
+          )}
+          {data.componentHealth.length > 0 ? (
+            <Table size="small" aria-label={t('health.components.ariaLabel')}>
+              <TableHeader>
+                <TableRow>
+                  <TableHeaderCell>{t('health.components.columnComponent')}</TableHeaderCell>
+                  <TableHeaderCell>{t('health.components.columnStatus')}</TableHeaderCell>
+                  <TableHeaderCell>{t('health.components.columnDetail')}</TableHeaderCell>
+                  <TableHeaderCell>{t('health.components.columnDaysToExpiry')}</TableHeaderCell>
+                  <TableHeaderCell>{t('health.components.columnLastChecked')}</TableHeaderCell>
                 </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        ) : (
-          <MessageBar intent="info">
-            <MessageBarBody>{t('health.components.empty')}</MessageBarBody>
-          </MessageBar>
-        )
+              </TableHeader>
+              <TableBody>
+                {data.componentHealth.map((c, i) => (
+                  <TableRow key={(c.component ?? '') + i}>
+                    <TableCell>{translateHealthComponentName(c.component, t)}</TableCell>
+                    <TableCell>
+                      <Badge appearance="filled" color={statusColor(c.status)}>
+                        {healthStatusText(c.status, t)}
+                      </Badge>
+                    </TableCell>
+                    <TableCell>
+                      <Text size={200}>{translateHealthComponentDetail(c, t)}</Text>
+                    </TableCell>
+                    <TableCell>{c.daysToExpiry ?? ''}</TableCell>
+                    <TableCell>
+                      <Text size={200}>{howLongAgo(c.lastSeenUtc, t)}</Text>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          ) : !data.componentHealthError ? (
+            <MessageBar intent="info">
+              <MessageBarBody>{t('health.components.empty')}</MessageBarBody>
+            </MessageBar>
+          ) : null}
+        </>
       }
     </SectionFrame>
   );

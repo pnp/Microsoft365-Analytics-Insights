@@ -4,6 +4,7 @@ using Azure.Messaging.ServiceBus;
 using Azure.Messaging.ServiceBus.Administration;
 using Common.Entities;
 using Common.Entities.Config;
+using Common.Entities.State;
 using DataUtils;
 using DataUtils.AppInsights;
 using DataUtils.Health;
@@ -52,6 +53,7 @@ namespace Web.AnalyticsWeb.Models.Health
                 { nameof(ImportTaskSettings.GraphUsersMetadata), "User metadata" },
                 { nameof(ImportTaskSettings.GraphUsageReports), "Usage reports" },
                 { nameof(ImportTaskSettings.GraphCopilotUsageReports), "Copilot usage reports (Graph)" },
+                { nameof(ImportTaskSettings.Agent365PackageCatalog), "Agent 365 package catalog" },
                 { nameof(ImportTaskSettings.GraphTeams), "Teams" },
                 { nameof(ImportTaskSettings.WebTraffic), "Web traffic" },
                 { nameof(ImportTaskSettings.SentEmails), "Sent emails" },
@@ -111,6 +113,7 @@ namespace Web.AnalyticsWeb.Models.Health
 
         private readonly IHealthDataSource _dataSource;
         private readonly IHealthCache _cache;
+        private readonly Func<AppConfig, Task<string>> _agentCostConnectionStatus;
 
         /// <summary>
         /// The instance the Health API serves every request from. It is deliberately a singleton: the
@@ -119,10 +122,18 @@ namespace Web.AnalyticsWeb.Models.Health
         /// </summary>
         public static readonly HealthService Default = new HealthService(new SqlHealthDataSource(), MemoryCacheHealthCache.Instance);
 
-        public HealthService(IHealthDataSource dataSource, IHealthCache cache)
+        public HealthService(IHealthDataSource dataSource, IHealthCache cache,
+            Func<AppConfig, Task<string>> agentCostConnectionStatus = null)
         {
             _dataSource = dataSource ?? throw new ArgumentNullException(nameof(dataSource));
             _cache = cache ?? throw new ArgumentNullException(nameof(cache));
+            _agentCostConnectionStatus = agentCostConnectionStatus ?? ReadAgentCostConnectionStatusAsync;
+        }
+
+        private static async Task<string> ReadAgentCostConnectionStatusAsync(AppConfig config)
+        {
+            var store = AgentCostConnectionStore.TryOpen(config);
+            return store == null ? "disconnected" : await store.GetStatusAsync();
         }
 
         // --- Public, independently-cached section loaders (one per api/Health route) ---
@@ -131,7 +142,11 @@ namespace Web.AnalyticsWeb.Models.Health
             => GetOrBuildAsync(SummaryKey, _summaryGate, () => BuildSummaryAsync(config));
 
         public Task<DataOverviewSection> LoadDataAsync()
-            => GetOrBuildAsync(DataKey, _dataGate, BuildDataAsync);
+            => LoadDataAsync(false);
+
+        public Task<DataOverviewSection> LoadDataAsync(bool agent365CatalogEnabled)
+            => GetOrBuildAsync(DataKey + (agent365CatalogEnabled ? ":agent365" : ":no-agent365"),
+                _dataGate, () => BuildDataAsync(agent365CatalogEnabled));
 
         public Task<LivenessSection> LoadLivenessAsync(AppConfig config)
             => GetOrBuildAsync(LivenessKey, _livenessGate, () => BuildLivenessAsync(config));
@@ -233,13 +248,13 @@ namespace Web.AnalyticsWeb.Models.Health
 
         // --- Data overview (SQL) ---
 
-        private async Task<DataOverviewSection> BuildDataAsync()
+        private async Task<DataOverviewSection> BuildDataAsync(bool agent365CatalogEnabled)
         {
             // Stamped before any SQL runs: the section's timestamp is "when this load started", which is
             // what the page has always shown, and the scans below can take tens of seconds.
             var loadedAtUtc = DateTime.UtcNow;
 
-            var counts = await _dataSource.GetDatabaseCountsAsync();
+            var counts = await _dataSource.GetDatabaseCountsAsync(agent365CatalogEnabled);
 
             // Recent volume + freshness on the two biggest fact tables, run in parallel on separate
             // contexts. Skipped entirely when the cheap block already failed hard (the database is
@@ -254,7 +269,7 @@ namespace Web.AnalyticsWeb.Models.Health
                 audit = auditTask.Result;
             }
 
-            return HealthDataSectionRules.BuildDataSection(counts, hits, audit, loadedAtUtc);
+            return HealthDataSectionRules.BuildDataSection(counts, hits, audit, loadedAtUtc, agent365CatalogEnabled);
         }
 
         // --- Configuration (config + schema + webhook) ---
@@ -372,6 +387,8 @@ namespace Web.AnalyticsWeb.Models.Health
                 }
             }
 
+            await LoadAgentCostConnectionHealthAsync(config, section);
+
             var input = new HealthRollupInput
             {
                 NowUtc = section.LoadedAtUtc,
@@ -383,6 +400,46 @@ namespace Web.AnalyticsWeb.Models.Health
             };
             HealthDataSectionRules.SetStatusFromRollup(section, input);
             return section;
+        }
+
+        private async Task LoadAgentCostConnectionHealthAsync(AppConfig config, ComponentsSection section)
+        {
+            if (config?.ImportJobSettings?.CopilotStudioCredits != true) return;
+
+            var row = new ComponentHealthRow
+            {
+                Component = "PowerPlatformConnection",
+                Status = HealthStatusNames.Degraded,
+                LastSeenUtc = DateTime.UtcNow
+            };
+            try
+            {
+                var status = await _agentCostConnectionStatus(config);
+                switch (status)
+                {
+                    case "connected":
+                        row.Status = HealthStatusNames.Healthy;
+                        row.ReasonKey = "agentCostConnection.connected";
+                        row.Detail = "A Power Platform billing administrator connection is saved for agent credit consumption.";
+                        break;
+                    case "disconnected":
+                        row.ReasonKey = "agentCostConnection.disconnected";
+                        row.Detail = "Agent credit tracking is enabled but no Power Platform billing administrator is connected. Connect in Administration > Agent costs.";
+                        break;
+                    case "reconnectNeeded":
+                        row.ReasonKey = "agentCostConnection.reconnectNeeded";
+                        row.Detail = "The Power Platform billing administrator connection needs renewal. Reconnect in Administration > Agent costs.";
+                        break;
+                    default:
+                        throw new InvalidOperationException("Unknown Power Platform connection status.");
+                }
+            }
+            catch (Exception)
+            {
+                row.ReasonKey = "agentCostConnection.checkFailed";
+                row.Detail = "The Power Platform billing administrator connection could not be checked. Check Azure Table storage access and Administration > Agent costs.";
+            }
+            UpsertComponent(section, row);
         }
 
         private static async Task LoadCredentialHealth(AppConfig config, ComponentsSection section)

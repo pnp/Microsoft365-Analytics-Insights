@@ -698,71 +698,66 @@ namespace Tests.UnitTests
             var script = File.ReadAllText(Path.Combine(migrations, "202610080900001_AddPromptCategories.manual.sql"));
             StringAssert.Contains(script, AddPromptCategories.Up_Sql);
             CollectionAssert.AreEqual(
-                File.ReadAllBytes(Path.Combine(migrations, "202610021200001_LicenceHistory.resx")),
+                File.ReadAllBytes(Path.Combine(migrations, "202610071400001_CopilotTurnPairing.resx")),
                 File.ReadAllBytes(Path.Combine(migrations, "202610080900001_AddPromptCategories.resx")));
         }
 
         [TestMethod]
         public void ManualScript_AppliesTwice_StampsMatchingModel_AndFactsCascadeOnPurge()
         {
+            using (var db = NewDatabase())
+            {
+                CreatePriorSchema(db);
+                db.Execute("INSERT dbo.__MigrationHistory VALUES(N'202610071400001_CopilotTurnPairing',N'Contoso',0x010203,N'6.5.1');");
+                var script = Script();
+                db.ExecuteScript(script, quotedIdentifierOn: false);
+                db.ExecuteScript(script, quotedIdentifierOn: false);
+                Assert.AreEqual(1, Convert.ToInt32(db.Scalar(
+                    "SELECT COUNT(*) FROM dbo.__MigrationHistory WHERE MigrationId=N'202610080900001_AddPromptCategories' AND Model=0x010203")));
+                db.Execute(@"INSERT dbo.copilot_prompt_taxonomies VALUES(N'v1',N'[{""name"":""Καλημέρα""}]');
+                    INSERT dbo.copilot_interactions VALUES(1);
+                    INSERT dbo.copilot_prompt_classifications VALUES(1,N'analysis',N'v1',NULL);
+                    DELETE dbo.copilot_interactions WHERE id=1;");
+                Assert.AreEqual(0, Convert.ToInt32(db.Scalar("SELECT COUNT(*) FROM dbo.copilot_prompt_classifications")));
+                StringAssert.Contains((string)db.Scalar("SELECT categories_json FROM dbo.copilot_prompt_taxonomies WHERE version=N'v1'"), "Καλημέρα");
+            }
+        }
+
+        [TestMethod]
+        public void ManualScript_RequiresTheImmediatePredecessor_NotOnlyLicenceHistory()
+        {
+            using (var db = NewDatabase())
+            {
+                CreatePriorSchema(db);
+                db.Execute("INSERT dbo.__MigrationHistory VALUES(N'202610021200001_LicenceHistory',N'Contoso',0x010203,N'6.5.1');");
+                var error = Assert.ThrowsException<SqlException>(() => db.ExecuteScript(Script(), quotedIdentifierOn: false));
+                StringAssert.Contains(error.Message, "202610071400001_CopilotTurnPairing");
+                Assert.AreEqual(0, Convert.ToInt32(db.Scalar(
+                    "SELECT COUNT(*) FROM dbo.__MigrationHistory WHERE MigrationId=N'202610080900001_AddPromptCategories'")));
+            }
+        }
+
+        private static ScratchDatabase NewDatabase()
+        {
             var connection = System.Configuration.ConfigurationManager.ConnectionStrings["SPOInsightsEntities"]?.ConnectionString;
             if (connection == null) Assert.Inconclusive("Local synthetic database config is required.");
             var builder = new SqlConnectionStringBuilder(connection);
             if (builder.DataSource.IndexOf("(localdb)", StringComparison.OrdinalIgnoreCase) < 0)
                 Assert.Inconclusive("This destructive isolated schema test only runs on LocalDB.");
-            builder.InitialCatalog = "UnitTestingPromptCategories_i686";
-            var master = new SqlConnectionStringBuilder(builder.ConnectionString) { InitialCatalog = "master" };
-            using (var db = new SqlConnection(master.ConnectionString))
-            {
-                db.Open();
-                using (var command = db.CreateCommand())
-                {
-                    command.CommandText = "IF DB_ID(N'UnitTestingPromptCategories_i686') IS NOT NULL DROP DATABASE UnitTestingPromptCategories_i686; CREATE DATABASE UnitTestingPromptCategories_i686;";
-                    command.ExecuteNonQuery();
-                }
-            }
-            try
-            {
-                using (var db = new SqlConnection(builder.ConnectionString))
-                {
-                    db.Open();
-                    using (var command = db.CreateCommand())
-                    {
-                        command.CommandText = @"CREATE TABLE dbo.copilot_interactions(id int PRIMARY KEY);
-                            CREATE TABLE dbo.copilot_interaction_import_log(id int PRIMARY KEY);
-                            CREATE TABLE dbo.__MigrationHistory(MigrationId nvarchar(150),ContextKey nvarchar(300),Model varbinary(max),ProductVersion nvarchar(32));
-                            INSERT dbo.__MigrationHistory VALUES(N'202610021200001_LicenceHistory',N'Contoso',0x010203,N'6.5.1');";
-                        command.ExecuteNonQuery();
-                        command.CommandText = File.ReadAllText(Path.Combine(RepositoryRoot(), "src", "AnalyticsEngine", "Common", "Entities", "Migrations",
-                            "202610080900001_AddPromptCategories.manual.sql"));
-                        command.ExecuteNonQuery();
-                        command.ExecuteNonQuery();
-                        command.CommandText = @"SELECT COUNT(*) FROM dbo.__MigrationHistory WHERE MigrationId=N'202610080900001_AddPromptCategories' AND Model=0x010203";
-                        Assert.AreEqual(1, Convert.ToInt32(command.ExecuteScalar()));
-                        command.CommandText = @"INSERT dbo.copilot_prompt_taxonomies VALUES(N'v1',N'[{""name"":""Καλημέρα""}]');
-                            INSERT dbo.copilot_interactions VALUES(1);
-                            INSERT dbo.copilot_prompt_classifications VALUES(1,N'analysis',N'v1',NULL);
-                            DELETE dbo.copilot_interactions WHERE id=1;
-                            SELECT COUNT(*) FROM dbo.copilot_prompt_classifications;";
-                        Assert.AreEqual(0, Convert.ToInt32(command.ExecuteScalar()));
-                        command.CommandText = "SELECT categories_json FROM dbo.copilot_prompt_taxonomies WHERE version=N'v1'";
-                        StringAssert.Contains((string)command.ExecuteScalar(), "Καλημέρα");
-                    }
-                }
-            }
-            finally
-            {
-                SqlConnection.ClearAllPools();
-                using (var db = new SqlConnection(master.ConnectionString))
-                {
-                    db.Open();
-                    using (var command = db.CreateCommand())
-                    {
-                        command.CommandText = "DROP DATABASE UnitTestingPromptCategories_i686";
-                        command.ExecuteNonQuery();
-                    }
-                }
-            }
+            return ScratchDatabase.Create("promptcategoriesmanual");
+        }
+
+        private static void CreatePriorSchema(ScratchDatabase db)
+        {
+            db.Execute(@"CREATE TABLE dbo.copilot_interactions(id int PRIMARY KEY);
+                CREATE TABLE dbo.copilot_interaction_import_log(id int PRIMARY KEY);
+                CREATE TABLE dbo.__MigrationHistory(MigrationId nvarchar(150),ContextKey nvarchar(300),Model varbinary(max),ProductVersion nvarchar(32));");
+        }
+
+        private static string Script()
+        {
+            return File.ReadAllText(Path.Combine(RepositoryRoot(), "src", "AnalyticsEngine", "Common", "Entities", "Migrations",
+                "202610080900001_AddPromptCategories.manual.sql"));
         }
 
         private static string RepositoryRoot()

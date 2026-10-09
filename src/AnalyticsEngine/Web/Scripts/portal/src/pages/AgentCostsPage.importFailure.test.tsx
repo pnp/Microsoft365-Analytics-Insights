@@ -7,6 +7,20 @@ import type { CopilotCapacitySnapshot } from '../types/agentCosts';
 import { CapacityUsedHint, ImportFailureBar } from './AgentCostsPage';
 
 describe('ImportFailureBar', () => {
+  it.each([
+    ['agentCosts.import.reconnectNeeded', 'tiene que volver a conectar'],
+    ['agentCosts.import.tokenUnavailable', 'no estaba disponible temporalmente'],
+    ['agentCosts.import.connectionRequired', 'ningún administrador de facturación conectado'],
+  ])(
+    'translates the stable delegated connection diagnosis %s into Spanish',
+    async (error, translatedText) => {
+      await loadCatalog('es');
+      const { container } = renderWithProvider(<ImportFailureBar kind="copilotStudio" error={error} />, { language: 'es' });
+      expect(container.textContent).not.toContain(error);
+      expect(container.textContent).toContain(translatedText);
+    },
+  );
+
   it('labels a failing import in the reader language and still says why it is failing', async () => {
     await loadCatalog('es');
     renderWithProvider(

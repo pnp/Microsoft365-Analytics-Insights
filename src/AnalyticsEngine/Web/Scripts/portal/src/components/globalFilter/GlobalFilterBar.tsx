@@ -115,7 +115,7 @@ export interface GlobalFilterBarProps {
  * the reader's own values filled in ("Sales (from your profile)").
  *
  * Shown only; the reports apply it on the server whatever this component does. A portal administrator
- * also gets a link to edit it and a switch to see reports without it, which changes only their own view.
+ * with See PII also gets a link to edit it and a switch to see reports without it, changing only their view.
  */
 export default function GlobalFilterBar({ note }: GlobalFilterBarProps) {
   const styles = useStyles();
@@ -142,8 +142,7 @@ export default function GlobalFilterBar({ note }: GlobalFilterBarProps) {
 
   if (!effective.active) return null;
 
-  // Switching the filter off for one's own view needs Administration; editing it needs See PII as well,
-  // as the editor page does - so an administrator without it is not offered a link to a refusal.
+  // Both bypassing and editing need Administration and See PII.
   const editLink = effective.canBypass && access.seePii ? (
     <Link href={`#${GLOBAL_FILTER_ADMIN_PATH}`}>{t('globalFilter.bar.edit')}</Link>
   ) : null;

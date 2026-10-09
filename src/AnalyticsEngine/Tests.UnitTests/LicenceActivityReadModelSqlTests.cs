@@ -1,8 +1,11 @@
+extern alias AnalyticsWeb;
+using AnalyticsWeb::Web.AnalyticsWeb.Models.LicenceActivity;
 using Common.Entities.LicenceActivity;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using Newtonsoft.Json;
 using System;
 using System.Collections.Generic;
+using System.Collections.Concurrent;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -14,6 +17,79 @@ namespace Tests.UnitTests
     public class LicenceActivityReadModelSqlTests
     {
         private static readonly DateTime Now = LicenceActivitySqlFixture.NowUtc;
+
+        [TestMethod]
+        public async Task CoverageDiagnosticsExplainAllUnknownDespitePositiveEvidence_AndRepair()
+        {
+            using (var fixture = LicenceActivitySqlTests.CreateMeasuredFixture())
+            {
+                fixture.Execute("DELETE dbo.outlook_user_activity_log WHERE [date] = '2000-06-25';");
+                var events = new ConcurrentQueue<LicenceActivityDiagnosticEvent>();
+                var diagnostics = new LicenceActivityRunDiagnostics("synthetic-run", item =>
+                {
+                    events.Enqueue(item);
+                    return true;
+                });
+                var query = Query();
+                var model = await fixture.Store().LoadReadModelAsync(query, Sources(), diagnostics, CancellationToken.None);
+                var gap = events.Single(item => item.Stage == "CoverageWeek"
+                    && item.Dimensions["Workload"] == "outlook" && item.Dimensions["ToUtc"] == "2000-06-25");
+                Assert.AreEqual("2000-06-25", gap.Dimensions["MissingDates"]);
+                Assert.AreEqual("MissingReportDays", gap.Dimensions["Reason"]);
+                Assert.AreEqual(7d, gap.Measurements["ExpectedDays"]);
+                Assert.AreEqual(6d, gap.Measurements["PresentDays"]);
+                Assert.AreEqual(0d, gap.Measurements["Selected"]);
+                var evidence = events.Single(item => item.Stage == "WorkloadEvidence"
+                    && item.Dimensions["Workload"] == "outlook");
+                Assert.AreEqual("partial", evidence.Dimensions["CoverageStatus"]);
+                Assert.AreEqual("IncompletePeriod", evidence.Dimensions["Reason"]);
+                Assert.IsTrue(evidence.Measurements["UsersWithActivity"] > 0);
+                Assert.AreEqual(0d, evidence.Measurements["UsersWithCompleteEvidence"]);
+                Assert.AreEqual(evidence.Measurements["ExpectedSamples"] - 1, evidence.Measurements["ObservedSamples"]);
+                var sku = model.BuildOverview(query, CancellationToken.None).Licences.First(l => l.AssignedUsers > 0);
+                Assert.AreEqual(sku.AssignedUsers, sku.Workloads.Single(w => w.Workload == "outlook").Unknown);
+
+                LicenceActivitySqlTests.SeedOneUsageTable(fixture, "outlook_user_activity_log", new[] { "2000-06-25" });
+                events = new ConcurrentQueue<LicenceActivityDiagnosticEvent>();
+                model = await fixture.Store().LoadReadModelAsync(query, Sources(), diagnostics, CancellationToken.None);
+                Assert.IsTrue(events.Where(item => item.Stage == "CoverageWeek").All(item =>
+                    item.Dimensions["Reason"] == "Complete" && item.Measurements["Selected"] == 1));
+                evidence = events.Single(item => item.Stage == "WorkloadEvidence"
+                    && item.Dimensions["Workload"] == "outlook");
+                Assert.AreEqual("available", evidence.Dimensions["CoverageStatus"]);
+                Assert.IsTrue(evidence.Measurements["UsersWithCompleteEvidence"] > 0);
+                Assert.IsTrue(model.BuildOverview(query, CancellationToken.None).Licences.All(l =>
+                    l.Workloads.Single(w => w.Workload == "outlook").Unknown == 0));
+            }
+        }
+
+        [TestMethod]
+        public async Task CoverageDiagnosticsDistinguishUnsettledAndClampedWeeks()
+        {
+            using (var fixture = LicenceActivitySqlTests.CreateMeasuredFixture())
+            {
+                var events = new ConcurrentQueue<LicenceActivityDiagnosticEvent>();
+                var diagnostics = new LicenceActivityRunDiagnostics("synthetic-run", item =>
+                {
+                    events.Enqueue(item);
+                    return true;
+                });
+                var query = LicenceActivityQuery.Create("2000-06-21", "2000-07-03", Now);
+                await fixture.Store().LoadReadModelAsync(query, Sources(), diagnostics, CancellationToken.None);
+                var first = events.Single(item => item.Stage == "CoverageWeek"
+                    && item.Dimensions["Workload"] == "teams" && item.Dimensions["ToUtc"] == "2000-06-25");
+                Assert.AreEqual("2000-06-21", first.Dimensions["FromUtc"]);
+                Assert.AreEqual(5d, first.Measurements["ExpectedDays"]);
+                Assert.AreEqual(5d, first.Measurements["PresentDays"]);
+                Assert.AreEqual("Complete", first.Dimensions["Reason"]);
+                var last = events.Single(item => item.Stage == "CoverageWeek"
+                    && item.Dimensions["Workload"] == "teams" && item.Dimensions["ToUtc"] == "2000-07-03");
+                Assert.AreEqual("Unsettled", last.Dimensions["Reason"]);
+                Assert.AreEqual(0d, last.Measurements["Settled"]);
+                Assert.AreEqual(0d, last.Measurements["Selected"]);
+                Assert.AreEqual(1d, last.Measurements["ExpectedDays"]);
+            }
+        }
 
         [TestMethod]
         public async Task CachedReadModelMatchesSqlAcrossSkuWorkloadSearchSortAndPageShapes()

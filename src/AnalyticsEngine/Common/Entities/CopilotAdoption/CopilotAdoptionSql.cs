@@ -1,4 +1,5 @@
-﻿using System;
+﻿using Common.Entities.Entities.UsageReports;
+using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
@@ -152,6 +153,86 @@ namespace Common.Entities.CopilotAdoption
             "FROM dbo.copilot_usage_report_import_log AS l\r\n" +
             "WHERE l.report_name = 'getMicrosoft365CopilotUsageUserDetail'\r\n" +
             "ORDER BY l.imported_utc DESC;";
+
+        /// <summary>
+        /// The report period, in days, that Microsoft's tenant-wide figures are read for: the stored period
+        /// closest to it wins. 28 days is the window the Microsoft 365 admin centre shows by default and the
+        /// rolling window Microsoft's 2026 Work Trend Index uses for prompts per user. Deliberately NOT the
+        /// selected analysis window: the importer only ever requests this one period of the summary report, so
+        /// following the page's window would change nothing but the wording, and the period actually read is
+        /// published next to the figures anyway.
+        /// </summary>
+        public const int MicrosoftReportTargetPeriodDays = 28;
+
+        /// <summary>
+        /// Microsoft's own tenant-wide prompt figures (#642): the "Any App" row of the latest
+        /// <c>getMicrosoft365CopilotUserCountSummary</c> roll-up the usage-report import stored in
+        /// <c>copilot_user_count_log</c>, for the stored report period closest to
+        /// <see cref="MicrosoftReportTargetPeriodDays"/>.
+        /// </summary>
+        /// <remarks>
+        /// <para><b>Which period.</b> Graph's version 2 report takes D7/D28/D90/D180 and version 1 takes D30
+        /// where version 2 takes D28. The importer requests D28 version 2 and falls back to D30 version 1, so
+        /// a tenant holds summary rows for 28 days, 30 days, or both. The period is pinned first - the closest
+        /// to 28, the shorter on a tie - and the latest report date for it is read second, so a later
+        /// version 1 fallback never displaces version 2 figures, and the period actually read is returned
+        /// rather than assumed.</para>
+        /// <para><b>Latest settled.</b> The most recent report date whose summary row set is complete, which
+        /// here means its "Any App" row exists: that row is where the tenant figures live, and the loader
+        /// writes a refresh date's whole summary in one batch, so a reader never sees half a set. Bounded by
+        /// <c>@reportTo</c> so a past range never reads a report from after it.</para>
+        /// <para><b>Null, never zero.</b> Version 1 has no prompt columns, so its row carries NULL prompts and
+        /// they are returned as NULL. No stored row returns no row at all. Concealed user information does not
+        /// apply: these are tenant totals with no identities, and the import records concealment only against
+        /// the per-user report (<see cref="CopilotReportObfuscatedSql"/>).</para>
+        /// <para><b>No agents surface.</b> Microsoft's published version 2 schema for this report lists Any App,
+        /// the Office apps, Copilot Chat, Edge, Microsoft 365 Copilot and Copilot Chat (work/web), plus the two
+        /// prompt totals - no agents surface, so there is no agent figure to read here. The only agent signal
+        /// in any Graph usage report is the per-user Copilot Agent last-activity date.</para>
+        /// <para><b>Version.</b> Taken from the import log row that recorded that refresh date's successful
+        /// summary import, so a figure can be traced to the report schema that produced it (#541).</para>
+        /// <para><b>Cost.</b> Both reads of <c>copilot_user_count_log</c> seek its unique index
+        /// <c>(report_type, report_period_days, report_date, app_name)</c>; the table holds one row per
+        /// Copilot surface per refresh date and is cleaned with the other usage reports, and the import log is
+        /// a handful of rows a day. Independent of tenant size.</para>
+        /// </remarks>
+        public const string MicrosoftReportFiguresSql =
+            "WITH SummaryPeriods AS (\r\n" +
+            "    SELECT DISTINCT s.report_period_days\r\n" +
+            "    FROM dbo.copilot_user_count_log AS s\r\n" +
+            "    WHERE s.report_type = N'" + CopilotUserCountReportTypes.Summary + "'\r\n" +
+            "      AND s.report_period_days IS NOT NULL\r\n" +
+            "      AND s.report_date <= @reportTo\r\n" +
+            "      AND s.app_name = N'" + CopilotAppNames.AnyApp + "'\r\n" +
+            "),\r\n" +
+            "PinnedPeriod AS (\r\n" +
+            "    SELECT TOP (1) p.report_period_days\r\n" +
+            "    FROM SummaryPeriods AS p\r\n" +
+            "    ORDER BY ABS(p.report_period_days - @targetPeriodDays), p.report_period_days\r\n" +
+            ")\r\n" +
+            "SELECT TOP (1)\r\n" +
+            "       s.report_date AS ReportDate,\r\n" +
+            "       s.report_period_days AS ReportPeriodDays,\r\n" +
+            "       s.prompts_submitted AS PromptsSubmitted,\r\n" +
+            "       s.average_prompts_submitted AS AveragePromptsSubmitted,\r\n" +
+            "       v.report_version AS ReportVersion\r\n" +
+            "FROM PinnedPeriod AS p\r\n" +
+            "JOIN dbo.copilot_user_count_log AS s\r\n" +
+            "  ON s.report_type = N'" + CopilotUserCountReportTypes.Summary + "'\r\n" +
+            " AND s.report_period_days = p.report_period_days\r\n" +
+            " AND s.report_date <= @reportTo\r\n" +
+            " AND s.app_name = N'" + CopilotAppNames.AnyApp + "'\r\n" +
+            "OUTER APPLY (\r\n" +
+            "    SELECT TOP (1) l.report_version\r\n" +
+            "    FROM dbo.copilot_usage_report_import_log AS l\r\n" +
+            "    WHERE l.report_name = N'" + CopilotUsageReportNames.UserCountSummary + "'\r\n" +
+            "      AND l.report_refresh_date = s.report_refresh_date\r\n" +
+            "      AND l.report_period = N'D' + CAST(s.report_period_days AS nvarchar(10))\r\n" +
+            "      AND l.error IS NULL\r\n" +
+            "    ORDER BY l.imported_utc DESC, l.id DESC\r\n" +
+            ") AS v\r\n" +
+            "ORDER BY s.report_date DESC\r\n" +
+            "OPTION (RECOMPILE);";
 
         /// <summary>Cheap existence probe: has any Copilot interaction been imported in the window?</summary>
         public const string HasCopilotAuditDataSql =
@@ -471,6 +552,9 @@ namespace Common.Entities.CopilotAdoption
                 "    FROM dbo.copilot_chats AS c\r\n" +
                 "    JOIN SeatUsers AS seats ON seats.user_id = c.user_id\r\n" +
                 "    WHERE c.time_stamp >= @historyFrom\r\n      AND c.time_stamp < @toExclusive\r\n" +
+                // A turn is counted once (#699), so the interaction counts and AppsUsed don't count a Microsoft
+                // 365 Copilot turn with a Copilot Studio agent twice, once as 'm365copilot' and once as 'Office'.
+                $"      AND {Copilot.CopilotTurnSql.CountedTurn("c")}\r\n" +
                 "),\r\n" +
                 "-- The counting totals: cheap, because none of them is a DISTINCT.\r\n" +
                 "CopilotTotals AS (\r\n" +
@@ -507,7 +591,9 @@ namespace Common.Entities.CopilotAdoption
                 "CopilotAgents AS (\r\n" +
                 "    SELECT user_id, COUNT(*) AS AgentsUsed\r\n" +
                 "    FROM (SELECT DISTINCT user_id, agent_id\r\n" +
-                "          FROM CopilotWindow WHERE time_stamp >= @from AND time_stamp < @toExclusive AND agent_id IS NOT NULL) AS g\r\n" +
+                "          FROM CopilotWindow WHERE time_stamp >= @from AND time_stamp < @toExclusive AND agent_id IS NOT NULL\r\n" +
+                // Testing an agent in the Copilot Studio test pane is not using it (#699).
+                $"            AND {Copilot.CopilotTurnSql.NotMakerTesting("app_host")}) AS g\r\n" +
                 "    GROUP BY user_id\r\n" +
                 "),\r\n" +
                 "-- Reassembled under the original name and shape, so everything downstream is unchanged.\r\n" +
@@ -1201,6 +1287,7 @@ namespace Common.Entities.CopilotAdoption
                     "           MAX(c.time_stamp) AS LastInteractionUtc\r\n" +
                     "    FROM dbo.copilot_chats AS c\r\n" +
                     "    WHERE c.time_stamp >= @from AND c.user_id IS NOT NULL\r\n      AND c.time_stamp < @toExclusive\r\n" +
+                    $"      AND {Copilot.CopilotTurnSql.CountedTurn("c")}\r\n" +
                     "    GROUP BY c.user_id\r\n" +
                     ")");
             }
@@ -1508,6 +1595,10 @@ namespace Common.Entities.CopilotAdoption
                 // eliminate the (usually large) majority of Copilot interactions that carry no agent
                 // before it does any joining, rather than discovering it during the join.
                 "  AND c.agent_id IS NOT NULL\r\n" +
+                // One turn, one interaction, and maker testing in the Copilot Studio test pane is not agent
+                // use (#699). Both keep the read on IX_copilot_chats_time_stamp_user_id - see CopilotTurnSql.
+                $"  AND {Copilot.CopilotTurnSql.CountedTurn("c")}\r\n" +
+                $"  AND {Copilot.CopilotTurnSql.NotMakerTesting("c.app_host")}\r\n" +
                 $"GROUP BY c.agent_id, c.user_id, CAST(c.time_stamp AS date), {AppHostKey("c.app_host", "(unknown)")}\r\n" +
                 "OPTION (RECOMPILE);\r\n" +
                 "\r\n" +
@@ -1569,6 +1660,8 @@ namespace Common.Entities.CopilotAdoption
                 "LEFT JOIN dbo.user_departments AS dept ON dept.id = u.department_id\r\n" +
                 "WHERE c.time_stamp >= @from\r\n  AND c.time_stamp < @toExclusive\r\n" +
                 "  AND c.agent_id IS NOT NULL\r\n" +
+                $"  AND {Copilot.CopilotTurnSql.CountedTurn("c")}\r\n" +
+                $"  AND {Copilot.CopilotTurnSql.NotMakerTesting("c.app_host")}\r\n" +
                 "GROUP BY ISNULL(NULLIF(LTRIM(RTRIM(dept.name)), ''), '(no department)')\r\n" +
                 "ORDER BY Value DESC\r\n" +
                 "OPTION (RECOMPILE);";
@@ -1605,6 +1698,8 @@ namespace Common.Entities.CopilotAdoption
                 "WHERE c.time_stamp >= @from\r\n  AND c.time_stamp < @toExclusive\r\n" +
                 "  AND c.agent_id IS NOT NULL\r\n" +
                 "  AND c.user_id IS NOT NULL\r\n" +
+                $"  AND {Copilot.CopilotTurnSql.CountedTurn("c")}\r\n" +
+                $"  AND {Copilot.CopilotTurnSql.NotMakerTesting("c.app_host")}\r\n" +
                 "GROUP BY c.user_id, c.agent_id, CAST(c.time_stamp AS date)\r\n" +
                 "OPTION (RECOMPILE);\r\n" +
                 "\r\n" +
@@ -1683,6 +1778,8 @@ namespace Common.Entities.CopilotAdoption
                 "    FROM dbo.copilot_chats AS c\r\n" +
                 "    WHERE c.time_stamp >= @from\r\n      AND c.time_stamp < @toExclusive\r\n" +
                 "      AND c.user_id IS NOT NULL\r\n" +
+                // A turn is counted once (#699) - see LicensedUsersSql.
+                $"      AND {Copilot.CopilotTurnSql.CountedTurn("c")}\r\n" +
                 UnlicensedPredicate(seatLicenceTypeIds, useLicenceHistory, "c.user_id", "      ") +
                 // Kept in step with UnlicensedActiveUsersSql - this is the detail behind that count.
                 ExcludeGuestsByUserId("c.user_id", "      ") +
@@ -1737,7 +1834,9 @@ namespace Common.Entities.CopilotAdoption
                 "           GROUP BY user_id) AS a ON a.user_id = t.user_id\r\n" +
                 "LEFT JOIN (SELECT user_id, COUNT(*) AS AgentsUsed\r\n" +
                 "           FROM (SELECT DISTINCT user_id, agent_id FROM #unlicensed_grain\r\n" +
-                "                 WHERE agent_id IS NOT NULL) AS z\r\n" +
+                "                 WHERE agent_id IS NOT NULL\r\n" +
+                // Testing an agent in the Copilot Studio test pane is not using it (#699).
+                $"                   AND {Copilot.CopilotTurnSql.NotMakerTesting("app_host")}) AS z\r\n" +
                 "           GROUP BY user_id) AS g ON g.user_id = t.user_id\r\n" +
                 "LEFT JOIN dbo.users AS u ON u.id = t.user_id\r\n" +
                 "LEFT JOIN dbo.user_departments AS dept ON dept.id = u.department_id\r\n" +
@@ -1766,7 +1865,11 @@ namespace Common.Entities.CopilotAdoption
                 "FROM dbo.copilot_event_accessed_resources AS ar\r\n" +
                 "JOIN dbo.copilot_chats AS c ON c.event_id = ar.copilot_chat_id\r\n" +
                 "LEFT JOIN dbo.copilot_event_accessed_resource_types AS rt ON rt.id = ar.resource_type_id\r\n" +
+                // Both audit records of one turn can list the same resource (a web-search result on both records
+                // of a Microsoft 365 Copilot pair, #699); it was one access, so it counts once.
+                Copilot.CopilotTurnSql.ResourceTurnJoin("c", "ar_dup") + "\r\n" +
                 "WHERE c.time_stamp >= @from\r\n  AND c.time_stamp < @toExclusive\r\n" +
+                "  AND " + Copilot.CopilotTurnSql.ResourceCountedOnce("ar", "ar_dup") + "\r\n" +
                 "GROUP BY ISNULL(rt.name, '" + Copilot.CopilotAccessedResourceTaxonomy.UnknownTypeLabel + "')\r\n" +
                 "ORDER BY Value DESC\r\n" +
                 "OPTION (RECOMPILE);";
@@ -1789,6 +1892,9 @@ namespace Common.Entities.CopilotAdoption
                 "FROM dbo.copilot_chats AS c\r\n" +
                 "JOIN SeatUsers AS seats ON seats.user_id = c.user_id\r\n" +
                 "WHERE c.time_stamp >= @from\r\n  AND c.time_stamp < @toExclusive\r\n" +
+                // One turn, one interaction, and maker testing is not where people use Copilot (#699).
+                $"  AND {Copilot.CopilotTurnSql.CountedTurn("c")}\r\n" +
+                $"  AND {Copilot.CopilotTurnSql.NotMakerTesting("c.app_host")}\r\n" +
                 $"GROUP BY {AppHostKey("c.app_host", "(unknown)")}\r\n" +
                 "ORDER BY Value DESC\r\n" +
                 "OPTION (RECOMPILE);";
@@ -1808,6 +1914,8 @@ namespace Common.Entities.CopilotAdoption
                 "FROM dbo.copilot_chats AS c\r\n" +
                 "WHERE c.time_stamp >= @from\r\n  AND c.time_stamp < @toExclusive\r\n" +
                 "  AND c.user_id IS NOT NULL\r\n" +
+                $"  AND {Copilot.CopilotTurnSql.CountedTurn("c")}\r\n" +
+                $"  AND {Copilot.CopilotTurnSql.NotMakerTesting("c.app_host")}\r\n" +
                 UnlicensedPredicate(seatLicenceTypeIds, useLicenceHistory, "c.user_id", "  ") +
                 // Kept in step with UnlicensedActiveUsersSql - this breaks that same population down by app.
                 ExcludeGuestsByUserId("c.user_id", "  ") +
@@ -1880,7 +1988,8 @@ namespace Common.Entities.CopilotAdoption
                 // removes every distinct: a user is licensed or not for the whole week, so MAX() over the
                 // flag is exactly the same answer, and the roll-up below is then a trivial SUM.
                 //
-                // This first pass touches NOTHING but copilot_chats. Whether a user holds a seat and
+                // This first pass touches NOTHING but copilot_chats (and the small copilot_chat_duplicates list,
+                // read by its primary key). Whether a user holds a seat and
                 // whether they are a guest are properties of the USER, not of the interaction, so joining
                 // those two lookups here - as this query used to - evaluated them once per chat row to
                 // produce an answer that is identical for every row the user appears in. The joins moved
@@ -1889,12 +1998,15 @@ namespace Common.Entities.CopilotAdoption
                 $"    SELECT {week} AS WeekStart,\r\n" +
                 "           c.user_id AS user_id,\r\n" +
                 $"           MAX(CASE WHEN ({cowork}) THEN 1 ELSE 0 END) AS CoworkRow,\r\n" +
-                "           MAX(CASE WHEN c.agent_id IS NOT NULL THEN 1 ELSE 0 END) AS UsedAgent,\r\n" +
+                // Testing an agent in the Copilot Studio test pane does not make its maker an agent user (#699).
+                $"           MAX(CASE WHEN c.agent_id IS NOT NULL AND {Copilot.CopilotTurnSql.NotMakerTesting("c.app_host")} THEN 1 ELSE 0 END) AS UsedAgent,\r\n" +
                 "           COUNT_BIG(*) AS Interactions\r\n" +
                 "    FROM dbo.copilot_chats AS c\r\n" +
                 "    WHERE c.time_stamp >= @trendFrom\r\n" +
                 "      AND c.time_stamp < @trendTo\r\n" +
                 "      AND c.user_id IS NOT NULL\r\n" +
+                // A turn is counted once (#699), so the interaction series don't count a pair twice.
+                $"      AND {Copilot.CopilotTurnSql.CountedTurn("c")}\r\n" +
                 $"    GROUP BY {week}, c.user_id\r\n" +
                 "),\r\n" +
                 // The per-user lookups, now once per (week, user) instead of once per interaction.
