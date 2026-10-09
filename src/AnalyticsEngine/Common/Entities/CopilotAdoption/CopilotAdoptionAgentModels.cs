@@ -160,6 +160,7 @@ namespace Common.Entities.CopilotAdoption
 
         /// <summary>Counts by <see cref="AgentHealth"/>, so the size of an inventory clean-up is visible.</summary>
         [JsonProperty("healthBreakdown")]
+        [SnapshotFactsBreakdown(typeof(AgentHealth))]
         public List<AdoptionCategory> HealthBreakdown { get; set; } = new List<AdoptionCategory>();
 
         /// <summary>Agent interactions by department.</summary>

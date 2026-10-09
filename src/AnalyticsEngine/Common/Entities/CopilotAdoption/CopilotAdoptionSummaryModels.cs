@@ -191,13 +191,71 @@ namespace Common.Entities.CopilotAdoption
     }
 
     /// <summary>One bar of a categorical chart. Same JSON shape as the Reports area's <c>ReportCategory</c>.</summary>
-    public class AdoptionCategory
+    public class AdoptionCategory : ISnapshotFactsBreakdownRow
     {
         [JsonProperty("label")]
         public string Label { get; set; }
 
         [JsonProperty("value")]
         public double Value { get; set; }
+
+        /// <summary>
+        /// The bar's stable identity when the chart has one bar per member of an enum - the member's name,
+        /// e.g. <c>NeverUsed</c> - or <c>null</c> when the label is the identity (a department, an app, an
+        /// agent). <see cref="Label"/> is display text and can be reworded; this cannot.
+        /// </summary>
+        /// <remarks>
+        /// Left out of the JSON when null, so every other chart keeps exactly the shape the SPA's chart
+        /// components expect. The workbook's Snapshot facts sheet keys a breakdown's rows by it - see
+        /// <see cref="SnapshotFactsBreakdownAttribute"/>.
+        /// </remarks>
+        [JsonProperty("key", NullValueHandling = NullValueHandling.Ignore)]
+        public string Key { get; set; }
+
+        string ISnapshotFactsBreakdownRow.BreakdownMember => Key;
+
+        object ISnapshotFactsBreakdownRow.BreakdownValue => Value;
+    }
+
+    /// <summary>
+    /// Marks a list as a breakdown with exactly one row per member of a fixed set the product defines - the
+    /// engagement bands, the agent health verdicts, the kinds of work the Cowork estimate models - so the
+    /// workbook's Snapshot facts sheet writes one row per member, keyed by the member's stable name
+    /// (<c>bandBreakdown.Champion</c>, <c>coworkValueEstimate.activities.sendEmail</c>), as well as the
+    /// list's row count.
+    /// </summary>
+    /// <remarks>
+    /// <para>The set is named by a type: an enum, whose member NAMES are the keys, or a static class of
+    /// <c>public const string</c> keys, whose VALUES are (<see cref="CoworkActivities"/>). Either way the
+    /// keys come from the type, never from the rows: every member has a row in every export, blank when the
+    /// list is missing or carries no row for that member, so two exports line up whatever the data says.
+    /// The rows say which member they count through <see cref="ISnapshotFactsBreakdownRow"/>.</para>
+    /// <para>Only for a list that always carries a row for every member, zero included, so that a missing
+    /// row can only mean the list was not built. A list that leaves out its zero rows would turn a measured
+    /// zero into a blank. Never for a list whose rows are tenant data - departments, apps, agents - because a
+    /// key must never be derived from a value, and never keyed by a display label, which can be reworded
+    /// between builds.</para>
+    /// </remarks>
+    [AttributeUsage(AttributeTargets.Property, AllowMultiple = false)]
+    public sealed class SnapshotFactsBreakdownAttribute : Attribute
+    {
+        public SnapshotFactsBreakdownAttribute(Type members)
+        {
+            Members = members;
+        }
+
+        /// <summary>The enum, or the static class of string constants, whose members key the rows.</summary>
+        public Type Members { get; }
+    }
+
+    /// <summary>One row of a <see cref="SnapshotFactsBreakdownAttribute"/> breakdown.</summary>
+    public interface ISnapshotFactsBreakdownRow
+    {
+        /// <summary>The member this row counts - an enum member's name or a key constant - or null when it is not one of them.</summary>
+        string BreakdownMember { get; }
+
+        /// <summary>The figure for that member.</summary>
+        object BreakdownValue { get; }
     }
 
     /// <summary>
@@ -871,6 +929,7 @@ namespace Common.Entities.CopilotAdoption
 
         /// <summary>How many licensed users fall in each <see cref="AdoptionBand"/>.</summary>
         [JsonProperty("bandBreakdown")]
+        [SnapshotFactsBreakdown(typeof(AdoptionBand))]
         public List<AdoptionCategory> BandBreakdown { get; set; } = new List<AdoptionCategory>();
 
         /// <summary>
