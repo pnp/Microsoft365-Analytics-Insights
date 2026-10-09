@@ -95,6 +95,17 @@ namespace Common.Entities.Config
 
             this.CognitiveEndpoint = ConfigurationManager.AppSettings.Get("CognitiveEndpoint");
             this.CognitiveKey = ConfigurationManager.AppSettings.Get("CognitiveKey");
+            FoundryPromptCategorisationEndpoint = ReadFoundryRuntimeSetting(nameof(FoundryPromptCategorisationEndpoint));
+            FoundryPromptCategorisationDeployment = ReadFoundryRuntimeSetting(nameof(FoundryPromptCategorisationDeployment));
+            FoundryPromptCategorisationKey = ReadFoundryRuntimeSetting(nameof(FoundryPromptCategorisationKey));
+            // Migrate the namespace as a set; never pair a new deployment with an old endpoint or key.
+            if (FoundryPromptCategorisationEndpoint == null && FoundryPromptCategorisationDeployment == null &&
+                FoundryPromptCategorisationKey == null)
+            {
+                FoundryPromptCategorisationEndpoint = ReadFoundryRuntimeSetting("FoundryPromptEndpoint");
+                FoundryPromptCategorisationDeployment = ReadFoundryRuntimeSetting("FoundryPromptDeployment");
+                FoundryPromptCategorisationKey = ReadFoundryRuntimeSetting("FoundryPromptKey");
+            }
 
 
             var importJobSettingsString = ConfigurationManager.AppSettings.Get("ImportJobSettings");
@@ -561,6 +572,15 @@ namespace Common.Entities.Config
         public int ImportStartStaggerMinutes { get; set; } = 0;
 
         #region Copilot AI interaction history
+
+        // Console WebJobs do not have ASP.NET's App Service appSettings override.
+        private static string ReadFoundryRuntimeSetting(string name) =>
+            Environment.GetEnvironmentVariable("APPSETTING_" + name) ??
+            Environment.GetEnvironmentVariable(name) ?? ConfigurationManager.AppSettings.Get(name);
+
+        public string FoundryPromptCategorisationEndpoint { get; set; }
+        public string FoundryPromptCategorisationDeployment { get; set; }
+        public string FoundryPromptCategorisationKey { get; set; }
 
         /// <summary>Default cadence for the interaction-history import: once a day.</summary>
         public const int DefaultCopilotInteractionHistoryIntervalHours = 24;

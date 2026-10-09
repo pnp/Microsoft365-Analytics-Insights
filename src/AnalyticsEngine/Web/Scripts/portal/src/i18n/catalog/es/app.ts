@@ -54,6 +54,7 @@ const app: Record<keyof typeof en, string> = {
   'app.route.leadershipCohort': 'Grupo directivo',
   'app.route.copilotAdoptionSettings': 'Configuración de adopción de Copilot',
   'app.route.configuration': 'Configuraci\u00f3n del servicio',
+  'app.route.agent365Catalog': 'Catálogo de Agent 365',
 };
 
 export default app;

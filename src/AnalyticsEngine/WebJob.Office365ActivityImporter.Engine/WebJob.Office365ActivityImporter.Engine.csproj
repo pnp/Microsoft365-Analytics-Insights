@@ -173,6 +173,7 @@
     <Compile Include="Graph\Copilot\InteractionHistory\UserImportScopePilotGroupMemberResolver.cs" />
     <Compile Include="Graph\Copilot\InteractionHistory\IAiInteractionSourceLoader.cs" />
     <Compile Include="Graph\Copilot\InteractionHistory\InteractionCognitiveEnricher.cs" />
+    <Compile Include="Graph\Copilot\InteractionHistory\PromptCategoryClassifier.cs" />
     <Compile Include="Graph\Copilot\InteractionHistory\InteractionStatsExtractor.cs" />
     <Compile Include="Graph\Copilot\InteractionHistory\PilotGroupResolution.cs" />
     <Compile Include="Graph\Email\DeltaTokenStores.cs" />
@@ -234,6 +235,7 @@
     <Compile Include="Graph\GraphRequestBudgetOptions.cs" />
     <Compile Include="Graph\GraphServiceClientFactory.cs" />
     <Compile Include="Graph\ManualGraphCallClient.cs" />
+    <Compile Include="Graph\Agent365\Agent365PackageCatalogImporter.cs" />
     <Compile Include="Graph\Teams\O365Team.cs" />
     <Compile Include="Graph\GraphLookupCache.cs" />
     <Compile Include="Graph\GraphImporter.cs" />

@@ -80,6 +80,17 @@
   </ItemGroup>
   <ItemGroup>
     <Compile Include="BaseEntity.cs" />
+    <Compile Include="PromptCategories\PromptCategoryConfiguration.cs" />
+    <Compile Include="PromptCategories\PromptCategorySql.cs" />
+    <Compile Include="PromptCategories\PromptCategoryRunStore.cs" />
+    <Compile Include="PromptCategories\PromptCategoryReportSql.cs" />
+    <Compile Include="Migrations\202610080900001_AddPromptCategories.cs" />
+    <Compile Include="Migrations\202610080900001_AddPromptCategories.Designer.cs">
+      <DependentUpon>202610080900001_AddPromptCategories.cs</DependentUpon>
+    </Compile>
+    <EmbeddedResource Include="Migrations\202610080900001_AddPromptCategories.resx">
+      <DependentUpon>202610080900001_AddPromptCategories.cs</DependentUpon>
+    </EmbeddedResource>
     <Compile Include="BuildConstants.cs" />
     <Compile Include="ActivityAnalysis\ActivityAnalysisCache.cs" />
     <Compile Include="ActivityAnalysis\ActivityAnalysisEvaluation.cs" />
@@ -135,6 +146,7 @@
     <Compile Include="CopilotAdoption\CopilotAdoptionUnlicensedModels.cs" />
     <Compile Include="CopilotAdoption\CopilotAdoptionUserModels.cs" />
     <Compile Include="CopilotAdoption\CopilotAdoptionWorkbook.cs" />
+    <Compile Include="Agent365\Agent365PackageCatalogStore.cs" />
     <Compile Include="CopilotAdoption\CopilotLicenceClassifier.cs" />
     <Compile Include="CopilotAdoption\CopilotLicenceModels.cs" />
     <Compile Include="CopilotAdoption\CsvSerialiser.cs" />
@@ -155,6 +167,7 @@
     <Compile Include="TeamsExplorer\TeamsExplorerScoring.cs" />
     <Compile Include="TeamsExplorer\TeamsExplorerSql.cs" />
     <Compile Include="Copilot\CopilotAccessedResourceTaxonomy.cs" />
+    <Compile Include="Copilot\CopilotTurnSql.cs" />
     <Compile Include="Config\ImportConfig.cs" />
     <Compile Include="Config\UserGroupsFilterModel.cs" />
     <Compile Include="UserScope\GroupDirectoryReader.cs" />
@@ -544,6 +557,14 @@
     <Compile Include="Migrations\202610021200001_LicenceHistory.Designer.cs">
       <DependentUpon>202610021200001_LicenceHistory.cs</DependentUpon>
     </Compile>
+    <Compile Include="Migrations\202610071200001_Agent365PackageCatalog.cs" />
+    <Compile Include="Migrations\202610071200001_Agent365PackageCatalog.Designer.cs">
+      <DependentUpon>202610071200001_Agent365PackageCatalog.cs</DependentUpon>
+    </Compile>
+    <Compile Include="Migrations\202610071400001_CopilotTurnPairing.cs" />
+    <Compile Include="Migrations\202610071400001_CopilotTurnPairing.Designer.cs">
+      <DependentUpon>202610071400001_CopilotTurnPairing.cs</DependentUpon>
+    </Compile>
     <Compile Include="Migrations\202609190900001_IndexPlatformUserActivityLogDate.cs" />
     <Compile Include="Migrations\202609190900001_IndexPlatformUserActivityLogDate.Designer.cs">
       <DependentUpon>202609190900001_IndexPlatformUserActivityLogDate.cs</DependentUpon>
@@ -867,6 +888,13 @@
     </EmbeddedResource>
     <EmbeddedResource Include="Migrations\202610021200001_LicenceHistory.resx">
       <DependentUpon>202610021200001_LicenceHistory.cs</DependentUpon>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Migrations\202610071200001_Agent365PackageCatalog.resx">
+      <DependentUpon>202610071200001_Agent365PackageCatalog.cs</DependentUpon>
+    </EmbeddedResource>
+    <None Include="Migrations\202610071200001_Agent365PackageCatalog.manual.sql" />
+    <EmbeddedResource Include="Migrations\202610071400001_CopilotTurnPairing.resx">
+      <DependentUpon>202610071400001_CopilotTurnPairing.cs</DependentUpon>
     </EmbeddedResource>
     <EmbeddedResource Include="Migrations\202609190900001_IndexPlatformUserActivityLogDate.resx">
       <DependentUpon>202609190900001_IndexPlatformUserActivityLogDate.cs</DependentUpon>

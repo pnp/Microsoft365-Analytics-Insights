@@ -191,6 +191,9 @@ namespace Common.Entities.UserScope.Purge
                 Delete(audit, "copilot_event_ai_models", "id", ByAuditEvent("copilot_chat_id"), "copilot_chat_id"),
                 Delete(audit, "copilot_event_ai_system_plugins", "id", ByAuditEvent("copilot_chat_id"), "copilot_chat_id"),
                 Delete(audit, "copilot_dlp_events", "id", ByAuditEvent("copilot_chat_id"), "copilot_chat_id"),
+                // An extra audit record of a Copilot turn (#699). Its foreign key cascades, but like the tables
+                // above it is cleared first, so the copilot_chats delete never cascades into it.
+                Delete(audit, "copilot_chat_duplicates", "event_id", ByAuditEvent("event_id"), "event_id"),
                 Delete(audit, "copilot_chats", "event_id", ByAuditEvent("event_id"), "event_id"),
                 Delete(audit, "dlp_rule_matches", "id", ByAuditEvent("event_id"), "event_id"),
                 Delete(audit, "event_meta_power_app_share", "id", ByAuditEvent("event_id"), "event_id"),
@@ -249,6 +252,7 @@ namespace Common.Entities.UserScope.Purge
                 Delete(usage, "cowork_usage_user_activity_log", "id", ByUser("user_id"), "user_id"),
 
                 Delete(UserScopePurgePhases.CopilotInteractions, "copilot_interaction_keywords", "id", ByInteraction("interaction_id"), "interaction_id"),
+                Delete(UserScopePurgePhases.CopilotInteractions, "copilot_prompt_classifications", "interaction_id", ByInteraction("interaction_id"), "interaction_id"),
                 Delete(UserScopePurgePhases.CopilotInteractions, "copilot_interactions", "id", ByUser("user_id"), "user_id", "session_id"),
                 Delete(UserScopePurgePhases.CopilotInteractions, "copilot_interaction_sessions", "id", ByUser("user_id"), "user_id"),
                 Delete(UserScopePurgePhases.CopilotInteractions, "copilot_interaction_user_watermarks", "id", ByUser("user_id"), "user_id"),

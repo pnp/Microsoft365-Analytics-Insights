@@ -10,6 +10,7 @@ using Azure.ResourceManager.Resources;
 using Azure.ResourceManager.Sql;
 using Azure.ResourceManager.Storage;
 using CloudInstallEngine.Azure;
+using CloudInstallEngine.Azure.InstallTasks;
 using CloudInstallEngine.Models;
 using Microsoft.Extensions.Logging;
 using System;
@@ -43,11 +44,12 @@ namespace App.ControlPanel.Engine
         public async Task RunPostCreatePaaSTasks(WebSiteResource webApp, AppServicePlanResource appServicePlan, DatabasePaaSInfo dbInfo, StorageAccountResource storage, AutomationAccountResource automationAccount,
             AppInsightsInfo appInsights,
             CognitiveServicesInfo cognitiveServicesInfo,
+            FoundryPromptInfo foundryPromptInfo,
             KeyVaultResource keyVault, string serviceBusConnectionString, SubscriptionResource subscription,
             SqlServerResource sqlServer = null, SqlAuthDecision sqlAuthDecision = null, Guid installerObjectId = default(Guid))
         {
             // Configure app-service connection-strings, etc
-            await ConfigureWebApp(webApp, appServicePlan, dbInfo, storage, cognitiveServicesInfo, appInsights, serviceBusConnectionString, keyVault);
+            await ConfigureWebApp(webApp, appServicePlan, dbInfo, storage, cognitiveServicesInfo, foundryPromptInfo, appInsights, serviceBusConnectionString, keyVault);
 
             // Download/extract the release while the App Service is still available. Kudu/SCM
             // rejects deployments while the site resource is stopped.
@@ -519,6 +521,7 @@ namespace App.ControlPanel.Engine
         async Task ConfigureWebApp(WebSiteResource webApp, AppServicePlanResource appServicePlan, DatabasePaaSInfo backendInfo,
             StorageAccountResource storage,
             CognitiveServicesInfo cognitiveServicesInfo,
+            FoundryPromptInfo foundryPromptInfo,
             AppInsightsInfo appInsights, string serviceBusConnectionString, KeyVaultResource keyVault)
         {
             // App settings
@@ -547,6 +550,13 @@ namespace App.ControlPanel.Engine
             {
                 appSettings.Properties.Add("CognitiveEndpoint", string.Empty);
                 appSettings.Properties.Add("CognitiveKey", string.Empty);
+            }
+
+            // These settings are always installer-managed. Writing empty values when disabled clears
+            // settings from older deployments without deleting the Azure OpenAI resource or deployment.
+            foreach (var setting in FoundryPromptAppSettings.Build(this.Config.FoundryPromptEnabled, foundryPromptInfo))
+            {
+                appSettings.Properties.Add(setting.Key, setting.Value);
             }
 
             appSettings.Properties.Add("ImportJobSettings", this.Config.SolutionConfig.ImportTaskSettings.ToSettingsString());

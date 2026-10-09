@@ -52,6 +52,8 @@ const ProfilingStatusPage = lazyWithReload(() => import('./pages/ProfilingStatus
 const InstallLogPage = lazyWithReload(() => import('./pages/InstallLogPage'));
 const HealthPage = lazyWithReload(() => import('./pages/HealthPage'));
 const ServiceConfigurationPage = lazyWithReload(() => import('./pages/ServiceConfigurationPage'));
+const PromptCategoriesPage = lazyWithReload(() => import('./pages/PromptCategoriesPage'));
+const Agent365CatalogPage = lazyWithReload(() => import('./pages/Agent365CatalogPage'));
 
 /**
  * The portal is split into two areas so the two audiences it serves don't have to wade
@@ -272,11 +274,27 @@ export const ROUTES: PortalRoute[] = [
   },
   {
     area: 'admin',
+    path: '/admin/prompt-categories',
+    labelKey: 'promptCategories.title',
+    groupKey: 'app.navGroup.manage',
+    icon: <Sparkle20Regular />,
+    element: <PromptCategoriesPage />,
+  },
+  {
+    area: 'admin',
     path: '/admin/configuration',
     labelKey: 'app.route.configuration',
     groupKey: 'app.navGroup.manage',
     icon: <Settings20Regular />,
     element: <ServiceConfigurationPage />,
+  },
+  {
+    area: 'admin',
+    path: '/admin/agent365-catalog',
+    labelKey: 'app.route.agent365Catalog',
+    groupKey: 'app.navGroup.manage',
+    icon: <DataUsage20Regular />,
+    element: <Agent365CatalogPage />,
   },
   {
     area: 'admin',

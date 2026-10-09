@@ -80,6 +80,8 @@ namespace Tests.UnitTests
             ["AgentCostConnectionAPIController.Begin"] = Admin,
             ["AgentCostConnectionAPIController.Disconnect"] = Admin,
 
+            ["Agent365PackageCatalogAPIController.Get"] = Admin,
+
             // Microsoft Graph's change-notification webhook: Graph cannot sign in, so it checks clientState instead.
             ["CallRecordWebhookController.Post"] = Public,
 
@@ -126,6 +128,11 @@ namespace Tests.UnitTests
             ["LicenceActivityAPIController.Export"] = Any,             // refuses usersId without See PII
 
             ["PortalAccessAPIController.Get"] = Any,
+            ["PromptCategoriesAPIController.Get"] = Admin,
+            ["PromptCategoriesAPIController.Save"] = Admin,
+            ["PromptCategoriesAPIController.Reset"] = Admin,
+            ["PromptCategoriesAPIController.Runs"] = Admin,
+            ["PromptCategoriesAPIController.Report"] = Any,
 
             ["ProfilingStatusAPIController.Get"] = Admin,
             ["ProfilingStatusAPIController.TraceLogs"] = Admin,

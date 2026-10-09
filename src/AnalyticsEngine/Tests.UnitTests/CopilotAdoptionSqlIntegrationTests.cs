@@ -1860,6 +1860,137 @@ namespace Tests.UnitTests
             }
         }
 
+        /// <summary>
+        /// Issue #699. A Microsoft 365 Copilot turn with a Copilot Studio agent is two audit records, the runtime's
+        /// one listed in copilot_chat_duplicates; a chat in the Copilot Studio test pane is maker testing. Every
+        /// agent figure counts the turn once and leaves maker testing out, and so do the "by app" charts. Maker
+        /// testing still counts as Copilot use in a person's interactions and active days.
+        /// </summary>
+        [TestMethod]
+        public void AgentAndAppFigures_CountAPairOnce_AndLeaveOutMakerTesting()
+        {
+            using (var db = ScratchDatabase.Create("CopilotTurnPairs"))
+            {
+                CreateUserTables(db);
+                CreateCopilotTables(db);
+                db.Execute(
+                    @"INSERT INTO dbo.license_types (id, name, sku_id)
+                          VALUES (1, N'Microsoft Copilot for Microsoft 365', N'Microsoft_365_Copilot');
+                      INSERT INTO dbo.users (id, user_name, mail, account_enabled)
+                          VALUES (1, N'user@contoso.com', N'user@contoso.com', 1),
+                                 (2, N'maker@contoso.com', N'maker@contoso.com', 1);
+                      INSERT INTO dbo.user_license_type_lookups (id, user_id, license_type_id) VALUES (1, 1, 1), (2, 2, 1);
+                      INSERT INTO dbo.copilot_agents (id, name, agent_id)
+                          VALUES (1, N'Contoso Helpdesk', N'11111111-1111-1111-1111-111111111111');");
+
+                var turn = DateTime.UtcNow.Date.AddDays(-2).AddHours(9);
+                var runtime = SeedCopilotInteractionAtReturningId(db, 1, turn, "m365copilot", agentId: 1);
+                var client = SeedCopilotInteractionAtReturningId(db, 1, turn.AddSeconds(5), "Office", agentId: 1);
+                MarkDuplicate(db, runtime, client, 1);
+                SeedCopilotInteractionAt(db, 1, turn.AddHours(1), "Word");
+                SeedCopilotInteractionAt(db, 2, turn, "Copilot Studio", agentId: 1);
+                SeedCopilotInteractionAt(db, 2, turn.AddMinutes(1), "Copilot Studio", agentId: 1);
+
+                var window = new[]
+                {
+                    new SqlParameter("@from", DateTime.UtcNow.Date.AddDays(-28)),
+                    new SqlParameter("@historyFrom", DateTime.UtcNow.Date.AddDays(-365)),
+                    new SqlParameter("@maxRows", 1000),
+                };
+
+                var agent = Query<AgentUsageQueryRow>(db, CopilotAdoptionSql.AgentUsageSql(new[] { 1 }), Clone(window)).Single();
+                Assert.AreEqual(1, agent.Interactions, "One turn, two audit records; the maker's test-pane chats are not agent use.");
+                Assert.AreEqual(1, agent.WindowInteractions);
+                Assert.AreEqual(1, agent.Users, "The maker is not an agent user.");
+                Assert.AreEqual(1, agent.AppsUsed, "'Office' only: not 'm365copilot' as well, and not 'Copilot Studio'.");
+
+                var agentUsers = Query<AgentUserRow>(db, CopilotAdoptionSql.AgentUsersSql(new[] { 1 }), Clone(window));
+                Assert.AreEqual(1, agentUsers.Single().UserId);
+                Assert.AreEqual(1, agentUsers.Single().Interactions);
+                Assert.AreEqual(1, agentUsers.Single().AgentsUsed);
+
+                var byApp = Query<CopilotAdoptionService.CategoryQueryRow>(db, CopilotAdoptionSql.UsageByAppSql(new[] { 1 }),
+                    new SqlParameter("@from", DateTime.UtcNow.Date.AddDays(-28)), new SqlParameter("@top", 10));
+                CollectionAssert.AreEquivalent(new[] { "Office", "Word" }, byApp.Select(r => r.Label).ToList(),
+                    "The pair is one interaction in Office, and maker testing is not where people use Copilot.");
+                Assert.IsTrue(byApp.All(r => r.Value == 1d));
+
+                var licensed = Query<LicensedUserUsageRow>(db, CopilotAdoptionSql.LicensedUsersSql(new[] { 1 }, new int[0], includeCopilotReport: false), Clone(window));
+                var user = licensed.Single(r => r.UserId == 1);
+                Assert.AreEqual(2, user.Interactions, "The agent turn and the Word interaction.");
+                Assert.AreEqual(2, user.AppsUsed, "Office and Word.");
+                Assert.AreEqual(1, user.AgentsUsed);
+                var maker = licensed.Single(r => r.UserId == 2);
+                Assert.AreEqual(2, maker.Interactions, "Maker testing is still Copilot use...");
+                Assert.AreEqual(0, maker.AgentsUsed, "...but it is not using an agent.");
+
+                var trend = Query<CopilotAdoptionService.NamedWeekRow>(db, CopilotAdoptionSql.WeeklyAdoptionTrendSql(new[] { 1 }, new int[0]),
+                    new SqlParameter("@trendFrom", DateTime.UtcNow.Date.AddDays(-28)),
+                    new SqlParameter("@trendTo", DateTime.UtcNow.Date.AddDays(1)));
+                Assert.AreEqual(4d, trend.Where(r => r.SeriesName == "Licensed interactions").Sum(r => r.Value),
+                    "The pair, the Word interaction and two test-pane chats.");
+                Assert.AreEqual(1d, trend.Where(r => r.SeriesName == "Agent users").Sum(r => r.Value),
+                    "The maker is not an agent user.");
+            }
+        }
+
+        /// <summary>
+        /// Issue #699. Both audit records of one turn can list the same resource - a web-search result was seen on
+        /// both records of a Microsoft 365 Copilot pair. It is one access, so it counts once; a resource only one of
+        /// the records lists still counts.
+        /// </summary>
+        [TestMethod]
+        public void TopResourceTypes_AResourceBothRecordsOfATurnList_CountsOnce()
+        {
+            using (var db = ScratchDatabase.Create("CopilotTurnResources"))
+            {
+                CreateUserTables(db);
+                CreateCopilotTables(db);
+                CreateCopilotResourceTables(db);
+                db.Execute(
+                    @"INSERT INTO dbo.users (id, user_name, account_enabled) VALUES (1, N'a@contoso.com', 1);
+                      INSERT INTO dbo.copilot_event_accessed_resource_types (id, name)
+                          VALUES (1, N'WebSearchQuery'), (2, N'docx');");
+
+                var turn = DateTime.UtcNow.Date.AddDays(-2).AddHours(9);
+                var runtime = SeedCopilotInteractionAtReturningId(db, 1, turn, "m365copilot", agentId: 1);
+                var client = SeedCopilotInteractionAtReturningId(db, 1, turn.AddSeconds(5), "Office", agentId: 1);
+                var echo = SeedCopilotInteractionAtReturningId(db, 1, turn.AddSeconds(8), "m365copilot", agentId: 1);
+                MarkDuplicate(db, runtime, client, 1);
+                MarkDuplicate(db, echo, client, 2);
+
+                db.Execute(
+                    $@"INSERT INTO dbo.copilot_event_accessed_resources (copilot_chat_id, resource_id_id, resource_type_id, action_id) VALUES
+                           ('{runtime}', 10, 1, 1), ('{client}', 10, 1, 1), ('{echo}', 10, 1, 1),
+                           ('{runtime}', 11, 2, 1), ('{echo}', 11, 2, 1),
+                           ('{runtime}', 12, 1, 1);");
+
+                var rows = Query<CopilotAdoptionService.CategoryQueryRow>(
+                    db,
+                    CopilotAdoptionSql.TopResourceTypesSql(),
+                    new SqlParameter("@from", DateTime.UtcNow.Date.AddDays(-28)),
+                    new SqlParameter("@top", 10));
+
+                Assert.AreEqual(2d, rows.Single(r => r.Label == "WebSearchQuery").Value,
+                    "Resource 10 is listed on all three records of the turn and counts once; resource 12 is only on the runtime record.");
+                Assert.AreEqual(1d, rows.Single(r => r.Label == "docx").Value,
+                    "Resource 11 is on the two extra records only, and still counts once.");
+            }
+        }
+
+        private static SqlParameter[] Clone(SqlParameter[] parameters)
+        {
+            return parameters.Select(p => new SqlParameter(p.ParameterName, p.Value)).ToArray();
+        }
+
+        /// <summary>Lists <paramref name="eventId"/> as an extra audit record of the turn counted on <paramref name="countedEventId"/>.</summary>
+        private static void MarkDuplicate(ScratchDatabase db, Guid eventId, Guid countedEventId, int reason)
+        {
+            db.Execute($@"INSERT INTO dbo.copilot_chat_duplicates (event_id, time_stamp, counted_event_id, reason)
+                          SELECT event_id, time_stamp, '{countedEventId}', {reason}
+                          FROM dbo.copilot_chats WHERE event_id = '{eventId}';");
+        }
+
         #endregion
 
         #region Failure classification against the real driver
@@ -2079,11 +2210,20 @@ namespace Tests.UnitTests
                       -- DenormaliseCopilotChatUserAndTime. Every Copilot query reads these instead of
                       -- joining dbo.audit_events.
                       user_id int NULL,
-                      time_stamp datetime NULL);
+                      time_stamp datetime NULL,
+                      conversation_id nvarchar(450) NULL);
 
                   CREATE NONCLUSTERED INDEX IX_copilot_chats_time_stamp_user_id
                       ON dbo.copilot_chats ([time_stamp], [user_id])
                       INCLUDE ([app_host], [agent_id]);
+
+                  -- Migration CopilotTurnPairing (#699): extra audit records of a turn counted on another record.
+                  CREATE TABLE dbo.copilot_chat_duplicates (
+                      event_id uniqueidentifier NOT NULL PRIMARY KEY,
+                      time_stamp datetime NOT NULL,
+                      counted_event_id uniqueidentifier NOT NULL,
+                      reason tinyint NOT NULL);
+                  CREATE NONCLUSTERED INDEX IX_copilot_chat_duplicates_time_stamp ON dbo.copilot_chat_duplicates (time_stamp);
 
                   CREATE TABLE dbo.copilot_agents (
                       id int NOT NULL PRIMARY KEY,
@@ -2277,7 +2417,13 @@ namespace Tests.UnitTests
                   CREATE TABLE dbo.copilot_event_accessed_resources (
                       id int IDENTITY(1,1) NOT NULL PRIMARY KEY,
                       copilot_chat_id uniqueidentifier NOT NULL,
-                      resource_type_id int NULL);");
+                      resource_id_id int NULL,
+                      resource_name_id int NULL,
+                      resource_site_url_id int NULL,
+                      resource_type_id int NULL,
+                      sensitivity_label_id int NULL,
+                      action_id int NULL,
+                      list_item_unique_id_id int NULL);");
         }
 
         private static void SeedCopilotInteraction(
@@ -2287,6 +2433,12 @@ namespace Tests.UnitTests
         }
 
         private static void SeedCopilotInteractionAt(
+            ScratchDatabase db, int userId, DateTime whenUtc, string appHost, int? agentId = null)
+        {
+            SeedCopilotInteractionAtReturningId(db, userId, whenUtc, appHost, agentId);
+        }
+
+        private static Guid SeedCopilotInteractionAtReturningId(
             ScratchDatabase db, int userId, DateTime whenUtc, string appHost, int? agentId = null)
         {
             var id = Guid.NewGuid();
@@ -2299,6 +2451,7 @@ namespace Tests.UnitTests
                        SELECT '{id}', N'{appHost}', {(agentId.HasValue ? agentId.Value.ToString() : "NULL")},
                               ae.user_id, ae.time_stamp
                        FROM dbo.audit_events AS ae WHERE ae.id = '{id}';");
+            return id;
         }
 
         /// <summary>Seeds one interaction and returns its id, so accessed resources can be attached.</summary>

@@ -54,6 +54,7 @@ namespace App.ControlPanel.Engine.InstallerTasks
         private readonly LogAnalyticsInstallTask _logAnalyticsInstallTask;
         private readonly AppInsightsInstallTask _appInsightsInstallTask;
         private readonly TextAnalyticsInstallTask _cognitiveServicesInstallTask;
+        private readonly AzureOpenAIInstallTask _foundryPromptInstallTask;
 
         private readonly VNetInstallTask _vnetInstallTask;
         private readonly HybridWorkerGroupTask _hybridWorkerGroupTask;
@@ -74,7 +75,7 @@ namespace App.ControlPanel.Engine.InstallerTasks
 
             if (!allowPublicAccess)
             {
-                logger.LogWarning("Public network access will be disabled on Azure PaaS resources (SQL, Storage, Key Vault, Service Bus, App Service, Automation, Cognitive Services). " +
+                logger.LogWarning("Public network access will be disabled on Azure PaaS resources (SQL, Storage, Key Vault, Service Bus, App Service, Automation, Cognitive Services, Azure AI Foundry). " +
                     "If this installer is NOT running on a machine connected to the private network (VNet, peered network, VPN/ExpressRoute, or Azure Bastion-attached host), the following steps will fail: " +
                     "Key Vault secret upload (appsecret), SQL connectivity test and database initialization, and the App Service warm-up request. " +
                     "These failures are non-fatal — the resources are still created and configured — but you must re-run the installer from inside the private network (or temporarily re-enable public access on Key Vault and SQL) to complete those steps.");
@@ -257,6 +258,19 @@ namespace App.ControlPanel.Engine.InstallerTasks
                 this.AddTask(_cognitiveServicesInstallTask);
             }
 
+            // Azure AI Foundry / Azure OpenAI for the optional prompt-category classifier.
+            // Provisioning this service does not turn on the separate prompt-category opt-in.
+            if (config.FoundryPromptEnabled)
+            {
+                var foundryConfig = TaskConfig.GetConfigForName(config.FoundryPromptResourceName)
+                    .AddSetting(AzureOpenAIInstallTask.CONFIG_KEY_DEPLOYMENT_NAME, config.FoundryPromptDeploymentName)
+                    .AddSetting(AzureOpenAIInstallTask.CONFIG_KEY_MODEL_NAME, config.FoundryPromptModelName)
+                    .AddSetting(AzureOpenAIInstallTask.CONFIG_KEY_MODEL_VERSION, config.FoundryPromptModelVersion ?? string.Empty)
+                    .AddSetting(AzureOpenAIInstallTask.CONFIG_KEY_CAPACITY, config.FoundryPromptCapacity.ToString());
+                _foundryPromptInstallTask = new AzureOpenAIInstallTask(foundryConfig, logger, Location, tagDic, allowPublicAccess);
+                this.AddTask(_foundryPromptInstallTask);
+            }
+
             if (config.SolutionConfig.ImportTaskSettings.GraphUsageReports)
             {
                 // Deploy Automation account. Later, post PaaS install, we will deploy the runbooks
@@ -369,6 +383,16 @@ namespace App.ControlPanel.Engine.InstallerTasks
                     AddPrivateEndpointTask(cognitivePeName, $"/subscriptions/{subId}/resourceGroups/{rgName}/providers/Microsoft.CognitiveServices/accounts/{config.CognitiveServiceName}",
                         "account", subnetId, logger, tagDic);
                     if (deployDns) AddPrivateDnsZoneTask("privatelink.cognitiveservices.azure.com", vnetId, cognitivePeName, logger, tagDic);
+                }
+
+                // Azure OpenAI account private endpoint and DNS zone.
+                if (config.FoundryPromptEnabled)
+                {
+                    var foundryPeName = $"pe-{config.FoundryPromptResourceName}-openai";
+                    AddPrivateEndpointTask(foundryPeName,
+                        $"/subscriptions/{subId}/resourceGroups/{rgName}/providers/Microsoft.CognitiveServices/accounts/{config.FoundryPromptResourceName}",
+                        "account", subnetId, logger, tagDic);
+                    if (deployDns) AddPrivateDnsZoneTask("privatelink.openai.azure.com", vnetId, foundryPeName, logger, tagDic);
                 }
 
                 // Automation Account
@@ -621,6 +645,8 @@ namespace App.ControlPanel.Engine.InstallerTasks
         public StorageAccountResource Storage => GetTaskResult<StorageAccountResource>(_storageAccountInstallTask);
         public AppInsightsInfo AppInsights => GetTaskResult<AppInsightsInfo>(_appInsightsInstallTask);
         public CognitiveServicesInfo CognitiveServicesInfo => _cognitiveServicesInstallTask != null ? GetTaskResult<CognitiveServicesInfo>(_cognitiveServicesInstallTask) : new CognitiveServicesInfo();
+
+        public FoundryPromptInfo FoundryPromptInfo => _foundryPromptInstallTask != null ? GetTaskResult<FoundryPromptInfo>(_foundryPromptInstallTask) : null;
         public ServiceBusQueueResourceWithConnectionString SBQueueWithConnectionString => _serviceBusQueueWithPolicyInstallTask != null ? GetTaskResult<ServiceBusQueueResourceWithConnectionString>(_serviceBusQueueWithPolicyInstallTask) : null;
         public KeyVaultResource KeyVault => GetTaskResult<KeyVaultResource>(_keyVaultTask);
         public VirtualNetworkResource VNet => _vnetInstallTask != null ? GetTaskResult<VirtualNetworkResource>(_vnetInstallTask) : null;

@@ -316,19 +316,24 @@ namespace Web.AnalyticsWeb.Controllers
                 + SelectCopilotAuditJoin(from, hasAgentFilter: false)
                 + " WHERE au.time_stamp >= @from" + AuditUserScope;
 
+            // A turn is counted once (#699): the Copilot Studio runtime's record of a Microsoft 365 Copilot
+            // turn with an agent is left out, so it counts once and only under 'Office', not 'm365copilot' too.
+            var countedTurns = " AND " + Common.Entities.Copilot.CopilotTurnSql.CountedTurn("c");
+
             var wb = WeekBucket("au.time_stamp");
 
             var interactions =
                 $"SELECT {wb} AS WeekStart, CAST(COUNT(*) AS float) AS Value\r\n" +
-                join + "\r\n" +
+                join + countedTurns + "\r\n" +
                 $"GROUP BY {wb} ORDER BY WeekStart\r\n" +
                 "OPTION (RECOMPILE);";
 
             var users = BuildCopilotUsersQuery(from);
 
+            // Maker testing in the Copilot Studio test pane is not where people use Copilot (#699).
             var hosts =
                 "SELECT TOP 8 ISNULL(c.app_host, '(unknown)') AS Label, CAST(COUNT(*) AS float) AS Value\r\n" +
-                join + "\r\n" +
+                join + countedTurns + " AND " + Common.Entities.Copilot.CopilotTurnSql.NotMakerTesting("c.app_host") + "\r\n" +
                 "GROUP BY ISNULL(c.app_host, '(unknown)') ORDER BY Value DESC\r\n" +
                 "OPTION (RECOMPILE);";
 
@@ -531,6 +536,9 @@ namespace Web.AnalyticsWeb.Controllers
                 "    " + auditJoin + "\r\n" +
                 "    JOIN EligibleAgents AS eligible ON c.agent_id = eligible.id\r\n" +
                 "    WHERE au.time_stamp >= @from" + AuditUserScope + "\r\n" +
+                // One turn, one execution, and maker testing in the Copilot Studio test pane is not agent use (#699).
+                "      AND " + Common.Entities.Copilot.CopilotTurnSql.CountedTurn("c") + "\r\n" +
+                "      AND " + Common.Entities.Copilot.CopilotTurnSql.NotMakerTesting("c.app_host") + "\r\n" +
                 $"    GROUP BY c.agent_id, {wb}\r\n" +
                 "),\r\n" +
                 "AgentWeeksWithTotals AS (\r\n" +

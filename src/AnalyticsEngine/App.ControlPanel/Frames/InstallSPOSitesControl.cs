@@ -113,11 +113,17 @@ namespace App.ControlPanel.Frames
                 AppServicePlanName = azurePaaSConfigControl1.AppServicePlanName,
                 AppInsightsWorkspaceName = azurePaaSConfigControl1.AppInsightsWorkspaceName,
                 AppInsightsName = azurePaaSConfigControl1.AppInsightsName,
-                CognitiveServiceName = azurePaaSConfigControl1.CognitiveServiceName,
-                CognitiveServicesEnabled = azurePaaSConfigControl1.CognitiveEnabled,
+                CognitiveServiceName = azureAIConfigControl1.CognitiveServiceName,
+                CognitiveServicesEnabled = azureAIConfigControl1.CognitiveEnabled,
                 SharePointConfig = sharePointConfigControl1.SharePointInstallConfig,
                 KeyVaultName = azurePaaSConfigControl1.KeyVaultName,
                 AutomationAccountName = azurePaaSConfigControl1.AutomationAccountName,
+                FoundryPromptEnabled = azureAIConfigControl1.FoundryPromptEnabled,
+                FoundryPromptResourceName = azureAIConfigControl1.FoundryPromptResourceName,
+                FoundryPromptDeploymentName = azureAIConfigControl1.FoundryPromptDeploymentName,
+                FoundryPromptModelName = azureAIConfigControl1.FoundryPromptModelName,
+                FoundryPromptModelVersion = azureAIConfigControl1.FoundryPromptModelVersion,
+                FoundryPromptCapacity = azureAIConfigControl1.FoundryPromptCapacity,
                 ResourceGroupName = azureBaseConfigControl1.ResourceGroup,
                 Subscription = azureBaseConfigControl1.AzureSubscription,
                 AzureLocationName = azureBaseConfigControl1.AzureLocationString,
@@ -198,11 +204,17 @@ namespace App.ControlPanel.Frames
             azurePaaSConfigControl1.AppInsightsName = config.AppInsightsName;
             azurePaaSConfigControl1.AppServicePlanName = config.AppServicePlanName;
             azurePaaSConfigControl1.AppServiceWebAppName = config.AppServiceWebAppName;
-            azurePaaSConfigControl1.CognitiveServiceName = config.CognitiveServiceName;
-            azurePaaSConfigControl1.CognitiveEnabled = config.CognitiveServicesEnabled;
+            azureAIConfigControl1.CognitiveServiceName = config.CognitiveServiceName;
+            azureAIConfigControl1.CognitiveEnabled = config.CognitiveServicesEnabled;
             azurePaaSConfigControl1.AppInsightsWorkspaceName = config.AppInsightsWorkspaceName;
             azurePaaSConfigControl1.KeyVaultName = config.KeyVaultName;
             azurePaaSConfigControl1.AutomationAccountName = config.AutomationAccountName;
+            azureAIConfigControl1.FoundryPromptEnabled = config.FoundryPromptEnabled;
+            azureAIConfigControl1.FoundryPromptResourceName = config.FoundryPromptResourceName;
+            azureAIConfigControl1.FoundryPromptDeploymentName = config.FoundryPromptDeploymentName;
+            azureAIConfigControl1.FoundryPromptModelName = config.FoundryPromptModelName;
+            azureAIConfigControl1.FoundryPromptModelVersion = config.FoundryPromptModelVersion;
+            azureAIConfigControl1.FoundryPromptCapacity = config.FoundryPromptCapacity;
 
             // Networking
             if (config.NetworkConfig != null)
@@ -387,18 +399,16 @@ namespace App.ControlPanel.Frames
             // Show SP tab if either web or audit traffic is needed
             if (importJobSettingsSelection.Config.ImportTaskSettings.WebTraffic || importJobSettingsSelection.Config.ImportTaskSettings.ActivityLog)
             {
-                if (!_spTabVisible)
+                if (!tabs.TabPages.Contains(tabSharePoint))
                 {
-                    tabs.TabPages.Insert(5, tabSharePoint);     //5th tab
-                    _spTabVisible = true;
+                    tabs.TabPages.Insert(tabs.TabPages.IndexOf(tabSources), tabSharePoint);
                 }
             }
             else
             {
-                if (_spTabVisible)
+                if (tabs.TabPages.Contains(tabSharePoint))
                 {
                     tabs.TabPages.Remove(tabSharePoint);
-                    _spTabVisible = false;
                 }
             }
         }
@@ -582,7 +592,6 @@ namespace App.ControlPanel.Frames
             SetFormGUIState(state);
         }
 
-        private bool _spTabVisible = true;
         private void importJobSettingsSelection_SolutionSelectionChange(object sender, EventArgs e)
         {
             RefreshTabsConfig();

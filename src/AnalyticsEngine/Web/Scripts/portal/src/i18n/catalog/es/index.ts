@@ -23,6 +23,7 @@ import userOrgs from './userOrgs';
 import userFilter from './userFilter';
 import globalFilter from './globalFilter';
 import access from './access';
+import promptCategories from './promptCategories';
 
 /**
  * Every Spanish module, as one object - and, because this is the only file `loadCatalog`
@@ -64,6 +65,7 @@ export const ES_MODULES = {
   userFilter,
   globalFilter,
   access,
+  promptCategories,
 } as const;
 
 export default ES_MODULES as unknown as Record<string, Catalog>;

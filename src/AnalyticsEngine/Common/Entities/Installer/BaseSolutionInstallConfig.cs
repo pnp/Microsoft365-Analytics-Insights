@@ -43,7 +43,9 @@ namespace Common.Entities.Installer
         //          because the solution no longer uses Azure Cache for Redis; runtime state moved to Azure
         //          Table storage in the existing storage account. Older configs still load; the properties
         //          are simply ignored.
-        const string CONFIG_VERSION = "3.0.0";
+        //          3.0.0 -> 3.1.0 added ImportTaskSettings.Agent365PackageCatalog (opt-in Agent 365 catalog import).
+        //          3.1.0 -> 3.2.0 added optional Azure AI Foundry OpenAI resource and deployment settings.
+        const string CONFIG_VERSION = "3.2.0";
 
         public BaseSolutionInstallConfig()
         {
@@ -147,6 +149,24 @@ namespace Common.Entities.Installer
 
         public bool CognitiveServicesEnabled { get; set; } = true;
         public string CognitiveServiceName { get; set; } = string.Empty;
+
+        /// <summary>Whether to provision the optional Azure AI Foundry Azure OpenAI service.</summary>
+        public bool FoundryPromptEnabled { get; set; } = false;
+
+        /// <summary>Resource name for the optional Azure OpenAI account.</summary>
+        public string FoundryPromptResourceName { get; set; } = string.Empty;
+
+        /// <summary>Model deployment name used by the prompt-category classifier.</summary>
+        public string FoundryPromptDeploymentName { get; set; } = "prompt-categories";
+
+        /// <summary>Azure OpenAI model name to deploy.</summary>
+        public string FoundryPromptModelName { get; set; } = "gpt-4o-mini";
+
+        /// <summary>Optional Azure OpenAI model version; blank lets Azure choose its current default.</summary>
+        public string FoundryPromptModelVersion { get; set; } = string.Empty;
+
+        /// <summary>Standard deployment capacity in model-specific rate-limit units (not provisioned throughput units).</summary>
+        public int FoundryPromptCapacity { get; set; } = 1;
 
         public bool DownloadLatestStable { get; set; } = true;
 

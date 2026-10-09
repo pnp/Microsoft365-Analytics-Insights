@@ -54,6 +54,7 @@ export const app = {
   'app.route.leadershipCohort': 'Leadership group',
   'app.route.copilotAdoptionSettings': 'Copilot Adoption settings',
   'app.route.configuration': 'Service configuration',
+  'app.route.agent365Catalog': 'Agent 365 catalogue',
 } as const;
 
 export default app;

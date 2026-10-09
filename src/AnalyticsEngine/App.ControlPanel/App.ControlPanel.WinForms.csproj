@@ -147,6 +147,12 @@
     <Compile Include="Frames\InstallWizardPages\AzurePaaSConfigControl.cs">
       <SubType>UserControl</SubType>
     </Compile>
+    <Compile Include="Frames\InstallWizardPages\AzureAIConfigControl.cs">
+      <SubType>UserControl</SubType>
+    </Compile>
+    <Compile Include="Frames\InstallWizardPages\AzureAIConfigControl.Designer.cs">
+      <DependentUpon>AzureAIConfigControl.cs</DependentUpon>
+    </Compile>
     <Compile Include="Frames\InstallWizardPages\AzurePaaSConfigControl.Designer.cs">
       <DependentUpon>AzurePaaSConfigControl.cs</DependentUpon>
     </Compile>
@@ -369,6 +375,12 @@
   </ItemGroup>
   <ItemGroup>
     <None Include="Resources\Copilot.png" />
+    <None Include="Resources\AzureOpenAI.png" />
+    <None Include="Resources\AzureOpenAI.svg" />
+    <Content Include="Resources\FluentUI-System-Icons.NOTICE.txt">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <TargetPath>FluentUI-System-Icons.NOTICE.txt</TargetPath>
+    </Content>
     <None Include="Resources\SharePoint.png" />
   </ItemGroup>
   <ItemGroup>
