@@ -120,6 +120,7 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
             }
 
             var activeUsersByDay = new List<KeyValuePair<DateTime, List<string>>>();
+            var userPhaseCompleted = false;
 
             // Phase A: one /users read per day, shared by the per-user table and the per-agent derivation.
             try
@@ -157,6 +158,7 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
                 userLog.RowsRead = rowsRead;
                 await LinkUsersAsync(mapped);
                 userLog.RowsSaved = await _store.UpsertCopilotStudioUserCreditsAsync(mapped);
+                userPhaseCompleted = true;
 
                 _logger.LogInformation($"Copilot Studio per-user credits: read {userLog.RowsRead:N0} row(s) across "
                     + $"{(today - from).Days + 1} day(s), stored {userLog.RowsSaved:N0}.");
@@ -186,13 +188,13 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
             catch (AgentCostAuthorisationException ex)
             {
                 _logger.LogError(ex, "Copilot Studio credit import failed: " + ex.Message);
-                return await FailAsync(agentLog, userLog, ex.Message, true);
+                return await FailAsync(agentLog, userLog, ex.Message, true, userPhaseCompleted);
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, $"Copilot Studio credit import failed: {ex.Message}. "
                     + "No other import is affected; this one will be retried on the next cycle.");
-                return await FailAsync(agentLog, userLog, ex.Message, false);
+                return await FailAsync(agentLog, userLog, ex.Message, false, userPhaseCompleted);
             }
         }
 
@@ -208,12 +210,13 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
         /// Records the failure on whichever logs were not already completed (the per-user log is saved as soon
         /// as the per-user rows are stored, so a later per-agent failure does not overwrite it).
         /// </summary>
-        private async Task<ConsumptionImportOutcomes> FailAsync(AgentCostImportLog agentLog, AgentCostImportLog userLog, string error, bool authorisation)
+        private async Task<ConsumptionImportOutcomes> FailAsync(
+            AgentCostImportLog agentLog, AgentCostImportLog userLog, string error, bool authorisation, bool userPhaseCompleted)
         {
             agentLog.Error = error;
             await SafeSaveLogAsync(agentLog);
 
-            var userFailed = userLog.RowsSaved == 0 && userLog.RowsRead == 0;
+            var userFailed = !userPhaseCompleted;
             if (userFailed)
             {
                 userLog.Error = error;
