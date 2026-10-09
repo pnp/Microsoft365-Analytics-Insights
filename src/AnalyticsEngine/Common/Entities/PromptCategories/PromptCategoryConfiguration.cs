@@ -15,8 +15,8 @@ namespace Common.Entities.PromptCategories
     public static class FoundryPromptSettings
     {
         public static bool IsConfigured(AppConfig settings) => settings != null &&
-            IsValidEndpoint(settings.FoundryPromptEndpoint) &&
-            Regex.IsMatch(settings.FoundryPromptDeployment ?? "", @"\A[a-zA-Z0-9][a-zA-Z0-9_.-]{0,63}\z");
+            IsValidEndpoint(settings.FoundryPromptCategorisationEndpoint) &&
+            Regex.IsMatch(settings.FoundryPromptCategorisationDeployment ?? "", @"\A[a-zA-Z0-9][a-zA-Z0-9_.-]{0,63}\z");
 
         public static bool IsValidEndpoint(string endpoint)
         {

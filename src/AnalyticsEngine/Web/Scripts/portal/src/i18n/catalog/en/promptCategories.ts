@@ -24,7 +24,7 @@ const en = {
   'promptCategories.governance': 'Optional new data flow: when enabled, user prompts from the scoped interaction-history import are sent to your Azure AI Foundry deployment. Responses are never sent. Only one category, taxonomy version and optional admin-assigned human mode are retained. Confirm your deployment region, data boundary and model costs before enabling.',
   'promptCategories.enabled': 'Enable Foundry prompt categorisation',
   'promptCategories.cap': 'Maximum prompts per import cycle (1–10,000)',
-  'promptCategories.backendMissing': 'Configure FoundryPromptEndpoint and FoundryPromptDeployment on the importer first. The runtime identity needs Cognitive Services OpenAI User; an optional FoundryPromptKey can be configured there. No resource is provisioned.',
+  'promptCategories.backendMissing': 'Enable the prompt categorisation service on the installer’s Azure AI tab to provision the service and configure it automatically. For an existing deployment, set FoundryPromptCategorisationEndpoint and FoundryPromptCategorisationDeployment on the App Service; the runtime identity needs Cognitive Services OpenAI User. FoundryPromptCategorisationKey is optional. Enable Copilot AI interaction history on Targets, then enable and save categorisation here.',
   'promptCategories.storageMissing': 'Durable Azure Table storage is required before saving or enabling.',
   'promptCategories.taxonomy': 'Taxonomy (2–20 categories, including Other)',
   'promptCategories.history': 'A taxonomy edit creates an immutable version for future imports only. Previous prompts cannot be recategorised. Concurrent saves use the last completed save; reload before editing.',

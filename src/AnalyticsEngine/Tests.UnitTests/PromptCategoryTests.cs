@@ -2,6 +2,7 @@ extern alias AnalyticsWeb;
 
 using AnalyticsWeb::Web.AnalyticsWeb.Controllers;
 using AnalyticsWeb::Web.AnalyticsWeb.Security;
+using CloudInstallEngine.Azure.InstallTasks;
 using Common.Entities;
 using Common.Entities.Config;
 using Common.Entities.Migrations;
@@ -76,16 +77,86 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
-        public void RuntimeSettings_AppServiceEnvironmentOverridesXml_WithoutInstallerSchemaChanges()
+        public void RuntimeSettings_InstallerCategorisationValuesReachRuntimeBeforePlainAndLegacySettings()
         {
-            var name = "APPSETTING_FoundryPromptEndpoint";
-            var original = Environment.GetEnvironmentVariable(name);
+            var settings = FoundryPromptAppSettings.Build(true, new FoundryPromptInfo
+            {
+                Endpoint = "https://contoso.openai.azure.com/", Deployment = "prompt-categories"
+            }).ToDictionary(setting => "APPSETTING_" + setting.Key, setting => setting.Value);
+            settings["APPSETTING_FoundryPromptCategorisationKey"] = "synthetic-category-key";
+            settings["FoundryPromptCategorisationEndpoint"] = "https://contoso-plain.openai.azure.com/";
+            settings["FoundryPromptCategorisationDeployment"] = "plain-model";
+            settings["FoundryPromptCategorisationKey"] = "synthetic-plain-key";
+            settings["APPSETTING_FoundryPromptEndpoint"] = "https://contoso-legacy.openai.azure.com/";
+            settings["APPSETTING_FoundryPromptDeployment"] = "legacy-model";
+            settings["APPSETTING_FoundryPromptKey"] = "synthetic-legacy-key";
+            WithFoundryEnvironment(settings, () =>
+            {
+                var config = new AppConfig();
+                Assert.AreEqual("https://contoso.openai.azure.com/", config.FoundryPromptCategorisationEndpoint);
+                Assert.AreEqual("prompt-categories", config.FoundryPromptCategorisationDeployment);
+                Assert.AreEqual("synthetic-category-key", config.FoundryPromptCategorisationKey);
+                Assert.IsTrue(FoundryPromptSettings.IsConfigured(config));
+            });
+        }
+
+        [DataTestMethod]
+        [DataRow("")]
+        [DataRow("APPSETTING_")]
+        public void RuntimeSettings_LegacyNamespaceStillWorksWhenCategorisationSettingsAreAbsent(string prefix)
+        {
+            WithFoundryEnvironment(new Dictionary<string, string>
+            {
+                [prefix + "FoundryPromptEndpoint"] = "https://contoso.openai.azure.com/",
+                [prefix + "FoundryPromptDeployment"] = "legacy-model",
+                [prefix + "FoundryPromptKey"] = "synthetic-legacy-key"
+            }, () =>
+            {
+                var config = new AppConfig();
+                Assert.AreEqual("https://contoso.openai.azure.com/", config.FoundryPromptCategorisationEndpoint);
+                Assert.AreEqual("legacy-model", config.FoundryPromptCategorisationDeployment);
+                Assert.AreEqual("synthetic-legacy-key", config.FoundryPromptCategorisationKey);
+                Assert.IsTrue(FoundryPromptSettings.IsConfigured(config));
+            });
+        }
+
+        [TestMethod]
+        public void RuntimeSettings_PartialCategorisationSettingsNeverBorrowLegacyEndpointOrKey()
+        {
+            WithFoundryEnvironment(new Dictionary<string, string>
+            {
+                ["APPSETTING_FoundryPromptCategorisationDeployment"] = "prompt-categories",
+                ["APPSETTING_FoundryPromptEndpoint"] = "https://contoso.openai.azure.com/",
+                ["APPSETTING_FoundryPromptDeployment"] = "legacy-model",
+                ["APPSETTING_FoundryPromptKey"] = "synthetic-legacy-key"
+            }, () =>
+            {
+                var config = new AppConfig();
+                Assert.AreEqual("prompt-categories", config.FoundryPromptCategorisationDeployment);
+                Assert.IsNull(config.FoundryPromptCategorisationEndpoint);
+                Assert.IsNull(config.FoundryPromptCategorisationKey);
+                Assert.IsFalse(FoundryPromptSettings.IsConfigured(config));
+            });
+        }
+
+        private static void WithFoundryEnvironment(Dictionary<string, string> settings, Action assert)
+        {
+            var names = new[]
+            {
+                "FoundryPromptCategorisationEndpoint", "FoundryPromptCategorisationDeployment", "FoundryPromptCategorisationKey",
+                "FoundryPromptEndpoint", "FoundryPromptDeployment", "FoundryPromptKey"
+            }.SelectMany(name => new[] { name, "APPSETTING_" + name }).ToArray();
+            var original = names.ToDictionary(name => name, Environment.GetEnvironmentVariable);
             try
             {
-                Environment.SetEnvironmentVariable(name, "https://contoso.openai.azure.com/");
-                Assert.AreEqual("https://contoso.openai.azure.com/", new AppConfig().FoundryPromptEndpoint);
+                foreach (var name in names) Environment.SetEnvironmentVariable(name, null);
+                foreach (var setting in settings) Environment.SetEnvironmentVariable(setting.Key, setting.Value);
+                assert();
             }
-            finally { Environment.SetEnvironmentVariable(name, original); }
+            finally
+            {
+                foreach (var setting in original) Environment.SetEnvironmentVariable(setting.Key, setting.Value);
+            }
         }
 
         [TestMethod]
@@ -178,7 +249,8 @@ namespace Tests.UnitTests
                 Assert.AreEqual(64, ((string)json["version"]).Length);
                 var read = await host.Client.GetAsync("api/PromptCategories");
                 var payload = await read.Content.ReadAsStringAsync();
-                Assert.IsFalse(payload.Contains("FoundryPromptKey") || payload.Contains("FoundryPromptEndpoint"));
+                Assert.IsFalse(payload.Contains("FoundryPromptCategorisationKey") || payload.Contains("FoundryPromptCategorisationEndpoint") ||
+                    payload.Contains("FoundryPromptKey") || payload.Contains("FoundryPromptEndpoint"));
                 Assert.IsNotNull(Newtonsoft.Json.Linq.JObject.Parse(payload)["configuration"]["categories"][0]["id"]);
                 var reset = await host.Client.PostAsync("api/PromptCategories/reset", new StringContent(""));
                 Assert.AreEqual(HttpStatusCode.OK, reset.StatusCode);
@@ -307,7 +379,7 @@ namespace Tests.UnitTests
         public void Deployment_AllowsModelVersionDots_ButNeverUrlTraversalOrParameters(string deployment, bool expected) =>
             Assert.AreEqual(expected, FoundryPromptSettings.IsConfigured(new AppConfig
             {
-                FoundryPromptEndpoint = "https://contoso.openai.azure.com/", FoundryPromptDeployment = deployment
+                FoundryPromptCategorisationEndpoint = "https://contoso.openai.azure.com/", FoundryPromptCategorisationDeployment = deployment
             }));
 
         [TestMethod]
@@ -343,9 +415,9 @@ namespace Tests.UnitTests
             {
                 var config = new AppConfig
                 {
-                    FoundryPromptEndpoint = "https://contoso.openai.azure.com/",
-                    FoundryPromptDeployment = "synthetic-model",
-                    FoundryPromptKey = "synthetic-key"
+                    FoundryPromptCategorisationEndpoint = "https://contoso.openai.azure.com/",
+                    FoundryPromptCategorisationDeployment = "synthetic-model",
+                    FoundryPromptCategorisationKey = "synthetic-key"
                 };
                 var handler = new FakeHandler();
                 using (var backend = new AzureFoundryPromptCategoryBackend(config, new HttpClient(handler),
@@ -378,8 +450,8 @@ namespace Tests.UnitTests
             using (var cancel = new CancellationTokenSource())
             using (var backend = new AzureFoundryPromptCategoryBackend(new AppConfig
             {
-                FoundryPromptEndpoint = "https://contoso.openai.azure.com/",
-                FoundryPromptDeployment = "synthetic-model", FoundryPromptKey = "synthetic-key"
+                FoundryPromptCategorisationEndpoint = "https://contoso.openai.azure.com/",
+                FoundryPromptCategorisationDeployment = "synthetic-model", FoundryPromptCategorisationKey = "synthetic-key"
             }, new HttpClient(new SingleResponseHandler(response)), _ => Task.FromResult("synthetic-token")))
             {
                 var task = backend.ClassifyAsync(Enabled(1), new[] { "Synthetic category prompt." }, cancel.Token);

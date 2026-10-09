@@ -49,9 +49,9 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.InteractionHisto
         {
             if (!FoundryPromptSettings.IsConfigured(settings))
                 throw new ArgumentException("Invalid Azure model endpoint.");
-            _uri = new Uri(new Uri(settings.FoundryPromptEndpoint).GetLeftPart(UriPartial.Authority) + "/openai/deployments/" +
-                settings.FoundryPromptDeployment + "/chat/completions?api-version=2024-10-21");
-            _key = settings.FoundryPromptKey;
+            _uri = new Uri(new Uri(settings.FoundryPromptCategorisationEndpoint).GetLeftPart(UriPartial.Authority) + "/openai/deployments/" +
+                settings.FoundryPromptCategorisationDeployment + "/chat/completions?api-version=2024-10-21");
+            _key = settings.FoundryPromptCategorisationKey;
             _useKey = string.IsNullOrWhiteSpace(_key) ? 0 : 1;
             if (tokenProvider != null) _token = tokenProvider;
             else

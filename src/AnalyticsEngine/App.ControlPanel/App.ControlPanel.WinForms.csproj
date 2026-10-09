@@ -375,8 +375,12 @@
   </ItemGroup>
   <ItemGroup>
     <None Include="Resources\Copilot.png" />
-    <None Include="Resources\Cognitive.png" />
-    <None Include="Resources\Foundry.png" />
+    <None Include="Resources\AzureOpenAI.png" />
+    <None Include="Resources\AzureOpenAI.svg" />
+    <Content Include="Resources\FluentUI-System-Icons.NOTICE.txt">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <TargetPath>FluentUI-System-Icons.NOTICE.txt</TargetPath>
+    </Content>
     <None Include="Resources\SharePoint.png" />
   </ItemGroup>
   <ItemGroup>

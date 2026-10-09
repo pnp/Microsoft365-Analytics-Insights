@@ -70,9 +70,9 @@ namespace App.ControlPanel.Properties {
             }
         }
 
-        internal static System.Drawing.Bitmap Foundry {
+        internal static System.Drawing.Bitmap AzureOpenAI {
             get {
-                object obj = ResourceManager.GetObject("Foundry", resourceCulture);
+                object obj = ResourceManager.GetObject("AzureOpenAI", resourceCulture);
                 return ((System.Drawing.Bitmap)(obj));
             }
         }

@@ -111,6 +111,9 @@ namespace Tests.UnitTests.InstallTests
             Assert.AreEqual(string.Empty, settings["FoundryPromptEndpoint"]);
             Assert.AreEqual(string.Empty, settings["FoundryPromptDeployment"]);
             Assert.AreEqual(string.Empty, settings["FoundryPromptKey"]);
+            Assert.AreEqual(string.Empty, settings["FoundryPromptCategorisationEndpoint"]);
+            Assert.AreEqual(string.Empty, settings["FoundryPromptCategorisationDeployment"]);
+            Assert.AreEqual(string.Empty, settings["FoundryPromptCategorisationKey"]);
         }
 
         [TestMethod]
@@ -166,8 +169,16 @@ namespace Tests.UnitTests.InstallTests
             var settings = FoundryPromptAppSettings.Build(true,
                 new FoundryPromptInfo { Endpoint = "https://contoso.openai.azure.com/", Deployment = "prompt-categories" });
 
-            Assert.AreEqual("https://contoso.openai.azure.com/", settings["FoundryPromptEndpoint"]);
-            Assert.AreEqual("prompt-categories", settings["FoundryPromptDeployment"]);
+            CollectionAssert.AreEquivalent(new[]
+            {
+                "FoundryPromptCategorisationEndpoint", "FoundryPromptCategorisationDeployment", "FoundryPromptCategorisationKey",
+                "FoundryPromptEndpoint", "FoundryPromptDeployment", "FoundryPromptKey"
+            }, settings.Keys.ToArray());
+            Assert.AreEqual("https://contoso.openai.azure.com/", settings["FoundryPromptCategorisationEndpoint"]);
+            Assert.AreEqual("prompt-categories", settings["FoundryPromptCategorisationDeployment"]);
+            Assert.AreEqual(string.Empty, settings["FoundryPromptCategorisationKey"]);
+            Assert.AreEqual(string.Empty, settings["FoundryPromptEndpoint"]);
+            Assert.AreEqual(string.Empty, settings["FoundryPromptDeployment"]);
             Assert.AreEqual(string.Empty, settings["FoundryPromptKey"]);
         }
     }

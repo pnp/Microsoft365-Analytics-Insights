@@ -142,6 +142,7 @@ namespace Tests.UnitTests.InstallTests
                     StringAssert.Contains(text, "connects the runtime automatically");
                     StringAssert.Contains(text, "'Copilot AI interaction history' on Targets");
                     StringAssert.Contains(text, "Administration > Prompt categories");
+                    Assert.AreEqual("Enable prompt categorisation service", Find<CheckBox>(ai, "chkFoundryEnable").Text);
                     Assert.IsFalse(ai.FoundryPromptEnabled);
                 }
             });

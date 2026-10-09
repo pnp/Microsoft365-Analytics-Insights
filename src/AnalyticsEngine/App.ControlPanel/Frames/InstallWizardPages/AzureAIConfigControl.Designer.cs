@@ -42,10 +42,10 @@ namespace App.ControlPanel.Frames.InstallWizard
             this.lblCognitiveName.AutoSize = true;
             this.lblCognitiveName.Location = new System.Drawing.Point(156, 143);
             this.Controls.Add(this.lblCognitiveName);
-            AddServiceIcon("picFoundry", global::App.ControlPanel.Properties.Resources.Foundry, 189);
-            AddHeading("Azure AI Foundry (Optional)", 64, 193);
+            AddServiceIcon("picFoundry", global::App.ControlPanel.Properties.Resources.AzureOpenAI, 189);
+            AddHeading("Azure OpenAI (Optional)", 64, 193);
             this.chkFoundryEnable.Name = "chkFoundryEnable";
-            this.chkFoundryEnable.Text = "Enable Foundry";
+            this.chkFoundryEnable.Text = "Enable prompt categorisation service";
             this.chkFoundryEnable.AutoSize = true;
             this.chkFoundryEnable.Location = new System.Drawing.Point(352, 197);
             this.chkFoundryEnable.TabIndex = 2;
@@ -53,10 +53,11 @@ namespace App.ControlPanel.Frames.InstallWizard
             this.Controls.Add(new System.Windows.Forms.Label
             {
                 Name = "lblFoundryDescription",
-                Text = "The installer provisions Azure OpenAI and connects the runtime automatically.\r\n" +
+                Text = "For prompt categorisation, the installer provisions Azure OpenAI and\r\n" +
+                    "connects the runtime automatically.\r\n" +
                     "To categorise prompts, enable 'Copilot AI interaction history' on Targets,\r\n" +
                     "then enable categorisation in Administration > Prompt categories in the portal.",
-                Location = new System.Drawing.Point(64, 224), Size = new System.Drawing.Size(535, 55)
+                Location = new System.Drawing.Point(64, 224), Size = new System.Drawing.Size(535, 60)
             });
             AddField(this.txtFoundryResourceName, "txtFoundryResourceName", "Resource name:", 290, 3);
             this.txtFoundryResourceName.CharacterCasing = System.Windows.Forms.CharacterCasing.Lower;

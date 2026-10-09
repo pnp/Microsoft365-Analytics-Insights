@@ -31,8 +31,12 @@ namespace CloudInstallEngine.Azure.InstallTasks
 
             return new Dictionary<string, string>
             {
-                ["FoundryPromptEndpoint"] = enabled ? service?.Endpoint ?? string.Empty : string.Empty,
-                ["FoundryPromptDeployment"] = enabled ? service?.Deployment ?? string.Empty : string.Empty,
+                ["FoundryPromptCategorisationEndpoint"] = enabled ? service.Endpoint : string.Empty,
+                ["FoundryPromptCategorisationDeployment"] = enabled ? service.Deployment : string.Empty,
+                ["FoundryPromptCategorisationKey"] = string.Empty,
+                // Clear the former namespace on upgrade so it cannot reactivate a disabled service.
+                ["FoundryPromptEndpoint"] = string.Empty,
+                ["FoundryPromptDeployment"] = string.Empty,
                 ["FoundryPromptKey"] = string.Empty
             };
         }
