@@ -3,6 +3,8 @@
 /** Which report areas are available, based on the enabled imports. */
 export interface ReportAreas {
   copilot: boolean;
+  /** Interaction-history import, independent of the Copilot audit feed. */
+  copilotInteractionHistory: boolean;
   usage: boolean;
   spoAudit: boolean;
   webTraffic: boolean;

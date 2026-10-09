@@ -133,12 +133,16 @@ namespace Web.AnalyticsWeb.Controllers
         [HttpGet]
         [Route("areas")]
         public IHttpActionResult Areas()
-        {
-            var s = new AppConfig().ImportJobSettings ?? new ImportTaskSettings();
+            => Ok(AvailableAreas(new AppConfig().ImportJobSettings));
 
-            return Ok(new ReportAreasModel
+        internal static ReportAreasModel AvailableAreas(ImportTaskSettings settings)
+        {
+            var s = settings ?? new ImportTaskSettings();
+
+            return new ReportAreasModel
             {
                 Copilot = s.Copilot,
+                CopilotInteractionHistory = s.CopilotInteractionHistory,
                 Usage = s.GraphUsageReports,
                 SpoAudit = s.ActivityLog,
                 WebTraffic = s.WebTraffic,
@@ -149,7 +153,7 @@ namespace Web.AnalyticsWeb.Controllers
                 // need GraphCopilotUsageReports as well, but that is decided per-chart so the app
                 // and platform charts still appear without it.
                 OfficeApps = s.GraphUsageReports,
-            });
+            };
         }
 
         // GET: api/Reports/copilot?months=3

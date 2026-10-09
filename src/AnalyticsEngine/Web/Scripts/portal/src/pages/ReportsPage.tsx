@@ -141,7 +141,7 @@ export default function ReportsPage() {
   }, [t]);
 
   const enabledAreas = useMemo(
-    () => (areas ? AREA_DEFS.filter((d) => areas[d.flag]) : []),
+    () => (areas ? AREA_DEFS.filter((d) => areas[d.flag] || (d.key === 'copilot' && areas.copilotInteractionHistory)) : []),
     [areas],
   );
 
@@ -266,14 +266,16 @@ export default function ReportsPage() {
             </div>
           )}
 
-          <ReportAreaView
-            key={selectedTab}
-            area={selectedTab}
-            months={months}
-            blurb={t(enabledAreas.find((a) => a.key === selectedTab)!.blurbKey)}
-            topAgents={topAgents}
-            agentName={agentNameFilter}
-          />
+          {(selectedTab !== 'copilot' || areas?.copilot) && (
+            <ReportAreaView
+              key={selectedTab}
+              area={selectedTab}
+              months={months}
+              blurb={t(enabledAreas.find((a) => a.key === selectedTab)!.blurbKey)}
+              topAgents={topAgents}
+              agentName={agentNameFilter}
+            />
+          )}
           {selectedTab === 'copilot' && <PromptCategoryReport months={months} />}
         </>
       ) : null}

@@ -4,18 +4,25 @@ import { renderWithProvider } from '../test/renderWithProvider';
 import ReportsPage, { reportCategories, reportChartWarningText, reportMatrix, reportSeries } from './ReportsPage';
 import { fetchReportAreas, fetchReportArea } from '../api/reportsApi';
 import { fetchAvailability } from '../api/licenceActivityApi';
+import { fetchPromptCategoryReport } from '../api/promptCategoriesApi';
 import { loadCatalog, translateStatic } from '../i18n';
 import type { ReportAreaData, ReportAreas, ReportChart } from '../types/reports';
 
 vi.mock('../api/reportsApi', () => ({ fetchReportAreas: vi.fn(), fetchReportArea: vi.fn() }));
 vi.mock('../api/licenceActivityApi', () => ({ fetchAvailability: vi.fn() }));
+vi.mock('../api/promptCategoriesApi', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../api/promptCategoriesApi')>(),
+  fetchPromptCategoryReport: vi.fn(),
+}));
 
 const mockAreas = vi.mocked(fetchReportAreas);
 const mockArea = vi.mocked(fetchReportArea);
 const mockAvailability = vi.mocked(fetchAvailability);
+const mockCategories = vi.mocked(fetchPromptCategoryReport);
 
 const NO_AREAS: ReportAreas = {
   copilot: false,
+  copilotInteractionHistory: false,
   usage: false,
   spoAudit: false,
   webTraffic: false,
@@ -54,9 +61,26 @@ const baseChart = (overrides: Partial<ReportChart>): ReportChart => ({
 beforeEach(() => {
   vi.clearAllMocks();
   mockArea.mockResolvedValue(areaData);
+  mockCategories.mockResolvedValue({ version: null, versions: [], categories: [], mix: [], trend: [] });
 });
 
 describe('ReportsPage', () => {
+  it.each(['en', 'es'] as const)('makes history-only prompt categories reachable in %s without requesting audit charts', async (language) => {
+    await loadCatalog(language);
+    mockAreas.mockResolvedValue({ ...NO_AREAS, copilotInteractionHistory: true });
+    renderWithProvider(<ReportsPage />, { language });
+
+    expect(await screen.findByRole('tab', { name: translateStatic(language, 'reports.area.copilot.label') })).toBeVisible();
+    expect(await screen.findByText(translateStatic(language, 'promptCategories.title'))).toBeVisible();
+    await waitFor(() => expect(mockCategories).toHaveBeenCalledWith(3, undefined));
+    expect(screen.queryByRole('tab', { name: translateStatic(language, 'reports.area.copilotAgents.label') })).not.toBeInTheDocument();
+    expect(mockArea).not.toHaveBeenCalled();
+
+    fireEvent.change(screen.getByLabelText(translateStatic(language, 'reports.period.ariaLabel')), { target: { value: '6' } });
+    await waitFor(() => expect(mockCategories).toHaveBeenCalledWith(6, undefined));
+    expect(mockArea).not.toHaveBeenCalled();
+  });
+
   it('keeps the report loading state without mounting Licence activity while areas are pending', () => {
     mockAreas.mockReturnValue(new Promise(() => {}));
     renderWithProvider(<ReportsPage />);
@@ -67,6 +91,7 @@ describe('ReportsPage', () => {
     expect(screen.getByRole('link', { name: 'Licence activity' })).toHaveAttribute('href', '#/insights/licence-activity');
     expect(mockAvailability).not.toHaveBeenCalled();
     expect(mockArea).not.toHaveBeenCalled();
+    expect(mockCategories).not.toHaveBeenCalled();
   });
 
   it('shows the empty report state and a link to standalone Licence activity when imports are disabled', async () => {
@@ -79,6 +104,7 @@ describe('ReportsPage', () => {
     expect(screen.getByRole('link', { name: 'Licence activity' })).toHaveAttribute('href', '#/insights/licence-activity');
     expect(mockAvailability).not.toHaveBeenCalled();
     expect(mockArea).not.toHaveBeenCalled();
+    expect(mockCategories).not.toHaveBeenCalled();
   });
 
   it('keeps report tabs and their period control without embedding Licence activity', async () => {
@@ -86,6 +112,8 @@ describe('ReportsPage', () => {
     renderWithProvider(<ReportsPage />);
 
     expect(await screen.findByRole('tab', { name: 'Copilot' })).toBeInTheDocument();
+    expect(await screen.findByText('Prompt categories')).toBeVisible();
+    await waitFor(() => expect(mockCategories).toHaveBeenCalledWith(3, undefined));
     expect(screen.getByLabelText('Reporting period')).toBeInTheDocument();
     expect(screen.queryByRole('tab', { name: 'Licence activity' })).not.toBeInTheDocument();
     await waitFor(() => expect(mockArea).toHaveBeenCalledWith('copilot', 3, undefined));
