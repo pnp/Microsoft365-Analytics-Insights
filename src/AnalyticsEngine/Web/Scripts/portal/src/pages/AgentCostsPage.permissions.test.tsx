@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { screen, waitFor } from '@testing-library/react';
+import { screen, waitFor, within } from '@testing-library/react';
 
 import { renderWithProvider } from '../test/renderWithProvider';
 import AgentCostsPage from './AgentCostsPage';
@@ -34,6 +34,7 @@ const availability: AgentCostAvailability = {
   azureCostsEnabled: false,
   hasCopilotStudioCreditData: true,
   hasPerUserCreditData: true,
+  copilotStudioConnectionRequired: false,
   hasAzureCostData: false,
   copilotStudioCreditsHasRunCleanly: true,
   azureCostsHaveRunCleanly: true,
@@ -85,6 +86,83 @@ beforeEach(() => {
 });
 
 describe('AgentCostsPage - See PII', () => {
+  it('reports prepaid consumption and Azure spend separately without See PII', async () => {
+    vi.mocked(fetchSummary).mockResolvedValue({
+      ...summary,
+      capacity: {
+        snapshotUtc: '2026-01-10T00:00:00Z',
+        consumptionAsOf: '2026-01-09T00:00:00Z',
+        entitled: 25000,
+        consumed: 1500,
+        consumptionType: 'MonthToDate',
+        allocated: 5000,
+        available: 23500,
+        payAsYouGoConsumed: 200,
+        status: 'WithinCapacity',
+      },
+      azureCost: [{ currency: 'USD', cost: 2, quantity: 200, includesEstimates: true }],
+    });
+    renderWithProvider(<AgentCostsPage />, { access: { administration: true, seePii: false } });
+
+    const prepaid = (await screen.findByText('Prepaid Copilot Credits used')).parentElement!;
+    expect(within(prepaid).getByText('1,500')).toBeInTheDocument();
+    expect(within(prepaid).getByText('1,500 of 25,000 used (Month to date)')).toBeInTheDocument();
+    const spend = screen.getByText('Spend in the selected period').parentElement!.parentElement!;
+    const azure = within(spend).getByText('Azure spend').parentElement!;
+    expect(within(azure).getByText('2.00 USD')).toBeInTheDocument();
+    expect(within(azure).getByText('200 metered units billed')).toBeInTheDocument();
+    const payAsYouGo = screen.getByText('Pay-as-you-go credits').parentElement!;
+    expect(within(payAsYouGo).getByText('200')).toBeInTheDocument();
+    expect(screen.getByText('Chargeable usage, paid from prepaid credits or pay-as-you-go; not an Azure charge total')).toBeInTheDocument();
+    expect(fetchTopUsers).not.toHaveBeenCalled();
+  });
+
+  it('shows confirmed zero prepaid consumption without inventing absent pay-as-you-go usage', async () => {
+    vi.mocked(fetchSummary).mockResolvedValue({
+      ...summary,
+      capacity: {
+        snapshotUtc: '2026-01-10T00:00:00Z',
+        consumptionAsOf: null,
+        entitled: 25000,
+        consumed: 0,
+        consumptionType: 'MonthToDate',
+        allocated: null,
+        available: 25000,
+        payAsYouGoConsumed: null,
+        status: null,
+      },
+    });
+    renderWithProvider(<AgentCostsPage />, { access: { administration: true, seePii: false } });
+
+    const prepaid = (await screen.findByText('Prepaid Copilot Credits used')).parentElement!;
+    expect(within(prepaid).getByText('0')).toBeInTheDocument();
+    expect(screen.queryByText('Pay-as-you-go credits')).not.toBeInTheDocument();
+    const spend = screen.getByText('Spend in the selected period').parentElement!.parentElement!;
+    expect(within(spend).queryByText('Azure spend')).not.toBeInTheDocument();
+  });
+
+  it('does not show missing prepaid consumption as zero', async () => {
+    vi.mocked(fetchSummary).mockResolvedValue({
+      ...summary,
+      capacity: {
+        snapshotUtc: '2026-01-10T00:00:00Z',
+        consumptionAsOf: null,
+        entitled: 25000,
+        consumed: null,
+        consumptionType: null,
+        allocated: null,
+        available: null,
+        payAsYouGoConsumed: null,
+        status: null,
+      },
+    });
+    renderWithProvider(<AgentCostsPage />, { access: { administration: true, seePii: false } });
+
+    const prepaid = (await screen.findByText('Prepaid Copilot Credits used')).parentElement!;
+    expect(within(prepaid).queryByText('0')).not.toBeInTheDocument();
+    expect(within(prepaid).getByText(/of 25,000 used/)).toHaveTextContent('— of 25,000 used');
+  });
+
   it('shows a reader without See PII every total, and in place of the per-person table says why', async () => {
     renderWithProvider(<AgentCostsPage />, { access: { administration: true, seePii: false } });
 

@@ -601,6 +601,9 @@
     <Compile Include="State\StateStore.cs" />
     <Compile Include="State\StorageTableClientFactory.cs" />
     <Compile Include="State\TeamsTokenStore.cs" />
+    <Compile Include="State\AgentCostConnectionStore.cs" />
+    <Compile Include="State\AgentCostDelegatedTokenProvider.cs" />
+    <Compile Include="State\AgentCostTokenProtection.cs" />
     <Compile Include="State\UserImportCheckpointKeys.cs" />
     <Compile Include="AnalyticsEntitiesContext.cs" />
     <Compile Include="Sql\AzureSqlAccessTokenInterceptor.cs" />

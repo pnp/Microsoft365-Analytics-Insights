@@ -9,7 +9,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
     ///
     /// Extracted for issues #371 / #381. The precedence chain in <c>UserDataMapper</c> had no test of
     /// any kind, and its last-but-one branch issued a database query <b>per user</b>; deciding the
-    /// batch's lookup set up front is what turns that into one query per batch. Everything here runs
+    /// batch's lookup set up front is what turns that into batched lookups. Everything here runs
     /// with zero SQL Server and zero Graph dependency.
     /// </summary>
     internal static class ManagerResolutionRules
@@ -27,7 +27,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         /// The result is deliberately a superset of what the chain actually queries: whether the
         /// earlier in-memory branches hit depends on dictionary state that changes as the batch is
         /// processed, so it cannot be decided up front. Over-fetching costs nothing extra - it is the
-        /// same single query either way - and under-fetching would silently reintroduce a per-user
+        /// same batched lookup either way - and under-fetching would silently reintroduce a per-user
         /// query.
         ///
         /// Comparison is case-insensitive because that is how both the Graph user dictionary and SQL

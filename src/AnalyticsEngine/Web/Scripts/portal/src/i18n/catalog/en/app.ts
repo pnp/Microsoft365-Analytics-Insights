@@ -11,6 +11,7 @@
  * a missing one a build failure.
  */
 export const app = {
+  'app.route.agentCostConnection': 'Copilot Studio billing connection',
   'app.signOut': 'Sign out',
   'app.nav.collapse': 'Collapse navigation',
   'app.nav.expand': 'Expand navigation',

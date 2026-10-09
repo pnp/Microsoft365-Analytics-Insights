@@ -441,7 +441,7 @@ namespace Tests.FakeDataGen.Demo
                         _sink.Write(DemoTables.StudioCredits, date, billed.EnvironmentId, billed.EnvironmentName,
                             billed.AgentId, billed.AgentName, CopilotStudioHarnessClassifier.Classify(slice.FeatureName),
                             slice.FeatureName,
-                            credits, nonBilled, SliceUsers(users, slice.UserShare), LastRefreshed(date),
+                            credits, nonBilled, SliceUsers(users, slice.UserShare), null,
                             AgentCostRowHasher.Hash(HashDate(date), billed.EnvironmentId, billed.AgentId,
                                 slice.FeatureName),
                             _importedUtc);
@@ -615,16 +615,6 @@ namespace Tests.FakeDataGen.Demo
         /// </summary>
         private static int SliceUsers(int users, decimal share) =>
             Math.Max(1, Math.Min(users, (int)Math.Round(users * share, MidpointRounding.AwayFromZero)));
-
-        /// <summary>
-        /// When Microsoft last recalculated the day, which settles the day after use and never postdates the
-        /// import that read it.
-        /// </summary>
-        private DateTime LastRefreshed(DateTime usageDate)
-        {
-            var refreshed = usageDate.AddDays(1).AddHours(6);
-            return refreshed > _importedUtc ? _importedUtc : refreshed;
-        }
 
         private static string HashDate(DateTime date) => date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
     }

@@ -3030,6 +3030,9 @@ namespace Tests.UnitTests
                 "https://adoption.microsoft.com/en-us/copilot/" + "plan/",
                 "https://adoption.microsoft.com/en-us/copilot/" + "adopt/",
                 "https://aka.ms/" + "CopilotAdoptionPlaybook",
+                // Renders the WorkLab home page with HTTP 200 for any path, so it reads as working to a
+                // link checker while never showing the report (#643).
+                "https://www.microsoft.com/en-us/worklab/work-trend-index/" + "2026/annual-report",
             };
 
             Assert.AreEqual(CopilotAdoptionGuidanceCatalogue.ExpectedLinkCount, CopilotAdoptionGuidanceCatalogue.All.Count,
@@ -3058,6 +3061,58 @@ namespace Tests.UnitTests
             {
                 CollectionAssert.DoesNotContain(allUrls, deadUrl);
             }
+        }
+
+        [TestMethod]
+        public void GuidanceCatalogue_EveryResourceHasOneStableTitleKey()
+        {
+            var all = CopilotAdoptionGuidanceCatalogue.All;
+            Assert.IsTrue(all.All(l => !string.IsNullOrWhiteSpace(l.TitleKey)),
+                "Every link needs a titleKey: the portal translates the title through it and would otherwise show English on a Spanish page.");
+            Assert.IsTrue(all.All(l => System.Text.RegularExpressions.Regex.IsMatch(l.TitleKey, "^[a-z][A-Za-z0-9]*$")),
+                "Title keys are part of a catalog key path, so they must be plain camelCase identifiers.");
+
+            // One key per resource: the same resource attached to several actions keeps its key, and two
+            // resources never share one, or the portal would show one resource under the other's name.
+            foreach (var byKey in all.GroupBy(l => l.TitleKey))
+            {
+                Assert.AreEqual(1, byKey.Select(l => l.Title).Distinct().Count(), $"{byKey.Key} names more than one title.");
+                Assert.AreEqual(1, byKey.Select(l => l.Url).Distinct().Count(), $"{byKey.Key} points at more than one URL.");
+            }
+            foreach (var byUrl in all.GroupBy(l => l.Url))
+            {
+                Assert.AreEqual(1, byUrl.Select(l => l.TitleKey).Distinct().Count(), $"{byUrl.Key} has more than one titleKey.");
+            }
+        }
+
+        [TestMethod]
+        public void GuidanceCatalogue_LinksThe2026WorkTrendIndexAsGuidanceForCoachAndAdvocate()
+        {
+            const string WorkTrendIndex2026 =
+                "https://www.microsoft.com/en-us/worklab/work-trend-index/agents-human-agency-and-the-opportunity-for-every-organization";
+            const string FrontierFirmResources = "https://www.microsoft.com/en-us/worklab/frontier-firm-resources";
+
+            foreach (var code in new[] { CopilotAdoptionScoring.AdoptionActionCodes.Coach, CopilotAdoptionScoring.AdoptionActionCodes.Advocate })
+            {
+                CollectionAssert.Contains(CopilotAdoptionGuidanceCatalogue.ForAction(code).Select(l => l.Url).ToList(), WorkTrendIndex2026,
+                    $"{code} should carry the 2026 Work Trend Index.");
+            }
+            CollectionAssert.Contains(
+                CopilotAdoptionGuidanceCatalogue.ForAction(CopilotAdoptionScoring.AdoptionActionCodes.Advocate).Select(l => l.Url).ToList(),
+                FrontierFirmResources);
+
+            // Guidance, not a benchmark (#547): the report is attached as reading for the people running an
+            // action, never to an action that judges a person against the report's numbers.
+            var reportActions = CopilotAdoptionGuidanceCatalogue.All
+                .Where(l => l.Url == WorkTrendIndex2026 || l.Url == FrontierFirmResources)
+                .Select(l => l.ActionCode)
+                .Distinct()
+                .OrderBy(c => c, StringComparer.Ordinal)
+                .ToList();
+            CollectionAssert.AreEqual(
+                new[] { CopilotAdoptionScoring.AdoptionActionCodes.Advocate, CopilotAdoptionScoring.AdoptionActionCodes.Coach }
+                    .OrderBy(c => c, StringComparer.Ordinal).ToList(),
+                reportActions);
         }
 
         [TestMethod]

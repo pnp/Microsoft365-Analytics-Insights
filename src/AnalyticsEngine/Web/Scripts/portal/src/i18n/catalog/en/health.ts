@@ -43,6 +43,11 @@ export const health = {
   'health.component.BlobCheckpoint': 'BlobCheckpoint',
   'health.component.CopilotAuditBackfill': 'Copilot audit backfill',
   'health.component.MessageTracing': 'Message tracing',
+  'health.component.PowerPlatformConnection': 'Power Platform billing connection',
+  'health.reason.agentCostConnectionConnected': 'A Power Platform billing administrator connection is saved for agent credit consumption.',
+  'health.reason.agentCostConnectionDisconnected': 'Agent credit tracking is enabled but no Power Platform billing administrator is connected. Connect in Administration > Agent costs.',
+  'health.reason.agentCostConnectionReconnectNeeded': 'The Power Platform billing administrator connection needs renewal. Reconnect in Administration > Agent costs.',
+  'health.reason.agentCostConnectionCheckFailed': 'The Power Platform billing administrator connection could not be checked. Check Azure Table storage access and Administration > Agent costs.',
   'health.duration.day': '{count} day',
   'health.duration.days': '{count} days',
   'health.duration.hour': '{count} hour',
@@ -164,7 +169,7 @@ export const health = {
 
   // Component health panel
   'health.components.title': 'Component health',
-  'health.components.description': 'Latest health per component. The runtime credential (expiry) and Service Bus (Teams calls queue) checks run here today; SQL, Activity API, Graph, Key Vault and DNS fill in as the runtime HealthCheck emitter (a later phase) lands.',
+  'health.components.description': 'Latest health per component. Checks include the runtime credential (expiry), Service Bus (Teams calls queue), and the saved Power Platform billing connection when agent credit tracking is enabled, alongside runtime HealthCheck events.',
   'health.components.loadError': "Couldn't load component health: {error}",
   'health.components.ariaLabel': 'Component health',
   'health.components.columnComponent': 'Component',

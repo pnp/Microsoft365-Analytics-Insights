@@ -45,6 +45,11 @@ const health: Record<keyof typeof en, string> = {
   'health.component.BlobCheckpoint': 'Punto de control de blobs',
   'health.component.CopilotAuditBackfill': 'Relleno de auditoría de Copilot',
   'health.component.MessageTracing': 'Seguimiento de mensajes',
+  'health.component.PowerPlatformConnection': 'Conexión de facturación de Power Platform',
+  'health.reason.agentCostConnectionConnected': 'Hay una conexión de administrador de facturación de Power Platform guardada para el consumo de créditos de agentes.',
+  'health.reason.agentCostConnectionDisconnected': 'El seguimiento de créditos de agentes está habilitado, pero no hay ningún administrador de facturación de Power Platform conectado. Conéctelo en Administración > Costes de agentes.',
+  'health.reason.agentCostConnectionReconnectNeeded': 'La conexión del administrador de facturación de Power Platform necesita renovarse. Vuelva a conectarlo en Administración > Costes de agentes.',
+  'health.reason.agentCostConnectionCheckFailed': 'No se pudo comprobar la conexión del administrador de facturación de Power Platform. Compruebe el acceso a Azure Table Storage y Administración > Costes de agentes.',
   'health.duration.day': '{count} día',
   'health.duration.days': '{count} días',
   'health.duration.hour': '{count} hora',
@@ -164,7 +169,7 @@ const health: Record<keyof typeof en, string> = {
 
   // Component health panel
   'health.components.title': 'Estado de componentes',
-  'health.components.description': 'Estado más reciente por componente. Las comprobaciones de la credencial en tiempo de ejecución (expiración) y Service Bus (cola de llamadas de Teams) se ejecutan aquí actualmente; SQL, Activity API, Graph, Key Vault y DNS se rellenarán cuando llegue el emisor HealthCheck en tiempo de ejecución (una fase posterior).',
+  'health.components.description': 'Estado más reciente por componente. Incluye comprobaciones de la credencial en tiempo de ejecución (expiración), Service Bus (cola de llamadas de Teams) y la conexión de facturación de Power Platform guardada cuando el seguimiento de créditos de agentes está habilitado, junto con los eventos HealthCheck en tiempo de ejecución.',
   'health.components.loadError': 'No se pudo cargar el estado de componentes: {error}',
   'health.components.ariaLabel': 'Estado de componentes',
   'health.components.columnComponent': 'Componente',
