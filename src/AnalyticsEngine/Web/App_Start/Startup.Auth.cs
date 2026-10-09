@@ -39,6 +39,7 @@ namespace Web.AnalyticsWeb
 
             ConfigureAuth(app, CreateOpenIdConnectOptions(
                 config.ClientID, config.Authority, config.WebAppURL, tokenCapture, app.GetDefaultCookieManager()));
+            app.UseOpenIdConnectAuthentication(AgentCostConsent.CreateOptions(config));
         }
 
         /// <summary>

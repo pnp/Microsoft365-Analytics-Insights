@@ -74,6 +74,9 @@ namespace Tests.UnitTests
             ["AgentCostsAPIController.Azure"] = Any,
             ["AgentCostsAPIController.Filters"] = Any,
             ["AgentCostsAPIController.Users"] = Pii,
+            ["AgentCostConnectionAPIController.Status"] = Admin,
+            ["AgentCostConnectionAPIController.Begin"] = Admin,
+            ["AgentCostConnectionAPIController.Disconnect"] = Admin,
 
             // Microsoft Graph's change-notification webhook: Graph cannot sign in, so it checks clientState instead.
             ["CallRecordWebhookController.Post"] = Public,
@@ -464,16 +467,18 @@ namespace Tests.UnitTests
             }
         }
 
-        [TestMethod]
-        public void ConnectTeams_MvcActionRequiresAdministration()
+        [DataTestMethod]
+        [DataRow(nameof(AccountController.ConnectTeams))]
+        [DataRow(nameof(AccountController.ConnectAgentCosts))]
+        public void DelegatedConnection_MvcActionRequiresAdministration(string actionName)
         {
-            var action = typeof(AccountController).GetMethod(nameof(AccountController.ConnectTeams));
+            var action = typeof(AccountController).GetMethod(actionName);
             var filter = action.GetCustomAttributes(typeof(RequirePortalMvcPermissionAttribute), true)
                 .Cast<RequirePortalMvcPermissionAttribute>()
                 .Single();
             Assert.AreEqual(PortalPermission.Administration, filter.Permission);
 
-            var denied = ConnectTeamsAuthorization(PortalTestHost.SignedIn(), PortalAccessPolicy.Enforcing);
+            var denied = ConnectTeamsAuthorization(PortalTestHost.SignedIn(), PortalAccessPolicy.Enforcing, actionName);
             filter.OnAuthorization(denied);
             Assert.AreEqual((int)HttpStatusCode.Forbidden, denied.HttpContext.Response.StatusCode);
             Assert.IsInstanceOfType(denied.Result, typeof(System.Web.Mvc.ContentResult));
@@ -481,24 +486,25 @@ namespace Tests.UnitTests
 
             var allowed = ConnectTeamsAuthorization(
                 PortalTestHost.SignedIn(PortalRoles.Administration),
-                PortalAccessPolicy.Enforcing);
+                PortalAccessPolicy.Enforcing, actionName);
             filter.OnAuthorization(allowed);
             Assert.IsNull(allowed.Result, "An administrator must reach the OIDC challenge.");
 
             var compatibilityMode = ConnectTeamsAuthorization(
                 PortalTestHost.SignedIn(),
-                PortalAccessPolicy.NotEnforcing);
+                PortalAccessPolicy.NotEnforcing, actionName);
             filter.OnAuthorization(compatibilityMode);
             Assert.IsNull(compatibilityMode.Result, "EnforcePortalRoles=false must preserve the pre-role behaviour.");
 
-            var anonymous = ConnectTeamsAuthorization(PortalTestHost.Anonymous(), PortalAccessPolicy.Enforcing);
+            var anonymous = ConnectTeamsAuthorization(PortalTestHost.Anonymous(), PortalAccessPolicy.Enforcing, actionName);
             filter.OnAuthorization(anonymous);
             Assert.IsInstanceOfType(anonymous.Result, typeof(System.Web.Mvc.HttpUnauthorizedResult));
         }
 
         private static System.Web.Mvc.AuthorizationContext ConnectTeamsAuthorization(
             IPrincipal principal,
-            PortalAccessPolicy policy)
+            PortalAccessPolicy policy,
+            string actionName)
         {
             var raw = new HttpContext(
                 new HttpRequest("", "https://contoso.invalid/Account/ConnectTeams", ""),
@@ -511,8 +517,8 @@ namespace Tests.UnitTests
             var controller = new AccountController();
             var controllerDescriptor = new System.Web.Mvc.ReflectedControllerDescriptor(typeof(AccountController));
             var actionDescriptor = new System.Web.Mvc.ReflectedActionDescriptor(
-                typeof(AccountController).GetMethod(nameof(AccountController.ConnectTeams)),
-                nameof(AccountController.ConnectTeams),
+                typeof(AccountController).GetMethod(actionName),
+                actionName,
                 controllerDescriptor);
             var controllerContext = new System.Web.Mvc.ControllerContext(
                 new HttpContextWrapper(raw),

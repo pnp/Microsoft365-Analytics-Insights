@@ -38,6 +38,7 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
         private readonly IClock _clock;
         private readonly Func<CopilotStudioCreditImporter> _creditImporterFactory;
         private readonly Func<AzureCostImporter> _azureCostImporterFactory;
+        private readonly Func<Task<string>> _creditConnectionVersion;
 
         public AgentCostImportPhase(
             ILogger logger,
@@ -45,7 +46,8 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
             IImportLastRunStore lastRunStore,
             Func<CopilotStudioCreditImporter> creditImporterFactory,
             Func<AzureCostImporter> azureCostImporterFactory,
-            IClock clock = null)
+            IClock clock = null,
+            Func<Task<string>> creditConnectionVersion = null)
         {
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
             _settings = settings ?? throw new ArgumentNullException(nameof(settings));
@@ -53,6 +55,7 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
             _creditImporterFactory = creditImporterFactory ?? throw new ArgumentNullException(nameof(creditImporterFactory));
             _azureCostImporterFactory = azureCostImporterFactory ?? throw new ArgumentNullException(nameof(azureCostImporterFactory));
             _clock = clock ?? SystemClock.Instance;
+            _creditConnectionVersion = creditConnectionVersion;
         }
 
         /// <summary>
@@ -73,36 +76,26 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
                 return;
             }
 
-            if (!await IsDueAsync(CopilotStudioCreditsLastImportedKey, _settings.CopilotStudioCreditsIntervalHours,
-                    "Copilot Studio credit import"))
-            {
-                return;
-            }
-
             try
             {
+                // A new connection (including disconnect) gets its own gate. An older run cannot stamp it.
+                var version = _creditConnectionVersion == null ? null : await _creditConnectionVersion();
+                var cadenceKey = CopilotStudioCreditsLastImportedKey + (version == null ? "" : "_" + version);
+                if (!await IsDueAsync(cadenceKey, _settings.CopilotStudioCreditsIntervalHours, "Copilot Studio credit import"))
+                    return;
                 var importer = _creditImporterFactory();
 
-                var consumption = await importer.ImportAsync();
+                var consumptionResult = await importer.ImportConsumptionAsync();
+                var consumption = consumptionResult.Agents;
                 var capacity = await importer.ImportCapacityAsync();
 
-                // The per-user read is BEST EFFORT and deliberately excluded from the cadence decision.
-                //
-                // It is an optional enrichment on a route Microsoft only added in July 2026, and a tenant
-                // that cannot serve it does not always say so cleanly: observed against a real tenant, an
-                // unusable /users route returns HTTP 500 persistently while the sibling routes return 403,
-                // and a genuinely missing route returns a clean 404 with "RouteNotFound". A persistent 500
-                // is indistinguishable from a transient one, so letting it into the gate decision would mark
-                // the whole import failed on every cycle - re-hitting Microsoft every few minutes, for ever,
-                // and never recording the per-agent figures as up to date even though they imported fine.
-                //
-                // The failure is not swallowed: it is written to agent_cost_import_log and surfaced on the
-                // Health page and the report, which is where an admin can act on it.
-                var users = await importer.ImportUserCreditsAsync();
+                // The per-user read is BEST EFFORT and deliberately excluded from the cadence decision: the
+                // per-agent figures are derived from the same reads, and the failure is not swallowed - it is
+                // written to agent_cost_import_log and surfaced on the Health page and the report.
+                var users = consumptionResult.Users;
                 if (!users.Succeeded)
                 {
-                    _logger.LogWarning("The per-user Copilot Studio credit read did not succeed. The per-agent figures "
-                        + "are unaffected and have been recorded normally; per-person figures may be missing or stale. "
+                    _logger.LogWarning("The per-user Copilot Studio credit read did not succeed. "
                         + "See the agent_cost_import_log entry for the reason.");
                 }
 
@@ -116,7 +109,7 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
 
                 // Back off ONLY when every failing part was refused. A transient failure alongside a refusal
                 // still deserves a prompt retry, so it must not be absorbed into "refused".
-                await StampOrRetry("Copilot Studio credit import", CopilotStudioCreditsLastImportedKey,
+                await StampOrRetry("Copilot Studio credit import", cadenceKey,
                     succeeded: parts.All(p => p.Succeeded),
                     isAuthorisationFailure: parts.Any(p => p.IsAuthorisationFailure) && !parts.Any(p => p.IsTransientFailure));
             }
