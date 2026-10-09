@@ -38,7 +38,7 @@ const copilotAdoption: Record<keyof typeof en, string> = {
   'copilotAdoption.page.unscoped.weeklyTrend': 'la tendencia semanal',
   'copilotAdoption.page.unscoped.agents': 'el inventario de agentes',
   'copilotAdoption.page.unscoped.purchasedSeats': 'puestos comprados y no asignados',
-  'copilotAdoption.page.unscoped.coworkCredits': 'el saldo de créditos de Cowork',
+  'copilotAdoption.page.unscoped.coworkCredits': 'la instantánea de capacidad de Copilot Studio',
   'copilotAdoption.page.unscoped.microsoftReport': 'las cifras del informe de uso de Microsoft',
   'copilotAdoption.page.trendGapNote': 'Hueco = no se pudo comprobar la cobertura de importación de Audit.General para esa semana completada; no se trata como uso cero.',
   'copilotAdoption.page.title': 'Adopción de Copilot',
