@@ -1339,7 +1339,8 @@ namespace Common.Entities.CopilotAdoption
             sheet.AddHeaderRow("Measure", "Value");
             sheet.AddRow("Active agents (this period)", estate.ActiveAgents);
             sheet.AddRow("Known agents (history)", estate.KnownAgents);
-            sheet.AddRow("Custom-built agents", estate.CustomAgents);
+            sheet.AddRow("Customer-built agents", estate.CustomAgents);
+            sheet.AddRow("Agents of unknown origin", estate.UnknownOriginAgents);
             sheet.AddRow("Agent users", estate.AgentUsers);
             sheet.AddRow("Of which licensed", estate.LicensedAgentUsers);
             sheet.AddRow("Agent interactions", estate.AgentInteractions);
@@ -1384,7 +1385,7 @@ namespace Common.Entities.CopilotAdoption
                 {
                     sheet.AddRow(
                         agent.Name,
-                        agent.IsCustomAgent ? "Custom" : "Microsoft",
+                        AgentOriginLabel(agent.Origin),
                         agent.Users,
                         agent.LicensedUsers,
                         agent.Interactions,
@@ -1397,6 +1398,20 @@ namespace Common.Entities.CopilotAdoption
                 }
 
                 sheet.AddAutoFilter(headerRow, sheet.CurrentRow, 1, 11);
+            }
+        }
+
+        /// <summary>
+        /// The Type column's text for an agent's origin key (<see cref="CopilotAgentOriginKeys"/>). "Unknown" is
+        /// written out rather than left blank: it is a finding about the audit data, not a missing value.
+        /// </summary>
+        internal static string AgentOriginLabel(string origin)
+        {
+            switch (origin)
+            {
+                case CopilotAgentOriginKeys.CustomerBuilt: return "Customer-built";
+                case CopilotAgentOriginKeys.Microsoft: return "Microsoft";
+                default: return "Unknown";
             }
         }
 

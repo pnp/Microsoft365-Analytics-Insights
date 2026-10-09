@@ -25,7 +25,7 @@ import type { KpiDefinition } from '../shared/KpiGrid';
 import { serverPlaceholderText } from '../shared/serverPlaceholder';
 import { PrintedFilters, printedSearch, useAdoptionTableStyles } from './adoptionShared';
 import { useT, type TFunction } from '../../i18n';
-import { agentHealthReason } from './serverText';
+import { agentHealthReason, agentOriginLabel } from './serverText';
 
 /**
  * Health colours run from "delete this" to "this is working", matching the engagement-band palette
@@ -207,7 +207,7 @@ export default function AgentsPanel({
     return agents.filter(
       (a) =>
         (health === '' || a.health === Number(health)) &&
-        (!customOnly || a.isCustomAgent) &&
+        (!customOnly || a.origin === 'customerBuilt') &&
         (needle === '' ||
           a.name.toLowerCase().includes(needle) ||
           (a.agentKey ?? '').toLowerCase().includes(needle)),
@@ -488,7 +488,7 @@ export default function AgentsPanel({
                             )}
                           </span>
                         </td>
-                        <td className={table.td}>{agent.isCustomAgent ? t('copilotAdoptionAgents.agents.table.type.custom') : t('copilotAdoptionAgents.agents.table.type.microsoft')}</td>
+                        <td className={table.td}>{agentOriginLabel(t, agent.origin)}</td>
                         <td className={`${table.td} ${table.tdNumeric}`}>
                           {formatCount(agent.users)}
                           <Text size={100} block className={table.tdSub}>
@@ -728,6 +728,7 @@ function buildAgentKpis(
       hint: t('copilotAdoptionAgents.agents.kpi.active.hint', {
         known: formatCount(estate.knownAgents),
         custom: formatCount(estate.customAgents),
+        unknown: formatCount(estate.unknownOriginAgents),
       }),
       info: {
         what: t('copilotAdoptionAgents.agents.kpi.active.what', {

@@ -1,5 +1,6 @@
 using ActivityImporter.Engine.ActivityAPI.Copilot;
 using Common.Entities;
+using Common.Entities.Copilot;
 using Microsoft.Extensions.Logging;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using Newtonsoft.Json;
@@ -140,9 +141,10 @@ namespace Tests.UnitTests
             Assert.IsNull(parsed.Messages.Single().IsPrompt,
                 "An omitted isPrompt must deserialise to null, not false.");
 
-            // isCustomAgent: true - only custom agents are charged in Copilot Credits at all, so the
-            // billing path this bug lived on is unreachable with false.
-            var report = CopilotCreditEstimation.Analyze(parsed, true);
+            // A customer-built custom-engine agent - only that kind is charged in Copilot Credits at all, so
+            // the billing path this bug lived on is unreachable for any other.
+            var report = CopilotCreditEstimation.Analyze(parsed,
+                new CopilotAgentClassification(CopilotAgentKind.CustomEngine, CopilotAgentOrigin.CustomerBuilt));
 
             Assert.AreEqual(0, report.GenerativeAnswers,
                 "A message whose direction is unknown must not be counted as a Copilot response.");
@@ -163,7 +165,8 @@ namespace Tests.UnitTests
             ] }".Replace('\'', '"');
             var parsed = JsonConvert.DeserializeObject<CopilotAuditEvent>(raw);
 
-            var report = CopilotCreditEstimation.Analyze(parsed, true);
+            var report = CopilotCreditEstimation.Analyze(parsed,
+                new CopilotAgentClassification(CopilotAgentKind.CustomEngine, CopilotAgentOrigin.CustomerBuilt));
 
             Assert.AreEqual(1, report.GenerativeAnswers,
                 "Exactly the one explicit response is billable; the prompt is not.");
