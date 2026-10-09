@@ -88,6 +88,13 @@ namespace Common.Entities.CopilotAdoption
         [JsonProperty("actionCode")]
         public string ActionCode { get; set; }
 
+        /// <summary>
+        /// Stable key for the resource, the same for every action it is attached to. The portal
+        /// translates the title through it; <see cref="Title"/> is the English fallback.
+        /// </summary>
+        [JsonProperty("titleKey")]
+        public string TitleKey { get; set; }
+
         [JsonProperty("title")]
         public string Title { get; set; }
 
