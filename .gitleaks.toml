@@ -40,10 +40,26 @@ to the exact introducing commit and test file so future findings remain visible.
 """
 condition = "AND"
 targetRules = ["generic-api-key"]
-commits = ["0ec385f0bb0333147bade17878e22fb9e5ca813c"]
+commits = [
+  "0ec385f0bb0333147bade17878e22fb9e5ca813c",
+  "2ae1a0a18529ad1a6bef1a8a229774999f1be5bf",
+]
 paths = [
   '''^src/AnalyticsEngine/Tests\.UnitTests/TeamsCrawlTests\.cs$''',
 ]
+
+# --- C# type-name false positive in delegated token protection ---
+[[allowlists]]
+description = """
+Confirmed C# type-name false positive: the AgentCostTokenProtection constructor's string secret
+parameter followed by X509Certificate2 is parsed as a generic key assignment. Only that exact
+captured type name in that exact source file is exempt; actual credentials remain scanned.
+"""
+condition = "AND"
+targetRules = ["generic-api-key"]
+regexTarget = "secret"
+regexes = ['''^X509Certificate2$''']
+paths = ['''^src/AnalyticsEngine/Common/Entities/State/AgentCostTokenProtection\.cs$''']
 
 # --- Local build / IDE / dependency / generated artifacts ---
 # These are never committed (they're gitignored) and are absent from a fresh CI checkout; they only
