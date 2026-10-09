@@ -57,6 +57,15 @@ importer still imports capacity, makes no consumption calls and records a non-er
 "connection required" state (`agentCosts.import.connectionRequired`) instead of a 403 every cycle.
 A failed connected identity never silently falls back or reports success.
 
+**Prepaid credits and Azure charges are separate measures.** The report explicitly shows prepaid
+Copilot Credits consumed from the tenant capacity snapshot, including Microsoft's consumption period
+and timestamp, alongside Azure monetary spend for the selected date window. The snapshot is not
+recalculated for that window. Prepaid consumption is pooled, not attributed to individual purchased
+packs. Per-agent "billed credits" means chargeable usage, not necessarily an additional Azure charge.
+Pay-as-you-go credit consumption is shown only if the entitlement API supplies it; a missing value is
+not zero and is never inferred from `payGo.entitled` or by subtracting per-agent totals from capacity.
+Credits and money are never added together. Both import toggles can be enabled independently.
+
 **How per-agent figures are built.** Microsoft restricted the tenant-wide per-agent route
 (`/MCSMessages/resources`) to its own clients
 ([Power CAT maintainer clarification](https://github.com/microsoft/Power-CAT-Copilot-Studio-Kit/issues/855)),

@@ -627,6 +627,7 @@ export default function AgentCostsPage() {
               <div className={styles.kpi}>
                 <span className={styles.kpiValue}>{formatCredits(summary?.billedCredits ?? 0)}</span>
                 <span className={styles.kpiLabel}>{t('agentCosts.kpi.creditsBilled')}</span>
+                <span className={styles.kpiHint}>{t('agentCosts.kpi.creditsBilled.hint')}</span>
               </div>
               <div className={styles.kpi}>
                 <span className={styles.kpiValue}>{formatCredits(summary?.nonBilledCredits ?? 0)}</span>
@@ -658,11 +659,15 @@ export default function AgentCostsPage() {
             {summary?.capacity && (
               <div className={`${styles.kpiGrid} ${styles.body}`}>
                 <div className={styles.kpi}>
-                  <span className={styles.kpiValue}>{formatCredits(summary.capacity.available)}</span>
-                  <span className={styles.kpiLabel}>{t('agentCosts.capacity.availableNow')}</span>
+                  <span className={styles.kpiValue}>{formatCredits(summary.capacity.consumed)}</span>
+                  <span className={styles.kpiLabel}>{t('agentCosts.capacity.prepaidUsed')}</span>
                   <span className={styles.kpiHint}>
                     <CapacityUsedHint capacity={summary.capacity} />
                   </span>
+                </div>
+                <div className={styles.kpi}>
+                  <span className={styles.kpiValue}>{formatCredits(summary.capacity.available)}</span>
+                  <span className={styles.kpiLabel}>{t('agentCosts.capacity.availableNow')}</span>
                 </div>
                 <div className={styles.kpi}>
                   <span className={styles.kpiValue}>{capacityStatusLabel(summary.capacity.status, t)}</span>
