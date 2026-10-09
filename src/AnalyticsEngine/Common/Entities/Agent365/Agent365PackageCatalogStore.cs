@@ -19,8 +19,10 @@ namespace Common.Entities.Agent365
         public string ManifestId { get; set; }
         public string Version { get; set; }
         public bool? IsBlocked { get; set; }
-        public DateTime? LastModifiedUtc { get; set; }
-        public DateTime? LastUsedUtc { get; set; }
+        private DateTime? _lastModifiedUtc;
+        private DateTime? _lastUsedUtc;
+        public DateTime? LastModifiedUtc { get => _lastModifiedUtc; set => _lastModifiedUtc = Agent365CatalogUtc.Normalize(value); }
+        public DateTime? LastUsedUtc { get => _lastUsedUtc; set => _lastUsedUtc = Agent365CatalogUtc.Normalize(value); }
         public bool LastUsedDateTimeProvided { get; set; }
         public int? ActiveUsers { get; set; }
         public int? TotalSessions { get; set; }
@@ -38,14 +40,27 @@ namespace Common.Entities.Agent365
 
     public class Agent365CatalogImportHealth
     {
-        public DateTime? LastAttemptUtc { get; set; }
-        public DateTime? LastAttemptCompletedUtc { get; set; }
+        private DateTime? _lastAttemptUtc;
+        private DateTime? _lastAttemptCompletedUtc;
+        private DateTime? _lastSuccessfulImportUtc;
+        public DateTime? LastAttemptUtc { get => _lastAttemptUtc; set => _lastAttemptUtc = Agent365CatalogUtc.Normalize(value); }
+        public DateTime? LastAttemptCompletedUtc { get => _lastAttemptCompletedUtc; set => _lastAttemptCompletedUtc = Agent365CatalogUtc.Normalize(value); }
         public bool? LastAttemptSucceeded { get; set; }
         public string LastAttemptError { get; set; }
-        public DateTime? LastSuccessfulImportUtc { get; set; }
+        public DateTime? LastSuccessfulImportUtc { get => _lastSuccessfulImportUtc; set => _lastSuccessfulImportUtc = Agent365CatalogUtc.Normalize(value); }
         public Guid? LatestSuccessfulRunId { get; set; }
         public int PackageCount { get; set; }
         public int NeverUsedCount { get; set; }
+    }
+
+    internal static class Agent365CatalogUtc
+    {
+        // SQL datetime2 preserves UTC ticks, but not DateTime.Kind. Normalize on materialisation so
+        // every reader (including Health and alternate stores) keeps the same UTC JSON contract.
+        internal static DateTime? Normalize(DateTime? value) =>
+            !value.HasValue ? (DateTime?)null :
+            value.Value.Kind == DateTimeKind.Local ? value.Value.ToUniversalTime() :
+            DateTime.SpecifyKind(value.Value, DateTimeKind.Utc);
     }
 
     public class Agent365PackageCatalogPage
