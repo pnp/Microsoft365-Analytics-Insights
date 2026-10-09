@@ -317,6 +317,8 @@
     <Compile Include="UserDataLookupServiceTests.cs" />
     <Compile Include="UserDataLookupSqlIntegrationTests.cs" />
     <Compile Include="UpnLookupBenchmarkTests.cs" />
+    <Compile Include="UpnBatchLookupTests.cs" />
+    <Compile Include="UpnBatchLookupBenchmarkTests.cs" />
     <Compile Include="UpnLookupVarcharParameterTests.cs" />
     <Compile Include="GraphFileMetadataLoaderTests.cs" />
     <Compile Include="GraphStringUtilsTests.cs" />
