@@ -8,6 +8,11 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using SettingsProvider = AnalyticsWeb::Web.AnalyticsWeb.Models.CopilotAdoption.CopilotAdoptionScoreSettingsProvider;
+using Azure.Core.Pipeline;
+using Azure.Data.Tables;
+using System.Net;
+using System.Net.Http;
+using System.Text;
 
 namespace Tests.UnitTests
 {
@@ -135,6 +140,160 @@ namespace Tests.UnitTests
                 await values.SetStringAsync(CopilotAdoptionScoreSettingsStore.DocumentKey, json);
                 await Unavailable(() => new CopilotAdoptionScoreSettingsStore(values, isDurable: true).GetAsync());
             }
+        }
+
+        [TestMethod]
+        [DataRow(true)]
+        [DataRow(false)]
+        public async Task Store_DeadlineCancelsTheRealTableSdkIncludingLazyOpening_AndTheNextReadRecovers(bool stallOpening)
+        {
+            using (var service = new CancellableSettingsTableService(stallOpening))
+            using (var client = new HttpClient(service))
+            {
+                var options = new TableClientOptions { Transport = new HttpClientTransport(client) };
+                options.Retry.MaxRetries = 3;
+                options.Retry.NetworkTimeout = TimeSpan.FromSeconds(100);
+                var connectionString = "DefaultEndpointsProtocol=https;AccountName=contoso;AccountKey="
+                    + Convert.ToBase64String(new byte[64]) + ";EndpointSuffix=core.windows.net";
+                var opens = 0;
+                var table = new StateStore.LazyTableClient(token =>
+                {
+                    Interlocked.Increment(ref opens);
+                    return StorageTableClientFactory.CreateAndEnsureTableAsync(connectionString, StateStore.TableName,
+                        null, null, null, null, false, null, "synthetic settings table",
+                        token, false, options, null);
+                });
+                var values = StateStore.Open(table, StatePartitions.CopilotAdoptionSettings);
+                var store = new CopilotAdoptionScoreSettingsStore(values, true, storageTimeout: TimeSpan.FromMilliseconds(500));
+                var provider = new SettingsProvider(() => store);
+                var watch = System.Diagnostics.Stopwatch.StartNew();
+
+                var read = provider.GetAsync();
+                await Unavailable(() => read);
+                Assert.IsTrue(watch.Elapsed < TimeSpan.FromSeconds(3), "The SDK's retry window must not become the HTTP deadline.");
+                Assert.AreSame(service.Stopped.Task, await Task.WhenAny(service.Stopped.Task, Task.Delay(2000)),
+                    "The actual SDK HTTP operation must stop, not merely be abandoned by Task.WhenAny.");
+                Assert.IsTrue(service.SawCancellation);
+                Assert.IsTrue(service.LastToken.IsCancellationRequested);
+                Assert.AreEqual(0, service.ActiveRequests);
+
+                service.Stall = false;
+                Assert.IsFalse((await provider.GetAsync()).IsCustomised, "A confirmed missing row is still the defaults.");
+                Assert.AreEqual(stallOpening ? 2 : 1, opens, "Cancelled lazy opening is released and not cached.");
+            }
+        }
+
+        [TestMethod]
+        public async Task Store_NonConditionalReadDeadline_IsUnavailableAndRecoversWithoutInventingDefaults()
+        {
+            var values = new StallingPlainSettingsStore();
+            var store = new CopilotAdoptionScoreSettingsStore(values, false, storageTimeout: TimeSpan.FromMilliseconds(500));
+
+            await Unavailable(() => store.GetAsync());
+            Assert.IsTrue(values.LastToken.IsCancellationRequested);
+            values.Stall = false;
+            Assert.IsTrue((await store.GetAsync()).Settings.IsDefault);
+        }
+
+        [TestMethod]
+        public async Task Store_CallerCancellation_ReachesTheSdkAndIsNotAStorageDeadlineFailure()
+        {
+            using (var service = new CancellableSettingsTableService(false))
+            using (var client = new HttpClient(service))
+            using (var caller = new CancellationTokenSource())
+            {
+                var options = new TableClientOptions { Transport = new HttpClientTransport(client) };
+                var table = new TableClient("DefaultEndpointsProtocol=https;AccountName=contoso;AccountKey="
+                    + Convert.ToBase64String(new byte[64]) + ";EndpointSuffix=core.windows.net", StateStore.TableName, options);
+                var store = new CopilotAdoptionScoreSettingsStore(
+                    StateStore.Open(new StateStore.LazyTableClient(_ => Task.FromResult(table)), StatePartitions.CopilotAdoptionSettings),
+                    true, storageTimeout: TimeSpan.FromSeconds(5));
+                var read = store.GetAsync(caller.Token);
+                Assert.AreSame(service.Started.Task, await Task.WhenAny(service.Started.Task, Task.Delay(2000)));
+                caller.Cancel();
+                Assert.AreSame(read, await Task.WhenAny(read, Task.Delay(1000)));
+                try
+                {
+                    await read;
+                    Assert.Fail("Cancellation must not return a default settings document.");
+                }
+                catch (OperationCanceledException ex) { Assert.AreEqual(caller.Token, ex.CancellationToken); }
+                await service.Stopped.Task;
+                Assert.IsTrue(service.SawCancellation);
+                Assert.AreEqual(0, service.ActiveRequests);
+                service.Stall = false;
+                Assert.IsTrue((await store.GetAsync()).Settings.IsDefault);
+            }
+        }
+
+        [TestMethod]
+        public async Task Store_WriteDeadline_CancelsTheConditionalWriteAndLeavesThePriorVersionInForce()
+        {
+            var values = new CountingStore();
+            var store = new CopilotAdoptionScoreSettingsStore(values, true, storageTimeout: TimeSpan.FromMilliseconds(500));
+            await store.SaveAsync(With(s => s.ChampionScore = 90), 0, "admin@contoso.com");
+            values.StallWrites = true;
+
+            await Unavailable(() => store.ResetAsync(1, "admin@contoso.com"));
+            Assert.IsTrue(values.LastWriteToken.IsCancellationRequested);
+            Assert.AreEqual(90, (await store.GetAsync()).Settings.ChampionScore);
+            values.StallWrites = false;
+            Assert.AreEqual(2, (await store.ResetAsync(1, "admin@contoso.com")).Version);
+        }
+
+        private sealed class CancellableSettingsTableService : HttpMessageHandler
+        {
+            private readonly bool _stallOpening;
+            private int _activeRequests;
+            internal CancellableSettingsTableService(bool stallOpening) { _stallOpening = stallOpening; }
+            internal bool Stall = true;
+            internal bool SawCancellation;
+            internal CancellationToken LastToken;
+            internal int ActiveRequests => Volatile.Read(ref _activeRequests);
+            internal readonly TaskCompletionSource<bool> Started = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            internal readonly TaskCompletionSource<bool> Stopped = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+            protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+            {
+                if (Stall && request.Method == (_stallOpening ? HttpMethod.Post : HttpMethod.Get))
+                {
+                    Interlocked.Increment(ref _activeRequests);
+                    LastToken = cancellationToken;
+                    Started.TrySetResult(true);
+                    try { await Task.Delay(Timeout.Infinite, cancellationToken); }
+                    catch (OperationCanceledException) { SawCancellation = true; throw; }
+                    finally
+                    {
+                        Interlocked.Decrement(ref _activeRequests);
+                        Stopped.TrySetResult(true);
+                    }
+                }
+                if (request.Method == HttpMethod.Post) return new HttpResponseMessage(HttpStatusCode.NoContent);
+                var response = new HttpResponseMessage(HttpStatusCode.NotFound)
+                {
+                    Content = new StringContent(
+                        "{\"odata.error\":{\"code\":\"ResourceNotFound\",\"message\":{\"lang\":\"en-US\",\"value\":\"Synthetic missing row.\"}}}",
+                        Encoding.UTF8, "application/json"),
+                };
+                response.Headers.Add("x-ms-error-code", "ResourceNotFound");
+                return response;
+            }
+        }
+
+        private sealed class StallingPlainSettingsStore : IKeyValueStore
+        {
+            internal bool Stall = true;
+            internal CancellationToken LastToken;
+            public string Description => "synthetic non-conditional store";
+            public async Task<string> GetStringAsync(string key, CancellationToken cancellationToken = default)
+            {
+                LastToken = cancellationToken;
+                if (Stall) await Task.Delay(Timeout.Infinite, cancellationToken);
+                return null;
+            }
+            public Task SetStringAsync(string key, string value, TimeSpan? timeToLive = null, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+            public Task<bool> DeleteAsync(string key, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+            public Task<bool> ExistsAsync(string key, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         }
 
         #endregion

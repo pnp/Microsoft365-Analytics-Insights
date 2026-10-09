@@ -3,6 +3,7 @@ using Newtonsoft.Json;
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace Common.Entities.CopilotAdoption
@@ -331,15 +332,18 @@ namespace Common.Entities.CopilotAdoption
     {
         public const string DocumentKey = "Current";
         public const int MaxHistory = 50;
+        public static readonly TimeSpan DefaultStorageTimeout = TimeSpan.FromSeconds(10);
         private const int MaxNameLength = 256;
 
         private readonly IKeyValueStore _values;
         private readonly IConditionalKeyValueStore _conditional;
         private readonly Func<DateTime> _utcNow;
+        private readonly TimeSpan _storageTimeout;
 
         /// <param name="values">Must support conditional writes when <paramref name="isDurable"/>: every
         /// <see cref="StateStore"/> partition does.</param>
-        public CopilotAdoptionScoreSettingsStore(IKeyValueStore values, bool isDurable, Func<DateTime> utcNow = null)
+        public CopilotAdoptionScoreSettingsStore(
+            IKeyValueStore values, bool isDurable, Func<DateTime> utcNow = null, TimeSpan? storageTimeout = null)
         {
             _values = values ?? throw new ArgumentNullException(nameof(values));
             _conditional = values as IConditionalKeyValueStore;
@@ -347,27 +351,30 @@ namespace Common.Entities.CopilotAdoption
                 throw new ArgumentException("A durable settings store needs conditional writes, so concurrent saves cannot overwrite each other.", nameof(values));
             IsDurable = isDurable;
             _utcNow = utcNow ?? (() => DateTime.UtcNow);
+            _storageTimeout = storageTimeout ?? DefaultStorageTimeout;
+            if (_storageTimeout <= TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(storageTimeout));
         }
 
         public bool IsDurable { get; }
 
         /// <summary>The stored document, or a version-0 default document when none has been saved.</summary>
-        public async Task<CopilotAdoptionScoreSettingsDocument> GetAsync() => (await ReadAsync().ConfigureAwait(false)).Document;
+        public Task<CopilotAdoptionScoreSettingsDocument> GetAsync(CancellationToken cancellationToken = default) =>
+            WithStorageDeadlineAsync(async token => (await ReadAsync(token).ConfigureAwait(false)).Document, cancellationToken);
 
-        private async Task<(CopilotAdoptionScoreSettingsDocument Document, string VersionToken)> ReadAsync()
+        private async Task<(CopilotAdoptionScoreSettingsDocument Document, string VersionToken)> ReadAsync(CancellationToken cancellationToken)
         {
             string json, token = null;
             try
             {
                 if (_conditional != null)
                 {
-                    var read = await _conditional.GetVersionedAsync(DocumentKey).ConfigureAwait(false);
+                    var read = await _conditional.GetVersionedAsync(DocumentKey, cancellationToken).ConfigureAwait(false);
                     json = read.Value;
                     token = read.VersionToken;
                 }
                 else
                 {
-                    json = await _values.GetStringAsync(DocumentKey).ConfigureAwait(false);
+                    json = await _values.GetStringAsync(DocumentKey, cancellationToken).ConfigureAwait(false);
                 }
             }
             catch (Exception ex) when (!(ex is OperationCanceledException))
@@ -405,23 +412,27 @@ namespace Common.Entities.CopilotAdoption
             return (document, token);
         }
 
-        public Task<CopilotAdoptionScoreSettingsDocument> SaveAsync(CopilotAdoptionScoreSettings settings, long expectedVersion, string changedBy)
+        public Task<CopilotAdoptionScoreSettingsDocument> SaveAsync(
+            CopilotAdoptionScoreSettings settings, long expectedVersion, string changedBy, CancellationToken cancellationToken = default)
         {
             if (settings == null) throw new CopilotAdoptionScoreSettingsRejectedException(CopilotAdoptionScoreSettingsErrorCodes.InvalidRequest);
             var errors = settings.Validate();
             if (errors.Count > 0) throw new CopilotAdoptionScoreSettingsRejectedException(errors[0], errors);
-            return WriteAsync(settings.Clone(), expectedVersion, changedBy, CopilotAdoptionScoreSettingsActions.Save);
+            return WithStorageDeadlineAsync(
+                token => WriteAsync(settings.Clone(), expectedVersion, changedBy, CopilotAdoptionScoreSettingsActions.Save, token), cancellationToken);
         }
 
-        public Task<CopilotAdoptionScoreSettingsDocument> ResetAsync(long expectedVersion, string changedBy) =>
-            WriteAsync(CopilotAdoptionScoreSettings.Defaults, expectedVersion, changedBy, CopilotAdoptionScoreSettingsActions.Reset);
+        public Task<CopilotAdoptionScoreSettingsDocument> ResetAsync(
+            long expectedVersion, string changedBy, CancellationToken cancellationToken = default) =>
+            WithStorageDeadlineAsync(
+                token => WriteAsync(CopilotAdoptionScoreSettings.Defaults, expectedVersion, changedBy, CopilotAdoptionScoreSettingsActions.Reset, token), cancellationToken);
 
         private async Task<CopilotAdoptionScoreSettingsDocument> WriteAsync(
-            CopilotAdoptionScoreSettings settings, long expectedVersion, string changedBy, string action)
+            CopilotAdoptionScoreSettings settings, long expectedVersion, string changedBy, string action, CancellationToken cancellationToken)
         {
             if (!IsDurable) throw new CopilotAdoptionScoreSettingsRejectedException(CopilotAdoptionScoreSettingsErrorCodes.StorageNotConfigured);
 
-            var (current, versionToken) = await ReadAsync().ConfigureAwait(false);
+            var (current, versionToken) = await ReadAsync(cancellationToken).ConfigureAwait(false);
             if (current.Version != expectedVersion)
                 throw new CopilotAdoptionScoreSettingsRejectedException(CopilotAdoptionScoreSettingsErrorCodes.VersionConflict);
 
@@ -459,7 +470,7 @@ namespace Common.Entities.CopilotAdoption
             bool written;
             try
             {
-                written = await _conditional.TrySetStringAsync(DocumentKey, JsonConvert.SerializeObject(next), versionToken).ConfigureAwait(false);
+                written = await _conditional.TrySetStringAsync(DocumentKey, JsonConvert.SerializeObject(next), versionToken, cancellationToken).ConfigureAwait(false);
             }
             catch (Exception ex) when (!(ex is OperationCanceledException))
             {
@@ -472,6 +483,49 @@ namespace Common.Entities.CopilotAdoption
             if (!written)
                 throw new CopilotAdoptionScoreSettingsRejectedException(CopilotAdoptionScoreSettingsErrorCodes.VersionConflict);
             return next;
+        }
+
+        private async Task<T> WithStorageDeadlineAsync<T>(Func<CancellationToken, Task<T>> operation, CancellationToken caller)
+        {
+            caller.ThrowIfCancellationRequested();
+            using (var deadline = CancellationTokenSource.CreateLinkedTokenSource(caller))
+            {
+                deadline.CancelAfter(_storageTimeout);
+                var cancelled = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+                using (deadline.Token.Register(() => cancelled.TrySetResult(true)))
+                {
+                    try
+                    {
+                        // The token reaches lazy table opening, the SDK request and its retries. The race is
+                        // only a backstop for legacy/non-cooperative stores, not a substitute for cancellation.
+                        var task = operation(deadline.Token);
+                        if (!task.IsCompleted && await Task.WhenAny(task, cancelled.Task).ConfigureAwait(false) != task)
+                        {
+                            _ = task.ContinueWith(failed => { _ = failed.Exception; }, CancellationToken.None,
+                                TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+                            deadline.Token.ThrowIfCancellationRequested();
+                        }
+                        var result = await task.ConfigureAwait(false);
+                        deadline.Token.ThrowIfCancellationRequested();
+                        return result;
+                    }
+                    catch (Exception ex) when (caller.IsCancellationRequested)
+                    {
+                        throw new OperationCanceledException("The score settings request was cancelled.", ex, caller);
+                    }
+                    catch (Exception ex) when (deadline.IsCancellationRequested)
+                    {
+                        throw new CopilotAdoptionScoreSettingsUnavailableException(
+                            "The Copilot Adoption score settings storage deadline expired.",
+                            new TimeoutException("The score settings storage operation timed out.", ex));
+                    }
+                    catch (OperationCanceledException ex)
+                    {
+                        throw new CopilotAdoptionScoreSettingsUnavailableException(
+                            "The Copilot Adoption score settings storage operation was cancelled.", ex);
+                    }
+                }
+            }
         }
     }
 }

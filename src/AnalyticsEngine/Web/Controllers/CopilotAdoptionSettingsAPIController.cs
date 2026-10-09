@@ -2,6 +2,7 @@ using Common.Entities.CopilotAdoption;
 using System;
 using System.Linq;
 using System.Net;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Web.Http;
 using Web.AnalyticsWeb.Models.CopilotAdoption;
@@ -32,21 +33,22 @@ namespace Web.AnalyticsWeb.Controllers
         // GET: api/CopilotAdoptionSettings
         [HttpGet]
         [Route("")]
-        public Task<IHttpActionResult> Get() => Answer(async service => Ok(await service.GetAsync()));
+        public Task<IHttpActionResult> Get(CancellationToken cancellationToken = default) =>
+            Answer(async service => Ok(await service.GetAsync(cancellationToken)));
 
         // POST: api/CopilotAdoptionSettings
         [HttpPost]
         [Route("")]
         [RequireSameOriginXhr]
-        public Task<IHttpActionResult> Save([FromBody] CopilotAdoptionSettingsSaveRequest request)
-            => Answer(async service => Ok(await service.SaveAsync(request, ChangedBy)));
+        public Task<IHttpActionResult> Save([FromBody] CopilotAdoptionSettingsSaveRequest request, CancellationToken cancellationToken = default)
+            => Answer(async service => Ok(await service.SaveAsync(request, ChangedBy, cancellationToken)));
 
         // POST: api/CopilotAdoptionSettings/reset
         [HttpPost]
         [Route("reset")]
         [RequireSameOriginXhr]
-        public Task<IHttpActionResult> Reset([FromBody] CopilotAdoptionSettingsResetRequest request)
-            => Answer(async service => Ok(await service.ResetAsync(request, ChangedBy)));
+        public Task<IHttpActionResult> Reset([FromBody] CopilotAdoptionSettingsResetRequest request, CancellationToken cancellationToken = default)
+            => Answer(async service => Ok(await service.ResetAsync(request, ChangedBy, cancellationToken)));
 
         /// <summary>The administrator's UPN where the token carries one, as the history shows it.</summary>
         private string ChangedBy => PortalViewer.UserPrincipalNameOf(User) ?? User?.Identity?.Name;

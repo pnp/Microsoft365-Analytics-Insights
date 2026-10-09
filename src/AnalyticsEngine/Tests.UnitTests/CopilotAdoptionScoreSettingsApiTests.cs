@@ -19,6 +19,7 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Xml.Linq;
+using System.Web.Http;
 using AdoptionCache = AnalyticsWeb::Web.AnalyticsWeb.Models.CopilotAdoption.ICopilotAdoptionAnalysisCache;
 using AdoptionCoordinator = AnalyticsWeb::Web.AnalyticsWeb.Models.CopilotAdoption.CopilotAdoptionAnalysisCoordinator;
 using AdoptionRunner = AnalyticsWeb::Web.AnalyticsWeb.Models.CopilotAdoption.ICopilotAdoptionAnalysisRunner;
@@ -34,6 +35,165 @@ namespace Tests.UnitTests
     public partial class CopilotAdoptionScoreSettingsTests
     {
         #region Analysis cache
+
+        [TestMethod]
+        public async Task Coordinator_CallerCancellationStopsAHeldSettingsReadWithoutJoiningAnalysis()
+        {
+            var values = new CountingStore();
+            values.HoldNext(2);
+            var provider = new SettingsProvider(() => new CopilotAdoptionScoreSettingsStore(values, isDurable: true));
+            var runner = new RecordingRunner();
+            var coordinator = new AdoptionCoordinator(runner, new DictionaryCache(),
+                (_, __) => NullAnalysisTelemetry.Instance, TimeSpan.FromMinutes(10), settingsSource: provider);
+            using (var caller = new CancellationTokenSource())
+            {
+                var request = coordinator.TryGetAsync(DateRange.Create(28, null, null, Now), new List<int>(),
+                    TimeSpan.FromSeconds(1), caller.Token);
+                try
+                {
+                    await values.ReadStarted.Task;
+                    caller.Cancel();
+                    Assert.AreSame(request, await Task.WhenAny(request, Task.Delay(500)),
+                        "A settings read must not strand a cancelled request before the coordinator wait starts.");
+                    try
+                    {
+                        await request;
+                        Assert.Fail("Caller cancellation must propagate, not answer with a cached/default report.");
+                    }
+                    catch (OperationCanceledException ex)
+                    {
+                        Assert.AreEqual(caller.Token, ex.CancellationToken);
+                    }
+                    Assert.IsTrue(values.LastReadToken.IsCancellationRequested, "Cancellation reaches the storage operation.");
+                    Assert.AreEqual(0, runner.Runs.Count);
+                }
+                finally
+                {
+                    values.ReleaseHeldReads();
+                    try { await request; } catch (OperationCanceledException) { }
+                }
+            }
+        }
+
+        [TestMethod]
+        public async Task Report_CachedAnalysisStillRequiresFreshSettings_DeadlineRefusesItAndNextReadRecovers()
+        {
+            var values = new CountingStore();
+            var store = new CopilotAdoptionScoreSettingsStore(values, true, storageTimeout: TimeSpan.FromMilliseconds(500));
+            await store.SaveAsync(With(s => s.ChampionScore = 90), 0, "admin@contoso.com");
+            var provider = new SettingsProvider(() => store);
+            var runner = new RecordingRunner();
+            var cache = new DictionaryCache();
+            var coordinator = new AdoptionCoordinator(runner, cache, (_, __) => NullAnalysisTelemetry.Instance,
+                TimeSpan.FromMinutes(10), settingsSource: provider);
+            var range = DateRange.Create(28, null, null, Now);
+            await coordinator.GetAsync(range, new List<int>());
+            var cacheReads = cache.ReadCount;
+            values.HoldNext(2);
+            try
+            {
+                using (var host = new PortalTestHost(
+                    new[] { typeof(CopilotAdoptionAPIController) }, PortalTestHost.SignedIn(),
+                    PortalAccessPolicy.Enforcing, _ => new CopilotAdoptionAPIController(coordinator)))
+                {
+                    var responseTask = host.Client.GetAsync("api/CopilotAdoption/summary");
+                    Assert.AreSame(responseTask, await Task.WhenAny(responseTask, Task.Delay(3000)),
+                        "The settings deadline must fail before the report's HTTP wait window.");
+                    var response = await responseTask;
+                    Assert.AreEqual(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+                    Assert.AreEqual(CopilotAdoptionScoreSettingsErrorCodes.ReportSettingsUnavailable, await Code(response));
+                }
+                Assert.AreEqual(cacheReads, cache.ReadCount, "Unavailable settings must not even consult the old analysis cache.");
+                Assert.AreEqual(1, runner.Runs.Count, "No default or last-known analysis is started or joined.");
+                Assert.AreEqual(90, provider.LastKnown.GetValues().ChampionScore);
+                Assert.IsTrue(values.LastReadToken.IsCancellationRequested);
+            }
+            finally { values.ReleaseHeldReads(); }
+
+            await new CopilotAdoptionScoreSettingsStore(values, true).SaveAsync(With(s => s.ChampionScore = 85), 1, "admin@contoso.com");
+            var recovered = await coordinator.GetAsync(range, new List<int>());
+            Assert.AreEqual(2, runner.Runs.Count);
+            Assert.AreEqual(2, recovered.Summary.Options.ScoreSettings.Version);
+            Assert.AreEqual(85, provider.LastKnown.GetValues().ChampionScore);
+        }
+
+        [TestMethod]
+        public async Task Coordinator_SettingsReadTimeCountsAgainstTheAnalysisWaitBudget()
+        {
+            var runner = new HeldSettingsRunner();
+            var coordinator = new AdoptionCoordinator(runner, new DictionaryCache(), (_, __) => NullAnalysisTelemetry.Instance,
+                TimeSpan.FromMinutes(10), settingsSource: new DelayedSettingsSource());
+            var request = coordinator.TryGetAsync(28, new List<int>(), TimeSpan.FromMilliseconds(500), CancellationToken.None);
+            try
+            {
+                await runner.FirstStarted.Task;
+                Assert.AreSame(request, await Task.WhenAny(request, Task.Delay(150)),
+                    "The request budget expired during the settings read; it must not restart at the analysis join.");
+                Assert.IsNull(await request);
+            }
+            finally
+            {
+                runner.Complete();
+                await coordinator.GetAsync(28, new List<int>());
+            }
+        }
+
+        [TestMethod]
+        public async Task Coordinator_CancellationWhileWaiting_PropagatesButDoesNotCancelTheSharedAnalysis()
+        {
+            var runner = new HeldSettingsRunner();
+            var coordinator = new AdoptionCoordinator(runner, new DictionaryCache(), (_, __) => NullAnalysisTelemetry.Instance,
+                TimeSpan.FromMinutes(10));
+            using (var caller = new CancellationTokenSource())
+            {
+                var request = coordinator.TryGetAsync(28, new List<int>(), TimeSpan.FromSeconds(5), caller.Token);
+                await runner.FirstStarted.Task;
+                caller.Cancel();
+                try
+                {
+                    await request;
+                    Assert.Fail("A cancelled waiter must not become a 202 response.");
+                }
+                catch (OperationCanceledException ex) { Assert.AreEqual(caller.Token, ex.CancellationToken); }
+                finally { runner.Complete(); }
+                Assert.IsNotNull(await coordinator.GetAsync(28, new List<int>()), "The shared run outlives the cancelled request.");
+            }
+        }
+
+        private sealed class DelayedSettingsSource : SettingsSource
+        {
+            public CopilotAdoptionEffectiveScoreSettings LastKnown => CopilotAdoptionEffectiveScoreSettings.Defaults;
+            public async Task<CopilotAdoptionEffectiveScoreSettings> GetAsync(CancellationToken cancellationToken = default)
+            {
+                await Task.Delay(700, cancellationToken);
+                return LastKnown;
+            }
+        }
+
+        [TestMethod]
+        [DataRow(true)]
+        [DataRow(false)]
+        public async Task Coordinator_EmptySettingsSourcesAreUnavailable_NotDefaultSuccess(bool missingTask)
+        {
+            var runner = new RecordingRunner();
+            var cache = new DictionaryCache();
+            var coordinator = new AdoptionCoordinator(runner, cache, (_, __) => NullAnalysisTelemetry.Instance,
+                TimeSpan.FromMinutes(10), settingsSource: new EmptySettingsSource(missingTask));
+
+            await Unavailable(() => coordinator.GetAsync(28, new List<int>()));
+
+            Assert.AreEqual(0, runner.Runs.Count);
+            Assert.AreEqual(0, cache.ReadCount);
+        }
+
+        private sealed class EmptySettingsSource : SettingsSource
+        {
+            private readonly bool _missingTask;
+            internal EmptySettingsSource(bool missingTask) { _missingTask = missingTask; }
+            public CopilotAdoptionEffectiveScoreSettings LastKnown => CopilotAdoptionEffectiveScoreSettings.Defaults;
+            public Task<CopilotAdoptionEffectiveScoreSettings> GetAsync(CancellationToken cancellationToken = default) =>
+                _missingTask ? null : Task.FromResult<CopilotAdoptionEffectiveScoreSettings>(null);
+        }
 
         [TestMethod]
         public async Task Report_StillBuildingNamesTheJoinedRun_WhenSettingsChangeDuringItsWait()
@@ -352,6 +512,99 @@ namespace Tests.UnitTests
                 var save = await host.Client.SendAsync(Post("api/CopilotAdoptionSettings", SaveBody(0, 90)));
                 Assert.AreEqual(HttpStatusCode.ServiceUnavailable, save.StatusCode);
                 Assert.AreEqual(CopilotAdoptionScoreSettingsErrorCodes.StateUnavailable, await Code(save));
+            }
+        }
+
+        [TestMethod]
+        [DataRow("get")]
+        [DataRow("save")]
+        [DataRow("reset")]
+        public async Task Api_EverySettingsRead_HasTheSameFailClosedDeadline(string operation)
+        {
+            var values = new CountingStore();
+            values.HoldNext(2);
+            var store = new CopilotAdoptionScoreSettingsStore(values, true, storageTimeout: TimeSpan.FromMilliseconds(500));
+            var service = new SettingsService(new SettingsProvider(() => store));
+            try
+            {
+                using (var host = SettingsHost(service, PortalTestHost.SignedIn(PortalRoles.Administration), PortalAccessPolicy.Enforcing))
+                {
+                    var response = operation == "get"
+                        ? await host.Client.GetAsync("api/CopilotAdoptionSettings")
+                        : await host.Client.SendAsync(Post(
+                            operation == "save" ? "api/CopilotAdoptionSettings" : "api/CopilotAdoptionSettings/reset",
+                            operation == "save" ? SaveBody(0, 90) : "{\"expectedVersion\":0}"));
+                    Assert.AreEqual(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+                    Assert.AreEqual(CopilotAdoptionScoreSettingsErrorCodes.StateUnavailable, await Code(response));
+                    Assert.IsTrue(values.LastReadToken.IsCancellationRequested);
+                }
+            }
+            finally { values.ReleaseHeldReads(); }
+            Assert.IsTrue((await store.GetAsync()).Settings.IsDefault);
+        }
+
+        [TestMethod]
+        [DataRow("save")]
+        [DataRow("reset")]
+        public async Task Api_SettingsWriteDeadline_RefusesSuccessAndCanBeRetried(string operation)
+        {
+            var values = new CountingStore();
+            var store = new CopilotAdoptionScoreSettingsStore(values, true, storageTimeout: TimeSpan.FromMilliseconds(500));
+            await store.SaveAsync(With(s => s.ChampionScore = 90), 0, "admin@contoso.com");
+            var service = new SettingsService(new SettingsProvider(() => store));
+            values.StallWrites = true;
+            using (var host = SettingsHost(service, PortalTestHost.SignedIn(PortalRoles.Administration), PortalAccessPolicy.Enforcing))
+            {
+                var response = await host.Client.SendAsync(Post(
+                    operation == "save" ? "api/CopilotAdoptionSettings" : "api/CopilotAdoptionSettings/reset",
+                    operation == "save" ? SaveBody(1, 85) : "{\"expectedVersion\":1}"));
+                Assert.AreEqual(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+                Assert.AreEqual(CopilotAdoptionScoreSettingsErrorCodes.StateUnavailable, await Code(response));
+                Assert.IsTrue(values.LastWriteToken.IsCancellationRequested);
+                Assert.AreEqual(90, (await store.GetAsync()).Settings.ChampionScore);
+                values.StallWrites = false;
+                Assert.AreEqual(HttpStatusCode.OK,
+                    (await host.Client.SendAsync(Post("api/CopilotAdoptionSettings/reset", "{\"expectedVersion\":1}"))).StatusCode);
+            }
+        }
+
+        [TestMethod]
+        [DataRow("get")]
+        [DataRow("save")]
+        [DataRow("reset")]
+        public async Task Api_EverySettingsAction_PropagatesCallerCancellationToStorage(string operation)
+        {
+            var values = new CountingStore();
+            values.HoldNext(2);
+            var service = Service(values, true);
+            using (var caller = new CancellationTokenSource())
+            using (var controller = new CopilotAdoptionSettingsAPIController(() => service)
+            {
+                Request = new HttpRequestMessage(HttpMethod.Get, "https://contoso.example/api/CopilotAdoptionSettings"),
+                Configuration = new HttpConfiguration(),
+                User = PortalTestHost.SignedIn(PortalRoles.Administration),
+            })
+            {
+                var request = operation == "get" ? controller.Get(caller.Token)
+                    : operation == "save"
+                        ? controller.Save(new AnalyticsWeb::Web.AnalyticsWeb.Models.CopilotAdoption.CopilotAdoptionSettingsSaveRequest
+                        { ExpectedVersion = 0, Settings = With(s => s.ChampionScore = 90) }, caller.Token)
+                        : controller.Reset(new AnalyticsWeb::Web.AnalyticsWeb.Models.CopilotAdoption.CopilotAdoptionSettingsResetRequest
+                        { ExpectedVersion = 0 }, caller.Token);
+                try
+                {
+                    await values.ReadStarted.Task;
+                    caller.Cancel();
+                    Assert.AreSame(request, await Task.WhenAny(request, Task.Delay(500)));
+                    try
+                    {
+                        await request;
+                        Assert.Fail("A cancelled administrator request must not be returned as a storage outage or success.");
+                    }
+                    catch (OperationCanceledException ex) { Assert.AreEqual(caller.Token, ex.CancellationToken); }
+                    Assert.IsTrue(values.LastReadToken.IsCancellationRequested);
+                }
+                finally { values.ReleaseHeldReads(); }
             }
         }
 

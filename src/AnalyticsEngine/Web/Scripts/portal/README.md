@@ -83,6 +83,17 @@ a cancellable 30-second request deadline, below App Service's HTTP deadline. If 
 acknowledge a write, check status before retrying: as with any network write, an interrupted
 response does not prove that the write failed.
 
+## Copilot Adoption score settings
+
+Copilot Adoption score-settings reads and saves have a cancellable **10-second storage deadline**,
+including lazy opening of `AnalyticsState`. Every adoption report request reads the current settings
+before consulting the analysis cache. A storage deadline or outage returns the existing
+settings-unavailable **503**, never a report scored with last-known or default rules. Administration
+reads, saves and resets use the same deadline; a cancelled client request remains a cancellation.
+After an interrupted save, read the current settings before retrying because a network timeout
+cannot prove whether a conditional write committed. No additional app setting or installer
+configuration is required.
+
 ## Copilot Studio billing administrator connection
 
 Copilot Studio credit **consumption** is read with a delegated administrator, because Microsoft's Power
