@@ -803,11 +803,10 @@ export interface CoworkSegmentRow {
 }
 
 /**
- * The tenant's Copilot Credit position.
+ * The tenant's Copilot Studio credit-capacity snapshot.
  *
- * This is the SHARED pool, not Cowork-only spend: Cowork draws on it, which makes it valid rollout
- * headroom, but Copilot Studio and other credit-billed workloads draw on the same pool and Microsoft
- * publishes no way to separate them. Every label built from this must say so.
+ * This is not Cowork funding, usage or spend. Manage Cowork billing separately in the Microsoft 365
+ * admin center under Copilot > Cost management.
  */
 export interface CoworkCreditPosition {
   available: boolean;

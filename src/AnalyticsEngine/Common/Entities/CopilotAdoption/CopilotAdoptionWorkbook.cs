@@ -798,7 +798,7 @@ namespace Common.Entities.CopilotAdoption
                 case CopilotAdoptionUnscopedSections.WeeklyTrend: return "the weekly trend";
                 case CopilotAdoptionUnscopedSections.Agents: return "the agent inventory";
                 case CopilotAdoptionUnscopedSections.PurchasedSeats: return "purchased and unassigned seats";
-                case CopilotAdoptionUnscopedSections.CoworkCredits: return "the Cowork credit balance";
+                case CopilotAdoptionUnscopedSections.CoworkCredits: return "the Copilot Studio capacity snapshot";
                 default: return section;
             }
         }
@@ -1532,26 +1532,25 @@ namespace Common.Entities.CopilotAdoption
                 var credits = summary.CoworkCreditPosition;
                 sheet.AddBlankRow();
                 sheet.AddRow(XlsxCell.Wrapped(
-                    "Copilot Credit position - the SHARED pool, not Cowork-only spend. Cowork draws on it, "
-                    + "which is what makes it valid rollout headroom, but Copilot Studio and other "
-                    + "credit-billed workloads draw on the same pool and Microsoft publishes no way to "
-                    + "separate them."));
+                    "Copilot Studio credit-capacity snapshot. This is not Cowork funding, usage or rollout "
+                    + "headroom. Manage and review Cowork usage-based billing separately in Microsoft 365 "
+                    + "admin center under Copilot > Cost management."));
 
                 if (credits.Entitled.HasValue)
                 {
-                    AddMeta(sheet, "Credits entitled", credits.Entitled.Value, "Pre-purchased capacity.");
+                    AddMeta(sheet, "Studio credits entitled", credits.Entitled.Value, "Copilot Studio capacity.");
                 }
                 if (credits.Consumed.HasValue)
                 {
-                    AddMeta(sheet, "Credits consumed", credits.Consumed.Value, "Consumed so far, across all credit-billed workloads.");
+                    AddMeta(sheet, "Studio credits consumed", credits.Consumed.Value, "Copilot Studio consumption reported by the capacity snapshot.");
                 }
                 if (credits.AvailableCredits.HasValue)
                 {
-                    AddMeta(sheet, "Credits available", credits.AvailableCredits.Value, "Remaining headroom for a Cowork rollout.");
+                    AddMeta(sheet, "Studio credits available", credits.AvailableCredits.Value, "Copilot Studio capacity, not Cowork rollout headroom.");
                 }
                 if (credits.PayAsYouGoConsumed.HasValue)
                 {
-                    AddMeta(sheet, "Pay-as-you-go consumed", credits.PayAsYouGoConsumed.Value, "Billed beyond pre-purchased capacity.");
+                    AddMeta(sheet, "Studio pay-as-you-go consumed", credits.PayAsYouGoConsumed.Value, "Copilot Studio consumption reported as pay-as-you-go.");
                 }
                 if (!string.IsNullOrWhiteSpace(credits.Status))
                 {
