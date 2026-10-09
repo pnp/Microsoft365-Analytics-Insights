@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { loadCatalog, translateStatic, type TFunction } from '..';
 import { EN_CATALOG } from '../catalog';
 import { COPILOT_ADOPTION_WARNING_KEYS, COWORK_TIER_LABEL_KEYS, TENURE_BASIS_LABEL_KEYS } from '../../components/copilotAdoption/serverText';
+import { AGENT_ORIGIN_LABEL_KEYS } from '../../components/copilotAdoption/serverText';
 import {
   BLOB_CHECKPOINT_REASON_KEYS,
   AGENT_COST_CONNECTION_REASON_KEYS,
@@ -2047,6 +2048,35 @@ describe('Copilot Adoption Cowork row tier labels', () => {
 
   it('has a SPA label map entry for every server Cowork tier code', () => {
     expect(Object.keys(COWORK_TIER_LABEL_KEYS).sort()).toEqual(coworkTierKeys().sort());
+  });
+});
+
+/**
+ * An agent's origin travels as a stable key (`CopilotAgentOriginKeys` in the C#), and the SPA writes the
+ * Type column's text from it (#639). A key added on the server with no SPA label would show as "Unknown".
+ */
+const COPILOT_AGENT_CLASSIFIER = join(process.cwd(), '..', '..', '..', 'Common', 'Entities', 'Copilot', 'CopilotAgentClassifier.cs');
+
+function agentOriginKeys(): string[] {
+  const source = readFileSync(COPILOT_AGENT_CLASSIFIER, 'utf8');
+  const start = source.indexOf('class CopilotAgentOriginKeys');
+  expect(start, 'Could not find CopilotAgentOriginKeys').toBeGreaterThanOrEqual(0);
+  const body = source.slice(start, source.indexOf('public static string For', start));
+  return [...body.matchAll(/public\s+const\s+string\s+\w+\s*=\s*"([^"]+)";/g)].map((m) => m[1]);
+}
+
+describe('Copilot Adoption agent origin labels', () => {
+  it('finds the classifier that defines them', () => {
+    expect(agentOriginKeys().length).toBeGreaterThanOrEqual(3);
+  });
+
+  it('has a SPA label for every origin key the server can send, and none it cannot', () => {
+    expect(Object.keys(AGENT_ORIGIN_LABEL_KEYS).sort()).toEqual(agentOriginKeys().sort());
+  });
+
+  it('has catalog text for every origin label', () => {
+    const missing = Object.values(AGENT_ORIGIN_LABEL_KEYS).filter((catalogKey) => !(catalogKey in EN_CATALOG));
+    expect(missing, 'Add the missing agent origin labels to copilotAdoptionAgents in en/es.').toEqual([]);
   });
 });
 

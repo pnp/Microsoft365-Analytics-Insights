@@ -2298,7 +2298,11 @@ namespace Common.Entities.CopilotAdoption
             var estate = summary.Agents;
 
             estate.KnownAgents = agents.Count;
-            estate.CustomAgents = agents.Count(a => a.IsCustomAgent);
+            // Origin is decided per agent when the inventory is read (CopilotAgentClassifier.ResolveStoredOrigin).
+            // An agent of unknown origin is counted on its own rather than as customer-built or as Microsoft's.
+            estate.CustomAgents = agents.Count(a => a.IsCustomerBuilt);
+            estate.UnknownOriginAgents = agents.Count(a =>
+                a.Origin != CopilotAgentOriginKeys.CustomerBuilt && a.Origin != CopilotAgentOriginKeys.Microsoft);
 
             var activeInWindow = agents
                 .Where(a => a.LastUsedUtc.HasValue && a.LastUsedUtc.Value >= summary.FromUtc)

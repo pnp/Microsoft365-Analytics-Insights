@@ -48,7 +48,7 @@ namespace Tests.UnitTests
             => $@"{{
                 ""RecordType"": 261, ""Operation"": ""CopilotInteraction"", ""Workload"": ""Copilot"",
                 ""AgentId"": ""{agentId}"",
-                ""AgentBlueprintId"": ""25664c89-cea5-4ab6-b924-a54fd8a19ae0"",
+                ""AgentBlueprintId"": ""00000000-0000-0000-0000-000000000000"",
                 ""AgentPlatform"": ""CopilotStudio"",
                 ""AppIdentity"": ""Copilot.Studio.{environmentId}-{SchemaName}"",
                 ""PlatformAgentId"": ""{environmentId}_{BotId}"",
@@ -105,8 +105,8 @@ namespace Tests.UnitTests
 
             Assert.IsNull(runtime.AgentName, "The runtime record carries no display name, and none is made up for it.");
             Assert.AreEqual(SchemaName, runtime.AgentFallbackName);
-            Assert.AreSame(CopilotCreditEstimation.NoCost, runtime.Cost,
-                "The fallback name must not send the record through credit estimation; #639 owns that.");
+            Assert.AreEqual(0, runtime.Cost.TotalCredits, "The runtime record carries no Messages, so it is never priced (#639).");
+            Assert.AreEqual(CopilotAgentCreditBasis.NoMessages, runtime.Cost.AgentCreditBasis);
         }
 
         [TestMethod]

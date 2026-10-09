@@ -1,5 +1,6 @@
 using ActivityImporter.Engine.ActivityAPI.Copilot;
 using Common.Entities;
+using Common.Entities.Copilot;
 using DataUtils;
 using Microsoft.Extensions.Logging;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
@@ -19,6 +20,14 @@ namespace Tests.UnitTests
     [TestClass]
     public class CopilotTests
     {
+        /// <summary>A customer-built custom-engine agent: the only kind the estimate prices.</summary>
+        private static readonly CopilotAgentClassification CustomEngineAgent =
+            new CopilotAgentClassification(CopilotAgentKind.CustomEngine, CopilotAgentOrigin.CustomerBuilt);
+
+        /// <summary>One of Microsoft's own agents, which the estimate never prices.</summary>
+        private static readonly CopilotAgentClassification MicrosoftAgent =
+            new CopilotAgentClassification(CopilotAgentKind.Unknown, CopilotAgentOrigin.Microsoft);
+
         protected ILogger _logger;
         protected TestsAppConfig _config;
 
@@ -1199,7 +1208,9 @@ namespace Tests.UnitTests
             Assert.AreEqual(appIdentity, result.AgentId, "AgentId should be set to AppIdentity value");
             Assert.AreEqual(appIdentity, result.AppIdentity, "AppIdentity should be preserved");
             Assert.AreEqual(organizationId, result.OrganizationId, "OrganizationId should be preserved");
-            Assert.IsNull(result.IsCustomAgent, "IsCustomAgent should always be null from FromJson");
+            Assert.AreEqual(CopilotAgentKind.CustomEngine, result.AgentKind, "A Copilot Studio runtime AppIdentity is a custom-engine agent");
+            Assert.AreEqual(CopilotAgentOrigin.CustomerBuilt, result.AgentOrigin, "A Copilot Studio runtime AppIdentity is customer-built");
+            Assert.AreEqual(true, result.IsCustomAgent, "is_custom_agent means customer-built");
         }
 
         /// <summary>
@@ -1377,14 +1388,17 @@ namespace Tests.UnitTests
             Assert.IsNotNull(result, "Result should not be null");
             Assert.AreEqual(existingAgentName, result.AgentName, "Existing AgentName should be preserved");
             Assert.AreEqual(existingAgentId, result.AgentId, "Existing AgentId should be preserved");
-            Assert.IsNull(result.IsCustomAgent, "IsCustomAgent should always be null from FromJson");
+            Assert.AreEqual(CopilotAgentKind.CustomEngine, result.AgentKind,
+                "The id is unrecognised, but the Copilot Studio runtime AppIdentity says what the agent is");
+            Assert.AreEqual(true, result.IsCustomAgent, "A Copilot Studio agent is customer-built");
         }
 
         /// <summary>
-        /// Tests that declarative agents (AgentId starting with "CopilotStudio.Declarative.") are not marked as custom
+        /// A declarative Copilot Studio agent is customer-built, so is_custom_agent is true, but it is not a
+        /// custom-engine agent, so the credit estimate does not price it. One flag used to stand for both (#639).
         /// </summary>
         [TestMethod]
-        public void CopilotAuditLogContent_FromJson_DeclarativeAgentIsNotCustom()
+        public void CopilotAuditLogContent_FromJson_DeclarativeAgentIsCustomerBuiltButNotPriced()
         {
             // Arrange
             var agentName = "DeclarativeAgent";
@@ -1396,7 +1410,8 @@ namespace Tests.UnitTests
                 ""CopilotEventData"": {{
                     ""AppHost"": ""Teams"",
                     ""AccessedResources"": [],
-                    ""Contexts"": []
+                    ""Contexts"": [],
+                    ""Messages"": [ {{ ""Id"": ""1"", ""isPrompt"": true }}, {{ ""Id"": ""2"", ""isPrompt"": false }} ]
                 }}
             }}";
 
@@ -1407,7 +1422,11 @@ namespace Tests.UnitTests
             Assert.IsNotNull(result, "Result should not be null");
             Assert.AreEqual(agentName, result.AgentName, "AgentName should be preserved");
             Assert.AreEqual(agentId, result.AgentId, "AgentId should be preserved");
-            Assert.IsNull(result.IsCustomAgent, "IsCustomAgent should always be null from FromJson");
+            Assert.AreEqual(CopilotAgentKind.Declarative, result.AgentKind, "Purview documents CopilotStudio.Declarative.* as a declarative agent");
+            Assert.AreEqual(CopilotAgentOrigin.CustomerBuilt, result.AgentOrigin, "...created through Copilot Studio, so customer-built");
+            Assert.AreEqual(true, result.IsCustomAgent, "is_custom_agent means customer-built, not custom-engine");
+            Assert.AreEqual(0, result.Cost.TotalCredits, "The estimate does not price declarative agents");
+            Assert.AreEqual(CopilotAgentCreditBasis.Declarative, result.Cost.AgentCreditBasis, "...and says so, so the 0 is a finding");
         }
 
         /// <summary>
@@ -1437,7 +1456,8 @@ namespace Tests.UnitTests
             Assert.IsNotNull(result, "Result should not be null");
             Assert.AreEqual(targetAgentName, result.AgentName, "AgentName should be set from TargetAgentName");
             Assert.AreEqual(agentId, result.AgentId, "AgentId should be preserved from JSON");
-            Assert.IsNull(result.IsCustomAgent, "IsCustomAgent should always be null from FromJson");
+            Assert.AreEqual(CopilotAgentKind.CustomEngine, result.AgentKind, "A TargetAgentName marks a custom-engine agent");
+            Assert.AreEqual(true, result.IsCustomAgent, "...which, on an id with no first-party shape, is customer-built");
         }
 
         /// <summary>
@@ -1468,7 +1488,8 @@ namespace Tests.UnitTests
             // Assert
             Assert.AreEqual(targetAgentName, result.AgentName, "TargetAgentName should take priority over AgentName");
             Assert.AreEqual(agentId, result.AgentId, "AgentId should be preserved");
-            Assert.IsNull(result.IsCustomAgent, "IsCustomAgent should always be null from FromJson");
+            Assert.AreEqual(CopilotAgentKind.CustomEngine, result.AgentKind, "The TargetAgentName decides the kind, not the AgentName");
+            Assert.AreEqual(true, result.IsCustomAgent, "A custom-engine agent on an unrecognised id is customer-built");
         }
 
         /// <summary>
@@ -1499,7 +1520,8 @@ namespace Tests.UnitTests
             // Assert
             Assert.AreEqual(targetAgentName, result.AgentName, "TargetAgentName should be used instead of AppIdentity extraction");
             Assert.AreEqual(appIdentity, result.AgentId, "AgentId should fall back to AppIdentity when not set in JSON");
-            Assert.IsNull(result.IsCustomAgent, "IsCustomAgent should always be null from FromJson");
+            Assert.AreEqual(CopilotAgentKind.CustomEngine, result.AgentKind, "A Copilot Studio runtime AppIdentity is a custom-engine agent");
+            Assert.AreEqual(true, result.IsCustomAgent, "A Copilot Studio agent is customer-built");
         }
 
         /// <summary>
@@ -1528,7 +1550,8 @@ namespace Tests.UnitTests
             // Assert
             Assert.AreEqual(targetAgentName, result.AgentName, "AgentName should be set from TargetAgentName");
             Assert.AreEqual(appIdentity, result.AgentId, "AgentId should fall back to AppIdentity when not in JSON");
-            Assert.IsNull(result.IsCustomAgent, "IsCustomAgent should always be null from FromJson");
+            Assert.AreEqual(CopilotAgentKind.CustomEngine, result.AgentKind, "A TargetAgentName marks a custom-engine agent");
+            Assert.AreEqual(true, result.IsCustomAgent, "A Copilot.Studio.* key is customer-built");
         }
 
         /// <summary>
@@ -1559,7 +1582,8 @@ namespace Tests.UnitTests
             // Assert
             Assert.AreEqual(targetAgentName, result.AgentName, "AgentName should be set from TargetAgentName");
             Assert.AreEqual(agentId, result.AgentId, "AgentId from JSON should be preserved, not overwritten by AppIdentity");
-            Assert.IsNull(result.IsCustomAgent, "IsCustomAgent should always be null from FromJson");
+            Assert.AreEqual(CopilotAgentKind.CustomEngine, result.AgentKind, "A TargetAgentName marks a custom-engine agent");
+            Assert.AreEqual(true, result.IsCustomAgent, "A custom-engine agent on an unrecognised id is customer-built");
         }
 
         /// <summary>
@@ -1672,8 +1696,13 @@ namespace Tests.UnitTests
 
             // Assert
             Assert.IsNotNull(result.Cost, "Cost should be calculated for TargetAgentName (custom agent)");
-            Assert.IsNull(result.IsCustomAgent, "IsCustomAgent should always be null from FromJson");
+            Assert.AreEqual(CopilotAgentKind.CustomEngine, result.AgentKind, "A TargetAgentName marks a custom-engine agent");
+            Assert.AreEqual(true, result.IsCustomAgent, "...on an unrecognised id, customer-built");
             Assert.AreEqual("CostTestAgent", result.AgentName, "AgentName should be set from TargetAgentName");
+            Assert.AreEqual(CopilotAgentCreditBasis.CustomEngine, result.Cost.AgentCreditBasis);
+            Assert.AreEqual(12, result.Cost.TotalCredits,
+                "One response grounded on a SharePoint site: 2 (generative answer) + 10 (tenant graph grounding). "
+                + "This was 0 from Stable build 1552 until #639, because FromJson never classified the agent.");
         }
 
         /// <summary>
@@ -1828,7 +1857,8 @@ namespace Tests.UnitTests
                 Assert.IsNotNull(result, $"Result should not be null for agent name: {expectedAgentName}");
                 Assert.AreEqual(expectedAgentName, result.AgentName, $"AgentName should be correctly extracted for: {expectedAgentName}");
                 Assert.AreEqual(appIdentity, result.AgentId, $"AgentId should be set to AppIdentity for: {expectedAgentName}");
-                Assert.IsNull(result.IsCustomAgent, $"IsCustomAgent should always be null from FromJson for: {expectedAgentName}");
+                Assert.AreEqual(CopilotAgentKind.CustomEngine, result.AgentKind, $"A Copilot Studio runtime AppIdentity is custom-engine: {expectedAgentName}");
+                Assert.AreEqual(true, result.IsCustomAgent, $"A Copilot Studio runtime AppIdentity is customer-built: {expectedAgentName}");
             }
         }
 
@@ -1955,7 +1985,7 @@ namespace Tests.UnitTests
             }";
 
             // Act - analyze for custom agent
-            var customAgentCost = CopilotCreditEstimation.Analyze(json, isCustomAgent: true);
+            var customAgentCost = CopilotCreditEstimation.Analyze(json, CustomEngineAgent);
 
             // Assert - custom agent should be charged
             Assert.AreEqual(2, customAgentCost.GenerativeAnswers, "Custom agent should have 2 generative answers");
@@ -1963,7 +1993,7 @@ namespace Tests.UnitTests
             Assert.AreEqual(24, customAgentCost.TotalCredits, "Custom agent should be charged 24 credits (2 * (2 + 10))");
 
             // Act - analyze for non-custom (standard M365) agent
-            var standardAgentCost = CopilotCreditEstimation.Analyze(json, isCustomAgent: false);
+            var standardAgentCost = CopilotCreditEstimation.Analyze(json, MicrosoftAgent);
 
             // Assert - standard agent should NOT be charged
             Assert.AreEqual(0, standardAgentCost.GenerativeAnswers, "Standard agent should have 0 generative answers counted");
@@ -1995,7 +2025,7 @@ namespace Tests.UnitTests
             }";
 
             // Act - analyze for custom agent
-            var customAgentCost = CopilotCreditEstimation.Analyze(json, isCustomAgent: true);
+            var customAgentCost = CopilotCreditEstimation.Analyze(json, CustomEngineAgent);
 
             // Assert - custom agent should be charged for deep reasoning
             Assert.AreEqual(1, customAgentCost.DeepReasoningActions, "Custom agent should have 1 deep reasoning action");
@@ -2003,7 +2033,7 @@ namespace Tests.UnitTests
             Assert.IsTrue(customAgentCost.ModelsUsed.Contains("DEEP_LEO"), "DEEP_LEO model should be tracked for custom agent");
 
             // Act - analyze for non-custom (standard M365) agent
-            var standardAgentCost = CopilotCreditEstimation.Analyze(json, isCustomAgent: false);
+            var standardAgentCost = CopilotCreditEstimation.Analyze(json, MicrosoftAgent);
 
             // Assert - standard agent should NOT be charged for deep reasoning
             Assert.AreEqual(0, standardAgentCost.DeepReasoningActions, "Standard agent should have 0 deep reasoning actions counted");
@@ -2033,7 +2063,7 @@ namespace Tests.UnitTests
             }";
 
             // Act - analyze for custom agent (should only charge for generative, not tenant graph)
-            var customAgentCost = CopilotCreditEstimation.Analyze(json, isCustomAgent: true);
+            var customAgentCost = CopilotCreditEstimation.Analyze(json, CustomEngineAgent);
 
             // Assert - custom agent charged for generative only (no tenant graph)
             Assert.AreEqual(2, customAgentCost.GenerativeAnswers, "Custom agent should have 2 generative answers");
@@ -2041,7 +2071,7 @@ namespace Tests.UnitTests
             Assert.AreEqual(4, customAgentCost.TotalCredits, "Custom agent should be charged 4 credits (2 * 2)");
 
             // Act - analyze for standard agent
-            var standardAgentCost = CopilotCreditEstimation.Analyze(json, isCustomAgent: false);
+            var standardAgentCost = CopilotCreditEstimation.Analyze(json, MicrosoftAgent);
 
             // Assert - standard agent has 0 credits
             Assert.AreEqual(0, standardAgentCost.TotalCredits, "Standard agent should have 0 credits even with web searches");
@@ -2073,7 +2103,7 @@ namespace Tests.UnitTests
             }";
 
             // Act - analyze for custom agent
-            var customAgentCost = CopilotCreditEstimation.Analyze(json, isCustomAgent: true);
+            var customAgentCost = CopilotCreditEstimation.Analyze(json, CustomEngineAgent);
 
             // Assert - custom agent full billing
             Assert.AreEqual(3, customAgentCost.GenerativeAnswers, "3 response messages");
@@ -2086,7 +2116,7 @@ namespace Tests.UnitTests
             Assert.IsTrue(customAgentCost.CreditBreakdown.ContainsKey("Agent Actions (Deep Reasoning)"), "Should have deep reasoning breakdown");
 
             // Act - analyze for standard agent
-            var standardAgentCost = CopilotCreditEstimation.Analyze(json, isCustomAgent: false);
+            var standardAgentCost = CopilotCreditEstimation.Analyze(json, MicrosoftAgent);
 
             // Assert - standard agent no billing but analytics preserved
             Assert.AreEqual(0, standardAgentCost.GenerativeAnswers, "No answers counted for standard agent");
@@ -2114,19 +2144,19 @@ namespace Tests.UnitTests
             }";
 
             // Act
-            var customAgentCost = CopilotCreditEstimation.Analyze(emptyJson, isCustomAgent: true);
-            var standardAgentCost = CopilotCreditEstimation.Analyze(emptyJson, isCustomAgent: false);
+            var customAgentCost = CopilotCreditEstimation.Analyze(emptyJson, CustomEngineAgent);
+            var standardAgentCost = CopilotCreditEstimation.Analyze(emptyJson, MicrosoftAgent);
 
             // Assert - both should return 0
             Assert.AreEqual(0, customAgentCost.TotalCredits, "Empty custom agent event should have 0 credits");
             Assert.AreEqual(0, standardAgentCost.TotalCredits, "Empty standard agent event should have 0 credits");
 
             // Test null string
-            var nullCost = CopilotCreditEstimation.Analyze((string)null, isCustomAgent: true);
+            var nullCost = CopilotCreditEstimation.Analyze((string)null, CustomEngineAgent);
             Assert.AreEqual(0, nullCost.TotalCredits, "Null event should have 0 credits");
 
             // Test empty string
-            var emptyCost = CopilotCreditEstimation.Analyze(string.Empty, isCustomAgent: true);
+            var emptyCost = CopilotCreditEstimation.Analyze(string.Empty, CustomEngineAgent);
             Assert.AreEqual(0, emptyCost.TotalCredits, "Empty string should have 0 credits");
         }
 
