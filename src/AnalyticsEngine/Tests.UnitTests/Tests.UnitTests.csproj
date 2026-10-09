@@ -373,6 +373,7 @@
     <Compile Include="CopilotAdoptionCoworkTests.cs" />
     <Compile Include="CopilotAdoptionEmailDomainTests.cs" />
     <Compile Include="CopilotAdoptionLicenceEstimateTests.cs" />
+    <Compile Include="CopilotAdoptionManagerModellingTests.cs" />
     <Compile Include="CopilotAdoptionMicrosoftReportTests.cs" />
     <Compile Include="CopilotAdoptionSeatTimeSavedTests.cs" />
     <Compile Include="CopilotAdoptionAgentUsersTests.cs" />

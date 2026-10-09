@@ -261,6 +261,9 @@ namespace Common.Entities.CopilotAdoption
                 CoworkAssessedForWholePopulation = tenant.CoworkReadinessAvailable && !CoworkCapped(analysis, tenant),
                 CoworkAssessmentCapped = tenant.CoworkReadinessAvailable && CoworkCapped(analysis, tenant),
                 UnlicensedUsers = Narrow(analysis.UnlicensedUsers, u => u.UserId, u => u.EmailDomain, scope),
+                // Resolved against the whole tenant, not the slice: a report in this view may well have a
+                // manager outside it, and that manager's own Copilot use is no less known for it (#641).
+                ManagerDirectory = CopilotAdoptionManagerModelling.InheritedDirectory(analysis),
                 SeatHolderTimeSavedRows = NarrowSeatTimeRows(analysis.SeatHolderTimeSavedRows, licensedUsers),
                 SeatHolderTimeSavedAssessed = analysis.SeatHolderTimeSavedAssessed,
             };

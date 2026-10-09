@@ -852,6 +852,7 @@ namespace Common.Entities.CopilotAdoption
                 }
 
                 analysis.UnlicensedUsers = rows;
+                analysis.UnlicensedUsageAssessed = true;
                 summary.Unlicensed.Truncated = rows.Count >= _options.MaxUnlicensedUsersScored;
 
                 if (summary.Unlicensed.Truncated)
@@ -1850,6 +1851,12 @@ namespace Common.Entities.CopilotAdoption
             {
                 summary.AccountabilityRollup = BuildAccountabilityRollup(users, summary.AccountabilityDimension);
             }
+
+            // Do people managers use Copilot themselves, and how do their teams compare (#641)? From the
+            // rows already in memory: one dictionary build and one pass, no SQL. Resolved against the
+            // whole tenant's rows even in a narrowed view, and after the department breakdown, whose
+            // departments it is shown beside.
+            CopilotAdoptionManagerModelling.Apply(analysis, "(no department)", _options.MinSeatsPerSegment);
 
             FinaliseAgents(analysis);
             FinaliseUnlicensed(analysis);

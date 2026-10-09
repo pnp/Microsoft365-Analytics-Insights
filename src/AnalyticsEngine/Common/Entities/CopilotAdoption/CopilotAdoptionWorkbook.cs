@@ -1146,6 +1146,8 @@ namespace Common.Entities.CopilotAdoption
                 }
             }
 
+            WriteManagerModellingSection(sheet, summary);
+
             // Where unlicensed Copilot demand concentrates. Sits next to the licensed breakdowns on
             // purpose: a department high in both is an allocation problem rather than an adoption one,
             // and can usually be fixed by moving seats rather than by buying them.
@@ -1215,6 +1217,84 @@ namespace Common.Entities.CopilotAdoption
                 {
                     sheet.AddRow(type.Label, CopilotAccessedResourceTaxonomy.KindLabel(type.Kind), type.Value);
                 }
+            }
+        }
+
+        /// <summary>
+        /// Do people managers use Copilot themselves, and how do their direct reports compare (#641)? The
+        /// whole population first, then each department of the adoption table above.
+        /// </summary>
+        /// <remarks>
+        /// Aggregates only, by design: the roll-up by direct manager above carries none of this, because a
+        /// row per manager with that manager's own status would disclose one person's use. A blank cell is
+        /// a figure withheld for the minimum group size or with nothing to divide - never a zero.
+        /// </remarks>
+        private static void WriteManagerModellingSection(XlsxSheet sheet, CopilotAdoptionSummary summary)
+        {
+            var departments = summary.ManagerModellingByDepartment ?? new List<ManagerModellingSegmentRow>();
+            if (departments.Count == 0) return;
+
+            if (summary.ReportsWithManager == 0)
+            {
+                sheet.AddBlankRow();
+                sheet.AddRow(XlsxCell.Wrapped(
+                    "Do people managers use Copilot themselves? Not shown: no licensed user analysed has a recorded "
+                    + "manager with an enabled account, so there is no team to compare. Managers come from the user "
+                    + "metadata import."));
+                return;
+            }
+
+            var whole = new ManagerModellingSegmentRow { Segment = PopulationLabel(summary), LicensedUsers = summary.ScoredUsers };
+            whole.CopyFrom(summary);
+            var rows = new List<ManagerModellingSegmentRow> { whole };
+            rows.AddRange(departments);
+
+            sheet.AddBlankRow();
+            sheet.AddRow(XlsxCell.Wrapped(
+                "Do people managers use Copilot themselves, and how do their direct reports compare? A direct report is "
+                + "an enabled licensed user whose manager is someone else with an enabled account; a people manager is "
+                + "anyone who manages at least one, with or without a Copilot seat. A manager whose own use cannot be "
+                + "determined is counted as unknown and left out of both sides of the comparison. Each department "
+                + $"is the report's own. Figures for fewer than {summary.Options.MinSeatsPerSegment} people managers, "
+                + "or a rate over fewer reports than that, are left blank. This is an association, not a cause: teams "
+                + "whose manager uses Copilot may differ in function, seniority or seat coverage."));
+            sheet.AddHeaderRow(
+                "Department", "Seats", "Direct reports", "Managers, use known", "Managers, use unknown",
+                "Managers using Copilot %",
+                "Reports - manager uses Copilot", "Active % - manager uses Copilot", "Habit % - manager uses Copilot",
+                "Reports - manager does not", "Active % - manager does not", "Habit % - manager does not",
+                "Reports - manager unknown");
+
+            foreach (var row in rows)
+            {
+                sheet.AddRow(
+                    row.Segment, row.LicensedUsers, row.ReportsWithManager, row.ManagersStatusKnown,
+                    row.ManagersStatusUnknown, row.ManagersActivePct,
+                    row.ReportsManagerActive, row.ReportsActiveRatePctManagerActive, row.ReportsHabitRatePctManagerActive,
+                    row.ReportsManagerInactive, row.ReportsActiveRatePctManagerInactive, row.ReportsHabitRatePctManagerInactive,
+                    row.ReportsManagerUnknown);
+            }
+
+            sheet.AddBlankRow();
+            sheet.AddRow(XlsxCell.Wrapped(
+                "The same comparison, split by whether the manager holds a Copilot seat. A manager with a seat is more "
+                + "likely both to use Copilot and to lead a team that was given seats, which on its own would widen the "
+                + "gap above - so compare like with like: managers with a seat against managers with a seat."));
+            sheet.AddHeaderRow(
+                "Department",
+                "Reports - uses Copilot, seat", "Active % - uses Copilot, seat", "Habit % - uses Copilot, seat",
+                "Reports - uses Copilot, no seat", "Active % - uses Copilot, no seat", "Habit % - uses Copilot, no seat",
+                "Reports - does not, seat", "Active % - does not, seat", "Habit % - does not, seat",
+                "Reports - does not, no seat", "Active % - does not, no seat", "Habit % - does not, no seat");
+
+            foreach (var row in rows)
+            {
+                sheet.AddRow(
+                    row.Segment,
+                    row.ReportsManagerActiveLicensed, row.ReportsActiveRatePctManagerActiveLicensed, row.ReportsHabitRatePctManagerActiveLicensed,
+                    row.ReportsManagerActiveUnlicensed, row.ReportsActiveRatePctManagerActiveUnlicensed, row.ReportsHabitRatePctManagerActiveUnlicensed,
+                    row.ReportsManagerInactiveLicensed, row.ReportsActiveRatePctManagerInactiveLicensed, row.ReportsHabitRatePctManagerInactiveLicensed,
+                    row.ReportsManagerInactiveUnlicensed, row.ReportsActiveRatePctManagerInactiveUnlicensed, row.ReportsHabitRatePctManagerInactiveUnlicensed);
             }
         }
 
@@ -2406,6 +2486,37 @@ namespace Common.Entities.CopilotAdoption
                 + "instead where it names a real domain - that suffix identifies the tenant, not a company. "
                 + "Anyone whose domain cannot be worked out is grouped as \"(no domain)\" rather than dropped, so "
                 + "the breakdown still adds up to the seat count.");
+
+            AddMethod(sheet, "Do managers use Copilot themselves?",
+                "Direct reports are the licensed users analysed whose account is enabled and whose manager - the direct "
+                + "manager only, never the wider hierarchy - is someone else with an enabled account. A people manager is "
+                + "anyone who directly manages at least one of them, with or without a Copilot seat. Disabled accounts are "
+                + "left out on both sides, and so are the reports of a manager whose account is disabled.\n"
+                + "A manager is Active with any Copilot use in the period: a seat holder whose band is above Dormant, or "
+                + "someone without a seat who appears in the unlicensed Copilot Chat usage. Not active means the data shows "
+                + "no use. Unknown means the data cannot say: a seat holder beyond the analysis limit "
+                + "(maxLicensedUsersScored), someone without a seat when the unlicensed usage stopped at "
+                + "maxUnlicensedUsersScored, failed or could not run (it needs the Copilot audit import), or an external "
+                + "guest, whom the unlicensed usage leaves out. Unknown is never counted as not active: those managers and "
+                + "their reports are left out of both sides of the comparison.\n"
+                + "managersActivePct = managersActive / managersStatusKnown x 100\n"
+                + "reportsActiveRatePctManagerActive = reports active in the period / reportsManagerActive x 100, and "
+                + "likewise for reports whose manager is not active (reportsManagerInactive)\n"
+                + $"reportsHabitRatePctManagerActive = reports with a habit (engagement of {o.EstablishedScore} or more - "
+                + "the same rule as the habit rate) / reportsManagerActive x 100, and likewise for the inactive side\n"
+                + "Each comparison is repeated by whether the manager holds a Copilot seat (the ...Licensed and "
+                + "...Unlicensed figures), because a manager with a seat is more likely both to use Copilot and to lead a "
+                + "team that was given seats, which on its own would widen the gap.\n"
+                + $"Aggregates only. Every figure that depends on managers' own use needs at least {o.MinSeatsPerSegment} "
+                + $"people managers whose use is known, and every rate needs at least {o.MinSeatsPerSegment} reports "
+                + "behind it; anything smaller is left blank. Nothing about a manager's own use is attached to a person's "
+                + "row or to the roll-up by direct manager. On the department table each report counts in their own "
+                + "department, and the departments are those of the adoption-by-department table.");
+
+            AddMethod(sheet, "Managers and their teams: an association, not a cause",
+                "A gap between the two report rates says that teams whose manager uses Copilot use it more (or less). It "
+                + "does not say the manager caused it. Teams whose manager uses Copilot may differ in function, seniority "
+                + "or seat coverage, so compare like with like - the split by seat - before drawing a conclusion.");
 
             AddMethod(sheet, "Business case score",
                 "Unlicensed users score 0-100 on four weighted signals, weighted so evidence beats inference:\n"

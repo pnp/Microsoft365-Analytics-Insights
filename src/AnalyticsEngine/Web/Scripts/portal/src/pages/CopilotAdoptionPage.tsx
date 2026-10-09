@@ -65,6 +65,7 @@ import AdoptionPeriodControl, { periodLabel, type FixedPeriod } from '../compone
 import SeatHolderTimeSavedModel from '../components/copilotAdoption/SeatHolderTimeSavedModel';
 import PiiHiddenNote from '../components/shared/PiiHiddenNote';
 import { SegmentTable, BAND_COLOUR_LIST } from '../components/copilotAdoption/adoptionShared';
+import { ManagerModellingLine, hasManagerModelling } from '../components/copilotAdoption/ManagerModelling';
 import { KpiGrid, formatCount, formatDate, formatPct, weightSharePct } from '../components/shared/KpiGrid';
 import type { KpiDefinition } from '../components/shared/KpiGrid';
 import { activeLocale, formatNumber, plural, useT, useTNode, type TFunction, type TranslationKey } from '../i18n';
@@ -1207,6 +1208,14 @@ function ExecutiveTab({
         </Card>
       </div>
 
+      {/* Do people managers use Copilot themselves, and how do their teams compare (#641)? One line
+          with its caveat; the analyst view's department table carries the same figures per department. */}
+      {hasManagerModelling(summary) && (
+        <Card>
+          <ManagerModellingLine summary={summary} />
+        </Card>
+      )}
+
       {/* Only shown on a multi-domain tenant. On a single-domain one it is a table comparing an
           organisation with itself, which is noise on the board-pack view.
 
@@ -1588,7 +1597,17 @@ function AnalystTab({
           />
         </div>
         <div className={styles.cardBody}>
-          <SegmentTable rows={summary.adoptionByDepartment} segmentLabel={t('copilotAdoption.page.department')} bands={bandThresholds} />
+          {hasManagerModelling(summary) && (
+            <div style={{ marginBottom: '16px' }}>
+              <ManagerModellingLine summary={summary} detail />
+            </div>
+          )}
+          <SegmentTable
+            rows={summary.adoptionByDepartment}
+            segmentLabel={t('copilotAdoption.page.department')}
+            bands={bandThresholds}
+            managerModelling={summary.managerModellingByDepartment}
+          />
         </div>
       </Card>
 

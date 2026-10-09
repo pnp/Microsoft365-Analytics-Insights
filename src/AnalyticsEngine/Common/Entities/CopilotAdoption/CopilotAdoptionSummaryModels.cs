@@ -970,6 +970,100 @@ namespace Common.Entities.CopilotAdoption
 
         #endregion
 
+        #region Manager modelling (#641)
+
+        // Do people managers use Copilot themselves, and how do their direct reports compare? Top-level
+        // scalars on purpose, so every one reaches Snapshot facts by itself. Definitions, the "unknown"
+        // status and the minimum group size are on ManagerModellingFigures, which computes them; these
+        // carry the same names and meanings for the whole population this summary describes. Aggregates
+        // only - an association, not a cause - and open to every reader.
+
+        /// <summary>Licensed users counted as direct reports: enabled, with an enabled manager who is someone else.</summary>
+        [JsonProperty("reportsWithManager")]
+        public int ReportsWithManager { get; set; }
+
+        /// <summary>People managers whose own Copilot use in the period is known: the denominator of <see cref="ManagersActivePct"/>.</summary>
+        [JsonProperty("managersStatusKnown")]
+        public int ManagersStatusKnown { get; set; }
+
+        /// <summary>People managers whose own use cannot be determined - kept apart from "not active".</summary>
+        [JsonProperty("managersStatusUnknown")]
+        public int ManagersStatusUnknown { get; set; }
+
+        [JsonProperty("managersActive")]
+        public int? ManagersActive { get; set; }
+
+        /// <summary>Share of people managers (of at least one licensed user) whose use is known who used Copilot themselves, licensed or not.</summary>
+        [JsonProperty("managersActivePct")]
+        public double? ManagersActivePct { get; set; }
+
+        [JsonProperty("reportsManagerActive")]
+        public int? ReportsManagerActive { get; set; }
+
+        [JsonProperty("reportsActiveRatePctManagerActive")]
+        public double? ReportsActiveRatePctManagerActive { get; set; }
+
+        [JsonProperty("reportsHabitRatePctManagerActive")]
+        public double? ReportsHabitRatePctManagerActive { get; set; }
+
+        [JsonProperty("reportsManagerInactive")]
+        public int? ReportsManagerInactive { get; set; }
+
+        [JsonProperty("reportsActiveRatePctManagerInactive")]
+        public double? ReportsActiveRatePctManagerInactive { get; set; }
+
+        [JsonProperty("reportsHabitRatePctManagerInactive")]
+        public double? ReportsHabitRatePctManagerInactive { get; set; }
+
+        [JsonProperty("reportsManagerUnknown")]
+        public int ReportsManagerUnknown { get; set; }
+
+        [JsonProperty("reportsManagerActiveLicensed")]
+        public int? ReportsManagerActiveLicensed { get; set; }
+
+        [JsonProperty("reportsActiveRatePctManagerActiveLicensed")]
+        public double? ReportsActiveRatePctManagerActiveLicensed { get; set; }
+
+        [JsonProperty("reportsHabitRatePctManagerActiveLicensed")]
+        public double? ReportsHabitRatePctManagerActiveLicensed { get; set; }
+
+        [JsonProperty("reportsManagerActiveUnlicensed")]
+        public int? ReportsManagerActiveUnlicensed { get; set; }
+
+        [JsonProperty("reportsActiveRatePctManagerActiveUnlicensed")]
+        public double? ReportsActiveRatePctManagerActiveUnlicensed { get; set; }
+
+        [JsonProperty("reportsHabitRatePctManagerActiveUnlicensed")]
+        public double? ReportsHabitRatePctManagerActiveUnlicensed { get; set; }
+
+        [JsonProperty("reportsManagerInactiveLicensed")]
+        public int? ReportsManagerInactiveLicensed { get; set; }
+
+        [JsonProperty("reportsActiveRatePctManagerInactiveLicensed")]
+        public double? ReportsActiveRatePctManagerInactiveLicensed { get; set; }
+
+        [JsonProperty("reportsHabitRatePctManagerInactiveLicensed")]
+        public double? ReportsHabitRatePctManagerInactiveLicensed { get; set; }
+
+        [JsonProperty("reportsManagerInactiveUnlicensed")]
+        public int? ReportsManagerInactiveUnlicensed { get; set; }
+
+        [JsonProperty("reportsActiveRatePctManagerInactiveUnlicensed")]
+        public double? ReportsActiveRatePctManagerInactiveUnlicensed { get; set; }
+
+        [JsonProperty("reportsHabitRatePctManagerInactiveUnlicensed")]
+        public double? ReportsHabitRatePctManagerInactiveUnlicensed { get; set; }
+
+        /// <summary>
+        /// The same figures for each department in <see cref="AdoptionByDepartment"/>, in its order. The
+        /// department is the report's own. A list, so Snapshot facts carries its row count only - a
+        /// department name is tenant data and never becomes a key.
+        /// </summary>
+        [JsonProperty("managerModellingByDepartment")]
+        public List<ManagerModellingSegmentRow> ManagerModellingByDepartment { get; set; } = new List<ManagerModellingSegmentRow>();
+
+        #endregion
+
         #region Charts
 
         /// <summary>Licensed -&gt; ever used -&gt; active -&gt; habitual -&gt; champion. The story in one chart.</summary>
