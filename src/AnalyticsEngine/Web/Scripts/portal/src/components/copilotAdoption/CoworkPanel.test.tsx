@@ -982,7 +982,7 @@ describe('CoworkPanel without See PII', () => {
   it('keeps the estimate, readiness and rollout, but never asks for or shows the people', async () => {
     const user = userEvent.setup();
     const s = withEstimates();
-    renderWithProvider(<CoworkPanel windowDays={28} summary={s} filterOptions={null} options={s.options} canSeePii={false} />);
+    renderWithProvider(<CoworkPanel windowDays={28} summary={s} options={s.options} canSeePii={false} />);
 
     // The headline still leads - it is modelled from totals - but offers no list to open.
     expect(screen.getByRole('tab', { name: /Time saved/, selected: true })).toBeTruthy();
