@@ -427,6 +427,142 @@ namespace Tests.UnitTests
             Assert.AreEqual(1, await DlpEventCount(client));
         }
 
+        [TestMethod]
+        public async Task Dlp_PreExistingTeamsEchoBlocks_AreReducedToOne_AndReImportChangesNothing()
+        {
+            var s = await NewScenario();
+            var turn = s.Runtime(0, "Microsoft Teams", BlockedResource());
+            var echo = s.Runtime(3, "Microsoft Teams", BlockedResource());
+
+            await CommitCycle(s, pairTurns: false, turn, echo);
+            Assert.AreEqual(2, await DlpEventCount(turn, echo), "An older importer stored both without their conversation ids.");
+
+            await CommitCycle(s, turn, echo);
+
+            var duplicates = await Duplicates(turn, echo);
+            Assert.AreEqual(ExtraRuntimeRecord, duplicates[echo.EventId].Reason);
+            Assert.AreEqual(turn.EventId, duplicates[echo.EventId].CountedEventId);
+            Assert.AreEqual(1, await DlpEventCount(turn, echo), "Reason-2 echoes need the same stored-row repair as reason-1 twins.");
+            Assert.AreEqual(1, await DlpEventCount(turn));
+            var retainedId = await Scalar<int>("SELECT id FROM dbo.copilot_dlp_events WHERE copilot_chat_id = {0}", turn.EventId);
+
+            await CommitCycle(s, echo);
+            await CommitCycle(s, turn, echo);
+
+            Assert.AreEqual(1, await DlpEventCount(turn, echo));
+            Assert.AreEqual(retainedId, await Scalar<int>("SELECT id FROM dbo.copilot_dlp_events WHERE copilot_chat_id = {0}", turn.EventId));
+        }
+
+        [TestMethod]
+        public async Task Dlp_PreExistingEchoBurst_RepairsMatchingSiblingRows_WhenTheCountedRecordHasNoMatch()
+        {
+            var s = await NewScenario();
+            var turn = s.Runtime(0, "Microsoft Teams");
+            var echo = s.Runtime(3, "Microsoft Teams", BlockedResource());
+            var secondEcho = s.Runtime(6, "Microsoft Teams", BlockedResource());
+            var distinctEcho = s.Runtime(9, "Microsoft Teams", BlockedResource().Replace("Καλημέρα κόσμε.docx", "Contoso other.docx"));
+
+            await CommitCycle(s, pairTurns: false, turn, echo, secondEcho, distinctEcho);
+            Assert.AreEqual(3, await DlpEventCount(turn, echo, secondEcho, distinctEcho));
+            await CommitCycle(s, turn, echo, secondEcho, distinctEcho);
+
+            var duplicates = await Duplicates(turn, echo, secondEcho, distinctEcho);
+            Assert.AreEqual(3, duplicates.Count);
+            Assert.IsTrue(duplicates.Values.All(d => d.Reason == ExtraRuntimeRecord && d.CountedEventId == turn.EventId));
+            Assert.AreEqual(2, await DlpEventCount(turn, echo, secondEcho, distinctEcho), "One shared block and one genuinely different resource.");
+            Assert.AreEqual(0, await DlpEventCount(turn), "The repair does not invent or move evidence onto the counted record.");
+            Assert.AreEqual(1, await DlpEventCount(distinctEcho));
+            var retainedIds = await Scalar<string>(
+                $"SELECT STRING_AGG(CONVERT(varchar(20), id), ',') WITHIN GROUP (ORDER BY id) FROM dbo.copilot_dlp_events WHERE copilot_chat_id IN ('{echo.EventId}', '{secondEcho.EventId}', '{distinctEcho.EventId}')");
+
+            await CommitCycle(s, secondEcho);
+            Assert.AreEqual(retainedIds, await Scalar<string>(
+                $"SELECT STRING_AGG(CONVERT(varchar(20), id), ',') WITHIN GROUP (ORDER BY id) FROM dbo.copilot_dlp_events WHERE copilot_chat_id IN ('{echo.EventId}', '{secondEcho.EventId}', '{distinctEcho.EventId}')"));
+        }
+
+        [DataTestMethod]
+        [DataRow("policy")]
+        [DataRow("rule")]
+        [DataRow("resource")]
+        [DataRow("type")]
+        [DataRow("action")]
+        [DataRow("label")]
+        [DataRow("blocked")]
+        public async Task Dlp_EchoRepair_PreservesEveryDifferentMatchTuple(string difference)
+        {
+            var s = await NewScenario();
+            var turn = s.Runtime(0, "Microsoft Teams", BlockedResource());
+            var echo = s.Runtime(3, "Microsoft Teams", BlockedResource());
+            await CommitCycle(s, pairTurns: false, turn, echo);
+
+            // Clone a genuinely different match on the echo. NULL label/action values are part of the tuple,
+            // not wildcards; a single differing column must be enough to keep both matches.
+            var column = new Dictionary<string, string>
+            {
+                ["policy"] = "dlp_policy_id",
+                ["rule"] = "dlp_rule_id",
+                ["resource"] = "resource_name_id",
+                ["type"] = "resource_type_id",
+                ["action"] = "dlp_action_id",
+                ["label"] = "sensitivity_label_id",
+                ["blocked"] = "is_blocked",
+            }[difference];
+            if (difference == "label")
+            {
+                await Sql(@"IF NOT EXISTS (SELECT 1 FROM dbo.sensitivity_labels WHERE label_id = N'00000000-0000-0000-0000-000000000746')
+INSERT dbo.sensitivity_labels (label_id) VALUES (N'00000000-0000-0000-0000-000000000746');");
+            }
+            var differentValue = difference == "label"
+                ? "(SELECT id FROM dbo.sensitivity_labels WHERE label_id = N'00000000-0000-0000-0000-000000000746')"
+                : difference == "blocked" ? "CAST(0 AS bit)" : "NULL";
+            var tuple = new[] { "dlp_policy_id", "dlp_rule_id", "dlp_action_id", "resource_name_id", "resource_type_id", "sensitivity_label_id", "is_blocked" };
+            await Sql($@"INSERT dbo.copilot_dlp_events (copilot_chat_id, {string.Join(", ", tuple)})
+SELECT copilot_chat_id, {string.Join(", ", tuple.Select(c => c == column ? differentValue : c))}
+FROM dbo.copilot_dlp_events WHERE copilot_chat_id = {{0}};", echo.EventId);
+
+            // A DLP.All workload match is a separate source and must not be deleted by Copilot repair.
+            await Sql("INSERT dbo.dlp_rule_matches (event_id, is_blocked) VALUES ({0}, 1);", echo.EventId);
+            await CommitCycle(s, turn, echo);
+
+            Assert.AreEqual(2, await DlpEventCount(turn, echo), "The shared tuple collapses but the different tuple survives: " + difference);
+            Assert.AreEqual(1, await DlpEventCount(turn));
+            Assert.AreEqual(1, await DlpEventCount(echo));
+            Assert.AreEqual(1, await Scalar<int>("SELECT COUNT(*) FROM dbo.dlp_rule_matches WHERE event_id = {0}", echo.EventId));
+
+            await CommitCycle(s, echo, turn);
+            Assert.AreEqual(2, await DlpEventCount(turn, echo), "A re-run preserves both different matches.");
+        }
+
+        [TestMethod]
+        public async Task Dlp_AlreadyPairedRecords_RepairOldCopiesOnReRun_WithoutSweepingOtherTurns()
+        {
+            var s = await NewScenario();
+            var runtime = s.Runtime(0, accessedResources: BlockedResource());
+            var client = s.Client(5, accessedResources: BlockedResource());
+            await CommitCycle(s, runtime, client);
+            await Sql(@"INSERT dbo.copilot_dlp_events (copilot_chat_id, dlp_policy_id, dlp_rule_id, dlp_action_id, resource_name_id, resource_type_id, sensitivity_label_id, is_blocked)
+SELECT {0}, dlp_policy_id, dlp_rule_id, dlp_action_id, resource_name_id, resource_type_id, sensitivity_label_id, is_blocked
+FROM dbo.copilot_dlp_events WHERE copilot_chat_id = {1};", runtime.EventId, client.EventId);
+
+            var other = await NewScenario();
+            var otherTurn = other.Runtime(0, "Microsoft Teams", BlockedResource());
+            var otherEcho = other.Runtime(3, "Microsoft Teams", BlockedResource());
+            await CommitCycle(other, pairTurns: false, otherTurn, otherEcho);
+            await Sql(@"INSERT dbo.copilot_chat_duplicates (event_id, time_stamp, counted_event_id, reason)
+SELECT event_id, time_stamp, {0}, 2 FROM dbo.copilot_chats WHERE event_id = {1};", otherTurn.EventId, otherEcho.EventId);
+
+            await CommitCycle(s, runtime);
+
+            AssertPaired(await Duplicates(runtime, client), runtime, client);
+            Assert.AreEqual(1, await DlpEventCount(runtime, client), "An existing reason-1 mapping needs repair even when #turn_pairs is empty.");
+            Assert.AreEqual(1, await DlpEventCount(client));
+            Assert.AreEqual(2, await DlpEventCount(otherTurn, otherEcho), "An unrelated turn outside the affected user/agent set is not swept.");
+
+            await CommitCycle(s, client, runtime);
+            Assert.AreEqual(1, await DlpEventCount(runtime, client));
+            Assert.AreEqual(2, await DlpEventCount(otherTurn, otherEcho));
+        }
+
         #endregion
 
         #region Helpers
@@ -485,7 +621,9 @@ namespace Tests.UnitTests
         /// re-read, as the importer's look-back window does), then the Copilot merge, then the DLP merge, in
         /// the order SaveSession commits them.
         /// </summary>
-        private async Task CommitCycle(Scenario scenario, params Record[] records)
+        private Task CommitCycle(Scenario scenario, params Record[] records) => CommitCycle(scenario, true, records);
+
+        private async Task CommitCycle(Scenario scenario, bool pairTurns, params Record[] records)
         {
             var copilot = new CopilotAuditEventManager(_config.ConnectionStrings.DatabaseConnectionString, new FakeCopilotMetadataLoader(), _logger);
             var dlp = new DlpAuditEventManager(_config.ConnectionStrings.DatabaseConnectionString, _logger);
@@ -509,6 +647,10 @@ namespace Tests.UnitTests
                     }
 
                     var content = CopilotAuditLogContent.FromJson(record.Json);
+                    if (!pairTurns)
+                    {
+                        content.CopilotEventData.ConversationId = null;
+                    }
                     await copilot.SaveSingleCopilotEventToSqlStaging(content, auditEvent);
                     await dlp.SaveCopilotDlpMatchesToSqlStaging(content, auditEvent);
                 }

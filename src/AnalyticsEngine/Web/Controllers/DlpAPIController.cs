@@ -772,20 +772,23 @@ GROUP BY p.policy_id, p.name;";
         // ---------------------------------------------------------------------------------------------------
         // Governance signals (#648)
         //
-        // One statement per detail table. Each starts from the window's interactions, read through
-        // IX_copilot_chats_time_stamp_user_id, is narrowed by the same scope marker as the rest of the page, and
-        // returns one row - or one row per model or plugin name - so nothing per interaction leaves SQL.
+        // One statement per detail table. Each starts from the window's counted turns, read through
+        // IX_copilot_chats_time_stamp_user_id and narrowed by the same scope marker as the rest of the page.
+        // The NOT EXISTS matches CopilotTurnSql.CountedTurn on (time_stamp, event_id). A turn expands to its
+        // constituent audit records through IX_copilot_chat_duplicates_counted_event_id: none of their
+        // signal evidence is discarded, even when a constituent sits just outside the window boundary.
+        // Only aggregates leave SQL. Keep the statements self-contained constants for the benchmark reader.
         // OPTION (RECOMPILE) because the windows differ by 25x in size: a plan compiled for 7 days must not be
         // reused for 180, nor the reverse.
         //
-        // No index carries the two flags, so each detail table is read by scanning its clustered index (messages
-        // twice, once per count) and hash-joined to the window. That was measured against the alternatives at
+        // No index carries the two flags. The original raw-record queries' scans and semi-joins were measured at
         // synthetic 200,000-user scale (4M interactions over 180 days, 8.4M messages, 7M accessed resources) by
         // Benchmarks/Invoke-CopilotGovernanceBenchmark.ps1, which reads these constants out of this file - keep
         // their names starting with "Governance". The rejected shape matters most: reducing each interaction with
         // OUTER APPLY ("aggregate per interaction, seek through the time_stamp index") made the optimiser spool
         // both tables and probe the spool once per interaction - 54M logical reads and 52 s at 28 days, against
-        // 251k reads and about 4 s for the two statements below that replace it. Results in the PR for #648.
+        // 251k reads and about 4 s for the original two statements. Those measurements predate turn pairing:
+        // distinct turn counts and the resource-identity aggregate below also retain every twin's evidence.
         // ---------------------------------------------------------------------------------------------------
 
         /// <summary>
@@ -797,31 +800,38 @@ GROUP BY p.policy_id, p.name;";
         /// one of its messages carries the flag, true or false, and in the numerator only if one carries it true.
         /// One whose messages are all NULL - every row imported before #570, and any payload that omits the field -
         /// is in neither.</para>
-        /// <para>Semi-joins rather than a per-interaction <c>GROUP BY</c>: each counts an interaction once however
-        /// many messages it has, without aggregating the join. The grouped form reads the table once rather than
-        /// twice, but its hash aggregate spills to tempdb (the optimiser cannot see that the flags sit in recent
-        /// rows): in every interleaved A/B on the benchmark fixture it was slower, by 8-63%, for half the logical reads.
-        /// The flagged count reads few rows: its scan keeps only <c>= 1</c> and seeks each interaction by its key.</para>
+        /// <para>Semi-joins reduce each constituent record's messages before distinct turn counts. A flag
+        /// reported on either the counted record or one of its twins belongs to the turn; NULL on the other
+        /// records cannot turn it into a clean or unreported turn.</para>
         /// </remarks>
         internal const string GovernanceMessagesSql = @"
+WITH turn_records AS (
+    SELECT c.event_id AS counted_event_id, turn_record.event_id
+    FROM dbo.copilot_chats AS c
+    CROSS APPLY (
+        SELECT c.event_id
+        UNION ALL
+        SELECT constituent.event_id FROM dbo.copilot_chat_duplicates AS constituent
+        WHERE constituent.counted_event_id = c.event_id
+    ) AS turn_record
+    WHERE c.time_stamp >= @from AND c.time_stamp <= @to/*scope: AND c.user_id IN {scopeUsers}*/
+      AND NOT EXISTS (SELECT 1 FROM dbo.copilot_chat_duplicates AS turn_dup WHERE turn_dup.time_stamp = c.time_stamp AND turn_dup.event_id = c.event_id)
+)
 SELECT w.Interactions, r.JailbreakReported, f.JailbreakFlagged
 FROM (
-    SELECT COUNT_BIG(*) AS Interactions
-    FROM dbo.copilot_chats AS c
-    WHERE c.time_stamp >= @from AND c.time_stamp <= @to/*scope: AND c.user_id IN {scopeUsers}*/
+    SELECT COUNT_BIG(DISTINCT c.counted_event_id) AS Interactions
+    FROM turn_records AS c
 ) AS w
 CROSS JOIN (
-    SELECT COUNT_BIG(*) AS JailbreakReported
-    FROM dbo.copilot_chats AS c
-    WHERE c.time_stamp >= @from AND c.time_stamp <= @to/*scope: AND c.user_id IN {scopeUsers}*/
-      AND EXISTS (SELECT 1 FROM dbo.copilot_event_messages AS m
+    SELECT COUNT_BIG(DISTINCT c.counted_event_id) AS JailbreakReported
+    FROM turn_records AS c
+    WHERE EXISTS (SELECT 1 FROM dbo.copilot_event_messages AS m
                   WHERE m.copilot_chat_id = c.event_id AND m.jailbreak_detected IS NOT NULL)
 ) AS r
 CROSS JOIN (
-    SELECT COUNT_BIG(*) AS JailbreakFlagged
-    FROM dbo.copilot_chats AS c
-    WHERE c.time_stamp >= @from AND c.time_stamp <= @to/*scope: AND c.user_id IN {scopeUsers}*/
-      AND EXISTS (SELECT 1 FROM dbo.copilot_event_messages AS m
+    SELECT COUNT_BIG(DISTINCT c.counted_event_id) AS JailbreakFlagged
+    FROM turn_records AS c
+    WHERE EXISTS (SELECT 1 FROM dbo.copilot_event_messages AS m
                   WHERE m.copilot_chat_id = c.event_id AND m.jailbreak_detected = 1)
 ) AS f
 OPTION (RECOMPILE);";
@@ -832,26 +842,47 @@ OPTION (RECOMPILE);";
         /// how many of the resources carried a sensitivity label.
         /// </summary>
         /// <remarks>
-        /// Each interaction's resources are reduced to one row first, so it counts once in the XPIA figures however
-        /// many resources it used. <c>MAX</c> ignores NULLs, so an interaction whose resources all left the flag out
+        /// Each turn's resources are reduced on the importer's full seven-column resource identity first,
+        /// then to one row per turn. Identical accesses count once, but their flags are combined before any
+        /// evidence is lost. <c>MAX</c> ignores NULLs, so a turn whose resources all left the flag out
         /// gets a NULL maximum, which <c>COUNT_BIG</c> skips: not reported, so in neither side of the rate. The label
         /// share counts every resource, because an absent <c>SensitivityLabelId</c> means the content carried no label.
         /// </remarks>
         internal const string GovernanceResourcesSql = @"
+WITH turn_records AS (
+    SELECT c.event_id AS counted_event_id, turn_record.event_id
+    FROM dbo.copilot_chats AS c
+    CROSS APPLY (
+        SELECT c.event_id
+        UNION ALL
+        SELECT constituent.event_id FROM dbo.copilot_chat_duplicates AS constituent
+        WHERE constituent.counted_event_id = c.event_id
+    ) AS turn_record
+    WHERE c.time_stamp >= @from AND c.time_stamp <= @to/*scope: AND c.user_id IN {scopeUsers}*/
+      AND NOT EXISTS (SELECT 1 FROM dbo.copilot_chat_duplicates AS turn_dup WHERE turn_dup.time_stamp = c.time_stamp AND turn_dup.event_id = c.event_id)
+), turn_resources AS (
+    SELECT c.counted_event_id,
+           a.resource_id_id, a.resource_name_id, a.resource_site_url_id, a.resource_type_id,
+           a.sensitivity_label_id, a.action_id, a.list_item_unique_id_id,
+           MAX(CAST(a.xpia_detected AS int)) AS XpiaFlagged
+    FROM turn_records AS c
+    INNER JOIN dbo.copilot_event_accessed_resources AS a ON a.copilot_chat_id = c.event_id
+    GROUP BY c.counted_event_id,
+             a.resource_id_id, a.resource_name_id, a.resource_site_url_id, a.resource_type_id,
+             a.sensitivity_label_id, a.action_id, a.list_item_unique_id_id
+)
 SELECT COUNT_BIG(*) AS InteractionsWithResources,
        ISNULL(SUM(x.Resources), 0) AS Resources,
        ISNULL(SUM(x.Labelled), 0) AS LabelledResources,
        COUNT_BIG(x.XpiaFlagged) AS XpiaReported,
        ISNULL(SUM(CAST(x.XpiaFlagged AS bigint)), 0) AS XpiaFlagged
 FROM (
-    SELECT a.copilot_chat_id,
+    SELECT a.counted_event_id,
            COUNT_BIG(*) AS Resources,
            COUNT_BIG(a.sensitivity_label_id) AS Labelled,
-           MAX(CAST(a.xpia_detected AS int)) AS XpiaFlagged
-    FROM dbo.copilot_chats AS c
-    INNER JOIN dbo.copilot_event_accessed_resources AS a ON a.copilot_chat_id = c.event_id
-    WHERE c.time_stamp >= @from AND c.time_stamp <= @to/*scope: AND c.user_id IN {scopeUsers}*/
-    GROUP BY a.copilot_chat_id
+           MAX(a.XpiaFlagged) AS XpiaFlagged
+    FROM turn_resources AS a
+    GROUP BY a.counted_event_id
 ) AS x
 OPTION (RECOMPILE);";
 
@@ -866,15 +897,26 @@ OPTION (RECOMPILE);";
         /// joins the window twice: in an interleaved A/B it was 13-41% slower here and 24-34% slower for plugins.
         /// </remarks>
         internal const string GovernanceModelsSql = @"
+WITH turn_records AS (
+    SELECT c.event_id AS counted_event_id, turn_record.event_id
+    FROM dbo.copilot_chats AS c
+    CROSS APPLY (
+        SELECT c.event_id
+        UNION ALL
+        SELECT constituent.event_id FROM dbo.copilot_chat_duplicates AS constituent
+        WHERE constituent.counted_event_id = c.event_id
+    ) AS turn_record
+    WHERE c.time_stamp >= @from AND c.time_stamp <= @to/*scope: AND c.user_id IN {scopeUsers}*/
+      AND NOT EXISTS (SELECT 1 FROM dbo.copilot_chat_duplicates AS turn_dup WHERE turn_dup.time_stamp = c.time_stamp AND turn_dup.event_id = c.event_id)
+)
 SELECT x.Name,
        CAST(GROUPING(x.Name) AS bit) AS IsTotal,
-       COUNT_BIG(DISTINCT x.copilot_chat_id) AS Interactions
+       COUNT_BIG(DISTINCT x.counted_event_id) AS Interactions
 FROM (
-    SELECT em.copilot_chat_id, m.[name] AS Name
-    FROM dbo.copilot_chats AS c
+    SELECT c.counted_event_id, m.[name] AS Name
+    FROM turn_records AS c
     INNER JOIN dbo.copilot_event_ai_models AS em ON em.copilot_chat_id = c.event_id
     INNER JOIN dbo.copilot_ai_models AS m ON m.id = em.model_id
-    WHERE c.time_stamp >= @from AND c.time_stamp <= @to/*scope: AND c.user_id IN {scopeUsers}*/
 ) AS x
 GROUP BY GROUPING SETS ((x.Name), ())
 OPTION (RECOMPILE);";
@@ -884,15 +926,26 @@ OPTION (RECOMPILE);";
         /// plugin is named by its id ("BingWebSearch"), falling back to its name when the payload had no id.
         /// </summary>
         internal const string GovernancePluginsSql = @"
+WITH turn_records AS (
+    SELECT c.event_id AS counted_event_id, turn_record.event_id
+    FROM dbo.copilot_chats AS c
+    CROSS APPLY (
+        SELECT c.event_id
+        UNION ALL
+        SELECT constituent.event_id FROM dbo.copilot_chat_duplicates AS constituent
+        WHERE constituent.counted_event_id = c.event_id
+    ) AS turn_record
+    WHERE c.time_stamp >= @from AND c.time_stamp <= @to/*scope: AND c.user_id IN {scopeUsers}*/
+      AND NOT EXISTS (SELECT 1 FROM dbo.copilot_chat_duplicates AS turn_dup WHERE turn_dup.time_stamp = c.time_stamp AND turn_dup.event_id = c.event_id)
+)
 SELECT x.Name,
        CAST(GROUPING(x.Name) AS bit) AS IsTotal,
-       COUNT_BIG(DISTINCT x.copilot_chat_id) AS Interactions
+       COUNT_BIG(DISTINCT x.counted_event_id) AS Interactions
 FROM (
-    SELECT ep.copilot_chat_id, COALESCE(p.plugin_id, p.[name]) AS Name
-    FROM dbo.copilot_chats AS c
+    SELECT c.counted_event_id, COALESCE(p.plugin_id, p.[name]) AS Name
+    FROM turn_records AS c
     INNER JOIN dbo.copilot_event_ai_system_plugins AS ep ON ep.copilot_chat_id = c.event_id
     INNER JOIN dbo.copilot_ai_system_plugins AS p ON p.id = ep.ai_system_plugin_id
-    WHERE c.time_stamp >= @from AND c.time_stamp <= @to/*scope: AND c.user_id IN {scopeUsers}*/
 ) AS x
 GROUP BY GROUPING SETS ((x.Name), ())
 OPTION (RECOMPILE);";
