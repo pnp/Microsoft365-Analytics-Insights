@@ -74,6 +74,16 @@ namespace Tests.UnitTests
                 AssertJsonUtc(usedJson, "lastUsedUtc", instant);
                 Assert.IsTrue((bool)packages.Single(p => (string)p["packageId"] == "contoso-never")["knownNeverUsed"]);
                 Assert.IsFalse((bool)packages.Single(p => (string)p["packageId"] == "contoso-unknown")["knownNeverUsed"]);
+
+                await store.BeginImportAsync(instant.AddHours(2));
+                var pending = await store.GetImportHealthAsync();
+                AssertUtc(instant.AddHours(2), pending.LastAttemptUtc);
+                Assert.IsNull(pending.LastAttemptCompletedUtc);
+                AssertUtc(instant.AddMinutes(1), pending.LastSuccessfulImportUtc);
+                var pendingJson = await ApiJsonAsync(store);
+                AssertJsonUtc(pendingJson, "lastAttemptUtc", instant.AddHours(2));
+                Assert.AreEqual(JTokenType.Null, pendingJson["lastAttemptCompletedUtc"].Type);
+                AssertJsonUtc(pendingJson, "lastSuccessfulImportUtc", instant.AddMinutes(1));
             }
         }
 
