@@ -1160,7 +1160,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.InteractionHisto
                 try
                 {
                     _promptRunStore = _promptRunStore ?? PromptCategoryRunStore.Open(_settings);
-                    await _promptRunStore.AppendAsync(runLog.RunStartedUtc, _promptClassifier.Run);
+                    using (var timeout = new System.Threading.CancellationTokenSource(TimeSpan.FromSeconds(15)))
+                        await _promptRunStore.AppendAsync(runLog.RunStartedUtc, _promptClassifier.Run, timeout.Token);
                 }
                 catch { _logger.LogWarning("Prompt classification counters could not be saved."); }
                 _promptClassifier.Dispose();

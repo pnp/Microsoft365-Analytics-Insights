@@ -163,6 +163,76 @@ namespace Tests.UnitTests
             }
         }
 
+        private sealed class StalledOrFailingStore : IKeyValueStore
+        {
+            private readonly bool _stall;
+            public StalledOrFailingStore(bool stall) { _stall = stall; }
+            public string Description => "synthetic";
+            private async Task<T> Fail<T>(CancellationToken ct)
+            {
+                if (_stall) await Task.Delay(Timeout.Infinite, ct);
+                throw new InvalidOperationException("synthetic storage account contoso unreachable");
+            }
+            public Task<string> GetStringAsync(string key, CancellationToken cancellationToken = default) => Fail<string>(cancellationToken);
+            public Task SetStringAsync(string key, string value, TimeSpan? timeToLive = null, CancellationToken cancellationToken = default) => Fail<bool>(cancellationToken);
+            public Task<bool> DeleteAsync(string key, CancellationToken cancellationToken = default) => Fail<bool>(cancellationToken);
+            public Task<bool> ExistsAsync(string key, CancellationToken cancellationToken = default) => Fail<bool>(cancellationToken);
+        }
+
+        [TestMethod]
+        public async Task AdminApi_ReportsDistinctStableCodes_AndNeverWaitsOnStalledStorage()
+        {
+            async Task<(HttpStatusCode Status, string Code, string Body)> Call(PromptCategoriesAPIController controller, string method, string url)
+            {
+                using (var host = new PortalTestHost(new[] { typeof(PromptCategoriesAPIController) },
+                    PortalTestHost.SignedIn(PortalRoles.Administration), PortalAccessPolicy.Enforcing, _ => controller))
+                {
+                    host.Client.DefaultRequestHeaders.Add("X-Requested-With", "XMLHttpRequest");
+                    host.Client.DefaultRequestHeaders.Add("Sec-Fetch-Site", "same-origin");
+                    var response = method == "GET" ? await host.Client.GetAsync(url) :
+                        await host.Client.PostAsync(url, new StringContent(url.EndsWith("reset") ? "" : JsonConvert.SerializeObject(Enabled(100)),
+                            System.Text.Encoding.UTF8, "application/json"));
+                    var body = await response.Content.ReadAsStringAsync();
+                    return (response.StatusCode, (string)Newtonsoft.Json.Linq.JObject.Parse(body)["code"], body);
+                }
+            }
+
+            var original = PromptCategoriesAPIController.StorageTimeout;
+            PromptCategoriesAPIController.StorageTimeout = TimeSpan.FromMilliseconds(200);
+            try
+            {
+                var stalled = new StalledOrFailingStore(true);
+                var watch = Stopwatch.StartNew();
+                var timedOut = await Call(new PromptCategoriesAPIController(new PromptCategoryConfigurationStore(stalled)), "GET", "api/PromptCategories");
+                Assert.IsTrue(watch.Elapsed < TimeSpan.FromSeconds(5), "Stalled storage must fail fast.");
+                Assert.AreEqual((HttpStatusCode.ServiceUnavailable, "storageTimeout"), (timedOut.Status, timedOut.Code));
+                var runsTimedOut = await Call(new PromptCategoriesAPIController(new PromptCategoryConfigurationStore(stalled), new PromptCategoryRunStore(stalled)), "GET", "api/PromptCategories/runs");
+                Assert.AreEqual("storageTimeout", runsTimedOut.Code);
+
+                var failing = new StalledOrFailingStore(false);
+                var unavailable = await Call(new PromptCategoriesAPIController(new PromptCategoryConfigurationStore(failing)), "GET", "api/PromptCategories");
+                Assert.AreEqual((HttpStatusCode.ServiceUnavailable, "storageUnavailable"), (unavailable.Status, unavailable.Code));
+                Assert.IsFalse(unavailable.Body.Contains("contoso"), "Exception text must never reach the browser.");
+                var failedSave = await Call(new PromptCategoriesAPIController(new PromptCategoryConfigurationStore(failing)), "POST", "api/PromptCategories");
+                Assert.AreEqual("storageUnavailable", failedSave.Code);
+
+                var corrupt = new InMemoryKeyValueStore();
+                await corrupt.SetStringAsync("current", "{not json");
+                var stored = await Call(new PromptCategoriesAPIController(new PromptCategoryConfigurationStore(corrupt)), "GET", "api/PromptCategories");
+                Assert.AreEqual((HttpStatusCode.InternalServerError, "storedConfigurationInvalid"), (stored.Status, stored.Code));
+                var healed = await Call(new PromptCategoriesAPIController(new PromptCategoryConfigurationStore(corrupt)), "POST", "api/PromptCategories/reset");
+                Assert.AreEqual(HttpStatusCode.OK, healed.Status, "Reset must repair an unreadable saved configuration.");
+
+                Func<PromptCategoriesAPIController> memoryOnly = () => new PromptCategoriesAPIController(new PromptCategoryConfigurationStore(null));
+                var memorySave = await Call(memoryOnly(), "POST", "api/PromptCategories");
+                Assert.AreEqual((HttpStatusCode.Conflict, "storageNotConfigured"), (memorySave.Status, memorySave.Code));
+                Assert.AreEqual("storageNotConfigured", (await Call(memoryOnly(), "POST", "api/PromptCategories/reset")).Code);
+                var memoryRuns = await Call(memoryOnly(), "GET", "api/PromptCategories/runs");
+                Assert.AreEqual((HttpStatusCode.ServiceUnavailable, "storageNotConfigured"), (memoryRuns.Status, memoryRuns.Code));
+            }
+            finally { PromptCategoriesAPIController.StorageTimeout = original; }
+        }
+
         [TestMethod]
         public async Task Classifier_TruncationPreservesUnicodeSurrogatePairs()
         {

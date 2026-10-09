@@ -65,6 +65,36 @@ describe('prompt categorisation editor', () => {
     await waitFor(() => expect(savePromptCategories).toHaveBeenCalledWith(expect.objectContaining({ enabled: false })));
   });
 
+  it('blocks saving while a field is invalid, explains why, and a confirmed reset calls the server', async () => {
+    const user = userEvent.setup();
+    renderWithProvider(<PromptCategoriesPage />);
+    const id = await screen.findByLabelText('Stable category id, category 1');
+    await user.clear(id);
+    await user.type(id, 'Bad Id');
+    expect(screen.getByText(/lowercase letters, digits or hyphens/)).toBeInTheDocument();
+    expect(screen.getByText('Fix the highlighted fields before saving.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Save taxonomy and opt-in' })).toBeDisabled();
+    await user.clear(id);
+    await user.type(id, 'other');
+    expect(screen.getAllByText('Another category already uses this id.').length).toBeGreaterThan(0);
+    await user.click(screen.getByRole('button', { name: 'Discard changes' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Save taxonomy and opt-in' })).toBeDisabled());
+    await user.click(screen.getByRole('button', { name: 'Reset defaults and disable' }));
+    expect(resetPromptCategories).not.toHaveBeenCalled();
+    await user.click(await screen.findByText('Reset and disable', { selector: 'button, button *' }));
+    await waitFor(() => expect(resetPromptCategories).toHaveBeenCalledTimes(1));
+  });
+
+  it('shows a distinct storage error with retry instead of a generic message', async () => {
+    const user = userEvent.setup();
+    vi.mocked(fetchPromptCategoryAdmin).mockRejectedValueOnce(Object.assign(new Error('x'), { name: 'PromptCategoryApiError', code: 'storageTimeout' }));
+    renderWithProvider(<PromptCategoriesPage />);
+    expect(await screen.findByText(/did not answer in time/)).toBeInTheDocument();
+    expect(screen.queryByText(/Check the category ids, names/)).not.toBeInTheDocument();
+    await user.click(screen.getAllByRole('button', { name: 'Retry' })[0]);
+    expect(await screen.findByLabelText('Enable Foundry prompt categorisation')).toBeInTheDocument();
+  });
+
   it('translates preset names in Spanish and preserves custom customer category names', async () => {
     await loadCatalog('es');
     const config = configuration();

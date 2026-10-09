@@ -23,7 +23,14 @@ namespace Web.AnalyticsWeb.Controllers
     [RoutePrefix("api/PromptCategories")]
     public sealed class PromptCategoriesAPIController : ApiController
     {
+        /// <summary>
+        /// How long one Table storage call may take. Unreachable storage otherwise sits behind the Azure SDK's
+        /// retries and its 100-second network timeout, so the admin page would spin for minutes before failing.
+        /// </summary>
+        internal static TimeSpan StorageTimeout = TimeSpan.FromSeconds(10);
+
         private readonly PromptCategoryConfigurationStore _store;
+        private readonly PromptCategoryRunStore _runStore;
         private readonly AppConfig _settings;
 
         public PromptCategoriesAPIController() : this(new AppConfig()) { }
@@ -31,10 +38,12 @@ namespace Web.AnalyticsWeb.Controllers
         {
             _settings = settings;
             _store = PromptCategoryConfigurationStore.Open(settings);
+            _runStore = PromptCategoryRunStore.Open(settings);
         }
-        internal PromptCategoriesAPIController(PromptCategoryConfigurationStore store)
+        internal PromptCategoriesAPIController(PromptCategoryConfigurationStore store, PromptCategoryRunStore runStore = null)
         {
             _store = store;
+            _runStore = runStore ?? new PromptCategoryRunStore(null);
             _settings = new AppConfig();
         }
 
@@ -42,16 +51,19 @@ namespace Web.AnalyticsWeb.Controllers
         [RequirePortalPermission(PortalPermission.Administration)]
         public async Task<IHttpActionResult> Get()
         {
-            try
+            using (var timeout = new CancellationTokenSource(StorageTimeout))
             {
-                return NoStore(new
+                try
                 {
-                    configuration = await _store.GetAsync(),
-                    storageAvailable = _store.IsDurable,
-                    backendConfigured = FoundryPromptSettings.IsConfigured(_settings)
-                });
+                    return NoStore(new
+                    {
+                        configuration = await _store.GetAsync(timeout.Token),
+                        storageAvailable = _store.IsDurable,
+                        backendConfigured = FoundryPromptSettings.IsConfigured(_settings)
+                    });
+                }
+                catch (Exception ex) { return Failure(ex, timeout); }
             }
-            catch { return StatusCode(HttpStatusCode.ServiceUnavailable); }
         }
 
         [HttpPost, Route("")]
@@ -59,10 +71,13 @@ namespace Web.AnalyticsWeb.Controllers
         [RequireSameOriginXhr]
         public async Task<IHttpActionResult> Save([FromBody] PromptCategoryConfiguration configuration)
         {
-            if (configuration == null) return BadRequest();
-            try { return NoStore(await _store.SaveAsync(configuration)); }
-            catch (ArgumentException) { return BadRequest(); }
-            catch { return StatusCode(HttpStatusCode.ServiceUnavailable); }
+            if (configuration == null) return Error(HttpStatusCode.BadRequest, "invalidTaxonomy");
+            if (!_store.IsDurable) return Error(HttpStatusCode.Conflict, "storageNotConfigured");
+            using (var timeout = new CancellationTokenSource(StorageTimeout))
+            {
+                try { return NoStore(await _store.SaveAsync(configuration, timeout.Token)); }
+                catch (Exception ex) { return Failure(ex, timeout); }
+            }
         }
 
         [HttpPost, Route("reset")]
@@ -70,24 +85,54 @@ namespace Web.AnalyticsWeb.Controllers
         [RequireSameOriginXhr]
         public async Task<IHttpActionResult> Reset()
         {
-            try { return NoStore(await _store.SaveAsync(PromptCategoryConfiguration.Defaults())); }
-            catch { return StatusCode(HttpStatusCode.ServiceUnavailable); }
+            if (!_store.IsDurable) return Error(HttpStatusCode.Conflict, "storageNotConfigured");
+            using (var timeout = new CancellationTokenSource(StorageTimeout))
+            {
+                try { return NoStore(await _store.SaveAsync(PromptCategoryConfiguration.Defaults(), timeout.Token)); }
+                catch (Exception ex) { return Failure(ex, timeout); }
+            }
         }
 
         [HttpGet, Route("runs")]
         [RequirePortalPermission(PortalPermission.Administration)]
         public async Task<IHttpActionResult> Runs()
         {
-            try
+            // Without durable storage the importer's counters live in another process, so an empty list would mislead.
+            if (!_runStore.IsDurable) return Error(HttpStatusCode.ServiceUnavailable, "storageNotConfigured");
+            using (var timeout = new CancellationTokenSource(StorageTimeout))
             {
-                var rows = await PromptCategoryRunStore.Open(_settings).RecentAsync();
-                return NoStore(rows.Select(row => new
+                try
                 {
-                    startedUtc = DateTime.SpecifyKind(row.StartedUtc, DateTimeKind.Utc),
-                    counters = row.Counters
-                }).ToArray());
+                    var rows = await _runStore.RecentAsync(timeout.Token);
+                    return NoStore(rows.Select(row => new
+                    {
+                        startedUtc = DateTime.SpecifyKind(row.StartedUtc, DateTimeKind.Utc),
+                        counters = row.Counters
+                    }).ToArray());
+                }
+                catch (Exception ex) { return Failure(ex, timeout); }
             }
-            catch { return StatusCode(HttpStatusCode.ServiceUnavailable); }
+        }
+
+        /// <summary>
+        /// A stable code the portal maps to its own wording (the API reports facts, the UI writes the sentences),
+        /// so storage that is slow or down, a rejected taxonomy and a missing database upgrade read differently.
+        /// Never echoes exception text, which can carry storage account names.
+        /// </summary>
+        private IHttpActionResult Failure(Exception ex, CancellationTokenSource timeout)
+        {
+            if (ex is ArgumentException) return Error(HttpStatusCode.BadRequest, "invalidTaxonomy");
+            if (ex is PromptCategoryStoredConfigurationException) return Error(HttpStatusCode.InternalServerError, "storedConfigurationInvalid");
+            if (ex is OperationCanceledException || timeout.IsCancellationRequested)
+                return Error(HttpStatusCode.ServiceUnavailable, "storageTimeout");
+            return Error(HttpStatusCode.ServiceUnavailable, "storageUnavailable");
+        }
+
+        private IHttpActionResult Error(HttpStatusCode status, string code)
+        {
+            var response = Request.CreateResponse(status, new { code });
+            response.Headers.CacheControl = new CacheControlHeaderValue { NoStore = true, Private = true };
+            return ResponseMessage(response);
         }
 
         [HttpGet, Route("report")]
@@ -124,7 +169,14 @@ namespace Web.AnalyticsWeb.Controllers
                     return NoStore(new { versions = versions.Select(v => v.Version), version, categories, mix, trend });
                 }
             }
-            catch { return StatusCode(HttpStatusCode.ServiceUnavailable); }
+            catch (Exception ex)
+            {
+                // 207/208: a column or table the database upgrade adds is missing.
+                for (var inner = ex; inner != null; inner = inner.InnerException)
+                    if (inner is SqlException sql && (sql.Number == 207 || sql.Number == 208))
+                        return Error(HttpStatusCode.ServiceUnavailable, "databaseNotUpgraded");
+                return Error(HttpStatusCode.ServiceUnavailable, "reportUnavailable");
+            }
         }
 
         private static Task<List<T>> QueryAsync<T>(AnalyticsEntitiesContext db, string sql, ReportUserScope scope, params object[] parameters)

@@ -7,6 +7,7 @@ using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace Common.Entities.PromptCategories
@@ -105,6 +106,12 @@ namespace Common.Entities.PromptCategories
         }
     }
 
+    /// <summary>The saved configuration exists but cannot be read or is no longer a valid taxonomy.</summary>
+    public sealed class PromptCategoryStoredConfigurationException : Exception
+    {
+        public PromptCategoryStoredConfigurationException(Exception inner) : base("The saved prompt category configuration is invalid.", inner) { }
+    }
+
     public sealed class PromptCategoryConfigurationStore
     {
         private static readonly InMemoryKeyValueStore Fallback = new InMemoryKeyValueStore();
@@ -120,24 +127,32 @@ namespace Common.Entities.PromptCategories
         public static PromptCategoryConfigurationStore Open(AppConfig settings) =>
             new PromptCategoryConfigurationStore(StateStore.TryOpen(settings, StatePartitions.PromptCategories));
 
-        public async Task<PromptCategoryConfiguration> GetAsync()
+        public async Task<PromptCategoryConfiguration> GetAsync(CancellationToken cancellationToken = default)
         {
-            var raw = await _store.GetStringAsync("current");
-            var config = raw == null ? PromptCategoryConfiguration.Defaults() :
-                JsonConvert.DeserializeObject<PromptCategoryConfiguration>(raw);
-            config.ValidateAndVersion();
+            var raw = await _store.GetStringAsync("current", cancellationToken);
+            PromptCategoryConfiguration config;
+            try
+            {
+                config = raw == null ? PromptCategoryConfiguration.Defaults() :
+                    JsonConvert.DeserializeObject<PromptCategoryConfiguration>(raw);
+                config.ValidateAndVersion();
+            }
+            catch (Exception ex) when (ex is JsonException || ex is ArgumentException || ex is NullReferenceException)
+            {
+                throw new PromptCategoryStoredConfigurationException(ex);
+            }
             // A memory-only configuration must never authorise a new external prompt data flow.
             if (!IsDurable) config.Enabled = false;
             return config;
         }
 
-        public async Task<PromptCategoryConfiguration> SaveAsync(PromptCategoryConfiguration config)
+        public async Task<PromptCategoryConfiguration>         SaveAsync(PromptCategoryConfiguration config, CancellationToken cancellationToken = default)
         {
             if (!IsDurable) throw new InvalidOperationException("Durable storage is required.");
             config.ValidateAndVersion();
             var serialized = JsonConvert.SerializeObject(config);
-            await _store.SetStringAsync("taxonomy-" + config.Version, serialized);
-            await _store.SetStringAsync("current", serialized);
+                    await _store.SetStringAsync("taxonomy-" + config.Version, serialized, cancellationToken: cancellationToken);
+                    await _store.SetStringAsync("current", serialized, cancellationToken: cancellationToken);
             return config;
         }
     }

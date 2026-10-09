@@ -223,11 +223,15 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.InteractionHisto
         {
             try
             {
-                var config = await PromptCategoryConfigurationStore.Open(settings).GetAsync();
-                if (!config.Enabled) return new PromptCategoryClassifier(config, null);
-                if (!FoundryPromptSettings.IsConfigured(settings))
-                    return new PromptCategoryClassifier(config, null, "not-configured");
-                return new PromptCategoryClassifier(config, new AzureFoundryPromptCategoryBackend(settings));
+                // Bounded so unreachable Table storage cannot stall the whole import behind the SDK's retries.
+                using (var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(15)))
+                {
+                    var config = await PromptCategoryConfigurationStore.Open(settings).GetAsync(timeout.Token);
+                    if (!config.Enabled) return new PromptCategoryClassifier(config, null);
+                    if (!FoundryPromptSettings.IsConfigured(settings))
+                        return new PromptCategoryClassifier(config, null, "not-configured");
+                    return new PromptCategoryClassifier(config, new AzureFoundryPromptCategoryBackend(settings));
+                }
             }
             catch
             {

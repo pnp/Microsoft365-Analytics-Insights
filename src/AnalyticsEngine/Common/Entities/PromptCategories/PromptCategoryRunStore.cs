@@ -28,7 +28,14 @@ namespace Common.Entities.PromptCategories
         private static readonly InMemoryKeyValueStore Fallback = new InMemoryKeyValueStore();
         private readonly IKeyValueStore _store;
 
-        public PromptCategoryRunStore(IKeyValueStore store) => _store = store ?? Fallback;
+        /// <summary>False when no Storage connection string is configured, so only this process would see what is written.</summary>
+        public bool IsDurable { get; }
+
+        public PromptCategoryRunStore(IKeyValueStore store)
+        {
+            _store = store ?? Fallback;
+            IsDurable = store != null;
+        }
 
         public static PromptCategoryRunStore Open(AppConfig settings) =>
             new PromptCategoryRunStore(StateStore.TryOpen(settings, StatePartitions.PromptCategories));
