@@ -105,6 +105,27 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public async Task RunStore_KeepsNewestTen_NewestFirst_AndToleratesCorruptState()
+        {
+            var kv = new InMemoryKeyValueStore();
+            var store = new PromptCategoryRunStore(kv);
+            var start = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+            for (var i = 0; i < 12; i++)
+                await store.AppendAsync(start.AddHours(i), new PromptCategoryRun { Sent = i, Reason = "enabled" });
+
+            var recent = await store.RecentAsync();
+            Assert.AreEqual(PromptCategoryRunStore.MaxRuns, recent.Count);
+            Assert.AreEqual(11, recent[0].Counters.Sent);
+            Assert.AreEqual(2, recent[recent.Count - 1].Counters.Sent);
+            Assert.AreEqual(DateTimeKind.Utc, recent[0].StartedUtc.Kind);
+
+            await kv.SetStringAsync("runs", "{not json");
+            Assert.AreEqual(0, (await store.RecentAsync()).Count);
+            await store.AppendAsync(start, new PromptCategoryRun());
+            Assert.AreEqual(1, (await store.RecentAsync()).Count, "A corrupt value is replaced, not fatal.");
+        }
+
+        [TestMethod]
         public async Task AdminApi_RequiresAdministrationAndSameOrigin_ReturnsContentFreeCamelCase_NoStore()
         {
             var store = new PromptCategoryConfigurationStore(new InMemoryKeyValueStore());

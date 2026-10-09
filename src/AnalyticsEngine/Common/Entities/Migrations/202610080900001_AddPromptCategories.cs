@@ -3,7 +3,8 @@ namespace Common.Entities.Migrations
     using System.Data.Entity.Migrations;
 
     /// <summary>
-    /// Purely additive, empty classification, immutable taxonomy and run-counter tables. No existing
+    /// Purely additive, empty classification and immutable taxonomy tables. Per-cycle run counters are
+    /// operational state and live in the AnalyticsState Azure Table, not here. No existing
     /// table is rewritten and no performance-motivated index change is made. Typical upgrade is seconds,
     /// independent of whether the interactions table has 1M, 10M or 100M rows; short metadata locks only.
     /// The EF model is unchanged and the predecessor's snapshot is reused verbatim.
@@ -34,22 +35,13 @@ BEGIN
         CONSTRAINT CK_prompt_classification_mode CHECK (human_mode IS NULL OR human_mode IN (N'directing', N'supervising'))
     );
 END;
-IF OBJECT_ID(N'dbo.copilot_prompt_classification_runs', N'U') IS NULL
-BEGIN
-    CREATE TABLE dbo.copilot_prompt_classification_runs (
-        run_id int NOT NULL CONSTRAINT PK_copilot_prompt_classification_runs PRIMARY KEY,
-        counters_json nvarchar(max) NOT NULL,
-        CONSTRAINT FK_prompt_classification_run FOREIGN KEY (run_id)
-            REFERENCES dbo.copilot_interaction_import_log(id) ON DELETE CASCADE
-    );
-END;
 RAISERROR('AddPromptCategories: schema ready.', 0, 1) WITH NOWAIT;";
 
         public override void Up() => Sql(Up_Sql, suppressTransaction: true);
 
         public override void Down()
         {
-            Sql("DROP TABLE dbo.copilot_prompt_classification_runs; DROP TABLE dbo.copilot_prompt_classifications; DROP TABLE dbo.copilot_prompt_taxonomies;");
+            Sql("DROP TABLE dbo.copilot_prompt_classifications; DROP TABLE dbo.copilot_prompt_taxonomies;");
         }
     }
 }

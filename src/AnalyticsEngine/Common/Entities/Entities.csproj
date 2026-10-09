@@ -82,6 +82,7 @@
     <Compile Include="BaseEntity.cs" />
     <Compile Include="PromptCategories\PromptCategoryConfiguration.cs" />
     <Compile Include="PromptCategories\PromptCategorySql.cs" />
+    <Compile Include="PromptCategories\PromptCategoryRunStore.cs" />
     <Compile Include="PromptCategories\PromptCategoryReportSql.cs" />
     <Compile Include="Migrations\202610080900001_AddPromptCategories.cs" />
     <Compile Include="Migrations\202610080900001_AddPromptCategories.Designer.cs">

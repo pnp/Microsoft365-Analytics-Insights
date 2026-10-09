@@ -64,11 +64,5 @@ namespace Common.Entities.PromptCategories
                     new SqlParameter("@facts", SqlDbType.NVarChar, -1) { Value = JsonConvert.SerializeObject(batch) });
             }
         }
-
-        public static Task SaveRunAsync(AnalyticsEntitiesContext db, int runId, PromptCategoryRun run) =>
-            db.Database.ExecuteSqlCommandAsync(
-                @"INSERT dbo.copilot_prompt_classification_runs(run_id, counters_json) VALUES (@id, @counters)",
-                new SqlParameter("@id", runId),
-                new SqlParameter("@counters", SqlDbType.NVarChar, -1) { Value = JsonConvert.SerializeObject(run) });
     }
 }

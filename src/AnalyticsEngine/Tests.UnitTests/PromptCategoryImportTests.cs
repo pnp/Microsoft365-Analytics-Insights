@@ -1,9 +1,11 @@
 using Common.Entities;
 using Common.Entities.Config;
 using Common.Entities.PromptCategories;
+using Common.Entities.State;
 using DataUtils;
 using Microsoft.Data.SqlClient;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
+using Newtonsoft.Json;
 using System;
 using System.Collections.Generic;
 using System.Data.Entity;
@@ -105,11 +107,10 @@ namespace Tests.UnitTests
                         @"SELECT COUNT(*) FROM dbo.copilot_prompt_classifications c JOIN dbo.copilot_interactions i ON i.id=c.interaction_id WHERE i.user_id=@id",
                         new SqlParameter("@id", userId)).SingleAsync();
                     Assert.AreEqual(6, count, "Only the three enabled cycles create two prompt facts each.");
-                    var counter = await db.Database.SqlQuery<string>(
-                        "SELECT counters_json FROM dbo.copilot_prompt_classification_runs WHERE run_id=@id",
-                        new SqlParameter("@id", runIds[3])).SingleAsync();
-                    StringAssert.Contains(counter, "service-failure");
-                    Assert.IsFalse(counter.Contains("synthetic confidential text"));
+                    var counters = JsonConvert.SerializeObject(await RunStore.RecentAsync());
+                    StringAssert.Contains(counters, "service-failure");
+                    Assert.IsFalse(counters.Contains("synthetic confidential text"));
+                    Assert.AreEqual(runIds.Count, (await RunStore.RecentAsync()).Count, "Each cycle records one counters entry.");
                 }
             }
             finally
@@ -134,9 +135,11 @@ namespace Tests.UnitTests
             var settings = new AppConfig { CopilotInteractionHistoryMaxUsersPerCycle = 1 };
             var importer = new CopilotInteractionHistoryImporter(AnalyticsLogger.ConsoleOnlyTracer(), settings,
                 source, new DisabledCognitiveEnricher(), new Pilot(upn), new UserGroupsFilterModel("Contoso synthetic pilot"),
-                promptClassifier: new PromptCategoryClassifier(taxonomy, backend));
+                promptClassifier: new PromptCategoryClassifier(taxonomy, backend), promptRunStore: RunStore);
             return importer.ImportAsync();
         }
+
+        private static readonly PromptCategoryRunStore RunStore = new PromptCategoryRunStore(new InMemoryKeyValueStore());
 
         private sealed class DisabledCognitiveEnricher : IInteractionCognitiveEnricher
         {

@@ -84,7 +84,7 @@ namespace Tests.UnitTests
                 {
                     storage.CommandText = @"SELECT SUM(used_page_count)*8.0/1024 FROM sys.dm_db_partition_stats p
                         JOIN sys.tables t ON t.object_id=p.object_id
-                        WHERE t.name IN ('copilot_prompt_taxonomies','copilot_prompt_classifications','copilot_prompt_classification_runs')";
+                        WHERE t.name IN ('copilot_prompt_taxonomies','copilot_prompt_classifications')";
                     Console.WriteLine($"Synthetic categorisation tables at 1m facts: {await storage.ExecuteScalarAsync()} MiB used.");
                 }
                 foreach (var days in new[] { 30, 180 })

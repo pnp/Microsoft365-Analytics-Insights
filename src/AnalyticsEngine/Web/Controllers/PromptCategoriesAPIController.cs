@@ -80,19 +80,12 @@ namespace Web.AnalyticsWeb.Controllers
         {
             try
             {
-                using (var db = new AnalyticsEntitiesContext())
+                var rows = await PromptCategoryRunStore.Open(_settings).RecentAsync();
+                return NoStore(rows.Select(row => new
                 {
-                    var rows = await db.Database.SqlQuery<PromptCategoryRunRow>(
-                        @"SELECT TOP(10) l.run_started_utc AS StartedUtc, r.counters_json AS Counters
-                          FROM dbo.copilot_prompt_classification_runs r
-                          JOIN dbo.copilot_interaction_import_log l ON l.id=r.run_id
-                          ORDER BY l.run_started_utc DESC").ToListAsync();
-                    return NoStore(rows.Select(row => new
-                    {
-                        startedUtc = DateTime.SpecifyKind(row.StartedUtc, DateTimeKind.Utc),
-                        counters = JsonConvert.DeserializeObject<PromptCategoryRun>(row.Counters)
-                    }).ToArray());
-                }
+                    startedUtc = DateTime.SpecifyKind(row.StartedUtc, DateTimeKind.Utc),
+                    counters = row.Counters
+                }).ToArray());
             }
             catch { return StatusCode(HttpStatusCode.ServiceUnavailable); }
         }
@@ -150,11 +143,6 @@ namespace Web.AnalyticsWeb.Controllers
         }
     }
 
-    public sealed class PromptCategoryRunRow
-    {
-        public DateTime StartedUtc { get; set; }
-        public string Counters { get; set; }
-    }
     public sealed class PromptCategoryVersionRow { public string Version { get; set; } }
     public class PromptCategoryMixRow
     {

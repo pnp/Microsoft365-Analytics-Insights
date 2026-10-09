@@ -109,6 +109,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.InteractionHisto
         private readonly int _userChunkSize;
         private readonly int _graphLoadParallelism;
         private PromptCategoryClassifier _promptClassifier;
+        private PromptCategoryRunStore _promptRunStore;
 
         public CopilotInteractionHistoryImporter(
             AnalyticsLogger logger,
@@ -121,9 +122,11 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.InteractionHisto
             int userChunkSize = DefaultUserChunkSize,
             int graphLoadParallelism = DefaultGraphLoadParallelism,
             IClock clock = null,
-            PromptCategoryClassifier promptClassifier = null)
+            PromptCategoryClassifier promptClassifier = null,
+            PromptCategoryRunStore promptRunStore = null)
             : base(logger, settings)
         {
+            _promptRunStore = promptRunStore;
             _sourceLoader = sourceLoader ?? throw new ArgumentNullException(nameof(sourceLoader));
             _cognitiveEnricher = cognitiveEnricher ?? NullInteractionCognitiveEnricher.Instance;
             _pilotGroupResolver = pilotGroupResolver;
@@ -1149,13 +1152,19 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.InteractionHisto
             {
                 db.CopilotInteractionImportLogs.Add(runLog);
                 await db.SaveChangesAsync();
-                if (_promptClassifier != null)
+            }
+
+            if (_promptClassifier != null)
+            {
+                // Fail-open: counters are diagnostics, and a storage blip must never fail the import.
+                try
                 {
-                    try { await PromptCategorySql.SaveRunAsync(db, runLog.ID, _promptClassifier.Run); }
-                    catch { _logger.LogWarning("Prompt classification counters could not be saved."); }
-                    _promptClassifier.Dispose();
-                    _promptClassifier = null;
+                    _promptRunStore = _promptRunStore ?? PromptCategoryRunStore.Open(_settings);
+                    await _promptRunStore.AppendAsync(runLog.RunStartedUtc, _promptClassifier.Run);
                 }
+                catch { _logger.LogWarning("Prompt classification counters could not be saved."); }
+                _promptClassifier.Dispose();
+                _promptClassifier = null;
             }
 
             _logger.LogInformation(
