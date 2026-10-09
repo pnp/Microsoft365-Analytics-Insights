@@ -128,8 +128,8 @@ namespace Tests.UnitTests
         [TestMethod]
         public void NewConfigSchemaVersionIsThree()
         {
-            Assert.AreEqual(new Version(3, 0, 0), new SolutionInstallConfig().ConfigSchemaVersion);
-            Assert.AreEqual(new Version(3, 0, 0), BaseSolutionInstallConfig.CurrentConfigSchemaVersion);
+            Assert.AreEqual(new Version(3, 1, 0), new SolutionInstallConfig().ConfigSchemaVersion);
+            Assert.AreEqual(new Version(3, 1, 0), BaseSolutionInstallConfig.CurrentConfigSchemaVersion);
         }
 
         [TestMethod]
@@ -146,10 +146,10 @@ namespace Tests.UnitTests
 
             var saved = Newtonsoft.Json.Linq.JObject.Parse(config.ToJson("synthetic-password"));
 
-            Assert.AreEqual("3.0.0", (string)saved["ConfigSchemaVersion"],
-                "Saved again it no longer has RedisName - it is a 3.0.0 config and the file must say so, not keep claiming 2.6.0.");
+            Assert.AreEqual("3.1.0", (string)saved["ConfigSchemaVersion"],
+                "Saved again it no longer has RedisName and includes the Agent 365 catalog setting; the file must carry the current schema version.");
             Assert.IsNull(saved["RedisName"]);
-            Assert.AreEqual(new Version(3, 0, 0), config.ConfigSchemaVersion, "The in-memory config matches what was written.");
+            Assert.AreEqual(new Version(3, 1, 0), config.ConfigSchemaVersion, "The in-memory config matches what was written.");
         }
 
         [TestMethod]
