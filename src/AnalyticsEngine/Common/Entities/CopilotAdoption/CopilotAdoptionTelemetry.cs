@@ -385,6 +385,9 @@ namespace Common.Entities.CopilotAdoption
         public const string AgentOrigins = "AgentOrigins";
         public const string AgentBuildersProbe = "AgentBuildersProbe";
         public const string AgentBuilders = "AgentBuilders";
+        public const string AgentGrowthAgents = "AgentGrowthAgents";
+        public const string AgentGrowth = "AgentGrowth";
+        public const string AgentGrowthBilling = "AgentGrowthBilling";
         public const string UnlicensedUsage = "UnlicensedUsage";
         public const string UnlicensedUsageByApp = "UnlicensedUsageByApp";
         public const string ResourceTypes = "ResourceTypes";

@@ -94,6 +94,7 @@ namespace Common.Entities.CopilotAdoption
         public const string CoworkReadiness = "CoworkReadiness";
         public const string AgentEstate = "AgentEstate";
         public const string AgentReach = "AgentReach";
+        public const string AgentGrowth = "AgentGrowth";
         public const string UnlicensedPopulation = "UnlicensedPopulation";
         public const string ResourceTypes = "ResourceTypes";
         public const string MicrosoftReportFigures = "MicrosoftReportFigures";

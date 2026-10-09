@@ -351,6 +351,90 @@ namespace Common.Entities.CopilotAdoption
         /// </summary>
         [JsonProperty("agents")]
         public List<AgentUsageRow> Agents { get; set; } = new List<AgentUsageRow>();
+
+        /// <summary>
+        /// Which agents <see cref="Growth"/> counts: one of the <see cref="AgentGrowthScopes"/> keys. A key
+        /// rather than a sentence, so the portal and the workbook can each name the scope in their own words.
+        /// </summary>
+        [JsonProperty("growthScope")]
+        public string GrowthScope { get; set; } = CopilotAdoptionAgentGrowth.Scope;
+
+        /// <summary>
+        /// The first Copilot interaction the audit log holds, or null when it holds none. A window that
+        /// starts before it is not measured, so this is what explains a blank year-ago window.
+        /// </summary>
+        [JsonProperty("growthAuditHistoryStartUtc")]
+        public DateTime? GrowthAuditHistoryStartUtc { get; set; }
+
+        /// <summary>
+        /// Agent use over <see cref="CopilotAdoptionAgentGrowth.WindowCount"/> consecutive, closed
+        /// 28-day windows, most recent first, ending at the last settled day (#645). Window 0 against
+        /// window 13 is the year-on-year comparison. Empty when the series was not computed.
+        /// </summary>
+        /// <remarks>
+        /// Tenant-wide like the rest of the estate, and as of now even for a historical reporting period,
+        /// like the inventory. Recomputed from the raw audit rows on every run: nothing is stored (#605).
+        /// </remarks>
+        [JsonProperty("growth")]
+        public List<AgentGrowthWindow> Growth { get; set; } = new List<AgentGrowthWindow>();
+    }
+
+    /// <summary>
+    /// One closed 28-day window of the agent growth series (#645). Every figure is null when the window
+    /// was not measured - never zero, so "we could not measure this" and "nobody used an agent" stay
+    /// distinguishable, which matters most in the year-ago window a growth ratio divides by.
+    /// </summary>
+    public class AgentGrowthWindow
+    {
+        /// <summary>0 for the most recent closed window, 13 for the same 28 days a year earlier.</summary>
+        [JsonProperty("windowsAgo")]
+        public int WindowsAgo { get; set; }
+
+        /// <summary>The window's first day (UTC, inclusive).</summary>
+        [JsonProperty("fromUtc")]
+        public DateTime FromUtc { get; set; }
+
+        /// <summary>The window's last day (UTC, inclusive).</summary>
+        [JsonProperty("toUtc")]
+        public DateTime ToUtc { get; set; }
+
+        /// <summary>
+        /// Customer-built agents with at least one day of user-initiated use in the window: the Work Trend
+        /// Index's definition of an active agent, less its autonomous-run half, which is
+        /// <see cref="CopilotStudioBilledAgents"/>. The scope is <see cref="AgentEstateSummary.GrowthScope"/>.
+        /// </summary>
+        [JsonProperty("activeAgents")]
+        public int? ActiveAgents { get; set; }
+
+        /// <summary>
+        /// Agents of unknown origin used in the window - left out of <see cref="ActiveAgents"/>, agent users
+        /// and interactions because the audit log does not say who made them (SharePoint agents, for
+        /// example), and counted here so the gap is visible: the figures are a floor by this much.
+        /// </summary>
+        [JsonProperty("unknownOriginAgents")]
+        public int? UnknownOriginAgents { get; set; }
+
+        /// <summary>Distinct people who used at least one of those agents in the window.</summary>
+        [JsonProperty("agentUsers")]
+        public int? AgentUsers { get; set; }
+
+        /// <summary>Copilot audit-log interactions with those agents in the window.</summary>
+        [JsonProperty("agentInteractions")]
+        public long? AgentInteractions { get; set; }
+
+        /// <summary>Interactions divided by agent users, to one decimal place. Null when nobody used an agent.</summary>
+        [JsonProperty("interactionsPerAgentUser")]
+        public double? InteractionsPerAgentUser { get; set; }
+
+        /// <summary>
+        /// Evidence of autonomous runs, kept apart from the user-initiated figures above and never added to
+        /// them: Copilot Studio agents with billed consumption in the window, from the Power Platform
+        /// billing import (<c>copilot_studio_credit_daily</c>). Billing covers conversations as well as
+        /// autonomous runs, so this is evidence that agents ran, not a count of autonomous runs. Null when
+        /// that import holds no rows for the window.
+        /// </summary>
+        [JsonProperty("copilotStudioBilledAgents")]
+        public int? CopilotStudioBilledAgents { get; set; }
     }
 
     /// <summary>

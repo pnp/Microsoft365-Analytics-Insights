@@ -738,6 +738,13 @@ namespace Tests.UnitTests
                           agent_id int NULL,
                           user_id int NULL,
                           time_stamp datetime NULL);
+                      CREATE TABLE dbo.copilot_chat_duplicates (
+                          event_id uniqueidentifier NOT NULL PRIMARY KEY,
+                          time_stamp datetime NOT NULL,
+                          counted_event_id uniqueidentifier NOT NULL,
+                          reason tinyint NOT NULL);
+                      CREATE NONCLUSTERED INDEX IX_copilot_chat_duplicates_time_stamp
+                          ON dbo.copilot_chat_duplicates (time_stamp);
                       CREATE NONCLUSTERED INDEX IX_copilot_chats_time_stamp_user_id
                           ON dbo.copilot_chats ([time_stamp], [user_id]) INCLUDE ([app_host], [agent_id]);
                       CREATE TABLE dbo.copilot_agents (

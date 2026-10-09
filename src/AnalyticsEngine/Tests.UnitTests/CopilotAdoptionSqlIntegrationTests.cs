@@ -1931,6 +1931,26 @@ namespace Tests.UnitTests
                     "The pair, the Word interaction and two test-pane chats.");
                 Assert.AreEqual(1d, trend.Where(r => r.SeriesName == "Agent users").Sum(r => r.Value),
                     "The maker is not an agent user.");
+
+                var reach = Query<AgentReachRow>(db, CopilotAdoptionSql.AgentReachSql(),
+                    new SqlParameter("@from", DateTime.UtcNow.Date.AddDays(-28)),
+                    new SqlParameter("@toExclusive", DateTime.UtcNow.Date.AddDays(1)),
+                    new SqlParameter("@maxRows", CopilotAdoptionSql.MaxAgentReachRows + 1));
+                var settled = DateTime.UtcNow.Date.AddDays(-1);
+                var growthParameters = new[]
+                {
+                    new SqlParameter("@lastSettledDay", settled),
+                    new SqlParameter("@seriesFrom", CopilotAdoptionAgentGrowth.SeriesFromUtc(settled)),
+                    new SqlParameter("@seriesToExclusive", CopilotAdoptionAgentGrowth.SeriesToExclusiveUtc(settled)),
+                }.Concat(CopilotAdoptionSql.AgentGrowthScopeParameters(null)).ToArray();
+                var growth = Query<AgentGrowthQueryRow>(db, CopilotAdoptionSql.AgentGrowthSql, growthParameters)
+                    .Single(row => row.WindowsAgo == 0);
+
+                Assert.AreEqual(1, reach.Count, "Agent breadth/reach must not turn maker testing into an agent user.");
+                Assert.AreEqual(1L, reach.Single().Interactions, "Agent depth counts the pair once.");
+                Assert.AreEqual(1, growth.ActiveAgents);
+                Assert.AreEqual(1, growth.AgentUsers, "Year-on-year growth excludes the maker.");
+                Assert.AreEqual(1L, growth.AgentInteractions, "Year-on-year growth counts the pair once.");
             }
         }
 
