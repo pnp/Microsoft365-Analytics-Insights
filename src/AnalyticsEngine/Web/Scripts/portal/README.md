@@ -66,6 +66,13 @@ Pay-as-you-go credit consumption is shown only if the entitlement API supplies i
 not zero and is never inferred from `payGo.entitled` or by subtracting per-agent totals from capacity.
 Credits and money are never added together. Both import toggles can be enabled independently.
 
+**Health checks the billing connection only when Copilot Studio credit tracking is enabled.**
+Component health shows whether a Power Platform billing administrator connection is saved.
+A missing connection, a required reconnect, or an unreadable connection store degrades the overall
+health status and points to Administration > Agent costs. This is a saved-connection check, not a
+live Power Platform token validation. Azure-cost-only tracking does not require this connection
+and does not add the check.
+
 **How per-agent figures are built.** Microsoft restricted the tenant-wide per-agent route
 (`/MCSMessages/resources`) to its own clients
 ([Power CAT maintainer clarification](https://github.com/microsoft/Power-CAT-Copilot-Studio-Kit/issues/855)),

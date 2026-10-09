@@ -8,6 +8,7 @@ import { EN_CATALOG } from '../catalog';
 import { COPILOT_ADOPTION_WARNING_KEYS, COWORK_TIER_LABEL_KEYS, TENURE_BASIS_LABEL_KEYS } from '../../components/copilotAdoption/serverText';
 import {
   BLOB_CHECKPOINT_REASON_KEYS,
+  AGENT_COST_CONNECTION_REASON_KEYS,
   HEALTH_COMPONENT_LABEL_KEYS,
   translateHealthComponentDetailText,
   translateHealthReasonText,
@@ -38,6 +39,24 @@ function sortedUnique(values: string[]): string[] {
 }
 
 describe('Delegated billing import diagnostics', () => {
+  it('translates every billing connection health state and its overall roll-up', async () => {
+    await loadCatalog('es');
+    const source = readFileSync(join(process.cwd(), '..', '..', 'Models', 'Health', 'HealthService.cs'), 'utf8');
+    const states = [...source.matchAll(/row\.ReasonKey = "(agentCostConnection\.[^"]+)";\s*row\.Detail = "([^"]+)";/g)];
+    expect(states).toHaveLength(4);
+    expect(states.map((state) => state[1]).sort()).toEqual(Object.keys(AGENT_COST_CONNECTION_REASON_KEYS).sort());
+    const es: TFunction = (key, values) => translateStatic('es', key, values);
+    for (const [, reasonKey, detail] of states) {
+      const key = AGENT_COST_CONNECTION_REASON_KEYS[reasonKey];
+      expect(EN_CATALOG[key]).toBe(detail);
+      expect(translateHealthComponentDetailText(detail, es)).toBe(es(key));
+      expect(translateHealthReasonText(`PowerPlatformConnection is degraded: ${detail}`, es))
+        .toBe(es('health.reason.componentDegraded', {
+          component: es('health.component.PowerPlatformConnection'), detail: es(key),
+        }));
+    }
+  });
+
   it('keeps server diagnostic keys, reader translations and both catalogs aligned', () => {
     const server = readFileSync(join(process.cwd(), '..', '..', '..',
       'WebJob.Office365ActivityImporter.Engine', 'AgentCosts', 'DelegatedAgentCostSource.cs'), 'utf8');
@@ -546,7 +565,7 @@ function healthComponentKeys(): string[] {
 describe('Health component display names', () => {
   it('translates every concrete component name the server can send today', () => {
     const serverKeys = healthComponentKeys();
-    expect(serverKeys).toEqual(['BlobCheckpoint', 'CopilotAuditBackfill', 'Credential', 'MessageTracing', 'ServiceBus']);
+    expect(serverKeys).toEqual(['BlobCheckpoint', 'CopilotAuditBackfill', 'Credential', 'MessageTracing', 'PowerPlatformConnection', 'ServiceBus']);
 
     const missingMapEntries = serverKeys.filter((key) => !(key in HEALTH_COMPONENT_LABEL_KEYS));
     const missingCatalogEntries = serverKeys
