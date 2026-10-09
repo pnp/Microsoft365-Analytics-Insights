@@ -32,7 +32,7 @@ namespace Tests.UnitTests
 {
     /// <summary>
     /// The administrator's global filter on the web side: applied to every report request whatever the page
-    /// sends, failing closed when it cannot be evaluated, switched off only for an administrator who asks,
+    /// sends, failing closed when it cannot be evaluated, switched off only with Administration and See PII,
     /// and edited only with a revision check. No database: an in-memory store and directory.
     /// </summary>
     [TestClass]
@@ -93,7 +93,7 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
-        public async Task Bypass_IsHonouredForAnAdministratorOnly()
+        public async Task Bypass_IsHonouredForAnAdministratorWithSeePiiOnly()
         {
             var resolver = Resolver(new MemoryStore(MyDepartment));
 
@@ -107,6 +107,104 @@ namespace Tests.UnitTests
 
             var adminWithoutCookie = await resolver.ResolveAsync(Request(), Admin("rep@contoso.com"), null, CancellationToken.None);
             Assert.IsTrue(adminWithoutCookie.IsRestricted, "The filter applies to administrators too until they switch it off.");
+
+            var ownFilter = UserFilterCodec.Parse("[{\"d\":\"department\",\"v\":[\"Engineering\"]}]");
+            var adminWithOwnFilter = await resolver.ResolveAsync(
+                Request(bypass: true), Admin("rep@contoso.com"), ownFilter, CancellationToken.None);
+            Assert.IsTrue(adminWithOwnFilter.Global.Bypassed);
+            CollectionAssert.AreEqual(new[] { 5 }, adminWithOwnFilter.Sql.UserIds.ToArray(),
+                "Bypassing the global filter does not remove the reader's own filter.");
+        }
+
+        [DataTestMethod]
+        [DataRow(false, false, true)]
+        [DataRow(true, false, true)]
+        [DataRow(false, true, true)]
+        [DataRow(true, true, true)]
+        [DataRow(false, false, false)]
+        [DataRow(true, false, false)]
+        [DataRow(false, true, false)]
+        [DataRow(true, true, false)]
+        public async Task Bypass_RequiresBothPermissions_InReportsAndCapabilityReporting(
+            bool administration, bool seePii, bool enforced)
+        {
+            var roles = new[] { administration ? PortalRoles.Administration : null, seePii ? PortalRoles.SeePii : null }
+                .Where(role => role != null).ToArray();
+            var principal = Principal("person1@contoso.com", roles);
+            var builder = new UserDirectorySnapshotBuilder();
+            for (var id = 1; id <= 6; id++)
+            {
+                builder.AddUser(new UserDirectoryEntry
+                {
+                    UserId = id,
+                    UserPrincipalName = "person" + id + "@contoso.com",
+                    Department = id == 6 ? "Contoso Legal" : "Contoso Sales",
+                });
+            }
+            var directory = new Directory(snapshot: builder.Build(DateTime.UtcNow));
+            var resolver = new ReportScopeResolver(
+                Provider(new MemoryStore("[{\"d\":\"department\",\"v\":[\"Contoso Sales\"]}]")), directory);
+            var canBypass = !enforced || (administration && seePii);
+
+            // Five included, one excluded: the existing small-scope floor permits the filtered report.
+            // An Administration-only caller must not recover the excluded person's figures by differencing.
+            var filtered = await resolver.ResolveAsync(Request(enforced: enforced), principal, null, CancellationToken.None);
+            Assert.AreEqual(5, filtered.Sql.Count);
+            var scope = await resolver.ResolveAsync(Request(bypass: true, enforced: enforced), principal, null, CancellationToken.None);
+            Assert.AreEqual(canBypass, scope.Global.CanBypass);
+            Assert.AreEqual(canBypass, scope.Global.Bypassed);
+            Assert.AreEqual(!canBypass, scope.IsRestricted);
+            Assert.AreEqual(canBypass, scope.Includes(6));
+            Assert.AreEqual(canBypass ? "all" : filtered.Key, scope.Key, "Ignored bypasses share only the filtered cache key.");
+
+            var described = await resolver.DescribeAsync(Request(bypass: true, enforced: enforced), principal, CancellationToken.None);
+            Assert.AreEqual(canBypass, described.CanBypass);
+            Assert.AreEqual(canBypass, described.Bypassed);
+            Assert.AreEqual(!canBypass, described.Applied);
+
+            var effective = Body<GlobalFilterEffectiveModel>(
+                await Controller(resolver, principal, bypass: true, enforced: enforced).Effective(CancellationToken.None));
+            Assert.AreEqual(canBypass, effective.CanBypass);
+            Assert.AreEqual(canBypass, effective.Bypassed);
+            Assert.AreEqual(!canBypass, effective.Applied);
+            Assert.IsFalse(effective.TooFewPeople, "The existing five-person floor has not changed.");
+
+            var noFilter = new ReportScopeResolver(GlobalFilterProviders.None, directory);
+            var inactive = Body<GlobalFilterEffectiveModel>(
+                await Controller(noFilter, principal, bypass: true, enforced: enforced).Effective(CancellationToken.None));
+            Assert.IsFalse(inactive.Active);
+            Assert.IsFalse(inactive.Bypassed);
+            Assert.AreEqual(canBypass, inactive.CanBypass, "Capability reporting must also agree with no filter defined.");
+        }
+
+        [DataTestMethod]
+        [DataRow(false, false)]
+        [DataRow(true, false)]
+        [DataRow(false, true)]
+        public async Task Bypass_WithoutBothPermissions_CannotSkipAnInvalidFilterOrUnavailableDirectory(
+            bool administration, bool seePii)
+        {
+            var roles = new[] { administration ? PortalRoles.Administration : null, seePii ? PortalRoles.SeePii : null }
+                .Where(role => role != null).ToArray();
+            var principal = Principal("rep@contoso.com", roles);
+            var invalid = Resolver(new MemoryStore("[{\"d\":\"department\",\"v\":[],\"vu\":\"salary\"}]"));
+            var invalidRefusal = await RefusalOf(() =>
+                invalid.ResolveAsync(Request(bypass: true), principal, null, CancellationToken.None));
+            Assert.AreEqual(HttpStatusCode.ServiceUnavailable, invalidRefusal.Item1);
+            Assert.AreEqual("globalFilterInvalid", invalidRefusal.Item2);
+            var effective = Body<GlobalFilterEffectiveModel>(
+                await Controller(invalid, principal, bypass: true).Effective(CancellationToken.None));
+            Assert.IsTrue(effective.Invalid);
+            Assert.IsTrue(effective.Applied);
+            Assert.IsFalse(effective.CanBypass);
+            Assert.IsFalse(effective.Bypassed);
+
+            var unavailable = new ReportScopeResolver(Provider(new MemoryStore(MyDepartment)),
+                new Directory(failure: new TimeoutException("synthetic directory failure")));
+            var unavailableRefusal = await RefusalOf(() =>
+                unavailable.ResolveAsync(Request(bypass: true), principal, null, CancellationToken.None));
+            Assert.AreEqual(HttpStatusCode.ServiceUnavailable, unavailableRefusal.Item1);
+            Assert.AreEqual("filterDirectoryUnavailable", unavailableRefusal.Item2);
         }
 
         [TestMethod]
@@ -167,10 +265,11 @@ namespace Tests.UnitTests
             var nobody = await resolver.ResolveAsync(Request(), Reader("stranger@contoso.com"), null, CancellationToken.None);
             Assert.AreEqual(0, nobody.Sql.Count);
 
-            // An administrator who switched the filter off has no scope to be too small.
+            // Administration alone cannot switch off the filter or evade the existing floor.
             var adminWithoutPii = Principal("rep@contoso.com", PortalRoles.Administration);
-            var bypassed = await resolver.ResolveAsync(Request(bypass: true), adminWithoutPii, null, CancellationToken.None);
-            Assert.IsFalse(bypassed.IsRestricted);
+            var adminRefused = await StatusOf(() => resolver.ResolveAsync(Request(bypass: true), adminWithoutPii, null, CancellationToken.None));
+            Assert.AreEqual(HttpStatusCode.Forbidden, adminRefused.Item1);
+            StringAssert.Contains(adminRefused.Item2, "seePii");
         }
 
         [TestMethod]
@@ -471,10 +570,10 @@ namespace Tests.UnitTests
             return new CachedGlobalFilterProvider(store, TimeSpan.FromMinutes(1));
         }
 
-        private static HttpRequestMessage Request(bool bypass = false, HttpMethod method = null)
+        private static HttpRequestMessage Request(bool bypass = false, HttpMethod method = null, bool enforced = true)
         {
             var configuration = new HttpConfiguration();
-            configuration.Properties[typeof(PortalAccessPolicy)] = PortalAccessPolicy.Enforcing;
+            configuration.Properties[typeof(PortalAccessPolicy)] = enforced ? PortalAccessPolicy.Enforcing : PortalAccessPolicy.NotEnforcing;
 
             var request = new HttpRequestMessage(method ?? HttpMethod.Get, "https://contoso.example/api/GlobalFilter");
             request.SetConfiguration(configuration);
@@ -483,9 +582,9 @@ namespace Tests.UnitTests
             return request;
         }
 
-        private static GlobalFilterAPIController Controller(ReportScopeResolver resolver, ClaimsPrincipal user, bool bypass = false, HttpMethod method = null)
+        private static GlobalFilterAPIController Controller(ReportScopeResolver resolver, ClaimsPrincipal user, bool bypass = false, HttpMethod method = null, bool enforced = true)
         {
-            var request = Request(bypass, method);
+            var request = Request(bypass, method, enforced);
             return new GlobalFilterAPIController(resolver)
             {
                 Request = request,
@@ -582,12 +681,13 @@ namespace Tests.UnitTests
 
         private sealed class Directory : IUserDirectorySource
         {
-            private readonly UserDirectorySnapshot _snapshot = Snapshot();
+            private readonly UserDirectorySnapshot _snapshot;
             private readonly Exception _failure;
 
-            public Directory(Exception failure = null)
+            public Directory(Exception failure = null, UserDirectorySnapshot snapshot = null)
             {
                 _failure = failure;
+                _snapshot = snapshot ?? Snapshot();
             }
 
             public Task<UserDirectorySnapshot> GetAsync(CancellationToken cancellationToken)

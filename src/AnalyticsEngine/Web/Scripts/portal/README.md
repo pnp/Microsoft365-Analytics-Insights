@@ -354,15 +354,19 @@ with or without See PII.
 - **What stays tenant-wide**, and says so beside the figures: the Overview page's data counts, Teams
   team-level figures (collaboration and conversations), agent and Azure cost figures, and the Copilot
   Adoption sections already marked as tenant-wide.
-- **Administrators** see the filter applied too, so they see what everyone sees. They can switch it off
-  for their own view from the bar, which sets the session cookie `GlobalFilterBypass=1`; the server
-  honours it only for a caller holding the Administration permission, and exports follow it because it
+- **Administrators** see the filter applied too, so they see what everyone sees. Only those with **both
+  Administration and See PII** can switch it off for their own view from the bar, which sets the session
+  cookie `GlobalFilterBypass=1`; the server requires both permissions, and exports follow it because it
   is a cookie. `GlobalFilterProvider` remounts the Insights pages (`viewKey`) whenever the switch or the
   filter changes, so no figures from before the change sit under a bar describing after it. The cookie is
   the browser's, not the tab's, so a tab coming back into view reads the filter again when the cookie no
-  longer agrees with what it last read - switched off or on in another tab.
+  longer agrees with what it last read - switched off or on in another tab. The browser clears a stored
+  bypass only after a fresh server answer says the reader cannot bypass, including after a sign-in or
+  permission change: an older tab's cached denial must not undo an authorized sign-in's explicit switch.
+  A failed read leaves the shared cookie alone without granting a cached-denied reader bypass;
+  a manually set or stale cookie never bypasses the server's permission checks.
 - **Not a security boundary without roles.** With `EnforcePortalRoles=false` everyone who can sign in is
-  an administrator and can switch the filter off; the editor warns about this.
+  granted both permissions and can switch the filter off; the editor warns about this.
 - **Where it is kept:** one row in `dbo.portal_global_filters` (migration
   `202610011330001_PortalGlobalFilter`, with its manual upgrade script). Each web process caches it for
   a minute, and a save is refused (`409`) if someone else saved since the editor opened it. Every save
