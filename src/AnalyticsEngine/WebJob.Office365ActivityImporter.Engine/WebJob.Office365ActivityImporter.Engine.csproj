@@ -223,6 +223,9 @@
     <Compile Include="Graph\Calls\ICallRecordSubscriptionManager.cs" />
     <Compile Include="Graph\Teams\ChannelMessagesLoader.cs" />
     <Compile Include="Graph\Teams\Extensions\GraphUserExtensions.cs" />
+    <Compile Include="Graph\Teams\ITeamsPersistenceStore.cs" />
+    <Compile Include="Graph\Teams\ITeamsCognitiveStatsLoader.cs" />
+    <Compile Include="Graph\Teams\SqlTeamsPersistenceStore.cs" />
     <Compile Include="Graph\Teams\Extensions\TeamChannelExtensions.cs" />
     <Compile Include="Graph\Teams\Extensions\ItemBodyExtensions.cs" />
     <Compile Include="Graph\Teams\GraphReadExceptions.cs" />

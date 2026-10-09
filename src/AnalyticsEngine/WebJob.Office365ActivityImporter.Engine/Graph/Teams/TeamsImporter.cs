@@ -16,9 +16,17 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
     {
         private TeamsFinder _teamsFinder;
         private TeamsLoadContext _context;
+        private readonly ITeamsCognitiveStatsLoader _cognitiveStatsLoader;
 
         /// <param name="userScope">The <c>UserGroupsFilter</c> scope for this crawl; null means unfiltered.</param>
-        public TeamsImporter(AnalyticsLogger logger, AppConfig settings, GraphServiceClient graphServiceClient, Common.Entities.UserScope.UserImportScope userScope = null) : base(logger, settings)
+        public TeamsImporter(AnalyticsLogger logger, AppConfig settings, GraphServiceClient graphServiceClient,
+            Common.Entities.UserScope.UserImportScope userScope = null)
+            : this(logger, settings, graphServiceClient, userScope, null)
+        {
+        }
+
+        public TeamsImporter(AnalyticsLogger logger, AppConfig settings, GraphServiceClient graphServiceClient,
+            Common.Entities.UserScope.UserImportScope userScope, ITeamsCognitiveStatsLoader cognitiveStatsLoader) : base(logger, settings)
         {
             if (logger is null)
             {
@@ -40,6 +48,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
                 UserScope = userScope ?? Common.Entities.UserScope.UserImportScope.Unfiltered
             };
             _teamsFinder = new TeamsFinder(logger, settings, graphServiceClient);
+            _cognitiveStatsLoader = cognitiveStatsLoader ?? new TeamsCognitiveStatsLoader(new AppConfig(), logger);
         }
 
         /// <summary>
@@ -94,7 +103,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
             {
                 try
                 {
-                    await team.SaveToSQL(lookupManager, _settings, _logger);
+                    await team.SaveToSQL(lookupManager, _settings, _logger, _cognitiveStatsLoader);
                 }
                 catch (SqlException ex)
                 {
