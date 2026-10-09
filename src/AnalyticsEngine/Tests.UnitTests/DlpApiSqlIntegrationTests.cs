@@ -387,6 +387,194 @@ namespace Tests.UnitTests
             Assert.AreEqual(1, aggregateOnly.UsersImpacted);
         }
 
+        /// <summary>
+        /// The governance section (#648) against the real schema: every interaction counted once however many
+        /// prompts or resources it has, a NULL flag in neither side of a rate, models and plugins counted per
+        /// interaction, and the administrator's filter applied in SQL.
+        /// </summary>
+        /// <remarks>
+        /// Asserted under a scope of the two people seeded here, because the other tests in this class share the
+        /// database and seed interactions inside the same 28-day window. The unfiltered statements are then
+        /// checked against a scope holding everyone, as the summary's are.
+        /// </remarks>
+        [TestMethod]
+        public async Task Governance_CountsEachInteractionOnce_AndLeavesUnreportedFlagsOutOfBothSidesOfTheRate()
+        {
+            var now = DateTime.UtcNow;
+            int nadia;
+            int omar;
+
+            using (var db = new AnalyticsEntitiesContext(_connectionString, true, false))
+            {
+                var operation = new EventOperation { Name = "CopilotInteractionForGovernance" };
+                db.event_operations.Add(operation);
+                var nadiaUser = new User { UserPrincipalName = "nadia@contoso.com" };
+                var omarUser = new User { UserPrincipalName = "omar@contoso.com" };
+                db.users.Add(nadiaUser);
+                db.users.Add(omarUser);
+                var label = new SensitivityLabel { LabelId = "00000000-0000-0000-0000-00000000c648" };
+                db.SensitivityLabels.Add(label);
+
+                // One model under two versions, which must still count as one model per interaction.
+                var deepReasoningV1 = new CopilotAIModel { Name = "DEEP_LEO", ProviderName = "Contoso AI", Version = "2026-01-01" };
+                var deepReasoningV2 = new CopilotAIModel { Name = "DEEP_LEO", ProviderName = "Contoso AI", Version = "2026-06-01" };
+                var otherModel = new CopilotAIModel { Name = "contoso-model" };
+                db.CopilotAIModels.Add(deepReasoningV1);
+                db.CopilotAIModels.Add(deepReasoningV2);
+                db.CopilotAIModels.Add(otherModel);
+
+                // A plugin with no id is named by its name, which is tenant-visible text and must survive as Unicode.
+                var webSearch = new CopilotAISystemPlugin { PluginId = "BingWebSearch", Name = "BuiltIn" };
+                var namedOnly = new CopilotAISystemPlugin { Name = "Καλημέρα κόσμε" };
+                db.CopilotAISystemPlugins.Add(webSearch);
+                db.CopilotAISystemPlugins.Add(namedOnly);
+                db.SaveChanges();
+                nadia = nadiaUser.ID;
+                omar = omarUser.ID;
+
+                Guid Interaction(User user, int daysAgo)
+                {
+                    var eventId = Guid.NewGuid();
+                    db.AuditEventsCommon.Add(new CommonAuditEvent { Id = eventId, TimeStamp = now.AddDays(-daysAgo), User = user, Operation = operation });
+                    db.CopilotChats.Add(new CopilotChat { EventID = eventId, AppHost = "BizChat", UserId = user.ID, TimeStampUtc = now.AddDays(-daysAgo) });
+                    db.SaveChanges();
+                    return eventId;
+                }
+
+                void Message(Guid chat, bool isPrompt, bool? jailbreak) => db.CopilotMessages.Add(new CopilotMessage
+                {
+                    ChatId = chat,
+                    MessageId = Guid.NewGuid().ToString("N"),
+                    IsPrompt = isPrompt,
+                    JailbreakDetected = jailbreak,
+                });
+
+                void Resource(Guid chat, bool? xpia, bool labelled) => db.CopilotEventAccessedResources.Add(new CopilotEventAccessedResource
+                {
+                    ChatId = chat,
+                    XpiaDetected = xpia,
+                    SensitivityLabelId = labelled ? label.ID : (int?)null,
+                });
+
+                void Model(Guid chat, CopilotAIModel model) =>
+                    db.CopilotEventAIModels.Add(new CopilotEventAIModel { ChatId = chat, ModelId = model.ID });
+
+                void Plugin(Guid chat, CopilotAISystemPlugin plugin) =>
+                    db.CopilotEventAISystemPlugins.Add(new CopilotEventAISystemPlugin { ChatId = chat, AISystemPluginId = plugin.ID });
+
+                // A: a jailbreak reported and raised on its prompt (the response's NULL changes nothing); XPIA reported
+                // clean on one resource and absent on the other; deep reasoning under both versions; web search.
+                var a = Interaction(nadiaUser, 2);
+                Message(a, isPrompt: true, jailbreak: true);
+                Message(a, isPrompt: false, jailbreak: null);
+                Resource(a, xpia: false, labelled: true);
+                Resource(a, xpia: null, labelled: false);
+                Model(a, deepReasoningV1);
+                Model(a, deepReasoningV2);
+                Plugin(a, webSearch);
+
+                // B: a jailbreak reported and not raised; XPIA raised on one of its two resources.
+                var b = Interaction(nadiaUser, 3);
+                Message(b, isPrompt: true, jailbreak: false);
+                Message(b, isPrompt: false, jailbreak: null);
+                Resource(b, xpia: true, labelled: true);
+                Resource(b, xpia: false, labelled: false);
+                Model(b, deepReasoningV1);
+                Model(b, otherModel);
+
+                // C: every flag NULL. Not reported is not clean, so C is in neither side of either rate.
+                var c = Interaction(omarUser, 4);
+                Message(c, isPrompt: true, jailbreak: null);
+                Message(c, isPrompt: false, jailbreak: null);
+                Resource(c, xpia: null, labelled: false);
+                Plugin(c, webSearch);
+                Plugin(c, namedOnly);
+
+                // D: an interaction with nothing recorded against it, which counts only as an interaction.
+                Interaction(omarUser, 5);
+
+                // E: everything raised, but outside every window the page offers.
+                var e = Interaction(nadiaUser, 200);
+                Message(e, isPrompt: true, jailbreak: true);
+                Resource(e, xpia: true, labelled: true);
+                Model(e, otherModel);
+                Plugin(e, webSearch);
+
+                db.SaveChanges();
+            }
+
+            var governance = await NewController().BuildGovernanceAsync(28, ReportUserScope.ForUsers(new[] { nadia, omar }));
+
+            Assert.AreEqual(4, governance.Interactions, "A, B, C and D; E is outside the window.");
+
+            Assert.AreEqual(2, governance.Jailbreak.ReportedInteractions, "A and B reported the flag; C reported nothing.");
+            Assert.AreEqual(1, governance.Jailbreak.FlaggedInteractions);
+            Assert.AreEqual(5000.0, governance.Jailbreak.RatePer10000.Value, 1e-9, "1 of the 2 that reported it - not 1 of 4.");
+
+            Assert.AreEqual(2, governance.Xpia.ReportedInteractions, "A (one clean resource) and B; C's only resource reported nothing.");
+            Assert.AreEqual(1, governance.Xpia.FlaggedInteractions, "B, counted once although only one of its resources was flagged.");
+
+            Assert.AreEqual(5, governance.SensitivityLabels.Resources, "A's two, B's two and C's one.");
+            Assert.AreEqual(2, governance.SensitivityLabels.LabelledResources);
+            Assert.AreEqual(3, governance.SensitivityLabels.InteractionsWithResources);
+            Assert.AreEqual(0.4, governance.SensitivityLabels.Share.Value, 1e-9);
+
+            Assert.AreEqual(2, governance.InteractionsWithModel);
+            Assert.AreEqual(
+                "DEEP_LEO:2|contoso-model:1",
+                string.Join("|", governance.Models.Select(m => m.Name + ":" + m.Interactions)),
+                "A used deep reasoning under two versions and still counts once.");
+            Assert.AreEqual(0.5, governance.Models[0].Share.Value, 1e-9, "A share of all 4 interactions.");
+
+            Assert.AreEqual(2, governance.InteractionsWithPlugin);
+            Assert.AreEqual(
+                "BingWebSearch:2|Καλημέρα κόσμε:1",
+                string.Join("|", governance.Plugins.Select(p => p.Name + ":" + p.Interactions)),
+                "Named by plugin id, or by name when there is no id - as Microsoft reported it.");
+
+            // One person in scope: only theirs, and with nothing reported the rates are unknown, never zero.
+            var onlyOmar = await NewController().BuildGovernanceAsync(28, ReportUserScope.ForUsers(new[] { omar }));
+            Assert.AreEqual(2, onlyOmar.Interactions);
+            Assert.AreEqual(0, onlyOmar.Jailbreak.ReportedInteractions);
+            Assert.IsNull(onlyOmar.Jailbreak.RatePer10000);
+            Assert.AreEqual(0, onlyOmar.Xpia.ReportedInteractions);
+            Assert.IsNull(onlyOmar.Xpia.RatePer10000);
+            Assert.AreEqual(1, onlyOmar.SensitivityLabels.Resources);
+            Assert.AreEqual(0, onlyOmar.InteractionsWithModel);
+            Assert.AreEqual(0, onlyOmar.Models.Count);
+            Assert.AreEqual(1, onlyOmar.InteractionsWithPlugin);
+
+            var nobody = await NewController().BuildGovernanceAsync(28, ReportUserScope.ForUsers(new int[0]));
+            Assert.AreEqual(0, nobody.Interactions);
+            Assert.IsNull(nobody.Jailbreak.RatePer10000);
+            Assert.IsNull(nobody.Xpia.RatePer10000);
+            Assert.IsNull(nobody.SensitivityLabels.Share);
+            Assert.AreEqual(0, nobody.InteractionsWithModel + nobody.InteractionsWithPlugin + nobody.Models.Count + nobody.Plugins.Count);
+
+            int[] everyoneIds;
+            using (var db = new AnalyticsEntitiesContext(_connectionString, true, false))
+            {
+                everyoneIds = db.users.Select(u => u.ID).ToArray();
+            }
+
+            var unfiltered = await NewController().BuildGovernanceAsync(28);
+            var everyone = await NewController().BuildGovernanceAsync(28, ReportUserScope.ForUsers(everyoneIds));
+            Assert.AreEqual(DescribeGovernance(unfiltered), DescribeGovernance(everyone),
+                "A scope holding everyone must give exactly the unfiltered figures.");
+            Assert.IsTrue(unfiltered.Interactions >= governance.Interactions);
+        }
+
+        private static string DescribeGovernance(AnalyticsWeb::Web.AnalyticsWeb.Models.Dlp.DlpGovernanceSummary g)
+        {
+            return string.Join(";",
+                g.Interactions,
+                g.Jailbreak.FlaggedInteractions + "/" + g.Jailbreak.ReportedInteractions,
+                g.Xpia.FlaggedInteractions + "/" + g.Xpia.ReportedInteractions,
+                g.SensitivityLabels.LabelledResources + "/" + g.SensitivityLabels.Resources + "/" + g.SensitivityLabels.InteractionsWithResources,
+                g.InteractionsWithModel + ":" + string.Join(",", g.Models.Select(m => m.Name + "=" + m.Interactions)),
+                g.InteractionsWithPlugin + ":" + string.Join(",", g.Plugins.Select(p => p.Name + "=" + p.Interactions)));
+        }
+
         private static void AssertSameFigures(DlpSummary expected, DlpSummary actual)
         {
             Assert.AreEqual(expected.CopilotBlockedCount, actual.CopilotBlockedCount, "CopilotBlockedCount");

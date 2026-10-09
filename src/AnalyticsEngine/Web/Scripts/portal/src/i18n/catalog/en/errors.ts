@@ -75,6 +75,7 @@ export const errors = {
   // DLP API
   'errors.dlp.availabilityFailed': "Couldn't load DLP availability ({status}).",
   'errors.dlp.summaryFailed': "Couldn't load DLP summary ({status}).",
+  'errors.dlp.governanceFailed': "Couldn't load the Copilot governance signals ({status}).",
 
   // Health API
   'errors.health.summaryFailed': "Couldn't load system health ({status}).",

@@ -93,6 +93,7 @@ namespace Tests.UnitTests
 
             ["DlpAPIController.Availability"] = Any,
             ["DlpAPIController.Summary"] = Any,                        // trims the top-users table
+            ["DlpAPIController.Governance"] = Any,                     // tenant-level rates and model/plugin names only
 
             // Every reader is shown the administrator's filter that narrows their reports. Reading, previewing
             // or changing the definition needs See PII as well as Administration: its value picker lists
