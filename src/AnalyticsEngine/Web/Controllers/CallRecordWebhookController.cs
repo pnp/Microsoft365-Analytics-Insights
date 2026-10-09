@@ -4,20 +4,23 @@ using Common.Entities.Config;
 using Common.Entities.Models;
 using DataUtils;
 using System.Collections.Generic;
-using System.Net;
-using System.Net.Http;
+using System.Text;
 using System.Threading.Tasks;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Web.AnalyticsWeb.Models.Calls;
 
 namespace Web.AnalyticsWeb.Controllers
 {
+    [Route("api/CallRecordWebhook")]
     public class CallRecordWebhookController  : ControllerBase
     {
         // Webhook called by Graph for new calls
         // POST: api/CallRecordWebhook
         [HttpPost]
-        public async Task<HttpResponseMessage> Post([FromBody] GraphChangeNotificationList changeMsg, string validationToken = "")
+        public async Task<IActionResult> Post(
+            [FromBody] GraphChangeNotificationList changeMsg,
+            [FromQuery] string validationToken = "")
         {
             var config = new AppConfig();
             var logger = new AnalyticsLogger(config.AppInsightsConnectionString, nameof(CallRecordWebhookController));
@@ -26,9 +29,7 @@ namespace Web.AnalyticsWeb.Controllers
             if (!string.IsNullOrEmpty(validationToken))
             {
                 logger.LogInformation($"{nameof(CallRecordWebhookController)}: test ping from Graph received.");
-                var pingTestResponse = new HttpResponseMessage(HttpStatusCode.OK);
-                pingTestResponse.Content = new StringContent(validationToken, System.Text.Encoding.UTF8, "text/plain");
-                return pingTestResponse;
+                return Content(validationToken, "text/plain", Encoding.UTF8);
             }
 
             // Do we have a correctly deserialised body?
@@ -48,9 +49,11 @@ namespace Web.AnalyticsWeb.Controllers
                 if (string.IsNullOrWhiteSpace(config.ConnectionStrings.ServiceBusConnectionString))
                 {
                     logger.LogError($"{nameof(CallRecordWebhookController)}: Service Bus is not configured. Teams call notifications cannot be processed. Enable Service Bus in the installer to use the Teams calls import.");
-                    return new HttpResponseMessage(HttpStatusCode.ServiceUnavailable)
+                    return new ContentResult
                     {
-                        Content = new StringContent("Service Bus is not configured on this deployment; Teams call notifications are disabled.", System.Text.Encoding.UTF8, "text/plain")
+                        StatusCode = StatusCodes.Status503ServiceUnavailable,
+                        ContentType = "text/plain; charset=utf-8",
+                        Content = "Service Bus is not configured on this deployment; Teams call notifications are disabled."
                     };
                 }
 
@@ -71,7 +74,7 @@ namespace Web.AnalyticsWeb.Controllers
                     {
                         logger.TrackException(ex);
                         logger.LogError($"Error adding change messages to queue: {ex.Message}");
-                        return new HttpResponseMessage(HttpStatusCode.InternalServerError);
+                        return StatusCode(StatusCodes.Status500InternalServerError);
                     }
                 }
                 finally
@@ -80,17 +83,17 @@ namespace Web.AnalyticsWeb.Controllers
                     await sbClient.DisposeAsync();
                 }
 
-                var successResponse = new HttpResponseMessage(HttpStatusCode.OK);
-                successResponse.Content = new StringContent("not null and that", System.Text.Encoding.UTF8, "text/plain");
-                return successResponse;
+                return Content("not null and that", "text/plain", Encoding.UTF8);
             }
             else
             {
                 logger.LogInformation($"{nameof(CallRecordWebhookController)} invoked with invalid body.");
-                var errResponse = new HttpResponseMessage(HttpStatusCode.BadRequest);
-                errResponse.Content = new StringContent($"Could not find {nameof(GraphChangeNotificationList)} in body",
-                    System.Text.Encoding.UTF8, "text/plain");
-                return errResponse;
+                return new ContentResult
+                {
+                    StatusCode = StatusCodes.Status400BadRequest,
+                    ContentType = "text/plain; charset=utf-8",
+                    Content = $"Could not find {nameof(GraphChangeNotificationList)} in body"
+                };
             }
         }
     }
