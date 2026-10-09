@@ -35,6 +35,7 @@
     <Compile Include="PromptCategoryImportTests.cs" />
     <Compile Include="PromptCategoryReportTests.cs" />
     <Compile Include="InstallTests\FoundryInstallConfigTests.cs" />
+    <Compile Include="InstallTests\AzureAIConfigControlTests.cs" />
     <Compile Include="ActivityAnalysisCacheTests.cs" />
     <Compile Include="ActivityAnalysisFakeSource.cs" />
     <Compile Include="ActivityAnalysisPerformanceTests.cs" />
@@ -522,6 +523,10 @@
     <ProjectReference Include="..\App.ControlPanel.Engine\App.ControlPanel.Engine.csproj">
       <Project>{B9BE1134-F5FE-41A9-9498-F411261D9A9C}</Project>
       <Name>App.ControlPanel.Engine</Name>
+    </ProjectReference>
+    <ProjectReference Include="..\App.ControlPanel\App.ControlPanel.WinForms.csproj">
+      <Project>{166141E8-D936-454A-AF8A-1CB825748909}</Project>
+      <Name>App.ControlPanel.WinForms</Name>
     </ProjectReference>
     <ProjectReference Include="..\Common\CloudInstallEngine\CloudInstallEngine.csproj">
       <Project>{F927D232-C692-409E-B448-75B3FC3F0F09}</Project>

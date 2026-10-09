@@ -38,6 +38,8 @@
             this.azureBaseConfigControl1 = new App.ControlPanel.Frames.InstallWizardPages.AzureBaseConfigControl();
             this.tabAzureResources = new System.Windows.Forms.TabPage();
             this.azurePaaSConfigControl1 = new App.ControlPanel.Frames.InstallWizard.AzurePaaSConfigControl();
+            this.tabAzureAI = new System.Windows.Forms.TabPage();
+            this.azureAIConfigControl1 = new App.ControlPanel.Frames.InstallWizard.AzureAIConfigControl();
             this.tabAzureStorage = new System.Windows.Forms.TabPage();
             this.azureStorageConfigControl1 = new App.ControlPanel.Frames.InstallWizard.AzureStorageConfigControl();
             this.tabNetworking = new System.Windows.Forms.TabPage();
@@ -83,6 +85,7 @@
             this.tabs.Controls.Add(this.tabCredentials);
             this.tabs.Controls.Add(this.tabPageAzureConfig);
             this.tabs.Controls.Add(this.tabAzureResources);
+            this.tabs.Controls.Add(this.tabAzureAI);
             this.tabs.Controls.Add(this.tabAzureStorage);
             this.tabs.Controls.Add(this.tabNetworking);
             this.tabs.Controls.Add(this.tabSharePoint);
@@ -178,8 +181,6 @@
             this.azurePaaSConfigControl1.AppInsightsWorkspaceName = "";
             this.azurePaaSConfigControl1.AppServicePlanName = "";
             this.azurePaaSConfigControl1.AppServiceWebAppName = "";
-            this.azurePaaSConfigControl1.CognitiveEnabled = false;
-            this.azurePaaSConfigControl1.CognitiveServiceName = "";
             this.azurePaaSConfigControl1.Dock = System.Windows.Forms.DockStyle.Fill;
             this.azurePaaSConfigControl1.KeyVaultName = "";
             this.azurePaaSConfigControl1.Location = new System.Drawing.Point(3, 3);
@@ -187,6 +188,23 @@
             this.azurePaaSConfigControl1.Name = "azurePaaSConfigControl1";
             this.azurePaaSConfigControl1.Size = new System.Drawing.Size(632, 537);
             this.azurePaaSConfigControl1.TabIndex = 0;
+            //
+            // tabAzureAI
+            //
+            this.tabAzureAI.Controls.Add(this.azureAIConfigControl1);
+            this.tabAzureAI.Name = "tabAzureAI";
+            this.tabAzureAI.Padding = new System.Windows.Forms.Padding(3);
+            this.tabAzureAI.Size = new System.Drawing.Size(638, 543);
+            this.tabAzureAI.Text = "Azure AI";
+            this.tabAzureAI.UseVisualStyleBackColor = true;
+            //
+            // azureAIConfigControl1
+            //
+            this.azureAIConfigControl1.Dock = System.Windows.Forms.DockStyle.Fill;
+            this.azureAIConfigControl1.Location = new System.Drawing.Point(3, 3);
+            this.azureAIConfigControl1.Name = "azureAIConfigControl1";
+            this.azureAIConfigControl1.Size = new System.Drawing.Size(632, 537);
+            this.azureAIConfigControl1.TabIndex = 0;
             // 
             // tabAzureStorage
             // 
@@ -495,6 +513,8 @@
         private InstallWizard.SharePointConfigControl sharePointConfigControl1;
         private InstallWizard.InstallSolutionControl installSolutionControl1;
         private InstallWizard.AzurePaaSConfigControl azurePaaSConfigControl1;
+        private System.Windows.Forms.TabPage tabAzureAI;
+        private InstallWizard.AzureAIConfigControl azureAIConfigControl1;
         private InstallWizard.AzureStorageConfigControl azureStorageConfigControl1;
         private InstallWizard.NetworkingConfigControl networkingConfigControl1;
         private InstallWizard.SystemCredentialsControl systemCredentialsControl1;

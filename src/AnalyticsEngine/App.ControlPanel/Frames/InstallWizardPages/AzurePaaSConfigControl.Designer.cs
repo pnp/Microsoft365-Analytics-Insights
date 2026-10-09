@@ -1,595 +1,101 @@
-﻿namespace App.ControlPanel.Frames.InstallWizard
+namespace App.ControlPanel.Frames.InstallWizard
 {
     partial class AzurePaaSConfigControl
     {
-        /// <summary> 
-        /// Required designer variable.
-        /// </summary>
         private System.ComponentModel.IContainer components = null;
 
-        /// <summary> 
-        /// Clean up any resources being used.
-        /// </summary>
-        /// <param name="disposing">true if managed resources should be disposed; otherwise, false.</param>
         protected override void Dispose(bool disposing)
         {
-            if (disposing && (components != null))
-            {
-                components.Dispose();
-            }
+            if (disposing && components != null) components.Dispose();
             base.Dispose(disposing);
         }
 
-        #region Component Designer generated code
-
-        /// <summary> 
-        /// Required method for Designer support - do not modify 
-        /// the contents of this method with the code editor.
-        /// </summary>
         private void InitializeComponent()
         {
-            System.ComponentModel.ComponentResourceManager resources = new System.ComponentModel.ComponentResourceManager(typeof(AzurePaaSConfigControl));
-            this.lblKVName = new System.Windows.Forms.Label();
-            this.lblGUIAzureHeaderKeyVault = new System.Windows.Forms.Label();
-            this.txtKeyVaultName = new System.Windows.Forms.TextBox();
-            this.lblGUIAzureKeyVaultDesc = new System.Windows.Forms.Label();
-            this.txtLogAnalyticsName = new System.Windows.Forms.TextBox();
-            this.label1 = new System.Windows.Forms.Label();
-            this.lblCognitiveName = new System.Windows.Forms.Label();
-            this.lblAppServiceWebAppName = new System.Windows.Forms.Label();
-            this.chkCognitiveEnable = new System.Windows.Forms.CheckBox();
-            this.lblGUIAzureHeaderCognitive = new System.Windows.Forms.Label();
-            this.txtCognitiveName = new System.Windows.Forms.TextBox();
-            this.lblGUIAzureCognitiveDesc = new System.Windows.Forms.Label();
-            this.lblGUIAzureHeaderDesc = new System.Windows.Forms.Label();
-            this.lblGUIAzureHeader = new System.Windows.Forms.Label();
-            this.lblGUIAzureHeaderAppService = new System.Windows.Forms.Label();
-            this.lblGUIAzureHeaderAppInsights = new System.Windows.Forms.Label();
-            this.txtAppServicePlanName = new System.Windows.Forms.TextBox();
-            this.lblGUIAzureAppServicePlanName = new System.Windows.Forms.Label();
-            this.txtAppServiceWebAppName = new System.Windows.Forms.TextBox();
-            this.lblGUIAzureAppServiceName = new System.Windows.Forms.Label();
             this.txtAppInsightsName = new System.Windows.Forms.TextBox();
-            this.lblGUIAzureAppInsightsName = new System.Windows.Forms.Label();
-            this.lblGUIAzureHeaderAutomation = new System.Windows.Forms.Label();
+            this.txtLogAnalyticsName = new System.Windows.Forms.TextBox();
+            this.txtAppServiceWebAppName = new System.Windows.Forms.TextBox();
+            this.txtAppServicePlanName = new System.Windows.Forms.TextBox();
+            this.txtKeyVaultName = new System.Windows.Forms.TextBox();
             this.txtAutomationAccountName = new System.Windows.Forms.TextBox();
-            this.lblGUIAutomationDesc = new System.Windows.Forms.Label();
-            this.lblGUIAzureHeaderFoundry = new System.Windows.Forms.Label();
-            this.lblGUIAzureFoundryDesc = new System.Windows.Forms.Label();
-            this.chkFoundryEnable = new System.Windows.Forms.CheckBox();
-            this.lblGUIFoundryResourceName = new System.Windows.Forms.Label();
-            this.txtFoundryResourceName = new System.Windows.Forms.TextBox();
-            this.lblFoundryEndpoint = new System.Windows.Forms.Label();
-            this.lblGUIFoundryDeploymentName = new System.Windows.Forms.Label();
-            this.txtFoundryDeploymentName = new System.Windows.Forms.TextBox();
-            this.lblGUIFoundryModelName = new System.Windows.Forms.Label();
-            this.txtFoundryModelName = new System.Windows.Forms.TextBox();
-            this.lblGUIFoundryModelVersion = new System.Windows.Forms.Label();
-            this.txtFoundryModelVersion = new System.Windows.Forms.TextBox();
-            this.lblGUIFoundryCapacity = new System.Windows.Forms.Label();
-            this.txtFoundryCapacity = new System.Windows.Forms.TextBox();
-            this.pictureBox1 = new System.Windows.Forms.PictureBox();
-            this.pictureBox2 = new System.Windows.Forms.PictureBox();
-            this.pictureBox3 = new System.Windows.Forms.PictureBox();
-            this.picAppService = new System.Windows.Forms.PictureBox();
-            this.picAppInsights = new System.Windows.Forms.PictureBox();
-            ((System.ComponentModel.ISupportInitialize)(this.pictureBox1)).BeginInit();
-            ((System.ComponentModel.ISupportInitialize)(this.pictureBox2)).BeginInit();
-            ((System.ComponentModel.ISupportInitialize)(this.pictureBox3)).BeginInit();
-            ((System.ComponentModel.ISupportInitialize)(this.picAppService)).BeginInit();
-            ((System.ComponentModel.ISupportInitialize)(this.picAppInsights)).BeginInit();
+            this.lblAppServiceWebAppName = new System.Windows.Forms.Label();
+            this.lblKVName = new System.Windows.Forms.Label();
             this.SuspendLayout();
-            // 
-            // lblKVName
-            // 
-            this.lblKVName.AutoSize = true;
-            this.lblKVName.Location = new System.Drawing.Point(153, 353);
-            this.lblKVName.Name = "lblKVName";
-            this.lblKVName.Size = new System.Drawing.Size(148, 13);
-            this.lblKVName.TabIndex = 181;
-            this.lblKVName.Text = "https://sfbdev.vault.azure.net";
-            // 
-            // lblGUIAzureHeaderKeyVault
-            // 
-            this.lblGUIAzureHeaderKeyVault.AutoSize = true;
-            this.lblGUIAzureHeaderKeyVault.Font = new System.Drawing.Font("Calibri", 12F, System.Drawing.FontStyle.Bold, System.Drawing.GraphicsUnit.Point, ((byte)(0)));
-            this.lblGUIAzureHeaderKeyVault.Location = new System.Drawing.Point(62, 307);
-            this.lblGUIAzureHeaderKeyVault.Name = "lblGUIAzureHeaderKeyVault";
-            this.lblGUIAzureHeaderKeyVault.Size = new System.Drawing.Size(73, 19);
-            this.lblGUIAzureHeaderKeyVault.TabIndex = 180;
-            this.lblGUIAzureHeaderKeyVault.Text = "Key Vault";
-            // 
-            // txtKeyVaultName
-            // 
-            this.txtKeyVaultName.CharacterCasing = System.Windows.Forms.CharacterCasing.Lower;
-            this.txtKeyVaultName.Location = new System.Drawing.Point(156, 330);
-            this.txtKeyVaultName.Name = "txtKeyVaultName";
-            this.txtKeyVaultName.Size = new System.Drawing.Size(150, 20);
-            this.txtKeyVaultName.TabIndex = 170;
-            this.txtKeyVaultName.Text = "txtkeyvaultname";
-            this.txtKeyVaultName.TextChanged += new System.EventHandler(this.txtKeyVaultName_TextChanged);
-            // 
-            // lblGUIAzureKeyVaultDesc
-            // 
-            this.lblGUIAzureKeyVaultDesc.AutoSize = true;
-            this.lblGUIAzureKeyVaultDesc.Location = new System.Drawing.Point(63, 333);
-            this.lblGUIAzureKeyVaultDesc.Name = "lblGUIAzureKeyVaultDesc";
-            this.lblGUIAzureKeyVaultDesc.Size = new System.Drawing.Size(38, 13);
-            this.lblGUIAzureKeyVaultDesc.TabIndex = 178;
-            this.lblGUIAzureKeyVaultDesc.Text = "Name:";
-            // 
-            // txtLogAnalyticsName
-            // 
-            this.txtLogAnalyticsName.Location = new System.Drawing.Point(438, 74);
-            this.txtLogAnalyticsName.Name = "txtLogAnalyticsName";
-            this.txtLogAnalyticsName.Size = new System.Drawing.Size(150, 20);
-            this.txtLogAnalyticsName.TabIndex = 176;
-            this.txtLogAnalyticsName.Text = "txtLogAnalyticsName";
-            // 
-            // label1
-            // 
-            this.label1.AutoSize = true;
-            this.label1.Location = new System.Drawing.Point(352, 77);
-            this.label1.Name = "label1";
-            this.label1.Size = new System.Drawing.Size(73, 13);
-            this.label1.TabIndex = 175;
-            this.label1.Text = "Log Analytics:";
-            // 
-            // lblCognitiveName
-            // 
-            this.lblCognitiveName.AutoSize = true;
-            this.lblCognitiveName.Location = new System.Drawing.Point(153, 268);
-            this.lblCognitiveName.Name = "lblCognitiveName";
-            this.lblCognitiveName.Size = new System.Drawing.Size(263, 13);
-            this.lblCognitiveName.TabIndex = 174;
-            this.lblCognitiveName.Text = "https://spoinsightsdemo.cognitiveservices.azure.com/";
-            // 
-            // lblAppServiceWebAppName
-            // 
-            this.lblAppServiceWebAppName.AutoSize = true;
-            this.lblAppServiceWebAppName.Location = new System.Drawing.Point(153, 183);
-            this.lblAppServiceWebAppName.Name = "lblAppServiceWebAppName";
-            this.lblAppServiceWebAppName.Size = new System.Drawing.Size(209, 13);
-            this.lblAppServiceWebAppName.TabIndex = 173;
-            this.lblAppServiceWebAppName.Text = "https://spoinsightsdemo.azurewebsites.net";
-            // 
-            // chkCognitiveEnable
-            // 
-            this.chkCognitiveEnable.AutoSize = true;
-            this.chkCognitiveEnable.Location = new System.Drawing.Point(355, 247);
-            this.chkCognitiveEnable.Name = "chkCognitiveEnable";
-            this.chkCognitiveEnable.Size = new System.Drawing.Size(149, 17);
-            this.chkCognitiveEnable.TabIndex = 160;
-            this.chkCognitiveEnable.Text = "Enable cognitive analytics";
-            this.chkCognitiveEnable.UseVisualStyleBackColor = true;
-            this.chkCognitiveEnable.CheckedChanged += new System.EventHandler(this.chkCognitiveEnable_CheckedChanged);
-            // 
-            // lblGUIAzureHeaderCognitive
-            // 
-            this.lblGUIAzureHeaderCognitive.AutoSize = true;
-            this.lblGUIAzureHeaderCognitive.Font = new System.Drawing.Font("Calibri", 12F, System.Drawing.FontStyle.Bold, System.Drawing.GraphicsUnit.Point, ((byte)(0)));
-            this.lblGUIAzureHeaderCognitive.Location = new System.Drawing.Point(62, 222);
-            this.lblGUIAzureHeaderCognitive.Name = "lblGUIAzureHeaderCognitive";
-            this.lblGUIAzureHeaderCognitive.Size = new System.Drawing.Size(204, 19);
-            this.lblGUIAzureHeaderCognitive.TabIndex = 172;
-            this.lblGUIAzureHeaderCognitive.Text = "Cognitive Services (Optional)";
-            // 
-            // txtCognitiveName
-            // 
-            this.txtCognitiveName.CharacterCasing = System.Windows.Forms.CharacterCasing.Lower;
-            this.txtCognitiveName.Location = new System.Drawing.Point(156, 245);
-            this.txtCognitiveName.Name = "txtCognitiveName";
-            this.txtCognitiveName.Size = new System.Drawing.Size(150, 20);
-            this.txtCognitiveName.TabIndex = 159;
-            this.txtCognitiveName.Text = "txtcognitivename";
-            this.txtCognitiveName.TextChanged += new System.EventHandler(this.txtCognitiveName_TextChanged);
-            // 
-            // lblGUIAzureCognitiveDesc
-            // 
-            this.lblGUIAzureCognitiveDesc.AutoSize = true;
-            this.lblGUIAzureCognitiveDesc.Location = new System.Drawing.Point(63, 248);
-            this.lblGUIAzureCognitiveDesc.Name = "lblGUIAzureCognitiveDesc";
-            this.lblGUIAzureCognitiveDesc.Size = new System.Drawing.Size(38, 13);
-            this.lblGUIAzureCognitiveDesc.TabIndex = 170;
-            this.lblGUIAzureCognitiveDesc.Text = "Name:";
-            // 
-            // lblGUIAzureHeaderDesc
-            // 
-            this.lblGUIAzureHeaderDesc.AutoSize = true;
-            this.lblGUIAzureHeaderDesc.Location = new System.Drawing.Point(-3, 19);
-            this.lblGUIAzureHeaderDesc.Name = "lblGUIAzureHeaderDesc";
-            this.lblGUIAzureHeaderDesc.Size = new System.Drawing.Size(610, 13);
-            this.lblGUIAzureHeaderDesc.TabIndex = 169;
-            this.lblGUIAzureHeaderDesc.Text = "These Azure \"Platform-as-a-Service\" resources need to be created for the solution" +
-    ". If they exist already they won\'t be recreated. ";
-            // 
-            // lblGUIAzureHeader
-            // 
-            this.lblGUIAzureHeader.AutoSize = true;
-            this.lblGUIAzureHeader.Font = new System.Drawing.Font("Calibri", 12F, System.Drawing.FontStyle.Bold, System.Drawing.GraphicsUnit.Point, ((byte)(0)));
-            this.lblGUIAzureHeader.Location = new System.Drawing.Point(-4, 0);
-            this.lblGUIAzureHeader.Name = "lblGUIAzureHeader";
-            this.lblGUIAzureHeader.Size = new System.Drawing.Size(155, 19);
-            this.lblGUIAzureHeader.TabIndex = 168;
-            this.lblGUIAzureHeader.Text = "Azure Paas Resources";
-            // 
-            // lblGUIAzureHeaderAppService
-            // 
-            this.lblGUIAzureHeaderAppService.AutoSize = true;
-            this.lblGUIAzureHeaderAppService.Font = new System.Drawing.Font("Calibri", 12F, System.Drawing.FontStyle.Bold, System.Drawing.GraphicsUnit.Point, ((byte)(0)));
-            this.lblGUIAzureHeaderAppService.Location = new System.Drawing.Point(62, 137);
-            this.lblGUIAzureHeaderAppService.Name = "lblGUIAzureHeaderAppService";
-            this.lblGUIAzureHeaderAppService.Size = new System.Drawing.Size(90, 19);
-            this.lblGUIAzureHeaderAppService.TabIndex = 167;
-            this.lblGUIAzureHeaderAppService.Text = "App Service";
-            // 
-            // lblGUIAzureHeaderAppInsights
-            // 
-            this.lblGUIAzureHeaderAppInsights.AutoSize = true;
-            this.lblGUIAzureHeaderAppInsights.Font = new System.Drawing.Font("Calibri", 12F, System.Drawing.FontStyle.Bold, System.Drawing.GraphicsUnit.Point, ((byte)(0)));
-            this.lblGUIAzureHeaderAppInsights.Location = new System.Drawing.Point(61, 52);
-            this.lblGUIAzureHeaderAppInsights.Name = "lblGUIAzureHeaderAppInsights";
-            this.lblGUIAzureHeaderAppInsights.Size = new System.Drawing.Size(143, 19);
-            this.lblGUIAzureHeaderAppInsights.TabIndex = 166;
-            this.lblGUIAzureHeaderAppInsights.Text = "Application Insights";
-            // 
-            // txtAppServicePlanName
-            // 
-            this.txtAppServicePlanName.Location = new System.Drawing.Point(438, 159);
-            this.txtAppServicePlanName.Name = "txtAppServicePlanName";
-            this.txtAppServicePlanName.Size = new System.Drawing.Size(150, 20);
-            this.txtAppServicePlanName.TabIndex = 158;
-            this.txtAppServicePlanName.Text = "txtAppServicePlanName";
-            // 
-            // lblGUIAzureAppServicePlanName
-            // 
-            this.lblGUIAzureAppServicePlanName.AutoSize = true;
-            this.lblGUIAzureAppServicePlanName.Location = new System.Drawing.Point(352, 163);
-            this.lblGUIAzureAppServicePlanName.Name = "lblGUIAzureAppServicePlanName";
-            this.lblGUIAzureAppServicePlanName.Size = new System.Drawing.Size(60, 13);
-            this.lblGUIAzureAppServicePlanName.TabIndex = 163;
-            this.lblGUIAzureAppServicePlanName.Text = "Plan name:";
-            // 
-            // txtAppServiceWebAppName
-            // 
-            this.txtAppServiceWebAppName.CharacterCasing = System.Windows.Forms.CharacterCasing.Lower;
-            this.txtAppServiceWebAppName.Location = new System.Drawing.Point(156, 160);
-            this.txtAppServiceWebAppName.Name = "txtAppServiceWebAppName";
-            this.txtAppServiceWebAppName.Size = new System.Drawing.Size(150, 20);
-            this.txtAppServiceWebAppName.TabIndex = 157;
-            this.txtAppServiceWebAppName.Text = "txtappservicewebappname";
-            this.txtAppServiceWebAppName.TextChanged += new System.EventHandler(this.txtAppServiceWebAppName_TextChanged);
-            // 
-            // lblGUIAzureAppServiceName
-            // 
-            this.lblGUIAzureAppServiceName.AutoSize = true;
-            this.lblGUIAzureAppServiceName.Location = new System.Drawing.Point(63, 163);
-            this.lblGUIAzureAppServiceName.Name = "lblGUIAzureAppServiceName";
-            this.lblGUIAzureAppServiceName.Size = new System.Drawing.Size(38, 13);
-            this.lblGUIAzureAppServiceName.TabIndex = 162;
-            this.lblGUIAzureAppServiceName.Text = "Name:";
-            // 
-            // txtAppInsightsName
-            // 
-            this.txtAppInsightsName.Location = new System.Drawing.Point(156, 74);
-            this.txtAppInsightsName.Name = "txtAppInsightsName";
-            this.txtAppInsightsName.Size = new System.Drawing.Size(150, 20);
-            this.txtAppInsightsName.TabIndex = 156;
-            this.txtAppInsightsName.Text = "txtAppInsightsName";
-            // 
-            // lblGUIAzureAppInsightsName
-            // 
-            this.lblGUIAzureAppInsightsName.AutoSize = true;
-            this.lblGUIAzureAppInsightsName.Location = new System.Drawing.Point(63, 77);
-            this.lblGUIAzureAppInsightsName.Name = "lblGUIAzureAppInsightsName";
-            this.lblGUIAzureAppInsightsName.Size = new System.Drawing.Size(80, 13);
-            this.lblGUIAzureAppInsightsName.TabIndex = 161;
-            this.lblGUIAzureAppInsightsName.Text = "Instance name:";
-            // 
-            // lblGUIAzureHeaderAutomation
-            // 
-            this.lblGUIAzureHeaderAutomation.AutoSize = true;
-            this.lblGUIAzureHeaderAutomation.Font = new System.Drawing.Font("Calibri", 12F, System.Drawing.FontStyle.Bold, System.Drawing.GraphicsUnit.Point, ((byte)(0)));
-            this.lblGUIAzureHeaderAutomation.Location = new System.Drawing.Point(62, 392);
-            this.lblGUIAzureHeaderAutomation.Name = "lblGUIAzureHeaderAutomation";
-            this.lblGUIAzureHeaderAutomation.Size = new System.Drawing.Size(152, 19);
-            this.lblGUIAzureHeaderAutomation.TabIndex = 185;
-            this.lblGUIAzureHeaderAutomation.Text = "Automation Account";
-            // 
-            // txtAutomationAccountName
-            // 
-            this.txtAutomationAccountName.Location = new System.Drawing.Point(156, 415);
-            this.txtAutomationAccountName.Name = "txtAutomationAccountName";
-            this.txtAutomationAccountName.Size = new System.Drawing.Size(150, 20);
-            this.txtAutomationAccountName.TabIndex = 171;
-            this.txtAutomationAccountName.Text = "txtAutomationAccountName";
-            // 
-            // lblGUIAutomationDesc
-            // 
-            this.lblGUIAutomationDesc.AutoSize = true;
-            this.lblGUIAutomationDesc.Location = new System.Drawing.Point(63, 418);
-            this.lblGUIAutomationDesc.Name = "lblGUIAutomationDesc";
-            this.lblGUIAutomationDesc.Size = new System.Drawing.Size(38, 13);
-            this.lblGUIAutomationDesc.TabIndex = 183;
-            this.lblGUIAutomationDesc.Text = "Name:";
-            //
-            // lblGUIAzureHeaderFoundry
-            //
-            this.lblGUIAzureHeaderFoundry.AutoSize = true;
-            this.lblGUIAzureHeaderFoundry.Font = new System.Drawing.Font("Calibri", 12F, System.Drawing.FontStyle.Bold, System.Drawing.GraphicsUnit.Point, ((byte)(0)));
-            this.lblGUIAzureHeaderFoundry.Location = new System.Drawing.Point(62, 463);
-            this.lblGUIAzureHeaderFoundry.Name = "lblGUIAzureHeaderFoundry";
-            this.lblGUIAzureHeaderFoundry.Size = new System.Drawing.Size(208, 19);
-            this.lblGUIAzureHeaderFoundry.TabIndex = 186;
-            this.lblGUIAzureHeaderFoundry.Text = "Azure AI Foundry (Optional)";
-            //
-            // lblGUIAzureFoundryDesc
-            //
-            this.lblGUIAzureFoundryDesc.AutoSize = true;
-            this.lblGUIAzureFoundryDesc.Location = new System.Drawing.Point(63, 487);
-            this.lblGUIAzureFoundryDesc.Name = "lblGUIAzureFoundryDesc";
-            this.lblGUIAzureFoundryDesc.Size = new System.Drawing.Size(544, 26);
-            this.lblGUIAzureFoundryDesc.TabIndex = 187;
-            this.lblGUIAzureFoundryDesc.Text = "Provision an Azure OpenAI resource and model deployment for optional prompt categorisation.\r\nThis does not enable categorisation; configure its separate opt-in after installation.";
-            //
-            // chkFoundryEnable
-            //
-            this.chkFoundryEnable.AutoSize = true;
-            this.chkFoundryEnable.Location = new System.Drawing.Point(355, 463);
-            this.chkFoundryEnable.Name = "chkFoundryEnable";
-            this.chkFoundryEnable.Size = new System.Drawing.Size(103, 17);
-            this.chkFoundryEnable.TabIndex = 172;
-            this.chkFoundryEnable.Text = "Enable Foundry";
-            this.chkFoundryEnable.UseVisualStyleBackColor = true;
-            this.chkFoundryEnable.CheckedChanged += new System.EventHandler(this.chkFoundryEnable_CheckedChanged);
-            //
-            // lblGUIFoundryResourceName
-            //
-            this.lblGUIFoundryResourceName.AutoSize = true;
-            this.lblGUIFoundryResourceName.Location = new System.Drawing.Point(63, 539);
-            this.lblGUIFoundryResourceName.Name = "lblGUIFoundryResourceName";
-            this.lblGUIFoundryResourceName.Size = new System.Drawing.Size(83, 13);
-            this.lblGUIFoundryResourceName.TabIndex = 188;
-            this.lblGUIFoundryResourceName.Text = "Resource name:";
-            //
-            // txtFoundryResourceName
-            //
-            this.txtFoundryResourceName.CharacterCasing = System.Windows.Forms.CharacterCasing.Lower;
-            this.txtFoundryResourceName.Location = new System.Drawing.Point(156, 536);
-            this.txtFoundryResourceName.Name = "txtFoundryResourceName";
-            this.txtFoundryResourceName.Size = new System.Drawing.Size(150, 20);
-            this.txtFoundryResourceName.TabIndex = 173;
-            this.txtFoundryResourceName.Text = "";
-            //
-            // lblFoundryEndpoint
-            //
-            this.lblFoundryEndpoint.AutoSize = true;
-            this.lblFoundryEndpoint.Location = new System.Drawing.Point(313, 539);
-            this.lblFoundryEndpoint.Name = "lblFoundryEndpoint";
-            this.lblFoundryEndpoint.Size = new System.Drawing.Size(201, 13);
-            this.lblFoundryEndpoint.TabIndex = 189;
-            this.lblFoundryEndpoint.Text = "Endpoint suffix: .openai.azure.com";
-            //
-            // lblGUIFoundryDeploymentName
-            //
-            this.lblGUIFoundryDeploymentName.AutoSize = true;
-            this.lblGUIFoundryDeploymentName.Location = new System.Drawing.Point(63, 565);
-            this.lblGUIFoundryDeploymentName.Name = "lblGUIFoundryDeploymentName";
-            this.lblGUIFoundryDeploymentName.Size = new System.Drawing.Size(88, 13);
-            this.lblGUIFoundryDeploymentName.TabIndex = 190;
-            this.lblGUIFoundryDeploymentName.Text = "Deployment:";
-            //
-            // txtFoundryDeploymentName
-            //
-            this.txtFoundryDeploymentName.Location = new System.Drawing.Point(156, 562);
-            this.txtFoundryDeploymentName.Name = "txtFoundryDeploymentName";
-            this.txtFoundryDeploymentName.Size = new System.Drawing.Size(150, 20);
-            this.txtFoundryDeploymentName.TabIndex = 174;
-            this.txtFoundryDeploymentName.Text = "prompt-categories";
-            //
-            // lblGUIFoundryModelName
-            //
-            this.lblGUIFoundryModelName.AutoSize = true;
-            this.lblGUIFoundryModelName.Location = new System.Drawing.Point(63, 591);
-            this.lblGUIFoundryModelName.Name = "lblGUIFoundryModelName";
-            this.lblGUIFoundryModelName.Size = new System.Drawing.Size(67, 13);
-            this.lblGUIFoundryModelName.TabIndex = 191;
-            this.lblGUIFoundryModelName.Text = "Model name:";
-            //
-            // txtFoundryModelName
-            //
-            this.txtFoundryModelName.Location = new System.Drawing.Point(156, 588);
-            this.txtFoundryModelName.Name = "txtFoundryModelName";
-            this.txtFoundryModelName.Size = new System.Drawing.Size(150, 20);
-            this.txtFoundryModelName.TabIndex = 175;
-            this.txtFoundryModelName.Text = "gpt-4o-mini";
-            //
-            // lblGUIFoundryModelVersion
-            //
-            this.lblGUIFoundryModelVersion.AutoSize = true;
-            this.lblGUIFoundryModelVersion.Location = new System.Drawing.Point(63, 617);
-            this.lblGUIFoundryModelVersion.Name = "lblGUIFoundryModelVersion";
-            this.lblGUIFoundryModelVersion.Size = new System.Drawing.Size(74, 13);
-            this.lblGUIFoundryModelVersion.TabIndex = 192;
-            this.lblGUIFoundryModelVersion.Text = "Model version:";
-            //
-            // txtFoundryModelVersion
-            //
-            this.txtFoundryModelVersion.Location = new System.Drawing.Point(156, 614);
-            this.txtFoundryModelVersion.Name = "txtFoundryModelVersion";
-            this.txtFoundryModelVersion.Size = new System.Drawing.Size(150, 20);
-            this.txtFoundryModelVersion.TabIndex = 176;
-            this.txtFoundryModelVersion.Text = "";
-            //
-            // lblGUIFoundryCapacity
-            //
-            this.lblGUIFoundryCapacity.AutoSize = true;
-            this.lblGUIFoundryCapacity.Location = new System.Drawing.Point(352, 565);
-            this.lblGUIFoundryCapacity.Name = "lblGUIFoundryCapacity";
-            this.lblGUIFoundryCapacity.Size = new System.Drawing.Size(51, 13);
-            this.lblGUIFoundryCapacity.TabIndex = 193;
-            this.lblGUIFoundryCapacity.Text = "Capacity:";
-            //
-            // txtFoundryCapacity
-            //
-            this.txtFoundryCapacity.Location = new System.Drawing.Point(438, 562);
-            this.txtFoundryCapacity.Name = "txtFoundryCapacity";
-            this.txtFoundryCapacity.Size = new System.Drawing.Size(50, 20);
-            this.txtFoundryCapacity.TabIndex = 177;
-            this.txtFoundryCapacity.Text = "1";
-            //
-            // pictureBox1
-            // 
-            this.pictureBox1.Image = global::App.ControlPanel.Properties.Resources.automation;
-            this.pictureBox1.Location = new System.Drawing.Point(0, 392);
-            this.pictureBox1.Name = "pictureBox1";
-            this.pictureBox1.Size = new System.Drawing.Size(56, 56);
-            this.pictureBox1.TabIndex = 184;
-            this.pictureBox1.TabStop = false;
-            //
-            // pictureBox2
-            // 
-            this.pictureBox2.Image = global::App.ControlPanel.Properties.Resources.keyvault;
-            this.pictureBox2.Location = new System.Drawing.Point(0, 307);
-            this.pictureBox2.Name = "pictureBox2";
-            this.pictureBox2.Size = new System.Drawing.Size(56, 56);
-            this.pictureBox2.TabIndex = 179;
-            this.pictureBox2.TabStop = false;
-            //
-            // pictureBox3
-            // 
-            this.pictureBox3.Image = ((System.Drawing.Image)(resources.GetObject("pictureBox3.Image")));
-            this.pictureBox3.Location = new System.Drawing.Point(0, 222);
-            this.pictureBox3.Name = "pictureBox3";
-            this.pictureBox3.Size = new System.Drawing.Size(56, 56);
-            this.pictureBox3.TabIndex = 171;
-            this.pictureBox3.TabStop = false;
-            //
-            // picAppService
-            // 
-            this.picAppService.Image = global::App.ControlPanel.Properties.Resources.AppService;
-            this.picAppService.Location = new System.Drawing.Point(0, 137);
-            this.picAppService.Name = "picAppService";
-            this.picAppService.Size = new System.Drawing.Size(56, 56);
-            this.picAppService.TabIndex = 165;
-            this.picAppService.TabStop = false;
-            //
-            // picAppInsights
-            // 
-            this.picAppInsights.Image = global::App.ControlPanel.Properties.Resources.AppInsights;
-            this.picAppInsights.Location = new System.Drawing.Point(0, 52);
-            this.picAppInsights.Name = "picAppInsights";
-            this.picAppInsights.Size = new System.Drawing.Size(56, 56);
-            this.picAppInsights.TabIndex = 164;
-            this.picAppInsights.TabStop = false;
-            //
-            // AzurePaaSConfigControl
-            // 
             this.AutoScaleDimensions = new System.Drawing.SizeF(6F, 13F);
             this.AutoScaleMode = System.Windows.Forms.AutoScaleMode.Font;
             this.AutoScroll = true;
-            this.AutoScrollMinSize = new System.Drawing.Size(613, 652);
-            this.Controls.Add(this.lblGUIAzureHeaderFoundry);
-            this.Controls.Add(this.lblGUIAzureFoundryDesc);
-            this.Controls.Add(this.chkFoundryEnable);
-            this.Controls.Add(this.lblGUIFoundryResourceName);
-            this.Controls.Add(this.txtFoundryResourceName);
-            this.Controls.Add(this.lblFoundryEndpoint);
-            this.Controls.Add(this.lblGUIFoundryDeploymentName);
-            this.Controls.Add(this.txtFoundryDeploymentName);
-            this.Controls.Add(this.lblGUIFoundryModelName);
-            this.Controls.Add(this.txtFoundryModelName);
-            this.Controls.Add(this.lblGUIFoundryModelVersion);
-            this.Controls.Add(this.txtFoundryModelVersion);
-            this.Controls.Add(this.lblGUIFoundryCapacity);
-            this.Controls.Add(this.txtFoundryCapacity);
-            this.Controls.Add(this.lblGUIAzureHeaderAutomation);
-            this.Controls.Add(this.txtAutomationAccountName);
-            this.Controls.Add(this.lblGUIAutomationDesc);
-            this.Controls.Add(this.pictureBox1);
-            this.Controls.Add(this.lblKVName);
-            this.Controls.Add(this.lblGUIAzureHeaderKeyVault);
-            this.Controls.Add(this.txtKeyVaultName);
-            this.Controls.Add(this.lblGUIAzureKeyVaultDesc);
-            this.Controls.Add(this.pictureBox2);
-            this.Controls.Add(this.txtLogAnalyticsName);
-            this.Controls.Add(this.label1);
-            this.Controls.Add(this.lblCognitiveName);
+            this.AutoScrollMinSize = new System.Drawing.Size(600, 390);
+            this.Controls.Add(new System.Windows.Forms.Label
+            {
+                Name = "lblGUIAzureHeader", Text = "Azure PaaS Resources", AutoSize = true,
+                Font = new System.Drawing.Font("Calibri", 12F, System.Drawing.FontStyle.Bold),
+                Location = new System.Drawing.Point(8, 8)
+            });
+            this.Controls.Add(new System.Windows.Forms.Label
+            {
+                Name = "lblGUIAzureHeaderDesc", Text = "Resources are created automatically, or reused if they already exist.",
+                AutoSize = true, Location = new System.Drawing.Point(8, 34)
+            });
+            AddServiceHeader("Application Insights", 62, global::App.ControlPanel.Properties.Resources.AppInsights);
+            AddField(this.txtAppInsightsName, "txtAppInsightsName", "Instance name:", 90, 0);
+            AddField(this.txtLogAnalyticsName, "txtLogAnalyticsName", "Log Analytics:", 90, 1);
+            AddServiceHeader("App Service", 147, global::App.ControlPanel.Properties.Resources.AppService);
+            AddField(this.txtAppServiceWebAppName, "txtAppServiceWebAppName", "Name:", 175, 0);
+            AddField(this.txtAppServicePlanName, "txtAppServicePlanName", "Plan name:", 175, 1);
+            this.txtAppServiceWebAppName.TextChanged += new System.EventHandler(this.txtAppServiceWebAppName_TextChanged);
+            this.lblAppServiceWebAppName.Name = "lblAppServiceWebAppName";
+            this.lblAppServiceWebAppName.AutoSize = true;
+            this.lblAppServiceWebAppName.Location = new System.Drawing.Point(156, 199);
             this.Controls.Add(this.lblAppServiceWebAppName);
-            this.Controls.Add(this.chkCognitiveEnable);
-            this.Controls.Add(this.lblGUIAzureHeaderCognitive);
-            this.Controls.Add(this.txtCognitiveName);
-            this.Controls.Add(this.lblGUIAzureCognitiveDesc);
-            this.Controls.Add(this.pictureBox3);
-            this.Controls.Add(this.lblGUIAzureHeaderDesc);
-            this.Controls.Add(this.lblGUIAzureHeader);
-            this.Controls.Add(this.lblGUIAzureHeaderAppService);
-            this.Controls.Add(this.lblGUIAzureHeaderAppInsights);
-            this.Controls.Add(this.txtAppServicePlanName);
-            this.Controls.Add(this.lblGUIAzureAppServicePlanName);
-            this.Controls.Add(this.txtAppServiceWebAppName);
-            this.Controls.Add(this.lblGUIAzureAppServiceName);
-            this.Controls.Add(this.txtAppInsightsName);
-            this.Controls.Add(this.lblGUIAzureAppInsightsName);
-            this.Controls.Add(this.picAppService);
-            this.Controls.Add(this.picAppInsights);
+            AddServiceHeader("Key Vault", 232, global::App.ControlPanel.Properties.Resources.keyvault);
+            AddField(this.txtKeyVaultName, "txtKeyVaultName", "Name:", 260, 0);
+            this.txtKeyVaultName.CharacterCasing = System.Windows.Forms.CharacterCasing.Lower;
+            this.txtKeyVaultName.TextChanged += new System.EventHandler(this.txtKeyVaultName_TextChanged);
+            this.lblKVName.Name = "lblKVName";
+            this.lblKVName.AutoSize = true;
+            this.lblKVName.Location = new System.Drawing.Point(156, 284);
+            this.Controls.Add(this.lblKVName);
+            AddServiceHeader("Automation Account", 317, global::App.ControlPanel.Properties.Resources.automation);
+            AddField(this.txtAutomationAccountName, "txtAutomationAccountName", "Name:", 345, 0);
             this.Name = "AzurePaaSConfigControl";
-            this.Size = new System.Drawing.Size(613, 472);
-            ((System.ComponentModel.ISupportInitialize)(this.pictureBox1)).EndInit();
-            ((System.ComponentModel.ISupportInitialize)(this.pictureBox2)).EndInit();
-            ((System.ComponentModel.ISupportInitialize)(this.pictureBox3)).EndInit();
-            ((System.ComponentModel.ISupportInitialize)(this.picAppService)).EndInit();
-            ((System.ComponentModel.ISupportInitialize)(this.picAppInsights)).EndInit();
+            this.Size = new System.Drawing.Size(632, 537);
             this.ResumeLayout(false);
             this.PerformLayout();
-
         }
 
-        #endregion
+        private void AddServiceHeader(string text, int y, System.Drawing.Image image)
+        {
+            this.Controls.Add(new System.Windows.Forms.PictureBox
+            {
+                Image = image, Location = new System.Drawing.Point(0, y), Size = new System.Drawing.Size(56, 56), TabStop = false
+            });
+            this.Controls.Add(new System.Windows.Forms.Label
+            {
+                Text = text, AutoSize = true, Location = new System.Drawing.Point(62, y),
+                Font = new System.Drawing.Font("Calibri", 12F, System.Drawing.FontStyle.Bold)
+            });
+        }
 
-        private System.Windows.Forms.Label lblKVName;
-        private System.Windows.Forms.Label lblGUIAzureHeaderKeyVault;
-        private System.Windows.Forms.TextBox txtKeyVaultName;
-        private System.Windows.Forms.Label lblGUIAzureKeyVaultDesc;
-        private System.Windows.Forms.PictureBox pictureBox2;
-        private System.Windows.Forms.TextBox txtLogAnalyticsName;
-        private System.Windows.Forms.Label label1;
-        private System.Windows.Forms.Label lblCognitiveName;
-        private System.Windows.Forms.Label lblAppServiceWebAppName;
-        private System.Windows.Forms.CheckBox chkCognitiveEnable;
-        private System.Windows.Forms.Label lblGUIAzureHeaderCognitive;
-        private System.Windows.Forms.TextBox txtCognitiveName;
-        private System.Windows.Forms.Label lblGUIAzureCognitiveDesc;
-        private System.Windows.Forms.PictureBox pictureBox3;
-        private System.Windows.Forms.Label lblGUIAzureHeaderDesc;
-        private System.Windows.Forms.Label lblGUIAzureHeader;
-        private System.Windows.Forms.Label lblGUIAzureHeaderAppService;
-        private System.Windows.Forms.Label lblGUIAzureHeaderAppInsights;
-        private System.Windows.Forms.TextBox txtAppServicePlanName;
-        private System.Windows.Forms.Label lblGUIAzureAppServicePlanName;
-        private System.Windows.Forms.TextBox txtAppServiceWebAppName;
-        private System.Windows.Forms.Label lblGUIAzureAppServiceName;
+        private void AddField(System.Windows.Forms.TextBox field, string name, string label, int y, int column)
+        {
+            this.Controls.Add(new System.Windows.Forms.Label
+            {
+                Text = label, AutoSize = true, Location = new System.Drawing.Point(column == 0 ? 63 : 352, y + 3)
+            });
+            field.Name = name;
+            field.Location = new System.Drawing.Point(column == 0 ? 156 : 438, y);
+            field.Size = new System.Drawing.Size(150, 20);
+            field.TabIndex = this.Controls.Count;
+            this.Controls.Add(field);
+        }
+
         private System.Windows.Forms.TextBox txtAppInsightsName;
-        private System.Windows.Forms.Label lblGUIAzureAppInsightsName;
-        private System.Windows.Forms.PictureBox picAppService;
-        private System.Windows.Forms.PictureBox picAppInsights;
-        private System.Windows.Forms.Label lblGUIAzureHeaderAutomation;
+        private System.Windows.Forms.TextBox txtLogAnalyticsName;
+        private System.Windows.Forms.TextBox txtAppServiceWebAppName;
+        private System.Windows.Forms.TextBox txtAppServicePlanName;
+        private System.Windows.Forms.TextBox txtKeyVaultName;
         private System.Windows.Forms.TextBox txtAutomationAccountName;
-        private System.Windows.Forms.Label lblGUIAutomationDesc;
-        private System.Windows.Forms.PictureBox pictureBox1;
-        private System.Windows.Forms.Label lblGUIAzureHeaderFoundry;
-        private System.Windows.Forms.Label lblGUIAzureFoundryDesc;
-        private System.Windows.Forms.CheckBox chkFoundryEnable;
-        private System.Windows.Forms.Label lblGUIFoundryResourceName;
-        private System.Windows.Forms.TextBox txtFoundryResourceName;
-        private System.Windows.Forms.Label lblFoundryEndpoint;
-        private System.Windows.Forms.Label lblGUIFoundryDeploymentName;
-        private System.Windows.Forms.TextBox txtFoundryDeploymentName;
-        private System.Windows.Forms.Label lblGUIFoundryModelName;
-        private System.Windows.Forms.TextBox txtFoundryModelName;
-        private System.Windows.Forms.Label lblGUIFoundryModelVersion;
-        private System.Windows.Forms.TextBox txtFoundryModelVersion;
-        private System.Windows.Forms.Label lblGUIFoundryCapacity;
-        private System.Windows.Forms.TextBox txtFoundryCapacity;
+        private System.Windows.Forms.Label lblAppServiceWebAppName;
+        private System.Windows.Forms.Label lblKVName;
     }
 }

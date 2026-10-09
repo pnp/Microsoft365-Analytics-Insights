@@ -147,6 +147,12 @@
     <Compile Include="Frames\InstallWizardPages\AzurePaaSConfigControl.cs">
       <SubType>UserControl</SubType>
     </Compile>
+    <Compile Include="Frames\InstallWizardPages\AzureAIConfigControl.cs">
+      <SubType>UserControl</SubType>
+    </Compile>
+    <Compile Include="Frames\InstallWizardPages\AzureAIConfigControl.Designer.cs">
+      <DependentUpon>AzureAIConfigControl.cs</DependentUpon>
+    </Compile>
     <Compile Include="Frames\InstallWizardPages\AzurePaaSConfigControl.Designer.cs">
       <DependentUpon>AzurePaaSConfigControl.cs</DependentUpon>
     </Compile>
