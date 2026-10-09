@@ -6,8 +6,10 @@ using Common.Entities.Migrations;
 using Common.Entities.UserFilters;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System;
+using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
+using Microsoft.Data.SqlClient;
 using DlpAPIController = AnalyticsWeb::Web.AnalyticsWeb.Controllers.DlpAPIController;
 using DlpGovernanceSummary = AnalyticsWeb::Web.AnalyticsWeb.Models.Dlp.DlpGovernanceSummary;
 
@@ -18,6 +20,46 @@ namespace Tests.UnitTests
     [TestCategory("SqlIntegration")]
     public class DlpGovernanceTurnSqlTests
     {
+        [TestMethod]
+        public void BenchmarkFreshFixture_ExecutesEveryShippedGovernanceStatement()
+        {
+            var directory = new DirectoryInfo(AppDomain.CurrentDomain.BaseDirectory);
+            while (directory != null && !File.Exists(Path.Combine(directory.FullName, "Benchmarks", "CopilotGovernanceBenchmark.sql")))
+                directory = directory.Parent;
+            Assert.IsNotNull(directory, "The shipped benchmark fixture must be available.");
+            var fixture = File.ReadAllText(Path.Combine(directory.FullName, "Benchmarks", "CopilotGovernanceBenchmark.sql"))
+                .Replace("$(SyntheticUsers)", "20")
+                .Replace("$(SyntheticInteractions)", "100")
+                .Replace("$(SyntheticDays)", "180")
+                .Replace("$(FlagDays)", "60");
+
+            using (var db = ScratchDatabase.Create("GovernanceBenchSmoke"))
+            {
+                db.ExecuteScript(fixture, quotedIdentifierOn: false);
+                Assert.AreEqual(0, Convert.ToInt32(db.Scalar("SELECT COUNT(*) FROM govbench.copilot_chat_duplicates")),
+                    "The default fixture treats each generated record as a canonical turn.");
+                using (var connection = new SqlConnection(db.ConnectionString))
+                {
+                    connection.Open();
+                    foreach (var sql in new[]
+                    {
+                        DlpAPIController.GovernanceMessagesSql, DlpAPIController.GovernanceResourcesSql,
+                        DlpAPIController.GovernanceModelsSql, DlpAPIController.GovernancePluginsSql
+                    })
+                    {
+                        using (var command = connection.CreateCommand())
+                        {
+                            command.CommandText = sql.Replace("dbo.", "govbench.");
+                            command.Parameters.AddWithValue("@from", DateTime.UtcNow.Date.AddDays(-28));
+                            command.Parameters.AddWithValue("@to", DateTime.UtcNow.Date.AddDays(1));
+                            using (var reader = command.ExecuteReader())
+                                Assert.IsTrue(reader.Read(), "Every shipped benchmark statement must execute against a fresh fixture.");
+                        }
+                    }
+                }
+            }
+        }
+
         [TestMethod]
         public void GovernanceQueries_UseTheSharedTimeStampAndEventIdTurnPredicate()
         {

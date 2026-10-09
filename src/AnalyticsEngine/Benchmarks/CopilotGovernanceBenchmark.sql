@@ -39,6 +39,8 @@ Fidelity
   (scripted from a migrated database, not retyped from memory):
     copilot_chats                     PK(event_id) clustered, IX_event_id, IX_agent_id,
                                       IX_copilot_chats_time_stamp_user_id (time_stamp, user_id) INCLUDE (app_host, agent_id)
+    copilot_chat_duplicates           PK(event_id), IX_time_stamp, IX_counted_event_id INCLUDE (reason);
+                                      empty by default, so every generated record is a canonical turn
     copilot_event_messages            PK(id) clustered, IX_copilot_chat_id
     copilot_event_accessed_resources  PK(id) clustered, IX_copilot_chat_id, IX_sensitivity_label_id,
                                       IX_copilot_event_accessed_resources_dedup (8 key columns)
@@ -83,6 +85,7 @@ IF OBJECT_ID(N'govbench.copilot_event_ai_models', N'U') IS NOT NULL DROP TABLE g
 IF OBJECT_ID(N'govbench.copilot_ai_models', N'U') IS NOT NULL DROP TABLE govbench.copilot_ai_models;
 IF OBJECT_ID(N'govbench.copilot_event_accessed_resources', N'U') IS NOT NULL DROP TABLE govbench.copilot_event_accessed_resources;
 IF OBJECT_ID(N'govbench.copilot_event_messages', N'U') IS NOT NULL DROP TABLE govbench.copilot_event_messages;
+IF OBJECT_ID(N'govbench.copilot_chat_duplicates', N'U') IS NOT NULL DROP TABLE govbench.copilot_chat_duplicates;
 IF OBJECT_ID(N'govbench.copilot_chats', N'U') IS NOT NULL DROP TABLE govbench.copilot_chats;
 IF OBJECT_ID(N'govbench.sensitivity_labels', N'U') IS NOT NULL DROP TABLE govbench.sensitivity_labels;
 
@@ -99,6 +102,19 @@ CREATE TABLE govbench.copilot_chats
     user_id int NULL,
     time_stamp datetime NULL
 );
+
+CREATE TABLE govbench.copilot_chat_duplicates
+(
+    event_id uniqueidentifier NOT NULL,
+    time_stamp datetime NOT NULL,
+    counted_event_id uniqueidentifier NOT NULL,
+    reason tinyint NOT NULL,
+    CONSTRAINT [PK_govbench.copilot_chat_duplicates] PRIMARY KEY CLUSTERED (event_id)
+);
+CREATE NONCLUSTERED INDEX IX_copilot_chat_duplicates_time_stamp
+    ON govbench.copilot_chat_duplicates (time_stamp);
+CREATE NONCLUSTERED INDEX IX_copilot_chat_duplicates_counted_event_id
+    ON govbench.copilot_chat_duplicates (counted_event_id) INCLUDE (reason);
 
 CREATE TABLE govbench.copilot_event_messages
 (
