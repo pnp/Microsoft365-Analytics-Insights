@@ -2,9 +2,9 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Accordion, AccordionHeader, AccordionItem, AccordionPanel, Badge, Body1, Button, Card, Dialog, DialogActions,
   DialogBody, DialogContent, DialogSurface, DialogTitle, DialogTrigger, Field, Input, MessageBar, MessageBarActions,
-  MessageBarBody, MessageBarTitle, Select, Subtitle2, Switch, Text, Title3, makeStyles, tokens,
+  MessageBarBody, MessageBarTitle, Select, Subtitle2, Switch, Text, Title3, Tooltip, makeStyles, tokens,
 } from '@fluentui/react-components';
-import { Add16Regular, ArrowClockwise16Regular, ArrowCounterclockwise16Regular, ArrowUndo16Regular, Delete16Regular, Save16Regular } from '@fluentui/react-icons';
+import { Add16Regular, ArrowClockwise16Regular, ArrowCounterclockwise16Regular, ArrowUndo16Regular, Delete16Regular, Info16Regular, Save16Regular } from '@fluentui/react-icons';
 import {
   fetchPromptCategoryAdmin, resetPromptCategories, savePromptCategories,
   type PromptCategoryAdmin, type PromptCategoryConfiguration,
@@ -31,6 +31,9 @@ const useStyles = makeStyles({
   section: { display: 'flex', flexDirection: 'column', gap: '12px' },
   sectionHeader: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px', flexWrap: 'wrap' },
   muted: { color: tokens.colorNeutralForeground3 },
+  modeLabel: { display: 'inline-flex', alignItems: 'center', gap: '6px' },
+  modeInfo: { color: tokens.colorNeutralForeground3, cursor: 'help' },
+  modeTooltip: { display: 'flex', flexDirection: 'column', gap: '8px', maxWidth: '360px' },
   settings: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: '16px', alignItems: 'start' },
   capInput: { maxWidth: '200px' },
   rows: { display: 'flex', flexDirection: 'column', gap: '10px' },
@@ -253,7 +256,17 @@ export default function PromptCategoriesPage() {
                 <Input aria-label={rowLabel('promptCategories.name', n)} value={nameOf(category)}
                   disabled={busy || fixed} maxLength={MAX_NAME_LENGTH} onChange={(_, data) => update(index, 'name', data.value)} />
               </Field>
-              <Field label={t('promptCategories.col.mode')}>
+              <Field label={<span className={styles.modeLabel}>
+                {t('promptCategories.col.mode')}
+                <Tooltip relationship="description" content={<div className={styles.modeTooltip}>
+                  <span>{t('promptCategories.modeHelp.directing')}</span>
+                  <span>{t('promptCategories.modeHelp.supervising')}</span>
+                  <span>{t('promptCategories.modeHelp.annotation')}</span>
+                </div>}>
+                  <Info16Regular className={styles.modeInfo} tabIndex={0} role="img"
+                    aria-label={rowLabel('promptCategories.modeHelp.label', n)} />
+                </Tooltip>
+              </span>}>
                 <Select aria-label={rowLabel('promptCategories.mode', n)} disabled={busy} value={category.humanMode ?? ''}
                   onChange={(_, data) => update(index, 'humanMode', data.value || null)}>
                   <option value="">{t('promptCategories.unassigned')}</option>

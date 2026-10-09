@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { screen, waitFor } from '@testing-library/react';
+import { act, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { renderWithProvider } from '../test/renderWithProvider';
 import { loadCatalog } from '../i18n';
@@ -28,6 +28,34 @@ beforeEach(() => {
 });
 
 describe('prompt categorisation editor', () => {
+  it('explains both modes and supervising examples on hover without assigning a default mode', async () => {
+    const user = userEvent.setup();
+    renderWithProvider(<PromptCategoriesPage />);
+    const info = await screen.findByRole('img', { name: 'About directing and supervising, category 1' });
+    await user.hover(info);
+    const tooltip = await screen.findByRole('tooltip');
+    expect(within(tooltip).getByText(/Directing: you specify the task/)).toBeInTheDocument();
+    expect(within(tooltip).getByText(/Investigate these failures, implement a fix/)).toBeInTheDocument();
+    expect(within(tooltip).getByText(/Research the options, compare them/)).toBeInTheDocument();
+    expect(within(tooltip).getByText(/the AI does not detect this behaviour/)).toBeInTheDocument();
+    expect(screen.getByLabelText('Optional human mode metadata, category 1')).toHaveValue('');
+    expect(screen.getByRole('button', { name: 'Save taxonomy and opt-in' })).toBeDisabled();
+    expect(savePromptCategories).not.toHaveBeenCalled();
+  });
+
+  it('makes the translated mode explanation available on keyboard focus', async () => {
+    await loadCatalog('es');
+    renderWithProvider(<PromptCategoriesPage />, { language: 'es' });
+    const info = await screen.findByRole('img', { name: 'Acerca de la dirección y la supervisión, categoría 1' });
+    expect(info).toHaveAttribute('tabindex', '0');
+    act(() => info.focus());
+    const tooltip = await screen.findByRole('tooltip');
+    expect(info).toHaveFocus();
+    expect(within(tooltip).getByText(/Dirección: usted define la tarea/)).toBeInTheDocument();
+    expect(within(tooltip).getByText(/Investiga estos fallos/)).toBeInTheDocument();
+    expect(within(tooltip).getByText(/la IA no detecta este comportamiento/)).toBeInTheDocument();
+  }, 30000);
+
   it('starts disabled, explains the new data flow, and saves an explicit opt-in', async () => {
     const user = userEvent.setup();
     renderWithProvider(<PromptCategoriesPage />);
