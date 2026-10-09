@@ -1,7 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<Project ToolsVersion="12.0" DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
-  <Import Project="$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props" Condition="Exists('$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props')" />
-  <Import Project="$(MSBuildExtensionsPath32)\Microsoft\VisualStudio\v$(VisualStudioVersion)\WebApplications\Microsoft.WebApplication.targets" />
+<Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <Configuration Condition=" '$(Configuration)' == '' ">Debug</Configuration>
     <Platform Condition=" '$(Platform)' == '' ">AnyCPU</Platform>
@@ -10,7 +8,14 @@
     <AppDesignerFolder>Properties</AppDesignerFolder>
     <RootNamespace>WebJob.Office365ActivityImporter</RootNamespace>
     <AssemblyName>SPOInsights.WebJob.Office365ActivityImport</AssemblyName>
-    <TargetFrameworkVersion>v4.8</TargetFrameworkVersion>
+    <TargetFramework>net48</TargetFramework>
+    <GenerateSupportedRuntime>false</GenerateSupportedRuntime>
+    <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <EnableDefaultEmbeddedResourceItems>false</EnableDefaultEmbeddedResourceItems>
+    <EnableDefaultNoneItems>false</EnableDefaultNoneItems>
+    <EmbeddedResourceUseDependentUponConvention>false</EmbeddedResourceUseDependentUponConvention>
+    <GenerateResourceUsePreserializedResources>false</GenerateResourceUsePreserializedResources>
     <FileAlignment>512</FileAlignment>
     <AutoGenerateBindingRedirects>true</AutoGenerateBindingRedirects>
     <TargetFrameworkProfile />
@@ -101,11 +106,6 @@
     <Reference Include="WindowsBase" />
   </ItemGroup>
   <ItemGroup>
-    <Compile Include="Program.cs" />
-    <Compile Include="ProgramTasks.cs" />
-    <Compile Include="Properties\AssemblyInfo.cs" />
-  </ItemGroup>
-  <ItemGroup>
     <Content Include="App.config">
     </Content>
     <None Include="App.Template.config" />
@@ -184,10 +184,10 @@
       <Version>10.0.11</Version>
     </PackageReference>
   </ItemGroup>
-  <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
   <!-- To modify your build process, add your task inside one of the targets below and uncomment it. 
        Other similar extension points exist, see Microsoft.Common.targets.  -->
-  <Target Name="BeforeBuild">
+  <UsingTask TaskName="TransformXml" AssemblyFile="$(MSBuildExtensionsPath32)\Microsoft\VisualStudio\v$(VisualStudioVersion)\Web\Microsoft.Web.Publishing.Tasks.dll" />
+  <Target Name="TransformAppConfig" BeforeTargets="PrepareForBuild">
     <TransformXml Source="App.Template.config" Transform="App.$(Configuration).config" Destination="App.config" />
   </Target>
   <Target Name="AfterBuild">
