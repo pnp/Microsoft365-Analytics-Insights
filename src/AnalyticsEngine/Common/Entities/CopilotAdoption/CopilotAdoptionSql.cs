@@ -1759,6 +1759,144 @@ namespace Common.Entities.CopilotAdoption
         }
 
         /// <summary>
+        /// The most (agent, person) rows <see cref="AgentReachSql"/> may return. Far beyond any tenant this
+        /// product is sized for - 200,000 people each using five agents in one period - and only there so a
+        /// pathological estate degrades the agent breadth, depth and reach figures to "not measured" (with
+        /// a warning) rather than loading an unbounded result into the web process. The query asks for one
+        /// row more than this, which is how the service tells "exactly this many" from "more".
+        /// </summary>
+        public const int MaxAgentReachRows = 1000000;
+
+        /// <summary>
+        /// Every (agent, person) pair in the window, with the person's department id - ONE grouped pass over
+        /// the window that the agent breadth and depth figures by department (#646) and each agent's reach
+        /// across departments (#647) are all derived from.
+        /// </summary>
+        /// <remarks>
+        /// <para>A range seek on <c>IX_copilot_chats_time_stamp_user_id</c>, whose key is
+        /// <c>(time_stamp, user_id)</c> with <c>agent_id</c> INCLUDEd, so the window is read from the index alone
+        /// and never touches the clustered table; one hash aggregate to (agent, person); one seek per person
+        /// into <c>users</c> for the department id. Not grouped by department in SQL on purpose: the agents a
+        /// figure counts are decided in C# (<see cref="CopilotAgentFigureScope"/>), and "people who used any
+        /// counted agent" cannot be derived from per-agent department totals - someone using two agents would be
+        /// counted twice.</para>
+        /// <para>The output is one row per distinct (agent, person) pair, which is the cost to watch: see
+        /// <see cref="MaxAgentReachRows"/>. Department names come from <see cref="AgentReachDepartmentsSql"/>
+        /// rather than from a join here, so a name is not repeated - and allocated - on every row.</para>
+        /// <para><b>Measured</b> on a synthetic 200,000-user tenant (6M interactions over 120 days, 1.2M of
+        /// them with an agent, agents drawn at random per interaction so the pairs barely compress - a
+        /// pessimistic shape), medians of three warm runs: 28 days, 10,896 logical reads, 344 ms CPU, 250k
+        /// pairs read by the client in ~0.4 s (~12 MB held); 90 days, 32,637 reads, 1.2 s CPU, 683k pairs in
+        /// ~1.1 s (~34 MB). Index Seek on <c>IX_copilot_chats_time_stamp_user_id</c>, hash aggregate, hash
+        /// join to <c>users</c>. The reads equal <see cref="AgentUsageByDepartmentSql"/>'s (10,900 / 32,641):
+        /// it is one more read of the same index range, with no new index.</para>
+        /// <para>Like every Copilot query here, no join to <c>dbo.audit_events</c>.</para>
+        /// </remarks>
+        public static string AgentReachSql()
+        {
+            return
+                "SELECT TOP (@maxRows)\r\n" +
+                "       g.agent_id AS AgentId,\r\n" +
+                "       g.user_id AS UserId,\r\n" +
+                "       u.department_id AS DepartmentId,\r\n" +
+                "       g.Interactions AS Interactions\r\n" +
+                "FROM (SELECT c.agent_id AS agent_id,\r\n" +
+                "             c.user_id AS user_id,\r\n" +
+                "             COUNT_BIG(*) AS Interactions\r\n" +
+                "      FROM dbo.copilot_chats AS c\r\n" +
+                "      WHERE c.time_stamp >= @from\r\n" +
+                "        AND c.time_stamp < @toExclusive\r\n" +
+                "        AND c.agent_id IS NOT NULL\r\n" +
+                "        AND c.user_id IS NOT NULL\r\n" +
+                "      GROUP BY c.agent_id, c.user_id) AS g\r\n" +
+                "LEFT JOIN dbo.users AS u ON u.id = g.user_id\r\n" +
+                "OPTION (RECOMPILE);";
+        }
+
+        /// <summary>Department names by id, for the department ids <see cref="AgentReachSql"/> returns.</summary>
+        public const string AgentReachDepartmentsSql =
+            "SELECT d.id AS Id, d.name AS Name\r\n" +
+            "FROM dbo.user_departments AS d;";
+
+        /// <summary>
+        /// Every stored agent's id and the importer's flag, so each agent in <see cref="AgentReachSql"/> can be
+        /// classified with <see cref="Copilot.CopilotAgentClassifier.ResolveStoredOrigin"/> in C# (#639) - whether
+        /// or not the agent inventory holds it. A separate read of a small table rather than a column on every
+        /// pair, so an agent's id is not repeated on every row; the flag is never filtered on in SQL, because a
+        /// stored 0 is not evidence (see the classifier).
+        /// </summary>
+        public const string AgentOriginsSql =
+            "SELECT ag.id AS Id, ag.agent_id AS AgentKey, ag.is_custom_agent AS IsCustomAgent\r\n" +
+            "FROM dbo.copilot_agents AS ag;";
+
+        /// <summary>
+        /// The Copilot Studio authoring operations that make someone an agent builder (#647): creating,
+        /// publishing or sharing an agent. Microsoft's own operation names, as the Power Platform audit feed
+        /// records them (see "View Copilot Studio audit logs in Purview"). Editing a topic, a component or a
+        /// setting does not count - one maker tweaking a topic all day is not a new builder.
+        /// </summary>
+        public static readonly IReadOnlyList<string> AgentBuilderOperations = new[]
+        {
+            "BotCreate",
+            "BotUpdateOperation-BotPublish",
+            "BotUpdateOperation-BotShare",
+        };
+
+        /// <summary>
+        /// Whether ANY Copilot Studio authoring event has ever been imported. Without it a tenant that does not
+        /// import the Power Platform audit feed would report "0 builders", which reads as a finding rather than
+        /// as a missing import. Cheap: an existence probe on the clustered key of a small table.
+        /// </summary>
+        public const string CopilotStudioAuthoringImportedSql =
+            "SELECT CASE WHEN EXISTS (SELECT 1 FROM dbo.event_meta_copilot_studio) THEN 1 ELSE 0 END AS Value;";
+
+        /// <summary>
+        /// The people who created, published or shared a Copilot Studio agent in the window, with the
+        /// department and sign-in name a filtered view narrows them by (#647).
+        /// </summary>
+        /// <remarks>
+        /// <para>Reads the Copilot Studio authoring events only - <c>event_meta_copilot_studio</c> and the
+        /// audit event each one belongs to, which carries the actor, the time and the operation. Never the
+        /// Copilot interactions: building an agent and using one are different records from different
+        /// feeds.</para>
+        /// <para>This is the one query in the Copilot Adoption tool that joins <c>dbo.audit_events</c>, and it
+        /// has to: an authoring event's time and actor live nowhere else. The three operations are resolved
+        /// through <c>event_operations</c> (a few hundred rows), which lets the optimiser seek
+        /// <c>IX_operation_id</c> or <c>IX_audit_events_time_stamp</c> (time_stamp INCLUDE operation_id,
+        /// user_id) rather than scan; <c>OPTION (RECOMPILE)</c> lets the real window and operation ids pick
+        /// between them.</para>
+        /// <para>Copilot Studio bot ids are NOT joined to <c>copilot_agents</c>: the two feeds identify an
+        /// agent differently, and nothing proves the identifiers equal (compare the note on
+        /// <c>CopilotStudioCreditDaily.AgentId</c>). Builders and agent usage are reported side by side.</para>
+        /// <para><b>Measured</b> on 3M synthetic audit events over a year, 120k of them Copilot Studio authoring
+        /// events (70% component edits): 28 days, 1,572 logical reads in 44 ms; 90 days, 3,971 reads in
+        /// 106 ms. Index Seek on <c>IX_audit_events_time_stamp</c>, which covers the operation and the actor,
+        /// merge-joined to <c>event_meta_copilot_studio</c> - the clustered <c>audit_events</c> rows (and their
+        /// wide <c>event_data</c>) are never read.</para>
+        /// </remarks>
+        public static string AgentBuildersSql()
+        {
+            var operations = string.Join(", ", AgentBuilderOperations.Select(o => "N'" + o.Replace("'", "''") + "'"));
+
+            return
+                "SELECT u.id AS UserId,\r\n" +
+                "       u.user_name AS UserPrincipalName,\r\n" +
+                "       u.mail AS Mail,\r\n" +
+                "       dept.name AS Department\r\n" +
+                "FROM (SELECT DISTINCT ae.user_id AS user_id\r\n" +
+                "      FROM dbo.event_meta_copilot_studio AS m\r\n" +
+                "      JOIN dbo.audit_events AS ae ON ae.id = m.event_id\r\n" +
+                "      JOIN dbo.event_operations AS op ON op.id = ae.operation_id\r\n" +
+                "      WHERE ae.time_stamp >= @from\r\n" +
+                "        AND ae.time_stamp < @toExclusive\r\n" +
+                "        AND ae.user_id IS NOT NULL\r\n" +
+                $"        AND op.operation_name IN ({operations})) AS b\r\n" +
+                "JOIN dbo.users AS u ON u.id = b.user_id\r\n" +
+                "LEFT JOIN dbo.user_departments AS dept ON dept.id = u.department_id\r\n" +
+                "OPTION (RECOMPILE);";
+        }
+
+        /// <summary>
         /// One row per unlicensed user who used Copilot in the window, with the same shape of figures
         /// the licensed population is scored from.
         ///

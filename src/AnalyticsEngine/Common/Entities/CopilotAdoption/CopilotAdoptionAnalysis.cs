@@ -55,6 +55,48 @@ namespace Common.Entities.CopilotAdoption
         public bool AgentUsersCapped { get; set; }
 
         /// <summary>
+        /// Every (agent, person) pair in the reporting period, from <see cref="CopilotAdoptionSql.AgentReachSql"/>
+        /// - what the agent breadth and depth figures are computed from (#646). Null when the query did not
+        /// run or failed, or when it returned more than <see cref="CopilotAdoptionSql.MaxAgentReachRows"/>.
+        /// </summary>
+        /// <remarks>
+        /// Shared, not copied, by a filtered view: each figure only counts the people the view's own
+        /// licensed and unlicensed rows hold, so the slice narrows it without a second list.
+        /// </remarks>
+        internal List<AgentReachRow> AgentReachRows { get; set; }
+
+        /// <summary>
+        /// The same pairs over the agent inventory's own period, which the reach columns on each
+        /// <see cref="AgentUsageRow"/> come from (#647). The same list as <see cref="AgentReachRows"/>
+        /// unless the analysis covers past dates, when the inventory still describes the latest period.
+        /// Null in a filtered view: reach is part of the tenant-wide inventory and is computed once.
+        /// </summary>
+        internal List<AgentReachRow> AgentInventoryReachRows { get; set; }
+
+        /// <summary>Department names by <c>user_departments.id</c>, for <see cref="AgentInventoryReachRows"/>.</summary>
+        internal Dictionary<int, string> AgentReachDepartments { get; set; }
+
+        /// <summary>
+        /// Each stored agent's origin key (<see cref="Copilot.CopilotAgentOriginKeys"/>) by <c>copilot_agents.id</c>,
+        /// resolved with <see cref="Copilot.CopilotAgentClassifier.ResolveStoredOrigin"/> - what decides which of
+        /// <see cref="AgentReachRows"/> count (<see cref="CopilotAgentFigureScope"/>). Null when it could not be
+        /// read, in which case breadth and depth are not measured rather than counted over no agents.
+        /// </summary>
+        internal Dictionary<int, string> AgentOrigins { get; set; }
+
+        /// <summary>
+        /// The people who created, published or shared a Copilot Studio agent in the period (#647). Held so a
+        /// filtered view can narrow them; only ever counted.
+        /// </summary>
+        internal List<AgentBuilderRow> AgentBuilders { get; set; } = new List<AgentBuilderRow>();
+
+        /// <summary>
+        /// True when <see cref="AgentBuilders"/> is a measurement: Copilot Studio authoring events have been
+        /// imported and the builders query succeeded. False means the builder figures are unknown, not zero.
+        /// </summary>
+        internal bool AgentBuildersAssessed { get; set; }
+
+        /// <summary>
         /// Every Copilot seat holder scored for Cowork readiness: who already uses it, and who carries the
         /// coordination load that Cowork is built to absorb.
         ///

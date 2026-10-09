@@ -306,6 +306,14 @@ export interface AgentUsageRow {
   health: AgentHealth;
   healthName: string;
   healthReason: string;
+  /** People who used it in the reporting period - the denominator of the home share (#647). */
+  windowUsers?: number | null;
+  /** Departments with at least one of its users in the period. Null when not measured. */
+  departments?: number | null;
+  /** The department most of its users are in; null when fewer than minSeatsPerSegment of them are. Tenant data. */
+  homeDepartment?: string | null;
+  /** The share of its period users in the home department, 0-100. */
+  homeDepartmentSharePct?: number | null;
 }
 
 /** The agent estate at a glance. */
@@ -390,6 +398,19 @@ export interface AdoptionCombinedSegmentRow {
   unlicensedActiveUsers: number;
   interactionsPerUnlicensedUser: number;
   unlicensedAgentUserPct: number;
+  /**
+   * Agent breadth and depth (#646) over the department's active Copilot users seen in the audit log, and its
+   * Copilot Studio builders (#647). Each is null when it could not be measured, and absent from a server
+   * that predates it.
+   */
+  agentActiveUsers?: number | null;
+  agentUsers?: number | null;
+  agentUserPct?: number | null;
+  distinctAgents?: number | null;
+  agentsPer100ActiveUsers?: number | null;
+  agentInteractions?: number | null;
+  interactionsPerActiveAgent?: number | null;
+  agentBuilders?: number | null;
 }
 
 /** Adoption, reclaim and next-action counts for one accountable unit. */
@@ -641,6 +662,28 @@ export interface CopilotAdoptionSummary extends Partial<ManagerModellingFigures>
   topAgentUsers?: AgentUserRow[];
   /** The people that list was picked from stopped at the server's row cap, so a filtered view's list may be short. */
   topAgentUsersCapped?: boolean;
+  /**
+   * Which agents the breadth, depth and reach figures count (#646, #647): a stable key the page words in
+   * the reader's language - see `agentFiguresScopeText`.
+   */
+  agentFiguresScope?: string | null;
+  /** Tenant-level agent breadth and depth (#646), builders and reach (#647). Null when not measured. */
+  agentBreadthDepartments?: number | null;
+  agentBreadthDepartmentsWithAgentUsers?: number | null;
+  agentBreadthDepartmentPct?: number | null;
+  agentActiveUsers?: number | null;
+  agentBreadthAgentUsers?: number | null;
+  agentBreadthUserPct?: number | null;
+  agentDepthDistinctAgents?: number | null;
+  agentDepthAgentsPer100ActiveUsers?: number | null;
+  agentDepthInteractions?: number | null;
+  agentDepthInteractionsPerActiveAgent?: number | null;
+  /** Agents of unknown origin the active users used in the period - not counted, so the figures above are a floor. */
+  agentUnknownOriginAgents?: number | null;
+  agentBuilders?: number | null;
+  agentsInThreeOrMoreDepartments?: number | null;
+  /** Inventory agents of unknown origin used in three or more departments - not counted in the figure above. */
+  agentsInThreeOrMoreDepartmentsUnknownOrigin?: number | null;
   unlicensed: UnlicensedPopulationSummary;
 
   options: CopilotAdoptionOptions;

@@ -26,6 +26,7 @@ import { serverPlaceholderText } from '../shared/serverPlaceholder';
 import { PrintedFilters, printedSearch, useAdoptionTableStyles } from './adoptionShared';
 import { useT, type TFunction } from '../../i18n';
 import { agentHealthReason, agentOriginLabel } from './serverText';
+import { AgentReachCells, AgentReachHeaderCells } from './AgentReachColumns';
 
 /**
  * Health colours run from "delete this" to "this is working", matching the engagement-band palette
@@ -469,6 +470,7 @@ export default function AgentsPanel({
                       <th className={`${table.th} ${table.thNumeric}`}>{t('copilotAdoptionAgents.agents.table.interactions')}</th>
                       <th className={`${table.th} ${table.thNumeric}`}>{t('copilotAdoptionAgents.agents.table.perUser')}</th>
                       <th className={`${table.th} ${table.thNumeric}`}>{t('copilotAdoptionAgents.agents.table.surfaces')}</th>
+                      <AgentReachHeaderCells minSeatsPerSegment={options.minSeatsPerSegment} />
                       <th className={table.th}>{t('copilotAdoptionAgents.agents.table.lastUsed')}</th>
                       <th className={table.th}>{t('copilotAdoptionAgents.agents.table.verdict')}</th>
                     </tr>
@@ -498,6 +500,7 @@ export default function AgentsPanel({
                         <td className={`${table.td} ${table.tdNumeric}`}>{formatCount(agent.interactions)}</td>
                         <td className={`${table.td} ${table.tdNumeric}`}>{agent.interactionsPerUser}</td>
                         <td className={`${table.td} ${table.tdNumeric}`}>{agent.appsUsed}</td>
+                        <AgentReachCells agent={agent} minSeatsPerSegment={options.minSeatsPerSegment} />
                         <td className={table.td}>
                           {formatDate(agent.lastUsedUtc)}
                           {agent.daysSinceLastUse !== null && agent.daysSinceLastUse > 0 && (
