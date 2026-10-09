@@ -248,6 +248,12 @@ namespace Common.Entities.CopilotAdoption
                 summary.DataSources.CopilotUsageReportDate.HasValue
                     ? $"Snapshot of {summary.DataSources.CopilotUsageReportDate.Value:yyyy-MM-dd}. Licensed users only."
                     : "Not imported.");
+            AddMeta(sheet, "Microsoft Copilot usage report - tenant summary", YesNo(summary.MicrosoftReportDate.HasValue),
+                summary.MicrosoftReportDate.HasValue
+                    ? $"Microsoft's tenant totals for {MicrosoftReportPeriodText(summary)}"
+                      + (string.IsNullOrWhiteSpace(summary.MicrosoftReportVersion) ? string.Empty : $", report version {summary.MicrosoftReportVersion}")
+                      + ". Licensed users only, tenant-wide."
+                    : "Not imported.");
             AddMeta(sheet, "Microsoft 365 usage reports", YesNo(summary.DataSources.M365UsageReportsAvailable),
                 summary.DataSources.M365UsageReportDate.HasValue
                     ? $"Daily reports read across the whole period, up to {summary.DataSources.M365UsageReportDate.Value:yyyy-MM-dd}. "
@@ -301,6 +307,29 @@ namespace Common.Entities.CopilotAdoption
         private static void AddMeta(XlsxSheet sheet, string name, object value, string notes)
         {
             sheet.AddRow(name, value, XlsxCell.Wrapped(notes));
+        }
+
+        /// <summary>
+        /// The report period Microsoft's tenant figures describe, in words: its real length and the date it
+        /// ends on - never "28 days" for a 30-day report.
+        /// </summary>
+        private static string MicrosoftReportPeriodText(CopilotAdoptionSummary summary)
+        {
+            if (!summary.MicrosoftReportDate.HasValue) return "no report period";
+
+            return summary.MicrosoftReportPeriodDays.HasValue
+                ? $"the {summary.MicrosoftReportPeriodDays.Value}-day report period to {summary.MicrosoftReportDate.Value:yyyy-MM-dd}"
+                : $"the report period to {summary.MicrosoftReportDate.Value:yyyy-MM-dd}";
+        }
+
+        /// <summary>
+        /// One of Microsoft's tenant figures as a cell: the number, or why there is none. Never a zero for a
+        /// figure Microsoft did not report.
+        /// </summary>
+        private static object MicrosoftReportValue<T>(T? value, CopilotAdoptionSummary summary) where T : struct
+        {
+            if (value.HasValue) return value.Value;
+            return summary.MicrosoftReportDate.HasValue ? "Not reported" : "Not imported";
         }
 
         /// <summary>
@@ -463,6 +492,26 @@ namespace Common.Entities.CopilotAdoption
                 "Licensed users whose score used Microsoft's per-user report because the audit import had no per-user signal for them.");
             AddMeta(sheet, "Scored from Microsoft report %", summary.UsageReportSourcedUserPct,
                 "The same figure as a share of the analysed users. The higher it is, the more of this report is pinned to Microsoft's reporting period rather than to the window on the Report sheet - which is what makes two snapshots taken over different windows less directly comparable.");
+
+            // Microsoft's own tenant figures, in their own block: a different source, unit and population
+            // from every figure above, so they sit beside them and are never added to them (#534, #642).
+            sheet.AddBlankRow();
+            var microsoftReportVersion1 = string.Equals(summary.MicrosoftReportVersion, "v1", StringComparison.OrdinalIgnoreCase);
+            AddMeta(sheet, "Microsoft report: prompts submitted", MicrosoftReportValue(summary.MicrosoftReportPromptsSubmitted, summary),
+                (summary.MicrosoftReportDate.HasValue
+                    ? $"Microsoft's own figure from its Copilot usage report, for {MicrosoftReportPeriodText(summary)}: "
+                    : "Microsoft's own figure from its Copilot usage report: ")
+                + "the prompts licensed users sent to Copilot Chat, as Microsoft counts them, across the whole tenant. "
+                + "Never added to the audit-log interactions above - a different source, unit and population."
+                + (microsoftReportVersion1 && !summary.MicrosoftReportPromptsSubmitted.HasValue
+                    ? " Version 1 of Microsoft's report has no prompt counts, so none is shown - never a zero."
+                    : string.Empty));
+            AddMeta(sheet, "Microsoft report: prompts per active user", MicrosoftReportValue(summary.MicrosoftReportAveragePromptsPerActiveUser, summary),
+                "Microsoft's average prompts per active user over the same period, with Microsoft's own definition of active. "
+                + "Not comparable with the audit-derived interactions per user, and licensed users only."
+                + (microsoftReportVersion1 && !summary.MicrosoftReportAveragePromptsPerActiveUser.HasValue
+                    ? " Version 1 of Microsoft's report has no prompt counts, so none is shown - never a zero."
+                    : string.Empty));
 
             sheet.AddBlankRow();
             AddMeta(sheet, "Using Copilot unlicensed", summary.UnlicensedActiveUsers,
@@ -799,6 +848,7 @@ namespace Common.Entities.CopilotAdoption
                 case CopilotAdoptionUnscopedSections.Agents: return "the agent inventory";
                 case CopilotAdoptionUnscopedSections.PurchasedSeats: return "purchased and unassigned seats";
                 case CopilotAdoptionUnscopedSections.CoworkCredits: return "the Cowork credit balance";
+                case CopilotAdoptionUnscopedSections.MicrosoftReport: return "Microsoft's usage-report figures";
                 default: return section;
             }
         }
@@ -2392,6 +2442,28 @@ namespace Common.Entities.CopilotAdoption
                           + "with their source and window; this file was exported without the See PII permission, so that list "
                           + "is not included. ")
                 + "Do not average or silently reconcile them into one number.");
+
+            AddMethod(sheet, "Microsoft's tenant prompt figures",
+                "The figures labelled 'Microsoft report' are Microsoft's own, read unchanged from the tenant summary of "
+                + "its Microsoft 365 Copilot usage report that the usage-report import stores: 'Total prompts submitted' "
+                + "and 'Average prompts submitted' per active user, for the report period closest to 28 days - 28 days "
+                + "on version 2 of the report, 30 days when the tenant only receives version 1 - ending on the report "
+                + "date stated beside them. Microsoft's most recent report is used, as the Microsoft 365 admin centre "
+                + "shows it, so its period ends on Microsoft's date rather than on this workbook's.\n"
+                + "They differ from the audit-derived figures by design, for the reasons above: Microsoft counts the "
+                + "prompts licensed users sent to Copilot Chat, over Microsoft's own report period, while the audit log "
+                + "counts Copilot interactions by every user, including unlicensed Copilot Chat users, over the selected "
+                + "period. A prompt and an interaction are different units, so the two are never added together or "
+                + "averaged - the total interactions on the Headline figures sheet contain no Microsoft prompt count.\n"
+                + "They cover Copilot as Microsoft's report counts it, not agents alone, so they are not the agent "
+                + "measure charted in Microsoft's 2026 Work Trend Index, and no external benchmark is shown beside them. "
+                + "Microsoft's published schema for the tenant summary has no agents surface, so it supplies no agent "
+                + "figure: agent figures in this workbook come from the audit log.\n"
+                + "A figure Microsoft did not report - version 1 of the report has no prompt counts - is left blank on "
+                + "'Snapshot facts', never written as zero. Concealed user information does not affect these figures: "
+                + "they are tenant totals with no identities in them. They describe the whole tenant, so a workbook "
+                + "narrowed to part of it carries them unchanged and says so on the Report sheet. "
+                + "(https://learn.microsoft.com/en-us/microsoft-365/copilot/extensibility/api/admin-settings/reports/copilotreportroot-getmicrosoft365copilotusercountsummary)");
 
             AddMethod(sheet, "Comparing two exports",
                 "Comparison lives in these files, not in the product. There is no stored history, no saved "
