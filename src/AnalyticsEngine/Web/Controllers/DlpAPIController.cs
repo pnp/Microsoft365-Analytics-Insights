@@ -800,9 +800,10 @@ GROUP BY p.policy_id, p.name;";
         /// one of its messages carries the flag, true or false, and in the numerator only if one carries it true.
         /// One whose messages are all NULL - every row imported before #570, and any payload that omits the field -
         /// is in neither.</para>
-        /// <para>Semi-joins reduce each constituent record's messages before distinct turn counts. A flag
-        /// reported on either the counted record or one of its twins belongs to the turn; NULL on the other
-        /// records cannot turn it into a clean or unreported turn.</para>
+        /// <para>Reduce reported messages to one nullable flag per canonical turn in one pass. A flag on any
+        /// constituent belongs to the turn; the left join preserves turns with no reported message.
+        /// Reusing the expanded turn set in three distinct-count semi-joins caused millions of message
+        /// lookups at synthetic scale, so the final counts share this one aggregate.</para>
         /// </remarks>
         internal const string GovernanceMessagesSql = @"
 WITH turn_records AS (
@@ -816,24 +817,18 @@ WITH turn_records AS (
     ) AS turn_record
     WHERE c.time_stamp >= @from AND c.time_stamp <= @to/*scope: AND c.user_id IN {scopeUsers}*/
       AND NOT EXISTS (SELECT 1 FROM dbo.copilot_chat_duplicates AS turn_dup WHERE turn_dup.time_stamp = c.time_stamp AND turn_dup.event_id = c.event_id)
+), turn_flags AS (
+    SELECT c.counted_event_id,
+           MAX(CAST(m.jailbreak_detected AS int)) AS JailbreakFlag
+    FROM turn_records AS c
+    LEFT JOIN dbo.copilot_event_messages AS m
+        ON m.copilot_chat_id = c.event_id AND m.jailbreak_detected IS NOT NULL
+    GROUP BY c.counted_event_id
 )
-SELECT w.Interactions, r.JailbreakReported, f.JailbreakFlagged
-FROM (
-    SELECT COUNT_BIG(DISTINCT c.counted_event_id) AS Interactions
-    FROM turn_records AS c
-) AS w
-CROSS JOIN (
-    SELECT COUNT_BIG(DISTINCT c.counted_event_id) AS JailbreakReported
-    FROM turn_records AS c
-    WHERE EXISTS (SELECT 1 FROM dbo.copilot_event_messages AS m
-                  WHERE m.copilot_chat_id = c.event_id AND m.jailbreak_detected IS NOT NULL)
-) AS r
-CROSS JOIN (
-    SELECT COUNT_BIG(DISTINCT c.counted_event_id) AS JailbreakFlagged
-    FROM turn_records AS c
-    WHERE EXISTS (SELECT 1 FROM dbo.copilot_event_messages AS m
-                  WHERE m.copilot_chat_id = c.event_id AND m.jailbreak_detected = 1)
-) AS f
+SELECT COUNT_BIG(*) AS Interactions,
+       COUNT_BIG(JailbreakFlag) AS JailbreakReported,
+       ISNULL(SUM(CAST(JailbreakFlag AS bigint)), 0) AS JailbreakFlagged
+FROM turn_flags
 OPTION (RECOMPILE);";
 
         /// <summary>
