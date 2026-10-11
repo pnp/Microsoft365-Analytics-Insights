@@ -7,6 +7,7 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
 using System.Runtime.CompilerServices;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace Common.Entities.LeadershipCohort
@@ -266,11 +267,16 @@ namespace Common.Entities.LeadershipCohort
     /// analysis instance and membership version - so the O(licensed users) pass runs once, not per reader.</para>
     /// <para>The cached analysis and summary are never modified. The controller attaches the result to a copy
     /// (<see cref="CopilotAdoptionSummary.WithLeadershipComparison"/>).</para>
+    /// <para>The complete optional storage read, including lazy table opening and every member page, has one
+    /// <see cref="DefaultStorageTimeout"/> deadline. An expired deadline withholds the leadership figures as
+    /// <see cref="LeadershipComparisonReasons.StateUnavailable"/>, not the completed report. Caller cancellation
+    /// propagates and is never cached as a storage failure.</para>
     /// </remarks>
     public sealed class LeadershipComparisonProvider
     {
         public static readonly TimeSpan HeaderCacheDuration = TimeSpan.FromSeconds(60);
         public static readonly TimeSpan FailureCacheDuration = TimeSpan.FromSeconds(15);
+        public static readonly TimeSpan DefaultStorageTimeout = TimeSpan.FromSeconds(10);
 
         private static readonly InMemoryKeyValueStore ProcessFallbackStore = new InMemoryKeyValueStore();
         private static readonly object DefaultLock = new object();
@@ -278,16 +284,21 @@ namespace Common.Entities.LeadershipCohort
 
         private readonly Func<LeadershipCohortStore> _openStore;
         private readonly Func<DateTime> _utcNow;
+        private readonly TimeSpan _storageTimeout;
         private readonly object _lock = new object();
         private readonly ConditionalWeakTable<CopilotAdoptionAnalysis, ConcurrentDictionary<string, LeadershipAdoptionComparison>> _comparisons =
             new ConditionalWeakTable<CopilotAdoptionAnalysis, ConcurrentDictionary<string, LeadershipAdoptionComparison>>();
 
         private State _state;
+        private long _generation;
 
-        public LeadershipComparisonProvider(Func<LeadershipCohortStore> openStore, Func<DateTime> utcNow = null)
+        public LeadershipComparisonProvider(
+            Func<LeadershipCohortStore> openStore, Func<DateTime> utcNow = null, TimeSpan? storageTimeout = null)
         {
             _openStore = openStore ?? throw new ArgumentNullException(nameof(openStore));
             _utcNow = utcNow ?? (() => DateTime.UtcNow);
+            _storageTimeout = storageTimeout ?? DefaultStorageTimeout;
+            if (_storageTimeout <= TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(storageTimeout));
         }
 
         /// <summary>The store for this deployment: the <c>AnalyticsState</c> table, or a per-process store without Storage.</summary>
@@ -320,14 +331,21 @@ namespace Common.Entities.LeadershipCohort
         /// <summary>Forgets the cached settings and membership, after a save or a refresh in this process.</summary>
         public void Invalidate()
         {
-            lock (_lock) _state = null;
+            lock (_lock)
+            {
+                _state = null;
+                _generation++;
+            }
         }
 
-        /// <summary>The comparison for an analysis. Never throws for a storage failure: that is a status.</summary>
-        public async Task<LeadershipAdoptionComparison> GetAsync(CopilotAdoptionAnalysis analysis, bool scopedView)
+        /// <summary>The comparison for an analysis. Storage failures are a status; caller cancellation propagates.</summary>
+        public async Task<LeadershipAdoptionComparison> GetAsync(
+            CopilotAdoptionAnalysis analysis, bool scopedView, CancellationToken cancellationToken = default)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             if (analysis == null) return null;
-            var state = await GetStateAsync().ConfigureAwait(false);
+            var state = await GetStateAsync(cancellationToken).ConfigureAwait(false);
+            cancellationToken.ThrowIfCancellationRequested();
 
             if (state.Failed) return LeadershipAdoptionComparison.WithStatus(LeadershipComparisonStatuses.Unavailable, LeadershipComparisonReasons.StateUnavailable);
             if (state.Settings == null) return LeadershipAdoptionComparison.WithStatus(LeadershipComparisonStatuses.NotConfigured);
@@ -350,48 +368,90 @@ namespace Common.Entities.LeadershipCohort
                 return LeadershipAdoptionComparison.WithStatus(LeadershipComparisonStatuses.Unavailable, LeadershipComparisonReasons.MembershipChanging);
 
             var perAnalysis = _comparisons.GetValue(analysis, _ => new ConcurrentDictionary<string, LeadershipAdoptionComparison>(StringComparer.Ordinal));
-            return perAnalysis.GetOrAdd(snapshot.Version, _ => LeadershipAdoptionCalculator.Compare(analysis, state.Members, snapshot.RefreshedUtc));
+            var comparison = perAnalysis.GetOrAdd(snapshot.Version, _ => LeadershipAdoptionCalculator.Compare(analysis, state.Members, snapshot.RefreshedUtc));
+            cancellationToken.ThrowIfCancellationRequested();
+            return comparison;
         }
 
-        private async Task<State> GetStateAsync()
+        private async Task<State> GetStateAsync(CancellationToken cancellationToken)
         {
             var now = _utcNow();
             State previous;
+            long generation;
             lock (_lock)
             {
                 previous = _state;
                 if (previous != null && now < previous.ExpiresUtc) return previous;
+                generation = _generation;
             }
 
-            State next;
-            try
+            var next = await ReadWithDeadlineAsync(previous, now, cancellationToken).ConfigureAwait(false);
+            lock (_lock)
             {
-                var store = _openStore();
-                var settings = await store.GetSettingsAsync().ConfigureAwait(false);
-                var snapshot = settings == null ? null : await store.GetSnapshotAsync().ConfigureAwait(false);
-                var request = settings == null ? null : await store.GetRefreshRequestAsync().ConfigureAwait(false);
-                var pending = LeadershipCohortRefresher.IsPending(settings, snapshot, request);
-                IReadOnlyCollection<int> members = null;
-                if (!pending && snapshot != null && snapshot.IsReady)
+                cancellationToken.ThrowIfCancellationRequested();
+                // A save/refresh or another completed read must not be overwritten by an older in-flight read.
+                if (generation != _generation) return new State { Failed = true };
+                if (ReferenceEquals(_state, previous)) _state = next;
+                return next.Failed ? next : _state;
+            }
+        }
+
+        private async Task<State> ReadWithDeadlineAsync(State previous, DateTime now, CancellationToken caller)
+        {
+            caller.ThrowIfCancellationRequested();
+            using (var deadline = CancellationTokenSource.CreateLinkedTokenSource(caller))
+            {
+                deadline.CancelAfter(_storageTimeout);
+                var cancelled = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+                using (deadline.Token.Register(() => cancelled.TrySetResult(true)))
                 {
-                    members = previous != null && previous.Members != null && previous.Snapshot != null
-                        && string.Equals(previous.Snapshot.Version, snapshot.Version, StringComparison.Ordinal)
-                        ? previous.Members
-                        : await store.ReadMembersAsync(snapshot).ConfigureAwait(false);
+                    try
+                    {
+                        // SDK opening, requests and retries receive the same token. The race only backs up stores
+                        // that ignore it; ReadStateAsync never publishes, so late completions cannot enter the cache.
+                        var task = ReadStateAsync(previous, now, deadline.Token);
+                        if (!task.IsCompleted && await Task.WhenAny(task, cancelled.Task).ConfigureAwait(false) != task)
+                        {
+                            _ = task.ContinueWith(failed => { _ = failed.Exception; }, CancellationToken.None,
+                                TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+                            deadline.Token.ThrowIfCancellationRequested();
+                        }
+                        var state = await task.ConfigureAwait(false);
+                        deadline.Token.ThrowIfCancellationRequested();
+                        return state;
+                    }
+                    catch (Exception ex) when (caller.IsCancellationRequested)
+                    {
+                        throw new OperationCanceledException("The leadership comparison request was cancelled.", ex, caller);
+                    }
+                    catch (Exception)
+                    {
+                        // Unknown state (including a deadline) is unavailable, never old membership or "not configured".
+                        return new State { Failed = true, ExpiresUtc = now + FailureCacheDuration };
+                    }
                 }
-                // A version mismatch (a refresh mid-write) is retried soon rather than held for the full minute.
-                var hold = !pending && snapshot != null && snapshot.IsReady && members == null ? FailureCacheDuration : HeaderCacheDuration;
-                next = new State { Settings = settings, Snapshot = snapshot, PendingRefresh = pending, Members = members, ExpiresUtc = now + hold };
             }
-            catch (Exception)
-            {
-                // Including LeadershipCohortStateUnavailableException: "unknown" is reported as unavailable, never as a
-                // previous answer and never as "not configured".
-                next = new State { Failed = true, ExpiresUtc = now + FailureCacheDuration };
-            }
+        }
 
-            lock (_lock) _state = next;
-            return next;
+        private async Task<State> ReadStateAsync(State previous, DateTime now, CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var store = _openStore();
+            var settings = await store.GetSettingsAsync(cancellationToken).ConfigureAwait(false);
+            var snapshot = settings == null ? null : await store.GetSnapshotAsync(cancellationToken).ConfigureAwait(false);
+            var request = settings == null ? null : await store.GetRefreshRequestAsync(cancellationToken).ConfigureAwait(false);
+            var pending = LeadershipCohortRefresher.IsPending(settings, snapshot, request);
+            IReadOnlyCollection<int> members = null;
+            if (!pending && snapshot != null && snapshot.IsReady)
+            {
+                members = previous != null && previous.Members != null && previous.Snapshot != null
+                    && string.Equals(previous.Snapshot.Version, snapshot.Version, StringComparison.Ordinal)
+                    ? previous.Members
+                    : await store.ReadMembersAsync(snapshot, cancellationToken).ConfigureAwait(false);
+            }
+            // A version mismatch (a refresh mid-write) is retried soon rather than held for the full minute.
+            var hold = !pending && snapshot != null && snapshot.IsReady && members == null ? FailureCacheDuration : HeaderCacheDuration;
+            return new State { Settings = settings, Snapshot = snapshot, PendingRefresh = pending, Members = members, ExpiresUtc = now + hold };
         }
 
         private sealed class State
