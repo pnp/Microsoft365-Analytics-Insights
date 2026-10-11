@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { screen } from '@testing-library/react';
+import { screen, within } from '@testing-library/react';
 import { renderWithProvider } from '../test/renderWithProvider';
 import { fetchAgent365Catalog } from '../api/agent365CatalogApi';
 import type { Agent365CatalogResponse } from '../types/agent365Catalog';
@@ -64,5 +64,39 @@ describe('Agent 365 UTC catalog dates', () => {
     expect(screen.queryByText(previousDay)).not.toBeInTheDocument();
     expect(screen.getByText(translateStatic(language, 'admin.agent365Catalog.usage.neverUsed'))).toBeVisible();
     expect(screen.getAllByText(translateStatic(language, 'admin.agent365Catalog.usage.unknown')).length).toBeGreaterThan(0);
+  });
+
+  describe('Agent 365 import status', () => {
+    for (const language of ['en', 'es'] as const) {
+      it.each(['running', 'succeeded', 'failed', 'none'] as const)(
+        `distinguishes %s imports in ${language} while retaining the last completed snapshot`,
+        async (status) => {
+          const hasAttempt = status !== 'none';
+          const completed = status === 'succeeded' || status === 'failed';
+          vi.mocked(fetchAgent365Catalog).mockResolvedValue({
+            ...response,
+            lastAttemptUtc: hasAttempt ? UTC_DATE : null,
+            lastAttemptCompletedUtc: completed ? UTC_DATE : null,
+            lastAttemptSucceeded: hasAttempt ? status === 'succeeded' : null,
+            lastAttemptError: status === 'failed' ? 'Synthetic import failure' : null,
+            ...(hasAttempt ? {} : {
+              lastSuccessfulImportUtc: null, packages: [], totalCount: 0, packageCount: 0, neverUsedCount: 0,
+            }),
+          });
+          await loadCatalog(language);
+          renderWithProvider(<Agent365CatalogPage />, { language });
+
+          const label = await screen.findByText(translateStatic(language, 'admin.agent365Catalog.summary.importStatus'));
+          expect(within(label.parentElement!).getByText(
+            translateStatic(language, `admin.agent365Catalog.status.${status}`),
+          )).toBeVisible();
+          const failure = screen.queryByText(translateStatic(language, 'admin.agent365Catalog.error.failed'));
+          if (status === 'failed') expect(failure).toBeVisible();
+          else expect(failure).not.toBeInTheDocument();
+          if (hasAttempt) expect(screen.getByText('Contoso used agent')).toBeVisible();
+          else expect(screen.queryByText('Contoso used agent')).not.toBeInTheDocument();
+        },
+      );
+    }
   });
 });

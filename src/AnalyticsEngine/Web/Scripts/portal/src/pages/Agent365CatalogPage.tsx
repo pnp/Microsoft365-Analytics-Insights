@@ -121,11 +121,15 @@ export default function Agent365CatalogPage() {
 
   const pagePackages = data?.packages ?? [];
   const canGoNext = Boolean(data && data.offset + pagePackages.length < data.totalCount);
-  const attemptStatus = data?.lastAttemptSucceeded === true
-    ? t('admin.agent365Catalog.status.succeeded')
-    : data?.lastAttemptSucceeded === false
-      ? t('admin.agent365Catalog.status.failed')
-      : t('admin.agent365Catalog.status.none');
+  const attemptRunning = data?.lastAttemptUtc != null && data.lastAttemptCompletedUtc == null;
+  const attemptFailed = data?.lastAttemptCompletedUtc != null && data.lastAttemptSucceeded === false;
+  const attemptStatus = attemptRunning
+    ? t('admin.agent365Catalog.status.running')
+    : data?.lastAttemptSucceeded === true
+      ? t('admin.agent365Catalog.status.succeeded')
+      : attemptFailed
+        ? t('admin.agent365Catalog.status.failed')
+        : t('admin.agent365Catalog.status.none');
 
   return (
     <div className={styles.page}>
@@ -154,7 +158,7 @@ export default function Agent365CatalogPage() {
           <MessageBarBody>{t('admin.agent365Catalog.importDisabled')}</MessageBarBody>
         </MessageBar>
       )}
-      {data?.lastAttemptSucceeded === false && (
+      {attemptFailed && (
         <MessageBar intent="error">
           <MessageBarBody>{t('admin.agent365Catalog.error.failed')}</MessageBarBody>
         </MessageBar>
