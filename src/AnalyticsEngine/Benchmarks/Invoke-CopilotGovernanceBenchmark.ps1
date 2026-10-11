@@ -428,7 +428,7 @@ if (-not $KeepFixture) {
     $connection = New-BenchConnection
     try {
         foreach ($table in @('copilot_event_ai_system_plugins', 'copilot_ai_system_plugins', 'copilot_event_ai_models', 'copilot_ai_models',
-                             'copilot_event_accessed_resources', 'copilot_event_messages', 'copilot_chats', 'sensitivity_labels')) {
+                             'copilot_event_accessed_resources', 'copilot_event_messages', 'copilot_chat_duplicates', 'copilot_chats', 'sensitivity_labels')) {
             Invoke-NonQuery -Connection $connection -Sql "IF OBJECT_ID(N'govbench.$table', N'U') IS NOT NULL DROP TABLE govbench.$table;"
         }
         Invoke-NonQuery -Connection $connection -Sql "IF SCHEMA_ID(N'govbench') IS NOT NULL DROP SCHEMA govbench;"

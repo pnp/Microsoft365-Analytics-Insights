@@ -52,6 +52,7 @@ const admin: Record<keyof typeof en, string> = {
   'admin.agent365Catalog.state.blocked': 'Bloqueado',
   'admin.agent365Catalog.status.failed': 'Error',
   'admin.agent365Catalog.status.none': 'Sin registros',
+  'admin.agent365Catalog.status.running': 'En curso',
   'admin.agent365Catalog.status.succeeded': 'Completada',
   'admin.agent365Catalog.summary.importStatus': 'Última importación',
   'admin.agent365Catalog.summary.lastAttempt': 'Último intento (UTC)',

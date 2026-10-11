@@ -15,7 +15,7 @@ namespace Web.AnalyticsWeb.Models.CopilotAdoption
         /// The settings in force. Throws <see cref="CopilotAdoptionScoreSettingsUnavailableException"/> when they
         /// cannot be read: never quietly answers with the defaults.
         /// </summary>
-        Task<CopilotAdoptionEffectiveScoreSettings> GetAsync();
+        Task<CopilotAdoptionEffectiveScoreSettings> GetAsync(CancellationToken cancellationToken = default);
 
         /// <summary>The last settings read, without touching storage; the defaults before the first read.</summary>
         CopilotAdoptionEffectiveScoreSettings LastKnown { get; }
@@ -28,7 +28,11 @@ namespace Web.AnalyticsWeb.Models.CopilotAdoption
         private static readonly Task<CopilotAdoptionEffectiveScoreSettings> Completed =
             Task.FromResult(CopilotAdoptionEffectiveScoreSettings.Defaults);
 
-        public Task<CopilotAdoptionEffectiveScoreSettings> GetAsync() => Completed;
+        public Task<CopilotAdoptionEffectiveScoreSettings> GetAsync(CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return Completed;
+        }
 
         public CopilotAdoptionEffectiveScoreSettings LastKnown => CopilotAdoptionEffectiveScoreSettings.Defaults;
     }
@@ -85,11 +89,12 @@ namespace Web.AnalyticsWeb.Models.CopilotAdoption
             }
         }
 
-        public async Task<CopilotAdoptionEffectiveScoreSettings> GetAsync()
+        public async Task<CopilotAdoptionEffectiveScoreSettings> GetAsync(CancellationToken cancellationToken = default)
         {
             // Numbered when the read starts, so a slow read that finishes after a newer one cannot replace LastKnown.
             var sequence = Interlocked.Increment(ref _sequence);
-            var document = await _store().GetAsync().ConfigureAwait(false);
+            var document = await _store().GetAsync(cancellationToken).ConfigureAwait(false);
+            cancellationToken.ThrowIfCancellationRequested();
             var settings = document.ToEffective();
             Remember(settings, sequence);
             return settings;

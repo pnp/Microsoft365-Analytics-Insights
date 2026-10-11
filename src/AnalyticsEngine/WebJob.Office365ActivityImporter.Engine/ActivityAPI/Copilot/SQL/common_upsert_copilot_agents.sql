@@ -449,25 +449,46 @@ BEGIN TRY
 
         SET @rows = @rows + @@ROWCOUNT;
 
-        -- A Copilot DLP match both records of a pair carry is the same block: keep it on the counted record.
-        -- Only reaches rows stored before the pair was found (records saved by an older build, or a pairing
-        -- that failed and was retried); insert_copilot_dlp_events_from_staging_table.sql stops a pair's later
-        -- record adding the copy in the first place.
+        -- Repair stored copies on EVERY affected turn, including reason-2 echoes and existing mappings
+        -- on a re-run with no new #turn_pairs. Only the batch's nearby user/agent/conversation set is
+        -- considered; the counted-event index then finds that turn's other constituents without a
+        -- whole-history sweep. Match identity and NULL equality are exactly the staging merge's tuple.
+        -- Prefer evidence already on the counted record, then the first constituent carrying it. A match
+        -- unique to a runtime record survives; nothing is moved or invented on the counted record.
         IF OBJECT_ID('dbo.copilot_dlp_events', 'U') IS NOT NULL
         BEGIN
+            CREATE TABLE #turn_dlp (
+                counted_event_id uniqueidentifier NOT NULL PRIMARY KEY);
+
+            INSERT INTO #turn_dlp (counted_event_id)
+            SELECT DISTINCT COALESCE(d.counted_event_id, t.event_id)
+            FROM #turn_rows AS t
+            LEFT JOIN dbo.copilot_chat_duplicates AS d
+                ON d.time_stamp = t.time_stamp AND d.event_id = t.event_id;
+
+            ;WITH turn_records AS (
+                SELECT t.counted_event_id, t.counted_event_id AS event_id, 0 AS is_extra
+                FROM #turn_dlp AS t
+                UNION ALL
+                SELECT t.counted_event_id, d.event_id, 1 AS is_extra
+                FROM #turn_dlp AS t
+                INNER JOIN dbo.copilot_chat_duplicates AS d ON d.counted_event_id = t.counted_event_id
+            ), copies AS (
+                SELECT x.id,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY r.counted_event_id,
+                                        x.dlp_policy_id, x.dlp_rule_id, x.dlp_action_id,
+                                        x.resource_name_id, x.resource_type_id, x.sensitivity_label_id, x.is_blocked
+                           ORDER BY r.is_extra, x.copilot_chat_id, x.id) AS turn_copy
+                FROM turn_records AS r
+                INNER JOIN dbo.copilot_dlp_events AS x ON x.copilot_chat_id = r.event_id
+            )
             DELETE x
             FROM dbo.copilot_dlp_events AS x
-            INNER JOIN #turn_pairs AS p ON p.runtime_event_id = x.copilot_chat_id
-            WHERE EXISTS (
-                SELECT 1
-                FROM dbo.copilot_dlp_events AS y
-                WHERE y.copilot_chat_id = p.client_event_id
-                  AND EXISTS (
-                      SELECT y.dlp_policy_id, y.dlp_rule_id, y.dlp_action_id, y.resource_name_id, y.resource_type_id, y.sensitivity_label_id, y.is_blocked
-                      INTERSECT
-                      SELECT x.dlp_policy_id, x.dlp_rule_id, x.dlp_action_id, x.resource_name_id, x.resource_type_id, x.sensitivity_label_id, x.is_blocked
-                  )
-            );
+            INNER JOIN copies AS c ON c.id = x.id
+            WHERE c.turn_copy > 1;
+
+            DROP TABLE #turn_dlp;
         END
 
         DROP TABLE #turn_extra;
@@ -486,6 +507,7 @@ BEGIN TRY
         VALUES (@batch_id, N'${STAGING_TABLE_ACTIVITY}', 'pair_turns', DATEDIFF(MILLISECOND, @t, SYSUTCDATETIME()), @rows);
 END TRY
 BEGIN CATCH
+    IF OBJECT_ID('tempdb..#turn_dlp') IS NOT NULL DROP TABLE #turn_dlp;
     IF OBJECT_ID('tempdb..#turn_extra') IS NOT NULL DROP TABLE #turn_extra;
     IF OBJECT_ID('tempdb..#turn_bursts') IS NOT NULL DROP TABLE #turn_bursts;
     IF OBJECT_ID('tempdb..#turn_pairs') IS NOT NULL DROP TABLE #turn_pairs;

@@ -285,13 +285,19 @@ namespace Web.AnalyticsWeb.Controllers
         /// The leadership comparison for this response (#654), or null when it cannot be produced. Compared with the
         /// whole tenant only: under a domain, a reader's filter or the administrator's global filter it reports
         /// <see cref="LeadershipComparisonStatuses.ScopedView"/> instead, because a narrowed population can leave a
-        /// handful of leaders to single out. Never throws - a comparison problem must not cost the reader the report.
+        /// handful of leaders to single out. Storage failures are a status; caller cancellation still propagates.
         /// </summary>
-        private async Task<LeadershipAdoptionComparison> LeadershipComparisonForAsync(CopilotAdoptionAnalysis analysis, bool narrowed)
+        private async Task<LeadershipAdoptionComparison> LeadershipComparisonForAsync(
+            CopilotAdoptionAnalysis analysis, bool narrowed, CancellationToken cancellationToken)
         {
             try
             {
-                return await (LeadershipComparisons ?? LeadershipComparisonProvider.Default).GetAsync(analysis, narrowed);
+                cancellationToken.ThrowIfCancellationRequested();
+                return await (LeadershipComparisons ?? LeadershipComparisonProvider.Default).GetAsync(analysis, narrowed, cancellationToken);
+            }
+            catch (Exception ex) when (cancellationToken.IsCancellationRequested)
+            {
+                throw new OperationCanceledException("The leadership comparison request was cancelled.", ex, cancellationToken);
             }
             catch (Exception)
             {
@@ -537,7 +543,7 @@ namespace Web.AnalyticsWeb.Controllers
             var (analysis, narrowed) = await TryGetScopedAnalysisAsync(
                 windowDays, from, to, seatLicenceTypeIds, emailDomain, filter, FirstResponseBudget, cancellationToken);
             if (analysis == null) return StillBuilding(windowDays, from, to, seatLicenceTypeIds);
-            var leadership = await LeadershipComparisonForAsync(analysis, narrowed);
+            var leadership = await LeadershipComparisonForAsync(analysis, narrowed, cancellationToken);
             return Ok(SummaryForCaller(analysis.Summary.WithLeadershipComparison(leadership)));
         }
 
@@ -1084,7 +1090,7 @@ namespace Web.AnalyticsWeb.Controllers
             var (analysis, narrowed) = await TryGetScopedAnalysisAsync(
                 windowDays, from, to, seatLicenceTypeIds, emailDomain, filter, ExportWaitBudget, cancellationToken);
             if (analysis == null) return ExportNotReadyResponse(windowDays, from, to, seatLicenceTypeIds);
-            var leadership = await LeadershipComparisonForAsync(analysis, narrowed);
+            var leadership = await LeadershipComparisonForAsync(analysis, narrowed, cancellationToken);
 
             var timeSaved = ParseTimeSavedOverrides(
                 copilotMinutesSavedPerMeeting,

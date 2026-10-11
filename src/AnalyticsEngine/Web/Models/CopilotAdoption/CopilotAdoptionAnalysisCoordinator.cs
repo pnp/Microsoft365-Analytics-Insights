@@ -256,8 +256,9 @@ namespace Web.AnalyticsWeb.Models.CopilotAdoption
         /// the cache key. Throws <see cref="CopilotAdoptionScoreSettingsUnavailableException"/> when they cannot be
         /// read, so a report is refused rather than scored with rules nobody chose.
         /// </summary>
-        private Task<CopilotAdoptionEffectiveScoreSettings> ScoreSettingsAsync() =>
-            _settingsSource.GetAsync() ?? Task.FromResult(CopilotAdoptionEffectiveScoreSettings.Defaults);
+        private Task<CopilotAdoptionEffectiveScoreSettings> ScoreSettingsAsync(CancellationToken cancellationToken = default) =>
+            _settingsSource.GetAsync(cancellationToken) ?? Task.FromException<CopilotAdoptionEffectiveScoreSettings>(
+                new CopilotAdoptionScoreSettingsUnavailableException("The score settings source returned no read operation."));
 
         public async Task<CopilotAdoptionAnalysis> TryGetAsync(
             CopilotAdoptionDateRange range,
@@ -278,7 +279,10 @@ namespace Web.AnalyticsWeb.Models.CopilotAdoption
             TimeSpan waitBudget,
             CancellationToken cancellationToken)
         {
-            var settings = await ScoreSettingsAsync().ConfigureAwait(false);
+            cancellationToken.ThrowIfCancellationRequested();
+            var requestWatch = System.Diagnostics.Stopwatch.StartNew();
+            var settings = await ScoreSettingsAsync(cancellationToken).ConfigureAwait(false);
+            cancellationToken.ThrowIfCancellationRequested();
             var task = Join(range, seatLicenceTypeIds, settings, out var interest, out var generation);
             if (task.IsCompleted) return new CopilotAdoptionAnalysisWaitResult(await task, generation?.RunId);
 
@@ -288,7 +292,9 @@ namespace Web.AnalyticsWeb.Models.CopilotAdoption
             interest?.EnterWait();
             try
             {
-                var finished = await Task.WhenAny(task, Task.Delay(waitBudget, cancellationToken));
+                var remaining = waitBudget - requestWatch.Elapsed;
+                var finished = await Task.WhenAny(task, Task.Delay(remaining > TimeSpan.Zero ? remaining : TimeSpan.Zero, cancellationToken));
+                cancellationToken.ThrowIfCancellationRequested();
                 return new CopilotAdoptionAnalysisWaitResult(finished == task ? await task : null, generation?.RunId);
             }
             finally
@@ -379,7 +385,8 @@ namespace Web.AnalyticsWeb.Models.CopilotAdoption
             interest = null;
             joinedGeneration = null;
             var ids = seatLicenceTypeIds ?? new List<int>();
-            settings = settings ?? CopilotAdoptionEffectiveScoreSettings.Defaults;
+            if (settings == null)
+                throw new CopilotAdoptionScoreSettingsUnavailableException("The score settings source returned no settings.");
             var cacheKey = CacheKey(range, ids, settings);
 
             if (_cache.TryGet(cacheKey, out var cached))

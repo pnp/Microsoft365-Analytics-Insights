@@ -209,6 +209,11 @@ namespace Tests.UnitTests
             }
 
             internal int Reads => Volatile.Read(ref _reads);
+            internal CancellationToken LastReadToken { get; private set; }
+            internal readonly TaskCompletionSource<bool> ReadStarted = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            internal void ReleaseHeldReads() => _allHeldReadsMade.TrySetResult(true);
+            internal bool StallWrites;
+            internal CancellationToken LastWriteToken { get; private set; }
 
             public string Description => _inner.Description;
 
@@ -222,6 +227,8 @@ namespace Tests.UnitTests
             public async Task<VersionedValue> GetVersionedAsync(string key, CancellationToken cancellationToken = default)
             {
                 Interlocked.Increment(ref _reads);
+                LastReadToken = cancellationToken;
+                ReadStarted.TrySetResult(true);
                 var read = await _inner.GetVersionedAsync(key, cancellationToken);
                 var n = Interlocked.Increment(ref _versionedReads) - _holdFrom;
                 var hold = Volatile.Read(ref _holdReads);
@@ -233,8 +240,12 @@ namespace Tests.UnitTests
                 return read;
             }
 
-            public Task<bool> TrySetStringAsync(string key, string value, string expectedVersionToken, CancellationToken cancellationToken = default) =>
-                _inner.TrySetStringAsync(key, value, expectedVersionToken, cancellationToken);
+            public async Task<bool> TrySetStringAsync(string key, string value, string expectedVersionToken, CancellationToken cancellationToken = default)
+            {
+                LastWriteToken = cancellationToken;
+                if (StallWrites) await Task.Delay(Timeout.Infinite, cancellationToken);
+                return await _inner.TrySetStringAsync(key, value, expectedVersionToken, cancellationToken);
+            }
 
             public Task SetStringAsync(string key, string value, TimeSpan? timeToLive = null, CancellationToken cancellationToken = default) =>
                 _inner.SetStringAsync(key, value, timeToLive, cancellationToken);
@@ -251,7 +262,7 @@ namespace Tests.UnitTests
 
             public CopilotAdoptionEffectiveScoreSettings LastKnown => Current;
 
-            public Task<CopilotAdoptionEffectiveScoreSettings> GetAsync() =>
+            public Task<CopilotAdoptionEffectiveScoreSettings> GetAsync(CancellationToken cancellationToken = default) =>
                 Fail
                     ? Task.FromException<CopilotAdoptionEffectiveScoreSettings>(new CopilotAdoptionScoreSettingsUnavailableException("Synthetic outage.", new InvalidOperationException()))
                     : Task.FromResult(Current);
@@ -271,9 +282,11 @@ namespace Tests.UnitTests
         private sealed class DictionaryCache : AdoptionCache
         {
             private readonly Dictionary<string, CopilotAdoptionAnalysis> _entries = new Dictionary<string, CopilotAdoptionAnalysis>();
+            internal int ReadCount;
 
             public bool TryGet(string key, out CopilotAdoptionAnalysis analysis)
             {
+                Interlocked.Increment(ref ReadCount);
                 lock (_entries) return _entries.TryGetValue(key, out analysis);
             }
 

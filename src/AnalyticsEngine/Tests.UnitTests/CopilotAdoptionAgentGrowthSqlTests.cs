@@ -34,6 +34,29 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public void GrowthAvailabilityProbe_ReadsSettledHistoryIndependentlyOfTheSelectedWindow()
+        {
+            using (var db = ScratchDatabase.Create("AgentGrowthAvailability"))
+            {
+                CreateCopilotTables(db);
+                int Available(DateTime from) => Query<int?>(db, CopilotAdoptionSql.HasCopilotAuditDataSql,
+                    new SqlParameter("@from", from),
+                    new SqlParameter("@toExclusive", CopilotAdoptionAgentGrowth.SeriesToExclusiveUtc(LastSettled))).Single() ?? 0;
+
+                var historyFrom = System.Data.SqlTypes.SqlDateTime.MinValue.Value;
+                Assert.AreEqual(0, Available(historyFrom), "No imported history must not enable measured growth.");
+                Seed(db, LastSettled.AddDays(1), 1, null, "Teams");
+                Assert.AreEqual(0, Available(historyFrom), "Unsettled interactions do not establish settled growth history.");
+                Seed(db, LastSettled.AddDays(-500), 1, null, "Teams");
+                Seed(db, CopilotAdoptionAgentGrowth.Windows(LastSettled)[13].FromUtc.AddDays(1), 1, 1, "Teams");
+
+                Assert.AreEqual(0, Available(CopilotAdoptionAgentGrowth.Windows(LastSettled)[0].FromUtc));
+                Assert.AreEqual(1, Available(historyFrom),
+                    "The SQL datetime lower bound must find older history without depending on the quiet selected period.");
+            }
+        }
+
+        [TestMethod]
         public void AgentGrowthSql_PutsEachInteractionInItsClosedWindowAndLeavesOutTheUnsettledDays()
         {
             using (var db = ScratchDatabase.Create("AgentGrowth"))

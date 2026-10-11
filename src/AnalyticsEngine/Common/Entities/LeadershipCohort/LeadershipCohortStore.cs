@@ -144,23 +144,27 @@ namespace Common.Entities.LeadershipCohort
         /// The members of a ready snapshot, or null when a page is missing or belongs to another refresh (a refresh is
         /// being written right now). Never returns a partial set.
         /// </summary>
-        public async Task<IReadOnlyCollection<int>> ReadMembersAsync(LeadershipCohortSnapshot snapshot)
+        public async Task<IReadOnlyCollection<int>> ReadMembersAsync(
+            LeadershipCohortSnapshot snapshot, CancellationToken cancellationToken = default)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             if (snapshot == null || !snapshot.IsReady || string.IsNullOrEmpty(snapshot.Slot)) return null;
             if (snapshot.PageCount < 0 || snapshot.PageCount > MaxPages) return null;
 
             var members = new HashSet<int>();
             for (var page = 0; page < snapshot.PageCount; page++)
             {
-                var body = await ReadAsync<LeadershipCohortMemberPage>(PageKey(snapshot.Slot, page)).ConfigureAwait(false);
+                var body = await ReadAsync<LeadershipCohortMemberPage>(PageKey(snapshot.Slot, page), cancellationToken).ConfigureAwait(false);
                 if (body == null || !string.Equals(body.Version, snapshot.Version, StringComparison.Ordinal)) return null;
                 foreach (var id in body.UserIds ?? new List<int>()) members.Add(id);
             }
+            cancellationToken.ThrowIfCancellationRequested();
             return members;
         }
 
         private async Task<T> ReadAsync<T>(string key, CancellationToken cancellationToken = default) where T : class
         {
+            cancellationToken.ThrowIfCancellationRequested();
             string json;
             try
             {
@@ -171,6 +175,7 @@ namespace Common.Entities.LeadershipCohort
             {
                 throw new LeadershipCohortStateUnavailableException($"Couldn't read '{key}' from {_values.Description}: {ex.Message}", ex);
             }
+            cancellationToken.ThrowIfCancellationRequested();
             if (string.IsNullOrEmpty(json)) return null;
             try
             {

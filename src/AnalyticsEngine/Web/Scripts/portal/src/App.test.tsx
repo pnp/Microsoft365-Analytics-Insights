@@ -69,7 +69,7 @@ beforeEach(() => {
     available: false, minimumDays: 7, maximumDays: 180, messages: [],
   });
   vi.mocked(fetchReportAreas).mockResolvedValue({
-    copilot: false, usage: false, spoAudit: false, webTraffic: false, calls: false, emails: false, officeApps: false,
+    copilot: false, copilotInteractionHistory: false, usage: false, spoAudit: false, webTraffic: false, calls: false, emails: false, officeApps: false,
   });
 });
 

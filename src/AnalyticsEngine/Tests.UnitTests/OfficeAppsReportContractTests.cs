@@ -1,5 +1,6 @@
 extern alias AnalyticsWeb;
 
+using Common.Entities;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
@@ -80,6 +81,24 @@ namespace Tests.UnitTests
 
             Assert.IsNotNull(areas["officeApps"], "api/Reports/areas must expose 'officeApps'.");
             Assert.IsTrue((bool)areas["officeApps"]);
+        }
+
+        [TestMethod]
+        public void AreasResponse_HistoryAndAuditAvailabilityAreIndependentAndCamelCase()
+        {
+            foreach (var audit in new[] { false, true })
+            foreach (var history in new[] { false, true })
+            {
+                var imports = new ImportTaskSettings { Copilot = audit, CopilotInteractionHistory = history };
+                var areas = JObject.Parse(JsonConvert.SerializeObject(ReportsAPIController.AvailableAreas(imports)));
+
+                Assert.AreEqual(audit, (bool)areas["copilot"]);
+                Assert.AreEqual(history, (bool)areas["copilotInteractionHistory"]);
+                Assert.IsNull(areas["CopilotInteractionHistory"]);
+                Assert.AreEqual(history, imports.CopilotInteractionHistory, "Reporting must not enable an import.");
+                Assert.AreEqual(audit, imports.Copilot);
+            }
+            Assert.IsFalse(ReportsAPIController.AvailableAreas(null).CopilotInteractionHistory);
         }
 
         /// <summary>

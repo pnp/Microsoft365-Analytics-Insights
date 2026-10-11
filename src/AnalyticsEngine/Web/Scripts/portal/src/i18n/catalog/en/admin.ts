@@ -50,6 +50,7 @@ export const admin = {
   'admin.agent365Catalog.state.blocked': 'Blocked',
   'admin.agent365Catalog.status.failed': 'Failed',
   'admin.agent365Catalog.status.none': 'None recorded',
+  'admin.agent365Catalog.status.running': 'Running',
   'admin.agent365Catalog.status.succeeded': 'Succeeded',
   'admin.agent365Catalog.summary.importStatus': 'Last import',
   'admin.agent365Catalog.summary.lastAttempt': 'Last attempt (UTC)',

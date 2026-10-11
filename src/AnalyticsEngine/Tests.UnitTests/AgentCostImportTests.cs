@@ -1294,6 +1294,63 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public async Task CreditImporter_NonemptyUserWriteFailure_FailsBothPhasesAndRecordsUserError()
+        {
+            var day = new DateTime(2026, 9, 9);
+            var source = new ScriptedCreditSource();
+            source.AddUsers(day, null, null, new CopilotStudioUserCreditRow { UserId = "contoso-user", Consumed = 3m });
+            var store = new RecordingAgentCostStore { UserCreditsError = new InvalidOperationException("Synthetic user write failure") };
+
+            var result = await new CopilotStudioCreditImporter(Logger, source, store, 1, new FixedClock(day.AddHours(6)))
+                .ImportConsumptionAsync();
+
+            Assert.IsFalse(result.Users.Succeeded);
+            Assert.IsFalse(result.Agents.Succeeded);
+            Assert.AreEqual(1, result.Users.Log.RowsRead);
+            Assert.AreEqual("Synthetic user write failure",
+                store.Logs.Single(l => l.ImportName == AgentCostImportNames.CopilotStudioUserCredits).Error);
+            Assert.AreEqual(0, source.ResourceCalls.Count);
+            Assert.AreEqual(0, store.Credits.Count);
+        }
+
+        [TestMethod]
+        public async Task CreditImporter_EmptyUserPhaseCompletedBeforeAgentWriteFailure_RemainsSuccessful()
+        {
+            var day = new DateTime(2026, 9, 9);
+            var store = new RecordingAgentCostStore { AgentCreditsError = new InvalidOperationException("Synthetic agent write failure") };
+
+            var result = await new CopilotStudioCreditImporter(Logger, new ScriptedCreditSource(), store, 1,
+                new FixedClock(day.AddHours(6))).ImportConsumptionAsync();
+
+            Assert.IsTrue(result.Users.Succeeded);
+            Assert.IsFalse(result.Agents.Succeeded);
+            Assert.AreEqual(0, result.Users.Log.RowsRead);
+            Assert.AreEqual(0, result.Users.Log.RowsSaved);
+            var userLog = store.Logs.Single(l => l.ImportName == AgentCostImportNames.CopilotStudioUserCredits);
+            Assert.IsNull(userLog.Error);
+            Assert.AreEqual("Synthetic agent write failure", result.Agents.Log.Error);
+        }
+
+        [TestMethod]
+        public async Task CreditImporter_ResourceFailure_PreservesCompletedNonemptyUserPhase()
+        {
+            var day = new DateTime(2026, 9, 9);
+            var source = new ScriptedCreditSource { ResourcesError = new InvalidOperationException("Synthetic resource failure") };
+            source.AddUsers(day, null, null, new CopilotStudioUserCreditRow { UserId = "contoso-user", Consumed = 3m });
+            var store = new RecordingAgentCostStore();
+
+            var result = await new CopilotStudioCreditImporter(Logger, source, store, 1,
+                new FixedClock(day.AddHours(6))).ImportConsumptionAsync();
+
+            Assert.IsTrue(result.Users.Succeeded);
+            Assert.IsFalse(result.Users.IsAuthorisationFailure);
+            Assert.IsFalse(result.Agents.Succeeded);
+            Assert.AreEqual(1, store.UserCredits.Count);
+            Assert.IsNull(store.Logs.Single(l => l.ImportName == AgentCostImportNames.CopilotStudioUserCredits).Error);
+            Assert.AreEqual(0, store.Credits.Count);
+        }
+
+        [TestMethod]
         public async Task CreditImporter_FanOutConcurrencyIsBounded()
         {
             var day = new DateTime(2026, 9, 9);
@@ -1843,6 +1900,8 @@ namespace Tests.UnitTests
 
         private class RecordingAgentCostStore : IAgentCostStore
         {
+            public Exception UserCreditsError { get; set; }
+            public Exception AgentCreditsError { get; set; }
             public List<CopilotStudioCreditDaily> Credits { get; } = new List<CopilotStudioCreditDaily>();
             public List<AzureCostDaily> Costs { get; } = new List<AzureCostDaily>();
             public List<AgentCostImportLog> Logs { get; } = new List<AgentCostImportLog>();
@@ -1850,6 +1909,7 @@ namespace Tests.UnitTests
 
             public Task<int> UpsertCopilotStudioCreditsAsync(IReadOnlyList<CopilotStudioCreditDaily> rows)
             {
+                if (AgentCreditsError != null) throw AgentCreditsError;
                 Credits.AddRange(rows);
                 return Task.FromResult(rows.Count);
             }
@@ -1875,6 +1935,7 @@ namespace Tests.UnitTests
 
             public Task<int> UpsertCopilotStudioUserCreditsAsync(IReadOnlyList<CopilotStudioCreditUserDaily> rows)
             {
+                if (UserCreditsError != null) throw UserCreditsError;
                 UserCredits.AddRange(rows);
                 return Task.FromResult(rows.Count);
             }

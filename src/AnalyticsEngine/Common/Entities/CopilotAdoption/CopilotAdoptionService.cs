@@ -456,16 +456,14 @@ namespace Common.Entities.CopilotAdoption
             {
                 steps.Add(new AnalysisStep(CopilotAdoptionSteps.AgentEstate,
                     output => BuildAgentEstateAsync(analysis, output, seatIds, windowStart, toExclusive, nowUtc, cancellationToken)));
-
-                // Its own step so it runs beside the inventory rather than after it: nothing here needs the
-                // inventory until the summary is assembled.
-                steps.Add(new AnalysisStep(CopilotAdoptionSteps.AgentReach,
-                    output => BuildAgentReachAsync(analysis, output, windowStart, toExclusive, nowUtc, summary.DataSources.AuditAvailable, cancellationToken)));
-                // Its own step so it overlaps the inventory rather than queueing behind it. As of now even for
-                // a historical period, like the inventory beside it on the Agents tab.
-                steps.Add(new AnalysisStep(CopilotAdoptionSteps.AgentGrowth,
-                    output => BuildAgentGrowthAsync(analysis, output, latestSettled, cancellationToken)));
             }
+
+            // Authoring has its own feed; growth has its own fixed history range. A quiet selected
+            // period must not suppress either. Each step probes its source before reading facts.
+            steps.Add(new AnalysisStep(CopilotAdoptionSteps.AgentReach,
+                output => BuildAgentReachAsync(analysis, output, windowStart, toExclusive, nowUtc, summary.DataSources.AuditAvailable, cancellationToken)));
+            steps.Add(new AnalysisStep(CopilotAdoptionSteps.AgentGrowth,
+                output => BuildAgentGrowthAsync(analysis, output, latestSettled, cancellationToken)));
 
             // Microsoft's own tenant figures stand on their own: they need neither a seat nor the audit import,
             // so this step is never gated. Last, so the warnings of every step above keep their order.
@@ -1009,8 +1007,9 @@ namespace Common.Entities.CopilotAdoption
         /// runs (#645). See <see cref="CopilotAdoptionAgentGrowth"/> for the rules.
         /// </summary>
         /// <remarks>
-        /// Three reads: the agent table for the scope decision (one row per agent), one range seek over the
-        /// series on the interaction index, and the billing table's date range. A failed billing read blanks
+        /// A cheap existence probe of settled audit history gates three reads: the agent table for the
+        /// scope decision (one row per agent), one bounded 392-day range seek over the series on the
+        /// interaction index, and the billing table's date range. A failed billing read blanks
         /// only the billing evidence. A failed scope or usage read leaves the series empty, and the step's
         /// warning says why: counting agents the scope was meant to leave out would be the wrong number with
         /// the right label, and fourteen blank windows would read as "not measured" rather than "not loaded".
@@ -1027,6 +1026,18 @@ namespace Common.Entities.CopilotAdoption
             // Left empty unless the user-initiated figures load: a series of blank windows would read as
             // "not measured" when the truth is "could not be loaded", which the step's warning says instead.
             estate.Growth = new List<AgentGrowthWindow>();
+
+            var auditHistoryAvailable = await SafeScalarAsync(
+                CopilotAdoptionSql.HasCopilotAuditDataSql,
+                CopilotAdoptionSteps.AgentGrowth,
+                CopilotAdoptionQueries.AuditDataProbe,
+                output,
+                "Copilot audit data probe",
+                () => output.MarkIncomplete("Copilot audit data"),
+                cancellationToken,
+                new SqlParameter("@from", System.Data.SqlTypes.SqlDateTime.MinValue.Value),
+                new SqlParameter("@toExclusive", CopilotAdoptionAgentGrowth.SeriesToExclusiveUtc(lastSettledDay))) == 1;
+            if (!auditHistoryAvailable) return;
 
             var agents = await SafeAsync(
                 () => QueryAsync<AgentGrowthAgentRow>(CopilotAdoptionSql.AgentGrowthAgentsSql, cancellationToken),
@@ -3686,7 +3697,7 @@ namespace Common.Entities.CopilotAdoption
         #region Query plumbing
 
         /// <summary>Runs a query on its own short-lived context, so one slow report cannot hold a context open.</summary>
-        private async Task<List<T>> QueryAsync<T>(
+        protected virtual async Task<List<T>> QueryAsync<T>(
             string sql,
             CancellationToken cancellationToken,
             params SqlParameter[] parameters)

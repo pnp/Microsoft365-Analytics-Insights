@@ -3,6 +3,7 @@ using Newtonsoft.Json;
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace Web.AnalyticsWeb.Models.CopilotAdoption
@@ -83,28 +84,30 @@ namespace Web.AnalyticsWeb.Models.CopilotAdoption
         public static CopilotAdoptionSettingsService ForThisDeployment() =>
             new CopilotAdoptionSettingsService(CopilotAdoptionScoreSettingsProvider.Production);
 
-        public async Task<CopilotAdoptionSettingsModel> GetAsync()
+        public async Task<CopilotAdoptionSettingsModel> GetAsync(CancellationToken cancellationToken = default)
         {
             var store = _provider.Store;
-            return ToModel(await store.GetAsync().ConfigureAwait(false), store.IsDurable);
+            return ToModel(await store.GetAsync(cancellationToken).ConfigureAwait(false), store.IsDurable);
         }
 
-        public async Task<CopilotAdoptionSettingsModel> SaveAsync(CopilotAdoptionSettingsSaveRequest request, string changedBy)
+        public async Task<CopilotAdoptionSettingsModel> SaveAsync(
+            CopilotAdoptionSettingsSaveRequest request, string changedBy, CancellationToken cancellationToken = default)
         {
             if (request?.Settings == null || request.ExpectedVersion == null)
                 throw new CopilotAdoptionScoreSettingsRejectedException(CopilotAdoptionScoreSettingsErrorCodes.InvalidRequest);
             var store = _provider.Store;
-            var saved = await store.SaveAsync(request.Settings, request.ExpectedVersion.Value, changedBy).ConfigureAwait(false);
+            var saved = await store.SaveAsync(request.Settings, request.ExpectedVersion.Value, changedBy, cancellationToken).ConfigureAwait(false);
             _provider.Publish(saved);
             return ToModel(saved, store.IsDurable);
         }
 
-        public async Task<CopilotAdoptionSettingsModel> ResetAsync(CopilotAdoptionSettingsResetRequest request, string changedBy)
+        public async Task<CopilotAdoptionSettingsModel> ResetAsync(
+            CopilotAdoptionSettingsResetRequest request, string changedBy, CancellationToken cancellationToken = default)
         {
             if (request?.ExpectedVersion == null)
                 throw new CopilotAdoptionScoreSettingsRejectedException(CopilotAdoptionScoreSettingsErrorCodes.InvalidRequest);
             var store = _provider.Store;
-            var saved = await store.ResetAsync(request.ExpectedVersion.Value, changedBy).ConfigureAwait(false);
+            var saved = await store.ResetAsync(request.ExpectedVersion.Value, changedBy, cancellationToken).ConfigureAwait(false);
             _provider.Publish(saved);
             return ToModel(saved, store.IsDurable);
         }
