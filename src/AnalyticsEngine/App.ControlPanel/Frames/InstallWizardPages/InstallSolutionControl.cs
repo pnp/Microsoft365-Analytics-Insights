@@ -17,6 +17,9 @@ namespace App.ControlPanel.Frames.InstallWizard
             InitializeComponent();
             _operations = new OperationCentreControl(lstLog) { Dock = DockStyle.Fill };
             installLayout.Controls.Add(_operations, 0, 3);
+            ClientSizeChanged += (sender, args) =>
+                installLayout.MinimumSize = new System.Drawing.Size(0, ClientSize.Height);
+            installLayout.MinimumSize = new System.Drawing.Size(0, ClientSize.Height);
             actionLayout.Controls.Add(_reviewOptions);
             _reviewOptions.Click += (sender, args) =>
             {

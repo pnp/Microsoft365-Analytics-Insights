@@ -167,6 +167,7 @@ namespace Tests.UnitTests.InstallTests
         [DataRow(900, 620, 1.0f)]
         [DataRow(900, 750, 1.5f)]
         [DataRow(1200, 1000, 2.0f)]
+        [DataRow(1028, 749, 2.0f)]
         public void InstallPage_OptionsAndActionsDoNotOverlap_WhenResizedOrScaled(int width, int height, float scale)
         {
             RunOnSta(() =>

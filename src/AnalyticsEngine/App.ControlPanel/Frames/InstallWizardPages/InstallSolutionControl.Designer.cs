@@ -252,7 +252,8 @@
             //
             // installLayout
             //
-            this.installLayout.AutoScroll = true;
+            this.installLayout.AutoSize = true;
+            this.installLayout.AutoSizeMode = System.Windows.Forms.AutoSizeMode.GrowAndShrink;
             this.installLayout.ColumnCount = 1;
             this.installLayout.ColumnStyles.Add(new System.Windows.Forms.ColumnStyle(System.Windows.Forms.SizeType.Percent, 100F));
             this.installLayout.Controls.Add(this.headerLayout, 0, 0);
@@ -260,7 +261,7 @@
             this.installLayout.Controls.Add(this.lblDeploymentNotice, 0, 2);
             this.installLayout.Controls.Add(this.lstLog, 0, 3);
             this.installLayout.Controls.Add(this.actionLayout, 0, 4);
-            this.installLayout.Dock = System.Windows.Forms.DockStyle.Fill;
+            this.installLayout.Dock = System.Windows.Forms.DockStyle.Top;
             this.installLayout.Font = new System.Drawing.Font("Segoe UI", 9F, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point);
             this.installLayout.Name = "installLayout";
             this.installLayout.Padding = new System.Windows.Forms.Padding(12);
@@ -335,6 +336,7 @@
             // 
             this.AutoScaleDimensions = new System.Drawing.SizeF(6F, 13F);
             this.AutoScaleMode = System.Windows.Forms.AutoScaleMode.Font;
+            this.AutoScroll = true;
             this.Controls.Add(this.installLayout);
             this.Name = "InstallSolutionControl";
             this.Size = new System.Drawing.Size(537, 394);
