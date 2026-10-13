@@ -468,6 +468,37 @@ namespace Tests.UnitTests
             }
         }
 
+        [DataTestMethod]
+        [DataRow("{\"categories\":[\"analysis\"]}", false, "analysis")]
+        [DataRow("{\"categories\":[\"other\"]}", false, "other")]
+        [DataRow("{\"categories\":[\"unknown\"]}", true, "other")]
+        [DataRow("{\"categories\":[]}", true, "other")]
+        [DataRow("{\"categories\":[12]}", true, "other")]
+        [DataRow("{\"categories\":[\"analysis\"],\"extra\":\"untrusted\"}", true, "other")]
+        [DataRow("not json", true, "other")]
+        public async Task Backend_MarksInvalidStructuredOutput_WhilePreservingImporterFallback(string content, bool invalid, string category)
+        {
+            var response = new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(JsonConvert.SerializeObject(new
+                {
+                    choices = new[] { new { finish_reason = "stop", message = new { content } } },
+                    usage = new { prompt_tokens = 100, completion_tokens = 10 }
+                }))
+            };
+            using (var backend = new AzureFoundryPromptCategoryBackend(new AppConfig
+            {
+                FoundryPromptCategorisationEndpoint = "https://contoso.openai.azure.com/",
+                FoundryPromptCategorisationDeployment = "synthetic-model", FoundryPromptCategorisationKey = "synthetic-key"
+            }, new HttpClient(new SingleResponseHandler(response))))
+            {
+                var result = await backend.ClassifyAsync(Enabled(1), new[] { "Synthetic prompt" }, CancellationToken.None);
+                Assert.AreEqual(invalid, result.ResponseWasInvalid);
+                Assert.AreEqual(category, result.Categories[0]);
+                Assert.IsNull(result.Failure, "The importer retains its existing Other fallback.");
+            }
+        }
+
         private sealed class SingleResponseHandler : HttpMessageHandler
         {
             private readonly HttpResponseMessage _response;

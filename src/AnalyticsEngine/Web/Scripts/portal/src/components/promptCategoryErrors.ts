@@ -18,6 +18,16 @@ const CODE_KEYS: Record<PromptCategoryErrorCode, TranslationKey> = {
   databaseNotUpgraded: 'promptCategories.error.databaseNotUpgraded',
   reportUnavailable: 'promptCategories.error.reportUnavailable',
   clientTimeout: 'promptCategories.error.clientTimeout',
+  invalidTestPrompt: 'promptCategories.error.invalidTestPrompt',
+  backendNotConfigured: 'promptCategories.error.backendNotConfigured',
+  taxonomyChanged: 'promptCategories.error.taxonomyChanged',
+  testBusy: 'promptCategories.error.testBusy',
+  testThrottled: 'promptCategories.error.testThrottled',
+  testAccessDenied: 'promptCategories.error.testAccessDenied',
+  testTimeout: 'promptCategories.error.testTimeout',
+  testRefused: 'promptCategories.error.testRefused',
+  testInvalidResponse: 'promptCategories.error.testInvalidResponse',
+  testServiceFailure: 'promptCategories.error.testServiceFailure',
 };
 
 /** The portal's wording for a failed call. Server text is never shown; only the stable code picks the sentence. */

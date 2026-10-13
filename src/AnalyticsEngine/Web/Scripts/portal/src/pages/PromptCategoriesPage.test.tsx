@@ -9,6 +9,7 @@ import PromptCategoriesPage from './PromptCategoriesPage';
 vi.mock('../api/promptCategoriesApi', () => ({
   fetchPromptCategoryAdmin: vi.fn(), fetchPromptCategoryRuns: vi.fn(),
   resetPromptCategories: vi.fn(), savePromptCategories: vi.fn(),
+  testPromptCategory: vi.fn(),
 }));
 
 const configuration = () => ({
@@ -28,6 +29,15 @@ beforeEach(() => {
 });
 
 describe('prompt categorisation editor', () => {
+  it('shows the test-drive only for a configured backend and blocks unsaved taxonomy changes', async () => {
+    const user = userEvent.setup();
+    renderWithProvider(<PromptCategoriesPage />);
+    expect(await screen.findByLabelText('Test prompt')).toBeEnabled();
+    const name = screen.getByLabelText('Category name, category 1');
+    await user.type(name, ' updated');
+    expect(screen.getByLabelText('Test prompt')).toBeDisabled();
+    expect(screen.getByText(/Save or discard taxonomy changes before testing/)).toBeInTheDocument();
+  });
   it('explains both modes and supervising examples on hover without assigning a default mode', async () => {
     const user = userEvent.setup();
     renderWithProvider(<PromptCategoriesPage />);
@@ -105,6 +115,7 @@ describe('prompt categorisation editor', () => {
     expect(await screen.findByLabelText('Enable Foundry prompt categorisation')).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Save taxonomy and opt-in' })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Reset defaults and disable' })).toBeDisabled();
+    expect(screen.queryByLabelText('Test prompt')).not.toBeInTheDocument();
   });
 
   it('allows an existing opt-in to be disabled when backend settings are removed', async () => {

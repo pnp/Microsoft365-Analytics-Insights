@@ -44,6 +44,7 @@ each other's tooling. The area switcher sits in the header; each area has its ow
 | `#/admin/user-import` | **User import** | Whether the Graph user import has a stored checkpoint (its `/users/delta` token, kept in the `UserImport` partition of the `AnalyticsState` Azure Table), where it is kept, when the import last completed and how often it runs - and a confirmed **Clear checkpoint** action so the next run reads every user again, optionally on the next import cycle. The in-product version of deleting the stored token by hand (issue #664). The token itself never reaches the browser. |
 | `#/admin/leadership-cohort` | **Leadership group** | Saves an explicit Entra ID group for the Copilot Adoption comparison and requests membership reads by the activity importer. The response acknowledges durable settings/request storage, not Graph completion. **Check status** retrieves the worker outcome without requesting another read. |
 | `#/admin/copilot-adoption-settings` | **Copilot Adoption settings** | Configures the tenant-wide frequency, depth and breadth weights and adoption-level thresholds. Settings and change history are stored in the `CopilotAdoptionSettings` partition of `AnalyticsState`. |
+| `#/admin/prompt-categories` | **Prompt categories** | Configures prompt goals and import opt-in. When an Azure OpenAI backend is configured, an explicit test-drive sends one synthetic sample against the saved taxonomy, even with import categorisation off. Shows the selected category, administrator-assigned human mode, taxonomy version and token usage without writing prompts/results or import counters. |
 | `#/admin/global-filter` | **Report filter** | The administrator's global report filter: conditions every Insights report applies for everyone, on top of their own filters, optionally compared with the viewer's own attributes. Previews the draft against the administrator's own account before saving. Needs See PII as well as Administration. See [The administrator's global filter](#the-administrators-global-filter). |
 | `#/admin/configuration` | **Service configuration** | What this deployment is pointed at: SQL, the storage account (which holds the runtime state table), Cognitive Services and Service Bus, plus the Teams calls import state and the Graph call webhook (with a live validation POST to test it). |
 
@@ -71,6 +72,19 @@ UI split does **not** reduce its SQL work or create new analytics. When audit im
 and prompt pages render their respective charts from that bundle; Azure AI Language availability is
 still reported by the server. Categories are requested only with history import enabled. Nothing in
 the report enables history import, categorisation or cognitive enrichment.
+
+The administration test-drive uses `POST api/PromptCategories/test`, protected by Administration
+and the same-origin XHR filter. Save or discard edits before testing; the submitted taxonomy version
+must still match the stored configuration. Samples are limited to 5,000 characters (longer requests
+are rejected, not truncated), and a process-wide gate admits at most two concurrent tests without
+queueing. Storage reads and model calls have separate 10-second and 20-second deadlines. The shared
+Azure OpenAI backend uses the importer's structured-output schema and key-to-Entra fallback; the
+web app does not reference an importer engine. A malformed model response fails the test rather than
+displaying the importer's `Other` fallback. A valid `Other` selection remains a successful test.
+No model explanations, raw responses, endpoint/key details or sample text are returned. Tests incur
+model usage but never opt the importer in, change the taxonomy or write classification/report data.
+The portal keeps the sample/result only in component memory; Azure's deployment-side handling still
+applies, so use synthetic text rather than personal or confidential data.
 
 Import availability is shared between the sidebar and report through `ReportAreasProvider`. Disabled
 report leaves are omitted from the rail unless directly opened, but remain in the catalog. A direct

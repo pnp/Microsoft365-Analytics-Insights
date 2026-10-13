@@ -32,19 +32,88 @@ namespace Web.AnalyticsWeb.Controllers
         private readonly PromptCategoryConfigurationStore _store;
         private readonly PromptCategoryRunStore _runStore;
         private readonly AppConfig _settings;
+        private readonly Func<IPromptCategoryBackend> _backendFactory;
+        private static readonly SemaphoreSlim TestGate = new SemaphoreSlim(2);
 
         public PromptCategoriesAPIController() : this(new AppConfig()) { }
         private PromptCategoriesAPIController(AppConfig settings)
         {
             _settings = settings;
+            _backendFactory = () => new AzureFoundryPromptCategoryBackend(settings);
             _store = PromptCategoryConfigurationStore.Open(settings);
             _runStore = PromptCategoryRunStore.Open(settings);
         }
-        internal PromptCategoriesAPIController(PromptCategoryConfigurationStore store, PromptCategoryRunStore runStore = null)
+        internal PromptCategoriesAPIController(PromptCategoryConfigurationStore store, PromptCategoryRunStore runStore = null,
+            AppConfig settings = null, Func<IPromptCategoryBackend> backendFactory = null)
         {
             _store = store;
             _runStore = runStore ?? new PromptCategoryRunStore(null);
-            _settings = new AppConfig();
+            _settings = settings ?? new AppConfig();
+            _backendFactory = backendFactory ?? (() => new AzureFoundryPromptCategoryBackend(_settings));
+        }
+
+        [HttpPost, Route("test")]
+        [RequirePortalPermission(PortalPermission.Administration)]
+        [RequireSameOriginXhr]
+        public async Task<IHttpActionResult> TestPrompt([FromBody] PromptCategoryTestRequest model, CancellationToken cancellationToken)
+        {
+            if (model == null || string.IsNullOrWhiteSpace(model.Prompt) || model.Prompt.Length > 5000)
+                return Error(HttpStatusCode.BadRequest, "invalidTestPrompt");
+            if (!FoundryPromptSettings.IsConfigured(_settings))
+                return Error(HttpStatusCode.Conflict, "backendNotConfigured");
+            if (!await TestGate.WaitAsync(0, cancellationToken))
+                return Error((HttpStatusCode)429, "testBusy");
+            try
+            {
+                PromptCategoryConfiguration taxonomy;
+                using (var storageTimeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken))
+                {
+                    storageTimeout.CancelAfter(StorageTimeout);
+                    try { taxonomy = await _store.GetAsync(storageTimeout.Token); }
+                    catch (Exception ex) { return Failure(ex, storageTimeout); }
+                }
+                if (model.Version != taxonomy.Version)
+                    return Error(HttpStatusCode.Conflict, "taxonomyChanged");
+
+                // Deliberately bypass import opt-in and counters: this sends only the admin's explicit sample.
+                IPromptCategoryBackend backend = null;
+                try
+                {
+                    backend = _backendFactory();
+                    using (var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken))
+                    {
+                        timeout.CancelAfter(TimeSpan.FromSeconds(20));
+                        var result = await backend.ClassifyAsync(taxonomy, new[] { model.Prompt }, timeout.Token);
+                        var failure = result?.Failure;
+                        if (failure != null)
+                            return Error(failure == "throttled" ? (HttpStatusCode)429 : HttpStatusCode.ServiceUnavailable,
+                                TestFailureCode(failure));
+                        var category = result?.Categories?.Count == 1
+                            ? taxonomy.Categories.SingleOrDefault(c => c.Id == result.Categories[0]) : null;
+                        if (category == null || result.ResponseWasInvalid)
+                            return Error(HttpStatusCode.BadGateway, "testInvalidResponse");
+                        return NoStore(new { category, version = taxonomy.Version,
+                            inputTokens = result.InputTokens, outputTokens = result.OutputTokens });
+                    }
+                }
+                catch (OperationCanceledException) { return Error(HttpStatusCode.ServiceUnavailable, "testTimeout"); }
+                catch (Exception) { return Error(HttpStatusCode.ServiceUnavailable, "testServiceFailure"); }
+                finally { (backend as IDisposable)?.Dispose(); }
+            }
+            finally { TestGate.Release(); }
+        }
+
+        private static string TestFailureCode(string failure)
+        {
+            switch (failure)
+            {
+                case "throttled": return "testThrottled";
+                case "access-denied": return "testAccessDenied";
+                case "timeout": return "testTimeout";
+                case "refused": return "testRefused";
+                case "invalid-response": return "testInvalidResponse";
+                default: return "testServiceFailure";
+            }
         }
 
         [HttpGet, Route("")]
@@ -196,6 +265,11 @@ namespace Web.AnalyticsWeb.Controllers
     }
 
     public sealed class PromptCategoryVersionRow { public string Version { get; set; } }
+    public sealed class PromptCategoryTestRequest
+    {
+        [JsonProperty("prompt")] public string Prompt { get; set; }
+        [JsonProperty("version")] public string Version { get; set; }
+    }
     public class PromptCategoryMixRow
     {
         [JsonProperty("categoryId")] public string CategoryId { get; set; }

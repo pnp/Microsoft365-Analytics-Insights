@@ -20,6 +20,12 @@ export interface PromptCategoryAdmin {
   storageAvailable: boolean;
   backendConfigured: boolean;
 }
+export interface PromptCategoryTestResult {
+  category: PromptCategoryDefinition;
+  version: string;
+  inputTokens: number;
+  outputTokens: number;
+}
 export interface PromptCategoryReport {
   versions: string[];
   version: string | null;
@@ -40,6 +46,8 @@ export interface PromptCategoryRun {
 export const PROMPT_CATEGORY_ERROR_CODES = [
   'storageUnavailable', 'storageTimeout', 'storageNotConfigured', 'invalidTaxonomy',
   'storedConfigurationInvalid', 'databaseNotUpgraded', 'reportUnavailable',
+  'invalidTestPrompt', 'backendNotConfigured', 'taxonomyChanged', 'testBusy', 'testThrottled',
+  'testAccessDenied', 'testTimeout', 'testRefused', 'testInvalidResponse', 'testServiceFailure',
 ] as const;
 export type PromptCategoryErrorCode = typeof PROMPT_CATEGORY_ERROR_CODES[number] | 'clientTimeout';
 
@@ -61,15 +69,15 @@ async function errorCodeOf(response: Response): Promise<PromptCategoryErrorCode 
     ? body!.code as PromptCategoryErrorCode : null;
 }
 
-async function call<T>(path = '', configuration?: PromptCategoryConfiguration, reset = false): Promise<T> {
+async function call<T>(path = '', body?: PromptCategoryConfiguration | { prompt: string; version: string }, reset = false, timeoutMs = CLIENT_TIMEOUT_MS): Promise<T> {
   const controller = new AbortController();
-  const timer = window.setTimeout(() => controller.abort(), CLIENT_TIMEOUT_MS);
+  const timer = window.setTimeout(() => controller.abort(), timeoutMs);
   try {
     const response = await apiFetch(`${window.location.origin}/api/PromptCategories${path}`, {
-      method: configuration || reset ? 'POST' : 'GET',
+      method: body || reset ? 'POST' : 'GET',
       headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
       signal: controller.signal,
-      ...(configuration ? { body: JSON.stringify(configuration) } : {}),
+      ...(body ? { body: JSON.stringify(body) } : {}),
     });
     if (!response.ok) throw new PromptCategoryApiError(await errorCodeOf(response));
     return await (response.json() as Promise<T>);
@@ -84,5 +92,7 @@ export const fetchPromptCategoryAdmin = () => call<PromptCategoryAdmin>();
 export const savePromptCategories = (configuration: PromptCategoryConfiguration) => call<PromptCategoryConfiguration>('', configuration);
 export const resetPromptCategories = () => call<PromptCategoryConfiguration>('/reset', undefined, true);
 export const fetchPromptCategoryRuns = () => call<PromptCategoryRun[]>('/runs');
+export const testPromptCategory = (prompt: string, version: string) =>
+  call<PromptCategoryTestResult>('/test', { prompt, version }, false, 40000);
 export const fetchPromptCategoryReport = (months: number, version?: string) =>
   call<PromptCategoryReport>(`/report?months=${months}${version ? `&version=${encodeURIComponent(version)}` : ''}`);

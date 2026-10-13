@@ -11,6 +11,7 @@ import {
 } from '../api/promptCategoriesApi';
 import Spinner from '../components/Spinner';
 import PromptCategoryRuns from '../components/PromptCategoryRuns';
+import PromptCategoryTestDrive from '../components/PromptCategoryTestDrive';
 import { isStoredConfigurationInvalid, promptCategoryErrorText } from '../components/promptCategoryErrors';
 import {
   MAX_CATEGORIES, MAX_DESCRIPTION_LENGTH, MAX_NAME_LENGTH, MAX_PROMPTS_CAP,
@@ -212,6 +213,9 @@ export default function PromptCategoriesPage() {
 
       {!admin.backendConfigured && <MessageBar intent="warning" layout="multiline"><MessageBarBody>{t('promptCategories.backendMissing')}</MessageBarBody></MessageBar>}
       {!admin.storageAvailable && <MessageBar intent="error" layout="multiline"><MessageBarBody>{t('promptCategories.storageMissing')}</MessageBarBody></MessageBar>}
+
+      {admin.backendConfigured && <PromptCategoryTestDrive key={`${baseline}-${dirty}`} version={config.version}
+        disabled={dirty || busy || loading} />}
 
       <Card className={styles.section}>
         <Subtitle2>{t('promptCategories.settingsTitle')}</Subtitle2>

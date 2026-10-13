@@ -1,6 +1,6 @@
 import { beforeEach, expect, it, vi } from 'vitest';
 import { apiFetch } from './http';
-import { fetchPromptCategoryAdmin, resetPromptCategories, savePromptCategories } from './promptCategoriesApi';
+import { fetchPromptCategoryAdmin, resetPromptCategories, savePromptCategories, testPromptCategory } from './promptCategoriesApi';
 import { loadCatalog, setActiveLanguage } from '../i18n';
 vi.mock('./http', () => ({ apiFetch: vi.fn() }));
 beforeEach(() => { vi.clearAllMocks(); setActiveLanguage('en'); });
@@ -21,4 +21,12 @@ it('never exposes server or model text in a Spanish error', async () => {
   setActiveLanguage('es');
   vi.mocked(apiFetch).mockResolvedValue(new Response('untrusted model or prompt content', { status: 503 }));
   await expect(fetchPromptCategoryAdmin()).rejects.toThrow(/No se pudo cargar/);
+});
+
+it('POSTs a single test prompt and saved version, never in the URL', async () => {
+  vi.mocked(apiFetch).mockResolvedValue(new Response('{}', { status: 200 }));
+  await testPromptCategory('Synthetic Καλημέρα', 'synthetic-version');
+  expect(apiFetch).toHaveBeenCalledWith(expect.stringMatching(/\/api\/PromptCategories\/test$/), expect.objectContaining({
+    method: 'POST', body: JSON.stringify({ prompt: 'Synthetic Καλημέρα', version: 'synthetic-version' }),
+  }));
 });

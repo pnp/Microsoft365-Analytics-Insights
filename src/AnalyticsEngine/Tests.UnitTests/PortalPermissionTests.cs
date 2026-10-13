@@ -132,6 +132,7 @@ namespace Tests.UnitTests
             ["PromptCategoriesAPIController.Save"] = Admin,
             ["PromptCategoriesAPIController.Reset"] = Admin,
             ["PromptCategoriesAPIController.Runs"] = Admin,
+            ["PromptCategoriesAPIController.TestPrompt"] = Admin,
             ["PromptCategoriesAPIController.Report"] = Any,
 
             ["ProfilingStatusAPIController.Get"] = Admin,
