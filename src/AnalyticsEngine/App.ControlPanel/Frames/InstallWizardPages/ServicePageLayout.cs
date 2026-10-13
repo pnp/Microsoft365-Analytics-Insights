@@ -115,14 +115,40 @@ namespace App.ControlPanel.Frames.InstallWizard
             return row;
         }
 
-        private static void AddField(TableLayoutPanel row, string caption, Control field, int column)
+        internal static TableLayoutPanel AddFieldGrid(TableLayoutPanel content)
+        {
+            var grid = new TableLayoutPanel
+            {
+                Dock = DockStyle.Fill,
+                AutoSize = true,
+                ColumnCount = 4,
+                Margin = new Padding(0, 2, 0, 2)
+            };
+            grid.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            grid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
+            grid.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            grid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
+            AddRow(content, grid);
+            return grid;
+        }
+
+        internal static void AddFieldGridRow(TableLayoutPanel grid, string caption, Control field,
+            string secondCaption, Control secondField)
+        {
+            var row = grid.RowCount++;
+            grid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            AddField(grid, caption, field, 0, row);
+            AddField(grid, secondCaption, secondField, 2, row);
+        }
+
+        private static void AddField(TableLayoutPanel row, string caption, Control field, int column, int rowIndex = 0)
         {
             var label = Text(caption);
             label.Margin = new Padding(column == 0 ? 0 : 16, 5, 8, 0);
-            row.Controls.Add(label, column, 0);
+            row.Controls.Add(label, column, rowIndex);
             field.Dock = DockStyle.Fill;
             field.Margin = new Padding(0, 2, 0, 2);
-            row.Controls.Add(field, column + 1, 0);
+            row.Controls.Add(field, column + 1, rowIndex);
         }
     }
 }

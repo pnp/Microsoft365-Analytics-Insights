@@ -82,6 +82,13 @@ namespace Tests.UnitTests.InstallTests
                             var previousSize = form.Size;
                             form.Size = form.MinimumSize;
                             Capture(form, directory, prefix + "-" + name + "-minimum");
+                            if (name == "tabNetworking")
+                            {
+                                var networking = Find<NetworkingConfigControl>(form, "networkingConfigControl1");
+                                networking.ScrollControlIntoView(Find<TextBox>(networking, "txtPeAutomation"));
+                                Capture(form, directory, prefix + "-network-endpoints-minimum");
+                                networking.AutoScrollPosition = Point.Empty;
+                            }
                             if (name == "tabAzureStorage")
                             {
                                 var storage = Find<AzureStorageConfigControl>(form, "azureStorageConfigControl1");
@@ -387,6 +394,42 @@ namespace Tests.UnitTests.InstallTests
                             Assert.IsTrue(azure.ClientRectangle.Contains(azure.RectangleToClient(link.RectangleToScreen(link.ClientRectangle))));
                         }
                     }
+                }
+            });
+        }
+
+        [TestMethod]
+        public void NetworkingInputs_ShareAlignedColumnsAcrossRowsAndSizes()
+        {
+            RunSta(() =>
+            {
+                using (var networking = new NetworkingConfigControl { Dock = DockStyle.Fill, VNetEnabled = true })
+                using (var host = new Form())
+                {
+                    host.Controls.Add(networking);
+                    host.Show();
+                    foreach (var size in new[] { new Size(730, 520), new Size(940, 650), new Size(730, 520) })
+                    {
+                        host.ClientSize = size;
+                        Application.DoEvents();
+                        foreach (var names in new[]
+                        {
+                            new[] { "txtPeSql", "txtPeStorage", "txtPeKeyVault", "txtPeCognitive" },
+                            new[] { "txtPeApp", "txtPeStorageTable", "txtPeServiceBus", "txtPeAutomation" },
+                            new[] { "txtVNetName", "txtSubnetName", "txtAppSubnetName" },
+                            new[] { "txtAddressPrefix", "txtSubnetAddressPrefix", "txtAppSubnetAddressPrefix" }
+                        })
+                        {
+                            var fields = names.Select(name => Find<TextBox>(networking, name)).ToArray();
+                            var bounds = fields.Select(field => networking.RectangleToClient(field.RectangleToScreen(field.ClientRectangle))).ToArray();
+                            Assert.IsTrue(bounds.All(rectangle => rectangle.Left == bounds[0].Left && rectangle.Right == bounds[0].Right),
+                                "Both input edges must align for " + string.Join(", ", names));
+                            Assert.IsTrue(fields.All(field => field.Width >= 100 && field.Parent.ClientRectangle.Contains(field.Bounds)));
+                        }
+                    }
+                    networking.SetEndpointNames(new PrivateEndpointNames { SqlServer = "contoso-sql-endpoint", StorageTable = "contoso-table-endpoint" });
+                    Assert.AreEqual("contoso-sql-endpoint", networking.GetEndpointNames().SqlServer);
+                    Assert.AreEqual("contoso-table-endpoint", networking.GetEndpointNames().StorageTable);
                 }
             });
         }

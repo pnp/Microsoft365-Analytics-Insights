@@ -27,9 +27,10 @@ namespace App.ControlPanel.Frames.InstallWizard
             }
             var settings = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, ColumnCount = 1, Padding = new Padding(8) };
             settings.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-            ServicePageLayout.AddFields(settings, lblVNetName.Text, txtVNetName, lblAddressPrefix.Text, txtAddressPrefix);
-            ServicePageLayout.AddFields(settings, lblSubnetName.Text, txtSubnetName, lblSubnetAddressPrefix.Text, txtSubnetAddressPrefix);
-            ServicePageLayout.AddFields(settings, lblAppSubnetName.Text, txtAppSubnetName, lblAppSubnetAddressPrefix.Text, txtAppSubnetAddressPrefix);
+            var subnets = ServicePageLayout.AddFieldGrid(settings);
+            ServicePageLayout.AddFieldGridRow(subnets, lblVNetName.Text, txtVNetName, lblAddressPrefix.Text, txtAddressPrefix);
+            ServicePageLayout.AddFieldGridRow(subnets, lblSubnetName.Text, txtSubnetName, lblSubnetAddressPrefix.Text, txtSubnetAddressPrefix);
+            ServicePageLayout.AddFieldGridRow(subnets, lblAppSubnetName.Text, txtAppSubnetName, lblAppSubnetAddressPrefix.Text, txtAppSubnetAddressPrefix);
             foreach (var control in new Control[] { chkDeployDnsZones, lblDnsZonesHelp, chkAllowPublicAccess, lblAllowPublicAccessHelp })
             {
                 control.AutoSize = true;
@@ -41,10 +42,11 @@ namespace App.ControlPanel.Frames.InstallWizard
             lblPeHelp.AutoSize = true;
             lblPeHelp.Dock = DockStyle.Fill;
             ServicePageLayout.AddRow(endpoints, lblPeHelp);
-            ServicePageLayout.AddFields(endpoints, lblPeSql.Text, txtPeSql, lblPeApp.Text, txtPeApp);
-            ServicePageLayout.AddFields(endpoints, lblPeStorage.Text, txtPeStorage, lblPeStorageTable.Text, txtPeStorageTable);
-            ServicePageLayout.AddFields(endpoints, lblPeKeyVault.Text, txtPeKeyVault, lblPeServiceBus.Text, txtPeServiceBus);
-            ServicePageLayout.AddFields(endpoints, lblPeCognitive.Text, txtPeCognitive, lblPeAutomation.Text, txtPeAutomation);
+            var names = ServicePageLayout.AddFieldGrid(endpoints);
+            ServicePageLayout.AddFieldGridRow(names, lblPeSql.Text, txtPeSql, lblPeApp.Text, txtPeApp);
+            ServicePageLayout.AddFieldGridRow(names, lblPeStorage.Text, txtPeStorage, lblPeStorageTable.Text, txtPeStorageTable);
+            ServicePageLayout.AddFieldGridRow(names, lblPeKeyVault.Text, txtPeKeyVault, lblPeServiceBus.Text, txtPeServiceBus);
+            ServicePageLayout.AddFieldGridRow(names, lblPeCognitive.Text, txtPeCognitive, lblPeAutomation.Text, txtPeAutomation);
             grpEndpointNames.Controls.Clear();
             grpEndpointNames.AutoSize = true;
             grpEndpointNames.AutoSizeMode = AutoSizeMode.GrowAndShrink;
