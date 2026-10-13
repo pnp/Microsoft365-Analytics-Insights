@@ -31,6 +31,11 @@ const app: Record<keyof typeof en, string> = {
 
   'app.navGroup.monitoring': 'Supervisi\u00f3n',
   'app.navGroup.manage': 'Administrar',
+  'app.workload.copilot': 'Copilot',
+  'app.workload.agents': 'Agentes',
+  'app.workload.apps': 'Aplicaciones y licencias',
+  'app.workload.sharepoint': 'SharePoint y OneDrive',
+  'app.workload.teams': 'Teams',
 
   'app.route.overview': 'Resumen',
   'app.route.reports': 'Informes',

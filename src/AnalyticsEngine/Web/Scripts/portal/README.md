@@ -18,7 +18,13 @@ each other's tooling. The area switcher sits in the header; each area has its ow
 | Route (hash) | Page | What it does |
 | --- | --- | --- |
 | `#/insights/overview` | **Overview** | The landing page. Headline figures for the workloads this deployment actually imports, a system-health snapshot (overall status, per-section state, data freshness and 24h volume) and a short tour of the rest of the portal. |
-| `#/insights/reports` | **Reports** | In-app version of the Power BI reports: a sub-area per enabled workload, charting usage over a configurable window. Includes **Office apps** — which Office apps people use, on which platforms, by department and by email domain, and how far Copilot has reached each app. |
+| `#/insights/reports` | **Reports** | A catalog of the built-in reports, including disabled imports with links to prerequisite explanations. The catalog requests import availability only, not chart data. |
+| `#/insights/reports/copilot` | **Copilot usage** | Existing interaction, active-user and app charts, separate from prompt insights and the specialist Adoption page. |
+| `#/insights/reports/copilot-prompts` | **Prompt insights** | Existing phrase, sentiment and language charts, plus prompt categories from interaction history. Describes observed prompts, not quality or business outcomes. |
+| `#/insights/reports/copilot-agents` | **Copilot agents** | Existing agent-execution and interaction charts, with agent-name and top-agent filters. |
+| `#/insights/reports/usage` and `#/insights/reports/office-apps` | **Microsoft 365 usage / Office apps** | Existing workload and app usage charts, including platforms, departments and Copilot reach. |
+| `#/insights/reports/spo-audit` and `#/insights/reports/web-traffic` | **File activity / Website traffic** | Existing SharePoint/OneDrive audit charts and page-tracker volume charts. Web activity remains a separate explorer. |
+| `#/insights/reports/calls` and `#/insights/reports/emails` | **Teams calls / Emails** | Existing call-volume/duration and sent-email charts. Teams Explorer remains separate. |
 | `#/insights/copilot-adoption` | **Copilot Adoption** | Which licensed users aren't getting value from their licence, and which unlicensed heavy users have the strongest case for one. |
 | `#/insights/teams` | **Teams Explorer** | How Microsoft Teams is actually being used: adoption and reach, engagement segments, meeting load and patterns, team/channel health and governance, conversation insight, and champions. Replaces the archived `reports\Misc\Archive\Teams.pbit`. |
 | `#/insights/web-activity` | **Web activity** | What people do on the SharePoint intranet: visits and visitors, page views, where visitors arrive and give up (entry/exit pages, bounce, page-to-page journeys), geography, search terms and the terms that lead nowhere, and browser/device/load-time technology. Replaces the Power BI web-traffic report. |
@@ -44,14 +50,36 @@ each other's tooling. The area switcher sits in the header; each area has its ow
 Routing uses `HashRouter`, so the whole SPA is served by a single MVC action and no IIS /
 MVC route changes are needed to add pages.
 
-The Reports **Copilot** tab also exposes prompt categories when the existing
-`CopilotInteractionHistory` import is enabled without the Copilot audit import. In that mode it
-requests only the category report, not the audit charts or the Copilot agents area. This availability
-flag does not enable history import or categorisation; the report reads classifications already
-collected under the administrator's existing opt-ins.
+Insights uses one workload sidebar: **Copilot**, **Agents**, **Apps & licences**,
+**SharePoint & OneDrive**, and **Teams** expand to the existing report and specialist destinations.
+Overview, Reports, Emails, Activity analysis and DLP impact remain standalone. Opening a route expands
+its active workload; other groups can be expanded manually. Narrow screens use a dismissible overlay
+instead of squeezing the report beside the rail. Administration's section headings and permissions
+are unchanged, as are existing specialist-page addresses and internal navigation.
+
+Report-derived routes accept `?months=1`, `3` or `6` (default `3`). Period changes replace the current
+history entry; switching reports pushes a destination and carries the period, so Back restores the
+report and period together. The catalog's links carry that period too. Agent reports also accept
+`top=5|8|10|15|20` and `agentName`; Apply/Clear and the count selector update those URL parameters.
+Unsupported period/count values display a warning before using the corresponding default.
+These controls do not change the independent date-window semantics of Adoption or the explorers.
+
+Prompt insights exposes prompt categories when `CopilotInteractionHistory` is enabled without the
+Copilot audit import. In that mode it requests only the category report and explains why the other
+prompt charts are not requested. Those charts still share the existing audit-report endpoint, so the
+UI split does **not** reduce its SQL work or create new analytics. When audit import is on, the usage
+and prompt pages render their respective charts from that bundle; Azure AI Language availability is
+still reported by the server. Categories are requested only with history import enabled. Nothing in
+the report enables history import, categorisation or cognitive enrichment.
+
+Import availability is shared between the sidebar and report through `ReportAreasProvider`. Disabled
+report leaves are omitted from the rail unless directly opened, but remain in the catalog. A direct
+link explains the prerequisite without redirecting or requesting the disabled workload's charts.
+Availability-read failures are shown with a retry, never presented as disabled imports or empty data.
 
 `src/navigation.tsx` is the single source of truth for both the router and the left nav, so
-the two cannot drift — adding a page means adding one entry to `ROUTES`.
+the two cannot drift. Built-in chart routes and catalog entries share `src/reportNavigation.ts`;
+specialist routes remain in `ROUTES`, with an optional workload association.
 
 > The pre-split routes (`#/home`, `#/reports`, `#/teams`, `#/health`, ...) are **not**
 > redirected. Anything unrecognised falls back to the Insights overview.

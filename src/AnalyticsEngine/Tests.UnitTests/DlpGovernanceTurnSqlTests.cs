@@ -20,8 +20,10 @@ namespace Tests.UnitTests
     [TestCategory("SqlIntegration")]
     public class DlpGovernanceTurnSqlTests
     {
-        [TestMethod]
-        public void BenchmarkFreshFixture_ExecutesEveryShippedGovernanceStatement()
+        [DataTestMethod]
+        [DataRow(false)]
+        [DataRow(true)]
+        public void BenchmarkFreshFixture_ExecutesEveryShippedGovernanceStatement(bool includeMixEvidence)
         {
             var directory = new DirectoryInfo(AppDomain.CurrentDomain.BaseDirectory);
             while (directory != null && !File.Exists(Path.Combine(directory.FullName, "Benchmarks", "CopilotGovernanceBenchmark.sql")))
@@ -38,22 +40,68 @@ namespace Tests.UnitTests
                 db.ExecuteScript(fixture, quotedIdentifierOn: false);
                 Assert.AreEqual(0, Convert.ToInt32(db.Scalar("SELECT COUNT(*) FROM govbench.copilot_chat_duplicates")),
                     "The default fixture treats each generated record as a canonical turn.");
+                // Keep the shipped fixture, but make its sparse model/plugin evidence deterministic.
+                db.Execute(@"
+DELETE FROM govbench.copilot_event_ai_models;
+DELETE FROM govbench.copilot_event_ai_system_plugins;");
+                if (includeMixEvidence)
+                    db.Execute(@"
+INSERT INTO govbench.copilot_chats (event_id, user_id, time_stamp)
+VALUES ('00000000-0000-0000-0000-000000000000', 1, DATEADD(DAY, -1, CAST(SYSUTCDATETIME() AS date)));
+INSERT INTO govbench.copilot_event_ai_models (copilot_chat_id, model_id)
+VALUES ('00000000-0000-0000-0000-000000000000', 1);
+INSERT INTO govbench.copilot_event_ai_system_plugins (copilot_chat_id, ai_system_plugin_id)
+VALUES ('00000000-0000-0000-0000-000000000000', 1);");
                 using (var connection = new SqlConnection(db.ConnectionString))
                 {
                     connection.Open();
-                    foreach (var sql in new[]
+                    foreach (var statement in new[]
                     {
-                        DlpAPIController.GovernanceMessagesSql, DlpAPIController.GovernanceResourcesSql,
-                        DlpAPIController.GovernanceModelsSql, DlpAPIController.GovernancePluginsSql
+                        (Name: "Messages", Sql: DlpAPIController.GovernanceMessagesSql,
+                            Columns: new[] { "Interactions", "JailbreakReported", "JailbreakFlagged" }),
+                        (Name: "Resources", Sql: DlpAPIController.GovernanceResourcesSql,
+                            Columns: new[] { "InteractionsWithResources", "Resources", "LabelledResources", "XpiaReported", "XpiaFlagged" }),
+                        (Name: "Models", Sql: DlpAPIController.GovernanceModelsSql,
+                            Columns: new[] { "Name", "IsTotal", "Interactions" }),
+                        (Name: "Plugins", Sql: DlpAPIController.GovernancePluginsSql,
+                            Columns: new[] { "Name", "IsTotal", "Interactions" })
                     })
                     {
                         using (var command = connection.CreateCommand())
                         {
-                            command.CommandText = sql.Replace("dbo.", "govbench.");
+                            command.CommandText = statement.Sql.Replace("dbo.", "govbench.");
                             command.Parameters.AddWithValue("@from", DateTime.UtcNow.Date.AddDays(-28));
                             command.Parameters.AddWithValue("@to", DateTime.UtcNow.Date.AddDays(1));
                             using (var reader = command.ExecuteReader())
-                                Assert.IsTrue(reader.Read(), "Every shipped benchmark statement must execute against a fresh fixture.");
+                            {
+                                CollectionAssert.AreEqual(statement.Columns,
+                                    Enumerable.Range(0, reader.FieldCount).Select(reader.GetName).ToArray(), statement.Name);
+                                var rows = 0;
+                                var namedRows = 0;
+                                var totalRows = 0;
+                                var isMix = statement.Name == "Models" || statement.Name == "Plugins";
+                                while (reader.Read())
+                                {
+                                    rows++;
+                                    if (isMix)
+                                    {
+                                        if (reader.GetBoolean(1)) totalRows++;
+                                        else namedRows++;
+                                        Assert.AreEqual(includeMixEvidence ? 1L : 0L, reader.GetInt64(2), statement.Name);
+                                    }
+                                    else
+                                        foreach (var column in Enumerable.Range(0, reader.FieldCount))
+                                            Assert.IsTrue(reader.GetInt64(column) >= 0, statement.Name);
+                                }
+                                if (isMix)
+                                {
+                                    // An empty mix can return no rows; the API uses SingleOrDefault for its total.
+                                    Assert.AreEqual(includeMixEvidence ? 1 : 0, namedRows, statement.Name);
+                                    Assert.IsTrue(totalRows <= 1, statement.Name);
+                                    if (includeMixEvidence) Assert.AreEqual(1, totalRows, statement.Name);
+                                }
+                                else Assert.AreEqual(1, rows, statement.Name);
+                            }
                         }
                     }
                 }
