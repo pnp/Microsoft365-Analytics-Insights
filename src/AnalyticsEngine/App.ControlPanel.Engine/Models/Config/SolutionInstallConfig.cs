@@ -327,6 +327,10 @@ namespace App.ControlPanel.Engine
             // Azure AI Foundry / Azure OpenAI
             if (this.FoundryPromptEnabled)
             {
+                if (!CloudInstallEngine.Azure.OpenAIModelCatalog.DeploymentTypes.Contains(this.FoundryPromptDeploymentType))
+                {
+                    errs.Add("Choose a valid Azure OpenAI deployment type: Standard, DataZoneStandard or GlobalStandard.");
+                }
                 if (string.IsNullOrWhiteSpace(this.FoundryPromptResourceName) ||
                     !System.Text.RegularExpressions.Regex.IsMatch(this.FoundryPromptResourceName, @"\A[a-z0-9][a-z0-9-]{0,61}[a-z0-9]\z"))
                 {

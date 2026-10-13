@@ -334,6 +334,7 @@ namespace App.ControlPanel
             this.MinimizeBox = false;
             this.Name = "DatabaseUpgradeForm";
             this.ShowIcon = false;
+            this.ShowInTaskbar = false;
             this.Text = "Upgrade Database Schema";
             this.Activated += new System.EventHandler(this.DatabaseUpgradeForm_Activated);
             this.FormClosing += new System.Windows.Forms.FormClosingEventHandler(this.DatabaseUpgradeForm_FormClosing);

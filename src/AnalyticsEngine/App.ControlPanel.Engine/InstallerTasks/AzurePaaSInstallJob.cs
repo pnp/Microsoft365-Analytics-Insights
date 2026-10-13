@@ -266,8 +266,9 @@ namespace App.ControlPanel.Engine.InstallerTasks
                     .AddSetting(AzureOpenAIInstallTask.CONFIG_KEY_DEPLOYMENT_NAME, config.FoundryPromptDeploymentName)
                     .AddSetting(AzureOpenAIInstallTask.CONFIG_KEY_MODEL_NAME, config.FoundryPromptModelName)
                     .AddSetting(AzureOpenAIInstallTask.CONFIG_KEY_MODEL_VERSION, config.FoundryPromptModelVersion ?? string.Empty)
+                    .AddSetting(AzureOpenAIInstallTask.CONFIG_KEY_DEPLOYMENT_TYPE, config.FoundryPromptDeploymentType)
                     .AddSetting(AzureOpenAIInstallTask.CONFIG_KEY_CAPACITY, config.FoundryPromptCapacity.ToString());
-                _foundryPromptInstallTask = new AzureOpenAIInstallTask(foundryConfig, logger, Location, tagDic, allowPublicAccess);
+                _foundryPromptInstallTask = new AzureOpenAIInstallTask(foundryConfig, logger, Location, tagDic, subscription, allowPublicAccess);
                 this.AddTask(_foundryPromptInstallTask);
             }
 

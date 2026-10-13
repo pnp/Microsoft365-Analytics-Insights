@@ -2,6 +2,7 @@ using Azure;
 using Azure.Core;
 using Azure.ResourceManager.CognitiveServices;
 using Azure.ResourceManager.CognitiveServices.Models;
+using Azure.ResourceManager.Resources;
 using CloudInstallEngine.Models;
 using Microsoft.Extensions.Logging;
 using System;
@@ -60,14 +61,17 @@ namespace CloudInstallEngine.Azure.InstallTasks
         public const string CONFIG_KEY_MODEL_NAME = "modelName";
         public const string CONFIG_KEY_MODEL_VERSION = "modelVersion";
         public const string CONFIG_KEY_CAPACITY = "capacity";
+        public const string CONFIG_KEY_DEPLOYMENT_TYPE = "deploymentType";
 
         private readonly bool _allowPublicAccess;
+        private readonly SubscriptionResource _subscription;
 
         public AzureOpenAIInstallTask(TaskConfig config, ILogger logger, AzureLocation azureLocation,
-            Dictionary<string, string> tags, bool allowPublicAccess = true)
+            Dictionary<string, string> tags, SubscriptionResource subscription, bool allowPublicAccess = true)
             : base(config, logger, azureLocation, tags)
         {
             _allowPublicAccess = allowPublicAccess;
+            _subscription = subscription ?? throw new ArgumentNullException(nameof(subscription));
         }
 
         public override string TaskName => "get/create Azure AI Foundry OpenAI service and deployment";
@@ -80,6 +84,21 @@ namespace CloudInstallEngine.Azure.InstallTasks
                 .AsEnumerable()
                 .SingleOrDefault(item => string.Equals(item.Data.Name, name, StringComparison.OrdinalIgnoreCase));
 
+            if (account != null && !string.Equals(account.Data.Kind, "OpenAI", StringComparison.OrdinalIgnoreCase))
+                throw new InstallException($"Azure resource '{name}' exists but is not an OpenAI account. Choose a different Azure AI Foundry resource name.");
+
+            var deploymentName = _config.GetConfigValue(CONFIG_KEY_DEPLOYMENT_NAME);
+            var modelName = _config.GetConfigValue(CONFIG_KEY_MODEL_NAME);
+            var modelVersion = _config.GetConfigValue(CONFIG_KEY_MODEL_VERSION);
+            var deploymentType = _config.GetConfigValue(CONFIG_KEY_DEPLOYMENT_TYPE);
+            var capacity = int.Parse(_config.GetConfigValue(CONFIG_KEY_CAPACITY));
+            // Validate before changing the account; an existing resource's actual location wins.
+            using (var timeout = new System.Threading.CancellationTokenSource(TimeSpan.FromSeconds(90)))
+            {
+                var choices = await OpenAIModelCatalog.LoadAsync(_subscription, account?.Data.Location ?? AzureLocation, timeout.Token);
+                OpenAIModelCatalog.ValidateSelection(choices, modelName, modelVersion, deploymentType, capacity);
+            }
+
             if (account == null)
             {
                 var data = BuildAccountData(AzureLocation, name, _allowPublicAccess);
@@ -90,11 +109,6 @@ namespace CloudInstallEngine.Azure.InstallTasks
             }
             else
             {
-                if (!string.Equals(account.Data.Kind, "OpenAI", StringComparison.OrdinalIgnoreCase))
-                {
-                    throw new InstallException($"Azure resource '{name}' exists but is not an OpenAI account. Choose a different Azure AI Foundry resource name.");
-                }
-
                 var currentProperties = account.Data.Properties;
                 var needsUpdate = currentProperties == null ||
                     string.IsNullOrWhiteSpace(currentProperties.CustomSubDomainName) ||
@@ -109,7 +123,7 @@ namespace CloudInstallEngine.Azure.InstallTasks
                         updateProperties.CustomSubDomainName = name;
                     }
                     updateProperties.PublicNetworkAccess = desiredAccess;
-                    var update = new CognitiveServicesAccountData(AzureLocation)
+                    var update = new CognitiveServicesAccountData(account.Data.Location)
                     {
                         Sku = account.Data.Sku,
                         Kind = account.Data.Kind,
@@ -130,14 +144,10 @@ namespace CloudInstallEngine.Azure.InstallTasks
                 _logger.LogInformation($"Found existing Azure AI Foundry OpenAI resource '{name}'.");
             }
 
-            var deploymentName = _config.GetConfigValue(CONFIG_KEY_DEPLOYMENT_NAME);
-            var modelName = _config.GetConfigValue(CONFIG_KEY_MODEL_NAME);
-            var modelVersion = _config.GetConfigValue(CONFIG_KEY_MODEL_VERSION);
-            var capacity = int.Parse(_config.GetConfigValue(CONFIG_KEY_CAPACITY));
             await account.GetCognitiveServicesAccountDeployments().CreateOrUpdateAsync(
                 WaitUntil.Completed,
                 deploymentName,
-                BuildDeploymentData(modelName, modelVersion, capacity));
+                BuildDeploymentData(modelName, modelVersion, capacity, deploymentType));
 
             var endpoint = account.Data.Properties?.Endpoint;
             if (string.IsNullOrWhiteSpace(endpoint))
@@ -150,11 +160,13 @@ namespace CloudInstallEngine.Azure.InstallTasks
             return new FoundryPromptInfo { Endpoint = endpoint, Deployment = deploymentName };
         }
 
-        internal static CognitiveServicesAccountDeploymentData BuildDeploymentData(string modelName, string modelVersion, int capacity)
+        internal static CognitiveServicesAccountDeploymentData BuildDeploymentData(string modelName, string modelVersion, int capacity, string deploymentType = "Standard")
         {
+            if (!OpenAIModelCatalog.DeploymentTypes.Contains(deploymentType))
+                throw new InstallException("Unsupported Azure OpenAI deployment type.");
             return new CognitiveServicesAccountDeploymentData
             {
-                Sku = new CognitiveServicesSku("Standard") { Capacity = capacity },
+                Sku = new CognitiveServicesSku(deploymentType) { Capacity = capacity },
                 Properties = new CognitiveServicesAccountDeploymentProperties
                 {
                     Model = new CognitiveServicesAccountDeploymentModel

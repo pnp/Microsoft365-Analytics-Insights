@@ -30,6 +30,7 @@ namespace Tests.UnitTests.InstallTests
             config.FoundryPromptModelName = "gpt-4o-mini";
             config.FoundryPromptModelVersion = "2024-07-18";
             config.FoundryPromptCapacity = 2;
+            config.FoundryPromptDeploymentType = "DataZoneStandard";
 
             var json = config.ToJson("synthetic-password");
             var loaded = SolutionInstallConfig.LoadFromJson(json, "synthetic-password").Config;
@@ -40,7 +41,8 @@ namespace Tests.UnitTests.InstallTests
             Assert.AreEqual("gpt-4o-mini", loaded.FoundryPromptModelName);
             Assert.AreEqual("2024-07-18", loaded.FoundryPromptModelVersion);
             Assert.AreEqual(2, loaded.FoundryPromptCapacity);
-            Assert.AreEqual("3.2.0", loaded.ConfigSchemaVersion.ToString());
+            Assert.AreEqual("DataZoneStandard", loaded.FoundryPromptDeploymentType);
+            Assert.AreEqual("3.3.0", loaded.ConfigSchemaVersion.ToString());
         }
 
         [TestMethod]
@@ -54,6 +56,7 @@ namespace Tests.UnitTests.InstallTests
             Assert.AreEqual("gpt-4o-mini", config.FoundryPromptModelName);
             Assert.AreEqual(string.Empty, config.FoundryPromptModelVersion);
             Assert.AreEqual(1, config.FoundryPromptCapacity);
+            Assert.AreEqual("Standard", config.FoundryPromptDeploymentType);
         }
 
         [TestMethod]
@@ -83,6 +86,33 @@ namespace Tests.UnitTests.InstallTests
             Assert.AreEqual("2024-07-18", data.Properties.Model.Version);
             Assert.AreEqual("Standard", data.Sku.Name);
             Assert.AreEqual(2, data.Sku.Capacity);
+        }
+
+        [DataTestMethod]
+        [DataRow("Standard")]
+        [DataRow("DataZoneStandard")]
+        [DataRow("GlobalStandard")]
+        public void DeploymentType_RoundTripsAndReachesAzureSku(string type)
+        {
+            var config = SolutionInstallConfig.NewConfig();
+            config.FoundryPromptDeploymentType = type;
+            var loaded = SolutionInstallConfig.LoadFromJson(config.ToJson("synthetic-password"), "synthetic-password").Config;
+            Assert.AreEqual(type, loaded.FoundryPromptDeploymentType);
+            Assert.AreEqual(type, AzureOpenAIInstallTask.BuildDeploymentData("gpt-4.1-nano", "2025-04-14", 1, type).Sku.Name);
+        }
+
+        [DataTestMethod]
+        [DataRow("")]
+        [DataRow(null)]
+        [DataRow("GlobalBatch")]
+        [DataRow("standard")]
+        public void DeploymentType_InvalidValuesAreRefusedNotDefaulted(string type)
+        {
+            var config = SolutionInstallConfig.NewConfig();
+            config.FoundryPromptEnabled = true;
+            config.FoundryPromptDeploymentType = type;
+            Assert.IsTrue(config.ValidatInputAndGetErrors().Any(x => x.Contains("deployment type")));
+            Assert.ThrowsException<InstallException>(() => AzureOpenAIInstallTask.BuildDeploymentData("gpt-4o-mini", "", 1, type));
         }
 
         [TestMethod]

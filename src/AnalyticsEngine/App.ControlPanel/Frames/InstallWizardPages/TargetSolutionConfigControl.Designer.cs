@@ -32,7 +32,7 @@
             System.ComponentModel.ComponentResourceManager resources = new System.ComponentModel.ComponentResourceManager(typeof(TargetSolutionConfigControl));
             this.toolTipTargets = new System.Windows.Forms.ToolTip(this.components);
             this.pnlSolutionSelectionContainer = new System.Windows.Forms.Panel();
-            this.grpProductCfgInsights = new System.Windows.Forms.GroupBox();
+            this.grpProductCfgInsights = new System.Windows.Forms.TableLayoutPanel();
             this.label3 = new System.Windows.Forms.Label();
             this.label2 = new System.Windows.Forms.Label();
             this.label1 = new System.Windows.Forms.Label();
@@ -512,15 +512,110 @@
             ((System.ComponentModel.ISupportInitialize)(this.pictureBox2)).EndInit();
             ((System.ComponentModel.ISupportInitialize)(this.pictureBox1)).EndInit();
             ((System.ComponentModel.ISupportInitialize)(this.pictureBoxCopilot)).EndInit();
+            ConfigureDecisionLayout();
             this.ResumeLayout(false);
             this.PerformLayout();
 
         }
 
+        private void ConfigureDecisionLayout()
+        {
+            this.Font = new System.Drawing.Font("Segoe UI", 9F);
+            this.Padding = new System.Windows.Forms.Padding(12);
+            this.lblGUITargetsHeader.Dock = System.Windows.Forms.DockStyle.Top;
+            this.lblGUITargetsHeader.Text = "Choose your workloads";
+            this.lblGUITargetsHeader.Font = new System.Drawing.Font("Segoe UI", 14F, System.Drawing.FontStyle.Bold);
+            this.pnlSolutionSelectionContainer.Dock = System.Windows.Forms.DockStyle.Fill;
+            this.pnlSolutionSelectionContainer.BringToFront();
+            this.pnlSolutionSelectionContainer.AutoScroll = true;
+            this.grpProductCfgInsights.Dock = System.Windows.Forms.DockStyle.Top;
+            this.grpProductCfgInsights.AutoSize = true;
+            this.grpProductCfgInsights.AutoSizeMode = System.Windows.Forms.AutoSizeMode.GrowAndShrink;
+            this.grpProductCfgInsights.Padding = new System.Windows.Forms.Padding(12);
+            var columns = new System.Windows.Forms.TableLayoutPanel
+            {
+                Dock = System.Windows.Forms.DockStyle.Fill, AutoSize = true, ColumnCount = 2, RowCount = 1
+            };
+            columns.ColumnStyles.Add(new System.Windows.Forms.ColumnStyle(System.Windows.Forms.SizeType.Percent, 42F));
+            columns.ColumnStyles.Add(new System.Windows.Forms.ColumnStyle(System.Windows.Forms.SizeType.Percent, 58F));
+            var left = DecisionSection(new System.Windows.Forms.Control[] {
+                label1, chkTeams, chkCalls, label2, chkUsageReports, chkUserMetadata, chkSentEmails, chkPowerPlatform,
+                label3, chkWeb, chkAuditLog });
+            var right = DecisionSection(new System.Windows.Forms.Control[] {
+                lblCopilotHeader, chkCopilot, chkCopilotUsageReports, chkCopilotInteractionHistory,
+                lnkInteractionHistoryHelp, lblCopilotDesc, chkDlp, lnkDlpHelp,
+                chkCopilotStudioCredits, lnkStudioCreditsHelp, chkAzureCostManagement, lnkAzureCostsHelp,
+                chkAgent365Catalog, lnkAgent365CatalogHelp });
+            columns.Controls.Add(left, 0, 0);
+            columns.Controls.Add(right, 1, 0);
+            this.grpProductCfgInsights.ColumnCount = 1;
+            this.grpProductCfgInsights.ColumnStyles.Clear();
+            this.grpProductCfgInsights.ColumnStyles.Add(new System.Windows.Forms.ColumnStyle(System.Windows.Forms.SizeType.Percent, 100F));
+            this.grpProductCfgInsights.RowCount = 1;
+            this.grpProductCfgInsights.RowStyles.Clear();
+            this.grpProductCfgInsights.RowStyles.Add(new System.Windows.Forms.RowStyle(System.Windows.Forms.SizeType.AutoSize));
+            this.grpProductCfgInsights.Controls.Add(columns, 0, 0);
+        }
+
+        private System.Windows.Forms.TableLayoutPanel DecisionSection(System.Windows.Forms.Control[] fields)
+        {
+            var section = new System.Windows.Forms.TableLayoutPanel
+            {
+                Dock = System.Windows.Forms.DockStyle.Top, AutoSize = true, ColumnCount = 1,
+                Padding = new System.Windows.Forms.Padding(0, 0, 16, 0), RowCount = fields.Length
+            };
+            section.ColumnStyles.Add(new System.Windows.Forms.ColumnStyle(System.Windows.Forms.SizeType.Percent, 100F));
+            for (int row = 0; row < fields.Length; row++)
+            {
+                var field = fields[row];
+                field.Dock = System.Windows.Forms.DockStyle.Fill;
+                field.Margin = new System.Windows.Forms.Padding(0, field is System.Windows.Forms.Label && !(field is System.Windows.Forms.LinkLabel) ? 12 : 3, 0, 6);
+                if (field is System.Windows.Forms.Label label) label.AutoSize = true;
+                if (field is System.Windows.Forms.CheckBox checkbox) checkbox.AutoSize = false;
+                section.RowStyles.Add(new System.Windows.Forms.RowStyle(System.Windows.Forms.SizeType.AutoSize));
+                var icon = field == label1 ? pictureBox1 : field == label2 ? pictureBox2
+                    : field == label3 ? pictureBox3 : field == lblCopilotHeader ? pictureBoxCopilot : null;
+                if (icon == null)
+                {
+                    section.Controls.Add(field, 0, row);
+                }
+                else
+                {
+                    var header = new System.Windows.Forms.TableLayoutPanel { AutoSize = true,
+                        Dock = System.Windows.Forms.DockStyle.Fill, ColumnCount = 2, RowCount = 1,
+                        Margin = new System.Windows.Forms.Padding(0, 12, 0, 8) };
+                    header.ColumnStyles.Add(new System.Windows.Forms.ColumnStyle(System.Windows.Forms.SizeType.Absolute, 40F));
+                    header.ColumnStyles.Add(new System.Windows.Forms.ColumnStyle(System.Windows.Forms.SizeType.Percent, 100F));
+                    icon.Size = new System.Drawing.Size(32, 32);
+                    icon.SizeMode = System.Windows.Forms.PictureBoxSizeMode.Zoom;
+                    icon.Margin = new System.Windows.Forms.Padding(0);
+                    field.Font = new System.Drawing.Font("Segoe UI", 11F, System.Drawing.FontStyle.Bold);
+                    field.Margin = new System.Windows.Forms.Padding(0, 4, 0, 0);
+                    header.Controls.Add(icon, 0, 0);
+                    header.Controls.Add(field, 1, 0);
+                    section.Controls.Add(header, 0, row);
+                }
+            }
+            System.EventHandler sizeChoices = (sender, args) =>
+            {
+                var width = System.Math.Max(100, section.ClientSize.Width - section.Padding.Horizontal - 24);
+                foreach (System.Windows.Forms.Control field in section.Controls)
+                {
+                    if (!(field is System.Windows.Forms.CheckBox checkbox)) continue;
+                    var text = System.Windows.Forms.TextRenderer.MeasureText(checkbox.Text, checkbox.Font,
+                        new System.Drawing.Size(width, int.MaxValue), System.Windows.Forms.TextFormatFlags.WordBreak);
+                    checkbox.Height = System.Math.Max(24, text.Height + 8);
+                }
+            };
+            section.SizeChanged += sizeChoices;
+            section.FontChanged += sizeChoices;
+            return section;
+        }
+
         #endregion
 
         private System.Windows.Forms.Panel pnlSolutionSelectionContainer;
-        private System.Windows.Forms.GroupBox grpProductCfgInsights;
+        private System.Windows.Forms.TableLayoutPanel grpProductCfgInsights;
         private System.Windows.Forms.Label label3;
         private System.Windows.Forms.Label label2;
         private System.Windows.Forms.Label label1;

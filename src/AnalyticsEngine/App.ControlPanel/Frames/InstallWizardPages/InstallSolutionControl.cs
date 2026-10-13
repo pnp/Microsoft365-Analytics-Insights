@@ -3,14 +3,33 @@ using App.ControlPanel.Engine.Models;
 using System;
 using System.ComponentModel;
 using System.Windows.Forms;
+using Microsoft.Extensions.Logging;
 
 namespace App.ControlPanel.Frames.InstallWizard
 {
     public partial class InstallSolutionControl : UserControl
     {
+        private readonly OperationCentreControl _operations;
+        private readonly Button _reviewOptions = new Button { Name = "reviewOptions", Text = "&Review options",
+            AutoSize = true, Padding = new Padding(8, 4, 8, 4), MinimumSize = new System.Drawing.Size(150, 34), Visible = false };
         public InstallSolutionControl()
         {
             InitializeComponent();
+            _operations = new OperationCentreControl(lstLog) { Dock = DockStyle.Fill };
+            installLayout.Controls.Add(_operations, 0, 3);
+            ClientSizeChanged += (sender, args) =>
+                installLayout.MinimumSize = new System.Drawing.Size(0, ClientSize.Height);
+            installLayout.MinimumSize = new System.Drawing.Size(0, ClientSize.Height);
+            actionLayout.Controls.Add(_reviewOptions);
+            _reviewOptions.Click += (sender, args) =>
+            {
+                grpTasks.Visible = true;
+                lblDeploymentNotice.Visible = true;
+                lblGUIInstallHeader.Text = "Review and deploy";
+                lblGUIInstallDesc.Text = "Review your options and the previous operation before deploying again.";
+                _operations.ShowPhases(false);
+                _reviewOptions.Visible = false;
+            };
         }
 
         private void InstallSolutionControl_Load(object sender, EventArgs e)
@@ -70,6 +89,7 @@ namespace App.ControlPanel.Frames.InstallWizard
             // what the engine actually executed. Log ListView, Copy-to-clipboard, and Cancel stay
             // enabled so the user can still read/scroll/copy progress and abort.
             grpTasks.Enabled = !running;
+            _reviewOptions.Enabled = !running;
         }
 
         #region Logging
@@ -86,10 +106,7 @@ namespace App.ControlPanel.Frames.InstallWizard
             }
             else
             {
-                // Add item to log & scroll
-                lstLog.Items.Add(installLogLVI);
-                lstLog.Items[lstLog.Items.Count - 1].EnsureVisible();
-                lstLog.Columns[0].Width = -2;
+                _operations.Append(installLogLVI);
 
                 if (fatalError)
                 {
@@ -103,17 +120,14 @@ namespace App.ControlPanel.Frames.InstallWizard
 
         private void btnCopyLog_Click(object sender, EventArgs e)
         {
-            string msgs = string.Empty;
-            foreach (ListViewItem li in lstLog.Items)
-            {
-                msgs += li.Text + Environment.NewLine;
-            }
-            msgs = msgs.TrimEnd(Environment.NewLine.ToCharArray());
+            var msgs = _operations.FullLogText;
             if (!string.IsNullOrEmpty(msgs))
             {
+                if (MessageBox.Show(this, "The full log can contain account names, resource names, URLs and other sensitive configuration. " +
+                    "Review and sanitise it before sharing. Copy the full log to the clipboard?",
+                    "Copy full log", MessageBoxButtons.YesNo, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2) != DialogResult.Yes)
+                    return;
                 Clipboard.SetText(msgs);
-
-                MessageBox.Show("Output copied to clipboard!", "Done", MessageBoxButtons.OK, MessageBoxIcon.Information);
             }
         }
 
@@ -131,21 +145,45 @@ namespace App.ControlPanel.Frames.InstallWizard
         {
             // Single-shot: once clicked, disable the button until SetRunningState toggles it back.
             btnCancel.Enabled = false;
+            _operations.RequestCancellation();
             CancelRequested?.Invoke(this, EventArgs.Empty);
         }
 
         internal void ClearLog()
         {
-            lstLog.Items.Clear();
+            _operations.ClearLog();
+        }
+
+        public void BeginOperation(string name, bool cancellable)
+        {
+            _operations.BeginRun(name);
+            _reviewOptions.Visible = false;
+            grpTasks.Visible = false;
+            lblDeploymentNotice.Visible = false;
+            lblGUIInstallHeader.Text = "Operation centre";
+            lblGUIInstallDesc.Text = "Observed engine phases and messages. No estimated percentage or deployment plan.";
+            btnCancel.Visible = cancellable;
+        }
+
+        public void CompleteOperation()
+        {
+            _operations.CompleteRun();
+            _reviewOptions.Visible = true;
+            lblGUIInstallHeader.Text = "Operation finished";
+            lblGUIInstallDesc.Text = "Review errors, warnings and verification results below. Finished does not necessarily mean successful.";
         }
 
         public class InstallLogLVI : ListViewItem
         {
+            public LogLevel Level { get; }
+            public string PhaseName { get; }
             public InstallLogLVI(InstallLogEventArgs issue)
             {
                 this.Text = issue.Text;
+                Level = issue.Level ?? (issue.IsError ? LogLevel.Error : LogLevel.Information);
+                PhaseName = issue.PhaseName;
 
-                if (issue.IsError)
+                if (Level >= LogLevel.Warning)
                 {
                     this.ImageIndex = 0;
                 }
