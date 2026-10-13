@@ -118,6 +118,12 @@
     <value>System.Resources.ResXResourceWriter, System.Windows.Forms, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089</value>
   </resheader>
   <assembly alias="System.Drawing" name="System.Drawing, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a" />
+  <data name="lblGUIInstallDesc.Text" xml:space="preserve">
+    <value>Review the options below, then test your configuration before deploying. Progress and errors appear in the log.</value>
+  </data>
+  <data name="lblDeploymentNotice.Text" xml:space="preserve">
+    <value>Test Configuration checks the configured resources and permissions. Install/Upgrade starts deployment and can change Azure resources, SharePoint components and the SQL database schema.</value>
+  </data>
   <data name="btnRunTests.Image" type="System.Drawing.Bitmap, System.Drawing" mimetype="application/x-microsoft.net.object.bytearray.base64">
     <value>
         iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAABGdBTUEAALGPC/xhBQAAAAlwSFlzAAAA

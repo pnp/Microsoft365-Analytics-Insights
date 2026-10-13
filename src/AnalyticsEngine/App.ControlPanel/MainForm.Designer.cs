@@ -56,6 +56,9 @@
             this.lblInstallDesc = new System.Windows.Forms.Label();
             this.label1 = new System.Windows.Forms.Label();
             this.grpStart = new System.Windows.Forms.GroupBox();
+            this.welcomeLayout = new System.Windows.Forms.TableLayoutPanel();
+            this.lblWelcomeTitle = new System.Windows.Forms.Label();
+            this.lblSetupSteps = new System.Windows.Forms.Label();
             this.label2 = new System.Windows.Forms.Label();
             this.solutionTestsConfigurationToolStripMenuItem = new System.Windows.Forms.ToolStripMenuItem();
             this.installSPOSitesControl = new App.ControlPanel.Frames.InstallSPOSitesControl();
@@ -63,6 +66,7 @@
             this.statusStrip.SuspendLayout();
             this.grpInstall.SuspendLayout();
             this.grpStart.SuspendLayout();
+            this.welcomeLayout.SuspendLayout();
             this.SuspendLayout();
             // 
             // menu
@@ -240,8 +244,9 @@
             // 
             // lblIntroText
             // 
-            this.lblIntroText.Anchor = ((System.Windows.Forms.AnchorStyles)(((System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Left) 
-            | System.Windows.Forms.AnchorStyles.Right)));
+            this.lblIntroText.AutoSize = true;
+            this.lblIntroText.Dock = System.Windows.Forms.DockStyle.Fill;
+            this.lblIntroText.Margin = new System.Windows.Forms.Padding(0, 0, 0, 24);
             this.lblIntroText.Location = new System.Drawing.Point(23, 32);
             this.lblIntroText.Name = "lblIntroText";
             this.lblIntroText.Size = new System.Drawing.Size(535, 47);
@@ -251,23 +256,29 @@
             // chkDisclaimer
             // 
             this.chkDisclaimer.AutoSize = true;
+            this.chkDisclaimer.Dock = System.Windows.Forms.DockStyle.Fill;
+            this.chkDisclaimer.Margin = new System.Windows.Forms.Padding(0, 12, 0, 24);
             this.chkDisclaimer.Location = new System.Drawing.Point(26, 181);
             this.chkDisclaimer.Name = "chkDisclaimer";
             this.chkDisclaimer.Size = new System.Drawing.Size(239, 17);
             this.chkDisclaimer.TabIndex = 0;
-            this.chkDisclaimer.Text = "I accept that using this tool is at my own risk. ";
+            this.chkDisclaimer.Text = "I accept that using this tool is at my own &risk.";
             this.chkDisclaimer.UseVisualStyleBackColor = true;
             this.chkDisclaimer.CheckedChanged += new System.EventHandler(this.chkDisclaimer_CheckedChanged);
             // 
             // btnStartInstall
             // 
-            this.btnStartInstall.Anchor = ((System.Windows.Forms.AnchorStyles)((System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Right)));
+            this.btnStartInstall.Anchor = System.Windows.Forms.AnchorStyles.Right;
+            this.btnStartInstall.AutoSize = true;
+            this.btnStartInstall.MinimumSize = new System.Drawing.Size(160, 36);
+            this.btnStartInstall.Padding = new System.Windows.Forms.Padding(12, 4, 12, 4);
+            this.btnStartInstall.AccessibleDescription = "Open the configuration wizard. No deployment starts yet.";
             this.btnStartInstall.Image = global::App.ControlPanel.Properties.Resources.CD_16x;
             this.btnStartInstall.Location = new System.Drawing.Point(458, 232);
             this.btnStartInstall.Name = "btnStartInstall";
             this.btnStartInstall.Size = new System.Drawing.Size(100, 35);
             this.btnStartInstall.TabIndex = 1;
-            this.btnStartInstall.Text = "Install Solution";
+            this.btnStartInstall.Text = "&Configure solution";
             this.btnStartInstall.TextImageRelation = System.Windows.Forms.TextImageRelation.ImageBeforeText;
             this.btnStartInstall.UseVisualStyleBackColor = true;
             this.btnStartInstall.Click += new System.EventHandler(this.btnStartInstall_Click);
@@ -275,31 +286,31 @@
             // lblInstallDesc
             // 
             this.lblInstallDesc.AutoSize = true;
+            this.lblInstallDesc.Dock = System.Windows.Forms.DockStyle.Fill;
+            this.lblInstallDesc.Margin = new System.Windows.Forms.Padding(0, 0, 0, 12);
             this.lblInstallDesc.Location = new System.Drawing.Point(23, 243);
             this.lblInstallDesc.Name = "lblInstallDesc";
             this.lblInstallDesc.Size = new System.Drawing.Size(327, 13);
             this.lblInstallDesc.TabIndex = 7;
-            this.lblInstallDesc.Text = "Click this to install/update the solution or complete a previous setup.";
+            this.lblInstallDesc.Text = resources.GetString("lblInstallDesc.Text");
             // 
             // label1
             // 
-            this.label1.Anchor = ((System.Windows.Forms.AnchorStyles)(((System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Left) 
-            | System.Windows.Forms.AnchorStyles.Right)));
+            this.label1.AutoSize = true;
+            this.label1.Dock = System.Windows.Forms.DockStyle.Fill;
+            this.label1.Margin = new System.Windows.Forms.Padding(0);
             this.label1.Location = new System.Drawing.Point(23, 124);
             this.label1.Name = "label1";
             this.label1.Size = new System.Drawing.Size(535, 42);
             this.label1.TabIndex = 8;
-            this.label1.Text = "This system comes with absolutely no guarantees - run at your own risk and ensure" +
-    " correct permissions to guarantee safe access to Office 365 and Azure. ";
+            this.label1.Text = resources.GetString("label1.Text");
             // 
             // grpStart
             // 
-            this.grpStart.Controls.Add(this.label2);
-            this.grpStart.Controls.Add(this.label1);
-            this.grpStart.Controls.Add(this.lblInstallDesc);
-            this.grpStart.Controls.Add(this.btnStartInstall);
-            this.grpStart.Controls.Add(this.chkDisclaimer);
-            this.grpStart.Controls.Add(this.lblIntroText);
+            this.grpStart.Controls.Add(this.welcomeLayout);
+            this.grpStart.BackColor = System.Drawing.SystemColors.Window;
+            this.grpStart.ForeColor = System.Drawing.SystemColors.WindowText;
+            this.grpStart.Padding = new System.Windows.Forms.Padding(24);
             this.grpStart.Location = new System.Drawing.Point(63, 74);
             this.grpStart.Name = "grpStart";
             this.grpStart.Size = new System.Drawing.Size(564, 274);
@@ -309,12 +320,58 @@
             // label2
             // 
             this.label2.AutoSize = true;
-            this.label2.Font = new System.Drawing.Font("Microsoft Sans Serif", 8.25F, System.Drawing.FontStyle.Bold, System.Drawing.GraphicsUnit.Point, ((byte)(0)));
+            this.label2.Font = new System.Drawing.Font("Segoe UI", 11F, System.Drawing.FontStyle.Bold, System.Drawing.GraphicsUnit.Point, ((byte)(0)));
+            this.label2.Margin = new System.Windows.Forms.Padding(0, 0, 0, 8);
             this.label2.Location = new System.Drawing.Point(23, 108);
             this.label2.Name = "label2";
             this.label2.Size = new System.Drawing.Size(71, 13);
             this.label2.TabIndex = 9;
-            this.label2.Text = "WARNING:";
+            this.label2.Text = "Before you begin";
+            //
+            // welcomeLayout
+            //
+            this.welcomeLayout.AutoScroll = true;
+            this.welcomeLayout.ColumnCount = 1;
+            this.welcomeLayout.ColumnStyles.Add(new System.Windows.Forms.ColumnStyle(System.Windows.Forms.SizeType.Percent, 100F));
+            this.welcomeLayout.Controls.Add(this.lblWelcomeTitle, 0, 0);
+            this.welcomeLayout.Controls.Add(this.lblIntroText, 0, 1);
+            this.welcomeLayout.Controls.Add(this.lblSetupSteps, 0, 2);
+            this.welcomeLayout.Controls.Add(this.label2, 0, 3);
+            this.welcomeLayout.Controls.Add(this.label1, 0, 4);
+            this.welcomeLayout.Controls.Add(this.chkDisclaimer, 0, 5);
+            this.welcomeLayout.Controls.Add(this.lblInstallDesc, 0, 7);
+            this.welcomeLayout.Controls.Add(this.btnStartInstall, 0, 8);
+            this.welcomeLayout.Dock = System.Windows.Forms.DockStyle.Fill;
+            this.welcomeLayout.Font = new System.Drawing.Font("Segoe UI", 9F, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point);
+            this.welcomeLayout.Name = "welcomeLayout";
+            this.welcomeLayout.RowCount = 9;
+            this.welcomeLayout.RowStyles.Add(new System.Windows.Forms.RowStyle(System.Windows.Forms.SizeType.AutoSize));
+            this.welcomeLayout.RowStyles.Add(new System.Windows.Forms.RowStyle(System.Windows.Forms.SizeType.AutoSize));
+            this.welcomeLayout.RowStyles.Add(new System.Windows.Forms.RowStyle(System.Windows.Forms.SizeType.AutoSize));
+            this.welcomeLayout.RowStyles.Add(new System.Windows.Forms.RowStyle(System.Windows.Forms.SizeType.AutoSize));
+            this.welcomeLayout.RowStyles.Add(new System.Windows.Forms.RowStyle(System.Windows.Forms.SizeType.AutoSize));
+            this.welcomeLayout.RowStyles.Add(new System.Windows.Forms.RowStyle(System.Windows.Forms.SizeType.AutoSize));
+            this.welcomeLayout.RowStyles.Add(new System.Windows.Forms.RowStyle(System.Windows.Forms.SizeType.Percent, 100F));
+            this.welcomeLayout.RowStyles.Add(new System.Windows.Forms.RowStyle(System.Windows.Forms.SizeType.AutoSize));
+            this.welcomeLayout.RowStyles.Add(new System.Windows.Forms.RowStyle(System.Windows.Forms.SizeType.AutoSize));
+            this.welcomeLayout.TabIndex = 0;
+            //
+            // lblWelcomeTitle
+            //
+            this.lblWelcomeTitle.AutoSize = true;
+            this.lblWelcomeTitle.Dock = System.Windows.Forms.DockStyle.Fill;
+            this.lblWelcomeTitle.Font = new System.Drawing.Font("Segoe UI", 20F, System.Drawing.FontStyle.Bold, System.Drawing.GraphicsUnit.Point);
+            this.lblWelcomeTitle.Margin = new System.Windows.Forms.Padding(0, 0, 0, 12);
+            this.lblWelcomeTitle.Name = "lblWelcomeTitle";
+            this.lblWelcomeTitle.Text = "Set up Microsoft 365 Analytics";
+            //
+            // lblSetupSteps
+            //
+            this.lblSetupSteps.AutoSize = true;
+            this.lblSetupSteps.Dock = System.Windows.Forms.DockStyle.Fill;
+            this.lblSetupSteps.Margin = new System.Windows.Forms.Padding(0, 0, 0, 24);
+            this.lblSetupSteps.Name = "lblSetupSteps";
+            this.lblSetupSteps.Text = resources.GetString("lblSetupSteps.Text");
             // 
             // solutionTestsConfigurationToolStripMenuItem
             // 
@@ -325,9 +382,7 @@
             // 
             // installSPOSitesControl
             // 
-            this.installSPOSitesControl.Anchor = ((System.Windows.Forms.AnchorStyles)((((System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Bottom) 
-            | System.Windows.Forms.AnchorStyles.Left) 
-            | System.Windows.Forms.AnchorStyles.Right)));
+            this.installSPOSitesControl.Dock = System.Windows.Forms.DockStyle.Fill;
             this.installSPOSitesControl.ProxyConfig = null;
             this.installSPOSitesControl.Location = new System.Drawing.Point(10, 19);
             this.installSPOSitesControl.Margin = new System.Windows.Forms.Padding(6);
@@ -340,7 +395,9 @@
             // 
             this.AutoScaleDimensions = new System.Drawing.SizeF(6F, 13F);
             this.AutoScaleMode = System.Windows.Forms.AutoScaleMode.Font;
-            this.ClientSize = new System.Drawing.Size(679, 623);
+            this.ClientSize = new System.Drawing.Size(960, 720);
+            this.MinimumSize = new System.Drawing.Size(780, 680);
+            this.StartPosition = System.Windows.Forms.FormStartPosition.CenterScreen;
             this.Controls.Add(this.grpInstall);
             this.Controls.Add(this.grpStart);
             this.Controls.Add(this.statusStrip);
@@ -357,6 +414,8 @@
             this.grpInstall.ResumeLayout(false);
             this.grpStart.ResumeLayout(false);
             this.grpStart.PerformLayout();
+            this.welcomeLayout.ResumeLayout(false);
+            this.welcomeLayout.PerformLayout();
             this.ResumeLayout(false);
             this.PerformLayout();
 
@@ -393,5 +452,8 @@
         private System.Windows.Forms.GroupBox grpStart;
         private System.Windows.Forms.Label label2;
         private System.Windows.Forms.ToolStripMenuItem solutionTestsConfigurationToolStripMenuItem;
+        private System.Windows.Forms.TableLayoutPanel welcomeLayout;
+        private System.Windows.Forms.Label lblWelcomeTitle;
+        private System.Windows.Forms.Label lblSetupSteps;
     }
 }

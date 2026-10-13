@@ -20,12 +20,14 @@ namespace App.ControlPanel.Frames
         // CTS for the currently-running install/test/uninstall. Replaced on each StartBackgroundProcess
         // so a previous run's cancellation can't affect the next one.
         private CancellationTokenSource _runCts;
+        private bool _isWorking;
         public InstallSPOSitesControl()
         {
             InitializeComponent();
             _logger = new InstallSPOSitesControlLogger(this);
             installSolutionControl1.CancelRequested += InstallSolutionControl1_CancelRequested;
             tabs.Selecting += Tabs_Selecting;
+            UpdateWizardNavigation();
             azureBaseConfigControl1.OnNeedAppRegistrationCredentials = () => GetConfigFromGUI().InstallerAccount;
             networkingConfigControl1.OnNeedAzureCredentials = () =>
             {
@@ -57,12 +59,36 @@ namespace App.ControlPanel.Frames
 
         private void btnNext_Click(object sender, EventArgs e)
         {
-            tabs.SelectedIndex++;
+            if (btnNext.Enabled && tabs.SelectedIndex < tabs.TabCount - 1)
+            {
+                tabs.SelectedIndex++;
+            }
+        }
+
+        private void btnBack_Click(object sender, EventArgs e)
+        {
+            if (btnBack.Enabled && tabs.SelectedIndex > 0)
+            {
+                tabs.SelectedIndex--;
+            }
         }
 
         private void tabs_SelectedIndexChanged(object sender, EventArgs e)
         {
-            btnNext.Enabled = tabs.SelectedIndex < (tabs.TabCount - 1);
+            UpdateWizardNavigation();
+        }
+
+        private void UpdateWizardNavigation()
+        {
+            var index = tabs.SelectedIndex;
+            btnBack.Enabled = !_isWorking && index > 0;
+            btnNext.Enabled = !_isWorking && index >= 0 && index < tabs.TabCount - 1;
+            btnNext.Text = index >= 0 && index < tabs.TabCount - 1
+                ? "&Next: " + tabs.TabPages[index + 1].Text
+                : "&Next";
+            lblStep.Text = index >= 0
+                ? $"Step {index + 1} of {tabs.TabCount}: {tabs.SelectedTab.Text}"
+                : string.Empty;
         }
 
         #endregion
@@ -354,13 +380,14 @@ namespace App.ControlPanel.Frames
             // The install tab itself stays enabled so log scrolling, copy-to-clipboard, and the
             // Cancel button keep working.
             bool isWorking = state == AppWaitState.Working;
+            _isWorking = isWorking;
             foreach (TabPage tp in tabs.TabPages)
             {
                 if (tp == tabInstall) continue;
                 tp.Enabled = !isWorking;
             }
             installSolutionControl1.SetRunningState(isWorking);
-            btnNext.Enabled = !isWorking && tabs.SelectedIndex < (tabs.TabCount - 1);
+            UpdateWizardNavigation();
 
             MainForm mainForm = (MainForm)this.ParentForm;
             mainForm.SetFormLoadingState(state);
@@ -411,6 +438,7 @@ namespace App.ControlPanel.Frames
                     tabs.TabPages.Remove(tabSharePoint);
                 }
             }
+            UpdateWizardNavigation();
         }
 
         #region Sources GUI

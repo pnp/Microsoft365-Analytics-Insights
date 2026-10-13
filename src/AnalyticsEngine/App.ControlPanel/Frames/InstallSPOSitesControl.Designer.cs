@@ -62,6 +62,10 @@
             this.installSolutionControl1 = new App.ControlPanel.Frames.InstallWizard.InstallSolutionControl();
             this.installerBackgroundWorker = new System.ComponentModel.BackgroundWorker();
             this.btnNext = new System.Windows.Forms.Button();
+            this.btnBack = new System.Windows.Forms.Button();
+            this.lblStep = new System.Windows.Forms.Label();
+            this.navigationLayout = new System.Windows.Forms.TableLayoutPanel();
+            this.navigationLayout.SuspendLayout();
             this.tabs.SuspendLayout();
             this.tabTargets.SuspendLayout();
             this.tabCredentials.SuspendLayout();
@@ -78,9 +82,8 @@
             // 
             // tabs
             // 
-            this.tabs.Anchor = ((System.Windows.Forms.AnchorStyles)((((System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Bottom) 
-            | System.Windows.Forms.AnchorStyles.Left) 
-            | System.Windows.Forms.AnchorStyles.Right)));
+            this.tabs.Dock = System.Windows.Forms.DockStyle.Fill;
+            this.tabs.Multiline = true;
             this.tabs.Controls.Add(this.tabTargets);
             this.tabs.Controls.Add(this.tabCredentials);
             this.tabs.Controls.Add(this.tabPageAzureConfig);
@@ -95,7 +98,7 @@
             this.tabs.Name = "tabs";
             this.tabs.SelectedIndex = 0;
             this.tabs.Size = new System.Drawing.Size(646, 569);
-            this.tabs.TabIndex = 29;
+            this.tabs.TabIndex = 0;
             this.tabs.SelectedIndexChanged += new System.EventHandler(this.tabs_SelectedIndexChanged);
             // 
             // tabTargets
@@ -451,21 +454,64 @@
             // 
             // btnNext
             // 
-            this.btnNext.Anchor = ((System.Windows.Forms.AnchorStyles)((System.Windows.Forms.AnchorStyles.Bottom | System.Windows.Forms.AnchorStyles.Right)));
+            this.btnNext.Anchor = System.Windows.Forms.AnchorStyles.Right;
+            this.btnNext.AutoSize = true;
+            this.btnNext.MinimumSize = new System.Drawing.Size(140, 32);
+            this.btnNext.Padding = new System.Windows.Forms.Padding(8, 4, 8, 4);
             this.btnNext.Location = new System.Drawing.Point(549, 570);
             this.btnNext.Name = "btnNext";
             this.btnNext.Size = new System.Drawing.Size(94, 22);
-            this.btnNext.TabIndex = 30;
-            this.btnNext.Text = "Next ->";
+            this.btnNext.TabIndex = 2;
+            this.btnNext.Text = "&Next";
             this.btnNext.UseVisualStyleBackColor = true;
             this.btnNext.Click += new System.EventHandler(this.btnNext_Click);
+            //
+            // btnBack
+            //
+            this.btnBack.Anchor = System.Windows.Forms.AnchorStyles.Right;
+            this.btnBack.AutoSize = true;
+            this.btnBack.MinimumSize = new System.Drawing.Size(90, 32);
+            this.btnBack.Name = "btnBack";
+            this.btnBack.Padding = new System.Windows.Forms.Padding(8, 4, 8, 4);
+            this.btnBack.TabIndex = 1;
+            this.btnBack.Text = "&Back";
+            this.btnBack.UseVisualStyleBackColor = true;
+            this.btnBack.Click += new System.EventHandler(this.btnBack_Click);
+            //
+            // lblStep
+            //
+            this.lblStep.AutoSize = true;
+            this.lblStep.Dock = System.Windows.Forms.DockStyle.Fill;
+            this.lblStep.Name = "lblStep";
+            this.lblStep.Margin = new System.Windows.Forms.Padding(8, 0, 12, 0);
+            this.lblStep.TextAlign = System.Drawing.ContentAlignment.MiddleLeft;
+            this.lblStep.Text = "Step 1";
+            //
+            // navigationLayout
+            //
+            this.navigationLayout.AutoSize = true;
+            this.navigationLayout.AutoSizeMode = System.Windows.Forms.AutoSizeMode.GrowAndShrink;
+            this.navigationLayout.ColumnCount = 3;
+            this.navigationLayout.ColumnStyles.Add(new System.Windows.Forms.ColumnStyle(System.Windows.Forms.SizeType.Percent, 100F));
+            this.navigationLayout.ColumnStyles.Add(new System.Windows.Forms.ColumnStyle(System.Windows.Forms.SizeType.AutoSize));
+            this.navigationLayout.ColumnStyles.Add(new System.Windows.Forms.ColumnStyle(System.Windows.Forms.SizeType.AutoSize));
+            this.navigationLayout.Controls.Add(this.lblStep, 0, 0);
+            this.navigationLayout.Controls.Add(this.btnBack, 1, 0);
+            this.navigationLayout.Controls.Add(this.btnNext, 2, 0);
+            this.navigationLayout.Dock = System.Windows.Forms.DockStyle.Bottom;
+            this.navigationLayout.Font = new System.Drawing.Font("Segoe UI", 9F, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point);
+            this.navigationLayout.Name = "navigationLayout";
+            this.navigationLayout.Padding = new System.Windows.Forms.Padding(0, 8, 0, 0);
+            this.navigationLayout.RowCount = 1;
+            this.navigationLayout.RowStyles.Add(new System.Windows.Forms.RowStyle(System.Windows.Forms.SizeType.AutoSize));
+            this.navigationLayout.TabIndex = 1;
             // 
             // InstallSPOSitesControl
             // 
             this.AutoScaleDimensions = new System.Drawing.SizeF(6F, 13F);
             this.AutoScaleMode = System.Windows.Forms.AutoScaleMode.Font;
-            this.Controls.Add(this.btnNext);
             this.Controls.Add(this.tabs);
+            this.Controls.Add(this.navigationLayout);
             this.Name = "InstallSPOSitesControl";
             this.Size = new System.Drawing.Size(646, 595);
             this.tabs.ResumeLayout(false);
@@ -481,6 +527,8 @@
             this.grpLocalSources.ResumeLayout(false);
             ((System.ComponentModel.ISupportInitialize)(this.pictureBox12)).EndInit();
             this.tabInstall.ResumeLayout(false);
+            this.navigationLayout.ResumeLayout(false);
+            this.navigationLayout.PerformLayout();
             this.ResumeLayout(false);
 
         }
@@ -492,6 +540,9 @@
         private System.Windows.Forms.TabPage tabInstall;
         private System.ComponentModel.BackgroundWorker installerBackgroundWorker;
         private System.Windows.Forms.Button btnNext;
+        private System.Windows.Forms.Button btnBack;
+        private System.Windows.Forms.Label lblStep;
+        private System.Windows.Forms.TableLayoutPanel navigationLayout;
         private System.Windows.Forms.TabPage tabPageAzureConfig;
         private System.Windows.Forms.TabPage tabSources;
         private System.Windows.Forms.GroupBox grpLocalSources;
