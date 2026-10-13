@@ -273,6 +273,97 @@ namespace Tests.UnitTests.InstallTests
             parent.Controls.Cast<Control>().SelectMany(child => new[] { child }.Concat(Descendants(child)));
 
         [TestMethod]
+        public void EveryInstallerForm_HidesItsIconOrUsesTheProductIcon()
+        {
+            RunSta(() =>
+            {
+                using (var defaultForm = new Form())
+                {
+                    byte[] ImageBytes(Icon icon)
+                    {
+                        using (var image = icon.ToBitmap())
+                        using (var stream = new MemoryStream())
+                        {
+                            image.Save(stream, System.Drawing.Imaging.ImageFormat.Png);
+                            return stream.ToArray();
+                        }
+                    }
+                    var defaultIcon = ImageBytes(defaultForm.Icon);
+                    var types = typeof(MainForm).Assembly.GetTypes()
+                        .Where(type => !type.IsAbstract && typeof(Form).IsAssignableFrom(type));
+                    foreach (var type in types)
+                    {
+                        Form form;
+                        if (type == typeof(DeploymentReviewForm)) form = new DeploymentReviewForm(SyntheticConfig(), new[] { "Usage reports" });
+                        else if (type == typeof(SqlDatabaseUsersForm)) form = new SqlDatabaseUsersForm(Array.Empty<SqlDatabaseUser>());
+                        else
+                        {
+                            Assert.IsNotNull(type.GetConstructor(Type.EmptyTypes), type.Name + " needs an explicit synthetic constructor fixture.");
+                            form = (Form)Activator.CreateInstance(type);
+                        }
+                        using (form)
+                        {
+                            if (form.ShowIcon || form.ShowInTaskbar)
+                            {
+                                Assert.IsNotNull(form.Icon, type.Name + " must have a product icon when shown in the title bar or taskbar.");
+                                Assert.IsFalse(defaultIcon.SequenceEqual(ImageBytes(form.Icon)), type.Name + " must not use the default WinForms icon.");
+                            }
+                            if (type == typeof(MainForm)) continue;
+                            Assert.IsFalse(form.ShowIcon, type.Name + " should keep the dialog title bar uncluttered.");
+                            var directory = Environment.GetEnvironmentVariable("INSTALLER_PREVIEW_DIR");
+                            if (string.IsNullOrEmpty(directory)) continue;
+                            foreach (var field in Descendants(form).OfType<TextBox>()) field.Text = string.Empty;
+                            form.Show();
+                            Capture(form, directory, "icon-" + type.Name);
+                            form.Close();
+                        }
+                    }
+                }
+            });
+        }
+
+        [TestMethod]
+        public void FullLogMessageDialog_HasNoDefaultIcon()
+        {
+            RunSta(() =>
+            {
+                using (var log = new ListView { View = View.Details, Dock = DockStyle.Fill })
+                using (var operations = new OperationCentreControl(log) { Dock = DockStyle.Fill })
+                using (var host = new Form { ClientSize = new Size(740, 530) })
+                using (var timer = new System.Windows.Forms.Timer { Interval = 100 })
+                {
+                    log.Columns.Add("Message", 600);
+                    host.Controls.Add(operations);
+                    host.Show();
+                    operations.Append(new InstallSolutionControl.InstallLogLVI(new InstallLogEventArgs { Text = "Synthetic log detail - no deployment." }));
+                    log.Items[0].Selected = true;
+                    Exception failure = null;
+                    var inspected = false;
+                    timer.Tick += (sender, args) =>
+                    {
+                        timer.Stop();
+                        var dialog = Application.OpenForms.Cast<Form>().Single(form => form.Text == "Log message - review before sharing");
+                        try
+                        {
+                            Assert.IsFalse(dialog.ShowIcon);
+                            Assert.IsFalse(dialog.ShowInTaskbar);
+                            var directory = Environment.GetEnvironmentVariable("INSTALLER_PREVIEW_DIR");
+                            if (!string.IsNullOrEmpty(directory)) Capture(dialog, directory, "icon-log-message");
+                            inspected = true;
+                        }
+                        catch (Exception ex) { failure = ex; }
+                        finally { dialog.Close(); }
+                    };
+                    timer.Start();
+                    typeof(OperationCentreControl).GetMethod("ShowSelectedMessage", BindingFlags.Instance | BindingFlags.NonPublic)
+                        .Invoke(operations, null);
+                    if (failure != null) ExceptionDispatchInfo.Capture(failure).Throw();
+                    Assert.IsTrue(inspected, "The real log-details dialog must be inspected.");
+                }
+            });
+        }
+
+        [TestMethod]
         public void AzureEnvironment_DescriptionAndTierLinksDoNotOverlap()
         {
             RunSta(() =>

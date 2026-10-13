@@ -16,6 +16,7 @@ namespace App.ControlPanel
             MinimumSize = new Size(700, 640);
             StartPosition = FormStartPosition.CenterParent;
             ShowInTaskbar = false;
+            ShowIcon = false;
             MinimizeBox = false;
             MaximizeBox = false;
             var layout = new TableLayoutPanel

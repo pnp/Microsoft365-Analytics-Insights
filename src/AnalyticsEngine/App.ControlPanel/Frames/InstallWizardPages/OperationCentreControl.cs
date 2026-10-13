@@ -196,7 +196,8 @@ namespace App.ControlPanel.Frames.InstallWizard
                 ClientSize = new Size(760, 380),
                 MinimumSize = new Size(500, 250),
                 StartPosition = FormStartPosition.CenterParent,
-                ShowInTaskbar = false
+                ShowInTaskbar = false,
+                ShowIcon = false
             })
             {
                 details.Controls.Add(new TextBox

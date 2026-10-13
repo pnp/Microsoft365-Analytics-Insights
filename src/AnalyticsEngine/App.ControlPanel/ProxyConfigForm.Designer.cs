@@ -214,6 +214,8 @@
             this.AcceptButton = this.btnOk;
             this.AutoScaleDimensions = new System.Drawing.SizeF(6F, 13F);
             this.AutoScaleMode = System.Windows.Forms.AutoScaleMode.Font;
+            this.ShowIcon = false;
+            this.ShowInTaskbar = false;
             this.CancelButton = this.btnCancel;
             this.ClientSize = new System.Drawing.Size(548, 491);
             this.Controls.Add(this.grpProxy);
