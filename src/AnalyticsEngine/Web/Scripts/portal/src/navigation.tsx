@@ -26,6 +26,7 @@ import {
 import { lazyWithReload } from './lazyWithReload';
 import type { TranslationKey } from './i18n';
 import { permissionGranted, type PortalAccessValue, type PortalPermission } from './access';
+import { REPORT_PAGES, type ReportPageDefinition, type WorkloadId } from './reportNavigation';
 
 // Code-split the pages so each route is a separate chunk (smaller initial load). lazyWithReload
 // recovers from a stale chunk after a rebuild/redeploy instead of leaving the route blank.
@@ -76,6 +77,14 @@ export interface AreaDefinition {
   requires?: PortalPermission;
 }
 
+export const WORKLOADS: { id: WorkloadId; labelKey: TranslationKey; icon: ReactElement }[] = [
+  { id: 'copilot', labelKey: 'app.workload.copilot', icon: <Sparkle20Regular /> },
+  { id: 'agents', labelKey: 'app.workload.agents', icon: <PeopleStar20Regular /> },
+  { id: 'apps', labelKey: 'app.workload.apps', icon: <DataUsage20Regular /> },
+  { id: 'sharepoint', labelKey: 'app.workload.sharepoint', icon: <Globe20Regular /> },
+  { id: 'teams', labelKey: 'app.workload.teams', icon: <PeopleCommunity20Regular /> },
+];
+
 export const AREAS: AreaDefinition[] = [
   { id: 'insights', labelKey: 'app.area.insights', basePath: '/insights', homePath: '/insights/overview' },
   { id: 'admin', labelKey: 'app.area.admin', basePath: '/admin', homePath: '/admin/health', requires: 'administration' },
@@ -96,6 +105,8 @@ export interface PortalRoute {
   element: ReactElement;
   /** Additional permission needed for this route. The area's requirement is checked too. */
   requires?: PortalPermission;
+  workload?: WorkloadId;
+  reportPage?: ReportPageDefinition;
 }
 
 /**
@@ -117,6 +128,15 @@ export const ROUTES: PortalRoute[] = [
     icon: <ChartMultiple20Regular />,
     element: <ReportsPage />,
   },
+  ...REPORT_PAGES.map((page): PortalRoute => ({
+    area: 'insights',
+    path: page.path,
+    labelKey: page.labelKey,
+    icon: <ChartMultiple20Regular />,
+    element: <ReportsPage page={page} />,
+    workload: page.workload,
+    reportPage: page,
+  })),
   {
     area: 'insights',
     path: '/insights/teams',
@@ -126,6 +146,7 @@ export const ROUTES: PortalRoute[] = [
     // someone to the wrong one.
     icon: <PeopleCommunity20Regular />,
     element: <TeamsExplorerPage />,
+    workload: 'teams',
   },
   {
     area: 'insights',
@@ -135,6 +156,7 @@ export const ROUTES: PortalRoute[] = [
     // and from where - and ChartMultiple already marks the generic "Reports" page next to it.
     icon: <Globe20Regular />,
     element: <WebActivityPage />,
+    workload: 'sharepoint',
   },
   {
     area: 'insights',
@@ -142,6 +164,7 @@ export const ROUTES: PortalRoute[] = [
     labelKey: 'app.route.copilotAdoption',
     icon: <Sparkle20Regular />,
     element: <CopilotAdoptionPage />,
+    workload: 'copilot',
   },
   {
     area: 'insights',
@@ -149,6 +172,7 @@ export const ROUTES: PortalRoute[] = [
     labelKey: 'app.route.licenceActivity',
     icon: <DataUsage20Regular />,
     element: <LicenceActivityPage />,
+    workload: 'apps',
   },
   {
     area: 'insights',
@@ -164,6 +188,7 @@ export const ROUTES: PortalRoute[] = [
     labelKey: 'app.route.agentCosts',
     icon: <Money20Regular />,
     element: <AgentCostsPage />,
+    workload: 'agents',
   },
   {
     area: 'insights',

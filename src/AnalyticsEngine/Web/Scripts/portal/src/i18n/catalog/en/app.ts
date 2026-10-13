@@ -31,6 +31,11 @@ export const app = {
 
   'app.navGroup.monitoring': 'Monitoring',
   'app.navGroup.manage': 'Manage',
+  'app.workload.copilot': 'Copilot',
+  'app.workload.agents': 'Agents',
+  'app.workload.apps': 'Apps & licences',
+  'app.workload.sharepoint': 'SharePoint & OneDrive',
+  'app.workload.teams': 'Teams',
 
   'app.route.overview': 'Overview',
   'app.route.reports': 'Reports',

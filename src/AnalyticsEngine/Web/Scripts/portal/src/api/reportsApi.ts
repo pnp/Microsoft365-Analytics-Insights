@@ -17,7 +17,7 @@ const REPORT_AREA_FAILURE_KEYS: Record<ReportAreaKey, TranslationKey> = {
   emails: 'errors.reports.emailsReportFailed',
 };
 
-/** Which report areas are enabled for this deployment (drives the visible sub-tabs). */
+/** Which report imports are enabled for this deployment (drives the catalog and workload rail). */
 export async function fetchReportAreas(): Promise<ReportAreas> {
   const response = await apiFetch(`${baseUrl()}/areas`, {
     method: 'GET',

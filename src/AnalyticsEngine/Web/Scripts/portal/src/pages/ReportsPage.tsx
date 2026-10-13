@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import {
   Title3,
   Body1,
@@ -7,18 +8,15 @@ import {
   Card,
   Input,
   Select,
-  Tab,
-  TabList,
   MessageBar,
   MessageBarBody,
   Button,
   makeStyles,
   tokens,
-  type SelectTabEventHandler,
 } from '@fluentui/react-components';
 import { ArrowClockwise16Regular } from '@fluentui/react-icons';
-import { fetchReportAreas, fetchReportArea } from '../api/reportsApi';
-import type { ReportAreaData, ReportAreaKey, ReportAreas, ReportChart, ReportMatrix, ReportSeries, ReportSeriesWarning } from '../types/reports';
+import { fetchReportArea } from '../api/reportsApi';
+import type { ReportAreaData, ReportAreaKey, ReportChart, ReportMatrix, ReportSeries, ReportSeriesWarning } from '../types/reports';
 import Spinner from '../components/Spinner';
 import SqlPopover from '../components/SqlPopover';
 import TimeSeriesChart from '../components/charts/TimeSeriesChart';
@@ -27,24 +25,9 @@ import MatrixChart from '../components/charts/MatrixChart';
 import WordCloud from '../components/charts/WordCloud';
 import GlobalFilterBar from '../components/globalFilter/GlobalFilterBar';
 import PromptCategoryReport from '../components/PromptCategoryReport';
+import ReportAreasProvider, { useReportAreas } from '../components/ReportAreasProvider';
+import { REPORT_PAGES, PROMPT_CHART_KEYS, reportImportLabelKey, reportMonths, reportPageEnabled, reportPath, type ReportPageDefinition } from '../reportNavigation';
 import { EN_CATALOG, formatDateParts, formatNumber, plural, useT, useTNode, type TFunction, type TranslationKey } from '../i18n';
-
-/** The report areas in display order, with the enabled-flag they map to and their friendly copy. */
-const AREA_DEFS: { flag: keyof ReportAreas; key: ReportAreaKey; labelKey: TranslationKey; blurbKey: TranslationKey }[] = [
-  { flag: 'copilot', key: 'copilot', labelKey: 'reports.area.copilot.label', blurbKey: 'reports.area.copilot.blurb' },
-  { flag: 'copilot', key: 'copilot-agents', labelKey: 'reports.area.copilotAgents.label', blurbKey: 'reports.area.copilotAgents.blurb' },
-  { flag: 'usage', key: 'usage', labelKey: 'reports.area.usage.label', blurbKey: 'reports.area.usage.blurb' },
-  {
-    flag: 'officeApps',
-    key: 'office-apps',
-    labelKey: 'reports.area.officeApps.label',
-    blurbKey: 'reports.area.officeApps.blurb',
-  },
-  { flag: 'spoAudit', key: 'spo-audit', labelKey: 'reports.area.spoAudit.label', blurbKey: 'reports.area.spoAudit.blurb' },
-  { flag: 'webTraffic', key: 'web-traffic', labelKey: 'reports.area.webTraffic.label', blurbKey: 'reports.area.webTraffic.blurb' },
-  { flag: 'calls', key: 'calls', labelKey: 'reports.area.calls.label', blurbKey: 'reports.area.calls.blurb' },
-  { flag: 'emails', key: 'emails', labelKey: 'reports.area.emails.label', blurbKey: 'reports.area.emails.blurb' },
-];
 
 const MONTH_OPTIONS = [
   { value: 1, labelKey: 'reports.period.lastMonth' },
@@ -70,11 +53,34 @@ const useStyles = makeStyles({
     alignItems: 'center',
     gap: '8px',
   },
+  heading: {
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'flex-start',
+    gap: '4px',
+    minWidth: 0,
+  },
   intro: {
     marginTop: '8px',
   },
-  subTabs: {
+  catalog: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 280px), 1fr))',
+    gap: '16px',
     marginTop: '16px',
+  },
+  catalogCard: {
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'flex-start',
+    gap: '12px',
+  },
+  catalogTitle: {
+    margin: 0,
+  },
+  catalogDescription: {
+    flexGrow: 1,
+    color: tokens.colorNeutralForeground3,
   },
   cards: {
     display: 'flex',
@@ -101,82 +107,56 @@ const useStyles = makeStyles({
   },
 });
 
-/**
- * Reports tab: a lightweight, in-app version of the Power BI reports. Shows a sub-tab per report
- * area, but only for the areas whose import is enabled, and charts each area's usage over a
- * configurable window (default the last 3 months). Data comes from api/Reports.
- */
-export default function ReportsPage() {
+export default function ReportsPage({ page }: { page?: ReportPageDefinition }) {
+  return <ReportAreasProvider><ReportsContent key={page?.path ?? 'catalog'} page={page} /></ReportAreasProvider>;
+}
+
+function ReportsContent({ page }: { page?: ReportPageDefinition }) {
   const styles = useStyles();
   const t = useT();
   const tNode = useTNode();
 
-  const [areas, setAreas] = useState<ReportAreas | null>(null);
-  const [areasError, setAreasError] = useState<string | null>(null);
-  const [areasLoading, setAreasLoading] = useState(true);
+  const { areas, error: areasError, loading: areasLoading, retry } = useReportAreas();
+  const [params, setParams] = useSearchParams();
+  const months = reportMonths(`?${params.toString()}`);
+  const topValue = params.get('top') ?? '8';
+  const topAgents = ['5', '8', '10', '15', '20'].includes(topValue) ? Number(topValue) : 8;
+  const agentNameFilter = params.get('agentName') ?? '';
+  const [agentNameDraft, setAgentNameDraft] = useState(agentNameFilter);
+  useEffect(() => setAgentNameDraft(agentNameFilter), [agentNameFilter]);
 
-  const [months, setMonths] = useState(3);
-  const [selectedTab, setSelectedTab] = useState<ReportAreaKey | null>(null);
-  const [topAgents, setTopAgents] = useState(8);
-  const [agentNameDraft, setAgentNameDraft] = useState('');
-  const [agentNameFilter, setAgentNameFilter] = useState('');
-
-  useEffect(() => {
-    let cancelled = false;
-    setAreasLoading(true);
-    setAreasError(null);
-    fetchReportAreas()
-      .then((a) => {
-        if (!cancelled) setAreas(a);
-      })
-      .catch((e) => {
-        if (!cancelled) setAreasError(e instanceof Error ? e.message : t('reports.error.loadAreas'));
-      })
-      .finally(() => {
-        if (!cancelled) setAreasLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [t]);
-
-  const enabledAreas = useMemo(
-    () => (areas ? AREA_DEFS.filter((d) => areas[d.flag] || (d.key === 'copilot' && areas.copilotInteractionHistory)) : []),
-    [areas],
-  );
-
-  useEffect(() => {
-    if (areas === null && !areasError) return; // still loading - don't pick a default yet
-    setSelectedTab((current) => {
-      if (current && enabledAreas.some((a) => a.key === current)) return current;
-      return enabledAreas[0]?.key ?? null;
-    });
-  }, [areas, areasError, enabledAreas]);
-
-  const onTabSelect: SelectTabEventHandler = (_e: unknown, data: { value: unknown }) => {
-    const area = enabledAreas.find((a) => a.key === data.value);
-    if (area) setSelectedTab(area.key);
+  const updateParam = (key: string, value: string) => {
+    setParams(previous => {
+      const next = new URLSearchParams(previous);
+      if (value) next.set(key, value);
+      else next.delete(key);
+      return next;
+    }, { replace: true });
   };
+  const enabled = page && areas ? reportPageEnabled(page, areas) : false;
+  const invalidPeriod = params.has('months') && !['1', '3', '6'].includes(params.get('months') ?? '');
+  const invalidTop = page?.area === 'copilot-agents' && !['5', '8', '10', '15', '20'].includes(topValue);
 
   return (
     <div>
       <div className={styles.header}>
-        <div>
-          <Title3>{t('reports.title')}</Title3>
+        <div className={styles.heading}>
+          {page && <Link href={`#${reportPath('/insights/reports', months)}`}>{t('reports.backToCatalog')}</Link>}
+          <Title3 as="h1" className={styles.catalogTitle}>{t(page?.titleKey ?? 'reports.title')}</Title3>
           <Body1 block className={styles.intro}>
-            {tNode('reports.intro.licenceActivity', {
+            {page ? t(page.blurbKey) : tNode('reports.catalog.intro', {
               link: <Link href="#/insights/licence-activity">{t('reports.intro.licenceActivityLink')}</Link>,
             })}
           </Body1>
         </div>
-        {enabledAreas.length > 0 && (
+        {page && enabled && !areasLoading && !areasError && (
           <div className={styles.controls}>
             <Text size={200} className={styles.muted}>
               {t('reports.period.label')}
             </Text>
             <Select
               value={String(months)}
-              onChange={(_e: unknown, data: { value: string }) => setMonths(Number(data.value))}
+              onChange={(_e: unknown, data: { value: string }) => updateParam('months', data.value)}
               aria-label={t('reports.period.ariaLabel')}
             >
               {MONTH_OPTIONS.map((o) => (
@@ -191,25 +171,18 @@ export default function ReportsPage() {
 
       <GlobalFilterBar />
 
-      {enabledAreas.length > 0 && (
-        <div className={styles.subTabs}>
-          <TabList selectedValue={selectedTab ?? ''} onTabSelect={onTabSelect}>
-            {enabledAreas.map((a) => (
-              <Tab key={a.key} value={a.key}>
-                {t(a.labelKey)}
-              </Tab>
-            ))}
-          </TabList>
-        </div>
-      )}
-
       {areasError && (
         <MessageBar intent="error" style={{ marginTop: '16px' }}>
           <MessageBarBody>{areasError}</MessageBarBody>
+          <Button onClick={retry}>{t('common.action.refresh')}</Button>
         </MessageBar>
       )}
 
-      {!areasLoading && !areasError && enabledAreas.length === 0 && (
+      {!areasLoading && !areasError && (invalidPeriod || invalidTop) && (
+        <MessageBar intent="warning"><MessageBarBody>{t('reports.invalidParameters')}</MessageBarBody></MessageBar>
+      )}
+
+      {!page && !areasLoading && !areasError && areas && !REPORT_PAGES.some(report => reportPageEnabled(report, areas)) && (
         <MessageBar intent="info" style={{ marginTop: '16px' }}>
           <MessageBarBody>
             {t('reports.empty.noImports')}
@@ -221,16 +194,35 @@ export default function ReportsPage() {
         <div style={{ textAlign: 'center', padding: '32px' }}>
           <Spinner size={80} label={t('reports.loading.reports')} />
         </div>
-      ) : areasError ? null : selectedTab && enabledAreas.some((a) => a.key === selectedTab) ? (
+      ) : areasError ? null : !page && areas ? (
+        <div className={styles.catalog}>
+          {REPORT_PAGES.map(report => (
+            <Card key={report.path} className={styles.catalogCard}>
+              <Text as="h2" size={400} weight="semibold" className={styles.catalogTitle}>{t(report.titleKey)}</Text>
+              <Text className={styles.catalogDescription}>{t(report.area === 'office-apps' ? 'reports.catalog.officeAppsBlurb' : report.blurbKey)}</Text>
+              <Text size={200}>{t(report.prompts && areas.copilot && !areas.copilotInteractionHistory
+                ? 'reports.catalog.historyDisabled'
+                : reportPageEnabled(report, areas) ? 'reports.catalog.enabled' : 'reports.catalog.disabled')}</Text>
+              <Link href={`#${reportPath(report.path, months)}`} aria-label={t('reports.catalog.openNamed', { report: t(report.titleKey) })}>{t('reports.catalog.open')}</Link>
+            </Card>
+          ))}
+        </div>
+      ) : page && !enabled ? (
+        <MessageBar intent="info" style={{ marginTop: '16px' }}>
+          <MessageBarBody>{page.prompts
+            ? t('reports.unavailable.prompts')
+            : t('reports.unavailable.import', { import: t(reportImportLabelKey(page)) })}</MessageBarBody>
+        </MessageBar>
+      ) : page && areas ? (
         <>
-          {selectedTab === 'copilot-agents' && (
+          {page.area === 'copilot-agents' && (
             <div className={styles.controls} style={{ marginTop: '16px', flexWrap: 'wrap' }}>
               <Text size={200} className={styles.muted}>
                 {t('reports.topAgents.label')}
               </Text>
               <Select
                 value={String(topAgents)}
-                onChange={(_e: unknown, data: { value: string }) => setTopAgents(Number(data.value))}
+                onChange={(_e: unknown, data: { value: string }) => updateParam('top', data.value)}
                 aria-label={t('reports.topAgents.ariaLabel')}
               >
                 {[5, 8, 10, 15, 20].map((count) => (
@@ -243,12 +235,12 @@ export default function ReportsPage() {
                 value={agentNameDraft}
                 onChange={(_e: unknown, data: { value: string }) => setAgentNameDraft(data.value)}
                 onKeyDown={(event: { key: string }) => {
-                  if (event.key === 'Enter') setAgentNameFilter(agentNameDraft.trim());
+                  if (event.key === 'Enter') updateParam('agentName', agentNameDraft.trim());
                 }}
                 placeholder={t('reports.topAgents.filterPlaceholder')}
                 aria-label={t('reports.topAgents.filterAriaLabel')}
               />
-              <Button size="small" onClick={() => setAgentNameFilter(agentNameDraft.trim())}>
+              <Button size="small" onClick={() => updateParam('agentName', agentNameDraft.trim())}>
                 {t('common.action.apply')}
               </Button>
               {agentNameFilter && (
@@ -257,7 +249,7 @@ export default function ReportsPage() {
                   size="small"
                   onClick={() => {
                     setAgentNameDraft('');
-                    setAgentNameFilter('');
+                    updateParam('agentName', '');
                   }}
                 >
                   {t('common.action.clear')}
@@ -266,17 +258,23 @@ export default function ReportsPage() {
             </div>
           )}
 
-          {(selectedTab !== 'copilot' || areas?.copilot) && (
+          {(!page.prompts || areas.copilot) && (
             <ReportAreaView
-              key={selectedTab}
-              area={selectedTab}
+              area={page.area}
               months={months}
-              blurb={t(enabledAreas.find((a) => a.key === selectedTab)!.blurbKey)}
               topAgents={topAgents}
               agentName={agentNameFilter}
+              prompts={page.prompts ?? false}
             />
           )}
-          {selectedTab === 'copilot' && <PromptCategoryReport months={months} />}
+          {page.prompts && !areas.copilot && (
+            <MessageBar intent="info"><MessageBarBody>{t('reports.promptInsights.auditUnavailable')}</MessageBarBody></MessageBar>
+          )}
+          {page.prompts && (areas.copilotInteractionHistory ? (
+            <div className={styles.cards}><PromptCategoryReport months={months} /></div>
+          ) : (
+            <MessageBar intent="info"><MessageBarBody>{t('reports.unavailable.prompts')}</MessageBarBody></MessageBar>
+          ))}
         </>
       ) : null}
     </div>
@@ -478,15 +476,15 @@ export function reportMatrix(t: TFunction, chart: ReportChart): ReportMatrix | n
 function ReportAreaView({
   area,
   months,
-  blurb,
   topAgents,
   agentName,
+  prompts,
 }: {
   area: ReportAreaKey;
   months: number;
-  blurb: string;
   topAgents: number;
   agentName: string;
+  prompts: boolean;
 }) {
   const styles = useStyles();
   const t = useT();
@@ -550,8 +548,8 @@ function ReportAreaView({
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px', flexWrap: 'wrap' }}>
         <Text size={200} className={styles.muted}>
           {area === 'usage' || area === 'office-apps'
-            ? t('reports.areaHeader.usageLag', { blurb, from: fromLabel })
-            : t('reports.areaHeader.toNow', { blurb, from: fromLabel })}
+            ? t('reports.areaHeader.weeksUsageLag', { from: fromLabel })
+            : t('reports.areaHeader.weeksToNow', { from: fromLabel })}
         </Text>
         <Button
           appearance="subtle"
@@ -586,7 +584,7 @@ function ReportAreaView({
         </MessageBar>
       )}
 
-      {area === 'copilot' && data.cognitiveConfigured === false && (
+      {area === 'copilot' && prompts && data.cognitiveConfigured === false && (
         <MessageBar intent="info">
           <MessageBarBody>
             {t('reports.promptInsights.notConfigured')}
@@ -594,7 +592,7 @@ function ReportAreaView({
         </MessageBar>
       )}
 
-      {data.charts.map((chart) => {
+      {data.charts.filter(chart => area !== 'copilot' || PROMPT_CHART_KEYS.has(chart.key) === prompts).map((chart) => {
         const title = chartText(t, chart.key, 'title', chart.title);
         const description = chartText(t, chart.key, 'description', chart.description);
         const valueLabel = chartText(t, chart.key, 'valueLabel', chart.valueLabel);
