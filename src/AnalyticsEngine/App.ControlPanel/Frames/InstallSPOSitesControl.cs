@@ -52,6 +52,12 @@ namespace App.ControlPanel.Frames
             RebuildNavigator();
             SelectPage(tabOverview);
             azureBaseConfigControl1.OnNeedAppRegistrationCredentials = () => GetConfigFromGUI().InstallerAccount;
+            azureAIConfigControl1.OnNeedModelCredentials = () =>
+            {
+                var config = GetConfigFromGUI();
+                return (config.InstallerAccount?.DirectoryId, config.InstallerAccount?.ClientId,
+                    config.InstallerAccount?.Secret, config.Subscription?.SubId, config.AzureLocationName);
+            };
             networkingConfigControl1.OnNeedAzureCredentials = () =>
             {
                 var config = GetConfigFromGUI();
@@ -225,6 +231,7 @@ namespace App.ControlPanel.Frames
                 FoundryPromptDeploymentName = azureAIConfigControl1.FoundryPromptDeploymentName,
                 FoundryPromptModelName = azureAIConfigControl1.FoundryPromptModelName,
                 FoundryPromptModelVersion = azureAIConfigControl1.FoundryPromptModelVersion,
+                FoundryPromptDeploymentType = azureAIConfigControl1.FoundryPromptDeploymentType,
                 FoundryPromptCapacity = azureAIConfigControl1.FoundryPromptCapacity,
                 ResourceGroupName = azureBaseConfigControl1.ResourceGroup,
                 Subscription = azureBaseConfigControl1.AzureSubscription,
@@ -316,6 +323,7 @@ namespace App.ControlPanel.Frames
             azureAIConfigControl1.FoundryPromptDeploymentName = config.FoundryPromptDeploymentName;
             azureAIConfigControl1.FoundryPromptModelName = config.FoundryPromptModelName;
             azureAIConfigControl1.FoundryPromptModelVersion = config.FoundryPromptModelVersion;
+            azureAIConfigControl1.FoundryPromptDeploymentType = config.FoundryPromptDeploymentType;
             azureAIConfigControl1.FoundryPromptCapacity = config.FoundryPromptCapacity;
 
             // Networking

@@ -133,12 +133,13 @@ namespace App.ControlPanel.Frames.InstallWizard
         }
 
         internal static void AddFieldGridRow(TableLayoutPanel grid, string caption, Control field,
-            string secondCaption, Control secondField)
+            string secondCaption = null, Control secondField = null)
         {
             var row = grid.RowCount++;
             grid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             AddField(grid, caption, field, 0, row);
-            AddField(grid, secondCaption, secondField, 2, row);
+            if (secondField == null) grid.SetColumnSpan(field, 3);
+            else AddField(grid, secondCaption, secondField, 2, row);
         }
 
         private static void AddField(TableLayoutPanel row, string caption, Control field, int column, int rowIndex = 0)

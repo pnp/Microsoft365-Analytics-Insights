@@ -1,3 +1,5 @@
+using System.Linq;
+
 namespace App.ControlPanel.Frames.InstallWizard
 {
     partial class AzureAIConfigControl
@@ -37,6 +39,20 @@ namespace App.ControlPanel.Frames.InstallWizard
             this.txtFoundryModelName = new System.Windows.Forms.TextBox { Name = "txtFoundryModelName", Text = "gpt-4o-mini" };
             this.txtFoundryModelVersion = new System.Windows.Forms.TextBox { Name = "txtFoundryModelVersion" };
             this.txtFoundryCapacity = new System.Windows.Forms.TextBox { Name = "txtFoundryCapacity", Text = "1" };
+            this.cmbFoundryDeploymentType = new System.Windows.Forms.ComboBox
+            {
+                Name = "cmbFoundryDeploymentType", DropDownStyle = System.Windows.Forms.ComboBoxStyle.DropDownList, FormattingEnabled = true
+            };
+            this.cmbFoundryDeploymentType.Items.AddRange(CloudInstallEngine.Azure.OpenAIModelCatalog.DeploymentTypes.Cast<object>().ToArray());
+            this.cmbFoundryDeploymentType.Format += (sender, args) =>
+                args.Value = CloudInstallEngine.Azure.OpenAIModelCatalog.DeploymentTypeLabel(args.ListItem as string);
+            this.cmbFoundryDeploymentType.SelectedItem = "Standard";
+            this.btnBrowseModels = new System.Windows.Forms.Button
+            {
+                Name = "btnBrowseModels", Text = "Browse available models...", AutoSize = true
+            };
+            this.lblFoundryResidency = ServicePageLayout.Text("");
+            this.lblFoundryResidency.Name = "lblFoundryResidency";
             this.SuspendLayout();
             this.AutoScaleDimensions = new System.Drawing.SizeF(6F, 13F);
             this.AutoScaleMode = System.Windows.Forms.AutoScaleMode.Font;
@@ -56,13 +72,28 @@ namespace App.ControlPanel.Frames.InstallWizard
                 global::App.ControlPanel.Properties.Resources.AzureOpenAI,
                 iconName: "picFoundry", descriptionName: "lblFoundryDescription");
             ServicePageLayout.AddRow(foundry, chkFoundryEnable);
-            ServicePageLayout.AddFields(foundry, "Resource name:", txtFoundryResourceName);
-            ServicePageLayout.AddRow(foundry, ServicePageLayout.Text("Endpoint suffix: .openai.azure.com"));
-            ServicePageLayout.AddFields(foundry, "Deployment:", txtFoundryDeploymentName, "Capacity:", txtFoundryCapacity);
-            ServicePageLayout.AddFields(foundry, "Model name:", txtFoundryModelName, "Model version:", txtFoundryModelVersion);
+            var modelGrid = ServicePageLayout.AddFieldGrid(foundry);
+            ServicePageLayout.AddFieldGridRow(modelGrid, "Resource name:", txtFoundryResourceName);
+            var endpointHint = ServicePageLayout.Text("Endpoint suffix: .openai.azure.com");
+            ServicePageLayout.AddRow(modelGrid, endpointHint);
+            modelGrid.SetColumnSpan(endpointHint, 4);
+            ServicePageLayout.AddRow(modelGrid, btnBrowseModels);
+            modelGrid.SetColumnSpan(btnBrowseModels, 4);
+            var modelHelp = ServicePageLayout.Text(
+                "Use the browser to pick a small compatible model for your subscription and region. " +
+                "The fields below also support manual configuration; they are not verified until installation.");
+            ServicePageLayout.AddRow(modelGrid, modelHelp);
+            modelGrid.SetColumnSpan(modelHelp, 4);
+            ServicePageLayout.AddFieldGridRow(modelGrid, "Deployment:", txtFoundryDeploymentName, "Capacity:", txtFoundryCapacity);
+            ServicePageLayout.AddFieldGridRow(modelGrid, "Model name:", txtFoundryModelName, "Model version:", txtFoundryModelVersion);
+            ServicePageLayout.AddFieldGridRow(modelGrid, "Deployment type:", cmbFoundryDeploymentType);
+            ServicePageLayout.AddRow(modelGrid, lblFoundryResidency);
+            modelGrid.SetColumnSpan(lblFoundryResidency, 4);
             this.chkCognitiveEnable.CheckedChanged += this.AISettingsChanged;
             this.txtCognitiveName.TextChanged += this.AISettingsChanged;
             this.chkFoundryEnable.CheckedChanged += this.AISettingsChanged;
+            this.cmbFoundryDeploymentType.SelectedIndexChanged += this.AISettingsChanged;
+            this.btnBrowseModels.Click += this.BrowseModels;
             this.Name = "AzureAIConfigControl";
             this.Size = new System.Drawing.Size(632, 537);
             this.ResumeLayout(false);
@@ -78,5 +109,8 @@ namespace App.ControlPanel.Frames.InstallWizard
         private System.Windows.Forms.TextBox txtFoundryModelName;
         private System.Windows.Forms.TextBox txtFoundryModelVersion;
         private System.Windows.Forms.TextBox txtFoundryCapacity;
+        private System.Windows.Forms.ComboBox cmbFoundryDeploymentType;
+        private System.Windows.Forms.Button btnBrowseModels;
+        private System.Windows.Forms.Label lblFoundryResidency;
     }
 }

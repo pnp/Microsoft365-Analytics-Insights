@@ -27,6 +27,7 @@ namespace Tests.UnitTests.InstallTests
                 config.FoundryPromptModelName = "gpt-4o-mini";
                 config.FoundryPromptModelVersion = "2024-07-18";
                 config.FoundryPromptCapacity = 2;
+                config.FoundryPromptDeploymentType = "GlobalStandard";
                 using (var wizard = new InstallSPOSitesControl())
                 {
                     wizard.ConfigureUI(config);
@@ -166,6 +167,7 @@ namespace Tests.UnitTests.InstallTests
             Assert.AreEqual(expected.FoundryPromptDeploymentName, actual.FoundryPromptDeploymentName);
             Assert.AreEqual(expected.FoundryPromptModelName, actual.FoundryPromptModelName);
             Assert.AreEqual(expected.FoundryPromptModelVersion, actual.FoundryPromptModelVersion);
+            Assert.AreEqual(expected.FoundryPromptDeploymentType, actual.FoundryPromptDeploymentType);
             Assert.AreEqual(expected.FoundryPromptCapacity, actual.FoundryPromptCapacity);
             Assert.AreEqual(expected.ConfigSchemaVersion, actual.ConfigSchemaVersion);
         }

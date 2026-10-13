@@ -45,7 +45,8 @@ namespace Common.Entities.Installer
         //          are simply ignored.
         //          3.0.0 -> 3.1.0 added ImportTaskSettings.Agent365PackageCatalog (opt-in Agent 365 catalog import).
         //          3.1.0 -> 3.2.0 added optional Azure AI Foundry OpenAI resource and deployment settings.
-        const string CONFIG_VERSION = "3.2.0";
+        //          3.2.0 -> 3.3.0 added Azure OpenAI deployment type; older configs retain regional Standard.
+        const string CONFIG_VERSION = "3.3.0";
 
         public BaseSolutionInstallConfig()
         {
@@ -165,7 +166,10 @@ namespace Common.Entities.Installer
         /// <summary>Optional Azure OpenAI model version; blank lets Azure choose its current default.</summary>
         public string FoundryPromptModelVersion { get; set; } = string.Empty;
 
-        /// <summary>Standard deployment capacity in model-specific rate-limit units (not provisioned throughput units).</summary>
+        /// <summary>Pay-per-token deployment type; regional Standard remains the default.</summary>
+        public string FoundryPromptDeploymentType { get; set; } = "Standard";
+
+        /// <summary>Deployment capacity in model-specific rate-limit units (not provisioned throughput units).</summary>
         public int FoundryPromptCapacity { get; set; } = 1;
 
         public bool DownloadLatestStable { get; set; } = true;
