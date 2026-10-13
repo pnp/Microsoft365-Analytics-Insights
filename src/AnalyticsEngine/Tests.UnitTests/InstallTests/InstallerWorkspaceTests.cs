@@ -32,7 +32,7 @@ namespace Tests.UnitTests.InstallTests
                 {
                     var load = typeof(MainForm).GetMethod("StartForm_Load", BindingFlags.NonPublic | BindingFlags.Instance);
                     form.Load -= (EventHandler)Delegate.CreateDelegate(typeof(EventHandler), form, load);
-                    form.LoadedConfig = SolutionInstallConfig.NewConfig();
+                    form.LoadedConfig = SyntheticConfig();
                     form.LoadedConfig.ResourceGroupName = "contoso-analytics";
                     form.LoadedConfig.AppServiceWebAppName = "contoso-analytics-web";
                     form.LoadedConfig.AppServicePlanName = "contoso-analytics-plan";
@@ -53,7 +53,8 @@ namespace Tests.UnitTests.InstallTests
                     Application.DoEvents();
                     var navigator = Find<TreeView>(form, "navigator");
                     var prefix = Environment.GetEnvironmentVariable("INSTALLER_PREVIEW_STAGE") ?? "workspace";
-                    foreach (var name in new[] { "tabTargets", "tabOverview", "tabSources", "tabInstall" })
+                    foreach (var name in new[] { "tabTargets", "tabOverview", "tabSources", "tabAzureResources",
+                        "tabAzureStorage", "tabAzureAI", "tabInstall" })
                     {
                         var node = navigator.Nodes.Find(name, true).SingleOrDefault();
                         if (node == null) continue;
@@ -75,7 +76,25 @@ namespace Tests.UnitTests.InstallTests
                             }
                             Find<RadioButton>(form, "rdbLatest").Checked = true;
                         }
+                        if (name == "tabAzureResources" || name == "tabAzureStorage" || name == "tabAzureAI")
+                        {
+                            var previousSize = form.Size;
+                            form.Size = form.MinimumSize;
+                            Capture(form, directory, prefix + "-" + name + "-minimum");
+                            if (name == "tabAzureStorage")
+                            {
+                                var storage = Find<AzureStorageConfigControl>(form, "azureStorageConfigControl1");
+                                storage.AutoScrollPosition = new Point(0, storage.DisplayRectangle.Height);
+                                Capture(form, directory, prefix + "-" + name + "-minimum-details");
+                                storage.AutoScrollPosition = Point.Empty;
+                            }
+                            form.Size = previousSize;
+                        }
                     }
+                    Find<InstallSPOSitesControl>(form, "installSPOSitesControl").ConfigureUI(SyntheticConfig());
+                    navigator.SelectedNode = navigator.Nodes.Find("tabOverview", true).Single();
+                    Capture(form, directory, prefix + "-overview-valid");
+                    navigator.SelectedNode = navigator.Nodes.Find("tabInstall", true).Single();
                     var page = Find<InstallSolutionControl>(form, "installSolutionControl1");
                     var wizard = Find<InstallSPOSitesControl>(form, "installSPOSitesControl");
                     page.SetRunningState(true);
@@ -130,6 +149,162 @@ namespace Tests.UnitTests.InstallTests
                     Capture(form, directory, prefix + "-minimum-window");
                 }
             });
+        }
+
+        [TestMethod]
+        public void Overview_GreenCheckOnlyMarksValidLocalConfiguration()
+        {
+            RunSta(() =>
+            {
+                using (var overview = new ConfigurationOverviewControl { Dock = DockStyle.Fill })
+                using (var host = new Form { ClientSize = new Size(740, 540) })
+                {
+                    host.Controls.Add(overview);
+                    host.Show();
+                    overview.RefreshConfiguration(SyntheticConfig(), 1);
+                    var icon = Find<Label>(overview, "configurationValidationIcon");
+                    Assert.IsTrue(icon.Visible);
+                    Assert.AreEqual(Color.Green, icon.ForeColor);
+                    StringAssert.Contains(Find<Label>(overview, "configurationValidation").Text, "have not been verified");
+                    var invalid = SyntheticConfig();
+                    invalid.ResourceGroupName = "";
+                    overview.RefreshConfiguration(invalid, 1);
+                    Assert.IsFalse(icon.Visible);
+                    StringAssert.Contains(Find<Label>(overview, "configurationValidation").Text, "review before deployment");
+                }
+            });
+        }
+
+        [DataTestMethod]
+        [DataRow(730, 520)]
+        [DataRow(940, 650)]
+        public void ServicePages_UseAvailableWidthAndKeepExplanationsAndFieldsReachable(int width, int height)
+        {
+            RunSta(() =>
+            {
+                using (var hosting = new AzurePaaSConfigControl())
+                using (var storage = new AzureStorageConfigControl())
+                using (var ai = new AzureAIConfigControl())
+                using (var host = new Form { ClientSize = new Size(width, height) })
+                {
+                    storage.SqlAuthMode = SqlServerAuthMode.EntraId;
+                    foreach (var page in new UserControl[] { hosting, storage, ai })
+                    {
+                        host.Controls.Clear();
+                        page.Dock = DockStyle.Fill;
+                        host.Controls.Add(page);
+                        host.Show();
+                        Application.DoEvents();
+                        var layout = Find<TableLayoutPanel>(page, "servicePageLayout");
+                        Assert.IsTrue(layout.Width >= page.ClientSize.Width - 20, page.Name + " must fill the page width.");
+                        Assert.IsTrue(layout.Height >= page.ClientSize.Height, page.Name + " must use the page height.");
+                        foreach (var service in layout.Controls.OfType<TableLayoutPanel>())
+                        {
+                            var content = service.Controls.OfType<TableLayoutPanel>().Single();
+                            var explanation = content.Controls.OfType<Label>().Skip(1).First();
+                            Assert.IsTrue(explanation.Text.Length > 40, service.Name + " must explain its purpose.");
+                            Assert.IsTrue(explanation.Width >= content.Width - 8, explanation.Name + " must fill its content width.");
+                            Assert.IsTrue(explanation.Height >= explanation.GetPreferredSize(explanation.Size).Height,
+                                explanation.Name + " must wrap without clipping.");
+                            Assert.IsTrue(service.ClientRectangle.Contains(content.Bounds), service.Name + " must contain its fields.");
+                        }
+                        foreach (var field in Descendants(page).OfType<TextBox>().Where(field => field.Visible))
+                        {
+                            Assert.IsTrue(field.Parent.ClientRectangle.Contains(field.Bounds), field.Name + " must fit its row.");
+                            Assert.IsTrue(field.Width >= 100, field.Name + " must retain a usable editing width.");
+                        }
+                        if (page == storage)
+                        {
+                            var usersButton = Find<Button>(storage, "btnSqlDatabaseUsers");
+                            Assert.IsTrue(usersButton.Width <= 170 && usersButton.Height >= 32 && usersButton.Height <= 50,
+                                "The database-users action must remain a compact button beside its wrapping summary.");
+                            var usersLabel = Find<Label>(storage, "lblSqlDatabaseUsers");
+                            Assert.IsTrue(usersLabel.Parent.ClientRectangle.Contains(usersLabel.Bounds));
+                            Assert.IsTrue(usersLabel.Height >= usersLabel.GetPreferredSize(usersLabel.Size).Height);
+                            var usersBounds = storage.RectangleToClient(usersLabel.RectangleToScreen(usersLabel.ClientRectangle));
+                            Assert.IsTrue(storage.ClientRectangle.Contains(usersBounds),
+                                "The database-users summary in Entra mode must fit at the minimum page size without scrolling.");
+                        }
+                        page.AutoScrollPosition = new Point(0, layout.Height);
+                        Application.DoEvents();
+                        var lastService = layout.Controls.OfType<TableLayoutPanel>().Last();
+                        var last = Descendants(lastService).Last(control => control.Visible && control is TextBox);
+                        var bounds = page.RectangleToClient(last.RectangleToScreen(last.ClientRectangle));
+                        Assert.IsTrue(page.ClientRectangle.Contains(bounds), last.Name + " must be reachable by scrolling.");
+                    }
+                    storage.SqlAuthMode = SqlServerAuthMode.EntraId;
+                    Assert.IsFalse(Find<TextBox>(storage, "txtSQLServerPassword").Enabled);
+                    Assert.IsFalse(Find<TextBox>(storage, "txtSQLServerPassword").Parent.Visible);
+                    storage.SQLServerUsername = "synthetic-sql-admin";
+                    storage.SQLServerPassword = "synthetic-only";
+                    storage.SqlAuthMode = SqlServerAuthMode.SqlLogin;
+                    Assert.IsTrue(Find<TextBox>(storage, "txtSQLServerPassword").Enabled);
+                    Assert.IsTrue(Find<TextBox>(storage, "txtSQLServerPassword").Parent.Visible);
+                    storage.SqlAuthMode = SqlServerAuthMode.EntraId;
+                    storage.SqlAuthMode = SqlServerAuthMode.SqlLogin;
+                    Assert.AreEqual("synthetic-sql-admin", storage.SQLServerUsername);
+                    Assert.AreEqual("synthetic-only", storage.SQLServerPassword);
+                    storage.ServiceBusEnabled = false;
+                    Assert.IsFalse(Find<TextBox>(storage, "txtServiceBusName").Enabled);
+                    storage.ServiceBusEnabled = true;
+                    Assert.IsTrue(Find<TextBox>(storage, "txtServiceBusName").Enabled);
+                }
+            });
+        }
+
+        private static System.Collections.Generic.IEnumerable<Control> Descendants(Control parent) =>
+            parent.Controls.Cast<Control>().SelectMany(child => new[] { child }.Concat(Descendants(child)));
+
+        [TestMethod]
+        public void LogAppend_DoesNotRebuildRowsResizeColumnsOrRelayoutStatus()
+        {
+            RunSta(() =>
+            {
+                using (var log = new CountingLogListView { Dock = DockStyle.Fill, View = View.Details })
+                using (var operations = new OperationCentreControl(log) { Dock = DockStyle.Fill })
+                using (var host = new Form { ClientSize = new Size(740, 530) })
+                {
+                    log.Columns.Add("Message", 300);
+                    host.Controls.Add(operations);
+                    host.Show();
+                    operations.BeginRun("Synthetic append replay");
+                    Find<CheckBox>(operations, "followLog").Checked = false;
+                    for (var i = 0; i < 60; i++)
+                        operations.Append(new InstallSolutionControl.InstallLogLVI(new InstallLogEventArgs { Text = "Synthetic message " + i }));
+                    Application.DoEvents();
+                    log.Items[20].Selected = true;
+                    log.TopItem = log.Items[15];
+                    var first = log.Items[0];
+                    var top = log.TopItem;
+                    var statusChanges = 0;
+                    Find<Label>(operations, "operationStatus").TextChanged += (sender, args) => statusChanges++;
+                    log.ColumnResizes = log.RowClears = 0;
+                    for (var i = 60; i < 260; i++)
+                        operations.Append(new InstallSolutionControl.InstallLogLVI(new InstallLogEventArgs { Text = "Synthetic message " + i }));
+                    Assert.AreEqual(0, log.ColumnResizes, "Appending must not resend column widths and repaint the whole list.");
+                    Assert.AreEqual(0, log.RowClears, "Appending must not rebuild existing rows.");
+                    Assert.AreEqual(0, statusChanges, "The timer, not each message, refreshes the status layout.");
+                    Assert.AreSame(first, log.Items[0]);
+                    Assert.AreSame(top, log.TopItem, "Paused follow must preserve the viewport.");
+                    Assert.IsTrue(log.Items[20].Selected);
+                    Assert.IsTrue(log.IsBuffered);
+                    Assert.AreEqual(260, log.Items.Count);
+                    operations.CompleteRun();
+                }
+            });
+        }
+
+        private sealed class CountingLogListView : App.ControlPanel.Controls.BufferedListView
+        {
+            internal int ColumnResizes;
+            internal int RowClears;
+            internal bool IsBuffered => DoubleBuffered;
+            protected override void WndProc(ref Message message)
+            {
+                if (message.Msg == 0x101e) ColumnResizes++;
+                if (message.Msg == 0x1009) RowClears++;
+                base.WndProc(ref message);
+            }
         }
 
         [TestMethod]

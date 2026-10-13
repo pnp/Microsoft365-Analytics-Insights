@@ -23,7 +23,17 @@ namespace App.ControlPanel.Frames.InstallWizard
             HorizontalScrollbar = true,
             AccessibleName = "Local configuration validation issues"
         };
-        private readonly Label _validation = new Label { AutoSize = true, Dock = DockStyle.Fill };
+        private readonly Label _validation = new Label { Name = "configurationValidation", AutoSize = true, Dock = DockStyle.Fill };
+        private readonly Label _validationIcon = new Label
+        {
+            Name = "configurationValidationIcon",
+            Text = "\u2713",
+            AutoSize = true,
+            Font = new Font("Segoe UI", 14F, FontStyle.Bold),
+            ForeColor = Color.Green,
+            AccessibleName = "Local configuration checks passed",
+            Visible = false
+        };
 
         public event EventHandler OpenRequested;
         public event EventHandler NewRequested;
@@ -59,8 +69,19 @@ namespace App.ControlPanel.Frames.InstallWizard
             _facts.Columns.Add("Entered value", 480);
             _facts.Resize += (sender, args) => _facts.Columns[1].Width = Math.Max(180, _facts.ClientSize.Width - _facts.Columns[0].Width - 24);
             layout.Controls.Add(_facts, 0, 2);
-            _validation.Margin = new Padding(0, 16, 0, 8);
-            layout.Controls.Add(_validation, 0, 3);
+            var validationRow = new TableLayoutPanel
+            {
+                AutoSize = true,
+                Dock = DockStyle.Fill,
+                ColumnCount = 2,
+                Margin = new Padding(0, 12, 0, 8)
+            };
+            validationRow.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            validationRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+            _validation.Margin = new Padding(0, 6, 0, 0);
+            validationRow.Controls.Add(_validationIcon, 0, 0);
+            validationRow.Controls.Add(_validation, 1, 0);
+            layout.Controls.Add(validationRow, 0, 3);
             layout.Controls.Add(_issues, 0, 4);
             var actions = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, Margin = new Padding(0, 12, 0, 0) };
             AddAction(actions, "Open &configuration...", () => OpenRequested?.Invoke(this, EventArgs.Empty));
@@ -87,6 +108,7 @@ namespace App.ControlPanel.Frames.InstallWizard
             _issues.Items.AddRange(issues.ToArray());
             _validation.Text = issues.Count == 0 ? "Local checks passed - resources and permissions have not been verified."
                 : $"{issues.Count} local validation message(s) - review before deployment";
+            _validationIcon.Visible = issues.Count == 0;
         }
     }
 

@@ -44,7 +44,7 @@
             this.lblGUIInstallHeader = new System.Windows.Forms.Label();
             this.pictureBox8 = new System.Windows.Forms.PictureBox();
             this.btnInstall = new System.Windows.Forms.Button();
-            this.lstLog = new System.Windows.Forms.ListView();
+            this.lstLog = new App.ControlPanel.Controls.BufferedListView();
             this.columnHeader1 = ((System.Windows.Forms.ColumnHeader)(new System.Windows.Forms.ColumnHeader()));
             this.imageListIssues = new System.Windows.Forms.ImageList(this.components);
             this.installLayout = new System.Windows.Forms.TableLayoutPanel();

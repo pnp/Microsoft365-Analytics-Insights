@@ -192,8 +192,10 @@ namespace Tests.UnitTests.InstallTests
                     }
                     var log = Find<ListView>(page, "lstLog");
                     var actions = Find<FlowLayoutPanel>(page, "actionLayout");
-                    Assert.IsTrue(log.Height >= 100);
-                    Assert.IsFalse(layout.RectangleToClient(log.Parent.RectangleToScreen(log.Bounds)).IntersectsWith(actions.Bounds));
+                    Assert.IsTrue(log.Height >= 100, $"Log viewport must retain 100px; actual={log.Bounds}, layout={layout.Bounds}, actions={actions.Bounds}.");
+                    var logBounds = layout.RectangleToClient(log.Parent.RectangleToScreen(log.Bounds));
+                    Assert.IsFalse(logBounds.IntersectsWith(actions.Bounds),
+                        $"Log={logBounds}; parent={log.Parent.Bounds}; actions={actions.Bounds}; rows={string.Join(",", layout.GetRowHeights())}");
                     Assert.IsTrue(layout.ClientRectangle.Contains(actions.Bounds), "Action buttons must stay reachable.");
                     var buttons = actions.Controls.Cast<Button>().Where(button => button.Visible).ToArray();
                     foreach (var button in buttons)

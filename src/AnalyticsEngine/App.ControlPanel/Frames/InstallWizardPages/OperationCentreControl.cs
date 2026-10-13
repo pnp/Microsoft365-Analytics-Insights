@@ -22,7 +22,7 @@ namespace App.ControlPanel.Frames.InstallWizard
             Text = "No operation has run. Test Configuration before deploying.",
             Visible = false
         };
-        private readonly ListView _phases = new ListView
+        private readonly ListView _phases = new App.ControlPanel.Controls.BufferedListView
         {
             Name = "operationPhases",
             Dock = DockStyle.Fill,
@@ -131,7 +131,7 @@ namespace App.ControlPanel.Frames.InstallWizard
         public void Append(InstallLogLVI item)
         {
             item.ToolTipText = item.Text;
-            _filters.Visible = true;
+            if (!_filters.Visible) _filters.Visible = true;
             _messages.Add(item);
             if (item.Level == LogLevel.Warning) _warnings++;
             if (item.Level >= LogLevel.Error)
@@ -152,8 +152,7 @@ namespace App.ControlPanel.Frames.InstallWizard
                 _log.Items.Add(item);
                 Follow();
             }
-            SizeLogColumn();
-            if (_running) RefreshStatus();
+            // Status is refreshed by the timer, not by every message (which relayouts the log).
         }
 
         private void ClosePhase()
@@ -175,7 +174,6 @@ namespace App.ControlPanel.Frames.InstallWizard
             foreach (var item in _messages.Where(Matches)) _log.Items.Add(item);
             _log.EndUpdate();
             Follow();
-            SizeLogColumn();
         }
 
         private void Follow()
@@ -183,7 +181,11 @@ namespace App.ControlPanel.Frames.InstallWizard
             if (_follow.Checked && _log.Items.Count > 0) _log.Items[_log.Items.Count - 1].EnsureVisible();
         }
 
-        private void SizeLogColumn() => _log.Columns[0].Width = Math.Max(120, _log.ClientSize.Width - 24);
+        private void SizeLogColumn()
+        {
+            var width = Math.Max(120, _log.ClientSize.Width - 24);
+            if (_log.Columns[0].Width != width) _log.Columns[0].Width = width;
+        }
 
         private void ShowSelectedMessage()
         {
@@ -213,6 +215,15 @@ namespace App.ControlPanel.Frames.InstallWizard
 
         public string FullLogText => string.Join(Environment.NewLine, _messages.Select(item => item.Text));
         public void ShowPhases(bool visible) => _phases.Visible = visible && _phases.Items.Count > 0;
+
+        public override Size GetPreferredSize(Size proposedSize)
+        {
+            var height = 100 + _log.Margin.Vertical;
+            if (_status.Visible) height += _status.GetPreferredSize(proposedSize).Height + _status.Margin.Vertical;
+            if (_phases.Visible) height += _phases.Height + _phases.Margin.Vertical;
+            if (_filters.Visible) height += _filters.GetPreferredSize(proposedSize).Height + _filters.Margin.Vertical;
+            return new Size(proposedSize.Width, height);
+        }
 
         public void ClearLog()
         {
