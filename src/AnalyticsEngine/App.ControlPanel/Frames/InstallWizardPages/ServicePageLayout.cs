@@ -32,6 +32,12 @@ namespace App.ControlPanel.Frames.InstallWizard
         internal static TableLayoutPanel AddService(TableLayoutPanel page, string name, string title,
             string description, Image image, string iconName = null, string descriptionName = null)
         {
+            // Only the gaps share spare height; each section keeps its own natural height.
+            if (page.Controls.Count > 2)
+            {
+                page.RowCount++;
+                page.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+            }
             var service = new TableLayoutPanel
             {
                 Name = name,

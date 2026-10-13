@@ -33,6 +33,7 @@ namespace App.ControlPanel.Frames
         public InstallSPOSitesControl()
         {
             InitializeComponent();
+            lblStep.UseMnemonic = false;
             ConfigureSourcesLayout();
             _logger = new InstallSPOSitesControlLogger(this);
             installSolutionControl1.CancelRequested += InstallSolutionControl1_CancelRequested;
@@ -541,8 +542,30 @@ namespace App.ControlPanel.Frames
             grpLocalSources.AutoSize = true;
             grpLocalSources.AutoSizeMode = AutoSizeMode.GrowAndShrink;
             grpLocalSources.Controls.Add(files);
+            var latestRelease = new LinkLabel
+            {
+                Name = "checkLatestVersion",
+                Text = "Check latest version",
+                AccessibleDescription = "Opens the latest stable GitHub release and its upgrade notes in your browser.",
+                AutoSize = true,
+                Tag = $"https://github.com/{SoftwareReleaseConfig.GITHUB_REPO_OWNER}/{SoftwareReleaseConfig.GITHUB_REPO_NAME}/releases/latest"
+            };
+            latestRelease.LinkClicked += (sender, args) =>
+            {
+                var url = (string)latestRelease.Tag;
+                try
+                {
+                    System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(url) { UseShellExecute = true });
+                    latestRelease.LinkVisited = true;
+                }
+                catch (Exception ex)
+                {
+                    MessageBox.Show(this, $"Couldn't open {url}\r\n\r\n{ex.Message}", "Check latest version",
+                        MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                }
+            };
             foreach (Control field in new Control[] { lblGUIAppSourcesHeader, lblGUIAppSourcesDesc,
-                rdbLatest, rdpSpecificLocation, grpLocalSources })
+                rdbLatest, latestRelease, rdpSpecificLocation, grpLocalSources })
             {
                 field.Dock = DockStyle.Fill;
                 field.Margin = new Padding(0, 6, 0, 12);

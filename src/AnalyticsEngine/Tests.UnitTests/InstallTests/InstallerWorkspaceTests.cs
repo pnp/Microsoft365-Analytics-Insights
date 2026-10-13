@@ -53,7 +53,8 @@ namespace Tests.UnitTests.InstallTests
                     Application.DoEvents();
                     var navigator = Find<TreeView>(form, "navigator");
                     var prefix = Environment.GetEnvironmentVariable("INSTALLER_PREVIEW_STAGE") ?? "workspace";
-                    foreach (var name in new[] { "tabTargets", "tabOverview", "tabSources", "tabAzureResources",
+                    foreach (var name in new[] { "tabTargets", "tabOverview", "tabSources", "tabCredentials",
+                        "tabPageAzureConfig", "tabNetworking", "tabSharePoint", "tabAzureResources",
                         "tabAzureStorage", "tabAzureAI", "tabInstall" })
                     {
                         var node = navigator.Nodes.Find(name, true).SingleOrDefault();
@@ -76,7 +77,7 @@ namespace Tests.UnitTests.InstallTests
                             }
                             Find<RadioButton>(form, "rdbLatest").Checked = true;
                         }
-                        if (name == "tabAzureResources" || name == "tabAzureStorage" || name == "tabAzureAI")
+                        if (name != "tabInstall")
                         {
                             var previousSize = form.Size;
                             form.Size = form.MinimumSize;
@@ -165,11 +166,19 @@ namespace Tests.UnitTests.InstallTests
                     var icon = Find<Label>(overview, "configurationValidationIcon");
                     Assert.IsTrue(icon.Visible);
                     Assert.AreEqual(Color.Green, icon.ForeColor);
+                    Assert.IsFalse(Find<ListBox>(overview, "configurationIssues").Visible);
+                    var factsHeight = Find<ListView>(overview, "configurationFacts").Height;
                     StringAssert.Contains(Find<Label>(overview, "configurationValidation").Text, "have not been verified");
                     var invalid = SyntheticConfig();
                     invalid.ResourceGroupName = "";
                     overview.RefreshConfiguration(invalid, 1);
                     Assert.IsFalse(icon.Visible);
+                    Assert.IsTrue(Find<ListBox>(overview, "configurationIssues").Visible);
+                    Assert.IsTrue(Find<ListView>(overview, "configurationFacts").Height < factsHeight);
+                    overview.RefreshConfiguration(SyntheticConfig(), 1);
+                    Assert.IsFalse(Find<ListBox>(overview, "configurationIssues").Visible);
+                    Assert.AreEqual(factsHeight, Find<ListView>(overview, "configurationFacts").Height);
+                    overview.RefreshConfiguration(invalid, 1);
                     StringAssert.Contains(Find<Label>(overview, "configurationValidation").Text, "review before deployment");
                 }
             });
@@ -188,6 +197,9 @@ namespace Tests.UnitTests.InstallTests
                 using (var host = new Form { ClientSize = new Size(width, height) })
                 {
                     storage.SqlAuthMode = SqlServerAuthMode.EntraId;
+                    Assert.AreEqual("Endpoint suffix: .cognitiveservices.azure.com", Find<Label>(ai, "lblCognitiveName").Text);
+                    ai.CognitiveServiceName = "contoso-language";
+                    Assert.AreEqual("https://contoso-language.cognitiveservices.azure.com", Find<Label>(ai, "lblCognitiveName").Text);
                     foreach (var page in new UserControl[] { hosting, storage, ai })
                     {
                         host.Controls.Clear();
@@ -198,6 +210,11 @@ namespace Tests.UnitTests.InstallTests
                         var layout = Find<TableLayoutPanel>(page, "servicePageLayout");
                         Assert.IsTrue(layout.Width >= page.ClientSize.Width - 20, page.Name + " must fill the page width.");
                         Assert.IsTrue(layout.Height >= page.ClientSize.Height, page.Name + " must use the page height.");
+                        var services = layout.Controls.OfType<TableLayoutPanel>().ToArray();
+                        var lastContent = services.Last().Controls.OfType<TableLayoutPanel>().Single();
+                        var contentBottom = page.PointToClient(lastContent.PointToScreen(new Point(0, lastContent.Height))).Y;
+                        Assert.IsTrue(contentBottom >= page.ClientSize.Height - 30,
+                            page.Name + " must distribute spare height between sections instead of leaving it below them.");
                         foreach (var service in layout.Controls.OfType<TableLayoutPanel>())
                         {
                             var content = service.Controls.OfType<TableLayoutPanel>().Single();
@@ -254,6 +271,116 @@ namespace Tests.UnitTests.InstallTests
 
         private static System.Collections.Generic.IEnumerable<Control> Descendants(Control parent) =>
             parent.Controls.Cast<Control>().SelectMany(child => new[] { child }.Concat(Descendants(child)));
+
+        [TestMethod]
+        public void AzureEnvironment_DescriptionAndTierLinksDoNotOverlap()
+        {
+            RunSta(() =>
+            {
+                using (var azure = new App.ControlPanel.Frames.InstallWizardPages.AzureBaseConfigControl { Dock = DockStyle.Fill })
+                using (var host = new Form { ClientSize = new Size(730, 520) })
+                {
+                    host.Controls.Add(azure);
+                    host.Show();
+                    Application.DoEvents();
+                    Assert.IsTrue(Find<Label>(azure, "lblGUIAzureConfigDesc").Top > Find<Label>(azure, "lblGUIAzureConfigHeader").Bottom);
+                    foreach (var tier in new[] { "Testing", "Production", "Testing" })
+                    {
+                        Find<ComboBox>(azure, "cmbEnvType").SelectedItem = tier;
+                        Application.DoEvents();
+                        foreach (var link in Descendants(azure).OfType<LinkLabel>().Where(link => link.Visible && link.Name.StartsWith("lnk")))
+                        {
+                            var caption = link.Parent.Controls.OfType<Label>().Single(label => label != link);
+                            Assert.IsTrue(caption.Right <= link.Left, link.Name + " must not be obscured by its caption.");
+                            Assert.IsTrue(link.Parent.ClientRectangle.Contains(link.Bounds));
+                            Assert.IsTrue(azure.ClientRectangle.Contains(azure.RectangleToClient(link.RectangleToScreen(link.ClientRectangle))));
+                        }
+                    }
+                }
+            });
+        }
+
+        [TestMethod]
+        public void NetworkingGuidance_WrapsWithoutOverlappingAndRemainsReachable()
+        {
+            RunSta(() =>
+            {
+                using (var networking = new NetworkingConfigControl { Dock = DockStyle.Fill, VNetEnabled = true })
+                using (var host = new Form { ClientSize = new Size(730, 520) })
+                {
+                    host.Controls.Add(networking);
+                    host.Show();
+                    Application.DoEvents();
+                    var help = Find<Label>(networking, "lblAllowPublicAccessHelp");
+                    var endpoints = Find<GroupBox>(networking, "grpEndpointNames");
+                    Assert.IsTrue(help.Height >= help.GetPreferredSize(help.Size).Height);
+                    Assert.IsTrue(help.Bottom <= endpoints.Top, "Public-access guidance must not overlap endpoint settings.");
+                    var warning = Find<Label>(networking, "lblSkuWarning");
+                    networking.AutoScrollPosition = new Point(0, networking.DisplayRectangle.Height);
+                    Application.DoEvents();
+                    Assert.IsTrue(networking.ClientRectangle.Contains(networking.RectangleToClient(warning.RectangleToScreen(warning.ClientRectangle))),
+                        "The network cost warning must be reachable at minimum size.");
+                    networking.VNetEnabled = false;
+                    Assert.IsFalse(Find<TextBox>(networking, "txtVNetName").Enabled);
+                }
+            });
+        }
+
+        [TestMethod]
+        public void ServiceSpacing_ContractsAfterResizeAndLegacyLoginChanges()
+        {
+            RunSta(() =>
+            {
+                using (var storage = new AzureStorageConfigControl { Dock = DockStyle.Fill, SqlAuthMode = SqlServerAuthMode.EntraId })
+                using (var host = new Form { ClientSize = new Size(730, 520) })
+                {
+                    host.Controls.Add(storage);
+                    host.Show();
+                    Application.DoEvents();
+                    var layout = Find<TableLayoutPanel>(storage, "servicePageLayout");
+                    var originalHeight = layout.Height;
+                    for (var i = 0; i < 3; i++)
+                    {
+                        host.ClientSize = new Size(940, 850);
+                        storage.SqlAuthMode = SqlServerAuthMode.SqlLogin;
+                        Application.DoEvents();
+                        host.ClientSize = new Size(730, 520);
+                        storage.SqlAuthMode = SqlServerAuthMode.EntraId;
+                        storage.AutoScrollPosition = Point.Empty;
+                        Application.DoEvents();
+                        Assert.AreEqual(originalHeight, layout.Height, "Flexible gaps must not accumulate height on resize or auth changes.");
+                        var users = Find<Button>(storage, "btnSqlDatabaseUsers");
+                        Assert.IsTrue(storage.ClientRectangle.Contains(storage.RectangleToClient(users.RectangleToScreen(users.ClientRectangle))));
+                    }
+                }
+            });
+        }
+
+        [TestMethod]
+        public void ReleaseSource_LatestVersionLinkIsReachableWithoutChangingTheSource()
+        {
+            RunSta(() =>
+            {
+                using (var wizard = new InstallSPOSitesControl { Dock = DockStyle.Fill })
+                using (var host = new Form { ClientSize = new Size(980, 580) })
+                {
+                    host.Controls.Add(wizard);
+                    host.Show();
+                    wizard.ConfigureUI(SyntheticConfig());
+                    Find<TreeView>(wizard, "navigator").SelectedNode =
+                        Find<TreeView>(wizard, "navigator").Nodes.Find("tabSources", true).Single();
+                    Application.DoEvents();
+                    var link = Find<LinkLabel>(wizard, "checkLatestVersion");
+                    Assert.IsTrue(link.Visible && link.Enabled && link.TabStop);
+                    Assert.AreEqual($"https://github.com/{SoftwareReleaseConfig.GITHUB_REPO_OWNER}/{SoftwareReleaseConfig.GITHUB_REPO_NAME}/releases/latest", link.Tag);
+                    Assert.IsTrue(wizard.GetConfigurationState().DownloadLatestStable);
+                    Find<RadioButton>(wizard, "rdpSpecificLocation").Checked = true;
+                    Assert.IsTrue(link.Visible && link.Enabled);
+                    Assert.IsFalse(wizard.GetConfigurationState().DownloadLatestStable);
+                    Assert.IsFalse(Find<Label>(wizard, "lblStep").UseMnemonic);
+                }
+            });
+        }
 
         [TestMethod]
         public void LogAppend_DoesNotRebuildRowsResizeColumnsOrRelayoutStatus()

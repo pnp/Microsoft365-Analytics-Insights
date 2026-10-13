@@ -24,6 +24,7 @@ namespace App.ControlPanel.Frames.InstallWizard
             AccessibleName = "Local configuration validation issues"
         };
         private readonly Label _validation = new Label { Name = "configurationValidation", AutoSize = true, Dock = DockStyle.Fill };
+        private readonly RowStyle _issuesRow = new RowStyle(SizeType.Percent, 42);
         private readonly Label _validationIcon = new Label
         {
             Name = "configurationValidationIcon",
@@ -48,7 +49,7 @@ namespace App.ControlPanel.Frames.InstallWizard
             layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             layout.RowStyles.Add(new RowStyle(SizeType.Percent, 58));
             layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-            layout.RowStyles.Add(new RowStyle(SizeType.Percent, 42));
+            layout.RowStyles.Add(_issuesRow);
             layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             layout.Controls.Add(new Label
             {
@@ -109,6 +110,9 @@ namespace App.ControlPanel.Frames.InstallWizard
             _validation.Text = issues.Count == 0 ? "Local checks passed - resources and permissions have not been verified."
                 : $"{issues.Count} local validation message(s) - review before deployment";
             _validationIcon.Visible = issues.Count == 0;
+            _issues.Visible = issues.Count > 0;
+            _issuesRow.SizeType = issues.Count > 0 ? SizeType.Percent : SizeType.Absolute;
+            _issuesRow.Height = issues.Count > 0 ? 42 : 0;
         }
     }
 

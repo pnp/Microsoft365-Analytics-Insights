@@ -14,7 +14,9 @@ namespace App.ControlPanel.Frames.InstallWizard
         private void UpdateResponsiveUIControls()
         {
             txtCognitiveName.Enabled = chkCognitiveEnable.Checked;
-            lblCognitiveName.Text = $"https://{txtCognitiveName.Text}.cognitiveservices.azure.com";
+            lblCognitiveName.Text = string.IsNullOrWhiteSpace(txtCognitiveName.Text)
+                ? "Endpoint suffix: .cognitiveservices.azure.com"
+                : $"https://{txtCognitiveName.Text}.cognitiveservices.azure.com";
             txtFoundryResourceName.Enabled = chkFoundryEnable.Checked;
             txtFoundryDeploymentName.Enabled = chkFoundryEnable.Checked;
             txtFoundryModelName.Enabled = chkFoundryEnable.Checked;
