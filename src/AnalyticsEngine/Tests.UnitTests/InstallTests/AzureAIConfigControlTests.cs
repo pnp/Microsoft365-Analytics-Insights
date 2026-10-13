@@ -71,7 +71,7 @@ namespace Tests.UnitTests.InstallTests
         }
 
         [TestMethod]
-        public void AzureAI_TabFollowsPaaS_AndSharePointVisibilityDoesNotMoveIt()
+        public void AzureAI_SectionFollowsPaaS_AndSharePointVisibilityDoesNotMoveIt()
         {
             RunOnSta(() =>
             {
@@ -88,19 +88,19 @@ namespace Tests.UnitTests.InstallTests
                     config.SolutionConfig.ImportTaskSettings.WebTraffic = false;
                     config.SolutionConfig.ImportTaskSettings.ActivityLog = false;
                     wizard.ConfigureUI(config);
-                    var tabs = Find<TabControl>(wizard, "tabs");
-                    AssertTabOrder(tabs);
-                    Assert.IsFalse(tabs.TabPages.ContainsKey("tabSharePoint"));
+                    var navigator = Find<TreeView>(wizard, "navigator");
+                    AssertSectionOrder(navigator);
+                    Assert.AreEqual(0, navigator.Nodes.Find("tabSharePoint", true).Length);
                     config.SolutionConfig.ImportTaskSettings.WebTraffic = true;
                     wizard.ConfigureUI(config);
-                    AssertTabOrder(tabs);
-                    Assert.AreEqual(tabs.TabPages.IndexOfKey("tabSources") - 1, tabs.TabPages.IndexOfKey("tabSharePoint"),
-                        string.Join(", ", tabs.TabPages.Cast<TabPage>().Select(page => page.Name)) +
-                        "; WebTraffic=" + wizard.GetConfigurationState().SolutionConfig.ImportTaskSettings.WebTraffic);
+                    AssertSectionOrder(navigator);
+                    var pages = navigator.Nodes.Cast<TreeNode>().SelectMany(group => group.Nodes.Cast<TreeNode>())
+                        .Select(node => node.Name).ToList();
+                    Assert.AreEqual(pages.IndexOf("tabSources") - 1, pages.IndexOf("tabSharePoint"));
                     config.SolutionConfig.ImportTaskSettings.WebTraffic = false;
                     wizard.ConfigureUI(config);
-                    AssertTabOrder(tabs);
-                    Assert.IsFalse(tabs.TabPages.ContainsKey("tabSharePoint"));
+                    AssertSectionOrder(navigator);
+                    Assert.AreEqual(0, navigator.Nodes.Find("tabSharePoint", true).Length);
                     var paas = Find<AzurePaaSConfigControl>(wizard, "azurePaaSConfigControl1");
                     Assert.IsFalse(paas.Controls.Cast<Control>().Any(control =>
                         control.Name.Contains("Foundry") || control.Name.Contains("Cognitive") ||
@@ -140,7 +140,7 @@ namespace Tests.UnitTests.InstallTests
                 {
                     var text = Find<Label>(ai, "lblFoundryDescription").Text;
                     StringAssert.Contains(text, "connects the runtime automatically");
-                    StringAssert.Contains(text, "'Copilot AI interaction history' on Targets");
+                    StringAssert.Contains(text, "'Copilot AI interaction history' on Workloads");
                     StringAssert.Contains(text, "Administration > Prompt categories");
                     Assert.AreEqual("Enable prompt categorisation service", Find<CheckBox>(ai, "chkFoundryEnable").Text);
                     Assert.IsFalse(ai.FoundryPromptEnabled);
@@ -148,11 +148,13 @@ namespace Tests.UnitTests.InstallTests
             });
         }
 
-        private static void AssertTabOrder(TabControl tabs)
+        private static void AssertSectionOrder(TreeView navigator)
         {
-            Assert.AreEqual(tabs.TabPages.IndexOfKey("tabAzureResources") + 1, tabs.TabPages.IndexOfKey("tabAzureAI"));
-            Assert.AreEqual("Azure AI", tabs.TabPages["tabAzureAI"].Text);
-            Assert.AreEqual(tabs.TabPages.IndexOfKey("tabAzureAI") + 1, tabs.TabPages.IndexOfKey("tabAzureStorage"));
+            var pages = navigator.Nodes.Cast<TreeNode>().SelectMany(group => group.Nodes.Cast<TreeNode>())
+                .Select(node => node.Name).ToList();
+            Assert.AreEqual(pages.IndexOf("tabAzureResources") + 1, pages.IndexOf("tabAzureAI"));
+            Assert.AreEqual("Azure AI", navigator.Nodes.Find("tabAzureAI", true).Single().Text);
+            Assert.AreEqual(pages.IndexOf("tabAzureAI") + 1, pages.IndexOf("tabAzureStorage"));
         }
 
         private static void AssertAIEqual(SolutionInstallConfig expected, SolutionInstallConfig actual)
@@ -176,7 +178,7 @@ namespace Tests.UnitTests.InstallTests
             Exception failure = null;
             var thread = new Thread(() =>
             {
-                try { action(); }
+                try { Application.EnableVisualStyles(); action(); }
                 catch (Exception ex) { failure = ex; }
             });
             thread.SetApartmentState(ApartmentState.STA);

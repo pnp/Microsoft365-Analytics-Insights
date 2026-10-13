@@ -72,18 +72,20 @@ namespace Tests.UnitTests.InstallTests
                     Find<CheckBox>(welcome, "chkDisclaimer").Checked = true;
                     Find<Button>(welcome, "btnStartInstall").PerformClick();
                     Assert.AreEqual(0, installs, "Entering the wizard must not start deployment.");
-                    var tabs = Find<TabControl>(form, "tabs");
-                    tabs.SelectedTab = tabs.TabPages["tabInstall"];
+                    var navigator = Find<TreeView>(form, "navigator");
+                    navigator.SelectedNode = navigator.Nodes.Find("tabInstall", true).Single();
                     Application.DoEvents();
                     var layout = Find<TableLayoutPanel>(page, "installLayout");
                     var log = Find<ListView>(page, "lstLog");
                     var actions = Find<FlowLayoutPanel>(page, "actionLayout");
                     Assert.IsTrue(layout.ClientRectangle.Contains(actions.Bounds));
-                    Assert.IsTrue(layout.ClientRectangle.Contains(log.Bounds));
+                    var logBounds = layout.RectangleToClient(log.Parent.RectangleToScreen(log.Bounds));
+                    Assert.IsTrue(layout.ClientRectangle.Contains(logBounds));
                     Assert.IsTrue(log.Height >= 100, "The minimum window size must leave a useful log viewport.");
-                    Assert.IsFalse(log.Bounds.IntersectsWith(actions.Bounds), "The log must not extend underneath the actions.");
+                    Assert.IsFalse(logBounds.IntersectsWith(actions.Bounds), "The log must not extend underneath the actions.");
                     var wizard = Find<InstallSPOSitesControl>(form, "installSPOSitesControl");
-                    Assert.IsFalse(tabs.Bounds.IntersectsWith(Find<TableLayoutPanel>(wizard, "navigationLayout").Bounds));
+                    Assert.IsFalse(Find<TableLayoutPanel>(wizard, "workspaceLayout").Bounds
+                        .IntersectsWith(Find<TableLayoutPanel>(wizard, "navigationLayout").Bounds));
                 }
             });
         }
@@ -94,43 +96,42 @@ namespace Tests.UnitTests.InstallTests
             RunOnSta(() =>
             {
                 using (var wizard = new InstallSPOSitesControl())
-                using (var host = ShowControl(wizard, new Size(800, 650)))
+                using (var host = ShowControl(wizard, new Size(1100, 750)))
                 {
                     var config = SolutionInstallConfig.NewConfig();
                     config.SolutionConfig.ImportTaskSettings.WebTraffic = false;
                     config.SolutionConfig.ImportTaskSettings.ActivityLog = false;
                     wizard.ConfigureUI(config);
-                    var tabs = Find<TabControl>(wizard, "tabs");
+                    var navigator = Find<TreeView>(wizard, "navigator");
                     var back = Find<Button>(wizard, "btnBack");
                     var next = Find<Button>(wizard, "btnNext");
                     var step = Find<Label>(wizard, "lblStep");
-                    Assert.IsTrue(tabs.Multiline, "All tabs should remain reachable at narrower widths.");
                     Assert.IsFalse(back.Enabled);
                     Assert.IsTrue(next.Enabled);
-                    Assert.AreEqual($"Step 1 of {tabs.TabCount}: Targets", step.Text);
-                    Assert.AreEqual("&Next: Credentials", next.Text);
+                    Assert.AreEqual($"Step 1 of {Nodes(navigator).Length}: Overview", step.Text);
+                    Assert.AreEqual("&Next: Workloads", next.Text);
                     next.PerformClick();
-                    Assert.AreEqual("tabCredentials", tabs.SelectedTab.Name);
+                    Assert.AreEqual("tabTargets", navigator.SelectedNode.Name);
                     Assert.IsTrue(back.Enabled);
                     back.PerformClick();
-                    Assert.AreEqual("tabTargets", tabs.SelectedTab.Name);
+                    Assert.AreEqual("tabOverview", navigator.SelectedNode.Name);
 
                     config.SolutionConfig.ImportTaskSettings.WebTraffic = true;
                     wizard.ConfigureUI(config);
-                    Assert.AreEqual($"Step 1 of {tabs.TabCount}: Targets", step.Text);
-                    Assert.IsTrue(tabs.TabPages.ContainsKey("tabSharePoint"));
-                    tabs.SelectedIndex = tabs.TabPages.IndexOfKey("tabSharePoint");
-                    Assert.AreEqual("&Next: Sources", next.Text);
+                    Assert.AreEqual($"Step 1 of {Nodes(navigator).Length}: Overview", step.Text);
+                    Assert.AreEqual(1, navigator.Nodes.Find("tabSharePoint", true).Length);
+                    navigator.SelectedNode = navigator.Nodes.Find("tabSharePoint", true).Single();
+                    Assert.AreEqual("&Next: Release && packages", next.Text);
                     next.PerformClick();
-                    Assert.AreEqual("tabSources", tabs.SelectedTab.Name);
-                    Assert.AreEqual("&Next: Install", next.Text);
+                    Assert.AreEqual("tabSources", navigator.SelectedNode.Name);
+                    Assert.AreEqual("&Next: Review && deploy", next.Text);
                     next.PerformClick();
-                    Assert.AreEqual("tabInstall", tabs.SelectedTab.Name);
+                    Assert.AreEqual("tabInstall", navigator.SelectedNode.Name);
                     Assert.IsFalse(next.Enabled);
                     Assert.IsTrue(back.Enabled);
-                    Assert.AreEqual($"Step {tabs.TabCount} of {tabs.TabCount}: Install", step.Text);
+                    Assert.AreEqual($"Step {Nodes(navigator).Length} of {Nodes(navigator).Length}: Review & deploy", step.Text);
                     back.PerformClick();
-                    Assert.AreEqual("tabSources", tabs.SelectedTab.Name);
+                    Assert.AreEqual("tabSources", navigator.SelectedNode.Name);
                     Assert.IsTrue(wizard.GetConfigurationState().SolutionConfig.ImportTaskSettings.WebTraffic);
                     Assert.AreEqual(config.ConfigSchemaVersion, wizard.GetConfigurationState().ConfigSchemaVersion);
                 }
@@ -145,13 +146,15 @@ namespace Tests.UnitTests.InstallTests
                 using (var form = new MainForm())
                 {
                     var wizard = Find<InstallSPOSitesControl>(form, "installSPOSitesControl");
-                    var tabs = Find<TabControl>(wizard, "tabs");
-                    tabs.SelectedIndex = 1;
+                    var navigator = Find<TreeView>(wizard, "navigator");
+                    navigator.SelectedNode = navigator.Nodes.Find("tabCredentials", true).Single();
                     var setState = typeof(InstallSPOSitesControl).GetMethod("SetFormGUIState",
                         BindingFlags.Instance | BindingFlags.NonPublic);
                     setState.Invoke(wizard, new object[] { AppWaitState.Working });
                     Assert.IsFalse(Find<Button>(wizard, "btnBack").Enabled);
                     Assert.IsFalse(Find<Button>(wizard, "btnNext").Enabled);
+                    navigator.SelectedNode = navigator.Nodes.Find("tabTargets", true).Single();
+                    Assert.AreEqual("tabCredentials", navigator.SelectedNode.Name, "A running operation must block direct sidebar navigation.");
                     setState.Invoke(wizard, new object[] { AppWaitState.Ready });
                     Assert.IsTrue(Find<Button>(wizard, "btnBack").Enabled);
                     Assert.IsTrue(Find<Button>(wizard, "btnNext").Enabled);
@@ -190,7 +193,7 @@ namespace Tests.UnitTests.InstallTests
                     var log = Find<ListView>(page, "lstLog");
                     var actions = Find<FlowLayoutPanel>(page, "actionLayout");
                     Assert.IsTrue(log.Height >= 100);
-                    Assert.IsFalse(log.Bounds.IntersectsWith(actions.Bounds));
+                    Assert.IsFalse(layout.RectangleToClient(log.Parent.RectangleToScreen(log.Bounds)).IntersectsWith(actions.Bounds));
                     Assert.IsTrue(layout.ClientRectangle.Contains(actions.Bounds), "Action buttons must stay reachable.");
                     var buttons = actions.Controls.Cast<Button>().Where(button => button.Visible).ToArray();
                     foreach (var button in buttons)
@@ -279,12 +282,15 @@ namespace Tests.UnitTests.InstallTests
         private static T Find<T>(Control parent, string name) where T : Control =>
             (T)parent.Controls.Find(name, true).Single();
 
+        private static TreeNode[] Nodes(TreeView navigator) => navigator.Nodes.Cast<TreeNode>()
+            .SelectMany(group => group.Nodes.Cast<TreeNode>()).ToArray();
+
         private static void RunOnSta(Action action)
         {
             Exception failure = null;
             var thread = new Thread(() =>
             {
-                try { action(); }
+                try { Application.EnableVisualStyles(); action(); }
                 catch (Exception ex) { failure = ex; }
             }) { IsBackground = true };
             thread.SetApartmentState(ApartmentState.STA);

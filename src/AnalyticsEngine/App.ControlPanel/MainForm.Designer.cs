@@ -395,8 +395,8 @@
             // 
             this.AutoScaleDimensions = new System.Drawing.SizeF(6F, 13F);
             this.AutoScaleMode = System.Windows.Forms.AutoScaleMode.Font;
-            this.ClientSize = new System.Drawing.Size(960, 720);
-            this.MinimumSize = new System.Drawing.Size(780, 680);
+            this.ClientSize = new System.Drawing.Size(1180, 800);
+            this.MinimumSize = new System.Drawing.Size(1000, 680);
             this.StartPosition = System.Windows.Forms.FormStartPosition.CenterScreen;
             this.Controls.Add(this.grpInstall);
             this.Controls.Add(this.grpStart);

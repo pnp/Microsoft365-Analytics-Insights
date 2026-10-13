@@ -3,10 +3,13 @@ using App.ControlPanel.Engine.Entities;
 using App.ControlPanel.Engine.Models;
 using App.ControlPanel.Engine.SPO.AppCatalog;
 using App.ControlPanel.Engine.SPO.Auth;
+using App.ControlPanel.Frames.InstallWizard;
 using Common.Entities.Installer;
 using DataUtils;
 using Microsoft.Extensions.Logging;
 using System;
+using System.Collections.Generic;
+using System.Linq;
 using System.Threading;
 using System.Windows.Forms;
 using static App.ControlPanel.Frames.InstallWizard.InstallSolutionControl;
@@ -21,13 +24,32 @@ namespace App.ControlPanel.Frames
         // so a previous run's cancellation can't affect the next one.
         private CancellationTokenSource _runCts;
         private bool _isWorking;
+        private readonly List<Panel> _pages = new List<Panel>();
+        private Panel _selectedPage;
+        private readonly Panel tabOverview = new Panel { Name = "tabOverview", Text = "Overview" };
+        private readonly ConfigurationOverviewControl _overview = new ConfigurationOverviewControl { Dock = DockStyle.Fill };
+        public event EventHandler OpenConfigurationRequested;
+        public event EventHandler NewConfigurationRequested;
         public InstallSPOSitesControl()
         {
             InitializeComponent();
+            ConfigureSourcesLayout();
             _logger = new InstallSPOSitesControlLogger(this);
             installSolutionControl1.CancelRequested += InstallSolutionControl1_CancelRequested;
-            tabs.Selecting += Tabs_Selecting;
-            UpdateWizardNavigation();
+            tabOverview.Controls.Add(_overview);
+            pageHost.Controls.Add(tabOverview);
+            _overview.OpenRequested += (sender, args) => OpenConfigurationRequested?.Invoke(this, args);
+            _overview.NewRequested += (sender, args) => NewConfigurationRequested?.Invoke(this, args);
+            _overview.ContinueRequested += (sender, args) => SelectPage(tabTargets);
+            _pages.AddRange(new[] { tabOverview, tabTargets, tabCredentials, tabPageAzureConfig, tabAzureResources,
+                tabAzureAI, tabAzureStorage, tabNetworking, tabSharePoint, tabSources, tabInstall });
+            foreach (var page in _pages)
+            {
+                page.Dock = DockStyle.Fill;
+                page.Visible = false;
+            }
+            RebuildNavigator();
+            SelectPage(tabOverview);
             azureBaseConfigControl1.OnNeedAppRegistrationCredentials = () => GetConfigFromGUI().InstallerAccount;
             networkingConfigControl1.OnNeedAzureCredentials = () =>
             {
@@ -59,35 +81,88 @@ namespace App.ControlPanel.Frames
 
         private void btnNext_Click(object sender, EventArgs e)
         {
-            if (btnNext.Enabled && tabs.SelectedIndex < tabs.TabCount - 1)
+            if (btnNext.Enabled)
             {
-                tabs.SelectedIndex++;
+                SelectPage(_pages[_pages.IndexOf(_selectedPage) + 1]);
             }
         }
 
         private void btnBack_Click(object sender, EventArgs e)
         {
-            if (btnBack.Enabled && tabs.SelectedIndex > 0)
+            if (btnBack.Enabled)
             {
-                tabs.SelectedIndex--;
+                SelectPage(_pages[_pages.IndexOf(_selectedPage) - 1]);
             }
         }
 
-        private void tabs_SelectedIndexChanged(object sender, EventArgs e)
+        private void navigator_BeforeSelect(object sender, TreeViewCancelEventArgs e)
         {
+            e.Cancel = _isWorking && e.Node.Tag != _selectedPage;
+        }
+
+        private void navigator_AfterSelect(object sender, TreeViewEventArgs e)
+        {
+            if (e.Node.Tag is Panel page) SelectPage(page);
+        }
+
+        private void SelectPage(Panel page)
+        {
+            if (_isWorking && page != _selectedPage) return;
+            foreach (Panel child in pageHost.Controls) child.Visible = child == page;
+            _selectedPage = page;
+            page.BringToFront();
+            if (page == tabOverview) _overview.RefreshConfiguration(GetConfigFromGUI(), SelectedWorkloadCount());
+            var node = navigator.Nodes.Cast<TreeNode>().SelectMany(group => group.Nodes.Cast<TreeNode>())
+                .FirstOrDefault(item => item.Tag == page);
+            if (navigator.SelectedNode != node) navigator.SelectedNode = node;
             UpdateWizardNavigation();
         }
 
+        private void RebuildNavigator()
+        {
+            navigator.BeginUpdate();
+            navigator.Nodes.Clear();
+            var configuration = navigator.Nodes.Add("Configuration");
+            var infrastructure = navigator.Nodes.Add("Infrastructure");
+            var deployment = navigator.Nodes.Add("Deployment");
+            foreach (var page in _pages)
+            {
+                var group = page == tabOverview || page == tabTargets || page == tabCredentials ? configuration
+                    : page == tabSharePoint || page == tabSources || page == tabInstall ? deployment : infrastructure;
+                group.Nodes.Add(new TreeNode(PageTitle(page)) { Name = page.Name, Tag = page });
+            }
+            navigator.ExpandAll();
+            navigator.EndUpdate();
+        }
+
+        private string PageTitle(Panel page)
+        {
+            if (page == tabTargets) return "Workloads";
+            if (page == tabCredentials) return "Accounts & permissions";
+            if (page == tabPageAzureConfig) return "Azure environment";
+            if (page == tabAzureResources) return "Hosting & services";
+            if (page == tabAzureStorage) return "Database & storage";
+            if (page == tabSources) return "Release & packages";
+            if (page == tabInstall) return "Review & deploy";
+            return page.Text;
+        }
+
+        private int SelectedWorkloadCount() => WorkloadCheckboxes(importJobSettingsSelection).Count(checkbox => checkbox.Checked);
+
+        private static IEnumerable<CheckBox> WorkloadCheckboxes(Control parent) =>
+            parent.Controls.Cast<Control>().SelectMany(child => child is CheckBox checkbox
+                ? new[] { checkbox } : WorkloadCheckboxes(child));
+
         private void UpdateWizardNavigation()
         {
-            var index = tabs.SelectedIndex;
+            var index = _pages.IndexOf(_selectedPage);
             btnBack.Enabled = !_isWorking && index > 0;
-            btnNext.Enabled = !_isWorking && index >= 0 && index < tabs.TabCount - 1;
-            btnNext.Text = index >= 0 && index < tabs.TabCount - 1
-                ? "&Next: " + tabs.TabPages[index + 1].Text
+            btnNext.Enabled = !_isWorking && index >= 0 && index < _pages.Count - 1;
+            btnNext.Text = index >= 0 && index < _pages.Count - 1
+                ? "&Next: " + PageTitle(_pages[index + 1]).Replace("&", "&&")
                 : "&Next";
             lblStep.Text = index >= 0
-                ? $"Step {index + 1} of {tabs.TabCount}: {tabs.SelectedTab.Text}"
+                ? $"Step {index + 1} of {_pages.Count}: {PageTitle(_selectedPage)}"
                 : string.Empty;
         }
 
@@ -373,15 +448,10 @@ namespace App.ControlPanel.Frames
                 this.Cursor = Cursors.Default;
             }
 
-            // Don't disable the whole tab control — that greys out the log ListView and
-            // disables scrolling, which is exactly what the user complained about. Instead,
-            // disable each tab page except the install tab (so the user can't change config
-            // mid-run) and prevent navigation away from the install tab via the Selecting hook.
-            // The install tab itself stays enabled so log scrolling, copy-to-clipboard, and the
-            // Cancel button keep working.
+            // Keep the operation centre usable while locking configuration and navigation.
             bool isWorking = state == AppWaitState.Working;
             _isWorking = isWorking;
-            foreach (TabPage tp in tabs.TabPages)
+            foreach (Panel tp in _pages)
             {
                 if (tp == tabInstall) continue;
                 tp.Enabled = !isWorking;
@@ -391,17 +461,6 @@ namespace App.ControlPanel.Frames
 
             MainForm mainForm = (MainForm)this.ParentForm;
             mainForm.SetFormLoadingState(state);
-        }
-
-        /// <summary>
-        /// Block navigation away from the install tab while a background process is running.
-        /// </summary>
-        private void Tabs_Selecting(object sender, TabControlCancelEventArgs e)
-        {
-            if (_runCts != null && !_runCts.IsCancellationRequested && e.TabPage != tabInstall)
-            {
-                e.Cancel = true;
-            }
         }
 
         /// <summary>
@@ -426,18 +485,21 @@ namespace App.ControlPanel.Frames
             // Show SP tab if either web or audit traffic is needed
             if (importJobSettingsSelection.Config.ImportTaskSettings.WebTraffic || importJobSettingsSelection.Config.ImportTaskSettings.ActivityLog)
             {
-                if (!tabs.TabPages.Contains(tabSharePoint))
+                if (!_pages.Contains(tabSharePoint))
                 {
-                    tabs.TabPages.Insert(tabs.TabPages.IndexOf(tabSources), tabSharePoint);
+                    _pages.Insert(_pages.IndexOf(tabSources), tabSharePoint);
                 }
             }
             else
             {
-                if (tabs.TabPages.Contains(tabSharePoint))
+                if (_pages.Contains(tabSharePoint))
                 {
-                    tabs.TabPages.Remove(tabSharePoint);
+                    _pages.Remove(tabSharePoint);
+                    if (_selectedPage == tabSharePoint) SelectPage(tabSources);
                 }
             }
+            RebuildNavigator();
+            SelectPage(_selectedPage);
             UpdateWizardNavigation();
         }
 
@@ -451,6 +513,44 @@ namespace App.ControlPanel.Frames
         private void UpdateSourcesGUI()
         {
             grpLocalSources.Enabled = rdpSpecificLocation.Checked;
+            grpLocalSources.Visible = rdpSpecificLocation.Checked;
+        }
+
+        private void ConfigureSourcesLayout()
+        {
+            tabSources.AutoScroll = true;
+            var layout = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true,
+                ColumnCount = 1, Padding = new Padding(16), Font = new System.Drawing.Font("Segoe UI", 9F) };
+            layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+            lblGUIAppSourcesHeader.Text = "Choose your release source";
+            lblGUIAppSourcesHeader.Font = new System.Drawing.Font("Segoe UI", 18F, System.Drawing.FontStyle.Bold);
+            lblGUIAppSourcesDesc.Text = "Use the stable release for a normal install. Expand local packages only when " +
+                "you have downloaded a specific release or need an offline source.";
+            pictureBox12.Visible = false;
+            var files = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, ColumnCount = 1 };
+            files.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+            foreach (var field in new[] { fileSelectionAITracker, fileSelectionWebjobActivity,
+                fileSelectionWebjobAppInsights, fileSelectionControlPanel, fileSelectionWebsite })
+            {
+                field.Dock = DockStyle.Fill;
+                field.Margin = new Padding(4, 8, 4, 8);
+                files.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+                files.Controls.Add(field, 0, files.RowCount++);
+            }
+            grpLocalSources.Text = "Advanced: local release packages";
+            grpLocalSources.AutoSize = true;
+            grpLocalSources.AutoSizeMode = AutoSizeMode.GrowAndShrink;
+            grpLocalSources.Controls.Add(files);
+            foreach (Control field in new Control[] { lblGUIAppSourcesHeader, lblGUIAppSourcesDesc,
+                rdbLatest, rdpSpecificLocation, grpLocalSources })
+            {
+                field.Dock = DockStyle.Fill;
+                field.Margin = new Padding(0, 6, 0, 12);
+                layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+                layout.Controls.Add(field, 0, layout.RowCount++);
+            }
+            tabSources.Controls.Add(layout);
+            UpdateSourcesGUI();
         }
 
         private void rdpSpecificLocation_CheckedChanged(object sender, EventArgs e)
@@ -474,9 +574,6 @@ namespace App.ControlPanel.Frames
 
             SetFormGUIState(AppWaitState.Working);
 
-            // Start new install 
-            installSolutionControl1.ClearLog();
-
             var config = GetConfigFromGUI();
 
             var softwareConfig = new SoftwareReleaseConfig();
@@ -485,6 +582,8 @@ namespace App.ControlPanel.Frames
             // it should already be Disposed in RunWorkerCompleted but guard against unusual paths.
             _runCts?.Dispose();
             _runCts = new CancellationTokenSource();
+            installSolutionControl1.BeginOperation(task == InstallTask.Install ? "Install / upgrade"
+                : task == InstallTask.Test ? "Configuration tests" : "Remove SharePoint tracker", task == InstallTask.Install);
 
             if (task == InstallTask.Install)
             {
@@ -499,8 +598,6 @@ namespace App.ControlPanel.Frames
                 _installerEngine = new SolutionUninstaller(config, _logger);
             }
             installerBackgroundWorker.RunWorkerAsync(task);
-
-            SetFormGUIState(AppWaitState.Working);
 
         }
 
@@ -566,6 +663,8 @@ namespace App.ControlPanel.Frames
 
         private void installerBackgroundWorker_RunWorkerCompleted(object sender, System.ComponentModel.RunWorkerCompletedEventArgs e)
         {
+            if (e.Error != null) HandleNestedException(e.Error);
+            installSolutionControl1.CompleteOperation();
             SetFormGUIState(AppWaitState.Ready);
             System.Media.SystemSounds.Beep.Play();
 
@@ -580,8 +679,14 @@ namespace App.ControlPanel.Frames
 
         private void installSolutionControl1_Install(object sender, EventArgs eventArgs)
         {
+            var config = GetConfigFromGUI();
+            var workloads = WorkloadCheckboxes(importJobSettingsSelection).Where(checkbox => checkbox.Checked)
+                .Select(checkbox => checkbox.Text).ToArray();
+            using (var review = new DeploymentReviewForm(config, workloads))
+            {
+                if (review.ShowDialog(this) != DialogResult.OK) return;
+            }
 
-            // Sanity
             if (!this.ValidatInputAndShowErrors(true))
             {
                 return;
@@ -601,7 +706,7 @@ namespace App.ControlPanel.Frames
             }
 
             // Save settings
-            (this.ParentForm as MainForm).SaveLastSettings();
+            if (!(this.ParentForm as MainForm).SaveLastSettings()) return;
 
             StartBackgroundProcess(InstallTask.Install);
         }
@@ -642,7 +747,7 @@ namespace App.ControlPanel.Frames
                 "Uninstall SharePoint Online Tracking", MessageBoxButtons.YesNo, MessageBoxIcon.Exclamation, MessageBoxDefaultButton.Button2);
             if (r == DialogResult.Yes)
             {
-                tabs.SelectedIndex = tabs.TabCount - 1;
+                SelectPage(tabInstall);
                 StartBackgroundProcess(InstallTask.UninstallFromSharePoint);
             }
         }

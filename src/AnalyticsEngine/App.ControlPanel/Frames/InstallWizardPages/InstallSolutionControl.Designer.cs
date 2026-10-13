@@ -87,7 +87,7 @@
             this.btnCopyLog.Name = "btnCopyLog";
             this.btnCopyLog.Size = new System.Drawing.Size(126, 28);
             this.btnCopyLog.TabIndex = 0;
-            this.btnCopyLog.Text = "&Copy log";
+            this.btnCopyLog.Text = "&Copy full log";
             this.btnCopyLog.TextImageRelation = System.Windows.Forms.TextImageRelation.ImageBeforeText;
             this.btnCopyLog.UseVisualStyleBackColor = true;
             this.btnCopyLog.Click += new System.EventHandler(this.btnCopyLog_Click);
@@ -198,7 +198,7 @@
             this.btnInstall.Name = "btnInstall";
             this.btnInstall.Size = new System.Drawing.Size(126, 28);
             this.btnInstall.TabIndex = 2;
-            this.btnInstall.Text = "&Install/Upgrade";
+            this.btnInstall.Text = "&Review deployment...";
             this.btnInstall.TextImageRelation = System.Windows.Forms.TextImageRelation.ImageBeforeText;
             this.btnInstall.UseVisualStyleBackColor = true;
             this.btnInstall.Click += new System.EventHandler(this.btnInstall_Click);

@@ -55,7 +55,7 @@ namespace App.ControlPanel.Frames.InstallWizard
                 Name = "lblFoundryDescription",
                 Text = "For prompt categorisation, the installer provisions Azure OpenAI and\r\n" +
                     "connects the runtime automatically.\r\n" +
-                    "To categorise prompts, enable 'Copilot AI interaction history' on Targets,\r\n" +
+                    "To categorise prompts, enable 'Copilot AI interaction history' on Workloads,\r\n" +
                     "then enable categorisation in Administration > Prompt categories in the portal.",
                 Location = new System.Drawing.Point(64, 224), Size = new System.Drawing.Size(535, 60)
             });
