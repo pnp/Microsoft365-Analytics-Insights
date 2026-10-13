@@ -77,6 +77,9 @@ namespace Tests.UnitTests.InstallTests
                     Application.DoEvents();
                     var layout = Find<TableLayoutPanel>(page, "installLayout");
                     var log = Find<ListView>(page, "lstLog");
+                    var operations = Find<OperationCentreControl>(page, "operationCentre");
+                    Assert.IsTrue(operations.MinimumSize.Height >= 100 + log.Margin.Vertical,
+                        "The outer percent row must enforce enough height for its nested viewport.");
                     var actions = Find<FlowLayoutPanel>(page, "actionLayout");
                     Assert.IsTrue(layout.ClientRectangle.Contains(actions.Bounds));
                     var logBounds = layout.RectangleToClient(log.Parent.RectangleToScreen(log.Bounds));

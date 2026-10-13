@@ -50,6 +50,7 @@ namespace App.ControlPanel.Frames.InstallWizard
         public OperationCentreControl(ListView log)
         {
             _log = log;
+            MinimumSize = new Size(0, 100 + _log.Margin.Vertical);
             Name = "operationCentre";
             Font = new Font("Segoe UI", 9F);
             _layout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 4 };
