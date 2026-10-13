@@ -7,7 +7,7 @@ import { renderWithProvider } from './test/renderWithProvider';
 import App from './App';
 import { routesForArea } from './navigation';
 import { fetchAvailability } from './api/licenceActivityApi';
-import { fetchReportAreas } from './api/reportsApi';
+import { fetchReportAreas, fetchReportArea } from './api/reportsApi';
 import { fetchActivityAnalysisAvailability, fetchActivityAnalysisReport } from './api/activityAnalysisApi';
 import type { PortalAccessProviderValue } from './access';
 
@@ -71,12 +71,14 @@ beforeEach(() => {
   vi.mocked(fetchReportAreas).mockResolvedValue({
     copilot: false, copilotInteractionHistory: false, usage: false, spoAudit: false, webTraffic: false, calls: false, emails: false, officeApps: false,
   });
+  vi.mocked(fetchReportArea).mockResolvedValue({
+    area: 'copilot', months: 3, fromWeek: '2026-01-05T00:00:00Z', charts: [], cognitiveConfigured: false,
+  });
 });
 
 describe('Licence activity navigation', () => {
-  it('places Licence activity directly below Copilot Adoption in Insights', () => {
-    const paths = routesForArea('insights').map((r) => r.path);
-    expect(paths[paths.indexOf('/insights/copilot-adoption') + 1]).toBe('/insights/licence-activity');
+  it('places Licence activity in Apps & licences while keeping its existing route', () => {
+    expect(routesForArea('insights').find(route => route.path === '/insights/licence-activity')?.workload).toBe('apps');
     expect(routesForArea('admin').some((r) => r.path === '/insights/licence-activity')).toBe(false);
   });
 
@@ -87,7 +89,8 @@ describe('Licence activity navigation', () => {
     expect(screen.getByText('Preview')).toBeVisible();
     expect(screen.queryByLabelText('Reporting period')).not.toBeInTheDocument();
     expect(fetchAvailability).toHaveBeenCalled();
-    expect(fetchReportAreas).not.toHaveBeenCalled();
+    expect(fetchReportAreas).toHaveBeenCalledTimes(1);
+    expect(fetchReportArea).not.toHaveBeenCalled();
     expect(within(screen.getByLabelText('Insights navigation')).getByText('Licence activity')).toBeVisible();
   });
 
@@ -97,6 +100,7 @@ describe('Licence activity navigation', () => {
 
     expect(await screen.findByText(/No built-in report charts are available yet/)).toBeVisible();
     expect(fetchAvailability).not.toHaveBeenCalled();
+    await user.click(within(screen.getByLabelText('Insights navigation')).getByText('Apps & licences'));
     await user.click(within(screen.getByLabelText('Insights navigation')).getByText('Licence activity'));
     expect(await screen.findByText(/Licence activity reporting is not available on this deployment/)).toBeVisible();
     expect(screen.queryByText(/No built-in report charts are available yet/)).not.toBeInTheDocument();
@@ -104,9 +108,8 @@ describe('Licence activity navigation', () => {
 });
 
 describe('Activity analysis navigation', () => {
-  it('places Activity analysis directly below Licence activity in Insights', () => {
-    const paths = routesForArea('insights').map((r) => r.path);
-    expect(paths[paths.indexOf('/insights/licence-activity') + 1]).toBe('/insights/activity-analysis');
+  it('keeps Activity analysis outside the workload groups', () => {
+    expect(routesForArea('insights').find(route => route.path === '/insights/activity-analysis')?.workload).toBeUndefined();
   });
 
   it('opens the page from its route and explains a deployment without the profiling tables', async () => {
@@ -159,6 +162,7 @@ describe('History entries', () => {
     const log = renderAt('/insights/reports');
     expect(await screen.findByText(/No built-in report charts are available yet/)).toBeVisible();
 
+    await user.click(within(screen.getByLabelText('Insights navigation')).getByText('Apps & licences'));
     await user.click(within(screen.getByLabelText('Insights navigation')).getByText('Licence activity'));
 
     expect(await screen.findByText(/Licence activity reporting is not available on this deployment/)).toBeVisible();
@@ -232,6 +236,7 @@ describe('History entries', () => {
     const user = userEvent.setup();
     const log = renderAt('/insights/reports');
     expect(await screen.findByText(/No built-in report charts are available yet/)).toBeVisible();
+    await user.click(within(screen.getByLabelText('Insights navigation')).getByText('Apps & licences'));
     await user.click(within(screen.getByLabelText('Insights navigation')).getByText('Licence activity'));
     expect(await screen.findByText(/Licence activity reporting is not available on this deployment/)).toBeVisible();
 

@@ -1,4 +1,4 @@
-import { Suspense, useCallback, useState } from 'react';
+import { Suspense, useCallback, useEffect, useState } from 'react';
 import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import {
   makeStyles,
@@ -13,12 +13,17 @@ import {
   MessageBarBody,
   NavDrawer,
   NavDrawerBody,
+  NavDrawerHeader,
   NavItem,
+  NavCategory,
+  NavCategoryItem,
+  NavSubItem,
+  NavSubItemGroup,
   NavSectionHeader,
   Tooltip,
   type SelectTabEventHandler,
 } from '@fluentui/react-components';
-import { SignOut20Regular } from '@fluentui/react-icons';
+import { Dismiss20Regular, SignOut20Regular } from '@fluentui/react-icons';
 import { AppToaster } from './components/toast';
 import Spinner from './components/Spinner';
 import {
@@ -30,12 +35,15 @@ import {
   missingPermission,
   visibleAreas,
   visibleRoutesForArea,
+  WORKLOADS,
   type PortalRoute,
 } from './navigation';
 import { PRODUCT_NAME, REPOSITORY_URL, printedBuildText } from './product';
 import { LanguageSwitcher, useT } from './i18n';
 import { roleForPermission, usePortalAccess, type PortalPermission } from './access';
 import { useGlobalFilter } from './components/globalFilter/GlobalFilterProvider';
+import ReportAreasProvider, { useReportAreas } from './components/ReportAreasProvider';
+import { reportMonths, reportPageEnabled, reportPageForPath, reportPath } from './reportNavigation';
 
 const useStyles = makeStyles({
   header: {
@@ -46,10 +54,20 @@ const useStyles = makeStyles({
     color: tokens.colorNeutralForegroundOnBrand,
     paddingInline: '20px',
     height: '48px',
+    '@media (max-width: 700px)': {
+      height: 'auto',
+      minHeight: '64px',
+      paddingInline: '12px',
+      paddingBlock: '8px',
+    },
   },
   brand: {
     color: tokens.colorNeutralForegroundOnBrand,
     fontWeight: tokens.fontWeightSemibold,
+    '@media (max-width: 700px)': {
+      fontSize: tokens.fontSizeBase300,
+      minWidth: 0,
+    },
   },
   headerActions: {
     display: 'flex',
@@ -76,6 +94,7 @@ const useStyles = makeStyles({
   },
   nav: {
     height: 'auto',
+    flexShrink: 0,
   },
   content: {
     // min-width: 0 stops a wide page (tables, charts) forcing the flex row wider than the
@@ -83,6 +102,9 @@ const useStyles = makeStyles({
     flexGrow: 1,
     minWidth: 0,
     padding: '24px',
+    '@media (max-width: 700px)': {
+      padding: '16px',
+    },
   },
   contentInner: {
     maxWidth: '1120px',
@@ -171,14 +193,49 @@ function RouteElement({ route }: { route: PortalRoute }) {
  * only construct a browser repeats on every printed page *and* reserves room for.
  */
 export default function App() {
+  const location = useLocation();
+  const access = usePortalAccess();
+  return (
+    <ReportAreasProvider enabled={access.status !== 'loading' && areaForPath(location.pathname) === 'insights'}>
+      <AppShell />
+    </ReportAreasProvider>
+  );
+}
+
+function AppShell() {
   const styles = useStyles();
   const location = useLocation();
   const navigate = useNavigate();
   const t = useT();
   const access = usePortalAccess();
   const { viewKey } = useGlobalFilter();
-  const [navOpen, setNavOpen] = useState(true);
+  const [compact, setCompact] = useState(() => window.matchMedia('(max-width: 700px)').matches);
+  const [navOpen, setNavOpen] = useState(() => !window.matchMedia('(max-width: 700px)').matches);
+  const [reportPeriod, setReportPeriod] = useState(() => reportMonths(location.search));
+  const reportAvailability = useReportAreas();
+  const activeWorkload = ROUTES.find(route => route.path === location.pathname)?.workload;
+  const [expansion, setExpansion] = useState<{ path: string; open: string[] }>({
+    path: location.pathname,
+    open: activeWorkload ? [activeWorkload] : [],
+  });
+  const openCategories = expansion.path === location.pathname ? expansion.open : activeWorkload ? [activeWorkload] : [];
   const build = printedBuildText();
+
+  useEffect(() => {
+    const query = window.matchMedia('(max-width: 700px)');
+    const changed = (event: MediaQueryListEvent) => {
+      setCompact(event.matches);
+      setNavOpen(!event.matches);
+    };
+    query.addEventListener('change', changed);
+    return () => query.removeEventListener('change', changed);
+  }, []);
+
+  useEffect(() => {
+    if (location.pathname === '/insights/reports' || reportPageForPath(location.pathname)) {
+      setReportPeriod(reportMonths(location.search));
+    }
+  }, [location.pathname, location.search]);
 
   const currentArea = areaForPath(location.pathname);
   const areas = visibleAreas(access);
@@ -186,17 +243,29 @@ export default function App() {
   // falls back to the first area they can see while the page itself explains what is missing.
   const navArea = areas.some((a) => a.id === currentArea) ? currentArea : (areas[0]?.id ?? currentArea);
   const navGroups = groupedRoutesForArea(navArea, visibleRoutesForArea(navArea, access));
+  const insightRoutes = visibleRoutesForArea('insights', access).filter(route =>
+    !route.reportPage || route.path === location.pathname ||
+    (reportAvailability.areas !== null && reportPageEnabled(route.reportPage, reportAvailability.areas)),
+  );
   const inAdministration = currentArea === 'admin';
 
   const goTo = useCallback(
     (target: string) => {
+      if (compact) setNavOpen(false);
       // Navigating to the entry history is already on would push an identical entry, so the
       // browser's Back button would look like it is doing nothing. Anything else navigates: a
       // click must never be silently dropped, however fast it follows the previous one.
       if (target === currentRoutePath(location.pathname)) return;
-      navigate(target);
+      if (target === '/insights/reports' || reportPageForPath(target)) {
+        const livePath = currentRoutePath(location.pathname);
+        const liveSearch = window.location.hash.includes('?') ? window.location.hash.slice(window.location.hash.indexOf('?')) : location.search;
+        const months = livePath === '/insights/reports' || reportPageForPath(livePath) ? reportMonths(liveSearch) : reportPeriod;
+        navigate(reportPath(target, months));
+      } else {
+        navigate(target);
+      }
     },
-    [navigate, location.pathname],
+    [navigate, location.pathname, location.search, reportPeriod, compact],
   );
 
   const onAreaSelect: SelectTabEventHandler = (_event: unknown, data: { value: unknown }) => {
@@ -283,17 +352,57 @@ export default function App() {
               <div className={styles.layout} data-print="content">
                 <NavDrawer
                   open={navOpen}
-                  type="inline"
+                  type={compact ? 'overlay' : 'inline'}
+                  onOpenChange={(_event, data) => setNavOpen(data.open)}
                   className={styles.nav}
                   data-print="hide"
                   selectedValue={location.pathname}
+                  selectedCategoryValue={activeWorkload ?? ''}
+                  openCategories={openCategories}
+                  onNavCategoryItemToggle={(_event, data) => {
+                    const value = String(data.categoryValue ?? data.value);
+                    setExpansion({
+                      path: location.pathname,
+                      open: openCategories.includes(value) ? openCategories.filter(id => id !== value) : [...openCategories, value],
+                    });
+                  }}
                   onNavItemSelect={(_event: unknown, data: { value: unknown }) => goTo(String(data.value))}
                   aria-label={t('app.nav.ariaLabel', {
                     area: t(AREAS.find((a) => a.id === navArea)?.labelKey ?? AREAS[0].labelKey),
                   })}
                 >
+                  {compact && (
+                    <NavDrawerHeader>
+                      <Button appearance="subtle" icon={<Dismiss20Regular />} onClick={() => setNavOpen(false)}>
+                        {t('app.nav.collapse')}
+                      </Button>
+                    </NavDrawerHeader>
+                  )}
                   <NavDrawerBody>
-                    {navGroups.map((bucket, i) => (
+                    {navArea === 'insights' ? (
+                      <>
+                        {insightRoutes.filter(route => route.path === '/insights/overview' || route.path === '/insights/reports').map(route => (
+                          <NavItem key={route.path} value={route.path} icon={route.icon}>{t(route.labelKey)}</NavItem>
+                        ))}
+                        {WORKLOADS.map(workload => {
+                          const children = insightRoutes.filter(route => route.workload === workload.id);
+                          if (children.length === 0) return null;
+                          return (
+                            <NavCategory key={workload.id} value={workload.id}>
+                              <NavCategoryItem icon={workload.icon}>{t(workload.labelKey)}</NavCategoryItem>
+                              <NavSubItemGroup>
+                                {children.map(route => (
+                                  <NavSubItem key={route.path} value={route.path}>{t(route.labelKey)}</NavSubItem>
+                                ))}
+                              </NavSubItemGroup>
+                            </NavCategory>
+                          );
+                        })}
+                        {insightRoutes.filter(route => !route.workload && route.path !== '/insights/overview' && route.path !== '/insights/reports').map(route => (
+                          <NavItem key={route.path} value={route.path} icon={route.icon}>{t(route.labelKey)}</NavItem>
+                        ))}
+                      </>
+                    ) : navGroups.map((bucket, i) => (
                       <div key={bucket.groupKey ?? `ungrouped-${i}`}>
                         {bucket.groupKey && <NavSectionHeader>{t(bucket.groupKey)}</NavSectionHeader>}
                         {bucket.routes.map((route) => (
@@ -316,6 +425,12 @@ export default function App() {
                     {!access.enforced && inAdministration && (
                       <MessageBar intent="warning" className={styles.shellMessage}>
                         <MessageBarBody>{t('access.enforcementOff')}</MessageBarBody>
+                      </MessageBar>
+                    )}
+                    {navArea === 'insights' && reportAvailability.error && !location.pathname.startsWith('/insights/reports') && (
+                      <MessageBar intent="warning" className={styles.shellMessage}>
+                        <MessageBarBody>{reportAvailability.error}</MessageBarBody>
+                        <Button onClick={reportAvailability.retry}>{t('common.action.refresh')}</Button>
                       </MessageBar>
                     )}
                     <Suspense
