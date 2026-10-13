@@ -3,7 +3,7 @@ import { Button, Card, Field, MessageBar, MessageBarActions, MessageBarBody, Mes
 import { ArrowClockwise16Regular } from '@fluentui/react-icons';
 import { fetchPromptCategoryReport, type PromptCategoryReport as Report } from '../api/promptCategoriesApi';
 import { EN_CATALOG, formatDateParts, formatNumber, useT, type TranslationKey } from '../i18n';
-import CategoryBarChart from './charts/CategoryBarChart';
+import PromptCategoryBreakdown from './PromptCategoryBreakdown';
 import TimeSeriesChart from './charts/TimeSeriesChart';
 import Spinner from './Spinner';
 import { promptCategoryErrorText } from './promptCategoryErrors';
@@ -13,10 +13,6 @@ const useStyles = makeStyles({
   notes: { margin: 0, paddingInlineStart: '18px', display: 'flex', flexDirection: 'column', gap: '4px' },
   version: { maxWidth: '420px' },
   section: { display: 'flex', flexDirection: 'column', gap: '8px' },
-  list: {
-    listStyleType: 'none', margin: 0, padding: 0, display: 'grid',
-    gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: '6px 16px',
-  },
   empty: { padding: '24px', textAlign: 'center', color: tokens.colorNeutralForeground3 },
   muted: { color: tokens.colorNeutralForeground3 },
 });
@@ -90,14 +86,7 @@ export default function PromptCategoryReport({ months }: { months: number }) {
       </Field>
       {!report.mix.length && <div className={styles.empty}><Text>{t('promptCategories.empty')}</Text></div>}
       {report.mix.length > 0 && <>
-        <div className={styles.section}>
-          <Text weight="semibold">{t('promptCategories.mix')}</Text>
-          <CategoryBarChart literalLabels categories={report.mix.map(row => ({ label: label(row.categoryId), value: row.prompts }))}
-            valueLabel={t('promptCategories.prompts')} />
-          <ul className={styles.list}>
-            {report.mix.map(row => <li key={row.categoryId}><Text>{label(row.categoryId)}: {formatNumber(row.prompts)} {t('promptCategories.prompts')}</Text></li>)}
-          </ul>
-        </div>
+        <PromptCategoryBreakdown report={report} label={label} />
         <div className={styles.section}>
           <Text weight="semibold">{t('promptCategories.trend')}</Text>
           <TimeSeriesChart literalLabels valueLabel={t('promptCategories.prompts')} series={series} />

@@ -73,6 +73,17 @@ and prompt pages render their respective charts from that bundle; Azure AI Langu
 still reported by the server. Categories are requested only with history import enabled. Nothing in
 the report enables history import, categorisation or cognitive enrichment.
 
+The category mix is a proportional treemap with exact counts and shares beneath it. Tile colours
+match the Directing, Supervising and Unassigned summaries; the leading assigned human mode is
+highlighted, with explicit tied/no-assignment states. Mode totals use the immutable taxonomy for
+the selected version, not today's administration settings. Human modes are administrator annotations
+of goals, not behaviours inferred by the model. Every share uses the sum of the displayed,
+privacy-eligible classified categories (including Unassigned); suppressed categories are never
+reconstructed and `not-classified` is shown separately, outside the denominator. Thus these are
+shares of the displayed classified sample, not all tenant prompts or all people. Weekly trend
+suppression and gaps are unchanged. The breakdown uses the existing report response, with no
+additional SQL queries or schema/configuration changes.
+
 The administration test-drive uses `POST api/PromptCategories/test`, protected by Administration
 and the same-origin XHR filter. Save or discard edits before testing; the submitted taxonomy version
 must still match the stored configuration. Samples are limited to 5,000 characters (longer requests

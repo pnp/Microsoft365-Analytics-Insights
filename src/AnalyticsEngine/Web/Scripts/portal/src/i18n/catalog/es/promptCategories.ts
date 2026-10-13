@@ -1,5 +1,17 @@
 import type en from '../en/promptCategories';
 const es: Record<keyof typeof en, string> = {
+  'promptCategories.breakdown.title': 'Objetivos de las indicaciones y modos humanos',
+  'promptCategories.breakdown.basis': 'Proporciones de {count} indicaciones clasificadas mostradas en este período y versión de taxonomía. Se excluyen las categorías ocultas por privacidad y las indicaciones no clasificadas; no es la proporción de todas las indicaciones del inquilino.',
+  'promptCategories.breakdown.leading': 'Modo humano asignado más popular: {mode} ({share})',
+  'promptCategories.breakdown.tied': 'La dirección y la supervisión son igual de populares entre las indicaciones mostradas.',
+  'promptCategories.breakdown.noMode': 'Las categorías mostradas no tienen ningún modo humano asignado.',
+  'promptCategories.breakdown.mostPopular': 'Modo asignado más popular',
+  'promptCategories.breakdown.count': '{count} indicaciones',
+  'promptCategories.breakdown.modeNote': 'Los colores agrupan las categorías por el modo humano asignado por un administrador en esta versión de taxonomía. El modelo clasifica el objetivo, no el comportamiento humano. Las indicaciones sin asignar permanecen en el denominador; el modo asignado predominante no implica necesariamente una mayoría.',
+  'promptCategories.breakdown.values': 'Recuentos, proporciones y modos humanos de las categorías',
+  'promptCategories.breakdown.row': '{share} · {mode}',
+  'promptCategories.breakdown.noClassified': 'No hay indicaciones clasificadas que cumplan el umbral de privacidad para mostrar un desglose de categorías.',
+  'promptCategories.breakdown.notClassified': 'Sin clasificar: {count} Indicaciones',
   'promptCategories.test.title': 'Probar las categorías de indicaciones',
   'promptCategories.test.notice': 'Al enviar esta muestra, se transmite a su implementación configurada de Azure OpenAI y se consume uso del modelo. Utilice texto ficticio, no datos personales ni confidenciales. El portal no guarda ni registra la indicación o el resultado, no lo añade a informes ni contadores de importación y no activa la categorización para las importaciones. La prueba utiliza la taxonomía guardada aunque la categorización de importaciones esté desactivada.',
   'promptCategories.test.saveFirst': 'Guarde o descarte los cambios de la taxonomía antes de probar. Espere a que termine cualquier operación de configuración.',

@@ -38,6 +38,20 @@ it('keeps an unavailable selection explicit so the reader can choose the sole el
   await waitFor(() => expect(fetchPromptCategoryReport).toHaveBeenCalledWith(1, 'version-b'));
 });
 
+it('regroups modes from the selected historical taxonomy without mixing versions', async () => {
+  vi.mocked(fetchPromptCategoryReport).mockImplementation(async (_months, version) => ({
+    versions: ['version-a', 'version-b'], version: version ?? 'version-a',
+    categories: [{ id: 'custom', name: 'Contoso', description: 'Synthetic goal', humanMode: version === 'version-b' ? 'supervising' : 'directing' }],
+    mix: [{ categoryId: 'custom', prompts: 20 }], trend: [],
+  }));
+  renderWithProvider(<PromptCategoryReport months={3} />);
+  expect(await screen.findByText('Most popular assigned human mode: Directing (100%)')).toBeInTheDocument();
+  await userEvent.setup().selectOptions(screen.getByLabelText('Taxonomy version'), 'version-b');
+  expect(await screen.findByText('Most popular assigned human mode: Supervising (100%)')).toBeInTheDocument();
+  expect(screen.queryByText('Most popular assigned human mode: Directing (100%)')).not.toBeInTheDocument();
+  expect(screen.getByText('Contoso: 20 Prompts')).toBeInTheDocument();
+});
+
 it('never translates administrator names that happen to match server placeholders', async () => {
   await loadCatalog('es');
   vi.mocked(fetchPromptCategoryReport).mockResolvedValue({
