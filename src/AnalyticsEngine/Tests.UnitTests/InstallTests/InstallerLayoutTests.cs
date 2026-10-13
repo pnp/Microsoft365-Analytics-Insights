@@ -77,9 +77,6 @@ namespace Tests.UnitTests.InstallTests
                     Application.DoEvents();
                     var layout = Find<TableLayoutPanel>(page, "installLayout");
                     var log = Find<ListView>(page, "lstLog");
-                    var operations = Find<OperationCentreControl>(page, "operationCentre");
-                    Assert.IsTrue(operations.MinimumSize.Height >= 100 + log.Margin.Vertical,
-                        "The outer percent row must enforce enough height for its nested viewport.");
                     var actions = Find<FlowLayoutPanel>(page, "actionLayout");
                     Assert.IsTrue(layout.ClientRectangle.Contains(actions.Bounds));
                     var logBounds = layout.RectangleToClient(log.Parent.RectangleToScreen(log.Bounds));
@@ -196,6 +193,9 @@ namespace Tests.UnitTests.InstallTests
                     var log = Find<ListView>(page, "lstLog");
                     var actions = Find<FlowLayoutPanel>(page, "actionLayout");
                     Assert.IsTrue(log.Height >= 100, $"Log viewport must retain 100px; actual={log.Bounds}, layout={layout.Bounds}, actions={actions.Bounds}.");
+                    var operations = Find<OperationCentreControl>(page, "operationCentre");
+                    Assert.IsTrue(operations.MinimumSize.Height >= 100 + log.Margin.Vertical,
+                        "The outer percent row must enforce enough height for its nested viewport.");
                     var logBounds = layout.RectangleToClient(log.Parent.RectangleToScreen(log.Bounds));
                     Assert.IsFalse(logBounds.IntersectsWith(actions.Bounds),
                         $"Log={logBounds}; parent={log.Parent.Bounds}; actions={actions.Bounds}; rows={string.Join(",", layout.GetRowHeights())}");
