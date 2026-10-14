@@ -156,6 +156,14 @@ importer still imports capacity, makes no consumption calls and records a non-er
 "connection required" state (`agentCosts.import.connectionRequired`) instead of a 403 every cycle.
 A failed connected identity never silently falls back or reports success.
 
+The Administration connection page shows a green checkmark and the connected administrator's
+account, read from the encrypted MSAL cache without requesting a token or calling Power Platform.
+New connections also retain the UTC time at which billing access was verified; old caches still show
+the account but omit that timestamp rather than inventing one. Refreshing tokens preserves the original
+verification time. This is saved-connection status, not proof that the latest usage import succeeded.
+An unreadable cache requires reconnection, and a failed status refresh removes stale success details.
+Only operational account metadata is returned to administrators, never tokens or the cache itself.
+
 **Prepaid credits and Azure charges are separate measures.** The report explicitly shows prepaid
 Copilot Credits consumed from the tenant capacity snapshot, including Microsoft's consumption period
 and timestamp, alongside Azure monetary spend for the selected date window. The snapshot is not

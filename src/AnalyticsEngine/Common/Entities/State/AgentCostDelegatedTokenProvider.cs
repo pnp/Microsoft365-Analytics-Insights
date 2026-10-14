@@ -85,7 +85,31 @@ namespace Common.Entities.State
             }
             await verifyAccess(result.AccessToken).ConfigureAwait(false);
             var protection = await _protection().ConfigureAwait(false);
-            await _store.ConnectAsync(Serialize(cache, result.Account.HomeAccountId.Identifier, protection)).ConfigureAwait(false);
+            await _store.ConnectAsync(Serialize(cache, result.Account.HomeAccountId.Identifier, protection,
+                DateTimeOffset.UtcNow)).ConfigureAwait(false);
+        }
+
+        public async Task<AgentCostConnectionDetails> GetConnectionDetailsAsync(string version)
+        {
+            var value = await _store.GetCacheAsync(version).ConfigureAwait(false);
+            try
+            {
+                if (value == null) throw new AgentCostConnectionException("reconnectNeeded");
+                var protection = await _protection().ConfigureAwait(false);
+                var payload = JsonConvert.DeserializeObject<CachePayload>(Encoding.UTF8.GetString(protection.Unprotect(value)));
+                if (payload == null) throw new AgentCostConnectionException("reconnectNeeded");
+                var app = await _client().ConfigureAwait(false);
+                var cache = new CacheSession(app, Convert.FromBase64String(payload.Cache));
+                var account = await app.GetAccountAsync(payload.Account).ConfigureAwait(false);
+                if (account == null) throw new AgentCostConnectionException("reconnectNeeded");
+                return new AgentCostConnectionDetails { Account = account.Username, VerifiedUtc = payload.VerifiedUtc };
+            }
+            catch (Exception ex) when (ex is CryptographicException || ex is JsonException
+                || ex is FormatException || ex is ArgumentException || ex is MsalException || ex is AgentCostConnectionException)
+            {
+                await _store.RequireReconnectAsync(version).ConfigureAwait(false);
+                throw new AgentCostConnectionException("reconnectNeeded");
+            }
         }
 
         public async Task<AccessToken> AcquireAsync(string version)
@@ -103,7 +127,7 @@ namespace Common.Entities.State
                 var account = await app.GetAccountAsync(payload.Account).ConfigureAwait(false);
                 if (account == null) throw new AgentCostConnectionException("reconnectNeeded");
                 var result = await app.AcquireTokenSilent(new[] { Scope }, account).ExecuteAsync().ConfigureAwait(false);
-                await _store.SaveCacheAsync(version, Serialize(cache, payload.Account, protection)).ConfigureAwait(false);
+                await _store.SaveCacheAsync(version, Serialize(cache, payload.Account, protection, payload.VerifiedUtc)).ConfigureAwait(false);
                 var current = await _store.GetHeadAsync().ConfigureAwait(false);
                 if (current?.Connected != true || current.Version != version)
                     throw new AgentCostConnectionException("disconnected");
@@ -126,11 +150,13 @@ namespace Common.Entities.State
             }
         }
 
-        private static string Serialize(CacheSession cache, string account, AgentCostTokenProtection protection) =>
+        private static string Serialize(CacheSession cache, string account, AgentCostTokenProtection protection,
+            DateTimeOffset? verifiedUtc) =>
             protection.Protect(Encoding.UTF8.GetBytes(JsonConvert.SerializeObject(new CachePayload
             {
                 Account = account,
                 Cache = Convert.ToBase64String(cache.Bytes),
+                VerifiedUtc = verifiedUtc,
             })));
 
         private sealed class CacheSession
@@ -154,7 +180,16 @@ namespace Common.Entities.State
         {
             public string Account { get; set; }
             public string Cache { get; set; }
+            public DateTimeOffset? VerifiedUtc { get; set; }
         }
+    }
+
+    public sealed class AgentCostConnectionDetails
+    {
+        [JsonProperty("account")]
+        public string Account { get; set; }
+        [JsonProperty("verifiedUtc")]
+        public DateTimeOffset? VerifiedUtc { get; set; }
     }
 
     /// <summary>Stable, secret-free outcome; never retains the original MSAL exception.</summary>

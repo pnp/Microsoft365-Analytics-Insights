@@ -15,15 +15,33 @@ namespace Web.AnalyticsWeb.Controllers
     public sealed class AgentCostConnectionAPIController : ApiController
     {
         private readonly Func<AgentCostConnectionStore> _openStore;
+        private readonly Func<AgentCostConnectionStore, AgentCostDelegatedTokenProvider> _createProvider;
         public AgentCostConnectionAPIController() : this(() => AgentCostConnectionStore.TryOpen(new AppConfig())) { }
-        internal AgentCostConnectionAPIController(Func<AgentCostConnectionStore> openStore) { _openStore = openStore; }
+        internal AgentCostConnectionAPIController(Func<AgentCostConnectionStore> openStore,
+            Func<AgentCostConnectionStore, AgentCostDelegatedTokenProvider> createProvider = null)
+        {
+            _openStore = openStore;
+            _createProvider = createProvider ?? (store => AgentCostDelegatedTokenProvider.Create(new AppConfig(), store));
+        }
 
         [HttpGet, Route("")]
         public async Task<IHttpActionResult> Status()
         {
             var store = _openStore();
             if (store == null) return Ok(new { state = "storageNotConfigured" });
-            try { return Ok(new { state = await store.GetStatusAsync() }); }
+            try
+            {
+                var head = await store.GetHeadAsync();
+                var state = await store.GetStatusAsync();
+                AgentCostConnectionDetails details = null;
+                if (state == "connected" && head?.Connected == true)
+                    details = await _createProvider(store).GetConnectionDetailsAsync(head.Version);
+                var current = await store.GetHeadAsync();
+                if (current?.Version != head?.Version)
+                    return Ok(new { state = await store.GetStatusAsync() });
+                return Ok(new { state, details });
+            }
+            catch (AgentCostConnectionException) { return Ok(new { state = "reconnectNeeded" }); }
             catch (Exception) { return Content(HttpStatusCode.ServiceUnavailable, new { code = "storageUnavailable" }); }
         }
 
