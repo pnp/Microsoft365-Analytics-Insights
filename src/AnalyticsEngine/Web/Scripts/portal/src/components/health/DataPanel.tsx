@@ -50,6 +50,23 @@ export default function DataPanel({ active }: { active: boolean }) {
             </MessageBar>
           )}
 
+          {data.agent365CatalogEnabled && (
+            <>
+              <Text className={styles.subHeading}>{t('health.data.agent365CatalogHeading')}</Text>
+              <Text>
+                {t('health.data.agent365CatalogCounts', {
+                  packages: formatNumber(data.agent365CatalogPackageCount),
+                  neverUsed: formatNumber(data.agent365CatalogNeverUsedCount),
+                })}
+              </Text>
+              <Text>
+                {data.agent365CatalogLastSuccessUtc
+                  ? t('health.data.agent365CatalogLastSuccess', { when: formatUtc(data.agent365CatalogLastSuccessUtc) })
+                  : t('health.data.agent365CatalogNoSuccessfulImport')}
+              </Text>
+            </>
+          )}
+
           <Table size="small" aria-label={t('health.data.ariaLabel')}>
             <TableHeader>
               <TableRow>

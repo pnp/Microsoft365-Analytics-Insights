@@ -725,9 +725,7 @@ export default function CoworkPanel({
             {t('copilotAdoptionCowork.creditsHeadroom.title')}
           </Text>
           <Text size={200} className={styles.sectionNote}>
-            {tNode('copilotAdoptionCowork.creditsHeadroom.description', {
-              sharedPool: <strong>{t('copilotAdoptionCowork.creditsHeadroom.sharedPool')}</strong>,
-            })}
+            {t('copilotAdoptionCowork.creditsHeadroom.description')}
           </Text>
           <div className={styles.creditGrid}>
             {credits.entitled !== null && (

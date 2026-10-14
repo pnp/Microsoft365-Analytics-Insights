@@ -59,7 +59,8 @@ namespace Web.AnalyticsWeb.Controllers
         [Route("data")]
         public async Task<IActionResult> Data()
         {
-            return Ok(await _health.LoadDataAsync());
+            var config = new AppConfig();
+            return Ok(await _health.LoadDataAsync(config.ImportJobSettings.Agent365PackageCatalog));
         }
 
         // GET: api/Health/liveness

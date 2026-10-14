@@ -67,6 +67,7 @@ const overview: Record<keyof typeof en, string> = {
   'overview.enabledImport.userMetadata': 'Metadatos de usuario',
   'overview.enabledImport.usageReports': 'Informes de uso',
   'overview.enabledImport.copilotUsageReportsGraph': 'Informes de uso de Copilot (Graph)',
+  'overview.enabledImport.agent365PackageCatalog': 'Catálogo de paquetes de Agent 365',
   'overview.enabledImport.teams': 'Teams',
   'overview.enabledImport.webTraffic': 'Tráfico web',
   'overview.enabledImport.sentEmails': 'Correos enviados',

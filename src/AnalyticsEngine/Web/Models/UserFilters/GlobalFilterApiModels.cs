@@ -23,7 +23,7 @@ namespace Web.AnalyticsWeb.Models.UserFilters
         [JsonProperty("bypassed")]
         public bool Bypassed { get; set; }
 
-        /// <summary>True when this person may switch it off for their own view, and edit it: a portal administrator.</summary>
+        /// <summary>True when this person may switch it off and edit it: both Administration and See PII are required.</summary>
         [JsonProperty("canBypass")]
         public bool CanBypass { get; set; }
 

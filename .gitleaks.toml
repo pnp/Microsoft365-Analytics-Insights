@@ -45,6 +45,19 @@ paths = [
   '''^src/AnalyticsEngine/Tests\.UnitTests/TeamsCrawlTests\.cs$''',
 ]
 
+# --- C# type-name false positive in delegated token protection ---
+[[allowlists]]
+description = """
+Confirmed C# type-name false positive: the AgentCostTokenProtection constructor's string secret
+parameter followed by X509Certificate2 is parsed as a generic key assignment. Only that exact
+captured type name in that exact source file is exempt; actual credentials remain scanned.
+"""
+condition = "AND"
+targetRules = ["generic-api-key"]
+regexTarget = "secret"
+regexes = ['''^X509Certificate2$''']
+paths = ['''^src/AnalyticsEngine/Common/Entities/State/AgentCostTokenProtection\.cs$''']
+
 # --- Local build / IDE / dependency / generated artifacts ---
 # These are never committed (they're gitignored) and are absent from a fresh CI checkout; they only
 # appear in a local working-tree (`gitleaks dir`) scan. Allowlisting keeps the local scan meaningful.

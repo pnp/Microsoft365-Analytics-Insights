@@ -12,6 +12,14 @@ namespace App.ControlPanel
         public MainForm()
         {
             InitializeComponent();
+            installSPOSitesControl.OpenConfigurationRequested += mnuOpenConfig_Click;
+            installSPOSitesControl.NewConfigurationRequested += (sender, args) =>
+            {
+                if (MessageBox.Show(this, "Discard the current edits and start a new configuration?",
+                    "New configuration", MessageBoxButtons.YesNo, MessageBoxIcon.Warning,
+                    MessageBoxDefaultButton.Button2) == DialogResult.Yes)
+                    NewConfig();
+            };
 
             // Defaults set on load
         }
@@ -67,10 +75,10 @@ namespace App.ControlPanel
             }
             if (!InstallerNetworkProxy.TryApplyProcessWide(this.SavedPreferences.ProxyConfig, null, out var proxyError))
             {
-                // The Window menu is hidden until the admin chooses Install Solution (SetMenu), so say how to
+                // The Window menu is hidden until the admin chooses Configure solution (SetMenu), so say how to
                 // reach it: naming a menu that is not on screen sends them looking for something that isn't there.
                 MessageBox.Show($"The saved installer proxy settings can't be used: {proxyError}\r\n\r\n" +
-                    "The installer will use the system proxy until you correct them: choose Install Solution, " +
+                    "The installer will use the system proxy until you correct them: choose Configure solution, " +
                     "then Window > Proxy Configuration.",
                     "Proxy Configuration", MessageBoxButtons.OK, MessageBoxIcon.Warning);
             }
@@ -263,19 +271,20 @@ namespace App.ControlPanel
         }
 
 
-        public void SaveLastSettings()
+        public bool SaveLastSettings()
         {
             if (this.HaveSavedConfig)
             {
                 SaveCurrentSettings(this.LastConfigFilePath, this.LastPassword);
+                return true;
             }
             else
             {
-                SaveNewSettingsFile();
+                return SaveNewSettingsFile();
             }
         }
 
-        public void SaveNewSettingsFile()
+        public bool SaveNewSettingsFile()
         {
             if (saveFileDialog.ShowDialog() == DialogResult.OK)
             {
@@ -283,8 +292,10 @@ namespace App.ControlPanel
                 if (passwordForm.ShowDialog() == DialogResult.OK)
                 {
                     SaveCurrentSettings(saveFileDialog.FileName, passwordForm.Password);
+                    return true;
                 }
             }
+            return false;
         }
 
         public void SaveCurrentSettings(string fileName, string password)
@@ -330,6 +341,12 @@ namespace App.ControlPanel
         internal void SetFormLoadingState(AppWaitState state)
         {
             toolStripLoading.Visible = state == AppWaitState.Working;
+            mnuOpenConfig.Enabled = state == AppWaitState.Ready && chkDisclaimer.Checked;
+            mnuNewConfig.Enabled = state == AppWaitState.Ready && chkDisclaimer.Checked;
+            mnuSaveConfigAs.Enabled = state == AppWaitState.Ready;
+            mnuSaveConfig.Enabled = state == AppWaitState.Ready && HaveSavedConfig;
+            mnuWindow.Enabled = state == AppWaitState.Ready;
+            mnuUpgradeDatabaseSchemaToolStripMenuItem.Enabled = state == AppWaitState.Ready;
         }
 
         private void solutionTestsConfigurationToolStripMenuItem_Click(object sender, EventArgs e)

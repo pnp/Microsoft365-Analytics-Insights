@@ -125,13 +125,12 @@ namespace Common.Entities.CopilotAdoption
         public bool CopilotActive { get; set; }
 
         /// <summary>
-        /// Total Copilot Credits billed to this user in the window, where the Copilot Studio credit import
-        /// has per-user rows for them.
+        /// Copilot Studio Credits billed to this user in the window, where the optional per-user import
+        /// has rows for them.
         ///
-        /// <b>Null means "not attributable", never zero.</b> And this is <i>all</i> Copilot Credit
-        /// consumption, not Cowork's share: Microsoft meters Cowork against the shared Copilot Credits
-        /// pool with no per-row workload discriminator, so a Cowork-only figure cannot be produced. See
-        /// <see cref="Common.Entities.Entities.AgentCosts.CopilotStudioHarnessClassifier"/>.
+        /// <b>Null means "not attributable", never zero.</b> This is Copilot Studio usage from that
+        /// import, not Cowork usage or spend. Cowork billing is managed separately in the Microsoft 365
+        /// admin center.
         /// </summary>
         public decimal? TotalCopilotCredits { get; set; }
     }
@@ -322,11 +321,9 @@ namespace Common.Entities.CopilotAdoption
         /// <summary>
         /// All Copilot Credits billed to this user in the window, or null for "not attributable".
         ///
-        /// <b>Not a Cowork figure.</b> Cowork meters against the shared Copilot Credits pool and Microsoft
-        /// exposes no per-row workload discriminator, so this is the user's total credit consumption
-        /// across every credit-billed Copilot workload. Labelled as such everywhere it is shown; null is
-        /// rendered as "not attributable" rather than as zero, which would read as "this user costs
-        /// nothing".
+        /// <b>Not a Cowork figure.</b> This is Copilot Studio usage from the optional per-user import.
+        /// Null is rendered as "not attributable" rather than as zero, which would read as "this user
+        /// has no Copilot Studio usage".
         /// </summary>
         [JsonProperty("totalCopilotCredits")]
         public decimal? TotalCopilotCredits { get; set; }
@@ -414,12 +411,11 @@ namespace Common.Entities.CopilotAdoption
     }
 
     /// <summary>
-    /// The tenant's Copilot Credit position, shown as rollout headroom.
+    /// The tenant's Copilot Studio credit-capacity snapshot.
     ///
-    /// <b>This is the shared Copilot Credits pool, not Cowork-only spend.</b> Cowork genuinely consumes
-    /// from it - which is what makes it valid headroom for a rollout decision - but Copilot Studio,
-    /// AI Builder and other credit-billed workloads draw on the same pool, and Microsoft publishes no way
-    /// to separate them. Every label on this must say so.
+    /// <b>This is not Cowork funding, usage or rollout headroom.</b> It is a separate Copilot Studio
+    /// capacity snapshot; Cowork's usage-based billing is managed separately in the Microsoft 365
+    /// admin center.
     /// </summary>
     public class CoworkCreditPosition
     {
@@ -507,7 +503,13 @@ namespace Common.Entities.CopilotAdoption
         /// Observed: per-active-day averages from Microsoft's usage reports, times working days a month,
         /// rounded as published.
         /// </summary>
+        /// <remarks>
+        /// The observed input the modelled hours rest on, so Snapshot facts carries each kind of work as a
+        /// row of its own (<c>coworkValueEstimate.activities.sendEmail</c>): a change in it is real even
+        /// though the hours are modelled.
+        /// </remarks>
         [JsonProperty("activities")]
+        [SnapshotFactsBreakdown(typeof(CoworkActivities))]
         public List<CoworkActivityVolume> Activities { get; set; } = new List<CoworkActivityVolume>();
 
         /// <summary>
@@ -562,7 +564,7 @@ namespace Common.Entities.CopilotAdoption
     /// What one cohort already does by hand of one kind of work Cowork could take on, a month.
     /// Observed, not modelled - see <see cref="CoworkActivities"/>.
     /// </summary>
-    public class CoworkActivityVolume
+    public class CoworkActivityVolume : ISnapshotFactsBreakdownRow
     {
         /// <summary>One of the <see cref="CoworkActivities"/> keys, e.g. <c>organiseMeetings</c>.</summary>
         [JsonProperty("activity")]
@@ -571,6 +573,10 @@ namespace Common.Entities.CopilotAdoption
         /// <summary>The work done by hand a month by the people the estimate covers.</summary>
         [JsonProperty("volumePerMonth")]
         public double VolumePerMonth { get; set; }
+
+        string ISnapshotFactsBreakdownRow.BreakdownMember => Activity;
+
+        object ISnapshotFactsBreakdownRow.BreakdownValue => VolumePerMonth;
     }
 
     /// <summary>

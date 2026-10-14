@@ -12,10 +12,13 @@ namespace App.ControlPanel.Engine.InstallerTasks
     /// </summary>
     public class ResourceSecurityInstallJob : BaseAnalyticsSolutionInstallJob
     {
+        public const string FOUNDRY_OPENAI_USER_ROLE_NAME = "Cognitive Services OpenAI User";
+
         private readonly RoleAssignmentTask _appInsightsReaderRoleTask;
         private readonly RoleAssignmentTask _storageBlobDataContributorRoleTask;
         private readonly RoleAssignmentTask _storageTableDataContributorRoleTask;
         private readonly RoleAssignmentTask _cognitiveServicesUserRoleTask;
+        private readonly RoleAssignmentTask _foundryOpenAIUserRoleTask;
         private readonly RoleAssignmentTask _serviceBusDataOwnerRoleTask;
 
         public ResourceSecurityInstallJob(ILogger logger, SolutionInstallConfig config, SubscriptionResource subscription) : base(logger, config, subscription)
@@ -77,6 +80,20 @@ namespace App.ControlPanel.Engine.InstallerTasks
                 this.AddTask(_cognitiveServicesUserRoleTask);
             }
 
+            // The runtime calls Azure OpenAI with its client-secret credential when no key is configured.
+            // This built-in role grants inference access without granting resource management permissions.
+            if (config.FoundryPromptEnabled)
+            {
+                var foundryOpenAIUserConfig = TaskConfig.GetConfigForPropAndVal(RoleAssignmentTask.CONFIG_KEY_ROLE_NAME, FOUNDRY_OPENAI_USER_ROLE_NAME)
+                    .AddSetting(RoleAssignmentTask.CONFIG_KEY_CLIENT_ID, config.RuntimeAccountOffice365.ClientId)
+                    .AddSetting(RoleAssignmentTask.CONFIG_KEY_CLIENT_SECRET, config.RuntimeAccountOffice365.Secret)
+                    .AddSetting(RoleAssignmentTask.CONFIG_KEY_TENANT_ID, config.RuntimeAccountOffice365.DirectoryId)
+                    .AddSetting(RoleAssignmentTask.CONFIG_KEY_PRINCIPAL_TYPE, "ServicePrincipal");
+
+                _foundryOpenAIUserRoleTask = new RoleAssignmentTask(foundryOpenAIUserConfig, logger, Location, tagDic);
+                this.AddTask(_foundryOpenAIUserRoleTask);
+            }
+
             // Assign "Azure Service Bus Data Owner" to the runtime account for data-plane access
             // (send from the calls webhook + receive in the importer) now that Service Bus authenticates
             // with RBAC instead of a SAS key. Without it the runtime SP gets 401, and with namespace local
@@ -99,6 +116,8 @@ namespace App.ControlPanel.Engine.InstallerTasks
         public RoleAssignmentResource StorageTableDataContributorRole => GetTaskResult<RoleAssignmentResource>(_storageTableDataContributorRoleTask);
         public RoleAssignmentResource CognitiveServicesUserRole =>
             _cognitiveServicesUserRoleTask == null ? null : GetTaskResult<RoleAssignmentResource>(_cognitiveServicesUserRoleTask);
+        public RoleAssignmentResource FoundryOpenAIUserRole =>
+            _foundryOpenAIUserRoleTask == null ? null : GetTaskResult<RoleAssignmentResource>(_foundryOpenAIUserRoleTask);
         public RoleAssignmentResource ServiceBusDataOwnerRole =>
             _serviceBusDataOwnerRoleTask == null ? null : GetTaskResult<RoleAssignmentResource>(_serviceBusDataOwnerRoleTask);
     }

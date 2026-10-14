@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Authentication.OpenIdConnect;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.DataProtection;
 using Web.AnalyticsWeb.Security;
 
 namespace Web.AnalyticsWeb.Controllers
@@ -44,6 +45,16 @@ namespace Web.AnalyticsWeb.Controllers
             return Challenge(
                 DelegatedGraphConsent.CreateTeamsConnectProperties(),
                 OpenIdConnectDefaults.AuthenticationScheme);
+        }
+
+        [HttpGet]
+        [Authorize]
+        [RequirePortalPermission(PortalPermission.Administration)]
+        public IActionResult ConnectAgentCosts(string intent, [FromServices] IDataProtectionProvider protection)
+        {
+            var properties = AgentCostConsent.ReadIntent(intent, User, protection);
+            if (properties == null) return StatusCode(403);
+            return Challenge(properties, AgentCostConsent.AuthenticationType);
         }
 
         /// <summary>

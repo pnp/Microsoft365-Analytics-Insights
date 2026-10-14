@@ -34,7 +34,7 @@ namespace Common.Entities.State
     /// the ones nobody reads again.</description></item>
     /// </list>
     /// </remarks>
-    public sealed class AzureTableKeyValueStore : IKeyValueStore
+    public sealed class AzureTableKeyValueStore : IConditionalKeyValueStore
     {
         internal const string KeyProperty = "Key";
         internal const string ValueProperty = "Value";
@@ -201,6 +201,59 @@ namespace Common.Entities.State
                     .ConfigureAwait(false);
 
                 return response.HasValue && !IsExpired(response.Value);
+            }, cancellationToken).ConfigureAwait(false);
+        }
+
+        public async Task<VersionedValue> GetVersionedAsync(string key, CancellationToken cancellationToken = default)
+        {
+            var rowKey = ToRowKey(key);
+            return await RunAsync(async table =>
+            {
+                var response = await table.GetEntityIfExistsAsync<TableEntity>(_partitionKey, rowKey, cancellationToken: cancellationToken)
+                    .ConfigureAwait(false);
+                if (!response.HasValue)
+                {
+                    return new VersionedValue(null, null);
+                }
+
+                var entity = response.Value;
+                // An expired row reads as missing but keeps its ETag, so a conditional write replaces it rather than
+                // failing because a row (nobody can see) is in the way.
+                return new VersionedValue(IsExpired(entity) ? null : DecodeValue(entity, key), entity.ETag.ToString());
+            }, cancellationToken).ConfigureAwait(false);
+        }
+
+        public async Task<bool> TrySetStringAsync(string key, string value, string expectedVersionToken, CancellationToken cancellationToken = default)
+        {
+            if (value == null) throw new ArgumentNullException(nameof(value));
+
+            var entity = new TableEntity(_partitionKey, ToRowKey(key))
+            {
+                { KeyProperty, key },
+            };
+            EncodeValue(entity, key, value);
+
+            return await RunAsync(async table =>
+            {
+                try
+                {
+                    if (expectedVersionToken == null)
+                    {
+                        // Insert fails with 409 when another writer created the row first.
+                        await table.AddEntityAsync(entity, cancellationToken).ConfigureAwait(false);
+                    }
+                    else
+                    {
+                        // Replace, conditional on the ETag read: 412 when the row changed since, 404 when it was deleted.
+                        await table.UpdateEntityAsync(entity, new ETag(expectedVersionToken), TableUpdateMode.Replace, cancellationToken)
+                            .ConfigureAwait(false);
+                    }
+                    return true;
+                }
+                catch (RequestFailedException ex) when (ex.Status == 409 || ex.Status == 412 || ex.Status == 404)
+                {
+                    return false;
+                }
             }, cancellationToken).ConfigureAwait(false);
         }
 

@@ -60,3 +60,51 @@ export interface DlpSummary {
   tenantBlockedCount: number;
   tenantAuditedCount: number;
 }
+
+/**
+ * A per-interaction flag as a rate per 10,000 (mirrors DlpGovernanceRate).
+ *
+ * A flag Microsoft did not report is "not reported", not "clean": such an interaction is in neither
+ * count, so the rate is always over `reportedInteractions` and is shown with it.
+ */
+export interface DlpGovernanceRate {
+  /** Numerator: interactions on which the flag was reported true at least once. */
+  flaggedInteractions: number;
+  /** Denominator: interactions on which the flag was reported at all, true or false. */
+  reportedInteractions: number;
+  /** Null when nothing reported the flag - unknown, never zero. */
+  ratePer10000: number | null;
+}
+
+/** The share of the content Copilot used that carried a sensitivity label. */
+export interface DlpGovernanceLabelShare {
+  labelledResources: number;
+  /** Denominator: every resource Copilot used, counted once per interaction. */
+  resources: number;
+  interactionsWithResources: number;
+  /** 0-1; null when Copilot used no resource. */
+  share: number | null;
+}
+
+/** A model or plugin as Microsoft named it (never translated), and the interactions that used it. */
+export interface DlpGovernanceMixRow {
+  name: string;
+  interactions: number;
+  /** Of every interaction in the window, 0-1; null when the window has none. */
+  share: number | null;
+}
+
+/** The DLP page's governance section (api/Dlp/governance; mirrors DlpGovernanceSummary). */
+export interface DlpGovernanceSummary {
+  fromUtc: string;
+  toUtc: string;
+  /** Copilot interactions in the window: the population every figure is drawn from. */
+  interactions: number;
+  jailbreak: DlpGovernanceRate;
+  xpia: DlpGovernanceRate;
+  sensitivityLabels: DlpGovernanceLabelShare;
+  interactionsWithModel: number;
+  models: DlpGovernanceMixRow[];
+  interactionsWithPlugin: number;
+  plugins: DlpGovernanceMixRow[];
+}

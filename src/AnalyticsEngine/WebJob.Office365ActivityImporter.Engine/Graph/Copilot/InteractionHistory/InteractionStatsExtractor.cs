@@ -53,6 +53,10 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.InteractionHisto
         public string LanguageName { get; set; }
         public List<string> KeyPhrases { get; set; } = new List<string>();
 
+        public string PromptCategoryId { get; set; }
+        public string PromptTaxonomyVersion { get; set; }
+        public string PromptHumanMode { get; set; }
+
         #endregion
     }
 

@@ -228,6 +228,101 @@ namespace Tests.UnitTests
             }
         }
 
+        /// <summary>
+        /// The Copilot Adoption score settings (#683, #684) in a real table: a save, its audit history and a reset
+        /// survive a fresh store instance - which is what another web app instance sees.
+        /// </summary>
+        [TestMethod]
+        public async Task CopilotAdoptionScoreSettings_RoundTripThroughTheTable()
+        {
+            var partition = "Test" + Guid.NewGuid().ToString("N");
+            var writer = new Common.Entities.CopilotAdoption.CopilotAdoptionScoreSettingsStore(
+                new AzureTableKeyValueStore(_table ?? Skip(), partition), isDurable: true);
+
+            var custom = Common.Entities.CopilotAdoption.CopilotAdoptionScoreSettings.Defaults;
+            custom.FrequencyWeightPercent = 40;
+            custom.DepthWeightPercent = 40;
+            custom.ChampionScore = 90;
+            await writer.SaveAsync(custom, 0, "admin@contoso.com");
+
+            var reader = new Common.Entities.CopilotAdoption.CopilotAdoptionScoreSettingsStore(
+                new AzureTableKeyValueStore(_table, partition), isDurable: true);
+            var stored = await reader.GetAsync();
+            Assert.AreEqual(1, stored.Version);
+            Assert.AreEqual(custom, stored.Settings);
+            Assert.AreEqual("admin@contoso.com", stored.History.Single().ChangedBy);
+            Assert.AreEqual(3, stored.History.Single().Changes.Count);
+
+            await reader.ResetAsync(1, "other.admin@contoso.com");
+            var reset = await writer.GetAsync();
+            Assert.AreEqual(2, reset.Version);
+            Assert.IsTrue(reset.Settings.IsDefault);
+            Assert.AreEqual(2, reset.History.Count);
+        }
+
+        /// <summary>The ETag-conditional writes the score settings rely on, against the real Table service.</summary>
+        [TestMethod]
+        public async Task ConditionalWrites_InsertOnlyWhenAbsent_AndReplaceOnlyAnUnchangedRow()
+        {
+            var store = NewStore();
+
+            var missing = await store.GetVersionedAsync("settings");
+            Assert.IsNull(missing.Value);
+            Assert.IsNull(missing.VersionToken);
+            Assert.IsTrue(await store.TrySetStringAsync("settings", "one", null));
+            Assert.IsFalse(await store.TrySetStringAsync("settings", "rival", null), "409: another writer created it first.");
+
+            var one = await store.GetVersionedAsync("settings");
+            Assert.AreEqual("one", one.Value);
+            Assert.IsTrue(await store.TrySetStringAsync("settings", "two", one.VersionToken));
+            Assert.IsFalse(await store.TrySetStringAsync("settings", "stale", one.VersionToken), "412: the row changed since it was read.");
+            Assert.AreEqual("two", await store.GetStringAsync("settings"));
+
+            var two = await store.GetVersionedAsync("settings");
+            await store.DeleteAsync("settings");
+            Assert.IsFalse(await store.TrySetStringAsync("settings", "gone", two.VersionToken), "404: the row was deleted since it was read.");
+
+            var large = new string('x', AzureTableKeyValueStore.MaxPlainValueChars + 10);
+            Assert.IsTrue(await store.TrySetStringAsync("large", large, null), "A value stored as compressed chunks can be written conditionally too.");
+            Assert.AreEqual(large, (await store.GetVersionedAsync("large")).Value);
+        }
+
+        /// <summary>
+        /// Several web instances saving the score settings against one version at once: exactly one lands, the rest are
+        /// conflicts, and the history holds only the change that was committed.
+        /// </summary>
+        [TestMethod]
+        public async Task CopilotAdoptionScoreSettings_ConcurrentSavesFromOneVersion_ExactlyOneLands()
+        {
+            var partition = "Test" + Guid.NewGuid().ToString("N");
+            var stores = Enumerable.Range(0, 6).Select(_ => new Common.Entities.CopilotAdoption.CopilotAdoptionScoreSettingsStore(
+                new AzureTableKeyValueStore(_table ?? Skip(), partition), isDurable: true)).ToList();
+
+            var outcomes = await Task.WhenAll(stores.Select((store, i) => Task.Run(async () =>
+            {
+                var settings = Common.Entities.CopilotAdoption.CopilotAdoptionScoreSettings.Defaults;
+                settings.ChampionScore = 80 + i;
+                try
+                {
+                    await store.SaveAsync(settings, 0, "admin" + i + "@contoso.com");
+                    return (string)null;
+                }
+                catch (Common.Entities.CopilotAdoption.CopilotAdoptionScoreSettingsRejectedException ex)
+                {
+                    return ex.Code;
+                }
+            })));
+
+            Assert.AreEqual(1, outcomes.Count(o => o == null), "Exactly one save lands.");
+            Assert.IsTrue(outcomes.Where(o => o != null).All(o => o == Common.Entities.CopilotAdoption.CopilotAdoptionScoreSettingsErrorCodes.VersionConflict));
+            var stored = await stores[0].GetAsync();
+            Assert.AreEqual(1, stored.Version);
+            var change = stored.History.Single().Changes.Single();
+            Assert.AreEqual(75, change.OldValue);
+            Assert.AreEqual(stored.Settings.ChampionScore, change.NewValue);
+            Assert.AreEqual("admin" + (stored.Settings.ChampionScore - 80) + "@contoso.com", stored.History.Single().ChangedBy, "The history names the winner.");
+        }
+
         private static AzureTableKeyValueStore NewStore()
         {
             return new AzureTableKeyValueStore(_table ?? Skip(), "Test" + Guid.NewGuid().ToString("N"));

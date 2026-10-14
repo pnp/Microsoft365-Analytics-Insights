@@ -55,7 +55,7 @@ import { usePrintAllRows } from '../shared/printPreparation';
 import PiiHiddenNote from '../shared/PiiHiddenNote';
 import { formatCount, formatDate } from '../shared/KpiGrid';
 import { useT, useTNode } from '../../i18n';
-import { copilotAdoptionWarningText, isLicenceOpportunityWarning, opportunityRationale, opportunityTierLabel } from './serverText';
+import { copilotAdoptionWarningText, guidanceLinkTitle, isLicenceOpportunityWarning, opportunityRationale, opportunityTierLabel } from './serverText';
 import LicenceTimeSavedHero from './LicenceTimeSavedHero';
 import LicenceTimeSavedModel from './LicenceTimeSavedModel';
 import { useTimeSavedAssumptions } from './coworkTimeSaved';
@@ -484,7 +484,7 @@ export default function OpportunitiesPanel({
           <Text size={200}>{t('copilotAdoptionUsers.opportunities.guidanceIntro')}</Text>
           {unlicensedGuidance.map((link) => (
             <a key={link.url} className={styles.guidanceLink} href={link.url} target="_blank" rel="noreferrer">
-              {link.title}
+              {guidanceLinkTitle(t, link)}
             </a>
           ))}
         </div>

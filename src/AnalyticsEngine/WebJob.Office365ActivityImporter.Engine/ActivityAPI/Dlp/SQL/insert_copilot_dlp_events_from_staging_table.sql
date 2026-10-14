@@ -17,6 +17,7 @@ IF OBJECT_ID('dbo.copilot_dlp_events', 'U') IS NOT NULL
    AND OBJECT_ID('dbo.dlp_policies', 'U') IS NOT NULL
    AND OBJECT_ID('dbo.dlp_rules', 'U') IS NOT NULL
    AND OBJECT_ID('dbo.dlp_actions', 'U') IS NOT NULL
+   AND OBJECT_ID('dbo.copilot_chat_duplicates', 'U') IS NOT NULL
 BEGIN
 
 -- 1. Upsert policies. LEFT() to the column widths so an unexpectedly long name truncates rather than
@@ -108,6 +109,12 @@ WHERE i.action_name IS NOT NULL
 --    seeks the handful of rows for one interaction rather than scanning the table. The importer re-reads
 --    a rolling look-back window, so the same interaction comes back through this merge on later cycles
 --    and MUST NOT accumulate duplicate rows - every count on this table is a COUNT of these rows.
+--
+--    And once per TURN (issue #699). Both audit records of one Microsoft 365 Copilot turn with a Copilot
+--    Studio agent can carry the same AccessedResources entry, and so the same block. The Copilot merge,
+--    which runs first, records which record is an extra record of a turn in copilot_chat_duplicates. A
+--    match already stored on another record of the same turn is not stored again, and when both records
+--    arrive in this batch the one counted as the turn keeps it. A match only one record carries is kept.
 ;WITH staged AS (
     SELECT DISTINCT
         i.event_id,
@@ -126,18 +133,56 @@ WHERE i.action_name IS NOT NULL
     LEFT JOIN copilot_event_accessed_resource_names rname ON rname.[name] = i.resource_name
     LEFT JOIN copilot_event_accessed_resource_types rtype ON rtype.[name] = i.resource_type
     LEFT JOIN sensitivity_labels slabel ON slabel.label_id = i.sensitivity_label_id
+),
+per_turn AS (
+    SELECT s.*,
+           ROW_NUMBER() OVER (
+               PARTITION BY COALESCE(dup.counted_event_id, s.event_id),
+                            s.dlp_policy_id, s.dlp_rule_id, s.dlp_action_id,
+                            s.resource_name_id, s.resource_type_id, s.sensitivity_label_id, s.is_blocked
+               ORDER BY CASE WHEN dup.event_id IS NULL THEN 0 ELSE 1 END, s.event_id) AS turn_copy
+    FROM staged s
+    LEFT JOIN copilot_chat_duplicates dup ON dup.event_id = s.event_id
 )
 INSERT INTO copilot_dlp_events
     (copilot_chat_id, dlp_policy_id, dlp_rule_id, dlp_action_id,
      resource_name_id, resource_type_id, sensitivity_label_id, is_blocked)
 SELECT s.event_id, s.dlp_policy_id, s.dlp_rule_id, s.dlp_action_id,
        s.resource_name_id, s.resource_type_id, s.sensitivity_label_id, s.is_blocked
-FROM staged s
-WHERE NOT EXISTS (
+FROM per_turn s
+WHERE s.turn_copy = 1
+  AND NOT EXISTS (
     SELECT 1
     FROM copilot_dlp_events x
     WHERE x.copilot_chat_id = s.event_id
       AND EXISTS (
+          SELECT x.dlp_policy_id, x.dlp_rule_id, x.dlp_action_id,
+                 x.resource_name_id, x.resource_type_id, x.sensitivity_label_id, x.is_blocked
+          INTERSECT
+          SELECT s.dlp_policy_id, s.dlp_rule_id, s.dlp_action_id,
+                 s.resource_name_id, s.resource_type_id, s.sensitivity_label_id, s.is_blocked
+      )
+)
+  -- The other records of the same turn: the record it is counted on and its other extra records, or,
+  -- for the counted record, its extra records.
+  AND NOT EXISTS (
+    SELECT 1
+    FROM (
+        SELECT d.counted_event_id AS mate_event_id
+        FROM copilot_chat_duplicates d
+        WHERE d.event_id = s.event_id
+        UNION ALL
+        SELECT other.event_id
+        FROM copilot_chat_duplicates d
+        INNER JOIN copilot_chat_duplicates other ON other.counted_event_id = d.counted_event_id
+        WHERE d.event_id = s.event_id AND other.event_id <> s.event_id
+        UNION ALL
+        SELECT d.event_id
+        FROM copilot_chat_duplicates d
+        WHERE d.counted_event_id = s.event_id
+    ) AS mates
+    INNER JOIN copilot_dlp_events x ON x.copilot_chat_id = mates.mate_event_id
+    WHERE EXISTS (
           SELECT x.dlp_policy_id, x.dlp_rule_id, x.dlp_action_id,
                  x.resource_name_id, x.resource_type_id, x.sensitivity_label_id, x.is_blocked
           INTERSECT

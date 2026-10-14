@@ -112,6 +112,15 @@ namespace Common.Entities.CopilotAdoption
         [JsonProperty("developingScore")]
         public double DevelopingScore { get; set; } = 25;
 
+        /// <summary>
+        /// Whether an administrator has changed the weights or band thresholds above from their defaults
+        /// (Administration &gt; Copilot Adoption settings), which ones, and the defaults - so every report,
+        /// export and Method text can say the figures were produced with customised rules. Immutable, so a
+        /// <see cref="Clone"/> may share it.
+        /// </summary>
+        [JsonProperty("scoreSettings")]
+        public CopilotAdoptionScoreSettingsInfo ScoreSettings { get; set; } = CopilotAdoptionScoreSettingsInfo.Defaults;
+
         #region Habit-formation buckets
 
         /// <summary>
@@ -738,6 +747,13 @@ namespace Common.Entities.CopilotAdoption
         /// report date for a short while after it appears, so snapshots newer than this are ignored.
         /// Mirrors the Reports area's <c>UsageReportLagDays</c>.
         /// </summary>
+        /// <remarks>
+        /// Also the last settled day of the agent growth series (#645): its 28-day windows end this many
+        /// days before today, because the Copilot audit feed and the Copilot Studio billing it reads arrive
+        /// late as well - audit content typically within a day, billing re-read by the importer for a week.
+        /// Reused rather than given an option of its own, so the series and the usage-report snapshots
+        /// always stop on the same settled day.
+        /// </remarks>
         [JsonProperty("usageReportLagDays")]
         public int UsageReportLagDays { get; set; } = 3;
 
@@ -804,7 +820,8 @@ namespace Common.Entities.CopilotAdoption
         /// <summary>
         /// A copy that can be changed without touching this instance.
         ///
-        /// A shallow copy is a complete one: every option is a value type or an immutable string. The
+        /// A shallow copy is a complete one: every option is a value type, an immutable string or the immutable
+        /// <see cref="CopilotAdoptionScoreSettingsInfo"/>. The
         /// instance a cached analysis carries is shared by every request reading that analysis, so
         /// anything that needs to vary an option for one caller - an export applying a reader's own
         /// time-saved assumptions - must work on a copy.

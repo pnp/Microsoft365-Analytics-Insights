@@ -101,6 +101,8 @@ namespace Tests.UnitTests
                     "copilot_interaction_user_watermarks", "copilot_interaction_import_log",
                     "copilot_interaction_app_classes", "copilot_interaction_conversation_types",
                     "copilot_interaction_types", "copilot_interaction_locales", "copilot_interaction_devices",
+                    // The extra audit records of a Copilot turn (#699)
+                    "copilot_chat_duplicates",
                 };
 
                 foreach (var table in expectedTables)
@@ -115,6 +117,7 @@ namespace Tests.UnitTests
                 foreach (var column in new[]
                 {
                     "copilot_chats.thread_id", "copilot_chats.client_region", "copilot_chats.copilot_log_version",
+                    "copilot_chats.conversation_id",
                     "copilot_event_messages.size", "copilot_event_messages.is_prompt",
                     "copilot_event_accessed_resources.action_id",
                     "copilot_event_accessed_resources.list_item_unique_id_id",

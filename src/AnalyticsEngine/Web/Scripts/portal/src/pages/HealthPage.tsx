@@ -10,6 +10,7 @@ import LivenessPanel from '../components/health/LivenessPanel';
 import ExceptionsPanel from '../components/health/ExceptionsPanel';
 import ComponentsPanel from '../components/health/ComponentsPanel';
 import DataPanel from '../components/health/DataPanel';
+import PromptCategoryRuns from '../components/PromptCategoryRuns';
 
 const useStyles = makeStyles({
   headerRow: {
@@ -40,6 +41,7 @@ const useStyles = makeStyles({
 // tab has been opened (see below). Overview is handled separately - it shares the summary fetch that
 // also feeds the header badge.
 const DETAIL_PANELS: { key: string; labelKey: TranslationKey; Panel: ComponentType<{ active: boolean }> }[] = [
+  { key: 'prompt-categories', labelKey: 'promptCategories.title', Panel: PromptCategoryRuns },
   { key: 'liveness', labelKey: 'health.tabs.importLiveness', Panel: LivenessPanel },
   { key: 'exceptions', labelKey: 'health.tabs.exceptions', Panel: ExceptionsPanel },
   { key: 'components', labelKey: 'health.tabs.componentHealth', Panel: ComponentsPanel },

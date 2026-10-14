@@ -248,7 +248,7 @@ namespace Tests.UnitTests
 
             public FixedAnalysisRunner(CopilotAdoptionAnalysis analysis) => _analysis = analysis;
 
-            public Task<CopilotAdoptionAnalysis> RunAsync(int windowDays, DateTime? fromUtc, DateTime? toUtc, DateTime? toExclusiveUtc, bool usesExplicitDates, List<int> seatLicenceTypeIds, ICopilotAdoptionRunTelemetry telemetry)
+            public Task<CopilotAdoptionAnalysis> RunAsync(int windowDays, DateTime? fromUtc, DateTime? toUtc, DateTime? toExclusiveUtc, bool usesExplicitDates, List<int> seatLicenceTypeIds, Common.Entities.CopilotAdoption.CopilotAdoptionEffectiveScoreSettings scoreSettings, ICopilotAdoptionRunTelemetry telemetry)
                 => Task.FromResult(_analysis);
         }
 

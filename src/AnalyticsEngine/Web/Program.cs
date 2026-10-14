@@ -119,7 +119,8 @@ builder.Services.AddAuthentication(options =>
             return Task.CompletedTask;
         },
     };
-});
+})
+.AddOpenIdConnect(AgentCostConsent.AuthenticationType, options => AgentCostConsent.ConfigureOptions(options, appConfig));
 
 builder.Services.AddAuthorization();
 

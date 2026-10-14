@@ -45,6 +45,15 @@ namespace WebJob.Office365ActivityImporter.Engine.StatsUploader
     /// from whatever an operator last chose in the UI. Figures from different tenants are only
     /// comparable if they cover the same period.
     /// </para>
+    /// <para>
+    /// <b>Fixed scoring.</b> For the same reason this block is scored with the built-in engagement-score
+    /// weights (50/30/20) and band thresholds (25/50/75), never with the administrator's Copilot Adoption
+    /// score settings (issues #683, #684). It is a separate analysis run by this importer, not a copy of
+    /// the portal's report: its <c>AverageAdoptionScore</c>, <c>MedianAdoptionScore</c> and
+    /// <c>BandBreakdown</c> therefore mean the same thing on every tenant, and on a tenant that has
+    /// customised its settings they can differ from what the portal shows. The importer does not read the
+    /// settings at all, so they cannot leak into the payload. See <see cref="TelemetryOptions"/>.
+    /// </para>
     /// </remarks>
     public class AdoptionStatsCollector : IAnonAdoptionStatsProvider
     {
@@ -53,6 +62,12 @@ namespace WebJob.Office365ActivityImporter.Engine.StatsUploader
 
         /// <summary>Weekly.</summary>
         public const int CadenceHours = 168;
+
+        /// <summary>
+        /// The options the telemetry analysis runs with: always the built-in defaults, including the default score
+        /// weights and band thresholds, so the anonymised figures are comparable between tenants. See the class remarks.
+        /// </summary>
+        internal static CopilotAdoptionOptions TelemetryOptions() => CopilotAdoptionOptions.Default;
 
         /// <summary>
         /// Hard ceiling on the whole analysis. A struggling tenant must not stall the import cycle:
@@ -208,7 +223,7 @@ namespace WebJob.Office365ActivityImporter.Engine.StatsUploader
             // maxConcurrentSteps: 1 - nobody is waiting on this, so do not double the load the
             // interactive path accepts in exchange for latency.
             var service = new CopilotAdoptionService(
-                CopilotAdoptionOptions.Default, contextFactory: null, maxConcurrentSteps: 1);
+                AdoptionStatsCollector.TelemetryOptions(), contextFactory: null, maxConcurrentSteps: 1);
 
             var analysis = await service.AnalyseAsync(cancellationToken: cancellationToken);
             return analysis?.Summary;

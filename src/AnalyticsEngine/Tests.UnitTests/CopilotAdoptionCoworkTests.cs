@@ -1303,9 +1303,8 @@ namespace Tests.UnitTests
                 .Select(c => c.Header)
                 .Single(h => h.IndexOf("not attributable", StringComparison.OrdinalIgnoreCase) >= 0);
 
-            // Microsoft meters Cowork against the shared Copilot Credits pool with no per-row workload
-            // discriminator, so a "Cowork credits" column would be a fabrication.
-            StringAssert.Contains(creditHeader, "not Cowork-only");
+            // This is the separate Copilot Studio credit import, not Cowork billing.
+            StringAssert.Contains(creditHeader, "Copilot Studio Credits");
             StringAssert.Contains(creditHeader, "not attributable");
         }
 

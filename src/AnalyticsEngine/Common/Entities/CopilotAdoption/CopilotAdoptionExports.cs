@@ -631,11 +631,10 @@ namespace Common.Entities.CopilotAdoption
                 new CsvColumn<CoworkReadinessRow>("Email score", r => r.EmailScore),
                 new CsvColumn<CoworkReadinessRow>("Document score", r => r.DocumentScore),
 
-                // Named "all Copilot Credits", never "Cowork credits". Microsoft meters Cowork against the
-                // shared Copilot Credits pool with no per-row workload discriminator, so a Cowork-only
-                // figure does not exist. Empty means not attributable - NOT zero.
+                // These figures come from the Copilot Studio per-user credit import, not from Cowork
+                // billing. Empty means not attributable - NOT zero.
                 new CsvColumn<CoworkReadinessRow>(
-                    "All Copilot Credits in period (not Cowork-only; blank = not attributable)",
+                    "Copilot Studio Credits in period (blank = not attributable)",
                     r => r.TotalCopilotCredits),
 
                 new CsvColumn<CoworkReadinessRow>("Justification", r => r.Rationale),

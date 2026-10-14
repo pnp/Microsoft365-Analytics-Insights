@@ -118,6 +118,42 @@ namespace Tests.UnitTests
             });
         }
 
+        [DataTestMethod]
+        [DataRow(false)]
+        [DataRow(true)]
+        public void Foundry_Runtime_Settings_Are_Read_Through_AnalyticsConfig_Not_Xml(bool legacyNames)
+        {
+            var names = new[]
+            {
+                "FoundryPromptCategorisationEndpoint", "FoundryPromptCategorisationDeployment", "FoundryPromptCategorisationKey",
+                "FoundryPromptEndpoint", "FoundryPromptDeployment", "FoundryPromptKey", "TenantGUID",
+            };
+            var previous = names.ToDictionary(name => name, name => AnalyticsConfig.Root[name]);
+            WithEnvironment(names.ToDictionary(name => name, _ => (string)null), () =>
+            {
+                try
+                {
+                    foreach (var name in names) AnalyticsConfig.Root[name] = null;
+                    AnalyticsConfig.Root["TenantGUID"] = Guid.Empty.ToString();
+                    var prefix = legacyNames ? "FoundryPrompt" : "FoundryPromptCategorisation";
+                    AnalyticsConfig.Root[prefix + "Endpoint"] = "https://contoso.openai.azure.com/";
+                    AnalyticsConfig.Root[prefix + "Deployment"] = "synthetic-model";
+                    AnalyticsConfig.Root[prefix + "Key"] = "synthetic-key";
+
+                    var runtime = new AppConfig();
+                    Assert.AreEqual("https://contoso.openai.azure.com/", runtime.FoundryPromptCategorisationEndpoint);
+                    Assert.AreEqual("synthetic-model", runtime.FoundryPromptCategorisationDeployment);
+                    Assert.AreEqual("synthetic-key", runtime.FoundryPromptCategorisationKey);
+                    foreach (var name in names.Take(6))
+                        Assert.IsNull(System.Configuration.ConfigurationManager.AppSettings[name]);
+                }
+                finally
+                {
+                    foreach (var setting in previous) AnalyticsConfig.Root[setting.Key] = setting.Value;
+                }
+            });
+        }
+
         /// <summary>
         /// A deployment must always win over the checked-in defaults, or an operator could not
         /// override anything without a rebuild.

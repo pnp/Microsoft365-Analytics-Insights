@@ -32,7 +32,7 @@
             System.ComponentModel.ComponentResourceManager resources = new System.ComponentModel.ComponentResourceManager(typeof(TargetSolutionConfigControl));
             this.toolTipTargets = new System.Windows.Forms.ToolTip(this.components);
             this.pnlSolutionSelectionContainer = new System.Windows.Forms.Panel();
-            this.grpProductCfgInsights = new System.Windows.Forms.GroupBox();
+            this.grpProductCfgInsights = new System.Windows.Forms.TableLayoutPanel();
             this.label3 = new System.Windows.Forms.Label();
             this.label2 = new System.Windows.Forms.Label();
             this.label1 = new System.Windows.Forms.Label();
@@ -54,10 +54,12 @@
             this.chkDlp = new System.Windows.Forms.CheckBox();
             this.chkCopilotStudioCredits = new System.Windows.Forms.CheckBox();
             this.chkAzureCostManagement = new System.Windows.Forms.CheckBox();
+            this.chkAgent365Catalog = new System.Windows.Forms.CheckBox();
             this.lnkInteractionHistoryHelp = new System.Windows.Forms.LinkLabel();
             this.lnkDlpHelp = new System.Windows.Forms.LinkLabel();
             this.lnkStudioCreditsHelp = new System.Windows.Forms.LinkLabel();
             this.lnkAzureCostsHelp = new System.Windows.Forms.LinkLabel();
+            this.lnkAgent365CatalogHelp = new System.Windows.Forms.LinkLabel();
             this.pictureBoxCopilot = new System.Windows.Forms.PictureBox();
             this.lblCopilotHeader = new System.Windows.Forms.Label();
             this.lblCopilotDesc = new System.Windows.Forms.Label();
@@ -90,6 +92,7 @@
             this.grpProductCfgInsights.Controls.Add(this.lnkDlpHelp);
             this.grpProductCfgInsights.Controls.Add(this.lnkStudioCreditsHelp);
             this.grpProductCfgInsights.Controls.Add(this.lnkAzureCostsHelp);
+            this.grpProductCfgInsights.Controls.Add(this.lnkAgent365CatalogHelp);
             this.grpProductCfgInsights.Controls.Add(this.label3);
             this.grpProductCfgInsights.Controls.Add(this.label2);
             this.grpProductCfgInsights.Controls.Add(this.label1);
@@ -102,6 +105,7 @@
             this.grpProductCfgInsights.Controls.Add(this.chkDlp);
             this.grpProductCfgInsights.Controls.Add(this.chkCopilotStudioCredits);
             this.grpProductCfgInsights.Controls.Add(this.chkAzureCostManagement);
+            this.grpProductCfgInsights.Controls.Add(this.chkAgent365Catalog);
             this.grpProductCfgInsights.Controls.Add(this.chkWeb);
             this.grpProductCfgInsights.Controls.Add(this.chkCalls);
             this.grpProductCfgInsights.Controls.Add(this.pictureBox3);
@@ -399,7 +403,20 @@
                     "s app setting naming the subscriptions to read, and the Cost Management Reader ro" +
                     "le on each of them. Neither is set up by the installer.");
             this.chkAzureCostManagement.UseVisualStyleBackColor = true;
-            // 
+            //
+            // chkAgent365Catalog
+            //
+            this.chkAgent365Catalog.AutoSize = true;
+            this.chkAgent365Catalog.Location = new System.Drawing.Point(356, 290);
+            this.chkAgent365Catalog.Margin = new System.Windows.Forms.Padding(2);
+            this.chkAgent365Catalog.MaximumSize = new System.Drawing.Size(290, 0);
+            this.chkAgent365Catalog.Name = "chkAgent365Catalog";
+            this.chkAgent365Catalog.Size = new System.Drawing.Size(176, 17);
+            this.chkAgent365Catalog.TabIndex = 35;
+            this.chkAgent365Catalog.Text = "Agent 365 package catalog";
+            this.toolTipTargets.SetToolTip(this.chkAgent365Catalog, "Imports the Agent 365 package catalog and documented usage metrics daily. Requires a Microsoft Agent 365 license and CopilotPackages.Read.All application permission with admin consent.");
+            this.chkAgent365Catalog.UseVisualStyleBackColor = true;
+            //
             // lnkInteractionHistoryHelp
             // 
             this.lnkInteractionHistoryHelp.AutoSize = true;
@@ -455,9 +472,22 @@
             this.lnkAzureCostsHelp.Text = "needs setup";
             this.toolTipTargets.SetToolTip(this.lnkAzureCostsHelp, "Open the wiki: the AzureCostScopes setting and the Cost Management Reader role.");
             this.lnkAzureCostsHelp.LinkClicked += new System.Windows.Forms.LinkLabelLinkClickedEventHandler(this.HelpLink_LinkClicked);
-            // 
+            //
+            // lnkAgent365CatalogHelp
+            //
+            this.lnkAgent365CatalogHelp.AutoSize = true;
+            this.lnkAgent365CatalogHelp.Location = new System.Drawing.Point(536, 290);
+            this.lnkAgent365CatalogHelp.Name = "lnkAgent365CatalogHelp";
+            this.lnkAgent365CatalogHelp.Size = new System.Drawing.Size(69, 13);
+            this.lnkAgent365CatalogHelp.TabIndex = 36;
+            this.lnkAgent365CatalogHelp.TabStop = true;
+            this.lnkAgent365CatalogHelp.Tag = "https://learn.microsoft.com/en-us/microsoft-365/copilot/extensibility/api/admin-settings/package/copilotpackages-list";
+            this.lnkAgent365CatalogHelp.Text = "needs setup";
+            this.toolTipTargets.SetToolTip(this.lnkAgent365CatalogHelp, "Open Microsoft Learn: Agent 365 Package Management API requirements.");
+            this.lnkAgent365CatalogHelp.LinkClicked += new System.Windows.Forms.LinkLabelLinkClickedEventHandler(this.HelpLink_LinkClicked);
+            //
             // lblGUITargetsHeader
-            // 
+            //
             this.lblGUITargetsHeader.AutoSize = true;
             this.lblGUITargetsHeader.Font = new System.Drawing.Font("Calibri", 12F, System.Drawing.FontStyle.Bold, System.Drawing.GraphicsUnit.Point, ((byte)(0)));
             this.lblGUITargetsHeader.Location = new System.Drawing.Point(-2, 0);
@@ -482,15 +512,110 @@
             ((System.ComponentModel.ISupportInitialize)(this.pictureBox2)).EndInit();
             ((System.ComponentModel.ISupportInitialize)(this.pictureBox1)).EndInit();
             ((System.ComponentModel.ISupportInitialize)(this.pictureBoxCopilot)).EndInit();
+            ConfigureDecisionLayout();
             this.ResumeLayout(false);
             this.PerformLayout();
 
         }
 
+        private void ConfigureDecisionLayout()
+        {
+            this.Font = new System.Drawing.Font("Segoe UI", 9F);
+            this.Padding = new System.Windows.Forms.Padding(12);
+            this.lblGUITargetsHeader.Dock = System.Windows.Forms.DockStyle.Top;
+            this.lblGUITargetsHeader.Text = "Choose your workloads";
+            this.lblGUITargetsHeader.Font = new System.Drawing.Font("Segoe UI", 14F, System.Drawing.FontStyle.Bold);
+            this.pnlSolutionSelectionContainer.Dock = System.Windows.Forms.DockStyle.Fill;
+            this.pnlSolutionSelectionContainer.BringToFront();
+            this.pnlSolutionSelectionContainer.AutoScroll = true;
+            this.grpProductCfgInsights.Dock = System.Windows.Forms.DockStyle.Top;
+            this.grpProductCfgInsights.AutoSize = true;
+            this.grpProductCfgInsights.AutoSizeMode = System.Windows.Forms.AutoSizeMode.GrowAndShrink;
+            this.grpProductCfgInsights.Padding = new System.Windows.Forms.Padding(12);
+            var columns = new System.Windows.Forms.TableLayoutPanel
+            {
+                Dock = System.Windows.Forms.DockStyle.Fill, AutoSize = true, ColumnCount = 2, RowCount = 1
+            };
+            columns.ColumnStyles.Add(new System.Windows.Forms.ColumnStyle(System.Windows.Forms.SizeType.Percent, 42F));
+            columns.ColumnStyles.Add(new System.Windows.Forms.ColumnStyle(System.Windows.Forms.SizeType.Percent, 58F));
+            var left = DecisionSection(new System.Windows.Forms.Control[] {
+                label1, chkTeams, chkCalls, label2, chkUsageReports, chkUserMetadata, chkSentEmails, chkPowerPlatform,
+                label3, chkWeb, chkAuditLog });
+            var right = DecisionSection(new System.Windows.Forms.Control[] {
+                lblCopilotHeader, chkCopilot, chkCopilotUsageReports, chkCopilotInteractionHistory,
+                lnkInteractionHistoryHelp, lblCopilotDesc, chkDlp, lnkDlpHelp,
+                chkCopilotStudioCredits, lnkStudioCreditsHelp, chkAzureCostManagement, lnkAzureCostsHelp,
+                chkAgent365Catalog, lnkAgent365CatalogHelp });
+            columns.Controls.Add(left, 0, 0);
+            columns.Controls.Add(right, 1, 0);
+            this.grpProductCfgInsights.ColumnCount = 1;
+            this.grpProductCfgInsights.ColumnStyles.Clear();
+            this.grpProductCfgInsights.ColumnStyles.Add(new System.Windows.Forms.ColumnStyle(System.Windows.Forms.SizeType.Percent, 100F));
+            this.grpProductCfgInsights.RowCount = 1;
+            this.grpProductCfgInsights.RowStyles.Clear();
+            this.grpProductCfgInsights.RowStyles.Add(new System.Windows.Forms.RowStyle(System.Windows.Forms.SizeType.AutoSize));
+            this.grpProductCfgInsights.Controls.Add(columns, 0, 0);
+        }
+
+        private System.Windows.Forms.TableLayoutPanel DecisionSection(System.Windows.Forms.Control[] fields)
+        {
+            var section = new System.Windows.Forms.TableLayoutPanel
+            {
+                Dock = System.Windows.Forms.DockStyle.Top, AutoSize = true, ColumnCount = 1,
+                Padding = new System.Windows.Forms.Padding(0, 0, 16, 0), RowCount = fields.Length
+            };
+            section.ColumnStyles.Add(new System.Windows.Forms.ColumnStyle(System.Windows.Forms.SizeType.Percent, 100F));
+            for (int row = 0; row < fields.Length; row++)
+            {
+                var field = fields[row];
+                field.Dock = System.Windows.Forms.DockStyle.Fill;
+                field.Margin = new System.Windows.Forms.Padding(0, field is System.Windows.Forms.Label && !(field is System.Windows.Forms.LinkLabel) ? 12 : 3, 0, 6);
+                if (field is System.Windows.Forms.Label label) label.AutoSize = true;
+                if (field is System.Windows.Forms.CheckBox checkbox) checkbox.AutoSize = false;
+                section.RowStyles.Add(new System.Windows.Forms.RowStyle(System.Windows.Forms.SizeType.AutoSize));
+                var icon = field == label1 ? pictureBox1 : field == label2 ? pictureBox2
+                    : field == label3 ? pictureBox3 : field == lblCopilotHeader ? pictureBoxCopilot : null;
+                if (icon == null)
+                {
+                    section.Controls.Add(field, 0, row);
+                }
+                else
+                {
+                    var header = new System.Windows.Forms.TableLayoutPanel { AutoSize = true,
+                        Dock = System.Windows.Forms.DockStyle.Fill, ColumnCount = 2, RowCount = 1,
+                        Margin = new System.Windows.Forms.Padding(0, 12, 0, 8) };
+                    header.ColumnStyles.Add(new System.Windows.Forms.ColumnStyle(System.Windows.Forms.SizeType.Absolute, 40F));
+                    header.ColumnStyles.Add(new System.Windows.Forms.ColumnStyle(System.Windows.Forms.SizeType.Percent, 100F));
+                    icon.Size = new System.Drawing.Size(32, 32);
+                    icon.SizeMode = System.Windows.Forms.PictureBoxSizeMode.Zoom;
+                    icon.Margin = new System.Windows.Forms.Padding(0);
+                    field.Font = new System.Drawing.Font("Segoe UI", 11F, System.Drawing.FontStyle.Bold);
+                    field.Margin = new System.Windows.Forms.Padding(0, 4, 0, 0);
+                    header.Controls.Add(icon, 0, 0);
+                    header.Controls.Add(field, 1, 0);
+                    section.Controls.Add(header, 0, row);
+                }
+            }
+            System.EventHandler sizeChoices = (sender, args) =>
+            {
+                var width = System.Math.Max(100, section.ClientSize.Width - section.Padding.Horizontal - 24);
+                foreach (System.Windows.Forms.Control field in section.Controls)
+                {
+                    if (!(field is System.Windows.Forms.CheckBox checkbox)) continue;
+                    var text = System.Windows.Forms.TextRenderer.MeasureText(checkbox.Text, checkbox.Font,
+                        new System.Drawing.Size(width, int.MaxValue), System.Windows.Forms.TextFormatFlags.WordBreak);
+                    checkbox.Height = System.Math.Max(24, text.Height + 8);
+                }
+            };
+            section.SizeChanged += sizeChoices;
+            section.FontChanged += sizeChoices;
+            return section;
+        }
+
         #endregion
 
         private System.Windows.Forms.Panel pnlSolutionSelectionContainer;
-        private System.Windows.Forms.GroupBox grpProductCfgInsights;
+        private System.Windows.Forms.TableLayoutPanel grpProductCfgInsights;
         private System.Windows.Forms.Label label3;
         private System.Windows.Forms.Label label2;
         private System.Windows.Forms.Label label1;
@@ -515,10 +640,12 @@
         private System.Windows.Forms.CheckBox chkDlp;
         private System.Windows.Forms.CheckBox chkCopilotStudioCredits;
         private System.Windows.Forms.CheckBox chkAzureCostManagement;
+        private System.Windows.Forms.CheckBox chkAgent365Catalog;
         private System.Windows.Forms.ToolTip toolTipTargets;
         private System.Windows.Forms.LinkLabel lnkInteractionHistoryHelp;
         private System.Windows.Forms.LinkLabel lnkDlpHelp;
         private System.Windows.Forms.LinkLabel lnkStudioCreditsHelp;
         private System.Windows.Forms.LinkLabel lnkAzureCostsHelp;
+        private System.Windows.Forms.LinkLabel lnkAgent365CatalogHelp;
     }
 }

@@ -1,4 +1,5 @@
 using Common.Entities;
+using Common.Entities.Agent365;
 using DataUtils.Sql;
 using System;
 using System.Collections.Generic;
@@ -57,7 +58,7 @@ namespace Web.AnalyticsWeb.Models.Health
             }
         }
 
-        public async Task<DatabaseCountsResult> GetDatabaseCountsAsync()
+        public async Task<DatabaseCountsResult> GetDatabaseCountsAsync(bool includeAgent365CatalogHealth)
         {
             var result = new DatabaseCountsResult();
 
@@ -109,6 +110,19 @@ namespace Web.AnalyticsWeb.Models.Health
                             Error = i.Error,
                         })
                         .ToList();
+
+                    if (includeAgent365CatalogHealth)
+                    {
+                        try
+                        {
+                            result.Agent365CatalogImportHealth =
+                                await new Agent365PackageCatalogStore(_contextFactory).GetImportHealthAsync();
+                        }
+                        catch (Exception agent365Ex)
+                        {
+                            result.Agent365CatalogStatusError = HealthDataSectionRules.InnermostMessage(agent365Ex);
+                        }
+                    }
                 }
             }
             catch (Exception ex)

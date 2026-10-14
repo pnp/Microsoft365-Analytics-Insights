@@ -9,6 +9,68 @@ namespace App.ControlPanel.Frames.InstallWizard
         public NetworkingConfigControl()
         {
             InitializeComponent();
+            ConfigureLayout();
+        }
+
+        private void ConfigureLayout()
+        {
+            Font = new System.Drawing.Font("Segoe UI", 9F);
+            AutoScroll = true;
+            var layout = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, ColumnCount = 1, Padding = new Padding(16) };
+            layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+            lblHeader.Font = new System.Drawing.Font("Segoe UI", 16F, System.Drawing.FontStyle.Bold);
+            foreach (var control in new Control[] { lblHeader, lblDescription, chkEnableVNet })
+            {
+                control.AutoSize = true;
+                control.Dock = DockStyle.Fill;
+                ServicePageLayout.AddRow(layout, control);
+            }
+            var settings = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, ColumnCount = 1, Padding = new Padding(8) };
+            settings.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+            var subnets = ServicePageLayout.AddFieldGrid(settings);
+            ServicePageLayout.AddFieldGridRow(subnets, lblVNetName.Text, txtVNetName, lblAddressPrefix.Text, txtAddressPrefix);
+            ServicePageLayout.AddFieldGridRow(subnets, lblSubnetName.Text, txtSubnetName, lblSubnetAddressPrefix.Text, txtSubnetAddressPrefix);
+            ServicePageLayout.AddFieldGridRow(subnets, lblAppSubnetName.Text, txtAppSubnetName, lblAppSubnetAddressPrefix.Text, txtAppSubnetAddressPrefix);
+            foreach (var control in new Control[] { chkDeployDnsZones, lblDnsZonesHelp, chkAllowPublicAccess, lblAllowPublicAccessHelp })
+            {
+                control.AutoSize = true;
+                control.Dock = DockStyle.Fill;
+                ServicePageLayout.AddRow(settings, control);
+            }
+            var endpoints = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, ColumnCount = 1, Padding = new Padding(8) };
+            endpoints.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+            lblPeHelp.AutoSize = true;
+            lblPeHelp.Dock = DockStyle.Fill;
+            ServicePageLayout.AddRow(endpoints, lblPeHelp);
+            var names = ServicePageLayout.AddFieldGrid(endpoints);
+            ServicePageLayout.AddFieldGridRow(names, lblPeSql.Text, txtPeSql, lblPeApp.Text, txtPeApp);
+            ServicePageLayout.AddFieldGridRow(names, lblPeStorage.Text, txtPeStorage, lblPeStorageTable.Text, txtPeStorageTable);
+            ServicePageLayout.AddFieldGridRow(names, lblPeKeyVault.Text, txtPeKeyVault, lblPeServiceBus.Text, txtPeServiceBus);
+            ServicePageLayout.AddFieldGridRow(names, lblPeCognitive.Text, txtPeCognitive, lblPeAutomation.Text, txtPeAutomation);
+            grpEndpointNames.Controls.Clear();
+            grpEndpointNames.AutoSize = true;
+            grpEndpointNames.AutoSizeMode = AutoSizeMode.GrowAndShrink;
+            grpEndpointNames.Dock = DockStyle.Fill;
+            grpEndpointNames.Controls.Add(endpoints);
+            ServicePageLayout.AddRow(settings, grpEndpointNames);
+            ServicePageLayout.AddFields(settings, lblHybridWorkerVm.Text, txtHybridWorkerVm);
+            btnBrowseVm.AutoSize = true;
+            btnBrowseVm.Anchor = AnchorStyles.Left;
+            ServicePageLayout.AddRow(settings, btnBrowseVm);
+            foreach (var label in new[] { lblHybridWorkerVmHelp, lblSkuWarning })
+            {
+                label.AutoSize = true;
+                label.Dock = DockStyle.Fill;
+                ServicePageLayout.AddRow(settings, label);
+            }
+            grpVNetSettings.Controls.Clear();
+            grpVNetSettings.AutoSize = true;
+            grpVNetSettings.AutoSizeMode = AutoSizeMode.GrowAndShrink;
+            grpVNetSettings.Dock = DockStyle.Fill;
+            grpVNetSettings.Controls.Add(settings);
+            ServicePageLayout.AddRow(layout, grpVNetSettings);
+            Controls.Add(layout);
+            layout.BringToFront();
         }
 
         /// <summary>

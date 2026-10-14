@@ -670,9 +670,8 @@ namespace Tests.UnitTests
                 var waived = row[Col(DemoTables.StudioCredits, "non_billed_credits")];
                 if (waived != null) Assert.IsTrue((decimal)waived <= billed);
 
-                Assert.IsTrue((DateTime)row[Col(DemoTables.StudioCredits, "last_refreshed_utc")]
-                    <= (DateTime)row[Col(DemoTables.StudioCredits, "imported_utc")],
-                    "Microsoft cannot have refreshed a row after we read it.");
+                Assert.IsNull(row[Col(DemoTables.StudioCredits, "last_refreshed_utc")],
+                    "Per-agent figures are derived from per-user reads, which carry no Microsoft refresh stamp.");
 
                 // The (usage_date, dimension_hash) unique index is the upsert key: a duplicate here would
                 // fail the insert against the real schema rather than merely look odd.

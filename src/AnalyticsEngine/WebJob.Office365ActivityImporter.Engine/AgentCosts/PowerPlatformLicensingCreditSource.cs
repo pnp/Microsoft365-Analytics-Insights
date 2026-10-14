@@ -11,17 +11,18 @@ using System.Threading.Tasks;
 namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
 {
     /// <summary>
-    /// Reads billed Copilot Studio consumption from the Power Platform licensing API
+    /// Reads Copilot Studio consumption from the Power Platform licensing API
     /// (<c>api.powerplatform.com/licensing/entitlements/MCSMessages</c>).
     /// </summary>
     /// <remarks>
-    /// <para><b>Application-only access to these routes is not confirmed by Microsoft.</b> The Power Platform
-    /// API supports service principals through its tenant-scoped RBAC model, but Microsoft's own
-    /// authentication guidance has said the API uses delegated permissions only, and the licensing entitlement
-    /// routes specifically have not been documented as working with client credentials. That is why a 401 or
-    /// 403 here is translated into a precise instruction: it is the single most likely way this import fails
-    /// on a correctly-installed system, and "Forbidden" on its own would send an admin looking in the wrong
-    /// place.</para>
+    /// <para><b>What each identity can read.</b> Measured against a live tenant, the capacity route
+    /// (<c>/entitlements/MCSMessages</c>) answers to the application identity, while every consumption route
+    /// answers only to a delegated administrator token (the "Copilot Studio billing connection"). The
+    /// tenant-wide per-agent route (<c>/resources</c>) is refused to both - Microsoft restricted it to its own
+    /// admin center - so this source does not call it. Per-agent figures are rebuilt from
+    /// <c>/users/{userId}/resources</c> by the importer.</para>
+    /// <para>An application-only instance (<c>delegated: false</c>) therefore reads capacity only, and its
+    /// consumption methods refuse to run rather than send a request that is known to fail.</para>
     /// </remarks>
     public class PowerPlatformLicensingCreditSource : ICopilotStudioCreditSource
     {
@@ -35,46 +36,63 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
         public const string ApiVersion = "2024-10-01";
         private const string BaseUrl = "https://api.powerplatform.com";
 
-        /// <summary>
-        /// Requests the richer per-row metadata (agent name, feature, model, tool, distinct-user count).
-        /// Undocumented in the public REST reference but required for anything beyond a bare credit total, so
-        /// the parser is written to cope if it stops being honoured.
-        /// </summary>
-        private const string IncludeFields = "users,tags,asOfDate";
-
         private const int PageSize = 5000;
 
         private readonly AutoThrottleHttpClient _httpClient;
         private readonly ILogger _logger;
+        private readonly bool _delegated;
 
-        public PowerPlatformLicensingCreditSource(AutoThrottleHttpClient httpClient, ILogger logger)
+        public PowerPlatformLicensingCreditSource(AutoThrottleHttpClient httpClient, ILogger logger, bool delegated = false)
         {
             _httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+            _delegated = delegated;
         }
 
-        public async Task<CopilotStudioCreditPage> GetConsumptionPageAsync(DateTime fromDate, DateTime toDate, string continuationToken)
+        public bool CanReadConsumption => _delegated;
+
+        /// <summary>
+        /// One page of ONE user's consumption by resource (agent) for a single day.
+        /// </summary>
+        /// <remarks>
+        /// A 404 is not treated as "route unavailable": the user was just listed by the per-user route, so a
+        /// missing route or user here means the read is incomplete, and the generic failure keeps the
+        /// importer from storing a figure that silently omits them.
+        /// </remarks>
+        public async Task<CopilotStudioCreditPage> GetUserResourceConsumptionPageAsync(string userId, DateTime day, string continuationToken)
         {
-            var url = $"{BaseUrl}/licensing/entitlements/{EntitlementId}/resources"
-                + $"?fromDate={QueryDate(fromDate)}"
-                + $"&toDate={QueryDate(toDate)}"
-                + $"&includeFields={Uri.EscapeDataString(IncludeFields)}"
+            RequireDelegated();
+            if (string.IsNullOrWhiteSpace(userId)) throw new ArgumentException("A user id is required.", nameof(userId));
+
+            var url = $"{BaseUrl}/licensing/entitlements/{EntitlementId}/users/{Uri.EscapeDataString(userId)}/resources"
+                + $"?fromDate={QueryDate(day)}"
+                + $"&toDate={QueryDate(day)}"
                 + $"&pageSize={PageSize.ToString(CultureInfo.InvariantCulture)}"
                 + $"&api-version={ApiVersion}";
 
             if (!string.IsNullOrEmpty(continuationToken))
             {
-                url += $"&continuationtoken={Uri.EscapeDataString(continuationToken)}";
+                url += $"&continuationToken={Uri.EscapeDataString(continuationToken)}";
             }
 
-            var json = await GetJsonAsync(url, "Copilot Studio credit consumption");
+            var json = await GetJsonAsync(url, "Copilot Studio per-user credit consumption by agent");
             return CopilotStudioCreditParser.ParseConsumptionPage(json);
         }
 
-        public async Task<CopilotStudioCapacitySnapshot> GetCapacityAsync()        {
+        public async Task<CopilotStudioCapacitySnapshot> GetCapacityAsync()
+        {
             var url = $"{BaseUrl}/licensing/entitlements/{EntitlementId}?api-version={ApiVersion}";
             var json = await GetJsonAsync(url, "Copilot Studio credit entitlement");
             return CopilotStudioCreditParser.ParseCapacity(json);
+        }
+
+        private void RequireDelegated()
+        {
+            if (!_delegated)
+            {
+                throw new InvalidOperationException(
+                    "Copilot Studio consumption can only be read with a delegated administrator connection.");
+            }
         }
 
         /// <summary>
@@ -84,21 +102,22 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
         internal static string QueryDate(DateTime date) => date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
 
         /// <summary>
-        /// One page of per-user consumption for the given day.
+        /// One page of per-user consumption for the given day (<c>/users</c>).
         /// </summary>
         /// <remarks>
-        /// Microsoft added this route in July 2026. It is the only documented source of per-user Copilot
-        /// Studio credit consumption - the per-agent route reports a distinct-user count and nothing more.
+        /// Microsoft added this route in July 2026. It is the entry point for everything the importer reads:
+        /// it lists who consumed, and the per-agent figures are rebuilt from each active user's
+        /// <c>/users/{userId}/resources</c>.
         /// <para>A 404 is treated as "this tenant's API does not offer the route" and returns null rather
-        /// than throwing, because a deployment against an older or restricted API surface must still get its
-        /// per-agent figures. Note that 404 is <b>not</b> the only way an unusable route presents: measured
-        /// against a real tenant whose service principal was not authorised, this route returned a persistent
-        /// HTTP 500 while its siblings returned 403, and only a genuinely unrouted path produced a clean 404
-        /// (<c>RouteNotFound</c>). That is why the caller treats the whole per-user read as best effort
-        /// rather than relying on being able to recognise "unavailable" from the status code alone.</para>
+        /// than throwing, so the caller can say so. Note that 404 is <b>not</b> the only way an unusable route
+        /// presents: against a real tenant whose service principal was not authorised this route returned a
+        /// persistent HTTP 500 while its siblings returned 403, and only a genuinely unrouted path produced a
+        /// clean 404 (<c>RouteNotFound</c>).</para>
         /// </remarks>
         public async Task<CopilotStudioUserCreditPage> GetUserConsumptionPageAsync(DateTime fromDate, DateTime toDate, string continuationToken)
         {
+            RequireDelegated();
+
             var url = $"{BaseUrl}/licensing/entitlements/{EntitlementId}/users"
                 + $"?fromDate={QueryDate(fromDate)}"
                 + $"&toDate={QueryDate(toDate)}"
@@ -122,10 +141,13 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
 
         /// <summary>
         /// Environment id =&gt; display name. Never throws: an environment name only makes a report easier to
-        /// read, so failing to resolve one must not cost the customer the billing data it decorates.
+        /// read, so failing to resolve one must not cost the customer the billing data it decorates. The
+        /// application identity is refused on this route, so without a delegated connection it is not asked.
         /// </summary>
         public async Task<IReadOnlyDictionary<string, string>> GetEnvironmentNamesAsync()
         {
+            if (!_delegated) return new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
             try
             {
                 var url = $"{BaseUrl}/environmentmanagement/environments?api-version={ApiVersion}";
@@ -163,8 +185,7 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
                 if (treatNotFoundAsUnavailable && response.StatusCode == HttpStatusCode.NotFound)
                 {
                     _logger.LogInformation($"The Power Platform licensing API has no route for {what} on this tenant "
-                        + "(HTTP 404). This is expected where the per-user entitlement routes are not available; the "
-                        + "per-agent figures are unaffected.");
+                        + "(HTTP 404).");
                     return LicensingApiResponse.Unavailable;
                 }
 
@@ -177,21 +198,30 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
 
                 if (response.StatusCode == HttpStatusCode.Unauthorized || response.StatusCode == HttpStatusCode.Forbidden)
                 {
+                    if (_delegated)
+                    {
+                        throw new AgentCostAuthorisationException(
+                            $"Microsoft refused to let the connected billing administrator read Copilot Studio usage (HTTP {(int)response.StatusCode}). "
+                            + "Check that the account still has the Power Platform Administrator role and isn't blocked by Conditional Access, "
+                            + "then reconnect in Administration > Copilot Studio billing connection. "
+                            + "Azure costs and Copilot Credits capacity are unaffected.");
+                    }
+                    // Consumption reads only run delegated, so an app-only refusal here is the capacity route.
                     throw new AgentCostAuthorisationException(
                         $"The Power Platform licensing API refused the request for {what} with HTTP {(int)response.StatusCode} ({response.StatusCode}). "
-                        + "A valid token is not sufficient for these routes: the app registration's service principal must also hold a Power Platform "
-                        + "RBAC role at tenant scope. Assign the 'Power Platform reader' role to the service principal (POST "
-                        + "https://api.powerplatform.com/authorization/roleAssignments?api-version=2024-10-01, or use the Power Platform admin centre), "
-                        + "then re-run. Note that Microsoft has not confirmed application-only access to the licensing entitlement routes, so if the "
-                        + "role assignment is in place and this persists, the API may currently require a signed-in administrator - in which case leave "
-                        + "this import turned off. No other import is affected.");
+                        + (response.StatusCode == HttpStatusCode.Unauthorized
+                            ? "The API did not accept authentication. Check the runtime app's tenant and token audience (https://api.powerplatform.com). "
+                            : "This does not prove that a role is missing. Verify 'Power Platform reader' at tenant scope for the enterprise application the importer actually uses, "
+                              + "and that the runtime app is registered with New-PowerAppManagementApp. ")
+                        + "If the assignment is already verified, do not recreate it or grant a broader role blindly: test the failing endpoint with the same runtime app identity "
+                        + "and retain the API response and request/correlation ID privately for Microsoft support. "
+                        + "Other imports are unaffected.");
                 }
 
                 if (!response.IsSuccessStatusCode)
                 {
-                    var body = await SafeReadAsync(response);
                     throw new HttpRequestException(
-                        $"The Power Platform licensing API returned HTTP {(int)response.StatusCode} ({response.StatusCode}) for {what}. {body}");
+                        $"The Power Platform licensing API returned HTTP {(int)response.StatusCode} ({response.StatusCode}) for {what}.");
                 }
 
                 var content = await response.Content.ReadAsStringAsync();
@@ -227,27 +257,11 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
             public bool RouteUnavailable { get; }
         }
 
-        private static async Task<string> SafeReadAsync(HttpResponseMessage response)
-        {
-            try
-            {
-                var body = await response.Content.ReadAsStringAsync();
-
-                // Truncated: this goes into a log and, via the import log, a 1000-character SQL column.
-                if (string.IsNullOrWhiteSpace(body)) return string.Empty;
-                return body.Length > 500 ? body.Substring(0, 500) + "..." : body;
-            }
-            catch
-            {
-                return string.Empty;
-            }
-        }
     }
 
     /// <summary>
-    /// Thrown when a cost API rejects the request for authorisation reasons rather than because something is
-    /// broken. Typed separately so the importer can log the specific remedy - the fix is a role assignment,
-    /// which no amount of retrying will achieve.
+    /// Thrown when a cost API rejects authentication or authorisation. Typed separately so the importer
+    /// preserves actionable guidance without treating a refused read as an empty successful import.
     /// </summary>
     public class AgentCostAuthorisationException : Exception
     {

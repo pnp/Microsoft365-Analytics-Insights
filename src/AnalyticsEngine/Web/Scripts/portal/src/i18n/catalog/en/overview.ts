@@ -70,6 +70,7 @@ export const overview = {
   'overview.enabledImport.userMetadata': 'User metadata',
   'overview.enabledImport.usageReports': 'Usage reports',
   'overview.enabledImport.copilotUsageReportsGraph': 'Copilot usage reports (Graph)',
+  'overview.enabledImport.agent365PackageCatalog': 'Agent 365 package catalog',
   'overview.enabledImport.teams': 'Teams',
   'overview.enabledImport.webTraffic': 'Web traffic',
   'overview.enabledImport.sentEmails': 'Sent emails',

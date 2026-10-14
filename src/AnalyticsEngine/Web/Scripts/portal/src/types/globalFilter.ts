@@ -60,7 +60,7 @@ export interface GlobalFilterEffective {
   applied: boolean;
   /** True when a portal administrator switched it off for their own view. */
   bypassed: boolean;
-  /** True when this reader may switch it off for their own view, and edit it. */
+  /** True when this reader may switch it off and edit it: requires both Administration and See PII. */
   canBypass: boolean;
   revision: number;
   /** Null when none is defined or the stored filter cannot be read. */

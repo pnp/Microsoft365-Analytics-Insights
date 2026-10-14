@@ -461,6 +461,66 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public async Task ScopedSelection_PreservesEnabledLegacyDuplicatesBeforeBackOffAndCap()
+        {
+            foreach (var collation in new[] { "SQL_Latin1_General_CP1_CI_AS", "Latin1_General_CI_AS", "Latin1_General_CS_AS" })
+            using (var fixture = await UpnBatchLookupTests.Fixture.CreateAsync(collation))
+            {
+                var now = new DateTime(2000, 1, 2, 0, 0, 0, DateTimeKind.Utc);
+                using (var db = new UpnBatchLookupTests.FixtureContext(fixture.ConnectionString))
+                {
+                    await db.Database.ExecuteSqlCommandAsync(@"
+DELETE dbo.user_license_type_lookups;
+DELETE dbo.users;
+DBCC CHECKIDENT ('dbo.users', RESEED, 0);
+INSERT dbo.users(user_name, account_enabled) VALUES
+('duplicate@contoso.com', 0), ('duplicate@contoso.com', 1), ('duplicate@contoso.com', NULL),
+('disabled@contoso.com', 0), ('outside@contoso.com', 1), ('backoff@contoso.com', 1);
+CREATE TABLE dbo.copilot_interaction_user_watermarks (
+id int IDENTITY PRIMARY KEY, user_id int NOT NULL, last_interaction_utc datetime NULL,
+last_run_utc datetime NULL, consecutive_empty_or_failed int NOT NULL, skip_until_utc datetime NULL,
+last_error nvarchar(500) NULL);
+INSERT dbo.copilot_interaction_user_watermarks(user_id,last_run_utc,consecutive_empty_or_failed,skip_until_utc)
+VALUES (2, '20000101', 0, NULL), (6, NULL, 2, '20000103');");
+                    CollectionAssert.AreEqual(new int?[] { 1, 4, null },
+                        await Common.Entities.LookupCaches.ExistingUserIds.FindAsync(db,
+                            new[] { "duplicate@contoso.com", "disabled@contoso.com", "missing@contoso.com" }),
+                        "Other callers must still get the lowest id, even when that row is disabled.");
+                }
+
+                var resolver = new FakePilotGroupMemberResolver(
+                    "duplicate@contoso.com", "disabled@contoso.com", "missing@contoso.com", "backoff@contoso.com");
+                var importer = new CopilotInteractionHistoryImporter(
+                    AnalyticsLogger.ConsoleOnlyTracer(), new AppConfig(), new FakeAiInteractionSourceLoader(),
+                    NullInteractionCognitiveEnricher.Instance, resolver, new UserGroupsFilterModel("Contoso Pilot"),
+                    new ScopedFixtureContextFactory(fixture.ConnectionString));
+                var select = typeof(CopilotInteractionHistoryImporter).GetMethod("SelectDueUsersInGroupsAsync",
+                    System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+                foreach (var cap in new[] { 10, 1 })
+                {
+                    var log = new CopilotInteractionImportLog();
+                    var task = (Task)select.Invoke(importer, new object[] { log, now, cap });
+                    await task;
+                    var states = (System.Collections.IEnumerable)task.GetType().GetProperty("Result").GetValue(task);
+                    var ids = states.Cast<object>()
+                        .Select(state => ((User)state.GetType().GetProperty("User").GetValue(state)).ID).ToArray();
+                    CollectionAssert.AreEqual(cap == 1 ? new[] { 3 } : new[] { 3, 2 }, ids,
+                        "Keep every eligible duplicate, exclude disabled/out-of-scope/missing users, then order and cap.");
+                    Assert.AreEqual(3, log.UsersInScope, "Count eligible rows before back-off and cap.");
+                    Assert.AreEqual(1, log.UsersSkipped, "Back-off must still exclude an otherwise eligible scoped user.");
+                }
+                Assert.AreEqual(2, resolver.CallCount, "Each selection resolves groups once, never per tenant user.");
+            }
+        }
+
+        private sealed class ScopedFixtureContextFactory : IAnalyticsDbContextFactory
+        {
+            private readonly string _connectionString;
+            public ScopedFixtureContextFactory(string connectionString) { _connectionString = connectionString; }
+            public AnalyticsEntitiesContext Create() => new UpnBatchLookupTests.FixtureContext(_connectionString);
+        }
+
+        [TestMethod]
         public async Task StrictGroupFilter_ResolvesScopeGroupFirstNotUserByUser()
         {
             // The pilot scope is resolved by listing the group's members, not by asking "is this user in the

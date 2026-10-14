@@ -98,6 +98,17 @@ namespace Common.Entities.Config
 
             this.CognitiveEndpoint = AnalyticsConfig.AppSettings.Get("CognitiveEndpoint");
             this.CognitiveKey = AnalyticsConfig.AppSettings.Get("CognitiveKey");
+            FoundryPromptCategorisationEndpoint = ReadFoundryRuntimeSetting(nameof(FoundryPromptCategorisationEndpoint));
+            FoundryPromptCategorisationDeployment = ReadFoundryRuntimeSetting(nameof(FoundryPromptCategorisationDeployment));
+            FoundryPromptCategorisationKey = ReadFoundryRuntimeSetting(nameof(FoundryPromptCategorisationKey));
+            // Migrate the namespace as a set; never pair a new deployment with an old endpoint or key.
+            if (FoundryPromptCategorisationEndpoint == null && FoundryPromptCategorisationDeployment == null &&
+                FoundryPromptCategorisationKey == null)
+            {
+                FoundryPromptCategorisationEndpoint = ReadFoundryRuntimeSetting("FoundryPromptEndpoint");
+                FoundryPromptCategorisationDeployment = ReadFoundryRuntimeSetting("FoundryPromptDeployment");
+                FoundryPromptCategorisationKey = ReadFoundryRuntimeSetting("FoundryPromptKey");
+            }
 
 
             var importJobSettingsString = AnalyticsConfig.AppSettings.Get("ImportJobSettings");
@@ -564,6 +575,15 @@ namespace Common.Entities.Config
         public int ImportStartStaggerMinutes { get; set; } = 0;
 
         #region Copilot AI interaction history
+
+        // All .NET 10 hosts use the same JSON/environment configuration source. Preserve the
+        // installer's APPSETTING_ alias precedence without bypassing that source or reading XML.
+        private static string ReadFoundryRuntimeSetting(string name) =>
+            AnalyticsConfig.AppSettings.Get("APPSETTING_" + name) ?? AnalyticsConfig.AppSettings.Get(name);
+
+        public string FoundryPromptCategorisationEndpoint { get; set; }
+        public string FoundryPromptCategorisationDeployment { get; set; }
+        public string FoundryPromptCategorisationKey { get; set; }
 
         /// <summary>Default cadence for the interaction-history import: once a day.</summary>
         public const int DefaultCopilotInteractionHistoryIntervalHours = 24;

@@ -2691,6 +2691,7 @@ namespace Tests.UnitTests
                 // with no format ("capped at 5000 agents"); they now group thousands like every other count
                 // in these warnings ("5,000"). Every other expected string is dev's text verbatim.
                 { CopilotAdoptionWarningKeys.AgentInventoryCapped, Case("The agent inventory was capped at 1,234 agents, so the agent figures are a floor rather than a total.", "maxAgents", 1234) },
+                { CopilotAdoptionWarningKeys.AgentReachTooLarge, Case("More than 1,000,000 combinations of agent and person were used in this period, so agent breadth, depth and reach were not calculated rather than calculated from part of them.", "maxRows", 1000000) },
                 { CopilotAdoptionWarningKeys.UnlicensedUsageCapped, Case("Unlicensed Copilot usage was capped at 1,234 users, so those figures are a floor rather than a total.", "maxUsers", 1234) },
                 { CopilotAdoptionWarningKeys.LicensedUserDetailCapped, Case("Only the first 1,234 licensed users were analysed. The figures below therefore describe that subset, not the whole tenant. The subset is ordered by internal user id for reproducibility, so the oldest user records are over-represented and the newest user records are excluded first.", "maxUsers", 1234) },
                 { CopilotAdoptionWarningKeys.LicensedUsersSubset, Case("This tenant holds 5,000 Copilot licences, but only 1,234 users could be analysed in one pass. Every rate and breakdown below describes those 1,234 users, not the whole tenant - they are not tenant-wide figures and must not be quoted as such. Because the drill-down query is ordered by internal user id, the oldest user records are over-represented and the newest joiners or newly onboarded subsidiaries are excluded first; the subset is reproducible, but not representative.", "licensedUsers", 5000, "scoredUsers", 1234) },
@@ -3023,6 +3024,9 @@ namespace Tests.UnitTests
                 "https://adoption.microsoft.com/en-us/copilot/" + "plan/",
                 "https://adoption.microsoft.com/en-us/copilot/" + "adopt/",
                 "https://aka.ms/" + "CopilotAdoptionPlaybook",
+                // Renders the WorkLab home page with HTTP 200 for any path, so it reads as working to a
+                // link checker while never showing the report (#643).
+                "https://www.microsoft.com/en-us/worklab/work-trend-index/" + "2026/annual-report",
             };
 
             Assert.AreEqual(CopilotAdoptionGuidanceCatalogue.ExpectedLinkCount, CopilotAdoptionGuidanceCatalogue.All.Count,
@@ -3051,6 +3055,58 @@ namespace Tests.UnitTests
             {
                 CollectionAssert.DoesNotContain(allUrls, deadUrl);
             }
+        }
+
+        [TestMethod]
+        public void GuidanceCatalogue_EveryResourceHasOneStableTitleKey()
+        {
+            var all = CopilotAdoptionGuidanceCatalogue.All;
+            Assert.IsTrue(all.All(l => !string.IsNullOrWhiteSpace(l.TitleKey)),
+                "Every link needs a titleKey: the portal translates the title through it and would otherwise show English on a Spanish page.");
+            Assert.IsTrue(all.All(l => System.Text.RegularExpressions.Regex.IsMatch(l.TitleKey, "^[a-z][A-Za-z0-9]*$")),
+                "Title keys are part of a catalog key path, so they must be plain camelCase identifiers.");
+
+            // One key per resource: the same resource attached to several actions keeps its key, and two
+            // resources never share one, or the portal would show one resource under the other's name.
+            foreach (var byKey in all.GroupBy(l => l.TitleKey))
+            {
+                Assert.AreEqual(1, byKey.Select(l => l.Title).Distinct().Count(), $"{byKey.Key} names more than one title.");
+                Assert.AreEqual(1, byKey.Select(l => l.Url).Distinct().Count(), $"{byKey.Key} points at more than one URL.");
+            }
+            foreach (var byUrl in all.GroupBy(l => l.Url))
+            {
+                Assert.AreEqual(1, byUrl.Select(l => l.TitleKey).Distinct().Count(), $"{byUrl.Key} has more than one titleKey.");
+            }
+        }
+
+        [TestMethod]
+        public void GuidanceCatalogue_LinksThe2026WorkTrendIndexAsGuidanceForCoachAndAdvocate()
+        {
+            const string WorkTrendIndex2026 =
+                "https://www.microsoft.com/en-us/worklab/work-trend-index/agents-human-agency-and-the-opportunity-for-every-organization";
+            const string FrontierFirmResources = "https://www.microsoft.com/en-us/worklab/frontier-firm-resources";
+
+            foreach (var code in new[] { CopilotAdoptionScoring.AdoptionActionCodes.Coach, CopilotAdoptionScoring.AdoptionActionCodes.Advocate })
+            {
+                CollectionAssert.Contains(CopilotAdoptionGuidanceCatalogue.ForAction(code).Select(l => l.Url).ToList(), WorkTrendIndex2026,
+                    $"{code} should carry the 2026 Work Trend Index.");
+            }
+            CollectionAssert.Contains(
+                CopilotAdoptionGuidanceCatalogue.ForAction(CopilotAdoptionScoring.AdoptionActionCodes.Advocate).Select(l => l.Url).ToList(),
+                FrontierFirmResources);
+
+            // Guidance, not a benchmark (#547): the report is attached as reading for the people running an
+            // action, never to an action that judges a person against the report's numbers.
+            var reportActions = CopilotAdoptionGuidanceCatalogue.All
+                .Where(l => l.Url == WorkTrendIndex2026 || l.Url == FrontierFirmResources)
+                .Select(l => l.ActionCode)
+                .Distinct()
+                .OrderBy(c => c, StringComparer.Ordinal)
+                .ToList();
+            CollectionAssert.AreEqual(
+                new[] { CopilotAdoptionScoring.AdoptionActionCodes.Advocate, CopilotAdoptionScoring.AdoptionActionCodes.Coach }
+                    .OrderBy(c => c, StringComparer.Ordinal).ToList(),
+                reportActions);
         }
 
         [TestMethod]

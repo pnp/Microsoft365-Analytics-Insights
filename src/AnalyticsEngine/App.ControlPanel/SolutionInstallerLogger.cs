@@ -47,7 +47,14 @@ namespace App.ControlPanel
             }
 
             var isErr = logLevel > LogLevel.Warning;
-            AddToSolutionLog(formatted, isErr);
+            AddEventToSolutionLog(new InstallLogEventArgs
+            {
+                Text = formatted,
+                IsError = isErr,
+                Level = logLevel,
+                PhaseName = message.StartsWith("=== Phase: ", StringComparison.Ordinal) && message.EndsWith(" ===", StringComparison.Ordinal)
+                    ? message.Substring(11, message.Length - 15) : null
+            });
         }
 
         private static string LevelLabel(LogLevel level)
@@ -63,6 +70,7 @@ namespace App.ControlPanel
         }
 
         protected abstract void AddToSolutionLog(string msg, bool isErr);
+        protected virtual void AddEventToSolutionLog(InstallLogEventArgs item) => AddToSolutionLog(item.Text, item.IsError);
     }
 
     /// <summary>
@@ -81,6 +89,9 @@ namespace App.ControlPanel
         {
             _installSPOSitesControl.LogItemOnUIThread(new InstallLogLVI(new InstallLogEventArgs() { Text = msg, IsError = isErr }));
         }
+
+        protected override void AddEventToSolutionLog(InstallLogEventArgs item) =>
+            _installSPOSitesControl.LogItemOnUIThread(new InstallLogLVI(item));
     }
 
     internal class InMemoryLogger : SolutionInstallerLogger
@@ -111,4 +122,3 @@ namespace App.ControlPanel
         }
     }
 }
-

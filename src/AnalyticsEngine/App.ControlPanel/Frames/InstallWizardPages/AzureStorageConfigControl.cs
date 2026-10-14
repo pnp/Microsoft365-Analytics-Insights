@@ -9,10 +9,68 @@ namespace App.ControlPanel.Frames.InstallWizard
     public partial class AzureStorageConfigControl : UserControl
     {
         private List<SqlDatabaseUser> _sqlDatabaseUsers = new List<SqlDatabaseUser>();
+        private TableLayoutPanel _sqlLoginFields;
+        private Label _sqlLoginNotice;
 
         public AzureStorageConfigControl()
         {
             InitializeComponent();
+            ConfigureServiceLayout();
+            UpdateResponsiveUIControls();
+        }
+
+        private void ConfigureServiceLayout()
+        {
+            var layout = ServicePageLayout.Create(this, "Database & storage",
+                "Stores imported analytics and supports background processing. Existing resources are reused.");
+            lblGUIAzureStorageHeader.Visible = lblGUIAzureStorageHeaderDesc.Visible = false;
+            var storage = ServicePageLayout.AddService(layout, "storageService", "Storage account",
+                "Blobs stage import data and deployment packages. Tables retain import checkpoints, runtime settings and caches.",
+                picStorage.Image);
+            picStorage.Visible = false;
+            lblGUIAzureHeaderBlobStorage.Visible = lblGUIAzureHeaderBlobStorageName.Visible = false;
+            ServicePageLayout.AddFields(storage, "Account name:", txtStorageAccount);
+            ServicePageLayout.AddRow(storage, lblStorageAccountURL);
+            var bus = ServicePageLayout.AddService(layout, "busService", "Service Bus",
+                "Queues Teams call-record notifications for reliable import. Disable it if Teams calls are not selected.",
+                picServiceBus.Image);
+            picServiceBus.Visible = false;
+            lblGUIAzureHeaderServiceBus.Visible = lblGUIAzureServiceBusName.Visible = false;
+            ServicePageLayout.AddFields(bus, "Namespace name:", txtServiceBusName, "", chkServiceBusEnabled);
+            ServicePageLayout.AddRow(bus, lblServiceBusName);
+            var sql = ServicePageLayout.AddService(layout, "sqlService", "SQL database",
+                "Stores activity and reporting data for the portal. Schedule a maintenance window when upgrading its schema.",
+                picSQL.Image);
+            picSQL.Visible = false;
+            lblGUIAzureHeaderSQL.Visible = lblGUIAzureSQLServerName.Visible = lblGUIAzureSQLDbName.Visible = false;
+            ServicePageLayout.AddFields(sql, "Server name:", txtSQLServerName, "Database:", txtSQLDb);
+            ServicePageLayout.AddRow(sql, lblSQLServerName);
+            chkSqlEntraAuth.Text = "Use Microsoft Entra ID authentication (recommended)";
+            ServicePageLayout.AddRow(sql, chkSqlEntraAuth);
+            _sqlLoginNotice = ServicePageLayout.Text(
+                "SQL login is deprecated; use it only for a server that still requires SQL authentication.");
+            ServicePageLayout.AddRow(sql, _sqlLoginNotice);
+            lblGUIAzureSQLUsername.Visible = lblGUIAzureSQLPassword.Visible = false;
+            _sqlLoginFields = ServicePageLayout.AddFields(sql, "Server username:", txtSQLServerUsername, "Password:", txtSQLServerPassword);
+            btnSqlDatabaseUsers.AutoSize = true;
+            btnSqlDatabaseUsers.Padding = new Padding(8, 4, 8, 4);
+            var users = new TableLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, ColumnCount = 2, RowCount = 1 };
+            users.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 170));
+            users.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+            users.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            btnSqlDatabaseUsers.Dock = DockStyle.Top;
+            btnSqlDatabaseUsers.MinimumSize = new System.Drawing.Size(150, 32);
+            lblSqlDatabaseUsers.Dock = DockStyle.Fill;
+            lblSqlDatabaseUsers.Margin = new Padding(8, 4, 0, 4);
+            users.Controls.Add(btnSqlDatabaseUsers, 0, 0);
+            users.Controls.Add(lblSqlDatabaseUsers, 1, 0);
+            ServicePageLayout.AddRow(sql, users);
+            foreach (var label in new[] { lblStorageAccountURL, lblServiceBusName, lblSQLServerName })
+            {
+                label.Dock = DockStyle.Fill;
+                label.Margin = new Padding(0, 0, 0, 6);
+            }
+            layout.BringToFront();
         }
 
         /// <summary>
@@ -76,12 +134,13 @@ namespace App.ControlPanel.Frames.InstallWizard
             txtServiceBusName.Enabled = chkServiceBusEnabled.Checked;
             lblServiceBusName.Enabled = chkServiceBusEnabled.Checked;
 
-            // The SQL administrator login is deprecated: grey it out when Microsoft Entra ID authentication
-            // is selected, rather than removing it, because an install pointed at an existing
-            // SQL-authentication server still needs it.
+            // Hide and disable the deprecated login in Entra mode, retaining its values for an existing
+            // server that still needs SQL authentication.
             var sqlLoginInUse = !chkSqlEntraAuth.Checked;
             txtSQLServerUsername.Enabled = sqlLoginInUse;
             txtSQLServerPassword.Enabled = sqlLoginInUse;
+            if (_sqlLoginFields != null) _sqlLoginFields.Visible = sqlLoginInUse;
+            if (_sqlLoginNotice != null) _sqlLoginNotice.Visible = sqlLoginInUse;
             lblGUIAzureSQLUsername.Enabled = sqlLoginInUse;
             lblGUIAzureSQLPassword.Enabled = sqlLoginInUse;
 

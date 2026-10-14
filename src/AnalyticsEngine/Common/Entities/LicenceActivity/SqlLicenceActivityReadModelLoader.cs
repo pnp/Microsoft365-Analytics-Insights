@@ -75,7 +75,7 @@ namespace Common.Entities.LicenceActivity
             var overview = await ExecuteOverviewSqlAsync(
                 LicenceActivitySql.BuildReadModelCoverage(sources, eligibleTable),
                 "coverage", range, sources, diagnostics,
-                reader => ReadModelCoverageAsync(reader, range, cancellationToken),
+                reader => ReadModelCoverageAsync(reader, range, diagnostics, cancellationToken),
                 cancellationToken).ConfigureAwait(false);
             if (!sources.UsageReports)
             {
@@ -88,6 +88,11 @@ namespace Common.Entities.LicenceActivity
             {
                 var scores = await LoadReadModelEvidenceAsync(
                     overview, coverage, eligibleTable, sources, diagnostics, cancellationToken).ConfigureAwait(false);
+                diagnostics.Evidence(coverage, scores.Count,
+                    scores.Values.Count(score => score.ActiveSamples > 0),
+                    scores.Values.Count(score => score.FrequencyKnown
+                        && score.ObservedSamples == coverage.ExpectedSamples),
+                    sources.UsageReportsGroupFiltered);
                 return new KeyValuePair<string, IReadOnlyDictionary<int, LicenceActivityScore>>(coverage.Workload, scores);
             }).ToArray();
             var evidence = await Task.WhenAll(tasks).ConfigureAwait(false);
@@ -158,7 +163,8 @@ namespace Common.Entities.LicenceActivity
         }
 
         private async Task<LicenceActivityOverview> ReadModelCoverageAsync(
-            SqlDataReader reader, LicenceActivityQuery range, CancellationToken cancellationToken)
+            SqlDataReader reader, LicenceActivityQuery range, ILicenceActivityDiagnostics diagnostics,
+            CancellationToken cancellationToken)
         {
             var result = new LicenceActivityOverview { Query = range };
             await RequireResultAsync(reader, true, cancellationToken,
@@ -188,6 +194,28 @@ namespace Common.Entities.LicenceActivity
             var byWorkload = result.Coverage.ToDictionary(c => c.Workload, StringComparer.Ordinal);
             while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
                 byWorkload[ReadString(reader, "WorkloadName")].SnapshotDates.Add(ReadUtc(reader, "SnapshotDate"));
+            await RequireResultAsync(reader, false, cancellationToken,
+                "WorkloadName", "WeekEnd", "ReportDate", "HasRows", "Settled").ConfigureAwait(false);
+            LicenceActivityCoverageWeek week = null;
+            while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+            {
+                var workload = ReadString(reader, "WorkloadName");
+                var weekEnd = ReadUtc(reader, "WeekEnd");
+                var date = ReadUtc(reader, "ReportDate");
+                if (week == null || week.Workload != workload || week.ToUtc != weekEnd)
+                {
+                    if (week != null) diagnostics.CoverageWeek(week);
+                    week = new LicenceActivityCoverageWeek
+                    {
+                        Workload = workload, FromUtc = date, ToUtc = weekEnd,
+                        Settled = reader.GetBoolean(reader.GetOrdinal("Settled"))
+                    };
+                }
+                week.ExpectedDays++;
+                if (reader.GetBoolean(reader.GetOrdinal("HasRows"))) week.PresentDays++;
+                else week.MissingDates.Add(date);
+            }
+            if (week != null) diagnostics.CoverageWeek(week);
             await DrainRemainingResultsAsync(reader, cancellationToken).ConfigureAwait(false);
             return result;
         }

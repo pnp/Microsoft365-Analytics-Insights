@@ -10,9 +10,11 @@ import {
   Globe20Regular,
   Home20Regular,
   Money20Regular,
+  Options20Regular,
   Organization20Regular,
   PeopleCommunity20Regular,
   PeopleAudience20Regular,
+  PeopleStar20Regular,
   PeopleSync20Regular,
   PeopleTeam20Regular,
   Pulse20Regular,
@@ -24,6 +26,7 @@ import {
 import { lazyWithReload } from './lazyWithReload';
 import type { TranslationKey } from './i18n';
 import { permissionGranted, type PortalAccessValue, type PortalPermission } from './access';
+import { REPORT_PAGES, type ReportPageDefinition, type WorkloadId } from './reportNavigation';
 
 // Code-split the pages so each route is a separate chunk (smaller initial load). lazyWithReload
 // recovers from a stale chunk after a rebuild/redeploy instead of leaving the route blank.
@@ -37,16 +40,21 @@ const LicenceActivityPage = lazyWithReload(() => import('./pages/LicenceActivity
 const ActivityAnalysisPage = lazyWithReload(() => import('./pages/ActivityAnalysisPage'));
 const DlpPage = lazyWithReload(() => import('./pages/DlpPage'));
 const TeamsPermissionsPage = lazyWithReload(() => import('./pages/TeamsPermissionsPage'));
+const AgentCostConnectionPage = lazyWithReload(() => import('./pages/AgentCostConnectionPage'));
 const UserLookupPage = lazyWithReload(() => import('./pages/UserLookupPage'));
 const UserOrgsPage = lazyWithReload(() => import('./pages/UserOrgsPage'));
 const UserImportPage = lazyWithReload(() => import('./pages/UserImportPage'));
 const UserScopePage = lazyWithReload(() => import('./pages/UserScopePage'));
 const GlobalFilterPage = lazyWithReload(() => import('./pages/GlobalFilterPage'));
 const CopilotAuditBackfillPage = lazyWithReload(() => import('./pages/CopilotAuditBackfillPage'));
+const LeadershipCohortPage = lazyWithReload(() => import('./pages/LeadershipCohortPage'));
+const CopilotAdoptionSettingsPage = lazyWithReload(() => import('./pages/CopilotAdoptionSettingsPage'));
 const ProfilingStatusPage = lazyWithReload(() => import('./pages/ProfilingStatusPage'));
 const InstallLogPage = lazyWithReload(() => import('./pages/InstallLogPage'));
 const HealthPage = lazyWithReload(() => import('./pages/HealthPage'));
 const ServiceConfigurationPage = lazyWithReload(() => import('./pages/ServiceConfigurationPage'));
+const PromptCategoriesPage = lazyWithReload(() => import('./pages/PromptCategoriesPage'));
+const Agent365CatalogPage = lazyWithReload(() => import('./pages/Agent365CatalogPage'));
 
 /**
  * The portal is split into two areas so the two audiences it serves don't have to wade
@@ -69,6 +77,14 @@ export interface AreaDefinition {
   requires?: PortalPermission;
 }
 
+export const WORKLOADS: { id: WorkloadId; labelKey: TranslationKey; icon: ReactElement }[] = [
+  { id: 'copilot', labelKey: 'app.workload.copilot', icon: <Sparkle20Regular /> },
+  { id: 'agents', labelKey: 'app.workload.agents', icon: <PeopleStar20Regular /> },
+  { id: 'apps', labelKey: 'app.workload.apps', icon: <DataUsage20Regular /> },
+  { id: 'sharepoint', labelKey: 'app.workload.sharepoint', icon: <Globe20Regular /> },
+  { id: 'teams', labelKey: 'app.workload.teams', icon: <PeopleCommunity20Regular /> },
+];
+
 export const AREAS: AreaDefinition[] = [
   { id: 'insights', labelKey: 'app.area.insights', basePath: '/insights', homePath: '/insights/overview' },
   { id: 'admin', labelKey: 'app.area.admin', basePath: '/admin', homePath: '/admin/health', requires: 'administration' },
@@ -89,6 +105,8 @@ export interface PortalRoute {
   element: ReactElement;
   /** Additional permission needed for this route. The area's requirement is checked too. */
   requires?: PortalPermission;
+  workload?: WorkloadId;
+  reportPage?: ReportPageDefinition;
 }
 
 /**
@@ -110,6 +128,15 @@ export const ROUTES: PortalRoute[] = [
     icon: <ChartMultiple20Regular />,
     element: <ReportsPage />,
   },
+  ...REPORT_PAGES.map((page): PortalRoute => ({
+    area: 'insights',
+    path: page.path,
+    labelKey: page.labelKey,
+    icon: <ChartMultiple20Regular />,
+    element: <ReportsPage page={page} />,
+    workload: page.workload,
+    reportPage: page,
+  })),
   {
     area: 'insights',
     path: '/insights/teams',
@@ -119,6 +146,7 @@ export const ROUTES: PortalRoute[] = [
     // someone to the wrong one.
     icon: <PeopleCommunity20Regular />,
     element: <TeamsExplorerPage />,
+    workload: 'teams',
   },
   {
     area: 'insights',
@@ -128,6 +156,7 @@ export const ROUTES: PortalRoute[] = [
     // and from where - and ChartMultiple already marks the generic "Reports" page next to it.
     icon: <Globe20Regular />,
     element: <WebActivityPage />,
+    workload: 'sharepoint',
   },
   {
     area: 'insights',
@@ -135,6 +164,7 @@ export const ROUTES: PortalRoute[] = [
     labelKey: 'app.route.copilotAdoption',
     icon: <Sparkle20Regular />,
     element: <CopilotAdoptionPage />,
+    workload: 'copilot',
   },
   {
     area: 'insights',
@@ -142,6 +172,7 @@ export const ROUTES: PortalRoute[] = [
     labelKey: 'app.route.licenceActivity',
     icon: <DataUsage20Regular />,
     element: <LicenceActivityPage />,
+    workload: 'apps',
   },
   {
     area: 'insights',
@@ -157,6 +188,7 @@ export const ROUTES: PortalRoute[] = [
     labelKey: 'app.route.agentCosts',
     icon: <Money20Regular />,
     element: <AgentCostsPage />,
+    workload: 'agents',
   },
   {
     area: 'insights',
@@ -251,11 +283,51 @@ export const ROUTES: PortalRoute[] = [
   },
   {
     area: 'admin',
+    path: '/admin/leadership-cohort',
+    labelKey: 'app.route.leadershipCohort',
+    groupKey: 'app.navGroup.manage',
+    icon: <PeopleStar20Regular />,
+    element: <LeadershipCohortPage />,
+  },
+  {
+    area: 'admin',
+    path: '/admin/copilot-adoption-settings',
+    labelKey: 'app.route.copilotAdoptionSettings',
+    groupKey: 'app.navGroup.manage',
+    icon: <Options20Regular />,
+    element: <CopilotAdoptionSettingsPage />,
+  },
+  {
+    area: 'admin',
+    path: '/admin/prompt-categories',
+    labelKey: 'promptCategories.title',
+    groupKey: 'app.navGroup.manage',
+    icon: <Sparkle20Regular />,
+    element: <PromptCategoriesPage />,
+  },
+  {
+    area: 'admin',
     path: '/admin/configuration',
     labelKey: 'app.route.configuration',
     groupKey: 'app.navGroup.manage',
     icon: <Settings20Regular />,
     element: <ServiceConfigurationPage />,
+  },
+  {
+    area: 'admin',
+    path: '/admin/agent365-catalog',
+    labelKey: 'app.route.agent365Catalog',
+    groupKey: 'app.navGroup.manage',
+    icon: <DataUsage20Regular />,
+    element: <Agent365CatalogPage />,
+  },
+  {
+    area: 'admin',
+    path: '/admin/agent-cost-connection',
+    labelKey: 'app.route.agentCostConnection',
+    groupKey: 'app.navGroup.manage',
+    icon: <Money20Regular />,
+    element: <AgentCostConnectionPage />,
   },
 ];
 

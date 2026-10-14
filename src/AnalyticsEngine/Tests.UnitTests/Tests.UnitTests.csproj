@@ -59,6 +59,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\App.ControlPanel.Engine\App.ControlPanel.Engine.csproj" />
+    <ProjectReference Include="..\App.ControlPanel\App.ControlPanel.WinForms.csproj" Condition="'$(AnalyticsTargetOS)' != 'linux'" />
     <ProjectReference Include="..\Common\CloudInstallEngine\CloudInstallEngine.csproj" />
     <ProjectReference Include="..\Common\DataUtils\DataUtils.csproj" />
     <ProjectReference Include="..\Common\Entities\Entities.csproj" />
@@ -114,6 +115,10 @@
        in Development); see AnalyticsConfig. Copied next to the binary because that is where
        AnalyticsConfig sets its base path. -->
   <ItemGroup>
+    <Compile Remove="Generated\**" />
+    <!-- Native workspace tests cannot run or compile in the Linux demo graph. -->
+    <Compile Remove="InstallTests\InstallerLayoutTests.cs;InstallTests\InstallerWorkspaceTests.cs;InstallTests\AzureAIConfigControlTests.cs;InstallTests\OpenAIModelCatalogTests.cs" Condition="'$(AnalyticsTargetOS)' == 'linux'" />
+    <Content Include="Generated\**" />
     <None Update="appsettings.json" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 

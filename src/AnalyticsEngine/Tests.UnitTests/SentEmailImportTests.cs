@@ -51,6 +51,7 @@ namespace Tests.UnitTests
             Assert.IsFalse(settings.Copilot, "Copilot should default to false");
             Assert.IsFalse(settings.ImportPowerPlatform, "ImportPowerPlatform should default to false");
             Assert.IsFalse(settings.GraphCopilotUsageReports, "GraphCopilotUsageReports should default to false");
+            Assert.IsFalse(settings.Agent365PackageCatalog, "Agent365PackageCatalog should default to false");
             Assert.IsFalse(settings.CopilotInteractionHistory, "CopilotInteractionHistory should default to false");
         }
 
@@ -80,7 +81,8 @@ namespace Tests.UnitTests
             var settings = new ImportTaskSettings(
                 "Calls=True;GraphUsersMetadata=True;GraphUsageReports=True;" +
                 "GraphTeams=True;ActivityLog=True;WebTraffic=True;SentEmails=True;" +
-                "Copilot=True;ImportPowerPlatform=True;GraphCopilotUsageReports=True;CopilotInteractionHistory=True");
+                "Copilot=True;ImportPowerPlatform=True;GraphCopilotUsageReports=True;" +
+                "Agent365PackageCatalog=True;CopilotInteractionHistory=True");
 
             Assert.IsTrue(settings.Calls);
             Assert.IsTrue(settings.GraphUsersMetadata);
@@ -92,6 +94,7 @@ namespace Tests.UnitTests
             Assert.IsTrue(settings.Copilot);
             Assert.IsTrue(settings.ImportPowerPlatform);
             Assert.IsTrue(settings.GraphCopilotUsageReports);
+            Assert.IsTrue(settings.Agent365PackageCatalog);
             Assert.IsTrue(settings.CopilotInteractionHistory);
         }
 
@@ -167,6 +170,7 @@ namespace Tests.UnitTests
                 Copilot = true,
                 ImportPowerPlatform = true,
                 GraphCopilotUsageReports = false,
+                Agent365PackageCatalog = true,
                 CopilotInteractionHistory = true,
             };
 
@@ -183,6 +187,7 @@ namespace Tests.UnitTests
             Assert.AreEqual(original.Copilot, reloaded.Copilot);
             Assert.AreEqual(original.ImportPowerPlatform, reloaded.ImportPowerPlatform);
             Assert.AreEqual(original.GraphCopilotUsageReports, reloaded.GraphCopilotUsageReports);
+            Assert.AreEqual(original.Agent365PackageCatalog, reloaded.Agent365PackageCatalog);
             Assert.AreEqual(original.CopilotInteractionHistory, reloaded.CopilotInteractionHistory);
         }
 
@@ -194,7 +199,7 @@ namespace Tests.UnitTests
             {
                 "Calls", "GraphUsersMetadata", "GraphUsageReports",
                 "GraphTeams", "ActivityLog", "WebTraffic", "SentEmails", "Copilot",
-                "ImportPowerPlatform", "GraphCopilotUsageReports", "CopilotInteractionHistory",
+                "ImportPowerPlatform", "GraphCopilotUsageReports", "Agent365PackageCatalog", "CopilotInteractionHistory",
             })
             {
                 Assert.IsTrue(settingsString.Contains(propName + "="),
@@ -211,7 +216,7 @@ namespace Tests.UnitTests
             {
                 "Calls", "GraphUsersMetadata", "GraphUsageReports",
                 "GraphTeams", "ActivityLog", "WebTraffic", "SentEmails", "Copilot",
-                "ImportPowerPlatform", "GraphCopilotUsageReports", "CopilotInteractionHistory",
+                "ImportPowerPlatform", "GraphCopilotUsageReports", "Agent365PackageCatalog", "CopilotInteractionHistory",
             })
             {
                 Assert.IsTrue(settingsString.Contains(propName + "=False"),
@@ -286,6 +291,7 @@ namespace Tests.UnitTests
             Assert.IsTrue(new ImportTaskSettings { ImportPowerPlatform = true }.HaveSomethingToDo());
             Assert.IsTrue(new ImportTaskSettings { GraphCopilotUsageReports = true }.HaveSomethingToDo());
             Assert.IsTrue(new ImportTaskSettings { CopilotInteractionHistory = true }.HaveSomethingToDo());
+            Assert.IsTrue(new ImportTaskSettings { Agent365PackageCatalog = true }.HaveSomethingToDo());
         }
 
         [TestMethod]

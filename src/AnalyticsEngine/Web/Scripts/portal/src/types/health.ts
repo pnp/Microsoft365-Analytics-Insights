@@ -100,6 +100,16 @@ export interface DataOverviewSection extends HealthSectionBase {
   copilotUsageReportsIdentitiesConcealed: boolean;
   copilotUsageReportLastImportUtc: string | null;
   copilotUsageReportErrors: string[];
+  agent365CatalogEnabled: boolean;
+  agent365CatalogIssue: string | null;
+  agent365CatalogError: string | null;
+  agent365CatalogLastAttemptUtc: string | null;
+  agent365CatalogLastAttemptCompletedUtc: string | null;
+  agent365CatalogLastAttemptSucceeded: boolean | null;
+  agent365CatalogLastSuccessUtc: string | null;
+  agent365CatalogPackageCount: number;
+  agent365CatalogNeverUsedCount: number;
+  agent365CatalogStatusError: string | null;
   /** Cheap DMV counts / DB size couldn't be read (e.g. no VIEW DATABASE STATE). */
   countsError: string | null;
   /** The bounded 24h/7d volume + freshness scans failed or timed out (expected on very large tenants). */

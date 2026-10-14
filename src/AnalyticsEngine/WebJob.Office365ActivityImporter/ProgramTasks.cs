@@ -164,6 +164,28 @@ namespace WebJob.Office365ActivityImporter
         }
 
         /// <summary>
+        /// Refreshes the Copilot Adoption leadership cohort's membership when it is due (#654). Does nothing when no
+        /// group is configured or there is no Storage account (the web app refuses to save the setting then, so there
+        /// is nothing to read). Never throws: the outcome, including a missing Graph permission, is recorded in the
+        /// cohort's status for the portal to show.
+        /// </summary>
+        internal async Task RefreshLeadershipCohortSafely()
+        {
+            try
+            {
+                var values = StateStore.TryOpen(_settings, StatePartitions.LeadershipCohort, _logger);
+                if (values == null) return;
+
+                var store = new Common.Entities.LeadershipCohort.LeadershipCohortStore(values, isDurable: true);
+                await Common.Entities.LeadershipCohort.LeadershipCohortRefresher.ForGraph(store, _settings, _logger).RefreshIfDueAsync();
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning($"Leadership cohort refresh skipped this cycle ({ex.GetType().Name}): {ex.Message}");
+            }
+        }
+
+        /// <summary>
         /// Optional agent-cost imports: billed Copilot Studio Copilot Credits, and daily Azure spend from
         /// Microsoft Cost Management.
         /// </summary>
@@ -187,6 +209,8 @@ namespace WebJob.Office365ActivityImporter
             try
             {
                 var store = new SqlAgentCostStore(DefaultAnalyticsDbContextFactory.Instance, _logger);
+                AgentCostConnectionStore connectionStore = null;
+                AgentCostConnectionHead connectionHead = null;
 
                 var phase = new AgentCostImportPhase(
                     _logger,
@@ -203,10 +227,19 @@ namespace WebJob.Office365ActivityImporter
                             _settings.UseClientCertificate);
 
                         var httpClient = new ConfidentialClientApplicationThrottledHttpClient(auth, false, _logger);
+                        ICopilotStudioCreditSource source = new PowerPlatformLicensingCreditSource(httpClient, _logger);
+                        if (connectionHead?.Connected == true)
+                        {
+                            var delegatedClient = new AgentCostDelegatedHttpClient(_logger,
+                                AgentCostDelegatedTokenProvider.Create(_settings, connectionStore), connectionHead.Version);
+                            source = new DelegatedAgentCostSource(new PowerPlatformLicensingCreditSource(
+                                delegatedClient, _logger, delegated: true),
+                                source, connectionStore, connectionHead.Version);
+                        }
 
                         return new CopilotStudioCreditImporter(
                             _logger,
-                            new PowerPlatformLicensingCreditSource(httpClient, _logger),
+                            source,
                             store,
                             _settings.CopilotStudioCreditsTrailingWindowDays,
                             clock: null,
@@ -220,6 +253,12 @@ namespace WebJob.Office365ActivityImporter
                                 _logger),
                             // Per-user credits for anyone outside UserGroupsFilter are not stored.
                             userScopeProvider: _userScopeProvider);
+                    },
+                    creditConnectionVersion: async () =>
+                    {
+                        connectionStore = AgentCostConnectionStore.TryOpen(_settings);
+                        connectionHead = connectionStore == null ? null : await connectionStore.GetHeadAsync();
+                        return connectionHead?.Version;
                     },
                     azureCostImporterFactory: () =>
                     {

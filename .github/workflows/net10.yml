@@ -270,13 +270,19 @@ jobs:
       # or credential, so a failure is always a real regression and must fail the job. Without this
       # they would be swallowed by the warning-only step that follows - and two of the things they
       # guard (the NLS setting, and 22 tests that spent the port excluded from the build) are exactly
-      # the kind of thing that goes missing without anything turning red. Runs in about a second.
+      # the kind of thing that goes missing without anything turning red. Also hard-gate the
+      # stable 1852 semantic ports: Core consent/admin APIs and native installer layout/catalogue.
       - name: Check configuration, collation and API invariants
         shell: pwsh
         run: |
           dotnet test src\AnalyticsEngine\Tests.UnitTests\Tests.UnitTests.csproj `
             -c Release --no-build --nologo `
-            --filter "FullyQualifiedName~ConfigurationSourceTests|FullyQualifiedName~UserSecretsConsistencyTests|FullyQualifiedName~ObjectByIdCacheCollationTests|FullyQualifiedName~AuthRequestRulesTests|FullyQualifiedName~LicenceActivityApiTests|FullyQualifiedName~LicenceActivityLoadHarnessTests|FullyQualifiedName~LicenceActivityReadModelCacheTests"
+            --filter "FullyQualifiedName~ConfigurationSourceTests|FullyQualifiedName~UserSecretsConsistencyTests|FullyQualifiedName~ObjectByIdCacheCollationTests|FullyQualifiedName~AuthRequestRulesTests|FullyQualifiedName~LicenceActivityApiTests|FullyQualifiedName~LicenceActivityLoadHarnessTests|FullyQualifiedName~LicenceActivityReadModelCacheTests|FullyQualifiedName~AgentCostConsent|FullyQualifiedName~AgentCostMvc|FullyQualifiedName~AgentCostConnection|FullyQualifiedName~PortalPermissionTests|FullyQualifiedName~GlobalFilterWebTests|FullyQualifiedName~PromptCategoryTestDrive|FullyQualifiedName~CopilotAdoptionScoreSettingsApi|FullyQualifiedName~DelegatedGraphConsentPipeline|FullyQualifiedName~CopilotAdoptionAspNetCoreApi|FullyQualifiedName~InstallerLayoutTests|FullyQualifiedName~InstallerWorkspaceTests|FullyQualifiedName~AzureAIConfigControlTests|FullyQualifiedName~FoundryInstallConfigTests|FullyQualifiedName~OpenAIModelCatalogTests"
+
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          # Every new Core controller must be activatable by MVC, not only by a direct fixture.
+          dotnet test src\AnalyticsEngine\Tests.UnitTests\Tests.UnitTests.csproj `
+            -c Release --no-build --nologo --filter "FullyQualifiedName~ControllerActivationTests|FullyQualifiedName~PromptCategoryTests.RuntimeSettings_"
 
       # Guards the demo generator's entry point. Building it proves nothing about whether it RUNS:
       # the project's move to an SDK-style csproj added a target-framework folder to the output path

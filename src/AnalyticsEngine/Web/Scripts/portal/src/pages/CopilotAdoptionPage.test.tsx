@@ -479,6 +479,32 @@ describe('CopilotAdoptionPage view split', () => {
     expect(screen.queryByRole('button', { name: 'SQL' })).not.toBeInTheDocument();
   });
 
+  it('shows Microsoft’s tenant prompt figures on the executive view, named and dated, beside the audit figures', async () => {
+    vi.mocked(fetchAdoptionSummary).mockResolvedValue(summary({
+      microsoftReportDate: '2026-10-05T00:00:00Z',
+      microsoftReportPeriodDays: 28,
+      microsoftReportVersion: 'v2',
+      microsoftReportPromptsSubmitted: 98765,
+      microsoftReportAveragePromptsPerActiveUser: 41.6,
+    }));
+
+    await renderPage();
+
+    const line = await screen.findByLabelText('Microsoft\'s Copilot usage report');
+    expect(line.textContent).toContain('28-day period to 5 Oct 2026');
+    expect(line.textContent).toContain('98,765');
+    expect(line.textContent).toContain('41.6');
+    // A different unit from the audit-log interactions: the headline figures are untouched by it.
+    expect(document.body.textContent).not.toContain('101,165');
+  });
+
+  it('leaves the executive view as it was when no Microsoft summary has been imported', async () => {
+    await renderPage();
+    await screen.findAllByText('Where we stand');
+
+    expect(screen.queryByText('Microsoft\'s Copilot usage report')).not.toBeInTheDocument();
+  });
+
   it('keeps every executive headline available in the Analyst view and puts SQL there', async () => {
     await renderPage();
     await screen.findAllByText('Where we stand');

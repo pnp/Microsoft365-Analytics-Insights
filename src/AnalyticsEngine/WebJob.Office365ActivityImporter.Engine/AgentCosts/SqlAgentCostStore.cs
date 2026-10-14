@@ -62,7 +62,6 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
                         existing.AgentName = row.AgentName;
                         existing.EnvironmentName = row.EnvironmentName;
                         existing.Harness = row.Harness;
-                        existing.LastRefreshedUtc = row.LastRefreshedUtc;
                         existing.ImportedUtc = row.ImportedUtc;
                     }
                     else

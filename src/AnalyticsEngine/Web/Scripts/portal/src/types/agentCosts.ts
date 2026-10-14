@@ -10,6 +10,8 @@ export interface AgentCostAvailability {
   azureCostsEnabled: boolean;
   hasCopilotStudioCreditData: boolean;
   hasPerUserCreditData: boolean;
+  /** No administrator is connected, so consumption is not imported (capacity still is). Informational, not a failure. */
+  copilotStudioConnectionRequired: boolean;
   hasAzureCostData: boolean;
   copilotStudioCreditsHasRunCleanly: boolean;
   azureCostsHaveRunCleanly: boolean;

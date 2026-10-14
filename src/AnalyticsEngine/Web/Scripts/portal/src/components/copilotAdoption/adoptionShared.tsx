@@ -9,7 +9,7 @@ import { useCallback, useState } from 'react';
 import type { ReactNode } from 'react';
 import { useT, type TFunction } from '../../i18n';
 import { AdoptionBand } from '../../types/copilotAdoption';
-import type { AdoptionSegmentRow } from '../../types/copilotAdoption';
+import type { AdoptionSegmentRow, ManagerModellingSegmentRow } from '../../types/copilotAdoption';
 import { ADOPTION_BANDS } from '../charts/GaugeRing';
 import { formatCount, formatPct } from '../shared/KpiGrid';
 import InfoTip from '../shared/InfoTip';
@@ -434,14 +434,22 @@ export function SegmentTable({
   rows,
   segmentLabel,
   bands,
+  managerModelling,
 }: {
   rows: AdoptionSegmentRow[];
   segmentLabel: string;
   /** The tuned band thresholds, so this table colours by the same rules as the rest of the page. */
   bands?: { champion: number; established: number; developing: number };
+  /**
+   * Whether each segment's people managers use Copilot themselves, and how their direct reports compare
+   * (#641), matched to the rows by segment name. Given, the table adds those columns: the department
+   * table passes it, the country table does not. Aggregates only - no manager is named.
+   */
+  managerModelling?: ManagerModellingSegmentRow[];
 }) {
   const styles = useStyles();
   const t = useT();
+  const managers = managerModelling ? new Map(managerModelling.map((m) => [m.segment, m])) : null;
 
   if (rows.length === 0) {
     return (
@@ -462,6 +470,15 @@ export function SegmentTable({
           <th className={`${styles.th} ${styles.thNumeric}`}>{t('copilotAdoption.shared.segmentTable.neverUsed')}</th>
           <th className={styles.th}>{t('copilotAdoption.shared.segmentTable.adoptionRate')}</th>
           <th className={styles.th}>{t('copilotAdoption.shared.segmentTable.avgScore')}</th>
+          {managers && (
+            <>
+              <th className={`${styles.th} ${styles.thNumeric}`}>{t('copilotAdoption.shared.segmentTable.managersUsingCopilot')}</th>
+              <th className={`${styles.th} ${styles.thNumeric}`}>{t('copilotAdoption.shared.segmentTable.activeManagerUses')}</th>
+              <th className={`${styles.th} ${styles.thNumeric}`}>{t('copilotAdoption.shared.segmentTable.activeManagerDoesNot')}</th>
+              <th className={`${styles.th} ${styles.thNumeric}`}>{t('copilotAdoption.shared.segmentTable.habitManagerUses')}</th>
+              <th className={`${styles.th} ${styles.thNumeric}`}>{t('copilotAdoption.shared.segmentTable.habitManagerDoesNot')}</th>
+            </>
+          )}
         </tr>
       </thead>
       <tbody>
@@ -494,10 +511,41 @@ export function SegmentTable({
             <td className={styles.td}>
               <ScoreBar score={row.averageAdoptionScore} colour={scoreColour(row.averageAdoptionScore, bands)} />
             </td>
+            {managers && <ManagerModellingCells row={managers.get(row.segment)} />}
           </tr>
         ))}
       </tbody>
     </table>
+  );
+}
+
+/**
+ * One department's manager-modelling cells. A figure the server withheld - too few people managers or
+ * reports to show without singling someone out - is a dash with the reason on hover, never 0%.
+ */
+function ManagerModellingCells({ row }: { row: ManagerModellingSegmentRow | undefined }) {
+  const styles = useStyles();
+  const t = useT();
+  const numeric = `${styles.td} ${styles.tdNumeric}`;
+  const withheld = t('copilotAdoption.shared.segmentTable.withheld');
+  const value = (pct: number | null | undefined) =>
+    pct === null || pct === undefined ? <span title={withheld} aria-label={withheld}>{'\u2014'}</span> : formatPct(pct);
+
+  return (
+    <>
+      <td className={numeric}>
+        {value(row?.managersActivePct)}
+        {row && row.managersStatusUnknown > 0 && (
+          <Text size={100} block className={styles.tdSub}>
+            {t('copilotAdoption.shared.segmentTable.managersUnknown', { count: formatCount(row.managersStatusUnknown) })}
+          </Text>
+        )}
+      </td>
+      <td className={numeric}>{value(row?.reportsActiveRatePctManagerActive)}</td>
+      <td className={numeric}>{value(row?.reportsActiveRatePctManagerInactive)}</td>
+      <td className={numeric}>{value(row?.reportsHabitRatePctManagerActive)}</td>
+      <td className={numeric}>{value(row?.reportsHabitRatePctManagerInactive)}</td>
+    </>
   );
 }
 

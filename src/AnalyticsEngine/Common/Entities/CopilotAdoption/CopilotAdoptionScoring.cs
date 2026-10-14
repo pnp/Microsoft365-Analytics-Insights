@@ -1,4 +1,5 @@
-﻿using System;
+﻿using Common.Entities.Copilot;
+using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
@@ -232,6 +233,8 @@ namespace Common.Entities.CopilotAdoption
                 OfficeLocation = row.OfficeLocation,
                 CompanyName = row.CompanyName,
                 ManagerUserPrincipalName = row.ManagerUserPrincipalName,
+                ManagerUserId = row.ManagerUserId,
+                ManagerAccountEnabled = row.ManagerAccountEnabled,
                 AccountEnabled = row.AccountEnabled,
                 HoldsSeatToday = row.HoldsSeatToday,
                 AccountCreatedUtc = row.AccountCreatedUtc,
@@ -817,7 +820,8 @@ namespace Common.Entities.CopilotAdoption
                 AgentId = row.AgentId,
                 Name = row.Name,
                 AgentKey = row.AgentKey,
-                IsCustomAgent = row.IsCustomAgent,
+                Origin = CopilotAgentOriginKeys.For(
+                    CopilotAgentClassifier.ResolveStoredOrigin(row.AgentKey, row.IsCustomAgent)),
                 Interactions = row.Interactions,
                 WindowInteractions = row.WindowInteractions,
                 Users = row.Users,

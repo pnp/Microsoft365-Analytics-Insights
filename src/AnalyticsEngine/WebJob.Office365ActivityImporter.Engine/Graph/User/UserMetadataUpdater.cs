@@ -1,6 +1,7 @@
 ﻿using Azure.Core;
 using Common.Entities;
 using Common.Entities.Config;
+using Common.Entities.LookupCaches;
 using Common.Entities.State;
 using Common.Entities.UserOrgs;
 using Common.Entities.UserScope;
@@ -338,11 +339,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 {
                     _logger.LogInformation($"User import - Reloading {insertedDbUsers.Count.ToString("N0")} newly inserted users with tracking for manager relationships...");
 
-                    // Collect UPNs as Graph delivers them. SQL Server's default code-first
-                    // collation (Latin1_General_CI_AS) is case-insensitive, so we no longer
-                    // need to lowercase here. The reload query below compares without LOWER()
-                    // to stay SARGable against the user_name index - critical at 200k-user scale
-                    // where a non-SARGable predicate forces a full clustered-index scan.
+                    // Keep Graph's spelling; the shared resolver matches under the column's collation.
                     var insertedUpns = new List<string>(insertedDbUsers.Count);
                     foreach (var user in insertedDbUsers)
                     {
@@ -360,10 +357,10 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                     {
                         var batchCount = Math.Min(RELOAD_BATCH_SIZE, insertedUpns.Count - i);
                         var batchUpns = insertedUpns.GetRange(i, batchCount);
-                        // No LOWER() on the column - the CI collation handles case-insensitive
-                        // matching and keeps the predicate SARGable.
+                        var resolved = await ExistingUserIds.FindAsync(db, batchUpns);
+                        var ids = resolved.Where(id => id.HasValue).Select(id => id.Value).Distinct().ToList();
                         var batchReloaded = await db.users
-                            .Where(u => batchUpns.Contains(u.UserPrincipalName))
+                            .Where(u => ids.Contains(u.ID))
                             .ToListAsync();
                         reloadedUsers.AddRange(batchReloaded);
                     }
@@ -454,7 +451,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                             dbUsersByUpn,
                             dbUsersByAadId,
                             async (graphUser, dbUser) => await UpdateDbUserWithGraphData(db, graphUser, allActiveGraphUsers, new List<Common.Entities.User>(), dbUser, true, dbUsersByAadId, importCycleLastUpdatedUtc, fallbackLicenceUserIds, fallbackDesiredLicences),
-                            // Resolve the whole batch's managers in one query rather than one per
+                            // Resolve the whole batch's managers in bulk rather than one query per
                             // user - see UserDataMapper.PrefetchManagersForBatchAsync (#371).
                             batch => _dataMapper.PrefetchManagersForBatchAsync(batch),
                             BATCH_SIZE);

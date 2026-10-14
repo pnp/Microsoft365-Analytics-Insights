@@ -136,9 +136,9 @@ namespace Tests.UnitTests
                             }
                             return found;
                         }),
-                        // Not changed by #713: the batch prefetch's IN-list, recorded for the follow-up.
-                        new Scenario($"IN-list of {inList.Count:N0} (unchanged)", inList.Count, async db =>
-                            (await new SqlUserLookupStore(db).GetUsersByUpnAsync(inList)).Count),
+                        // Retain the pre-#713 batch query so this per-user benchmark still reproduces its baseline.
+                        new Scenario($"IN-list of {inList.Count:N0} (legacy baseline)", inList.Count, async db =>
+                            (await db.users.Where(u => inList.Contains(u.UserPrincipalName)).Include(u => u.LicenseLookups).ToListAsync()).Count),
                     };
 
                     foreach (var scenario in scenarios)

@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using Microsoft.Extensions.Logging;
 
 namespace App.ControlPanel.Engine.Models
 {
@@ -11,6 +12,8 @@ namespace App.ControlPanel.Engine.Models
     {
         public string Text { get; set; }
         public bool IsError { get; set; }
+        public LogLevel? Level { get; set; }
+        public string PhaseName { get; set; }
     }
     public static class InstallEventsExtensions
     {

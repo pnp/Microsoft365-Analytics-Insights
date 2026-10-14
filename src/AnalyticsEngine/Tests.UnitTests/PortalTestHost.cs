@@ -78,6 +78,7 @@ namespace Tests.UnitTests
                         }
 
                         services.AddSingleton(_principal);
+                        services.AddDataProtection();
                         services.AddAuthentication(TestScheme)
                             .AddScheme<AuthenticationSchemeOptions, SuppliedPrincipalHandler>(TestScheme, null);
                         services.AddAuthorization();

@@ -66,7 +66,7 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
-        public void ProductionSections_AreTheSixSectionsInRunOrder()
+        public void ProductionSections_AreTheSevenSectionsInRunOrder()
         {
             var sections = BuildFactory(SettingsWithDistinctIntervals(), NeverCalled())
                 .CreateSections(SettingsWithDistinctIntervals());
@@ -76,6 +76,7 @@ namespace Tests.UnitTests
                 {
                     "User metadata refresh",
                     "Copilot usage reports",
+                    "Agent 365 package catalog",
                     "Teams import",
                     "Sent emails import",
                     "Copilot interaction history import",
@@ -139,6 +140,7 @@ namespace Tests.UnitTests
                 { "User metadata refresh", "Skipping user metadata import" },
                 { "Usage reports", "Skipping usage reports import" },
                 { "Copilot usage reports", "Skipping Graph Copilot usage reports import" },
+                { "Agent 365 package catalog", "Skipping Agent 365 package catalog import" },
                 { "Teams import", "Skipping Teams import" },
                 { "Sent emails import", "Skipping sent emails import" },
                 { "Copilot interaction history import", "Skipping Copilot interaction history import" },
@@ -158,6 +160,7 @@ namespace Tests.UnitTests
 
             AssertGated(sections["User metadata refresh"], "GraphUsersMetadataLastImported", 11);
             AssertGated(sections["Copilot usage reports"], "GraphCopilotUsageReportsLastImported", 22);
+            AssertGated(sections["Agent 365 package catalog"], "Agent365PackageCatalogLastImported", 24);
             AssertGated(sections["Teams import"], "GraphTeamsLastImported", 33);
             AssertGated(sections["Copilot interaction history import"], "CopilotInteractionHistoryLastImported", 44);
 
@@ -188,6 +191,7 @@ namespace Tests.UnitTests
                 Tuple.Create<string, Action<ImportTaskSettings>>("User metadata refresh", s => s.GraphUsersMetadata = true),
                 Tuple.Create<string, Action<ImportTaskSettings>>("Usage reports", s => s.GraphUsageReports = true),
                 Tuple.Create<string, Action<ImportTaskSettings>>("Copilot usage reports", s => s.GraphCopilotUsageReports = true),
+                Tuple.Create<string, Action<ImportTaskSettings>>("Agent 365 package catalog", s => s.Agent365PackageCatalog = true),
                 Tuple.Create<string, Action<ImportTaskSettings>>("Teams import", s => s.GraphTeams = true),
                 Tuple.Create<string, Action<ImportTaskSettings>>("Sent emails import", s => s.SentEmails = true),
                 Tuple.Create<string, Action<ImportTaskSettings>>("Copilot interaction history import", s => s.CopilotInteractionHistory = true),

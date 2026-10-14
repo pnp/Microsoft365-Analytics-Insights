@@ -79,6 +79,10 @@ export const ENABLED_IMPORT_LABELS_BY_SETTING_PROPERTY: Record<string, { english
     english: phrase('Copilot', 'usage', 'reports', '(Graph)'),
     key: 'overview.enabledImport.copilotUsageReportsGraph',
   },
+  Agent365PackageCatalog: {
+    english: phrase('Agent', '365', 'package', 'catalog'),
+    key: 'overview.enabledImport.agent365PackageCatalog',
+  },
   GraphTeams: { english: 'Teams', key: 'overview.enabledImport.teams' },
   WebTraffic: { english: 'Web traffic', key: 'overview.enabledImport.webTraffic' },
   SentEmails: { english: 'Sent emails', key: 'overview.enabledImport.sentEmails' },

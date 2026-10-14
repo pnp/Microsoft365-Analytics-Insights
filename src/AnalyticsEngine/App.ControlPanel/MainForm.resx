@@ -130,7 +130,20 @@
     <value>362, 17</value>
   </metadata>
   <data name="lblIntroText.Text" xml:space="preserve">
-    <value>Welcome to the Office 365 Advanced Analytics administration tool. This tool is designed to help you install or update the solution to your Azure/Office 365 resources automatically. Manual installation outside this tool is also possible - please see the documentation.</value>
+    <value>Install, upgrade or complete an existing setup using your Azure and Microsoft 365 resources. Start with a new configuration, or open a saved configuration from the File menu after entering the wizard.</value>
+  </data>
+  <data name="lblSetupSteps.Text" xml:space="preserve">
+    <value>1. Configure workloads, accounts and Azure resources.
+
+2. Check your configuration and review the installation tasks.
+
+3. Choose Install/Upgrade when you are ready to deploy.</value>
+  </data>
+  <data name="label1.Text" xml:space="preserve">
+    <value>This tool comes with no guarantees. Use it at your own risk and ensure the accounts have the correct permissions. Installation can change Azure resources, SharePoint sites and the SQL database schema. Plan a maintenance window for upgrades.</value>
+  </data>
+  <data name="lblInstallDesc.Text" xml:space="preserve">
+    <value>Configure solution opens the wizard only. It does not start installation.</value>
   </data>
   <metadata name="$this.TrayHeight" type="System.Int32, mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089">
     <value>53</value>

@@ -166,7 +166,7 @@ namespace Common.Entities.State
             var credential = createCredential != null
                 ? await createCredential(tenantId, clientId, clientSecret, keyVaultUrl, useClientCertificate).ConfigureAwait(false)
                 : await CreateRuntimeCredentialAsync(
-                    tenantId, clientId, clientSecret, keyVaultUrl, useClientCertificate, logger).ConfigureAwait(false);
+                    tenantId, clientId, clientSecret, keyVaultUrl, useClientCertificate, logger, cancellationToken).ConfigureAwait(false);
             var rbacClient = clientOptions == null
                 ? new TableClient(endpoint, tableName, credential)
                 : new TableClient(endpoint, tableName, credential, clientOptions);
@@ -310,15 +310,16 @@ namespace Common.Entities.State
 
         public static async Task<TokenCredential> CreateRuntimeCredentialAsync(
             string tenantId, string clientId, string clientSecret, string keyVaultUrl,
-            bool useClientCertificate, ILogger logger)
+            bool useClientCertificate, ILogger logger, CancellationToken cancellationToken = default)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             if (!useClientCertificate)
             {
                 return new ClientSecretCredential(tenantId, clientId, clientSecret);
             }
 
             var certificate = await AuthHelper.RetrieveKeyVaultCertificate(
-                AuthHelper.CertificateName, keyVaultUrl, logger ?? AnalyticsLogger.ConsoleOnlyTracer()).ConfigureAwait(false);
+                AuthHelper.CertificateName, keyVaultUrl, logger ?? AnalyticsLogger.ConsoleOnlyTracer(), cancellationToken).ConfigureAwait(false);
             return new ClientCertificateCredential(tenantId, clientId, certificate);
         }
 
