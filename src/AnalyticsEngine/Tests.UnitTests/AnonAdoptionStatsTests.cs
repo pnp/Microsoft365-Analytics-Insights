@@ -26,6 +26,30 @@ namespace Tests.UnitTests
     [TestClass]
     public class AnonAdoptionStatsTests
     {
+        /// <summary>
+        /// The telemetry block is a separate analysis scored with the built-in weights and thresholds, never the tenant's
+        /// Copilot Adoption score settings (#683, #684), so its scores and bands mean the same on every tenant.
+        /// </summary>
+        [TestMethod]
+        public void TelemetryAnalysis_AlwaysScoresWithTheBuiltInWeightsAndThresholds()
+        {
+            var options = AdoptionStatsCollector.TelemetryOptions();
+            var defaults = CopilotAdoptionOptions.Default;
+            CopilotAdoptionScoreSettings.Defaults.ApplyTo(defaults);
+
+            Assert.AreEqual(defaults.FrequencyWeight, options.FrequencyWeight);
+            Assert.AreEqual(defaults.DepthWeight, options.DepthWeight);
+            Assert.AreEqual(defaults.BreadthWeight, options.BreadthWeight);
+            Assert.AreEqual(defaults.DevelopingScore, options.DevelopingScore);
+            Assert.AreEqual(defaults.EstablishedScore, options.EstablishedScore);
+            Assert.AreEqual(defaults.ChampionScore, options.ChampionScore);
+            Assert.AreEqual(0.5, options.FrequencyWeight);
+            Assert.AreEqual(75, options.ChampionScore);
+            Assert.IsFalse(options.ScoreSettings.Customised);
+            Assert.AreEqual(0, options.ScoreSettings.Version);
+            Assert.AreNotSame(options, AdoptionStatsCollector.TelemetryOptions(), "A fresh copy each time, so nothing can customise it in place.");
+        }
+
         // Obviously-synthetic stand-ins for the tenant data the source models really carry. The Greek
         // is deliberate: a department or agent name routinely contains non-Latin text, and a substring
         // search for it in the serialised payload is an exact, unambiguous leak detector.

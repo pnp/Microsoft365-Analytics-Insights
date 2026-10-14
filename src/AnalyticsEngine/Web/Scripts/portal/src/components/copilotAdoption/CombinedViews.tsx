@@ -2,12 +2,65 @@ import { makeStyles, tokens, Text } from '@fluentui/react-components';
 import type {
   AdoptionCombinedSegmentRow,
   AdoptionConcentrationBand,
+  CopilotAdoptionSummary,
 } from '../../types/copilotAdoption';
-import { useT } from '../../i18n';
+import { formatNumber, plural, useT, type TFunction, type TranslationKey } from '../../i18n';
 import { concentrationLabel } from './serverText';
 import { formatCount, formatPct } from '../shared/KpiGrid';
 import { serverPlaceholderText } from '../shared/serverPlaceholder';
 import { useAdoptionTableStyles } from './adoptionShared';
+
+/**
+ * An agent counts as having spread beyond its home team once people in this many departments use it (#647).
+ * Mirrors `CopilotAdoptionService.AgentReachDepartmentThreshold`; a test reads the C# so the two cannot drift.
+ */
+export const AGENT_REACH_DEPARTMENT_THRESHOLD = 3;
+
+/**
+ * Catalog entries for the agent scopes the server can name in `agentFiguresScope` - the C#
+ * `CopilotAgentFigureScope` constants. A test reads the C# so a new scope cannot ship unworded.
+ */
+export const AGENT_FIGURES_SCOPE_KEYS: Record<string, TranslationKey> = {
+  allAgents: 'copilotAdoption.combinedViews.agents.scope.allAgents',
+  customerBuiltAgents: 'copilotAdoption.combinedViews.agents.scope.customerBuiltAgents',
+};
+
+/** Which agents the breadth, depth and reach figures count, in the reader's language. */
+export function agentFiguresScopeText(t: TFunction, scope: string | null | undefined): string {
+  const key = AGENT_FIGURES_SCOPE_KEYS[scope ?? 'allAgents'];
+  return key ? t(key) : String(scope);
+}
+
+/** The tenant-level agent breadth, depth, builder and reach figures (#646, #647) the department card states. */
+export type AgentAdoptionTotals = Pick<
+  CopilotAdoptionSummary,
+  | 'agentFiguresScope'
+  | 'agentBreadthDepartments'
+  | 'agentBreadthDepartmentsWithAgentUsers'
+  | 'agentBreadthDepartmentPct'
+  | 'agentActiveUsers'
+  | 'agentBreadthAgentUsers'
+  | 'agentBreadthUserPct'
+  | 'agentDepthAgentsPer100ActiveUsers'
+  | 'agentDepthInteractionsPerActiveAgent'
+  | 'agentUnknownOriginAgents'
+  | 'agentBuilders'
+  | 'agentsInThreeOrMoreDepartments'
+  | 'agentsInThreeOrMoreDepartmentsUnknownOrigin'
+>;
+
+const NOT_MEASURED = '\u2014';
+
+/** A one-decimal figure in the reader's number format, or a dash when it was not measured. */
+function formatTenth(value: number | null | undefined): string {
+  return value === null || value === undefined
+    ? NOT_MEASURED
+    : formatNumber(value, { minimumFractionDigits: 0, maximumFractionDigits: 1 });
+}
+
+function formatOptionalCount(value: number | null | undefined): string {
+  return value === null || value === undefined ? NOT_MEASURED : formatCount(value);
+}
 
 /** Heaviest cohort darkest, so the shape of the power law reads left to right. */
 const COHORT_COLOUR = ['#0b3d6b', '#1f6cb0', '#5b9bd5', '#c7dbef'];
@@ -112,6 +165,20 @@ const useStyles = makeStyles({
     borderBottomStyle: 'solid',
     borderBottomColor: tokens.colorNeutralStroke3,
   },
+  agentTotals: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
+    gap: '8px 16px',
+    marginBottom: '12px',
+  },
+  agentTotal: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '2px',
+  },
+  tableWrap: {
+    overflowX: 'auto',
+  },
 });
 
 /**
@@ -188,8 +255,19 @@ export function ConcentrationBar({ bands }: { bands: AdoptionConcentrationBand[]
  * The comparison is the whole point. A department with idle seats and heavy unlicensed Chat use is
  * not an adoption problem, it is a seat-allocation problem - and that is invisible in any view that
  * reports one population at a time.
+ *
+ * The right-hand columns add agent breadth and depth (#646) and Copilot Studio builders (#647) per
+ * department, with the tenant-wide figures stated above the table. No new chart (#552).
  */
-export function CombinedSegmentTable({ rows }: { rows: AdoptionCombinedSegmentRow[] }) {
+export function CombinedSegmentTable({
+  rows,
+  agentTotals,
+  minSeatsPerSegment,
+}: {
+  rows: AdoptionCombinedSegmentRow[];
+  agentTotals?: AgentAdoptionTotals;
+  minSeatsPerSegment?: number;
+}) {
   const styles = useStyles();
   const table = useAdoptionTableStyles();
   const t = useT();
@@ -228,53 +306,177 @@ export function CombinedSegmentTable({ rows }: { rows: AdoptionCombinedSegmentRo
   };
 
   return (
-    <table className={table.table}>
-      <thead>
-        <tr>
-          <th className={table.th}>{t('copilotAdoption.combinedViews.segment.department')}</th>
-          <th className={`${table.th} ${table.thNumeric}`}>{t('copilotAdoption.combinedViews.segment.licences')}</th>
-          <th className={`${table.th} ${table.thNumeric}`}>{t('copilotAdoption.combinedViews.segment.activeLicences')}</th>
-          <th className={`${table.th} ${table.thNumeric}`}>{t('copilotAdoption.combinedViews.segment.interactionsPerLicence')}</th>
-          <th className={`${table.th} ${table.thNumeric}`}>{t('copilotAdoption.combinedViews.segment.licencesUsingAgents')}</th>
-          <th className={`${table.th} ${table.thNumeric}`}>{t('copilotAdoption.combinedViews.segment.unlicensedUsers')}</th>
-          <th className={`${table.th} ${table.thNumeric}`}>{t('copilotAdoption.combinedViews.segment.interactionsPerUnlicensedUser')}</th>
-          <th className={`${table.th} ${table.thNumeric}`}>{t('copilotAdoption.combinedViews.segment.unlicensedUsingAgents')}</th>
-        </tr>
-      </thead>
-      <tbody>
-        {rows.map((r) => (
-          <tr key={r.segment}>
-            <td className={table.td}>{serverPlaceholderText(t, r.segment)}</td>
-            <td className={`${table.td} ${table.tdNumeric}`}>{formatCount(r.licensedUsers)}</td>
-            <td className={`${table.td} ${table.tdNumeric}`}>{formatCount(r.licensedActiveUsers)}</td>
-            <td className={styles.heat}>
-              <span
-                style={{
-                  ...shade(r.interactionsPerLicensedUser, maxLicensed, '#0f6cbd'),
-                  padding: '2px 6px',
-                  borderRadius: '3px',
-                }}
-              >
-                {r.interactionsPerLicensedUser}
-              </span>
-            </td>
-            <td className={`${table.td} ${table.tdNumeric}`}>{formatPct(r.licensedAgentUserPct)}</td>
-            <td className={`${table.td} ${table.tdNumeric}`}>{formatCount(r.unlicensedActiveUsers)}</td>
-            <td className={styles.heat}>
-              <span
-                style={{
-                  ...shade(r.interactionsPerUnlicensedUser, maxUnlicensed, '#a4373a'),
-                  padding: '2px 6px',
-                  borderRadius: '3px',
-                }}
-              >
-                {r.interactionsPerUnlicensedUser}
-              </span>
-            </td>
-            <td className={`${table.td} ${table.tdNumeric}`}>{formatPct(r.unlicensedAgentUserPct)}</td>
-          </tr>
+    <>
+      {agentTotals && <AgentTotals totals={agentTotals} minSeatsPerSegment={minSeatsPerSegment} />}
+      <div className={styles.tableWrap}>
+        <table className={table.table}>
+          <thead>
+            <tr>
+              <th className={table.th}>{t('copilotAdoption.combinedViews.segment.department')}</th>
+              <th className={`${table.th} ${table.thNumeric}`}>{t('copilotAdoption.combinedViews.segment.licences')}</th>
+              <th className={`${table.th} ${table.thNumeric}`}>{t('copilotAdoption.combinedViews.segment.activeLicences')}</th>
+              <th className={`${table.th} ${table.thNumeric}`}>{t('copilotAdoption.combinedViews.segment.interactionsPerLicence')}</th>
+              <th className={`${table.th} ${table.thNumeric}`}>{t('copilotAdoption.combinedViews.segment.licencesUsingAgents')}</th>
+              <th className={`${table.th} ${table.thNumeric}`}>{t('copilotAdoption.combinedViews.segment.unlicensedUsers')}</th>
+              <th className={`${table.th} ${table.thNumeric}`}>{t('copilotAdoption.combinedViews.segment.interactionsPerUnlicensedUser')}</th>
+              <th className={`${table.th} ${table.thNumeric}`}>{t('copilotAdoption.combinedViews.segment.unlicensedUsingAgents')}</th>
+              <th className={`${table.th} ${table.thNumeric}`} title={t('copilotAdoption.combinedViews.segment.usingAgents.help')}>{t('copilotAdoption.combinedViews.segment.usingAgents')}</th>
+              <th className={`${table.th} ${table.thNumeric}`} title={t('copilotAdoption.combinedViews.segment.distinctAgents.help')}>{t('copilotAdoption.combinedViews.segment.distinctAgents')}</th>
+              <th className={`${table.th} ${table.thNumeric}`} title={t('copilotAdoption.combinedViews.segment.agentsPer100.help')}>{t('copilotAdoption.combinedViews.segment.agentsPer100')}</th>
+              <th className={`${table.th} ${table.thNumeric}`} title={t('copilotAdoption.combinedViews.segment.interactionsPerAgent.help')}>{t('copilotAdoption.combinedViews.segment.interactionsPerAgent')}</th>
+              <th className={`${table.th} ${table.thNumeric}`} title={t('copilotAdoption.combinedViews.segment.agentBuilders.help')}>{t('copilotAdoption.combinedViews.segment.agentBuilders')}</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r) => (
+              <tr key={r.segment}>
+                <td className={table.td}>{serverPlaceholderText(t, r.segment)}</td>
+                <td className={`${table.td} ${table.tdNumeric}`}>{formatCount(r.licensedUsers)}</td>
+                <td className={`${table.td} ${table.tdNumeric}`}>{formatCount(r.licensedActiveUsers)}</td>
+                <td className={styles.heat}>
+                  <span
+                    style={{
+                      ...shade(r.interactionsPerLicensedUser, maxLicensed, '#0f6cbd'),
+                      padding: '2px 6px',
+                      borderRadius: '3px',
+                    }}
+                  >
+                    {r.interactionsPerLicensedUser}
+                  </span>
+                </td>
+                <td className={`${table.td} ${table.tdNumeric}`}>{formatPct(r.licensedAgentUserPct)}</td>
+                <td className={`${table.td} ${table.tdNumeric}`}>{formatCount(r.unlicensedActiveUsers)}</td>
+                <td className={styles.heat}>
+                  <span
+                    style={{
+                      ...shade(r.interactionsPerUnlicensedUser, maxUnlicensed, '#a4373a'),
+                      padding: '2px 6px',
+                      borderRadius: '3px',
+                    }}
+                  >
+                    {r.interactionsPerUnlicensedUser}
+                  </span>
+                </td>
+                <td className={`${table.td} ${table.tdNumeric}`}>{formatPct(r.unlicensedAgentUserPct)}</td>
+                <td
+                  className={`${table.td} ${table.tdNumeric}`}
+                  title={
+                    r.agentUsers === null || r.agentUsers === undefined || r.agentActiveUsers === null || r.agentActiveUsers === undefined
+                      ? t('copilotAdoption.combinedViews.segment.notMeasured')
+                      : t('copilotAdoption.combinedViews.segment.usingAgents.cell', {
+                          users: formatCount(r.agentUsers),
+                          active: formatCount(r.agentActiveUsers),
+                        })
+                  }
+                >
+                  {r.agentUserPct === null || r.agentUserPct === undefined ? NOT_MEASURED : formatPct(r.agentUserPct)}
+                </td>
+                <td className={`${table.td} ${table.tdNumeric}`}>{formatOptionalCount(r.distinctAgents)}</td>
+                <td className={`${table.td} ${table.tdNumeric}`}>{formatTenth(r.agentsPer100ActiveUsers)}</td>
+                <td className={`${table.td} ${table.tdNumeric}`}>{formatTenth(r.interactionsPerActiveAgent)}</td>
+                <td className={`${table.td} ${table.tdNumeric}`}>{formatOptionalCount(r.agentBuilders)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </>
+  );
+}
+
+/**
+ * The tenant-wide agent breadth, depth, builder and reach figures (#646, #647), above the department
+ * table they summarise. Figures, not a chart (#552); a dash marks one that could not be measured.
+ */
+function AgentTotals({ totals, minSeatsPerSegment }: { totals: AgentAdoptionTotals; minSeatsPerSegment?: number }) {
+  const styles = useStyles();
+  const t = useT();
+
+  const share = (
+    count: number | null | undefined,
+    total: number | null | undefined,
+    pct: number | null | undefined,
+  ): string =>
+    count === null || count === undefined || total === null || total === undefined
+      ? NOT_MEASURED
+      : t('copilotAdoption.combinedViews.agents.ofTotal', {
+          count: formatCount(count),
+          total: formatCount(total),
+          pct: pct === null || pct === undefined ? NOT_MEASURED : formatPct(pct),
+        });
+
+  const unknownAgents = totals.agentUnknownOriginAgents ?? 0;
+  const unknownReach = totals.agentsInThreeOrMoreDepartmentsUnknownOrigin ?? 0;
+
+  const items: { key: string; label: string; value: string; help: string; note?: string }[] = [
+    {
+      key: 'departments',
+      label: t('copilotAdoption.combinedViews.agents.departments'),
+      value: share(totals.agentBreadthDepartmentsWithAgentUsers, totals.agentBreadthDepartments, totals.agentBreadthDepartmentPct),
+      help: t('copilotAdoption.combinedViews.agents.departments.help', { min: minSeatsPerSegment ?? 5 }),
+    },
+    {
+      key: 'users',
+      label: t('copilotAdoption.combinedViews.agents.users'),
+      value: share(totals.agentBreadthAgentUsers, totals.agentActiveUsers, totals.agentBreadthUserPct),
+      help: t('copilotAdoption.combinedViews.agents.users.help'),
+    },
+    {
+      key: 'per100',
+      label: t('copilotAdoption.combinedViews.agents.per100'),
+      value: formatTenth(totals.agentDepthAgentsPer100ActiveUsers),
+      help: t('copilotAdoption.combinedViews.agents.per100.help'),
+    },
+    {
+      key: 'perAgent',
+      label: t('copilotAdoption.combinedViews.agents.perAgent'),
+      value: formatTenth(totals.agentDepthInteractionsPerActiveAgent),
+      help: t('copilotAdoption.combinedViews.agents.perAgent.help'),
+    },
+    {
+      key: 'builders',
+      label: t('copilotAdoption.combinedViews.agents.builders'),
+      value: formatOptionalCount(totals.agentBuilders),
+      help: t('copilotAdoption.combinedViews.agents.builders.help'),
+    },
+    {
+      key: 'reach',
+      label: t('copilotAdoption.combinedViews.agents.reach', { threshold: AGENT_REACH_DEPARTMENT_THRESHOLD }),
+      value: formatOptionalCount(totals.agentsInThreeOrMoreDepartments),
+      help: t('copilotAdoption.combinedViews.agents.reach.help', { threshold: AGENT_REACH_DEPARTMENT_THRESHOLD }),
+      note: unknownReach > 0
+        ? t('copilotAdoption.combinedViews.agents.reachUnknown', { count: formatCount(unknownReach) })
+        : undefined,
+    },
+  ];
+
+  return (
+    <div>
+      <Text size={300} weight="semibold" block>
+        {t('copilotAdoption.combinedViews.agents.title')}
+      </Text>
+      <Text size={200} block className={styles.muted}>
+        {t('copilotAdoption.combinedViews.agents.scope', { scope: agentFiguresScopeText(t, totals.agentFiguresScope) })}
+      </Text>
+      {unknownAgents > 0 && (
+        <Text size={200} block className={styles.muted} data-testid="agent-total-unknown">
+          {t(
+            plural(unknownAgents, 'copilotAdoption.combinedViews.agents.unknownOrigin.one', 'copilotAdoption.combinedViews.agents.unknownOrigin.other'),
+            { count: formatCount(unknownAgents) },
+          )}
+        </Text>
+      )}
+      <div className={styles.agentTotals}>
+        {items.map((item) => (
+          <div key={item.key} className={styles.agentTotal} title={item.help} data-testid={`agent-total-${item.key}`}>
+            <Text size={200} className={styles.muted}>{item.label}</Text>
+            <Text size={300} weight="semibold">{item.value}</Text>
+            {item.note && (
+              <Text size={100} className={styles.muted}>{item.note}</Text>
+            )}
+          </div>
         ))}
-      </tbody>
-    </table>
+      </div>
+    </div>
   );
 }

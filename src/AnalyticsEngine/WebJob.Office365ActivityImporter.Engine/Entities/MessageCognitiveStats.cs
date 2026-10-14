@@ -90,62 +90,9 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities
 
         internal async Task InsertOrAppendSqlStats(TeamsAndCallsDBLookupManager lookupManager, Common.Entities.Entities.TeamDefinition dbTeam)
         {
-            var dbChannel = await lookupManager.GetTeamChannel(this.Channel.Id, this.Channel.DisplayName, dbTeam);
-            var existingLog = await lookupManager.Database.TeamChannelStats
-                .Where(s => s.Date == this.ForDate.Date && s.ChannelID == dbChannel.ID)
-                .SingleOrDefaultAsync();
-
-            if (existingLog == null)
+            using (var store = new SqlTeamsPersistenceStore(lookupManager))
             {
-                // Stats not seen today. Easy - insert.
-                existingLog = new ChannelStatsLog
-                {
-                    Channel = dbChannel,
-                    ChatsCount = this.ChatsCount,
-                    SentimentScore = this.Sentiment,
-                    Date = this.ForDate.Date
-                };
-                lookupManager.Database.TeamChannelStats.Add(existingLog);
-            }
-            else
-            {
-                // Update stats that exist already, if the stats have new messages from our DB log
-                this.IncrementMessageStatsWithThis(existingLog);
-            }
-
-            foreach (var kw in this.KeyWords.Keys)
-            {
-                var kwDef = await lookupManager.GetOrCreateKeyword(kw);
-                var addNew = !existingLog.IsSavedToDB;
-
-                if (existingLog.IsSavedToDB)
-                {
-                    var existingKwLookup = await lookupManager.Database.TeamChannelStatKeywords
-                        .Where(s => s.ChannelStatsLogID == existingLog.ID && s.KeyWordID == kwDef.ID)
-                        .FirstOrDefaultAsync();     // Hack: avoid "InvalidOperationException: Sequence contains more than one element" error
-
-                    addNew = existingKwLookup == null;
-                }
-
-                if (addNew)
-                    existingLog.KeywordLookups.Add(new ChannelLogKeyword { KeyWord = kwDef, ChannelStatsLog = existingLog });
-            }
-
-            foreach (var lang in this.Languages)
-            {
-                var langDef = await lookupManager.GetOrCreateLanguage(lang);
-                var addNew = !existingLog.IsSavedToDB;
-
-                if (existingLog.IsSavedToDB)
-                {
-                    var existingLangLookup = await lookupManager.Database.TeamChannelStatLanguages
-                        .Where(s => s.ChannelStatsLogID == existingLog.ID && s.LanguageID == langDef.ID)
-                        .SingleOrDefaultAsync();
-
-                    addNew = existingLangLookup == null;
-                }
-                if (addNew)
-                    existingLog.LanguageLookups.Add(new ChannelLogLanguage { Language = langDef, ChannelStatsLog = existingLog });
+                await store.SaveStats(this, dbTeam);
             }
         }
 

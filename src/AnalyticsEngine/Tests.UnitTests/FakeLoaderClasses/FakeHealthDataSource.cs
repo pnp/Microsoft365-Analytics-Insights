@@ -36,6 +36,7 @@ namespace UnitTests.FakeLoaderClasses
 
         public int ProbeCallCount { get; private set; }
         public int CountsCallCount { get; private set; }
+        public bool IncludeAgent365CatalogHealthRequested { get; private set; }
 
         /// <summary>Makes <see cref="GetDatabaseCountsAsync"/> take this long, to stand in for a slow scan.</summary>
         public TimeSpan CountsDelay { get; set; } = TimeSpan.Zero;
@@ -49,9 +50,10 @@ namespace UnitTests.FakeLoaderClasses
             return Task.FromResult(ProbeResult);
         }
 
-        public async Task<DatabaseCountsResult> GetDatabaseCountsAsync()
+        public async Task<DatabaseCountsResult> GetDatabaseCountsAsync(bool includeAgent365CatalogHealth)
         {
             CountsCallCount++;
+            IncludeAgent365CatalogHealthRequested = includeAgent365CatalogHealth;
             if (CountsDelay > TimeSpan.Zero) await Task.Delay(CountsDelay);
             return CountsResult;
         }

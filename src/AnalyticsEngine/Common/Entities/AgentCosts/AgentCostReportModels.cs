@@ -168,6 +168,13 @@ namespace Common.Entities.AgentCosts
         [JsonProperty("perUserCreditsLastError")]
         public string PerUserCreditsLastError { get; set; }
 
+        /// <summary>
+        /// The latest consumption import did nothing because no delegated administrator connection exists.
+        /// Not an error: the portal shows how to connect one.
+        /// </summary>
+        [JsonProperty("copilotStudioConnectionRequired")]
+        public bool CopilotStudioConnectionRequired { get; set; }
+
         [JsonProperty("capacityLastError")]
         public string CapacityLastError { get; set; }
 

@@ -1,5 +1,6 @@
 using ActivityImporter.Engine.ActivityAPI.Copilot;
 using Common.Entities;
+using Common.Entities.Copilot;
 using Microsoft.Extensions.Logging;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using Newtonsoft.Json;
@@ -23,6 +24,14 @@ namespace Tests.UnitTests
     [TestClass]
     public class CopilotExtendedDataTests
     {
+        /// <summary>A customer-built custom-engine agent: the only kind the estimate prices.</summary>
+        private static readonly CopilotAgentClassification CustomEngineAgent =
+            new CopilotAgentClassification(CopilotAgentKind.CustomEngine, CopilotAgentOrigin.CustomerBuilt);
+
+        /// <summary>One of Microsoft's own agents, which the estimate never prices.</summary>
+        private static readonly CopilotAgentClassification MicrosoftAgent =
+            new CopilotAgentClassification(CopilotAgentKind.Unknown, CopilotAgentOrigin.Microsoft);
+
         protected ILogger _logger;
         protected TestsAppConfig _config;
 
@@ -50,7 +59,7 @@ namespace Tests.UnitTests
             }";
 
             // Act
-            var cost = CopilotCreditEstimation.Analyze(json, isCustomAgent: true);
+            var cost = CopilotCreditEstimation.Analyze(json, CustomEngineAgent);
 
             // Assert
             // 3 messages � 2 credits = 6 credits
@@ -79,7 +88,7 @@ namespace Tests.UnitTests
             }";
 
             // Act
-            var cost = CopilotCreditEstimation.Analyze(json, isCustomAgent: true);
+            var cost = CopilotCreditEstimation.Analyze(json, CustomEngineAgent);
 
             // Assert
             // 3 messages � (2 credits generative + 10 credits tenant graph) = 36 credits
@@ -129,7 +138,7 @@ namespace Tests.UnitTests
             }";
 
             // Act
-            var cost = CopilotCreditEstimation.Analyze(json, isCustomAgent: true);
+            var cost = CopilotCreditEstimation.Analyze(json, CustomEngineAgent);
 
             // Assert
             // 3 messages � 2 credits (generative) = 6 credits
@@ -163,7 +172,7 @@ namespace Tests.UnitTests
             }";
 
             // Act
-            var cost = CopilotCreditEstimation.Analyze(json, isCustomAgent: true);
+            var cost = CopilotCreditEstimation.Analyze(json, CustomEngineAgent);
 
             // Assert
             // 2 messages � 2 credits (generative) = 4 credits
@@ -191,7 +200,7 @@ namespace Tests.UnitTests
             }";
 
             // Act
-            var cost = CopilotCreditEstimation.Analyze(json, isCustomAgent: true);
+            var cost = CopilotCreditEstimation.Analyze(json, CustomEngineAgent);
 
             // Assert
             // 1 message � (2 + 10) = 12 credits
@@ -213,7 +222,7 @@ namespace Tests.UnitTests
             }";
 
             // Act
-            var cost = CopilotCreditEstimation.Analyze(json, isCustomAgent: true);
+            var cost = CopilotCreditEstimation.Analyze(json, CustomEngineAgent);
 
             // Assert
             Assert.AreEqual(12, cost.TotalCredits);
@@ -237,7 +246,7 @@ namespace Tests.UnitTests
             }";
 
             // Act
-            var cost = CopilotCreditEstimation.Analyze(json, isCustomAgent: true);
+            var cost = CopilotCreditEstimation.Analyze(json, CustomEngineAgent);
 
             // Assert
             // Still just 1 message � (2 + 10) = 12 credits (not multiplied by resource count)
@@ -264,7 +273,7 @@ namespace Tests.UnitTests
                 ]
             }";
 
-            var cost = CopilotCreditEstimation.Analyze(json, isCustomAgent: true);
+            var cost = CopilotCreditEstimation.Analyze(json, CustomEngineAgent);
 
             Assert.AreEqual(1, cost.TenantGraphGroundedAnswers,
                 "A citation with nothing to say it came from outside the tenant must not be waved through.");
@@ -293,7 +302,7 @@ namespace Tests.UnitTests
                 ]
             }";
 
-            var cost = CopilotCreditEstimation.Analyze(json, isCustomAgent: true);
+            var cost = CopilotCreditEstimation.Analyze(json, CustomEngineAgent);
 
             Assert.AreEqual(1, cost.TenantGraphGroundedAnswers);
             Assert.AreEqual(12, cost.TotalCredits);
@@ -315,7 +324,7 @@ namespace Tests.UnitTests
                 ]
             }";
 
-            var cost = CopilotCreditEstimation.Analyze(json, isCustomAgent: true);
+            var cost = CopilotCreditEstimation.Analyze(json, CustomEngineAgent);
 
             Assert.AreEqual("TenantResource", cost.TenantGraphGroundingBasis);
             Assert.AreEqual(0, cost.UnclassifiedResources);
@@ -340,7 +349,7 @@ namespace Tests.UnitTests
                 ]
             }";
 
-            var cost = CopilotCreditEstimation.Analyze(json, isCustomAgent: true);
+            var cost = CopilotCreditEstimation.Analyze(json, CustomEngineAgent);
 
             Assert.AreEqual("UnclassifiedResource", cost.TenantGraphGroundingBasis,
                 "A placeholder identifier is not evidence that the resource belongs to the tenant.");
@@ -363,7 +372,7 @@ namespace Tests.UnitTests
                 ]
             }";
 
-            var cost = CopilotCreditEstimation.Analyze(json, isCustomAgent: true);
+            var cost = CopilotCreditEstimation.Analyze(json, CustomEngineAgent);
 
             Assert.AreEqual(2, cost.TenantGraphGroundedAnswers);
             Assert.AreEqual(24, cost.TotalCredits);
@@ -388,7 +397,7 @@ namespace Tests.UnitTests
                 'AISystemPlugin': [{ 'Id': 'BingWebSearch', 'Name': 'BuiltIn' }]
             }";
 
-            var cost = CopilotCreditEstimation.Analyze(json, isCustomAgent: true);
+            var cost = CopilotCreditEstimation.Analyze(json, CustomEngineAgent);
 
             Assert.AreEqual(0, cost.TenantGraphGroundedAnswers);
             Assert.AreEqual(2, cost.TotalCredits);
@@ -412,7 +421,7 @@ namespace Tests.UnitTests
                 'AISystemPlugin': [{ 'Id': 'BingWebSearch', 'Name': 'BuiltIn' }]
             }";
 
-            var cost = CopilotCreditEstimation.Analyze(json, isCustomAgent: true);
+            var cost = CopilotCreditEstimation.Analyze(json, CustomEngineAgent);
 
             Assert.AreEqual(1, cost.TenantGraphGroundedAnswers);
             Assert.AreEqual("TenantResource", cost.TenantGraphGroundingBasis);
@@ -434,7 +443,7 @@ namespace Tests.UnitTests
                 ]
             }";
 
-            var cost = CopilotCreditEstimation.Analyze(json, isCustomAgent: true);
+            var cost = CopilotCreditEstimation.Analyze(json, CustomEngineAgent);
 
             Assert.AreEqual(0, cost.TenantGraphGroundedAnswers);
             Assert.AreEqual(2, cost.TotalCredits);
@@ -458,7 +467,7 @@ namespace Tests.UnitTests
                 ]
             }";
 
-            var cost = CopilotCreditEstimation.Analyze(json, isCustomAgent: true);
+            var cost = CopilotCreditEstimation.Analyze(json, CustomEngineAgent);
 
             Assert.AreEqual("UnclassifiedResource", cost.TenantGraphGroundingBasis);
             Assert.AreEqual(1, cost.UnclassifiedResources);
@@ -475,7 +484,7 @@ namespace Tests.UnitTests
                 'AccessedResources': []
             }";
 
-            var cost = CopilotCreditEstimation.Analyze(json, isCustomAgent: true);
+            var cost = CopilotCreditEstimation.Analyze(json, CustomEngineAgent);
 
             Assert.AreEqual(0, cost.TenantGraphGroundedAnswers);
             Assert.AreEqual("NoResources", cost.TenantGraphGroundingBasis);
@@ -503,7 +512,7 @@ namespace Tests.UnitTests
                     'AccessedResources': [ { 'Type': 'CITATION', 'SiteUrl': '" + url + @"' } ]
                 }";
 
-                var cost = CopilotCreditEstimation.Analyze(json, isCustomAgent: true);
+                var cost = CopilotCreditEstimation.Analyze(json, CustomEngineAgent);
 
                 Assert.AreEqual("TenantResource", cost.TenantGraphGroundingBasis, url);
                 Assert.AreEqual(12, cost.TotalCredits, url);
@@ -521,7 +530,7 @@ namespace Tests.UnitTests
                 ]
             }";
 
-            var cost = CopilotCreditEstimation.Analyze(json, isCustomAgent: true);
+            var cost = CopilotCreditEstimation.Analyze(json, CustomEngineAgent);
 
             Assert.AreNotEqual("TenantResource", cost.TenantGraphGroundingBasis,
                 "A host that merely contains a Microsoft domain is not evidence of tenant content.");
@@ -537,7 +546,7 @@ namespace Tests.UnitTests
                 'AccessedResources': [ { 'Type': 'CITATION' } ]
             }";
 
-            var cost = CopilotCreditEstimation.Analyze(json, isCustomAgent: false);
+            var cost = CopilotCreditEstimation.Analyze(json, MicrosoftAgent);
 
             Assert.AreEqual(0, cost.TotalCredits);
             Assert.AreEqual("NotAssessed", cost.TenantGraphGroundingBasis);
@@ -549,9 +558,9 @@ namespace Tests.UnitTests
         public void Copilot_CostEstimation_NullOrEmptyInput_ReturnsZero()
         {
             // Arrange & Act
-            var costNull = CopilotCreditEstimation.Analyze((string)null, isCustomAgent: true);
-            var costEmpty = CopilotCreditEstimation.Analyze("", isCustomAgent: true);
-            var costWhitespace = CopilotCreditEstimation.Analyze("   ", isCustomAgent: true);
+            var costNull = CopilotCreditEstimation.Analyze((string)null, CustomEngineAgent);
+            var costEmpty = CopilotCreditEstimation.Analyze("", CustomEngineAgent);
+            var costWhitespace = CopilotCreditEstimation.Analyze("   ", CustomEngineAgent);
 
             // Assert
             Assert.AreEqual(0, costNull.TotalCredits);
@@ -571,7 +580,7 @@ namespace Tests.UnitTests
             }";
 
             // Act
-            var cost = CopilotCreditEstimation.Analyze(json, isCustomAgent: true);
+            var cost = CopilotCreditEstimation.Analyze(json, CustomEngineAgent);
 
             // Assert
             Assert.AreEqual(0, cost.TotalCredits);
@@ -590,7 +599,7 @@ namespace Tests.UnitTests
             }";
 
             // Act
-            var cost = CopilotCreditEstimation.Analyze(json, isCustomAgent: true);
+            var cost = CopilotCreditEstimation.Analyze(json, CustomEngineAgent);
 
             // Assert
             Assert.AreEqual(0, cost.TotalCredits);
@@ -615,7 +624,7 @@ namespace Tests.UnitTests
             }";
 
             // Act
-            var cost = CopilotCreditEstimation.Analyze(json, isCustomAgent: true);
+            var cost = CopilotCreditEstimation.Analyze(json, CustomEngineAgent);
 
             // Assert
             Assert.AreEqual(2, cost.ResourceTypeBreakdown["docx"]);
@@ -645,7 +654,7 @@ namespace Tests.UnitTests
             }";
 
             // Act
-            var cost = CopilotCreditEstimation.Analyze(json, isCustomAgent: true);
+            var cost = CopilotCreditEstimation.Analyze(json, CustomEngineAgent);
 
             // Assert
             Assert.AreEqual(7, cost.TotalCredits); // 2 + 5
@@ -1382,7 +1391,7 @@ namespace Tests.UnitTests
                 Assert.AreEqual("DEEP_LEO", aiModels[0].AIModel.Name);
 
                 // Assert - Verify cost calculation
-                var cost = CopilotCreditEstimation.Analyze(auditLogContent.ParsedAuditEvent, isCustomAgent: true);
+                var cost = CopilotCreditEstimation.Analyze(auditLogContent.ParsedAuditEvent, CustomEngineAgent);
                 // 2 messages � (2 generative + 10 tenant graph) + 5 deep reasoning = 29 credits
                 Assert.AreEqual(29, cost.TotalCredits);
                 Assert.AreEqual(1, cost.DeepReasoningActions);

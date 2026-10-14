@@ -26,7 +26,7 @@ namespace Web.AnalyticsWeb.Models.UserFilters
         /// <summary>True when an administrator switched it off for their own view.</summary>
         public bool Bypassed { get; set; }
 
-        /// <summary>True when the signed-in person may switch it off for their own view - a portal administrator.</summary>
+        /// <summary>True when the signed-in person may switch it off: both Administration and See PII are required.</summary>
         public bool CanBypass { get; set; }
 
         public int Revision { get; set; }
@@ -252,7 +252,7 @@ namespace Web.AnalyticsWeb.Models.UserFilters
     /// (see <see cref="GlobalFilterResolver"/>).</para>
     /// <para><b>Administrators.</b> The filter applies to administrators too, so they see what everyone sees.
     /// One may switch it off for their own view with the <see cref="BypassCookie"/> cookie, which the portal
-    /// sets from the filter bar; it is honoured only for a caller holding the Administration permission,
+    /// sets from the filter bar; it is honoured only for a caller holding both Administration and See PII,
     /// and is a cookie so that export links - plain navigations that cannot send a header - follow it too.</para>
     /// <para><b>Free when unused.</b> With no global filter and no reader filter nothing is resolved and the
     /// directory is never read: a tenant that does not use the feature pays for one cached lookup.</para>
@@ -308,7 +308,7 @@ namespace Web.AnalyticsWeb.Models.UserFilters
         {
             var state = await ReadFilterAsync(request, cancellationToken).ConfigureAwait(false);
             var access = PortalAccess.Evaluate(request, principal);
-            var canBypass = access.Administration;
+            var canBypass = access.Administration && access.SeePii;
             var bypassed = state.IsDefined && canBypass && BypassRequested(request);
 
             var applyGlobal = state.IsDefined && !bypassed;
@@ -367,7 +367,7 @@ namespace Web.AnalyticsWeb.Models.UserFilters
             if (!state.IsDefined) return null;
 
             var access = PortalAccess.Evaluate(request, principal);
-            var canBypass = access.Administration;
+            var canBypass = access.Administration && access.SeePii;
             var global = new GlobalFilterApplication
             {
                 Defined = true,

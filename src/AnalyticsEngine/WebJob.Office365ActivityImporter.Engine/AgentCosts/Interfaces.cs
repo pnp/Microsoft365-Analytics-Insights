@@ -40,15 +40,17 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
         public decimal Consumed { get; set; }
         public decimal? NonBillableQuantity { get; set; }
 
-        /// <summary>Distinct user COUNT. The API never returns user identities - see the entity docs.</summary>
-        public int? Users { get; set; }
+        /// <summary>
+        /// The user whose per-user read produced this row. The per-agent figures are derived from per-user
+        /// reads, and this is what lets the importer count DISTINCT contributing users per slice. It is used
+        /// only for that count and is never stored against the per-agent row.
+        /// </summary>
+        public string UserId { get; set; }
 
         public string FeatureName { get; set; }
 
         /// <summary>The usage day the row belongs to, when the API reported one.</summary>
         public DateTime? AsOfDate { get; set; }
-
-        public DateTime? LastRefreshedDate { get; set; }
     }
 
     /// <summary>Tenant-wide Copilot Credits entitlement figures.</summary>
@@ -77,17 +79,26 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
     /// </remarks>
     public class AgentCostImportOutcome
     {
-        public AgentCostImportOutcome(AgentCostImportLog log, bool isAuthorisationFailure = false)
+        public AgentCostImportOutcome(AgentCostImportLog log, bool isAuthorisationFailure = false, bool isConnectionRequired = false)
         {
             Log = log;
             IsAuthorisationFailure = isAuthorisationFailure;
+            IsConnectionRequired = isConnectionRequired;
         }
 
         public AgentCostImportLog Log { get; }
 
         public bool IsAuthorisationFailure { get; }
 
-        public bool Succeeded => Log != null && string.IsNullOrEmpty(Log.Error);
+        /// <summary>
+        /// Consumption was not attempted because no delegated administrator connection exists. A state to
+        /// act on, not a failure: nothing was refused, so there is nothing to retry until a connection is made
+        /// (which gets its own cadence gate).
+        /// </summary>
+        public bool IsConnectionRequired { get; }
+
+        public bool Succeeded => Log != null && (string.IsNullOrEmpty(Log.Error) || IsConnectionRequired);
+
 
         /// <summary>
         /// Failed for a reason that retrying might fix - a timeout, a 500, an incomplete read.
@@ -135,6 +146,16 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
         /// milestone issue.
         /// </remarks>
         public decimal? NonBillableQuantity { get; set; }
+
+        /// <summary>
+        /// How many resources (agents) Microsoft says the user touched, from <c>metadata.Resources</c>. With
+        /// <see cref="Consumed"/> and <see cref="NonBillableQuantity"/> it decides whether a per-agent read is
+        /// worth making for this user at all.
+        /// </summary>
+        public decimal? ResourceCount { get; set; }
+
+        /// <summary>True when the row shows any activity worth a per-agent read.</summary>
+        public bool HasActivity => Consumed > 0 || NonBillableQuantity > 0 || ResourceCount > 0;
     }
 
     /// <summary>One page of per-user consumption rows, plus the token for the next.</summary>
@@ -159,22 +180,26 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
     public interface ICopilotStudioCreditSource
     {
         /// <summary>
-        /// One page of per-agent consumption for the inclusive date range. Pass a null or empty
-        /// <paramref name="continuationToken"/> for the first page.
+        /// Whether per-user and per-agent consumption can be read at all. Microsoft restricts every
+        /// consumption route to a delegated (signed-in administrator) token; the application identity can
+        /// read only the tenant capacity. When false the importer calls no consumption route and records a
+        /// "connection required" state rather than a 403 on every cycle.
         /// </summary>
-        Task<CopilotStudioCreditPage> GetConsumptionPageAsync(DateTime fromDate, DateTime toDate, string continuationToken);
+        bool CanReadConsumption { get; }
 
         /// <summary>
-        /// One page of <b>per-user</b> consumption for the given day.
+        /// One page of per-user consumption for the inclusive date range (one day per call in production).
+        /// Returns null when the tenant's API does not offer the route.
         /// </summary>
-        /// <remarks>
-        /// A separate method rather than an overload of the per-agent read, because it is a different
-        /// endpoint with a different response envelope (<c>value[].users[]</c> rather than
-        /// <c>value[].resources[]</c>) and a different documented model. Returns null when the tenant's API
-        /// does not offer the route - these endpoints are new (July 2026), so an older or restricted tenant
-        /// legitimately has nothing here and that must be distinguishable from "no consumption".
-        /// </remarks>
         Task<CopilotStudioUserCreditPage> GetUserConsumptionPageAsync(DateTime fromDate, DateTime toDate, string continuationToken);
+
+        /// <summary>
+        /// One page of ONE user's consumption broken down by resource (agent) for the given day
+        /// (<c>/users/{userId}/resources</c>). Pass a null or empty <paramref name="continuationToken"/> for
+        /// the first page. The tenant-wide per-agent route is restricted by Microsoft, so the per-agent
+        /// figures are rebuilt from these reads.
+        /// </summary>
+        Task<CopilotStudioCreditPage> GetUserResourceConsumptionPageAsync(string userId, DateTime day, string continuationToken);
 
         /// <summary>The tenant's current entitlement/consumption totals, or null if unavailable.</summary>
         Task<CopilotStudioCapacitySnapshot> GetCapacityAsync();

@@ -11,6 +11,7 @@ namespace App.ControlPanel
         public ImportLogForm()
         {
             InitializeComponent();
+            Icon = (Icon)new System.ComponentModel.ComponentResourceManager(typeof(MainForm)).GetObject("$this.Icon");
         }
 
         private void ImportLogForm_Load(object sender, EventArgs e)

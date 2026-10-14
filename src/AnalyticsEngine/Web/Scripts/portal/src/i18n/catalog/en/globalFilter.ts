@@ -16,7 +16,7 @@ const globalFilter = {
   'globalFilter.bar.edit': 'Edit',
   'globalFilter.bar.switchOff': 'Switch off for my view',
   'globalFilter.bar.switchOffHint':
-    'See every report without this filter. Only your own view changes: everyone else still sees the filtered reports.',
+    'See every report without this filter. This requires both Administration and See PII. Only your own view changes: everyone else still sees the filtered reports.',
   'globalFilter.bar.switchOn': 'Switch back on',
   'globalFilter.bar.switching': 'Switching…',
   'globalFilter.bar.bypassed':
@@ -106,7 +106,7 @@ const globalFilter = {
   'globalFilter.admin.retry': 'Try again',
   'globalFilter.admin.reload': 'Reload',
   'globalFilter.admin.rolesNotEnforced':
-    'Portal roles aren’t enforced on this deployment, so everyone who can sign in is a portal administrator: anyone can change this filter or switch it off for their own view. Turn on role enforcement (EnforcePortalRoles) before relying on it to limit what people see.',
+    'Portal roles aren’t enforced on this deployment, so everyone who can sign in holds Administration and See PII: anyone can change this filter or switch it off for their own view. Turn on role enforcement (EnforcePortalRoles) before relying on it to limit what people see.',
   'globalFilter.admin.storageUnavailable':
     'The database hasn’t been upgraded to hold a global filter, so none can be saved. Run the installer, or the manual upgrade script {script}, and reload this page.',
   'globalFilter.admin.invalidStored':

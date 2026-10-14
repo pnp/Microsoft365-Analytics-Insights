@@ -1171,6 +1171,55 @@ VALUES
             }
         }
 
+        /// <summary>
+        /// Issue #699. A Microsoft 365 Copilot turn with a Copilot Studio agent is two audit records, the runtime's
+        /// listed in copilot_chat_duplicates, and a chat in the Copilot Studio test pane is a maker testing an agent,
+        /// not use of a Microsoft 365 Copilot licence. The audit evidence counts the turn once and leaves the test
+        /// pane out.
+        /// </summary>
+        [TestMethod]
+        public async Task Copilot_AuditEvidenceCountsATurnOnce_AndLeavesOutMakerTesting()
+        {
+            using (var fixture = LicenceActivitySqlFixture.Create("LicenceCopilotTurns"))
+            {
+                SeedDirectory(fixture);
+                fixture.Execute(@"
+INSERT dbo.copilot_usage_report_import_log
+    (report_name, report_refresh_date, report_version, report_period, imported_utc,
+     rows_read, rows_saved, is_upn_obfuscated, error)
+VALUES
+    (N'getMicrosoft365CopilotUsageUserDetail', '2000-06-30', N'v2', N'D28',
+     '2000-07-01T01:00:00', 5, 0, 1, NULL);
+INSERT dbo.copilot_chats (event_id, app_host, user_id, time_stamp)
+VALUES
+    ('00000000-0000-0000-0000-000000000001', N'm365copilot', 1, '2000-06-20T09:00:00'),
+    ('00000000-0000-0000-0000-000000000002', N'Office', 1, '2000-06-20T09:00:05'),
+    ('00000000-0000-0000-0000-000000000003', N'Copilot Studio', 1, '2000-06-21T09:00:00'),
+    ('00000000-0000-0000-0000-000000000004', N'Copilot Studio', 2, '2000-06-21T09:00:00');
+INSERT dbo.copilot_chat_duplicates (event_id, time_stamp, counted_event_id, reason)
+VALUES ('00000000-0000-0000-0000-000000000001', '2000-06-20T09:00:00', '00000000-0000-0000-0000-000000000002', 1);");
+
+                var sources = Sources(
+                    usageReports: false, copilotReports: true, copilotAudit: true);
+                var overview = await fixture.Store().LoadOverviewAsync(
+                    OverviewQuery(), sources,
+                    NullLicenceActivityDiagnostics.Instance, CancellationToken.None);
+                var users = await fixture.Store().LoadUsersAsync(
+                    overview,
+                    OverviewQuery().ForUsers(
+                        1, "copilot", null, "activity", "desc", 5, 1, 20,
+                        LicenceActivitySqlFixture.NowUtc),
+                    sources,
+                    NullLicenceActivityDiagnostics.Instance,
+                    CancellationToken.None);
+
+                var user = users.MostActive.Single(u => u.UserId == 1).Workloads.Single(w => w.Workload == "copilot");
+                Assert.AreEqual(1d, user.AverageActions, "One turn in the week: not two audit records, and not the test-pane chat.");
+                Assert.IsFalse(users.MostActive.Any(u => u.UserId == 2),
+                    "Testing an agent in the Copilot Studio test pane is not evidence of using a Microsoft 365 Copilot licence.");
+            }
+        }
+
         [TestMethod]
         public async Task Copilot_InteractionHistoryIsUsedWhenItIsTheOnlyEnabledPositiveSource()
         {

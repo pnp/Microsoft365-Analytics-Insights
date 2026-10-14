@@ -11,6 +11,7 @@
  * a missing one a build failure.
  */
 export const app = {
+  'app.route.agentCostConnection': 'Copilot Studio billing connection',
   'app.signOut': 'Sign out',
   'app.nav.collapse': 'Collapse navigation',
   'app.nav.expand': 'Expand navigation',
@@ -30,6 +31,11 @@ export const app = {
 
   'app.navGroup.monitoring': 'Monitoring',
   'app.navGroup.manage': 'Manage',
+  'app.workload.copilot': 'Copilot',
+  'app.workload.agents': 'Agents',
+  'app.workload.apps': 'Apps & licences',
+  'app.workload.sharepoint': 'SharePoint & OneDrive',
+  'app.workload.teams': 'Teams',
 
   'app.route.overview': 'Overview',
   'app.route.reports': 'Reports',
@@ -50,7 +56,10 @@ export const app = {
   'app.route.userScope': 'User scope',
   'app.route.globalFilter': 'Report filter',
   'app.route.copilotAuditBackfill': 'Copilot audit backfill',
+  'app.route.leadershipCohort': 'Leadership group',
+  'app.route.copilotAdoptionSettings': 'Copilot Adoption settings',
   'app.route.configuration': 'Service configuration',
+  'app.route.agent365Catalog': 'Agent 365 catalogue',
 } as const;
 
 export default app;

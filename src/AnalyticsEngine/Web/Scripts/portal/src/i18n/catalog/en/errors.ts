@@ -25,6 +25,8 @@ export const errors = {
   'errors.userOrgs.requestFailed': 'Request failed ({status})',
   'errors.userFilter.dimensionsFailed': "Couldn't load the attributes to filter on ({status}).",
   'errors.userFilter.valuesFailed': "Couldn't load the values for this attribute ({status}).",
+  'errors.copilotAdoptionSettings.unavailable':
+    "The Copilot Adoption score settings couldn't be read, so this report isn't available right now. Try again shortly.",
   'errors.globalFilter.unavailable':
     "The filter a portal administrator set for reports couldn't be read, so this report isn't available right now. Try again shortly.",
   'errors.globalFilter.invalid':
@@ -75,6 +77,7 @@ export const errors = {
   // DLP API
   'errors.dlp.availabilityFailed': "Couldn't load DLP availability ({status}).",
   'errors.dlp.summaryFailed': "Couldn't load DLP summary ({status}).",
+  'errors.dlp.governanceFailed': "Couldn't load the Copilot governance signals ({status}).",
 
   // Health API
   'errors.health.summaryFailed': "Couldn't load system health ({status}).",

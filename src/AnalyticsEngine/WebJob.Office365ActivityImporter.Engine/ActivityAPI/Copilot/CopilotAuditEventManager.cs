@@ -316,6 +316,7 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
             row.ContextsJson = SerializeContexts(auditRecord.CopilotEventData?.Contexts);
             row.AISystemPluginsJson = SerializeAISystemPlugins(auditRecord);
             row.ThreadId = auditRecord.CopilotEventData?.ThreadId;
+            row.ConversationId = auditRecord.CopilotEventData?.ConversationId;
             row.ClientRegion = auditRecord.ClientRegion;
             row.CopilotLogVersion = auditRecord.CopilotLogVersion;
             row.CopilotCreditEstimateTotal = auditRecord.Cost?.TotalCredits;

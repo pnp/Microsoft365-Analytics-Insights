@@ -107,6 +107,8 @@
             this.AcceptButton = this.btnSave;
             this.AutoScaleDimensions = new System.Drawing.SizeF(6F, 13F);
             this.AutoScaleMode = System.Windows.Forms.AutoScaleMode.Font;
+            this.ShowIcon = false;
+            this.ShowInTaskbar = false;
             this.ClientSize = new System.Drawing.Size(485, 168);
             this.Controls.Add(this.chkShowPassword);
             this.Controls.Add(this.btnSave);

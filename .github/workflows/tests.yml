@@ -12,6 +12,8 @@ on:
       - src/AnalyticsEngine/**
       - src/SPO/AITracker/**
       - reports/**
+      # Tested by CopilotAdoptionWorkbookComparisonScriptTests in Tests.UnitTests.
+      - scripts/CopilotAdoption/**
       - .github/workflows/tests.yml
   pull_request:
     # `ready_for_review` alone is NOT enough. A pull request opened directly as non-draft emits
@@ -82,6 +84,8 @@ jobs:
           filters: |
             code:
               - 'src/AnalyticsEngine/**'
+              # The workbook comparison script has no build of its own: its tests are in Tests.UnitTests.
+              - 'scripts/CopilotAdoption/**'
             aitracker:
               - 'src/SPO/AITracker/**'
             spfx:

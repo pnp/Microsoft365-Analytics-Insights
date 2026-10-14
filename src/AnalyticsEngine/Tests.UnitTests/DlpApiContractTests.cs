@@ -7,6 +7,10 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
 using DlpAvailability = AnalyticsWeb::Web.AnalyticsWeb.Models.Dlp.DlpAvailability;
+using DlpGovernanceLabelShare = AnalyticsWeb::Web.AnalyticsWeb.Models.Dlp.DlpGovernanceLabelShare;
+using DlpGovernanceMixRow = AnalyticsWeb::Web.AnalyticsWeb.Models.Dlp.DlpGovernanceMixRow;
+using DlpGovernanceRate = AnalyticsWeb::Web.AnalyticsWeb.Models.Dlp.DlpGovernanceRate;
+using DlpGovernanceSummary = AnalyticsWeb::Web.AnalyticsWeb.Models.Dlp.DlpGovernanceSummary;
 using DlpImpactRow = AnalyticsWeb::Web.AnalyticsWeb.Models.Dlp.DlpImpactRow;
 using DlpSummary = AnalyticsWeb::Web.AnalyticsWeb.Models.Dlp.DlpSummary;
 using DlpTrendPoint = AnalyticsWeb::Web.AnalyticsWeb.Models.Dlp.DlpTrendPoint;
@@ -31,6 +35,12 @@ namespace Tests.UnitTests
     [TestClass]
     public class DlpApiContractTests
     {
+        /// <summary>Every model the DLP API returns, including the governance section's (#648).</summary>
+        private static readonly System.Type[] ApiModelTypes =
+        {
+            typeof(DlpAvailability), typeof(DlpImpactRow), typeof(DlpTrendPoint), typeof(DlpSummary),
+            typeof(DlpGovernanceSummary), typeof(DlpGovernanceRate), typeof(DlpGovernanceLabelShare), typeof(DlpGovernanceMixRow),
+        };
         /// <summary>
         /// Every public property on a model returned by the DLP API must declare its wire name, and
         /// that name must be camelCase. A missing attribute is the exact defect described above.
@@ -38,7 +48,7 @@ namespace Tests.UnitTests
         [TestMethod]
         public void EveryDlpApiModelPropertyDeclaresACamelCaseWireName()
         {
-            foreach (var type in new[] { typeof(DlpAvailability), typeof(DlpImpactRow), typeof(DlpTrendPoint), typeof(DlpSummary) })
+            foreach (var type in ApiModelTypes)
             {
                 foreach (var property in type.GetProperties(BindingFlags.Public | BindingFlags.Instance))
                 {
@@ -125,6 +135,47 @@ namespace Tests.UnitTests
         }
 
         /// <summary>
+        /// The governance section's wire names (#648), asserted on real serialised JSON. Every rate travels with
+        /// its numerator and denominator, and the lists the page calls .map() on are arrays even when empty.
+        /// </summary>
+        [TestMethod]
+        public void SerialisedGovernanceCarriesTheFieldsTheSpaReads()
+        {
+            var governance = JObject.Parse(JsonConvert.SerializeObject(new DlpGovernanceSummary
+            {
+                Interactions = 20000,
+                Jailbreak = new DlpGovernanceRate { FlaggedInteractions = 3, ReportedInteractions = 12000 },
+                Xpia = new DlpGovernanceRate { FlaggedInteractions = 1, ReportedInteractions = 8000 },
+                SensitivityLabels = new DlpGovernanceLabelShare { LabelledResources = 25, Resources = 100, InteractionsWithResources = 60 },
+                InteractionsWithModel = 900,
+                Models = new List<DlpGovernanceMixRow> { new DlpGovernanceMixRow { Name = "DEEP_LEO", Interactions = 600, Share = 0.03 } },
+                InteractionsWithPlugin = 2800,
+            }));
+
+            foreach (var field in new[] { "fromUtc", "toUtc", "interactions", "jailbreak", "xpia", "sensitivityLabels", "interactionsWithModel", "models", "interactionsWithPlugin", "plugins" })
+            {
+                Assert.IsNotNull(governance[field], $"api/Dlp/governance must expose '{field}'.");
+            }
+
+            foreach (var rate in new[] { "jailbreak", "xpia" })
+            {
+                foreach (var field in new[] { "flaggedInteractions", "reportedInteractions", "ratePer10000" })
+                {
+                    Assert.IsNotNull(governance[rate][field], $"'{rate}' must carry '{field}': a rate is never shown without its denominator.");
+                }
+            }
+
+            Assert.AreEqual(2.5, (double)governance["jailbreak"]["ratePer10000"], 1e-9);
+            Assert.AreEqual(0.25, (double)governance["sensitivityLabels"]["share"], 1e-9);
+            Assert.AreEqual(100, (long)governance["sensitivityLabels"]["resources"]);
+            Assert.AreEqual(60, (long)governance["sensitivityLabels"]["interactionsWithResources"]);
+            Assert.AreEqual("DEEP_LEO", (string)governance["models"][0]["name"]);
+            Assert.AreEqual(600, (long)governance["models"][0]["interactions"]);
+            Assert.AreEqual(0.03, (double)governance["models"][0]["share"], 1e-9);
+            Assert.AreEqual(JTokenType.Array, governance["plugins"].Type, "An empty list must still be an array.");
+        }
+
+        /// <summary>
         /// The TypeScript interfaces are the other half of this contract, so they are read here too -
         /// a field renamed in C# without the matching rename in dlp.ts fails the build.
         /// </summary>
@@ -133,9 +184,11 @@ namespace Tests.UnitTests
         {
             var typings = DlpTypeScriptSource();
 
-            var expected = typeof(DlpSummary).GetProperties(BindingFlags.Public | BindingFlags.Instance)
+            var expected = new[] { typeof(DlpSummary), typeof(DlpGovernanceSummary), typeof(DlpGovernanceRate), typeof(DlpGovernanceLabelShare), typeof(DlpGovernanceMixRow) }
+                .SelectMany(t => t.GetProperties(BindingFlags.Public | BindingFlags.Instance))
                 .Select(p => p.GetCustomAttribute<JsonPropertyAttribute>()?.PropertyName)
-                .Where(n => !string.IsNullOrEmpty(n));
+                .Where(n => !string.IsNullOrEmpty(n))
+                .Distinct();
 
             foreach (var field in expected)
             {

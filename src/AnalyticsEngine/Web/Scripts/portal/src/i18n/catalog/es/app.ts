@@ -12,6 +12,7 @@ import type { app as en } from '../en/app';
  * easier.
  */
 const app: Record<keyof typeof en, string> = {
+  'app.route.agentCostConnection': 'Conexión de facturación de Copilot Studio',
   'app.signOut': 'Cerrar sesi\u00f3n',
   'app.nav.collapse': 'Contraer la navegaci\u00f3n',
   'app.nav.expand': 'Expandir la navegaci\u00f3n',
@@ -30,6 +31,11 @@ const app: Record<keyof typeof en, string> = {
 
   'app.navGroup.monitoring': 'Supervisi\u00f3n',
   'app.navGroup.manage': 'Administrar',
+  'app.workload.copilot': 'Copilot',
+  'app.workload.agents': 'Agentes',
+  'app.workload.apps': 'Aplicaciones y licencias',
+  'app.workload.sharepoint': 'SharePoint y OneDrive',
+  'app.workload.teams': 'Teams',
 
   'app.route.overview': 'Resumen',
   'app.route.reports': 'Informes',
@@ -50,7 +56,10 @@ const app: Record<keyof typeof en, string> = {
   'app.route.userScope': 'Ámbito de usuarios',
   'app.route.globalFilter': 'Filtro de informes',
   'app.route.copilotAuditBackfill': 'Relleno de auditoría de Copilot',
+  'app.route.leadershipCohort': 'Grupo directivo',
+  'app.route.copilotAdoptionSettings': 'Configuración de adopción de Copilot',
   'app.route.configuration': 'Configuraci\u00f3n del servicio',
+  'app.route.agent365Catalog': 'Catálogo de Agent 365',
 };
 
 export default app;

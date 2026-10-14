@@ -67,7 +67,11 @@ namespace Tests.UnitTests
             try
             {
                 using (var db = new AnalyticsEntitiesContext())
+                using (var transaction = db.Database.BeginTransaction())
                 {
+                    // Reconcile counts the entire store. Isolate its inputs, then roll back to preserve other fixtures' rows.
+                    await db.Database.ExecuteSqlCommandAsync(
+                        "DELETE FROM dbo.user_license_history; DELETE FROM dbo.user_license_type_lookups;");
                     var userA = new Common.Entities.User { UserPrincipalName = token + "-a@contoso.local" };
                     var userB = new Common.Entities.User { UserPrincipalName = token + "-b@contoso.local" };
                     var licence = new LicenseType { Name = token + " licence", SKUID = token + "_SKU" };

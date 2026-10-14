@@ -21,8 +21,31 @@ namespace App.ControlPanel.Frames.InstallWizardPages
         public AzureBaseConfigControl()
         {
             InitializeComponent();
+            lblGUIAzureConfigDesc.Top = lblGUIAzureConfigHeader.Bottom + 4;
+            ConfigureTierDetails(grpTestingTierDetails, label3, lnkPlanLevelB1, label4, lnkSQLLevelBasic);
+            ConfigureTierDetails(grpProdTierDetails, label6, lnkPlanLevelB2, label5, lnkSQLLevelStandard);
+            flowLayoutPanel1.AutoSize = true;
+            flowLayoutPanel1.AutoSizeMode = AutoSizeMode.GrowAndShrink;
+            flowLayoutPanel1.FlowDirection = FlowDirection.TopDown;
+            flowLayoutPanel1.WrapContents = false;
             cmbEnvType.Items.Clear();
             cmbEnvType.Items.AddRange(new string[] { PERF_TIER_TESTING, PERF_TIER_PROD });
+        }
+
+        private static void ConfigureTierDetails(Panel panel, Label planCaption, LinkLabel planLink,
+            Label sqlCaption, LinkLabel sqlLink)
+        {
+            var rows = new FlowLayoutPanel { AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink,
+                FlowDirection = FlowDirection.TopDown, WrapContents = false };
+            foreach (var pair in new[] { new Control[] { planCaption, planLink }, new Control[] { sqlCaption, sqlLink } })
+            {
+                var row = new FlowLayoutPanel { AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, WrapContents = false };
+                row.Controls.AddRange(pair);
+                rows.Controls.Add(row);
+            }
+            panel.AutoSize = true;
+            panel.AutoSizeMode = AutoSizeMode.GrowAndShrink;
+            panel.Controls.Add(rows);
         }
 
         public event EventHandler<bool> LoadingSubscriptionStateChange;

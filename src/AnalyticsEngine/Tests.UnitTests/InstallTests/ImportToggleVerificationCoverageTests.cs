@@ -114,6 +114,7 @@ namespace Tests.UnitTests.InstallTests
                 [nameof(ImportTaskSettings.SentEmails)] = new[] { "Mail.Read" },
                 [nameof(ImportTaskSettings.Calls)] = new[] { "CallRecords.Read.All" },
                 [nameof(ImportTaskSettings.ImportDlp)] = new[] { "ActivityFeed.ReadDlp" },
+                [nameof(ImportTaskSettings.Agent365PackageCatalog)] = new[] { "CopilotPackages.Read.All" },
             };
 
             foreach (var pair in expectedPermissionsByToggle)

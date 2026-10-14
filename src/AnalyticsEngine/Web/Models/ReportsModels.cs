@@ -16,6 +16,10 @@ namespace Web.AnalyticsWeb.Models
         [JsonProperty("copilot")]
         public bool Copilot { get; set; }
 
+        /// <summary>Graph interaction history, which feeds prompt categories independently of the audit import.</summary>
+        [JsonProperty("copilotInteractionHistory")]
+        public bool CopilotInteractionHistory { get; set; }
+
         /// <summary>Microsoft 365 usage reports (Graph usage-report import: Teams/Outlook/OneDrive/SharePoint/Viva Engage).</summary>
         [JsonProperty("usage")]
         public bool Usage { get; set; }

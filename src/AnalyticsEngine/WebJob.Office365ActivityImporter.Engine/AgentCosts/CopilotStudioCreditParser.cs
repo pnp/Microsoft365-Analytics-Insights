@@ -13,9 +13,9 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
     /// </summary>
     /// <remarks>
     /// <para><b>Two envelopes are accepted deliberately.</b> Microsoft's REST reference documents a flat
-    /// <c>value[]</c> of resource snapshots, but a live tenant queried with <c>includeFields</c> returns those
-    /// same rows nested under <c>value[].resources[]</c>. Only the flat shape is documented and only the
-    /// nested shape has been observed, so supporting exactly one of them would be a bet. Both are handled, and
+    /// <c>value[]</c> of resource snapshots, but a live tenant returns those same rows nested under
+    /// <c>value[].resources[]</c> (here, the rows of <c>/users/{userId}/resources</c>). Only the nested shape
+    /// has been observed, so supporting exactly one of them would be a bet. Both are handled, and
     /// an envelope that is neither yields no rows rather than an exception - the importer records "read 0
     /// rows", which is visible in the import log, instead of failing the whole cycle.</para>
     ///
@@ -210,6 +210,7 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
                 Unit = GetString(row, "unit"),
                 AsOfDate = GetDateTime(row, "asOfDate"),
                 NonBillableQuantity = GetDecimal(GetProperty(row, "metadata") as JObject, "NonBillableQuantity"),
+                ResourceCount = GetDecimal(GetProperty(row, "metadata") as JObject, "Resources"),
             };
         }
 
@@ -224,7 +225,6 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
                 EnvironmentId = GetString(row, "environmentId"),
                 ResourceId = GetString(row, "resourceId"),
                 Consumed = GetDecimal(row, "consumed") ?? 0m,
-                LastRefreshedDate = GetDateTime(row, "lastRefreshedDate"),
 
                 // asOfDate is documented on neither envelope but is what a live tenant returns as the usage
                 // day. The importer falls back to the requested date when it is absent.
@@ -241,7 +241,6 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
                 ResourceName = FirstString(metadata, "ResourceName", "ProductName"),
                 NonBillableQuantity = FirstDecimal(metadata, "NonBillableQuantity", "nonBillableConsumed"),
                 FeatureName = FirstString(metadata, "FeatureName", "Feature"),
-                Users = metadata != null ? GetInt(metadata, "Users") : null,
             };
         }
 
@@ -301,18 +300,6 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
             return decimal.TryParse(token.ToString(), NumberStyles.Any, CultureInfo.InvariantCulture, out var parsed)
                 ? parsed
                 : (decimal?)null;
-        }
-
-        private static int? GetInt(JObject o, string name)
-        {
-            var value = GetDecimal(o, name);
-            if (!value.HasValue) return null;
-
-            // Clamp rather than overflow: this is a user count used for reporting, and an absurd value from
-            // the API must not throw away the billing figures on the same row.
-            if (value.Value > int.MaxValue) return int.MaxValue;
-            if (value.Value < int.MinValue) return int.MinValue;
-            return (int)value.Value;
         }
 
         private static DateTime? GetDateTime(JObject o, string name)

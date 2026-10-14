@@ -187,7 +187,13 @@ FROM #Coverage ORDER BY workload;
 SELECT coverage.workload_name AS WorkloadName, samples.sample_date AS SnapshotDate
 FROM #Samples AS samples
 JOIN #Coverage AS coverage ON coverage.workload = samples.workload
-ORDER BY samples.workload, samples.sample_date;");
+ORDER BY samples.workload, samples.sample_date;
+SELECT coverage.workload_name AS WorkloadName, days.week_end AS WeekEnd,
+       days.day AS ReportDate, days.has_row AS HasRows,
+       CAST(CASE WHEN days.week_end <= @settled THEN 1 ELSE 0 END AS bit) AS Settled
+FROM #CoverageDays AS days
+JOIN #Coverage AS coverage ON coverage.workload = days.workload
+ORDER BY days.workload, days.week_end, days.day;");
             return sql.ToString().Replace("#EligibleUsers", eligibleTable);
         }
 
@@ -1051,6 +1057,16 @@ CREATE TABLE #Samples
     PRIMARY KEY (workload, sample_date)
 );
 
+-- Retain the existing day-existence probes for diagnostics; do not scan the fact tables again.
+CREATE TABLE #CoverageDays
+(
+    workload tinyint NOT NULL,
+    week_end date NOT NULL,
+    day date NOT NULL,
+    has_row bit NOT NULL,
+    PRIMARY KEY (workload, week_end, day)
+);
+
 CREATE TABLE #Coverage
 (
     workload tinyint NOT NULL PRIMARY KEY,
@@ -1136,24 +1152,25 @@ DECLARE @latest{0} datetime = (SELECT MAX([date]) FROM {1});
 -- its days was imported: Graph's daily reports list just that day's active people, so absence is
 -- only evidence of inactivity once the whole week is present. Bounded by the number of days in the
 -- period (<= 180 single-row index seeks), never by the number of rows in the report table.
+INSERT #CoverageDays (workload, week_end, day, has_row)
+SELECT {0}, days.week_end, days.day,
+       CASE WHEN present.has_row IS NULL THEN 0 ELSE 1 END
+FROM #Days AS days
+OUTER APPLY
+(
+    SELECT TOP (1) 1 AS has_row
+    FROM {1} AS available WITH (INDEX(IX_date))
+    WHERE available.[date] >= days.[day]
+      AND available.[date] < DATEADD(DAY, 1, days.[day])
+) AS present
+OPTION (RECOMPILE);
+
 INSERT #Samples (workload, sample_date)
 SELECT {0}, days.week_end
-FROM
-(
-    SELECT days.week_end,
-           CASE WHEN present.has_row IS NULL THEN 0 ELSE 1 END AS day_imported
-    FROM #Days AS days
-    OUTER APPLY
-    (
-        SELECT TOP (1) 1 AS has_row
-        FROM {1} AS available WITH (INDEX(IX_date))
-        WHERE available.[date] >= days.[day]
-          AND available.[date] < DATEADD(DAY, 1, days.[day])
-    ) AS present
-    WHERE days.week_end <= @settled
-) AS days
+FROM #CoverageDays AS days
+WHERE days.workload = {0} AND days.week_end <= @settled
 GROUP BY days.week_end
-HAVING MIN(days.day_imported) = 1
+HAVING MIN(CAST(days.has_row AS int)) = 1
 OPTION (RECOMPILE);
 
 DECLARE @observed{0} int =
@@ -1709,6 +1726,8 @@ BEGIN
         JOIN #EligibleUsers AS eligible ON eligible.user_id = chats.user_id
         WHERE chats.time_stamp >= @from
           AND chats.time_stamp < @endExclusive
+          AND " + global::Common.Entities.Copilot.CopilotTurnSql.CountedTurn("chats") + @"
+          AND " + global::Common.Entities.Copilot.CopilotTurnSql.NotMakerTesting("chats.app_host") + @"
         GROUP BY chats.user_id,
                  DATEADD(DAY,
                     -(((DATEDIFF(DAY, CONVERT(date, '19000101', 112), CAST(chats.time_stamp AS date)) % 7) + 7) % 7),
@@ -2836,6 +2855,8 @@ OPTION (RECOMPILE);
     JOIN #ActivityScope AS eligible ON eligible.user_id = chats.user_id
     WHERE chats.time_stamp >= @from
       AND chats.time_stamp < @endExclusive
+      AND " + global::Common.Entities.Copilot.CopilotTurnSql.CountedTurn("chats") + @"
+      AND " + global::Common.Entities.Copilot.CopilotTurnSql.NotMakerTesting("chats.app_host") + @"
     GROUP BY chats.user_id,
              DATEADD(DAY,
                 -(((DATEDIFF(DAY, CONVERT(date, '19000101', 112), CAST(chats.time_stamp AS date)) % 7) + 7) % 7),

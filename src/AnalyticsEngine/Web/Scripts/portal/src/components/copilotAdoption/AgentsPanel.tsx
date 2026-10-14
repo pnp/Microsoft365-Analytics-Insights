@@ -25,7 +25,9 @@ import type { KpiDefinition } from '../shared/KpiGrid';
 import { serverPlaceholderText } from '../shared/serverPlaceholder';
 import { PrintedFilters, printedSearch, useAdoptionTableStyles } from './adoptionShared';
 import { useT, type TFunction } from '../../i18n';
-import { agentHealthReason } from './serverText';
+import { agentHealthReason, agentOriginLabel } from './serverText';
+import { AgentReachCells, AgentReachHeaderCells } from './AgentReachColumns';
+import AgentGrowthLine from './AgentGrowthLine';
 
 /**
  * Health colours run from "delete this" to "this is working", matching the engagement-band palette
@@ -207,7 +209,7 @@ export default function AgentsPanel({
     return agents.filter(
       (a) =>
         (health === '' || a.health === Number(health)) &&
-        (!customOnly || a.isCustomAgent) &&
+        (!customOnly || a.origin === 'customerBuilt') &&
         (needle === '' ||
           a.name.toLowerCase().includes(needle) ||
           (a.agentKey ?? '').toLowerCase().includes(needle)),
@@ -224,16 +226,30 @@ export default function AgentsPanel({
     [estate.healthBreakdown, t],
   );
 
+  // The growth series reaches back a year, past the inventory's history, so it still has something to
+  // say when no agent has been used recently enough to be in the inventory.
+  const growthLine = (
+    <AgentGrowthLine
+      estate={estate}
+      lagDays={options.usageReportLagDays}
+      sql={sql?.agentGrowth}
+      billingSql={sql?.agentGrowthBilling}
+    />
+  );
+
   if (estate.knownAgents === 0) {
     return (
-      <Card>
-        <Text weight="semibold" size={400}>
-          {t('copilotAdoptionAgents.agents.empty.title')}
-        </Text>
-        <Text size={200} block className={styles.muted} style={{ marginTop: '6px' }}>
-          {t('copilotAdoptionAgents.agents.empty.description')}
-        </Text>
-      </Card>
+      <div className={styles.stack}>
+        <Card>
+          <Text weight="semibold" size={400}>
+            {t('copilotAdoptionAgents.agents.empty.title')}
+          </Text>
+          <Text size={200} block className={styles.muted} style={{ marginTop: '6px' }}>
+            {t('copilotAdoptionAgents.agents.empty.description')}
+          </Text>
+        </Card>
+        {(estate.growth ?? []).some((w) => w.activeAgents !== null) && growthLine}
+      </div>
     );
   }
 
@@ -242,6 +258,8 @@ export default function AgentsPanel({
   return (
     <div className={styles.stack}>
       <KpiGrid items={kpis} />
+
+      {growthLine}
 
       <div className={styles.twoUp}>
         <Card>
@@ -469,6 +487,7 @@ export default function AgentsPanel({
                       <th className={`${table.th} ${table.thNumeric}`}>{t('copilotAdoptionAgents.agents.table.interactions')}</th>
                       <th className={`${table.th} ${table.thNumeric}`}>{t('copilotAdoptionAgents.agents.table.perUser')}</th>
                       <th className={`${table.th} ${table.thNumeric}`}>{t('copilotAdoptionAgents.agents.table.surfaces')}</th>
+                      <AgentReachHeaderCells minSeatsPerSegment={options.minSeatsPerSegment} />
                       <th className={table.th}>{t('copilotAdoptionAgents.agents.table.lastUsed')}</th>
                       <th className={table.th}>{t('copilotAdoptionAgents.agents.table.verdict')}</th>
                     </tr>
@@ -488,7 +507,7 @@ export default function AgentsPanel({
                             )}
                           </span>
                         </td>
-                        <td className={table.td}>{agent.isCustomAgent ? t('copilotAdoptionAgents.agents.table.type.custom') : t('copilotAdoptionAgents.agents.table.type.microsoft')}</td>
+                        <td className={table.td}>{agentOriginLabel(t, agent.origin)}</td>
                         <td className={`${table.td} ${table.tdNumeric}`}>
                           {formatCount(agent.users)}
                           <Text size={100} block className={table.tdSub}>
@@ -498,6 +517,7 @@ export default function AgentsPanel({
                         <td className={`${table.td} ${table.tdNumeric}`}>{formatCount(agent.interactions)}</td>
                         <td className={`${table.td} ${table.tdNumeric}`}>{agent.interactionsPerUser}</td>
                         <td className={`${table.td} ${table.tdNumeric}`}>{agent.appsUsed}</td>
+                        <AgentReachCells agent={agent} minSeatsPerSegment={options.minSeatsPerSegment} />
                         <td className={table.td}>
                           {formatDate(agent.lastUsedUtc)}
                           {agent.daysSinceLastUse !== null && agent.daysSinceLastUse > 0 && (
@@ -728,6 +748,7 @@ function buildAgentKpis(
       hint: t('copilotAdoptionAgents.agents.kpi.active.hint', {
         known: formatCount(estate.knownAgents),
         custom: formatCount(estate.customAgents),
+        unknown: formatCount(estate.unknownOriginAgents),
       }),
       info: {
         what: t('copilotAdoptionAgents.agents.kpi.active.what', {

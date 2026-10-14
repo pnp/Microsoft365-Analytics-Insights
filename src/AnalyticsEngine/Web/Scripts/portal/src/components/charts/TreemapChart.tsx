@@ -1,4 +1,4 @@
-import { makeStyles, tokens } from '@fluentui/react-components';
+import { makeStyles, mergeClasses, tokens } from '@fluentui/react-components';
 import type { ReportCategory } from '../../types/reports';
 import { formatNumber, useT } from '../../i18n';
 import { serverPlaceholderText } from '../shared/serverPlaceholder';
@@ -35,6 +35,8 @@ const useStyles = makeStyles({
     opacity: 0.9,
     fontVariantNumeric: 'tabular-nums',
   },
+  shareLabel: { whiteSpace: 'normal', display: '-webkit-box', WebkitBoxOrient: 'vertical', fontSize: '16px', lineHeight: '20px', flexShrink: 0 },
+  shareValue: { fontSize: '20px', lineHeight: '24px', opacity: 1 },
   empty: {
     color: tokens.colorNeutralForeground3,
     padding: '24px 0',
@@ -146,10 +148,14 @@ export default function TreemapChart({
   categories,
   valueLabel,
   height = 240,
+  literalLabels = false,
+  showShare = false,
 }: {
-  categories: ReportCategory[];
+  categories: (ReportCategory & { color?: string })[];
   valueLabel: string;
   height?: number;
+  literalLabels?: boolean;
+  showShare?: boolean;
 }) {
   const t = useT();
   const styles = useStyles();
@@ -179,10 +185,12 @@ export default function TreemapChart({
       {rects.map((r) => {
         const share = (r.value / total) * 100;
         const heightPx = (r.h / LAYOUT_H) * height;
+        const showValue = heightPx >= (showShare ? 60 : 40);
+        const labelLines = Math.max(1, Math.min(2, Math.floor((heightPx - 16 - (showValue ? 24 : 0)) / 20)));
 
         return (
           <div
-            key={r.label}
+            key={r.index}
             className={styles.tile}
             style={{
               left: `${(r.x / LAYOUT_W) * 100}%`,
@@ -192,14 +200,16 @@ export default function TreemapChart({
               // rejects the border shorthands, and per-side longhands here would be four rules.
               width: `calc(${(r.w / LAYOUT_W) * 100}% - 3px)`,
               height: `calc(${(r.h / LAYOUT_H) * 100}% - 3px)`,
-              backgroundColor: seriesColor(r.index),
+              backgroundColor: sorted[r.index].color ?? seriesColor(r.index),
             }}
-            title={t('charts.treemap.tileTitle', { label: serverPlaceholderText(t, r.label), value: formatValue(r.value), valueLabel, percent: formatNumber(Math.round(share * 10) / 10) })}
+            title={t('charts.treemap.tileTitle', { label: literalLabels ? r.label : serverPlaceholderText(t, r.label), value: formatValue(r.value), valueLabel, percent: formatNumber(Math.round(share * 10) / 10) })}
           >
-            <span className={styles.label}>{serverPlaceholderText(t, r.label)}</span>
+            <span className={mergeClasses(styles.label, showShare && styles.shareLabel)}
+              style={showShare ? { WebkitLineClamp: labelLines } : undefined}>{literalLabels ? r.label : serverPlaceholderText(t, r.label)}</span>
             {/* Only show the value when the tile is tall enough for a second line. A clipped
                 half-height number is worse than none, and the tooltip always carries it. */}
-            {heightPx >= 40 && <span className={styles.value}>{formatValue(r.value)}</span>}
+            {showValue && <span className={mergeClasses(styles.value, showShare && styles.shareValue)}>{showShare
+              ? formatNumber(r.value / total, { style: 'percent', maximumFractionDigits: 1 }) : formatValue(r.value)}</span>}
           </div>
         );
       })}

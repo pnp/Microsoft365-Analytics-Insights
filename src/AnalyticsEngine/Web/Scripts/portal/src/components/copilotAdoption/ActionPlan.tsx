@@ -3,7 +3,7 @@ import type { AdoptionActionSummary } from '../../types/copilotAdoption';
 import type { CopilotAdoptionOptions } from '../../types/copilotAdoption';
 import { useT } from '../../i18n';
 import { formatCount, formatPct } from '../shared/KpiGrid';
-import { actionDescription, actionLabel } from './serverText';
+import { actionDescription, actionLabel, guidanceLinkTitle } from './serverText';
 
 /**
  * Action colours run from "this licence is costing money" through to "this licence is paying for itself",
@@ -213,7 +213,7 @@ export default function ActionPlan({
                       onClick={(e) => e.stopPropagation()}
                       onKeyDown={(e) => e.stopPropagation()}
                     >
-                      {link.title}
+                      {guidanceLinkTitle(t, link)}
                     </a>
                   ))}
                 </span>

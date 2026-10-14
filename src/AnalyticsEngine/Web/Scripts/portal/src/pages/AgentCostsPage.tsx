@@ -155,10 +155,17 @@ export function importFailureWarning(t: TFunction, kind: 'copilotStudio' | 'azur
     : 'agentCosts.warning.azureCostImportFailing');
 }
 
+export function importFailureDetail(t: TFunction, error: string): string {
+  if (error === 'agentCosts.import.reconnectNeeded') return t('agentCosts.import.reconnectNeeded');
+  if (error === 'agentCosts.import.tokenUnavailable') return t('agentCosts.import.tokenUnavailable');
+  if (error === 'agentCosts.import.connectionRequired') return t('agentCosts.import.connectionRequired');
+  return error;
+}
+
 /**
  * A failing import's warning bar. The label is the portal's own wording, so it is translated. The detail is
- * the importer's last error: diagnostic text, shown exactly as the importer wrote it, as `availabilityMessages`
- * already does with `{error}`. It must stay, because once some figures exist this bar is the only place the page
+ * the importer's last error: known connection keys are translated; other diagnostic text is preserved.
+ * It must stay, because once some figures exist this bar is the only place the page
  * says WHY the import is failing - `availabilityMessages` quotes the error only while there is no data at all.
  */
 export function ImportFailureBar({ kind, error }: { kind: 'copilotStudio' | 'azure'; error: string }) {
@@ -166,7 +173,7 @@ export function ImportFailureBar({ kind, error }: { kind: 'copilotStudio' | 'azu
   return (
     <MessageBar intent="warning">
       <MessageBarBody>
-        <strong>{importFailureWarning(t, kind)}</strong> {error}
+        <strong>{importFailureWarning(t, kind)}</strong> {importFailureDetail(t, error)}
       </MessageBarBody>
     </MessageBar>
   );
@@ -195,9 +202,11 @@ function availabilityMessages(availability: AgentCostAvailability, t: TFunction)
     messages.push(t('agentCosts.availability.message.noImports'));
   }
 
-  if (availability.copilotStudioCreditsEnabled && !availability.hasCopilotStudioCreditData) {
+  if (availability.copilotStudioCreditsEnabled && availability.copilotStudioConnectionRequired) {
+    messages.push(t('agentCosts.availability.message.connectionRequired'));
+  } else if (availability.copilotStudioCreditsEnabled && !availability.hasCopilotStudioCreditData) {
     if (availability.copilotStudioCreditsLastError) {
-      messages.push(t('agentCosts.availability.message.copilotImportFailing', { error: availability.copilotStudioCreditsLastError }));
+      messages.push(t('agentCosts.availability.message.copilotImportFailing', { error: importFailureDetail(t, availability.copilotStudioCreditsLastError) }));
     } else if (availability.copilotStudioCreditsHasRunCleanly) {
       messages.push(t('agentCosts.availability.message.copilotNoUsage'));
     } else {
@@ -218,7 +227,7 @@ function availabilityMessages(availability: AgentCostAvailability, t: TFunction)
   if (availability.copilotStudioCreditsEnabled
     && !availability.copilotStudioCreditsLastError
     && availability.perUserCreditsLastError) {
-    messages.push(t('agentCosts.availability.message.perUserNotUpdating', { error: availability.perUserCreditsLastError }));
+    messages.push(t('agentCosts.availability.message.perUserNotUpdating', { error: importFailureDetail(t, availability.perUserCreditsLastError) }));
   }
 
   if (availability.copilotStudioCreditsEnabled
@@ -227,7 +236,7 @@ function availabilityMessages(availability: AgentCostAvailability, t: TFunction)
     messages.push(t('agentCosts.availability.message.capacityNotUpdating', { error: availability.capacityLastError }));
   }
 
-  messages.push(t('agentCosts.availability.message.creditEndpointMismatch'));
+  messages.push(t('agentCosts.availability.message.perAgentFromPerUser'));
   messages.push(t('agentCosts.availability.message.azureNoPeople'));
   messages.push(t('agentCosts.availability.message.azureEstimates'));
   return messages;
@@ -618,6 +627,7 @@ export default function AgentCostsPage() {
               <div className={styles.kpi}>
                 <span className={styles.kpiValue}>{formatCredits(summary?.billedCredits ?? 0)}</span>
                 <span className={styles.kpiLabel}>{t('agentCosts.kpi.creditsBilled')}</span>
+                <span className={styles.kpiHint}>{t('agentCosts.kpi.creditsBilled.hint')}</span>
               </div>
               <div className={styles.kpi}>
                 <span className={styles.kpiValue}>{formatCredits(summary?.nonBilledCredits ?? 0)}</span>
@@ -649,11 +659,15 @@ export default function AgentCostsPage() {
             {summary?.capacity && (
               <div className={`${styles.kpiGrid} ${styles.body}`}>
                 <div className={styles.kpi}>
-                  <span className={styles.kpiValue}>{formatCredits(summary.capacity.available)}</span>
-                  <span className={styles.kpiLabel}>{t('agentCosts.capacity.availableNow')}</span>
+                  <span className={styles.kpiValue}>{formatCredits(summary.capacity.consumed)}</span>
+                  <span className={styles.kpiLabel}>{t('agentCosts.capacity.prepaidUsed')}</span>
                   <span className={styles.kpiHint}>
                     <CapacityUsedHint capacity={summary.capacity} />
                   </span>
+                </div>
+                <div className={styles.kpi}>
+                  <span className={styles.kpiValue}>{formatCredits(summary.capacity.available)}</span>
+                  <span className={styles.kpiLabel}>{t('agentCosts.capacity.availableNow')}</span>
                 </div>
                 <div className={styles.kpi}>
                   <span className={styles.kpiValue}>{capacityStatusLabel(summary.capacity.status, t)}</span>

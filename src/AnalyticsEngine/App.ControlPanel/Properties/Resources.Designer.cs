@@ -63,6 +63,20 @@ namespace App.ControlPanel.Properties {
         /// <summary>
         ///   Looks up a localized resource of type System.Drawing.Bitmap.
         /// </summary>
+        internal static System.Drawing.Bitmap Cognitive {
+            get {
+                object obj = ResourceManager.GetObject("Cognitive", resourceCulture);
+                return ((System.Drawing.Bitmap)(obj));
+            }
+        }
+
+        internal static System.Drawing.Bitmap AzureOpenAI {
+            get {
+                object obj = ResourceManager.GetObject("AzureOpenAI", resourceCulture);
+                return ((System.Drawing.Bitmap)(obj));
+            }
+        }
+
         internal static System.Drawing.Bitmap AppInsights {
             get {
                 object obj = ResourceManager.GetObject("AppInsights", resourceCulture);

@@ -671,10 +671,20 @@ CREATE TABLE dbo.copilot_chats
     app_host nvarchar(max) NULL,
     agent_id int NULL,
     user_id int NULL,
-    time_stamp datetime NULL
+    time_stamp datetime NULL,
+    conversation_id nvarchar(450) NULL
 );
 CREATE INDEX IX_copilot_chats_time_stamp_user_id
     ON dbo.copilot_chats(time_stamp, user_id) INCLUDE(app_host, agent_id);
+
+-- Migration CopilotTurnPairing (#699): extra audit records of a turn counted on another record.
+CREATE TABLE dbo.copilot_chat_duplicates
+(
+    event_id uniqueidentifier NOT NULL CONSTRAINT PK_copilot_chat_duplicates PRIMARY KEY,
+    time_stamp datetime NOT NULL,
+    counted_event_id uniqueidentifier NOT NULL,
+    reason tinyint NOT NULL
+);
 
 CREATE TABLE dbo.copilot_interactions
 (

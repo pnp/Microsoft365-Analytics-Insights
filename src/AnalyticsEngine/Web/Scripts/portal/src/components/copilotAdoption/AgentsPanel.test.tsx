@@ -49,6 +49,39 @@ const OPTIONS: CopilotAdoptionOptions = {
   maxOpportunityCandidates: 50000,
   maxAgents: 1000,
   maxUnlicensedUsersScored: 50000,
+  depthMinActiveDays: 3,
+  reclaimGraceDays: 30,
+  activationWindowDays: 30,
+  opportunityCopilotTargetBasisDays: 28,
+  opportunityProvenDemandMinActiveDays: 3,
+  coworkCollaborationWeight: 20,
+  coworkMeetingWeight: 35,
+  coworkEmailWeight: 25,
+  coworkDocumentWeight: 20,
+  coworkCollaborationTarget: 50,
+  coworkMeetingTarget: 5,
+  coworkEmailTarget: 80,
+  coworkDocumentTarget: 30,
+  coworkLoadMinScore: 50,
+  coworkFluencyMinScore: 50,
+  coworkRegularMinActiveDays: 3,
+  coworkAgentFamiliarityUplift: 10,
+  copilotMinutesSavedPerMeeting: 5,
+  copilotMinutesSavedPerMailThread: 0.5,
+  copilotMinutesSavedPerDocument: 1,
+  coworkEstimateLowerBoundRatio: 0.5,
+  coworkOrganiseMeetingsShare: 0.25,
+  coworkOrganiseMeetingsMinutes: 6,
+  coworkPrepareMeetingsShare: 0.1,
+  coworkPrepareMeetingsMinutes: 6,
+  coworkSendEmailShare: 0.05,
+  coworkSendEmailMinutes: 6,
+  coworkPostInTeamsShare: 0.01,
+  coworkPostInTeamsMinutes: 6,
+  coworkCreateDocumentsShare: 0.02,
+  coworkCreateDocumentsMinutes: 6,
+  accountabilityDimension: 'directManager',
+  maxCoworkUsersScored: 50000,
 };
 
 /** A machine-generated identifier of the length that used to push the rest of the table off screen. */
@@ -59,6 +92,7 @@ function agent(over: Partial<AgentUsageRow>): AgentUsageRow {
     agentId: 1,
     name: 'Contoso Agent',
     agentKey: null,
+    origin: 'customerBuilt',
     isCustomAgent: true,
     interactions: 100,
     users: 10,
@@ -79,7 +113,7 @@ function agent(over: Partial<AgentUsageRow>): AgentUsageRow {
 const AGENTS: AgentUsageRow[] = [
   agent({ agentId: 1, name: 'Contoso Expenses Helper', agentKey: 'CopilotStudio.Declarative.T_expenses' }),
   agent({ agentId: 2, name: 'Fabrikam Travel Booker', agentKey: LONG_KEY }),
-  agent({ agentId: 3, name: 'Northwind Ticket Triage', agentKey: null, isCustomAgent: false }),
+  agent({ agentId: 3, name: 'Northwind Ticket Triage', agentKey: null, origin: 'microsoft', isCustomAgent: false }),
 ];
 
 const ESTATE: AgentEstateSummary = {
@@ -87,6 +121,7 @@ const ESTATE: AgentEstateSummary = {
   activeAgents: 3,
   knownAgents: 3,
   customAgents: 2,
+  unknownOriginAgents: 0,
   agentUsers: 25,
   licensedAgentUsers: 10,
   agentInteractions: 300,
@@ -152,6 +187,54 @@ describe('AgentsPanel inventory', () => {
     // engine, so the truncation itself (max-width + text-overflow) cannot be verified from a test.
     // That was checked in a headless browser against a 180-character key.
     expect(screen.getByText(LONG_KEY)).toHaveAttribute('title', LONG_KEY);
+  });
+});
+
+describe('AgentsPanel agent origin', () => {
+  // One agent of each origin, as the server sends them (#639). isCustomAgent is false for Microsoft's agents
+  // and for unknown ones alike, which is why the Type column reads origin instead.
+  const MIXED: AgentUsageRow[] = [
+    agent({ agentId: 1, name: 'Contoso Expenses Helper', origin: 'customerBuilt', isCustomAgent: true }),
+    agent({ agentId: 2, name: 'Copilot Cowork', origin: 'microsoft', isCustomAgent: false }),
+    agent({ agentId: 3, name: 'Καλημέρα κόσμε agent', origin: 'unknown', isCustomAgent: false }),
+  ];
+  const MIXED_ESTATE: AgentEstateSummary = { ...ESTATE, customAgents: 1, unknownOriginAgents: 1, agents: MIXED };
+
+  function renderMixed() {
+    return renderWithProvider(
+      <AgentsPanel estate={MIXED_ESTATE} agents={MIXED} options={OPTIONS} windowDays={30} sql={null} />,
+    );
+  }
+
+  function typeOf(name: string): string {
+    const row = screen.getByText(name).closest('tr') as HTMLElement;
+    return within(row).getAllByRole('cell')[1].textContent ?? '';
+  }
+
+  it('labels each agent Customer-built, Microsoft or Unknown', () => {
+    renderMixed();
+
+    expect(typeOf('Contoso Expenses Helper')).toBe('Customer-built');
+    expect(typeOf('Copilot Cowork')).toBe('Microsoft');
+    expect(typeOf('Καλημέρα κόσμε agent')).toBe('Unknown');
+  });
+
+  it('keeps only customer-built agents when "Customer-built agents only" is ticked', async () => {
+    const user = userEvent.setup();
+    renderMixed();
+
+    await user.click(screen.getByRole('checkbox', { name: 'Customer-built agents only' }));
+
+    expect(screen.getByText('Contoso Expenses Helper')).toBeInTheDocument();
+    expect(screen.queryByText('Copilot Cowork')).not.toBeInTheDocument();
+    expect(screen.queryByText('Καλημέρα κόσμε agent')).not.toBeInTheDocument();
+    expect(screen.getByText('1 of 3 agents')).toBeInTheDocument();
+  });
+
+  it('shows how many agents are of unknown origin beside the customer-built count', () => {
+    renderMixed();
+
+    expect(screen.getByText('3 known: 1 customer-built, 1 of unknown origin')).toBeInTheDocument();
   });
 });
 

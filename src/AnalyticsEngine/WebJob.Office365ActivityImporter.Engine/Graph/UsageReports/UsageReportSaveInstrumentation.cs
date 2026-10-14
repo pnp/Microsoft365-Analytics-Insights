@@ -3,6 +3,7 @@ using Microsoft.Extensions.Logging;
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Globalization;
 using System.Threading;
 
 namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
@@ -35,6 +36,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
         public string ReportTable { get; set; }
         public string Outcome { get; set; }
         public string ExceptionType { get; set; }
+        public DateTime? ReportDateUtc { get; set; }
         public Dictionary<string, double> Metrics { get; } = new Dictionary<string, double>();
     }
 
@@ -92,6 +94,10 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
             {
                 dimensions["ExceptionType"] = point.ExceptionType;
             }
+            if (point.ReportDateUtc.HasValue)
+            {
+                dimensions["ReportDateUtc"] = point.ReportDateUtc.Value.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+            }
 
             point.Metrics["Sequence"] = Interlocked.Increment(ref _sequence);
             _logger.TrackEvent(AnalyticsLogger.AnalyticsEvent.UsageReportSaveStage, dimensions, point.Metrics);
@@ -128,4 +134,3 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
         }
     }
 }
-

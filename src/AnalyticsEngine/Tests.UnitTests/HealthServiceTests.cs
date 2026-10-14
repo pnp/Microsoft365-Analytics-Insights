@@ -3,6 +3,7 @@
 using AnalyticsWeb::Web.AnalyticsWeb.Controllers;
 using AnalyticsWeb::Web.AnalyticsWeb.Models.Health;
 using Common.Entities;
+using Common.Entities.Config;
 using Common.Entities.Entities.UsageReports;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System;
@@ -30,6 +31,79 @@ namespace Tests.UnitTests
     {
         private static HealthService Build(FakeHealthDataSource source, InMemoryHealthCache cache)
             => new HealthService(source, cache);
+
+        [DataTestMethod]
+        [DataRow("connected", "Healthy", "agentCostConnection.connected")]
+        [DataRow("disconnected", "Degraded", "agentCostConnection.disconnected")]
+        [DataRow("reconnectNeeded", "Degraded", "agentCostConnection.reconnectNeeded")]
+        public async Task AgentCostConnection_Enabled_ReportsStatusAndRollsUp(
+            string connectionStatus, string expectedStatus, string reasonKey)
+        {
+            var reads = 0;
+            var service = new HealthService(new FakeHealthDataSource(), new InMemoryHealthCache(), _ =>
+            {
+                reads++;
+                return Task.FromResult(connectionStatus);
+            });
+            var config = AgentCostHealthConfig(true, false);
+
+            var components = await service.LoadComponentsAsync(config);
+            var row = components.ComponentHealth.Single(c => c.Component == "PowerPlatformConnection");
+            Assert.AreEqual(expectedStatus, row.Status);
+            Assert.AreEqual(reasonKey, row.ReasonKey);
+            Assert.AreEqual(expectedStatus, components.Status);
+
+            var summary = await service.LoadSummaryAsync(config);
+            Assert.AreEqual(expectedStatus, summary.OverallStatus);
+            if (expectedStatus == HealthStatusNames.Degraded)
+                Assert.IsTrue(summary.OverallReasons.Any(r => r.Contains(row.Detail)));
+            Assert.AreEqual(1, reads, "The summary must reuse the cached component check.");
+        }
+
+        [DataTestMethod]
+        [DataRow(false)]
+        [DataRow(true)]
+        public async Task AgentCostConnection_CreditsDisabled_OmitsCheckEvenWithAzureCosts(bool azureCosts)
+        {
+            var reads = 0;
+            var service = new HealthService(new FakeHealthDataSource(), new InMemoryHealthCache(),
+                _ => { reads++; return Task.FromResult("disconnected"); });
+            var components = await service.LoadComponentsAsync(AgentCostHealthConfig(false, azureCosts));
+            Assert.AreEqual(0, reads, "Disabled credit tracking must not access the connection store.");
+            Assert.IsFalse(components.ComponentHealth.Any(c => c.Component == "PowerPlatformConnection"));
+            Assert.AreEqual(HealthStatusNames.Healthy, components.Status);
+        }
+
+        [DataTestMethod]
+        [DataRow(null)]
+        [DataRow("unexpected")]
+        public async Task AgentCostConnection_UnreadableOrUnknown_DegradesWithoutLeakingError(string status)
+        {
+            var service = new HealthService(new FakeHealthDataSource(), new InMemoryHealthCache(),
+                _ => status == null
+                    ? Task.FromException<string>(new InvalidOperationException("Private diagnostic"))
+                    : Task.FromResult(status));
+            var components = await service.LoadComponentsAsync(AgentCostHealthConfig(true, false));
+            var row = components.ComponentHealth.Single(c => c.Component == "PowerPlatformConnection");
+            Assert.AreEqual("agentCostConnection.checkFailed", row.ReasonKey);
+            Assert.AreEqual(HealthStatusNames.Degraded, components.Status);
+            Assert.IsFalse(row.Detail.Contains("Private diagnostic"));
+        }
+
+        private static AppConfig AgentCostHealthConfig(bool credits, bool azureCosts)
+        {
+            var config = new TestsAppConfig
+            {
+                ImportJobSettings = new ImportTaskSettings { CopilotStudioCredits = credits, AzureCostManagement = azureCosts },
+                UseClientCertificate = false,
+                AppInsightsConnectionString = null,
+                TenantGUID = Guid.Empty,
+                ClientID = "00000000-0000-0000-0000-000000000000",
+                ClientSecret = "synthetic-test-secret"
+            };
+            config.ConnectionStrings.ServiceBusConnectionString = null;
+            return config;
+        }
 
         #region Caching
 

@@ -12,7 +12,7 @@ namespace Common.Entities.State
     /// Values live only as long as this instance, so a caller that needs them to survive across import cycles must
     /// hold ONE instance for the life of the process. Thread-safe: the importers read and write concurrently.
     /// </remarks>
-    public sealed class InMemoryKeyValueStore : IKeyValueStore
+    public sealed class InMemoryKeyValueStore : IConditionalKeyValueStore
     {
         /// <summary>How many writes happen between sweeps of expired entries, so a TTL'd cache cannot grow without bound.</summary>
         private const int SweepEveryWrites = 1000;
@@ -20,6 +20,7 @@ namespace Common.Entities.State
         private readonly ConcurrentDictionary<string, Entry> _entries = new ConcurrentDictionary<string, Entry>(StringComparer.Ordinal);
         private readonly Func<DateTime> _utcNow;
         private int _writesSinceSweep;
+        private long _lastVersion;
 
         public InMemoryKeyValueStore() : this(() => DateTime.UtcNow)
         {
@@ -83,7 +84,7 @@ namespace Common.Entities.State
                 expiresUtc = _utcNow() + timeToLive.Value;
             }
 
-            _entries[key] = new Entry(value, expiresUtc);
+            _entries[key] = new Entry(value, expiresUtc, NextVersion());
 
             if (Interlocked.Increment(ref _writesSinceSweep) >= SweepEveryWrites)
             {
@@ -103,6 +104,36 @@ namespace Common.Entities.State
             return Task.FromResult(existed);
         }
 
+        public Task<VersionedValue> GetVersionedAsync(string key, CancellationToken cancellationToken = default)
+        {
+            ValidateKey(key);
+            cancellationToken.ThrowIfCancellationRequested();
+
+            if (!_entries.TryGetValue(key, out var entry)) return Task.FromResult(new VersionedValue(null, null));
+
+            // As in Azure Tables, an expired entry reads as missing but keeps its version, so a conditional write can replace it.
+            return Task.FromResult(new VersionedValue(entry.IsExpired(_utcNow()) ? null : entry.Value, entry.Version));
+        }
+
+        public Task<bool> TrySetStringAsync(string key, string value, string expectedVersionToken, CancellationToken cancellationToken = default)
+        {
+            ValidateKey(key);
+            if (value == null) throw new ArgumentNullException(nameof(value));
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var replacement = new Entry(value, null, NextVersion());
+            if (expectedVersionToken == null)
+            {
+                return Task.FromResult(_entries.TryAdd(key, replacement));
+            }
+
+            // TryUpdate compares the entry by reference, so it succeeds only if nothing replaced it since it was read.
+            return Task.FromResult(
+                _entries.TryGetValue(key, out var current)
+                && string.Equals(current.Version, expectedVersionToken, StringComparison.Ordinal)
+                && _entries.TryUpdate(key, replacement, current));
+        }
+
         public async Task<bool> ExistsAsync(string key, CancellationToken cancellationToken = default)
         {
             return await GetStringAsync(key, cancellationToken).ConfigureAwait(false) != null;
@@ -120,6 +151,8 @@ namespace Common.Entities.State
             }
         }
 
+        private string NextVersion() => Interlocked.Increment(ref _lastVersion).ToString(System.Globalization.CultureInfo.InvariantCulture);
+
         private static void ValidateKey(string key)
         {
             if (string.IsNullOrEmpty(key)) throw new ArgumentException("A key is required.", nameof(key));
@@ -127,11 +160,14 @@ namespace Common.Entities.State
 
         private sealed class Entry
         {
-            public Entry(string value, DateTime? expiresUtc)
+            public Entry(string value, DateTime? expiresUtc, string version)
             {
                 Value = value;
                 ExpiresUtc = expiresUtc;
+                Version = version;
             }
+
+            public string Version { get; }
 
             public string Value { get; }
 

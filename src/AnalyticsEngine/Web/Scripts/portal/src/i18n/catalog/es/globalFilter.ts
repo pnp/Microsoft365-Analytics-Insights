@@ -11,7 +11,7 @@ const globalFilter: Record<keyof typeof en, string> = {
   'globalFilter.bar.edit': 'Editar',
   'globalFilter.bar.switchOff': 'Desactivar en mi vista',
   'globalFilter.bar.switchOffHint':
-    'Vea todos los informes sin este filtro. Solo cambia su propia vista: los demás siguen viendo los informes filtrados.',
+    'Vea todos los informes sin este filtro. Se requieren los permisos Administración y Ver PII. Solo cambia su propia vista: los demás siguen viendo los informes filtrados.',
   'globalFilter.bar.switchOn': 'Volver a activar',
   'globalFilter.bar.switching': 'Cambiando…',
   'globalFilter.bar.bypassed':
@@ -101,7 +101,7 @@ const globalFilter: Record<keyof typeof en, string> = {
   'globalFilter.admin.retry': 'Reintentar',
   'globalFilter.admin.reload': 'Recargar',
   'globalFilter.admin.rolesNotEnforced':
-    'Los roles del portal no se aplican en esta implementación, por lo que cualquiera que inicie sesión es administrador del portal: cualquiera puede cambiar este filtro o desactivarlo en su propia vista. Active la aplicación de roles (EnforcePortalRoles) antes de confiar en él para limitar lo que ve cada persona.',
+    'Los roles del portal no se aplican en esta implementación, por lo que cualquiera que inicie sesión tiene los permisos Administración y Ver PII: cualquiera puede cambiar este filtro o desactivarlo en su propia vista. Active la aplicación de roles (EnforcePortalRoles) antes de confiar en él para limitar lo que ve cada persona.',
   'globalFilter.admin.storageUnavailable':
     'La base de datos no se ha actualizado para guardar un filtro global, por lo que no se puede guardar ninguno. Ejecute el instalador, o el script de actualización manual {script}, y recargue esta página.',
   'globalFilter.admin.invalidStored':
