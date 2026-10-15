@@ -39,6 +39,7 @@ const es: Record<keyof typeof en, string> = {
   'promptCategories.unsaved': 'Los cambios no se aplican hasta que los guarde. Las importaciones siguen usando la activación y taxonomía guardadas.',
   'promptCategories.weeklyValues': 'Mostrar valores semanales',
   'promptCategories.versionUnavailable': 'No hay grupos elegibles en este periodo',
+  'promptCategories.noVersions': 'No hay versiones de taxonomía disponibles',
   'promptCategories.defaults.meeting-summary.name': 'Resúmenes de reuniones',
   'promptCategories.defaults.meeting-summary.description': 'Resumir una reunión o extraer sus acciones.',
   'promptCategories.defaults.document-editing.name': 'Edición de documentos',

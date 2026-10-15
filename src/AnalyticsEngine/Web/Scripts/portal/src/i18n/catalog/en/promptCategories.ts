@@ -38,6 +38,7 @@ const en = {
   'promptCategories.unsaved': 'Changes are not active until you save. Imports continue to use the saved opt-in and taxonomy.',
   'promptCategories.weeklyValues': 'Show weekly values',
   'promptCategories.versionUnavailable': 'No eligible groups in this period',
+  'promptCategories.noVersions': 'No taxonomy versions available',
   'promptCategories.defaults.meeting-summary.name': 'Meeting summaries',
   'promptCategories.defaults.meeting-summary.description': 'Summarise a meeting or extract its actions.',
   'promptCategories.defaults.document-editing.name': 'Document editing',
