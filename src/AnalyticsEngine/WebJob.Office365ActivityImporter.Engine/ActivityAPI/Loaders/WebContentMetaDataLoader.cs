@@ -4,6 +4,7 @@ using Microsoft.Extensions.Logging;
 using Newtonsoft.Json;
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 using System.Net.Http;
 using System.Threading;
@@ -112,28 +113,24 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI
                 }
 
                 // Process the response for this URL
-                if (!string.IsNullOrEmpty(responseFromServer))
+                try
                 {
-                    // Deserialise the results from the HTTP response
-                    try
+                    var responseMeta = JsonConvert.DeserializeObject<List<ActivityReportInfo>>(responseFromServer);
+                    if (responseMeta == null || responseMeta.Any(metaData => metaData == null))
                     {
-                        var responseMeta = JsonConvert.DeserializeObject<List<ActivityReportInfo>>(responseFromServer);
-
-                        if (responseMeta != null && responseMeta.Count > 0)
-                        {
-                            // Add our own batch ID variable to each response
-                            foreach (var metaData in responseMeta)
-                            {
-                                metaData.BatchID = batchId;
-                            }
-
-                            allResults.AddRange(responseMeta);
-                        }
+                        throw new JsonSerializationException("Expected an array of activity metadata objects.");
                     }
-                    catch (JsonSerializationException)
+                    foreach (var metaData in responseMeta)
                     {
-                        _logger.LogError($"Could not deserialise to list of {nameof(ActivityReportInfo)} response: '{responseFromServer}'");
+                        metaData.BatchID = batchId;
                     }
+                    allResults.AddRange(responseMeta);
+                }
+                catch (JsonException ex)
+                {
+                    Interlocked.Increment(ref _metadataDownloadErrors);
+                    _logger.LogError($"Could not deserialise activity metadata ({ex.GetType().Name}). Stopping this listing; it will be retried next cycle.");
+                    break;
                 }
 
                 // Prepare next iteration
@@ -154,7 +151,7 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI
         {
             // Activity API format: YYYY-MM-DDTHH:MM:SS
             var utc = d.ToUniversalTime();
-            return utc.ToString("yyyy-MM-ddTHH:mm:ss");
+            return utc.ToString("yyyy-MM-ddTHH:mm:ss", CultureInfo.InvariantCulture);
         }
     }
 

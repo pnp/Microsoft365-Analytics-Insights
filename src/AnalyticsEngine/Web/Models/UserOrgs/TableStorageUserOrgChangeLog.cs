@@ -178,10 +178,12 @@ namespace Web.AnalyticsWeb.Models.UserOrgs
                 catch (Exception ex) when (!(ex is OperationCanceledException))
                 {
                     ReadFailed(ex);
-                    if (continuation != null && (ex is RequestFailedException || ex is ArgumentException || ex is FormatException))
+                    if (continuation != null && (ex is RequestFailedException failed && failed.Status == 400
+                        || ex is ArgumentException || ex is FormatException))
                     {
                         // A continuation the service does not recognise - edited, or from an older page. Asked
-                        // again rather than answered with a fault.
+                        // again rather than answered with a fault. Storage outages and access failures must
+                        // reach the service's unavailable-state handler instead.
                         throw new UserOrgValidationException(
                             "That page of changes is no longer available. Open the change list again.",
                             UserOrgImportRefusalCodes.ChangePageExpired,

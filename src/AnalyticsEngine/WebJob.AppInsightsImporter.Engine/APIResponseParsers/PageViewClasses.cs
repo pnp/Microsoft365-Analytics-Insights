@@ -22,7 +22,8 @@ namespace WebJob.AppInsightsImporter.Engine.ApiImporter
             {
                 try
                 {
-                    this.CustomProperties = JsonConvert.DeserializeObject<PageViewCustomProps>(this.CustomDimensionsJson);
+                    this.CustomProperties = JsonConvert.DeserializeObject<PageViewCustomProps>(this.CustomDimensionsJson)
+                        ?? new PageViewCustomProps();
                 }
                 catch (JsonException)
                 {

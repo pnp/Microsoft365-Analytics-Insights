@@ -27,6 +27,23 @@ namespace Tests.UnitTests
     [TestClass]
     public class SentEmailImporterPipelineTests
     {
+        [TestMethod]
+        public void BuildDeltaUrl_EscapesMailboxPathWithoutReencodingStoredDeltaToken()
+        {
+            foreach (var upn in new[] { "alex#sales@contoso.com", "alex'ops@contoso.com", "alex!ops@contoso.com", "alex@contoso.com" })
+            {
+                var user = new User { UserPrincipalName = upn };
+                const string token = "opaque%2Btoken%2Fvalue%3D";
+                var url = GraphSentEmailSourceLoader.BuildDeltaUrl(user, token, includeBody: true);
+                var uri = new Uri(url);
+
+                Assert.AreEqual(string.Empty, uri.Fragment);
+                StringAssert.Contains(uri.AbsolutePath, "/users/" + Uri.EscapeDataString(upn) + "/mailFolders/sentitems/messages/delta");
+                StringAssert.Contains(uri.Query, "&$deltatoken=" + token);
+                StringAssert.Contains(uri.Query, "sentDateTime,body");
+            }
+        }
+
         #region BuildCandidates
 
         [TestMethod]
