@@ -40,7 +40,10 @@ to the exact introducing commit and test file so future findings remain visible.
 """
 condition = "AND"
 targetRules = ["generic-api-key"]
-commits = ["0ec385f0bb0333147bade17878e22fb9e5ca813c"]
+commits = [
+  "0ec385f0bb0333147bade17878e22fb9e5ca813c",
+  "2ae1a0a18529ad1a6bef1a8a229774999f1be5bf",
+]
 paths = [
   '''^src/AnalyticsEngine/Tests\.UnitTests/TeamsCrawlTests\.cs$''',
 ]
