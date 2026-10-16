@@ -123,6 +123,85 @@ namespace Tests.UnitTests
         private static readonly DateTime Day = new DateTime(2026, 5, 30, 0, 0, 0, DateTimeKind.Utc);
 
         [TestMethod]
+        public async Task AppInsightsClient_PartialResults_AreRejectedForBothImports()
+        {
+            var partial = EmptyTableJson.TrimEnd('}')
+                + ",\"error\":{\"code\":\"PartialError\",\"message\":\"Query limit reached.\"}}";
+            var handler = new StubHandler
+            {
+                Fallback = () => new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(partial) }
+            };
+            using (var client = NewClient(handler))
+            {
+                await Assert.ThrowsExceptionAsync<System.IO.InvalidDataException>(() => client.GetPageViewsAsync(Day, false));
+                await Assert.ThrowsExceptionAsync<System.IO.InvalidDataException>(() => client.GetCustomEventsAsync(Day, false));
+            }
+        }
+
+        [TestMethod]
+        public async Task HealthQueryClient_RejectsPartialAndNullResponsesAtTheHttpBoundary()
+        {
+            foreach (var body in new[]
+            {
+                EmptyTableJson.TrimEnd('}') + ",\"error\":{\"code\":\"PartialError\"}}",
+                "null",
+            })
+            {
+                var handler = new StubHandler
+                {
+                    Fallback = () => new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(body) }
+                };
+                using (var client = new DataUtils.AppInsights.AppInsightsQueryClient(ConnectionString,
+                    new CountingCredential(TimeSpan.FromHours(1)), NullLogger.Instance, handler))
+                {
+                    await Assert.ThrowsExceptionAsync<System.IO.InvalidDataException>(() => client.RunQueryAsync("customEvents | count"));
+                    await Assert.ThrowsExceptionAsync<System.IO.InvalidDataException>(() => client.RunQueryRawAsync("customEvents | count"));
+                }
+            }
+        }
+
+        [TestMethod]
+        public async Task HealthQueryClient_CompleteResponseStillReturnsThePrimaryTable()
+        {
+            using (var client = new DataUtils.AppInsights.AppInsightsQueryClient(ConnectionString,
+                new CountingCredential(TimeSpan.FromHours(1)), NullLogger.Instance, new StubHandler { Fallback = Ok }))
+            {
+                var table = await client.RunQueryAsync("customEvents | count");
+                Assert.AreEqual("PrimaryResult", table.Name);
+                Assert.AreEqual(0, table.RowCount);
+            }
+        }
+
+        [TestMethod]
+        public async Task AppInsightsClient_DisposesResponsesAfterReadingOrRejectingThem()
+        {
+            foreach (var status in new[] { HttpStatusCode.OK, HttpStatusCode.Forbidden })
+            {
+                var content = new TrackingContent(EmptyTableJson);
+                var handler = new StubHandler().Then(() => new HttpResponseMessage(status) { Content = content });
+                using (var client = NewClient(handler))
+                {
+                    if (status == HttpStatusCode.OK)
+                        await client.GetPageViewsAsync(Day, false);
+                    else
+                        await Assert.ThrowsExceptionAsync<HttpRequestException>(() => client.GetPageViewsAsync(Day, false));
+                    Assert.IsTrue(content.Disposed, "The response must not retain its buffered body until a later GC.");
+                }
+            }
+        }
+
+        private sealed class TrackingContent : StringContent
+        {
+            internal TrackingContent(string value) : base(value) { }
+            internal bool Disposed { get; private set; }
+            protected override void Dispose(bool disposing)
+            {
+                Disposed = true;
+                base.Dispose(disposing);
+            }
+        }
+
+        [TestMethod]
         public async Task AppInsightsClient_TransientHttpError_IsRetriedWithExponentialBackoff()
         {
             var handler = new StubHandler()
