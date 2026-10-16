@@ -1,6 +1,7 @@
 using Azure.Core;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
+using Newtonsoft.Json;
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -11,6 +12,7 @@ using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
 using WebJob.AppInsightsImporter.Engine;
+using WebJob.AppInsightsImporter.Engine.ApiImporter;
 
 namespace Tests.UnitTests
 {
@@ -122,11 +124,20 @@ namespace Tests.UnitTests
 
         private static readonly DateTime Day = new DateTime(2026, 5, 30, 0, 0, 0, DateTimeKind.Utc);
 
-        [TestMethod]
-        public async Task AppInsightsClient_PartialResults_AreRejectedForBothImports()
+        [DataTestMethod]
+        [DataRow(false)]
+        [DataRow(true)]
+        public async Task AppInsightsClient_PartialResults_AreRejectedForBothImports(bool hasRows)
         {
-            var partial = EmptyTableJson.TrimEnd('}')
+            var tableJson = hasRows
+                ? EmptyTableJson.Replace("\"rows\":[]", "\"rows\":[[\"2026-05-30T12:00:00Z\"]]")
+                : EmptyTableJson;
+            var partial = tableJson.TrimEnd('}')
                 + ",\"error\":{\"code\":\"PartialError\",\"message\":\"Query limit reached.\"}}";
+            var parsed = JsonConvert.DeserializeObject<AppInsightsQueryResult>(partial);
+            Assert.AreEqual(hasRows ? 1 : 0, parsed.Tables[0].Rows.Count);
+            Assert.ThrowsException<System.IO.InvalidDataException>(() => { var table = parsed.DefaultTable; });
+
             var handler = new StubHandler
             {
                 Fallback = () => new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(partial) }
@@ -144,6 +155,8 @@ namespace Tests.UnitTests
             foreach (var body in new[]
             {
                 EmptyTableJson.TrimEnd('}') + ",\"error\":{\"code\":\"PartialError\"}}",
+                EmptyTableJson.Replace("\"rows\":[]", "\"rows\":[[\"2026-05-30T12:00:00Z\"]]").TrimEnd('}')
+                    + ",\"error\":{\"code\":\"PartialError\"}}",
                 "null",
             })
             {

@@ -26,7 +26,7 @@ namespace WebJob.AppInsightsImporter.Engine.ApiImporter
             {
                 if (Error != null)
                 {
-                    throw new InvalidDataException("Application Insights returned an error or partial query results. The import was not completed; retry with a smaller time range.");
+                    throw new InvalidDataException("Application Insights returned an error or partial query results. The import is halted to avoid losing data; automatic query-window splitting is not implemented.");
                 }
                 if (Tables == null)
                 {
