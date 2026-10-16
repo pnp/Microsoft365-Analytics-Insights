@@ -1,5 +1,6 @@
 using Common.Entities.CopilotAdoption;
 using Common.Entities.Entities.AgentCosts;
+using Common.Entities.PromptCategories;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using Newtonsoft.Json;
 using System;
@@ -402,6 +403,44 @@ namespace Tests.UnitTests
                     if (!DemoCalendar.IsWeekday(date)) { Assert.AreEqual(0, row[6]); Assert.AreEqual(0L, row[7]); }
                 }
             }
+        }
+
+        [TestMethod]
+        public void PromptCategories_CoverEveryPromptAndDefaultCategoryWithoutClassifyingResponses()
+        {
+            var options = DemoOptions.Parse(new[] { "--preview", "--users", "200", "--days", "35",
+                "--as-of", "2026-09-01", "--areas", "copilot-history" }, DateTime.UtcNow);
+            var tables = new[] { DemoTables.Interactions, DemoTables.PromptTaxonomies, DemoTables.PromptClassifications };
+            var sink = Generate(options, tables.Contains);
+            var taxonomy = PromptCategoryConfiguration.Defaults();
+            taxonomy.ValidateAndVersion();
+            var stored = sink.For(DemoTables.PromptTaxonomies).Single();
+            Assert.AreEqual(taxonomy.Version, stored[0]);
+            Assert.AreEqual(JsonConvert.SerializeObject(taxonomy.Categories), stored[1]);
+            var interactions = sink.For(DemoTables.Interactions)
+                .ToDictionary(r => (int)r[Col(DemoTables.Interactions, "id")]);
+            var facts = sink.For(DemoTables.PromptClassifications);
+            Assert.AreEqual(interactions.Count / 2, facts.Count);
+            Assert.AreEqual(facts.Count, facts.Select(r => r[0]).Distinct().Count());
+            foreach (var fact in facts)
+            {
+                var prompt = interactions[(int)fact[0]];
+                Assert.AreEqual(1, prompt[Col(DemoTables.Interactions, "interaction_type_id")]);
+                Assert.AreEqual(taxonomy.Version, fact[2]);
+                Assert.AreEqual(taxonomy.Categories.Single(c => c.Id == (string)fact[1]).HumanMode, fact[3]);
+            }
+            CollectionAssert.AreEquivalent(taxonomy.Categories.Select(c => c.Id).ToArray(),
+                facts.Select(r => (string)r[1]).Distinct().ToArray());
+            foreach (var group in facts.GroupBy(r => (string)r[1]))
+                Assert.IsTrue(group.Select(r => interactions[(int)r[0]][Col(DemoTables.Interactions, "user_id")])
+                    .Distinct().Count() >= 10, "Every category must clear the real report's privacy threshold.");
+
+            var full = Generate(DemoOptions.Parse(new[] { "--preview", "--users", "200", "--days", "35",
+                "--as-of", "2026-09-01" }, DateTime.UtcNow), tables.Contains);
+            Assert.AreEqual(JsonConvert.SerializeObject(full.Rows), JsonConvert.SerializeObject(sink.Rows),
+                "The full demo and individual history area must generate the same categories.");
+            var directory = Generate(Options("--areas", "directory"), tables.Contains);
+            Assert.AreEqual(0, directory.Rows.Count, "Unselected history must not invent taxonomy or classification rows.");
         }
 
         [TestMethod]

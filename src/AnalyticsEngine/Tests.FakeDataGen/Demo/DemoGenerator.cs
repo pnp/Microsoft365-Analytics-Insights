@@ -1,4 +1,6 @@
 using Common.Entities.CopilotAdoption;
+using Common.Entities.PromptCategories;
+using Newtonsoft.Json;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -71,6 +73,8 @@ namespace Tests.FakeDataGen.Demo
         private DemoWebActivityGenerator _web;
         private DemoPowerPlatformGenerator _powerPlatform;
         private DemoAgentCosts _agentCosts;
+        private readonly PromptCategoryConfiguration _taxonomy = PromptCategoryConfiguration.Defaults();
+        private int _interactionId;
 
         public DemoGenerator(DemoOptions options, CancellationToken cancellation = default(CancellationToken))
         {
@@ -78,6 +82,7 @@ namespace Tests.FakeDataGen.Demo
             _population = new DemoPopulation(options);
             _calendar = new DemoCalendar(options);
             _cancellation = cancellation;
+            _taxonomy.ValidateAndVersion();
             _dailyActive = new int[options.Days, DemoTimeline.ReportApps.Length];
             _rollingActive = new int[options.Days, DemoTimeline.ReportApps.Length];
             _dailyPrompts = new long[options.Days];
@@ -209,6 +214,8 @@ namespace Tests.FakeDataGen.Demo
                 _sink.Write(DemoTables.InteractionApps, i + 1, "IPM.SkypeTeams.Message.Copilot." + DemoTimeline.Hosts[i]);
             _sink.Write(DemoTables.ConversationTypes, 1, "bizchat");
             _sink.Write(DemoTables.ConversationTypes, 2, "appchat");
+            if (_options.Includes(DemoArea.CopilotHistory))
+                _sink.Write(DemoTables.PromptTaxonomies, _taxonomy.Version, JsonConvert.SerializeObject(_taxonomy.Categories));
             if (_options.Includes(DemoArea.Copilot | DemoArea.Dlp))
             {
                 _sink.Write(DemoTables.CopilotModels, 1, "Contoso demo language model", "Synthetic provider", "1.0");
@@ -467,12 +474,15 @@ namespace Tests.FakeDataGen.Demo
                 string request = id.ToString("N");
                 object language = user.Id % 3 == 0 ? null : (object)1;
                 object sentiment = language == null ? null : (object)((1 + (user.Id + slot) % 9) / 10.0);
+                int promptId = checked(++_interactionId);
                 _sink.Write(DemoTables.Interactions, request + "-prompt", sessionId, user.Id, request, 1,
                     host + 1, host == 0 ? 1 : 2, time, words * 6, words, 0, 0, 0, agent > 0 ? 1 : 0, null,
-                    language, sentiment);
+                    language, sentiment, promptId);
+                var category = _taxonomy.Categories[(user.Id + dayIndex + slot) % _taxonomy.Categories.Count];
+                _sink.Write(DemoTables.PromptClassifications, promptId, category.Id, _taxonomy.Version, category.HumanMode);
                 _sink.Write(DemoTables.Interactions, request + "-response", sessionId, user.Id, request, 2,
                     host + 1, host == 0 ? 1 : 2, time.AddMilliseconds(latency), words * 24, words * 4, 0, agent > 0 ? 1 : 0, 0, 0, latency,
-                    language, sentiment);
+                    language, sentiment, checked(++_interactionId));
             }
         }
 
