@@ -25,7 +25,7 @@ using WebJob.Office365ActivityImporter.Engine.Graph.Copilot.AuditBackfill;
 namespace Tests.UnitTests
 {
     [TestClass]
-    public class CopilotAuditBackfillTests
+    public partial class CopilotAuditBackfillTests
     {
         [TestMethod]
         public void Slicer_UsesNewestDayFirstAndClampsToRetention()
@@ -133,6 +133,7 @@ namespace Tests.UnitTests
             Assert.AreEqual(1, job.Gaps.Count);
             Assert.IsTrue(job.Gaps[0].Incomplete);
             Assert.AreEqual(CopilotAuditBackfillErrorCodes.QueryTruncated, job.Gaps[0].ErrorCode);
+            Assert.AreEqual(CopilotAuditBackfillErrorCodes.QueryTruncated, job.LastErrorCode);
         }
 
         [TestMethod]
@@ -574,11 +575,10 @@ VALUES (@p0, N'Word', @userId, @p1);",
                     new CopilotAuditSearchRecordPage { Records = new List<CopilotAuditSearchRecord> { SyntheticRecord("00000000-0000-0000-0000-000000000032") } },
                 })
             };
-            var ticks = 0;
             var importer = new CopilotAuditBackfillImporter(state, source, new CountingPersistence(),
                 new AppConfig { ImportJobSettings = new ImportTaskSettings { Copilot = true } }, NullLogger.Instance,
                 () => new DateTime(2026, 10, 2, 12, 0, 0, DateTimeKind.Utc), _ => Task.CompletedTask,
-                new FakeExistingEventFilter(), () => ++ticks >= 2 ? CopilotAuditBackfillImporter.MaxCycleBudget : TimeSpan.Zero);
+                new FakeExistingEventFilter(), () => source.RecordPagesRead > 0 ? CopilotAuditBackfillImporter.MaxCycleBudget : TimeSpan.Zero);
 
             var job = await importer.AdvanceLatestAsync();
 
@@ -828,6 +828,7 @@ VALUES (@p0, N'Word', @userId, @p1);",
             public Exception SubmitFailure;
             public int SubmitCount;
             public int PollCount;
+            public int RecordPagesRead;
             public int SubmitCountBeforeFirstPoll;
 
             public Task<AppTokenPermissionAccess> GetPermissionAccessAsync() => Task.FromResult(Access);
@@ -855,7 +856,11 @@ VALUES (@p0, N'Word', @userId, @p1);",
                 });
             }
 
-            public Task<CopilotAuditSearchRecordPage> GetRecordsAsync(string queryId, string nextLink = null) => Task.FromResult(Pages.Count > 0 ? Pages.Dequeue() : new CopilotAuditSearchRecordPage());
+            public Task<CopilotAuditSearchRecordPage> GetRecordsAsync(string queryId, string nextLink = null)
+            {
+                RecordPagesRead++;
+                return Task.FromResult(Pages.Count > 0 ? Pages.Dequeue() : new CopilotAuditSearchRecordPage());
+            }
         }
 
         private sealed class FakeExistingEventFilter : ICopilotAuditBackfillExistingEventFilter

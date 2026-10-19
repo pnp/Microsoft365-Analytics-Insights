@@ -142,6 +142,11 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.AuditBackfill
                     "The Copilot audit import toggle is off.").ConfigureAwait(false);
             }
 
+            if (job.CancelRequested || await _state.IsCancelRequestedAsync(job.Id).ConfigureAwait(false))
+            {
+                return await FinishAsync(job, CopilotAuditBackfillStates.Cancelled, null, null).ConfigureAwait(false);
+            }
+
             var access = await _source.GetPermissionAccessAsync().ConfigureAwait(false);
             job.PermissionStatus = ToPermissionStatus(access);
             if (access == AppTokenPermissionAccess.NotGranted || access == AppTokenPermissionAccess.NoIdentityToInspect)
@@ -173,7 +178,11 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.AuditBackfill
                         return await FinishAsync(job, CopilotAuditBackfillStates.Cancelled, null, null).ConfigureAwait(false);
                     }
 
-                    await TopUpQueriesAsync(job).ConfigureAwait(false);
+                    await TopUpQueriesAsync(job, () => elapsed() >= MaxCycleBudget).ConfigureAwait(false);
+                    if (job.CancelRequested || await _state.IsCancelRequestedAsync(job.Id).ConfigureAwait(false))
+                    {
+                        return await FinishAsync(job, CopilotAuditBackfillStates.Cancelled, null, null).ConfigureAwait(false);
+                    }
                     if (job.InFlightSlices.Count == 0)
                     {
                         if (job.PendingSlices.Count > 0)
@@ -188,6 +197,10 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.AuditBackfill
                     }
 
                     var progressed = await PollInFlightAsync(job, () => elapsed() >= MaxCycleBudget).ConfigureAwait(false);
+                    if (job.CancelRequested)
+                    {
+                        return await FinishAsync(job, CopilotAuditBackfillStates.Cancelled, null, null).ConfigureAwait(false);
+                    }
                     if (job.InFlightSlices.Count == 0 && job.PendingSlices.Count > 0)
                     {
                         await _state.SaveAsync(job).ConfigureAwait(false);
@@ -205,12 +218,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.AuditBackfill
 
                     if (!progressed && job.InFlightSlices.Count > 0)
                     {
-                        var remaining = MaxCycleBudget - elapsed();
-                        if (remaining <= PollDelay)
-                        {
-                            break;
-                        }
-                        await _delay(PollDelay).ConfigureAwait(false);
+                        // Remote queries can take hours. Do not hold up the next live-import cycle just to poll.
+                        break;
                     }
                 }
 
@@ -251,12 +260,16 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.AuditBackfill
             }
         }
 
-        private async Task TopUpQueriesAsync(CopilotAuditBackfillJob job)
+        private async Task TopUpQueriesAsync(CopilotAuditBackfillJob job, Func<bool> budgetExpired)
         {
             var ledger = await _state.GetSubmissionLedgerAsync().ConfigureAwait(false);
-            MirrorLedger(job, ledger);
+            var recoveredLedger = MirrorLedger(job, ledger);
             var now = _utcNow();
             PruneSubmissionHistory(job, now);
+            if (recoveredLedger)
+            {
+                await SaveLedgerAsync(job).ConfigureAwait(false);
+            }
             if (job.SubmissionsPausedUntilUtc.HasValue && job.SubmissionsPausedUntilUtc.Value > now)
             {
                 await SaveLedgerAsync(job).ConfigureAwait(false);
@@ -265,6 +278,11 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.AuditBackfill
 
             while (job.InFlightSlices.Count < MaxInFlightQueries && job.PendingSlices.Count > 0)
             {
+                if (budgetExpired()) return;
+                if (job.CancelRequested || (job.CancelRequested = await _state.IsCancelRequestedAsync(job.Id).ConfigureAwait(false)))
+                {
+                    return;
+                }
                 now = _utcNow();
                 PruneSubmissionHistory(job, now);
                 if (job.SubmissionTimestampsUtc.Count >= DailySubmissionBudget)
@@ -320,11 +338,30 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.AuditBackfill
             }
         }
 
-        private static void MirrorLedger(CopilotAuditBackfillJob job, CopilotAuditBackfillSubmissionLedger ledger)
+        private static bool MirrorLedger(CopilotAuditBackfillJob job, CopilotAuditBackfillSubmissionLedger ledger)
         {
-            job.SubmissionTimestampsUtc = ledger.SubmissionTimestampsUtc ?? new List<DateTime>();
-            job.SubmissionsPausedUntilUtc = ledger.SubmissionsPausedUntilUtc;
-            job.SubmitFailureBackoffMinutes = ledger.SubmitFailureBackoffMinutes;
+            var shared = ledger.SubmissionTimestampsUtc ?? new List<DateTime>();
+            var local = job.SubmissionTimestampsUtc ?? new List<DateTime>();
+            // A successful POST can precede a failed ledger write. The saved job is a recovery copy.
+            // Preserve multiplicity: several submissions can legitimately have the same timestamp.
+            var merged = shared.GroupBy(t => t).Select(g => new { Time = g.Key, Count = g.Count() })
+                .Concat(local.GroupBy(t => t).Select(g => new { Time = g.Key, Count = g.Count() }))
+                .GroupBy(g => g.Time)
+                .SelectMany(g => Enumerable.Repeat(g.Key, g.Max(x => x.Count)))
+                .OrderBy(t => t).ToList();
+            var pause = ledger.SubmissionsPausedUntilUtc;
+            if (job.SubmissionsPausedUntilUtc.HasValue
+                && (!pause.HasValue || job.SubmissionsPausedUntilUtc.Value > pause.Value))
+            {
+                pause = job.SubmissionsPausedUntilUtc;
+            }
+            var backoff = Math.Max(job.SubmitFailureBackoffMinutes, ledger.SubmitFailureBackoffMinutes);
+            var recovered = merged.Count > shared.Count || pause != ledger.SubmissionsPausedUntilUtc
+                || backoff > ledger.SubmitFailureBackoffMinutes;
+            job.SubmissionTimestampsUtc = merged;
+            job.SubmissionsPausedUntilUtc = pause;
+            job.SubmitFailureBackoffMinutes = backoff;
+            return recovered;
         }
 
         private Task SaveLedgerAsync(CopilotAuditBackfillJob job)
@@ -355,6 +392,12 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.AuditBackfill
             var remaining = new List<CopilotAuditBackfillSlice>();
             foreach (var slice in job.InFlightSlices)
             {
+                if (budgetExpired() || job.CancelRequested
+                    || (job.CancelRequested = await _state.IsCancelRequestedAsync(job.Id).ConfigureAwait(false)))
+                {
+                    remaining.Add(slice);
+                    continue;
+                }
                 try
                 {
                     if (!slice.ImportingRecords)
@@ -398,6 +441,12 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.AuditBackfill
                         }
 
                         slice.ImportingRecords = true;
+                    }
+
+                    if (budgetExpired())
+                    {
+                        remaining.Add(slice);
+                        continue;
                     }
 
                     var imported = await ImportRecordsAsync(job, slice, budgetExpired).ConfigureAwait(false);
@@ -492,7 +541,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.AuditBackfill
                 {
                     page = await _source.GetRecordsAsync(slice.QueryId, next).ConfigureAwait(false);
                 }
-                catch (GraphHttpException) when (!string.IsNullOrEmpty(next))
+                catch (GraphHttpException ex) when (!string.IsNullOrEmpty(next)
+                    && (ex.StatusCode == HttpStatusCode.BadRequest || ex.StatusCode == HttpStatusCode.Gone))
                 {
                     next = null;
                     slice.RecordsNextLink = null;
@@ -506,6 +556,12 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.AuditBackfill
                     if (mapping.Content == null)
                     {
                         AddMappingFailure(job, mapping.ErrorCode ?? "unknown");
+                        if (!job.Gaps.Any(g => g.StartUtc == slice.StartUtc && g.EndUtc == slice.EndUtc
+                            && g.ErrorCode == CopilotAuditBackfillErrorCodes.UnrecognisedAuditData))
+                        {
+                            RecordGap(job, slice, CopilotAuditBackfillErrorCodes.UnrecognisedAuditData,
+                                "One or more Audit Search records could not be mapped; inspect mapping failure counts.", incomplete: true);
+                        }
                         continue;
                     }
 
@@ -522,7 +578,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.AuditBackfill
                 next = page.NextLink;
                 slice.RecordsNextLink = next;
 
-                if (!string.IsNullOrEmpty(next) && budgetExpired())
+                job.CancelRequested = await _state.IsCancelRequestedAsync(job.Id).ConfigureAwait(false);
+                if (!string.IsNullOrEmpty(next) && (budgetExpired() || job.CancelRequested))
                 {
                     if (mapped.Count > 0)
                     {
@@ -561,6 +618,12 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.AuditBackfill
 
         private Task<CopilotAuditBackfillJob> FinishAsync(CopilotAuditBackfillJob job, string state, string errorCode, string detail)
         {
+            if (state == CopilotAuditBackfillStates.CompletedWithGaps && errorCode == null && job.Gaps.Count > 0)
+            {
+                var gap = job.Gaps[job.Gaps.Count - 1];
+                errorCode = gap.ErrorCode;
+                detail = gap.Detail;
+            }
             job.State = state;
             job.CompletedUtc = _utcNow();
             job.LastErrorCode = errorCode;
