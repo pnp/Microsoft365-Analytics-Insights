@@ -6,6 +6,33 @@ export interface CopilotAdoptionScoreValues {
   developingScore: number;
   establishedScore: number;
   championScore: number;
+  frequencyTargetRatio: number;
+  workingDaysPerWeek: number;
+  depthTargetInteractionsPerActiveDay: number;
+  depthMinActiveDays: number;
+  breadthTargetApps: number;
+  habitModerateMinDays: number;
+  habitFrequentMinDays: number;
+  habitDailyMinDays: number;
+  opportunityRecommendScore: number;
+  opportunityProvenDemandMinActiveDays: number;
+  opportunityUnlicensedCopilotWeight: number;
+  opportunityCollaborationWeight: number;
+  opportunityEmailWeight: number;
+  opportunityDocumentWeight: number;
+  coworkLoadMinScore: number;
+  coworkFluencyMinScore: number;
+  coworkRegularMinActiveDays: number;
+  coworkCollaborationWeight: number;
+  coworkMeetingWeight: number;
+  coworkEmailWeight: number;
+  coworkDocumentWeight: number;
+  agentReviewInactiveDays: number;
+  agentRetireInactiveDays: number;
+  agentNewDays: number;
+  agentMinUsers: number;
+  reclaimGraceDays: number;
+  minSeatsPerSegment: number;
 }
 
 export type CopilotAdoptionScoreField = keyof CopilotAdoptionScoreValues;

@@ -177,9 +177,9 @@ namespace Common.Entities.CopilotAdoption
         public int ReclaimGraceDays { get; set; } = 30;
 
         /// <summary>
-        /// Days from first observed Copilot seat assignment in which a new seat should reach first use.
-        /// Defaults to the same 30-day grace concept as reclaim scoring, so a newly assigned seat is never
-        /// both "too new to judge" and "failed to activate" on the same day.
+        /// Reserved for days from first observed Copilot seat assignment to first use. Persisted in tenant
+        /// settings, but not used to classify activation until first-observed seat-tenure history exists (#277).
+        /// Account creation is not a substitute for seat assignment.
         /// </summary>
         [JsonProperty("activationWindowDays")]
         public int ActivationWindowDays { get; set; } = 30;

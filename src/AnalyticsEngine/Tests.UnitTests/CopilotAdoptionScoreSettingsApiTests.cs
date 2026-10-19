@@ -394,6 +394,70 @@ namespace Tests.UnitTests
         #region Admin API
 
         [TestMethod]
+        public async Task Api_ExtendedSettings_RejectMalformedValues_AndRequireSeatConfirmation()
+        {
+            var service = Service(new InMemoryKeyValueStore(), durable: true);
+            using (var host = SettingsHost(service, PortalTestHost.SignedIn(PortalRoles.Administration), PortalAccessPolicy.Enforcing))
+            {
+                foreach (var fields in new[]
+                {
+                    "\"unknownSetting\":1", "\"frequencyTargetRatio\":\"0.5\"", "\"workingDaysPerWeek\":4.5",
+                    "\"depthMinActiveDays\":null", "\"frequencyTargetRatio\":0", "\"habitModerateMinDays\":20",
+                    "\"opportunityCollaborationWeight\":0", "\"coworkEmailWeight\":101", "\"minSeatsPerSegment\":4",
+                    "\"agentReviewInactiveDays\":100", "\"reclaimGraceDays\":0",
+                    "\"agentNewDays\":119,\"agentRetireInactiveDays\":120", "\"agentNewDays\":120",
+                    "\"agentNewDays\":90",
+                })
+                {
+                    var response = await host.Client.SendAsync(Post("api/CopilotAdoptionSettings", "{\"expectedVersion\":0,\"settings\":{" + fields + "}}"));
+                    Assert.AreEqual(HttpStatusCode.BadRequest, response.StatusCode, fields);
+                    Assert.IsFalse(string.IsNullOrEmpty(await Code(response)), fields);
+                }
+                var body = new JObject { ["expectedVersion"] = 0, ["settings"] = JObject.FromObject(PhaseTwoSettings()) };
+                var refused = await host.Client.SendAsync(Post("api/CopilotAdoptionSettings", body.ToString()));
+                Assert.AreEqual(HttpStatusCode.BadRequest, refused.StatusCode);
+                Assert.AreEqual("seatImpactConfirmationRequired", await Code(refused));
+                body["confirmSeatImpact"] = true;
+                var saved = await host.Client.SendAsync(Post("api/CopilotAdoptionSettings", body.ToString()));
+                Assert.AreEqual(HttpStatusCode.OK, saved.StatusCode, await saved.Content.ReadAsStringAsync());
+                var oldEditor = await host.Client.SendAsync(Post("api/CopilotAdoptionSettings",
+                    "{\"expectedVersion\":1,\"confirmSeatImpact\":true,\"settings\":{\"championScore\":90}}"));
+                Assert.AreEqual(HttpStatusCode.BadRequest, oldEditor.StatusCode, "An older editor cannot silently reset newer custom rules it omitted.");
+                Assert.AreEqual("invalidRequest", await Code(oldEditor));
+                var reset = await host.Client.SendAsync(Post("api/CopilotAdoptionSettings/reset", "{\"expectedVersion\":1}"));
+                Assert.AreEqual("seatImpactConfirmationRequired", await Code(reset));
+                var confirmed = await host.Client.SendAsync(Post("api/CopilotAdoptionSettings/reset", "{\"expectedVersion\":1,\"confirmSeatImpact\":true}"));
+                Assert.AreEqual(HttpStatusCode.OK, confirmed.StatusCode);
+            }
+        }
+
+        [TestMethod]
+        public async Task Api_ActivationIsNotATenantSetting_AndCannotChangeAuditOrCache()
+        {
+            var values = new InMemoryKeyValueStore();
+            var service = Service(values, durable: true);
+            using (var host = SettingsHost(service, PortalTestHost.SignedIn(PortalRoles.Administration), PortalAccessPolicy.Enforcing))
+            {
+                foreach (var days in new[] { 30, 60 })
+                {
+                    var response = await host.Client.SendAsync(Post("api/CopilotAdoptionSettings",
+                        "{\"expectedVersion\":0,\"confirmSeatImpact\":true,\"settings\":{\"activationWindowDays\":" + days + "}}"));
+                    Assert.AreEqual(HttpStatusCode.BadRequest, response.StatusCode);
+                    Assert.AreEqual("invalidRequest", await Code(response));
+                }
+                var responseBody = JObject.Parse(await (await host.Client.GetAsync("api/CopilotAdoptionSettings")).Content.ReadAsStringAsync());
+                Assert.IsNull(responseBody["settings"]["activationWindowDays"]);
+                Assert.IsNull(responseBody["defaults"]["activationWindowDays"]);
+            }
+            var document = await new CopilotAdoptionScoreSettingsStore(values, true).GetAsync();
+            Assert.AreEqual(0L, document.Version);
+            Assert.AreEqual(0, document.History.Count);
+            Assert.IsTrue(document.Settings.IsDefault);
+            Assert.AreEqual(string.Empty, document.ToEffective().CacheKeySuffix);
+            Assert.IsNull(JObject.FromObject(document.Settings)["activationWindowDays"]);
+        }
+
+        [TestMethod]
         public async Task Api_OnlyAdministratorsMayReadOrChangeTheSettings()
         {
             var service = Service(new InMemoryKeyValueStore(), durable: true);

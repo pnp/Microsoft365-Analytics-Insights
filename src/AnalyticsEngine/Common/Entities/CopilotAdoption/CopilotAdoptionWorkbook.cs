@@ -288,10 +288,10 @@ namespace Common.Entities.CopilotAdoption
                 + CustomisedNote(o, CopilotAdoptionScoreSettingsFields.DepthWeightPercent, CopilotAdoptionScoreSettings.DefaultDepthWeightPercent / 100d));
             AddMeta(sheet, "Breadth weight", o.BreadthWeight, "Share from number of Copilot surfaces used."
                 + CustomisedNote(o, CopilotAdoptionScoreSettingsFields.BreadthWeightPercent, CopilotAdoptionScoreSettings.DefaultBreadthWeightPercent / 100d));
-            AddMeta(sheet, "Frequency target", o.FrequencyTargetRatio, "Share of working days needed for full marks.");
-            AddMeta(sheet, "Depth target", o.DepthTargetInteractionsPerActiveDay, "Interactions per active day for full marks.");
-            AddMeta(sheet, "Depth minimum active days", o.DepthMinActiveDays, "Below this many active days the depth component is scaled down in proportion, so one busy afternoon cannot read as a habit.");
-            AddMeta(sheet, "Breadth target", o.BreadthTargetApps, "Copilot surfaces for full marks.");
+            AddMeta(sheet, "Frequency target", o.FrequencyTargetRatio, "Share of working days needed for full marks." + CustomisedNote(o, "frequencyTargetRatio", 0.6));
+            AddMeta(sheet, "Depth target", o.DepthTargetInteractionsPerActiveDay, "Interactions per active day for full marks." + CustomisedNote(o, "depthTargetInteractionsPerActiveDay", 5));
+            AddMeta(sheet, "Depth minimum active days", o.DepthMinActiveDays, "Below this many active days the depth component is scaled down in proportion, so one busy afternoon cannot read as a habit." + CustomisedNote(o, "depthMinActiveDays", 3));
+            AddMeta(sheet, "Breadth target", o.BreadthTargetApps, "Copilot surfaces for full marks." + CustomisedNote(o, "breadthTargetApps", 3));
             AddMeta(sheet, "Champion at", o.ChampionScore, "Engagement score for the Champion band."
                 + CustomisedNote(o, CopilotAdoptionScoreSettingsFields.ChampionScore, CopilotAdoptionScoreSettings.DefaultChampionScore));
             AddMeta(sheet, "Established at", o.EstablishedScore, "The 'habit formed' line - what 'habitual users' counts."
@@ -299,11 +299,13 @@ namespace Common.Entities.CopilotAdoption
             AddMeta(sheet, "Developing at", o.DevelopingScore, "Engagement score for the Developing band."
                 + CustomisedNote(o, CopilotAdoptionScoreSettingsFields.DevelopingScore, CopilotAdoptionScoreSettings.DefaultDevelopingScore));
             AddMeta(sheet, "Habit month length", o.HabitBucketNormalisationDays, "Active days are restated per this many days.");
-            AddMeta(sheet, "Licence recommendation at", o.OpportunityRecommendScore, "Business-case score for a recommended candidate.");
-            AddMeta(sheet, "Agent review after", $"{o.AgentReviewInactiveDays} days", "Inactivity before an agent is reviewed.");
-            AddMeta(sheet, "Agent retire after", $"{o.AgentRetireInactiveDays} days", "Inactivity before an agent is proposed for retirement.");
-            AddMeta(sheet, "Agent minimum users", o.AgentMinUsers, "Users an agent needs before its use counts as adoption.");
-            AddMeta(sheet, "New-seat activation window", $"{o.ActivationWindowDays} days", "Days from first observed seat assignment to first use for activation-rate reporting.");
+            AddMeta(sheet, "Licence recommendation at", o.OpportunityRecommendScore, "Business-case score for a recommended candidate." + CustomisedNote(o, "opportunityRecommendScore", 50));
+            AddMeta(sheet, "Agent review after", $"{o.AgentReviewInactiveDays} days", "Inactivity before an agent is reviewed." + CustomisedNote(o, "agentReviewInactiveDays", 30));
+            AddMeta(sheet, "Agent retire after", $"{o.AgentRetireInactiveDays} days", "Inactivity before an agent is proposed for retirement." + CustomisedNote(o, "agentRetireInactiveDays", 90));
+            AddMeta(sheet, "Agent minimum users", o.AgentMinUsers, "Users an agent needs before its use counts as adoption." + CustomisedNote(o, "agentMinUsers", 3));
+            AddMeta(sheet, "New-seat activation window (reserved)", $"{o.ActivationWindowDays} days", "Not a tenant setting. Reserved for future first-observed seat-tenure reporting (#277); activation is not currently calculated.");
+            foreach (var setting in EffectiveTenantSettings(o))
+                AddMeta(sheet, setting.Name, setting.Value, setting.Note);
 
             // Null-tolerant like WarningSummary below, not because the summary is built that way but
             // because a workbook that throws on an unexpected null reaches the customer as "Excel found
@@ -324,6 +326,25 @@ namespace Common.Entities.CopilotAdoption
         private static void AddMeta(XlsxSheet sheet, string name, object value, string notes)
         {
             sheet.AddRow(name, value, XlsxCell.Wrapped(notes));
+        }
+
+        private static IEnumerable<(string Name, double Value, string Note)> EffectiveTenantSettings(CopilotAdoptionOptions options)
+        {
+            foreach (var field in CopilotAdoptionScoreSettings.Defaults.Fields())
+            {
+                var propertyName = char.ToUpperInvariant(field.Name[0]) + field.Name.Substring(1);
+                double value;
+                if (propertyName.EndsWith("WeightPercent", StringComparison.Ordinal))
+                {
+                    propertyName = propertyName.Substring(0, propertyName.Length - "Percent".Length);
+                    value = Convert.ToDouble(typeof(CopilotAdoptionOptions).GetProperty(propertyName).GetValue(options), CultureInfo.InvariantCulture) * 100;
+                }
+                else value = Convert.ToDouble(typeof(CopilotAdoptionOptions).GetProperty(propertyName).GetValue(options), CultureInfo.InvariantCulture);
+                var name = System.Text.RegularExpressions.Regex.Replace(char.ToUpperInvariant(field.Name[0]) + field.Name.Substring(1), "([a-z])([A-Z])", "$1 $2");
+                yield return ("Tenant setting: " + name, value,
+                    (options.ScoreSettings?.CustomisedFields.Contains(field.Name) == true ? "CUSTOMISED. " : "Default. ")
+                    + "Built-in default: " + field.Default.ToString(CultureInfo.InvariantCulture) + ".");
+            }
         }
 
         /// <summary>
@@ -2657,6 +2678,8 @@ namespace Common.Entities.CopilotAdoption
                 + "'Expected active days' column is the number that row was scored against.");
 
             AddMethod(sheet, "Score settings", ScoreSettingsStatus(o) + ". " + ScoreSettingsExplanation(o));
+            foreach (var setting in EffectiveTenantSettings(o))
+                AddMethod(sheet, setting.Name, setting.Value.ToString(CultureInfo.InvariantCulture) + ". " + setting.Note);
 
             AddMethod(sheet, "Why working days",
                 $"The frequency target is {o.FrequencyTargetRatio:P0} of the working days in the period, assuming "
