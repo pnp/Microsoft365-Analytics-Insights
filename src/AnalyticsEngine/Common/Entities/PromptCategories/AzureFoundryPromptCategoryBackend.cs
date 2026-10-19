@@ -15,6 +15,16 @@ using System.Threading.Tasks;
 
 namespace Common.Entities.PromptCategories
 {
+    public enum PromptCategoryResponseFailure
+    {
+        None,
+        Refused,
+        ContentFiltered,
+        OutputLimit,
+        InvalidEnvelope,
+        IncompleteResponse
+    }
+
     public sealed class PromptCategoryBatchResult
     {
         public IReadOnlyList<string> Categories { get; set; }
@@ -23,6 +33,7 @@ namespace Common.Entities.PromptCategories
         public int OutputTokens { get; set; }
         public int Attempts { get; set; } = 1;
         public bool ResponseWasInvalid { get; set; }
+        public PromptCategoryResponseFailure ResponseFailure { get; set; }
     }
 
     public interface IPromptCategoryBackend
@@ -149,16 +160,33 @@ namespace Common.Entities.PromptCategories
                                     buffer.Write(bytes, 0, count);
                                 }
                                 var root = JObject.Parse(Encoding.UTF8.GetString(buffer.ToArray()));
-                                var choice = root["choices"]?.FirstOrDefault();
-                                if ((string)choice?["finish_reason"] != "stop" ||
-                                    choice?["message"]?["refusal"]?.Type == JTokenType.String)
+                                var choice = (root["choices"] as JArray)?.FirstOrDefault() as JObject;
+                                var message = choice?["message"] as JObject;
+                                var finish = choice?["finish_reason"];
+                                var responseFailure = choice == null || message == null || finish?.Type != JTokenType.String
+                                    ? PromptCategoryResponseFailure.InvalidEnvelope
+                                    : message["refusal"]?.Type == JTokenType.String
+                                        ? PromptCategoryResponseFailure.Refused
+                                        : (string)finish == "content_filter"
+                                            ? PromptCategoryResponseFailure.ContentFiltered
+                                            : (string)finish == "length"
+                                                ? PromptCategoryResponseFailure.OutputLimit
+                                                : (string)finish != "stop"
+                                                    ? PromptCategoryResponseFailure.IncompleteResponse
+                                                    : PromptCategoryResponseFailure.None;
+                                if (responseFailure == PromptCategoryResponseFailure.None && message["content"]?.Type != JTokenType.String)
+                                    responseFailure = PromptCategoryResponseFailure.InvalidEnvelope;
+                                if (responseFailure != PromptCategoryResponseFailure.None)
                                     return new PromptCategoryBatchResult
                                     {
-                                        Failure = "refused", Attempts = attempt,
+                                        // Existing importer/UI codes stay bounded; evaluation can distinguish the safe transport detail.
+                                        Failure = responseFailure == PromptCategoryResponseFailure.Refused ||
+                                            responseFailure == PromptCategoryResponseFailure.ContentFiltered ? "refused" : "invalid-response",
+                                        ResponseFailure = responseFailure, Attempts = attempt,
                                         InputTokens = Math.Max(0, (int?)root["usage"]?["prompt_tokens"] ?? 0),
                                         OutputTokens = Math.Max(0, (int?)root["usage"]?["completion_tokens"] ?? 0)
                                     };
-                                var categories = ParseCategories((string)choice?["message"]?["content"], ids, prompts.Count, out var invalid);
+                                var categories = ParseCategories((string)message["content"], ids, prompts.Count, out var invalid);
                                 return new PromptCategoryBatchResult
                                 {
                                     Attempts = attempt,
@@ -174,6 +202,8 @@ namespace Common.Entities.PromptCategories
             }
             }
             catch (OperationCanceledException) { return new PromptCategoryBatchResult { Failure = "timeout", Attempts = attempts }; }
+            catch (JsonException) { return new PromptCategoryBatchResult
+                { Failure = "invalid-response", ResponseFailure = PromptCategoryResponseFailure.InvalidEnvelope, Attempts = attempts }; }
             catch { return new PromptCategoryBatchResult { Failure = effectiveToken.IsCancellationRequested ? "timeout" : "service-failure", Attempts = attempts }; }
             return new PromptCategoryBatchResult { Failure = "access-denied", Attempts = attempts };
         }

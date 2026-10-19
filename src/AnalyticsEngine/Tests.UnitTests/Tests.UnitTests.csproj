@@ -37,6 +37,10 @@
   <ItemGroup>
     <Compile Remove="Generated\**" />
     <Content Include="Generated\**" />
+    <!-- Reuse the standalone evaluation correctness tests in the required CI test assembly. No live model calls. -->
+    <Compile Include="..\Benchmarks\PromptCategoryEvaluation\Evaluation.cs" Link="PromptCategoryEvaluation\Evaluation.cs" />
+    <Compile Include="..\Benchmarks\PromptCategoryEvaluation.Tests\EvaluationCorrectnessTests.cs" Link="PromptCategoryEvaluation\EvaluationCorrectnessTests.cs" />
+    <EmbeddedResource Include="..\Benchmarks\PromptCategoryEvaluation\synthetic-v1.json" LogicalName="PromptCategoryEvaluation.synthetic-v1.json" />
   </ItemGroup>
   <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Debug|AnyCPU' ">
     <DebugSymbols>true</DebugSymbols>
