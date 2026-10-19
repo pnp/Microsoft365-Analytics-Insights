@@ -4,6 +4,7 @@ using Common.Entities;
 using Common.Entities.Config;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System;
+using System.Linq;
 using System.Threading.Tasks;
 
 namespace Tests.UnitTests
@@ -16,6 +17,7 @@ namespace Tests.UnitTests
     public class ProfilingStoredProcedureTests
     {
         private const int TEST_USER_ID = 99999;
+        private static int _copilotOperationId;
         private static readonly DateTime TEST_MONDAY = new DateTime(2024, 1, 1); // January 1, 2024 is a Monday
 
         /// <summary>
@@ -37,6 +39,17 @@ namespace Tests.UnitTests
             });
 
             Console.WriteLine("Database initialization complete. All SQL scripts have been executed.");
+            using (var db = new AnalyticsEntitiesContext())
+            {
+                var operation = db.event_operations.FirstOrDefault(o => o.Name == "Contoso profiling Copilot");
+                if (operation == null)
+                {
+                    operation = new EventOperation { Name = "Contoso profiling Copilot" };
+                    db.event_operations.Add(operation);
+                    db.SaveChanges();
+                }
+                _copilotOperationId = operation.ID;
+            }
 
             // Clean up any test users from previous test runs
             CleanupTestUsers();
@@ -823,20 +836,7 @@ namespace Tests.UnitTests
         {
             for (var date = startDate; date <= endDate; date = date.AddDays(1))
             {
-                // First insert audit event
-                var eventId = await ExecuteScalar<Guid>(db, $@"
-                    INSERT INTO dbo.audit_events 
-                    (id, user_id, time_stamp, operation_id)
-                    OUTPUT INSERTED.id
-                    VALUES 
-                    (NEWID(), {userId}, '{date:yyyy-MM-dd HH:mm:ss}', 1)");
-
-                // Then insert copilot chat
-                await ExecuteSql(db, $@"
-                    INSERT INTO dbo.copilot_chats 
-                    (event_id, app_host)
-                    VALUES 
-                    ('{eventId}', 'Teams')");
+                await InsertCopilotChat(db, userId, date, "Teams");
             }
         }
 
@@ -986,16 +986,60 @@ namespace Tests.UnitTests
                 WHERE date = '{monday:yyyy-MM-dd}' AND user_id = {userId}");
         }
 
-        private async Task InsertCopilotChat(AnalyticsEntitiesContext db, int userId, DateTime date, string appHost)
+        [TestMethod]
+        public async Task CopilotProfilingAndLegacyTemplates_CountPairsOnce_KeepRapidPrompts_ExcludeMakerTesting()
+        {
+            using (var db = new AnalyticsEntitiesContext())
+            {
+                var monday = TEST_MONDAY;
+                await CleanupTestData(db, monday);
+                await EnsureTestUserExists(db, TEST_USER_ID);
+                var runtime = await InsertCopilotChat(db, TEST_USER_ID, monday, "m365copilot");
+                var client = await InsertCopilotChat(db, TEST_USER_ID, monday.AddSeconds(5), "Office");
+                await InsertCopilotChat(db, TEST_USER_ID, monday.AddSeconds(10), "Microsoft Teams");
+                await InsertCopilotChat(db, TEST_USER_ID, monday.AddSeconds(12), "Microsoft Teams");
+                await InsertCopilotChat(db, TEST_USER_ID, monday.AddSeconds(15), "Copilot Studio");
+                await InsertCopilotChat(db, TEST_USER_ID, monday.AddSeconds(20), "Contoso future host");
+                await ExecuteSql(db, $@"
+INSERT dbo.copilot_chat_duplicates (event_id, time_stamp, counted_event_id, reason)
+VALUES ('{runtime}', '{monday:yyyy-MM-dd HH:mm:ss}', '{client}', 1)");
+                db.CopilotEventMetadataFiles.Add(new Common.Entities.Entities.AuditLog.CopilotEventMetadataFile {
+                    ChatId = runtime, FileExtensionId = null, FileNameId = null,
+                    Url = new Url { FullUrl = "https://contoso.sharepoint.com/sites/example/Καλημέρα-" + Guid.NewGuid().ToString("N") + ".pdf" },
+                    Site = db.sites.FirstOrDefault(site => site.UrlBase == "https://contoso.sharepoint.com/sites/example")
+                        ?? new Site { UrlBase = "https://contoso.sharepoint.com/sites/example" }
+                });
+                await db.SaveChangesAsync();
+                try
+                {
+                    await ExecuteStoredProcedure(db, "profiling.usp_CompileActivityWeek", monday);
+                    Assert.AreEqual(4, await GetActivityMetricSum(db, monday, TEST_USER_ID, "Copilot Chats"));
+                    Assert.AreEqual(1, await GetActivityMetricSum(db, monday, TEST_USER_ID, "Copilot Files"), "File evidence unique to the runtime constituent is retained.");
+                    Assert.AreEqual(1, await GetActivityMetricSum(db, monday, TEST_USER_ID, "Copilot App Office"));
+                    Assert.AreEqual(2, await GetActivityMetricSum(db, monday, TEST_USER_ID, "Copilot App Teams"));
+                    var root = CopilotHistoricalEvidenceTests.ReportDirectory();
+                    var chats = System.IO.File.ReadAllText(System.IO.Path.Combine(root, "chats.sql"));
+                    Assert.AreEqual(4, await ExecuteScalar<int>(db, $@"
+SELECT COUNT(*) FROM ({chats}) c JOIN dbo.audit_events e ON e.id = c.event_id WHERE e.user_id = {TEST_USER_ID}"));
+                    var activity = System.IO.File.ReadAllText(System.IO.Path.Combine(root, "activity.sql"));
+                    Assert.AreEqual(4, await ExecuteScalar<int>(db, $@"
+SELECT COUNT(*) FROM ({activity}) c WHERE c.UserId = {TEST_USER_ID}"));
+                }
+                finally { await ExecuteSql(db, $"DELETE FROM dbo.copilot_event_files WHERE copilot_chat_id = '{runtime}'"); }
+            }
+        }
+
+        private async Task<Guid> InsertCopilotChat(AnalyticsEntitiesContext db, int userId, DateTime date, string appHost)
         {
             var eventId = await ExecuteScalar<Guid>(db, $@"
                 INSERT INTO dbo.audit_events (id, user_id, time_stamp, operation_id)
                 OUTPUT INSERTED.id
-                VALUES (NEWID(), {userId}, '{date:yyyy-MM-dd HH:mm:ss}', 1)");
+                VALUES (NEWID(), {userId}, '{date:yyyy-MM-dd HH:mm:ss}', {_copilotOperationId})");
 
             await ExecuteSql(db, $@"
-                INSERT INTO dbo.copilot_chats (event_id, app_host)
-                VALUES ('{eventId}', '{appHost}')");
+                INSERT INTO dbo.copilot_chats (event_id, app_host, user_id, time_stamp)
+                VALUES ('{eventId}', '{appHost}', {userId}, '{date:yyyy-MM-dd HH:mm:ss}')");
+            return eventId;
         }
 
         private async Task InsertTeamsDeviceUsageTestData(AnalyticsEntitiesContext db, int userId, DateTime startDate, DateTime endDate)

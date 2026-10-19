@@ -64,8 +64,9 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
         private readonly InsertBatch<TeamsCopilotLogTempEntity> _copilotInsertsTeams;
         private readonly InsertBatch<ChatOnlyCopilotLogTempEntity> _copilotInsertsChatsNoContext;
         private readonly ProjectResourceReader _rr;
+        private readonly bool _throwOnPairingFailure;
 
-        public SqlCopilotStagingWriter(string connectionString, ILogger logger)
+        public SqlCopilotStagingWriter(string connectionString, ILogger logger, bool throwOnPairingFailure = false)
         {
             if (string.IsNullOrEmpty(connectionString))
             {
@@ -77,6 +78,7 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
             }
 
             _rr = new ProjectResourceReader(System.Reflection.Assembly.GetExecutingAssembly());
+            _throwOnPairingFailure = throwOnPairingFailure;
             _copilotInsertsSP = new InsertBatch<SPCopilotLogTempEntity>(connectionString, logger);
             _copilotInsertsTeams = new InsertBatch<TeamsCopilotLogTempEntity>(connectionString, logger);
             _copilotInsertsChatsNoContext = new InsertBatch<ChatOnlyCopilotLogTempEntity>(connectionString, logger);
@@ -130,7 +132,10 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
             var workloadSpecificSql = workloadSpecificScriptName != null
                 ? _rr.ReadResourceString(workloadSpecificScriptName).Replace(ActivityImportConstants.STAGING_TABLE_VARNAME, tempTableName)
                 : string.Empty;
-            return commonMergeSql + Environment.NewLine + workloadSpecificSql;
+            // Set both values explicitly: a pooled connection must never inherit strict repair mode.
+            var strictMode = "EXEC sys.sp_set_session_context @key=N'copilot_history_strict', @value="
+                + (_throwOnPairingFailure ? "1" : "0") + ";" + Environment.NewLine;
+            return strictMode + commonMergeSql + Environment.NewLine + workloadSpecificSql;
         }
     }
 }

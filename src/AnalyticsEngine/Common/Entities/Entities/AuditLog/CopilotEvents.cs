@@ -163,8 +163,9 @@ namespace Common.Entities.Entities.AuditLog
         public string AgentID { get; set; } = null;
 
         /// <summary>
-        /// Indicates whether this is a custom agent (extracted from AppIdentity) or a standard Copilot agent.
-        /// Nullable to support backward compatibility with existing data.
+        /// Import-time origin evidence: true for Customer-built, false for Microsoft, null for Unknown.
+        /// This is not billing kind. Legacy false values are not reliable first-party evidence; readers
+        /// use CopilotAgentClassifier.ResolveStoredOrigin rather than treating NULL/false as Microsoft.
         /// </summary>
         [Column("is_custom_agent")]
         public bool? IsCustomAgent { get; set; }
@@ -527,4 +528,3 @@ namespace Common.Entities.Entities.AuditLog
     #endregion
 
 }
-
