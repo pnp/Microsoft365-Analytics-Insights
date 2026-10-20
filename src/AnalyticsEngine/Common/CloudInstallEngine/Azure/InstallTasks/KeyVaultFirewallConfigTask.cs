@@ -45,7 +45,9 @@ namespace CloudInstallEngine.Azure.InstallTasks
         public override string TaskName => "configure Key Vault firewall (allow installer + App Service IPs)";
 
         // Best-effort networking config: a transient failure here must not abort an otherwise-successful install.
-        public override bool IsCritical => false;
+        public override bool IsCritical => Networking != null &&
+            _config.ContainsKey(CONFIG_KEY_VNET_SUBNET_ID) && !string.IsNullOrWhiteSpace(_config[CONFIG_KEY_VNET_SUBNET_ID]);
+        public PrivateNetworkProvenance Networking { get; set; }
 
         public override async Task<KeyVaultResource> ExecuteTaskReturnResult(object contextArg)
         {
@@ -90,13 +92,41 @@ namespace CloudInstallEngine.Azure.InstallTasks
             _logger.LogInformation($"Enabling Key Vault '{vault.Data.Name}' firewall: default action 'Deny', bypass 'AzureServices', {ruleSet.IPRules.Count} IP rule(s), {ruleSet.VirtualNetworkRules.Count} virtual-network rule(s).");
 
             var patch = new KeyVaultPatch { Properties = new KeyVaultPatchProperties { NetworkRuleSet = ruleSet } };
+            PrivateNetworkArtifact subnetRule = null;
+            var creatingRule = false;
+            if (Networking != null && !string.IsNullOrWhiteSpace(vnetSubnetId))
+            {
+                subnetRule = new PrivateNetworkArtifact
+                {
+                    Id = vault.Id + "/virtualNetworkRules/" + Uri.EscapeDataString(vnetSubnetId),
+                    Kind = PrivateNetworkProvenance.VirtualNetworkRule, TargetId = vault.Id.ToString(),
+                    SubnetId = vnetSubnetId
+                };
+                var exists = vault.Data.Properties?.NetworkRuleSet?.VirtualNetworkRules
+                    .Any(r => PrivateNetworkProvenance.Same(r.Id.ToString(), vnetSubnetId)) == true;
+                if (exists) Networking.ObserveExisting(subnetRule);
+                else
+                {
+                    Networking.ObserveMissing(subnetRule.Id);
+                    Networking.BeginCreate(subnetRule);
+                    creatingRule = true;
+                }
+            }
             try
             {
                 var updated = await vault.UpdateAsync(patch);
+                if (creatingRule)
+                {
+                    if (updated.Value.Data.Properties.NetworkRuleSet.VirtualNetworkRules
+                        .All(r => !PrivateNetworkProvenance.Same(r.Id.ToString(), vnetSubnetId)))
+                        throw PrivateNetworkProvenance.Blocked(subnetRule.Id, "the created Key Vault subnet rule was not returned by Azure");
+                    Networking.ConfirmCreate(subnetRule.Id);
+                }
                 return updated.Value;
             }
             catch (global::Azure.RequestFailedException ex) when (KeyVaultTask.IsDisallowedByPolicy(ex))
             {
+                if (creatingRule) throw;
                 // Tenant Azure Policy denies writes to Microsoft.KeyVault/vaults. The vault already
                 // exists and is usable; firewall allow-listing is best-effort, so reuse it as-is.
                 _logger.LogWarning($"Could not allow-list IPs on key vault '{vault.Data.Name}': the write was disallowed by Azure Policy. Reusing the existing firewall configuration; ensure the installer and App Service IPs already have access, or grant a policy exemption and re-run.");

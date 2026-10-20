@@ -19,11 +19,14 @@ namespace App.ControlPanel.Frames
     public partial class InstallSPOSitesControl : UserControl, ISolutionConfigurableComponent
     {
         private BaseInstallProcess _installerEngine = null;
+        private SolutionInstallConfig _configurationState;
         private readonly InstallSPOSitesControlLogger _logger;
         // CTS for the currently-running install/test/uninstall. Replaced on each StartBackgroundProcess
         // so a previous run's cancellation can't affect the next one.
         private CancellationTokenSource _runCts;
         private bool _isWorking;
+        // Advanced config-file setting: retain it when the wizard reconstructs a saved configuration.
+        private int _teamsMaxChannelsPerTeamPerCycle;
         private readonly List<Panel> _pages = new List<Panel>();
         private Panel _selectedPage;
         private readonly Panel tabOverview = new Panel { Name = "tabOverview", Text = "Overview" };
@@ -215,12 +218,14 @@ namespace App.ControlPanel.Frames
                 ServiceBusName = azureStorageConfigControl1.ServiceBusName,
                 ServiceBusEnabled = azureStorageConfigControl1.ServiceBusEnabled,
                 AllowTelemetry = installSolutionControl1.AllowTelemetry,
+                TeamsMaxChannelsPerTeamPerCycle = _teamsMaxChannelsPerTeamPerCycle,
                 SolutionConfig = importJobSettingsSelection.Config,
                 TasksConfig = installSolutionControl1.TasksConfig,
                 AppServiceWebAppName = azurePaaSConfigControl1.AppServiceWebAppName,
                 AppServicePlanName = azurePaaSConfigControl1.AppServicePlanName,
                 AppInsightsWorkspaceName = azurePaaSConfigControl1.AppInsightsWorkspaceName,
                 AppInsightsName = azurePaaSConfigControl1.AppInsightsName,
+                HealthMonitoring = azurePaaSConfigControl1.HealthMonitoring,
                 CognitiveServiceName = azureAIConfigControl1.CognitiveServiceName,
                 CognitiveServicesEnabled = azureAIConfigControl1.CognitiveEnabled,
                 SharePointConfig = sharePointConfigControl1.SharePointInstallConfig,
@@ -285,12 +290,16 @@ namespace App.ControlPanel.Frames
                 config.DownloadLatestStable = true;
             }
 
+            config.PreservePrivateNetworkingStateFrom(_configurationState);
+            _configurationState = config;
             return config;
         }
 
 
         public void ConfigureUI(SolutionInstallConfig config)
         {
+            _configurationState = config;
+            _teamsMaxChannelsPerTeamPerCycle = config.TeamsMaxChannelsPerTeamPerCycle;
             // Set GUI
             importJobSettingsSelection.Config = config.SolutionConfig;
 
@@ -311,6 +320,7 @@ namespace App.ControlPanel.Frames
             azureStorageConfigControl1.ServiceBusEnabled = config.ServiceBusEnabled;
 
             azurePaaSConfigControl1.AppInsightsName = config.AppInsightsName;
+            azurePaaSConfigControl1.HealthMonitoring = config.HealthMonitoring;
             azurePaaSConfigControl1.AppServicePlanName = config.AppServicePlanName;
             azurePaaSConfigControl1.AppServiceWebAppName = config.AppServiceWebAppName;
             azureAIConfigControl1.CognitiveServiceName = config.CognitiveServiceName;

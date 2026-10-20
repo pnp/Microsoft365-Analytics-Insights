@@ -12,6 +12,7 @@ namespace App.ControlPanel.Frames.InstallWizard
 
         private void InitializeComponent()
         {
+            var resources = new System.ComponentModel.ComponentResourceManager(typeof(AzurePaaSConfigControl));
             this.txtAppInsightsName = new System.Windows.Forms.TextBox { Name = "txtAppInsightsName" };
             this.txtLogAnalyticsName = new System.Windows.Forms.TextBox { Name = "txtLogAnalyticsName" };
             this.txtAppServiceWebAppName = new System.Windows.Forms.TextBox { Name = "txtAppServiceWebAppName" };
@@ -25,6 +26,17 @@ namespace App.ControlPanel.Frames.InstallWizard
             this.lblAppServiceWebAppName.Name = "lblAppServiceWebAppName";
             this.lblKVName = ServicePageLayout.Text("");
             this.lblKVName.Name = "lblKVName";
+            this.chkHealthMonitoring = new System.Windows.Forms.CheckBox
+            {
+                Name = "chkHealthMonitoring", AutoSize = true,
+                Text = resources.GetString("HealthMonitoring.Enabled")
+            };
+            this.txtHealthEmail = new System.Windows.Forms.TextBox { Name = "txtHealthEmail" };
+            this.numHealthMinutes = new System.Windows.Forms.NumericUpDown
+            {
+                Name = "numHealthMinutes", Minimum = int.MinValue, Maximum = int.MaxValue, Value = 15
+            };
+            ((System.ComponentModel.ISupportInitialize)this.numHealthMinutes).BeginInit();
             this.SuspendLayout();
             this.AutoScaleDimensions = new System.Drawing.SizeF(6F, 13F);
             this.AutoScaleMode = System.Windows.Forms.AutoScaleMode.Font;
@@ -34,6 +46,10 @@ namespace App.ControlPanel.Frames.InstallWizard
                 "Application Insights collects runtime diagnostics. Log Analytics stores that telemetry for queries and retention.",
                 global::App.ControlPanel.Properties.Resources.AppInsights);
             ServicePageLayout.AddFields(insights, "Instance name:", txtAppInsightsName, "Workspace:", txtLogAnalyticsName);
+            ServicePageLayout.AddRow(insights, chkHealthMonitoring);
+            ServicePageLayout.AddFields(insights, resources.GetString("HealthMonitoring.Email"), txtHealthEmail);
+            ServicePageLayout.AddFields(insights, resources.GetString("HealthMonitoring.Threshold"), numHealthMinutes);
+            ServicePageLayout.AddRow(insights, ServicePageLayout.Text(resources.GetString("HealthMonitoring.Notice")));
             var hosting = ServicePageLayout.AddService(layout, "hostingService", "App Service & hosting plan",
                 "The web app hosts the portal and importers. Its plan supplies compute capacity and determines hosting cost.",
                 global::App.ControlPanel.Properties.Resources.AppService);
@@ -50,8 +66,10 @@ namespace App.ControlPanel.Frames.InstallWizard
             ServicePageLayout.AddFields(automation, "Account name:", txtAutomationAccountName);
             this.txtAppServiceWebAppName.TextChanged += this.txtAppServiceWebAppName_TextChanged;
             this.txtKeyVaultName.TextChanged += this.txtKeyVaultName_TextChanged;
+            this.chkHealthMonitoring.CheckedChanged += this.HealthMonitoring_CheckedChanged;
             this.Name = "AzurePaaSConfigControl";
             this.Size = new System.Drawing.Size(632, 537);
+            ((System.ComponentModel.ISupportInitialize)this.numHealthMinutes).EndInit();
             this.ResumeLayout(false);
             this.PerformLayout();
         }
@@ -64,5 +82,8 @@ namespace App.ControlPanel.Frames.InstallWizard
         private System.Windows.Forms.TextBox txtAutomationAccountName;
         private System.Windows.Forms.Label lblAppServiceWebAppName;
         private System.Windows.Forms.Label lblKVName;
+        private System.Windows.Forms.CheckBox chkHealthMonitoring;
+        private System.Windows.Forms.TextBox txtHealthEmail;
+        private System.Windows.Forms.NumericUpDown numHealthMinutes;
     }
 }

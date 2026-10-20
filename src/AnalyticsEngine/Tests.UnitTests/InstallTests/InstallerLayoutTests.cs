@@ -17,6 +17,115 @@ namespace Tests.UnitTests.InstallTests
     [TestClass]
     public class InstallerLayoutTests
     {
+        [DataTestMethod]
+        [DataRow(false, 0)]
+        [DataRow(false, int.MinValue)]
+        [DataRow(true, 14)]
+        [DataRow(true, 1441)]
+        public void HealthMonitoring_OutOfRangeSavedThresholdLoadsWithoutLosingValidation(bool enabled, int minutes)
+        {
+            RunOnSta(() =>
+            {
+                using (var wizard = new InstallSPOSitesControl())
+                {
+                    var config = SolutionInstallConfig.NewConfig();
+                    config.HealthMonitoring.Enabled = enabled;
+                    config.HealthMonitoring.NotificationEmail = "operator@contoso.example";
+                    config.HealthMonitoring.MissingHeartbeatMinutes = minutes;
+                    wizard.ConfigureUI(config);
+                    var settings = wizard.GetConfigurationState().HealthMonitoring;
+                    Assert.AreEqual(minutes, settings.MissingHeartbeatMinutes, "Opening a config must not silently change it.");
+                    Assert.AreEqual(enabled, settings.Enabled);
+                    Assert.AreEqual(enabled ? 1 : 0, settings.ValidatInputAndGetErrors().Count);
+                }
+            });
+        }
+
+        [DataTestMethod]
+        [DataRow(600, 500, 1.0f)]
+        [DataRow(900, 750, 1.5f)]
+        [DataRow(1200, 1000, 2.0f)]
+        public void HealthMonitoring_FieldsAndNoticeRemainReachable_WhenResizedOrScaled(int width, int height, float scale)
+        {
+            RunOnSta(() =>
+            {
+                using (var page = new AzurePaaSConfigControl())
+                using (var host = ShowControl(page, new Size(width, height)))
+                {
+                    page.HealthMonitoring = new Common.Entities.Installer.HealthMonitoringConfig
+                    {
+                        Enabled = true, NotificationEmail = "operator@contoso.example"
+                    };
+                    if (scale != 1.0f)
+                    {
+                        page.Scale(new SizeF(scale, scale));
+                        page.Font = new Font(page.Font.FontFamily, page.Font.Size * scale);
+                        Application.DoEvents();
+                    }
+                    var content = Find<TableLayoutPanel>(page, "insightsServiceContent");
+                    var fields = new Control[]
+                    {
+                        Find<CheckBox>(page, "chkHealthMonitoring"),
+                        Find<TextBox>(page, "txtHealthEmail"),
+                        Find<NumericUpDown>(page, "numHealthMinutes")
+                    };
+                    foreach (var field in fields)
+                    {
+                        page.ScrollControlIntoView(field);
+                        Application.DoEvents();
+                        Assert.IsTrue(page.ClientRectangle.IntersectsWith(page.RectangleToClient(
+                            field.Parent.RectangleToScreen(field.Bounds))), field.Name + " must remain reachable by scrolling.");
+                    }
+                    Assert.IsFalse(page.HorizontalScroll.Visible, "Hosting settings must not require horizontal scrolling.");
+                    var check = (CheckBox)fields[0];
+                    Assert.IsTrue(check.Width >= check.GetPreferredSize(check.Size).Width, "Alert opt-in must not clip.");
+                    Assert.IsTrue(content.Controls.OfType<Label>().Last().AutoSize, "Cost and liveness limitations must wrap.");
+                }
+            });
+        }
+
+        [TestMethod]
+        public void TeamsChannelBudget_AdvancedSettingSurvivesWizardAndLegacyConfigReset()
+        {
+            RunOnSta(() =>
+            {
+                using (var wizard = new InstallSPOSitesControl())
+                {
+                    var config = SolutionInstallConfig.NewConfig();
+                    config.TeamsMaxChannelsPerTeamPerCycle = 8;
+                    wizard.ConfigureUI(config);
+                    Assert.AreEqual(8, wizard.GetConfigurationState().TeamsMaxChannelsPerTeamPerCycle);
+                    wizard.ConfigureUI(SolutionInstallConfig.NewConfig());
+                    Assert.AreEqual(0, wizard.GetConfigurationState().TeamsMaxChannelsPerTeamPerCycle);
+                }
+            });
+        }
+
+        [TestMethod]
+        public void HealthMonitoring_RoundTripsThroughWizard_AndOptOutDisablesFields()
+        {
+            RunOnSta(() =>
+            {
+                using (var wizard = new InstallSPOSitesControl())
+                {
+                    var config = SolutionInstallConfig.NewConfig();
+                    config.HealthMonitoring.NotificationEmail = "operator@contoso.example";
+                    config.HealthMonitoring.MissingHeartbeatMinutes = 30;
+                    wizard.ConfigureUI(config);
+                    Assert.IsTrue(Find<TextBox>(wizard, "txtHealthEmail").Enabled);
+                    Assert.IsTrue(Find<NumericUpDown>(wizard, "numHealthMinutes").Enabled);
+                    var roundTrip = wizard.GetConfigurationState();
+                    Assert.IsTrue(roundTrip.HealthMonitoring.Enabled);
+                    Assert.AreEqual("operator@contoso.example", roundTrip.HealthMonitoring.NotificationEmail);
+                    Assert.AreEqual(30, roundTrip.HealthMonitoring.MissingHeartbeatMinutes);
+                    Find<CheckBox>(wizard, "chkHealthMonitoring").Checked = false;
+                    Assert.IsFalse(Find<TextBox>(wizard, "txtHealthEmail").Enabled);
+                    Assert.IsFalse(Find<NumericUpDown>(wizard, "numHealthMinutes").Enabled);
+                    Assert.IsFalse(wizard.GetConfigurationState().HealthMonitoring.Enabled);
+                }
+            });
+        }
+
         [TestMethod]
         public void Welcome_ExplainsConfigurationDoesNotDeploy_AndRetainsRiskAcknowledgement()
         {

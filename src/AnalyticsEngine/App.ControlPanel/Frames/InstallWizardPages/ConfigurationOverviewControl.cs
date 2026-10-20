@@ -139,11 +139,18 @@ namespace App.ControlPanel.Frames.InstallWizard
                 Tuple.Create("Network", config.NetworkConfig?.Enabled == true
                     ? config.NetworkConfig.AllowPublicAccess ? "VNet enabled; public access allowed" : "Private network only - installer needs line-of-sight"
                     : "VNet integration not selected"),
+                Tuple.Create("Private-network cleanup", config.NetworkConfig?.Enabled == true
+                    ? "Not requested: retain VNet connectivity, including hybrid public access"
+                    : "Delete only confirmed installer-owned endpoints/DNS; preserve shared resources"),
+                Tuple.Create("Legacy networking", "Unknown ownership blocks automatic cleanup; network-owner review required"),
                 Tuple.Create("Packages", config.DownloadLatestStable ? "Latest stable release on GitHub" : "Local package files"),
                 Tuple.Create("Deploy content", Selected(config.TasksConfig.InstallLatestSolutionContent)),
                 Tuple.Create("SQL schema upgrade", Selected(config.TasksConfig.UpgradeSchema)),
                 Tuple.Create("SharePoint sites", $"{config.SharePointConfig.TargetSites.Count} configured"),
-                Tuple.Create("Usage reporting", config.AllowTelemetry ? "Allowed" : "Disabled")
+                Tuple.Create("Usage reporting", config.AllowTelemetry ? "Allowed" : "Disabled"),
+                Tuple.Create("Importer health alerts", config.HealthMonitoring?.Enabled == true
+                    ? $"Enabled - Azure Monitor charges may apply; email {Value(config.HealthMonitoring.NotificationEmail)}, missing for {config.HealthMonitoring.MissingHeartbeatMinutes} minutes"
+                    : "Disabled - owned rules will be disabled; telemetry is unchanged")
             };
         }
 

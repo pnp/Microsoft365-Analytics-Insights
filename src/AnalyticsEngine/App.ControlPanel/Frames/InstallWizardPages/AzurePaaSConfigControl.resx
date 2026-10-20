@@ -158,4 +158,16 @@
         RK5CYII=
 </value>
   </data>
+  <data name="HealthMonitoring.Enabled" xml:space="preserve">
+    <value>Enable Azure Monitor importer liveness alerts</value>
+  </data>
+  <data name="HealthMonitoring.Email" xml:space="preserve">
+    <value>Notification email:</value>
+  </data>
+  <data name="HealthMonitoring.Threshold" xml:space="preserve">
+    <value>Missing heartbeat (minutes, 15-1440):</value>
+  </data>
+  <data name="HealthMonitoring.Notice" xml:space="preserve">
+    <value>Azure Monitor log alerts can incur charges. These detect stopped importers, not stale data or failed cycles. Test email delivery after installation. For scheduled shutdowns, use an Azure alert processing rule or opt out here; opting out disables owned alerts, not telemetry.</value>
+  </data>
 </root>

@@ -110,6 +110,14 @@ namespace Common.Entities.Config
 
             var importJobSettingsString = ConfigurationManager.AppSettings.Get("ImportJobSettings");
             this.ImportJobSettings = new ImportTaskSettings(importJobSettingsString);
+            var teamsChannelBudgetSetting = ConfigurationManager.AppSettings.Get("TeamsMaxChannelsPerTeamPerCycle");
+            if (!string.IsNullOrWhiteSpace(teamsChannelBudgetSetting))
+            {
+                if (!int.TryParse(teamsChannelBudgetSetting, System.Globalization.NumberStyles.Integer,
+                    System.Globalization.CultureInfo.InvariantCulture, out var teamsChannelBudget) || teamsChannelBudget < 0)
+                    throw new ConfigurationErrorsException("TeamsMaxChannelsPerTeamPerCycle must be an integer between 0 and 2147483647. Zero disables the budget.");
+                this.TeamsMaxChannelsPerTeamPerCycle = teamsChannelBudget;
+            }
 
             this.StatsApiSecret = ConfigurationManager.AppSettings.Get("StatsApiSecret");
             this.StatsApiUrl = ConfigurationManager.AppSettings.Get("StatsApiUrl");
@@ -465,6 +473,12 @@ namespace Common.Entities.Config
         }
 
         public ImportTaskSettings ImportJobSettings { get; set; }
+
+        /// <summary>
+        /// Opt-in aggregate deep-Teams channel-read budget. Zero preserves the unbudgeted crawl.
+        /// Reads stop between channels, never part-way through an additive statistics batch.
+        /// </summary>
+        public int TeamsMaxChannelsPerTeamPerCycle { get; set; }
 
         public string StatsApiSecret { get; set; } = null;
         public string StatsApiUrl { get; set; } = null;

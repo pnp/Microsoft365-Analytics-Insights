@@ -31,12 +31,15 @@ namespace CloudInstallEngine.Azure.InstallTasks
         }
 
         public override string TaskName => "get/create private DNS zone";
+        public PrivateNetworkProvenance Networking { get; set; }
 
         public override async Task<PrivateDnsZoneResource> ExecuteTaskReturnResult(object contextArg)
         {
             var zoneName = _config.GetNameConfigValue();
             var vnetId = _config.GetConfigValue(CONFIG_KEY_VNET_ID);
             var peName = _config.GetConfigValue(CONFIG_KEY_PE_NAME);
+            var zoneId = Container.Id + "/providers/Microsoft.Network/privateDnsZones/" + zoneName;
+            var zoneProvenance = new PrivateNetworkArtifact { Id = zoneId, Kind = PrivateNetworkProvenance.Zone };
 
             // 1. Get or create the Private DNS Zone
             PrivateDnsZoneResource dnsZone = null;
@@ -48,6 +51,7 @@ namespace CloudInstallEngine.Azure.InstallTasks
             }
             catch (RequestFailedException ex) when (ex.Status == 404)
             {
+                if (Networking != null && !PrivateNetworkProvenance.IsMissing(ex)) throw;
                 // Not found
             }
             WarnIfSlow(sw, $"reading private DNS zone '{zoneName}'");
@@ -57,12 +61,20 @@ namespace CloudInstallEngine.Azure.InstallTasks
                 _logger.LogInformation($"Creating private DNS zone '{zoneName}'...");
                 var dnsZoneData = new PrivateDnsZoneData("global");
                 EnsureTagsOnNew(dnsZoneData.Tags);
+                if (Networking != null)
+                {
+                    Networking.ObserveMissing(zoneId);
+                    Networking.BeginCreate(zoneProvenance);
+                    Networking.StampNew(dnsZoneData.Tags);
+                }
                 var operation = await Container.GetPrivateDnsZones().CreateOrUpdateAsync(WaitUntil.Completed, zoneName, dnsZoneData);
                 dnsZone = operation.Value;
+                Networking?.ConfirmCreate(zoneId);
                 _logger.LogInformation($"Created private DNS zone '{dnsZone.Data.Name}'.");
             }
             else
             {
+                Networking?.ObserveExisting(zoneProvenance, dnsZone.Data.Tags);
                 _logger.LogInformation($"Found existing private DNS zone '{dnsZone.Data.Name}'.");
                 await EnsureTagsOnExisting(dnsZone.Data.Tags, dnsZone.GetTagResource());
             }
@@ -80,6 +92,12 @@ namespace CloudInstallEngine.Azure.InstallTasks
 
             if (existingLink != null)
             {
+                var link = (await dnsZone.GetVirtualNetworkLinks().GetAsync(existingLink.Name)).Value;
+                Networking?.ObserveExisting(new PrivateNetworkArtifact
+                {
+                    Id = link.Id.ToString(), Kind = PrivateNetworkProvenance.Link, TargetId = vnetId,
+                    ZoneIds = new List<string> { zoneId }
+                }, link.Data.Tags);
                 if (string.Equals(existingLink.Name, linkName, StringComparison.OrdinalIgnoreCase))
                 {
                     _logger.LogInformation($"Found existing VNet link '{existingLink.Name}' for DNS zone '{zoneName}'.");
@@ -99,13 +117,27 @@ namespace CloudInstallEngine.Azure.InstallTasks
                     RegistrationEnabled = false,
                 };
                 EnsureTagsOnNew(linkData.Tags);
+                var linkId = zoneId + "/virtualNetworkLinks/" + linkName;
+                if (Networking != null)
+                {
+                    Networking.ObserveMissing(linkId);
+                    Networking.BeginCreate(new PrivateNetworkArtifact
+                    {
+                        Id = linkId, Kind = PrivateNetworkProvenance.Link, TargetId = vnetId,
+                        ZoneIds = new List<string> { zoneId }
+                    });
+                    Networking.StampNew(linkData.Tags);
+                }
                 try
                 {
                     var operation = await dnsZone.GetVirtualNetworkLinks().CreateOrUpdateAsync(WaitUntil.Completed, linkName, linkData);
+                    Networking?.ConfirmCreate(linkId);
                     _logger.LogInformation($"Created VNet link '{operation.Value.Data.Name}'.");
                 }
                 catch (RequestFailedException ex) when (IsVNetLinkAlreadyPresentConflict(ex))
                 {
+                    if (Networking != null)
+                        throw PrivateNetworkProvenance.Blocked(linkId, "another creator established the VNet link during creation");
                     _logger.LogInformation($"Azure reported that DNS zone '{zoneName}' already has a VNet link for the configured virtual network; reusing the existing link.");
                 }
             }
@@ -126,6 +158,19 @@ namespace CloudInstallEngine.Azure.InstallTasks
 
             if (zoneGroupDecision.Action == ZoneGroupAction.Create)
             {
+                var groupId = peResource.Id + "/privateDnsZoneGroups/" + zoneGroupName;
+                var existingRecords = Networking == null ? new List<string>() : dnsZone.GetRecords()
+                    .Select(r => r.Name).ToList();
+                var groupProvenance = new PrivateNetworkArtifact
+                {
+                    Id = groupId, Kind = PrivateNetworkProvenance.ZoneGroup,
+                    TargetId = peResource.Id.ToString(), ZoneIds = new List<string> { zoneId }
+                };
+                if (Networking != null)
+                {
+                    Networking.ObserveMissing(groupId);
+                    Networking.BeginCreate(groupProvenance);
+                }
                 _logger.LogInformation($"Creating DNS zone group '{zoneGroupName}' on private endpoint '{peName}'...");
                 var zoneGroupData = new PrivateDnsZoneGroupData()
                 {
@@ -140,15 +185,28 @@ namespace CloudInstallEngine.Azure.InstallTasks
                 {
                     var operation = await peResource.GetPrivateDnsZoneGroups().CreateOrUpdateAsync(WaitUntil.Completed, zoneGroupName, zoneGroupData);
                     zoneGroup = operation.Value;
+                    if (Networking != null)
+                    {
+                        zoneGroup = (await zoneGroup.GetAsync()).Value;
+                        groupProvenance.Records = ReadRecords(zoneGroup.Data.PrivateDnsZoneConfigs);
+                        foreach (var record in groupProvenance.Records)
+                            record.CreatedExclusively = !existingRecords.Contains(record.Name, StringComparer.OrdinalIgnoreCase);
+                        Networking.ConfirmCreate(groupId);
+                    }
                     _logger.LogInformation($"Created DNS zone group '{zoneGroup.Data.Name}'.");
                 }
                 catch (RequestFailedException ex) when (IsZoneGroupAlreadyPresentConflict(ex))
                 {
+                    if (Networking != null)
+                        throw PrivateNetworkProvenance.Blocked(groupId, "another creator established the DNS zone group during creation");
                     _logger.LogInformation($"Azure reported that private endpoint '{peName}' already has a DNS zone group; reusing the existing group.");
                 }
             }
             else if (zoneGroupDecision.Action == ZoneGroupAction.Recreate)
             {
+                if (Networking != null)
+                    throw PrivateNetworkProvenance.Blocked(zoneGroup.Id.ToString(),
+                        "an existing DNS zone group points at a different zone; automatic adoption/replacement is not authorized");
                 // Reconcile: if the existing zone group references a different (wrong) private DNS zone,
                 // recreate it. Without this, the bad config is
                 // sticky: A records never auto-register into the right zone and VNet-integrated clients
@@ -183,15 +241,35 @@ namespace CloudInstallEngine.Azure.InstallTasks
             }
             else if (string.Equals(zoneGroupDecision.ExistingGroup.Name, zoneGroupName, StringComparison.OrdinalIgnoreCase))
             {
+                ObserveGroup(zoneGroup, peResource);
                 _logger.LogInformation($"Found existing DNS zone group '{zoneGroupDecision.ExistingGroup.Name}' on private endpoint '{peName}'.");
             }
             else
             {
+                ObserveGroup(zoneGroup, peResource);
                 _logger.LogInformation($"Found existing DNS zone group '{zoneGroupDecision.ExistingGroup.Name}' on private endpoint '{peName}' (name differs from the installer default - created outside the installer; reusing).");
             }
 
             return dnsZone;
         }
+
+        private void ObserveGroup(PrivateDnsZoneGroupResource group, PrivateEndpointResource endpoint)
+        {
+            Networking?.ObserveExisting(new PrivateNetworkArtifact
+            {
+                Id = group.Id.ToString(), Kind = PrivateNetworkProvenance.ZoneGroup,
+                TargetId = endpoint.Id.ToString(),
+                ZoneIds = GetConfiguredZoneIds(group.Data.PrivateDnsZoneConfigs),
+                Records = ReadRecords(group.Data.PrivateDnsZoneConfigs)
+            });
+        }
+
+        public static List<PrivateNetworkRecord> ReadRecords(IEnumerable<PrivateDnsZoneConfig> configs) =>
+            configs.SelectMany(c => c.RecordSets.Select(r => new PrivateNetworkRecord
+            {
+                ZoneId = c.PrivateDnsZoneId?.ToString(), Name = r.RecordSetName,
+                Type = r.RecordType, Addresses = r.IPAddresses.ToList()
+            })).ToList();
 
         internal static VNetLinkInfo FindVNetLinkForVirtualNetwork(IEnumerable<VNetLinkInfo> links, string vnetId)
         {

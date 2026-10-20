@@ -59,14 +59,24 @@ namespace App.ControlPanel.Engine.InstallerTasks
         private readonly VNetInstallTask _vnetInstallTask;
         private readonly HybridWorkerGroupTask _hybridWorkerGroupTask;
         private string _hybridWorkerGroupName;
+        private readonly PrivateNetworkProvenance _networking;
 
         /// <summary>
         /// Add tasks in order for execution, some being chained
         /// </summary>
-        public AzurePaaSInstallJob(ILogger logger, SolutionInstallConfig config, SubscriptionResource subscription) : base(logger, config, subscription)
+        public AzurePaaSInstallJob(ILogger logger, SolutionInstallConfig config, SubscriptionResource subscription,
+            Action checkpointPrivateNetworking = null) : base(logger, config, subscription)
         {
+            config.PrivateNetworking = config.PrivateNetworking ?? new PrivateNetworkManifest();
+            _networking = new PrivateNetworkProvenance(config.PrivateNetworking,
+                $"/subscriptions/{config.Subscription.SubId}/resourceGroups/{config.ResourceGroupName}",
+                checkpointPrivateNetworking ?? (() => throw new InstallException(
+                    "Save the installer configuration and supply a durable networking checkpoint before changing private networking.")));
 
             var tagDic = config.Tags.ToDictionary();
+            var health = config.HealthMonitoring ?? throw new InstallException("Health monitoring configuration is missing.");
+            var healthErrors = health.ValidatInputAndGetErrors();
+            if (healthErrors.Count != 0) throw new InstallException(string.Join(Environment.NewLine, healthErrors));
             var vnetEnabled = config.NetworkConfig != null && config.NetworkConfig.Enabled;
             // When VNet is disabled we always allow public access (legacy/default behaviour).
             // When VNet is enabled, honour the AllowPublicAccess flag (some customer Azure policies
@@ -250,6 +260,14 @@ namespace App.ControlPanel.Engine.InstallerTasks
             var appInsightsConfig = TaskConfig.GetConfigForName(config.AppInsightsName);
             _appInsightsInstallTask = new AppInsightsInstallTask(appInsightsConfig, logger, Location, tagDic, ResourceGroupName, config.Subscription.SubId, creds);
             this.AddTask(_logAnalyticsInstallTask, _appInsightsInstallTask);
+            var healthConfig = TaskConfig.GetConfigForName(config.AppServiceWebAppName)
+                .AddSetting(HealthMonitoringInstallTask.AppInsightsNameSetting, config.AppInsightsName);
+            var activityExpected = Common.Entities.ImportTaskSettings.GetImportPropertyInfos()
+                .Any(p => p.Name != nameof(Common.Entities.ImportTaskSettings.WebTraffic) &&
+                    (bool)p.GetValue(config.SolutionConfig.ImportTaskSettings));
+            this.AddTask(new HealthMonitoringInstallTask(healthConfig, logger, Location, tagDic,
+                health.Enabled, health.NotificationEmail, health.MissingHeartbeatMinutes, activityExpected,
+                config.SolutionConfig.ImportTaskSettings.WebTraffic));
 
             // Cognitive
             if (config.CognitiveServicesEnabled)
@@ -415,11 +433,68 @@ namespace App.ControlPanel.Engine.InstallerTasks
         /// </summary>
         public override async Task Install(object previousRunResult)
         {
+            var vnetEnabled = _config.NetworkConfig?.Enabled == true;
+            if (!vnetEnabled)
+            {
+                ResourceGroupResource group = null;
+                try { group = (await Subscription.GetResourceGroupAsync(_config.ResourceGroupName, CancellationToken)).Value; }
+                catch (RequestFailedException ex) when (PrivateNetworkProvenance.IsMissing(ex)) { }
+                if (group != null)
+                {
+                    var targets = NetworkingTargets();
+                    var cleanup = new PrivateNetworkCleanupClient(group, _networking.Manifest,
+                        targets.Select(t => t.Item1), targets.Select(t => t.Item2),
+                        string.IsNullOrWhiteSpace(_config.NetworkConfig?.VNetName) ? null :
+                            _networking.Manifest.ResourceGroupId + "/providers/Microsoft.Network/virtualNetworks/" + _config.NetworkConfig.VNetName);
+                    await new PrivateNetworkTeardown(_networking, cleanup, Logger).Run(false, CancellationToken);
+                }
+                else
+                    _networking.ObserveMissingResourceGroup();
+            }
             await ConfigureSqlEntraAdministrator();
 
             await base.Install(previousRunResult);
 
             await DetectSqlAuthMethod();
+            if (vnetEnabled)
+            {
+                _networking.Manifest.AppliedTopology = _config.NetworkConfig.AllowPublicAccess ? "Hybrid" : "Private";
+                _networking.Save();
+            }
+        }
+
+        protected override Task<object> ProcessTask(BaseInstallTask task, object previousRunResult)
+        {
+            if (task is PrivateEndpointInstallTask endpoint) endpoint.Networking = _networking;
+            if (task is PrivateDnsZoneInstallTask dns) dns.Networking = _networking;
+            if (task is ServiceBusPrivateEndpointInstallTask busEndpoint) busEndpoint.Networking = _networking;
+            if (task is ServiceBusPrivateDnsZoneInstallTask busDns) busDns.Networking = _networking;
+            if (task is AppServiceWebsiteTask website) website.Networking = _networking;
+            if (task is KeyVaultFirewallConfigTask firewall) firewall.Networking = _networking;
+            return base.ProcessTask(task, previousRunResult);
+        }
+
+        private List<Tuple<string, string>> NetworkingTargets()
+        {
+            var prefix = _networking.Manifest.ResourceGroupId + "/providers/";
+            var names = _config.NetworkConfig?.CustomEndpointNames ?? new PrivateEndpointNames();
+            var targets = new List<Tuple<string, string>>();
+            void Add(string name, string type, string endpointName, string suffix)
+            {
+                if (!string.IsNullOrWhiteSpace(name))
+                    targets.Add(Tuple.Create(prefix + type + "/" + name,
+                        names.GetNameOrDefault(endpointName, $"pe-{name}-{suffix}")));
+            }
+            Add(_config.SQLServerName, "Microsoft.Sql/servers", names.SqlServer, "sql");
+            Add(_config.AppServiceWebAppName, "Microsoft.Web/sites", names.AppService, "app");
+            Add(_config.StorageAccountName, "Microsoft.Storage/storageAccounts", names.Storage, "blob");
+            Add(_config.StorageAccountName, "Microsoft.Storage/storageAccounts", names.StorageTable, "table");
+            Add(_config.KeyVaultName, "Microsoft.KeyVault/vaults", names.KeyVault, "vault");
+            Add(_config.ServiceBusName, "Microsoft.ServiceBus/namespaces", names.ServiceBus, "sb");
+            Add(_config.CognitiveServiceName, "Microsoft.CognitiveServices/accounts", names.CognitiveServices, "cognitive");
+            Add(_config.FoundryPromptResourceName, "Microsoft.CognitiveServices/accounts", null, "openai");
+            Add(_config.AutomationAccountName, "Microsoft.Automation/automationAccounts", names.AutomationAccount, "automation");
+            return targets;
         }
 
         /// <summary>

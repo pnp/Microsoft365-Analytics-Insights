@@ -46,7 +46,10 @@ namespace Common.Entities.Installer
         //          3.0.0 -> 3.1.0 added ImportTaskSettings.Agent365PackageCatalog (opt-in Agent 365 catalog import).
         //          3.1.0 -> 3.2.0 added optional Azure AI Foundry OpenAI resource and deployment settings.
         //          3.2.0 -> 3.3.0 added Azure OpenAI deployment type; older configs retain regional Standard.
-        const string CONFIG_VERSION = "3.3.0";
+        //          3.3.0 -> 3.4.0 added optional health-alert provisioning, notification email and heartbeat threshold.
+        //          3.3.0 -> 3.4.0 added opt-in TeamsMaxChannelsPerTeamPerCycle (zero preserves the legacy crawl).
+        //          3.3.0 -> 3.4.0 added persisted prospective private-network creator provenance.
+        const string CONFIG_VERSION = "3.4.0";
 
         public BaseSolutionInstallConfig()
         {
@@ -68,6 +71,17 @@ namespace Common.Entities.Installer
         public TargetSolutionConfig SolutionConfig { get; set; } = new TargetSolutionConfig();
 
         public bool AllowTelemetry { get; set; } = true;
+
+        /// <summary>Deep Teams channel reads per Team/cycle; zero disables budgeting. Config-file setting.</summary>
+        public int TeamsMaxChannelsPerTeamPerCycle { get; set; }
+
+        public override List<string> ValidatInputAndGetErrors()
+        {
+            var errors = base.ValidatInputAndGetErrors();
+            if (TeamsMaxChannelsPerTeamPerCycle < 0)
+                errors.Add("TeamsMaxChannelsPerTeamPerCycle must be zero or positive.");
+            return errors;
+        }
 
         public string ResourceGroupName { get; set; } = string.Empty;
 
@@ -238,6 +252,8 @@ namespace Common.Entities.Installer
         public List<AzTag> Tags { get; set; } = new List<AzTag>();
 
         public VNetConfig NetworkConfig { get; set; } = new VNetConfig();
+
+        public HealthMonitoringConfig HealthMonitoring { get; set; } = new HealthMonitoringConfig();
     }
 
     /// <summary>

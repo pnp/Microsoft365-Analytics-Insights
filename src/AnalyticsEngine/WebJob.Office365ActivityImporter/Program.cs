@@ -265,6 +265,7 @@ namespace WebJob.Office365ActivityImporter
             var deferredGraphImport = new SingleFlightBackgroundRunner(logger, "Deferred Graph import (usage reports)");
 
             // Run app
+            using (var heartbeat = new DataUtils.Health.ImporterHeartbeat(logger, DataUtils.Health.ImporterHeartbeat.ActivityJob))
             while (runAgain)
             {
                 var importCycleTelemetryScope = logger.BeginOperationScope(Guid.NewGuid().ToString("N"));
@@ -409,6 +410,7 @@ namespace WebJob.Office365ActivityImporter
 #endif
 
                 // Output cycle stats
+                heartbeat.CycleCompleted(importCycleTimer.Elapsed);
                 importCycleTimer.TrackFinishedEventAndStopTimer(AnalyticsLogger.AnalyticsEvent.FinishedImportCycle);
                 if (messageTraceUploader != null)
                 {

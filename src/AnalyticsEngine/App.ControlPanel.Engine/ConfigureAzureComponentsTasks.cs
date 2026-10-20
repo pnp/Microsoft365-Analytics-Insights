@@ -560,6 +560,10 @@ namespace App.ControlPanel.Engine
             }
 
             appSettings.Properties.Add("ImportJobSettings", this.Config.SolutionConfig.ImportTaskSettings.ToSettingsString());
+            if (this.Config.TeamsMaxChannelsPerTeamPerCycle < 0)
+                throw new InvalidOperationException("TeamsMaxChannelsPerTeamPerCycle must be zero or positive.");
+            appSettings.Properties.Add("TeamsMaxChannelsPerTeamPerCycle",
+                this.Config.TeamsMaxChannelsPerTeamPerCycle.ToString(System.Globalization.CultureInfo.InvariantCulture));
 
             // Office 365 Management Activity API feeds to subscribe to, derived from the selected
             // audit-based imports (Copilot => Audit.General, SharePoint audit => Audit.SharePoint).

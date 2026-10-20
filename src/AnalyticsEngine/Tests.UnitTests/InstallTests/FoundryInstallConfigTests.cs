@@ -42,7 +42,7 @@ namespace Tests.UnitTests.InstallTests
             Assert.AreEqual("2024-07-18", loaded.FoundryPromptModelVersion);
             Assert.AreEqual(2, loaded.FoundryPromptCapacity);
             Assert.AreEqual("DataZoneStandard", loaded.FoundryPromptDeploymentType);
-            Assert.AreEqual("3.3.0", loaded.ConfigSchemaVersion.ToString());
+            Assert.AreEqual(Common.Entities.Installer.BaseSolutionInstallConfig.CurrentConfigSchemaVersion, loaded.ConfigSchemaVersion);
         }
 
         [TestMethod]

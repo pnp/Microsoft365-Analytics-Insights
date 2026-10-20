@@ -30,6 +30,7 @@ namespace CloudInstallEngine.Azure.InstallTasks
         }
 
         public override string TaskName => "get/create private endpoint";
+        public PrivateNetworkProvenance Networking { get; set; }
 
         public override async Task<PrivateEndpointResource> ExecuteTaskReturnResult(object contextArg)
         {
@@ -38,6 +39,12 @@ namespace CloudInstallEngine.Azure.InstallTasks
             var groupId = _config.GetConfigValue(CONFIG_KEY_GROUP_ID);
             var subnetId = _config.GetConfigValue(CONFIG_KEY_SUBNET_ID);
             var targetShortName = ShortResourceName(targetResourceId);
+            var id = Container.Id + "/providers/Microsoft.Network/privateEndpoints/" + name;
+            var provenance = new PrivateNetworkArtifact
+            {
+                Id = id, Kind = PrivateNetworkProvenance.Endpoint, TargetId = targetResourceId,
+                GroupId = groupId, SubnetId = subnetId
+            };
 
             PrivateEndpointResource pe = null;
             var sw = Stopwatch.StartNew();
@@ -48,6 +55,7 @@ namespace CloudInstallEngine.Azure.InstallTasks
             }
             catch (RequestFailedException ex) when (ex.Status == 404)
             {
+                if (Networking != null && !PrivateNetworkProvenance.IsMissing(ex)) throw;
                 // Not found
             }
             WarnIfSlow(sw, $"reading private endpoint '{name}'");
@@ -55,11 +63,24 @@ namespace CloudInstallEngine.Azure.InstallTasks
             // Check if existing PE is disconnected (e.g. target resource was deleted and recreated) and needs to be recreated
             if (pe != null)
             {
+                if (Networking != null)
+                {
+                    var connections = pe.Data.PrivateLinkServiceConnections;
+                    if (connections.Count != 1 || pe.Data.ManualPrivateLinkServiceConnections.Count != 0 ||
+                        !PrivateNetworkProvenance.Same(connections[0].PrivateLinkServiceId?.ToString(), targetResourceId) ||
+                        connections[0].GroupIds.Count != 1 || !PrivateNetworkProvenance.Same(connections[0].GroupIds[0], groupId) ||
+                        !PrivateNetworkProvenance.Same(pe.Data.Subnet?.Id?.ToString(), subnetId))
+                        throw PrivateNetworkProvenance.Blocked(id, "the existing endpoint targets a different resource, group or subnet");
+                    Networking.ObserveExisting(provenance, pe.Data.Tags);
+                }
                 var connection = pe.Data.PrivateLinkServiceConnections?.FirstOrDefault();
                 var connectionState = connection?.ConnectionState?.Status;
                 if (!string.IsNullOrEmpty(connectionState) &&
                     !string.Equals(connectionState, "Approved", System.StringComparison.OrdinalIgnoreCase))
                 {
+                    if (Networking != null)
+                        throw PrivateNetworkProvenance.Blocked(id,
+                            "the endpoint is disconnected; review its DNS dependencies before removing/recreating it");
                     _logger.LogInformation($"Existing private endpoint '{name}' has connection status '{connectionState}'. Deleting and recreating for '{targetShortName}'...");
                     await pe.DeleteAsync(WaitUntil.Completed);
                     pe = null;
@@ -83,8 +104,15 @@ namespace CloudInstallEngine.Azure.InstallTasks
                 });
 
                 EnsureTagsOnNew(peData.Tags);
+                if (Networking != null)
+                {
+                    Networking.ObserveMissing(id);
+                    Networking.BeginCreate(provenance);
+                    Networking.StampNew(peData.Tags);
+                }
                 var operation = await Container.GetPrivateEndpoints().CreateOrUpdateAsync(WaitUntil.Completed, name, peData);
                 pe = operation.Value;
+                Networking?.ConfirmCreate(id);
 
                 _logger.LogInformation($"Created private endpoint '{pe.Data.Name}'.");
             }

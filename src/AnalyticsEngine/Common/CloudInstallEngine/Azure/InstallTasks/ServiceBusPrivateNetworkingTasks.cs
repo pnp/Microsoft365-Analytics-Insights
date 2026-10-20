@@ -25,6 +25,7 @@ namespace CloudInstallEngine.Azure.InstallTasks
         }
 
         public override string TaskName => "get/create Service Bus private endpoint";
+        public PrivateNetworkProvenance Networking { get; set; }
 
         public override async Task<PrivateEndpointResource> ExecuteTaskReturnResult(object contextArg)
         {
@@ -37,6 +38,7 @@ namespace CloudInstallEngine.Azure.InstallTasks
             var innerTask = new PrivateEndpointInstallTask(_config, _logger, AzureLocation, Tags)
             {
                 Container = base.Container,
+                Networking = Networking,
             };
             return await innerTask.ExecuteTaskReturnResult(contextArg);
         }
@@ -59,6 +61,7 @@ namespace CloudInstallEngine.Azure.InstallTasks
         }
 
         public override string TaskName => "get/create Service Bus private DNS zone";
+        public PrivateNetworkProvenance Networking { get; set; }
 
         public override async Task<PrivateDnsZoneResource> ExecuteTaskReturnResult(object contextArg)
         {
@@ -72,6 +75,7 @@ namespace CloudInstallEngine.Azure.InstallTasks
             var innerTask = new PrivateDnsZoneInstallTask(_config, _logger, AzureLocation, Tags)
             {
                 Container = base.Container,
+                Networking = Networking,
             };
             return await innerTask.ExecuteTaskReturnResult(contextArg);
         }
