@@ -19,6 +19,33 @@ namespace Tests.UnitTests
     {
         private const string InScopeSite = "https://contoso.sharepoint.com/sites/example";
 
+        [TestMethod]
+        public void PageViews_JsonNullCustomDimensions_DoNotAbortTheDay()
+        {
+            var timestamp = new DateTime(2026, 1, 5, 9, 30, 0, DateTimeKind.Utc);
+            var table = new AppInsightsTable
+            {
+                Columns = new List<Column>
+                {
+                    new Column { Name = "timestamp" },
+                    new Column { Name = "customDimensions" },
+                },
+                Rows = new List<List<object>>
+                {
+                    new List<object> { timestamp, "null" },
+                    new List<object> { timestamp.AddMinutes(1), "{}" },
+                },
+            };
+
+            var result = new PageViewCollection(table, timestamp.Date, AnalyticsLogger.ConsoleOnlyTracer());
+
+            Assert.AreEqual(2, result.Rows.Count, "Missing optional properties must not drop this or the following row.");
+            Assert.IsNotNull(result.Rows[0].CustomProperties);
+            Assert.AreEqual(timestamp, result.Rows[0].Timestamp);
+            Assert.AreEqual(0d, result.Rows[0].PageLoadInSeconds);
+            Assert.AreEqual(timestamp.AddMinutes(1), result.LatestRead);
+        }
+
         private static PageViewAppInsightsQueryResult PageView(Guid? pageRequestId, string url, string siteUrl = InScopeSite)
         {
             return new PageViewAppInsightsQueryResult
