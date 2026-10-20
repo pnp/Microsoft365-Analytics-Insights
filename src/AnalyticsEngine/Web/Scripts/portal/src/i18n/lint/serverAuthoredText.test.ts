@@ -5,6 +5,7 @@ import { join } from 'node:path';
 
 import { loadCatalog, translateStatic, type TFunction } from '..';
 import { EN_CATALOG } from '../catalog';
+import { DEFAULT_SCORE_VALUES, SCORE_FIELD_LABEL_KEYS } from '../../components/copilotAdoption/scoreSettings';
 import { COPILOT_ADOPTION_WARNING_KEYS, COWORK_TIER_LABEL_KEYS, TENURE_BASIS_LABEL_KEYS } from '../../components/copilotAdoption/serverText';
 import { AGENT_ORIGIN_LABEL_KEYS } from '../../components/copilotAdoption/serverText';
 import {
@@ -177,6 +178,17 @@ function scoreSettingsCodes(): Map<string, string> {
 }
 
 describe('Global filter error codes', () => {
+  it('keeps every adoption setting default and label aligned with the durable server model', () => {
+    const source = readFileSync(SCORE_SETTINGS, 'utf8');
+    const constants = new Map([...source.matchAll(/public const int (\w+) = (\d+);/g)].map((m) => [m[1], Number(m[2])]));
+    const settings = Object.fromEntries([...source.matchAll(/\[JsonProperty\("([^"]+)"\)\]\s+public (?:int|double) \w+ \{ get; set; \} = ([\w.]+);/g)]
+      .filter((m) => m[1] in DEFAULT_SCORE_VALUES)
+      .map((m) => [m[1], constants.get(m[2]) ?? Number(m[2])]));
+    expect(settings).toEqual(DEFAULT_SCORE_VALUES);
+    expect(Object.keys(SCORE_FIELD_LABEL_KEYS).sort()).toEqual(Object.keys(DEFAULT_SCORE_VALUES).sort());
+    expect(Object.values(SCORE_FIELD_LABEL_KEYS).filter((key) => !(key in EN_CATALOG))).toEqual([]);
+  });
+
   it('words every code the editor’s endpoints can send, and nothing they cannot', () => {
     const source = readFileSync(GLOBAL_FILTER_CONTROLLER, 'utf8');
     const server = sortedUnique([...source.matchAll(/internal\s+const\s+string\s+\w+Code\s*=\s*"([^"]+)"/g)].map((m) => m[1]));

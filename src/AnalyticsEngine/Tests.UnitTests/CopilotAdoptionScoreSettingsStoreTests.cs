@@ -21,6 +21,29 @@ namespace Tests.UnitTests
         #region Store
 
         [TestMethod]
+        public async Task Store_ExtendedFullHistory_RoundTripsThroughAzureTableCompression()
+        {
+            var store = new CopilotAdoptionScoreSettingsStore(new InMemoryKeyValueStore(), true);
+            CopilotAdoptionScoreSettingsDocument document = null;
+            for (var version = 0; version < 55; version++)
+                document = version % 2 == 0
+                    ? await store.SaveAsync(PhaseTwoSettings(), version, "Contoso 管理者")
+                    : await store.ResetAsync(version, "Contoso 管理者");
+            var json = Newtonsoft.Json.JsonConvert.SerializeObject(document);
+            Assert.IsTrue(json.Length > AzureTableKeyValueStore.MaxPlainValueChars, "Expanded audit history crosses the real table encoding boundary.");
+            var entity = new TableEntity("synthetic-settings", "Current");
+            AzureTableKeyValueStore.EncodeValue(entity, "Current", json);
+            var decoded = AzureTableKeyValueStore.DecodeValue(entity, "Current");
+            Assert.AreEqual(json, decoded);
+            var restored = Newtonsoft.Json.JsonConvert.DeserializeObject<CopilotAdoptionScoreSettingsDocument>(decoded);
+            Assert.AreEqual(55L, restored.Version);
+            Assert.AreEqual(50, restored.History.Count);
+            Assert.IsTrue(restored.Settings.Equals(PhaseTwoSettings()));
+            Assert.IsTrue(restored.History.All(h => h.Changes.Count == 27));
+            Assert.AreEqual("Contoso 管理者", restored.UpdatedBy);
+        }
+
+        [TestMethod]
         public async Task Store_WithNothingSaved_ReturnsVersionZeroDefaults()
         {
             var store = new CopilotAdoptionScoreSettingsStore(new InMemoryKeyValueStore(), isDurable: true);
@@ -133,6 +156,11 @@ namespace Tests.UnitTests
                 "{not json",
                 "{\"schemaVersion\":1,\"version\":3,\"settings\":null}",
                 "{\"schemaVersion\":99,\"version\":3,\"settings\":{}}",
+                "{\"schemaVersion\":2,\"version\":3,\"settings\":{\"unknownSetting\":1}}",
+                "{\"schemaVersion\":2,\"version\":3,\"settings\":{\"frequencyTargetRatio\":\"0.5\"}}",
+                "{\"schemaVersion\":2,\"version\":3,\"settings\":{\"depthTargetInteractionsPerActiveDay\":null}}",
+                "{\"schemaVersion\":2,\"version\":3,\"settings\":{\"habitDailyMinDays\":29}}",
+                "{\"schemaVersion\":2,\"version\":3,\"settings\":{\"minSeatsPerSegment\":4}}",
                 "{\"schemaVersion\":1,\"version\":3,\"settings\":{\"frequencyWeightPercent\":90,\"depthWeightPercent\":30,\"breadthWeightPercent\":20,\"developingScore\":25,\"establishedScore\":50,\"championScore\":75}}",
             })
             {

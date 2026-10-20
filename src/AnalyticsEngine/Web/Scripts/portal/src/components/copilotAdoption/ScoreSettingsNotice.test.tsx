@@ -5,9 +5,11 @@ import { renderWithProvider } from '../../test/renderWithProvider';
 import { ScoreSettingsBanner, ScoreSettingsMethodNote, effectiveScoreValues } from './ScoreSettingsNotice';
 import type { CopilotAdoptionOptions } from '../../types/copilotAdoption';
 import type { CopilotAdoptionScoreValues } from '../../types/copilotAdoptionSettings';
+import { DEFAULT_SCORE_VALUES } from './scoreSettings';
 
 /** Only the fields the notice reads matter; the rest of the options are irrelevant here. */
 const DEFAULT_OPTIONS = {
+  ...DEFAULT_SCORE_VALUES,
   windowDays: 45,
   historyDays: 200,
   workingDaysPerWeek: 5,
@@ -21,23 +23,23 @@ const DEFAULT_OPTIONS = {
   establishedScore: 50,
   developingScore: 25,
   habitBucketNormalisationDays: 28,
-  habitModerateMinDays: 4,
-  habitFrequentMinDays: 8,
-  habitDailyMinDays: 16,
+  habitModerateMinDays: 6,
+  habitFrequentMinDays: 11,
+  habitDailyMinDays: 20,
   agentReviewInactiveDays: 30,
-  agentRetireInactiveDays: 60,
-  agentNewDays: 14,
+  agentRetireInactiveDays: 90,
+  agentNewDays: 30,
   agentMinUsers: 3,
   agentHistoryDays: 120,
-  opportunityUnlicensedCopilotWeight: 40,
+  opportunityUnlicensedCopilotWeight: 35,
   opportunityCollaborationWeight: 25,
   opportunityEmailWeight: 20,
-  opportunityDocumentWeight: 15,
+  opportunityDocumentWeight: 20,
   opportunityCopilotTarget: 20,
   opportunityCollaborationTarget: 30,
   opportunityEmailTarget: 40,
   opportunityDocumentTarget: 20,
-  opportunityRecommendScore: 60,
+  opportunityRecommendScore: 50,
   usageReportLagDays: 3,
   topSegments: 10,
   minSeatsPerSegment: 5,
@@ -45,9 +47,10 @@ const DEFAULT_OPTIONS = {
   maxOpportunityCandidates: 50000,
   maxAgents: 1000,
   maxUnlicensedUsersScored: 50000,
-} as CopilotAdoptionOptions;
+} as unknown as CopilotAdoptionOptions;
 
 const DEFAULTS: CopilotAdoptionScoreValues = {
+  ...DEFAULT_SCORE_VALUES,
   frequencyWeightPercent: 50, depthWeightPercent: 30, breadthWeightPercent: 20,
   developingScore: 25, establishedScore: 50, championScore: 75,
 };
@@ -74,6 +77,19 @@ const CUSTOM_REPORT: CopilotAdoptionOptions = {
 };
 
 describe('ScoreSettingsNotice', () => {
+  it.each(['en', 'es'] as const)('annotates additional custom rules in %s', async (language) => {
+    await loadCatalog(language);
+    const options = {
+      ...DEFAULT_REPORT, frequencyTargetRatio: 0.75, coworkFluencyMinScore: 70, minSeatsPerSegment: 6,
+      scoreSettings: { ...DEFAULT_REPORT.scoreSettings!, customised: true,
+        customisedFields: ['frequencyTargetRatio', 'coworkFluencyMinScore', 'minSeatsPerSegment'] as const },
+    };
+    renderWithProvider(<ScoreSettingsBanner options={{ ...options, scoreSettings: { ...options.scoreSettings, customisedFields: [...options.scoreSettings.customisedFields] } }} />, { language });
+    const text = screen.getByTestId('score-settings-banner').textContent ?? '';
+    expect(text).toContain(language === 'en' ? 'Frequency target (ratio of working days): 0.75 (default: 0.6)' : 'Objetivo de frecuencia (proporción de días laborables): 0,75 (predeterminado: 0,6)');
+    expect(text).toContain(language === 'en' ? 'Cowork fluency minimum score: 70' : 'Puntuación mínima de soltura de Cowork: 70');
+  });
+
   it('reads the effective values back as whole percentages', () => {
     expect(effectiveScoreValues(CUSTOM_REPORT)).toEqual({ ...DEFAULTS, frequencyWeightPercent: 60, depthWeightPercent: 20, championScore: 90 });
     expect(effectiveScoreValues({ ...DEFAULT_OPTIONS, frequencyWeight: 0.5, depthWeight: 0.3, breadthWeight: 0.2 })).toEqual(DEFAULTS);
