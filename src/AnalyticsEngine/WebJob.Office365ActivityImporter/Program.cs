@@ -39,17 +39,30 @@ namespace WebJob.Office365ActivityImporter
         internal static string TraceAuditEmail = null;
         internal static string TraceAuditDirectory = null;
 
+        private sealed class HistoricalRepairCheckpoint
+        {
+            public string Target { get; set; }
+            public DateTime FromUtc { get; set; }
+            public DateTime ToUtc { get; set; }
+            public ActivityImporter.Engine.ActivityAPI.Copilot.CopilotHistoricalRepairBatch Batch { get; set; }
+        }
+
         /// <summary>
-        /// Imports data from the Graph & 0365 Activity APIs.
-        /// 
-        /// Startup params (from ActivityImportConstants):
-        /// --webhook XYZ - override URL to create webhook subscriptions for
-        /// --callId XYZ - get & save a call from Graph
+        /// Imports Activity/Graph data, or repairs one bounded historical Copilot batch with
+        /// --repair-copilot-history fromUtc toUtc privateCheckpointFile (without calling Graph).
+        /// Other overrides: --webhook URL, --callId ID.
         /// </summary>
         static void Main(string[] args) => MainAsync(args).GetAwaiter().GetResult();
         static async Task MainAsync(string[] args)
         {
             int argIdx = 0;
+            var repairHistory = args.Length > 0 && args[0] == "--repair-copilot-history";
+            string checkpointPath = null;
+            if (repairHistory)
+            {
+                if (args.Length != 4) throw new ArgumentException("--repair-copilot-history <from UTC ISO-8601> <to UTC ISO-8601> <private checkpoint file>");
+                checkpointPath = ActivityImporter.Engine.ActivityAPI.Copilot.CopilotHistoricalRepair.ValidateCheckpointPath(args[3]);
+            }
 
             // Get settings
             AppConfig configuredSettings = null;
@@ -61,6 +74,40 @@ namespace WebJob.Office365ActivityImporter
             {
                 Console.WriteLine("Error converting configurations values to int/guid/timespan. Please verify App Settings.");
                 ConsoleApp.BombOut(true);
+            }
+
+            // Explicit operator-only repair: one bounded batch, no Graph calls, no normal import loop.
+            if (repairHistory)
+            {
+                var from = DateTime.Parse(args[1], System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.RoundtripKind);
+                var to = DateTime.Parse(args[2], System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.RoundtripKind);
+                if (from.Kind != DateTimeKind.Utc || to.Kind != DateTimeKind.Utc) throw new ArgumentException("Both dates must be UTC (Z).");
+                string target;
+                using (var hash = System.Security.Cryptography.SHA256.Create())
+                    target = Convert.ToBase64String(hash.ComputeHash(System.Text.Encoding.UTF8.GetBytes(
+                        configuredSettings.ConnectionStrings.DatabaseConnectionString)));
+                using (var checkpointLock = new System.IO.FileStream(checkpointPath + ".lock", System.IO.FileMode.OpenOrCreate,
+                    System.IO.FileAccess.ReadWrite, System.IO.FileShare.None))
+                {
+                    var checkpoint = System.IO.File.Exists(checkpointPath)
+                        ? JsonConvert.DeserializeObject<HistoricalRepairCheckpoint>(System.IO.File.ReadAllText(checkpointPath))
+                        : new HistoricalRepairCheckpoint { FromUtc = from, ToUtc = to, Target = target };
+                    if (checkpoint == null || checkpoint.FromUtc != from || checkpoint.ToUtc != to || checkpoint.Target != target)
+                        throw new ArgumentException("Checkpoint belongs to a different target or UTC window.");
+                    var batch = await ActivityImporter.Engine.ActivityAPI.Copilot.CopilotHistoricalRepair.RunBatchAsync(
+                        configuredSettings.ConnectionStrings.DatabaseConnectionString, from, to,
+                        checkpoint.Batch?.AfterTime, checkpoint.Batch?.AfterEventId, 500,
+                        Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance, checkpoint.Batch?.AfterUserId);
+                    // Retain the last cursor on an empty batch, rather than restarting on the next invocation.
+                    if (batch.Scanned > 0) checkpoint.Batch = batch;
+                    var pending = checkpointPath + ".pending";
+                    System.IO.File.WriteAllText(pending, JsonConvert.SerializeObject(checkpoint));
+                    if (System.IO.File.Exists(checkpointPath)) System.IO.File.Replace(pending, checkpointPath, null);
+                    else System.IO.File.Move(pending, checkpointPath);
+                    Console.WriteLine($"Scanned={batch.Scanned}; Replayed={batch.Replayed}; Unrecoverable={batch.Unrecoverable}; UnknownKind={batch.UnknownKind}. "
+                        + "Repeat until Scanned=0. Re-scan with a new checkpoint after historical writers finish.");
+                }
+                return;
             }
 
 #if DEBUG
@@ -84,6 +131,7 @@ namespace WebJob.Office365ActivityImporter
                     await db.SaveChangesAsync();
                     Console.WriteLine("DEBUG test config added to allow telemetry tests");
                 }
+
             }
 #endif
 

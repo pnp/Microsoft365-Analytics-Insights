@@ -1899,7 +1899,9 @@ BEGIN
         Word
       FROM (
         SELECT
-          app_host,
+          CASE WHEN c.app_host = N'Microsoft Teams' THEN N'Teams'
+               WHEN c.app_host = N'm365copilot' THEN N'Office'
+               ELSE c.app_host END AS app_host,
           @StartDate AS "date",
           -- Qualified explicitly: dbo.copilot_chats now carries a denormalised "user_id" of its own
           -- (migration DenormaliseCopilotChatUserAndTime), so an unqualified reference here is ambiguous.
@@ -1917,6 +1919,9 @@ BEGIN
         -- The other usp_Upsert* procs are unaffected: they read the daily *_user_activity_log tables,
         -- whose "date" values are always midnight, so the same comparison is exact for them.
         WHERE au.time_stamp >= @StartDate AND au.time_stamp < DATEADD(DAY, 1, @EndDate)
+          AND (c.app_host IS NULL OR c.app_host <> N'Copilot Studio')
+          AND NOT EXISTS (SELECT 1 FROM dbo.copilot_chat_duplicates AS turn_dup
+                          WHERE turn_dup.time_stamp = c.time_stamp AND turn_dup.event_id = c.event_id)
       ) t
       PIVOT (
         COUNT(event_id)
@@ -1984,15 +1989,28 @@ BEGIN
         au."user_id",
         @StartDate AS "date",
         c.event_id AS chat_id,
-        f.copilot_chat_id AS has_file,
-        m.copilot_chat_id AS has_meeting
+        CASE WHEN f.copilot_chat_id IS NOT NULL OR extra.has_file = 1 THEN c.event_id END AS has_file,
+        CASE WHEN m.copilot_chat_id IS NOT NULL OR extra.has_meeting = 1 THEN c.event_id END AS has_meeting
       FROM dbo.copilot_chats AS c
         JOIN dbo.audit_events AS au ON c.event_id = au.id
         LEFT JOIN dbo.copilot_event_files AS f ON c.event_id = f.copilot_chat_id
         LEFT JOIN dbo.copilot_event_meetings AS m ON c.event_id = m.copilot_chat_id
+        -- A constituent can be the only record carrying resolved file/meeting metadata. Count its
+        -- evidence on the retained turn, using the existing counted-event index, rather than losing it.
+        OUTER APPLY (
+          SELECT MAX(CASE WHEN ef.copilot_chat_id IS NOT NULL THEN 1 ELSE 0 END) AS has_file,
+                 MAX(CASE WHEN em.copilot_chat_id IS NOT NULL THEN 1 ELSE 0 END) AS has_meeting
+          FROM dbo.copilot_chat_duplicates AS d
+          LEFT JOIN dbo.copilot_event_files AS ef ON ef.copilot_chat_id = d.event_id
+          LEFT JOIN dbo.copilot_event_meetings AS em ON em.copilot_chat_id = d.event_id
+          WHERE d.counted_event_id = c.event_id
+        ) extra
       -- Same half-open window as hosts_pivoted above; the two must agree or the per-host counts and
       -- the chat/file/meeting counts would cover different windows for the same week.
       WHERE au.time_stamp >= @StartDate AND au.time_stamp < DATEADD(DAY, 1, @EndDate)
+        AND (c.app_host IS NULL OR c.app_host <> N'Copilot Studio')
+        AND NOT EXISTS (SELECT 1 FROM dbo.copilot_chat_duplicates AS turn_dup
+                        WHERE turn_dup.time_stamp = c.time_stamp AND turn_dup.event_id = c.event_id)
     ),
     event_counts AS (
       SELECT

@@ -115,7 +115,9 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot
         /// 1.2.0.0 - the agent's kind and origin decide whether an interaction is priced, and
         ///           AgentCreditBasis records why (#639). From Stable build 1552 until this version no
         ///           agent was ever classified, so every agent interaction was estimated at 0; custom-engine
-        ///           agents are priced again from here. Estimates stored before this are not recomputed.
+        ///           agents are priced again from here. Legacy zero estimates can only be repaired when
+        ///           retained original audit evidence is replayed; the persisted breakdown omitted response
+        ///           counts, so resources and model names alone cannot recover historical totals.
         /// </summary>
         private const string COST_ESTIMATION_VERSION = "1.2.0.0";
 

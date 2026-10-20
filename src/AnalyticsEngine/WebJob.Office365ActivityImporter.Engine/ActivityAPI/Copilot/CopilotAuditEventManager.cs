@@ -619,6 +619,41 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
                     "Could not merge duplicate Copilot agent rows this cycle. The import itself succeeded; the "
                     + "affected agents stay split in Copilot reports until a later cycle merges them.");
             }
+            try
+            {
+                await RunHistoricalEvidenceRepairAsync(connectionString, logger);
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex, "Could not repair historical Copilot origin flags or unsupported time-only mappings this cycle. A later cycle will retry.");
+            }
+        }
+
+        /// <summary>
+        /// Repairs at most 1,000 recognised unknown agent flags and restores at most 50,000 unsupported
+        /// time-only duplicate guesses. Each statement commits independently; reruns resume from the
+        /// remaining evidence. Never computes credit totals from incomplete historical facts.
+        /// </summary>
+        internal static async Task RunHistoricalEvidenceRepairAsync(string connectionString, ILogger logger)
+        {
+            var rr = new ProjectResourceReader(System.Reflection.Assembly.GetExecutingAssembly());
+            var sql = rr.ReadResourceString(
+                "WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot.SQL.repair_historical_copilot_evidence.sql");
+            using (var con = AzureSqlTokenAuth.CreateConnection(connectionString))
+            {
+                await con.OpenAsync();
+                using (var cmd = new SqlCommand(sql, con) { CommandTimeout = 300 })
+                using (var reader = await cmd.ExecuteReaderAsync())
+                {
+                    if (await reader.ReadAsync())
+                    {
+                        var classified = Convert.ToInt32(reader["ClassifiedAgents"]);
+                        var restored = Convert.ToInt32(reader["RestoredTurns"]);
+                        if (classified > 0 || restored > 0)
+                            logger.LogWarning($"Recovered origin for {classified:n0} Copilot agent(s) and restored {restored:n0} unsupported time-only turn mappings. No historical credits were inferred.");
+                    }
+                }
+            }
         }
 
         /// <summary>Runs <c>repair_split_copilot_agents.sql</c> once and returns what it did.</summary>
