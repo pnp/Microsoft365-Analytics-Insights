@@ -150,9 +150,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 _logger.LogWarning($"{sectionName} did not complete successfully; it will be retried on the next cycle.");
             }
 
-            // Record the run only after success (so a failure doesn't suppress the next attempt) and only
-            // when gating is active (interval > 0).
-            if (intervalHours > 0 && succeeded)
+            // The portal also uses this stamp as last completed, even when cadence gating is disabled.
+            if (succeeded)
             {
                 await _lastRunStore.SetLastRunUtc(key, _clock.UtcNow);
             }

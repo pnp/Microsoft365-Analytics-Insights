@@ -132,10 +132,12 @@ namespace Tests.UnitTests
             Assert.AreEqual(2, store.Writes.Count, "A forced run still re-stamps the gate, so the next cycle is throttled normally again.");
         }
 
-        [TestMethod]
-        public async Task GraphImporter_IntervalHoursZero_RunsEveryCycleAndRecordsNoLastRunTime()
+        [DataTestMethod]
+        [DataRow(0)]
+        [DataRow(-1)]
+        public async Task GraphImporter_CadenceDisabled_RunsEveryCycleAndRecordsLastCompletion(int intervalHours)
         {
-            var section = FakeGraphImportSection.Gated("Ungated by interval", FirstSectionCadence, 0);
+            var section = FakeGraphImportSection.Gated("Ungated by interval", FirstSectionCadence, intervalHours);
 
             // Seeded as having run this very instant: with gating disabled that must not matter.
             var store = new RecordingImportLastRunStore().Seed(FirstSectionCadence, Now);
@@ -144,15 +146,21 @@ namespace Tests.UnitTests
             await importer.GetAndSaveAllGraphData(GatingSettings());
             await importer.GetAndSaveAllGraphData(GatingSettings());
 
-            Assert.AreEqual(2, section.RunCount, "IntervalHours 0 disables gating, so the section runs every cycle.");
-            Assert.AreEqual(0, store.Writes.Count,
-                "With gating disabled there is no window to protect, so writing a last-run time is pointless cache traffic on every cycle.");
+            Assert.AreEqual(2, section.RunCount, "A non-positive interval runs every cycle, even with a recorded completion.");
+            Assert.AreEqual(2, store.Writes.Count, "Every successful run must record its completion for the User import page.");
+            foreach (var write in store.Writes)
+            {
+                Assert.AreEqual(FirstSectionCadence, write.Key);
+                Assert.AreEqual(Now, write.Value, "The completion timestamp must use the injected UTC clock.");
+            }
         }
 
-        [TestMethod]
-        public async Task GraphImporter_SectionReturnsFalse_DoesNotRecordLastRunTime()
+        [DataTestMethod]
+        [DataRow(24)]
+        [DataRow(0)]
+        public async Task GraphImporter_SectionReturnsFalse_DoesNotRecordLastRunTime(int intervalHours)
         {
-            var section = FakeGraphImportSection.Gated("Failing section", FirstSectionCadence, 24);
+            var section = FakeGraphImportSection.Gated("Failing section", FirstSectionCadence, intervalHours);
             section.Result = false;
 
             var store = new RecordingImportLastRunStore();
