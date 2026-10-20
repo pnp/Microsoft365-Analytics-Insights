@@ -25,6 +25,40 @@ namespace Tests.UnitTests
 {
     public partial class CopilotAuditBackfillTests
     {
+        [TestMethod]
+        public async Task Importer_PersistenceFailureIsLoggedWhileDurableErrorRemainsSanitised()
+        {
+            var state = await NewStateWithJobAsync();
+            var logger = new FakeLoaderClasses.RecordingLogger();
+            var failure = new InvalidOperationException("Synthetic private persistence failure.");
+            var source = new FakeAuditSearchSource
+            {
+                Query = new CopilotAuditSearchQuery { Status = "succeeded" },
+                Pages = new Queue<CopilotAuditSearchRecordPage>(new[]
+                {
+                    new CopilotAuditSearchRecordPage
+                    {
+                        Records = new List<CopilotAuditSearchRecord> { SyntheticRecord(SyntheticId(1)) }
+                    }
+                })
+            };
+            var importer = new CopilotAuditBackfillImporter(state, source,
+                new MeasuredScalePersistence(_ => throw failure),
+                new AppConfig { ImportJobSettings = new ImportTaskSettings { Copilot = true } }, logger,
+                () => new DateTime(2026, 10, 2, 12, 0, 0, DateTimeKind.Utc), _ => Task.CompletedTask,
+                new FakeExistingEventFilter());
+
+            var job = await importer.AdvanceLatestAsync();
+
+            Assert.IsTrue(logger.Entries.Any(e => ReferenceEquals(e.Exception, failure)),
+                "Operators need the underlying SQL/backend exception in the private importer log.");
+            Assert.AreEqual(CopilotAuditBackfillStates.Running, job.State);
+            Assert.AreEqual(CopilotAuditBackfillErrorCodes.QueryFailed, job.LastErrorCode);
+            Assert.AreEqual(nameof(InvalidOperationException), job.LastErrorDetail);
+            Assert.AreEqual(1, job.PendingSlices.Count, "The failed slice must remain resumable.");
+            Assert.AreEqual(0, job.RecordsImported);
+        }
+
         public TestContext TestContext { get; set; }
 
         [TestMethod]

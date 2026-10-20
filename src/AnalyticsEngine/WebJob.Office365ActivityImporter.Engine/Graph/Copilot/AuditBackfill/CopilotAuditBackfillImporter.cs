@@ -483,6 +483,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.AuditBackfill
                 }
                 catch (Exception ex)
                 {
+                    _logger?.LogWarning(ex, $"Copilot audit backfill {job.Id}: slice processing failed; it will retry or record a gap.");
                     progressed = true;
                     RetryOrGap(job, slice, CopilotAuditBackfillErrorCodes.QueryFailed, DescribeForStorage(ex), resubmitLater: true);
                 }
@@ -612,6 +613,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.AuditBackfill
                 return new CommitOutcome { AlreadyPresent = mapped.Count };
             }
 
+            toCommit.RecoverMissingCopilotMetadata = true;
             var stats = await _persistence.CommitAll(toCommit).ConfigureAwait(false);
             return new CommitOutcome { Imported = stats.Imported, AlreadyPresent = mapped.Count - toCommit.Count };
         }
