@@ -8,6 +8,7 @@ using Common.Entities;
 using Common.Entities.Config;
 using Common.Entities.UserScope;
 using DataUtils;
+using DataUtils.Health;
 using Microsoft.Extensions.Logging;
 using System;
 using System.Configuration;
@@ -99,18 +100,18 @@ namespace WebJob.AppInsightsImporter
                 }
             }
 
-            // Stagger this WebJob's first cycle so it doesn't peak on the shared App Service plan at the
-            // same time as the activity importer. One-off; later cycles use ImportCyclePauseMinutes.
-#if !DEBUG
-            if (runAgain && config.ImportStartStaggerMinutes > 0)
-            {
-                logger.LogInformation($"Staggering start by {config.ImportStartStaggerMinutes} min(s) to avoid simultaneous CPU peaks with the activity importer...");
-                System.Threading.Thread.Sleep(config.ImportStartStaggerMinutes * 60 * 1000);
-            }
-#endif
-
+            using (var heartbeat = new DataUtils.Health.ImporterHeartbeat(logger, DataUtils.Health.ImporterHeartbeat.WebTrafficJob))
+            using (var health = Common.Entities.Health.DefaultRuntimeHealth.Start(config, logger, ImporterHeartbeat.WebTrafficJob))
             try
             {
+                // Heartbeat during the initial stagger too: a planned wait is not a dead process.
+#if !DEBUG
+                if (runAgain && config.ImportStartStaggerMinutes > 0)
+                {
+                    logger.LogInformation($"Staggering start by {config.ImportStartStaggerMinutes} min(s) to avoid simultaneous CPU peaks with the activity importer...");
+                    System.Threading.Thread.Sleep(config.ImportStartStaggerMinutes * 60 * 1000);
+                }
+#endif
                 // UserGroupsFilter, shared across cycles: the resolved scope (and the last good one to fall back on), and
                 // how far this process has read - see AppInsightsScanWatermark.
                 var userScopeProvider = UserImportScopeProvider.CreateForGraph(config, logger);
@@ -139,6 +140,7 @@ namespace WebJob.AppInsightsImporter
 #endif
 
                     // Output cycle stats
+                    heartbeat.CycleCompleted(importCycleTimer.Elapsed);
                     importCycleTimer.TrackFinishedEventAndStopTimer(AnalyticsLogger.AnalyticsEvent.FinishedImportCycle);
 
                     if (runAgain)

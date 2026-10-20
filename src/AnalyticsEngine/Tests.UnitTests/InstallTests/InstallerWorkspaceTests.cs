@@ -768,6 +768,7 @@ namespace Tests.UnitTests.InstallTests
         private static SolutionInstallConfig SyntheticConfig()
         {
             var config = SolutionInstallConfig.NewConfig();
+            config.HealthMonitoring.NotificationEmail = "operator@contoso.example";
             config.SolutionConfig.ImportTaskSettings.Copilot = true;
             config.Subscription = new AzureSubscription(Guid.Empty.ToString(), "Contoso synthetic subscription");
             config.AzureLocationName = "westeurope";

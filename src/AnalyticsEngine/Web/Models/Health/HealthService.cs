@@ -468,13 +468,13 @@ namespace Web.AnalyticsWeb.Models.Health
                 }
                 else
                 {
-                    // The app is running and authenticating, so the secret is currently valid; its expiry
-                    // date is not readable at runtime from the secret value itself.
+                    // Process liveness is not credential validation. Fresh DefaultHealth telemetry below
+                    // can supply token-acquisition evidence, but a secret value cannot reveal its expiry.
                     UpsertComponent(section, new ComponentHealthRow
                     {
                         Component = "Credential",
-                        Status = HealthStatusNames.Healthy,
-                        Detail = "Client-secret auth: currently valid. Secret expiry is not visible at runtime - use certificate auth to get an expiry warning, or track it in the app registration.",
+                        Status = HealthStatusNames.Degraded,
+                        Detail = "Client-secret validity and expiry are not checked here. Enable default health checks for token validation; track secret expiry in the app registration.",
                         LastSeenUtc = DateTime.UtcNow
                     });
                 }
@@ -564,6 +564,11 @@ namespace Web.AnalyticsWeb.Models.Health
         private static async Task LoadComponentHealthFromTelemetry(AppInsightsQueryClient client, ComponentsSection section)
         {
             var table = await client.RunQueryAsync(QueryComponentHealth);
+            ApplyComponentTelemetry(table, section, DateTime.UtcNow);
+        }
+
+        internal static void ApplyComponentTelemetry(AppInsightsQueryTable table, ComponentsSection section, DateTime nowUtc)
+        {
             foreach (var row in table.Rows)
             {
                 var component = table.GetString(row, "Component");
@@ -573,19 +578,29 @@ namespace Web.AnalyticsWeb.Models.Health
                 {
                     continue;
                 }
-                // Runtime checks done above (Credential, Service Bus) are fresher than telemetry - keep them.
-                if (section.ComponentHealth.Any(c => string.Equals(c.Component, component, StringComparison.OrdinalIgnoreCase))) continue;
+                var current = section.ComponentHealth.FirstOrDefault(c => string.Equals(c.Component, component, StringComparison.OrdinalIgnoreCase));
+                if (current != null)
+                {
+                    // A newly acquired token (or its failure) is stronger evidence than the local
+                    // certificate-date-only check. Never hide a current certificate failure with an
+                    // older healthy event, or use stale telemetry as proof of credential validity.
+                    var defaultCredentialCheck = component == "Credential" && reasonKey?.StartsWith("defaultHealth.", StringComparison.Ordinal) == true;
+                    if (!defaultCredentialCheck || current.Status == HealthStatusNames.Unhealthy) continue;
+                }
+                var lastSeen = table.GetDateTimeUtc(row, "LastSeen");
+                var stale = reasonKey?.StartsWith("defaultHealth.", StringComparison.Ordinal) == true
+                    && (!lastSeen.HasValue || lastSeen.Value < nowUtc.AddMinutes(-30));
 
                 UpsertComponent(section, new ComponentHealthRow
                 {
                     Component = component,
-                    Status = table.GetString(row, "Status"),
-                    Detail = table.GetString(row, "Detail"),
-                    ReasonKey = reasonKey,
+                    Status = stale ? HealthStatusNames.Degraded : table.GetString(row, "Status"),
+                    Detail = stale ? "Default health-check telemetry is older than 30 minutes or has no timestamp; current health is unknown." : table.GetString(row, "Detail"),
+                    ReasonKey = stale ? "defaultHealth.stale" : reasonKey,
                     ErrorCode = table.GetString(row, "ErrorCode"),
                     HttpStatus = table.GetInt(row, "HttpStatus"),
-                    DaysToExpiry = table.GetInt(row, "DaysToExpiry"),
-                    LastSeenUtc = table.GetDateTimeUtc(row, "LastSeen")
+                    DaysToExpiry = stale ? null : table.GetInt(row, "DaysToExpiry"),
+                    LastSeenUtc = lastSeen
                 });
             }
         }

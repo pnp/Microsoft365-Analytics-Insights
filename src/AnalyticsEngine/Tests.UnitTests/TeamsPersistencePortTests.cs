@@ -227,6 +227,126 @@ namespace Tests.UnitTests
             Assert.IsNull(await tokens.GetDeltaToken("contoso-team", "channel-two"));
         }
 
+        [TestMethod]
+        public async Task Budget_ResumedCyclesDoNotRepeatAdditiveWrites()
+        {
+            var state = new Common.Entities.State.InMemoryKeyValueStore();
+            var events = new List<string>();
+            var tokens = new RecordingTokens(events);
+            var source = new IncrementalBudgetSource(tokens);
+            var persistedCounts = 0;
+            for (int cycle = 0; cycle < 4; cycle++)
+            {
+                var team = Team();
+                team.Channels.ForEach(c => c.Messages.Clear());
+                team.AllReactions.Clear();
+                team.PendingChannelDeltaTokenCommits.Clear();
+                team.ChannelBudgetProgress = new TeamsChannelBudgetProgress(state, 1, new RecordingLogger());
+                await new TeamsChannelCrawler(source, team.ChannelBudgetProgress)
+                    .PopulateNewMessagesAndReactions(team.Channels, team.Id, team.PendingChannelDeltaTokenCommits);
+                var store = new RecordingStore(events);
+                await team.SaveToSQL(store, new RecordingCognitive(events), tokens, new RecordingLogger());
+                persistedCounts += store.Stats.Sum(s => s.ChatsCount);
+            }
+            Assert.AreEqual(2, persistedCounts, "Each channel's synthetic message is written once, not once per budget cycle.");
+            CollectionAssert.AreEqual(new[] { "channel-one", "channel-two", "channel-one", "channel-two" }, source.Reads);
+            Assert.AreEqual("channel-two", await state.GetStringAsync("budget|contoso-team"));
+        }
+
+        [DataTestMethod]
+        [DataRow("stats:channel-one")]
+        [DataRow("commit")]
+        [DataRow("cancel")]
+        [DataRow("token")]
+        public async Task Budget_SqlCancellationAndTokenFailuresNeverPublishSchedulingCursor(string failure)
+        {
+            var state = new Common.Entities.State.InMemoryKeyValueStore();
+            var events = new List<string>();
+            var tokens = new RecordingTokens(events);
+            var team = Team();
+            team.Channels.ForEach(c => c.Messages.Clear());
+            team.AllReactions.Clear();
+            team.PendingChannelDeltaTokenCommits.Clear();
+            team.ChannelBudgetProgress = new TeamsChannelBudgetProgress(state, 1, new RecordingLogger());
+            await new TeamsChannelCrawler(new IncrementalBudgetSource(tokens), team.ChannelBudgetProgress)
+                .PopulateNewMessagesAndReactions(team.Channels, team.Id, team.PendingChannelDeltaTokenCommits);
+            var store = new RecordingStore(events);
+            if (failure == "token") tokens.FailChannel = "channel-one";
+            else
+            {
+                store.FailStage = failure == "cancel" ? "commit" : failure;
+                store.Failure = failure == "cancel" ? (Exception)new OperationCanceledException() : new DbUpdateException("synthetic failure");
+            }
+            if (failure == "commit")
+                Assert.IsNull(await team.SaveToSQL(store, new RecordingCognitive(events), tokens, new RecordingLogger()));
+            else if (failure == "cancel")
+                await Assert.ThrowsExceptionAsync<OperationCanceledException>(() => team.SaveToSQL(store, new RecordingCognitive(events), tokens, new RecordingLogger()));
+            else if (failure == "token")
+                await Assert.ThrowsExceptionAsync<InvalidOperationException>(() => team.SaveToSQL(store, new RecordingCognitive(events), tokens, new RecordingLogger()));
+            else
+                await Assert.ThrowsExceptionAsync<DbUpdateException>(() => team.SaveToSQL(store, new RecordingCognitive(events), tokens, new RecordingLogger()));
+            Assert.IsNull(await state.GetStringAsync("budget|contoso-team"));
+            Assert.IsNull(await tokens.GetDeltaToken(team.Id, "channel-one"));
+        }
+
+        [TestMethod]
+        public async Task Budget_CursorWriteFailureAfterTokens_ReReadDoesNotRepeatSqlCounts()
+        {
+            var state = new FaultingBudgetState();
+            var events = new List<string>();
+            var tokens = new RecordingTokens(events);
+            var source = new IncrementalBudgetSource(tokens);
+            var total = 0;
+            for (int attempt = 0; attempt < 2; attempt++)
+            {
+                var team = Team();
+                team.Channels.ForEach(c => c.Messages.Clear());
+                team.AllReactions.Clear();
+                team.PendingChannelDeltaTokenCommits.Clear();
+                team.ChannelBudgetProgress = new TeamsChannelBudgetProgress(state, 1, new RecordingLogger());
+                await new TeamsChannelCrawler(source, team.ChannelBudgetProgress)
+                    .PopulateNewMessagesAndReactions(team.Channels, team.Id, team.PendingChannelDeltaTokenCommits);
+                var store = new RecordingStore(events);
+                if (attempt == 0)
+                {
+                    await Assert.ThrowsExceptionAsync<InvalidOperationException>(() =>
+                        team.SaveToSQL(store, new RecordingCognitive(events), tokens, new RecordingLogger()));
+                    Assert.IsNotNull(await tokens.GetDeltaToken(team.Id, "channel-one"), "Graph token must be committed before scheduling cursor.");
+                    Assert.IsNull(await state.GetStringAsync("budget|contoso-team"));
+                    state.FailWrites = false;
+                }
+                else await team.SaveToSQL(store, new RecordingCognitive(events), tokens, new RecordingLogger());
+                total += store.Stats.Sum(s => s.ChatsCount);
+            }
+            Assert.AreEqual(1, total, "Re-reading after a cursor-only failure uses the already committed delta token.");
+            CollectionAssert.AreEqual(new[] { "channel-one", "channel-one" }, source.Reads);
+        }
+
+        private sealed class FaultingBudgetState : Common.Entities.State.IKeyValueStore
+        {
+            private readonly Common.Entities.State.InMemoryKeyValueStore _inner = new Common.Entities.State.InMemoryKeyValueStore();
+            public bool FailWrites { get; set; } = true;
+            public string Description => "synthetic faulting state";
+            public Task<string> GetStringAsync(string key, System.Threading.CancellationToken cancellationToken = default) => _inner.GetStringAsync(key, cancellationToken);
+            public Task<bool> ExistsAsync(string key, System.Threading.CancellationToken cancellationToken = default) => _inner.ExistsAsync(key, cancellationToken);
+            public Task<bool> DeleteAsync(string key, System.Threading.CancellationToken cancellationToken = default) => _inner.DeleteAsync(key, cancellationToken);
+            public Task SetStringAsync(string key, string value, TimeSpan? timeToLive = null, System.Threading.CancellationToken cancellationToken = default)
+                => FailWrites ? Task.FromException(new InvalidOperationException("synthetic state failure")) : _inner.SetStringAsync(key, value, timeToLive, cancellationToken);
+        }
+
+        private sealed class IncrementalBudgetSource : IChannelMessagesSourceLoader
+        {
+            private readonly ITeamChannelDeltaTokenStore _tokens;
+            public List<string> Reads { get; } = new List<string>();
+            public IncrementalBudgetSource(ITeamChannelDeltaTokenStore tokens) { _tokens = tokens; }
+            public async Task<TeamChannelDeltaTokenInfo> LoadMessagesAndReactions(ChannelWithReactions channel, string teamId)
+            {
+                Reads.Add(channel.Id);
+                if (await _tokens.GetDeltaToken(teamId, channel.Id) == null) channel.Messages.Add(Msg(Day));
+                return new TeamChannelDeltaTokenInfo { Token = "synthetic-complete", LastUpdated = Day };
+            }
+        }
+
         private sealed class RecordingStore : ITeamsPersistenceStore
         {
             private readonly List<string> _events;

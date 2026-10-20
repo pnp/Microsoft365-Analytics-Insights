@@ -10,6 +10,7 @@ import { COPILOT_ADOPTION_WARNING_KEYS, COWORK_TIER_LABEL_KEYS, TENURE_BASIS_LAB
 import { AGENT_ORIGIN_LABEL_KEYS } from '../../components/copilotAdoption/serverText';
 import {
   BLOB_CHECKPOINT_REASON_KEYS,
+  DEFAULT_HEALTH_REASON_KEYS,
   AGENT_COST_CONNECTION_REASON_KEYS,
   HEALTH_COMPONENT_LABEL_KEYS,
   translateHealthComponentDetailText,
@@ -43,6 +44,26 @@ import { COPILOT_ADOPTION_SETTINGS_ERROR_KEYS } from '../../api/copilotAdoptionS
 function sortedUnique(values: string[]): string[] {
   return [...new Set(values)].sort((a, b) => a.localeCompare(b));
 }
+
+describe('Default runtime health diagnostics', () => {
+  it('translates every emitted reason and summary fallback in both languages', async () => {
+    await loadCatalog('es');
+    const root = join(process.cwd(), '..', '..', '..');
+    const sources = [
+      join(root, 'Common', 'DataUtils', 'Health', 'RuntimeHealthMonitor.cs'),
+      join(root, 'Common', 'DataUtils', 'Health', 'RuntimeCredentialHealth.cs'),
+      join(root, 'Common', 'Entities', 'Health', 'DefaultRuntimeHealth.cs'),
+      join(root, 'Web', 'Models', 'Health', 'HealthService.cs'),
+    ].map((path) => readFileSync(path, 'utf8')).join('\n');
+    expect(translationKeysIn(sources, 'defaultHealth.')).toEqual(Object.keys(DEFAULT_HEALTH_REASON_KEYS).sort());
+    const es: TFunction = (key, values) => translateStatic('es', key, values);
+    for (const key of Object.values(DEFAULT_HEALTH_REASON_KEYS)) {
+      expect(sources).toContain(`"${EN_CATALOG[key]}"`);
+      expect(translateHealthComponentDetailText(EN_CATALOG[key], es)).toBe(es(key));
+      expect(es(key)).not.toBe(EN_CATALOG[key]);
+    }
+  });
+});
 
 describe('Delegated billing import diagnostics', () => {
   it('translates every billing connection health state and its overall roll-up', async () => {
@@ -665,18 +686,21 @@ function healthComponentKeys(): string[] {
   const blobCheckpointSource = readFileSync(HEALTH_COMPONENT_BLOB_CHECKPOINT_FACTORY, 'utf8');
   const copilotBackfillSource = readFileSync(HEALTH_COMPONENT_COPILOT_BACKFILL, 'utf8');
   const officeImporterSource = readFileSync(HEALTH_COMPONENT_OFFICE_IMPORTER_PROGRAM, 'utf8');
+  const defaultChecksSource = readFileSync(join(process.cwd(), '..', '..', '..',
+    'Common', 'Entities', 'Health', 'DefaultRuntimeHealth.cs'), 'utf8');
   return sortedUnique([
     ...[...source.matchAll(HEALTH_SERVICE_COMPONENT)].map((m) => m[1]),
     ...[...blobCheckpointSource.matchAll(HEALTH_TELEMETRY_COMPONENT)].map((m) => m[1]),
     ...[...copilotBackfillSource.matchAll(HEALTH_TELEMETRY_COMPONENT)].map((m) => m[1]),
     ...[...officeImporterSource.matchAll(HEALTH_TELEMETRY_COMPONENT)].map((m) => m[1]),
+    ...[...defaultChecksSource.matchAll(/\[HealthComponent\.([A-Za-z0-9_]+)\]/g)].map((m) => m[1]),
   ]);
 }
 
 describe('Health component display names', () => {
   it('translates every concrete component name the server can send today', () => {
     const serverKeys = healthComponentKeys();
-    expect(serverKeys).toEqual(['BlobCheckpoint', 'CopilotAuditBackfill', 'Credential', 'MessageTracing', 'PowerPlatformConnection', 'ServiceBus']);
+    expect(serverKeys).toEqual(['BlobCheckpoint', 'CopilotAuditBackfill', 'Credential', 'MessageTracing', 'PowerPlatformConnection', 'ServiceBus', 'Sql']);
 
     const missingMapEntries = serverKeys.filter((key) => !(key in HEALTH_COMPONENT_LABEL_KEYS));
     const missingCatalogEntries = serverKeys

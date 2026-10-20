@@ -1,5 +1,9 @@
 using System.Collections.Generic;
 using System.Threading.Tasks;
+using System;
+using System.Linq;
+using Common.Entities.State;
+using Microsoft.Extensions.Logging;
 
 namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
 {
@@ -12,10 +16,12 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
     public class TeamsChannelCrawler
     {
         private readonly IChannelMessagesSourceLoader _messagesSource;
+        private readonly TeamsChannelBudgetProgress _budget;
 
-        public TeamsChannelCrawler(IChannelMessagesSourceLoader messagesSource)
+        public TeamsChannelCrawler(IChannelMessagesSourceLoader messagesSource, TeamsChannelBudgetProgress budget = null)
         {
             _messagesSource = messagesSource ?? throw new System.ArgumentNullException(nameof(messagesSource));
+            _budget = budget;
         }
 
         /// <summary>
@@ -25,7 +31,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
         /// <remarks>
         /// A channel that returns no delta token leaves the stored token untouched, so a read that
         /// couldn't produce one doesn't destroy the incremental position. Channels are crawled in
-        /// order and a read failure aborts the whole team's crawl, exactly as before - the caller
+        /// source order by default, or in durable round-robin order when budgeting is enabled.
+        /// A read failure aborts the whole team's crawl, exactly as before - the caller
         /// deletes the team's auth token and retries next cycle.
         /// </remarks>
         public async Task<List<TeamChannelDeltaTokenCommit>> PopulateNewMessagesAndReactions(
@@ -35,10 +42,21 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
         {
             pendingDeltaTokenCommits = pendingDeltaTokenCommits ?? new List<TeamChannelDeltaTokenCommit>();
 
-            foreach (var channel in channels)
+            var selected = _budget == null ? channels : await _budget.SelectChannels(channels, teamId);
+            foreach (var channel in selected)
             {
                 // Load stats. Will throw ChannelMessagesReadException if token is invalid
-                var channelDelta = await _messagesSource.LoadMessagesAndReactions(channel, teamId);
+                TeamChannelDeltaTokenInfo channelDelta;
+                try
+                {
+                    channelDelta = await _messagesSource.LoadMessagesAndReactions(channel, teamId);
+                }
+                catch (ChannelMessagesReadException)
+                {
+                    _budget?.ReadFailed();
+                    throw;
+                }
+                _budget?.ReadCompleted(channel.Id, channelDelta != null);
 
                 if (channelDelta != null)
                 {
@@ -46,7 +64,82 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
                 }
             }
 
+            _budget?.ReportCompleted();
             return pendingDeltaTokenCommits;
+        }
+    }
+
+    /// <summary>
+    /// A scheduling cursor, NOT a Graph checkpoint. Only channel delta tokens certify completed reads.
+    /// Stops between channels so the budget itself never causes replay of additive statistics.
+    /// </summary>
+    public sealed class TeamsChannelBudgetProgress
+    {
+        private readonly IKeyValueStore _store;
+        private readonly ILogger _logger;
+        private readonly int _maximum;
+        private string _lastRead;
+        private int _read;
+        private string _teamKey;
+        private int _deferred;
+        private string _teamReference;
+
+        public TeamsChannelBudgetProgress(IKeyValueStore store, int maximum, ILogger logger)
+        {
+            _store = store ?? throw new ArgumentNullException(nameof(store));
+            if (maximum <= 0) throw new ArgumentOutOfRangeException(nameof(maximum));
+            _maximum = maximum;
+            _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+        }
+
+        internal async Task<List<ChannelWithReactions>> SelectChannels(List<ChannelWithReactions> channels, string teamId)
+        {
+            _teamKey = "budget|" + teamId;
+            _teamReference = TeamReference(teamId);
+            _read = 0;
+            _lastRead = null;
+            var after = await _store.GetStringAsync(_teamKey);
+            var ordered = channels.OrderBy(c => c.Id, StringComparer.Ordinal).ToList();
+            var start = after == null ? 0 : ordered.FindIndex(c => StringComparer.Ordinal.Compare(c.Id, after) > 0);
+            if (start < 0) start = 0;
+            var count = Math.Min(_maximum, ordered.Count);
+            var selected = new List<ChannelWithReactions>(count);
+            for (int i = 0; i < count; i++) selected.Add(ordered[(start + i) % ordered.Count]);
+            _deferred = ordered.Count - count;
+            return selected;
+        }
+
+        internal void ReadCompleted(string channelId, bool completedDelta)
+        {
+            _lastRead = channelId;
+            _read++;
+            if (!completedDelta)
+                _logger.LogWarning("TeamsChannelReadIncomplete: section=channelMessages; teamRef={TeamRef}; no completed delta; scheduling may continue but Graph checkpoint is unchanged. On retry, additive statistics may be counted again.", _teamReference);
+        }
+
+        internal void ReadFailed() => _logger.LogWarning("TeamsChannelGraphFailure: section=channelMessages; teamRef={TeamRef}; budget exhaustion is not the cause; failed read has no scheduling or Graph checkpoint.", _teamReference);
+
+        internal void ReportCompleted()
+        {
+            if (_deferred > 0)
+                _logger.LogWarning("TeamsChannelBudgetExhausted: section=channelMessages; teamRef={TeamRef}; channelsRead={Read}; channelsDeferred={Deferred}; limit={Limit}. Deferred channels resume after SQL persistence.",
+                    _teamReference, _read, _deferred, _maximum);
+        }
+
+        /// <summary>Called only after SQL and completed channel-token writes have succeeded.</summary>
+        public async Task CommitAfterPersistence()
+        {
+            if (_lastRead != null)
+            {
+                await _store.SetStringAsync(_teamKey, _lastRead);
+                _logger.LogInformation("TeamsChannelBudgetProgressSaved: section=channelMessages; channelsRead={Read}; SQL and completed Graph checkpoints persisted.", _read);
+            }
+        }
+
+        private static string TeamReference(string teamId)
+        {
+            using (var hash = System.Security.Cryptography.SHA256.Create())
+                return BitConverter.ToString(hash.ComputeHash(System.Text.Encoding.UTF8.GetBytes(teamId))).Replace("-", "").Substring(0, 16);
         }
     }
 }

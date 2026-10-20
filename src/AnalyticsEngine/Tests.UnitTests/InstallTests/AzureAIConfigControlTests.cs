@@ -14,6 +14,64 @@ namespace Tests.UnitTests.InstallTests
     public class AzureAIConfigControlTests
     {
         [TestMethod]
+        public void NetworkingCleanupIsExplicitInExistingDeploymentConfirmation()
+        {
+            RunOnSta(() =>
+            {
+                var config = SolutionInstallConfig.NewConfig();
+                config.NetworkConfig.Enabled = false;
+                using (var review = new App.ControlPanel.DeploymentReviewForm(config, new string[0]))
+                {
+                    var facts = Find<ListView>(review, "reviewFacts");
+                    StringAssert.Contains(facts.Items.Cast<ListViewItem>().Single(i => i.Text == "Private-network cleanup").SubItems[1].Text,
+                        "Delete only confirmed installer-owned");
+                    StringAssert.Contains(facts.Items.Cast<ListViewItem>().Single(i => i.Text == "Legacy networking").SubItems[1].Text,
+                        "blocks automatic cleanup");
+                    Assert.IsFalse(Find<Button>(review, "confirmDeployment").Enabled);
+                }
+                config.NetworkConfig.Enabled = true;
+                config.NetworkConfig.AllowPublicAccess = true;
+                using (var review = new App.ControlPanel.DeploymentReviewForm(config, new string[0]))
+                    StringAssert.Contains(Find<ListView>(review, "reviewFacts").Items.Cast<ListViewItem>()
+                        .Single(i => i.Text == "Private-network cleanup").SubItems[1].Text, "retain VNet connectivity");
+            });
+        }
+
+        [TestMethod]
+        public void NetworkingProvenanceSurvivesWizardRecompositionAndNewConfigDoesNotAdoptIt()
+        {
+            RunOnSta(() =>
+            {
+                var directory = System.IO.Path.Combine(Environment.CurrentDirectory, "network-wizard-test-" + Guid.NewGuid().ToString("N"));
+                System.IO.Directory.CreateDirectory(directory);
+                try
+                {
+                    var config = SolutionInstallConfig.NewConfig();
+                    config.PrivateNetworking.AppliedTopology = "PublicTransitionPending";
+                    using (var wizard = new InstallSPOSitesControl())
+                    {
+                        wizard.ConfigureUI(config);
+                        var first = wizard.GetConfigurationState();
+                        first.Save(System.IO.Path.Combine(directory, "contoso.json"), "synthetic-password");
+                        var next = wizard.GetConfigurationState();
+                        Assert.AreSame(config.PrivateNetworking, next.PrivateNetworking);
+                        Assert.AreEqual(first.SavedConfigFileName, next.SavedConfigFileName,
+                            "The actual install rebuilds GUI config after Save; it must retain the checkpoint destination.");
+                        next.PrivateNetworking.AppliedTopology = "Public";
+                        Assert.AreEqual("Public", wizard.GetConfigurationState().PrivateNetworking.AppliedTopology);
+                        var fresh = SolutionInstallConfig.NewConfig();
+                        wizard.ConfigureUI(fresh);
+                        var reset = wizard.GetConfigurationState();
+                        Assert.AreSame(fresh.PrivateNetworking, reset.PrivateNetworking);
+                        Assert.AreNotEqual(config.PrivateNetworking.DeploymentToken, reset.PrivateNetworking.DeploymentToken);
+                        Assert.IsNull(reset.SavedConfigFileName);
+                    }
+                }
+                finally { System.IO.Directory.Delete(directory, true); }
+            });
+        }
+
+        [TestMethod]
         public void AzureAI_BothServicesRoundTripThroughInstallerUI()
         {
             RunOnSta(() =>

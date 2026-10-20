@@ -290,7 +290,7 @@ namespace DataUtils
         /// <param name="detail">Optional free-text reason. MUST NOT contain secrets or customer data.</param>
         /// <param name="daysToExpiry">Optional; for <see cref="HealthComponent.Credential"/>, days until the credential expires.</param>
         /// <param name="reasonKey">Optional stable key the web portal can translate while keeping <paramref name="detail"/> as an English fallback.</param>
-        public void TrackHealthCheck(HealthComponent component, HealthStatus status, string detail = null, int? daysToExpiry = null, string reasonKey = null)
+        public void TrackHealthCheck(HealthComponent component, HealthStatus status, string detail = null, int? daysToExpiry = null, string reasonKey = null, string jobName = null)
         {
             var context = new Dictionary<string, string>
             {
@@ -309,24 +309,38 @@ namespace DataUtils
             {
                 context.Add("ReasonKey", reasonKey);
             }
+            if (!string.IsNullOrEmpty(jobName))
+            {
+                context.Add("JobName", jobName);
+                context.Add("Monitor", "DefaultHealth");
+            }
             TrackEvent(AnalyticsEvent.HealthCheck, context);
         }
 
         /// <summary>
-        /// Emit a structured <c>ImporterHeartbeat</c> event (issue #144 Appendix E), one per import job per cycle.
-        /// Absence of this signal is the canonical "web-job died / crash-looping" detector.
+        /// Emit structured process liveness. The runtime emits periodically, independently of cycle length.
+        /// This does not prove successful progress; absent completion fields mean no cycle has finished yet.
         /// </summary>
         /// <param name="jobName">Importer job name, e.g. "Office365ActivityImporter" or "AppInsightsImporter".</param>
         /// <param name="lastCycleUtc">UTC timestamp of the cycle that just completed.</param>
         /// <param name="lastCycleDurationSeconds">Wall-clock duration of the cycle, in seconds.</param>
         public void TrackImporterHeartbeat(string jobName, DateTime lastCycleUtc, double lastCycleDurationSeconds)
         {
+            TrackImporterHeartbeat(jobName, (DateTime?)lastCycleUtc, lastCycleDurationSeconds);
+        }
+
+        public void TrackImporterHeartbeat(string jobName, DateTime? lastCycleUtc, double? lastCycleDurationSeconds, DateTime? processStartedUtc = null)
+        {
             var context = new Dictionary<string, string>
             {
-                { "JobName", jobName ?? string.Empty },
-                { "LastCycleUtc", lastCycleUtc.ToUniversalTime().ToString("o", CultureInfo.InvariantCulture) },
-                { "LastCycleDurationSeconds", lastCycleDurationSeconds.ToString(CultureInfo.InvariantCulture) },
+                { "JobName", jobName ?? string.Empty }
             };
+            if (lastCycleUtc.HasValue)
+                context.Add("LastCycleUtc", lastCycleUtc.Value.ToUniversalTime().ToString("o", CultureInfo.InvariantCulture));
+            if (lastCycleDurationSeconds.HasValue)
+                context.Add("LastCycleDurationSeconds", lastCycleDurationSeconds.Value.ToString(CultureInfo.InvariantCulture));
+            if (processStartedUtc.HasValue)
+                context.Add("ProcessStartedUtc", processStartedUtc.Value.ToUniversalTime().ToString("o", CultureInfo.InvariantCulture));
             TrackEvent(AnalyticsEvent.ImporterHeartbeat, context);
         }
 
