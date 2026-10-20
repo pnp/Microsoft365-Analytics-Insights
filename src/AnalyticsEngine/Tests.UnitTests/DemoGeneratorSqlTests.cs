@@ -7,6 +7,7 @@ using Microsoft.Data.SqlClient;
 using System.Linq;
 using System.Threading;
 using Tests.FakeDataGen.Demo;
+using Tests.FakeDataGen.Copilot;
 
 namespace Tests.UnitTests
 {
@@ -122,8 +123,10 @@ WHERE agent_name LIKE N'%Καλημέρα%';") > 0, "nvarchar agent names must s
             finally { DropOwnedScratch(name); }
         }
 
-        [TestMethod]
-        public void PromptCategories_RealReportQueriesReturnDefaultMixAndWeeklyTrend()
+        [DataTestMethod]
+        [DataRow(false)]
+        [DataRow(true)]
+        public void PromptCategories_RealReportQueriesReturnDefaultMixAndWeeklyTrend(bool dedicatedHistoryGenerator)
         {
             string name = "ContosoDemo_Categories_" + Guid.NewGuid().ToString("N");
             var options = DemoOptions.Parse(new[] { "--database", name, "--users", "200", "--days", "35",
@@ -133,10 +136,27 @@ WHERE agent_name LIKE N'%Καλημέρα%';") > 0, "nvarchar agent names must s
                 using (var database = new SqlDemoDatabase(options, CancellationToken.None))
                 {
                     database.Open(null);
-                    var summary = DemoCommand.NewSummary(options);
-                    using (var sink = new CountingDemoSink(summary, database.CreateSink()))
-                        new DemoGenerator(options).Generate(sink, summary, null);
-                    database.ValidateAndComplete(summary, null);
+                    if (dedicatedHistoryGenerator)
+                    {
+                        using (var users = new RawContext(SqlDemoDatabase.LocalConnection(name)))
+                            users.Database.ExecuteSqlCommand(@"DECLARE @n int=1;
+                                WHILE @n<=200 BEGIN
+                                    INSERT dbo.users(user_name,account_enabled)
+                                    VALUES(CONCAT('category-fixture-',@n,'@contoso.example'),1);
+                                    SET @n+=1;
+                                END;");
+                        new CopilotInteractionHistoryGenerator(SqlDemoDatabase.LocalConnection(name))
+                            .GenerateInteractionHistory(userCount: 200, sessionsPerUser: 4, turnsPerSession: 8,
+                                daysBack: 28, cognitivePercentage: 0, sharedThreadPercentage: 0,
+                                windowEndUtc: options.AsOf.AddDays(-1));
+                    }
+                    else
+                    {
+                        var summary = DemoCommand.NewSummary(options);
+                        using (var sink = new CountingDemoSink(summary, database.CreateSink()))
+                            new DemoGenerator(options).Generate(sink, summary, null);
+                        database.ValidateAndComplete(summary, null);
+                    }
                 }
                 using (var raw = new RawContext(SqlDemoDatabase.LocalConnection(name)))
                 {
