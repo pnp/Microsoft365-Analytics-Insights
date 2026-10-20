@@ -165,6 +165,11 @@
     <Compile Include="..\Tests.FakeDataGen\Copilot\CopilotAdoptionPersonas.cs">
       <Link>DemoGenerator\CopilotAdoptionPersonas.cs</Link>
     </Compile>
+    <Compile Include="..\Tests.FakeDataGen\Copilot\CopilotInteractionHistoryGenerator.cs" Link="DemoGenerator\CopilotInteractionHistoryGenerator.cs" />
+    <Compile Include="..\Tests.FakeDataGen\Copilot\CopilotUserManager.cs" Link="DemoGenerator\CopilotUserManager.cs" />
+    <Compile Include="..\Tests.FakeDataGen\Copilot\CopilotLicenseManager.cs" Link="DemoGenerator\CopilotLicenseManager.cs" />
+    <Compile Include="..\Tests.FakeDataGen\Copilot\CopilotActivityGeneratorConfig.cs" Link="DemoGenerator\CopilotActivityGeneratorConfig.cs" />
+    <Compile Include="..\Tests.FakeDataGen\Generation\ActivityTimestampGenerator.cs" Link="DemoGenerator\ActivityTimestampGenerator.cs" />
     <Compile Include="..\Tests.FakeDataGen\Seeding\SeedDataCatalogue.cs">
       <Link>DemoGenerator\SeedDataCatalogue.cs</Link>
     </Compile>

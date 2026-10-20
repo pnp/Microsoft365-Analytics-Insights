@@ -146,6 +146,101 @@ namespace PromptCategoryEvaluationTests
         }
 
         [TestMethod]
+        public void Metrics_LanguageAndChallengeSlicesKeepCoverageFailuresAndFalseUnknownsVisible()
+        {
+            var report = new EvaluationReport
+            {
+                Decisions = new List<Decision>
+                {
+                    new Decision { Language = "en", Stratum = "clear", Expected = "analysis", CategoryId = "analysis" },
+                    new Decision { Language = "en", Stratum = "injection", Expected = "analysis", CategoryId = "other" },
+                    new Decision { Language = "es", Stratum = "unknown", Expected = "other", CategoryId = "other" },
+                    new Decision { Language = "es", Stratum = "clear", Expected = "analysis", Failure = "timeout" },
+                    new Decision { Language = "el", Stratum = "injection", Expected = "analysis", Failure = "not-sent" }
+                }
+            };
+            Evaluation.Calculate(report, new[] { "analysis", "other" });
+            Assert.AreEqual(0.25, report.KnownIntentUnknownRate.Value);
+            Assert.AreEqual(0.4, report.Categories.Single(c => c.Id == "analysis").F1.Value, 0.00001);
+            Assert.AreEqual(2.0 / 3, report.Categories.Single(c => c.Id == "other").F1.Value, 0.00001);
+            Assert.AreEqual((0.4 + 2.0 / 3) / 2, report.MacroF1.Value, 0.00001);
+            var english = report.Languages.Single(s => s.Id == "en");
+            Assert.AreEqual(0.5, english.OverallAccuracy.Value);
+            Assert.AreEqual(0.5, english.UnknownRate.Value);
+            var spanish = report.Languages.Single(s => s.Id == "es");
+            Assert.AreEqual(0.5, spanish.OverallAccuracy.Value);
+            Assert.AreEqual(1.0, spanish.ClassifiedAccuracy.Value);
+            Assert.AreEqual(0.5, spanish.NotClassifiedRate.Value);
+            var greek = report.Languages.Single(s => s.Id == "el");
+            Assert.AreEqual(1, greek.NotClassified);
+            Assert.IsNull(greek.ClassifiedAccuracy);
+            var injection = report.Strata.Single(s => s.Id == "injection");
+            Assert.AreEqual(0.0, injection.OverallAccuracy.Value);
+            Assert.AreEqual(0.5, injection.NotClassifiedRate.Value);
+            Assert.AreEqual(report.Total, report.Languages.Sum(s => s.Total));
+            Assert.AreEqual(report.Total, report.Strata.Sum(s => s.Total));
+        }
+
+        [TestMethod]
+        public void Budget_RequiresCurrentPositiveConservativeCurrencyApprovalIncludingFallback()
+        {
+            Assert.AreEqual(0.01m, EvaluationBudget.FromApproval("USD", "0.01", "0.001", 10).MaximumEstimatedRunCost);
+            Assert.ThrowsException<ArgumentException>(() => EvaluationBudget.FromApproval("USD", "0,01", "0.001", 10));
+            Assert.ThrowsException<ArgumentException>(() => EvaluationBudget.FromApproval("USD", "0.01", "0,001", 10));
+            Assert.ThrowsException<ArgumentException>(() => EvaluationBudget.FromApproval("USD", "1,000.00", "0.001", 10));
+            var budget = new EvaluationBudget
+            {
+                Currency = "USD", ApprovedMaximumCost = 0.01m, MaximumEstimatedCostPerHttpAttempt = 0.001m
+            };
+            budget.Validate(10);
+            Assert.AreEqual(0.01m, budget.MaximumEstimatedRunCost);
+            budget.ApprovedMaximumCost = 0.009m;
+            Assert.ThrowsException<ArgumentException>(() => budget.Validate(10));
+            budget.ApprovedMaximumCost = decimal.MaxValue;
+            budget.MaximumEstimatedCostPerHttpAttempt = decimal.MaxValue;
+            Assert.ThrowsException<ArgumentException>(() => budget.Validate(10), "Overflow must reject, not wrap the approved envelope.");
+            budget.MaximumEstimatedCostPerHttpAttempt = 0;
+            Assert.ThrowsException<ArgumentException>(() => budget.Validate(10));
+            budget.MaximumEstimatedCostPerHttpAttempt = -1;
+            Assert.ThrowsException<ArgumentException>(() => budget.Validate(10));
+            budget.MaximumEstimatedCostPerHttpAttempt = 0.001m;
+            budget.Currency = "usd";
+            Assert.ThrowsException<ArgumentException>(() => budget.Validate(10));
+            budget.Currency = "USD";
+            budget.ApprovedMaximumCost = 0;
+            Assert.ThrowsException<ArgumentException>(() => budget.Validate(10));
+        }
+
+        [TestMethod]
+        public async Task Preparation_RecordsFrozenCoverageAndBoundsButNeverQualityOrPromptContent()
+        {
+            var samples = Evaluation.LoadSamples();
+            var plan = Evaluation.Prepare(PromptCategoryConfiguration.Defaults(), samples, 50);
+            var report = await Evaluation.RunAsync(new FixtureBackend(), PromptCategoryConfiguration.Defaults(),
+                samples, 50, CancellationToken.None);
+            Assert.AreEqual(report.DatasetSha256, plan.DatasetSha256);
+            Assert.AreEqual(report.TaxonomyVersion, plan.TaxonomyVersion);
+            Assert.AreEqual(samples.Count, plan.CategoryCounts.Values.Sum());
+            Assert.AreEqual(samples.Count, plan.LanguageCounts.Values.Sum());
+            Assert.AreEqual(samples.Count, plan.StratumCounts.Values.Sum());
+            Assert.AreEqual(2 * ((samples.Count + 9) / 10), plan.MaximumHttpAttempts);
+            Assert.AreEqual(plan.MaximumHttpAttempts * 500, plan.MaximumOutputTokens);
+            var serialized = JsonConvert.SerializeObject(plan);
+            Assert.IsFalse(serialized.Contains("\"OverallAccuracy\""));
+            Assert.IsFalse(serialized.Contains("\"Decisions\""));
+            Assert.IsFalse(serialized.Contains(samples[0].Prompt));
+            StringAssert.Contains(plan.EvidenceKind, "no-model-calls-no-accuracy-evidence");
+            // An opt-in test-host export supports offline preparation on hosts that cannot launch native runners.
+            var output = Environment.GetEnvironmentVariable("PROMPT_EVAL_PREPARE_OUTPUT");
+            if (!string.IsNullOrWhiteSpace(output))
+            {
+                Evaluation.WritePrivateReport(output, plan);
+                Assert.AreEqual(serialized, JsonConvert.SerializeObject(JsonConvert.DeserializeObject(File.ReadAllText(output))));
+                Assert.ThrowsException<ArgumentException>(() => Evaluation.WritePrivateReport(output, plan));
+            }
+        }
+
+        [TestMethod]
         public void Dataset_CoversEveryAllowedCategoryLanguagesAndChallengeStrata()
         {
             var samples = Evaluation.LoadSamples();

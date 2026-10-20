@@ -4,6 +4,7 @@ using Newtonsoft.Json;
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Security.Cryptography;
@@ -41,6 +42,72 @@ namespace PromptCategoryEvaluation
         public int Predicted { get; set; }
         public double? Recall { get; set; }
         public double? Precision { get; set; }
+        public double? F1 { get; set; }
+    }
+
+    public sealed class SliceMetric
+    {
+        public string Id { get; set; }
+        public int Total { get; set; }
+        public int Classified { get; set; }
+        public int Correct { get; set; }
+        public int Unknown { get; set; }
+        public int NotClassified { get; set; }
+        public double? OverallAccuracy { get; set; }
+        public double? ClassifiedAccuracy { get; set; }
+        public double? UnknownRate { get; set; }
+        public double? NotClassifiedRate { get; set; }
+    }
+
+    public sealed class EvaluationBudget
+    {
+        public string Currency { get; set; }
+        public decimal ApprovedMaximumCost { get; set; }
+        public decimal MaximumEstimatedCostPerHttpAttempt { get; set; }
+        public decimal MaximumEstimatedRunCost { get; private set; }
+        public string Basis => "Operator-supplied conservative quote per HTTP attempt, including the full input and output allowance. Not an Azure billing cap or verified price.";
+
+        public static EvaluationBudget FromApproval(string currency, string approvedMaximum, string costPerAttempt, int maximumHttpAttempts)
+        {
+            // Reject locale separators rather than silently reading a Spanish decimal comma as a thousands separator.
+            if (!decimal.TryParse(approvedMaximum, NumberStyles.AllowDecimalPoint, CultureInfo.InvariantCulture, out var maximum) ||
+                !decimal.TryParse(costPerAttempt, NumberStyles.AllowDecimalPoint, CultureInfo.InvariantCulture, out var perAttempt))
+                throw new ArgumentException("Budget amounts require invariant decimal notation without group separators.");
+            var budget = new EvaluationBudget
+            {
+                Currency = currency, ApprovedMaximumCost = maximum, MaximumEstimatedCostPerHttpAttempt = perAttempt
+            };
+            budget.Validate(maximumHttpAttempts);
+            return budget;
+        }
+
+        public void Validate(int maximumHttpAttempts)
+        {
+            if (maximumHttpAttempts < 1 || maximumHttpAttempts > 200 ||
+                Currency == null || !System.Text.RegularExpressions.Regex.IsMatch(Currency, @"\A[A-Z]{3}\z") ||
+                ApprovedMaximumCost <= 0 || MaximumEstimatedCostPerHttpAttempt <= 0 ||
+                MaximumEstimatedCostPerHttpAttempt > ApprovedMaximumCost / maximumHttpAttempts)
+                throw new ArgumentException("Explicit currency approval and a sufficient conservative request-cost budget are required.");
+            MaximumEstimatedRunCost = MaximumEstimatedCostPerHttpAttempt * maximumHttpAttempts;
+        }
+    }
+
+    public sealed class EvaluationPlan
+    {
+        public string EvidenceKind => "prepared-synthetic-evaluation-no-model-calls-no-accuracy-evidence";
+        public string DatasetVersion { get; set; }
+        public string DatasetSha256 { get; set; }
+        public string TaxonomyVersion { get; set; }
+        public object Taxonomy { get; set; }
+        public int Total { get; set; }
+        public int MaximumScheduledRequests { get; set; }
+        public int MaximumHttpAttempts { get; set; }
+        public int MaximumOutputTokens { get; set; }
+        public int PromptCharacters { get; set; }
+        public Dictionary<string, int> CategoryCounts { get; set; }
+        public Dictionary<string, int> LanguageCounts { get; set; }
+        public Dictionary<string, int> StratumCounts { get; set; }
+        public string[] RemainingGates { get; set; }
     }
 
     public sealed class EvaluationReport
@@ -62,11 +129,16 @@ namespace PromptCategoryEvaluation
         public double? UnknownRate { get; set; }
         public double? NotClassifiedRate { get; set; }
         public double? MacroRecall { get; set; }
+        public double? MacroF1 { get; set; }
+        public double? KnownIntentUnknownRate { get; set; }
+        public EvaluationBudget BudgetApproval { get; set; }
         public int HttpAttempts { get; set; }
         public int InputTokens { get; set; }
         public int OutputTokens { get; set; }
         public long ElapsedMilliseconds { get; set; }
         public List<CategoryMetric> Categories { get; set; }
+        public List<SliceMetric> Languages { get; set; }
+        public List<SliceMetric> Strata { get; set; }
         public Dictionary<string, Dictionary<string, int>> Confusion { get; set; }
         public Dictionary<string, int> Failures { get; set; }
         public List<Decision> Decisions { get; set; }
@@ -77,11 +149,46 @@ namespace PromptCategoryEvaluation
     {
         public const string DatasetVersion = "fictional-intents-v1";
 
+        public static EvaluationPlan Prepare(PromptCategoryConfiguration taxonomy, IReadOnlyList<Sample> samples, int maxPrompts)
+        {
+            Validate(samples, taxonomy, maxPrompts);
+            var requests = (samples.Count + 9) / 10;
+            return new EvaluationPlan
+            {
+                DatasetVersion = DatasetVersion,
+                DatasetSha256 = Hash(JsonConvert.SerializeObject(samples)),
+                TaxonomyVersion = taxonomy.Version,
+                Taxonomy = taxonomy.Categories.Select(c => new { c.Id, c.Description }).ToArray(),
+                Total = samples.Count, MaximumScheduledRequests = requests,
+                MaximumHttpAttempts = requests * 2, MaximumOutputTokens = requests * 2 * 500,
+                PromptCharacters = samples.Sum(s => s.Prompt.Length),
+                CategoryCounts = samples.GroupBy(s => s.Expected).ToDictionary(g => g.Key, g => g.Count()),
+                LanguageCounts = samples.GroupBy(s => s.Language).ToDictionary(g => g.Key, g => g.Count()),
+                StratumCounts = samples.GroupBy(s => s.Stratum).ToDictionary(g => g.Key, g => g.Count()),
+                RemainingGates = new[]
+                {
+                    "An explicitly authorized existing target deployment, verified model/version, credentials and current currency spend approval are required before inference.",
+                    "Obtain a conservative per-HTTP-attempt cost quote covering the full payload and 500 output tokens; authentication fallback is included in the attempt bound.",
+                    "No model calls or semantic quality measurements have occurred in preparation mode. Do not publish this plan as accuracy evidence.",
+                    "Freeze labels before inference. This small purposive single-curator corpus is not tenant-representative; translations are correlated and strata are uneven.",
+                    "Sample order is frozen and grouped by intent. Circuit-breaking can prevent later categories from being sent; inspect category coverage and not-sent outcomes.",
+                    "Review real-model unknown/error rates, per-category precision/recall/F1, language/stratum slices and confusion before making release-quality claims."
+                }
+            };
+        }
+
         public static string ValidateOutputPath(string path)
         {
             var output = PrivateArtifactPath.Validate(path);
             if (File.Exists(output)) throw new ArgumentException();
             return output;
+        }
+
+        public static void WritePrivateReport(string output, object report)
+        {
+            using (var file = new FileStream(ValidateOutputPath(output), FileMode.CreateNew, FileAccess.Write))
+            using (var writer = new StreamWriter(file))
+                writer.Write(JsonConvert.SerializeObject(report, Formatting.Indented));
         }
 
         public static List<Sample> LoadSamples()
@@ -182,10 +289,17 @@ namespace PromptCategoryEvaluation
                 {
                     Id = id, Total = total, Correct = correct, Predicted = predicted,
                     Classified = decisions.Count(d => d.Expected == id && d.Failure == null),
-                    Recall = Divide(correct, total), Precision = Divide(correct, predicted)
+                    Recall = Divide(correct, total), Precision = Divide(correct, predicted),
+                    F1 = Divide(2 * correct, total + predicted)
                 };
             }).ToList();
             report.MacroRecall = report.Categories.Where(c => c.Recall.HasValue).Select(c => c.Recall).DefaultIfEmpty(null).Average();
+            report.MacroF1 = report.Categories.Select(c => c.F1).DefaultIfEmpty(null).Average();
+            report.KnownIntentUnknownRate = Divide(
+                decisions.Count(d => d.Expected != "other" && d.Failure == null && d.CategoryId == "other"),
+                decisions.Count(d => d.Expected != "other"));
+            report.Languages = Slices(decisions, d => d.Language);
+            report.Strata = Slices(decisions, d => d.Stratum);
             report.Confusion = report.Categories.ToDictionary(c => c.Id, c =>
                 report.Categories.Select(x => x.Id).Concat(new[] { "not-classified" }).ToDictionary(predicted => predicted,
                     predicted => decisions.Count(d => d.Expected == c.Id &&
@@ -193,6 +307,22 @@ namespace PromptCategoryEvaluation
             report.Failures = decisions.Where(d => d.Failure != null).GroupBy(d => d.Failure)
                 .ToDictionary(g => g.Key, g => g.Count());
         }
+
+        private static List<SliceMetric> Slices(IEnumerable<Decision> decisions, Func<Decision, string> key) =>
+            decisions.GroupBy(d => key(d) ?? "unspecified").OrderBy(g => g.Key, StringComparer.Ordinal).Select(g =>
+            {
+                var total = g.Count();
+                var classified = g.Count(d => d.Failure == null);
+                var correct = g.Count(d => d.Failure == null && d.Expected == d.CategoryId);
+                var unknown = g.Count(d => d.Failure == null && d.CategoryId == "other");
+                return new SliceMetric
+                {
+                    Id = g.Key, Total = total, Classified = classified, Correct = correct,
+                    Unknown = unknown, NotClassified = total - classified,
+                    OverallAccuracy = Divide(correct, total), ClassifiedAccuracy = Divide(correct, classified),
+                    UnknownRate = Divide(unknown, total), NotClassifiedRate = Divide(total - classified, total)
+                };
+            }).ToList();
 
         private static string SafeFailure(string failure)
         {
