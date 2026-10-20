@@ -153,6 +153,39 @@ namespace Tests.UnitTests
                 "Nobody outside the scope is named in the log.");
         }
 
+        [DataTestMethod]
+        [DataRow(true)]
+        [DataRow(false)]
+        public async Task SavePipeline_VerifiedCopilotMetadataRecovery_PreservesScopeAndOtherWorkloadDedup(bool inScope)
+        {
+            var copilot = new CopilotAuditLogContent
+            {
+                Id = Guid.NewGuid(),
+                UserId = inScope ? InScopeUpn : OutOfScopeUpn,
+                CreationTime = Created,
+                Operation = "CopilotInteraction",
+                Workload = "Copilot",
+                EventRaw = "{}",
+                CopilotEventData = new CopilotEventData()
+            };
+            var otherWorkload = SpEvent(InScopeUpn);
+            var cache = ActivityImportCache.GetEmptyCache();
+            cache.RememberLoadedProcessedEvent(copilot);
+            cache.RememberLoadedProcessedEvent(otherWorkload);
+            var records = SetOf(copilot, copilot, otherWorkload);
+            records.RecoverMissingCopilotMetadata = true;
+            var writer = new InMemoryActivityStagingWriter();
+
+            var result = await PassFor(new AllowAllFilterConfig(), new RecordingLogger()).RunAsync(
+                records, cache, writer.CreateBatch(null), stagingTableName: null, mergeLock: null);
+
+            Assert.AreEqual(inScope ? 1 : 0, result.Stats.Imported);
+            Assert.AreEqual(inScope ? 0 : 1, result.Stats.UsersOutOfScope);
+            Assert.AreEqual(inScope ? 1 : 0, writer.LastBatch.Rows.Count,
+                "Recovery still de-duplicates within the set, skips other workloads and refuses out-of-scope people.");
+            if (inScope) Assert.AreEqual(copilot.Id, writer.LastBatch.Rows.Single().Id);
+        }
+
         [TestMethod]
         public async Task SavePipeline_SerialMode_MergesTheSharedStagingTableWithNoMergeLock()
         {

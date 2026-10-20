@@ -7,6 +7,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using WebJob.Office365ActivityImporter.Engine.ActivityAPI.Rules;
 using WebJob.Office365ActivityImporter.Engine.Entities;
+using WebJob.Office365ActivityImporter.Engine.Entities.Serialisation;
 using WebJob.Office365ActivityImporter.Engine.Properties;
 
 namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Persistence
@@ -160,9 +161,10 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Persistence
                     // Don't insert duplicates in same set. The decision itself (dedup -> URL scope -> user
                     // scope, plus what gets remembered where) lives in ActivityStagingRules so it can be
                     // asserted with no SQL and no Graph; see issue #373.
-                    var recoverMetadata = activities.RequiresMetadataRecovery(abtractLog)
-                        && cache.HaveSeenInProcessedOrIgnoredEvents(abtractLog)
-                        && !cache.WasRememberedThisCycle(abtractLog);
+                    var recoverMetadata = (activities.RecoverMissingCopilotMetadata && abtractLog is CopilotAuditLogContent)
+                        || (activities.RequiresMetadataRecovery(abtractLog)
+                            && cache.HaveSeenInProcessedOrIgnoredEvents(abtractLog)
+                            && !cache.WasRememberedThisCycle(abtractLog));
                     var decision = await ActivityStagingRules.DecideAndRememberAsync(
                         abtractLog, processedIds, cache, urlInScope, userInGroupsFilter, stageRow,
                         retryState?.ShouldRetry(abtractLog.Id) == true || recoverMetadata);
