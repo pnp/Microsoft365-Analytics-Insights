@@ -1,4 +1,3 @@
-using Azure.Core;
 using Common.Entities.Config;
 using DataUtils;
 using DataUtils.Health;
@@ -42,14 +41,8 @@ namespace Common.Entities.Health
             // construct an EF runtime context, initialize a DB, or probe master from this monitor.
             var expected = LocalMigrations.Value;
             var builder = new SqlConnectionStringBuilder(connectionString) { ConnectTimeout = 15 };
-            using (var connection = new SqlConnection(builder.ConnectionString))
+            using (var connection = AzureSqlTokenAuth.CreateConnection(builder.ConnectionString))
             {
-                if (AzureSqlTokenAuth.NeedsAccessToken(builder.ConnectionString))
-                {
-                    var credential = AzureSqlTokenAuth.Credential ?? throw new InvalidOperationException();
-                    connection.AccessToken = (await credential.GetTokenAsync(
-                        new TokenRequestContext(new[] { AzureSqlTokenAuth.SqlTokenScope }), cancellationToken).ConfigureAwait(false)).Token;
-                }
                 await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
                 using (var command = connection.CreateCommand())
                 {
