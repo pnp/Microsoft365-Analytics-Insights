@@ -14,6 +14,7 @@ namespace DataUtils.Health
         private readonly AnalyticsLogger _logger;
         private readonly string _jobName;
         private readonly Timer _timer;
+        private readonly DateTime _processStartedUtc = DateTime.UtcNow;
         private DateTime? _lastCycleUtc;
         private double? _lastCycleSeconds;
         private bool _disposed;
@@ -54,7 +55,7 @@ namespace DataUtils.Health
                 if (_disposed) return;
                 try
                 {
-                    _logger.TrackImporterHeartbeat(_jobName, _lastCycleUtc, _lastCycleSeconds);
+                    _logger.TrackImporterHeartbeat(_jobName, _lastCycleUtc, _lastCycleSeconds, _processStartedUtc);
                 }
                 catch (Exception ex)
                 {

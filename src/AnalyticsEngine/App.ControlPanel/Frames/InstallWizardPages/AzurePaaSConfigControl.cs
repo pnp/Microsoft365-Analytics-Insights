@@ -7,6 +7,7 @@ namespace App.ControlPanel.Frames.InstallWizard
 {
     public partial class AzurePaaSConfigControl : UserControl
     {
+        private bool _healthEmailWasNull;
         public AzurePaaSConfigControl()
         {
             InitializeComponent();
@@ -31,13 +32,14 @@ namespace App.ControlPanel.Frames.InstallWizard
             get => new HealthMonitoringConfig
             {
                 Enabled = chkHealthMonitoring.Checked,
-                NotificationEmail = txtHealthEmail.Text.Trim(),
+                NotificationEmail = _healthEmailWasNull && txtHealthEmail.Text.Length == 0 ? null : txtHealthEmail.Text,
                 MissingHeartbeatMinutes = (int)numHealthMinutes.Value
             };
             set
             {
                 if (value == null) throw new ArgumentNullException(nameof(value));
                 chkHealthMonitoring.Checked = value.Enabled;
+                _healthEmailWasNull = value.NotificationEmail == null;
                 txtHealthEmail.Text = value.NotificationEmail;
                 numHealthMinutes.Value = value.MissingHeartbeatMinutes;
                 UpdateHealthMonitoringControls();

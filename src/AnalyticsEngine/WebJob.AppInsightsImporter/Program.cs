@@ -8,6 +8,7 @@ using Common.Entities;
 using Common.Entities.Config;
 using Common.Entities.UserScope;
 using DataUtils;
+using DataUtils.Health;
 using Microsoft.Extensions.Logging;
 using System;
 using System.Configuration;
@@ -100,6 +101,7 @@ namespace WebJob.AppInsightsImporter
             }
 
             using (var heartbeat = new DataUtils.Health.ImporterHeartbeat(logger, DataUtils.Health.ImporterHeartbeat.WebTrafficJob))
+            using (var health = Common.Entities.Health.DefaultRuntimeHealth.Start(config, logger, ImporterHeartbeat.WebTrafficJob))
             try
             {
                 // Heartbeat during the initial stagger too: a planned wait is not a dead process.

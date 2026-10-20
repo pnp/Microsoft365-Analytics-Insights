@@ -148,9 +148,9 @@ namespace App.ControlPanel.Frames.InstallWizard
                 Tuple.Create("SQL schema upgrade", Selected(config.TasksConfig.UpgradeSchema)),
                 Tuple.Create("SharePoint sites", $"{config.SharePointConfig.TargetSites.Count} configured"),
                 Tuple.Create("Usage reporting", config.AllowTelemetry ? "Allowed" : "Disabled"),
-                Tuple.Create("Importer health alerts", config.HealthMonitoring?.Enabled == true
-                    ? $"Enabled - Azure Monitor charges may apply; email {Value(config.HealthMonitoring.NotificationEmail)}, missing for {config.HealthMonitoring.MissingHeartbeatMinutes} minutes"
-                    : "Disabled - owned rules will be disabled; telemetry is unchanged")
+                Tuple.Create("Default health alerts", config.HealthMonitoring?.Enabled == true
+                    ? $"Enabled - up to 7 billable rules; email {Value(config.HealthMonitoring.NotificationEmail)}, heartbeat missing for {config.HealthMonitoring.MissingHeartbeatMinutes} minutes; details in Hosting & services"
+                    : "Disabled - owned rules and active checks will be disabled; basic telemetry remains")
             };
         }
 

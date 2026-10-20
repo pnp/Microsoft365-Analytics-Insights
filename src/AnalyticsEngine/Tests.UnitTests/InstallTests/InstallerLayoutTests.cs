@@ -18,6 +18,25 @@ namespace Tests.UnitTests.InstallTests
     public class InstallerLayoutTests
     {
         [DataTestMethod]
+        [DataRow(null)]
+        [DataRow("  preserved invalid disabled value  ")]
+        public void HealthMonitoring_DisabledEmailRoundTripsWithoutNormalisation(string email)
+        {
+            RunOnSta(() =>
+            {
+                using (var page = new AzurePaaSConfigControl())
+                {
+                    page.HealthMonitoring = new Common.Entities.Installer.HealthMonitoringConfig
+                    {
+                        Enabled = false, NotificationEmail = email, MissingHeartbeatMinutes = -123
+                    };
+                    Assert.AreEqual(email, page.HealthMonitoring.NotificationEmail);
+                    Assert.AreEqual(-123, page.HealthMonitoring.MissingHeartbeatMinutes);
+                    Assert.AreEqual(0, page.HealthMonitoring.ValidatInputAndGetErrors().Count);
+                }
+            });
+        }
+        [DataTestMethod]
         [DataRow(false, 0)]
         [DataRow(false, int.MinValue)]
         [DataRow(true, 14)]
@@ -79,7 +98,15 @@ namespace Tests.UnitTests.InstallTests
                     Assert.IsFalse(page.HorizontalScroll.Visible, "Hosting settings must not require horizontal scrolling.");
                     var check = (CheckBox)fields[0];
                     Assert.IsTrue(check.Width >= check.GetPreferredSize(check.Size).Width, "Alert opt-in must not clip.");
-                    Assert.IsTrue(content.Controls.OfType<Label>().Last().AutoSize, "Cost and liveness limitations must wrap.");
+                    var notice = content.Controls.OfType<Label>().Last();
+                    Assert.IsTrue(notice.AutoSize, "Cost and health limitations must wrap.");
+                    CaptureHealthPreview(host, width, height, "fields");
+                    page.ScrollControlIntoView(notice);
+                    Application.DoEvents();
+                    Assert.IsTrue(page.ClientRectangle.IntersectsWith(page.RectangleToClient(
+                        notice.Parent.RectangleToScreen(notice.Bounds))), "The expanded cost/coverage notice must be reachable.");
+                    Assert.IsFalse(page.HorizontalScroll.Visible);
+                    CaptureHealthPreview(host, width, height, "notice");
                 }
             });
         }
@@ -392,6 +419,17 @@ namespace Tests.UnitTests.InstallTests
             host.Show();
             Application.DoEvents();
             return host;
+        }
+
+        private static void CaptureHealthPreview(Form host, int width, int height, string stage)
+        {
+            var directory = Environment.GetEnvironmentVariable("INSTALLER_PREVIEW_DIR");
+            if (string.IsNullOrEmpty(directory)) return;
+            using (var image = new Bitmap(host.Width, host.Height))
+            {
+                host.DrawToBitmap(image, new Rectangle(Point.Empty, host.Size));
+                image.Save(System.IO.Path.Combine(directory, $"health144-{width}-{height}-{stage}.png"));
+            }
         }
 
         private static T Find<T>(Control parent, string name) where T : Control =>

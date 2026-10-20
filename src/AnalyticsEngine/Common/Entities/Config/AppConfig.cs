@@ -26,6 +26,7 @@ namespace Common.Entities.Config
             this.TenantGUID = Guid.Parse(ConfigurationManager.AppSettings.Get("TenantGUID"));
             this.AADInstance = ConfigurationManager.AppSettings.Get("AADInstance");
             this.KeyVaultUrl = ConfigurationManager.AppSettings.Get("KeyVaultUrl");
+            this.EnableDefaultHealthChecks = bool.TryParse(ConfigurationManager.AppSettings.Get("EnableDefaultHealthChecks"), out var healthChecks) && healthChecks;
 
             RegisterAzureSqlFallbackCredential();
 
@@ -371,6 +372,7 @@ namespace Common.Entities.Config
         public bool UseClientCertificate { get; set; } = false;
 
         public string KeyVaultUrl { get; set; }
+        public bool EnableDefaultHealthChecks { get; set; }
 
         /// <summary>
         /// Default: https://login.microsoftonline.com/

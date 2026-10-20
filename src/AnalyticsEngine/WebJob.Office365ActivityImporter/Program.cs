@@ -266,6 +266,7 @@ namespace WebJob.Office365ActivityImporter
 
             // Run app
             using (var heartbeat = new DataUtils.Health.ImporterHeartbeat(logger, DataUtils.Health.ImporterHeartbeat.ActivityJob))
+            using (var health = Common.Entities.Health.DefaultRuntimeHealth.Start(configuredSettings, logger, ImporterHeartbeat.ActivityJob))
             while (runAgain)
             {
                 var importCycleTelemetryScope = logger.BeginOperationScope(Guid.NewGuid().ToString("N"));

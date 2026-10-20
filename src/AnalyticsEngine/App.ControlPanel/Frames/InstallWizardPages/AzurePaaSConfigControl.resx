@@ -159,7 +159,7 @@
 </value>
   </data>
   <data name="HealthMonitoring.Enabled" xml:space="preserve">
-    <value>Enable Azure Monitor importer liveness alerts</value>
+    <value>Enable Azure Monitor health alerts</value>
   </data>
   <data name="HealthMonitoring.Email" xml:space="preserve">
     <value>Notification email:</value>
@@ -168,6 +168,6 @@
     <value>Missing heartbeat (minutes, 15-1440):</value>
   </data>
   <data name="HealthMonitoring.Notice" xml:space="preserve">
-    <value>Azure Monitor log alerts can incur charges. These detect stopped importers, not stale data or failed cycles. Test email delivery after installation. For scheduled shutdowns, use an Azure alert processing rule or opt out here; opting out disables owned alerts, not telemetry.</value>
+    <value>Azure Monitor log/metric alerts and telemetry can incur charges (up to 7 alert rules). Checks cover importer liveness, 24h cycle completion, SQL/schema, runtime tokens, certificate expiry and SQL/plan capacity. Completed cycles do not prove data arrived. Client-secret expiry is unknown: track it in Entra. Test email delivery after installation. For planned shutdowns, use an Azure alert processing rule or opt out here. Opt-out stops active checks and disables owned alerts; basic telemetry remains.</value>
   </data>
 </root>

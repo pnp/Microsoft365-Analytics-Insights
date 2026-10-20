@@ -1,5 +1,7 @@
 using App.ControlPanel.Engine;
 using Azure.Core;
+using Azure.Core.Pipeline;
+using Azure.ResourceManager;
 using Azure.ResourceManager.Resources;
 using CloudInstallEngine;
 using CloudInstallEngine.Azure.InstallTasks;
@@ -15,10 +17,16 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
+using Kusto.Language;
+using Kusto.Language.Symbols;
+using System.ClientModel.Primitives;
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
+using System.Net;
+using System.Net.Http;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -93,20 +101,22 @@ namespace Tests.UnitTests.InstallTests
             var task = new FakeTask(true, true, false);
             await task.ExecuteTaskReturnResult(null);
             var resources = (JArray)task.Template["resources"];
-            Assert.AreEqual(2, resources.Count);
+            Assert.AreEqual(7, resources.Count);
             var group = (JObject)resources[0];
             var rule = (JObject)resources[1];
             Assert.AreEqual("[parameters('notificationEmail')]", (string)group.SelectToken("properties.emailReceivers[0].emailAddress"));
             Assert.AreEqual("operator@contoso.example", (string)task.Parameters.SelectToken("notificationEmail.value"));
-            Assert.AreEqual("PT30M", (string)rule.SelectToken("properties.overrideQueryTimeRange"));
+            Assert.AreEqual("P2D", (string)rule.SelectToken("properties.overrideQueryTimeRange"));
             Assert.AreEqual("PT5M", (string)rule.SelectToken("properties.windowSize"));
             Assert.AreEqual(FakeTask.GroupId + "/providers/Microsoft.Insights/components/contoso-insights",
                 (string)rule.SelectToken("properties.scopes[0]"));
             Assert.AreEqual((string)rule.SelectToken("dependsOn[0]"), (string)rule.SelectToken("properties.actions.actionGroups[0]"));
             var query = (string)rule.SelectToken("properties.criteria.allOf[0].query");
             StringAssert.Contains(query, "JobName) == 'Office365ActivityImporter'");
-            StringAssert.Contains(query, "| summarize Heartbeats = count() | where Heartbeats == 0");
-            Assert.IsFalse(query.Contains(" by "), "Grouping would lose the never-seen-job row.");
+            StringAssert.Contains(query, "| summarize Heartbeats=count() | where Heartbeats == 0");
+            StringAssert.Contains(query, "arg_max(timestamp, *)");
+            StringAssert.Contains(query, "join kind=leftanti");
+            StringAssert.Contains(query, "FirstStart < ago(24h)");
             Assert.AreEqual(0, (int)rule.SelectToken("properties.criteria.allOf[0].threshold"));
         }
 
@@ -141,7 +151,8 @@ namespace Tests.UnitTests.InstallTests
             var task = new FakeTask(true, false, true);
             task.AddOwnedResources();
             await task.ExecuteTaskReturnResult(null);
-            var rules = ((JArray)task.Template["resources"]).OfType<JObject>().Skip(1).ToArray();
+            var rules = ((JArray)task.Template["resources"]).OfType<JObject>()
+                .Where(r => (string)r["name"] == task.ResourceNames[1] || (string)r["name"] == task.ResourceNames[2]).ToArray();
             Assert.AreEqual(2, rules.Length);
             Assert.IsFalse((bool)rules[0]["properties"]["enabled"]);
             Assert.IsTrue((bool)rules[1]["properties"]["enabled"]);
@@ -158,10 +169,10 @@ namespace Tests.UnitTests.InstallTests
             await task.ExecuteTaskReturnResult(null);
             var first = task.Template.ToString();
             var resources = (JArray)task.Template["resources"];
-            Assert.AreEqual(2, resources.Count);
-            Assert.IsTrue(resources.All(r => (string)r["type"] == "Microsoft.Insights/scheduledQueryRules"));
+            Assert.AreEqual(7, resources.Count);
             Assert.IsTrue(resources.All(r => !(bool)r["properties"]["enabled"]));
-            Assert.IsTrue(resources.All(r => ((JArray)r["properties"]["actions"]["actionGroups"]).Count == 0));
+            Assert.IsTrue(resources.All(r => r["properties"]["actions"] is JArray actions
+                ? actions.Count == 0 : ((JArray)r["properties"]["actions"]["actionGroups"]).Count == 0));
             await task.ExecuteTaskReturnResult(null);
             Assert.AreEqual(first, task.Template.ToString());
         }
@@ -189,11 +200,197 @@ namespace Tests.UnitTests.InstallTests
             Assert.AreEqual(0, task.Deployments);
         }
 
+        [TestMethod]
+        public async Task Provisioning_FailureDoesNotAbortRemainingInstallerTasks()
+        {
+            var job = new FakeSequentialJob(NullLogger.Instance);
+            var monitoring = new FakeTask(true, true, true) { FailDeployment = true };
+            var after = new FakeMarkerTask(TaskConfig.NoConfig, NullLogger.Instance);
+            job.AddTask(monitoring);
+            job.AddTask(after);
+            await job.Install();
+            Assert.AreEqual(1, monitoring.Deployments);
+            Assert.IsTrue(after.WasRun, "A monitoring failure must not abort the solution deployment.");
+        }
+
+        [TestMethod]
+        public async Task Provisioning_SdkSerializesRealDeploymentPayload_WithTypedParametersAndCapacityScopes()
+        {
+            var task = new FakeTask(true, true, true);
+            await task.ExecuteTaskReturnResult(null);
+            var deployment = GenericARMInstallTask.BuildDeploymentContent(task.RawParameters, task.Template.ToString());
+            var wire = JObject.Parse(ModelReaderWriter.Write(deployment).ToString());
+            Assert.AreEqual("Incremental", (string)wire.SelectToken("properties.mode"));
+            var template = (JObject)wire.SelectToken("properties.template");
+            Assert.IsNotNull(template, "The SDK must send a JSON object, not an escaped template string.");
+            Assert.AreEqual("operator@contoso.example", (string)wire.SelectToken("properties.parameters.notificationEmail.value"));
+            var metrics = ((JArray)template["resources"]).Where(r => (string)r["type"] == "Microsoft.Insights/metricAlerts").ToArray();
+            Assert.AreEqual(4, metrics.Length);
+            CollectionAssert.AreEquivalent(new[] { "cpu_percent", "storage_percent", "CpuPercentage", "MemoryPercentage" },
+                metrics.Select(r => (string)r.SelectToken("properties.criteria.allOf[0].metricName")).ToArray());
+            foreach (var metric in metrics)
+            {
+                var scope = (string)metric.SelectToken("properties.scopes[0]");
+                Assert.IsTrue(scope == FakeTask.GroupId + "/providers/Microsoft.Sql/servers/contoso-sql/databases/contoso-analytics"
+                    || scope == FakeTask.GroupId + "/providers/Microsoft.Web/serverfarms/contoso-plan");
+                Assert.IsFalse((bool)metric.SelectToken("properties.criteria.allOf[0].skipMetricValidation"));
+                Assert.AreEqual((string)metric.SelectToken("dependsOn[0]"), (string)metric.SelectToken("properties.actions[0].actionGroupId"));
+            }
+        }
+
+        [TestMethod]
+        public void Queries_ParseAndBindAgainstApplicationInsightsSchema_AndBoundInputs()
+        {
+            var globals = GlobalState.Default.WithDatabase(new DatabaseSymbol("SyntheticInsights",
+                new TableSymbol("customEvents", "(timestamp:datetime, name:string, customDimensions:dynamic)"),
+                new TableSymbol("exceptions", "(timestamp:datetime, outerType:string, innermostType:string, outerMessage:string, innermostMessage:string)"),
+                new TableSymbol("traces", "(timestamp:datetime, operation_Name:string, message:string)")));
+            foreach (var query in new[]
+            {
+                HealthMonitoringInstallTask.ImporterHealthQuery(ImporterHeartbeat.ActivityJob, 15),
+                HealthMonitoringInstallTask.ImporterHealthQuery(ImporterHeartbeat.WebTrafficJob, 1440),
+                HealthMonitoringInstallTask.MissingHeartbeatQuery(ImporterHeartbeat.ActivityJob, 30),
+                HealthMonitoringInstallTask.LoggedFailuresQuery
+            })
+            {
+                var diagnostics = KustoCode.ParseAndAnalyze(query, globals).GetDiagnostics();
+                Assert.AreEqual(0, diagnostics.Count, string.Join(Environment.NewLine, diagnostics.Select(d => d.Message)));
+            }
+            Assert.ThrowsException<ArgumentException>(() => HealthMonitoringInstallTask.ImporterHealthQuery("'; union *", 30));
+            Assert.ThrowsException<ArgumentOutOfRangeException>(() => HealthMonitoringInstallTask.ImporterHealthQuery(ImporterHeartbeat.ActivityJob, 14));
+        }
+
+        [DataTestMethod]
+        [DataRow(true, false)]
+        [DataRow(false, true)]
+        public async Task Provisioning_RealSdkListsAllOwnedResourceTypes_AndSendsIncrementalDeployment(bool enabled, bool existing)
+        {
+            using (var handler = new MonitoringHandler { ExistingOwned = existing })
+            using (var http = new HttpClient(handler))
+            {
+                var task = SdkTask(http, enabled);
+                await task.ExecuteTaskReturnResult(null);
+                Assert.AreEqual(1, handler.Deployments);
+                CollectionAssert.IsSubsetOf(new[]
+                {
+                    "Microsoft.Insights/scheduledQueryRules", "Microsoft.Insights/actionGroups", "Microsoft.Insights/metricAlerts"
+                }, handler.ListedTypes);
+                var resources = (JArray)handler.Payload.SelectToken("properties.template.resources");
+                Assert.AreEqual(enabled ? 8 : 7, resources.Count);
+                Assert.IsTrue(resources.Where(r => (string)r["type"] != "Microsoft.Insights/actionGroups")
+                    .All(r => (bool)r["properties"]["enabled"] == enabled));
+                Assert.AreEqual("object", (string)handler.Payload.SelectToken("properties.template.parameters.resourceTags.type"));
+                Assert.AreEqual("operator@contoso.example",
+                    (string)handler.Payload.SelectToken("properties.parameters.notificationEmail.value"));
+            }
+        }
+
+        [DataTestMethod]
+        [DataRow(false)]
+        [DataRow(true)]
+        public async Task Provisioning_RealSdkNeverMutatesAfterOwnershipCollisionOrReadFailure(bool readFailure)
+        {
+            using (var handler = new MonitoringHandler { ExistingOwned = true, Collision = !readFailure, FailReads = readFailure })
+            using (var http = new HttpClient(handler))
+            {
+                var task = SdkTask(http, true);
+                if (readFailure)
+                    await Assert.ThrowsExceptionAsync<Azure.RequestFailedException>(() => task.ExecuteTaskReturnResult(null));
+                else
+                    await Assert.ThrowsExceptionAsync<InstallException>(() => task.ExecuteTaskReturnResult(null));
+                Assert.AreEqual(0, handler.Deployments);
+            }
+        }
+
+        private static HealthMonitoringInstallTask SdkTask(HttpClient http, bool enabled)
+        {
+            var options = new ArmClientOptions { Transport = new HttpClientTransport(http) };
+            options.Retry.MaxRetries = 0;
+            var group = new ArmClient(new SyntheticCredential(), "00000000-0000-0000-0000-000000000000", options)
+                .GetResourceGroupResource(new ResourceIdentifier(FakeTask.GroupId));
+            return new HealthMonitoringInstallTask(MonitoringTaskConfig(), NullLogger.Instance,
+                new AzureLocation("westeurope"), new Dictionary<string, string>(), enabled,
+                "operator@contoso.example", 30, true, true) { Container = group };
+        }
+
+        private static TaskConfig MonitoringTaskConfig() => TaskConfig.GetConfigForName("contoso-web")
+            .AddSetting(HealthMonitoringInstallTask.AppInsightsNameSetting, "contoso-insights")
+            .AddSetting(HealthMonitoringInstallTask.SqlServerNameSetting, "contoso-sql")
+            .AddSetting(HealthMonitoringInstallTask.SqlDatabaseNameSetting, "contoso-analytics")
+            .AddSetting(HealthMonitoringInstallTask.AppServicePlanNameSetting, "contoso-plan");
+
+        private sealed class SyntheticCredential : TokenCredential
+        {
+            public override AccessToken GetToken(TokenRequestContext requestContext, CancellationToken cancellationToken)
+                => new AccessToken("synthetic", DateTimeOffset.MaxValue);
+            public override ValueTask<AccessToken> GetTokenAsync(TokenRequestContext requestContext, CancellationToken cancellationToken)
+                => new ValueTask<AccessToken>(GetToken(requestContext, cancellationToken));
+        }
+
+        private sealed class MonitoringHandler : HttpMessageHandler
+        {
+            public bool ExistingOwned, Collision, FailReads;
+            public int Deployments;
+            public JObject Payload;
+            public List<string> ListedTypes { get; } = new List<string>();
+
+            protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+            {
+                if (request.Method == HttpMethod.Put && request.RequestUri.AbsolutePath.Contains("/deployments/"))
+                {
+                    Deployments++;
+                    Payload = JObject.Parse(await request.Content.ReadAsStringAsync());
+                    return Json(HttpStatusCode.OK, new JObject
+                    {
+                        ["id"] = request.RequestUri.AbsolutePath, ["name"] = "contoso-deployment",
+                        ["type"] = "Microsoft.Resources/deployments",
+                        ["properties"] = new JObject { ["provisioningState"] = "Succeeded", ["mode"] = "Incremental" }
+                    });
+                }
+                Assert.AreEqual(HttpMethod.Get, request.Method, "The fake must reject every unexpected SDK mutation.");
+                if (FailReads) return Json(HttpStatusCode.Forbidden, new JObject
+                {
+                    ["error"] = new JObject { ["code"] = "AuthorizationFailed", ["message"] = "Synthetic read failure" }
+                });
+                var filter = Uri.UnescapeDataString(request.RequestUri.Query);
+                var resources = new JArray();
+                var types = new[] { "Microsoft.Insights/scheduledQueryRules", "Microsoft.Insights/actionGroups",
+                    "Microsoft.Insights/metricAlerts", "Microsoft.Insights/components" };
+                var type = types.Single(t => filter.Contains(t));
+                ListedTypes.Add(type);
+                if (type == "Microsoft.Insights/components")
+                    resources.Add(Resource("contoso-insights", type, true));
+                else if (ExistingOwned)
+                {
+                    var suffixes = type == types[0] ? new[] { "activity", "webtraffic", "failures" }
+                        : type == types[1] ? new[] { "notifications" }
+                        : new[] { "sql-cpu", "sql-storage", "plan-cpu", "plan-memory" };
+                    foreach (var suffix in suffixes)
+                        resources.Add(Resource("contoso-web-health-" + suffix, type, !(Collision && suffix == "sql-cpu")));
+                    resources.Add(Resource("contoso-unrelated-alert", type, false));
+                }
+                return Json(HttpStatusCode.OK, new JObject { ["value"] = resources });
+            }
+
+            private static JObject Resource(string name, string type, bool owned) => new JObject
+            {
+                ["id"] = FakeTask.GroupId + "/providers/" + type + "/" + name,
+                ["name"] = name, ["type"] = type, ["location"] = "westeurope",
+                ["tags"] = owned ? new JObject
+                {
+                    [HealthMonitoringInstallTask.OwnerTag] = HealthMonitoringInstallTask.OwnershipKey(FakeTask.GroupId, "contoso-web")
+                } : new JObject(),
+                ["properties"] = new JObject()
+            };
+            private static HttpResponseMessage Json(HttpStatusCode status, JObject value)
+                => new HttpResponseMessage(status) { Content = new StringContent(value.ToString(), Encoding.UTF8, "application/json") };
+        }
+
         private sealed class FakeTask : HealthMonitoringInstallTask
         {
             public const string GroupId = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/contoso-demo";
             public FakeTask(bool enabled, bool activity, bool web, Dictionary<string, string> tags = null) : base(
-                TaskConfig.GetConfigForName("contoso-web").AddSetting(AppInsightsNameSetting, "contoso-insights"),
+                MonitoringTaskConfig(),
                 NullLogger.Instance, new AzureLocation("westeurope"), tags ?? new Dictionary<string, string>(),
                 enabled, enabled ? "operator@contoso.example" : "", 30, activity, web)
             {
@@ -201,6 +398,7 @@ namespace Tests.UnitTests.InstallTests
             public List<HealthResource> Existing { get; } = new List<HealthResource>();
             public JObject Template { get; private set; }
             public JObject Parameters { get; private set; }
+            public object RawParameters { get; private set; }
             public int Deployments { get; private set; }
             public bool FailDeployment { get; set; }
             protected override string ContainerId => GroupId;
@@ -218,6 +416,7 @@ namespace Tests.UnitTests.InstallTests
             {
                 Deployments++;
                 Template = (JObject)template.DeepClone();
+                RawParameters = parameters;
                 Parameters = JObject.Parse(BinaryData.FromObjectAsJson(parameters).ToString());
                 if (FailDeployment) throw new InvalidOperationException("Synthetic deployment failure");
                 return Task.FromResult<ArmDeploymentResource>(null);

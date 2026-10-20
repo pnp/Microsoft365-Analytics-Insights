@@ -261,7 +261,10 @@ namespace App.ControlPanel.Engine.InstallerTasks
             _appInsightsInstallTask = new AppInsightsInstallTask(appInsightsConfig, logger, Location, tagDic, ResourceGroupName, config.Subscription.SubId, creds);
             this.AddTask(_logAnalyticsInstallTask, _appInsightsInstallTask);
             var healthConfig = TaskConfig.GetConfigForName(config.AppServiceWebAppName)
-                .AddSetting(HealthMonitoringInstallTask.AppInsightsNameSetting, config.AppInsightsName);
+                .AddSetting(HealthMonitoringInstallTask.AppInsightsNameSetting, config.AppInsightsName)
+                .AddSetting(HealthMonitoringInstallTask.SqlServerNameSetting, config.SQLServerName)
+                .AddSetting(HealthMonitoringInstallTask.SqlDatabaseNameSetting, config.SQLServerDatabaseName)
+                .AddSetting(HealthMonitoringInstallTask.AppServicePlanNameSetting, config.AppServicePlanName);
             var activityExpected = Common.Entities.ImportTaskSettings.GetImportPropertyInfos()
                 .Any(p => p.Name != nameof(Common.Entities.ImportTaskSettings.WebTraffic) &&
                     (bool)p.GetValue(config.SolutionConfig.ImportTaskSettings));
