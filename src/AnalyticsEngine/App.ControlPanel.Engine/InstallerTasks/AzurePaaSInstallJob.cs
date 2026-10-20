@@ -441,7 +441,7 @@ namespace App.ControlPanel.Engine.InstallerTasks
                 catch (RequestFailedException ex) when (PrivateNetworkProvenance.IsMissing(ex)) { }
                 if (group != null)
                 {
-                    var targets = NetworkingTargets();
+                    var targets = NetworkingTargets(_config, _networking.Manifest.ResourceGroupId);
                     var cleanup = new PrivateNetworkCleanupClient(group, _networking.Manifest,
                         targets.Select(t => t.Item1), targets.Select(t => t.Item2),
                         string.IsNullOrWhiteSpace(_config.NetworkConfig?.VNetName) ? null :
@@ -474,10 +474,10 @@ namespace App.ControlPanel.Engine.InstallerTasks
             return base.ProcessTask(task, previousRunResult);
         }
 
-        private List<Tuple<string, string>> NetworkingTargets()
+        public static List<Tuple<string, string>> NetworkingTargets(SolutionInstallConfig config, string resourceGroupId)
         {
-            var prefix = _networking.Manifest.ResourceGroupId + "/providers/";
-            var names = _config.NetworkConfig?.CustomEndpointNames ?? new PrivateEndpointNames();
+            var prefix = resourceGroupId + "/providers/";
+            var names = config.NetworkConfig?.CustomEndpointNames ?? new PrivateEndpointNames();
             var targets = new List<Tuple<string, string>>();
             void Add(string name, string type, string endpointName, string suffix)
             {
@@ -485,15 +485,15 @@ namespace App.ControlPanel.Engine.InstallerTasks
                     targets.Add(Tuple.Create(prefix + type + "/" + name,
                         names.GetNameOrDefault(endpointName, $"pe-{name}-{suffix}")));
             }
-            Add(_config.SQLServerName, "Microsoft.Sql/servers", names.SqlServer, "sql");
-            Add(_config.AppServiceWebAppName, "Microsoft.Web/sites", names.AppService, "app");
-            Add(_config.StorageAccountName, "Microsoft.Storage/storageAccounts", names.Storage, "blob");
-            Add(_config.StorageAccountName, "Microsoft.Storage/storageAccounts", names.StorageTable, "table");
-            Add(_config.KeyVaultName, "Microsoft.KeyVault/vaults", names.KeyVault, "vault");
-            Add(_config.ServiceBusName, "Microsoft.ServiceBus/namespaces", names.ServiceBus, "sb");
-            Add(_config.CognitiveServiceName, "Microsoft.CognitiveServices/accounts", names.CognitiveServices, "cognitive");
-            Add(_config.FoundryPromptResourceName, "Microsoft.CognitiveServices/accounts", null, "openai");
-            Add(_config.AutomationAccountName, "Microsoft.Automation/automationAccounts", names.AutomationAccount, "automation");
+            Add(config.SQLServerName, "Microsoft.Sql/servers", names.SqlServer, "sql");
+            Add(config.AppServiceWebAppName, "Microsoft.Web/sites", names.AppService, "app");
+            Add(config.StorageAccountName, "Microsoft.Storage/storageAccounts", names.Storage, "blob");
+            Add(config.StorageAccountName, "Microsoft.Storage/storageAccounts", names.StorageTable, "table");
+            Add(config.KeyVaultName, "Microsoft.KeyVault/vaults", names.KeyVault, "vault");
+            Add(config.ServiceBusName, "Microsoft.ServiceBus/namespaces", names.ServiceBus, "sb");
+            Add(config.CognitiveServiceName, "Microsoft.CognitiveServices/accounts", names.CognitiveServices, "cognitive");
+            Add(config.FoundryPromptResourceName, "Microsoft.CognitiveServices/accounts", null, "openai");
+            Add(config.AutomationAccountName, "Microsoft.Automation/automationAccounts", names.AutomationAccount, "automation");
             return targets;
         }
 
@@ -794,7 +794,9 @@ namespace App.ControlPanel.Engine.InstallerTasks
 
         public static string BuildWarning(string resourceName, string resourceType, string resourceGroupName)
         {
-            return $"Azure Cache for Redis '{resourceName}' ({resourceType}) in resource group '{resourceGroupName}' is no longer used by Microsoft 365 Analytics & Insights - runtime state is now kept in Azure Table storage in the solution's storage account. Delete it to stop paying for it, together with its private endpoint and private DNS zone (privatelink.redis.cache.windows.net / privatelink.redis.azure.net) if you created them for this solution.";
+            return $"Azure Cache for Redis '{resourceName}' ({resourceType}) in resource group '{resourceGroupName}' is no longer used by Microsoft 365 Analytics & Insights - runtime state is now kept in Azure Table storage in the solution's storage account. " +
+                "This installer does not adopt, reconfigure or delete retired Redis resources. Use --review-networking for a read-only inventory, then obtain separate network-owner approval and original ownership evidence before any manual cleanup. " +
+                "Preserve shared DNS records and links; never delete a whole private DNS zone, VNet, subnet or resource group as part of Redis cleanup.";
         }
     }
 

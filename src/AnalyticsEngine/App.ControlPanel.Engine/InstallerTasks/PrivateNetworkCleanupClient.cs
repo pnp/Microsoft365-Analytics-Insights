@@ -46,6 +46,105 @@ namespace App.ControlPanel.Engine.InstallerTasks
             _previousVnetId = previousVnetId;
         }
 
+        /// <summary>
+        /// GET-only resource-group inventory, including unrelated/shared and retired Redis networking.
+        /// It is intentionally separate from fail-fast teardown discovery and never updates the journal.
+        /// </summary>
+        public async Task<PrivateNetworkReview> Review(CancellationToken ct)
+        {
+            var report = new PrivateNetworkReview { ResourceGroupId = _group.Id.ToString() };
+            var observed = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            void Add(string id, string observation, IEnumerable<string> relationships = null)
+            {
+                observed.Add(id);
+                var saved = _manifest.Artifacts.SingleOrDefault(a => PrivateNetworkProvenance.Same(a.Id, id));
+                report.Items.Add(new PrivateNetworkReviewItem
+                {
+                    ResourceId = id,
+                    ResourceType = new ResourceIdentifier(id).ResourceType.ToString(),
+                    Observation = observation,
+                    SavedEvidence = saved == null ? "No saved creator evidence; separate owner review required." :
+                        saved.Removed ? "Previously recorded removed; live artifact must not be adopted." :
+                        saved.CreatedByInstaller && saved.CreationConfirmed ?
+                            "Confirmed creation is recorded; this inventory is not deletion approval or ownership revalidation." :
+                            "Adopted or unconfirmed creation; separate owner evidence required.",
+                    RelationshipIds = relationships?.Where(r => r != null).Distinct(StringComparer.OrdinalIgnoreCase).ToList()
+                        ?? new List<string>()
+                });
+            }
+
+            foreach (var endpoint in _group.GetPrivateEndpoints().GetAll(ct))
+            {
+                var connections = endpoint.Data.PrivateLinkServiceConnections
+                    .Concat(endpoint.Data.ManualPrivateLinkServiceConnections).ToList();
+                var targets = connections.Select(c => c.PrivateLinkServiceId?.ToString()).ToList();
+                var related = targets.Any(t => _targets.Contains(t)) || _endpointNames.Contains(endpoint.Data.Name) ||
+                    _manifest.Artifacts.Any(a => PrivateNetworkProvenance.Same(a.Id, endpoint.Id.ToString()));
+                Add(endpoint.Id.ToString(),
+                    (related ? "Configured/recorded candidate. " : "Resource-group inventory only; deployment ownership unknown. ") +
+                    "Connection states: " + string.Join(", ", connections.Select(c => c.PrivateLinkServiceConnectionState?.Status.ToString() ?? "Unknown")) +
+                    ". Subresources: " + string.Join(", ", connections.SelectMany(c => c.GroupIds)) + ".",
+                    targets.Concat(new[] { endpoint.Data.Subnet?.Id?.ToString() }));
+                foreach (var group in endpoint.GetPrivateDnsZoneGroups().GetAll(ct))
+                    Add(group.Id.ToString(), "Endpoint DNS zone group; review every linked zone and its shared users.",
+                        group.Data.PrivateDnsZoneConfigs.Select(c => c.PrivateDnsZoneId?.ToString()).Concat(new[] { endpoint.Id.ToString() }));
+            }
+            foreach (var zone in _group.GetPrivateDnsZones().GetAll(cancellationToken: ct))
+            {
+                if (!zone.Data.Name.StartsWith("privatelink.", StringComparison.OrdinalIgnoreCase) &&
+                    !_manifest.Artifacts.Any(a => a.ZoneIds.Contains(zone.Id.ToString(), StringComparer.OrdinalIgnoreCase) ||
+                        PrivateNetworkProvenance.Same(a.Id, zone.Id.ToString()))) continue;
+                Add(zone.Id.ToString(), "Private DNS zone retained; never delete the whole zone through this workflow.");
+                foreach (var record in zone.GetRecords(cancellationToken: ct))
+                    Add(record.Id.ToString(),
+                        "DNS record in a potentially shared zone; current presence/name is not exclusive creator evidence.",
+                        new[] { zone.Id.ToString() });
+                foreach (var link in zone.GetVirtualNetworkLinks().GetAll(cancellationToken: ct))
+                    Add(link.Id.ToString(), "VNet link in a potentially shared zone; review resolution impact before any separately approved change.",
+                        new[] { zone.Id.ToString(), link.Data.VirtualNetworkId?.ToString() });
+            }
+            foreach (var target in _targets.Where(t => new ResourceIdentifier(t).ResourceType.ToString()
+                .Equals("Microsoft.Web/sites", StringComparison.OrdinalIgnoreCase)))
+            {
+                var integration = await Read(new PrivateNetworkArtifact { Id = target, Kind = PrivateNetworkProvenance.Integration }, ct);
+                if (integration?.Artifact.SubnetId != null)
+                    Add(target, "App Service outbound VNet integration; current association does not prove creator ownership.",
+                        new[] { integration.Artifact.SubnetId });
+            }
+            foreach (var target in _targets.Where(t => new ResourceIdentifier(t).ResourceType.ToString()
+                .Equals("Microsoft.KeyVault/vaults", StringComparison.OrdinalIgnoreCase)))
+            {
+                KeyVaultResource vault;
+                try { vault = (await _group.GetKeyVaultAsync(new ResourceIdentifier(target).Name, ct)).Value; }
+                catch (RequestFailedException ex) when (PrivateNetworkProvenance.IsMissing(ex)) { continue; }
+                var rules = vault.Data.Properties.NetworkRuleSet;
+                Add(target, "Key Vault public access: " + vault.Data.Properties.PublicNetworkAccess +
+                    "; firewall default: " + rules?.DefaultAction + ". IP rules and policy are not changed.");
+                if (rules != null)
+                    foreach (var rule in rules.VirtualNetworkRules)
+                        Add(target + "/virtualNetworkRules/" + Uri.EscapeDataString(rule.Id.ToString()),
+                            "Key Vault subnet rule; current association does not prove installer ownership.",
+                            new[] { target, rule.Id.ToString() });
+            }
+            foreach (var artifact in _manifest.Artifacts.Where(a => !a.Removed && !observed.Contains(a.Id) &&
+                (a.Kind == PrivateNetworkProvenance.Integration || a.Kind == PrivateNetworkProvenance.VirtualNetworkRule)))
+            {
+                var live = await Read(artifact, ct);
+                if (live != null && !observed.Contains(artifact.Id))
+                    Add(artifact.Id, "Recorded integration/subnet rule; owner must review exact relationship before cleanup.",
+                        new[] { live.Artifact.TargetId, live.Artifact.SubnetId });
+            }
+            foreach (var resource in _group.GetGenericResources(filter: LeftoverRedisResourceWarning.ResourceTypeFilter, cancellationToken: ct))
+                Add(resource.Id.ToString(), "Retired Redis provider: not reconfigured or deleted by this installer. " +
+                    "Resource-group presence does not prove this deployment owns it; separately approved manual review is required.");
+            foreach (var artifact in _manifest.Artifacts.Where(a => !a.Removed && !observed.Contains(a.Id)))
+                Add(artifact.Id, "Recorded artifact was not observed in this resource-group inventory; " +
+                    "do not treat absence as deletion approval or reset the saved journal.",
+                    new[] { artifact.TargetId, artifact.SubnetId }.Concat(artifact.ZoneIds));
+            ct.ThrowIfCancellationRequested();
+            return report;
+        }
+
         public async Task<IReadOnlyList<PrivateNetworkSnapshot>> DiscoverEndpoints(CancellationToken ct)
         {
             var result = new List<PrivateNetworkSnapshot>();
@@ -211,6 +310,26 @@ namespace App.ControlPanel.Engine.InstallerTasks
 
         public async Task ValidateRecords(PrivateNetworkArtifact group, bool removed, CancellationToken ct)
         {
+            if (!removed)
+            {
+                // Identical addresses do not prove exclusivity: another endpoint's zone group can
+                // now depend on the same record set, even if its contents have not changed.
+                foreach (var endpoint in _group.GetPrivateEndpoints().GetAll(ct))
+                foreach (var other in endpoint.GetPrivateDnsZoneGroups().GetAll(ct))
+                {
+                    if (PrivateNetworkProvenance.Same(other.Id.ToString(), group.Id)) continue;
+                    var configs = other.Data.PrivateDnsZoneConfigs.Where(c =>
+                        group.ZoneIds.Contains(c.PrivateDnsZoneId?.ToString(), StringComparer.OrdinalIgnoreCase)).ToList();
+                    if (configs.Count == 0) continue;
+                    var records = PrivateDnsZoneInstallTask.ReadRecords(configs);
+                    if (records.Count == 0 || records.Any(r => group.Records.Any(expected =>
+                        PrivateNetworkProvenance.Same(r.ZoneId, expected.ZoneId) &&
+                        PrivateNetworkProvenance.Same(r.Name, expected.Name) &&
+                        PrivateNetworkProvenance.Same(r.Type, expected.Type))))
+                        throw PrivateNetworkProvenance.Blocked(other.Id.ToString(),
+                            "another endpoint DNS zone group shares an owned record set or its record inventory is not yet available");
+                }
+            }
             foreach (var expected in group.Records)
             {
                 Scope(expected.ZoneId);

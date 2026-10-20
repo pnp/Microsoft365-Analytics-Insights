@@ -150,6 +150,7 @@ namespace CloudInstallEngine.Azure
             $"Private-to-public networking transition BLOCKED for '{id}': {reason}. " +
             "Nothing without confirmed creator provenance can be deleted automatically. " +
             "Restore the original saved installer manifest, or have the network owner review and manually remove the exact resource and its DNS dependencies outside this installer, then retry. " +
+            "Use AnalyticsInstaller.exe --review-networking <saved-config.json> <new-private-report.json> for a GET-only inventory; the report is not deletion approval. " +
             "This build does not provide automatic legacy adoption. " +
             "Names and ordinary deployment tags are not ownership evidence.");
     }

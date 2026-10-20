@@ -14,6 +14,7 @@ using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 using System.IO;
 using System.Net;
@@ -130,6 +131,7 @@ namespace Tests.UnitTests.InstallTests
             var ex = await Assert.ThrowsExceptionAsync<InstallException>(() => fixture.Run());
             StringAssert.Contains(ex.Message, "BLOCKED");
             StringAssert.Contains(ex.Message, "manually");
+            StringAssert.Contains(ex.Message, "--review-networking");
             Assert.AreEqual(0, fixture.Client.Mutations.Count);
         }
 
@@ -223,6 +225,24 @@ namespace Tests.UnitTests.InstallTests
         }
 
         [TestMethod]
+        public async Task SdkDisconnectedExistingEndpointIsReportedAndNeverRecreatedOrClaimed()
+        {
+            using (var handler = new NetworkingHandler("synthetic-foreign"))
+            using (var http = new HttpClient(handler))
+            {
+                handler.Stored[EndpointId]["properties"]["privateLinkServiceConnections"][0]["properties"]["privateLinkServiceConnectionState"]["status"] = "Disconnected";
+                var manifest = new PrivateNetworkManifest();
+                var provenance = new PrivateNetworkProvenance(manifest, ResourceGroupId, () => { });
+                var ex = await Assert.ThrowsExceptionAsync<InstallException>(() =>
+                    EndpointTask(Group(http), provenance).ExecuteTaskReturnResult(null));
+                StringAssert.Contains(ex.Message, "disconnected");
+                Assert.IsFalse(provenance.IsOwned(EndpointId));
+                Assert.AreEqual(0, handler.Puts);
+                Assert.AreEqual(0, handler.Deletes.Count);
+            }
+        }
+
+        [TestMethod]
         public async Task InterruptedCreationCannotBeSilentlyAdoptedAndMissingIntentCanRetry()
         {
             using (var handler = new EndpointHandler { FailPutOnce = true })
@@ -290,6 +310,43 @@ namespace Tests.UnitTests.InstallTests
                 manifest.Artifacts.Clear();
                 await Assert.ThrowsExceptionAsync<InstallException>(() => adapter.EnablePublicTarget(target, CancellationToken.None));
                 Assert.AreEqual(1, handler.Mutations);
+            }
+        }
+
+        [DataTestMethod]
+        [DataRow("Microsoft.Sql/servers")]
+        [DataRow("Microsoft.Storage/storageAccounts")]
+        [DataRow("Microsoft.KeyVault/vaults")]
+        [DataRow("Microsoft.ServiceBus/namespaces")]
+        [DataRow("Microsoft.Web/sites")]
+        [DataRow("Microsoft.CognitiveServices/accounts")]
+        [DataRow("Microsoft.Automation/automationAccounts")]
+        public async Task SdkEverySupportedProviderDistinguishesMissingTargetsAndPolicyDenial(string resourceType)
+        {
+            var target = ResourceGroupId + "/providers/" + resourceType + "/contoso";
+            var manifest = new PrivateNetworkManifest { ResourceGroupId = ResourceGroupId, AppliedTopology = "PublicTransitionPending" };
+            manifest.Artifacts.Add(new PrivateNetworkArtifact
+            {
+                Id = EndpointId, Kind = PrivateNetworkProvenance.Endpoint, TargetId = target,
+                CreatedByInstaller = true, CreationConfirmed = true
+            });
+            using (var handler = new ResourceHandler(target, resourceType) { ReadErrorCode = "ResourceNotFound" })
+            using (var http = new HttpClient(handler))
+            {
+                var adapter = new PrivateNetworkCleanupClient(Group(http), manifest, new[] { target }, new string[0]);
+                await adapter.ValidatePublicTarget(target, CancellationToken.None);
+                await adapter.EnablePublicTarget(target, CancellationToken.None);
+                Assert.AreEqual(0, handler.Mutations, "Genuinely absent resources are not recreated by teardown.");
+                handler.ReadErrorCode = null;
+                handler.FailPatchOnce = true;
+                handler.FailureStatus = HttpStatusCode.Forbidden;
+                var ex = await Assert.ThrowsExceptionAsync<RequestFailedException>(() => adapter.EnablePublicTarget(target, CancellationToken.None));
+                Assert.AreEqual(403, ex.Status, "Policy/authorization failures must reach the caller.");
+                Assert.IsFalse(manifest.Artifacts.Single().Removed);
+                Assert.AreEqual("PublicTransitionPending", manifest.AppliedTopology);
+                handler.IgnoreChanges = true;
+                await Assert.ThrowsExceptionAsync<InstallException>(() => adapter.EnablePublicTarget(target, CancellationToken.None));
+                Assert.IsFalse(manifest.Artifacts.Single().Removed, "Unconfirmed public readback cannot retire private state.");
             }
         }
 
@@ -516,10 +573,329 @@ namespace Tests.UnitTests.InstallTests
             }
         }
 
+        [DataTestMethod]
+        [DataRow(false)]
+        [DataRow(true)]
+        public async Task SdkSharedZoneGroupReferenceBlocksEvenWithUnchangedAddresses(bool unavailableRecordInventory)
+        {
+            var manifest = new PrivateNetworkManifest();
+            var provenance = new PrivateNetworkProvenance(manifest, ResourceGroupId, () => { });
+            provenance.BeginCreate(new PrivateNetworkArtifact
+            {
+                Id = EndpointId, Kind = PrivateNetworkProvenance.Endpoint,
+                TargetId = SqlId, GroupId = "sqlServer", SubnetId = SubnetId
+            });
+            provenance.ConfirmCreate(EndpointId);
+            using (var handler = new NetworkingHandler(manifest.DeploymentToken))
+            using (var http = new HttpClient(handler))
+            {
+                var group = Group(http);
+                var dns = new PrivateDnsZoneInstallTask(TaskConfig.GetConfigForName("privatelink.database.windows.net")
+                    .AddSetting(PrivateDnsZoneInstallTask.CONFIG_KEY_VNET_ID, new ResourceIdentifier(SubnetId).Parent.ToString())
+                    .AddSetting(PrivateDnsZoneInstallTask.CONFIG_KEY_PE_NAME, "pe-contoso-sql-sql"),
+                    NullLogger.Instance, new AzureLocation("westeurope"), new Dictionary<string, string>())
+                { Container = group, Networking = provenance };
+                await dns.ExecuteTaskReturnResult(null);
+                var otherEndpointId = EndpointId + "-foreign";
+                handler.Stored[otherEndpointId] = (JObject)handler.Stored[EndpointId].DeepClone();
+                handler.Stored[otherEndpointId]["id"] = otherEndpointId;
+                handler.Stored[otherEndpointId]["name"] = "foreign-endpoint";
+                handler.Stored[otherEndpointId]["properties"]["privateLinkServiceConnections"][0]["properties"]["privateLinkServiceId"] = SqlId + "-foreign";
+                var ownedGroup = manifest.Artifacts.Single(a => a.Kind == PrivateNetworkProvenance.ZoneGroup);
+                var foreignGroupId = otherEndpointId + "/privateDnsZoneGroups/foreign-group";
+                handler.Stored[foreignGroupId] = (JObject)handler.Stored[ownedGroup.Id].DeepClone();
+                handler.Stored[foreignGroupId]["id"] = foreignGroupId;
+                handler.Stored[foreignGroupId]["name"] = "foreign-group";
+                if (unavailableRecordInventory)
+                    handler.Stored[foreignGroupId]["properties"]["privateDnsZoneConfigs"][0]["properties"]["recordSets"] = new JArray();
+                var puts = handler.Puts;
+                var cleanup = new PrivateNetworkTeardown(provenance, new PrivateNetworkCleanupClient(group, manifest,
+                    new[] { SqlId }, new[] { "pe-contoso-sql-sql" }), NullLogger.Instance);
+                var ex = await Assert.ThrowsExceptionAsync<InstallException>(() => cleanup.Run(false, CancellationToken.None));
+                StringAssert.Contains(ex.Message, "another endpoint DNS zone group");
+                Assert.AreEqual(puts, handler.Puts, "All dependencies must pass before even enabling public access.");
+                Assert.AreEqual(0, handler.Deletes.Count);
+                Assert.IsFalse(ownedGroup.Removed);
+                handler.Stored.Remove(foreignGroupId);
+                await cleanup.Run(false, CancellationToken.None);
+                Assert.AreEqual("Public", manifest.AppliedTopology);
+                Assert.IsTrue(handler.Stored.ContainsKey(otherEndpointId), "Unrelated endpoints are never removed.");
+            }
+        }
+
+        [TestMethod]
+        public async Task SdkLegacyReviewCollectsEndpointOrphanSharedDnsRedisAndMissingHistoryWithoutMutation()
+        {
+            var manifest = new PrivateNetworkManifest();
+            var missingId = EndpointId + "-missing";
+            manifest.Artifacts.Add(new PrivateNetworkArtifact
+            {
+                Id = missingId, Kind = PrivateNetworkProvenance.Endpoint, CreatedByInstaller = true, CreationConfirmed = true
+            });
+            var before = JsonConvert.SerializeObject(manifest);
+            using (var handler = new NetworkingHandler("synthetic-foreign") { RecordPresent = true, ForeignRecordPresent = true })
+            using (var http = new HttpClient(handler))
+            {
+                handler.SeedForeignDns();
+                var redisId = ResourceGroupId + "/providers/Microsoft.Cache/redis/contoso-retired";
+                handler.Stored[redisId] = new JObject
+                {
+                    ["id"] = redisId, ["name"] = "contoso-retired", ["type"] = "Microsoft.Cache/redis"
+                };
+                var vaultId = ResourceGroupId + "/providers/Microsoft.KeyVault/vaults/contoso";
+                var siteId = ResourceGroupId + "/providers/Microsoft.Web/sites/contoso";
+                using (var vault = new ResourceHandler(vaultId, "Microsoft.KeyVault/vaults"))
+                using (var site = new ResourceHandler(siteId, "Microsoft.Web/sites"))
+                {
+                    vault.Stored["properties"]["networkAcls"]["virtualNetworkRules"] = new JArray(new JObject { ["id"] = SubnetId });
+                    site.Stored["properties"]["virtualNetworkSubnetId"] = SubnetId;
+                    handler.Stored[vaultId] = vault.Stored;
+                    handler.Stored[siteId] = site.Stored;
+                }
+                handler.Stored[EndpointId]["properties"]["privateLinkServiceConnections"][0]["properties"]["privateLinkServiceConnectionState"]["status"] = "Disconnected";
+                var client = new PrivateNetworkCleanupClient(Group(http), manifest, new[] { SqlId, vaultId, siteId }, new[] { "pe-contoso-sql-sql" });
+                var report = await client.Review(CancellationToken.None);
+                StringAssert.Contains(report.Items.Single(i => i.ResourceId == EndpointId).Observation, "Disconnected");
+                Assert.IsTrue(report.Items.Any(i => i.ResourceId == ZoneId + "/A/contoso-sql"));
+                Assert.IsTrue(report.Items.Any(i => i.ResourceId == ZoneId + "/A/foreign-service"));
+                Assert.IsTrue(report.Items.Any(i => i.ResourceId.Contains("/virtualNetworkLinks/")));
+                StringAssert.Contains(report.Items.Single(i => i.ResourceId == redisId).Observation, "Retired Redis");
+                StringAssert.Contains(report.Items.Single(i => i.ResourceId == missingId).Observation, "not observed");
+                StringAssert.Contains(report.Items.Single(i => i.ResourceId == siteId).Observation, "outbound VNet integration");
+                Assert.IsTrue(report.Items.Any(i => i.ResourceId == vaultId + "/virtualNetworkRules/" + Uri.EscapeDataString(SubnetId)),
+                    "Legacy vault subnet rules are inventoried without manufacturing provenance.");
+                Assert.IsFalse(report.DeletionAuthorized);
+                Assert.IsFalse(report.PublicDnsVerified);
+                Assert.AreEqual(before, JsonConvert.SerializeObject(manifest));
+                Assert.IsTrue(handler.Methods.All(m => m == HttpMethod.Get));
+                handler.Stored.Remove(EndpointId);
+                var orphanReport = await client.Review(CancellationToken.None);
+                Assert.IsFalse(orphanReport.Items.Any(i => i.ResourceId == EndpointId));
+                Assert.IsTrue(orphanReport.Items.Any(i => i.ResourceId == ZoneId + "/A/contoso-sql"),
+                    "A missing legacy endpoint must not hide its leftover DNS.");
+                await Assert.ThrowsExceptionAsync<InstallException>(() =>
+                    new PrivateNetworkTeardown(new PrivateNetworkProvenance(manifest, ResourceGroupId, () => { }),
+                        client, NullLogger.Instance).Run(false, CancellationToken.None));
+                Assert.AreEqual(0, handler.Puts, "A review never adopts resources or bypasses teardown safeguards.");
+                Assert.AreEqual(0, handler.Deletes.Count);
+            }
+        }
+
+        [DataTestMethod]
+        [DataRow("/privateEndpoints")]
+        [DataRow("/privateDnsZones")]
+        [DataRow("/resources")]
+        public async Task SdkReviewPropagatesDeniedInventoryWithoutMutation(string deniedSuffix)
+        {
+            var manifest = new PrivateNetworkManifest();
+            var original = JsonConvert.SerializeObject(manifest);
+            using (var handler = new NetworkingHandler("synthetic-foreign") { DeniedSuffix = deniedSuffix })
+            using (var http = new HttpClient(handler))
+            {
+                var client = new PrivateNetworkCleanupClient(Group(http), manifest, new[] { SqlId }, new[] { "pe-contoso-sql-sql" });
+                var ex = await Assert.ThrowsExceptionAsync<RequestFailedException>(() => client.Review(CancellationToken.None));
+                Assert.AreEqual(403, ex.Status);
+                Assert.IsTrue(handler.Methods.All(m => m == HttpMethod.Get));
+                Assert.AreEqual(original, JsonConvert.SerializeObject(manifest));
+            }
+        }
+
+        [TestMethod]
+        public async Task SdkRetiredRedisIsNotASupportedPublicToggleEvenWithRecordedEndpoint()
+        {
+            var target = ResourceGroupId + "/providers/Microsoft.Cache/redis/contoso";
+            var manifest = new PrivateNetworkManifest();
+            manifest.Artifacts.Add(new PrivateNetworkArtifact
+            {
+                Id = EndpointId, Kind = PrivateNetworkProvenance.Endpoint, TargetId = target,
+                CreatedByInstaller = true, CreationConfirmed = true
+            });
+            using (var handler = new ResourceHandler(target, "Microsoft.Cache/redis"))
+            using (var http = new HttpClient(handler))
+            {
+                var client = new PrivateNetworkCleanupClient(Group(http), manifest, new[] { target }, new string[0]);
+                var ex = await Assert.ThrowsExceptionAsync<InstallException>(() => client.EnablePublicTarget(target, CancellationToken.None));
+                StringAssert.Contains(ex.Message, "unsupported public-network target type");
+                Assert.AreEqual(0, handler.Mutations);
+                Assert.AreEqual(0, handler.Reads);
+            }
+        }
+
+        [TestMethod]
+        public async Task ReviewCommandPreservesSavedConfigAndPublishesNoIncompleteOrOverwrittenReport()
+        {
+            var directory = CreatePrivateReviewDirectory();
+            try
+            {
+                var config = new App.ControlPanel.Engine.SolutionInstallConfig();
+                config.InstallerAccount.Secret = "synthetic-install-secret";
+                config.NetworkConfig.VNetName = "contoso-vnet";
+                config.Tags.Add(new Common.Entities.Installer.AzTag("Purpose", "Καλημέρα κόσμε"));
+                var path = Path.Combine(directory, "contoso-config.json");
+                var reportPath = Path.Combine(directory, "contoso-private-review.json");
+                config.Save(path, "synthetic-password");
+                var original = File.ReadAllBytes(path);
+                var calls = 0;
+                Func<App.ControlPanel.Engine.SolutionInstallConfig, CancellationToken, Task<PrivateNetworkReview>> review = (loaded, ct) =>
+                {
+                    calls++;
+                    Assert.AreEqual("contoso-vnet", loaded.NetworkConfig.VNetName);
+                    return Task.FromResult(new PrivateNetworkReview { ResourceGroupId = ResourceGroupId });
+                };
+                var args = new[] { App.ControlPanel.Engine.PrivateNetworkReviewCommand.Operation, path, reportPath };
+                await App.ControlPanel.Engine.PrivateNetworkReviewCommand.Run(args, "synthetic-password", CancellationToken.None, review);
+                Assert.AreEqual(1, calls);
+                CollectionAssert.AreEqual(original, File.ReadAllBytes(path));
+                var output = JObject.Parse(File.ReadAllText(reportPath));
+                Assert.IsTrue((bool)output["ReadOnly"]);
+                Assert.IsFalse((bool)output["DeletionAuthorized"]);
+                Assert.IsNull(output["DeploymentToken"]);
+                await Assert.ThrowsExceptionAsync<IOException>(() =>
+                    App.ControlPanel.Engine.PrivateNetworkReviewCommand.Run(args, "synthetic-password", CancellationToken.None, review));
+                Assert.AreEqual(1, calls);
+                File.Delete(reportPath);
+                await Assert.ThrowsExceptionAsync<RequestFailedException>(() =>
+                    App.ControlPanel.Engine.PrivateNetworkReviewCommand.Run(args, "synthetic-password", CancellationToken.None,
+                        (loaded, ct) => throw new RequestFailedException(403, "Synthetic review denied")));
+                Assert.IsFalse(File.Exists(reportPath), "A failed read cannot publish an apparently complete inventory.");
+                await Assert.ThrowsExceptionAsync<ArgumentException>(() =>
+                    App.ControlPanel.Engine.PrivateNetworkReviewCommand.Run(args, null, CancellationToken.None, review));
+                await Assert.ThrowsExceptionAsync<InvalidOperationException>(() =>
+                    App.ControlPanel.Engine.PrivateNetworkReviewCommand.Run(args, "incorrect-synthetic-password", CancellationToken.None, review));
+                await Assert.ThrowsExceptionAsync<OperationCanceledException>(() =>
+                    App.ControlPanel.Engine.PrivateNetworkReviewCommand.Run(args, "synthetic-password", new CancellationToken(true), review));
+                CollectionAssert.AreEqual(original, File.ReadAllBytes(path));
+                Assert.IsFalse(File.Exists(reportPath));
+                File.WriteAllText(path, "{ invalid synthetic JSON");
+                await Assert.ThrowsExceptionAsync<JsonReaderException>(() =>
+                    App.ControlPanel.Engine.PrivateNetworkReviewCommand.Run(args, "synthetic-password", CancellationToken.None, review));
+                File.Delete(path);
+                await Assert.ThrowsExceptionAsync<FileNotFoundException>(() =>
+                    App.ControlPanel.Engine.PrivateNetworkReviewCommand.Run(args, "synthetic-password", CancellationToken.None, review));
+            }
+            finally { Directory.Delete(directory, true); }
+        }
+
+        [DataTestMethod]
+        [DataRow(false)]
+        [DataRow(true)]
+        public async Task ReviewRejectsCheckoutAndWorktreeOutputBeforeLoadingConfigOrReadingArm(bool gitFile)
+        {
+            var directory = CreatePrivateReviewDirectory();
+            try
+            {
+                var repository = Path.Combine(directory, "contoso-checkout");
+                var outputDirectory = Path.Combine(repository, "ignored-output");
+                Directory.CreateDirectory(outputDirectory);
+                var marker = Path.Combine(repository, ".git");
+                if (gitFile) File.WriteAllText(marker, "gitdir: synthetic-contoso-git-metadata");
+                else Directory.CreateDirectory(marker);
+                var reportPath = Path.Combine(outputDirectory, "private-review.json");
+                var calls = 0;
+                var args = new[] { App.ControlPanel.Engine.PrivateNetworkReviewCommand.Operation,
+                    Path.Combine(directory, "missing-config.json"), reportPath };
+                await Assert.ThrowsExceptionAsync<ArgumentException>(() =>
+                    App.ControlPanel.Engine.PrivateNetworkReviewCommand.Run(args, "synthetic-password", CancellationToken.None,
+                        (config, ct) => { calls++; return Task.FromResult(new PrivateNetworkReview()); }));
+                Assert.AreEqual(0, calls, "Invalid output must be rejected before config/credential loading or ARM inventory.");
+                Assert.IsFalse(File.Exists(reportPath));
+            }
+            finally { Directory.Delete(directory, true); }
+        }
+
+        [TestMethod]
+        public async Task ReviewRejectsJunctionOutputBeforeLoadingConfigOrReadingArm()
+        {
+            var directory = CreatePrivateReviewDirectory();
+            var link = Path.Combine(directory, "contoso-junction");
+            try
+            {
+                var target = Path.Combine(directory, "private-target");
+                Directory.CreateDirectory(target);
+                CreateReviewJunction(link, target);
+                var reportPath = Path.Combine(link, "private-review.json");
+                var calls = 0;
+                var args = new[] { App.ControlPanel.Engine.PrivateNetworkReviewCommand.Operation,
+                    Path.Combine(directory, "missing-config.json"), reportPath };
+                await Assert.ThrowsExceptionAsync<ArgumentException>(() =>
+                    App.ControlPanel.Engine.PrivateNetworkReviewCommand.Run(args, "synthetic-password", CancellationToken.None,
+                        (config, ct) => { calls++; return Task.FromResult(new PrivateNetworkReview()); }));
+                Assert.AreEqual(0, calls);
+                Assert.IsFalse(File.Exists(Path.Combine(target, "private-review.json")));
+            }
+            finally
+            {
+                if (Directory.Exists(link)) Directory.Delete(link);
+                Directory.Delete(directory, true);
+            }
+        }
+
+        [DataTestMethod]
+        [DataRow(false)]
+        [DataRow(true)]
+        public async Task ReviewRevalidatesCheckoutAndJunctionBeforeWriting(bool junction)
+        {
+            var directory = CreatePrivateReviewDirectory();
+            var outputDirectory = Path.Combine(directory, "output");
+            try
+            {
+                Directory.CreateDirectory(outputDirectory);
+                var configPath = Path.Combine(directory, "contoso-config.json");
+                new App.ControlPanel.Engine.SolutionInstallConfig().Save(configPath, "synthetic-password");
+                var reportPath = Path.Combine(outputDirectory, "private-review.json");
+                var calls = 0;
+                var args = new[] { App.ControlPanel.Engine.PrivateNetworkReviewCommand.Operation, configPath, reportPath };
+                await Assert.ThrowsExceptionAsync<ArgumentException>(() =>
+                    App.ControlPanel.Engine.PrivateNetworkReviewCommand.Run(args, "synthetic-password", CancellationToken.None,
+                        (config, ct) =>
+                        {
+                            calls++;
+                            if (junction)
+                            {
+                                Directory.Delete(outputDirectory);
+                                CreateReviewJunction(outputDirectory, directory);
+                            }
+                            else File.WriteAllText(Path.Combine(outputDirectory, ".git"), "gitdir: synthetic-contoso-git-metadata");
+                            return Task.FromResult(new PrivateNetworkReview());
+                        }));
+                Assert.AreEqual(1, calls);
+                Assert.IsFalse(File.Exists(reportPath), "A path changed during inventory must not receive the private report.");
+            }
+            finally
+            {
+                if (junction && Directory.Exists(outputDirectory)) Directory.Delete(outputDirectory);
+                Directory.Delete(directory, true);
+            }
+        }
+
+        private static string CreatePrivateReviewDirectory()
+        {
+            var directory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+                "m365-network-review-test-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(directory);
+            DataUtils.PrivateArtifactPath.Validate(Path.Combine(directory, "private-review.json"));
+            return directory;
+        }
+
+        private static void CreateReviewJunction(string link, string target)
+        {
+            using (var process = Process.Start(new ProcessStartInfo(Environment.GetEnvironmentVariable("ComSpec"),
+                "/c mklink /J \"" + link + "\" \"" + target + "\"")
+            { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true }))
+            {
+                var stdout = process.StandardOutput.ReadToEnd();
+                var stderr = process.StandardError.ReadToEnd();
+                process.WaitForExit();
+                Assert.AreEqual(0, process.ExitCode, "Could not create synthetic junction: " + stdout + stderr);
+            }
+        }
+
         private sealed class NetworkingHandler : HttpMessageHandler
         {
             public Dictionary<string, JObject> Stored = new Dictionary<string, JObject>(StringComparer.OrdinalIgnoreCase);
             public List<string> Deletes = new List<string>();
+            public List<HttpMethod> Methods = new List<HttpMethod>();
+            public string DeniedSuffix;
             public int Puts;
             public bool RecordPresent, ForeignRecordPresent, SawConditionalLinkDelete;
             public NetworkingHandler(string token)
@@ -537,7 +913,19 @@ namespace Tests.UnitTests.InstallTests
             }
             protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
             {
+                Methods.Add(request.Method);
                 var path = request.RequestUri.AbsolutePath;
+                if (DeniedSuffix != null && path.EndsWith(DeniedSuffix, StringComparison.OrdinalIgnoreCase))
+                    return Json(HttpStatusCode.Forbidden, new JObject
+                    {
+                        ["error"] = new JObject { ["code"] = "AuthorizationFailed" }
+                    });
+                if (request.Method == HttpMethod.Get && path == ResourceGroupId + "/resources")
+                    return Json(HttpStatusCode.OK, new JObject
+                    {
+                        ["value"] = new JArray(Stored.Values.Where(v =>
+                            ((string)v["type"])?.StartsWith("Microsoft.Cache/", StringComparison.OrdinalIgnoreCase) == true))
+                    });
                 if (request.Method == HttpMethod.Put || request.Method.Method == "PATCH")
                 {
                     Puts++;

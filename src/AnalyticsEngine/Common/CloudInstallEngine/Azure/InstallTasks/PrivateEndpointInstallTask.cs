@@ -74,7 +74,7 @@ namespace CloudInstallEngine.Azure.InstallTasks
                     Networking.ObserveExisting(provenance, pe.Data.Tags);
                 }
                 var connection = pe.Data.PrivateLinkServiceConnections?.FirstOrDefault();
-                var connectionState = connection?.ConnectionState?.Status;
+                var connectionState = connection?.PrivateLinkServiceConnectionState?.Status;
                 if (!string.IsNullOrEmpty(connectionState) &&
                     !string.Equals(connectionState, "Approved", System.StringComparison.OrdinalIgnoreCase))
                 {
