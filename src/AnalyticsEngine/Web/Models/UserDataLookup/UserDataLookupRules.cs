@@ -99,6 +99,9 @@ namespace Web.AnalyticsWeb.Models.UserDataLookup
             public const string WebTraffic = "WebTraffic";
             public const string SentEmails = "SentEmails";
             public const string Copilot = "Copilot";
+
+            /// <summary>Microsoft's per-user Copilot usage reports. Not a User lookup category; used by the coverage matrix.</summary>
+            public const string CopilotUsageReports = "GraphCopilotUsageReports";
         }
 
         // Friendly names / descriptions for the import workloads, shown on the lookup page so an
@@ -250,6 +253,7 @@ namespace Web.AnalyticsWeb.Models.UserDataLookup
                 case Wf.WebTraffic: return s.WebTraffic;
                 case Wf.SentEmails: return s.SentEmails;
                 case Wf.Copilot: return s.Copilot;
+                case Wf.CopilotUsageReports: return s.GraphCopilotUsageReports;
                 default: return false;
             }
         }

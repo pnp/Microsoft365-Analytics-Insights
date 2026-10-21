@@ -47,14 +47,23 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
     public sealed class LicenseRefreshRunInfo
     {
         public LicenseRefreshRunInfo(DateTime completedUtc, DateTime? previousCompletedUtc, bool historyTablesAvailable)
+            : this(completedUtc, previousCompletedUtc, historyTablesAvailable, Common.Entities.Licences.LicenceHistorySources.TenantRefresh)
+        {
+        }
+
+        public LicenseRefreshRunInfo(DateTime completedUtc, DateTime? previousCompletedUtc, bool historyTablesAvailable, byte historySource)
         {
             CompletedUtc = completedUtc;
             PreviousCompletedUtc = previousCompletedUtc;
             HistoryTablesAvailable = historyTablesAvailable;
+            HistorySource = historySource;
         }
         public DateTime CompletedUtc { get; }
         public DateTime? PreviousCompletedUtc { get; }
         public bool HistoryTablesAvailable { get; }
+
+        /// <summary>The <c>from_source</c> recorded on history rows this refresh opens: see <see cref="Common.Entities.Licences.LicenceHistorySources"/>.</summary>
+        public byte HistorySource { get; }
         public bool IsFirstHistoryRefresh => HistoryTablesAvailable && PreviousCompletedUtc == null;
     }
     /// <summary>Seat-count observation for one licence type in a completed refresh.</summary>

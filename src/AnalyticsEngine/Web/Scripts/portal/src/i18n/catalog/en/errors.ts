@@ -20,6 +20,7 @@ export const errors = {
   'errors.userLookup.missingUpn': "A 'upn' query parameter is required.",
   'errors.userLookup.unknownCategory': "Unknown category '{category}'.",
   'errors.userLookup.categoryNoDrilldown': "Category '{category}' does not support drill-down.",
+  'errors.userLookup.unknownReport': 'That report cannot be explained here.',
 
   // User organisations API
   'errors.userOrgs.requestFailed': 'Request failed ({status})',

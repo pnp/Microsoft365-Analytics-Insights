@@ -190,5 +190,13 @@ namespace Common.Entities.State
         /// old and new values). One row; deleting it restores the defaults.
         /// </summary>
         public const string CopilotAdoptionSettings = "CopilotAdoptionSettings";
+
+        /// <summary>
+        /// Per-person profile and licence refresh requests from the portal's User lookup diagnostics, the queue the
+        /// importer drains them from, each person's last verified licence check, and the licence-data generation report
+        /// caches key on. Bounded: at most <c>UserRefreshStore.MaxQueueLength</c> queued requests; finished requests
+        /// expire after 30 days. Holds UPNs and who asked, so it is protected like every other runtime state partition.
+        /// </summary>
+        public const string UserRefresh = "UserRefresh";
     }
 }

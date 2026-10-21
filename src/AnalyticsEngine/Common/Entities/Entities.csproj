@@ -82,6 +82,7 @@
   </ItemGroup>
   <ItemGroup>
     <EmbeddedResource Include="..\..\..\Clean Old Data Data.sql" />
+    <EmbeddedResource Include="Resources\Product_names_and_service_plan_identifiers_for_licensing.csv" LogicalName="Common.Entities.Resources.Product_names_and_service_plan_identifiers_for_licensing.csv" />
   </ItemGroup>
   <ItemGroup>
     <Compile Update="Migrations\202610080900001_AddPromptCategories.Designer.cs">
