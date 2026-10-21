@@ -35,7 +35,6 @@ namespace Tests.UnitTests
         private const string DisplayName = "Contoso Helpdesk";
 
         private const byte RuntimeTwin = 1;
-        private const byte ExtraRuntimeRecord = 2;
 
         #region Payloads
 
@@ -172,6 +171,17 @@ namespace Tests.UnitTests
                 "A different conversation, or a client record ten minutes later, is not the runtime record's twin.");
         }
 
+        [TestMethod]
+        public async Task Pair_UnknownClientHost_IsNotEvidenceOfATwin()
+        {
+            var s = await NewScenario();
+            var runtime = s.Runtime(0);
+            var unknown = new Record(ClientRecord(s.AgentGuid, s.ConversationId)
+                .Replace(@"""AppHost"": ""Office""", @"""AppHost"": ""Contoso future host"""), s.Start.AddSeconds(5));
+            await CommitCycle(s, runtime, unknown);
+            Assert.AreEqual(0, (await Duplicates(runtime, unknown)).Count);
+        }
+
         /// <summary>
         /// A record saved by an older build has no conversation id. When the importer re-reads it in its
         /// look-back window, the id is filled in and the record can be paired.
@@ -271,7 +281,7 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
-        public async Task Teams_ExtraRuntimeRecordAFewSecondsLater_IsCountedAsPartOfTheTurn()
+        public async Task Teams_DistinctPromptsAFewSecondsApart_AreNotCollapsed()
         {
             var s = await NewScenario();
             var turn = s.Runtime(0, "Microsoft Teams");
@@ -282,13 +292,11 @@ namespace Tests.UnitTests
             await CommitCycle(s, nextTurn, extra);
 
             var duplicates = await Duplicates(turn, extra, nextTurn);
-            Assert.AreEqual(1, duplicates.Count, "Only the extra record is left out; the next turn still counts.");
-            Assert.AreEqual(turn.EventId, duplicates[extra.EventId].CountedEventId);
-            Assert.AreEqual(ExtraRuntimeRecord, duplicates[extra.EventId].Reason);
+            Assert.AreEqual(0, duplicates.Count, "Time proximity alone cannot prove that distinct prompts are duplicates.");
         }
 
         [TestMethod]
-        public async Task Microsoft365Copilot_ExtraRuntimeRecord_IsFoldedIntoThePairedTurn()
+        public async Task Microsoft365Copilot_RapidNextPromptWithNoClientYet_StillCounts()
         {
             var s = await NewScenario();
             var runtime = s.Runtime(0);
@@ -298,18 +306,158 @@ namespace Tests.UnitTests
             await CommitCycle(s, runtime, client, extra);
 
             var duplicates = await Duplicates(runtime, client, extra);
-            Assert.AreEqual(2, duplicates.Count);
+            Assert.AreEqual(1, duplicates.Count);
             Assert.AreEqual(client.EventId, duplicates[runtime.EventId].CountedEventId);
-            Assert.AreEqual(client.EventId, duplicates[extra.EventId].CountedEventId, "The turn is counted once, on the client record.");
+            Assert.IsFalse(duplicates.ContainsKey(extra.EventId), "A second prompt's runtime record must count until its own twin arrives.");
         }
 
         #endregion
 
         #region Reports
 
+        [TestMethod]
+        public async Task HistoricalRetainedConversation_PairsAcrossRepairBatches_AndLegacyReportRetainsUniqueResources()
+        {
+            var s = await NewScenario();
+            var at = new DateTime(2002, 1, 5, 0, 0, 0, DateTimeKind.Utc).AddSeconds(
+                Math.Abs((long)Guid.NewGuid().GetHashCode()));
+            var shared = @"{""Id"":""https://contoso.example/search"",""Name"":""Contoso search"",""Type"":""WebSearch""}";
+            var unique = @"{""Id"":""https://contoso.sharepoint.com/sites/example/Καλημέρα.pdf"",""Name"":""Καλημέρα κόσμε.pdf"",""Type"":""docx""}";
+            var runtime = new Record(RuntimeRecord(s.AgentGuid, s.ConversationId, accessedResources: "[" + shared + "," + unique + "]"), at);
+            var client = new Record(ClientRecord(s.AgentGuid, s.ConversationId, "[" + shared + "]"), at.AddSeconds(5));
+            await CommitCycle(s, pairTurns: false, runtime, client);
+            foreach (var record in new[] { runtime, client })
+                await Sql("UPDATE dbo.audit_events SET event_data = {0} WHERE id = {1}",
+                    CopilotAuditLogContent.FromJson(record.Json).EventRaw, record.EventId);
+            await Sql(@"UPDATE dbo.copilot_agents SET is_custom_agent = NULL
+WHERE id IN (SELECT agent_id FROM dbo.copilot_chats WHERE event_id = {0})", runtime.EventId);
+            var first = await CopilotHistoricalRepair.RunBatchAsync(_config.ConnectionStrings.DatabaseConnectionString,
+                at, at.AddMinutes(1), null, null, 1, _logger);
+            var second = await CopilotHistoricalRepair.RunBatchAsync(_config.ConnectionStrings.DatabaseConnectionString,
+                at, at.AddMinutes(1), first.AfterTime, first.AfterEventId, 1, _logger, first.AfterUserId);
+            Assert.AreEqual(1, second.Scanned);
+            Assert.AreEqual(true, await Scalar<bool?>(@"SELECT a.is_custom_agent FROM dbo.copilot_agents a
+JOIN dbo.copilot_chats c ON c.agent_id = a.id WHERE c.event_id = {0}", runtime.EventId),
+                "Retained PlatformAgentType establishes origin even though the top-level AgentPlatform was not stored.");
+            AssertPaired(await Duplicates(runtime, client), runtime, client);
+            await CopilotHistoricalRepair.RunBatchAsync(_config.ConnectionStrings.DatabaseConnectionString,
+                at, at.AddMinutes(1), null, null, 500, _logger);
+            var reportSql = System.IO.File.ReadAllText(System.IO.Path.Combine(CopilotHistoricalEvidenceTests.ReportDirectory(), "resources.sql"));
+            Assert.AreEqual(2, await Scalar<int>("SELECT COUNT(*) FROM (" + reportSql + ") resources WHERE copilot_chat_id = {0}", client.EventId),
+                "Shared resource once, plus the runtime-only Greek document, both attributed to the counted turn.");
+            Assert.AreEqual(3, await Scalar<int>("SELECT COUNT(*) FROM dbo.copilot_event_accessed_resources WHERE copilot_chat_id IN ({0}, {1})",
+                runtime.EventId, client.EventId), "Underlying evidence is not deleted or moved.");
+        }
+
+        [TestMethod]
+        public async Task HistoricalOverlappingPrompts_DoNotGuessWhichResourceBelongsToWhichClient()
+        {
+            var s = await NewScenario();
+            var at = new DateTime(2003, 1, 5, 0, 0, 0, DateTimeKind.Utc).AddSeconds(
+                Math.Abs((long)Guid.NewGuid().GetHashCode()));
+            var records = new[] {
+                new Record(RuntimeRecord(s.AgentGuid, s.ConversationId), at),
+                new Record(RuntimeRecord(s.AgentGuid, s.ConversationId), at.AddSeconds(1)),
+                new Record(ClientRecord(s.AgentGuid, s.ConversationId), at.AddSeconds(5)),
+                new Record(ClientRecord(s.AgentGuid, s.ConversationId), at.AddSeconds(6))
+            };
+            await CommitCycle(s, pairTurns: false, records);
+            foreach (var record in records)
+                await Sql("UPDATE dbo.audit_events SET event_data = {0} WHERE id = {1}",
+                    CopilotAuditLogContent.FromJson(record.Json).EventRaw, record.EventId);
+            await CopilotHistoricalRepair.RunBatchAsync(_config.ConnectionStrings.DatabaseConnectionString,
+                at, at.AddMinutes(1), null, null, 500, _logger);
+            Assert.AreEqual(0, (await Duplicates(records)).Count, "Multiple possible historical pairings remain unknown, not invented.");
+            Assert.AreEqual(4, await ChatCount(records));
+        }
+
+        [DataTestMethod]
+        [DataRow(3, false, false, false)]
+        [DataRow(4, false, false, false)]
+        [DataRow(3, true, false, false)]
+        [DataRow(3, false, true, false)]
+        [DataRow(3, false, false, true)]
+        public async Task HistoricalPendingNeighbors_AcrossPages_NeverProveUniquenessOrLoseEvidence(
+            int count, bool missingConversation, bool missingUser, bool unknownHost)
+        {
+            var s = await NewScenario();
+            var at = s.Start;
+            var records = Enumerable.Range(0, count).Select(i =>
+            {
+                var resources = BlockedResource().Trim().TrimEnd(']') +
+                    @",{""Id"":""https://contoso.sharepoint.com/sites/example/Καλημέρα-" + i +
+                    @".pdf"",""Name"":""Καλημέρα-" + i + @".pdf"",""Type"":""docx""}]";
+                var seconds = new[] { 0, 5, 6, 10 }[i];
+                return new Record(i % 2 == 0
+                    ? RuntimeRecord(s.AgentGuid, s.ConversationId,
+                        appHost: unknownHost && i == 2 ? "Contoso future host" : "m365copilot", accessedResources: resources)
+                    : ClientRecord(s.AgentGuid, s.ConversationId, resources), at.AddSeconds(seconds));
+            }).ToArray();
+            await CommitCycle(s, pairTurns: false, records);
+            foreach (var record in records)
+            {
+                var retained = Newtonsoft.Json.Linq.JObject.Parse(CopilotAuditLogContent.FromJson(record.Json).EventRaw);
+                if (missingConversation && record == records[2]) retained.Remove("ConversationId");
+                await Sql("UPDATE dbo.audit_events SET event_data = {0} WHERE id = {1}", retained.ToString(), record.EventId);
+                await Sql("UPDATE dbo.copilot_chats SET conversation_id = NULL WHERE event_id = {0}", record.EventId);
+            }
+            if (missingUser)
+                await Sql("UPDATE dbo.copilot_chats SET user_id = NULL WHERE event_id = {0}", records[2].EventId);
+            Assert.AreEqual(count, await DlpEventCount(records));
+            var report = System.IO.File.ReadAllText(System.IO.Path.Combine(
+                CopilotHistoricalEvidenceTests.ReportDirectory(), "resources.sql"));
+            CopilotHistoricalRepairBatch cursor = null;
+            for (var i = 0; i <= count; i++)
+            {
+                var page = await CopilotHistoricalRepair.RunBatchAsync(_config.ConnectionStrings.DatabaseConnectionString,
+                    at, at.AddMinutes(1), cursor?.AfterTime, cursor?.AfterEventId, 1, _logger, cursor?.AfterUserId);
+                Assert.AreEqual(0, (await Duplicates(records)).Count,
+                    "Pending or ambiguous neighbors must prevent a permanent pair at every page boundary.");
+                Assert.AreEqual(count, await DlpEventCount(records), "A guessed pair must not delete shared DLP evidence.");
+                if (page.Scanned == 0) break;
+                cursor = page;
+            }
+            await CopilotHistoricalRepair.RunBatchAsync(_config.ConnectionStrings.DatabaseConnectionString,
+                at, at.AddMinutes(1), null, null, 500, _logger);
+            Assert.AreEqual(0, (await Duplicates(records)).Count, "A full-window rerun must remain conservatively unpaired.");
+            Assert.AreEqual(count, await ChatCount(records));
+            Assert.AreEqual(count, await DlpEventCount(records));
+            foreach (var record in records)
+            {
+                Assert.AreEqual(2, await Scalar<int>(
+                    "SELECT COUNT(*) FROM dbo.copilot_event_accessed_resources WHERE copilot_chat_id = {0}", record.EventId));
+                Assert.AreEqual(2, await Scalar<int>("SELECT COUNT(*) FROM (" + report +
+                    ") resources WHERE copilot_chat_id = {0}", record.EventId),
+                    "Each distinct prompt retains its own shared and unique resource attribution.");
+            }
+        }
+
+        [TestMethod]
+        public async Task HistoricalStrictPairing_DoesNotProveUniquenessAtAClippedNeighborhoodEdge()
+        {
+            var s = await NewScenario();
+            var records = new[] { s.Runtime(0, "Microsoft Teams"), s.Runtime(120), s.Client(121), s.Client(240) };
+            await CommitCycle(s, pairTurns: false, records);
+            foreach (var record in records)
+            {
+                await Sql("UPDATE dbo.audit_events SET event_data = {0} WHERE id = {1}",
+                    CopilotAuditLogContent.FromJson(record.Json).EventRaw, record.EventId);
+                await Sql("UPDATE dbo.copilot_chats SET conversation_id = {0} WHERE event_id = {1}",
+                    s.ConversationId, record.EventId);
+            }
+            // The Teams seed sees runtime+Office near its range edge, but not the runtime's second client.
+            await CopilotHistoricalRepair.RunBatchAsync(_config.ConnectionStrings.DatabaseConnectionString,
+                s.Start, s.Start.AddSeconds(1), null, null, 1, _logger);
+            Assert.AreEqual(0, (await Duplicates(records)).Count,
+                "Non-seed pairs cannot establish uniqueness from a clipped counterpart neighborhood.");
+            await CopilotHistoricalRepair.RunBatchAsync(_config.ConnectionStrings.DatabaseConnectionString,
+                s.Start, s.Start.AddMinutes(5), null, null, 500, _logger);
+            Assert.AreEqual(0, (await Duplicates(records)).Count, "The complete neighborhood exposes two possible clients.");
+        }
+
         /// <summary>
-        /// Through the real merge into the real report SQL: a pair is one interaction under one app, an extra
-        /// Teams record is not a second interaction, and maker testing in the Copilot Studio test pane is left out.
+        /// Through the real merge into the real report SQL: a pair is one interaction, rapid Teams
+        /// prompts remain distinct, and maker testing in the Copilot Studio test pane is left out.
         /// </summary>
         [TestMethod]
         public async Task AgentInventory_CountsEachTurnOnce_AndLeavesOutMakerTesting()
@@ -322,7 +470,7 @@ namespace Tests.UnitTests
 
             var row = await AgentInventoryRow(s);
 
-            Assert.AreEqual(2, row.Interactions, "One Microsoft 365 Copilot turn and one Teams turn; test-pane chats are maker testing.");
+            Assert.AreEqual(3, row.Interactions, "One Microsoft 365 Copilot turn and two rapid Teams turns; maker testing is excluded.");
             Assert.AreEqual(1, row.Users);
             Assert.AreEqual(2, row.AppsUsed, "'Office' and 'Microsoft Teams' - not 'm365copilot' as well, and not 'Copilot Studio'.");
         }
@@ -428,7 +576,7 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
-        public async Task Dlp_PreExistingTeamsEchoBlocks_AreReducedToOne_AndReImportChangesNothing()
+        public async Task Dlp_RapidTeamsPrompts_KeepTheirSeparateBlocks_OnReplay()
         {
             var s = await NewScenario();
             var turn = s.Runtime(0, "Microsoft Teams", BlockedResource());
@@ -440,21 +588,20 @@ namespace Tests.UnitTests
             await CommitCycle(s, turn, echo);
 
             var duplicates = await Duplicates(turn, echo);
-            Assert.AreEqual(ExtraRuntimeRecord, duplicates[echo.EventId].Reason);
-            Assert.AreEqual(turn.EventId, duplicates[echo.EventId].CountedEventId);
-            Assert.AreEqual(1, await DlpEventCount(turn, echo), "Reason-2 echoes need the same stored-row repair as reason-1 twins.");
+            Assert.AreEqual(0, duplicates.Count);
+            Assert.AreEqual(2, await DlpEventCount(turn, echo), "Distinct rapid turns retain their own block evidence.");
             Assert.AreEqual(1, await DlpEventCount(turn));
             var retainedId = await Scalar<int>("SELECT id FROM dbo.copilot_dlp_events WHERE copilot_chat_id = {0}", turn.EventId);
 
             await CommitCycle(s, echo);
             await CommitCycle(s, turn, echo);
 
-            Assert.AreEqual(1, await DlpEventCount(turn, echo));
+            Assert.AreEqual(2, await DlpEventCount(turn, echo));
             Assert.AreEqual(retainedId, await Scalar<int>("SELECT id FROM dbo.copilot_dlp_events WHERE copilot_chat_id = {0}", turn.EventId));
         }
 
         [TestMethod]
-        public async Task Dlp_PreExistingEchoBurst_RepairsMatchingSiblingRows_WhenTheCountedRecordHasNoMatch()
+        public async Task Dlp_RapidRuntimeBurst_KeepsEachTurnsResources()
         {
             var s = await NewScenario();
             var turn = s.Runtime(0, "Microsoft Teams");
@@ -467,9 +614,8 @@ namespace Tests.UnitTests
             await CommitCycle(s, turn, echo, secondEcho, distinctEcho);
 
             var duplicates = await Duplicates(turn, echo, secondEcho, distinctEcho);
-            Assert.AreEqual(3, duplicates.Count);
-            Assert.IsTrue(duplicates.Values.All(d => d.Reason == ExtraRuntimeRecord && d.CountedEventId == turn.EventId));
-            Assert.AreEqual(2, await DlpEventCount(turn, echo, secondEcho, distinctEcho), "One shared block and one genuinely different resource.");
+            Assert.AreEqual(0, duplicates.Count);
+            Assert.AreEqual(3, await DlpEventCount(turn, echo, secondEcho, distinctEcho), "Same resource on distinct prompts is a separate access.");
             Assert.AreEqual(0, await DlpEventCount(turn), "The repair does not invent or move evidence onto the counted record.");
             Assert.AreEqual(1, await DlpEventCount(distinctEcho));
             var retainedIds = await Scalar<string>(
@@ -488,11 +634,11 @@ namespace Tests.UnitTests
         [DataRow("action")]
         [DataRow("label")]
         [DataRow("blocked")]
-        public async Task Dlp_EchoRepair_PreservesEveryDifferentMatchTuple(string difference)
+        public async Task Dlp_PairRepair_PreservesEveryDifferentMatchTuple(string difference)
         {
             var s = await NewScenario();
-            var turn = s.Runtime(0, "Microsoft Teams", BlockedResource());
-            var echo = s.Runtime(3, "Microsoft Teams", BlockedResource());
+            var turn = s.Client(5, accessedResources: BlockedResource());
+            var echo = s.Runtime(0, accessedResources: BlockedResource());
             await CommitCycle(s, pairTurns: false, turn, echo);
 
             // Clone a genuinely different match on the echo. NULL label/action values are part of the tuple,
@@ -564,6 +710,47 @@ SELECT event_id, time_stamp, {0}, 2 FROM dbo.copilot_chats WHERE event_id = {1};
         }
 
         #endregion
+
+        [TestMethod]
+        public async Task HistoricalPairingFailure_ReturnsNoCheckpoint_AndRetryFinishesThePair()
+        {
+            var s = await NewScenario();
+            var at = new DateTime(2004, 1, 5, 0, 0, 0, DateTimeKind.Utc).AddSeconds(
+                Math.Abs((long)Guid.NewGuid().GetHashCode()));
+            var runtime = new Record(RuntimeRecord(s.AgentGuid, s.ConversationId), at);
+            var client = new Record(ClientRecord(s.AgentGuid, s.ConversationId), at.AddSeconds(5));
+            await CommitCycle(s, pairTurns: false, runtime, client);
+            foreach (var record in new[] { runtime, client })
+                await Sql("UPDATE dbo.audit_events SET event_data = {0} WHERE id = {1}",
+                    CopilotAuditLogContent.FromJson(record.Json).EventRaw, record.EventId);
+            await Sql(@"CREATE TRIGGER dbo.ContosoHistoryPairingFailure ON dbo.copilot_chat_duplicates
+AFTER INSERT AS THROW 51000, 'Synthetic history pairing failure', 1;");
+            try
+            {
+                await Assert.ThrowsExceptionAsync<DataUtils.Sql.BatchSaveException>(() =>
+                    CopilotHistoricalRepair.RunBatchAsync(_config.ConnectionStrings.DatabaseConnectionString,
+                        at, at.AddMinutes(1), null, null, 500, _logger));
+            }
+            finally { await Sql("DROP TRIGGER dbo.ContosoHistoryPairingFailure"); }
+            await CopilotHistoricalRepair.RunBatchAsync(_config.ConnectionStrings.DatabaseConnectionString,
+                at, at.AddMinutes(1), null, null, 500, _logger);
+            AssertPaired(await Duplicates(runtime, client), runtime, client);
+        }
+
+        [DataTestMethod]
+        [DataRow("")]
+        [DataRow("   ")]
+        [DataRow("overlong")]
+        public async Task Pair_UnknownOrTruncatedConversationIdentity_IsNeverPaired(string conversation)
+        {
+            var s = await NewScenario();
+            var runtimeConversation = conversation == "overlong" ? new string('a', 450) + "first" : conversation;
+            var clientConversation = conversation == "overlong" ? new string('a', 450) + "second" : conversation;
+            var runtime = new Record(RuntimeRecord(s.AgentGuid, runtimeConversation), s.Start);
+            var client = new Record(ClientRecord(s.AgentGuid, clientConversation), s.Start.AddSeconds(5));
+            await CommitCycle(s, runtime, client);
+            Assert.AreEqual(0, (await Duplicates(runtime, client)).Count, "Missing or truncated conversation identity is not a matching key.");
+        }
 
         #region Helpers
 

@@ -144,6 +144,19 @@ namespace CloudInstallEngine.Azure.InstallTasks
                 var currentSubnetId = webApp.Data.VirtualNetworkSubnetId?.ToString();
                 if (string.IsNullOrWhiteSpace(currentSubnetId) || !currentSubnetId.Equals(vnetSubnetId, System.StringComparison.OrdinalIgnoreCase))
                 {
+                    var integration = new PrivateNetworkArtifact
+                    {
+                        Id = webApp.Id.ToString(), Kind = PrivateNetworkProvenance.Integration,
+                        TargetId = webApp.Id.ToString(), SubnetId = vnetSubnetId,
+                        PreviousRouteAllEnabled = (await webApp.GetWebSiteConfig().GetAsync()).Value.Data.IsVnetRouteAllEnabled == true
+                    };
+                    if (Networking != null)
+                    {
+                        if (!string.IsNullOrWhiteSpace(currentSubnetId))
+                            throw PrivateNetworkProvenance.Blocked(webApp.Id.ToString(), "an existing App Service VNet integration uses another subnet");
+                        Networking.ObserveMissing(integration.Id);
+                        Networking.BeginCreate(integration);
+                    }
                     try
                     {
                         _logger.LogInformation($"Configuring VNet integration for App Service '{_config.ResourceName}'...");
@@ -156,10 +169,12 @@ namespace CloudInstallEngine.Azure.InstallTasks
                             }
                         };
                         await Container.GetWebSites().CreateOrUpdateAsync(WaitUntil.Completed, _config.ResourceName, vnetUpdateData);
+                        Networking?.ConfirmCreate(integration.Id);
                         _logger.LogInformation($"VNet integration configured for App Service '{_config.ResourceName}' with route-all enabled.");
                     }
                     catch (RequestFailedException ex)
                     {
+                        if (Networking != null) throw;
                         _logger.LogWarning($"Failed to configure VNet integration for App Service: {ex.Message}. " +
                             $"Ensure the integration subnet '{vnetSubnetId}' exists and is delegated to Microsoft.Web/serverFarms. " +
                             $"Without VNet integration, the App Service will use public outbound IPs to reach public Azure PaaS endpoints.");
@@ -167,6 +182,11 @@ namespace CloudInstallEngine.Azure.InstallTasks
                 }
                 else
                 {
+                    Networking?.ObserveExisting(new PrivateNetworkArtifact
+                    {
+                        Id = webApp.Id.ToString(), Kind = PrivateNetworkProvenance.Integration,
+                        TargetId = webApp.Id.ToString(), SubnetId = vnetSubnetId
+                    });
                     _logger.LogInformation($"App Service '{_config.ResourceName}' already has VNet integration configured.");
                 }
             }
@@ -174,6 +194,8 @@ namespace CloudInstallEngine.Azure.InstallTasks
             return webApp;
 
         }
+
+        public PrivateNetworkProvenance Networking { get; set; }
 
         public static WebSiteData BuildNewWebSiteData(AzureLocation azureLocation, ResourceIdentifier appServicePlanId, AppServiceSkuDescription appServicePlanSku, bool allowPublicAccess)
         {

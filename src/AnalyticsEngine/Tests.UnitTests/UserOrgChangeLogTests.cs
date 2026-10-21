@@ -406,11 +406,67 @@ namespace Tests.UnitTests
                 () => log.GetImportAsync("1-1", CancellationToken.None));
             await Assert.ThrowsExceptionAsync<Azure.RequestFailedException>(
                 () => log.GetChangesAsync("1-1", null, null, 10, CancellationToken.None));
-            await Assert.ThrowsExceptionAsync<UserOrgValidationException>(
+            await Assert.ThrowsExceptionAsync<Azure.RequestFailedException>(
                 () => log.GetChangesAsync("1-1", null, "stale-continuation", 10, CancellationToken.None));
 
             Assert.AreEqual(3, reads.Count, "Each refused read is reported - a stale page as much as any other.");
             Assert.AreEqual(0, writes.Count);
+        }
+
+        [TestMethod]
+        public async Task ContinuedPage_StorageFailuresAreNotMisreportedAsExpiredPages()
+        {
+            foreach (var status in new[] { 0, 401, 403, 404, 408, 429, 500, 503 })
+            {
+                var failure = new Azure.RequestFailedException(status, "Synthetic storage failure.");
+                var reported = new List<Exception>();
+                var log = new TableStorageUserOrgChangeLog(new FailingReadTableClient(failure),
+                    onReadFailed: reported.Add);
+
+                var actual = await Assert.ThrowsExceptionAsync<Azure.RequestFailedException>(
+                    () => log.GetChangesAsync("1-1", null, "next-page", 10, CancellationToken.None));
+
+                Assert.AreSame(failure, actual, "Storage failures must reach the service's unavailable-state handler.");
+                Assert.AreSame(failure, reported.Single());
+            }
+        }
+
+        [TestMethod]
+        public async Task ContinuedPage_InvalidContinuationStillRequestsReopeningTheList()
+        {
+            foreach (var failure in new Exception[]
+            {
+                new Azure.RequestFailedException(400, "Invalid continuation.", "InvalidInput", null),
+                new ArgumentException("Invalid continuation."),
+                new FormatException("Invalid continuation."),
+            })
+            {
+                var log = new TableStorageUserOrgChangeLog(new FailingReadTableClient(failure));
+                var actual = await Assert.ThrowsExceptionAsync<UserOrgValidationException>(
+                    () => log.GetChangesAsync("1-1", null, "invalid-page", 10, CancellationToken.None));
+
+                Assert.AreEqual(UserOrgImportRefusalCodes.ChangePageExpired, actual.Code);
+                Assert.AreSame(failure, actual.InnerException);
+            }
+        }
+
+        private sealed class FailingReadTableClient : Azure.Data.Tables.TableClient
+        {
+            private readonly Exception _failure;
+            internal FailingReadTableClient(Exception failure) { _failure = failure; }
+
+            public override Azure.AsyncPageable<T> QueryAsync<T>(string filter = null, int? maxPerPage = null,
+                IEnumerable<string> select = null, CancellationToken cancellationToken = default)
+            {
+                return Azure.AsyncPageable<T>.FromPages(FailedPages<T>());
+            }
+
+            private IEnumerable<Azure.Page<T>> FailedPages<T>()
+            {
+                yield return Fail<T>();
+            }
+
+            private Azure.Page<T> Fail<T>() => throw _failure;
         }
 
         [TestMethod]

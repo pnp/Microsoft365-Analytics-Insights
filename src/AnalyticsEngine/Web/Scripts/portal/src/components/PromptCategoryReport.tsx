@@ -78,9 +78,11 @@ export default function PromptCategoryReport({ months }: { months: number }) {
     {report === null && error === null && <Spinner label={t('promptCategories.loading')} />}
     {report && <>
       <Field className={styles.version} label={t('promptCategories.version')}>
-        <Select value={report.version ?? ''} onChange={(_, data) => setVersion(data.value)}>
+        <Select value={report.version ?? ''} disabled={report.versions.length === 0} onChange={(_, data) => setVersion(data.value)}>
           {report.version && !report.versions.includes(report.version) &&
             <option value={report.version}>{report.version} · {t('promptCategories.versionUnavailable')}</option>}
+          {!report.version && report.versions.length === 0 &&
+            <option value="">{t('promptCategories.noVersions')}</option>}
           {report.versions.map(v => <option key={v} value={v}>{v}</option>)}
         </Select>
       </Field>

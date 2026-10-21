@@ -15,7 +15,8 @@ namespace Tests.FakeDataGen.Demo
         //          contoso-demo-v3 - selectable imported workloads and detailed activity, plus agent
         //                            costs: billed Copilot Studio credits (per agent and per user),
         //                            the Copilot Credits capacity snapshot and daily Azure agent spend.
-        public const string FormatVersion = "contoso-demo-v3";
+        //          contoso-demo-v4 - default taxonomy and prompt-only classifications in interaction history.
+        public const string FormatVersion = "contoso-demo-v4";
 
         // Accepted ranges, shared with the interactive menu (DemoInteractive) so the two entry points
         // cannot drift apart and offer a value the other refuses.

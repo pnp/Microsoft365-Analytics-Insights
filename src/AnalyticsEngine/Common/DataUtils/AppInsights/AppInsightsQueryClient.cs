@@ -1,9 +1,11 @@
 ﻿using Azure.Core;
 using Microsoft.Extensions.Logging;
 using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
 using System;
 using System.Collections.Generic;
 using System.Globalization;
+using System.IO;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
@@ -32,7 +34,7 @@ namespace DataUtils.AppInsights
         private static readonly string[] AppInsightsScope = new[] { "https://api.applicationinsights.io/.default" };
         private AccessToken? _cachedToken;
         private readonly SemaphoreSlim _tokenLock = new SemaphoreSlim(1, 1);
-        private readonly HttpClient _client = new HttpClient { Timeout = TimeSpan.FromSeconds(100) };
+        private readonly HttpClient _client;
 
         private const int MaxRetries = 3;
         private const int MaxBackoffSeconds = 30;
@@ -41,6 +43,13 @@ namespace DataUtils.AppInsights
         /// <param name="credential">A <see cref="TokenCredential"/> (e.g. ClientSecretCredential) for Entra ID authentication.</param>
         /// <param name="logger">Logger.</param>
         public AppInsightsQueryClient(string appInsightsConnectionString, TokenCredential credential, ILogger logger)
+            : this(appInsightsConnectionString, credential, logger, null)
+        {
+        }
+
+        /// <summary>Uses a caller-supplied transport for offline query-response tests.</summary>
+        public AppInsightsQueryClient(string appInsightsConnectionString, TokenCredential credential, ILogger logger,
+            HttpMessageHandler messageHandler)
         {
             if (string.IsNullOrEmpty(appInsightsConnectionString))
             {
@@ -56,6 +65,9 @@ namespace DataUtils.AppInsights
                 throw new ArgumentException("Could not parse ApplicationId from the provided connection string.", nameof(appInsightsConnectionString));
             }
 
+            _client = messageHandler == null
+                ? new HttpClient { Timeout = TimeSpan.FromSeconds(100) }
+                : new HttpClient(messageHandler, disposeHandler: false) { Timeout = TimeSpan.FromSeconds(100) };
             _client.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
         }
 
@@ -106,7 +118,11 @@ namespace DataUtils.AppInsights
                 {
                     throw new HttpRequestException($"App Insights query failed (HTTP {(int)response.StatusCode}): {body}");
                 }
-                return JsonConvert.DeserializeObject<AppInsightsQueryResponse>(body);
+                var result = JsonConvert.DeserializeObject<AppInsightsQueryResponse>(body);
+                if (result == null)
+                    throw new InvalidDataException("Application Insights returned no query response.");
+                result.EnsureSuccess();
+                return result;
             }
         }
 
@@ -178,12 +194,23 @@ namespace DataUtils.AppInsights
         [JsonProperty("tables")]
         public List<AppInsightsQueryTable> Tables { get; set; }
 
+        [JsonProperty("error")]
+        public JObject Error { get; set; }
+
+        /// <summary>HTTP 200 can still carry a PartialError; never report those figures as complete.</summary>
+        public void EnsureSuccess()
+        {
+            if (Error != null)
+                throw new InvalidDataException("Application Insights returned an error or partial query results. Retry with a smaller time range.");
+        }
+
         /// <summary>The primary result table (named "PrimaryResult" if present, else the first table).</summary>
         [JsonIgnore]
         public AppInsightsQueryTable PrimaryTable
         {
             get
             {
+                EnsureSuccess();
                 if (Tables == null || Tables.Count == 0) return AppInsightsQueryTable.Empty;
                 return Tables.FirstOrDefault(t => string.Equals(t.Name, "PrimaryResult", StringComparison.OrdinalIgnoreCase)) ?? Tables[0];
             }

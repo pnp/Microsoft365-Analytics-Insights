@@ -20,6 +20,24 @@ namespace App.ControlPanel
         {
             ApplySavedProxyPreferences();
 
+            if (args?.FirstOrDefault() == PrivateNetworkReviewCommand.Operation)
+            {
+                try
+                {
+                    using (var timeout = new System.Threading.CancellationTokenSource(TimeSpan.FromMinutes(10)))
+                        PrivateNetworkReviewCommand.Run(args,
+                            Environment.GetEnvironmentVariable(PrivateNetworkReviewCommand.PasswordEnvironmentVariable),
+                            timeout.Token).GetAwaiter().GetResult();
+                    Console.WriteLine("Read-only networking inventory saved. Keep the report private; no changes or deletion are authorized.");
+                }
+                catch (Exception ex)
+                {
+                    Console.Error.WriteLine($"Networking review failed ({ex.GetType().Name}): {ex.Message}");
+                    Environment.ExitCode = 1;
+                }
+                return;
+            }
+
             // Are we running a special operation instead of just opening the UI? 
             // We can init the SQL database with EF (upgrade the schema), or register an install state in the local DB.
             // This happens as part of the install process, where the downloaded installer app is launched with special args.

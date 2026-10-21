@@ -1,4 +1,5 @@
 using Common.Entities.CopilotAdoption;
+using Common.Entities.PromptCategories;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System;
 using System.Data.Entity;
@@ -6,6 +7,7 @@ using Microsoft.Data.SqlClient;
 using System.Linq;
 using System.Threading;
 using Tests.FakeDataGen.Demo;
+using Tests.FakeDataGen.Copilot;
 
 namespace Tests.UnitTests
 {
@@ -121,6 +123,74 @@ WHERE agent_name LIKE N'%Καλημέρα%';") > 0, "nvarchar agent names must s
             finally { DropOwnedScratch(name); }
         }
 
+        [DataTestMethod]
+        [DataRow(false)]
+        [DataRow(true)]
+        public void PromptCategories_RealReportQueriesReturnDefaultMixAndWeeklyTrend(bool dedicatedHistoryGenerator)
+        {
+            string name = "ContosoDemo_Categories_" + Guid.NewGuid().ToString("N");
+            var options = DemoOptions.Parse(new[] { "--database", name, "--users", "200", "--days", "35",
+                "--as-of", "2026-09-01", "--areas", "copilot-history", "--no-profiles" }, DateTime.UtcNow);
+            try
+            {
+                using (var database = new SqlDemoDatabase(options, CancellationToken.None))
+                {
+                    database.Open(null);
+                    if (dedicatedHistoryGenerator)
+                    {
+                        using (var users = new RawContext(SqlDemoDatabase.LocalConnection(name)))
+                            users.Database.ExecuteSqlCommand(@"DECLARE @n int=1;
+                                WHILE @n<=200 BEGIN
+                                    INSERT dbo.users(user_name,account_enabled)
+                                    VALUES(CONCAT('category-fixture-',@n,'@contoso.example'),1);
+                                    SET @n+=1;
+                                END;");
+                        new CopilotInteractionHistoryGenerator(SqlDemoDatabase.LocalConnection(name))
+                            .GenerateInteractionHistory(userCount: 200, sessionsPerUser: 4, turnsPerSession: 8,
+                                daysBack: 28, cognitivePercentage: 0, sharedThreadPercentage: 0,
+                                windowEndUtc: options.AsOf.AddDays(-1));
+                    }
+                    else
+                    {
+                        var summary = DemoCommand.NewSummary(options);
+                        using (var sink = new CountingDemoSink(summary, database.CreateSink()))
+                            new DemoGenerator(options).Generate(sink, summary, null);
+                        database.ValidateAndComplete(summary, null);
+                    }
+                }
+                using (var raw = new RawContext(SqlDemoDatabase.LocalConnection(name)))
+                {
+                    var taxonomy = PromptCategoryConfiguration.Defaults();
+                    taxonomy.ValidateAndVersion();
+                    var versions = raw.Database.SqlQuery<string>(PromptCategoryReportSql.Versions,
+                        new SqlParameter("@from", options.AsOf.AddDays(-28))).ToList();
+                    CollectionAssert.AreEqual(new[] { taxonomy.Version }, versions);
+                    var mix = raw.Database.SqlQuery<CategoryMixRow>(PromptCategoryReportSql.Mix,
+                        new SqlParameter("@from", options.AsOf.AddDays(-28)),
+                        new SqlParameter("@version", taxonomy.Version)).ToList();
+                    CollectionAssert.AreEquivalent(taxonomy.Categories.Select(c => c.Id).ToArray(),
+                        mix.Select(r => r.CategoryId).ToArray(),
+                        "Generate report-visible categories, not merely a taxonomy definition.");
+                    Assert.IsTrue(mix.All(r => r.Prompts > 0));
+                    var trend = raw.Database.SqlQuery<CategoryTrendRow>(PromptCategoryReportSql.Trend,
+                        new SqlParameter("@from", options.AsOf.AddDays(-28)),
+                        new SqlParameter("@version", taxonomy.Version)).ToList();
+                    CollectionAssert.AreEquivalent(taxonomy.Categories.Select(c => c.Id).ToArray(),
+                        trend.Select(r => r.CategoryId).Distinct().ToArray(),
+                        "Every category must clear the weekly privacy threshold too.");
+                    Assert.AreEqual(0, raw.Database.SqlQuery<int>(@"SELECT COUNT(*) FROM dbo.copilot_interactions i
+LEFT JOIN dbo.copilot_prompt_classifications c ON c.interaction_id=i.id
+WHERE (i.interaction_type_id=1 AND c.interaction_id IS NULL)
+ OR (i.interaction_type_id=2 AND c.interaction_id IS NOT NULL)").Single());
+                    Assert.AreEqual(0, raw.Database.SqlQuery<CategoryMixRow>(PromptCategoryReportSql.Mix,
+                        new SqlParameter("@from", options.AsOf),
+                        new SqlParameter("@version", taxonomy.Version)).Count(),
+                        "A period with no activity must stay empty.");
+                }
+            }
+            finally { DropOwnedScratch(name); }
+        }
+
         [TestMethod]
         public void ExistingUnmarkedLocalTarget_IsNeverClaimedOrUpgraded()
         {
@@ -186,6 +256,19 @@ WHERE agent_name LIKE N'%Καλημέρα%';") > 0, "nvarchar agent names must s
         {
             static RawContext() { Database.SetInitializer<RawContext>(null); }
             public RawContext(string connection) : base(connection) { }
+        }
+
+        private sealed class CategoryMixRow
+        {
+            public string CategoryId { get; set; }
+            public long Prompts { get; set; }
+        }
+
+        private sealed class CategoryTrendRow
+        {
+            public string CategoryId { get; set; }
+            public DateTime WeekStart { get; set; }
+            public long Prompts { get; set; }
         }
     }
 }

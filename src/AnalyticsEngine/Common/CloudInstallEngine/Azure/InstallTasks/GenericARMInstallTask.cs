@@ -30,11 +30,7 @@ namespace CloudInstallEngine.Azure.InstallTasks
                 throw new ArgumentException($"'{nameof(templateJson)}' cannot be null or empty.", nameof(templateJson));
             }
 
-            var armDeploymentInfo = new ArmDeploymentContent(new ArmDeploymentProperties(ArmDeploymentMode.Incremental)
-            {
-                Template = BinaryData.FromString(templateJson),
-                Parameters = BinaryData.FromObjectAsJson(newCreationParams)
-            });
+            var armDeploymentInfo = BuildDeploymentContent(newCreationParams, templateJson);
 
             try
             {
@@ -42,11 +38,19 @@ namespace CloudInstallEngine.Azure.InstallTasks
                     .CreateOrUpdateAsync(WaitUntil.Completed, this.GetType().Name + DateTime.Now.Ticks, armDeploymentInfo);
                 return result.Value;
             }
+
             catch (RequestFailedException ex)
             {
                 _logger.LogError($"{this.TaskName} threw error {ex.Message}");
                 throw;
             }
         }
+
+        internal static ArmDeploymentContent BuildDeploymentContent(object parameters, string templateJson)
+            => new ArmDeploymentContent(new ArmDeploymentProperties(ArmDeploymentMode.Incremental)
+            {
+                Template = BinaryData.FromString(templateJson),
+                Parameters = BinaryData.FromObjectAsJson(parameters)
+            });
     }
 }

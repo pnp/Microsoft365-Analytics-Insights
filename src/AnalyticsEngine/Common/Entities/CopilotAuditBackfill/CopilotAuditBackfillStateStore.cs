@@ -28,7 +28,9 @@ namespace Common.Entities.CopilotAuditBackfill
         {
             var now = _utcNow();
             var seed = (int)Math.Min(int.MaxValue - 1, Math.Max(1, (now - IdEpoch).TotalSeconds));
-            var id = Math.Max(await GetLatestIdAsync().ConfigureAwait(false) + 1, seed);
+            var latestId = await GetLatestIdAsync().ConfigureAwait(false);
+            var previous = latestId > 0 ? await GetAsync(latestId).ConfigureAwait(false) : null;
+            var id = Math.Max(latestId + 1, seed);
             var job = new CopilotAuditBackfillJob
             {
                 Id = id,
@@ -38,6 +40,10 @@ namespace Common.Entities.CopilotAuditBackfill
                 UpdatedUtc = now,
                 StartUtc = DateTime.SpecifyKind(startUtc, DateTimeKind.Utc),
                 EndUtc = DateTime.SpecifyKind(endUtc, DateTimeKind.Utc),
+                SubmissionTimestampsUtc = new System.Collections.Generic.List<DateTime>(
+                    previous?.SubmissionTimestampsUtc ?? new System.Collections.Generic.List<DateTime>()),
+                SubmissionsPausedUntilUtc = previous?.SubmissionsPausedUntilUtc,
+                SubmitFailureBackoffMinutes = previous?.SubmitFailureBackoffMinutes ?? 0,
             };
             job.PendingSlices = CopilotAuditBackfillSlicer.BuildDaySlices(job.StartUtc, job.EndUtc);
             await SaveAsync(job).ConfigureAwait(false);

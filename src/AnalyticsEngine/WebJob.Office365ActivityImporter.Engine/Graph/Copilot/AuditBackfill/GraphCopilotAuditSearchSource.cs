@@ -148,10 +148,16 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.AuditBackfill
         public static CopilotAuditSearchRecordPage FromJson(string json)
         {
             var o = JObject.Parse(json);
+            if (!(o["value"] is JArray records))
+            {
+                throw new JsonSerializationException("Audit Search records response must contain a value array.");
+            }
             return new CopilotAuditSearchRecordPage
             {
                 NextLink = (string)o["@odata.nextLink"],
-                Records = (o["value"] as JArray ?? new JArray()).Select(v => v.ToObject<CopilotAuditSearchRecord>()).Where(r => r != null).ToList(),
+                Records = records.Select(v => v.Type == JTokenType.Object
+                    ? v.ToObject<CopilotAuditSearchRecord>()
+                    : new CopilotAuditSearchRecord { AuditData = v }).ToList(),
             };
         }
     }

@@ -7,6 +7,8 @@
  * build rather than reaching a customer as English text inside a Spanish page.
  */
 const copilotAdoption: Record<keyof typeof en, string> = {
+  'copilotAdoption.scoreSettings.effectiveValues': 'Configuración efectiva de puntuación y decisiones',
+  'copilotAdoption.scoreSettings.fieldValue': '{field}: {value} (predeterminado: {defaultValue})',
   'copilotAdoption.page.window.last7Days': 'Últimos 7 días',
   'copilotAdoption.page.window.last28Days': 'Últimos 28 días',
   'copilotAdoption.page.window.last90Days': 'Últimos 90 días',
@@ -456,7 +458,7 @@ const copilotAdoption: Record<keyof typeof en, string> = {
   'copilotAdoption.page.depthMinInteractionsActivedaysConfidence': 'profundidad = min(1, (interacciones / diasActivos) / {v0}) x confianza',
   'copilotAdoption.page.breadthMinAppsused': 'amplitud   = min(1, appsUsadas / {v0})',
   'copilotAdoption.page.scoreFrequencyDepthBreadth': 'puntuacion = (frecuencia x {v0} + profundidad x {v1} + amplitud x {v2})',
-  'copilotAdoption.page.overDayPeriodFrequencyTargetActiveDaysUserActive': '{heading} En un periodo de {windowDays} días, el objetivo de frecuencia es {frequencyTargetDays} días activos. Un usuario activo en {exampleActiveDays} de ellos, con una media de {depthTarget} interacciones en cada uno de esos días, en una sola aplicación, obtiene {exampleScore}: profundo pero estrecho e intermitente, por eso la acción recomendada para ese perfil es ampliar en lugar de formar más. {confidence}',
+  'copilotAdoption.page.overDayPeriodFrequencyTargetActiveDaysUserActive': '{heading} En un periodo de {windowDays} días, la puntuación máxima de frecuencia requiere {frequencyTargetDays} días activos. Un usuario activo en {exampleActiveDays} de ellos, con una media de {depthTarget} interacciones en cada uno de esos días, en una sola aplicación, obtiene {exampleScore}. Esto ilustra cómo se combinan los objetivos y pesos efectivos; la acción recomendada también depende de los umbrales efectivos de nivel y las demás señales de la persona. {confidence}',
   'copilotAdoption.page.workedExample': 'Ejemplo práctico.',
   'copilotAdoption.page.overShortPeriodActiveDaysNeededFullConfidenceDepth': 'En un periodo tan corto, {v0} días activos está por debajo de los {v1} necesarios para tener plena confianza en la medida de profundidad, por lo que la profundidad se escala al {v2} de su valor nominal.',
   'copilotAdoption.page.activeDaysAboveDepthConfidenceFactorHereChangeNumber': '{v0} días activos está en {v1} o por encima, por lo que el factor de confianza de profundidad es 1 aquí y no cambia el número.',

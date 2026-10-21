@@ -5,6 +5,7 @@ using AnalyticsWeb::Web.AnalyticsWeb.Models.Health;
 using Common.Entities;
 using Common.Entities.Config;
 using Common.Entities.Entities.UsageReports;
+using DataUtils.AppInsights;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System;
 using System.Collections.Generic;
@@ -51,10 +52,10 @@ namespace Tests.UnitTests
             var row = components.ComponentHealth.Single(c => c.Component == "PowerPlatformConnection");
             Assert.AreEqual(expectedStatus, row.Status);
             Assert.AreEqual(reasonKey, row.ReasonKey);
-            Assert.AreEqual(expectedStatus, components.Status);
+            Assert.AreEqual(HealthStatusNames.Degraded, components.Status, "Client-secret expiry is unknown even when billing is connected.");
 
             var summary = await service.LoadSummaryAsync(config);
-            Assert.AreEqual(expectedStatus, summary.OverallStatus);
+            Assert.AreEqual(HealthStatusNames.Degraded, summary.OverallStatus);
             if (expectedStatus == HealthStatusNames.Degraded)
                 Assert.IsTrue(summary.OverallReasons.Any(r => r.Contains(row.Detail)));
             Assert.AreEqual(1, reads, "The summary must reuse the cached component check.");
@@ -71,7 +72,7 @@ namespace Tests.UnitTests
             var components = await service.LoadComponentsAsync(AgentCostHealthConfig(false, azureCosts));
             Assert.AreEqual(0, reads, "Disabled credit tracking must not access the connection store.");
             Assert.IsFalse(components.ComponentHealth.Any(c => c.Component == "PowerPlatformConnection"));
-            Assert.AreEqual(HealthStatusNames.Healthy, components.Status);
+            Assert.AreEqual(HealthStatusNames.Degraded, components.Status, "A running web app is not proof of credential health.");
         }
 
         [DataTestMethod]
@@ -103,6 +104,31 @@ namespace Tests.UnitTests
             };
             config.ConnectionStrings.ServiceBusConnectionString = null;
             return config;
+        }
+
+        [DataTestMethod]
+        [DataRow("Healthy", "Unhealthy", 5, "Unhealthy", "defaultHealth.failed")]
+        [DataRow("Unhealthy", "Healthy", 5, "Unhealthy", null)]
+        [DataRow("Healthy", "Healthy", 31, "Degraded", "defaultHealth.stale")]
+        [DataRow("Degraded", "Degraded", 5, "Degraded", "defaultHealth.secretExpiryUnknown")]
+        public void DefaultCredentialTelemetry_DoesNotHideFailuresOrTreatStaleSuccessAsCurrent(
+            string localStatus, string eventStatus, int minutesOld, string expectedStatus, string expectedReason)
+        {
+            var now = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+            var section = new ComponentsSection();
+            section.ComponentHealth.Add(new ComponentHealthRow { Component = "Credential", Status = localStatus });
+            var reason = eventStatus == "Unhealthy" ? "defaultHealth.failed" : eventStatus == "Degraded"
+                ? "defaultHealth.secretExpiryUnknown" : "defaultHealth.certificateValid";
+            var table = new AppInsightsQueryTable
+            {
+                Columns = new[] { "Component", "Status", "ReasonKey", "Detail", "LastSeen" }
+                    .Select(n => new AppInsightsQueryColumn { Name = n }).ToList(),
+                Rows = new List<List<object>> { new List<object> { "Credential", eventStatus, reason, "synthetic", now.AddMinutes(-minutesOld) } }
+            };
+            HealthService.ApplyComponentTelemetry(table, section, now);
+            var credential = section.ComponentHealth.Single();
+            Assert.AreEqual(expectedStatus, credential.Status);
+            Assert.AreEqual(expectedReason, credential.ReasonKey);
         }
 
         #region Caching

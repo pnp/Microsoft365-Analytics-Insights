@@ -67,6 +67,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
         public bool HasRefreshToken { get; set; }
         public DateTime? LastRefreshed { get; set; }
         public List<TeamChannelDeltaTokenCommit> PendingChannelDeltaTokenCommits { get; set; } = new List<TeamChannelDeltaTokenCommit>();
+        public TeamsChannelBudgetProgress ChannelBudgetProgress { get; set; }
 
         #endregion
 
@@ -131,6 +132,10 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
             if (this.PendingChannelDeltaTokenCommits.Count > 0 && deltaTokenStore != null)
             {
                 await TeamChannelDeltaTokenCommitter.CommitPendingTokens(deltaTokenStore, this.Id, this.PendingChannelDeltaTokenCommits);
+            }
+            if (this.ChannelBudgetProgress != null)
+            {
+                await this.ChannelBudgetProgress.CommitAfterPersistence();
             }
 
             return dbTeam;
@@ -239,9 +244,15 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
             {
                 // We have a token. Load channel msgs/replies/reactions
                 var pendingDeltaTokenCommits = new List<TeamChannelDeltaTokenCommit>();
+                if (appConfig.TeamsMaxChannelsPerTeamPerCycle > 0)
+                {
+                    fullTeam.ChannelBudgetProgress = new TeamsChannelBudgetProgress(
+                        Common.Entities.State.StateStore.TryOpen(appConfig, Common.Entities.State.StatePartitions.TeamsChannels, logger),
+                        appConfig.TeamsMaxChannelsPerTeamPerCycle, logger);
+                }
                 try
                 {
-                    fullTeam.PendingChannelDeltaTokenCommits = await fullTeam.Channels.PopulateNewMessagesAndReactions(team, teamRefreshOAuthToken, teamTokenManager.ChannelDeltaTokenStore, logger, pendingDeltaTokenCommits);
+                    fullTeam.PendingChannelDeltaTokenCommits = await fullTeam.Channels.PopulateNewMessagesAndReactions(team, teamRefreshOAuthToken, teamTokenManager.ChannelDeltaTokenStore, logger, pendingDeltaTokenCommits, fullTeam.ChannelBudgetProgress);
                 }
                 catch (ChannelMessagesReadException ex)
                 {

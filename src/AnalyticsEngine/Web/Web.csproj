@@ -149,7 +149,7 @@
       <Version>4.3.2</Version>
     </PackageReference>
     <PackageReference Include="System.Security.Cryptography.Xml">
-      <Version>10.0.11</Version>
+      <Version>10.0.13</Version>
     </PackageReference>
     <PackageReference Include="System.Text.Json">
       <Version>10.0.11</Version>

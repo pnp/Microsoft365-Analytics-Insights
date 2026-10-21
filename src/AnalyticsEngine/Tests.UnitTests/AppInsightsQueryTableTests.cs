@@ -100,6 +100,16 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public void PrimaryTable_PartialResultsAreNotPresentedAsCompleteHealthData()
+        {
+            var json = SampleJson.TrimEnd().TrimEnd('}')
+                + ",\"error\":{\"code\":\"PartialError\",\"message\":\"Query limit reached.\"}}";
+            var response = JsonConvert.DeserializeObject<AppInsightsQueryResponse>(json);
+
+            Assert.ThrowsException<System.IO.InvalidDataException>(() => { var table = response.PrimaryTable; });
+        }
+
+        [TestMethod]
         public void PrimaryTable_EmptyWhenNoTables()
         {
             var response = JsonConvert.DeserializeObject<AppInsightsQueryResponse>(@"{ ""tables"": [] }");
