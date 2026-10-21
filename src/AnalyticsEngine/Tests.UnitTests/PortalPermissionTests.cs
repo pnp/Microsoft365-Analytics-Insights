@@ -168,6 +168,15 @@ namespace Tests.UnitTests
 
             ["UserDataLookupAPIController.Summary"] = AdminAndPii,
             ["UserDataLookupAPIController.Detail"] = AdminAndPii,
+            // Per-person licence and coverage diagnostics, and the live directory comparison (which is also
+            // refused for anyone outside the import scope before any Graph call).
+            ["UserDataLookupAPIController.Diagnostics"] = AdminAndPii,
+            ["UserDataLookupAPIController.LiveLicences"] = AdminAndPii,
+            ["UserDataLookupAPIController.ReportVerdict"] = AdminAndPii,
+            ["UserDataLookupAPIController.Coverage"] = AdminAndPii,
+            // One-person refresh: queues an importer re-read of one named person, and reports its result.
+            ["UserDataLookupAPIController.Refresh"] = AdminAndPii,
+            ["UserDataLookupAPIController.RefreshStatus"] = AdminAndPii,
 
             // Aggregate dimensions and value counts drive the report-wide filter for every insights reader.
             ["UserFilterAPIController.Dimensions"] = Pii,

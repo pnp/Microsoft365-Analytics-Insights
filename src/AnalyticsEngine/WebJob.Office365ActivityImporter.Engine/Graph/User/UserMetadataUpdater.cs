@@ -1,8 +1,9 @@
-﻿using Azure.Core;
+using Azure.Core;
 using Common.Entities;
 using Common.Entities.Config;
 using Common.Entities.LookupCaches;
 using Common.Entities.State;
+using Common.Entities.UserDiagnostics;
 using Common.Entities.UserOrgs;
 using Common.Entities.UserScope;
 using DataUtils;
@@ -213,6 +214,158 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         /// </returns>
         public async Task<bool> InsertAndUpdateDatabaseFromExternalUsers()
         {
+            // The users-and-licences writer lock: held from the first Graph read to the last write, so a one-person
+            // refresh from the portal can never land between this run's reading and its writing and then be
+            // overwritten by an older answer. See DirectoryWriterLock.
+            using (var writerLock = await AcquireWriterLockAsync())
+            {
+                if (writerLock == NotAcquired)
+                {
+                    _logger.LogWarning("User import - another writer of users and licences (a one-person refresh from the portal, or this import " +
+                        $"on another instance) held the users-and-licences lock for {WriterLockWait.TotalMinutes:N0} minute(s). Skipping this cycle's user import; " +
+                        "it is retried on the next cycle.");
+                    return false;
+                }
+
+                _refreshStore = UserRefreshStore.TryOpen(_settings, _logger);
+                _writeFence = writerLock?.Lock == null
+                    ? (Func<Task<bool>>)(() => Task.FromResult(true))
+                    : () => writerLock.Lock.IsStillHeldAsync();
+
+                var mayHaveMarked = false;
+                if (writerLock.Lock != null)
+                {
+                    // One-person refreshes also wait on this marker, so that even if the lock's connection drops part-way,
+                    // none runs until this run has stopped writing. Kept alive with the lock's own heartbeat, which also
+                    // stops the hour-long Graph reads leaving the lock's connection idle long enough to be closed.
+                    await TryMarkScheduledImportAsync();
+                    mayHaveMarked = _refreshStore != null;
+                    var store = _refreshStore;
+                    writerLock.Lock.StartKeepAlive(DirectoryWriterLock.DefaultKeepAliveInterval,
+                        store == null ? null : (Func<Task>)(() => store.MarkScheduledImportActiveAsync()));
+                }
+
+                try
+                {
+                    return await InsertAndUpdateDatabaseFromExternalUsersCore();
+                }
+                finally
+                {
+                    // Stop the heartbeat first - including a beat already in flight - or it could write the marker back
+                    // just after it is cleared. Cleared even when the first mark failed: a later beat may have set it.
+                    var heartbeatStopped = writerLock.Lock?.StopKeepAlive() ?? true;
+                    if (mayHaveMarked)
+                    {
+                        if (!heartbeatStopped)
+                        {
+                            _logger.LogInformation($"User import - a 'user import running' heartbeat to Azure Table storage was still in progress after the import finished; if it completes it holds one-person refreshes back for up to {UserRefreshStore.ScheduledImportMarkerLifetime.TotalMinutes:N0} minutes.");
+                        }
+
+                        try
+                        {
+                            await _refreshStore.ClearScheduledImportActiveAsync();
+                        }
+                        catch (Exception ex)
+                        {
+                            // It expires by itself within UserRefreshStore.ScheduledImportMarkerLifetime.
+                            _logger.LogInformation($"User import - couldn't clear the 'user import running' marker ({ex.GetType().Name}); one-person refreshes wait until it expires.");
+                        }
+                    }
+                }
+            }
+        }
+
+        private async Task TryMarkScheduledImportAsync()
+        {
+            if (_refreshStore == null) return;
+            try
+            {
+                await _refreshStore.MarkScheduledImportActiveAsync();
+            }
+            catch (Exception ex)
+            {
+                // Without the marker the SQL lock still orders the writers; only the dropped-connection case is less
+                // covered until the next heartbeat sets it.
+                _logger.LogInformation($"User import - couldn't set the 'user import running' marker ({ex.GetType().Name}); continuing.");
+            }
+        }
+
+        private UserRefreshStore _refreshStore;
+
+        /// <summary>How long the scheduled import waits for a one-person refresh to finish before skipping the cycle.</summary>
+        public static readonly TimeSpan WriterLockWait = TimeSpan.FromMinutes(5);
+
+        /// <summary>
+        /// Takes the users-and-licences writer lock. Overridable by tests; null means "no lock" (no SQL connection string,
+        /// as in some unit tests), which keeps the import's behaviour exactly as it was.
+        /// </summary>
+        public Func<Task<DirectoryWriterLock>> WriterLockFactory { get; set; }
+
+        private sealed class HeldLock : IDisposable
+        {
+            public HeldLock(DirectoryWriterLock writerLock) { Lock = writerLock; }
+            public DirectoryWriterLock Lock { get; }
+            public void Dispose() => Lock?.Dispose();
+        }
+
+        private static readonly HeldLock NotAcquired = new HeldLock(null);
+
+        private Func<Task<bool>> _writeFence = () => Task.FromResult(true);
+
+        /// <summary>The lock check the licence processor of the last run used. For tests of its wiring.</summary>
+        internal Func<Task<bool>> LicenceWriteFence => _licenseProcessor?.WriteFence;
+
+        private async Task<HeldLock> AcquireWriterLockAsync()
+        {
+            var factory = WriterLockFactory;
+            if (factory == null)
+            {
+                var connectionString = _settings?.ConnectionStrings?.DatabaseConnectionString;
+                if (string.IsNullOrWhiteSpace(connectionString))
+                {
+                    return new HeldLock(null);
+                }
+                factory = () => DirectoryWriterLock.TryAcquireAsync(connectionString, WriterLockWait);
+            }
+
+            var acquired = await factory();
+            return acquired == null ? NotAcquired : new HeldLock(acquired);
+        }
+
+        /// <summary>
+        /// Throws when the writer lock was lost (its SQL connection dropped) since the run's reading began: someone else
+        /// may have written since, and this run's older answer must not overwrite theirs.
+        /// </summary>
+        private async Task EnsureWriterLockHeldAsync(string phase)
+        {
+            if (!await _writeFence())
+            {
+                throw new InvalidOperationException(
+                    $"User import - lost the users-and-licences writer lock before the {phase}; not writing an answer that may now be out of date. The run is retried on the next cycle.");
+            }
+        }
+
+        /// <summary>Checks the writer lock before each batch of the bulk metadata update, not just once for the phase.</summary>
+        private sealed class FencedUserBulkUpdateWriter : IUserBulkUpdateWriter
+        {
+            private readonly IUserBulkUpdateWriter _inner;
+            private readonly Func<Task> _fence;
+
+            public FencedUserBulkUpdateWriter(IUserBulkUpdateWriter inner, Func<Task> fence)
+            {
+                _inner = inner;
+                _fence = fence;
+            }
+
+            public async Task ExecuteAsync(System.Data.DataTable userUpdates)
+            {
+                await _fence();
+                await _inner.ExecuteAsync(userUpdates);
+            }
+        }
+
+        private async Task<bool> InsertAndUpdateDatabaseFromExternalUsersCore()
+        {
             const int BATCH_SIZE = 500;
             var phaseResults = new UserImportPhaseResults();
 
@@ -221,7 +374,18 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 db.Configuration.AutoDetectChangesEnabled = false;
 
                 _userMetaCache = new UserMetadataCache(db);
-                _licenseProcessor = new UserLicenseProcessor(_logger, _userLoader, _userMetaCache);
+                _licenseProcessor = new UserLicenseProcessor(_logger, _userLoader, _userMetaCache)
+                {
+                    // Every licence write path - the tenant SKU refresh and the per-user fallback - checks the
+                    // users-and-licences lock before each chunk. Set here, once, so no path can miss it.
+                    WriteFence = () => _writeFence(),
+                };
+                var refreshStore = _refreshStore;
+                if (refreshStore != null)
+                {
+                    // Reports key their caches on this generation, so a licence change reaches them without waiting out the cache.
+                    _licenseProcessor.LicencesChanged = () => refreshStore.BumpLicenceDataGenerationAsync();
+                }
                 _dataMapper = new UserDataMapper(_logger, _userMetaCache, new SqlUserLookupStore(db), _clock);
                 var importCycleLastUpdatedUtc = _clock.UtcNow;
 
@@ -329,7 +493,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 var fallbackDesiredLicences = skus == null ? new HashSet<UserLicenseAssignment>() : null;
 
                 // Insert any user we've not seen so far
-                var insertedDbUsers = await InsertMissingUsers(db, allActiveGraphUsers, graphMentionedExistingDbUsers, skus == null, importCycleLastUpdatedUtc, fallbackLicenceUserIds, fallbackDesiredLicences);
+                var insertedDbUsers = await InsertMissingUsersFenced(db, allActiveGraphUsers, graphMentionedExistingDbUsers, skus == null, importCycleLastUpdatedUtc, fallbackLicenceUserIds, fallbackDesiredLicences);
                 phaseResults.InsertPhaseSucceeded = true;
                 _logger.LogInformation($"User import - Insert phase completed. {insertedDbUsers.Count.ToString("N0")} new users inserted.");
 
@@ -439,7 +603,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                             dbUsersByAadId,
                             _dataMapper.GraphUsersByAadId,
                             _userMetaCache,
-                            new SqlUserBulkUpdateWriter(db.Database.Connection.ConnectionString),
+                            new FencedUserBulkUpdateWriter(new SqlUserBulkUpdateWriter(db.Database.Connection.ConnectionString), () => EnsureWriterLockHeldAsync("metadata update")),
                             importCycleLastUpdatedUtc);
                     }
                     else
@@ -454,7 +618,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                             // Resolve the whole batch's managers in bulk rather than one query per
                             // user - see UserDataMapper.PrefetchManagersForBatchAsync (#371).
                             batch => _dataMapper.PrefetchManagersForBatchAsync(batch),
-                            BATCH_SIZE);
+                            BATCH_SIZE,
+                            beforeSave: () => EnsureWriterLockHeldAsync("metadata update"));
                     }
                     phaseResults.UpdatePhaseSucceeded = true;
                     _logger.LogInformation($"User import - Completed metadata update for {existingUsersUpdated.ToString("N0")} existing users");
@@ -522,6 +687,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                     // No re-attach loop needed: the licence refresh works in FK IDs
                     // (UserId / LicenseTypeId) rather than navigation properties, so
                     // the entities do not need to be tracked by EF.
+                    await EnsureWriterLockHeldAsync("licence refresh");
                     await _licenseProcessor.ProcessSKUsForAllUsers(skus, allDbUsersForLicenseRefresh, db);
                     _logger.LogInformation($"User import - updated user license information from {skus.Count.ToString("N0")} tenant SKUs");
 
@@ -532,6 +698,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 else
                 {
                     await UserLicenseProcessor.MarkSubscribedSkuCapacityUnavailableAsync(db, _logger);
+                    await EnsureWriterLockHeldAsync("per-user licence refresh");
                     await _licenseProcessor.ReconcileCollectedUserLicenses(db, fallbackLicenceUserIds, fallbackDesiredLicences);
 
                     // No separate licence phase runs at all when tenant SKUs are unavailable:
@@ -577,6 +744,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                     // False when the loader withheld the new token because the checkpoint was cleared while this
                     // run was in progress (an admin asking for a full re-read); it has logged why. Reporting the run
                     // as not done keeps the cadence gate open, so that re-read happens on the next cycle.
+                    // Not fenced: every write is done, so losing the lock now protects nothing, and failing here would
+                    // only throw away a finished run.
                     cycleCompleted = await _userLoader.CommitDeltaTokenAsync();
                 }
                 else
@@ -1125,6 +1294,12 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         /// Inserts missing users into DB using two-phase approach: fast bulk insert, then metadata enrichment.
         /// Delegates to UserInsertProcessor for the heavy lifting.
         /// </summary>
+        private async Task<List<Common.Entities.User>> InsertMissingUsersFenced(AnalyticsEntitiesContext db, List<GraphUser> allGraphUsers, List<Common.Entities.User> graphMentionedDbUsers, bool readUserSkus, DateTime? importCycleLastUpdatedUtc, HashSet<int> fallbackLicenceUserIds, HashSet<UserLicenseAssignment> fallbackDesiredLicences)
+        {
+            await EnsureWriterLockHeldAsync("user insert");
+            return await InsertMissingUsers(db, allGraphUsers, graphMentionedDbUsers, readUserSkus, importCycleLastUpdatedUtc, fallbackLicenceUserIds, fallbackDesiredLicences);
+        }
+
         public async Task<List<Common.Entities.User>> InsertMissingUsers(AnalyticsEntitiesContext db, List<GraphUser> allGraphUsers, List<Common.Entities.User> graphMentionedDbUsers, bool readUserSkus, DateTime? importCycleLastUpdatedUtc = null, HashSet<int> fallbackLicenceUserIds = null, HashSet<UserLicenseAssignment> fallbackDesiredLicences = null)
         {
             // Ensure cache and helpers are initialized (for direct method calls from tests)
@@ -1138,7 +1313,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             }
             if (_licenseProcessor == null)
             {
-                _licenseProcessor = new UserLicenseProcessor(_logger, _userLoader, _userMetaCache);
+                _licenseProcessor = new UserLicenseProcessor(_logger, _userLoader, _userMetaCache) { WriteFence = () => _writeFence() };
             }
 
             return await _insertProcessor.InsertMissingUsers(

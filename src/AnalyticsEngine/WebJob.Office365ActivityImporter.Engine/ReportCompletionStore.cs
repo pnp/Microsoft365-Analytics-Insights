@@ -106,7 +106,7 @@ namespace WebJob.Office365ActivityImporter.Engine
         /// Prefix for the per-report keys. Deliberately distinct from the phase-level
         /// <c>UserActivityLastImported</c> key so the two cannot collide.
         /// </summary>
-        internal const string KeyPrefix = "UserActivityReportLastImported:";
+        internal const string KeyPrefix = Common.Entities.State.ImportScheduleKeys.UsageReportPrefix;
         internal const string NextAttemptKeyPrefix = "UserActivityReportNextAttemptUtc:";
 
         private readonly IKeyValueStore _store;

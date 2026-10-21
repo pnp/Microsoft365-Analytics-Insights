@@ -179,6 +179,62 @@ WHERE r.copilot_chat_id = @id", new SqlParameter("@id", proven)).SingleAsync());
             }
         }
 
+        [DataTestMethod]
+        [DataRow(false)]
+        [DataRow(true)]
+        [DoNotParallelize]
+        public async Task RetainedReplay_PreservesAnotherWritersLoadedStagingRows(bool concurrentRepairs)
+        {
+            var at = new DateTime(2003, 1, 5, 0, 0, 0, DateTimeKind.Utc).AddSeconds(
+                Math.Abs((long)Guid.NewGuid().GetHashCode()));
+            var id = await AddHistorical(at, "Contoso.Unknown." + Guid.NewGuid(),
+                "{\"AppHost\":\"Office\",\"ConversationId\":\"contoso-isolated-repair\",\"AccessedResources\":[]}");
+            var second = concurrentRepairs
+                ? await AddHistorical(at.AddDays(1), "Contoso.Unknown." + Guid.NewGuid(),
+                    "{\"AppHost\":\"Office\",\"ConversationId\":\"contoso-second-repair\",\"AccessedResources\":[]}")
+                : Guid.Empty;
+            var table = WebJob.Office365ActivityImporter.Engine.ActivityImportConstants.STAGING_TABLE_COPILOT_CHATONLY;
+            using (var owner = new SqlConnection(_Connection()))
+            {
+                await owner.OpenAsync();
+                using (var create = new SqlCommand(
+                    $"DROP TABLE IF EXISTS [{table}]; CREATE TABLE [{table}] (sentinel int NOT NULL); INSERT [{table}] VALUES (42);", owner))
+                    await create.ExecuteNonQueryAsync();
+                try
+                {
+                    var repair = CopilotHistoricalRepair.RunBatchAsync(_Connection(), at, at.AddSeconds(1),
+                        null, null, 1, NullLogger.Instance);
+                    if (concurrentRepairs)
+                    {
+                        var results = await Task.WhenAll(repair, CopilotHistoricalRepair.RunBatchAsync(
+                            _Connection(), at.AddDays(1), at.AddDays(1).AddSeconds(1), null, null, 1, NullLogger.Instance));
+                        Assert.IsTrue(results.All(r => r.Replayed == 1));
+                    }
+                    else Assert.AreEqual(1, (await repair).Replayed);
+                    using (var read = new SqlCommand($"SELECT sentinel FROM [{table}]", owner))
+                        Assert.AreEqual(42, Convert.ToInt32(await read.ExecuteScalarAsync()),
+                            "Repair must not drop or replace a live writer's already-loaded staging table.");
+                    using (var db = new AnalyticsEntitiesContext())
+                    {
+                        Assert.AreEqual("contoso-isolated-repair",
+                            await db.Database.SqlQuery<string>(
+                                "SELECT conversation_id FROM dbo.copilot_chats WHERE event_id = @id",
+                                new SqlParameter("@id", id)).SingleAsync());
+                        if (concurrentRepairs)
+                            Assert.AreEqual("contoso-second-repair",
+                                await db.Database.SqlQuery<string>(
+                                    "SELECT conversation_id FROM dbo.copilot_chats WHERE event_id = @id",
+                                    new SqlParameter("@id", second)).SingleAsync());
+                    }
+                }
+                finally
+                {
+                    using (var drop = new SqlCommand($"DROP TABLE IF EXISTS [{table}]", owner))
+                        await drop.ExecuteNonQueryAsync();
+                }
+            }
+        }
+
         [TestMethod]
         public async Task Replay_BoundsPayloads_AndSkipsUnknownShapesWithoutInventingCredits()
         {

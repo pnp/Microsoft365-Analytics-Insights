@@ -14,6 +14,7 @@ const errors: Record<keyof typeof en, string> = {
   'errors.userLookup.missingUpn': "Se requiere el parámetro de consulta 'upn'.",
   'errors.userLookup.unknownCategory': "Categoría desconocida '{category}'.",
   'errors.userLookup.categoryNoDrilldown': "La categoría '{category}' no admite el desglose.",
+  'errors.userLookup.unknownReport': 'Ese informe no se puede explicar aquí.',
 
   // User organisations API
   'errors.userOrgs.requestFailed': 'La solicitud ha fallado ({status})',

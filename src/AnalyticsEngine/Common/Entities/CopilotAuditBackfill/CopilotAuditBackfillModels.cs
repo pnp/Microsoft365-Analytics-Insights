@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 
 namespace Common.Entities.CopilotAuditBackfill
 {
@@ -45,6 +46,9 @@ namespace Common.Entities.CopilotAuditBackfill
         public DateTime? SubmittedUtc { get; set; }
         public string RecordsNextLink { get; set; }
         public bool ImportingRecords { get; set; }
+        /// <summary>Null identifies an older checkpoint without query-wide mapping evidence.</summary>
+        public bool? HasSeenRecords { get; set; }
+        public bool HasRecognisedRecords { get; set; }
         public int SplitLevel { get; set; }
         public int AttemptCount { get; set; }
     }
@@ -99,5 +103,32 @@ namespace Common.Entities.CopilotAuditBackfill
         public string LastErrorDetail { get; set; }
         public bool CancelRequested { get; set; }
         public bool IsActive => CopilotAuditBackfillStates.IsActive(State);
+
+        /// <summary>Completed original day windows, including days processed through smaller slices.</summary>
+        public IReadOnlyList<string> GetCompletedDays()
+        {
+            var completed = new HashSet<string>(CompletedDays ?? new List<string>(), StringComparer.Ordinal);
+            // A rejected submission can leave a failed job without a queued slice; absence is not completion.
+            if (State != CopilotAuditBackfillStates.Running && State != CopilotAuditBackfillStates.Completed
+                && State != CopilotAuditBackfillStates.CompletedWithGaps && State != CopilotAuditBackfillStates.Cancelled)
+                return completed.OrderByDescending(d => d, StringComparer.Ordinal).ToArray();
+
+            var outstanding = new HashSet<string>(
+                (PendingSlices ?? new List<CopilotAuditBackfillSlice>())
+                    .Concat(InFlightSlices ?? new List<CopilotAuditBackfillSlice>())
+                    .Select(s => CopilotAuditBackfillSlicer.DayKey(s.StartUtc)), StringComparer.Ordinal);
+            if (CurrentSlice != null) outstanding.Add(CopilotAuditBackfillSlicer.DayKey(CurrentSlice.StartUtc));
+            var uncovered = new HashSet<string>(
+                (Gaps ?? new List<CopilotAuditBackfillGap>())
+                    .Where(g => !g.Incomplete || g.ErrorCode != CopilotAuditBackfillErrorCodes.UnrecognisedAuditData)
+                    .Select(g => g.Day), StringComparer.Ordinal);
+            foreach (var day in CopilotAuditBackfillSlicer.BuildDaySlices(StartUtc, EndUtc)
+                .Where(s => (s.EndUtc - s.StartUtc).TotalHours >= 23))
+            {
+                var key = CopilotAuditBackfillSlicer.DayKey(day.StartUtc);
+                if (!outstanding.Contains(key) && !uncovered.Contains(key)) completed.Add(key);
+            }
+            return completed.OrderByDescending(d => d, StringComparer.Ordinal).ToArray();
+        }
     }
 }

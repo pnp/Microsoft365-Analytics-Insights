@@ -71,7 +71,15 @@ namespace Common.Entities
 
         }
 
-        public AnalyticsEntitiesContext(DbConnection sqlConn) : base(sqlConn, true)
+        public AnalyticsEntitiesContext(DbConnection sqlConn) : this(sqlConn, true)
+        {
+        }
+
+        /// <param name="contextOwnsConnection">
+        /// False to borrow an open connection the caller keeps - such as the one holding the users-and-licences writer
+        /// lock, whose session must outlive each context made on it.
+        /// </param>
+        public AnalyticsEntitiesContext(DbConnection sqlConn, bool contextOwnsConnection) : base(sqlConn, contextOwnsConnection)
         {
             if (AzureSqlTokenAuth.NeedsAccessToken(sqlConn?.ConnectionString))
             {

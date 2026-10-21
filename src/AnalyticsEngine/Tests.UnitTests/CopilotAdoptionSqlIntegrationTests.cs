@@ -8,6 +8,7 @@ using Microsoft.Data.SqlClient;
 using Newtonsoft.Json;
 using System.Linq;
 using System.Globalization;
+using System.Threading.Tasks;
 
 namespace Tests.UnitTests
 {
@@ -44,6 +45,165 @@ namespace Tests.UnitTests
             }
         }
 
+
+        [DataTestMethod]
+        [DataRow(28, 90)]
+        [DataRow(28, 119)]
+        [DataRow(28, 120)]
+        [DataRow(90, 120)]
+        [DataRow(180, 120)]
+        public void AgentRetirementBoundary_RemainsVisibleWithoutChangingDefaultOrWiderHistory(int windowDays, int retirementDays)
+        {
+            var settings = new CopilotAdoptionScoreSettings { AgentRetireInactiveDays = retirementDays };
+            var options = CopilotAdoptionOptions.Default;
+            settings.ApplyTo(options);
+            options.WindowDays = windowDays;
+            var now = new DateTime(2026, 10, 1, 12, 0, 0, DateTimeKind.Utc);
+            using (var db = ScratchDatabase.Create("CopilotRetireBoundary"))
+            {
+                CreateUserTables(db);
+                CreateCopilotTables(db);
+                db.Execute(
+                    @"INSERT INTO dbo.users (id, user_name) VALUES (1, N'person@contoso.com');
+                      INSERT INTO dbo.copilot_agents (id, name, agent_id)
+                          VALUES (1, N'Contoso boundary agent', N'contoso.boundary'),
+                                 (2, N'Contoso younger agent', N'contoso.younger'),
+                                 (3, N'Contoso older agent', N'contoso.older'),
+                                 (4, N'Contoso history-edge agent', N'contoso.history-edge');");
+                SeedCopilotInteractionAt(db, 1, now.Date.AddDays(-retirementDays).AddHours(9), "Office", agentId: 1);
+                SeedCopilotInteractionAt(db, 1, now.Date.AddDays(1 - retirementDays).AddHours(9), "Office", agentId: 2);
+                SeedCopilotInteractionAt(db, 1, now.Date.AddDays(-150).AddHours(9), "Office", agentId: 3);
+                SeedCopilotInteractionAt(db, 1, now.Date.AddDays(-120).AddHours(9), "Office", agentId: 4);
+                var historyStart = CopilotAdoptionScoring.WindowStartUtc(now,
+                    CopilotAdoptionScoring.AgentHistoryWindowDays(options));
+                var rows = Query<AgentUsageQueryRow>(db, CopilotAdoptionSql.AgentUsageSql(new[] { 1 }),
+                    new SqlParameter("@from", CopilotAdoptionScoring.WindowStartUtc(now, options.WindowDays)),
+                    new SqlParameter("@toExclusive", now),
+                    new SqlParameter("@historyFrom", historyStart),
+                    new SqlParameter("@maxRows", options.MaxAgents));
+
+                var expectedIds = windowDays == 180 ? new[] { 1, 2, 3, 4 }
+                    : retirementDays == 120 ? new[] { 1, 2, 4 } : new[] { 1, 2 };
+                CollectionAssert.AreEquivalent(expectedIds, rows.Select(r => r.AgentId).ToArray());
+                Assert.AreEqual(AgentHealth.Retire,
+                    CopilotAdoptionScoring.ScoreAgent(rows.Single(r => r.AgentId == 1), now, options).Health);
+                Assert.AreEqual(AgentHealth.Review,
+                    CopilotAdoptionScoring.ScoreAgent(rows.Single(r => r.AgentId == 2), now, options).Health);
+            }
+        }
+
+        [DataTestMethod]
+        [DataRow(false, 28, true)]
+        [DataRow(true, 28, true)]
+        [DataRow(false, 90, true)]
+        [DataRow(false, 28, false)]
+        [DataRow(false, 180, true)]
+        public async Task AgentInventory_QuietReportingPeriodStillReviewsRetainedHistory(bool explicitDates, int windowDays, bool hasHistory)
+        {
+            using (var db = ScratchDatabase.Create("CopilotQuietAgentHistory"))
+            {
+                CreateUserTables(db);
+                CreateCopilotTables(db);
+                db.Execute(
+                    @"INSERT INTO dbo.license_types (id, name, sku_id)
+                          VALUES (1, N'Contoso baseline licence', N'CONTOSO_BASELINE');
+                      INSERT INTO dbo.users (id, user_name) VALUES (1, N'person@contoso.com');
+                      INSERT INTO dbo.copilot_agents (id, name, agent_id)
+                          VALUES (1, N'Contoso quiet agent', N'contoso.quiet');");
+                var now = DateTime.UtcNow;
+                if (hasHistory)
+                    SeedCopilotInteractionAt(db, 1, now.Date.AddDays(-100).AddHours(9), "Office", agentId: 1);
+                var options = CopilotAdoptionOptions.Default;
+                options.WindowDays = windowDays;
+                if (explicitDates)
+                {
+                    options.UsesExplicitDates = true;
+                    options.FromUtc = now.Date.AddDays(1 - windowDays);
+                    options.ToUtc = now.Date;
+                    options.ToExclusiveUtc = now.Date.AddDays(1);
+                }
+                var analysis = await new CopilotAdoptionService(options, new AgentInventoryContextFactory(db.ConnectionString))
+                    .AnalyseAsync();
+
+                Assert.AreEqual(hasHistory && windowDays == 180, analysis.Summary.DataSources.AuditAvailable);
+                Assert.AreEqual(hasHistory ? 1 : 0, analysis.Agents.Count,
+                    "A quiet reporting period must not hide agents retained inside the independent inventory history. "
+                    + string.Join(" | ", analysis.Summary.Warnings));
+                if (hasHistory) Assert.AreEqual(AgentHealth.Retire, analysis.Agents.Single().Health);
+            }
+        }
+
+        private sealed class AgentInventoryContextFactory : IAnalyticsDbContextFactory
+        {
+            private readonly string _connectionString;
+            public AgentInventoryContextFactory(string connectionString) { _connectionString = connectionString; }
+            public AnalyticsEntitiesContext Create() => new AgentInventoryQueryContext(_connectionString);
+        }
+
+        [TestMethod]
+        public async Task AgentInventory_FailedHistoryProbeMarksItsFiguresIncomplete()
+        {
+            using (var db = ScratchDatabase.Create("CopilotAgentProbeFailure"))
+            {
+                CreateUserTables(db);
+                CreateCopilotTables(db);
+                db.Execute(@"INSERT INTO dbo.license_types (id, name, sku_id)
+                    VALUES (1, N'Contoso baseline licence', N'CONTOSO_BASELINE');");
+                var options = new CopilotAdoptionOptions { WindowDays = 28 };
+                var interceptor = new AgentHistoryProbeFailureInterceptor(
+                    new SqlConnectionStringBuilder(db.ConnectionString).InitialCatalog,
+                    CopilotAdoptionScoring.AgentHistoryWindowDays(options));
+                System.Data.Entity.Infrastructure.Interception.DbInterception.Add(interceptor);
+                CopilotAdoptionAnalysis analysis;
+                try
+                {
+                    analysis = await new CopilotAdoptionService(options, new AgentInventoryContextFactory(db.ConnectionString))
+                        .AnalyseAsync();
+                }
+                finally
+                {
+                    System.Data.Entity.Infrastructure.Interception.DbInterception.Remove(interceptor);
+                }
+
+                Assert.AreEqual(1, interceptor.Failures,
+                    "Only the bounded history fallback, not the reporting-window or lifetime growth probe, must fail.");
+                CollectionAssert.Contains(analysis.Summary.IncompleteReasons, "Copilot audit data");
+            }
+        }
+
+        private sealed class AgentHistoryProbeFailureInterceptor : System.Data.Entity.Infrastructure.Interception.DbCommandInterceptor
+        {
+            private readonly string _database;
+            private readonly int _historyDays;
+            public AgentHistoryProbeFailureInterceptor(string database, int historyDays)
+            {
+                _database = database;
+                _historyDays = historyDays;
+            }
+            public int Failures { get; private set; }
+
+            public override void ReaderExecuting(System.Data.Common.DbCommand command,
+                System.Data.Entity.Infrastructure.Interception.DbCommandInterceptionContext<System.Data.Common.DbDataReader> interceptionContext)
+            {
+                if (command.Connection.Database == _database
+                    && command.CommandText.Trim() == CopilotAdoptionSql.HasCopilotAuditDataSql.Trim()
+                    && command.Parameters.Contains("@from")
+                    && command.Parameters.Contains("@toExclusive")
+                    && command.Parameters["@from"].Value is DateTime from
+                    && command.Parameters["@toExclusive"].Value is DateTime toExclusive
+                    && from == CopilotAdoptionScoring.WindowStartUtc(toExclusive, _historyDays))
+                {
+                    Failures++;
+                    interceptionContext.Exception = new InvalidOperationException("Synthetic history-probe failure.");
+                }
+            }
+        }
+
+        private sealed class AgentInventoryQueryContext : AnalyticsEntitiesContext
+        {
+            static AgentInventoryQueryContext() { Database.SetInitializer<AgentInventoryQueryContext>(null); }
+            public AgentInventoryQueryContext(string connectionString) : base(new SqlConnection(connectionString)) { }
+        }
 
         #region Licensed users
 
@@ -434,7 +594,7 @@ namespace Tests.UnitTests
                 var rollingStart = CopilotAdoptionScoring.WindowStartUtc(DateTime.UtcNow, options.WindowDays);
                 var agentHistoryStart = CopilotAdoptionScoring.WindowStartUtc(
                     DateTime.UtcNow,
-                    Math.Max(options.WindowDays, Math.Max(options.AgentRetireInactiveDays, options.AgentHistoryDays)));
+                    CopilotAdoptionScoring.AgentHistoryWindowDays(options));
 
                 var rollingRows = Query<AgentUsageQueryRow>(db, sql,
                     new SqlParameter("@from", rollingStart),

@@ -21,6 +21,7 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
     /// (NOT the original top-level AgentId, AppIdentity or AgentPlatform). No Graph calls.
     /// Call with an explicit half-open UTC window. Persist the returned timestamp/user/event checkpoint
     /// only after success, and repeat until Scanned is zero. Replaying a checkpoint is idempotent.
+    /// Replay staging is isolated from the live importer's scratch tables.
     /// Rows inserted behind a checkpoint require another pass of that window; no watermark can
     /// promise a complete history while a writer is inserting historical timestamps.
     /// </summary>
@@ -87,7 +88,7 @@ ORDER BY c.time_stamp, c.user_id, c.event_id OPTION (RECOMPILE)", connection) { 
             }
             var result = new CopilotHistoricalRepairBatch();
             using (var manager = new CopilotAuditEventManager(
-                new SqlCopilotStagingWriter(connectionString, logger, throwOnPairingFailure: true),
+                new SqlCopilotStagingWriter(connectionString, logger, throwOnPairingFailure: true, isolateStagingTables: true),
                 new NoMetadata(), logger, resolveResourceMetadata: false))
             {
                 foreach (var row in rows)
