@@ -290,8 +290,10 @@ namespace Tests.UnitTests
             Assert.AreEqual(1, source.Submits);
         }
 
-        [TestMethod]
-        public async Task Importer_CancelDuringPagingStopsBeforeNextPageAndSurvivesRestart()
+        [DataTestMethod]
+        [DataRow(true)]
+        [DataRow(false)]
+        public async Task Importer_CancelDuringPagingStopsBeforeNextPageAndSurvivesRestart(bool hasNextPage)
         {
             var state = await NewStateWithJobAsync();
             var job = await state.GetLatestAsync();
@@ -302,15 +304,18 @@ namespace Tests.UnitTests
                 await state.RequestCancelAsync(job.Id);
                 return new CopilotAuditSearchRecordPage
                 {
-                    Records = new List<CopilotAuditSearchRecord> { SyntheticRecord(SyntheticId(1)) },
-                    NextLink = "page-2"
+                    Records = new List<CopilotAuditSearchRecord>
+                    {
+                        hasNextPage ? SyntheticRecord(SyntheticId(1)) : null
+                    },
+                    NextLink = hasNextPage ? "page-2" : null
                 };
             });
             var persistence = new CountingPersistence();
             job = await RegressionImporter(state, source, persistence).AdvanceLatestAsync();
             Assert.AreEqual(CopilotAuditBackfillStates.Cancelled, job.State);
             Assert.AreEqual(1, reads);
-            Assert.AreEqual(1, persistence.CommitCount);
+            Assert.AreEqual(hasNextPage ? 1 : 0, persistence.CommitCount);
             job = await RegressionImporter(state, source, persistence).AdvanceLatestAsync();
             Assert.AreEqual(CopilotAuditBackfillStates.Cancelled, job.State);
             Assert.AreEqual(1, reads);
@@ -344,6 +349,176 @@ namespace Tests.UnitTests
             Assert.AreEqual(1, source.Submits);
             Assert.AreEqual(2L, job.RecordsImported);
             CollectionAssert.AreEqual(new string[] { null, "page-2" }, links);
+        }
+
+        [DataTestMethod]
+        [DataRow(true)]
+        [DataRow(false)]
+        public async Task Importer_MixedMappingValiditySurvivesPagingRestart(bool validFirstPage)
+        {
+            var store = new InMemoryKeyValueStore();
+            var state = new CopilotAuditBackfillStateStore(store, true);
+            await state.CreateAsync(new DateTime(2026, 10, 1), new DateTime(2026, 10, 2), "admin@contoso.com");
+            var expired = false;
+            var source = new CallbackSource(next =>
+            {
+                var firstPage = next == null;
+                if (firstPage) expired = true;
+                return Task.FromResult(new CopilotAuditSearchRecordPage
+                {
+                    Records = new List<CopilotAuditSearchRecord>
+                    {
+                        firstPage == validFirstPage ? SyntheticRecord(SyntheticId(1)) : null
+                    },
+                    NextLink = firstPage ? "page-2" : null
+                });
+            });
+            var persistence = new CountingPersistence();
+            var job = await RegressionImporter(state, source, persistence,
+                () => expired ? CopilotAuditBackfillImporter.MaxCycleBudget : TimeSpan.Zero).AdvanceLatestAsync();
+
+            Assert.AreEqual(CopilotAuditBackfillStates.Running, job.State,
+                "An incomplete page sequence cannot establish that the entire query is unrecognised.");
+            Assert.AreEqual("page-2", job.InFlightSlices.Single().RecordsNextLink);
+
+            job = await RegressionImporter(new CopilotAuditBackfillStateStore(store, true), source, persistence)
+                .AdvanceLatestAsync();
+
+            Assert.AreEqual(CopilotAuditBackfillStates.CompletedWithGaps, job.State);
+            Assert.AreEqual(2L, job.RecordsSeen);
+            Assert.AreEqual(1L, job.RecordsImported);
+            Assert.AreEqual(1L, job.MappingFailureCounts.Values.Sum());
+            Assert.AreEqual(1, job.Gaps.Count);
+            Assert.AreEqual(1, source.Submits);
+        }
+
+        [DataTestMethod]
+        [DataRow(false)]
+        [DataRow(true)]
+        public async Task Importer_AllUnrecognisedPagedQueryFailsOnlyAfterLastPage(bool emptyLastPage)
+        {
+            var store = new InMemoryKeyValueStore();
+            var state = new CopilotAuditBackfillStateStore(store, true);
+            await state.CreateAsync(new DateTime(2026, 10, 1), new DateTime(2026, 10, 2), "admin@contoso.com");
+            var expired = false;
+            var source = new CallbackSource(next =>
+            {
+                var firstPage = next == null;
+                if (firstPage) expired = true;
+                return Task.FromResult(new CopilotAuditSearchRecordPage
+                {
+                    Records = !firstPage && emptyLastPage
+                        ? new List<CopilotAuditSearchRecord>()
+                        : new List<CopilotAuditSearchRecord> { null },
+                    NextLink = firstPage ? "page-2" : null
+                });
+            });
+            var persistence = new CountingPersistence();
+            var job = await RegressionImporter(state, source, persistence,
+                () => expired ? CopilotAuditBackfillImporter.MaxCycleBudget : TimeSpan.Zero).AdvanceLatestAsync();
+
+            Assert.AreEqual(CopilotAuditBackfillStates.Running, job.State);
+            Assert.AreEqual("page-2", job.InFlightSlices.Single().RecordsNextLink);
+
+            job = await RegressionImporter(new CopilotAuditBackfillStateStore(store, true), source, persistence)
+                .AdvanceLatestAsync();
+
+            Assert.AreEqual(CopilotAuditBackfillStates.Failed, job.State);
+            Assert.AreEqual(CopilotAuditBackfillErrorCodes.UnrecognisedAuditData, job.LastErrorCode);
+            Assert.AreEqual(emptyLastPage ? 1L : 2L, job.MappingFailureCounts.Values.Sum());
+            Assert.AreEqual(0, persistence.CommitCount);
+        }
+
+        [TestMethod]
+        public async Task Importer_ReplacementQueryDoesNotInheritMappingSuccess()
+        {
+            var store = new InMemoryKeyValueStore();
+            var state = new CopilotAuditBackfillStateStore(store, true);
+            await state.CreateAsync(new DateTime(2026, 10, 1), new DateTime(2026, 10, 2), "admin@contoso.com");
+            var attempt = 0;
+            var expired = false;
+            var source = new CallbackSource(next =>
+            {
+                if (attempt == 1 && next != null)
+                    throw new GraphHttpException(HttpStatusCode.InternalServerError, "https://graph.microsoft.com",
+                        "{\"error\":{\"code\":\"InternalServerError\"}}", null);
+                expired = attempt == 1;
+                return Task.FromResult(new CopilotAuditSearchRecordPage
+                {
+                    Records = new List<CopilotAuditSearchRecord>
+                    {
+                        attempt == 1 ? SyntheticRecord(SyntheticId(1)) : null
+                    },
+                    NextLink = attempt == 1 ? "page-2" : null
+                });
+            })
+            {
+                OnSubmit = () => { attempt++; return Task.CompletedTask; }
+            };
+            var persistence = new CountingPersistence();
+            var job = await RegressionImporter(state, source, persistence,
+                () => expired ? CopilotAuditBackfillImporter.MaxCycleBudget : TimeSpan.Zero).AdvanceLatestAsync();
+            Assert.AreEqual(CopilotAuditBackfillStates.Running, job.State);
+            Assert.AreEqual(1L, job.RecordsImported);
+
+            job = await RegressionImporter(new CopilotAuditBackfillStateStore(store, true), source, persistence)
+                .AdvanceLatestAsync();
+            Assert.AreEqual(1, job.PendingSlices.Count);
+            Assert.AreEqual(0, job.InFlightSlices.Count);
+
+            job = await RegressionImporter(new CopilotAuditBackfillStateStore(store, true), source, persistence)
+                .AdvanceLatestAsync();
+
+            Assert.AreEqual(2, source.Submits);
+            Assert.AreEqual(CopilotAuditBackfillStates.Failed, job.State,
+                "A recognised record from an earlier query attempt cannot validate its replacement.");
+            Assert.AreEqual(CopilotAuditBackfillErrorCodes.UnrecognisedAuditData, job.LastErrorCode);
+        }
+
+        [DataTestMethod]
+        [DataRow(true)]
+        [DataRow(false)]
+        public async Task Importer_LegacyContinuationReplaysToRecoverQueryMappingEvidence(bool recognisedPrefix)
+        {
+            var store = new InMemoryKeyValueStore();
+            var state = new CopilotAuditBackfillStateStore(store, true);
+            await state.CreateAsync(new DateTime(2026, 10, 1), new DateTime(2026, 10, 2), "admin@contoso.com");
+            var job = await state.GetLatestAsync();
+            var slice = job.PendingSlices.Single();
+            job.PendingSlices.Clear();
+            slice.QueryId = "legacy-query";
+            slice.AttemptCount = 1;
+            slice.ImportingRecords = true;
+            slice.RecordsNextLink = "page-2";
+            job.InFlightSlices.Add(slice);
+            job.State = CopilotAuditBackfillStates.Running;
+            job.RecordsImported = recognisedPrefix ? 1 : 0;
+            await state.SaveAsync(job);
+            var links = new List<string>();
+            var source = new CallbackSource(next =>
+            {
+                links.Add(next);
+                return Task.FromResult(new CopilotAuditSearchRecordPage
+                {
+                    Records = new List<CopilotAuditSearchRecord>
+                    {
+                        next == null && recognisedPrefix ? SyntheticRecord(SyntheticId(1)) : null
+                    },
+                    NextLink = next == null ? "page-2" : null
+                });
+            });
+            var existing = new FakeExistingEventFilter();
+            existing.Existing.Add(new Guid(SyntheticId(1)));
+            var persistence = new CountingPersistence();
+
+            job = await RegressionImporter(new CopilotAuditBackfillStateStore(store, true), source, persistence,
+                existing: existing).AdvanceLatestAsync();
+
+            Assert.AreEqual(recognisedPrefix ? CopilotAuditBackfillStates.CompletedWithGaps : CopilotAuditBackfillStates.Failed, job.State);
+            CollectionAssert.AreEqual(new string[] { null, "page-2" }, links,
+                "An old cursor without recognition evidence must replay the existing query, not guess.");
+            Assert.AreEqual(0, source.Submits, "Recovering evidence must not consume another query submission.");
+            Assert.AreEqual(0, persistence.CommitCount, "Previously committed records remain de-duplicated.");
         }
 
         [TestMethod]

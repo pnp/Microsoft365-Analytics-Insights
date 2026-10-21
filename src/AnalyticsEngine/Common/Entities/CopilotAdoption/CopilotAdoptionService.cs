@@ -393,8 +393,7 @@ namespace Common.Entities.CopilotAdoption
             var agentAuditAvailable = summary.DataSources.AuditAvailable;
             if (!agentAuditAvailable && _options.UsesExplicitDates)
             {
-                var agentProbeHistoryDays = Math.Max(
-                    _options.WindowDays, Math.Max(_options.AgentRetireInactiveDays, _options.AgentHistoryDays));
+                var agentProbeHistoryDays = CopilotAdoptionScoring.AgentHistoryWindowDays(_options);
                 agentAuditAvailable = await SafeScalarAsync(
                     CopilotAdoptionSql.HasCopilotAuditDataSql,
                     CopilotAdoptionSteps.DataSourceProbes,
@@ -721,8 +720,7 @@ namespace Common.Entities.CopilotAdoption
             // The inventory reads its own, much shorter history than the rest of the analysis - see
             // CopilotAdoptionOptions.AgentHistoryDays. Never shorter than the reporting window, or an
             // agent used inside the period could be missing from its own inventory.
-            var agentHistoryDays = Math.Max(
-                _options.WindowDays, Math.Max(_options.AgentRetireInactiveDays, _options.AgentHistoryDays));
+            var agentHistoryDays = CopilotAdoptionScoring.AgentHistoryWindowDays(_options);
             var agentHistoryStart = CopilotAdoptionScoring.WindowStartUtc(nowUtc, agentHistoryDays);
             var agentWindowStart = _options.UsesExplicitDates
                 ? CopilotAdoptionScoring.WindowStartUtc(nowUtc, _options.WindowDays)

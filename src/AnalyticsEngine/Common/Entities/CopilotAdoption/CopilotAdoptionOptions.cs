@@ -193,7 +193,7 @@ namespace Common.Entities.CopilotAdoption
         public int AgentMinUsers { get; set; } = 3;
 
         /// <summary>
-        /// How far back the agent inventory looks.
+        /// The minimum history the agent inventory reads.
         ///
         /// Deliberately much shorter than <see cref="HistoryDays"/>. The inventory only needs enough
         /// history to reach past <see cref="AgentRetireInactiveDays"/> - an agent quiet for longer than
@@ -201,6 +201,8 @@ namespace Common.Entities.CopilotAdoption
         /// only other date-sensitive rule is the <see cref="AgentNewDays"/> exemption, which looks
         /// forwards from first use, so an older agent being reported as "first seen at the window edge"
         /// cannot wrongly mark it New.
+        /// The effective window also includes the reporting period and the retirement boundary:
+        /// because today is included, a 120-day retirement threshold needs 121 calendar days.
         ///
         /// The cost of getting this wrong is significant: the query aggregates <c>copilot_chats</c>
         /// joined to <c>audit_events</c>, and on a 200,000-user tenant a year of that history is

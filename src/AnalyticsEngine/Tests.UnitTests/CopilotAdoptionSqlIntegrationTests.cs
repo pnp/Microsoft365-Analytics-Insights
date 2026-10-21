@@ -45,6 +45,52 @@ namespace Tests.UnitTests
         }
 
 
+        [DataTestMethod]
+        [DataRow(28, 90)]
+        [DataRow(28, 119)]
+        [DataRow(28, 120)]
+        [DataRow(90, 120)]
+        [DataRow(180, 120)]
+        public void AgentRetirementBoundary_RemainsVisibleWithoutChangingDefaultOrWiderHistory(int windowDays, int retirementDays)
+        {
+            var settings = new CopilotAdoptionScoreSettings { AgentRetireInactiveDays = retirementDays };
+            var options = CopilotAdoptionOptions.Default;
+            settings.ApplyTo(options);
+            options.WindowDays = windowDays;
+            var now = new DateTime(2026, 10, 1, 12, 0, 0, DateTimeKind.Utc);
+            using (var db = ScratchDatabase.Create("CopilotRetireBoundary"))
+            {
+                CreateUserTables(db);
+                CreateCopilotTables(db);
+                db.Execute(
+                    @"INSERT INTO dbo.users (id, user_name) VALUES (1, N'person@contoso.com');
+                      INSERT INTO dbo.copilot_agents (id, name, agent_id)
+                          VALUES (1, N'Contoso boundary agent', N'contoso.boundary'),
+                                 (2, N'Contoso younger agent', N'contoso.younger'),
+                                 (3, N'Contoso older agent', N'contoso.older'),
+                                 (4, N'Contoso history-edge agent', N'contoso.history-edge');");
+                SeedCopilotInteractionAt(db, 1, now.Date.AddDays(-retirementDays).AddHours(9), "Office", agentId: 1);
+                SeedCopilotInteractionAt(db, 1, now.Date.AddDays(1 - retirementDays).AddHours(9), "Office", agentId: 2);
+                SeedCopilotInteractionAt(db, 1, now.Date.AddDays(-150).AddHours(9), "Office", agentId: 3);
+                SeedCopilotInteractionAt(db, 1, now.Date.AddDays(-120).AddHours(9), "Office", agentId: 4);
+                var historyStart = CopilotAdoptionScoring.WindowStartUtc(now,
+                    CopilotAdoptionScoring.AgentHistoryWindowDays(options));
+                var rows = Query<AgentUsageQueryRow>(db, CopilotAdoptionSql.AgentUsageSql(new[] { 1 }),
+                    new SqlParameter("@from", CopilotAdoptionScoring.WindowStartUtc(now, options.WindowDays)),
+                    new SqlParameter("@toExclusive", now),
+                    new SqlParameter("@historyFrom", historyStart),
+                    new SqlParameter("@maxRows", options.MaxAgents));
+
+                var expectedIds = windowDays == 180 ? new[] { 1, 2, 3, 4 }
+                    : retirementDays == 120 ? new[] { 1, 2, 4 } : new[] { 1, 2 };
+                CollectionAssert.AreEquivalent(expectedIds, rows.Select(r => r.AgentId).ToArray());
+                Assert.AreEqual(AgentHealth.Retire,
+                    CopilotAdoptionScoring.ScoreAgent(rows.Single(r => r.AgentId == 1), now, options).Health);
+                Assert.AreEqual(AgentHealth.Review,
+                    CopilotAdoptionScoring.ScoreAgent(rows.Single(r => r.AgentId == 2), now, options).Health);
+            }
+        }
+
         #region Licensed users
 
         [TestMethod]
@@ -434,7 +480,7 @@ namespace Tests.UnitTests
                 var rollingStart = CopilotAdoptionScoring.WindowStartUtc(DateTime.UtcNow, options.WindowDays);
                 var agentHistoryStart = CopilotAdoptionScoring.WindowStartUtc(
                     DateTime.UtcNow,
-                    Math.Max(options.WindowDays, Math.Max(options.AgentRetireInactiveDays, options.AgentHistoryDays)));
+                    CopilotAdoptionScoring.AgentHistoryWindowDays(options));
 
                 var rollingRows = Query<AgentUsageQueryRow>(db, sql,
                     new SqlParameter("@from", rollingStart),

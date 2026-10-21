@@ -45,6 +45,9 @@ namespace Common.Entities.CopilotAuditBackfill
         public DateTime? SubmittedUtc { get; set; }
         public string RecordsNextLink { get; set; }
         public bool ImportingRecords { get; set; }
+        /// <summary>Null identifies an older checkpoint without query-wide mapping evidence.</summary>
+        public bool? HasSeenRecords { get; set; }
+        public bool HasRecognisedRecords { get; set; }
         public int SplitLevel { get; set; }
         public int AttemptCount { get; set; }
     }
