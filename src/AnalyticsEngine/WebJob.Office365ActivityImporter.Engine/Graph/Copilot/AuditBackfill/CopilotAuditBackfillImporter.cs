@@ -381,6 +381,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.AuditBackfill
             slice.SubmittedUtc = submittedUtc;
             slice.RecordsNextLink = null;
             slice.ImportingRecords = false;
+            slice.HasSeenRecords = false;
+            slice.HasRecognisedRecords = false;
             job.SlicesSubmitted++;
             job.SubmissionTimestampsUtc.Add(submittedUtc);
             _logger?.LogInformation($"Copilot audit backfill {job.Id}: submitted Audit Search query for {slice.StartUtc:o} to {slice.EndUtc:o} (attempt {slice.AttemptCount}).");
@@ -453,14 +455,16 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.AuditBackfill
                     job.RecordsSeen += imported.Seen;
                     job.RecordsImported += imported.Imported;
                     job.RecordsAlreadyPresent += imported.AlreadyPresent;
-                    if (imported.Seen > 0 && imported.Mapped == 0)
-                    {
-                        throw new CopilotAuditBackfillFatalException(CopilotAuditBackfillErrorCodes.UnrecognisedAuditData, "Graph returned Audit Search records, but their auditData shape was not recognised as CopilotInteraction.");
-                    }
-                    if (imported.Paused)
+                    slice.HasSeenRecords = slice.HasSeenRecords == true || imported.Seen > 0;
+                    slice.HasRecognisedRecords |= imported.Mapped > 0;
+                    if (imported.Paused || job.CancelRequested)
                     {
                         remaining.Add(slice);
                         continue;
+                    }
+                    if (slice.HasSeenRecords == true && !slice.HasRecognisedRecords)
+                    {
+                        throw new CopilotAuditBackfillFatalException(CopilotAuditBackfillErrorCodes.UnrecognisedAuditData, "Graph returned Audit Search records, but their auditData shape was not recognised as CopilotInteraction.");
                     }
 
                     slice.ImportingRecords = false;
@@ -501,6 +505,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.AuditBackfill
                 slice.SubmittedUtc = null;
                 slice.RecordsNextLink = null;
                 slice.ImportingRecords = false;
+                slice.HasSeenRecords = false;
+                slice.HasRecognisedRecords = false;
                 job.PendingSlices.Add(slice);
                 job.LastErrorCode = errorCode;
                 job.LastErrorDetail = Truncate(detail);
@@ -532,6 +538,14 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.AuditBackfill
 
         private async Task<ImportOutcome> ImportRecordsAsync(CopilotAuditBackfillJob job, CopilotAuditBackfillSlice slice, Func<bool> budgetExpired)
         {
+            if (!slice.HasSeenRecords.HasValue)
+            {
+                if (!string.IsNullOrEmpty(slice.RecordsNextLink))
+                    _logger?.LogInformation("Replaying a legacy Copilot audit backfill query to recover mapping evidence; existing SQL records remain de-duplicated.");
+                slice.RecordsNextLink = null;
+                slice.HasSeenRecords = false;
+                slice.HasRecognisedRecords = false;
+            }
             var outcome = new ImportOutcome();
             var mapped = new WebActivityReportSet();
             var next = slice.RecordsNextLink;

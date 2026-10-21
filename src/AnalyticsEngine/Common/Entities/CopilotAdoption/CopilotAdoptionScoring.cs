@@ -78,6 +78,14 @@ namespace Common.Entities.CopilotAdoption
             return nowUtc.Date.AddDays(-(days - 1));
         }
 
+        /// <summary>Includes today and the retirement boundary without raising the configured history floor.</summary>
+        internal static int AgentHistoryWindowDays(CopilotAdoptionOptions options)
+        {
+            if (options == null) throw new ArgumentNullException(nameof(options));
+            return Math.Max(options.WindowDays,
+                Math.Max(options.AgentHistoryDays, checked(options.AgentRetireInactiveDays + 1)));
+        }
+
         /// <summary>
         /// Days of use inside the window that earn full marks for frequency. Reported to the user next
         /// to their actual active days so "62%" is never an unexplained number.
