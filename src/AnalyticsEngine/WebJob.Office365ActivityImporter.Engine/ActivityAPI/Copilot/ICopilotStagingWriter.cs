@@ -65,8 +65,12 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
         private readonly InsertBatch<ChatOnlyCopilotLogTempEntity> _copilotInsertsChatsNoContext;
         private readonly ProjectResourceReader _rr;
         private readonly bool _throwOnPairingFailure;
+        private readonly string _sharePointStagingTable;
+        private readonly string _teamsStagingTable;
+        private readonly string _chatOnlyStagingTable;
 
-        public SqlCopilotStagingWriter(string connectionString, ILogger logger, bool throwOnPairingFailure = false)
+        public SqlCopilotStagingWriter(string connectionString, ILogger logger, bool throwOnPairingFailure = false,
+            bool isolateStagingTables = false)
         {
             if (string.IsNullOrEmpty(connectionString))
             {
@@ -79,6 +83,12 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
 
             _rr = new ProjectResourceReader(System.Reflection.Assembly.GetExecutingAssembly());
             _throwOnPairingFailure = throwOnPairingFailure;
+            // Operator replays run beside the live process; keep shards temporary even in DEBUG.
+            var shard = isolateStagingTables ? Guid.NewGuid().ToString("N") : null;
+            string StagingName(string name) => isolateStagingTables ? "##" + name.TrimStart('#') + "_" + shard : name;
+            _sharePointStagingTable = StagingName(ActivityImportConstants.STAGING_TABLE_COPILOT_SP);
+            _teamsStagingTable = StagingName(ActivityImportConstants.STAGING_TABLE_COPILOT_TEAMS);
+            _chatOnlyStagingTable = StagingName(ActivityImportConstants.STAGING_TABLE_COPILOT_CHATONLY);
             _copilotInsertsSP = new InsertBatch<SPCopilotLogTempEntity>(connectionString, logger);
             _copilotInsertsTeams = new InsertBatch<TeamsCopilotLogTempEntity>(connectionString, logger);
             _copilotInsertsChatsNoContext = new InsertBatch<ChatOnlyCopilotLogTempEntity>(connectionString, logger);
@@ -92,9 +102,9 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
 
         public async Task<CopilotStagingCommitTimings> CommitAllChanges()
         {
-            var docsMergeSql = GetSql(ActivityImportConstants.STAGING_TABLE_COPILOT_SP, "WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot.SQL.insert_sp_copilot_events_from_staging_table.sql");
-            var teamsMergeSql = GetSql(ActivityImportConstants.STAGING_TABLE_COPILOT_TEAMS, "WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot.SQL.insert_teams_copilot_events_from_staging_table.sql");
-            var chatOnlyMergeSql = GetSql(ActivityImportConstants.STAGING_TABLE_COPILOT_CHATONLY, null);
+            var docsMergeSql = GetSql(_sharePointStagingTable, "WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot.SQL.insert_sp_copilot_events_from_staging_table.sql");
+            var teamsMergeSql = GetSql(_teamsStagingTable, "WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot.SQL.insert_teams_copilot_events_from_staging_table.sql");
+            var chatOnlyMergeSql = GetSql(_chatOnlyStagingTable, null);
 
             // Per-staging-table timing. Each of the three Copilot staging tables runs the shared
             // accessed-resource / agents merge (common_upsert_copilot_agents.sql), which on Copilot-heavy
@@ -103,17 +113,17 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
             var timings = new CopilotStagingCommitTimings();
 
             var swSp = Stopwatch.StartNew();
-            await _copilotInsertsSP.SaveToStagingTable(STAGING_INSERTS_PER_THREAD, docsMergeSql);
+            await _copilotInsertsSP.SaveToStagingTable(STAGING_INSERTS_PER_THREAD, docsMergeSql, _sharePointStagingTable);
             swSp.Stop();
             timings.SharePoint = swSp.Elapsed;
 
             var swTeams = Stopwatch.StartNew();
-            await _copilotInsertsTeams.SaveToStagingTable(STAGING_INSERTS_PER_THREAD, teamsMergeSql);
+            await _copilotInsertsTeams.SaveToStagingTable(STAGING_INSERTS_PER_THREAD, teamsMergeSql, _teamsStagingTable);
             swTeams.Stop();
             timings.Teams = swTeams.Elapsed;
 
             var swChat = Stopwatch.StartNew();
-            await _copilotInsertsChatsNoContext.SaveToStagingTable(STAGING_INSERTS_PER_THREAD, chatOnlyMergeSql);
+            await _copilotInsertsChatsNoContext.SaveToStagingTable(STAGING_INSERTS_PER_THREAD, chatOnlyMergeSql, _chatOnlyStagingTable);
             swChat.Stop();
             timings.ChatOnly = swChat.Elapsed;
 
