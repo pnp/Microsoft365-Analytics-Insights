@@ -36,6 +36,13 @@ namespace App.ControlPanel.Frames.InstallWizard
             {
                 Name = "numHealthMinutes", Minimum = int.MinValue, Maximum = int.MaxValue, Value = 15
             };
+            this.lblHealthThresholdHelp = ServicePageLayout.Text(resources.GetString("HealthMonitoring.ThresholdHelp"));
+            this.lblHealthThresholdHelp.Name = "lblHealthThresholdHelp";
+            this.lnkHealthDetails = new System.Windows.Forms.LinkLabel
+            {
+                Name = "lnkHealthDetails", AutoSize = true,
+                Text = resources.GetString("HealthMonitoring.ShowDetails")
+            };
             ((System.ComponentModel.ISupportInitialize)this.numHealthMinutes).BeginInit();
             this.SuspendLayout();
             this.AutoScaleDimensions = new System.Drawing.SizeF(6F, 13F);
@@ -49,6 +56,8 @@ namespace App.ControlPanel.Frames.InstallWizard
             ServicePageLayout.AddRow(insights, chkHealthMonitoring);
             ServicePageLayout.AddFields(insights, resources.GetString("HealthMonitoring.Email"), txtHealthEmail);
             ServicePageLayout.AddFields(insights, resources.GetString("HealthMonitoring.Threshold"), numHealthMinutes);
+            ServicePageLayout.AddRow(insights, lblHealthThresholdHelp);
+            ServicePageLayout.AddRow(insights, lnkHealthDetails);
             ServicePageLayout.AddRow(insights, ServicePageLayout.Text(resources.GetString("HealthMonitoring.Notice")));
             var hosting = ServicePageLayout.AddService(layout, "hostingService", "App Service & hosting plan",
                 "The web app hosts the portal and importers. Its plan supplies compute capacity and determines hosting cost.",
@@ -67,6 +76,7 @@ namespace App.ControlPanel.Frames.InstallWizard
             this.txtAppServiceWebAppName.TextChanged += this.txtAppServiceWebAppName_TextChanged;
             this.txtKeyVaultName.TextChanged += this.txtKeyVaultName_TextChanged;
             this.chkHealthMonitoring.CheckedChanged += this.HealthMonitoring_CheckedChanged;
+            this.lnkHealthDetails.LinkClicked += this.HealthDetails_LinkClicked;
             this.Name = "AzurePaaSConfigControl";
             this.Size = new System.Drawing.Size(632, 537);
             ((System.ComponentModel.ISupportInitialize)this.numHealthMinutes).EndInit();
@@ -85,5 +95,7 @@ namespace App.ControlPanel.Frames.InstallWizard
         private System.Windows.Forms.CheckBox chkHealthMonitoring;
         private System.Windows.Forms.TextBox txtHealthEmail;
         private System.Windows.Forms.NumericUpDown numHealthMinutes;
+        private System.Windows.Forms.Label lblHealthThresholdHelp;
+        private System.Windows.Forms.LinkLabel lnkHealthDetails;
     }
 }

@@ -61,10 +61,13 @@ namespace Tests.UnitTests.InstallTests
         }
 
         [DataTestMethod]
-        [DataRow(600, 500, 1.0f)]
-        [DataRow(900, 750, 1.5f)]
-        [DataRow(1200, 1000, 2.0f)]
-        public void HealthMonitoring_FieldsAndNoticeRemainReachable_WhenResizedOrScaled(int width, int height, float scale)
+        [DataRow(600, 500, 1.0f, false)]
+        [DataRow(900, 750, 1.5f, false)]
+        [DataRow(1200, 1000, 2.0f, false)]
+        [DataRow(600, 500, 1.0f, true)]
+        [DataRow(900, 750, 1.5f, true)]
+        [DataRow(1200, 1000, 2.0f, true)]
+        public void HealthMonitoring_FieldsAndNoticeRemainReachable_WhenResizedOrScaled(int width, int height, float scale, bool expanded)
         {
             RunOnSta(() =>
             {
@@ -79,6 +82,11 @@ namespace Tests.UnitTests.InstallTests
                     {
                         page.Scale(new SizeF(scale, scale));
                         page.Font = new Font(page.Font.FontFamily, page.Font.Size * scale);
+                        Application.DoEvents();
+                    }
+                    if (expanded)
+                    {
+                        ClickLink(Find<LinkLabel>(page, "lnkHealthDetails"));
                         Application.DoEvents();
                     }
                     var content = Find<TableLayoutPanel>(page, "insightsServiceContent");
@@ -100,13 +108,64 @@ namespace Tests.UnitTests.InstallTests
                     Assert.IsTrue(check.Width >= check.GetPreferredSize(check.Size).Width, "Alert opt-in must not clip.");
                     var notice = content.Controls.OfType<Label>().Last();
                     Assert.IsTrue(notice.AutoSize, "Cost and health limitations must wrap.");
-                    CaptureHealthPreview(host, width, height, "fields");
+                    CaptureHealthPreview(host, width, height, expanded ? "expanded-fields" : "fields");
                     page.ScrollControlIntoView(notice);
                     Application.DoEvents();
                     Assert.IsTrue(page.ClientRectangle.IntersectsWith(page.RectangleToClient(
                         notice.Parent.RectangleToScreen(notice.Bounds))), "The expanded cost/coverage notice must be reachable.");
                     Assert.IsFalse(page.HorizontalScroll.Visible);
-                    CaptureHealthPreview(host, width, height, "notice");
+                    CaptureHealthPreview(host, width, height, expanded ? "expanded-notice" : "notice");
+                    var helper = Find<Label>(page, "lblHealthThresholdHelp");
+                    Assert.IsTrue(helper.Height >= helper.GetPreferredSize(new Size(helper.Width, 0)).Height,
+                        "The heartbeat explanation must wrap without clipping.");
+                    if (expanded)
+                    {
+                        var details = Find<TableLayoutPanel>(page, "healthMonitoringDetails");
+                        foreach (var label in details.Controls.OfType<Label>())
+                            Assert.IsTrue(label.Height >= label.GetPreferredSize(new Size(label.Width, 0)).Height,
+                                "Monitoring help must not clip: " + label.Text);
+                        page.ScrollControlIntoView(Find<LinkLabel>(page, "lnkHealthWiki"));
+                        Application.DoEvents();
+                        Assert.IsFalse(page.HorizontalScroll.Visible);
+                        CaptureHealthPreview(host, width, height, "expanded-guide");
+                    }
+                }
+            });
+        }
+
+        [TestMethod]
+        public void HealthMonitoring_HelpWorksWhenDisabled_WithoutChangingConfiguration()
+        {
+            RunOnSta(() =>
+            {
+                using (var page = new AzurePaaSConfigControl())
+                using (var host = ShowControl(page, new Size(800, 650)))
+                {
+                    page.HealthMonitoring = new Common.Entities.Installer.HealthMonitoringConfig
+                    {
+                        Enabled = false, NotificationEmail = "operator@contoso.example", MissingHeartbeatMinutes = 30
+                    };
+                    var minutes = Find<NumericUpDown>(page, "numHealthMinutes");
+                    StringAssert.Contains(minutes.AccessibleDescription, "no heartbeat");
+                    StringAssert.Contains(minutes.AccessibleDescription, "every 5 minutes");
+                    var link = Find<LinkLabel>(page, "lnkHealthDetails");
+                    var details = Find<TableLayoutPanel>(page, "healthMonitoringDetails");
+                    Assert.IsFalse(details.Visible);
+                    Assert.IsTrue(link.Enabled, "Help must remain available when monitoring is disabled.");
+                    ClickLink(link);
+                    Assert.IsTrue(details.Visible);
+                    Assert.IsTrue(Find<LinkLabel>(details, "lnkHealthWiki").TabStop,
+                        "The documentation link must be reachable by keyboard.");
+                    var text = string.Join("\n", details.Controls.OfType<Label>().Select(label => label.Text));
+                    StringAssert.Contains(text, "24 hours");
+                    StringAssert.Contains(text, "Client-secret expiry is unknown");
+                    StringAssert.Contains(text, "Changing this screen alone does not update Azure");
+                    ClickLink(link);
+                    Assert.IsFalse(details.Visible);
+                    Assert.IsTrue(link.Focused || link.CanFocus);
+                    Assert.IsFalse(page.HealthMonitoring.Enabled);
+                    Assert.AreEqual(30, page.HealthMonitoring.MissingHeartbeatMinutes);
+                    Assert.AreEqual("operator@contoso.example", page.HealthMonitoring.NotificationEmail);
                 }
             });
         }
@@ -434,6 +493,10 @@ namespace Tests.UnitTests.InstallTests
 
         private static T Find<T>(Control parent, string name) where T : Control =>
             (T)parent.Controls.Find(name, true).Single();
+
+        private static void ClickLink(LinkLabel link) =>
+            typeof(LinkLabel).GetMethod("OnLinkClicked", BindingFlags.Instance | BindingFlags.NonPublic)
+                .Invoke(link, new object[] { new LinkLabelLinkClickedEventArgs(link.Links[0]) });
 
         private static TreeNode[] Nodes(TreeView navigator) => navigator.Nodes.Cast<TreeNode>()
             .SelectMany(group => group.Nodes.Cast<TreeNode>()).ToArray();
