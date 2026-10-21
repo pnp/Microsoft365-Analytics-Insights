@@ -149,13 +149,15 @@ namespace Tests.UnitTests
                 CreateCopilotTables(db);
                 db.Execute(@"INSERT INTO dbo.license_types (id, name, sku_id)
                     VALUES (1, N'Contoso baseline licence', N'CONTOSO_BASELINE');");
+                var options = new CopilotAdoptionOptions { WindowDays = 28 };
                 var interceptor = new AgentHistoryProbeFailureInterceptor(
-                    new SqlConnectionStringBuilder(db.ConnectionString).InitialCatalog);
+                    new SqlConnectionStringBuilder(db.ConnectionString).InitialCatalog,
+                    CopilotAdoptionScoring.AgentHistoryWindowDays(options));
                 System.Data.Entity.Infrastructure.Interception.DbInterception.Add(interceptor);
                 CopilotAdoptionAnalysis analysis;
                 try
                 {
-                    analysis = await new CopilotAdoptionService(contextFactory: new AgentInventoryContextFactory(db.ConnectionString))
+                    analysis = await new CopilotAdoptionService(options, new AgentInventoryContextFactory(db.ConnectionString))
                         .AnalyseAsync();
                 }
                 finally
@@ -163,7 +165,8 @@ namespace Tests.UnitTests
                     System.Data.Entity.Infrastructure.Interception.DbInterception.Remove(interceptor);
                 }
 
-                Assert.IsTrue(interceptor.Triggered, "Only the history fallback, not the reporting-window probe, must fail.");
+                Assert.AreEqual(1, interceptor.Failures,
+                    "Only the bounded history fallback, not the reporting-window or lifetime growth probe, must fail.");
                 CollectionAssert.Contains(analysis.Summary.IncompleteReasons, "Copilot audit data");
             }
         }
@@ -171,8 +174,13 @@ namespace Tests.UnitTests
         private sealed class AgentHistoryProbeFailureInterceptor : System.Data.Entity.Infrastructure.Interception.DbCommandInterceptor
         {
             private readonly string _database;
-            public AgentHistoryProbeFailureInterceptor(string database) { _database = database; }
-            public bool Triggered { get; private set; }
+            private readonly int _historyDays;
+            public AgentHistoryProbeFailureInterceptor(string database, int historyDays)
+            {
+                _database = database;
+                _historyDays = historyDays;
+            }
+            public int Failures { get; private set; }
 
             public override void ReaderExecuting(System.Data.Common.DbCommand command,
                 System.Data.Entity.Infrastructure.Interception.DbCommandInterceptionContext<System.Data.Common.DbDataReader> interceptionContext)
@@ -180,10 +188,12 @@ namespace Tests.UnitTests
                 if (command.Connection.Database == _database
                     && command.CommandText.Trim() == CopilotAdoptionSql.HasCopilotAuditDataSql.Trim()
                     && command.Parameters.Contains("@from")
+                    && command.Parameters.Contains("@toExclusive")
                     && command.Parameters["@from"].Value is DateTime from
-                    && from < DateTime.UtcNow.Date.AddDays(-28))
+                    && command.Parameters["@toExclusive"].Value is DateTime toExclusive
+                    && from == CopilotAdoptionScoring.WindowStartUtc(toExclusive, _historyDays))
                 {
-                    Triggered = true;
+                    Failures++;
                     interceptionContext.Exception = new InvalidOperationException("Synthetic history-probe failure.");
                 }
             }

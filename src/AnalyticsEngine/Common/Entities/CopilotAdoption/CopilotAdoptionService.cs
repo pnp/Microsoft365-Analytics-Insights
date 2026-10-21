@@ -402,7 +402,7 @@ namespace Common.Entities.CopilotAdoption
                     summary.Warnings,
                     summary.WarningDetails,
                     "Copilot audit data probe",
-                    null,
+                    () => summary.MarkFiguresIncomplete("Copilot audit data"),
                     cancellationToken,
                     new SqlParameter("@from", CopilotAdoptionScoring.WindowStartUtc(nowUtc, agentProbeHistoryDays)),
                     new SqlParameter("@toExclusive", nowUtc)) == 1;
