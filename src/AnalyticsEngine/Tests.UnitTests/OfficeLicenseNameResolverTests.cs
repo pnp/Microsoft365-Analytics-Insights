@@ -194,7 +194,7 @@ namespace Tests.UnitTests
         {
             var plansBySku = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
 
-            using (var stream = typeof(OfficeLicenseNameResolver).Assembly.GetManifestResourceStream(OfficeLicenseNameResolver.RESOURCE_NAME))
+            using (var stream = Common.Entities.Licences.LicensingCatalogue.OpenEmbeddedCsv())
             using (var reader = new StreamReader(stream))
             using (var csv = new CsvReader(reader, CultureInfo.InvariantCulture))
             {

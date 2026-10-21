@@ -21,6 +21,21 @@ namespace Tests.UnitTests
         #region Store
 
         [TestMethod]
+        public async Task Store_PreviouslyAcceptedRetirementLimitRemainsReadable()
+        {
+            var values = new InMemoryKeyValueStore();
+            await values.SetStringAsync(CopilotAdoptionScoreSettingsStore.DocumentKey,
+                "{\"schemaVersion\":1,\"version\":1,\"settings\":{\"agentRetireInactiveDays\":120}}");
+            var document = await new CopilotAdoptionScoreSettingsStore(values, true).GetAsync();
+            var options = CopilotAdoptionOptions.Default;
+
+            document.ToEffective().ApplyTo(options);
+
+            Assert.AreEqual(120, options.AgentRetireInactiveDays);
+            CollectionAssert.Contains(options.ScoreSettings.CustomisedFields.ToList(), "agentRetireInactiveDays");
+        }
+
+        [TestMethod]
         public async Task Store_ExtendedFullHistory_RoundTripsThroughAzureTableCompression()
         {
             var store = new CopilotAdoptionScoreSettingsStore(new InMemoryKeyValueStore(), true);

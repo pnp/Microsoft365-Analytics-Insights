@@ -25,6 +25,7 @@
          name (Common.Entities.Clean Old Data Data.sql) is loaded by exact string at runtime and is
          pinned by EmbeddedResourceNameTests - do not "tidy" this into a Link. -->
     <EmbeddedResource Include="..\..\..\Clean Old Data Data.sql" />
+    <EmbeddedResource Include="Resources\Product_names_and_service_plan_identifiers_for_licensing.csv" LogicalName="Common.Entities.Resources.Product_names_and_service_plan_identifiers_for_licensing.csv" />
   </ItemGroup>
 
   <ItemGroup>

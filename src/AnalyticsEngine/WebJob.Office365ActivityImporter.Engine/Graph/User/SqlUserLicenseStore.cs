@@ -254,7 +254,7 @@ SELECT @changed;";
                         "    SELECT 1 FROM dbo.user_license_type_lookups AS t\r\n" +
                         "    WHERE t.license_type_id = v.license_type_id AND t.user_id = v.user_id);\r\n" +
                         "INSERT INTO dbo.user_license_history (user_id, license_type_id, valid_from_utc, valid_to_utc, from_source, valid_from_previous_refresh_utc)\r\n" +
-                        "SELECT i.user_id, i.license_type_id, @refreshUtc, NULL, CONVERT(tinyint, 1), @previousRefreshUtc\r\n" +
+                        "SELECT i.user_id, i.license_type_id, @refreshUtc, NULL, @historySource, @previousRefreshUtc\r\n" +
                         "FROM @inserted AS i\r\n" +
                         "WHERE NOT EXISTS (\r\n" +
                         "    SELECT 1 FROM dbo.user_license_history AS h\r\n" +
@@ -508,6 +508,7 @@ VALUES (@runId, @licenseTypeId, @observedUtc, @consumed, @enabled, @warning, @su
                 new SqlParameter("@refreshUtc", SqlDbType.DateTime2) { Value = refresh.CompletedUtc },
                 new SqlParameter("@completedUtc", SqlDbType.DateTime2) { Value = refresh.CompletedUtc },
                 new SqlParameter("@previousRefreshUtc", SqlDbType.DateTime2) { Value = (object)refresh.PreviousCompletedUtc ?? DBNull.Value },
+                new SqlParameter("@historySource", SqlDbType.TinyInt) { Value = refresh.HistorySource },
             };
         }
         private static SqlParameter NullableInt(string name, int? value)

@@ -299,7 +299,73 @@ namespace Tests.UnitTests.InstallTests
                 else
                     await Assert.ThrowsExceptionAsync<InstallException>(() => task.ExecuteTaskReturnResult(null));
                 Assert.AreEqual(0, handler.Deployments);
+                Assert.AreEqual(0, handler.WebSiteReads, "Ownership/read guards must run before looking up any plan.");
             }
+        }
+
+        [DataTestMethod]
+        [DataRow(false)]
+        [DataRow(true)]
+        public async Task Provisioning_UsesTheActualHostingPlanRatherThanTheConfiguredName(bool existingPlanElsewhere)
+        {
+            var actualPlan = existingPlanElsewhere
+                ? FakeTask.GroupId.Replace("contoso-demo", "contoso-hosting") + "/providers/Microsoft.Web/serverfarms/contoso-existing-plan"
+                : FakeTask.GroupId + "/providers/Microsoft.Web/serverfarms/contoso-web";
+            using (var handler = new MonitoringHandler { HostingPlanId = actualPlan })
+            using (var http = new HttpClient(handler))
+            {
+                await SdkTask(http, true).ExecuteTaskReturnResult(null);
+                var planAlerts = ((JArray)handler.Payload.SelectToken("properties.template.resources"))
+                    .Where(r => (string)r.SelectToken("properties.criteria.allOf[0].metricNamespace") == "Microsoft.Web/serverfarms")
+                    .ToList();
+
+                Assert.AreEqual(2, planAlerts.Count);
+                Assert.IsTrue(planAlerts.All(r => (string)r.SelectToken("properties.scopes[0]") == actualPlan),
+                    "Capacity alerts must monitor the web app's real host, including an existing plan in another resource group.");
+                Assert.AreEqual(1, handler.WebSiteReads);
+            }
+        }
+
+        [DataTestMethod]
+        [DataRow("forbidden")]
+        [DataRow("missing")]
+        [DataRow("wrong-type")]
+        public async Task Provisioning_HostingPlanReadProblemsNeverDeployGuessedScopes(string failure)
+        {
+            using (var handler = new MonitoringHandler
+            {
+                FailHostingRead = failure == "forbidden",
+                OmitHostingPlan = failure == "missing",
+                HostingPlanId = failure == "wrong-type"
+                    ? FakeTask.GroupId + "/providers/Microsoft.Sql/servers/contoso-sql"
+                    : FakeTask.GroupId + "/providers/Microsoft.Web/serverfarms/contoso-plan"
+            })
+            using (var http = new HttpClient(handler))
+            {
+                var task = SdkTask(http, true);
+                if (failure == "forbidden")
+                    await Assert.ThrowsExceptionAsync<Azure.RequestFailedException>(() => task.ExecuteTaskReturnResult(null));
+                else
+                    await Assert.ThrowsExceptionAsync<InstallException>(() => task.ExecuteTaskReturnResult(null));
+                Assert.AreEqual(1, handler.WebSiteReads);
+                Assert.AreEqual(0, handler.Deployments);
+            }
+        }
+
+        [TestMethod]
+        public async Task Provisioning_OptOutWithOnlySqlAlertsDoesNotRequireAHostingPlan()
+        {
+            var task = new FakeTask(false, false, false) { FailHostingRead = true };
+            task.Existing.Add(new HealthMonitoringInstallTask.HealthResource(task.ResourceNames[4], new Dictionary<string, string>
+            {
+                [HealthMonitoringInstallTask.OwnerTag] = HealthMonitoringInstallTask.OwnershipKey(FakeTask.GroupId, "contoso-web")
+            }));
+
+            await task.ExecuteTaskReturnResult(null);
+
+            Assert.AreEqual(0, task.HostingPlanReads);
+            Assert.AreEqual(1, ((JArray)task.Template["resources"]).Count);
+            Assert.IsFalse((bool)task.Template.SelectToken("resources[0].properties.enabled"));
         }
 
         private static HealthMonitoringInstallTask SdkTask(HttpClient http, bool enabled)
@@ -330,7 +396,10 @@ namespace Tests.UnitTests.InstallTests
         private sealed class MonitoringHandler : HttpMessageHandler
         {
             public bool ExistingOwned, Collision, FailReads;
+            public bool FailHostingRead, OmitHostingPlan;
             public int Deployments;
+            public int WebSiteReads;
+            public string HostingPlanId = FakeTask.GroupId + "/providers/Microsoft.Web/serverfarms/contoso-plan";
             public JObject Payload;
             public List<string> ListedTypes { get; } = new List<string>();
 
@@ -351,6 +420,20 @@ namespace Tests.UnitTests.InstallTests
                     });
                 }
                 Assert.AreEqual(HttpMethod.Get, request.Method, "The fake must reject every unexpected SDK mutation.");
+                if (request.RequestUri.AbsolutePath.EndsWith("/Microsoft.Web/sites/contoso-web", StringComparison.OrdinalIgnoreCase))
+                {
+                    WebSiteReads++;
+                    if (FailHostingRead) return Json(HttpStatusCode.Forbidden, new JObject
+                    {
+                        ["error"] = new JObject { ["code"] = "AuthorizationFailed", ["message"] = "Synthetic hosting-plan read failure" }
+                    });
+                    return Json(HttpStatusCode.OK, new JObject
+                    {
+                        ["id"] = FakeTask.GroupId + "/providers/Microsoft.Web/sites/contoso-web",
+                        ["name"] = "contoso-web", ["type"] = "Microsoft.Web/sites", ["location"] = "westeurope",
+                        ["properties"] = new JObject { ["serverFarmId"] = OmitHostingPlan ? null : HostingPlanId }
+                    });
+                }
                 if (FailReads) return Json(HttpStatusCode.Forbidden, new JObject
                 {
                     ["error"] = new JObject { ["code"] = "AuthorizationFailed", ["message"] = "Synthetic read failure" }
@@ -404,8 +487,16 @@ namespace Tests.UnitTests.InstallTests
             public object RawParameters { get; private set; }
             public int Deployments { get; private set; }
             public bool FailDeployment { get; set; }
+            public bool FailHostingRead { get; set; }
+            public int HostingPlanReads { get; private set; }
             protected override string ContainerId => GroupId;
             protected override string ScopeLocation => "westeurope";
+            protected override Task<ResourceIdentifier> ReadHostingPlanIdAsync()
+            {
+                HostingPlanReads++;
+                if (FailHostingRead) throw new InvalidOperationException("Unexpected hosting-plan read.");
+                return Task.FromResult(new ResourceIdentifier(GroupId + "/providers/Microsoft.Web/serverfarms/contoso-plan"));
+            }
             protected override IReadOnlyList<HealthResource> ReadExistingResources() => Existing;
             public void AddOwnedResources()
             {

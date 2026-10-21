@@ -66,6 +66,5 @@
     <EmbeddedResource Include="ActivityAPI\Dlp\SQL\insert_copilot_dlp_events_from_staging_table.sql" />
     <EmbeddedResource Include="ActivityAPI\Dlp\SQL\insert_dlp_rule_matches_from_staging_table.sql" />
     <EmbeddedResource Include="ActivityAPI\PowerPlatform\SQL\insert_copilot_studio_events_from_staging_table.sql" />
-    <EmbeddedResource Include="Resources\Product_names_and_service_plan_identifiers_for_licensing.csv" />
   </ItemGroup>
 </Project>

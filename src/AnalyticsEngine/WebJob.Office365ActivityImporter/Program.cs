@@ -312,6 +312,11 @@ namespace WebJob.Office365ActivityImporter
             // here, outside the loop like callQueueProcessor, because a run outlives the cycle that started it.
             var deferredGraphImport = new SingleFlightBackgroundRunner(logger, "Deferred Graph import (usage reports)");
 
+            // Administrators' one-person refreshes from the portal's User lookup page (Azure Table queue). Null without a
+            // Storage account, in which case the portal does not offer the action. Drained at safe points in the cycle -
+            // never while the scheduled user import is writing; the users-and-licences lock enforces that across instances.
+            var userRefreshWorker = WebJob.Office365ActivityImporter.Engine.Graph.TargetedUserRefreshWorker.ForConfig(configuredSettings, logger, userScopeProvider);
+
             // Run app
             using (var heartbeat = new DataUtils.Health.ImporterHeartbeat(logger, DataUtils.Health.ImporterHeartbeat.ActivityJob))
             using (var health = Common.Entities.Health.DefaultRuntimeHealth.Start(configuredSettings, logger, ImporterHeartbeat.ActivityJob))
@@ -324,6 +329,10 @@ namespace WebJob.Office365ActivityImporter
                 // States which users this cycle's imports cover - including when a filter matches no group or is
                 // failing open - every cycle, not only when the scope is refreshed.
                 await userScopeProvider.GetScopeForCycleAsync();
+
+                // One-person refreshes queued from the portal: first, so an administrator waits at most one cycle gap,
+                // not the whole Graph import. Bounded, and never throws.
+                if (userRefreshWorker != null) await userRefreshWorker.DrainAsync();
 
                 var tasks = new ProgramTasks(logger, configuredSettings, activityReportsLastImportedStore, graphLastRunStore, sentEmailMailboxSkipList, reportCompletionStore, userScopeProvider);
 
@@ -373,6 +382,10 @@ namespace WebJob.Office365ActivityImporter
                     throw;
 #endif
                 }
+
+                // And again after the Graph import, which can run for a long time on a large tenant (and holds the
+                // users-and-licences lock throughout its user import), so requests made meanwhile are not held a full cycle.
+                if (userRefreshWorker != null) await userRefreshWorker.DrainAsync();
 
                 // Activity import (Office 365 Management Activity API). Runs when any workload needs
                 // Audit.SharePoint or Audit.General (SharePoint audit, Copilot, or Power Platform).

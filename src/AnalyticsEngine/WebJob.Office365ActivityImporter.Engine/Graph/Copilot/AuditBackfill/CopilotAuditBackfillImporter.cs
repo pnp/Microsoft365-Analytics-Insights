@@ -381,6 +381,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.AuditBackfill
             slice.SubmittedUtc = submittedUtc;
             slice.RecordsNextLink = null;
             slice.ImportingRecords = false;
+            slice.HasSeenRecords = false;
+            slice.HasRecognisedRecords = false;
             job.SlicesSubmitted++;
             job.SubmissionTimestampsUtc.Add(submittedUtc);
             _logger?.LogInformation($"Copilot audit backfill {job.Id}: submitted Audit Search query for {slice.StartUtc:o} to {slice.EndUtc:o} (attempt {slice.AttemptCount}).");
@@ -453,19 +455,22 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.AuditBackfill
                     job.RecordsSeen += imported.Seen;
                     job.RecordsImported += imported.Imported;
                     job.RecordsAlreadyPresent += imported.AlreadyPresent;
-                    if (imported.Seen > 0 && imported.Mapped == 0)
-                    {
-                        throw new CopilotAuditBackfillFatalException(CopilotAuditBackfillErrorCodes.UnrecognisedAuditData, "Graph returned Audit Search records, but their auditData shape was not recognised as CopilotInteraction.");
-                    }
-                    if (imported.Paused)
+                    slice.HasSeenRecords = slice.HasSeenRecords == true || imported.Seen > 0;
+                    slice.HasRecognisedRecords |= imported.Mapped > 0;
+                    if (imported.Paused || job.CancelRequested)
                     {
                         remaining.Add(slice);
                         continue;
+                    }
+                    if (slice.HasSeenRecords == true && !slice.HasRecognisedRecords)
+                    {
+                        throw new CopilotAuditBackfillFatalException(CopilotAuditBackfillErrorCodes.UnrecognisedAuditData, "Graph returned Audit Search records, but their auditData shape was not recognised as CopilotInteraction.");
                     }
 
                     slice.ImportingRecords = false;
                     slice.RecordsNextLink = null;
                     job.SlicesCompleted++;
+                    // Retain whole-day evidence if a later slice aborts this poll before queue publication.
                     if ((slice.EndUtc - slice.StartUtc).TotalHours >= 23)
                     {
                         var dayKey = CopilotAuditBackfillSlicer.DayKey(slice.StartUtc);
@@ -490,6 +495,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.AuditBackfill
             }
 
             job.InFlightSlices = remaining;
+            job.CompletedDays = job.GetCompletedDays().ToList();
             return progressed;
         }
 
@@ -501,6 +507,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.AuditBackfill
                 slice.SubmittedUtc = null;
                 slice.RecordsNextLink = null;
                 slice.ImportingRecords = false;
+                slice.HasSeenRecords = false;
+                slice.HasRecognisedRecords = false;
                 job.PendingSlices.Add(slice);
                 job.LastErrorCode = errorCode;
                 job.LastErrorDetail = Truncate(detail);
@@ -532,6 +540,14 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.AuditBackfill
 
         private async Task<ImportOutcome> ImportRecordsAsync(CopilotAuditBackfillJob job, CopilotAuditBackfillSlice slice, Func<bool> budgetExpired)
         {
+            if (!slice.HasSeenRecords.HasValue)
+            {
+                if (!string.IsNullOrEmpty(slice.RecordsNextLink))
+                    _logger?.LogInformation("Replaying a legacy Copilot audit backfill query to recover mapping evidence; existing SQL records remain de-duplicated.");
+                slice.RecordsNextLink = null;
+                slice.HasSeenRecords = false;
+                slice.HasRecognisedRecords = false;
+            }
             var outcome = new ImportOutcome();
             var mapped = new WebActivityReportSet();
             var next = slice.RecordsNextLink;
@@ -627,6 +643,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.AuditBackfill
                 detail = gap.Detail;
             }
             job.State = state;
+            job.CompletedDays = job.GetCompletedDays().ToList();
             job.CompletedUtc = _utcNow();
             job.LastErrorCode = errorCode;
             job.LastErrorDetail = Truncate(detail);

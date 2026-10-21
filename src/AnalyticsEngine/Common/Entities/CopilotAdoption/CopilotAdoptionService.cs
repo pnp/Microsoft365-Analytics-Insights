@@ -211,11 +211,7 @@ namespace Common.Entities.CopilotAdoption
             // and the workbook asserted that a SKU was excluded while every figure on the page included it.
             if (seatLicenceTypeIdOverride != null)
             {
-                var effective = new HashSet<int>(seatIds);
-                foreach (var licence in summary.SeatLicenceTypes)
-                {
-                    licence.IsCopilotSeat = effective.Contains(licence.Id);
-                }
+                CopilotLicenceClassifier.ApplyOverride(summary.SeatLicenceTypes, seatIds);
 
                 SummarisePurchasedSeatCapacity(summary);
             }
@@ -391,10 +387,10 @@ namespace Common.Entities.CopilotAdoption
             }
 
             var agentAuditAvailable = summary.DataSources.AuditAvailable;
-            if (!agentAuditAvailable && _options.UsesExplicitDates)
+            // The estate's independent history also matters when a rolling period is quiet.
+            if (!agentAuditAvailable)
             {
-                var agentProbeHistoryDays = Math.Max(
-                    _options.WindowDays, Math.Max(_options.AgentRetireInactiveDays, _options.AgentHistoryDays));
+                var agentProbeHistoryDays = CopilotAdoptionScoring.AgentHistoryWindowDays(_options);
                 agentAuditAvailable = await SafeScalarAsync(
                     CopilotAdoptionSql.HasCopilotAuditDataSql,
                     CopilotAdoptionSteps.DataSourceProbes,
@@ -402,7 +398,7 @@ namespace Common.Entities.CopilotAdoption
                     summary.Warnings,
                     summary.WarningDetails,
                     "Copilot audit data probe",
-                    null,
+                    () => summary.MarkFiguresIncomplete("Copilot audit data"),
                     cancellationToken,
                     new SqlParameter("@from", CopilotAdoptionScoring.WindowStartUtc(nowUtc, agentProbeHistoryDays)),
                     new SqlParameter("@toExclusive", nowUtc)) == 1;
@@ -721,8 +717,7 @@ namespace Common.Entities.CopilotAdoption
             // The inventory reads its own, much shorter history than the rest of the analysis - see
             // CopilotAdoptionOptions.AgentHistoryDays. Never shorter than the reporting window, or an
             // agent used inside the period could be missing from its own inventory.
-            var agentHistoryDays = Math.Max(
-                _options.WindowDays, Math.Max(_options.AgentRetireInactiveDays, _options.AgentHistoryDays));
+            var agentHistoryDays = CopilotAdoptionScoring.AgentHistoryWindowDays(_options);
             var agentHistoryStart = CopilotAdoptionScoring.WindowStartUtc(nowUtc, agentHistoryDays);
             var agentWindowStart = _options.UsesExplicitDates
                 ? CopilotAdoptionScoring.WindowStartUtc(nowUtc, _options.WindowDays)

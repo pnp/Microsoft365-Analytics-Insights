@@ -66,7 +66,6 @@ namespace Tests.UnitTests
             "WebJob.Office365ActivityImporter.Engine.ActivityAPI.PowerPlatform.SQL.insert_power_automate_share_events_from_staging_table.sql",
             "WebJob.Office365ActivityImporter.Engine.ActivityAPI.PowerPlatform.SQL.insert_power_bi_events_from_staging_table.sql",
             "WebJob.Office365ActivityImporter.Engine.Properties.Resources.resources",
-            "WebJob.Office365ActivityImporter.Engine.Resources.Product_names_and_service_plan_identifiers_for_licensing.csv",
         };
 
         /// <summary>
@@ -142,6 +141,19 @@ namespace Tests.UnitTests
                     $"'{CleanOldDataResource}' is no longer embedded under that name. It is included from " +
                     @"outside the project directory (..\..\..\Clean Old Data Data.sql), so its manifest " +
                     "name is especially sensitive to project-file changes.");
+            }
+        }
+
+        /// <summary>
+        /// The importer names licence types from this file and the portal's licence diagnostics explain
+        /// Copilot classification from it, so both must find it under the one name.
+        /// </summary>
+        [TestMethod]
+        public void Entities_EmbedsTheLicensingCatalogue()
+        {
+            using (var stream = Entities.GetManifestResourceStream(Common.Entities.Licences.LicensingCatalogue.ResourceName))
+            {
+                Assert.IsNotNull(stream, $"'{Common.Entities.Licences.LicensingCatalogue.ResourceName}' is no longer embedded in Common.Entities.");
             }
         }
 

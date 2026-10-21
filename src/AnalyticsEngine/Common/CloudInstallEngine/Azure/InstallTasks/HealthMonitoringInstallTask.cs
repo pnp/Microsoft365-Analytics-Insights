@@ -1,5 +1,6 @@
 using Azure.Core;
 using Azure.ResourceManager.Resources;
+using Azure.ResourceManager.AppService;
 using CloudInstallEngine.Models;
 using Microsoft.Extensions.Logging;
 using Newtonsoft.Json.Linq;
@@ -17,6 +18,7 @@ namespace CloudInstallEngine.Azure.InstallTasks
         public const string AppInsightsNameSetting = "AppInsightsName";
         public const string SqlServerNameSetting = "SqlServerName";
         public const string SqlDatabaseNameSetting = "SqlDatabaseName";
+        // Accepted for older callers, but never trusted as the web app's hosting identity.
         public const string AppServicePlanNameSetting = "AppServicePlanName";
         internal const string OwnerTag = "m365ai-health-owner";
         private const string RuleType = "Microsoft.Insights/scheduledQueryRules";
@@ -67,7 +69,9 @@ namespace CloudInstallEngine.Azure.InstallTasks
                 return null;
             }
 
-            var template = BuildTemplate(ContainerId, ScopeLocation, managed);
+            var needsPlanScope = _enabled || managed.Contains(ResourceNames[6]) || managed.Contains(ResourceNames[7]);
+            var hostingPlan = needsPlanScope ? await ReadHostingPlanIdAsync() : null;
+            var template = BuildTemplate(ContainerId, ScopeLocation, managed, hostingPlan);
             if (((JArray)template["resources"]).Count == 0) return null;
             var result = await DeployTemplate(template, BuildParameters(owner));
             _logger.LogInformation(_enabled
@@ -77,6 +81,15 @@ namespace CloudInstallEngine.Azure.InstallTasks
         }
 
         protected virtual string ContainerId => Container.Id.ToString();
+
+        protected virtual async Task<ResourceIdentifier> ReadHostingPlanIdAsync()
+        {
+            var site = (await Container.GetWebSiteAsync(_config.ResourceName)).Value;
+            var plan = site.Data.AppServicePlanId;
+            if (plan == null || !string.Equals(plan.ResourceType.ToString(), "Microsoft.Web/serverfarms", StringComparison.OrdinalIgnoreCase))
+                throw new InstallException("The App Service did not report a valid hosting plan; no health-alert resources were changed.");
+            return plan;
+        }
 
         protected virtual string ScopeLocation
         {
@@ -130,7 +143,7 @@ namespace CloudInstallEngine.Azure.InstallTasks
             _config.ResourceName + "-health-plan-memory"
         };
 
-        internal JObject BuildTemplate(string resourceGroupId, string location, ISet<string> existingOwned)
+        internal JObject BuildTemplate(string resourceGroupId, string location, ISet<string> existingOwned, ResourceIdentifier hostingPlan)
         {
             var names = ResourceNames;
             var groupId = resourceGroupId + "/providers/" + GroupType + "/" + names[0];
@@ -195,7 +208,7 @@ namespace CloudInstallEngine.Azure.InstallTasks
 
             var sqlId = resourceGroupId + "/providers/Microsoft.Sql/servers/" + _config.GetConfigValue(SqlServerNameSetting)
                 + "/databases/" + _config.GetConfigValue(SqlDatabaseNameSetting);
-            var planId = resourceGroupId + "/providers/Microsoft.Web/serverfarms/" + _config.GetConfigValue(AppServicePlanNameSetting);
+            var planId = hostingPlan?.ToString();
             var metrics = new[]
             {
                 new[] { sqlId, "Microsoft.Sql/servers/databases", "cpu_percent", "PT1H" },

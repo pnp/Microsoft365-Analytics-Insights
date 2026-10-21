@@ -51,6 +51,7 @@ import {
   useAdoptionTableStyles,
   useRowExpansion,
 } from './adoptionShared';
+import TroubleshootUserLink from '../userlookup/TroubleshootUserLink';
 import { usePrintAllRows } from '../shared/printPreparation';
 import PiiHiddenNote from '../shared/PiiHiddenNote';
 import { formatCount, formatDate } from '../shared/KpiGrid';
@@ -776,6 +777,16 @@ export default function OpportunitiesPanel({
                         >
                           <DetailRationale text={opportunityRationale(t, row)} />
                         </DetailSection>
+                        <TroubleshootUserLink
+                          context={{
+                            upn: row.userPrincipalName,
+                            report: 'copilotAdoption',
+                            windowDays,
+                            from: dateRange?.from,
+                            to: dateRange?.to,
+                            licenceTypeIds: seatLicenceTypeIds,
+                          }}
+                        />
                       </DetailRow>
                     )}
                   </Fragment>

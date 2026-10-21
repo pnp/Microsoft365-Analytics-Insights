@@ -32,6 +32,10 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         /// batch's managers in bulk instead of one query per user (#371). Optional; pass
         /// null to skip.
         /// </param>
+        /// <param name="beforeSave">
+        /// Called just before each batch is saved - the users-and-licences lock check, so a batch read long before never
+        /// lands once the lock is lost. Optional.
+        /// </param>
         public async Task<int> ProcessExistingUsersInBatches(
             AnalyticsEntitiesContext db,
             List<GraphUser> allActiveGraphUsers,
@@ -40,7 +44,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             Dictionary<string, Common.Entities.User> dbUsersByAadId,
             Func<GraphUser, Common.Entities.User, Task> updateAction,
             Func<List<GraphUser>, Task> prepareBatch,
-            int batchSize = DEFAULT_BATCH_SIZE)
+            int batchSize = DEFAULT_BATCH_SIZE,
+            Func<Task> beforeSave = null)
         {
             _logger.LogInformation($"User import - updating {userUpnsToProcess.Count.ToString("N0")} existing users in batches...");
 
@@ -113,6 +118,10 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
 
                 // Save batch and clear change tracker to free memory
                 db.ChangeTracker.DetectChanges();
+                if (beforeSave != null)
+                {
+                    await beforeSave();
+                }
                 await db.SaveChangesAsync();
 
                 processedCount += batch.Count;
