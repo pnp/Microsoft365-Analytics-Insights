@@ -25,7 +25,7 @@ using WebJob.Office365ActivityImporter.Engine.Graph.Copilot.AuditBackfill;
 namespace Tests.UnitTests
 {
     [TestClass]
-    public class CopilotAuditBackfillTests
+    public partial class CopilotAuditBackfillTests
     {
         [TestMethod]
         public void Slicer_UsesNewestDayFirstAndClampsToRetention()
@@ -133,6 +133,7 @@ namespace Tests.UnitTests
             Assert.AreEqual(1, job.Gaps.Count);
             Assert.IsTrue(job.Gaps[0].Incomplete);
             Assert.AreEqual(CopilotAuditBackfillErrorCodes.QueryTruncated, job.Gaps[0].ErrorCode);
+            Assert.AreEqual(CopilotAuditBackfillErrorCodes.QueryTruncated, job.LastErrorCode);
         }
 
         [TestMethod]
@@ -244,9 +245,18 @@ namespace Tests.UnitTests
         [TestCategory("SqlIntegration")]
         public async Task Importer_WithRealSqlPersistence_SkipsOnlyEventsThatAlreadyHaveCopilotMetadata()
         {
+            if (Environment.GetEnvironmentVariable("BACKFILL_SYNTHETIC_SQL_SCALE") == "1")
+            {
+                CreateFreshSyntheticSqlDatabase();
+                Assert.ThrowsException<Microsoft.Data.SqlClient.SqlException>(CreateFreshSyntheticSqlDatabase,
+                    "Even a dedicated synthetic catalog must never be reused by the evidence runner.");
+            }
             var completeId = new Guid("00000000-0000-0000-0000-000000000041");
             var metadataMissingId = new Guid("00000000-0000-0000-0000-000000000042");
             var newId = new Guid("00000000-0000-0000-0000-000000000043");
+            var recentMetadataMissingId = new Guid("00000000-0000-0000-0000-000000000044");
+            var recentTime = DateTime.UtcNow.AddHours(-2);
+            recentTime = recentTime.AddTicks(-(recentTime.Ticks % TimeSpan.TicksPerSecond));
             var existingOperation = "Already imported CopilotInteraction " + Guid.NewGuid().ToString("N");
             var config = new TestsAppConfig
             {
@@ -257,7 +267,7 @@ namespace Tests.UnitTests
 
             using (var db = TestDb())
             {
-                CleanupEvents(db, completeId, metadataMissingId, newId);
+                CleanupEvents(db, completeId, metadataMissingId, newId, recentMetadataMissingId);
                 db.Database.ExecuteSqlCommand(@"
 DECLARE @operationId int = (SELECT id FROM dbo.event_operations WHERE operation_name = @p2);
 IF @operationId IS NULL
@@ -275,6 +285,8 @@ INSERT INTO dbo.audit_events (id, time_stamp, operation_id, user_id)
 VALUES (@p0, @p1, @operationId, @userId);
 INSERT INTO dbo.audit_events (id, time_stamp, operation_id, user_id)
 VALUES (@p5, @p1, @operationId, @userId);
+INSERT INTO dbo.audit_events (id, time_stamp, operation_id, user_id)
+VALUES (@p6, @p7, @operationId, @userId);
 INSERT INTO dbo.copilot_chats (event_id, app_host, user_id, time_stamp)
 VALUES (@p0, N'Word', @userId, @p1);",
                     completeId,
@@ -282,9 +294,14 @@ VALUES (@p0, N'Word', @userId, @p1);",
                     existingOperation,
                     "jane.doe@contoso.com",
                     "00000000-0000-0000-0000-000000000041",
-                    metadataMissingId);
+                    metadataMissingId,
+                    recentMetadataMissingId,
+                    recentTime);
             }
 
+            var recentRecord = SyntheticRecord(recentMetadataMissingId.ToString());
+            recentRecord.CreatedDateTime = recentTime;
+            recentRecord.AuditData["CreationTime"] = recentTime.ToString("s") + "Z";
             var state = await NewStateWithJobAsync();
             var source = new FakeAuditSearchSource
             {
@@ -298,30 +315,46 @@ VALUES (@p0, N'Word', @userId, @p1);",
                             SyntheticRecord(completeId.ToString()),
                             SyntheticRecord(metadataMissingId.ToString()),
                             SyntheticRecord(newId.ToString()),
+                            recentRecord,
                         }
                     }
                 })
             };
-            var persistence = new ActivityReportSqlPersistenceManager(new AllowAllFilterConfig(), Common.Entities.UserScope.UserImportScope.Unfiltered, NullLogger.Instance, config);
-            var importer = new CopilotAuditBackfillImporter(state, source, persistence, config, NullLogger.Instance,
+            var logger = new FakeLoaderClasses.RecordingLogger();
+            var persistence = new ActivityReportSqlPersistenceManager(new AllowAllFilterConfig(), Common.Entities.UserScope.UserImportScope.Unfiltered, logger, config);
+            var diagnosticPersistence = new MeasuredScalePersistence(async records =>
+            {
+                try { return await persistence.CommitAll(records); }
+                catch (Exception ex)
+                {
+                    TestContext.WriteLine(ex.ToString());
+                    throw;
+                }
+            });
+            var importer = new CopilotAuditBackfillImporter(state, source, diagnosticPersistence, config, logger,
                 () => new DateTime(2026, 10, 2, 12, 0, 0, DateTimeKind.Utc), _ => Task.CompletedTask,
                 new SqlCopilotAuditBackfillExistingEventFilter(TestDb));
 
             var job = await importer.AdvanceLatestAsync();
+            if (job.State != CopilotAuditBackfillStates.Completed)
+                foreach (var entry in logger.Entries.Where(e => e.Exception != null))
+                    TestContext.WriteLine(entry.Exception.ToString());
 
             using (var db = TestDb())
             {
                 var complete = db.AuditEventsCommon.Single(e => e.Id == completeId);
                 var recovered = db.CopilotChats.SingleOrDefault(c => c.EventID == metadataMissingId);
                 var inserted = db.CopilotChats.SingleOrDefault(c => c.EventID == newId);
+                var recentRecovered = db.CopilotChats.SingleOrDefault(c => c.EventID == recentMetadataMissingId);
                 Assert.IsNotNull(recovered, "An audit_events row without Copilot metadata must be re-staged for metadata recovery.");
                 Assert.IsNotNull(inserted, "The genuinely new backfill record should be committed through the real SQL path.");
+                Assert.IsNotNull(recentRecovered, "A recent partial live save in the normal dedup-cache window must also recover its missing Copilot metadata.");
                 Assert.AreEqual(new DateTime(2026, 9, 1, 10, 0, 0, DateTimeKind.Utc), complete.TimeStamp, "The complete existing old audit event must be left untouched.");
                 Assert.AreEqual(CopilotAuditBackfillStates.Completed, job.State);
-                Assert.AreEqual(3, job.RecordsSeen);
-                Assert.AreEqual(2, job.RecordsImported);
+                Assert.AreEqual(4, job.RecordsSeen);
+                Assert.AreEqual(3, job.RecordsImported);
                 Assert.AreEqual(1, job.RecordsAlreadyPresent);
-                CleanupEvents(db, completeId, metadataMissingId, newId);
+                CleanupEvents(db, completeId, metadataMissingId, newId, recentMetadataMissingId);
             }
         }
 
@@ -574,11 +607,10 @@ VALUES (@p0, N'Word', @userId, @p1);",
                     new CopilotAuditSearchRecordPage { Records = new List<CopilotAuditSearchRecord> { SyntheticRecord("00000000-0000-0000-0000-000000000032") } },
                 })
             };
-            var ticks = 0;
             var importer = new CopilotAuditBackfillImporter(state, source, new CountingPersistence(),
                 new AppConfig { ImportJobSettings = new ImportTaskSettings { Copilot = true } }, NullLogger.Instance,
                 () => new DateTime(2026, 10, 2, 12, 0, 0, DateTimeKind.Utc), _ => Task.CompletedTask,
-                new FakeExistingEventFilter(), () => ++ticks >= 2 ? CopilotAuditBackfillImporter.MaxCycleBudget : TimeSpan.Zero);
+                new FakeExistingEventFilter(), () => source.RecordPagesRead > 0 ? CopilotAuditBackfillImporter.MaxCycleBudget : TimeSpan.Zero);
 
             var job = await importer.AdvanceLatestAsync();
 
@@ -832,6 +864,7 @@ VALUES (@p0, N'Word', @userId, @p1);",
             public Exception SubmitFailure;
             public int SubmitCount;
             public int PollCount;
+            public int RecordPagesRead;
             public int SubmitCountBeforeFirstPoll;
 
             public Task<AppTokenPermissionAccess> GetPermissionAccessAsync() => Task.FromResult(Access);
@@ -859,7 +892,11 @@ VALUES (@p0, N'Word', @userId, @p1);",
                 });
             }
 
-            public Task<CopilotAuditSearchRecordPage> GetRecordsAsync(string queryId, string nextLink = null) => Task.FromResult(Pages.Count > 0 ? Pages.Dequeue() : new CopilotAuditSearchRecordPage());
+            public Task<CopilotAuditSearchRecordPage> GetRecordsAsync(string queryId, string nextLink = null)
+            {
+                RecordPagesRead++;
+                return Task.FromResult(Pages.Count > 0 ? Pages.Dequeue() : new CopilotAuditSearchRecordPage());
+            }
         }
 
         private sealed class FakeExistingEventFilter : ICopilotAuditBackfillExistingEventFilter

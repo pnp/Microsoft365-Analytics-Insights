@@ -47,6 +47,9 @@ namespace Web.AnalyticsWeb.Models.CopilotAdoption
 
     public sealed class CopilotAdoptionSettingsSaveRequest
     {
+        [JsonProperty("confirmSeatImpact")]
+        public bool ConfirmSeatImpact { get; set; }
+
         /// <summary>The version the administrator was editing; a save made against an older one is refused.</summary>
         [JsonProperty("expectedVersion")]
         public long? ExpectedVersion { get; set; }
@@ -57,6 +60,8 @@ namespace Web.AnalyticsWeb.Models.CopilotAdoption
 
     public sealed class CopilotAdoptionSettingsResetRequest
     {
+        [JsonProperty("confirmSeatImpact")]
+        public bool ConfirmSeatImpact { get; set; }
         [JsonProperty("expectedVersion")]
         public long? ExpectedVersion { get; set; }
     }
@@ -96,6 +101,7 @@ namespace Web.AnalyticsWeb.Models.CopilotAdoption
             if (request?.Settings == null || request.ExpectedVersion == null)
                 throw new CopilotAdoptionScoreSettingsRejectedException(CopilotAdoptionScoreSettingsErrorCodes.InvalidRequest);
             var store = _provider.Store;
+            await RequireSeatConfirmation(store, request.Settings, request.ConfirmSeatImpact, cancellationToken).ConfigureAwait(false);
             var saved = await store.SaveAsync(request.Settings, request.ExpectedVersion.Value, changedBy, cancellationToken).ConfigureAwait(false);
             _provider.Publish(saved);
             return ToModel(saved, store.IsDurable);
@@ -107,9 +113,21 @@ namespace Web.AnalyticsWeb.Models.CopilotAdoption
             if (request?.ExpectedVersion == null)
                 throw new CopilotAdoptionScoreSettingsRejectedException(CopilotAdoptionScoreSettingsErrorCodes.InvalidRequest);
             var store = _provider.Store;
+            await RequireSeatConfirmation(store, CopilotAdoptionScoreSettings.Defaults, request.ConfirmSeatImpact, cancellationToken).ConfigureAwait(false);
             var saved = await store.ResetAsync(request.ExpectedVersion.Value, changedBy, cancellationToken).ConfigureAwait(false);
             _provider.Publish(saved);
             return ToModel(saved, store.IsDurable);
+        }
+
+        private static async Task RequireSeatConfirmation(CopilotAdoptionScoreSettingsStore store,
+            CopilotAdoptionScoreSettings proposed, bool confirmed, CancellationToken token)
+        {
+            if (confirmed) return;
+            var errors = proposed.Validate();
+            if (errors.Count > 0) throw new CopilotAdoptionScoreSettingsRejectedException(errors[0], errors);
+            var current = (await store.GetAsync(token).ConfigureAwait(false)).Settings;
+            if (!confirmed && current.ReclaimGraceDays != proposed.ReclaimGraceDays)
+                throw new CopilotAdoptionScoreSettingsRejectedException(CopilotAdoptionScoreSettingsErrorCodes.SeatImpactConfirmationRequired);
         }
 
         private static CopilotAdoptionSettingsModel ToModel(CopilotAdoptionScoreSettingsDocument document, bool durable) =>

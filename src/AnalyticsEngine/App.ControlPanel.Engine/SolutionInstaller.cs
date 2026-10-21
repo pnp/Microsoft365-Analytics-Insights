@@ -58,7 +58,8 @@ namespace App.ControlPanel.Engine
                 ct.ThrowIfCancellationRequested();
                 log.LogInformation("=== Phase: Azure backend resources ===");
                 // Get/create AppService + SQL and supporting Azure resources. Binaries installed post-create.
-                var azureBackeEndCreationJob = new AzurePaaSInstallJob(log, Config, azureSub);
+                var azureBackeEndCreationJob = new AzurePaaSInstallJob(log, Config, azureSub,
+                    () => Config.CheckpointPrivateNetworking(_configPassword));
                 azureBackeEndCreationJob.CancellationToken = ct;
                 await azureBackeEndCreationJob.Install();
 

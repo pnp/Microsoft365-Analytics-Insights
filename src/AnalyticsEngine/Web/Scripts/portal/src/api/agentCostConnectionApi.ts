@@ -4,6 +4,7 @@ import type { TranslationKey } from '../i18n';
 
 export type AgentCostConnectionStatus = {
   state: 'connected' | 'disconnected' | 'reconnectNeeded' | 'storageNotConfigured';
+  details?: { account: string | null; verifiedUtc: string | null } | null;
 };
 
 const errorKeys = new Map<string, TranslationKey>([

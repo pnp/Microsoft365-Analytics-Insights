@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Badge, Body1, Button, Card, CardHeader, Field, Input, MessageBar, MessageBarBody, Table, TableBody, TableCell, TableHeader, TableHeaderCell, TableRow, Text, Title3, makeStyles, tokens } from '@fluentui/react-components';
+import { Badge, Body1, Button, Card, CardHeader, Dialog, DialogActions, DialogBody, DialogContent, DialogSurface, DialogTitle, Field, Input, MessageBar, MessageBarBody, Table, TableBody, TableCell, TableHeader, TableHeaderCell, TableRow, Text, Title3, makeStyles, tokens } from '@fluentui/react-components';
 import { ArrowClockwise16Regular, ArrowReset20Regular, Save16Regular } from '@fluentui/react-icons';
 import {
   COPILOT_ADOPTION_SETTINGS_ERROR_KEYS,
@@ -10,7 +10,7 @@ import {
 } from '../api/copilotAdoptionSettingsApi';
 import { PortalPermissionError, SessionExpiredError } from '../api/http';
 import Spinner from '../components/Spinner';
-import { SCORE_FIELD_LABEL_KEYS, THRESHOLD_FIELDS, WEIGHT_FIELDS, validateScoreSettings } from '../components/copilotAdoption/scoreSettings';
+import { DEFAULT_SCORE_VALUES, SCORE_FIELD_LABEL_KEYS, SETTING_GROUPS, THRESHOLD_FIELDS, WEIGHT_FIELDS, validateScoreSettings } from '../components/copilotAdoption/scoreSettings';
 import { formatUtc } from '../components/health/healthShared';
 import { formatNumber, useT, type TFunction, type TranslationKey } from '../i18n';
 import type { CopilotAdoptionScoreField, CopilotAdoptionScoreValues, CopilotAdoptionSettingsModel } from '../types/copilotAdoptionSettings';
@@ -18,29 +18,15 @@ import type { CopilotAdoptionScoreField, CopilotAdoptionScoreValues, CopilotAdop
 type Draft = Record<CopilotAdoptionScoreField, string>;
 
 function toDraft(values: CopilotAdoptionScoreValues): Draft {
-  return {
-    frequencyWeightPercent: String(values.frequencyWeightPercent),
-    depthWeightPercent: String(values.depthWeightPercent),
-    breadthWeightPercent: String(values.breadthWeightPercent),
-    developingScore: String(values.developingScore),
-    establishedScore: String(values.establishedScore),
-    championScore: String(values.championScore),
-  };
+  return Object.fromEntries(Object.entries(values).map(([key, value]) => [key, String(value)])) as Draft;
 }
 
 function parse(value: string): number {
-  return /^\s*\d+\s*$/.test(value) ? Number(value.trim()) : Number.NaN;
+  return /^\s*(?:\d+(?:[.,]\d*)?|[.,]\d+)(?:[eE][+-]?\d+)?\s*$/.test(value) ? Number(value.trim().replace(',', '.')) : Number.NaN;
 }
 
 function toValues(draft: Draft): CopilotAdoptionScoreValues {
-  return {
-    frequencyWeightPercent: parse(draft.frequencyWeightPercent),
-    depthWeightPercent: parse(draft.depthWeightPercent),
-    breadthWeightPercent: parse(draft.breadthWeightPercent),
-    developingScore: parse(draft.developingScore),
-    establishedScore: parse(draft.establishedScore),
-    championScore: parse(draft.championScore),
-  };
+  return Object.fromEntries(Object.entries(draft).map(([key, value]) => [key, parse(value)])) as unknown as CopilotAdoptionScoreValues;
 }
 
 function errorText(t: TFunction, code: string): string {
@@ -66,6 +52,7 @@ export default function CopilotAdoptionSettingsPage() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState<string | null>(null);
+  const [confirmation, setConfirmation] = useState<'save' | 'reset' | null>(null);
 
   const report = useCallback((e: unknown, fallback: string) => {
     if (e instanceof SessionExpiredError || e instanceof PortalPermissionError) {
@@ -103,21 +90,25 @@ export default function CopilotAdoptionSettingsPage() {
   const changed = !!values && !!model && (Object.keys(values) as CopilotAdoptionScoreField[]).some((f) => values[f] !== model.settings[f]);
   const weightTotal = values ? WEIGHT_FIELDS.reduce((sum, f) => sum + (Number.isNaN(values[f]) ? 0 : values[f]), 0) : 0;
 
-  const save = async () => {
+  const seatImpact = (proposed: CopilotAdoptionScoreValues) => !!model &&
+    proposed.reclaimGraceDays !== model.settings.reclaimGraceDays;
+  const save = async (confirmed = false) => {
     if (!model || !values) return;
+    if (!confirmed && seatImpact(values)) { setConfirmation('save'); return; }
     setBusy(true); setError(null); setSaved(null);
     try {
-      accept(await saveCopilotAdoptionSettings(model.version, values));
+      accept(await (confirmed ? saveCopilotAdoptionSettings(model.version, values, true) : saveCopilotAdoptionSettings(model.version, values)));
       setSaved(t('admin.copilotAdoptionSettings.saved'));
     } catch (e) { report(e, 'saveFailed'); }
     finally { setBusy(false); }
   };
 
-  const reset = async () => {
+  const reset = async (confirmed = false) => {
     if (!model) return;
+    if (!confirmed && seatImpact(model.defaults)) { setConfirmation('reset'); return; }
     setBusy(true); setError(null); setSaved(null);
     try {
-      accept(await resetCopilotAdoptionSettings(model.version));
+      accept(await (confirmed ? resetCopilotAdoptionSettings(model.version, true) : resetCopilotAdoptionSettings(model.version)));
       setSaved(t('admin.copilotAdoptionSettings.resetDone'));
     } catch (e) { report(e, 'saveFailed'); }
     finally { setBusy(false); }
@@ -126,7 +117,7 @@ export default function CopilotAdoptionSettingsPage() {
   if (loading) return <Spinner label={t('admin.copilotAdoptionSettings.loading')} />;
 
   const customised = (model?.customisedFields.length ?? 0) > 0;
-  const input = (field: CopilotAdoptionScoreField, suffixKey: TranslationKey) => (
+  const input = (field: CopilotAdoptionScoreField, suffixKey: TranslationKey, describedBy?: string) => (
     <Field
       key={field}
       className={styles.field}
@@ -134,10 +125,12 @@ export default function CopilotAdoptionSettingsPage() {
       hint={model ? t(suffixKey, { value: formatNumber(model.defaults[field]) }) : undefined}
     >
       <Input
-        type="number"
-        inputMode="numeric"
+        type="text"
+        inputMode={field === 'frequencyTargetRatio' || field === 'depthTargetInteractionsPerActiveDay' ? 'decimal' : 'numeric'}
         value={draft?.[field] ?? ''}
         disabled={!model || busy}
+        aria-describedby={describedBy}
+        aria-invalid={describedBy !== undefined}
         onChange={(_, data) => setDraft((prev) => (prev ? { ...prev, [field]: data.value } : prev))}
       />
     </Field>
@@ -181,11 +174,29 @@ export default function CopilotAdoptionSettingsPage() {
           )}
           <Text className={styles.muted}>{t('admin.copilotAdoptionSettings.thresholds.coworkIndependent')}</Text>
         </Card>
+        {SETTING_GROUPS.map((group) => {
+          const groupValues = { ...DEFAULT_SCORE_VALUES };
+          if (values) group.fields.forEach((field) => { groupValues[field] = values[field]; });
+          const groupProblems = validateScoreSettings(groupValues);
+          const errorId = groupProblems.length > 0 ? `settings-${group.fields[0]}-error` : undefined;
+          return <Card key={group.key}>
+            <CardHeader header={<Text weight="semibold">{t(group.key)}</Text>} />
+            <Text>{t(group.help)}</Text>
+            <div className={styles.fields}>{group.fields.map((f) => input(f, 'admin.copilotAdoptionSettings.defaultScore', errorId))}</div>
+            {errorId && <Text id={errorId} role="alert">{groupProblems.map((code) => errorText(t, code)).join(' ')}</Text>}
+            {group.fields.includes('frequencyTargetRatio') && values && !problems.includes('targetOutOfRange') && <Text className={styles.muted}>
+              {t('admin.copilotAdoptionSettings.targets.preview', {
+                working: formatNumber(28 * values.workingDaysPerWeek / 7),
+                active: formatNumber(Math.ceil(Math.max(1, 28 * values.workingDaysPerWeek / 7 * values.frequencyTargetRatio))),
+              })}
+            </Text>}
+          </Card>;
+        })}
         {problems.length > 0 && <MessageBar intent="warning"><MessageBarBody>{problems.map((p) => errorText(t, p)).join(' ')}</MessageBarBody></MessageBar>}
         <Text className={styles.muted}>{t('admin.copilotAdoptionSettings.effect')}</Text>
         <div className={styles.actions}>
-          <Button appearance="primary" icon={<Save16Regular />} onClick={save} disabled={busy || !model.durable || !changed || problems.length > 0}>{t('admin.copilotAdoptionSettings.save')}</Button>
-          <Button icon={<ArrowReset20Regular />} onClick={reset} disabled={busy || !model.durable || !customised}>{t('admin.copilotAdoptionSettings.reset')}</Button>
+          <Button appearance="primary" icon={<Save16Regular />} onClick={() => void save()} disabled={busy || !model.durable || !changed || problems.length > 0}>{t('admin.copilotAdoptionSettings.save')}</Button>
+          <Button icon={<ArrowReset20Regular />} onClick={() => void reset()} disabled={busy || !model.durable || !customised}>{t('admin.copilotAdoptionSettings.reset')}</Button>
           <Button icon={<ArrowClockwise16Regular />} onClick={load} disabled={busy}>{t('admin.copilotAdoptionSettings.reload')}</Button>
         </div>
         <Card>
@@ -220,5 +231,23 @@ export default function CopilotAdoptionSettingsPage() {
         </Card>
       </>}
     </div>
+    <Dialog open={confirmation !== null} onOpenChange={(_, data) => { if (!data.open) setConfirmation(null); }}>
+      <DialogSurface>
+        <DialogBody>
+          <DialogTitle>{t('admin.copilotAdoptionSettings.seats.confirmTitle')}</DialogTitle>
+          <DialogContent>{model && values && t('admin.copilotAdoptionSettings.seats.confirmBody', {
+            oldGrace: formatNumber(model.settings.reclaimGraceDays),
+            newGrace: formatNumber((confirmation === 'reset' ? model.defaults : values).reclaimGraceDays),
+          })}</DialogContent>
+          <DialogActions>
+            <Button onClick={() => setConfirmation(null)}>{t('admin.copilotAdoptionSettings.seats.cancel')}</Button>
+            <Button appearance="primary" onClick={() => {
+              const action = confirmation; setConfirmation(null);
+              if (action === 'reset') void reset(true); else void save(true);
+            }}>{t('admin.copilotAdoptionSettings.seats.confirm')}</Button>
+          </DialogActions>
+        </DialogBody>
+      </DialogSurface>
+    </Dialog>
   </div>;
 }

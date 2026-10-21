@@ -190,11 +190,15 @@ namespace Tests.FakeDataGen.Demo
             I("page_title_id"), I("web_id"), I("agent_id"), I("device_id"), I("os_id"),
             F("seconds_on_page"), F("page_load_time"), G("page_request_id"), I("country_id"), I("city_id"),
             I("location_province_id"), I("id"));
-        public static readonly DemoTable Interactions = T("copilot_interactions", false,
+        public static readonly DemoTable Interactions = T("copilot_interactions", true,
             N("graph_interaction_id", 200), I("session_id"), I("user_id"), N("request_id", 200),
             I("interaction_type_id"), I("app_class_id"), I("conversation_type_id"), D("created_utc"),
             I("body_char_count"), I("body_word_count"), I("attachment_count"), I("link_count"),
-            I("mention_count"), I("context_count"), I("response_latency_ms"), I("language_id"), F("sentiment_score"));
+            I("mention_count"), I("context_count"), I("response_latency_ms"), I("language_id"), F("sentiment_score"), I("id"));
+        public static readonly DemoTable PromptTaxonomies = T("copilot_prompt_taxonomies", false,
+            N("version", 64), N("categories_json", -1));
+        public static readonly DemoTable PromptClassifications = T("copilot_prompt_classifications", false,
+            I("interaction_id"), N("category_id", 40), N("taxonomy_version", 64), N("human_mode", 20));
         public static readonly DemoTable Teams = Daily("teams_user_activity_log", L("private_chat_count"), L("team_chat_count"),
             L("post_messages"), L("reply_messages"), L("urgent_messages"), L("calls_count"), L("meetings_count"),
             L("adhoc_meetings_attended_count"), L("adhoc_meetings_organized_count"), L("meetings_attended_count"),

@@ -111,7 +111,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
                 ? "id,subject,from,toRecipients,sentDateTime,body"
                 : "id,subject,from,toRecipients,sentDateTime";
 
-            var url = $"https://graph.microsoft.com/v1.0/users/{user.UserPrincipalName}/mailFolders/sentitems/messages/delta" +
+            var url = $"https://graph.microsoft.com/v1.0/users/{Uri.EscapeDataString(user.UserPrincipalName)}/mailFolders/sentitems/messages/delta" +
                       $"?$select={select}&$top={GraphPageSize}";
 
             if (!string.IsNullOrEmpty(deltaToken))

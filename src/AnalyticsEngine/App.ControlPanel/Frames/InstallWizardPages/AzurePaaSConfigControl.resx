@@ -158,4 +158,70 @@
         RK5CYII=
 </value>
   </data>
+  <data name="HealthMonitoring.Enabled" xml:space="preserve">
+    <value>Enable Azure Monitor health alerts</value>
+  </data>
+  <data name="HealthMonitoring.Email" xml:space="preserve">
+    <value>Notification email:</value>
+  </data>
+  <data name="HealthMonitoring.Threshold" xml:space="preserve">
+    <value>Alert after no heartbeat (minutes):</value>
+  </data>
+  <data name="HealthMonitoring.Notice" xml:space="preserve">
+    <value>Azure Monitor alerts and telemetry can incur charges (up to 7 alert rules). Test notification email delivery after installation. Expand the details for coverage, limitations and planned shutdowns.</value>
+  </data>
+  <data name="HealthMonitoring.ThresholdHelp" xml:space="preserve">
+    <value>Send an alert if an expected importer sends no heartbeat for this many minutes (15-1440; default 15). Azure checks every 5 minutes; telemetry and email delivery can add delay. This is not an import timeout or a data-freshness threshold.</value>
+  </data>
+  <data name="HealthMonitoring.ToolTipTitle" xml:space="preserve">
+    <value>Azure Monitor health alerts</value>
+  </data>
+  <data name="HealthMonitoring.ShowDetails" xml:space="preserve">
+    <value>Show monitoring coverage and limitations</value>
+  </data>
+  <data name="HealthMonitoring.HideDetails" xml:space="preserve">
+    <value>Hide monitoring coverage and limitations</value>
+  </data>
+  <data name="HealthMonitoring.HeartbeatHeading" xml:space="preserve">
+    <value>What the minutes value means</value>
+  </data>
+  <data name="HealthMonitoring.Heartbeat" xml:space="preserve">
+    <value>Each expected importer normally sends a heartbeat every minute, even during a long import. For example, 15 means alert when that importer has sent no heartbeat in the last 15 minutes. Each importer is checked separately. The value changes only the missing-heartbeat threshold, not the other alert windows.</value>
+  </data>
+  <data name="HealthMonitoring.CoverageHeading" xml:space="preserve">
+    <value>What is monitored</value>
+  </data>
+  <data name="HealthMonitoring.Coverage" xml:space="preserve">
+    <value>Importer heartbeats; no completed cycle for 24 hours; SQL connectivity and schema; runtime token acquisition; certificate expiry within 14 days; missing SQL/credential health checks; logged SQL/Teams permission failures; and sustained SQL/App Service plan capacity above 90%.</value>
+  </data>
+  <data name="HealthMonitoring.LimitationsHeading" xml:space="preserve">
+    <value>What an alert cannot prove</value>
+  </data>
+  <data name="HealthMonitoring.Limitations" xml:space="preserve">
+    <value>A heartbeat proves the process is alive, not that imports succeeded. A completed cycle can import zero records. These checks do not prove data freshness or all API permissions. Client-secret expiry is unknown: track and rotate secrets in Entra ID. Missing telemetry can also mean a telemetry-delivery problem.</value>
+  </data>
+  <data name="HealthMonitoring.CostsHeading" xml:space="preserve">
+    <value>Azure resources and charges</value>
+  </data>
+  <data name="HealthMonitoring.Costs" xml:space="preserve">
+    <value>The installer configures an email action group and up to 7 log/metric alert rules. Azure Monitor alerts, Application Insights telemetry and Log Analytics can incur charges. Capacity alerts apply to the shared database/hosting plan, including other workloads using those resources.</value>
+  </data>
+  <data name="HealthMonitoring.MaintenanceHeading" xml:space="preserve">
+    <value>Planned shutdowns and opting out</value>
+  </data>
+  <data name="HealthMonitoring.Maintenance" xml:space="preserve">
+    <value>For scheduled downtime, use an Azure Monitor alert processing rule to suppress notifications. Unticking health alerts takes effect on Install/Upgrade: it stops active checks and disables installer-owned alerts, but retains the notification action group and basic telemetry. Changing this screen alone does not update Azure.</value>
+  </data>
+  <data name="HealthMonitoring.DeliveryHeading" xml:space="preserve">
+    <value>Notification delivery</value>
+  </data>
+  <data name="HealthMonitoring.Delivery" xml:space="preserve">
+    <value>After installation, test the email action group in Azure Monitor and check the recipient's spam/quarantine filters. Alert evaluation is every 5 minutes, not an exact countdown or a promise of repeated email every X minutes.</value>
+  </data>
+  <data name="HealthMonitoring.Wiki" xml:space="preserve">
+    <value>Open the installer health monitoring guide (wiki)</value>
+  </data>
+  <data name="HealthMonitoring.OpenWikiError" xml:space="preserve">
+    <value>Could not open the monitoring guide. Open this address in your browser:</value>
+  </data>
 </root>

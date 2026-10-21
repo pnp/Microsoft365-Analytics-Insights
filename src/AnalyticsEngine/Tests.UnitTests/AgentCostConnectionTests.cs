@@ -105,6 +105,11 @@ namespace Tests.UnitTests
             Assert.AreEqual("synthetic-access-2", verifiedToken);
             var head = await store.GetHeadAsync();
             Assert.IsFalse((await store.GetCacheAsync(head.Version)).Contains("synthetic"));
+            var requests = handler.TokenRequests;
+            var details = await Provider(store, handler).GetConnectionDetailsAsync(head.Version);
+            Assert.AreEqual("billing-admin@contoso.example", details.Account);
+            Assert.IsNotNull(details.VerifiedUtc);
+            Assert.AreEqual(requests, handler.TokenRequests, "Reading account details must not redeem or refresh tokens.");
             var renewed = await Provider(store, handler).AcquireAsync(head.Version);
             Assert.AreEqual("synthetic-access-3", renewed.Token);
             Assert.AreEqual("synthetic-refresh-1", handler.RefreshTokens[0]);
@@ -112,6 +117,41 @@ namespace Tests.UnitTests
             // Force expiry again, then prove a newly built provider reads the rotated refresh token from Storage.
             await Provider(store, handler).AcquireAsync(head.Version);
             Assert.AreEqual("synthetic-refresh-3", handler.RefreshTokens.Last());
+            Assert.AreEqual(details.VerifiedUtc, (await Provider(store, handler).GetConnectionDetailsAsync(head.Version)).VerifiedUtc);
+        }
+
+        [TestMethod]
+        public async Task ExistingConnection_ShowsAccountWithoutInventingVerificationTime()
+        {
+            var store = new AgentCostConnectionStore(new InMemoryKeyValueStore());
+            var server = new MsalServer();
+            var provider = Provider(store, server);
+            await provider.ConnectAsync("synthetic-code", Redirect, Tenant, ObjectId, _ => Task.CompletedTask);
+            var head = await store.GetHeadAsync();
+            var protection = new AgentCostTokenProtection(Secret);
+            var payload = JObject.Parse(Encoding.UTF8.GetString(protection.Unprotect(await store.GetCacheAsync(head.Version))));
+            payload.Remove("VerifiedUtc");
+            await store.SaveCacheAsync(head.Version, protection.Protect(Encoding.UTF8.GetBytes(payload.ToString())));
+            var details = await Provider(store, server).GetConnectionDetailsAsync(head.Version);
+            Assert.AreEqual("billing-admin@contoso.example", details.Account);
+            Assert.IsNull(details.VerifiedUtc);
+            Assert.AreEqual(2, server.TokenRequests);
+        }
+
+        [TestMethod]
+        public async Task UnreadableConnectionDetails_RequireReconnectWithoutExposingCache()
+        {
+            var store = new AgentCostConnectionStore(new InMemoryKeyValueStore());
+            await store.ConnectAsync("invalid-synthetic-cache");
+            using (var host = new PortalTestHost(new[] { typeof(AgentCostConnectionAPIController) },
+                PortalTestHost.SignedIn(PortalRoles.Administration), PortalAccessPolicy.Enforcing,
+                _ => new AgentCostConnectionAPIController(() => store, s => Provider(s, new MsalServer()))))
+            {
+                var status = JObject.Parse(await host.Client.GetStringAsync("api/AgentCostConnection"));
+                Assert.AreEqual("reconnectNeeded", (string)status["state"]);
+                Assert.AreEqual(1, status.Properties().Count(), "An unreadable cache must not expose account or credential data.");
+            }
+            Assert.AreEqual("reconnectNeeded", await store.GetStatusAsync());
         }
 
         [DataTestMethod]
@@ -224,10 +264,11 @@ namespace Tests.UnitTests
         public async Task CoreConnectionApi_EnforcesAdministrationSameOriginAndNoStore()
         {
             var store = new AgentCostConnectionStore(new InMemoryKeyValueStore());
-            await store.ConnectAsync("synthetic-encrypted-cache");
+            var server = new MsalServer();
+            await Provider(store, server).ConnectAsync("synthetic-code", Redirect, Tenant, ObjectId, _ => Task.CompletedTask);
             using (var host = new PortalTestHost(new[] { typeof(AgentCostConnectionAPIController) },
                 PortalTestHost.SignedIn(), PortalAccessPolicy.Enforcing,
-                _ => new AgentCostConnectionAPIController(() => store)))
+                _ => new AgentCostConnectionAPIController(() => store, s => Provider(s, server))))
             {
                 Assert.AreEqual(HttpStatusCode.Forbidden,
                     (await host.Client.GetAsync("api/AgentCostConnection")).StatusCode);
@@ -236,7 +277,9 @@ namespace Tests.UnitTests
                 {
                     Assert.AreEqual(HttpStatusCode.OK, status.StatusCode);
                     Assert.IsTrue(status.Headers.CacheControl.NoStore);
-                    Assert.AreEqual("connected", (string)JObject.Parse(await status.Content.ReadAsStringAsync())["state"]);
+                    var body = JObject.Parse(await status.Content.ReadAsStringAsync());
+                    Assert.AreEqual("connected", (string)body["state"]);
+                    Assert.AreEqual("billing-admin@contoso.example", (string)body["details"]["account"]);
                 }
                 foreach (var action in new[] { "begin", "disconnect" })
                 {
@@ -334,10 +377,11 @@ namespace Tests.UnitTests
         public async Task ConnectionApi_EnforcesRolesPerRequestAndNeverReturnsTokens()
         {
             var store = new AgentCostConnectionStore(new InMemoryKeyValueStore());
-            await store.ConnectAsync("synthetic-secret-cache");
+            var server = new MsalServer();
+            await Provider(store, server).ConnectAsync("synthetic-code", Redirect, Tenant, ObjectId, _ => Task.CompletedTask);
             using (var host = new PortalTestHost(new[] { typeof(AgentCostConnectionAPIController) },
                 PortalTestHost.SignedIn(), PortalAccessPolicy.Enforcing,
-                _ => new AgentCostConnectionAPIController(() => store)))
+                _ => new AgentCostConnectionAPIController(() => store, s => Provider(s, server))))
             {
                 Assert.AreEqual(HttpStatusCode.Forbidden, (await host.Client.GetAsync("api/AgentCostConnection")).StatusCode);
                 host.Principal = PortalTestHost.SignedIn(PortalRoles.Administration);
@@ -345,7 +389,13 @@ namespace Tests.UnitTests
                 Assert.AreEqual(HttpStatusCode.OK, response.StatusCode);
                 var status = JObject.Parse(await response.Content.ReadAsStringAsync());
                 Assert.AreEqual("connected", (string)status["state"]);
-                Assert.AreEqual(1, status.Properties().Count());
+                Assert.AreEqual("billing-admin@contoso.example", (string)status["details"]["account"]);
+                Assert.IsNotNull(status["details"]["verifiedUtc"]);
+                CollectionAssert.AreEquivalent(new[] { "account", "verifiedUtc" },
+                    ((JObject)status["details"]).Properties().Select(p => p.Name).ToArray());
+                Assert.IsFalse(status.ToString().Contains("synthetic-access"));
+                Assert.IsFalse(status.ToString().Contains("synthetic-refresh"));
+                Assert.AreEqual(2, server.TokenRequests);
                 Assert.AreEqual(HttpStatusCode.Forbidden,
                     (await host.Client.PostAsync("api/AgentCostConnection/disconnect", new StringContent(""))).StatusCode);
                 host.Client.DefaultRequestHeaders.Add("X-Requested-With", "XMLHttpRequest");

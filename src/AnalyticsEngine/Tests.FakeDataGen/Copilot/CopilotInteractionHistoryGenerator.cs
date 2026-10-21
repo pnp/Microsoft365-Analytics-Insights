@@ -1,5 +1,6 @@
 using Common.Entities;
 using Common.Entities.Entities.Copilot;
+using Common.Entities.PromptCategories;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -24,6 +25,9 @@ namespace Tests.FakeDataGen.Copilot
     /// <item><description><b>Prompt-only enrichment.</b> Sentiment, language and key phrases are set on
     /// <c>userPrompt</c> rows only. Copilot responses are never scored by the importer, so a report that
     /// averaged sentiment across all rows would look right here and be wrong in production.</description></item>
+    /// <item><description><b>Default prompt categories.</b> Synthetic prompts are assigned the default
+    /// taxonomy without sending prompt text to a model, so the aggregate report has sample data in both
+    /// portal languages.</description></item>
     /// <item><description><b>Shared threads.</b> A small share of sessions belong to two users with the same
     /// <c>session_ref</c> - a Teams meeting Copilot session appears in more than one participant's history.
     /// That is why the sessions table is unique on (user, ref) rather than ref alone, and it is exactly the
@@ -162,6 +166,8 @@ namespace Tests.FakeDataGen.Copilot
 
             List<int> userIds;
             Lookups lookups;
+            var taxonomy = PromptCategoryConfiguration.Defaults();
+            taxonomy.ValidateAndVersion();
 
             using (var db = new AnalyticsEntitiesContext(_connectionString, true, false))
             {
@@ -193,12 +199,15 @@ namespace Tests.FakeDataGen.Copilot
 
             var stats = new GenerationStats();
             var newestInteractionByUser = new Dictionary<int, DateTime>();
+            var userOrdinals = userIds.Select((userId, index) => new { userId, index })
+                .ToDictionary(item => item.userId, item => item.index);
+            var promptCountsByUser = userIds.ToDictionary(userId => userId, _ => 0);
 
             for (int offset = 0; offset < plan.Count; offset += SessionsPerBatch)
             {
                 var batch = plan.GetRange(offset, Math.Min(SessionsPerBatch, plan.Count - offset));
-                WriteSessionBatch(batch, lookups, turnsPerSession, daysBack, cognitivePercentage,
-                    windowEnd, stats, newestInteractionByUser);
+                WriteSessionBatch(batch, lookups, taxonomy, userOrdinals, promptCountsByUser,
+                    turnsPerSession, daysBack, cognitivePercentage, windowEnd, stats, newestInteractionByUser);
 
                 Console.WriteLine($"  {Math.Min(offset + SessionsPerBatch, plan.Count):N0}/{plan.Count:N0} session(s), " +
                     $"{stats.Interactions:N0} interaction(s) written...");
@@ -213,6 +222,7 @@ namespace Tests.FakeDataGen.Copilot
             Console.WriteLine($"  Interactions:  {stats.Interactions:N0} ({stats.Prompts:N0} prompt(s), {stats.Responses:N0} response(s))");
             Console.WriteLine($"  Key phrases:   {stats.KeyPhraseLinks:N0} link(s)");
             Console.WriteLine($"  Scored prompts:{stats.ScoredPrompts,8:N0}");
+            Console.WriteLine($"  Categorised:   {stats.CategorisedPrompts,8:N0} prompt(s) using the default taxonomy");
         }
 
         #region Lookups
@@ -316,6 +326,9 @@ namespace Tests.FakeDataGen.Copilot
         private void WriteSessionBatch(
             List<PlannedSession> batch,
             Lookups lookups,
+            PromptCategoryConfiguration taxonomy,
+            Dictionary<int, int> userOrdinals,
+            Dictionary<int, int> promptCountsByUser,
             int turnsPerSession,
             int daysBack,
             int cognitivePercentage,
@@ -347,15 +360,27 @@ namespace Tests.FakeDataGen.Copilot
                     stats.Sessions += sessions.Count;
 
                     var keyPhraseLinks = new List<CopilotInteractionKeyword>();
+                    var categoryCandidates = new List<PromptClassificationCandidate>();
 
                     for (int i = 0; i < sessions.Count; i++)
                     {
                         WriteSessionInteractions(db, sessions[i], lookups, turnsPerSession, daysBack,
-                            cognitivePercentage, windowEnd, stats, newestInteractionByUser, keyPhraseLinks);
+                            cognitivePercentage, windowEnd, stats, newestInteractionByUser, keyPhraseLinks,
+                            taxonomy, userOrdinals, promptCountsByUser, categoryCandidates);
                     }
 
                     db.ChangeTracker.DetectChanges();
                     db.SaveChanges();
+
+                    var categoryFacts = categoryCandidates.Select(candidate => new PromptCategoryFact
+                    {
+                        InteractionId = candidate.Interaction.ID,
+                        CategoryId = candidate.Category.Id,
+                        TaxonomyVersion = taxonomy.Version,
+                        HumanMode = candidate.Category.HumanMode
+                    }).ToList();
+                    PromptCategorySql.SaveFactsAsync(db, taxonomy, categoryFacts).GetAwaiter().GetResult();
+                    stats.CategorisedPrompts += categoryFacts.Count;
 
                     // Key-phrase links need the interaction ids, so they are a second pass.
                     foreach (var link in keyPhraseLinks)
@@ -385,7 +410,11 @@ namespace Tests.FakeDataGen.Copilot
             DateTime windowEnd,
             GenerationStats stats,
             Dictionary<int, DateTime> newestInteractionByUser,
-            List<CopilotInteractionKeyword> keyPhraseLinks)
+            List<CopilotInteractionKeyword> keyPhraseLinks,
+            PromptCategoryConfiguration taxonomy,
+            Dictionary<int, int> userOrdinals,
+            Dictionary<int, int> promptCountsByUser,
+            List<PromptClassificationCandidate> categoryCandidates)
         {
             int turns = Math.Max(1, (int)Math.Round(turnsPerSession * (0.3 + _random.NextDouble() * 1.7)));
 
@@ -435,6 +464,9 @@ namespace Tests.FakeDataGen.Copilot
                     LanguageId = scored ? lookups.Languages[languageName] : (int?)null,
                 };
                 db.CopilotInteractions.Add(prompt);
+                int promptOrdinal = promptCountsByUser[session.UserId]++;
+                var category = taxonomy.Categories[(userOrdinals[session.UserId] + promptOrdinal) % taxonomy.Categories.Count];
+                categoryCandidates.Add(new PromptClassificationCandidate { Interaction = prompt, Category = category });
                 stats.Prompts++;
                 stats.Interactions++;
                 if (scored) stats.ScoredPrompts++;
@@ -616,6 +648,12 @@ namespace Tests.FakeDataGen.Copilot
             public string SessionRef { get; set; }
         }
 
+        private class PromptClassificationCandidate
+        {
+            public CopilotInteraction Interaction { get; set; }
+            public PromptCategoryDefinition Category { get; set; }
+        }
+
         private class Lookups
         {
             public Dictionary<string, int> InteractionTypes { get; set; }
@@ -635,6 +673,7 @@ namespace Tests.FakeDataGen.Copilot
             public int Responses;
             public int ScoredPrompts;
             public int KeyPhraseLinks;
+            public int CategorisedPrompts;
         }
     }
 }

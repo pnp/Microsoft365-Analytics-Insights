@@ -9,17 +9,16 @@ using System.Threading.Tasks;
 namespace Common.Entities.CopilotAdoption
 {
     /// <summary>
-    /// The tenant-wide engagement-score settings an administrator may change (issues #683 and #684): the
-    /// percentage weight of each score component, and the score at which each band starts.
+    /// Tenant-wide adoption scoring and decision settings an administrator may change (issues #683 and #684).
     /// </summary>
     /// <remarks>
-    /// <para>Deliberately only these six numbers. The active-day targets, Cowork thresholds, reclaim rules,
-    /// privacy minimums and memory/history caps stay as <see cref="CopilotAdoptionOptions"/> defaults: they
-    /// are either calibrated against Microsoft's own reports or protect the server, and none was asked for.</para>
+    /// <para>Tenant-wide scoring and decision controls only. History/query windows, normalisation periods,
+    /// workload calibration targets and performance caps remain fixed.</para>
     /// <para>Weights are whole percentages so an administrator types 50/30/20 rather than 0.5/0.3/0.2, and
     /// <see cref="ApplyTo"/> divides by 100 - which gives exactly the doubles the defaults have always used,
     /// so default settings change no score by even a rounding error.</para>
     /// </remarks>
+    [JsonConverter(typeof(CopilotAdoptionScoreSettingsConverter))]
     public sealed class CopilotAdoptionScoreSettings : IEquatable<CopilotAdoptionScoreSettings>
     {
         public const int DefaultFrequencyWeightPercent = 50;
@@ -51,7 +50,65 @@ namespace Common.Entities.CopilotAdoption
         [JsonProperty("championScore")]
         public int ChampionScore { get; set; } = DefaultChampionScore;
 
+        [JsonProperty("frequencyTargetRatio")]
+        public double FrequencyTargetRatio { get; set; } = 0.6;
+        [JsonProperty("workingDaysPerWeek")]
+        public int WorkingDaysPerWeek { get; set; } = 5;
+        [JsonProperty("depthTargetInteractionsPerActiveDay")]
+        public double DepthTargetInteractionsPerActiveDay { get; set; } = 5;
+        [JsonProperty("depthMinActiveDays")]
+        public int DepthMinActiveDays { get; set; } = 3;
+        [JsonProperty("breadthTargetApps")]
+        public int BreadthTargetApps { get; set; } = 3;
+        [JsonProperty("habitModerateMinDays")]
+        public int HabitModerateMinDays { get; set; } = 6;
+        [JsonProperty("habitFrequentMinDays")]
+        public int HabitFrequentMinDays { get; set; } = 11;
+        [JsonProperty("habitDailyMinDays")]
+        public int HabitDailyMinDays { get; set; } = 20;
+        [JsonProperty("opportunityRecommendScore")]
+        public int OpportunityRecommendScore { get; set; } = 50;
+        [JsonProperty("opportunityProvenDemandMinActiveDays")]
+        public int OpportunityProvenDemandMinActiveDays { get; set; } = 3;
+        [JsonProperty("opportunityUnlicensedCopilotWeight")]
+        public int OpportunityUnlicensedCopilotWeight { get; set; } = 35;
+        [JsonProperty("opportunityCollaborationWeight")]
+        public int OpportunityCollaborationWeight { get; set; } = 25;
+        [JsonProperty("opportunityEmailWeight")]
+        public int OpportunityEmailWeight { get; set; } = 20;
+        [JsonProperty("opportunityDocumentWeight")]
+        public int OpportunityDocumentWeight { get; set; } = 20;
+        [JsonProperty("coworkLoadMinScore")]
+        public int CoworkLoadMinScore { get; set; } = 50;
+        [JsonProperty("coworkFluencyMinScore")]
+        public int CoworkFluencyMinScore { get; set; } = 50;
+        [JsonProperty("coworkRegularMinActiveDays")]
+        public int CoworkRegularMinActiveDays { get; set; } = 3;
+        [JsonProperty("coworkCollaborationWeight")]
+        public int CoworkCollaborationWeight { get; set; } = 20;
+        [JsonProperty("coworkMeetingWeight")]
+        public int CoworkMeetingWeight { get; set; } = 35;
+        [JsonProperty("coworkEmailWeight")]
+        public int CoworkEmailWeight { get; set; } = 25;
+        [JsonProperty("coworkDocumentWeight")]
+        public int CoworkDocumentWeight { get; set; } = 20;
+        [JsonProperty("agentReviewInactiveDays")]
+        public int AgentReviewInactiveDays { get; set; } = 30;
+        [JsonProperty("agentRetireInactiveDays")]
+        public int AgentRetireInactiveDays { get; set; } = 90;
+        [JsonProperty("agentNewDays")]
+        public int AgentNewDays { get; set; } = 30;
+        [JsonProperty("agentMinUsers")]
+        public int AgentMinUsers { get; set; } = 3;
+        [JsonProperty("reclaimGraceDays")]
+        public int ReclaimGraceDays { get; set; } = 30;
+        [JsonProperty("minSeatsPerSegment")]
+        public int MinSeatsPerSegment { get; set; } = 5;
+
         public static CopilotAdoptionScoreSettings Defaults => new CopilotAdoptionScoreSettings();
+
+        [JsonIgnore]
+        internal IReadOnlyCollection<string> ProvidedFields { get; set; }
 
         [JsonIgnore]
         public bool IsDefault => Equals(Defaults);
@@ -61,7 +118,7 @@ namespace Common.Entities.CopilotAdoption
         public IReadOnlyList<string> CustomisedFields =>
             Fields().Where(f => f.Value != f.Default).Select(f => f.Name).ToList();
 
-        internal IEnumerable<(string Name, int Value, int Default)> Fields()
+        internal IEnumerable<(string Name, double Value, double Default)> Fields()
         {
             yield return (CopilotAdoptionScoreSettingsFields.FrequencyWeightPercent, FrequencyWeightPercent, DefaultFrequencyWeightPercent);
             yield return (CopilotAdoptionScoreSettingsFields.DepthWeightPercent, DepthWeightPercent, DefaultDepthWeightPercent);
@@ -69,6 +126,33 @@ namespace Common.Entities.CopilotAdoption
             yield return (CopilotAdoptionScoreSettingsFields.DevelopingScore, DevelopingScore, DefaultDevelopingScore);
             yield return (CopilotAdoptionScoreSettingsFields.EstablishedScore, EstablishedScore, DefaultEstablishedScore);
             yield return (CopilotAdoptionScoreSettingsFields.ChampionScore, ChampionScore, DefaultChampionScore);
+            yield return ("frequencyTargetRatio", FrequencyTargetRatio, 0.6);
+            yield return ("workingDaysPerWeek", WorkingDaysPerWeek, 5);
+            yield return ("depthTargetInteractionsPerActiveDay", DepthTargetInteractionsPerActiveDay, 5);
+            yield return ("depthMinActiveDays", DepthMinActiveDays, 3);
+            yield return ("breadthTargetApps", BreadthTargetApps, 3);
+            yield return ("habitModerateMinDays", HabitModerateMinDays, 6);
+            yield return ("habitFrequentMinDays", HabitFrequentMinDays, 11);
+            yield return ("habitDailyMinDays", HabitDailyMinDays, 20);
+            yield return ("opportunityRecommendScore", OpportunityRecommendScore, 50);
+            yield return ("opportunityProvenDemandMinActiveDays", OpportunityProvenDemandMinActiveDays, 3);
+            yield return ("opportunityUnlicensedCopilotWeight", OpportunityUnlicensedCopilotWeight, 35);
+            yield return ("opportunityCollaborationWeight", OpportunityCollaborationWeight, 25);
+            yield return ("opportunityEmailWeight", OpportunityEmailWeight, 20);
+            yield return ("opportunityDocumentWeight", OpportunityDocumentWeight, 20);
+            yield return ("coworkLoadMinScore", CoworkLoadMinScore, 50);
+            yield return ("coworkFluencyMinScore", CoworkFluencyMinScore, 50);
+            yield return ("coworkRegularMinActiveDays", CoworkRegularMinActiveDays, 3);
+            yield return ("coworkCollaborationWeight", CoworkCollaborationWeight, 20);
+            yield return ("coworkMeetingWeight", CoworkMeetingWeight, 35);
+            yield return ("coworkEmailWeight", CoworkEmailWeight, 25);
+            yield return ("coworkDocumentWeight", CoworkDocumentWeight, 20);
+            yield return ("agentReviewInactiveDays", AgentReviewInactiveDays, 30);
+            yield return ("agentRetireInactiveDays", AgentRetireInactiveDays, 90);
+            yield return ("agentNewDays", AgentNewDays, 30);
+            yield return ("agentMinUsers", AgentMinUsers, 3);
+            yield return ("reclaimGraceDays", ReclaimGraceDays, 30);
+            yield return ("minSeatsPerSegment", MinSeatsPerSegment, 5);
         }
 
         /// <summary>Every rule the values break, as stable codes the portal translates. Empty when valid.</summary>
@@ -94,8 +178,40 @@ namespace Common.Entities.CopilotAdoption
                 errors.Add(CopilotAdoptionScoreSettingsErrorCodes.ThresholdsNotAscending);
             }
 
+            if (!FiniteInRange(FrequencyTargetRatio, double.Epsilon, 1)
+                || WorkingDaysPerWeek < 1 || WorkingDaysPerWeek > 7
+                || !FiniteInRange(DepthTargetInteractionsPerActiveDay, double.Epsilon, 1000000)
+                || DepthMinActiveDays < 1 || DepthMinActiveDays > 365
+                || BreadthTargetApps < 1 || BreadthTargetApps > 100)
+                errors.Add(CopilotAdoptionScoreSettingsErrorCodes.TargetOutOfRange);
+            if (!(1 <= HabitModerateMinDays && HabitModerateMinDays < HabitFrequentMinDays
+                && HabitFrequentMinDays < HabitDailyMinDays && HabitDailyMinDays <= 28))
+                errors.Add(CopilotAdoptionScoreSettingsErrorCodes.HabitDaysNotAscending);
+            if (!ValidWeights(OpportunityUnlicensedCopilotWeight, OpportunityCollaborationWeight, OpportunityEmailWeight, OpportunityDocumentWeight)
+                || !ValidWeights(CoworkCollaborationWeight, CoworkMeetingWeight, CoworkEmailWeight, CoworkDocumentWeight))
+                errors.Add(CopilotAdoptionScoreSettingsErrorCodes.DecisionWeightsInvalid);
+            if (new[] { OpportunityRecommendScore, CoworkLoadMinScore, CoworkFluencyMinScore }.Any(v => v < 1 || v > 100)
+                || OpportunityProvenDemandMinActiveDays < 1 || OpportunityProvenDemandMinActiveDays > 365
+                || CoworkRegularMinActiveDays < 1 || CoworkRegularMinActiveDays > 365)
+                errors.Add(CopilotAdoptionScoreSettingsErrorCodes.DecisionThresholdInvalid);
+            // WindowStartUtc includes today: 120 days of history yields at most 119 days of observed age.
+            // New uses <=, and must not mask retirement when an older first interaction was outside the query.
+            if (!(1 <= AgentReviewInactiveDays && AgentReviewInactiveDays < AgentRetireInactiveDays && AgentRetireInactiveDays <= 120)
+                || AgentNewDays < 1 || AgentNewDays > CopilotAdoptionOptions.Default.AgentHistoryDays - 2
+                || AgentNewDays >= AgentRetireInactiveDays || AgentMinUsers < 3 || AgentMinUsers > 200000)
+                errors.Add(CopilotAdoptionScoreSettingsErrorCodes.AgentSettingsInvalid);
+            if (ReclaimGraceDays < 1 || ReclaimGraceDays > 365)
+                errors.Add(CopilotAdoptionScoreSettingsErrorCodes.SeatWindowsInvalid);
+            if (MinSeatsPerSegment < 5 || MinSeatsPerSegment > 200000)
+                errors.Add(CopilotAdoptionScoreSettingsErrorCodes.SegmentMinimumInvalid);
             return errors;
         }
+
+        private static bool FiniteInRange(double value, double min, double max) =>
+            !double.IsNaN(value) && !double.IsInfinity(value) && value >= min && value <= max;
+
+        private static bool ValidWeights(params int[] values) =>
+            values.All(v => v >= 0 && v <= 100) && values.Sum() == 100;
 
         /// <summary>
         /// Writes these settings into <paramref name="options"/>. Default settings write the values
@@ -104,19 +220,48 @@ namespace Common.Entities.CopilotAdoption
         public void ApplyTo(CopilotAdoptionOptions options)
         {
             if (options == null) throw new ArgumentNullException(nameof(options));
+            var errors = Validate();
+            if (errors.Count > 0) throw new CopilotAdoptionScoreSettingsRejectedException(errors[0], errors);
             options.FrequencyWeight = FrequencyWeightPercent / 100d;
             options.DepthWeight = DepthWeightPercent / 100d;
             options.BreadthWeight = BreadthWeightPercent / 100d;
             options.DevelopingScore = DevelopingScore;
             options.EstablishedScore = EstablishedScore;
             options.ChampionScore = ChampionScore;
+            options.FrequencyTargetRatio = FrequencyTargetRatio;
+            options.WorkingDaysPerWeek = WorkingDaysPerWeek;
+            options.DepthTargetInteractionsPerActiveDay = DepthTargetInteractionsPerActiveDay;
+            options.DepthMinActiveDays = DepthMinActiveDays;
+            options.BreadthTargetApps = BreadthTargetApps;
+            options.HabitModerateMinDays = HabitModerateMinDays;
+            options.HabitFrequentMinDays = HabitFrequentMinDays;
+            options.HabitDailyMinDays = HabitDailyMinDays;
+            options.OpportunityRecommendScore = OpportunityRecommendScore;
+            options.OpportunityProvenDemandMinActiveDays = OpportunityProvenDemandMinActiveDays;
+            options.OpportunityUnlicensedCopilotWeight = OpportunityUnlicensedCopilotWeight;
+            options.OpportunityCollaborationWeight = OpportunityCollaborationWeight;
+            options.OpportunityEmailWeight = OpportunityEmailWeight;
+            options.OpportunityDocumentWeight = OpportunityDocumentWeight;
+            options.CoworkLoadMinScore = CoworkLoadMinScore;
+            options.CoworkFluencyMinScore = CoworkFluencyMinScore;
+            options.CoworkRegularMinActiveDays = CoworkRegularMinActiveDays;
+            options.CoworkCollaborationWeight = CoworkCollaborationWeight;
+            options.CoworkMeetingWeight = CoworkMeetingWeight;
+            options.CoworkEmailWeight = CoworkEmailWeight;
+            options.CoworkDocumentWeight = CoworkDocumentWeight;
+            options.AgentReviewInactiveDays = AgentReviewInactiveDays;
+            options.AgentRetireInactiveDays = AgentRetireInactiveDays;
+            options.AgentNewDays = AgentNewDays;
+            options.AgentMinUsers = AgentMinUsers;
+            options.ReclaimGraceDays = ReclaimGraceDays;
+            options.MinSeatsPerSegment = MinSeatsPerSegment;
         }
 
         public CopilotAdoptionScoreSettings Clone() => (CopilotAdoptionScoreSettings)MemberwiseClone();
 
         /// <summary>A compact, culture-invariant fingerprint of the values, used in the analysis cache key.</summary>
         public string Fingerprint() =>
-            string.Join("-", Fields().Select(f => f.Value.ToString(System.Globalization.CultureInfo.InvariantCulture)));
+            string.Join("-", Fields().Select(f => f.Value.ToString("R", System.Globalization.CultureInfo.InvariantCulture)));
 
         public bool Equals(CopilotAdoptionScoreSettings other) =>
             other != null && Fields().Select(f => f.Value).SequenceEqual(other.Fields().Select(f => f.Value));
@@ -144,6 +289,14 @@ namespace Common.Entities.CopilotAdoption
         public const string ThresholdOutOfRange = "thresholdOutOfRange";
         public const string ThresholdsNotAscending = "thresholdsNotAscending";
         public const string InvalidRequest = "invalidRequest";
+        public const string TargetOutOfRange = "targetOutOfRange";
+        public const string HabitDaysNotAscending = "habitDaysNotAscending";
+        public const string DecisionWeightsInvalid = "decisionWeightsInvalid";
+        public const string DecisionThresholdInvalid = "decisionThresholdInvalid";
+        public const string AgentSettingsInvalid = "agentSettingsInvalid";
+        public const string SeatWindowsInvalid = "seatWindowsInvalid";
+        public const string SegmentMinimumInvalid = "segmentMinimumInvalid";
+        public const string SeatImpactConfirmationRequired = "seatImpactConfirmationRequired";
         public const string VersionConflict = "settingsChanged";
         public const string StorageNotConfigured = "storageNotConfigured";
         public const string StateUnavailable = "stateUnavailable";
@@ -153,6 +306,39 @@ namespace Common.Entities.CopilotAdoption
         /// silently scoring with the defaults, which would publish figures computed with rules nobody chose.
         /// </summary>
         public const string ReportSettingsUnavailable = "copilotAdoptionSettingsUnavailable";
+    }
+
+    /// <summary>Reject unknown fields, coercion and fractional integers instead of silently changing a rule.</summary>
+    public sealed class CopilotAdoptionScoreSettingsConverter : JsonConverter
+    {
+        public override bool CanWrite => false;
+        public override bool CanConvert(Type objectType) => objectType == typeof(CopilotAdoptionScoreSettings);
+        public override void WriteJson(JsonWriter writer, object value, JsonSerializer serializer) => throw new NotSupportedException();
+        public override object ReadJson(JsonReader reader, Type objectType, object existingValue, JsonSerializer serializer)
+        {
+            var json = Newtonsoft.Json.Linq.JObject.Load(reader,
+                new Newtonsoft.Json.Linq.JsonLoadSettings { DuplicatePropertyNameHandling = Newtonsoft.Json.Linq.DuplicatePropertyNameHandling.Error });
+            var properties = typeof(CopilotAdoptionScoreSettings).GetProperties()
+                .Select(p => new { Property = p, Json = p.GetCustomAttributes(typeof(JsonPropertyAttribute), false).Cast<JsonPropertyAttribute>().SingleOrDefault() })
+                .Where(p => p.Json != null).ToDictionary(p => p.Json.PropertyName, p => p.Property, StringComparer.Ordinal);
+            foreach (var field in json.Properties())
+            {
+                if (!properties.TryGetValue(field.Name, out var property)
+                    || (field.Value.Type != Newtonsoft.Json.Linq.JTokenType.Integer
+                        && field.Value.Type != Newtonsoft.Json.Linq.JTokenType.Float))
+                    throw new JsonSerializationException("Unknown or non-numeric adoption setting.");
+                if (property.PropertyType == typeof(int))
+                {
+                    var value = (double)field.Value;
+                    if (double.IsNaN(value) || double.IsInfinity(value) || value < int.MinValue || value > int.MaxValue || value != Math.Truncate(value))
+                        throw new JsonSerializationException("Adoption setting requires a whole number.");
+                }
+            }
+            var result = new CopilotAdoptionScoreSettings();
+            using (var values = json.CreateReader()) serializer.Populate(values, result);
+            result.ProvidedFields = json.Properties().Select(p => p.Name).ToList().AsReadOnly();
+            return result;
+        }
     }
 
     /// <summary>
@@ -254,10 +440,10 @@ namespace Common.Entities.CopilotAdoption
         public string Field { get; set; }
 
         [JsonProperty("oldValue")]
-        public int OldValue { get; set; }
+        public double OldValue { get; set; }
 
         [JsonProperty("newValue")]
-        public int NewValue { get; set; }
+        public double NewValue { get; set; }
     }
 
     public static class CopilotAdoptionScoreSettingsActions
@@ -269,7 +455,7 @@ namespace Common.Entities.CopilotAdoption
     /// <summary>The stored document: the values in force, their version and the audit trail.</summary>
     public sealed class CopilotAdoptionScoreSettingsDocument
     {
-        public const int CurrentSchemaVersion = 1;
+        public const int CurrentSchemaVersion = 2;
 
         [JsonProperty("schemaVersion")]
         public int SchemaVersion { get; set; } = CurrentSchemaVersion;
@@ -388,7 +574,8 @@ namespace Common.Entities.CopilotAdoption
             CopilotAdoptionScoreSettingsDocument document;
             try
             {
-                document = JsonConvert.DeserializeObject<CopilotAdoptionScoreSettingsDocument>(json);
+                document = JsonConvert.DeserializeObject<CopilotAdoptionScoreSettingsDocument>(json,
+                    new JsonSerializerSettings { MissingMemberHandling = MissingMemberHandling.Error });
             }
             catch (JsonException ex)
             {
@@ -400,9 +587,9 @@ namespace Common.Entities.CopilotAdoption
             // replaced by the defaults, which would silently change every score in the report.
             if (document?.Settings == null)
                 throw new CopilotAdoptionScoreSettingsUnavailableException("The stored Copilot Adoption score settings are empty.");
-            if (document.SchemaVersion > CopilotAdoptionScoreSettingsDocument.CurrentSchemaVersion)
+            if (document.SchemaVersion < 1 || document.SchemaVersion > CopilotAdoptionScoreSettingsDocument.CurrentSchemaVersion || document.Version < 0)
                 throw new CopilotAdoptionScoreSettingsUnavailableException(
-                    $"The stored Copilot Adoption score settings use schema {document.SchemaVersion}, newer than this build understands.");
+                    "The stored Copilot Adoption score settings have an unsupported schema or version.");
             var errors = document.Settings.Validate();
             if (errors.Count > 0)
                 throw new CopilotAdoptionScoreSettingsUnavailableException(
@@ -435,6 +622,10 @@ namespace Common.Entities.CopilotAdoption
             var (current, versionToken) = await ReadAsync(cancellationToken).ConfigureAwait(false);
             if (current.Version != expectedVersion)
                 throw new CopilotAdoptionScoreSettingsRejectedException(CopilotAdoptionScoreSettingsErrorCodes.VersionConflict);
+            // Older editors may know only the original six settings. Missing additive fields may default on
+            // read, but must not silently erase an administrator's newer custom rules on write.
+            if (settings.ProvidedFields != null && current.Settings.CustomisedFields.Any(f => !settings.ProvidedFields.Contains(f)))
+                throw new CopilotAdoptionScoreSettingsRejectedException(CopilotAdoptionScoreSettingsErrorCodes.InvalidRequest);
 
             var changes = current.Settings.Fields().Zip(settings.Fields(), (was, proposed) => new { old = was, proposed })
                 .Where(p => p.old.Value != p.proposed.Value)

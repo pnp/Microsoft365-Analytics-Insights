@@ -39,6 +39,12 @@ namespace App.ControlPanel.Engine
 
         public EnvironmentTypeEnum EnvironmentType { get; set; } = EnvironmentTypeEnum.Testing;
 
+        public CloudInstallEngine.Azure.PrivateNetworkManifest PrivateNetworking { get; set; } =
+            new CloudInstallEngine.Azure.PrivateNetworkManifest();
+
+        [JsonIgnore]
+        public string SavedConfigFileName { get; private set; }
+
         [JsonIgnore]
         public InstallTasksConfig TasksConfig { get; set; } = new InstallTasksConfig();
 
@@ -114,6 +120,7 @@ namespace App.ControlPanel.Engine
             c.TasksConfig.UpgradeSchema = true;
             c.Tags = new List<AzTag>();
             c.NetworkConfig = new VNetConfig();
+            c.HealthMonitoring = new HealthMonitoringConfig { Enabled = true };
 
             var sharePointInstallConfig = SharePointInstallConfig.Empty();
             c.SharePointConfig = sharePointInstallConfig;
@@ -145,6 +152,7 @@ namespace App.ControlPanel.Engine
                 }
 
             var result = SolutionInstallConfig.LoadFromJson(jSon, password);
+            result.Config.SavedConfigFileName = Path.GetFullPath(fileName);
 
             Console.WriteLine($"Loaded config version '{result.Config.ConfigSchemaVersion}' from '{fileName}'.");
 
@@ -193,13 +201,14 @@ namespace App.ControlPanel.Engine
 
         public void Save(string fileName, string password)
         {
-            var jSon = ToJson(password);
+            var jSon = ToJson(password, includePrivateNetworking: true);
 
             var tryAgain = true;
             while (tryAgain)
                 try
                 {
                     File.WriteAllText(fileName, jSon);
+                    SavedConfigFileName = Path.GetFullPath(fileName);
                     tryAgain = false;
                 }
                 catch (IOException ex)
@@ -215,7 +224,7 @@ namespace App.ControlPanel.Engine
                 }
         }
 
-        public string ToJson(string password)
+        public string ToJson(string password, bool includePrivateNetworking = false)
         {
             // Encrypt passwords
             if (!string.IsNullOrEmpty(this.SQLServerAdminPassword))
@@ -234,7 +243,36 @@ namespace App.ControlPanel.Engine
             // row the installer records (SqlInstallerTasks.RegisterConfigAndStatus uses this too).
             this.ConfigSchemaVersion = CurrentConfigSchemaVersion;
 
-            return JsonConvert.SerializeObject(this);
+            var json = Newtonsoft.Json.Linq.JObject.FromObject(this);
+            // Runtime/SQL config snapshots are not an ownership store. Only the saved installer file
+            // carries the provenance journal; restoring an old SQL snapshot must not authorize deletes.
+            if (!includePrivateNetworking) json.Remove(nameof(PrivateNetworking));
+            return json.ToString(Formatting.None);
+        }
+
+        internal void CheckpointPrivateNetworking(string password)
+        {
+            if (string.IsNullOrWhiteSpace(SavedConfigFileName))
+                throw new CloudInstallEngine.Models.InstallException(
+                    "Save the installer configuration to disk before changing private networking. Creator provenance must be durable before Azure changes.");
+
+            var checkpoint = SavedConfigFileName + ".network-checkpoint-new";
+            try
+            {
+                File.WriteAllText(checkpoint, ToJson(password, includePrivateNetworking: true));
+                File.Replace(checkpoint, SavedConfigFileName, null);
+            }
+            finally
+            {
+                if (File.Exists(checkpoint)) File.Delete(checkpoint);
+            }
+        }
+
+        public void PreservePrivateNetworkingStateFrom(SolutionInstallConfig previous)
+        {
+            if (previous == null) return;
+            PrivateNetworking = previous.PrivateNetworking ?? new CloudInstallEngine.Azure.PrivateNetworkManifest();
+            SavedConfigFileName = previous.SavedConfigFileName;
         }
 
         #endregion
@@ -245,6 +283,10 @@ namespace App.ControlPanel.Engine
         public override List<string> ValidatInputAndGetErrors()
         {
             var errs = base.ValidatInputAndGetErrors();
+            if (HealthMonitoring == null)
+                errs.Add("Health monitoring configuration is missing.");
+            else
+                errs.AddRange(HealthMonitoring.ValidatInputAndGetErrors());
 
             if (!SolutionConfig.ImportTaskSettings.HaveSomethingToDo())
             {

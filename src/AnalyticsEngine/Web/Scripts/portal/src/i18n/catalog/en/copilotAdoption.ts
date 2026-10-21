@@ -5,6 +5,8 @@
  * makes a missing one a build failure.
  */
 export const copilotAdoption = {
+  'copilotAdoption.scoreSettings.effectiveValues': 'Effective scoring and decision settings',
+  'copilotAdoption.scoreSettings.fieldValue': '{field}: {value} (default: {defaultValue})',
   'copilotAdoption.page.window.last7Days': 'Last 7 days',
   'copilotAdoption.page.window.last28Days': 'Last 28 days',
   'copilotAdoption.page.window.last90Days': 'Last 90 days',
@@ -455,7 +457,7 @@ export const copilotAdoption = {
   'copilotAdoption.page.depthMinInteractionsActivedaysConfidence': 'depth      = min(1, (interactions / activeDays) / {v0}) x confidence',
   'copilotAdoption.page.breadthMinAppsused': 'breadth    = min(1, appsUsed / {v0})',
   'copilotAdoption.page.scoreFrequencyDepthBreadth': 'score = (frequency x {v0} + depth x {v1} + breadth x {v2})',
-  'copilotAdoption.page.overDayPeriodFrequencyTargetActiveDaysUserActive': '{heading} Over a {windowDays}-day period the frequency target is {frequencyTargetDays} active days. A user active on {exampleActiveDays} of those, averaging {depthTarget} interactions on each of those days, in a single app, scores {exampleScore} - deep but narrow and intermittent, which is why the recommended action for that profile is to broaden rather than to train. {confidence}',
+  'copilotAdoption.page.overDayPeriodFrequencyTargetActiveDaysUserActive': '{heading} Over a {windowDays}-day period full frequency marks need {frequencyTargetDays} active days. A user active on {exampleActiveDays} of those, averaging {depthTarget} interactions on each of those days, in a single app, scores {exampleScore}. This illustrates how the effective targets and weights combine; the recommended action also depends on the effective band thresholds and the person’s other signals. {confidence}',
   'copilotAdoption.page.workedExample': 'Worked example.',
   'copilotAdoption.page.overShortPeriodActiveDaysNeededFullConfidenceDepth': 'Over this short a period, {v0} active days is below the {v1} needed for full confidence in the depth measure, so depth is scaled to {v2} of its face value.',
   'copilotAdoption.page.activeDaysAboveDepthConfidenceFactorHereChangeNumber': '{v0} active days is at or above {v1}, so the depth confidence factor is 1 here and does not change the number.',

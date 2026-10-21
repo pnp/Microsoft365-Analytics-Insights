@@ -38,6 +38,27 @@ it('keeps an unavailable selection explicit so the reader can choose the sole el
   await waitFor(() => expect(fetchPromptCategoryReport).toHaveBeenCalledWith(1, 'version-b'));
 });
 
+it('explains when no taxonomy versions are available in English', async () => {
+  vi.mocked(fetchPromptCategoryReport).mockResolvedValue({
+    versions: [], version: null, categories: [], mix: [], trend: [],
+  });
+  renderWithProvider(<PromptCategoryReport months={3} />);
+  const select = await screen.findByLabelText('Taxonomy version');
+  expect(select).toBeDisabled();
+  expect(screen.getByRole('option', { name: 'No taxonomy versions available' })).toBeInTheDocument();
+});
+
+it('explains when no taxonomy versions are available in Spanish', async () => {
+  await loadCatalog('es');
+  vi.mocked(fetchPromptCategoryReport).mockResolvedValue({
+    versions: [], version: null, categories: [], mix: [], trend: [],
+  });
+  renderWithProvider(<PromptCategoryReport months={3} />, { language: 'es' });
+  const select = await screen.findByLabelText('Versión de taxonomía');
+  expect(select).toBeDisabled();
+  expect(screen.getByRole('option', { name: 'No hay versiones de taxonomía disponibles' })).toBeInTheDocument();
+});
+
 it('regroups modes from the selected historical taxonomy without mixing versions', async () => {
   vi.mocked(fetchPromptCategoryReport).mockImplementation(async (_months, version) => ({
     versions: ['version-a', 'version-b'], version: version ?? 'version-a',
@@ -73,3 +94,21 @@ it('never translates administrator names that happen to match server placeholder
   expect(screen.queryByText('(desconocido)')).not.toBeInTheDocument();
   expect(screen.queryByText('(ninguno)')).not.toBeInTheDocument();
 }, 30000);
+
+it('translates the default taxonomy labels in Spanish', async () => {
+  await loadCatalog('es');
+  vi.mocked(fetchPromptCategoryReport).mockResolvedValue({
+    versions: ['default-version'], version: 'default-version',
+    categories: [{
+      id: 'meeting-summary',
+      name: 'Meeting summaries',
+      description: 'Summarise a meeting or extract its actions.',
+      humanMode: 'directing',
+      nameKey: 'promptCategories.defaults.meeting-summary.name',
+    }],
+    mix: [{ categoryId: 'meeting-summary', prompts: 20 }],
+    trend: [],
+  });
+  renderWithProvider(<PromptCategoryReport months={3} />, { language: 'es' });
+  expect(await screen.findByText('Resúmenes de reuniones: 20 Indicaciones')).toBeInTheDocument();
+});

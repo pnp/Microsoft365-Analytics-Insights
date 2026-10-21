@@ -4,6 +4,15 @@ import { beginAgentCostConnection, disconnectAgentCostConnection, fetchAgentCost
 afterEach(() => vi.unstubAllGlobals());
 
 describe('billing connection API transport', () => {
+  it('preserves the returned operational account details for the page', async () => {
+    const status = {
+      state: 'connected',
+      details: { account: 'billing-admin@contoso.example', verifiedUtc: '2026-10-01T12:30:00Z' },
+    };
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify(status), { status: 200 })));
+    expect(await fetchAgentCostConnection()).toEqual(status);
+  });
+
   it('uses same-origin POST for changes and never sends a credential', async () => {
     const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({ state: 'disconnected' }), { status: 200 }));
     vi.stubGlobal('fetch', fetch);

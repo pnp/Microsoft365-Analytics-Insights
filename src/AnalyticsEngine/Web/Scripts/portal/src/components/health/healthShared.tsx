@@ -21,6 +21,19 @@ export type BadgeColor = 'success' | 'warning' | 'danger' | 'informative' | 'sub
 export const CYCLE_SLA_HOURS = 24;
 export const AUTO_REFRESH_MS = 60_000;
 
+export const DEFAULT_HEALTH_REASON_KEYS: Record<string, keyof typeof enHealth> = {
+  'defaultHealth.timeout': 'health.reason.defaultTimeout',
+  'defaultHealth.failed': 'health.reason.defaultFailed',
+  'defaultHealth.tokenUnavailable': 'health.reason.defaultTokenUnavailable',
+  'defaultHealth.secretExpiryUnknown': 'health.reason.defaultSecretExpiryUnknown',
+  'defaultHealth.certificateExpiring': 'health.reason.defaultCertificateExpiring',
+  'defaultHealth.certificateValid': 'health.reason.defaultCertificateValid',
+  'defaultHealth.sqlReadOnly': 'health.reason.defaultSqlReadOnly',
+  'defaultHealth.sqlSchemaMismatch': 'health.reason.defaultSqlSchemaMismatch',
+  'defaultHealth.sqlHealthy': 'health.reason.defaultSqlHealthy',
+  'defaultHealth.stale': 'health.reason.defaultStale',
+};
+
 export const BLOB_CHECKPOINT_REASON_KEYS: Record<string, TranslationKey> = {
   'blobCheckpoint.healthy': 'health.reason.blobCheckpointHealthy',
   'blobCheckpoint.notConfigured': 'health.reason.blobCheckpointNotConfigured',
@@ -47,6 +60,7 @@ export const AGENT_COST_CONNECTION_REASON_KEYS: Record<string, keyof typeof enHe
 };
 
 export const HEALTH_COMPONENT_LABEL_KEYS: Record<string, TranslationKey> = {
+  Sql: 'health.component.Sql',
   Credential: 'health.component.Credential',
   ServiceBus: 'health.component.ServiceBus',
   BlobCheckpoint: 'health.component.BlobCheckpoint',
@@ -240,6 +254,9 @@ function isDataOverviewSection(section: HealthSectionBase): section is DataOverv
 }
 
 export function translateHealthComponentDetailText(detail: string | null | undefined, t: TFunction): string {
+  for (const key of Object.values(DEFAULT_HEALTH_REASON_KEYS)) {
+    if (detail === enHealth[key]) return t(key);
+  }
   if (!detail) return '';
 
   if (detail === enHealth['health.reason.runtimeCertificateExpired']) {
@@ -324,6 +341,8 @@ export function translateHealthComponentDetailText(detail: string | null | undef
 }
 
 export function translateHealthComponentDetail(component: ComponentHealthRow, t: TFunction): string {
+  const defaultHealthKey = component.reasonKey ? DEFAULT_HEALTH_REASON_KEYS[component.reasonKey] : null;
+  if (defaultHealthKey) return t(defaultHealthKey);
   const blobCheckpointKey = component.reasonKey ? BLOB_CHECKPOINT_REASON_KEYS[component.reasonKey] : null;
   if (blobCheckpointKey) {
     return t(blobCheckpointKey, {

@@ -147,8 +147,17 @@ SET
 FROM dbo.copilot_chats AS ec
 INNER JOIN dbo.[${STAGING_TABLE_ACTIVITY}] AS i
     ON ec.event_id = i.event_id
-WHERE ec.copilot_credit_estimate_total IS NULL 
-    AND i.copilot_credit_estimate_total IS NOT NULL;
+WHERE i.copilot_credit_estimate_total IS NOT NULL
+  AND (ec.copilot_credit_estimate_total IS NULL
+       -- Only a replay of retained original audit evidence can recover a legacy zero. The stored
+       -- breakdown omitted response counts on the old early-return path; resources alone cannot
+       -- reconstruct them. Never overwrite a nonzero estimate or a current/unknown model.
+       OR (ec.copilot_credit_estimate_total = 0
+           AND ISJSON(ec.copilot_credit_estimate_json) = 1
+           AND JSON_VALUE(CASE WHEN ISJSON(ec.copilot_credit_estimate_json) = 1 THEN ec.copilot_credit_estimate_json END, '$.CostModelVersion') IN ('1.0.0.1', '1.1.0.0')
+           AND JSON_VALUE(CASE WHEN ISJSON(ec.copilot_credit_estimate_json) = 1 THEN ec.copilot_credit_estimate_json END, '$.AgentCreditBasis') IS NULL
+           AND JSON_VALUE(CASE WHEN ISJSON(i.copilot_credit_estimate_json) = 1 THEN i.copilot_credit_estimate_json END, '$.AgentCreditBasis') = 'CustomEngine'
+           AND i.copilot_credit_estimate_total > 0));
 
 
 SET @rows = @@ROWCOUNT;
@@ -165,7 +174,7 @@ FROM dbo.copilot_chats AS ec
 INNER JOIN [${STAGING_TABLE_ACTIVITY}] AS i
     ON ec.event_id = i.event_id
 WHERE ec.conversation_id IS NULL
-  AND i.conversation_id IS NOT NULL
+  AND NULLIF(LTRIM(RTRIM(i.conversation_id)), N'') IS NOT NULL
   AND i.agent_id IS NOT NULL;
 
 SET @rows = @@ROWCOUNT;
@@ -194,10 +203,8 @@ SET @t = SYSUTCDATETIME();
 --              it carries the name, the messages and the credit estimate, and its app_host is the one
 --              every other Microsoft 365 Copilot turn has. The runtime twin stays the evidence for its own
 --              AccessedResources and DLP detail, which reports de-duplicate per turn.
---   reason 2 - an extra runtime record: logged within @echoSeconds of a runtime record of the same agent,
---              user, conversation and app_host. Its turn is counted on that record, or on the client
---              record that record is paired with. A real second turn within @echoSeconds would also be
---              folded in; that needs the first answer, and the user's next prompt, inside 10 seconds.
+-- Former reason 2 (time-only runtime echoes) is no longer created. Rapid distinct prompts are
+-- indistinguishable from those echoes in persisted facts, so those records remain counted.
 --
 -- Rules:
 --   * Pairs are one-to-one, never many-to-one. Each unpaired client record proposes to the nearest
@@ -209,9 +216,9 @@ SET @t = SYSUTCDATETIME();
 --   * Only runtime records are ever marked. A client record, and a runtime record with no twin (Teams,
 --     the Copilot Studio test pane, or a Microsoft 365 Copilot turn whose client record has not arrived
 --     yet), always counts.
---   * An extra record (reason 2) can still be claimed as a pair twin later, which turns it into reason 1.
---     That is how a quick runtime record whose client record arrives in a later import cycle ends up
---     paired with the right twin. Nothing is ever un-marked, so the result only ever converges.
+--   * An old reason-2 record can still become a one-to-one pair twin; otherwise its unsupported
+--     mapping is removed. With no conversation id, historical pairings cannot be reconstructed;
+--     replay of retained audit records fills that field above. ThreadId is not a substitute.
 --   * Order and cycles don't matter: the records can arrive in one batch or in different import cycles,
 --     in either order, and again on re-import. Whichever arrives second does the pairing, and a runtime
 --     record that is already a pair twin, or a client record already paired, is never considered again.
@@ -236,9 +243,9 @@ BEGIN
 BEGIN TRY
     DECLARE @pairWindowSeconds int = 120;
     DECLARE @pairLeadSeconds int = 5;
-    DECLARE @echoSeconds int = 10;
-    DECLARE @turnReach int = @pairWindowSeconds + @pairLeadSeconds + @echoSeconds;
+    DECLARE @turnReach int = @pairWindowSeconds + @pairLeadSeconds;
     DECLARE @turnRound int = 0;
+    DECLARE @historyStrict bit = ISNULL(TRY_CONVERT(bit, SESSION_CONTEXT(N'copilot_history_strict')), 0);
 
     -- The staged agent interactions that may have another record of the same turn.
     SELECT DISTINCT c.event_id, c.user_id, c.agent_id, c.conversation_id, c.time_stamp
@@ -247,9 +254,10 @@ BEGIN TRY
     INNER JOIN dbo.copilot_chats AS c ON c.event_id = i.event_id
     INNER JOIN dbo.copilot_agents AS ag ON ag.id = c.agent_id
     WHERE i.agent_id IS NOT NULL
-      AND i.conversation_id IS NOT NULL
+      AND NULLIF(LTRIM(RTRIM(i.conversation_id)), N'') IS NOT NULL
+      AND DATALENGTH(i.conversation_id) <= 900
       AND c.user_id IS NOT NULL
-      AND c.conversation_id IS NOT NULL
+      AND NULLIF(LTRIM(RTRIM(c.conversation_id)), N'') IS NOT NULL
       -- Keeps DATEADD below clear of the datetime range on a nonsense timestamp.
       AND c.time_stamp >= '20000101' AND c.time_stamp < '99990101'
       AND LEN(ag.agent_id) = 36
@@ -287,7 +295,8 @@ BEGIN TRY
                CAST(CASE WHEN c.app_host = N'm365copilot' THEN 1
                          WHEN c.app_host = N'Microsoft Teams' THEN 2
                          WHEN c.app_host = N'Copilot Studio' THEN 3
-                         ELSE 0 END AS tinyint) AS host_kind
+                         WHEN c.app_host = N'Office' THEN 0
+                         ELSE 4 END AS tinyint) AS host_kind
         INTO #turn_near
         FROM #turn_ranges AS r
         CROSS APPLY (
@@ -297,7 +306,8 @@ BEGIN TRY
             ORDER BY ic.time_stamp
         ) AS c
         WHERE EXISTS (SELECT 1 FROM #turn_seed AS s
-                      WHERE s.user_id = c.user_id AND s.agent_id = c.agent_id
+                      WHERE (s.user_id = c.user_id OR (@historyStrict = 1 AND c.user_id IS NULL))
+                        AND s.agent_id = c.agent_id
                         AND s.time_stamp >= DATEADD(SECOND, -@turnReach, c.time_stamp)
                         AND s.time_stamp <= DATEADD(SECOND, @turnReach, c.time_stamp))
         OPTION (RECOMPILE);
@@ -325,6 +335,44 @@ BEGIN TRY
         WHERE t.host_kind = 0
           AND NOT EXISTS (SELECT 1 FROM dbo.copilot_chat_duplicates AS d WHERE d.counted_event_id = t.event_id AND d.reason = 1)
           AND NOT EXISTS (SELECT 1 FROM dbo.copilot_chat_duplicates AS d WHERE d.event_id = t.event_id);
+
+        IF @historyStrict = 1
+        BEGIN
+            -- A neighboring record not hydrated by this page is UNKNOWN, not evidence of uniqueness.
+            -- Missing user/conversation or unrecognized host facts keep this neighborhood unpaired, including
+            -- when the retained payload can never repair them. No raw-payload parsing is needed here.
+            SELECT DISTINCT n.user_id, n.agent_id INTO #history_pending
+            FROM #turn_near n JOIN dbo.copilot_chats c ON c.event_id = n.event_id
+            WHERE n.host_kind IN (0, 1, 4)
+              AND (n.host_kind = 4 OR n.user_id IS NULL OR NULLIF(LTRIM(RTRIM(c.conversation_id)), N'') IS NULL);
+
+            -- Count ALL known potential counterparts, even ones already paired. A historical pair
+            -- must touch a seed: then both endpoints' complete counterpart windows fit within the
+            -- +/-125-second neighborhood, rather than proving uniqueness at a clipped range edge.
+            ;WITH candidates AS (
+                SELECT rt.event_id AS runtime_event_id, cl.event_id AS client_event_id,
+                       COUNT(*) OVER (PARTITION BY rt.event_id) AS runtime_choices,
+                       COUNT(*) OVER (PARTITION BY cl.event_id) AS client_choices
+                FROM #turn_rows rt JOIN #turn_rows cl
+                  ON rt.user_id = cl.user_id AND rt.agent_id = cl.agent_id AND rt.conversation_id = cl.conversation_id
+                 AND rt.time_stamp >= DATEADD(SECOND, -@pairWindowSeconds, cl.time_stamp)
+                 AND rt.time_stamp <= DATEADD(SECOND, @pairLeadSeconds, cl.time_stamp)
+                WHERE rt.host_kind = 1 AND cl.host_kind = 0
+                  AND NOT EXISTS (SELECT 1 FROM #history_pending p
+                                  WHERE p.agent_id = rt.agent_id AND (p.user_id = rt.user_id OR p.user_id IS NULL))
+            )
+            SELECT runtime_event_id, client_event_id INTO #history_unique_pairs
+            FROM candidates WHERE runtime_choices = 1 AND client_choices = 1
+              AND EXISTS (SELECT 1 FROM #turn_seed s
+                          WHERE s.event_id = runtime_event_id OR s.event_id = client_event_id);
+
+            DELETE rt FROM #turn_runtime rt
+            WHERE NOT EXISTS (SELECT 1 FROM #history_unique_pairs p WHERE p.runtime_event_id = rt.event_id);
+            DELETE cl FROM #turn_client cl
+            WHERE NOT EXISTS (SELECT 1 FROM #history_unique_pairs p WHERE p.client_event_id = cl.event_id);
+            DROP TABLE #history_unique_pairs;
+            DROP TABLE #history_pending;
+        END
 
         CREATE TABLE #turn_pairs (
             runtime_event_id uniqueidentifier NOT NULL PRIMARY KEY,
@@ -381,75 +429,15 @@ BEGIN TRY
 
         SET @rows = (SELECT COUNT(*) FROM #turn_pairs);
 
-        -- An extra record whose turn was counted on a runtime record that is now a pair twin: its turn is
-        -- now counted on that record's client twin.
-        UPDATE d
-        SET d.counted_event_id = p.client_event_id
+        -- No time-only runtime "echo" suppression. Distinct prompts in the same conversation can
+        -- arrive seconds apart, and the stored facts do not distinguish those from repeated runtime
+        -- records. Restore old reason-2 guesses in this affected set before any DLP de-duplication.
+        DELETE d
         FROM dbo.copilot_chat_duplicates AS d
-        INNER JOIN #turn_pairs AS p ON p.runtime_event_id = d.counted_event_id
+        INNER JOIN #turn_rows AS t ON t.event_id = d.event_id
         WHERE d.reason = 2;
 
-        -- Extra runtime records. A burst is a run of runtime records of one agent, user, conversation and
-        -- app_host, each within @echoSeconds of the one before. A record in a burst that already holds a
-        -- pair twin belongs to the nearest twin's turn; otherwise every record after the burst's first
-        -- belongs to the first one's turn. Only records that still count are marked. The bursts are
-        -- materialised and indexed first: as a CTE read three ways it was re-evaluated per row.
-        ;WITH runtime AS (
-            SELECT t.event_id, t.user_id, t.agent_id, t.conversation_id, t.host_kind, t.time_stamp,
-                   d.reason, d.counted_event_id,
-                   LAG(t.time_stamp) OVER (PARTITION BY t.user_id, t.agent_id, t.conversation_id, t.host_kind
-                                           ORDER BY t.time_stamp, t.event_id) AS previous_time
-            FROM #turn_rows AS t
-            LEFT JOIN dbo.copilot_chat_duplicates AS d ON d.event_id = t.event_id
-            WHERE t.host_kind IN (1, 2, 3)
-        ), runs AS (
-            SELECT event_id, user_id, agent_id, conversation_id, host_kind, time_stamp, reason, counted_event_id,
-                   SUM(CASE WHEN previous_time IS NULL
-                              OR DATEDIFF_BIG(MILLISECOND, previous_time, time_stamp) > @echoSeconds * 1000
-                            THEN 1 ELSE 0 END)
-                       OVER (PARTITION BY user_id, agent_id, conversation_id, host_kind
-                             ORDER BY time_stamp, event_id ROWS UNBOUNDED PRECEDING) AS burst
-            FROM runtime
-        )
-        SELECT event_id, user_id, agent_id, conversation_id, host_kind, time_stamp, reason, counted_event_id, burst,
-               ROW_NUMBER() OVER (PARTITION BY user_id, agent_id, conversation_id, host_kind, burst
-                                  ORDER BY time_stamp, event_id) AS position
-        INTO #turn_bursts
-        FROM runs;
-
-        CREATE CLUSTERED INDEX IX_turn_bursts ON #turn_bursts (user_id, agent_id, host_kind, burst, position);
-
-        SELECT x.event_id,
-               x.time_stamp,
-               COALESCE(twin.counted_event_id,
-                        CASE WHEN first_record.reason = 2 THEN first_record.counted_event_id ELSE first_record.event_id END) AS counted_event_id
-        INTO #turn_extra
-        FROM #turn_bursts AS x
-        INNER JOIN #turn_bursts AS first_record
-            ON first_record.user_id = x.user_id AND first_record.agent_id = x.agent_id
-           AND first_record.host_kind = x.host_kind AND first_record.conversation_id = x.conversation_id
-           AND first_record.burst = x.burst AND first_record.position = 1
-        OUTER APPLY (
-            SELECT TOP (1) b.counted_event_id
-            FROM #turn_bursts AS b
-            WHERE b.user_id = x.user_id AND b.agent_id = x.agent_id AND b.host_kind = x.host_kind
-              AND b.conversation_id = x.conversation_id AND b.burst = x.burst
-              AND b.reason = 1
-            ORDER BY ABS(DATEDIFF_BIG(MILLISECOND, b.time_stamp, x.time_stamp)), b.event_id
-        ) AS twin
-        WHERE x.reason IS NULL
-          AND (twin.counted_event_id IS NOT NULL OR x.position > 1);
-
-        INSERT INTO dbo.copilot_chat_duplicates (event_id, time_stamp, counted_event_id, reason)
-        SELECT e.event_id, e.time_stamp, e.counted_event_id, 2
-        FROM #turn_extra AS e
-        WHERE e.counted_event_id IS NOT NULL
-          AND e.counted_event_id <> e.event_id
-          AND NOT EXISTS (SELECT 1 FROM dbo.copilot_chat_duplicates AS d WHERE d.event_id = e.event_id);
-
-        SET @rows = @rows + @@ROWCOUNT;
-
-        -- Repair stored copies on EVERY affected turn, including reason-2 echoes and existing mappings
+        -- Repair stored copies on EVERY affected turn, including existing one-to-one mappings
         -- on a re-run with no new #turn_pairs. Only the batch's nearby user/agent/conversation set is
         -- considered; the counted-event index then finds that turn's other constituents without a
         -- whole-history sweep. Match identity and NULL equality are exactly the staging merge's tuple.
@@ -491,8 +479,6 @@ BEGIN TRY
             DROP TABLE #turn_dlp;
         END
 
-        DROP TABLE #turn_extra;
-        DROP TABLE #turn_bursts;
         DROP TABLE #turn_pairs;
         DROP TABLE #turn_client;
         DROP TABLE #turn_runtime;
@@ -507,6 +493,8 @@ BEGIN TRY
         VALUES (@batch_id, N'${STAGING_TABLE_ACTIVITY}', 'pair_turns', DATEDIFF(MILLISECOND, @t, SYSUTCDATETIME()), @rows);
 END TRY
 BEGIN CATCH
+    IF OBJECT_ID('tempdb..#history_pending') IS NOT NULL DROP TABLE #history_pending;
+    IF OBJECT_ID('tempdb..#history_unique_pairs') IS NOT NULL DROP TABLE #history_unique_pairs;
     IF OBJECT_ID('tempdb..#turn_dlp') IS NOT NULL DROP TABLE #turn_dlp;
     IF OBJECT_ID('tempdb..#turn_extra') IS NOT NULL DROP TABLE #turn_extra;
     IF OBJECT_ID('tempdb..#turn_bursts') IS NOT NULL DROP TABLE #turn_bursts;
@@ -521,6 +509,8 @@ BEGIN CATCH
     -- rows_affected carries the SQL error number, so a failing pairing shows up in the step profiler.
     IF @dbg = 1 INSERT INTO dbo.copilot_merge_step_timings (batch_id, staging_table, step_name, duration_ms, rows_affected)
         VALUES (@batch_id, N'${STAGING_TABLE_ACTIVITY}', 'pair_turns_failed', DATEDIFF(MILLISECOND, @t, SYSUTCDATETIME()), ERROR_NUMBER());
+    -- A historical repair must not advance its durable checkpoint past a failed pairing.
+    IF TRY_CONVERT(bit, SESSION_CONTEXT(N'copilot_history_strict')) = 1 THROW;
 END CATCH
 END
 

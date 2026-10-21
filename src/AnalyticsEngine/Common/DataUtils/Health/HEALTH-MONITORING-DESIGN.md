@@ -2,16 +2,102 @@
 
 Tracks issue [#144](https://github.com/pnp/Microsoft365-Analytics-Insights/issues/144).
 
-This is the **engineering design record** for shipping sensible, opt-out, default health monitoring
-from the installer so a fresh install is observable by default. Today the solution has **no default
-health monitoring**: the wiki documents how to build ~12 Azure Monitor / Application Insights alert
-rules and an action group by hand, but most installs never do it, so when a web-job dies, the runtime
-app secret expires, or the DB fills up, **data silently stops flowing and nobody is told**.
+This is the **engineering design record** for opt-out monitoring provisioned by the installer.
+The implementation below is the current contract; the subsequent proposal sections retain the
+broader issue design and are **not a claim that every proposed signal is implemented**.
 
-The full feature is phased (see below) and touches the (.NET Framework 4.8) installer, web-jobs, web app
-and Azure provisioning SDK. The **first, additive slice lives here**: the uniform health-telemetry
-signal (`HealthTelemetry.cs` + `AnalyticsLogger.TrackHealthCheck` / `TrackImporterHeartbeat`) that all
-later alerting collapses onto.
+## Delivered monitoring contract
+
+New wizard configurations enable monitoring and require one notification email or an explicit
+opt-out. Old JSON without `HealthMonitoring` stays opted out. The existing saved schema is unchanged.
+The installer writes `EnableDefaultHealthChecks` to the web app in both enabled and disabled states;
+the importers read it on startup. This runtime setting is not a new persisted installer property.
+
+When enabled, each expected importer runs two independent checks immediately and every five minutes,
+off the import loop. Each has a 30-second budget; cancellation is requested at timeout, late work
+cannot emit success after disposal, and a non-cooperative check is not launched again until it returns.
+The other check and the one-minute process heartbeat continue while an import/check is stuck.
+
+- **SQL:** connects only to the configured database, reads read/write metadata and its
+  `__MigrationHistory`, and compares that context's complete history with this build's local
+  migration metadata. No EF initializer, migration application, table scan, `master` connection or
+  write probe is run. This detects missing/newer/wrong-context history, not arbitrary manual schema
+  damage, storage exhaustion in advance, or the runtime user's effective write permissions.
+- **Credential:** requests a fresh Graph `.default` token using a new credential instance, bypassing
+  the importer's token cache. Token issuance proves authentication, **not API permission grants**.
+  Certificate authentication uses the same cached certificate as the running importer and reports
+  its `NotAfter` (<14 whole days degraded, <3 unhealthy). A successful secret-token acquisition is
+  **degraded/expiry unknown**, never an invented expiry date or a claim that the secret cannot expire.
+  No extra app-read permission, secret inspection or invasive permission probe is introduced.
+- Both checks emit privacy-safe `HealthCheck` results with `JobName`, `Monitor=DefaultHealth` and
+  stable `ReasonKey`. Exceptions, connection strings, tokens and tenant identifiers are not copied
+  into those events. The existing bilingual Health page recognises these reasons, prefers fresh
+  token evidence over its certificate-date-only check, and does not show stale success as current.
+
+One action group (`<web-app>-health-notifications`) and **at most seven** severity-2 rules are managed:
+
+| Rule | Default / boundary |
+|---|---|
+| Activity importer health | Only when a non-web import is selected |
+| Web-traffic importer health | Only when web traffic is selected |
+| Logged SQL / Teams permission failures | Only when at least one importer is expected |
+| SQL CPU | Average >90% for 1 hour; CPU is available across DTU/vCore models, but is not a DTU IO alert |
+| SQL storage | Average >90% for 15 minutes |
+| Shared App Service plan CPU | Average >90% for 1 hour |
+| Shared App Service plan memory | Average >90% for 1 hour |
+
+Each importer rule evaluates every five minutes and combines: missing heartbeat (configurable
+15–1440 minutes), no completed cycle for 24 hours (including a first cycle still unfinished after
+24 hours, across restarts observed within the two-day query window), latest unhealthy SQL/credential
+check, known certificate expiry <14 days, and either expected check absent for 30 minutes.
+Latest-per-component results allow recovery; an old failure alone does not pin the rule on.
+A completed loop is **not** proof of successful sub-imports or non-zero rows. The passive rule
+detects >10 logged SQL exceptions in one hour (both SqlClient namespaces), >2 logged full/read-only
+SQL exceptions in ten minutes, and the existing explicit Teams-user permission-failure trace.
+No matching logged failures is not proof of permission/data-flow health.
+
+Only exact deterministic names bearing this deployment's ownership hash are reconciled. An unowned
+name collision blocks the monitoring update before any write. Upgrades **update owned definitions,
+recipients and thresholds**; portal edits to these installer-owned rules are not preserved. Use
+separately named custom rules for operator-managed thresholds. Opt-out disables all owned log and
+metric rules, removes their actions, retains the action group, and stops active probes after the
+updated runtime settings are loaded; the basic process heartbeat/operational telemetry remain.
+Unknown/unowned resources are never adopted, disabled or deleted. Provisioning is best-effort:
+failure is logged by the installer and must be remediated, but does not abort the product install.
+
+### Cost, scale and planned shutdowns
+
+Monitoring is not free: log/metric alert evaluation and telemetry ingestion/retention can be billed.
+At two jobs, the baseline is about 2,880 periodic heartbeat events and 1,152 check events per day,
+plus cycle-completion heartbeats. Up to three log rules and four metric rules evaluate every five
+minutes. The per-job log query reads at most two days of telemetry to distinguish a long first cycle
+from a fresh startup; this is a bounded query horizon, **not a currency spending cap**. Review Azure's
+current pricing and retention for the deployment. An already opted-in liveness-only installation
+gains the additional rules on upgrade; budget for that expanded scope.
+
+SQL checks read only migration-history metadata (O(number of migrations)), not the 200,000-user or
+multi-million-row fact tables. Token checks are fixed per process, not per user. No new SQL table,
+configuration table or migration is required.
+
+Expected shutdowns, upgrades and deliberately paused jobs need an Azure alert processing rule for
+the maintenance interval or an explicit monitoring opt-out. Suppression is not a claim of health.
+Newly created rules can alert before the first deployment/check telemetry arrives. Restoring a host
+does not prove email delivery: inspect rule evaluation and use an explicitly authorised action-group
+test against a disposable target.
+
+### Remaining issue acceptance / live gates
+
+Offline tests cover the real ARM SDK resource-list/deployment serialization branches, ownership,
+opt-out/idempotency, KQL syntax/type binding against an App Insights schema, token/expiry/timeout
+branches, isolated LocalDB history drift/read-only checks and wizard round trips/layout.
+They do **not** prove Azure accepts/deploys every rule, actual KQL results in the service, firing,
+recovery notifications or email delivery. Those require a disposable target and explicit permission.
+
+The complete #144 acceptance remains open: proactive **client-secret expiry**, active Graph/Activity
+permission/anonymisation checks, SQL DTU/data/log-IO/deadlocks, Service Bus metrics/dead letters,
+Key Vault/Storage reachability, web availability, and workload-gated **non-zero data freshness**
+are not all delivered here. No Redis monitor is appropriate: Redis has been retired.
+The broader catalog below is a design proposal, not an enabled default or an approved cost ceiling.
 
 ## What's implemented now
 
@@ -23,10 +109,10 @@ Application Insights pipeline (no new sink):
     `ServiceBus`, `Credential`, `Dns`, `BlobCheckpoint`).
   - `Status` — one of `DataUtils.Health.HealthStatus` (`Healthy` | `Degraded` | `Unhealthy`).
   - `Detail` — optional free-text reason. **Must not contain secrets or customer data.**
-  - `DaysToExpiry` — numeric, `Credential` only.
-- **`ImporterHeartbeat`** custom event — one per import job per cycle:
+  - `DaysToExpiry` — integer dimension in invariant text (`toint` in KQL), `Credential` only.
+- **`ImporterHeartbeat`** custom event — every minute independently, and when a cycle completes:
   - `JobName` (e.g. `Office365ActivityImporter` | `AppInsightsImporter`),
-    `LastCycleUtc`, `LastCycleDurationSeconds`.
+    `ProcessStartedUtc`, and (only after a completed cycle) `LastCycleUtc`, `LastCycleDurationSeconds`.
 
 Why this first: a uniform signal lets runtime alerting collapse to **1–2 generic rules**
 (`any HealthCheck Status == Unhealthy`, `Credential DaysToExpiry < N`, `no ImporterHeartbeat in N min`)
@@ -110,8 +196,8 @@ is to **reuse them, not duplicate them**:
   question: same web-job on its own timer vs a separate WebJob/Function) so a stuck import can't
   suppress the liveness beat. It also adds structured `JobName` / `LastCycleUtc` /
   `LastCycleDurationSeconds` dimensions (vs the free-text `context` string) so the same rule works
-  across both jobs. Until the independent-timer host lands (Phase 1/2), the existing
-  `FinishedImportCycle` remains the interim liveness signal and the wiki alert stays valid.
+  across both jobs. The independent host is now implemented; `FinishedImportCycle` remains a separate
+  loop-completion signal, not a dependency or non-zero-data success guarantee.
 
 ## What should be monitored
 
@@ -287,7 +373,7 @@ the source for a **step-by-step admin guide to be published to the wiki** (the w
 `Microsoft365-Analytics-Insights.wiki` repo; it is drafted here so it is version-controlled and reviewed
 with the code). Once the installer provisions the default action group, extra alerts are a few clicks.
 
-**One-time:** confirm the default action group exists (installer creates `M365-Analytics-alerts`, or
+**One-time:** confirm the default action group exists (installer creates `<web-app>-health-notifications`, or
 create one under *Monitor → Alerts → Action groups* with an email/Teams-webhook receiver). Every alert
 below routes to it, so recipients are configured in one place.
 

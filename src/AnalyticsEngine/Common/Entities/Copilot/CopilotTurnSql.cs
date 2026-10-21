@@ -9,8 +9,9 @@ namespace Common.Entities.Copilot
     /// <para>
     /// <b>One turn, one interaction.</b> The importer keeps every audit record as a <c>copilot_chats</c> row, and
     /// lists in <c>dbo.copilot_chat_duplicates</c> each record that is an extra record of a turn counted on
-    /// another one: the Copilot Studio runtime's twin of a Microsoft 365 Copilot record, and an extra runtime
-    /// record logged a few seconds after the first (see <c>common_upsert_copilot_agents.sql</c>).
+    /// another one: the Copilot Studio runtime's one-to-one twin of a Microsoft 365 Copilot record
+    /// (see <c>common_upsert_copilot_agents.sql</c>). Same-host records seconds apart are not proof of
+    /// duplicates: they can be distinct prompts, and remain counted.
     /// <see cref="CountedTurn"/> leaves those out. It is a NOT EXISTS on <c>(time_stamp, event_id)</c>:
     /// <c>event_id</c> is the clustering key of <c>copilot_chats</c>, so every one of its indexes carries it, and
     /// <c>time_stamp</c> is the key of <c>IX_copilot_chats_time_stamp_user_id</c>, so a query that is covered by

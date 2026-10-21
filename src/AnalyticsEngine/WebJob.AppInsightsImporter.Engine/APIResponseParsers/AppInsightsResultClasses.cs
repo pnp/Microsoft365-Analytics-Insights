@@ -1,6 +1,8 @@
 ﻿using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
 using System;
 using System.Collections.Generic;
+using System.IO;
 
 namespace WebJob.AppInsightsImporter.Engine.ApiImporter
 {
@@ -15,10 +17,17 @@ namespace WebJob.AppInsightsImporter.Engine.ApiImporter
         [JsonProperty("tables")]
         public List<AppInsightsTable> Tables { get; set; }
 
+        [JsonProperty("error")]
+        public JObject Error { get; set; }
+
         public AppInsightsTable DefaultTable
         {
             get
             {
+                if (Error != null)
+                {
+                    throw new InvalidDataException("Application Insights returned an error or partial query results. The import is halted to avoid losing data; automatic query-window splitting is not implemented.");
+                }
                 if (Tables == null)
                 {
                     throw new InvalidOperationException("App Insights query response did not contain a 'tables' element.");

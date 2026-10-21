@@ -2085,11 +2085,9 @@ function MethodTab({ summary }: { summary: CopilotAdoptionSummary }) {
   const o = summary.options;
   const weights = [o.frequencyWeight, o.depthWeight, o.breadthWeight];
   const weightSum = weights.reduce((total, w) => total + w, 0);
-  const frequencyTargetDays = Math.round(o.windowDays * (o.workingDaysPerWeek / 7) * o.frequencyTargetRatio);
-  // The EXACT target the scorer divides by (CopilotAdoptionScoring.TargetActiveDays). frequencyTargetDays
-  // above is a display label; using it in the arithmetic would print a score the scorer never produces -
-  // at a 90-day period the exact target is 38.57 and the label is 39.
+  // Arithmetic uses the exact denominator; full marks need the next whole active day.
   const frequencyTargetExact = Math.max(1, o.windowDays * (o.workingDaysPerWeek / 7) * o.frequencyTargetRatio);
+  const frequencyTargetDays = Math.ceil(frequencyTargetExact);
   // Mirrors CopilotAdoptionScoring.OpportunityCopilotTargetForWindow. The Copilot opportunity target is
   // the only one of the four that is a raw total rather than a per-active-day average, so it is scaled
   // from its basis period to the selected window. Quoting the unscaled number here would document a

@@ -112,7 +112,7 @@ WHERE url_id=1 AND field_id=1;");
                                 "Each append needs fresh namespaced objects in " + table);
                         }
                         foreach (string table in new[] { "power_platform_connectors", "power_platform_client_types",
-                            "copilot_ai_models", "file_field_definitions" })
+                            "copilot_ai_models", "file_field_definitions", "copilot_prompt_taxonomies" })
                             Assert.AreEqual(originalRows[table], after[table], "Stable lookup names must be reused in " + table);
                         Assert.AreEqual(originalRows["file_metadata_property_values"] * (run + 1),
                             after["file_metadata_property_values"], "Each namespaced page must receive its own immutable metadata.");
@@ -149,6 +149,13 @@ JOIN dbo.users manager ON manager.id=u.manager_id
 WHERE u.id>" + sentinel + " AND (u.department_id<>manager.department_id OR u.company_name_id<>manager.company_name_id);"));
                         Assert.AreEqual(0L, Scalar(connection, @"SELECT COUNT_BIG(*) FROM dbo.copilot_interactions i
 JOIN dbo.copilot_interaction_sessions s ON s.id=i.session_id WHERE s.user_id<>i.user_id;"));
+                        Assert.AreEqual(originalRows["copilot_prompt_classifications"] * (run + 1),
+                            after["copilot_prompt_classifications"]);
+                        Assert.AreEqual(0L, Scalar(connection, @"SELECT COUNT_BIG(*) FROM dbo.copilot_interactions i
+JOIN dbo.copilot_interaction_types t ON t.id=i.interaction_type_id
+LEFT JOIN dbo.copilot_prompt_classifications c ON c.interaction_id=i.id
+WHERE (t.name=N'userPrompt' AND c.interaction_id IS NULL)
+ OR (t.name=N'aiResponse' AND c.interaction_id IS NOT NULL);"));
                         Assert.AreEqual(0L, Scalar(connection, @"SELECT COUNT_BIG(*) FROM dbo.copilot_chats c
 JOIN dbo.audit_events a ON a.id=c.event_id WHERE a.user_id<>c.user_id OR a.time_stamp<>c.time_stamp;"));
                         Assert.AreEqual(0L, Scalar(connection, @"SELECT COUNT_BIG(*) FROM dbo.event_meta_power_app e
@@ -231,7 +238,7 @@ WHERE class=0 AND name LIKE N'M365AnalyticsSyntheticDemo%';"));
                                 sink.Write(DemoTables.Audit, id, 1, 1, options.AsOf);
                                 sink.Write(DemoTables.Chats, id, "Contoso", null, thread, "US", "1", 1, options.AsOf);
                                 sink.Write(DemoTables.Interactions, graph, 1, 1, id.ToString("N"), 1, 1, 1,
-                                    options.AsOf, 10, 2, 0, 0, 0, 0, null, null, null);
+                                    options.AsOf, 10, 2, 0, 0, 0, 0, null, null, null, 1);
                                 sink.Flush();
                             }
                             database.Complete(summary, null);

@@ -18,7 +18,7 @@ Tests.FakeDataGen.exe demo --help
 This non-interactive command creates a **new LocalDB-only** target, applies the
 existing schema, and generates current overlapping licence assignments, daily
 workload coverage (including explicit zero rows), Copilot adoption and official
-D28 snapshots, metadata-only prompt/response pairs, SharePoint/web facts, detailed
+D28 snapshots, metadata-only prompt/response pairs with default prompt categories, SharePoint/web facts, detailed
 Teams activity, sent email, Power Platform activity, billed Copilot Studio credits and
 daily Azure agent spend, and complete-week Power BI profiles. Actual Power BI report
 views are separate from these profiling tables. It never reads a configured production
@@ -26,6 +26,11 @@ connection.
 Exact completed reruns are read-only no-ops; other existing targets are refused.
 `--preview` runs the same generator without SQL. Fix `--as-of` and `--seed` for
 reproducibility. `--help` lists all flags and the deliberately unsupported datasets.
+The full demo and `--areas copilot-history` assign synthetic prompts across the default
+taxonomy, including directing and supervising modes, without calling a model or enabling
+live classification. The category report still requires ten distinct people per group;
+small populations or narrow filters can legitimately be empty. Use a new database name
+after rebuilding: older completed demos are not backfilled by an exact rerun.
 The operator guide lives in the wiki: [Synthetic demo data](https://github.com/pnp/Microsoft365-Analytics-Insights/wiki/Synthetic-demo-data).
 
 ### Rebuilding a demo database: `--recreate`

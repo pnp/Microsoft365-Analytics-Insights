@@ -238,11 +238,11 @@ namespace WebJob.AppInsightsImporter.Engine
 
             // API Doc: https://docs.microsoft.com/en-us/rest/api/application-insights/query/get
             var req = $"https://api.applicationinsights.io/v1/apps/{_appInsightsId}/query?query={Uri.EscapeDataString(adxQuery)}";
-            var response = await GetWithRetry(req);
-
-            var result = await HandleResponse<AppInsightsQueryResult>(response, saveRestResponses, "pageview");
-
-            return new PageViewCollection(result.DefaultTable, forDate, this._logger);
+            using (var response = await GetWithRetry(req))
+            {
+                var result = await HandleResponse<AppInsightsQueryResult>(response, saveRestResponses, "pageview");
+                return new PageViewCollection(result.DefaultTable, forDate, this._logger);
+            }
         }
 
         /// <summary>
@@ -258,11 +258,11 @@ namespace WebJob.AppInsightsImporter.Engine
             // Doc: https://dev.applicationinsights.io/reference/get-events
             var req = $"https://api.applicationinsights.io/v1/apps/{_appInsightsId}/query?query={Uri.EscapeDataString(adxQuery)}";
 
-            var resultsResponse = await GetWithRetry(req);
-
-            var result = await HandleResponse<AppInsightsQueryResult>(resultsResponse, saveRestResponses, "event");
-
-            return new CustomEventsResultCollection(result.DefaultTable, forDate, _logger);
+            using (var response = await GetWithRetry(req))
+            {
+                var result = await HandleResponse<AppInsightsQueryResult>(response, saveRestResponses, "event");
+                return new CustomEventsResultCollection(result.DefaultTable, forDate, _logger);
+            }
         }
 
         /// <summary>

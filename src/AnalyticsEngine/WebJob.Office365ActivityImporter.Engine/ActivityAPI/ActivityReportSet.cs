@@ -36,6 +36,12 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities
         /// </summary>
         internal ISet<string> MetadataRecoveryBlobIds { get; set; } = new HashSet<string>();
 
+        /// <summary>
+        /// Set only after the backfill's Copilot-metadata existence query has excluded complete events.
+        /// A cached parent audit row must not suppress recovery of its missing Copilot details.
+        /// </summary>
+        internal bool RecoverMissingCopilotMetadata { get; set; }
+
         internal bool RequiresMetadataRecovery(AbstractAuditLogContent auditEvent)
         {
             return auditEvent != null

@@ -4,6 +4,7 @@ using DataUtils.Http;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
@@ -21,6 +22,63 @@ namespace Tests.UnitTests
     [TestClass]
     public class ActivityReportLoaderTimeoutTests
     {
+        [TestMethod]
+        public async Task WebContentMetaDataLoader_UsesGregorianUtcDatesUnderEveryHostCulture()
+        {
+            var original = CultureInfo.CurrentCulture;
+            try
+            {
+                foreach (var culture in new[] { "th-TH", "ar-SA", "en-US" })
+                {
+                    CultureInfo.CurrentCulture = CultureInfo.GetCultureInfo(culture);
+                    var clock = NewClock();
+                    var handler = new SequencedContentHandler(clock, new[] { Response(HttpStatusCode.OK, "[]") });
+                    using (var httpClient = NewConfidentialClient(handler, clock))
+                    {
+                        var loader = new WebContentMetaDataLoader(AnalyticsLogger.ConsoleOnlyTracer(), httpClient, NewConfig());
+                        await loader.GetChangesSummary(new List<string> { "Audit.SharePoint" },
+                            new List<WebJob.Office365ActivityImporter.Engine.Engine.Entities.TimePeriod>
+                            {
+                                new WebJob.Office365ActivityImporter.Engine.Engine.Entities.TimePeriod(
+                                    new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+                                    new DateTime(2026, 1, 2, 0, 0, 0, DateTimeKind.Utc))
+                            });
+
+                        StringAssert.Contains(handler.RequestUris.Single(), "startTime=2026-01-01T00:00:00", culture);
+                        StringAssert.Contains(handler.RequestUris.Single(), "endTime=2026-01-02T00:00:00", culture);
+                    }
+                }
+            }
+            finally
+            {
+                CultureInfo.CurrentCulture = original;
+            }
+        }
+
+        [TestMethod]
+        public async Task WebContentMetaDataLoader_InvalidJsonCountsFailureAndPreservesEarlierPages()
+        {
+            foreach (var invalid in new[] { "{", "{}", "null", "", "[null]" })
+            {
+                var clock = NewClock();
+                var handler = new SequencedContentHandler(clock, new[]
+                {
+                    Response(HttpStatusCode.OK, MetadataJson("page-1"), "NextPageUri", "https://contoso.example/metadata?page=2"),
+                    Response(HttpStatusCode.OK, invalid, "NextPageUri", "https://contoso.example/metadata?page=3"),
+                });
+                using (var httpClient = NewConfidentialClient(handler, clock))
+                {
+                    var loader = new WebContentMetaDataLoader(AnalyticsLogger.ConsoleOnlyTracer(), httpClient, NewConfig());
+                    var result = await loader.DownloadMetadata("https://contoso.example/metadata?page=1", 42);
+
+                    Assert.AreEqual(1, loader.MetadataDownloadErrorCount, "Malformed metadata must not appear as a successful listing: " + invalid);
+                    Assert.AreEqual(1, result.Count, "Keep valid pages already downloaded.");
+                    Assert.AreEqual("page-1", result[0].ContentId);
+                    Assert.AreEqual(2, handler.RequestUris.Count, "Stop this listing on its failed page.");
+                }
+            }
+        }
+
         [TestMethod]
         public async Task ActivityReportWebLoader_HttpTimeout_DoesNotCrash_AndCountsError()
         {

@@ -284,6 +284,18 @@ jobs:
           dotnet test src\AnalyticsEngine\Tests.UnitTests\Tests.UnitTests.csproj `
             -c Release --no-build --nologo --filter "FullyQualifiedName~ControllerActivationTests|FullyQualifiedName~PromptCategoryTests.RuntimeSettings_"
 
+      # Hard-gate the stable 1853 semantic ports; the broad suite below is diagnostic-only.
+      - name: Check stable 1853 configuration and API ports
+        shell: pwsh
+        run: |
+          dotnet test src\AnalyticsEngine\Tests.UnitTests\Tests.UnitTests.csproj `
+            -c Release --no-build --nologo `
+            --filter "FullyQualifiedName~Release1853CorePortTests|FullyQualifiedName~TeamsChannelBudgetTests|FullyQualifiedName~HealthMonitoringTests|FullyQualifiedName~RuntimeHealthTests|FullyQualifiedName~AgentCostConnectionTests|FullyQualifiedName~CopilotAdoptionScoreSettingsTests|FullyQualifiedName~EvaluationCorrectnessTests"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          dotnet test src\AnalyticsEngine\Benchmarks\PromptCategoryEvaluation.Tests\PromptCategoryEvaluation.Tests.csproj `
+            -c Release --nologo
+          exit $LASTEXITCODE
+
       # Guards the demo generator's entry point. Building it proves nothing about whether it RUNS:
       # the project's move to an SDK-style csproj added a target-framework folder to the output path
       # and silently invalidated the literal path Verify-DemoCommand.ps1 used to locate the exe.

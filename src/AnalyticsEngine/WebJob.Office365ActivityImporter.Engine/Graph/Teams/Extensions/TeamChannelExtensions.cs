@@ -16,14 +16,15 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
         /// Sets Messages on each channel. The crawl itself uses the existing source and token ports.
         /// </summary>
         public static async Task<List<TeamChannelDeltaTokenCommit>> PopulateNewMessagesAndReactions(this List<ChannelWithReactions> channels, Team team, RefreshOAuthToken refreshToken,
-            ITeamChannelDeltaTokenStore deltaTokenStore, ILogger logger, List<TeamChannelDeltaTokenCommit> pendingDeltaTokenCommits = null)
+            ITeamChannelDeltaTokenStore deltaTokenStore, ILogger logger, List<TeamChannelDeltaTokenCommit> pendingDeltaTokenCommits = null,
+            TeamsChannelBudgetProgress budget = null)
         {
             if (channels.Count == 0 || refreshToken == null)
             {
                 return pendingDeltaTokenCommits ?? new List<TeamChannelDeltaTokenCommit>();
             }
             var messagesSource = new GraphChannelMessagesSourceLoader(refreshToken, deltaTokenStore, logger);
-            return await new TeamsChannelCrawler(messagesSource).PopulateNewMessagesAndReactions(channels, team.Id, pendingDeltaTokenCommits);
+            return await new TeamsChannelCrawler(messagesSource, budget).PopulateNewMessagesAndReactions(channels, team.Id, pendingDeltaTokenCommits);
         }
 
         public static async Task<TeamChannel> SaveToSql(this ChannelWithReactions channel, TeamsAndCallsDBLookupManager lookupManager, TeamDefinition dbTeam)

@@ -56,6 +56,8 @@ namespace Web.AnalyticsWeb.Controllers
 
         private async Task<IActionResult> Answer(Func<CopilotAdoptionSettingsService, Task<IActionResult>> action)
         {
+            if (!ModelState.IsValid)
+                return BadRequest(new CopilotAdoptionSettingsError { Code = CopilotAdoptionScoreSettingsErrorCodes.InvalidRequest });
             try
             {
                 return await action(_createService());

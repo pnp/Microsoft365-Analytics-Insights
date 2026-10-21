@@ -11,6 +11,87 @@ Ola-Hallengren maintenance scripts `Profiling-01-CommandExecute.sql` and
 
 ---
 
+## Copilot correctness contract (#639 / #699)
+
+`usp_UpsertCopilotActivities` counts turns, not raw audit records: it excludes
+`copilot_chat_duplicates` and the `Copilot Studio` maker-test host in both its
+per-host and total/file/meeting paths. `Microsoft Teams` maps to Teams and an
+unpaired `m365copilot` runtime record maps to Office. Same-host records seconds
+apart are **not** sufficient evidence of duplicates; distinct rapid prompts stay
+counted. Previously compiled weeks do not change automatically: recompile affected
+weeks after repairing source data.
+
+The two legacy templates in `reports\Copilot` use the adjacent SQL sources, embedded
+by `Update-Templates.py`. Their inventory categories are **Customer-built /
+Microsoft / Unknown**, independently of billing kind. A legacy false flag does
+not establish Microsoft origin. No-agent use is separate from Unknown origin.
+Resources unique to either record of a paired turn remain attributed to the counted
+turn; only the same full resource tuple is counted once. Maker testing is excluded.
+The credit field is an **audit-derived estimate, not billed consumption**. Missing
+historical evidence is blank, not zero, and `Estimate status` exposes the gap.
+Refresh/reopen the updated templates; existing user-created reports are not rewritten.
+
+Historical recovery is intentionally limited. `audit_events.event_data` retains
+**CopilotEventData only**, not the top-level AgentId/AppIdentity/AgentPlatform.
+Retained Messages and resources permit recomputation when the stored identity or
+retained platform evidence still establishes billing kind. A bare GUID plus an
+inventory flag cannot establish custom-engine billing kind. Old zero-estimate JSON
+omitted response counts on its early-return path and is not a substitute for those
+Messages. Missing/malformed/oversized retained data and unrecognised kinds remain
+unrecovered. No billing-consumption records are changed.
+The affected deployment interval is tenant-specific: the blanket-zero defect
+starts with that deployment's first affected build (Stable build 1552 onwards)
+and ends when Stable build 1852 is deployed. Earlier classification was incomplete
+too; a build number alone does not prove an individual interaction is recoverable.
+
+The importer's opt-in `--repair-copilot-history <from UTC ISO-8601> <to UTC ISO-8601>
+<private checkpoint file>` mode processes at most 500 stored chats per invocation,
+without Graph access, using the configured database. Repeat the same command until
+`Scanned=0`. The checkpoint is private operational state, bound to the connection
+configuration and half-open UTC window; it contains internal record/user cursor
+identifiers, so never publish it or add it to the repository.
+CLI preflight requires an existing private directory **outside every Git worktree**;
+ignored directories are rejected too, as are paths traversing junctions/symbolic
+links. Validation runs before configuration/target access or artifact creation.
+Paging follows the existing timestamp/user index and retains all cursor components
+even if retention deletes the last processed row. A failure before checkpoint
+replacement can be retried safely. After historical writers
+finish, make another pass with a **new** checkpoint, because inserts behind a
+watermark cannot be guaranteed by any one-pass repair.
+Retained payloads over 1 MiB (1,048,576 bytes) are skipped explicitly; a batch buffers
+at most 8 MiB (8,388,608 bytes) of UTF-16 retained payload text, not total process
+memory. `Unrecoverable` reports invalid/missing/oversized input;
+`UnknownKind` reports replayed agent records whose retained evidence cannot price
+the agent. These are not successful credit recoveries.
+
+ConversationId can be recovered from retained event data and used by the existing
+one-to-one pairing SQL. If neither that field nor retained evidence survives,
+ThreadId and nearby timestamps cannot recover the missing conversation: there is
+no whole-history pairing claim. The bounded `repair_historical_copilot_evidence.sql`
+self-heal fills only recognised NULL origin flags and removes unsupported legacy
+reason-2 time-only mappings. It does not delete or relocate chats/resources.
+Already-deleted DLP copies are not reconstructed by this repair; original-source
+replay is required if those copies are still available.
+Historical mode also leaves overlapping multi-candidate pairings untouched:
+without a prompt correlation key it cannot prove which runtime resource belongs
+to which client prompt. Same-host runtime repeats cannot be distinguished from
+rapid real prompts either. Such rows stay counted, so incomplete historical
+coverage can still overstate distinct turns; it must not be sold as exact recovery.
+Pending or unrecoverable nearby user/conversation facts and unrecognised hosts prevent historical pairing;
+an unhydrated page neighbor is not proof of uniqueness. Only pairs touching the
+current batch's seeds are considered, keeping both endpoints' potential counterpart
+windows inside the bounded neighborhood. Positive legacy credit estimates are
+preserved and labelled as legacy audit estimates, not billed consumption.
+Repeating the replay CLI does not globally drain the separate origin/reason-2
+self-heal: use normal importer cycles or explicitly rerun that bounded SQL repair.
+At large-tenant scale, replay is opt-in and bounded, not an automatic whole-history
+scan. The automatic repair bounds writes but still searches the agent/mapping
+tables; weekly resource attribution adds counted-event index lookups. Monitor
+those existing query paths and run historical replay/recompilation in a maintenance
+window. No new performance index or schema change is introduced here.
+
+---
+
 ## 1. What it is (in one paragraph)
 
 The product imports **raw per-user, per-day Microsoft 365 activity/usage** from the Graph

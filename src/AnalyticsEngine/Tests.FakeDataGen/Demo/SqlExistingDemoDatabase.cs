@@ -483,6 +483,16 @@ WHERE f.parent_object_id=OBJECT_ID(@table);"))
                         .Append(") THROW 51000, 'A synthetic logical foreign key has not been mapped.', 1;");
                     expressions[reference.Key] = "(SELECT actual_id FROM " + map + " WHERE logical_id=" + parameter + ")";
                 }
+                if (plan.Table == DemoTables.PromptTaxonomies)
+                {
+                    // Content-addressed taxonomies are immutable and shared by every appended population.
+                    sql.Append("IF EXISTS (SELECT 1 FROM ").Append(plan.SqlName)
+                        .Append(" WITH (UPDLOCK,HOLDLOCK) WHERE version=").Append(parameters[0]).Append(") BEGIN ")
+                        .Append("IF NOT EXISTS (SELECT 1 FROM ").Append(plan.SqlName)
+                        .Append(" WHERE version=").Append(parameters[0]).Append(" AND categories_json COLLATE Latin1_General_100_BIN2=")
+                        .Append(parameters[1]).Append(") THROW 51000, 'A stored synthetic taxonomy differs from its version.', 1;")
+                        .Append(" END ELSE BEGIN ");
+                }
                 if (plan.ReuseKey.Length > 0)
                 {
                     sql.Append("SET @actual=NULL; SELECT TOP (1) @actual=").Append(Quote(plan.IdentityColumn))
@@ -505,6 +515,7 @@ WHERE f.parent_object_id=OBJECT_ID(@table);"))
                 if (plan.ReuseKey.Length > 0)
                     sql.Append(" END ELSE INSERT INTO ").Append(plan.MapName).Append(" (logical_id,actual_id) VALUES (")
                         .Append(parameters[plan.IdentityIndex]).Append(",@actual);");
+                if (plan.Table == DemoTables.PromptTaxonomies) sql.Append(" END;");
             }
             sql.Append("SELECT @inserted;");
             command.CommandText = sql.ToString();

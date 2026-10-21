@@ -74,6 +74,13 @@
 
   <ItemGroup>
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+    <PackageReference Include="Microsoft.Azure.Kusto.Language" Version="12.4.1" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Include="..\Benchmarks\PromptCategoryEvaluation\Evaluation.cs" Link="PromptCategoryEvaluation\Evaluation.cs" />
+    <Compile Include="..\Benchmarks\PromptCategoryEvaluation.Tests\EvaluationCorrectnessTests.cs" Link="PromptCategoryEvaluation\EvaluationCorrectnessTests.cs" />
+    <EmbeddedResource Include="..\Benchmarks\PromptCategoryEvaluation\synthetic-v1.json" LogicalName="PromptCategoryEvaluation.synthetic-v1.json" />
   </ItemGroup>
 
   <!-- Source linked from Tests.FakeDataGen. A ProjectReference is not possible: FakeDataGen
@@ -108,6 +115,11 @@
     <Compile Include="..\Tests.FakeDataGen\Demo\SqlDemoDatabase.cs" />
     <Compile Include="..\Tests.FakeDataGen\Demo\SqlExistingDemoDatabase.cs" />
     <Compile Include="..\Tests.FakeDataGen\Copilot\CopilotAdoptionPersonas.cs" />
+    <Compile Include="..\Tests.FakeDataGen\Copilot\CopilotInteractionHistoryGenerator.cs" />
+    <Compile Include="..\Tests.FakeDataGen\Copilot\CopilotLicenseManager.cs" />
+    <Compile Include="..\Tests.FakeDataGen\Copilot\CopilotUserManager.cs" />
+    <Compile Include="..\Tests.FakeDataGen\Copilot\CopilotActivityGeneratorConfig.cs" />
+    <Compile Include="..\Tests.FakeDataGen\Generation\ActivityTimestampGenerator.cs" />
     <Compile Include="..\Tests.FakeDataGen\Seeding\SeedDataCatalogue.cs" />
   </ItemGroup>
 
