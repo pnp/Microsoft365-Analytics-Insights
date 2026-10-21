@@ -892,6 +892,9 @@ namespace Tests.UnitTests.InstallTests
 
         private sealed class NetworkingHandler : HttpMessageHandler
         {
+            protected override HttpResponseMessage Send(HttpRequestMessage request, CancellationToken ct)
+                => SendAsync(request, ct).GetAwaiter().GetResult();
+
             public Dictionary<string, JObject> Stored = new Dictionary<string, JObject>(StringComparer.OrdinalIgnoreCase);
             public List<string> Deletes = new List<string>();
             public List<HttpMethod> Methods = new List<HttpMethod>();
@@ -1001,6 +1004,9 @@ namespace Tests.UnitTests.InstallTests
 
         private sealed class ResourceHandler : HttpMessageHandler
         {
+            protected override HttpResponseMessage Send(HttpRequestMessage request, CancellationToken ct)
+                => SendAsync(request, ct).GetAwaiter().GetResult();
+
             public JObject Stored;
             public int Mutations, Reads;
             public int IntegrationDeletes;
@@ -1100,6 +1106,9 @@ namespace Tests.UnitTests.InstallTests
 
         private sealed class EndpointHandler : HttpMessageHandler
         {
+            protected override HttpResponseMessage Send(HttpRequestMessage request, CancellationToken ct)
+                => SendAsync(request, ct).GetAwaiter().GetResult();
+
             public const string EndpointJson = "{\"id\":\"" + EndpointId + "\",\"name\":\"pe-contoso-sql-sql\",\"type\":\"Microsoft.Network/privateEndpoints\",\"location\":\"westeurope\",\"tags\":{},\"properties\":{\"provisioningState\":\"Succeeded\",\"subnet\":{\"id\":\"" + SubnetId + "\"},\"privateLinkServiceConnections\":[{\"name\":\"contoso\",\"properties\":{\"privateLinkServiceId\":\"" + SqlId + "\",\"groupIds\":[\"sqlServer\"],\"privateLinkServiceConnectionState\":{\"status\":\"Approved\"}}}]}}";
             public JObject Stored;
             public int Puts;
