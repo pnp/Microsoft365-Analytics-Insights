@@ -391,7 +391,8 @@ namespace Common.Entities.CopilotAdoption
             }
 
             var agentAuditAvailable = summary.DataSources.AuditAvailable;
-            if (!agentAuditAvailable && _options.UsesExplicitDates)
+            // The estate's independent history also matters when a rolling period is quiet.
+            if (!agentAuditAvailable)
             {
                 var agentProbeHistoryDays = CopilotAdoptionScoring.AgentHistoryWindowDays(_options);
                 agentAuditAvailable = await SafeScalarAsync(
@@ -401,7 +402,7 @@ namespace Common.Entities.CopilotAdoption
                     summary.Warnings,
                     summary.WarningDetails,
                     "Copilot audit data probe",
-                    null,
+                    () => summary.MarkFiguresIncomplete("Copilot audit data"),
                     cancellationToken,
                     new SqlParameter("@from", CopilotAdoptionScoring.WindowStartUtc(nowUtc, agentProbeHistoryDays)),
                     new SqlParameter("@toExclusive", nowUtc)) == 1;

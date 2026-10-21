@@ -470,6 +470,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.AuditBackfill
                     slice.ImportingRecords = false;
                     slice.RecordsNextLink = null;
                     job.SlicesCompleted++;
+                    // Retain whole-day evidence if a later slice aborts this poll before queue publication.
                     if ((slice.EndUtc - slice.StartUtc).TotalHours >= 23)
                     {
                         var dayKey = CopilotAuditBackfillSlicer.DayKey(slice.StartUtc);
@@ -494,6 +495,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.AuditBackfill
             }
 
             job.InFlightSlices = remaining;
+            job.CompletedDays = job.GetCompletedDays().ToList();
             return progressed;
         }
 
@@ -641,6 +643,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.AuditBackfill
                 detail = gap.Detail;
             }
             job.State = state;
+            job.CompletedDays = job.GetCompletedDays().ToList();
             job.CompletedUtc = _utcNow();
             job.LastErrorCode = errorCode;
             job.LastErrorDetail = Truncate(detail);
