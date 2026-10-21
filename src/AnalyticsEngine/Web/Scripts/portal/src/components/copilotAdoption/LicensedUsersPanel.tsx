@@ -52,6 +52,7 @@ import {
 import { usePrintAllRows } from '../shared/printPreparation';
 import { formatCount, formatDate, formatPct, weightSharePct } from '../shared/KpiGrid';
 import ActionPlan, { ActionBadge } from './ActionPlan';
+import TroubleshootUserLink from '../userlookup/TroubleshootUserLink';
 import { useT, useTNode, type TFunction, type TranslationKey } from '../../i18n';
 import {
   adoptionBandLabel,
@@ -804,6 +805,16 @@ export default function LicensedUsersPanel({
                         >
                           <DetailRationale text={recommendedActionText(t, row, options)} />
                         </DetailSection>
+                        <TroubleshootUserLink
+                          context={{
+                            upn: row.userPrincipalName,
+                            report: 'copilotAdoption',
+                            windowDays,
+                            from: dateRange?.from,
+                            to: dateRange?.to,
+                            licenceTypeIds: seatLicenceTypeIds,
+                          }}
+                        />
                       </DetailRow>
                     )}
                   </Fragment>

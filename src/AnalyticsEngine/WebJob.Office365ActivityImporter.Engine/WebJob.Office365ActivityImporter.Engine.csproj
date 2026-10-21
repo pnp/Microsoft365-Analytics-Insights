@@ -111,7 +111,6 @@
   </ItemGroup>
   <ItemGroup>
     <None Include="App.config" />
-    <EmbeddedResource Include="Resources\Product_names_and_service_plan_identifiers_for_licensing.csv" />
     <None Include="Graph\Copilot\InteractionHistory\readme.md" />
     <None Include="Graph\Email\readme.md" />
     <None Include="Graph\User\REFACTORING_SUMMARY.md" />

@@ -156,7 +156,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             var store = _licenseStoreFactory(db);
             var refresh = await store.StartRefresh(DateTime.UtcNow);
             var seatCountSnapshots = await SaveSubscribedSkuCapacityAsync(db, skuLicenseTypes, refresh.CompletedUtc);
-            await store.CarryAssignmentsAcrossRenamedLicenceTypes(skuLicenseTypes.Select(pair => pair.Value.ID).ToList(), refresh);
+            var moved = await store.CarryAssignmentsAcrossRenamedLicenceTypes(skuLicenseTypes.Select(pair => pair.Value.ID).ToList(), refresh);
 
             // Build the state Graph says the table should be in. Using a set also gives us the
             // de-duplication the UNIQUE index on (license_type_id, user_id) demands: two SKU part
@@ -220,8 +220,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 // Additions before removals. A user moving from one SKU to another then briefly holds
                 // both licences rather than neither - a momentary superset is safe to report on, a
                 // momentary gap is exactly the bug this replaced.
-                added = await store.AddAssignments(delta.ToAdd, refresh);
-                removed = await store.RemoveAssignments(removals, refresh);
+                added = await WriteFencedAsync(delta.ToAdd, chunk => store.AddAssignments(chunk, refresh));
+                removed = await WriteFencedAsync(removals, chunk => store.RemoveAssignments(chunk, refresh));
             }
 
             var reconciled = await store.ReconcileHistoryWithCurrentLookups(refresh);
@@ -231,8 +231,66 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 $"User import - licence refresh complete: {added.ToString("N0")} assignment(s) added, {removed.ToString("N0")} removed" +
                 $", {reconciled.OpenedLookupRowsWithoutHistory.ToString("N0")} missing history row(s) opened and {reconciled.ClosedOpenRowsWithoutLookup.ToString("N0")} stale history row(s) closed" +
                 (runId.HasValue ? $", history refresh run {runId.Value.ToString("N0")} recorded." : "."));
+
+            if (added > 0 || removed > 0 || moved > 0)
+            {
+                await NotifyLicencesChangedAsync();
+            }
         }
 
+        /// <summary>Rows per licence write between checks of the users-and-licences lock.</summary>
+        internal const int FencedWriteChunk = 2000;
+
+        /// <summary>
+        /// Writes in chunks, checking the users-and-licences lock before each: the rows were read from Graph minutes
+        /// earlier, and once the lock is lost a one-person refresh may write a newer answer that the rest of this older
+        /// reading must not overwrite. A chunk already started when the lock is lost still completes; none starts after.
+        /// </summary>
+        private async Task<int> WriteFencedAsync(IReadOnlyList<UserLicenseAssignment> rows, Func<IReadOnlyList<UserLicenseAssignment>, Task<int>> write)
+        {
+            var written = 0;
+            for (var i = 0; i < rows.Count; i += FencedWriteChunk)
+            {
+                if (!await WriteFence())
+                {
+                    throw new InvalidOperationException("User import - lost the users-and-licences writer lock while writing licences; not writing more of an answer that may now be out of date. The refresh is retried on the next cycle.");
+                }
+
+                var count = Math.Min(FencedWriteChunk, rows.Count - i);
+                var chunk = new List<UserLicenseAssignment>(count);
+                for (var j = 0; j < count; j++)
+                {
+                    chunk.Add(rows[i + j]);
+                }
+                written += await write(chunk);
+            }
+            return written;
+        }
+
+        /// <summary>
+        /// Checked immediately before licence writes; false means the users-and-licences writer lock was lost and the
+        /// write must not happen. Always true when no lock is in use.
+        /// </summary>
+        public Func<Task<bool>> WriteFence { get; set; } = () => Task.FromResult(true);
+
+        /// <summary>
+        /// Called after licence assignments changed, so report caches stop serving results computed before the change.
+        /// Best effort: a failure is logged, never thrown - the licences are already right.
+        /// </summary>
+        public Func<Task> LicencesChanged { get; set; }
+
+        private async Task NotifyLicencesChangedAsync()
+        {
+            if (LicencesChanged == null) return;
+            try
+            {
+                await LicencesChanged();
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning($"User import - licences changed but the report-cache generation could not be advanced ({ex.GetType().Name}); reports refresh when their caches expire.");
+            }
+        }
 
         private async Task<List<LicenseSeatCountSnapshot>> SaveSubscribedSkuCapacityAsync(
             AnalyticsEntitiesContext db,
@@ -493,17 +551,21 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
 
             var store = _licenseStoreFactory(db);
             var refresh = await store.StartRefresh(DateTime.UtcNow);
-            await store.CarryAssignmentsAcrossRenamedLicenceTypes(desired.Select(d => d.LicenseTypeId).Distinct().ToList(), refresh);
+            var moved = await store.CarryAssignmentsAcrossRenamedLicenceTypes(desired.Select(d => d.LicenseTypeId).Distinct().ToList(), refresh);
             var current = await store.LoadAssignmentsFor(userIds);
             var delta = UserLicenseAssignmentDelta.Between(current, desired);
-            var added = await store.AddAssignments(delta.ToAdd, refresh);
-            var removed = await store.RemoveAssignments(delta.ToRemove, refresh);
+            var added = await WriteFencedAsync(delta.ToAdd, chunk => store.AddAssignments(chunk, refresh));
+            var removed = await WriteFencedAsync(delta.ToRemove, chunk => store.RemoveAssignments(chunk, refresh));
             var reconciled = await store.ReconcileHistoryWithCurrentLookups(refresh);
             var runId = await store.CompleteRefresh(refresh, new List<LicenseSeatCountSnapshot>());
             _logger.LogInformation(
                 $"User import - per-user licence refresh complete for {userIds.Count.ToString("N0")} user(s): {added.ToString("N0")} assignment(s) added, {removed.ToString("N0")} removed" +
                 $", {reconciled.OpenedLookupRowsWithoutHistory.ToString("N0")} missing history row(s) opened and {reconciled.ClosedOpenRowsWithoutLookup.ToString("N0")} stale history row(s) closed" +
                 (runId.HasValue ? $", history refresh run {runId.Value.ToString("N0")} recorded." : "."));
+            if (added > 0 || removed > 0 || moved > 0)
+            {
+                await NotifyLicencesChangedAsync();
+            }
             return runId;
         }
 
@@ -517,8 +579,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         /// </summary>
         public async Task<LicenseType> GetLicenseType(string skuPartNumber)
         {
-            var productName = _officeLicenseNameResolver.GetDisplayNameFor(skuPartNumber);
-            if (string.IsNullOrEmpty(productName))
+            return await GetOrCreateLicenseType(_userMetaCache.LicenseTypeCache, _officeLicenseNameResolver, skuPartNumber, () =>
             {
                 // Expected, and nothing an admin can act on: some current SKUs (e.g. CDS_API_CAPACITY) are missing
                 // from Microsoft's own published CSV too. Information, once per SKU per import - the per-user
@@ -527,6 +588,19 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 {
                     _logger.LogInformation($"User import - SKU part-number '{skuPartNumber}' has no display name in Microsoft's licensing CSV (Product_names_and_service_plan_identifiers_for_licensing.csv), so its licences are filed under the part number.");
                 }
+            });
+        }
+
+        /// <summary>
+        /// The licence type a SKU is filed under: its product display name, or the part number when the catalogue has
+        /// none. Shared with the one-person refresh, which must file a licence exactly where this import does.
+        /// </summary>
+        internal static async Task<LicenseType> GetOrCreateLicenseType(Common.Entities.LookupCaches.LicenseTypeCache cache, IOfficeLicenseNameResolver resolver, string skuPartNumber, Action noDisplayName = null)
+        {
+            var productName = resolver.GetDisplayNameFor(skuPartNumber);
+            if (string.IsNullOrEmpty(productName))
+            {
+                noDisplayName?.Invoke();
 
                 // Set display name as SKU ID
                 productName = skuPartNumber;
@@ -539,13 +613,12 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             // by name, so a key longer than the stored name would never find its row again.
             productName = StringUtils.EnsureMaxLength(productName, LicenceTypeNameMaxLength);
 
-            var thisLicense = await _userMetaCache.LicenseTypeCache.GetOrCreateNewResource(productName,
+            return await cache.GetOrCreateNewResource(productName,
                 new LicenseType
                 {
                     Name = productName,
                     SKUID = skuPartNumber
                 });
-            return thisLicense;
         }
     }
 }

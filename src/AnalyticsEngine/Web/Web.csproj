@@ -329,6 +329,11 @@
     <Compile Include="Models\UserDataLookup\SqlUserDataLookupQuery.cs" />
     <Compile Include="Models\UserDataLookup\UserDataLookupRules.cs" />
     <Compile Include="Models\UserDataLookup\UserDataLookupService.cs" />
+    <Compile Include="Models\UserDiagnostics\ImportStampReader.cs" />
+    <Compile Include="Models\UserDiagnostics\LicenceDataGenerationSource.cs" />
+    <Compile Include="Models\UserDiagnostics\UserCoverageModels.cs" />
+    <Compile Include="Models\UserDiagnostics\UserDiagnosticsQuery.cs" />
+    <Compile Include="Models\UserDiagnostics\UserDiagnosticsService.cs" />
     <Compile Include="Models\UserImport\UserImportCheckpointModels.cs" />
     <Compile Include="Models\UserImport\UserImportCheckpointService.cs" />
     <Compile Include="Models\UserScope\UserScopeModels.cs" />

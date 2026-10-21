@@ -1,4 +1,4 @@
-﻿using Common.Entities;
+using Common.Entities;
 using Common.Entities.Agent365;
 using Common.Entities.Config;
 using Common.Entities.Entities.UsageReports;
@@ -43,13 +43,13 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Sections
         // cleared by hand (delete the row) to make that import run on the next cycle. The user import's key is shared
         // with the web portal's User import page, which clears it for the same reason.
         public const string GraphUsersMetadataLastImportedKey = Common.Entities.State.UserImportCheckpointKeys.LastCompleted;
-        public const string GraphTeamsLastImportedKey = "GraphTeamsLastImported";
-        public const string GraphCopilotUsageReportsLastImportedKey = "GraphCopilotUsageReportsLastImported";
+        public const string GraphTeamsLastImportedKey = Common.Entities.State.ImportScheduleKeys.GraphTeams;
+        public const string GraphCopilotUsageReportsLastImportedKey = Common.Entities.State.ImportScheduleKeys.GraphCopilotUsageReports;
         public const string Agent365PackageCatalogLastImportedKey = "Agent365PackageCatalogLastImported";
         public const string GraphCopilotUsageReportUserCountTrendLastImportedKey = GraphCopilotUsageReportsLastImportedKey + ":UserCountTrend";
         public const string GraphCopilotUsageReportUserCountSummaryLastImportedKey = GraphCopilotUsageReportsLastImportedKey + ":UserCountSummary";
         public const string GraphCopilotUsageReportUsageUserDetailLastImportedKey = GraphCopilotUsageReportsLastImportedKey + ":UsageUserDetail";
-        public const string CopilotInteractionHistoryLastImportedKey = "CopilotInteractionHistoryLastImported";
+        public const string CopilotInteractionHistoryLastImportedKey = Common.Entities.State.ImportScheduleKeys.CopilotInteractionHistory;
 
         private readonly AnalyticsLogger _logger;
         private readonly AppConfig _settings;

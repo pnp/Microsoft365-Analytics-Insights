@@ -1,10 +1,14 @@
 using Common.Entities.Config;
+using Common.Entities.UserDiagnostics;
 using System;
 using System.Net;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Web.Http;
 using Web.AnalyticsWeb.Models;
 using Web.AnalyticsWeb.Models.UserDataLookup;
+using Web.AnalyticsWeb.Models.UserDiagnostics;
+using Web.AnalyticsWeb.Models.UserFilters;
 using Web.AnalyticsWeb.Security;
 
 namespace Web.AnalyticsWeb.Controllers
@@ -28,14 +32,20 @@ namespace Web.AnalyticsWeb.Controllers
     public class UserDataLookupAPIController : ApiController
     {
         private readonly IUserDataLookupService _service;
+        private readonly Func<UserDiagnosticsService> _diagnostics;
 
-        public UserDataLookupAPIController() : this(new UserDataLookupService(new SqlUserDataLookupQuery()))
+        public UserDataLookupAPIController() : this(new UserDataLookupService(new SqlUserDataLookupQuery()), UserDiagnosticsService.ForThisDeployment)
         {
         }
 
-        public UserDataLookupAPIController(IUserDataLookupService service)
+        public UserDataLookupAPIController(IUserDataLookupService service) : this(service, UserDiagnosticsService.ForThisDeployment)
+        {
+        }
+
+        internal UserDataLookupAPIController(IUserDataLookupService service, Func<UserDiagnosticsService> diagnostics)
         {
             _service = service ?? throw new ArgumentNullException(nameof(service));
+            _diagnostics = diagnostics ?? throw new ArgumentNullException(nameof(diagnostics));
         }
 
         /// <summary>
@@ -61,6 +71,85 @@ namespace Web.AnalyticsWeb.Controllers
             return ToActionResult(await _service.GetDetailAsync(upn, category, take), upn);
         }
 
+        /// <summary>
+        /// GET api/UserDataLookup/diagnostics?upn=user@contoso.com
+        /// Stored licences with their Copilot classification, licence history, import freshness, scope and findings.
+        /// Answers for a person the import has never stored too: that is often the question.
+        /// </summary>
+        [HttpGet]
+        [Route("diagnostics")]
+        public async Task<IHttpActionResult> Diagnostics(string upn = "")
+        {
+            return ToActionResult(await _diagnostics().GetDiagnosticsAsync(upn), upn);
+        }
+
+        /// <summary>
+        /// GET api/UserDataLookup/live-licences?upn=user@contoso.com
+        /// Reads the person's licences from Microsoft Graph now and compares them with SQL. Read-only; refused without a
+        /// Graph call for anyone not confirmed in the import scope.
+        /// </summary>
+        [HttpGet]
+        [Route("live-licences")]
+        public async Task<IHttpActionResult> LiveLicences(string upn = "", CancellationToken cancellationToken = default(CancellationToken))
+        {
+            return ToActionResult(await _diagnostics().CompareLiveAsync(upn, cancellationToken), upn);
+        }
+
+        /// <summary>
+        /// GET api/UserDataLookup/report-verdict?upn=...&amp;report=copilotAdoption&amp;windowDays=28[&amp;from=&amp;to=][&amp;licenceTypeIds=1,2]
+        /// Why a report counts the person as licensed or unlicensed, recomputed with the report's own rule.
+        /// </summary>
+        [HttpGet]
+        [Route("report-verdict")]
+        public async Task<IHttpActionResult> ReportVerdict(string upn = "", string report = "copilotAdoption", int windowDays = 28,
+            string from = null, string to = null, string licenceTypeIds = null)
+        {
+            var ids = CopilotAdoptionAPIController.ParseIds(licenceTypeIds);
+            return ToActionResult(await _diagnostics().GetReportVerdictAsync(upn, report, windowDays, from, to, ids), upn);
+        }
+
+        /// <summary>
+        /// GET api/UserDataLookup/coverage?upn=user@contoso.com
+        /// The newest stored record of each kind for the person, and what is known about each feeding import.
+        /// </summary>
+        [HttpGet]
+        [Route("coverage")]
+        public async Task<IHttpActionResult> Coverage(string upn = "")
+        {
+            return ToActionResult(await _diagnostics().GetCoverageAsync(upn), upn);
+        }
+
+        /// <summary>
+        /// POST api/UserDataLookup/refresh {"upn": "user@contoso.com"}
+        /// Queues a one-person refresh of the profile and licences for the importer. Answers at once; follow the request
+        /// with <c>refresh-status</c>. A refusal (out of scope, not stored, no Storage) is a 200 with a stable reason.
+        /// </summary>
+        [HttpPost]
+        [Route("refresh")]
+        [RequireSameOriginXhr]
+        public async Task<IHttpActionResult> Refresh([FromBody] UserRefreshSubmitRequest request)
+        {
+            var upn = request?.Upn ?? string.Empty;
+            var requestedBy = PortalViewer.UserPrincipalNameOf(User) ?? User?.Identity?.Name;
+            return ToActionResult(await _diagnostics().SubmitRefreshAsync(upn, requestedBy), upn);
+        }
+
+        /// <summary>
+        /// GET api/UserDataLookup/refresh-status?id=... One refresh request and, once finished, its result. An unknown id is
+        /// a bare 404: the portal words that itself, so the server sends no sentence.
+        /// </summary>
+        [HttpGet]
+        [Route("refresh-status")]
+        public async Task<IHttpActionResult> RefreshStatus(string id = "")
+        {
+            var refresh = await _diagnostics().GetRefreshAsync(id);
+            if (refresh == null)
+            {
+                return NotFound();
+            }
+            return Ok(refresh);
+        }
+
         private IHttpActionResult ToActionResult<T>(UserDataLookupResult<T> result, string upn) where T : class
         {
             switch (result.Status)
@@ -81,6 +170,13 @@ namespace Web.AnalyticsWeb.Controllers
         {
             if (message == "A 'upn' query parameter is required.")
                 return new ApiErrorModel(message, "missingUpn");
+
+            // The report-verdict range errors are already stable catalog keys (see CopilotAdoptionDateRange).
+            if (message.StartsWith("copilotAdoption.error.", StringComparison.Ordinal))
+                return new ApiErrorModel(message, message);
+
+            if (message.StartsWith("Unknown report '", StringComparison.Ordinal))
+                return new ApiErrorModel(message, "unknownReport");
 
             const string unknownPrefix = "Unknown category '";
             if (message.StartsWith(unknownPrefix) && message.EndsWith("'."))

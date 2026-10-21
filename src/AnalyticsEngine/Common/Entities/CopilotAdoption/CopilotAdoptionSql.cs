@@ -2528,9 +2528,58 @@ namespace Common.Entities.CopilotAdoption
                 "    SELECT DISTINCT h.user_id AS user_id\r\n" +
                 "    FROM dbo.user_license_history AS h\r\n" +
                 $"    WHERE h.license_type_id IN ({seats})\r\n" +
-                "      AND (h.valid_from_utc < @toExclusive OR (h.from_source = 0 AND h.valid_from_utc <= @historyStart))\r\n" +
-                "      AND (h.valid_to_utc IS NULL OR h.valid_to_utc > @from)\r\n" +
+                HistoryHoldingCondition("h", "      ") +
                 ")";
+        }
+
+        /// <summary>
+        /// The window test that makes a <c>user_license_history</c> row count as "held a seat in the
+        /// reporting period". Shared by every licensed/unlicensed predicate in this class and by the
+        /// per-user verdict trace (<see cref="UserSeatEvidenceSql"/>), so the trace cannot drift from the
+        /// report it explains. A row seeded when history tracking began (<c>from_source = 0</c>) counts
+        /// from the start of the window, because it means "held before tracking began", not "assigned then".
+        /// </summary>
+        internal static string HistoryHoldingCondition(string alias, string indent)
+        {
+            return
+                $"{indent}AND ({alias}.valid_from_utc < @toExclusive OR ({alias}.from_source = 0 AND {alias}.valid_from_utc <= @historyStart))\r\n" +
+                $"{indent}AND ({alias}.valid_to_utc IS NULL OR {alias}.valid_to_utc > @from)\r\n";
+        }
+
+        /// <summary>
+        /// The rows that decide whether ONE user counts as licensed in the Copilot Adoption report, using the
+        /// report's own seat-holding rule: the current licence lookups for a rolling window, or the licence
+        /// history overlapping the period when the report uses history. Returns every row for the seat
+        /// licence types, so an empty result is the report's "unlicensed" verdict and each row is a reason
+        /// for "licensed". Parameters: <c>@userId</c>, plus <c>@from</c>, <c>@toExclusive</c> and
+        /// <c>@historyStart</c> when <paramref name="useLicenceHistory"/>.
+        /// </summary>
+        public static string UserSeatEvidenceSql(IEnumerable<int> seatLicenceTypeIds, bool useLicenceHistory)
+        {
+            var seats = IdList(seatLicenceTypeIds);
+            if (!useLicenceHistory)
+            {
+                return
+                    "SELECT ul.license_type_id AS LicenceTypeId,\r\n" +
+                    "       CAST(NULL AS datetime2) AS ValidFromUtc,\r\n" +
+                    "       CAST(NULL AS datetime2) AS ValidToUtc,\r\n" +
+                    "       CAST(NULL AS tinyint) AS FromSource\r\n" +
+                    "FROM dbo.user_license_type_lookups AS ul\r\n" +
+                    "WHERE ul.user_id = @userId\r\n" +
+                    $"  AND ul.license_type_id IN ({seats})\r\n" +
+                    "ORDER BY ul.license_type_id;";
+            }
+
+            return
+                "SELECT h.license_type_id AS LicenceTypeId,\r\n" +
+                "       h.valid_from_utc AS ValidFromUtc,\r\n" +
+                "       h.valid_to_utc AS ValidToUtc,\r\n" +
+                "       h.from_source AS FromSource\r\n" +
+                "FROM dbo.user_license_history AS h\r\n" +
+                "WHERE h.user_id = @userId\r\n" +
+                $"  AND h.license_type_id IN ({seats})\r\n" +
+                HistoryHoldingCondition("h", "  ") +
+                "ORDER BY h.license_type_id, h.valid_from_utc;";
         }
 
         private static string UnlicensedPredicate(
@@ -2555,8 +2604,7 @@ namespace Common.Entities.CopilotAdoption
                 $"{indent}    SELECT 1 FROM dbo.user_license_history AS h\r\n" +
                 $"{indent}    WHERE h.user_id = {userIdExpression}\r\n" +
                 $"{indent}      AND h.license_type_id IN ({seats})\r\n" +
-                $"{indent}      AND (h.valid_from_utc < @toExclusive OR (h.from_source = 0 AND h.valid_from_utc <= @historyStart))\r\n" +
-                $"{indent}      AND (h.valid_to_utc IS NULL OR h.valid_to_utc > @from)\r\n" +
+                HistoryHoldingCondition("h", indent + "      ") +
                 $"{indent})\r\n";
         }
 

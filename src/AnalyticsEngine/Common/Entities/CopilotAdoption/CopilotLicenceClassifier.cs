@@ -107,22 +107,39 @@ namespace Common.Entities.CopilotAdoption
         /// </param>
         public static bool IsCopilotSeat(string skuPartNumber, string displayName)
         {
+            return Explain(skuPartNumber, displayName).IsCopilotSeat;
+        }
+
+        /// <summary>
+        /// Identifies this version of the rules, so a diagnostic or an export can say which rules decided
+        /// a classification. Change it whenever a prefix, exclusion or name rule changes.
+        /// </summary>
+        public const string RuleSetVersion = "2026-10-e7";
+
+        /// <summary>
+        /// The same decision as <see cref="IsCopilotSeat"/>, with the rule that made it, so an administrator
+        /// can see - and challenge - why a SKU was or was not counted.
+        /// </summary>
+        public static CopilotSeatClassification Explain(string skuPartNumber, string displayName)
+        {
             var sku = Normalise(skuPartNumber);
 
             if (sku.Length > 0)
             {
-                if (StartsWithAny(sku, ExcludedSkuPrefixes))
+                var excluded = FirstMatch(sku, ExcludedSkuPrefixes);
+                if (excluded != null)
                 {
-                    return false;
+                    return new CopilotSeatClassification(false, CopilotSeatClassificationReasons.ExcludedSkuPrefix, excluded);
                 }
 
-                if (StartsWithAny(sku, SeatSkuPrefixes))
+                var seat = FirstMatch(sku, SeatSkuPrefixes);
+                if (seat != null)
                 {
-                    return true;
+                    return new CopilotSeatClassification(true, CopilotSeatClassificationReasons.SeatSkuPrefix, seat);
                 }
             }
 
-            return IsSeatDisplayName(displayName);
+            return ExplainDisplayName(displayName);
         }
 
         /// <summary>
@@ -133,26 +150,30 @@ namespace Common.Entities.CopilotAdoption
         /// which would understate adoption; a false negative is visible in the licence-types list and
         /// can be corrected with an explicit override.
         /// </summary>
-        private static bool IsSeatDisplayName(string displayName)
+        private static CopilotSeatClassification ExplainDisplayName(string displayName)
         {
             if (string.IsNullOrWhiteSpace(displayName))
             {
-                return false;
+                return new CopilotSeatClassification(false, CopilotSeatClassificationReasons.NoRuleMatched, null);
             }
 
             var name = displayName.Trim().ToLowerInvariant();
 
             if (!name.Contains("copilot"))
             {
-                return false;
+                return new CopilotSeatClassification(false, CopilotSeatClassificationReasons.NoRuleMatched, null);
             }
 
-            if (ExcludedNameWords.Any(word => name.Contains(word)))
+            var excludedWord = ExcludedNameWords.FirstOrDefault(word => name.Contains(word));
+            if (excludedWord != null)
             {
-                return false;
+                return new CopilotSeatClassification(false, CopilotSeatClassificationReasons.ExcludedNameWord, excludedWord.Trim());
             }
 
-            return SeatNameQualifiers.Any(qualifier => name.Contains(qualifier));
+            var qualifier = SeatNameQualifiers.FirstOrDefault(q => name.Contains(q));
+            return qualifier != null
+                ? new CopilotSeatClassification(true, CopilotSeatClassificationReasons.SeatDisplayName, "copilot + " + qualifier)
+                : new CopilotSeatClassification(false, CopilotSeatClassificationReasons.CopilotNameWithoutQualifier, null);
         }
 
         /// <summary>
@@ -167,20 +188,49 @@ namespace Common.Entities.CopilotAdoption
             }
 
             return licenceTypes
-                .Select(licenceType => new LicenceTypeClassification
+                .Select(licenceType =>
                 {
-                    Id = licenceType.Id,
-                    Name = licenceType.Name,
-                    SkuPartNumber = licenceType.SkuPartNumber,
-                    AssignedUsers = licenceType.AssignedUsers,
-                    PurchasedUnits = licenceType.PurchasedUnits,
-                    UnassignedUnits = licenceType.PurchasedUnits.HasValue && licenceType.PurchasedUnits.Value >= licenceType.AssignedUsers
-                        ? licenceType.PurchasedUnits.Value - licenceType.AssignedUsers
-                        : (int?)null,
-                    PurchasedUnitsRefreshedUtc = licenceType.PurchasedUnitsRefreshedUtc,
-                    IsCopilotSeat = IsCopilotSeat(licenceType.SkuPartNumber, licenceType.Name),
+                    var explanation = Explain(licenceType.SkuPartNumber, licenceType.Name);
+                    return new LicenceTypeClassification
+                    {
+                        Id = licenceType.Id,
+                        Name = licenceType.Name,
+                        SkuPartNumber = licenceType.SkuPartNumber,
+                        AssignedUsers = licenceType.AssignedUsers,
+                        PurchasedUnits = licenceType.PurchasedUnits,
+                        UnassignedUnits = licenceType.PurchasedUnits.HasValue && licenceType.PurchasedUnits.Value >= licenceType.AssignedUsers
+                            ? licenceType.PurchasedUnits.Value - licenceType.AssignedUsers
+                            : (int?)null,
+                        PurchasedUnitsRefreshedUtc = licenceType.PurchasedUnitsRefreshedUtc,
+                        IsCopilotSeat = explanation.IsCopilotSeat,
+                        ClassificationReason = explanation.Reason,
+                        MatchedRule = explanation.MatchedRule,
+                    };
                 })
                 .ToList();
+        }
+
+        /// <summary>
+        /// Rewrites <paramref name="classifications"/> to what a report with an explicit seat override
+        /// actually counted, recording where the override disagreed with the rules. The automatic
+        /// <see cref="LicenceTypeClassification.MatchedRule"/> is kept, so the rule the override replaced
+        /// is still visible.
+        /// </summary>
+        public static void ApplyOverride(IEnumerable<LicenceTypeClassification> classifications, IEnumerable<int> effectiveSeatIds)
+        {
+            if (classifications == null) return;
+            var effective = new HashSet<int>(effectiveSeatIds ?? Enumerable.Empty<int>());
+            foreach (var licence in classifications)
+            {
+                var counted = effective.Contains(licence.Id);
+                if (counted != licence.IsCopilotSeat)
+                {
+                    licence.ClassificationReason = counted
+                        ? CopilotSeatClassificationReasons.ReportOverrideIncluded
+                        : CopilotSeatClassificationReasons.ReportOverrideExcluded;
+                }
+                licence.IsCopilotSeat = counted;
+            }
         }
 
         /// <summary>
@@ -206,9 +256,9 @@ namespace Common.Entities.CopilotAdoption
             return all.Where(l => l.IsCopilotSeat).Select(l => l.Id).ToList();
         }
 
-        private static bool StartsWithAny(string normalisedSku, IEnumerable<string> prefixes)
+        private static string FirstMatch(string normalisedSku, IEnumerable<string> prefixes)
         {
-            return prefixes.Any(prefix => normalisedSku.StartsWith(prefix, StringComparison.Ordinal));
+            return prefixes.FirstOrDefault(prefix => normalisedSku.StartsWith(prefix, StringComparison.Ordinal));
         }
 
         /// <summary>

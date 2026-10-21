@@ -10,7 +10,9 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
 {
     /// <summary>
     /// Resolves a SKU part number (e.g. <c>ENTERPRISEPACK</c>) to Microsoft's product display name
-    /// (e.g. "Office 365 E3"), using the licensing CSV Microsoft publishes, embedded in this assembly.
+    /// (e.g. "Office 365 E3"), using the licensing CSV Microsoft publishes, embedded in
+    /// <c>Common.Entities</c> so the web portal's licence diagnostics read the same file
+    /// (<see cref="Common.Entities.Licences.LicensingCatalogue"/>).
     /// </summary>
     /// <remarks>
     /// Source: https://learn.microsoft.com/en-us/entra/identity/users/licensing-service-plan-reference
@@ -18,23 +20,17 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
     public class OfficeLicenseNameResolver : IOfficeLicenseNameResolver
     {
         /// <summary>
-        /// Manifest name of the embedded CSV. Format: "{Namespace}.{Folder}.{filename}.{Extension}"
+        /// Manifest name of the embedded CSV, in the <c>Common.Entities</c> assembly.
         /// </summary>
-        public const string RESOURCE_NAME = "WebJob.Office365ActivityImporter.Engine.Resources.Product_names_and_service_plan_identifiers_for_licensing.csv";
+        public const string RESOURCE_NAME = Common.Entities.Licences.LicensingCatalogue.ResourceName;
 
         // Keyed by part number after NormaliseWhitespace, compared case-insensitively.
         private readonly Dictionary<string, string> _displayNamesBySku = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
         public OfficeLicenseNameResolver()
         {
-            var assembly = Assembly.GetExecutingAssembly();
-            using (var stream = assembly.GetManifestResourceStream(RESOURCE_NAME))
+            using (var stream = Common.Entities.Licences.LicensingCatalogue.OpenEmbeddedCsv())
             {
-                if (stream == null)
-                {
-                    throw new ArgumentOutOfRangeException(nameof(RESOURCE_NAME), $"No resource found by name '{RESOURCE_NAME}'");
-                }
-
                 using (var reader = new StreamReader(stream))
                 {
                     Load(reader);

@@ -211,11 +211,7 @@ namespace Common.Entities.CopilotAdoption
             // and the workbook asserted that a SKU was excluded while every figure on the page included it.
             if (seatLicenceTypeIdOverride != null)
             {
-                var effective = new HashSet<int>(seatIds);
-                foreach (var licence in summary.SeatLicenceTypes)
-                {
-                    licence.IsCopilotSeat = effective.Contains(licence.Id);
-                }
+                CopilotLicenceClassifier.ApplyOverride(summary.SeatLicenceTypes, seatIds);
 
                 SummarisePurchasedSeatCapacity(summary);
             }

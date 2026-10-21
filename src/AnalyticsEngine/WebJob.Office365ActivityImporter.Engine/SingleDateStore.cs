@@ -71,7 +71,7 @@ namespace WebJob.Office365ActivityImporter.Engine
         /// The phase-level marker's key in <see cref="StatePartitions.ImportSchedule"/>. Deleting the row makes the
         /// usage-report phase run on the next cycle.
         /// </summary>
-        public const string UserActivityLastImportedKey = "UserActivityLastImported";
+        public const string UserActivityLastImportedKey = Common.Entities.State.ImportScheduleKeys.UsageReportsPhase;
 
         public static ISingleDateStore Create(AppConfig config, ILogger logger)
         {

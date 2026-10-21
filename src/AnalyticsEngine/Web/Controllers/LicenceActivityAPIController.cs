@@ -11,6 +11,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Web.Http;
 using Web.AnalyticsWeb.Models.LicenceActivity;
+using Web.AnalyticsWeb.Models.UserDiagnostics;
 using Web.AnalyticsWeb.Models.UserFilters;
 using Web.AnalyticsWeb.Security;
 
@@ -35,20 +36,23 @@ namespace Web.AnalyticsWeb.Controllers
         private readonly LicenceActivitySnapshotCache<LicenceActivityOverview> _overviews;
         private readonly LicenceActivitySnapshotCache<LicenceActivityUsers> _users;
         private readonly ReportScopeResolver _scopes;
+        private readonly LicenceDataGenerationSource _licenceGeneration;
 
-        public LicenceActivityAPIController() : this(CreateContext, OverviewCache, UsersCache, ReportScopeResolver.Default) { }
+        public LicenceActivityAPIController() : this(CreateContext, OverviewCache, UsersCache, ReportScopeResolver.Default, LicenceDataGenerationSource.Production) { }
 
         /// <summary>For tests: no global filter unless <paramref name="scopes"/> supplies one.</summary>
         internal LicenceActivityAPIController(
             Func<LicenceActivityRequestContext> context,
             LicenceActivitySnapshotCache<LicenceActivityOverview> overviews,
             LicenceActivitySnapshotCache<LicenceActivityUsers> users,
-            ReportScopeResolver scopes = null)
+            ReportScopeResolver scopes = null,
+            LicenceDataGenerationSource licenceGeneration = null)
         {
             _context = context;
             _overviews = overviews;
             _users = users;
             _scopes = scopes ?? new ReportScopeResolver(GlobalFilterProviders.None, CachedUserDirectorySource.Default);
+            _licenceGeneration = licenceGeneration ?? LicenceDataGenerationSource.None;
         }
 
         [HttpGet, Route("availability")]
@@ -78,7 +82,10 @@ namespace Web.AnalyticsWeb.Controllers
                 var scope = await _scopes.ResolveAsync(Request, User, null, cancellationToken).ConfigureAwait(false);
                 if (scope.IsRestricted) query = query.WithPeopleScope(scope.Includes, scope.Sql.Key);
 
-                var task = _overviews.GetAsync(context.Scope, query.CacheKey(), async (diagnostics, lifetime) =>
+                // A licence change recorded since (a one-person refresh, or the import) moves this on, so figures read
+                // before it are not served after it.
+                var licenceGeneration = await _licenceGeneration.GetAsync().ConfigureAwait(false);
+                var task = _overviews.GetAsync(context.Scope, query.CacheKey() + LicenceDataGenerationSource.KeySuffix(licenceGeneration), async (diagnostics, lifetime) =>
                 {
                     var result = await context.Store.LoadOverviewAsync(query, context.Sources, diagnostics, lifetime).ConfigureAwait(false);
                     result.Query = query;
