@@ -114,6 +114,12 @@ namespace Tests.UnitTests.InstallTests
                         command.CommandText = "CREATE DATABASE [" + catalog + "];";
                         await command.ExecuteNonQueryAsync();
                         created = true;
+                        // LocalDB/Express inherits AUTO_CLOSE ON. A catalog flag read from master
+                        // is not proof that a subsequently reopened target is still read-only:
+                        // SQL 2025 cold-reopen reproduction allowed writes after that flag was true.
+                        // Keep this owned fixture open independently of connection lifetimes.
+                        command.CommandText = "ALTER DATABASE [" + catalog + "] SET AUTO_CLOSE OFF;";
+                        await command.ExecuteNonQueryAsync();
                     }
                     var migrations = new Common.Entities.Migrations.Configuration();
                     var expected = new DbMigrator(migrations).GetLocalMigrations().ToArray();
@@ -160,6 +166,19 @@ namespace Tests.UnitTests.InstallTests
                         command.CommandText = "SELECT is_read_only FROM sys.databases WHERE name = @catalog;";
                         command.Parameters.AddWithValue("@catalog", catalog);
                         Assert.IsTrue((bool)await command.ExecuteScalarAsync(), "The isolated fixture must really be read-only.");
+                    }
+                    // Prove the target connection itself rejects a write, not merely that master's
+                    // metadata says READ_ONLY. No change to the monitor or its expected reason.
+                    using (var connection = new SqlConnection(builder.ConnectionString))
+                    {
+                        await connection.OpenAsync();
+                        using (var command = connection.CreateCommand())
+                        {
+                            command.CommandText = "CREATE TABLE dbo.MustNotCreate (id int);";
+                            var rejection = await Assert.ThrowsExceptionAsync<SqlException>(
+                                async () => await command.ExecuteNonQueryAsync());
+                            Assert.AreEqual(3906, rejection.Number, "The owned target must reject writes as read-only.");
+                        }
                     }
                     var readOnly = await DefaultRuntimeHealth.CheckSqlAsync(builder.ConnectionString, CancellationToken.None);
                     Assert.AreEqual("defaultHealth.sqlReadOnly", readOnly.ReasonKey);
