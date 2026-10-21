@@ -1,3 +1,5 @@
+extern alias AnalyticsWeb;
+
 using Common.Entities;
 using Common.Entities.Config;
 using Common.Entities.CopilotAuditBackfill;
@@ -20,6 +22,7 @@ using WebJob.Office365ActivityImporter.Engine.ActivityAPI;
 using WebJob.Office365ActivityImporter.Engine.Entities;
 using WebJob.Office365ActivityImporter.Engine.Graph;
 using WebJob.Office365ActivityImporter.Engine.Graph.Copilot.AuditBackfill;
+using BackfillStatusService = AnalyticsWeb::Web.AnalyticsWeb.Models.CopilotAuditBackfill.CopilotAuditBackfillService;
 
 namespace Tests.UnitTests
 {
@@ -266,6 +269,8 @@ namespace Tests.UnitTests
             Assert.AreEqual(5, job.SlicesSplit);
             Assert.AreEqual(24, source.RecordWindows.Count);
             Assert.AreEqual(24L, job.RecordsImported);
+            CollectionAssert.AreEqual(new[] { "2026-10-01" }, job.CompletedDays,
+                "A day completed through hourly children must appear in the operator's completed-days list.");
             var windows = source.RecordWindows.OrderBy(s => s.StartUtc).ToList();
             Assert.AreEqual(new DateTime(2026, 10, 1), windows.First().StartUtc);
             Assert.AreEqual(new DateTime(2026, 10, 2), windows.Last().EndUtc);
@@ -274,6 +279,108 @@ namespace Tests.UnitTests
                 Assert.AreEqual(TimeSpan.FromHours(1), windows[i].EndUtc - windows[i].StartUtc);
                 if (i > 0) Assert.AreEqual(windows[i - 1].EndUtc, windows[i].StartUtc);
             }
+        }
+
+        [DataTestMethod]
+        [DataRow(false)]
+        [DataRow(true)]
+        public async Task Importer_SplitDayWithMissingQueryCoverageIsNotCompleted(bool truncated)
+        {
+            var state = await NewStateWithJobAsync();
+            var job = await state.GetLatestAsync();
+            job.PendingSlices = CopilotAuditBackfillSlicer.SplitIntoHours(job.PendingSlices.Single());
+            foreach (var slice in job.PendingSlices) slice.SplitLevel = 2;
+            if (!truncated) job.PendingSlices[0].AttemptCount = CopilotAuditBackfillImporter.MaxSliceAttempts - 1;
+            await state.SaveAsync(job);
+            var source = new FakeAuditSearchSource();
+            source.Queries.Enqueue(new CopilotAuditSearchQuery
+            {
+                Status = truncated ? "succeeded" : "failed",
+                IsTruncated = truncated
+            });
+            var cycles = 0;
+            do
+            {
+                job = await RegressionImporter(state, source, new CountingPersistence()).AdvanceLatestAsync();
+                Assert.IsTrue(++cycles <= 20);
+            } while (job.IsActive);
+
+            Assert.AreEqual(CopilotAuditBackfillStates.CompletedWithGaps, job.State);
+            Assert.AreEqual(0, job.CompletedDays.Count);
+            Assert.AreEqual(truncated ? CopilotAuditBackfillErrorCodes.QueryTruncated : CopilotAuditBackfillErrorCodes.QueryFailed,
+                job.Gaps.Single().ErrorCode);
+            var status = await new BackfillStatusService(state,
+                new AppConfig { ImportJobSettings = new ImportTaskSettings { Copilot = true } }).GetStatusAsync();
+            Assert.AreEqual(0, status.LatestJob.CompletedDays.Length);
+            CollectionAssert.AreEqual(new[] { "2026-10-01" },
+                truncated ? status.LatestJob.IncompleteDays : status.LatestJob.FailedDays);
+        }
+
+        [TestMethod]
+        public async Task Status_CompletedLegacySplitDayIsRecoveredWithoutWritingState()
+        {
+            var state = await NewStateWithJobAsync();
+            var job = await state.GetLatestAsync();
+            job.State = CopilotAuditBackfillStates.Completed;
+            job.PendingSlices.Clear();
+            job.SlicesCompleted = 24;
+            await state.SaveAsync(job);
+
+            var status = await new BackfillStatusService(state,
+                new AppConfig { ImportJobSettings = new ImportTaskSettings { Copilot = true } }).GetStatusAsync();
+
+            CollectionAssert.AreEqual(new[] { "2026-10-01" }, status.LatestJob.CompletedDays);
+            Assert.AreEqual(0, (await state.GetLatestAsync()).CompletedDays.Count,
+                "The status projection heals old progress without rewriting an operator's saved job.");
+        }
+
+        [TestMethod]
+        public void Progress_PartialBoundaryDaysRemainExcluded()
+        {
+            var job = new CopilotAuditBackfillJob
+            {
+                State = CopilotAuditBackfillStates.Completed,
+                StartUtc = new DateTime(2026, 10, 1, 12, 0, 0, DateTimeKind.Utc),
+                EndUtc = new DateTime(2026, 10, 2, 12, 0, 0, DateTimeKind.Utc)
+            };
+
+            Assert.AreEqual(0, job.GetCompletedDays().Count);
+        }
+
+        [DataTestMethod]
+        [DataRow("pending")]
+        [DataRow("inFlight")]
+        [DataRow("legacy")]
+        public void Progress_CancelledDayWithOutstandingWorkIsNotCompleted(string queue)
+        {
+            var start = new DateTime(2026, 10, 1, 0, 0, 0, DateTimeKind.Utc);
+            var job = new CopilotAuditBackfillJob
+            {
+                State = CopilotAuditBackfillStates.Cancelled,
+                StartUtc = start,
+                EndUtc = start.AddDays(1)
+            };
+            var slice = new CopilotAuditBackfillSlice { StartUtc = start, EndUtc = start.AddHours(1) };
+            if (queue == "pending") job.PendingSlices.Add(slice);
+            else if (queue == "inFlight") job.InFlightSlices.Add(slice);
+            else job.CurrentSlice = slice;
+
+            Assert.AreEqual(0, job.GetCompletedDays().Count);
+        }
+
+        [TestMethod]
+        public void Progress_RejectedSubmissionDoesNotInventCompletionFromAnEmptyQueue()
+        {
+            var job = new CopilotAuditBackfillJob
+            {
+                State = CopilotAuditBackfillStates.Failed,
+                LastErrorCode = CopilotAuditBackfillErrorCodes.QueryRejected,
+                StartUtc = new DateTime(2026, 9, 30, 0, 0, 0, DateTimeKind.Utc),
+                EndUtc = new DateTime(2026, 10, 2, 0, 0, 0, DateTimeKind.Utc),
+                CompletedDays = new List<string> { "2026-10-01" }
+            };
+
+            CollectionAssert.AreEqual(new[] { "2026-10-01" }, job.GetCompletedDays().ToArray());
         }
 
         [TestMethod]
@@ -549,6 +656,12 @@ namespace Tests.UnitTests
             Assert.AreEqual(2L, job.MappingFailureCounts.Values.Sum());
             Assert.AreEqual(CopilotAuditBackfillErrorCodes.UnrecognisedAuditData, job.Gaps.Single().ErrorCode);
             Assert.AreEqual(CopilotAuditBackfillErrorCodes.UnrecognisedAuditData, job.LastErrorCode);
+            CollectionAssert.AreEqual(new[] { "2026-10-01" }, job.CompletedDays);
+            var status = await new BackfillStatusService(state,
+                new AppConfig { ImportJobSettings = new ImportTaskSettings { Copilot = true } }).GetStatusAsync();
+            CollectionAssert.AreEqual(new[] { "2026-10-01" }, status.LatestJob.CompletedDays);
+            CollectionAssert.AreEqual(new[] { "2026-10-01" }, status.LatestJob.IncompleteDays,
+                "Per-record mapping gaps do not mean the query's day window was left unread.");
         }
 
         [TestMethod]

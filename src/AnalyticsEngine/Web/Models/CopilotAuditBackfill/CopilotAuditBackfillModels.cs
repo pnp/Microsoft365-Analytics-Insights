@@ -192,7 +192,7 @@ namespace Web.AnalyticsWeb.Models.CopilotAuditBackfill
                 SlicesSubmitted = job.SlicesSubmitted,
                 SlicesCompleted = job.SlicesCompleted,
                 SlicesSplit = job.SlicesSplit,
-                CompletedDays = (job.CompletedDays ?? new System.Collections.Generic.List<string>()).OrderByDescending(x => x, StringComparer.Ordinal).ToArray(),
+                CompletedDays = job.GetCompletedDays().ToArray(),
                 FailedDays = gaps.Where(g => !g.Incomplete).Select(g => g.Day).Distinct().OrderByDescending(x => x, StringComparer.Ordinal).ToArray(),
                 IncompleteDays = gaps.Where(g => g.Incomplete).Select(g => g.Day).Distinct().OrderByDescending(x => x, StringComparer.Ordinal).ToArray(),
                 RecordsSeen = job.RecordsSeen,
