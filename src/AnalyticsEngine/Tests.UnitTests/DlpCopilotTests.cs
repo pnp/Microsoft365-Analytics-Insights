@@ -515,5 +515,147 @@ namespace Tests.UnitTests
         }
 
         #endregion
+
+        #region DLP.All records are not file or mail activity (A3)
+
+        private const string OrgSite = "https://contoso.sharepoint.com/sites/finance";
+
+        private static DlpAuditLogContent DlpRecord(string workload, string objectId) => new DlpAuditLogContent
+        {
+            Id = System.Guid.NewGuid(),
+            Workload = workload,
+            RecordType = ActivityImportConstants.DlpRecordTypes.ComplianceDLPSharePoint,
+            Operation = "DlpRuleMatch",
+            UserId = "alex@contoso.onmicrosoft.com",
+            ObjectId = objectId,
+        };
+
+        private static WebJob.Office365ActivityImporter.Engine.ActivityAPI.SharePointOrgUrlsFilterConfig OrgUrlFilter()
+        {
+            var filter = new WebJob.Office365ActivityImporter.Engine.ActivityAPI.SharePointOrgUrlsFilterConfig();
+            filter.OrgUrlConfigs.Add(new DataUtils.FilterUrlConfig { Url = OrgSite });
+            return filter;
+        }
+
+        [TestMethod]
+        public void OrgUrlFilter_SharePointDlpRecord_GetsTheSameWhitelistAsSharePointActivity()
+        {
+            var filter = OrgUrlFilter();
+
+            Assert.IsTrue(filter.InScope(DlpRecord("SharePoint", OrgSite + "/Shared Documents/Καλημέρα κόσμε.docx")));
+            Assert.IsTrue(filter.InScope(DlpRecord("OneDrive", OrgSite + "/Shared Documents/budget.xlsx")));
+            Assert.IsFalse(filter.InScope(DlpRecord("SharePoint", "https://contoso.sharepoint.com/sites/excluded/Shared Documents/a.docx")),
+                "A policy match on a site outside org_urls must not be imported.");
+            Assert.IsFalse(filter.InScope(DlpRecord("OneDrive", "https://contoso-my.sharepoint.com/personal/alex_contoso_com/Documents/a.docx")));
+        }
+
+        [TestMethod]
+        public void OrgUrlFilter_DlpRecordsWithNothingToTest_AreKept()
+        {
+            var filter = OrgUrlFilter();
+
+            Assert.IsTrue(filter.InScope(DlpRecord("Exchange", "<00000000-0000-0000-0000-000000000000@contoso.onmicrosoft.com>")),
+                "Exchange DLP has no site.");
+            Assert.IsTrue(filter.InScope(DlpRecord("Endpoint", @"C:\Users\alex\Documents\a.docx")));
+            Assert.IsTrue(filter.InScope(DlpRecord("SharePoint", null)), "Without a URL there is nothing to test, and no site detail is stored.");
+            Assert.IsTrue(new WebJob.Office365ActivityImporter.Engine.ActivityAPI.SharePointOrgUrlsFilterConfig()
+                .InScope(DlpRecord("SharePoint", "https://contoso.sharepoint.com/sites/excluded/a.docx")),
+                "A DLP-only tenant configures no org URLs; its SharePoint policy matches must still be imported.");
+        }
+
+        /// <summary>A SharePoint DLP.All record as the feed delivers it, through the dispatcher.</summary>
+        private static WebJob.Office365ActivityImporter.Engine.Entities.AbstractAuditLogContent DispatchedSharePointDlp(string objectId, string siteCollectionUrl)
+        {
+            var json = new JObject
+            {
+                ["Workload"] = "SharePoint",
+                ["RecordType"] = 11,
+                ["Operation"] = "DlpRuleMatch",
+                ["UserKey"] = "DlpAgent",
+                ["ObjectId"] = objectId,
+                ["PolicyDetails"] = new JArray(new JObject { ["PolicyId"] = "policy-1", ["PolicyName"] = "Contoso Finance" }),
+            };
+            if (siteCollectionUrl != null)
+            {
+                json["SharePointMetaData"] = new JObject { ["SiteCollectionUrl"] = siteCollectionUrl, ["FilePathUrl"] = objectId };
+            }
+            return AuditLogContentDispatcher.Dispatch(json, json.ToObject<WorkloadOnlyAuditLogContent>(), Logger);
+        }
+
+        private static WebJob.Office365ActivityImporter.Engine.ActivityAPI.SharePointOrgUrlsFilterConfig ExactMatchFilter(string siteUrl)
+        {
+            var filter = new WebJob.Office365ActivityImporter.Engine.ActivityAPI.SharePointOrgUrlsFilterConfig();
+            filter.OrgUrlConfigs.Add(new DataUtils.FilterUrlConfig { Url = siteUrl, ExactSiteMatch = true });
+            return filter;
+        }
+
+        /// <summary>
+        /// The filter used to test DLP records with no site URL, which makes every exact-match rule a starts-with
+        /// rule: an exact rule for the root site admitted every DLP match in the tenant.
+        /// </summary>
+        [TestMethod]
+        public void OrgUrlFilter_ExactRuleForTheRootSite_AdmitsOnlyTheRootSiteCollectionsDlpMatches()
+        {
+            const string root = "https://contoso.sharepoint.com";
+            var filter = ExactMatchFilter(root);
+
+            Assert.IsTrue(filter.InScope(DispatchedSharePointDlp(root + "/Shared Documents/Καλημέρα κόσμε.docx", root)));
+            Assert.IsTrue(filter.InScope(DispatchedSharePointDlp(root + "/Shared Documents/a.docx", root + "/")));
+            Assert.IsFalse(filter.InScope(DispatchedSharePointDlp(root + "/sites/finance/Shared Documents/a.docx", root + "/sites/finance")),
+                "A site below the root URL is not the root site.");
+            Assert.IsFalse(filter.InScope(DispatchedSharePointDlp(root + "/Shared Documents/a.docx", null)),
+                "Without its site collection an exact-match rule can't be checked, so it doesn't match.");
+        }
+
+        [TestMethod]
+        public void OrgUrlFilter_ExactRuleForASite_DoesNotAdmitAnotherSiteThatSharesItsUrlPrefix()
+        {
+            const string finance = "https://contoso.sharepoint.com/sites/finance";
+            var filter = ExactMatchFilter(finance);
+
+            Assert.IsTrue(filter.InScope(DispatchedSharePointDlp(finance + "/Shared Documents/a.docx", finance)));
+            Assert.IsFalse(filter.InScope(DispatchedSharePointDlp(finance + "-archive/Shared Documents/a.docx", finance + "-archive")));
+            Assert.IsFalse(filter.InScope(DispatchedSharePointDlp(finance + "-emea/Shared Documents/a.docx", finance + "-emea")));
+        }
+
+        /// <summary>
+        /// A DLP record names only its site collection, so an exact rule for a SUBSITE is matched on the document's URL
+        /// instead. It never matched, though the same subsite's SharePoint activity is imported.
+        /// </summary>
+        [TestMethod]
+        public void OrgUrlFilter_ExactRuleForASubsite_AdmitsItsDocumentsButNotASiblingSubsites()
+        {
+            const string hr = "https://contoso.sharepoint.com/sites/hr";
+            var filter = ExactMatchFilter(hr + "/benefits");
+
+            Assert.IsTrue(filter.InScope(DispatchedSharePointDlp(hr + "/benefits/Shared Documents/Καλημέρα κόσμε.docx", hr)));
+            Assert.IsTrue(filter.InScope(DispatchedSharePointDlp(hr + "/Benefits/Shared Documents/a.docx", hr + "/")), "Case and a trailing slash don't matter.");
+            Assert.IsTrue(ExactMatchFilter(hr + "/benefits/").InScope(DispatchedSharePointDlp(hr + "/benefits/Shared Documents/a.docx", hr)),
+                "Nor does a trailing slash on the rule.");
+            Assert.IsFalse(filter.InScope(DispatchedSharePointDlp(hr + "/benefits-archive/Shared Documents/a.docx", hr)),
+                "A sibling subsite that shares the rule's prefix.");
+            Assert.IsFalse(filter.InScope(DispatchedSharePointDlp(hr + "/payroll/Shared Documents/a.docx", hr)), "A sibling subsite.");
+            Assert.IsFalse(filter.InScope(DispatchedSharePointDlp(hr + "/Shared Documents/a.docx", hr)), "The subsite's parent.");
+            Assert.IsFalse(filter.InScope(DispatchedSharePointDlp(hr + "-emea/benefits/Shared Documents/a.docx", hr + "-emea")),
+                "A subsite of another site collection that shares the rule's prefix.");
+        }
+
+        [TestMethod]
+        public void StagingRow_DlpRecord_IsStagedUnderTheDlpWorkloadNotWhereItWasDetected()
+        {
+            foreach (var detectedIn in new[] { "SharePoint", "OneDrive", "Exchange" })
+            {
+                var row = new AuditLogTempEntity(DlpRecord(detectedIn, OrgSite + "/Shared Documents/a.docx"), "alex@contoso.onmicrosoft.com");
+
+                Assert.AreEqual(ActivityImportConstants.WORKLOAD_DLP, row.Workload,
+                    $"A DLP match detected in {detectedIn} must not be merged as {detectedIn} activity.");
+            }
+
+            var spEvent = new SharePointAuditLogContent { Workload = "SharePoint", ObjectId = OrgSite + "/a.docx" };
+            Assert.AreEqual("SharePoint", new AuditLogTempEntity(spEvent, "alex@contoso.onmicrosoft.com").Workload,
+                "Only DLP records are re-labelled.");
+        }
+
+        #endregion
     }
 }

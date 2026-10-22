@@ -338,7 +338,7 @@ namespace Tests.UnitTests
             var state = new UserScopePurgeStateStore(NewStore(), isDurable: true);
             Assert.IsTrue(state.IsDurable);
 
-            var job = await state.CreateAsync("admin@contoso.local", "fingerprint", 5);
+            var job = await state.CreateAsync("admin@contoso.local", "fingerprint", 5, 3, "sha256:membership");
             job.State = UserScopePurgeStates.Running;
             job.RowsAffected["call_sessions.attendee_user_id"] = 2;
             job.RowsAffected["audit_events"] = 1234;
@@ -349,6 +349,8 @@ namespace Tests.UnitTests
             Assert.AreEqual(UserScopePurgeStates.Running, latest.State);
             Assert.AreEqual(2L, latest.RowsAffected["call_sessions.attendee_user_id"]);
             Assert.AreEqual(1234L, latest.RowsAffected["audit_events"]);
+            Assert.AreEqual(3, latest.ConfirmedOutsideScopeCount, "What the administrator confirmed survives a restart with the record...");
+            Assert.AreEqual("sha256:membership", latest.ScopeMembershipFingerprint, "...and so does whom it was confirmed against.");
             Assert.IsFalse(latest.CancelRequested);
 
             Assert.IsTrue(await state.RequestCancelAsync(job.Id));

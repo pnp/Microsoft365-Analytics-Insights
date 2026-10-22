@@ -40,13 +40,17 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities.Serialisation
 
     }
 
+    /// <summary>
+    /// One continuation page of a call record's sessions: what <c>sessions@odata.nextLink</c> (and each page's own
+    /// <c>@odata.nextLink</c>) returns. See <see cref="CallRecordDTO.LoadRemainingSessionPages"/>.
+    /// </summary>
     public class CallSessionListDTO
     {
         [JsonProperty("value")]
         public List<CallSessionDTO> Sessions { get; set; }
 
-        [JsonProperty("@odata.nextlink")]
-        public string OdataNextlink { get; set; }
+        [JsonProperty("@odata.nextLink")]
+        public string ODataNextLink { get; set; }
 
     }
 

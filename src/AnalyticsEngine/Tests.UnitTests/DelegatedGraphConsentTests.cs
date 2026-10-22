@@ -12,6 +12,7 @@ using Microsoft.Owin.Security.DataProtection;
 using Microsoft.Owin.Security.Notifications;
 using Microsoft.Owin.Security.OpenIdConnect;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
+using Newtonsoft.Json.Linq;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -19,6 +20,7 @@ using System.Net;
 using System.Net.Http;
 using System.Security.Claims;
 using System.Threading.Tasks;
+using System.Web.Http;
 
 namespace Tests.UnitTests
 {
@@ -419,8 +421,9 @@ namespace Tests.UnitTests
             // access token to the page makes Graph reject it and the page can only say "No Teams found".
             var stored = new RefreshOAuthToken { AccessToken = "synthetic-stale-access", RefreshToken = "synthetic-revoked-refresh" };
 
+            // What GetNewRefreshToken throws when Entra ID refuses: a refusal always carries Entra ID's answer.
             var token = await SiteTokenAPIController.MintAccessTokenAsync(stored,
-                refreshToken => throw new HttpRequestException("Synthetic: 400 (Bad Request) AADSTS700082"));
+                refreshToken => throw TokenEndpointRefusal(400, "{\"error\":\"invalid_grant\",\"error_codes\":[700082]}"));
 
             Assert.IsNull(token, "A refresh token that no longer works must read as 'not connected', so the page offers Connect.");
         }
@@ -434,6 +437,91 @@ namespace Tests.UnitTests
 
             Assert.IsNull(token);
         }
+
+        /// <summary>
+        /// D10: Entra ID unreachable, slow, throttling or failing is not "not connected". Connecting again would send the
+        /// admin through an interactive sign-in whose code redemption hits the same token endpoint from the same server, so
+        /// it fails too. The page needs to say "try again in a few minutes", which it can only do from a stable code.
+        /// </summary>
+        [DataTestMethod]
+        [DataRow(503, "{\"error\":\"temporarily_unavailable\",\"error_codes\":[90079]}")]
+        [DataRow(500, "<html><body>Synthetic gateway error</body></html>")]
+        [DataRow(504, null)]
+        [DataRow(429, "{\"error\":\"temporarily_unavailable\"}")]
+        [DataRow(429, null)]
+        [DataRow(400, "{\"error\":\"temporarily_unavailable\",\"error_description\":\"AADSTS90007: Synthetic.\"}")]
+        public async Task SiteToken_EntraIdRefusingForNow_IsA503WithAStableCode(int status, string body)
+        {
+            await AssertEntraUnavailable(_ => throw TokenEndpointRefusal(status, body));
+        }
+
+        [TestMethod]
+        public async Task SiteToken_EntraIdUnreachable_IsA503WithAStableCode()
+        {
+            // No answer at all: what HttpClient throws for a DNS failure, a refused or reset connection, or TLS.
+            await AssertEntraUnavailable(_ => throw new HttpRequestException("An error occurred while sending the request.",
+                new WebException("The remote name could not be resolved: 'login.microsoftonline.com'", WebExceptionStatus.NameResolutionFailure)));
+        }
+
+        [TestMethod]
+        public async Task SiteToken_EntraIdTimingOut_IsA503WithAStableCode()
+        {
+            // HttpClient's timeout, on .NET Framework.
+            await AssertEntraUnavailable(_ => throw new TaskCanceledException("A task was canceled."));
+        }
+
+        /// <summary>
+        /// A token Entra ID won't accept silently - dead, or blocked until the admin signs in interactively (MFA, Conditional
+        /// Access, sign-in frequency) - is still "not connected": connecting again is exactly the remedy.
+        /// </summary>
+        [DataTestMethod]
+        [DataRow("{\"error\":\"invalid_grant\",\"suberror\":\"bad_token\",\"error_codes\":[70008]}")]
+        [DataRow("{\"error\":\"invalid_grant\",\"error_codes\":[50173]}")]
+        [DataRow("{\"error\":\"invalid_grant\",\"suberror\":\"basic_action\",\"error_codes\":[50076]}")]
+        [DataRow("{\"error\":\"invalid_grant\",\"error_codes\":[53003]}")]
+        [DataRow("{\"error\":\"invalid_grant\",\"error_codes\":[70044]}")]
+        [DataRow("{\"error\":\"interaction_required\",\"error_codes\":[50079]}")]
+        [DataRow("{\"error\":\"invalid_grant\"}")]
+        public async Task SiteToken_ATokenThatNeedsASignIn_IsStillNoToken_SoThePageOffersConnect(string body)
+        {
+            var token = await SiteTokenAPIController.MintAccessTokenAsync(
+                new RefreshOAuthToken { RefreshToken = "synthetic-refresh" }, _ => throw TokenEndpointRefusal(400, body));
+
+            Assert.IsNull(token);
+        }
+
+        /// <summary>A failure this version doesn't recognise keeps today's answer: "not connected".</summary>
+        [TestMethod]
+        public async Task SiteToken_AFailureItDoesNotRecognise_IsStillNoToken()
+        {
+            var unrecognised = new Func<string, Task<RefreshOAuthToken>>[]
+            {
+                _ => throw TokenEndpointRefusal(401, "{\"error\":\"invalid_client\",\"error_codes\":[7000222]}"),
+                _ => throw TokenEndpointRefusal(400, "{\"error\":\"invalid_request\",\"error_codes\":[900144]}"),
+                _ => throw TokenEndpointRefusal(403, "<html><body>Synthetic proxy page</body></html>"),
+                _ => throw new InvalidOperationException("synthetic"),
+                _ => throw new Newtonsoft.Json.JsonReaderException("synthetic"),
+            };
+
+            foreach (var refresh in unrecognised)
+            {
+                Assert.IsNull(await SiteTokenAPIController.MintAccessTokenAsync(new RefreshOAuthToken { RefreshToken = "synthetic-refresh" }, refresh));
+            }
+        }
+
+        private static async Task AssertEntraUnavailable(Func<string, Task<RefreshOAuthToken>> refresh)
+        {
+            var refused = await Assert.ThrowsExceptionAsync<HttpResponseException>(() =>
+                SiteTokenAPIController.MintAccessTokenAsync(new RefreshOAuthToken { RefreshToken = "synthetic-refresh" }, refresh));
+
+            Assert.AreEqual(HttpStatusCode.ServiceUnavailable, refused.Response.StatusCode);
+            var body = JObject.Parse(await refused.Response.Content.ReadAsStringAsync());
+            Assert.AreEqual("entraUnavailable", (string)body["code"], "The page words it from the code; the API sends no English.");
+            Assert.AreEqual(1, body.Count, body.ToString());
+        }
+
+        private static RefreshTokenRequestException TokenEndpointRefusal(int status, string body) => new RefreshTokenRequestException(
+            $"Response status code does not indicate success: {status}.", (HttpStatusCode)status, body, null);
 
         private static Task<RefreshOAuthToken> RefreshShouldNotHappen(string refreshToken) =>
             throw new AssertFailedException("There was nothing to refresh.");

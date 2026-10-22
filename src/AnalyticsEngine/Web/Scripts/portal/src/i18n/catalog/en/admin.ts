@@ -86,7 +86,7 @@ export const admin = {
   'admin.copilotAuditBackfill.error.queryFailed': 'Microsoft Graph Audit Search reported a failed query.',
   'admin.copilotAuditBackfill.error.queryRejected': 'Microsoft Graph rejected the Audit Search query shape. Report this so the backfill can be updated for this tenant/API response.',
   'admin.copilotAuditBackfill.error.queryThrottled': 'Microsoft Graph throttled Audit Search query submissions. The backfill is paused and will retry later.',
-  'admin.copilotAuditBackfill.error.queryTruncated': 'A Microsoft Graph Audit Search slice was still truncated after splitting to hours.',
+  'admin.copilotAuditBackfill.error.queryTruncated': 'A Microsoft Graph Audit Search slice was still truncated after splitting to quarter-hours. The records it returned were imported; the rest of that window is missing.',
   'admin.copilotAuditBackfill.error.graphAccessDenied': 'Microsoft Graph refused the Audit Search request with 401 or 403. Check AuditLogsQuery.Read.All consent.',
   'admin.copilotAuditBackfill.error.jobActive': 'A Copilot audit backfill is already running.',
   'admin.copilotAuditBackfill.error.jobNotActive': 'That Copilot audit backfill is no longer running.',
@@ -143,6 +143,9 @@ export const admin = {
   'admin.teamsPermissions.connect.outcomeTitle': "Microsoft Teams isn't connected",
   'admin.teamsPermissions.description':
     'This page is so you can authorise deep analytics for a Team. This will allow Microsoft 365 Advanced Analytics and Insights to read messages for anonymous statistical reporting purposes only.',
+  'admin.teamsPermissions.entraUnavailable.message':
+    "Couldn't reach Microsoft Entra ID to refresh your Teams connection. Try again in a few minutes.",
+  'admin.teamsPermissions.entraUnavailable.retry': 'Try again',
   'admin.teamsPermissions.errors.fetchGraphProfile': 'Unable to fetch Graph profile.',
   'admin.teamsPermissions.errors.fetchJoinedTeams': 'Unable to fetch joined teams.',
   'admin.teamsPermissions.loadingTeams': 'Loading your Teams...',
@@ -591,7 +594,7 @@ export const admin = {
   'admin.userScope.purge.operationalList':
     'Runs asynchronously in small batches while importers keep running. If new data arrives for someone during the purge, that person is kept and counted as skipped; running the purge again removes them.',
   'admin.userScope.purge.restartDurable':
-    'If the web app restarts, the purge starts again by itself and finishes, unless UserGroupsFilter was changed, in which case it stops.',
+    'If the web app restarts, the purge starts again by itself and finishes, unless UserGroupsFilter or the members of its groups have changed, in which case it stops so that you can confirm again.',
   'admin.userScope.purge.restartMemory':
     "This web app keeps the purge's progress in its own memory, because no Azure Storage connection is configured. If the web app restarts, a running purge stops: start it again to finish it. With more than one web app instance, only the instance running the purge shows its progress.",
   'admin.userScope.purge.irreversible': 'This cannot be undone.',
@@ -662,6 +665,10 @@ export const admin = {
     'The purge removed nobody because UserGroupsFilter changed after the purge was confirmed. Check the filter and start the purge again.',
   'admin.userScope.jobError.filterChangedWhileRunning':
     'The purge stopped because UserGroupsFilter changed while it was running. What it had already removed stays removed, and nobody else was removed. Check the filter and start the purge again to see who is outside it now.',
+  'admin.userScope.jobError.purgeExceedsConfirmed':
+    'The purge stopped because more people are outside the scope than the number confirmed when it started: the groups lost members, or new users arrived. Anything it had already removed stays removed, and nobody else was removed. Check the groups, then start the purge again to confirm the new number.',
+  'admin.userScope.jobError.scopeMembershipChanged':
+    'The purge stopped when it started again after a restart, because the members of the UserGroupsFilter groups had changed since it was confirmed. Anything it had already removed stays removed, and nobody else was removed. Start the purge again to confirm who is outside the scope now.',
   'admin.userScope.jobError.databaseError':
     'The purge stopped because the analytics database returned an error.',
   'admin.userScope.jobError.stateUnavailable':

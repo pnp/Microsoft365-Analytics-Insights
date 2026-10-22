@@ -43,6 +43,12 @@ namespace Common.Entities.UserScope.Purge
     /// users being removed is never stored anywhere: it exists only in the purge's session, as <c>#purge_candidates</c>.
     /// </para>
     /// <para>
+    /// What the administrator confirmed binds every run: before anything is deleted, a run stops if more people would
+    /// have been removed in all than the number they confirmed (<see cref="UserScopePurgeJob.ConfirmedOutsideScopeCount"/>),
+    /// and one that had to read the groups again stops if they no longer resolve to the people it was confirmed against
+    /// (<see cref="UserScopePurgeJob.ScopeMembershipFingerprint"/>).
+    /// </para>
+    /// <para>
     /// Only one purge runs at a time, on any web app instance: the run holds the purge lock on its session (see
     /// <see cref="UserScopePurgeDatabase"/>). Its record - progress, counts, who started it - is kept in
     /// <see cref="UserScopePurgeStateStore"/>, never in the analytics database. Logs carry job ids, table names and counts
@@ -103,7 +109,7 @@ namespace Common.Entities.UserScope.Purge
 
         /// <summary>
         /// Test hook: the users to purge, instead of working them out from the scope - so a test never lets a real scope
-        /// loose on a shared database.
+        /// loose on a shared database. A scope provider given alongside is still read and checked, but never searched.
         /// </summary>
         internal IReadOnlyCollection<int> CandidatesOverride { get; set; }
 
@@ -279,14 +285,12 @@ namespace Common.Entities.UserScope.Purge
             }
 
             List<int> candidates;
+            UserImportScope scope = null;
             var scopeDescription = string.Empty;
-            if (CandidatesOverride != null)
+            if (CandidatesOverride == null || scopeProvider != null)
             {
-                candidates = CandidatesOverride.ToList();
-            }
-            else
-            {
-                var resolution = preResolved != null && preResolved.Status == UserImportScopeStatus.Resolved
+                var confirmed = preResolved != null && preResolved.Status == UserImportScopeStatus.Resolved;
+                var resolution = confirmed
                     ? preResolved
                     : scopeProvider == null ? null : await scopeProvider.RefreshAsync().ConfigureAwait(false);
 
@@ -303,10 +307,49 @@ namespace Common.Entities.UserScope.Purge
                     return await EndAsync(job, UserScopePurgeStates.Failed, UserScopePurgeErrorCodes.ScopeEmpty, null).ConfigureAwait(false);
                 }
 
-                var scope = UserImportScope.ForMembers(resolution.Members, "purge");
+                // The groups were read again - the purge is starting again after a restart, or the instance that started it
+                // has gone - rather than taken from the confirmation. If they no longer resolve to the same people, the
+                // people this run would remove are not the ones the administrator was shown, so it stops.
+                if (!confirmed && MembershipChangedSince(job, resolution))
+                {
+                    _logger.LogWarning($"User scope purge {job.Id}: the members of the UserGroupsFilter groups changed after the purge was confirmed, " +
+                        "so it stopped and removed nobody " + (restarted ? "more. What it removed before the change stays removed; " : "else. ") +
+                        "start the purge again to confirm who is outside the scope now.");
+                    return await EndAsync(job, UserScopePurgeStates.Failed, UserScopePurgeErrorCodes.ScopeMembershipChanged, null).ConfigureAwait(false);
+                }
+
+                scope = UserImportScope.ForMembers(resolution.Members, "purge");
+                scopeDescription = $" of {resolution.Members.Count:N0} member(s)";
+            }
+
+            if (CandidatesOverride != null)
+            {
+                candidates = CandidatesOverride.ToList();
+            }
+            else
+            {
                 var unknownUserId = await GetOrCreateUnknownUserAsync().ConfigureAwait(false);
                 candidates = await FindUsersOutsideScopeAsync(scope, unknownUserId).ConfigureAwait(false);
+            }
 
+            // Never more people in all than the administrator agreed to remove. Checked against the people actually found,
+            // before anything is deleted: the importers keep adding users between the confirmation and here, and a purge
+            // starting again after a restart has read the groups again.
+            var ceiling = job.ConfirmedOutsideScopeCount ?? job.CandidateCount;
+            var total = job.UsersDeleted + candidates.Count;
+            if (total > ceiling)
+            {
+                _logger.LogWarning($"User scope purge {job.Id}: {total:N0} user(s) are outside the scope{scopeDescription}" +
+                    (job.UsersDeleted > 0 ? $" counting the {job.UsersDeleted:N0} already removed" : string.Empty) +
+                    $", more than the {ceiling:N0} the purge was confirmed for, so it stopped and removed nobody " +
+                    (restarted ? "more. What it removed before stays removed; " : "else. ") +
+                    "check the groups, then start the purge again to confirm the new number.");
+                return await EndAsync(job, UserScopePurgeStates.Failed, UserScopePurgeErrorCodes.PurgeExceedsConfirmed,
+                    $"{total} found, {ceiling} confirmed").ConfigureAwait(false);
+            }
+
+            if (CandidatesOverride == null)
+            {
                 // Copilot Studio credit rows that were never linked to a user row carry only an Entra object id. They are
                 // settled here, while the scope is in hand; the later steps only see linked rows.
                 var unlinked = await DeleteUnlinkedCreditsOutsideScopeAsync(scope).ConfigureAwait(false);
@@ -314,7 +357,6 @@ namespace Common.Entities.UserScope.Purge
                 {
                     Add(job, "copilot_studio_credit_user_daily", unlinked);
                 }
-                scopeDescription = $" of {resolution.Members.Count:N0} member(s)";
             }
 
             job.StepIndex = 0;
@@ -347,6 +389,11 @@ namespace Common.Entities.UserScope.Purge
             var current = scopeProvider?.Filter?.Fingerprint ?? string.Empty;
             return !string.IsNullOrEmpty(job.FilterFingerprint) && !string.Equals(job.FilterFingerprint, current, StringComparison.Ordinal);
         }
+
+        /// <summary>Whether the groups now resolve to other people than the ones the purge was confirmed against.</summary>
+        private static bool MembershipChangedSince(UserScopePurgeJob job, UserImportScopeResolution resolution)
+            => !string.IsNullOrEmpty(job.ScopeMembershipFingerprint)
+               && !string.Equals(job.ScopeMembershipFingerprint, resolution.Members.MembershipFingerprint, StringComparison.Ordinal);
 
         /// <summary>Users that the scope does not contain by object id, UPN or mail - never the anonymous Unknown User.</summary>
         internal async Task<List<int>> FindUsersOutsideScopeAsync(UserImportScope scope, int unknownUserId)

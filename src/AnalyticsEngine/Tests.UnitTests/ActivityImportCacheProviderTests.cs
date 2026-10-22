@@ -37,7 +37,7 @@ namespace Tests.UnitTests
                 newestContentUtc: newestUtc, daysBeforeNowToDownload: 3, nowUtc: Now);
 
         [TestMethod]
-        public async Task ImportCache_PerRunScope_IsBuiltOnceAndReusedByEveryBatch()
+        public async Task ImportCache_PerRunScope_IsCreatedOnceSharedByEveryBatchAndLoadsNoWindow()
         {
             var loader = new FakeActivityImportCacheLoader();
             var provider = new ActivityImportCacheProvider(loader, new RecordingLogger());
@@ -47,14 +47,13 @@ namespace Tests.UnitTests
             var second = await provider.GetForWindowAsync(window);
             var third = await provider.GetForWindowAsync(window);
 
-            Assert.AreEqual(1, loader.LoadCount,
-                "The run-scoped cache must be loaded from audit_events ONCE per import cycle, not once per save batch.");
             Assert.AreSame(first, second, "Every batch of the cycle must share one cache, so ids remembered by one batch are seen by the next.");
             Assert.AreSame(first, third);
 
-            // ...and over the whole download window, not the batch's own [oldest, newest] span.
-            Assert.AreEqual(window.FromUtc, loader.Loads[0].FromUtc);
-            Assert.AreEqual(window.ToUtc, loader.Loads[0].ToUtc);
+            // The fix for the per-cycle memory blow-up: the run cache used to load every audit_events /
+            // ignored_audit_events id in the download window + 1 day here and hold them for the whole cycle.
+            Assert.AreEqual(0, loader.LoadCount, "The run-scoped cache must not load the download window into memory.");
+            Assert.AreEqual(0, loader.Lookups.Count, "Nothing is looked up until a batch asks about its own ids.");
         }
 
         [TestMethod]
@@ -82,11 +81,11 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
-        public async Task ImportCache_ConcurrentFirstUse_StillBuildsOnlyOnce()
+        public async Task ImportCache_ConcurrentFirstUse_AllCallersShareOneCache()
         {
             // In concurrent-save mode several batches enter the save path at once, all before the cache
-            // exists. Without the init lock each of them would run the (expensive, whole-window)
-            // audit_events query.
+            // exists. They must all get the SAME cache, or a reservation made by one batch could not stop a
+            // concurrent batch staging the same id.
             //
             // LongRunning tasks plus a Barrier rather than plain Task.Run: the ThreadPool injects threads
             // slowly once its minimum is exhausted, so pool-scheduled racers can arrive hundreds of
@@ -119,42 +118,97 @@ namespace Tests.UnitTests
             var caches = await allRacers;
             startLine.Dispose();
 
-            Assert.AreEqual(1, loader.LoadCount, "Concurrent first callers must not each build the cache.");
+            Assert.AreEqual(0, loader.LoadCount, "No racer may load the download window.");
             Assert.IsTrue(caches.All(c => c != null && ReferenceEquals(c, caches[0])), "All concurrent callers must get the same cache instance.");
         }
 
         [TestMethod]
-        public async Task ImportCache_PerRunBuild_LogsTheIdCountAndWindowOnce()
+        public async Task ImportCache_PerRun_LogsOncePerCycleThatTheWindowIsNotLoaded()
         {
-            // Operator-facing telemetry: #381 forbids changing log text or the numbers inside it, and this
-            // line is how an operator sees whether the per-cycle cache is working.
+            // Operator-facing: this line replaces "built run dedup cache from audit_events in Ns (N
+            // already-processed id(s), D-day window)", because there is no longer a window load to report.
             var logger = new RecordingLogger();
-            var loader = new FakeActivityImportCacheLoader
-            {
-                SeedCache = cache =>
-                {
-                    cache.RememberProcessedEvent(Event(Now.AddHours(-1)));
-                    cache.RememberProcessedEvent(Event(Now.AddHours(-2)));
-                    cache.RememberProcessedEvent(Event(Now.AddHours(-3)));
-                }
-            };
+            var loader = new FakeActivityImportCacheLoader();
             var provider = new ActivityImportCacheProvider(loader, logger);
             var window = PerRunWindow(daysBeforeNowToDownload: 3);
 
             await provider.GetForWindowAsync(window);
             await provider.GetForWindowAsync(window);
 
-            var buildLines = logger.Entries
-                .Where(e => e.Message.Contains("built run dedup cache from audit_events"))
-                .ToList();
+            var lines = logger.Entries.Where(e => e.Message.Contains("run dedup cache ready")).ToList();
 
-            Assert.AreEqual(1, buildLines.Count, "The build line must be logged once per cycle, not once per batch.");
-            Assert.AreEqual(Microsoft.Extensions.Logging.LogLevel.Information, buildLines[0].Level);
-            StringAssert.Contains(buildLines[0].Message, "(3 already-processed id(s)",
-                "The count comes from ActivityImportCache.ProcessedIdCount - the ids actually loaded.");
-            // daysBeforeNowToDownload 3 + the one-day lower margin.
-            StringAssert.Contains(buildLines[0].Message, $"{window.DaysBack}-day window");
-            Assert.AreEqual(4, window.DaysBack, "Precondition: the reported window is the download window plus its lower margin.");
+            Assert.AreEqual(1, lines.Count, "Logged once per cycle, not once per batch.");
+            Assert.AreEqual(Microsoft.Extensions.Logging.LogLevel.Information, lines[0].Level);
+            StringAssert.Contains(lines[0].Message, "by primary key (up to 1000 per query)");
+            StringAssert.Contains(lines[0].Message, $"instead of loading the {window.DaysBack}-day window into memory");
+            Assert.IsFalse(logger.Entries.Any(e => e.Message.Contains("built run dedup cache")),
+                "The old build line would claim a load that no longer happens.");
+        }
+
+        [TestMethod]
+        public async Task ImportCache_PerRun_ChecksOnlyTheBatchsOwnIdsAndKeepsNoneOfTheAnswers()
+        {
+            // The "database" holds a large backlog of already-imported events. A batch must cost a lookup of its
+            // own ids, not a load of everything else.
+            var loader = new FakeActivityImportCacheLoader();
+            for (var i = 0; i < 5000; i++) loader.AlreadyProcessedIds.Add(Guid.NewGuid());
+            var imported = Guid.NewGuid();
+            var ignored = Guid.NewGuid();
+            var brandNew = Guid.NewGuid();
+            loader.AlreadyProcessedIds.Add(imported);
+            loader.AlreadyProcessedIds.Add(ignored);
+
+            var runCache = await new ActivityImportCacheProvider(loader, new RecordingLogger()).GetForWindowAsync(PerRunWindow());
+            var batchCache = await runCache.WithStoreLookupAsync(new[] { imported, ignored, brandNew, imported });
+
+            Assert.AreEqual(1, loader.Lookups.Count, "One lookup for the batch.");
+            CollectionAssert.AreEquivalent(new[] { imported, ignored, brandNew }, loader.Lookups[0],
+                "Only the batch's own ids are asked about, each once.");
+            Assert.AreEqual(0, loader.LoadCount);
+
+            Assert.IsTrue(batchCache.HaveSeenInProcessedOrIgnoredEvents(imported));
+            Assert.IsTrue(batchCache.HaveSeenInProcessedOrIgnoredEvents(ignored));
+            Assert.IsFalse(batchCache.HaveSeenInProcessedOrIgnoredEvents(brandNew));
+
+            // The answers belong to the batch's view and go with it; the run cache - which lives for the whole
+            // cycle - holds only what the cycle itself stages or ignores.
+            Assert.IsFalse(runCache.HaveSeenInProcessedOrIgnoredEvents(imported));
+            Assert.AreEqual(0, runCache.ProcessedIdCount);
+        }
+
+        [TestMethod]
+        public async Task ImportCache_PerRun_IdsThisCycleAlreadyDecidedAreNotLookedUpAgain()
+        {
+            var loader = new FakeActivityImportCacheLoader();
+            var runCache = await new ActivityImportCacheProvider(loader, new RecordingLogger()).GetForWindowAsync(PerRunWindow());
+            var staged = Event(Now.AddHours(-1));
+            var ignored = Event(Now.AddHours(-2));
+            var unknown = Guid.NewGuid();
+            runCache.RememberProcessedEvent(staged);
+            runCache.RememberNewlyIgnoredEvent(ignored);
+
+            var batchCache = await runCache.WithStoreLookupAsync(new[] { staged.Id, ignored.Id, unknown });
+
+            CollectionAssert.AreEqual(new[] { unknown }, loader.Lookups.Single(),
+                "Memory already answers for ids this cycle staged or ignored.");
+            Assert.IsTrue(batchCache.HaveSeenInProcessedOrIgnoredEvents(staged));
+            Assert.IsTrue(batchCache.HaveSeenInProcessedOrIgnoredEvents(ignored));
+            Assert.IsTrue(batchCache.WasRememberedThisCycle(staged), "The view shares the run's reservations.");
+        }
+
+        [TestMethod]
+        public void ImportCache_LookupQueries_NeverExceedTheParameterLimitAndCoverEveryId()
+        {
+            // SQL Server refuses a command with more than 2,100 parameters, and a dropped id would be re-imported.
+            var ids = Enumerable.Range(0, 2345).Select(_ => Guid.NewGuid()).ToList();
+
+            var chunks = ProcessedAuditEventLookupQuery.Chunk(ids).ToList();
+
+            Assert.IsTrue(chunks.All(c => c.Length <= ProcessedAuditEventLookupQuery.MaxIdsPerQuery));
+            Assert.IsTrue(chunks.All(c => ProcessedAuditEventLookupQuery.ParameterCounts.Contains(c.Length)),
+                "Every query uses one of the few padded sizes, so SQL Server reuses a handful of plans.");
+            CollectionAssert.AreEquivalent(ids, chunks.SelectMany(c => c.Distinct()).ToList(),
+                "Every id is looked up exactly once; padding only repeats an id within its own query.");
         }
     }
 }

@@ -70,6 +70,9 @@ namespace Tests.UnitTests
             private readonly Queue<Tuple<HttpStatusCode, string>> _responses;
             public int CallCount { get; private set; }
 
+            /// <summary>Every requested URL, as the caller built it, in order.</summary>
+            public List<string> RequestUrls { get; } = new List<string>();
+
             public SequenceHandler(params Tuple<HttpStatusCode, string>[] responses)
             {
                 _responses = new Queue<Tuple<HttpStatusCode, string>>(responses);
@@ -78,6 +81,7 @@ namespace Tests.UnitTests
             protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
             {
                 CallCount++;
+                RequestUrls.Add(request.RequestUri.OriginalString);
                 var next = _responses.Count > 0
                     ? _responses.Dequeue()
                     : Tuple.Create(HttpStatusCode.OK, "{\"value\":[]}");
@@ -238,6 +242,348 @@ namespace Tests.UnitTests
             var summary = SentEmailImporter.FormatMailboxFailureSummary(11, buckets, maxBuckets: 3);
 
             Assert.AreEqual("11 (500 ErrorInternalServerError x5, 403 ErrorAccessDenied x2, HttpRequestException x1, 3 more)", summary);
+        }
+
+        #endregion
+
+        #region Rejected sync checkpoints and bounded reads
+
+        private const string StoredToken = "synthetic-stored-token";
+        private const string MailboxBase = "https://graph.microsoft.com/v1.0/users/alice%40contoso.com/mailFolders('sentitems')/messages/delta";
+
+        private static Tuple<HttpStatusCode, string> Ok(string body) => Tuple.Create(HttpStatusCode.OK, body);
+
+        private static string DeltaLink(string token) => MailboxBase + "?$deltatoken=" + token;
+
+        private static string SkipLink(string token) => MailboxBase + "?$skiptoken=" + token;
+
+        // A sent-items page. Messages carry only an id, so the importer has nothing to write to SQL for them.
+        private static string SentItemsPage(string nextLink, string deltaLink, params string[] messageIds)
+        {
+            var page = new Newtonsoft.Json.Linq.JObject
+            {
+                ["value"] = new Newtonsoft.Json.Linq.JArray(messageIds.Select(id => new Newtonsoft.Json.Linq.JObject { ["id"] = id })),
+            };
+            if (nextLink != null) page["@odata.nextLink"] = nextLink;
+            if (deltaLink != null) page["@odata.deltaLink"] = deltaLink;
+            return page.ToString();
+        }
+
+        private static GraphSentEmailSourceLoader NewLoader(ManualGraphCallClient client, IDeltaTokenStore tokens)
+            => new GraphSentEmailSourceLoader(client, tokens, appIdentity: null, logger: AnalyticsLogger.ConsoleOnlyTracer());
+
+        /// <summary>Records every state read, write and delete, as each is an Azure Table round trip in production.</summary>
+        private sealed class RecordingDeltaTokenStore : IDeltaTokenStore
+        {
+            private readonly InMemoryDeltaTokenStore _inner = new InMemoryDeltaTokenStore();
+
+            public ConcurrentQueue<string> Reads { get; } = new ConcurrentQueue<string>();
+            public ConcurrentQueue<string> Writes { get; } = new ConcurrentQueue<string>();
+            public ConcurrentQueue<string> Deletes { get; } = new ConcurrentQueue<string>();
+
+            /// <summary>Stores a value without recording it.</summary>
+            public Task Seed(string key, string value) => _inner.SetDeltaToken(key, value);
+
+            public Task<string> GetDeltaToken(string key)
+            {
+                Reads.Enqueue(key);
+                return _inner.GetDeltaToken(key);
+            }
+
+            public Task SetDeltaToken(string key, string deltaToken)
+            {
+                Writes.Enqueue(key);
+                return _inner.SetDeltaToken(key, deltaToken);
+            }
+
+            public Task ClearDeltaToken(string key)
+            {
+                Deletes.Enqueue(key);
+                return _inner.ClearDeltaToken(key);
+            }
+        }
+
+        [TestMethod]
+        public async Task SentEmailImporter_SteadyStateIncrementalRead_TouchesOnlyTheTokenKey()
+        {
+            // At 200,000 mailboxes every extra state call is 200,000 more Table round trips a cycle: an incremental read
+            // must neither look for nor delete a continuation that cannot exist.
+            var user = new Common.Entities.User { UserPrincipalName = "alice@contoso.com" };
+            var tokenKey = GraphSentEmailSourceLoader.BuildDeltaKey(user);
+            var tokens = new RecordingDeltaTokenStore();
+            await tokens.Seed(tokenKey, StoredToken);
+
+            using (var handler = new SequenceHandler(Ok(SentItemsPage(null, DeltaLink("next-token"), "msg-1"))))
+            using (var client = new ManualGraphCallClient(handler, NullLogger.Instance))
+            {
+                var importer = new SentEmailImporter(AnalyticsLogger.ConsoleOnlyTracer(), new AppConfig(), NewLoader(client, tokens), NullSentEmailSentimentScorer.Instance);
+
+                await importer.ImportSentEmailsForUser(user);
+
+                CollectionAssert.AreEqual(new[] { tokenKey }, tokens.Reads.ToArray(), "One state read, as before bounded reads.");
+                CollectionAssert.AreEqual(new[] { tokenKey }, tokens.Writes.ToArray());
+                Assert.AreEqual(0, tokens.Deletes.Count, "No continuation was read, so there is none to delete.");
+                Assert.AreEqual("next-token", await tokens.GetDeltaToken(tokenKey));
+            }
+        }
+
+        [TestMethod]
+        public async Task SentEmailImporter_IncrementalReadThatOutgrowsACycle_ResumesFromItsContinuation()
+        {
+            // An incremental round can outgrow one cycle too - after the importer was stopped for a while, say. A load
+            // only looks for a continuation when no token is stored, so committing one must retire the token: otherwise
+            // every later cycle would restart the round from the token and never finish it.
+            var user = new Common.Entities.User { UserPrincipalName = "alice@contoso.com" };
+            var tokenKey = GraphSentEmailSourceLoader.BuildDeltaKey(user);
+            var continuationKey = GraphSentEmailSourceLoader.BuildContinuationKey(user);
+            var tokens = new RecordingDeltaTokenStore();
+            await tokens.Seed(tokenKey, StoredToken);
+
+            using (var handler = new SequenceHandler(
+                Ok(SentItemsPage(SkipLink("page-2"), null, "msg-1", "msg-2")),
+                Ok(SentItemsPage(null, DeltaLink("round-done"), "msg-3"))))
+            using (var client = new ManualGraphCallClient(handler, NullLogger.Instance))
+            {
+                var loader = NewLoader(client, tokens);
+                loader.MaxMessagesPerMailboxPerCycle = 2;
+                var importer = new SentEmailImporter(AnalyticsLogger.ConsoleOnlyTracer(), new AppConfig(), loader, NullSentEmailSentimentScorer.Instance);
+
+                await importer.ImportSentEmailsForUser(user);
+                StringAssert.Contains(handler.RequestUrls[0], "$deltatoken=" + StoredToken);
+                Assert.AreEqual(SkipLink("page-2"), await tokens.GetDeltaToken(continuationKey));
+                Assert.IsNull(await tokens.GetDeltaToken(tokenKey), "The token is retired while its round is unfinished.");
+
+                await importer.ImportSentEmailsForUser(user);
+                Assert.AreEqual(SkipLink("page-2"), handler.RequestUrls[1], "The next cycle continues the round instead of restarting it.");
+                Assert.AreEqual("round-done", await tokens.GetDeltaToken(tokenKey));
+                Assert.IsNull(await tokens.GetDeltaToken(continuationKey), "A finished round leaves no continuation behind.");
+            }
+        }
+
+        [DataTestMethod]
+        [DataRow(HttpStatusCode.Gone, "{\"error\":{\"code\":\"SyncStateNotFound\",\"message\":\"Synthetic.\"}}", DisplayName = "410 Gone")]
+        [DataRow(HttpStatusCode.NotFound, "{\"error\":{\"code\":\"syncStateNotFound\",\"message\":\"Synthetic.\"}}", DisplayName = "404 syncStateNotFound")]
+        [DataRow(HttpStatusCode.BadRequest, "{\"error\":{\"code\":\"Request_UnsupportedQuery\",\"message\":\"Synthetic.\"}}", DisplayName = "400 Request_UnsupportedQuery")]
+        public async Task SentEmailSource_RejectedDeltaToken_IsDiscardedAndTheMailboxReadAgainFromTheStart(HttpStatusCode status, string body)
+        {
+            // The token used to be sent on every cycle for ever: the mailbox failed every time, and nothing cleared it.
+            var user = new Common.Entities.User { UserPrincipalName = "alice@contoso.com" };
+            var tokens = new InMemoryDeltaTokenStore();
+            await tokens.SetDeltaToken(GraphSentEmailSourceLoader.BuildDeltaKey(user), StoredToken);
+
+            using (var handler = new SequenceHandler(Tuple.Create(status, body), Ok(SentItemsPage(null, DeltaLink("fresh-token"), "msg-1"))))
+            using (var client = new ManualGraphCallClient(handler, NullLogger.Instance))
+            {
+                var result = await NewLoader(client, tokens).LoadSentEmailsForUserAsync(user, includeBody: false);
+
+                Assert.AreEqual(2, handler.CallCount, "One rejected request, then one full read in the same call.");
+                StringAssert.Contains(handler.RequestUrls[0], "$deltatoken=" + StoredToken);
+                Assert.IsFalse(handler.RequestUrls[1].Contains("$deltatoken"), "The re-read must start from scratch, not from any token.");
+                Assert.AreEqual(1, result.Messages.Count);
+                Assert.AreEqual("fresh-token", result.NextDeltaToken, "The new token is handed back, for the importer to commit once the mail is saved.");
+                Assert.IsTrue(result.CheckpointWasReset);
+                Assert.IsNull(await tokens.GetDeltaToken(GraphSentEmailSourceLoader.BuildDeltaKey(user)), "The dead token is discarded.");
+            }
+        }
+
+        [DataTestMethod]
+        [DataRow(HttpStatusCode.Forbidden, AccessDenied, DisplayName = "403")]
+        [DataRow(HttpStatusCode.InternalServerError, InternalServerError, DisplayName = "500")]
+        [DataRow(HttpStatusCode.BadRequest, "{\"error\":{\"code\":\"SyntheticUnrecognisedCode\",\"message\":\"Synthetic.\"}}", DisplayName = "400, unrecognised code")]
+        public async Task SentEmailSource_FailureThatSaysNothingAboutTheToken_KeepsIt(HttpStatusCode status, string body)
+        {
+            // Discarding a token over a permission or server fault would turn it into a full re-read of the mailbox. A
+            // delta token rides on a query this loader builds, so an unrecognised 400 may be about the query, not it.
+            var user = new Common.Entities.User { UserPrincipalName = "alice@contoso.com" };
+            var tokens = new InMemoryDeltaTokenStore();
+            await tokens.SetDeltaToken(GraphSentEmailSourceLoader.BuildDeltaKey(user), StoredToken);
+
+            using (var handler = new SequenceHandler(Tuple.Create(status, body)))
+            using (var client = new ManualGraphCallClient(handler, NullLogger.Instance))
+            {
+                await Assert.ThrowsExceptionAsync<GraphHttpException>(() => NewLoader(client, tokens).LoadSentEmailsForUserAsync(user, includeBody: false));
+
+                Assert.AreEqual(1, handler.CallCount);
+                Assert.AreEqual(StoredToken, await tokens.GetDeltaToken(GraphSentEmailSourceLoader.BuildDeltaKey(user)));
+            }
+        }
+
+        [TestMethod]
+        public async Task SentEmailSource_RejectionOfALaterPage_KeepsTheToken()
+        {
+            // Only the first request carried the stored token; a later page follows Graph's own $skiptoken link.
+            var user = new Common.Entities.User { UserPrincipalName = "alice@contoso.com" };
+            var tokens = new InMemoryDeltaTokenStore();
+            await tokens.SetDeltaToken(GraphSentEmailSourceLoader.BuildDeltaKey(user), StoredToken);
+
+            using (var handler = new SequenceHandler(
+                Ok(SentItemsPage(SkipLink("page-2"), null, "msg-1")),
+                Tuple.Create(HttpStatusCode.Gone, "{\"error\":{\"code\":\"SyncStateNotFound\",\"message\":\"Synthetic.\"}}")))
+            using (var client = new ManualGraphCallClient(handler, NullLogger.Instance))
+            {
+                await Assert.ThrowsExceptionAsync<GraphHttpException>(() => NewLoader(client, tokens).LoadSentEmailsForUserAsync(user, includeBody: false));
+
+                Assert.AreEqual(2, handler.CallCount, "No re-read: the stored token was not the one refused.");
+                Assert.AreEqual(StoredToken, await tokens.GetDeltaToken(GraphSentEmailSourceLoader.BuildDeltaKey(user)));
+            }
+        }
+
+        [TestMethod]
+        public async Task SentEmailImporter_SyncStateNotFound404_IsNotMistakenForAUserWithoutAMailbox()
+        {
+            // A 404 used to mean only "no mailbox", so a dead token put a real mailbox on the skip list as well.
+            var user = new Common.Entities.User { UserPrincipalName = "alice@contoso.com" };
+            var tokens = new InMemoryDeltaTokenStore();
+            await tokens.SetDeltaToken(GraphSentEmailSourceLoader.BuildDeltaKey(user), StoredToken);
+
+            using (var handler = new SequenceHandler(
+                Tuple.Create(HttpStatusCode.NotFound, "{\"error\":{\"code\":\"syncStateNotFound\",\"message\":\"Synthetic.\"}}"),
+                Ok(SentItemsPage(null, DeltaLink("fresh-token")))))
+            using (var client = new ManualGraphCallClient(handler, NullLogger.Instance))
+            {
+                var importer = new SentEmailImporter(AnalyticsLogger.ConsoleOnlyTracer(), new AppConfig(), NewLoader(client, tokens), NullSentEmailSentimentScorer.Instance);
+
+                await importer.ImportSentEmailsForUser(user);
+
+                Assert.AreEqual(0, GetPrivateField<int>(importer, "_mailboxesNotFound"));
+                Assert.IsFalse(GetPrivateField<ConcurrentDictionary<string, byte>>(importer, "_noMailboxUpns").ContainsKey(user.UserPrincipalName));
+                Assert.AreEqual(0, GetPrivateField<int>(importer, "_mailboxesFailed"));
+                Assert.AreEqual("fresh-token", await tokens.GetDeltaToken(GraphSentEmailSourceLoader.BuildDeltaKey(user)),
+                    "The re-read's token is committed, so the next cycle is an ordinary incremental read.");
+            }
+        }
+
+        [DataTestMethod]
+        [DataRow(HttpStatusCode.Gone, "{\"error\":{\"code\":\"SyncStateNotFound\",\"message\":\"Synthetic.\"}}", DisplayName = "410 Gone")]
+        [DataRow(HttpStatusCode.BadRequest, "{\"error\":{\"code\":\"SyntheticUnrecognisedCode\",\"message\":\"Synthetic.\"}}", DisplayName = "400, any code")]
+        public async Task SentEmailSource_RejectedContinuation_IsDiscardedAndTheMailboxReadAgain(HttpStatusCode status, string body)
+        {
+            // Graph minted the continuation itself, so a 400 for it means the link went stale (say, the importer was
+            // stopped for a while) - not that the query is wrong - whatever error code comes with it. While a
+            // continuation is stored there is no token: committing one retires it.
+            var user = new Common.Entities.User { UserPrincipalName = "alice@contoso.com" };
+            var tokens = new InMemoryDeltaTokenStore();
+            await tokens.SetDeltaToken(GraphSentEmailSourceLoader.BuildContinuationKey(user), SkipLink("expired"));
+
+            using (var handler = new SequenceHandler(
+                Tuple.Create(status, body),
+                Ok(SentItemsPage(null, DeltaLink("fresh-token"), "msg-1"))))
+            using (var client = new ManualGraphCallClient(handler, NullLogger.Instance))
+            {
+                var result = await NewLoader(client, tokens).LoadSentEmailsForUserAsync(user, includeBody: false);
+
+                Assert.AreEqual(SkipLink("expired"), handler.RequestUrls[0], "The stored continuation is resumed.");
+                Assert.IsFalse(handler.RequestUrls[1].Contains("token="), "The re-read starts from scratch.");
+                Assert.AreEqual("fresh-token", result.NextDeltaToken);
+                Assert.IsNull(await tokens.GetDeltaToken(GraphSentEmailSourceLoader.BuildContinuationKey(user)), "The dead continuation is discarded.");
+            }
+        }
+
+        [DataTestMethod]
+        [DataRow(false, DisplayName = "No value property")]
+        [DataRow(true, DisplayName = "value: null")]
+        public async Task SentEmailImporter_PageWithoutItsValueCollection_FailsTheMailboxAndCommitsNothing(bool explicitNull)
+        {
+            // Such a page used to read as an empty one: the read went on to the deltaLink and the token advanced past
+            // messages it never saw - lost for good.
+            var user = new Common.Entities.User { UserPrincipalName = "alice@contoso.com" };
+            var tokens = new RecordingDeltaTokenStore();
+            var pageWithoutValue = new Newtonsoft.Json.Linq.JObject { ["@odata.nextLink"] = SkipLink("page-3") };
+            if (explicitNull) pageWithoutValue["value"] = Newtonsoft.Json.Linq.JValue.CreateNull();
+
+            Tuple<HttpStatusCode, string>[] Script() => new[]
+            {
+                Ok(SentItemsPage(SkipLink("page-2"), null, "msg-1")),
+                Ok(pageWithoutValue.ToString()),
+                Ok(SentItemsPage(null, DeltaLink("must-not-be-stored"), "msg-3")),
+            };
+
+            using (var handler = new SequenceHandler(Script()))
+            using (var client = new ManualGraphCallClient(handler, NullLogger.Instance))
+            {
+                var ex = await Assert.ThrowsExceptionAsync<InvalidOperationException>(
+                    () => NewLoader(client, tokens).LoadSentEmailsForUserAsync(user, includeBody: false));
+
+                Assert.AreEqual(2, handler.CallCount, "The read stops at the page it cannot trust.");
+                StringAssert.Contains(ex.Message, "page 2");
+                Assert.IsFalse(ex.Message.Contains("https://") || ex.Message.Contains(user.UserPrincipalName) || ex.Message.Contains("token"),
+                    "The message must carry neither the URL, the mailbox nor its sync token.");
+            }
+
+            using (var handler = new SequenceHandler(Script()))
+            using (var client = new ManualGraphCallClient(handler, NullLogger.Instance))
+            {
+                var importer = new SentEmailImporter(AnalyticsLogger.ConsoleOnlyTracer(), new AppConfig(), NewLoader(client, tokens), NullSentEmailSentimentScorer.Instance);
+
+                await importer.ImportSentEmailsForUser(user);
+
+                Assert.AreEqual(1, GetPrivateField<int>(importer, "_mailboxesFailed"), "The mailbox fails this cycle, and only this mailbox.");
+                Assert.AreEqual(0, tokens.Writes.Count, "Neither a delta token nor a continuation may be committed.");
+                Assert.IsNull(await tokens.GetDeltaToken(GraphSentEmailSourceLoader.BuildDeltaKey(user)));
+                Assert.IsNull(await tokens.GetDeltaToken(GraphSentEmailSourceLoader.BuildContinuationKey(user)));
+            }
+        }
+
+        [TestMethod]
+        public async Task SentEmailImporter_LargeFirstRead_IsSpreadOverCyclesAndResumesWhereItStopped()
+        {
+            // A first read used to pull the whole Sent Items folder - with bodies when sentiment is on - into memory with
+            // up to 24 other mailboxes, and to start again from page one after any failure.
+            var user = new Common.Entities.User { UserPrincipalName = "alice@contoso.com" };
+            var tokens = new InMemoryDeltaTokenStore();
+            var continuationKey = GraphSentEmailSourceLoader.BuildContinuationKey(user);
+            var tokenKey = GraphSentEmailSourceLoader.BuildDeltaKey(user);
+
+            using (var handler = new SequenceHandler(
+                Ok(SentItemsPage(SkipLink("page-2"), null, "msg-1", "msg-2")),
+                Ok(SentItemsPage(SkipLink("page-3"), null, "msg-3", "msg-4")),
+                Ok(SentItemsPage(null, DeltaLink("round-done"), "msg-5")),
+                Ok(SentItemsPage(null, DeltaLink("steady-state")))))
+            using (var client = new ManualGraphCallClient(handler, NullLogger.Instance))
+            {
+                var loader = NewLoader(client, tokens);
+                loader.MaxMessagesPerMailboxPerCycle = 2;
+                var importer = new SentEmailImporter(AnalyticsLogger.ConsoleOnlyTracer(), new AppConfig(), loader, NullSentEmailSentimentScorer.Instance);
+
+                await importer.ImportSentEmailsForUser(user);
+                Assert.AreEqual(1, handler.CallCount, "The first cycle stops at its bound instead of reading the whole folder.");
+                Assert.AreEqual(SkipLink("page-2"), await tokens.GetDeltaToken(continuationKey));
+                Assert.IsNull(await tokens.GetDeltaToken(tokenKey), "No token until the round is complete.");
+
+                await importer.ImportSentEmailsForUser(user);
+                Assert.AreEqual(SkipLink("page-2"), handler.RequestUrls[1], "The next cycle continues where the last one stopped.");
+                Assert.AreEqual(SkipLink("page-3"), await tokens.GetDeltaToken(continuationKey));
+
+                await importer.ImportSentEmailsForUser(user);
+                Assert.AreEqual(SkipLink("page-3"), handler.RequestUrls[2]);
+                Assert.AreEqual("round-done", await tokens.GetDeltaToken(tokenKey));
+                Assert.IsNull(await tokens.GetDeltaToken(continuationKey), "A finished round leaves no continuation behind.");
+
+                await importer.ImportSentEmailsForUser(user);
+                StringAssert.Contains(handler.RequestUrls[3], "$deltatoken=round-done", "From then on it is the ordinary incremental read.");
+                Assert.AreEqual(5, GetPrivateField<int>(importer, "_messagesSeen"), "Every message was read exactly once.");
+            }
+        }
+
+        [TestMethod]
+        public async Task SentEmailSource_BodiesAreReadInSmallerBounds()
+        {
+            var user = new Common.Entities.User { UserPrincipalName = "alice@contoso.com" };
+            using (var handler = new SequenceHandler(
+                Ok(SentItemsPage(SkipLink("page-2"), null, "msg-1", "msg-2")),
+                Ok(SentItemsPage(null, DeltaLink("round-done"), "msg-3"))))
+            using (var client = new ManualGraphCallClient(handler, NullLogger.Instance))
+            {
+                var loader = NewLoader(client, new InMemoryDeltaTokenStore());
+                loader.MaxMessagesPerMailboxPerCycle = 10;
+                loader.MaxMessagesWithBodyPerMailboxPerCycle = 2;
+
+                var result = await loader.LoadSentEmailsForUserAsync(user, includeBody: true);
+
+                Assert.AreEqual(2, result.Messages.Count);
+                Assert.AreEqual(SkipLink("page-2"), result.NextPageLink);
+                Assert.IsNull(result.NextDeltaToken);
+            }
         }
 
         #endregion

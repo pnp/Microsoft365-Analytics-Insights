@@ -102,8 +102,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Sections
         /// <param name="settings">
         /// The per-cycle settings passed to the <c>GraphImporter</c> pass being run. In production this is the same
         /// object as the <see cref="AppConfig"/> given to the constructor; the distinction is preserved
-        /// because the original code read <c>DaysBeforeNowToDownload</c> and the <c>ImportJobSettings</c>
-        /// flags from the method argument and everything else from the field.
+        /// because the original code read <c>DaysBeforeNowToDownload</c> (now <c>UsageReportsDaysBack</c>) and the
+        /// <c>ImportJobSettings</c> flags from the method argument and everything else from the field.
         /// </param>
         public IReadOnlyList<IGraphImportSection> CreateSections(AppConfig settings)
         {
@@ -182,8 +182,10 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Sections
                             teamsConfig = await TeamsCrawlConfig.LoadFromDb(db);
                         }
 
-                        await teamsImporter.RefreshAndSaveAllTeamsData(teamsConfig);
-                        return true;
+                        // Not a completed run when every Team failed (an outage) or no group reported its workloads: the
+                        // cadence gate is left unstamped so the crawl is retried next cycle. See TeamsCrawlSummary.Succeeded.
+                        var crawl = await teamsImporter.RefreshAndSaveAllTeamsData(teamsConfig);
+                        return crawl.Succeeded;
                     }),
 
                 DelegateGraphImportSection.Ungated(
@@ -262,13 +264,15 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Sections
                 // at source. Listed last because it runs last. Its gating, completion stamps and log lines are unchanged.
                 //
                 // Not cadence-gated: the activity/usage-report phase owns its own once-a-day throttle via
-                // ISingleDateStore, and reports "did I import" itself.
+                // ISingleDateStore, and reports "did I import" itself. Its look-back is UsageReportsDaysBack, not the
+                // audit import's DaysBeforeNowToDownload: Graph keeps ~28 days of usage detail, and a date that ages out
+                // of a short window before its import succeeds can never be fetched again.
                 DelegateGraphImportSection.Ungated(
                     "Usage reports",
                     "Skipping usage reports import",
                     s => s.GraphUsageReports,
                     // Global user activity report. Each thread creates own context.
-                    async () => await _activityReportsImport(settings.DaysBeforeNowToDownload, httpClient, await _userScopeProvider.GetScopeAsync()))
+                    async () => await _activityReportsImport(settings.UsageReportsDaysBack, httpClient, await _userScopeProvider.GetScopeAsync()))
                     .Deferred(),
             };
         }

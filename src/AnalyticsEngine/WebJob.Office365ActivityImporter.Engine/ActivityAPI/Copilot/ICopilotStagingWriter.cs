@@ -2,9 +2,11 @@ using DataUtils;
 using DataUtils.Sql.Inserts;
 using Microsoft.Extensions.Logging;
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Threading.Tasks;
 using WebJob.Office365ActivityImporter.Engine;
+using WebJob.Office365ActivityImporter.Engine.ActivityAPI;
 using WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot;
 
 namespace ActivityImporter.Engine.ActivityAPI.Copilot
@@ -112,26 +114,40 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
             // expensive (the chat-only path carries accessed resources too, so it is often the largest).
             var timings = new CopilotStagingCommitTimings();
 
-            var swSp = Stopwatch.StartNew();
-            await _copilotInsertsSP.SaveToStagingTable(STAGING_INSERTS_PER_THREAD, docsMergeSql, _sharePointStagingTable);
-            swSp.Stop();
-            timings.SharePoint = swSp.Elapsed;
-
-            var swTeams = Stopwatch.StartNew();
-            await _copilotInsertsTeams.SaveToStagingTable(STAGING_INSERTS_PER_THREAD, teamsMergeSql, _teamsStagingTable);
-            swTeams.Stop();
-            timings.Teams = swTeams.Elapsed;
-
-            var swChat = Stopwatch.StartNew();
-            await _copilotInsertsChatsNoContext.SaveToStagingTable(STAGING_INSERTS_PER_THREAD, chatOnlyMergeSql, _chatOnlyStagingTable);
-            swChat.Stop();
-            timings.ChatOnly = swChat.Elapsed;
+            // Chat-only first, and every table even when an earlier one failed: a failure in a file or meeting
+            // enrichment merge used to stop the plain interactions after it from being saved at all. Any failure is
+            // rethrown once all three have run, so the batch is still retried (every merge here is idempotent).
+            // Run order doesn't affect turn pairing, which happens whichever record arrives second.
+            var failures = new List<Exception>();
+            timings.ChatOnly = await CommitStagingTable(_copilotInsertsChatsNoContext, chatOnlyMergeSql, _chatOnlyStagingTable, failures);
+            timings.SharePoint = await CommitStagingTable(_copilotInsertsSP, docsMergeSql, _sharePointStagingTable, failures);
+            timings.Teams = await CommitStagingTable(_copilotInsertsTeams, teamsMergeSql, _teamsStagingTable, failures);
+            if (failures.Count > 0)
+            {
+                CommitFailures.Rethrow(failures, "Copilot staging-table merges");
+            }
 
             _copilotInsertsSP.Rows.Clear();
             _copilotInsertsTeams.Rows.Clear();
             _copilotInsertsChatsNoContext.Rows.Clear();
 
             return timings;
+        }
+
+        private static async Task<TimeSpan> CommitStagingTable<T>(InsertBatch<T> batch, string mergeSql, string stagingTable, List<Exception> failures)
+            where T : class
+        {
+            var sw = Stopwatch.StartNew();
+            try
+            {
+                await batch.SaveToStagingTable(STAGING_INSERTS_PER_THREAD, mergeSql, stagingTable);
+            }
+            catch (Exception ex)
+            {
+                failures.Add(ex);
+            }
+            sw.Stop();
+            return sw.Elapsed;
         }
 
         private string GetSql(string tempTableName, string workloadSpecificScriptName)

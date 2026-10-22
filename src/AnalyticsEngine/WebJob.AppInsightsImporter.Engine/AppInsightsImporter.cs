@@ -36,10 +36,25 @@ namespace WebJob.AppInsightsImporter.Engine
         private readonly UserImportScope _userScope;
         private readonly AppInsightsScanWatermark _scanWatermark;
 
+        // Process-lifetime: which days failed to save, and how many times in a row.
+        private readonly AppInsightsDayFailureTracker _dayFailures;
+
+        // Process-lifetime: the query windows each day needed, so a day over the API's limits is not re-split every cycle.
+        private readonly AppInsightsQueryWindowCache _queryWindows;
+
         /// <param name="userScope">The <c>UserGroupsFilter</c> scope for this cycle; null means unfiltered.</param>
         /// <param name="scanWatermark">
         /// Process-lifetime record of how far the import has read, consulted only when the scope is filtered. See
         /// <see cref="AppInsightsScanWatermark"/>.
+        /// </param>
+        /// <param name="dayFailureTracker">
+        /// Process-lifetime record of the days that failed to save, so a failed day is retried next cycle before any
+        /// later day, and given up on after a few attempts. See <see cref="AppInsightsDayFailureTracker"/>. Null uses
+        /// one shared by the whole process.
+        /// </param>
+        /// <param name="queryWindowCache">
+        /// Process-lifetime record of the query windows each day needed. See <see cref="AppInsightsQueryWindowCache"/>.
+        /// Null uses one shared by the whole process.
         /// </param>
         public AppInsightsImporter(AppConfig importConfig, AnalyticsLogger logger, IClock clock = null,
             IAppInsightsSourceLoader source = null,
@@ -48,7 +63,9 @@ namespace WebJob.AppInsightsImporter.Engine
             IAppInsightsDayPersistenceManager persistence = null,
             IAnalyticsDbContextFactory contextFactory = null,
             UserImportScope userScope = null,
-            AppInsightsScanWatermark scanWatermark = null)
+            AppInsightsScanWatermark scanWatermark = null,
+            AppInsightsDayFailureTracker dayFailureTracker = null,
+            AppInsightsQueryWindowCache queryWindowCache = null)
         {
             _importConfig = importConfig;
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
@@ -60,6 +77,8 @@ namespace WebJob.AppInsightsImporter.Engine
             _persistence = persistence;
             _userScope = userScope ?? UserImportScope.Unfiltered;
             _scanWatermark = scanWatermark;
+            _dayFailures = dayFailureTracker ?? AppInsightsDayFailureTracker.ProcessDefault;
+            _queryWindows = queryWindowCache ?? AppInsightsQueryWindowCache.ProcessDefault;
         }
 
         /// <summary>
@@ -129,6 +148,18 @@ namespace WebJob.AppInsightsImporter.Engine
             var startDate = AppInsightsImportWindow.ResolveStartDateUtc(
                 scanFromDateOverride, effectiveNewestHitTimestamp, nowUtc);
 
+            // A day that failed to save is retried before any later day, even if the newest stored hit has moved
+            // past it since (a browser with its clock ahead can do that). See AppInsightsDayFailureTracker.
+            var retryDayUtc = _dayFailures.EarliestDayAwaitingRetryUtc;
+            if (retryDayUtc.HasValue && retryDayUtc.Value < startDate.Date)
+            {
+                _logger.LogInformation($"Day {retryDayUtc.Value:yyyy-MM-dd} failed to save in an earlier cycle; starting from it so it is retried before any later day.");
+                startDate = retryDayUtc.Value;
+            }
+
+            // The query windows remembered for days this run no longer reads are of no further use.
+            _queryWindows.ForgetDaysBefore(startDate.Date);
+
             var jobTimer = new JobTimer(_logger, "Hits import");
             if (newestHitTimestamp.HasValue)
             {
@@ -143,10 +174,11 @@ namespace WebJob.AppInsightsImporter.Engine
             {
                 if (!await ImportDaysAndSave(_source, saveRestResponses, startDate, filterUrls, persistence, sw))
                 {
-                    // A fatal download failure aborted the run. The original code returned straight out of
-                    // ImportAndSave here, so the section was never reported as finished; keep that, or
-                    // liveness monitoring would see a successful section import for a cycle that imported
-                    // nothing. (Release only - DEBUG rethrows.)
+                    // The run stopped early: a fatal download failure, or a day that failed to save and is retried
+                    // next cycle. The original code returned straight out of ImportAndSave on a download failure, so
+                    // the section was never reported as finished; keep that for both, or liveness monitoring would
+                    // see a successful section import for a cycle that did not import everything. (A download
+                    // failure only gets here in Release - DEBUG rethrows.)
                     return;
                 }
             }
@@ -157,7 +189,7 @@ namespace WebJob.AppInsightsImporter.Engine
                     this._importConfig.TenantGUID.ToString(),
                     this._importConfig.ClientID,
                     this._importConfig.ClientSecret);
-                using (var ai = new AppInsightsAPIClient(this._importConfig.AppInsightsConnectionString, credential, _logger))
+                using (var ai = new AppInsightsAPIClient(this._importConfig.AppInsightsConnectionString, credential, _logger, null, _queryWindows))
                 {
                     if (!await ImportDaysAndSave(ai, saveRestResponses, startDate, filterUrls, persistence, sw))
                     {
@@ -171,11 +203,13 @@ namespace WebJob.AppInsightsImporter.Engine
         }
 
         /// <summary>
-        /// The day loop: fetch a day, save it, and never let one bad day abort the rest of the run.
+        /// The day loop: fetch a day, save it, and stop at a day that fails to save so it is retried next cycle
+        /// before any later day - unless it has already failed too often in a row, when it is given up on so the
+        /// import cannot stall on it (see <see cref="AppInsightsDayFailureTracker"/>).
         /// </summary>
         /// <returns>
-        /// False when a download failure aborted the whole run, so the caller must NOT report the section as
-        /// finished. Only reachable in Release: the DEBUG build rethrows instead.
+        /// False when the run stopped early - a download failure (Release only: the DEBUG build rethrows) or a day
+        /// that failed to save - so the caller must NOT report the section as finished.
         /// </returns>
         private async Task<bool> ImportDaysAndSave(IAppInsightsSourceLoader source, bool saveRestResponses, DateTime startDate,
             List<FilterUrlConfig> filterUrls, IAppInsightsDayPersistenceManager persistence, Stopwatch sw)
@@ -254,14 +288,28 @@ namespace WebJob.AppInsightsImporter.Engine
                     }
                     catch (Exception ex)
                     {
-                        // Isolate per-day save failures. A single bad day - e.g. a page-update
-                        // event that trips a DbUpdateException - must never abort the whole
-                        // multi-day run and stall the importer's watermark indefinitely (the
-                        // SqlException-only catch used to let any other exception escape, which
-                        // permanently stuck the importer re-processing the same day). Log the
-                        // full error, record it, and carry on with the next day.
+                        // A day that failed to save must not be carried past: the next day's hits would move the
+                        // watermark (the newest stored hit) beyond it and it would never be read again. Stop here and
+                        // let the next cycle start from it. The save is idempotent, so retrying the parts that did
+                        // save costs time, not duplicates. Every exception counts, not just SqlException: one that
+                        // escaped used to stall the importer on the same day for months - which is also why a day
+                        // that keeps failing is only retried a bounded number of times.
                         _logger.TrackException(ex);
-                        _logger.LogError($"Failed saving data for day {d:yyyy-MM-dd}: {CommonExceptionHandler.GetErrorText(ex)}. Skipping this day and continuing.");
+                        var failures = _dayFailures.RecordFailure(d);
+                        if (!_dayFailures.ShouldGiveUp(failures))
+                        {
+                            _logger.LogError($"Failed saving data for day {d:yyyy-MM-dd} (attempt {failures} of {_dayFailures.MaxAttempts}): {CommonExceptionHandler.GetErrorText(ex)}. " +
+                                "Stopping this run here; the day will be retried next cycle, before any later day.");
+                            _logger.LogError($"Exception detail: {ex}");
+                            if (Debugger.IsAttached)
+                            {
+                                throw;
+                            }
+                            return false;
+                        }
+
+                        _logger.LogError($"Failed saving data for day {d:yyyy-MM-dd} again ({failures} failed attempts in a row): {CommonExceptionHandler.GetErrorText(ex)}. " +
+                            $"Giving up on it and continuing with later days. Whatever that day did not save is a permanent gap in the web-traffic data for {d:yyyy-MM-dd}.");
                         _logger.LogError($"Exception detail: {ex}");
                         if (Debugger.IsAttached)
                         {
@@ -280,6 +328,7 @@ namespace WebJob.AppInsightsImporter.Engine
                 }
 
                 // The day is fully processed - saved, or nothing left to save - so the next cycle need not read it again.
+                _dayFailures.RecordSuccess(d);
                 if (_userScope.IsFiltered)
                 {
                     _scanWatermark?.Advance(newestRead);

@@ -291,6 +291,45 @@ namespace Tests.UnitTests
             Assert.AreEqual(renamed, (await SingleAgentRow(agentId)).Name, "Once the batch agrees, the rename is applied.");
         }
 
+        /// <summary>
+        /// Imports commit newest-first, so an agent first stored from its runtime records, which carry only the Copilot
+        /// Studio schema name, gets its display name from an older named record in a later commit. Nothing stored says
+        /// whether the newer interactions carried a name, so they must not hold it back.
+        /// </summary>
+        [TestMethod]
+        public async Task Upsert_SchemaNameFallback_IsReplacedByADisplayNameFromAnOlderCommitArrivingLater()
+        {
+            var agentId = NewAgentId();
+            var now = DateTime.UtcNow;
+
+            await CommitBatchAt(now, Record(agentId, fallbackName: SchemaName));
+            Assert.AreEqual(SchemaName, (await SingleAgentRow(agentId)).Name);
+
+            await CommitBatchAt(now.AddDays(-2), Record(agentId, name: DisplayName));
+
+            Assert.AreEqual(DisplayName, (await SingleAgentRow(agentId)).Name);
+        }
+
+        /// <summary>
+        /// Nor a rename or a flag correction: a newer interaction that an earlier commit stored without a name or flag
+        /// is no evidence against them.
+        /// </summary>
+        [TestMethod]
+        public async Task Upsert_RenameAndFlag_AreNotHeldBackByANewerUnnamedInteractionFromAnEarlierCommit()
+        {
+            var agentId = NewAgentId();
+            var start = DateTime.UtcNow.AddMinutes(-10);
+            const string renamed = "Contoso IT Helpdesk";
+            await CommitBatchAt(start.AddDays(-2), Record(agentId, name: DisplayName, isCustomAgent: false));
+
+            await CommitBatchAt(start.AddSeconds(30), Record(agentId));
+            await CommitBatchAt(start.AddSeconds(5), Record(agentId, name: renamed, isCustomAgent: true));
+
+            var agent = await SingleAgentRow(agentId);
+            Assert.AreEqual(renamed, agent.Name);
+            Assert.AreEqual(true, agent.IsCustomAgent);
+        }
+
         [TestMethod]
         public async Task Upsert_NameLongerThanTheColumn_IsTrimmedRatherThanFailingTheBatch()
         {
@@ -572,7 +611,10 @@ namespace Tests.UnitTests
             };
 
         /// <summary>Stages each record against its own new audit event, and commits them all as ONE batch.</summary>
-        private async Task<List<Guid>> CommitBatch(params CopilotAuditLogContent[] records)
+        private Task<List<Guid>> CommitBatch(params CopilotAuditLogContent[] records) => CommitBatchAt(null, records);
+
+        /// <summary>The same, with every audit event at <paramref name="timeStamp"/> (now when null).</summary>
+        private async Task<List<Guid>> CommitBatchAt(DateTime? timeStamp, params CopilotAuditLogContent[] records)
         {
             var manager = new CopilotAuditEventManager(_config.ConnectionStrings.DatabaseConnectionString, new FakeCopilotMetadataLoader(), _logger);
             var eventIds = new List<Guid>();
@@ -582,7 +624,7 @@ namespace Tests.UnitTests
                 {
                     var commonEvent = new CommonAuditEvent
                     {
-                        TimeStamp = DateTime.UtcNow,
+                        TimeStamp = timeStamp ?? DateTime.UtcNow,
                         Operation = new EventOperation { Name = "Copilot agent identity test " + Guid.NewGuid() },
                         User = new User { AzureAdId = "test", UserPrincipalName = $"agent.identity.{Guid.NewGuid():N}@contoso.com" },
                         Id = Guid.NewGuid(),

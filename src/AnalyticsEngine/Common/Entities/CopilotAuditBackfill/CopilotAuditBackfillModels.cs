@@ -51,6 +51,14 @@ namespace Common.Entities.CopilotAuditBackfill
         public bool HasRecognisedRecords { get; set; }
         public int SplitLevel { get; set; }
         public int AttemptCount { get; set; }
+
+        /// <summary>
+        /// Graph reported this slice's query hit its record limit, and the slice was already as narrow as it
+        /// can be split. Its records are still imported; once they have all been read the slice is recorded as
+        /// incomplete rather than completed. Persisted so paging paused by the cycle budget still ends in that
+        /// gap. Absent from checkpoints written before it existed, which therefore read as not truncated.
+        /// </summary>
+        public bool QueryTruncated { get; set; }
     }
 
     public sealed class CopilotAuditBackfillGap

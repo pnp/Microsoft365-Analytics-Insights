@@ -422,8 +422,10 @@ namespace Tests.UnitTests
             try
             {
                 var websiteZip = CreateTestZip(testRoot, "Website", "default.htm");
-                var activityZip = CreateTestZip(testRoot, "Office365ActivityImporter", "job.exe");
-                var appInsightsZip = CreateTestZip(testRoot, "AppInsightsImporter", "job.exe");
+                var activityZip = CreateTestZip(testRoot, "Office365ActivityImporter", "job.exe",
+                    Path.Combine(AnalyticsEngineSourceRoot(), "WebJob.Office365ActivityImporter", "settings.job"));
+                var appInsightsZip = CreateTestZip(testRoot, "AppInsightsImporter", "job.exe",
+                    Path.Combine(AnalyticsEngineSourceRoot(), "WebJob.AppInsightsImporter", "settings.job"));
                 var sources = new LocalStorageInstallSourceInfo();
                 sources.GetSolutionComponentLocation(SoftwareComponent.WebSite).FileLocation = websiteZip;
                 sources.GetSolutionComponentLocation(SoftwareComponent.WebJobActivity).FileLocation = activityZip;
@@ -436,6 +438,18 @@ namespace Tests.UnitTests
                     CollectionAssert.Contains(entries, "default.htm");
                     CollectionAssert.Contains(entries, "app_data/jobs/continuous/Office365ActivityImporter/job.exe");
                     CollectionAssert.Contains(entries, "app_data/jobs/continuous/AppInsightsImporter/job.exe");
+
+                    // Kudu reads settings.job only from the root of the job's own folder.
+                    foreach (var job in new[] { "Office365ActivityImporter", "AppInsightsImporter" })
+                    {
+                        var settings = archive.Entries.SingleOrDefault(
+                            entry => entry.FullName.Replace('\\', '/') == $"app_data/jobs/continuous/{job}/settings.job");
+                        Assert.IsNotNull(settings, $"{job} must be deployed with settings.job next to its .exe.");
+                        using (var reader = new StreamReader(settings.Open()))
+                        {
+                            AssertIsSingletonSettingsJob(reader.ReadToEnd(), job);
+                        }
+                    }
                 }
             }
             finally
@@ -444,15 +458,87 @@ namespace Tests.UnitTests
             }
         }
 
-        private static string CreateTestZip(string testRoot, string rootDirectoryName, string fileName)
+        private static string CreateTestZip(string testRoot, string rootDirectoryName, string fileName, params string[] filesToCopy)
         {
             var sourceDirectory = Path.Combine(testRoot, rootDirectoryName);
             Directory.CreateDirectory(sourceDirectory);
             System.IO.File.WriteAllText(Path.Combine(sourceDirectory, fileName), "synthetic test content");
+            foreach (var file in filesToCopy)
+            {
+                System.IO.File.Copy(file, Path.Combine(sourceDirectory, Path.GetFileName(file)));
+            }
 
             var zipPath = Path.Combine(testRoot, rootDirectoryName + ".zip");
             ZipFile.CreateFromDirectory(sourceDirectory, zipPath, CompressionLevel.Optimal, true);
             return zipPath;
+        }
+
+        /// <summary>
+        /// Kudu runs a continuous WebJob on every instance of a scaled-out App Service unless its settings.job sets
+        /// is_singleton, and both importers stage rows in fixed-name global ##temp tables that every save drops and
+        /// re-creates - so a second instance destroys the first one's staging data mid-save. The file has to be listed
+        /// in the project (both set EnableDefaultNoneItems=false) and copied to the root of the build output: that is
+        /// the folder CI zips, and the installer unpacks the zip into app_data\jobs\continuous\&lt;name&gt;.
+        /// </summary>
+        [DataTestMethod]
+        [DataRow("WebJob.Office365ActivityImporter")]
+        [DataRow("WebJob.AppInsightsImporter")]
+        public void WebJobProjectShipsSingletonSettingsJob(string projectName)
+        {
+            var projectDirectory = Path.Combine(AnalyticsEngineSourceRoot(), projectName);
+            var settingsPath = Path.Combine(projectDirectory, "settings.job");
+            Assert.IsTrue(System.IO.File.Exists(settingsPath), $"{projectName} has no settings.job.");
+            AssertIsSingletonSettingsJob(System.IO.File.ReadAllText(settingsPath), projectName);
+
+            var project = System.Xml.Linq.XDocument.Load(Path.Combine(projectDirectory, projectName + ".csproj"));
+            var items = project.Descendants()
+                .Where(e => e.Name.LocalName == "None" || e.Name.LocalName == "Content")
+                .Where(e => string.Equals((string)e.Attribute("Include"), "settings.job", StringComparison.OrdinalIgnoreCase))
+                .ToList();
+            Assert.AreEqual(1, items.Count, $"{projectName}.csproj must include settings.job exactly once.");
+            var item = items[0];
+
+            string Metadata(string name) =>
+                ((string)item.Attribute(name) ?? item.Elements().FirstOrDefault(e => e.Name.LocalName == name)?.Value)?.Trim();
+
+            CollectionAssert.Contains(new[] { "PreserveNewest", "Always" }, Metadata("CopyToOutputDirectory"),
+                $"{projectName}.csproj must copy settings.job to the build output.");
+            Assert.IsNull(item.Attribute("Condition") ?? item.Parent.Attribute("Condition"),
+                $"{projectName}.csproj must ship settings.job in every build configuration.");
+            foreach (var relocation in new[] { "Link", "TargetPath" })
+            {
+                var value = Metadata(relocation);
+                Assert.IsTrue(value == null || string.Equals(value, "settings.job", StringComparison.OrdinalIgnoreCase),
+                    $"settings.job must land next to the .exe, but {relocation} moves it to '{value}'.");
+            }
+        }
+
+        /// <summary>Kudu only honours a JSON boolean: <c>"is_singleton": "true"</c> is silently ignored.</summary>
+        private static void AssertIsSingletonSettingsJob(string json, string webJob)
+        {
+            using (var settings = JsonDocument.Parse(json))
+            {
+                Assert.IsTrue(
+                    settings.RootElement.ValueKind == JsonValueKind.Object &&
+                    settings.RootElement.TryGetProperty("is_singleton", out var isSingleton) &&
+                    isSingleton.ValueKind == JsonValueKind.True,
+                    $"{webJob}'s settings.job must set \"is_singleton\": true, or Kudu runs it on every App Service instance.");
+            }
+        }
+
+        /// <summary>The src\AnalyticsEngine folder, found by walking up from the test assembly.</summary>
+        private static string AnalyticsEngineSourceRoot()
+        {
+            for (var dir = new DirectoryInfo(AppDomain.CurrentDomain.BaseDirectory); dir != null; dir = dir.Parent)
+            {
+                if (System.IO.File.Exists(Path.Combine(dir.FullName, "WebJob.Office365ActivityImporter", "WebJob.Office365ActivityImporter.csproj")))
+                {
+                    return dir.FullName;
+                }
+            }
+
+            Assert.Fail("Could not locate src\\AnalyticsEngine above the test assembly.");
+            return null;
         }
 
         [TestMethod]

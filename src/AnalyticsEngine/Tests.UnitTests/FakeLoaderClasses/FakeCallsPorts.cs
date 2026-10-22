@@ -177,4 +177,55 @@ namespace UnitTests.FakeLoaderClasses
             return Task.CompletedTask;
         }
     }
+
+    /// <summary>
+    /// In-memory <see cref="ICallQueueMessageSettlement"/>: records what was done with the message, in order, and can
+    /// make queueing a retry fail the way Service Bus does.
+    /// </summary>
+    public class FakeCallQueueMessageSettlement : ICallQueueMessageSettlement
+    {
+        public const string Complete = "Complete";
+        public const string Abandon = "Abandon";
+        public const string DeadLetter = "DeadLetter";
+        public const string ScheduleRetry = "ScheduleRetry";
+
+        public List<string> Operations { get; } = new List<string>();
+        public string DeadLetterReason { get; private set; }
+        public string DeadLetterDescription { get; private set; }
+        public CallQueueRetryState ScheduledState { get; private set; }
+        public DateTime? ScheduledForUtc { get; private set; }
+
+        /// <summary>When set, queueing a retry fails with this (as a faulted task).</summary>
+        public Exception ScheduleFailure { get; set; }
+
+        public Task CompleteAsync()
+        {
+            Operations.Add(Complete);
+            return Task.CompletedTask;
+        }
+
+        public Task AbandonAsync()
+        {
+            Operations.Add(Abandon);
+            return Task.CompletedTask;
+        }
+
+        public Task DeadLetterAsync(string reason, string description)
+        {
+            Operations.Add(DeadLetter);
+            DeadLetterReason = reason;
+            DeadLetterDescription = description;
+            return Task.CompletedTask;
+        }
+
+        public Task ScheduleRetryAsync(CallQueueRetryState state, DateTime enqueueAtUtc)
+        {
+            Operations.Add(ScheduleRetry);
+            if (ScheduleFailure != null) return Task.FromException(ScheduleFailure);
+
+            ScheduledState = state;
+            ScheduledForUtc = enqueueAtUtc;
+            return Task.CompletedTask;
+        }
+    }
 }

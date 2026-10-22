@@ -4,7 +4,8 @@ export interface NamedCount {
   /** Stable identifier for the figure (e.g. "auditEvents"); drives the icon, independent of the label. */
   key: string;
   name: string;
-  count: number;
+  /** Null when the figure couldn't be counted just now; the key still arrives so the tile keeps its place. */
+  count: number | null;
   /** One short line saying where the number comes from. */
   hint: string | null;
 }

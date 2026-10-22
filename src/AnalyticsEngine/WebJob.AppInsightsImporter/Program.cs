@@ -19,6 +19,17 @@ namespace WebJob.AppInsightsImporter
     class Program
     {
         /// <summary>
+        /// Whether a failed import cycle is logged and followed by the next one. DEBUG lets it escape instead, to the
+        /// catch around the loop that rethrows it, so it stops in the debugger as it always has.
+        /// </summary>
+        private static readonly bool ContinueAfterFailedCycle =
+#if DEBUG
+            false;
+#else
+            true;
+#endif
+
+        /// <summary>
         /// Application entry-point
         /// </summary>
         static void Main(string[] args)
@@ -113,24 +124,43 @@ namespace WebJob.AppInsightsImporter
                 }
 #endif
                 // UserGroupsFilter, shared across cycles: the resolved scope (and the last good one to fall back on), and
-                // how far this process has read - see AppInsightsScanWatermark.
+                // how far this process has read - see AppInsightsScanWatermark. Also which days failed to save, so each
+                // is retried next cycle but only a few times - see AppInsightsDayFailureTracker - and the query windows
+                // each day needed, so a day over the API's limits is not re-split every cycle - see AppInsightsQueryWindowCache.
                 var userScopeProvider = UserImportScopeProvider.CreateForGraph(config, logger);
                 var scanWatermark = new Engine.AppInsightsScanWatermark();
+                var dayFailures = new Engine.AppInsightsDayFailureTracker();
+                var queryWindows = new Engine.AppInsightsQueryWindowCache();
 
                 while (runAgain)
                 {
                     var importCycleTimer = new JobTimer(logger, Process.GetCurrentProcess().ProcessName);
                     importCycleTimer.Start();
 
-                    var userScope = userScopeProvider.GetScopeForCycleAsync().GetAwaiter().GetResult();
-                    var importer = new Engine.AppInsightsImporter(config, logger, userScope: userScope, scanWatermark: scanWatermark);
-                    if (daysBeforeReadOverride > 0)
+                    // One failed cycle - e.g. a transient SQL error loading the URL filters or the newest hit - must
+                    // not end the process: the web-job would restart, losing the state above and adding downtime.
+                    // Log it and try again after the normal pause. DEBUG still stops on it, in the catch below.
+                    var cycleCompleted = false;
+                    try
                     {
-                        importer.ImportAndSave(saveRestResponses, daysBeforeReadOverride).Wait();
+                        var userScope = userScopeProvider.GetScopeForCycleAsync().GetAwaiter().GetResult();
+                        var importer = new Engine.AppInsightsImporter(config, logger, userScope: userScope, scanWatermark: scanWatermark,
+                            dayFailureTracker: dayFailures, queryWindowCache: queryWindows);
+                        if (daysBeforeReadOverride > 0)
+                        {
+                            importer.ImportAndSave(saveRestResponses, daysBeforeReadOverride).Wait();
+                        }
+                        else
+                        {
+                            importer.ImportAndSave(saveRestResponses, null).Wait();
+                        }
+                        cycleCompleted = true;
                     }
-                    else
+                    catch (Exception ex) when (ContinueAfterFailedCycle)
                     {
-                        importer.ImportAndSave(saveRestResponses, null).Wait();
+                        logger.TrackException(ex);
+                        logger.LogError($"Import cycle failed: {CommonExceptionHandler.GetErrorText(ex)}. Trying again after the normal pause.");
+                        logger.LogError($"Exception detail: {ex}");
                     }
 
 #if DEBUG
@@ -139,9 +169,12 @@ namespace WebJob.AppInsightsImporter
                     runAgain = !debugSwitchDetected;
 #endif
 
-                    // Output cycle stats
-                    heartbeat.CycleCompleted(importCycleTimer.Elapsed);
-                    importCycleTimer.TrackFinishedEventAndStopTimer(AnalyticsLogger.AnalyticsEvent.FinishedImportCycle);
+                    // Output cycle stats - only for a cycle that ran to the end, so a failing one isn't reported as completed.
+                    if (cycleCompleted)
+                    {
+                        heartbeat.CycleCompleted(importCycleTimer.Elapsed);
+                        importCycleTimer.TrackFinishedEventAndStopTimer(AnalyticsLogger.AnalyticsEvent.FinishedImportCycle);
+                    }
 
                     if (runAgain)
                     {

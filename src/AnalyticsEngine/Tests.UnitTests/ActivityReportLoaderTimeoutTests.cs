@@ -1,16 +1,19 @@
 using Common.Entities.Config;
 using DataUtils;
 using DataUtils.Http;
+using Microsoft.Extensions.Logging;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System;
 using System.Collections.Generic;
 using System.Globalization;
+using System.IO;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Runtime.Serialization;
 using System.Threading;
 using System.Threading.Tasks;
+using Tests.UnitTests.FakeLoaderClasses;
 using WebJob.Office365ActivityImporter.Engine.ActivityAPI;
 using WebJob.Office365ActivityImporter.Engine.ActivityAPI.Loaders;
 
@@ -236,6 +239,78 @@ namespace Tests.UnitTests
             Assert.IsTrue(handler.RequestUris[1].StartsWith(page2, StringComparison.Ordinal));
             Assert.IsTrue(handler.RequestUris[2].StartsWith(page2, StringComparison.Ordinal), "The retry must request the same next-page URI, not skip forward.");
             CollectionAssert.AreEqual(new[] { 0, 0, 2 }, AttemptOffsets(clock, handler));
+        }
+
+        [TestMethod]
+        [DoNotParallelize]
+        public async Task ActivityReportWebLoader_TraceEmail_WritesOnlyTheRecordsThatContainIt()
+        {
+            // --traceAuditEmail used to be ignored: with a trace directory set, every raw record was written to disk.
+            var traceDirectory = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "audit-trace-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(traceDirectory);
+            var originalDirectory = AuditTraceConfig.TraceDirectory;
+            var originalEmail = AuditTraceConfig.TraceEmail;
+            try
+            {
+                AuditTraceConfig.TraceDirectory = traceDirectory;
+                AuditTraceConfig.TraceEmail = "ann@contoso.com";
+                var records = "[" + TraceRecord("Ann@Contoso.com") + "," + TraceRecord("joann@contoso.com") + "," + TraceRecord("bob@contoso.com") + "]";
+                var clock = NewClock();
+                var handler = new SequencedContentHandler(clock, new[] { Response(HttpStatusCode.OK, records) });
+                var logger = new RecordingLogger();
+
+                using (var httpClient = NewAutoClient(handler, clock))
+                {
+                    var loader = new ActivityReportWebLoader(httpClient, logger, Guid.Empty.ToString());
+                    await loader.Load(new ActivityReportInfo { ContentUri = new Uri("https://contoso.example/audit/content") });
+                }
+
+                var written = Directory.GetFiles(traceDirectory, "audit_trace_*.json");
+                Assert.AreEqual(1, written.Length, "Only the traced person's record may be written.");
+                StringAssert.Contains(File.ReadAllText(written[0]), "Ann@Contoso.com");
+                Assert.IsTrue(logger.Entries.Any(e => e.Level == LogLevel.Warning
+                    && e.Message.Contains("raw audit records that contain the --traceAuditEmail address are being written")),
+                    "Tracing personal data to disk is announced once per cycle.");
+            }
+            finally
+            {
+                AuditTraceConfig.TraceDirectory = originalDirectory;
+                AuditTraceConfig.TraceEmail = originalEmail;
+                Directory.Delete(traceDirectory, recursive: true);
+            }
+        }
+
+        [TestMethod]
+        [DoNotParallelize]
+        public void ActivityReportWebLoader_TraceEmailWithoutDirectory_SaysNothingIsTraced()
+        {
+            var originalDirectory = AuditTraceConfig.TraceDirectory;
+            var originalEmail = AuditTraceConfig.TraceEmail;
+            try
+            {
+                AuditTraceConfig.TraceDirectory = null;
+                AuditTraceConfig.TraceEmail = "ann@contoso.com";
+                var logger = new RecordingLogger();
+
+                using (var httpClient = NewAutoClient(new SequencedContentHandler(NewClock(), new Func<HttpResponseMessage>[0]), NewClock()))
+                {
+                    new ActivityReportWebLoader(httpClient, logger, Guid.Empty.ToString());
+                }
+
+                Assert.IsTrue(logger.Entries.Any(e => e.Level == LogLevel.Warning
+                    && e.Message.Contains("--traceAuditEmail is set without a usable --traceAuditDir, so no audit records are being traced")));
+            }
+            finally
+            {
+                AuditTraceConfig.TraceDirectory = originalDirectory;
+                AuditTraceConfig.TraceEmail = originalEmail;
+            }
+        }
+
+        private static string TraceRecord(string userId)
+        {
+            return "{\"Id\":\"" + Guid.NewGuid() + "\",\"RecordType\":2,\"CreationTime\":\"2026-01-01T00:00:00\",\"Operation\":\"Send\"," +
+                "\"Workload\":\"Exchange\",\"UserId\":\"" + userId + "\"}";
         }
 
         private sealed class TimeoutHttpMessageHandler : HttpMessageHandler

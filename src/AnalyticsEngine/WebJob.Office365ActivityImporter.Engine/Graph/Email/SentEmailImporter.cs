@@ -72,6 +72,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
         private int _duplicateMessageIdsSkippedOnRetry;
         private int _deltaTokenReads;
         private int _deltaTokenWrites;
+        private int _mailboxesContinuingNextCycle;
+        private int _mailboxCheckpointsReset;
         private readonly ConcurrentDictionary<string, int> _mailboxFailureBuckets =
             new ConcurrentDictionary<string, int>(StringComparer.OrdinalIgnoreCase);
 
@@ -425,11 +427,16 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
                         var load = await _sourceLoader.LoadSentEmailsForUserAsync(user, includeBody);
                         Interlocked.Add(ref _deltaTokenReads, load.DeltaTokenReads);
                         Interlocked.Add(ref _deltaTokenWrites, load.DeltaTokenWrites);
+                        if (!string.IsNullOrEmpty(load.NextPageLink))
+                            Interlocked.Increment(ref _mailboxesContinuingNextCycle);
+                        if (load.CheckpointWasReset)
+                            Interlocked.Increment(ref _mailboxCheckpointsReset);
                         loaded.Add(new LoadedUser
                         {
                             User = user,
-                            Messages = load.Messages,
-                            NextDeltaToken = load.NextDeltaToken
+                            Messages = load.Messages ?? Array.Empty<GraphSentMessage>(),
+                            NextDeltaToken = load.NextDeltaToken,
+                            NextPageLink = load.NextPageLink
                         });
                     }
                     catch (GraphResourceNotFoundException ex)
@@ -951,7 +958,9 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
                 $"(duplicates skipped in chunk: {_duplicateMessageIdsSkippedInChunk}, " +
                 $"duplicates skipped on retry: {_duplicateMessageIdsSkippedOnRetry}) " +
                 $"(recipient rows: {_recipientsInserted}). " +
-                $"Delta tokens read: {_deltaTokenReads}, written: {_deltaTokenWrites}.");
+                $"Delta tokens read: {_deltaTokenReads}, written: {_deltaTokenWrites}. " +
+                $"Mailboxes continuing a long read next cycle: {_mailboxesContinuingNextCycle}; " +
+                $"rejected sync checkpoints discarded and re-read from the start: {_mailboxCheckpointsReset}.");
         }
 
         internal static string FormatMailboxFailureSummary(
@@ -1064,13 +1073,21 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
             if (_deltaTokenCommitter == null)
                 return;
 
+            var continuationCommitter = _deltaTokenCommitter as ISentEmailSyncContinuationCommitter;
             foreach (var loaded in loadedUsers)
             {
-                if (string.IsNullOrEmpty(loaded.NextDeltaToken))
-                    continue;
-
-                await _deltaTokenCommitter.CommitDeltaTokenAsync(loaded.User, loaded.NextDeltaToken);
-                Interlocked.Increment(ref _deltaTokenWrites);
+                if (!string.IsNullOrEmpty(loaded.NextDeltaToken))
+                {
+                    await _deltaTokenCommitter.CommitDeltaTokenAsync(loaded.User, loaded.NextDeltaToken);
+                    Interlocked.Increment(ref _deltaTokenWrites);
+                }
+                else if (!string.IsNullOrEmpty(loaded.NextPageLink) && continuationCommitter != null)
+                {
+                    // The read stopped at its per-cycle bound and this chunk has now saved what it read, so the next
+                    // cycle can continue after it rather than from the start of the round.
+                    await continuationCommitter.CommitContinuationAsync(loaded.User, loaded.NextPageLink);
+                    Interlocked.Increment(ref _deltaTokenWrites);
+                }
             }
         }
 
@@ -1285,6 +1302,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
             public Common.Entities.User User;
             public IReadOnlyList<GraphSentMessage> Messages;
             public string NextDeltaToken;
+            public string NextPageLink;
         }
 
         private sealed class UserChunkResult

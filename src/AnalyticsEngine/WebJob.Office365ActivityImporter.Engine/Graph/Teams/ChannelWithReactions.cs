@@ -16,12 +16,19 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
         {
             this.Id = c.Id;
             this.DisplayName = c.DisplayName;
+            this.MembershipType = c.MembershipType;
 
             // We don't use hardly any data for channel so leave the rest for now
         }
 
         public string Id { get; set; } = string.Empty;
         public string DisplayName { get; set; }
+
+        /// <summary>
+        /// Standard, private or shared. Decides whether a forbidden message read means "skip this channel" or "this
+        /// token can't read the Team" - see <see cref="ChannelReadFailureRules"/>. <c>null</c> when Graph didn't say.
+        /// </summary>
+        public ChannelMembershipType? MembershipType { get; set; }
 
         public List<ChatMessageReaction> Reactions { get; set; } = new List<ChatMessageReaction>();
         public List<ChatMessage> Messages { get; set; } = new List<ChatMessage>();

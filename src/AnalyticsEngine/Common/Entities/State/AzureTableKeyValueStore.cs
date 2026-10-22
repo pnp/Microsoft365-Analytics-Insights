@@ -257,6 +257,27 @@ namespace Common.Entities.State
             }, cancellationToken).ConfigureAwait(false);
         }
 
+        public async Task<bool> TryDeleteAsync(string key, string expectedVersionToken, CancellationToken cancellationToken = default)
+        {
+            if (expectedVersionToken == null) return false;
+
+            var rowKey = ToRowKey(key);
+            return await RunAsync(async table =>
+            {
+                try
+                {
+                    // Conditional on the ETag read: 412 when the row changed since, 404 when it was already deleted.
+                    var response = await table.DeleteEntityAsync(_partitionKey, rowKey, new ETag(expectedVersionToken), cancellationToken)
+                        .ConfigureAwait(false);
+                    return response == null || (response.Status != 404 && response.Status != 412);
+                }
+                catch (RequestFailedException ex) when (ex.Status == 412 || ex.Status == 404)
+                {
+                    return false;
+                }
+            }, cancellationToken).ConfigureAwait(false);
+        }
+
         /// <summary>
         /// Deletes up to <paramref name="maxToDelete"/> values in this partition whose time-to-live has passed. Values
         /// written without a TTL are never touched, and neither is a value rewritten after this purge found it expired.

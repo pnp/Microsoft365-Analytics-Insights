@@ -34,6 +34,16 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
         private int _totalFilesCount;
         private int _totalChatOnlyCount;
 
+        // Interactions staged without their file/meeting details because Graph failed transiently. Inside the save
+        // lock every lookup is made once; see GraphFileMetadataLoader.GetSpoFileInfo for where retries happen.
+        private int _totalUnenrichedAfterTransientFailure;
+
+        /// <summary>
+        /// Interactions staged since the last commit without their file or meeting details because Microsoft Graph
+        /// failed transiently (throttling, a server error or a timeout).
+        /// </summary>
+        public int UnenrichedAfterTransientFailureCount => _totalUnenrichedAfterTransientFailure;
+
         /// <summary>
         /// Production entry point: builds the SQL staging writer from a connection string. Kept as a thin
         /// overload so SaveSession.Init() and every other existing call site is unchanged. See issue #367.
@@ -186,7 +196,8 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
                 {
                     MeetingId = meetingId,
                     MeetingCreatedUTC = meetingInfo?.CreatedUTC,
-                    MeetingName = meetingInfo?.Subject,
+                    // online_meetings.name is nvarchar(100); the merge trims too, but can't avoid splitting a surrogate pair.
+                    MeetingName = AuditStagingText.TrimToLength(meetingInfo?.Subject, AuditStagingText.MeetingNameMaxLength),
                 };
                 PopulateCommonStagingFields(row, auditRecord, baseOfficeEvent);
                 _stagingWriter.StageTeams(row);
@@ -194,6 +205,7 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
             }
             catch (Exception ex)
             {
+                CountIfUnenrichedAfterTransientFailure(ex);
                 _logger.LogWarning(ex,
                     $"Failed to resolve optional meeting metadata for event {baseOfficeEvent.Id} context {contextId}; staging the Copilot interaction without meeting enrichment.");
                 return false;
@@ -217,7 +229,11 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
                 }
                 else
                 {
-                    spFileInfo = await _copilotEventAdaptor.GetSpoFileInfo(contextId, baseOfficeEvent.User.UserPrincipalName);
+                    // One attempt, and no waiting: this runs inside the save's SQL lock. Retrying with back-off is the
+                    // prewarm's job, outside the lock, through the same run-scoped loader's GetSpoFileInfo.
+                    spFileInfo = _copilotEventAdaptor is GraphFileMetadataLoader graphLoader
+                        ? await graphLoader.GetSpoFileInfoSingleAttempt(contextId, baseOfficeEvent.User.UserPrincipalName)
+                        : await _copilotEventAdaptor.GetSpoFileInfo(contextId, baseOfficeEvent.User.UserPrincipalName);
                     if (spFileInfo == null)
                     {
                         // Expected and high-volume: many copilot contexts (e.g. securitycopilot.microsoft.com
@@ -231,7 +247,9 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
                 var row = new SPCopilotLogTempEntity
                 {
                     FileExtension = spFileInfo?.Extension,
-                    FileName = spFileInfo?.Filename,
+                    // event_file_names.file_name is nvarchar(250): one longer name used to fail the merge for the
+                    // whole batch, on every retry.
+                    FileName = AuditStagingText.TrimToLength(spFileInfo?.Filename, AuditStagingText.FileNameMaxLength),
                     // Keep the SharePoint URL within the urls.full_url column width (nvarchar(850)):
                     // strip the volatile xsdata token, else reduce to the page path. See issue #122.
                     Url = StringUtils.EnsureUrlWithinLength(spFileInfo?.Url, Common.Entities.Url.FullUrlMaxLength),
@@ -243,10 +261,39 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
             }
             catch (Exception ex)
             {
+                CountIfUnenrichedAfterTransientFailure(ex);
                 _logger.LogWarning(ex,
                     $"Failed to resolve optional file metadata for event {baseOfficeEvent.Id} context {contextId}; staging the Copilot interaction without file enrichment.");
                 return false;
             }
+        }
+
+        private void CountIfUnenrichedAfterTransientFailure(Exception ex)
+        {
+            if (IsTransientEnrichmentFailure(ex))
+            {
+                _totalUnenrichedAfterTransientFailure++;
+            }
+        }
+
+        /// <summary>
+        /// Graph throttling or a server error, a request that failed to connect, or one that ran out of time: a failure
+        /// that says nothing about the file or meeting, so an interaction saved without its details is worth counting.
+        /// </summary>
+        internal static bool IsTransientEnrichmentFailure(Exception ex)
+        {
+            if (GraphFileMetadataLoader.IsRetryableGraphFailure(ex))
+            {
+                return true;
+            }
+            for (var e = ex; e != null; e = e.InnerException)
+            {
+                if (e is OperationCanceledException || e is TimeoutException)
+                {
+                    return true;
+                }
+            }
+            return false;
         }
 
         /// <summary>
@@ -500,10 +547,20 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
             else
                 _logger.LogDebug(copilotTimingMsg);
 
+            // Made visible because it is permanent: these interactions are counted, but nothing goes back for the
+            // file or meeting they were about.
+            if (_totalUnenrichedAfterTransientFailure > 0)
+            {
+                _logger.LogWarning($"Copilot enrichment: {_totalUnenrichedAfterTransientFailure.ToString("n0")} interaction(s) in this batch were saved without " +
+                    "their file or meeting details because Microsoft Graph failed transiently (throttling, server errors or timeouts). " +
+                    "The interactions are counted as usual, but they will not be re-enriched later, so file and meeting breakdowns under-count them.");
+            }
+
             // Clear counters for next batch. The staged rows are cleared by the writer.
             _totalFilesCount = 0;
             _totalMeetingsCount = 0;
             _totalChatOnlyCount = 0;
+            _totalUnenrichedAfterTransientFailure = 0;
         }
 
         /// <summary>

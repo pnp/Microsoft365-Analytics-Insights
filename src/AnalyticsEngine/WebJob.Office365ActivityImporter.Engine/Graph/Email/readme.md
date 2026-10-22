@@ -12,8 +12,9 @@ Cognitive Services configuration is present.
 For each user with an email address in the analytics database, the importer:
 
 1. Loads the user's `sentitems` mail folder using the Graph delta query
-   (`/users/{upn}/mailFolders/sentitems/messages/delta`).
-2. Persists the delta token via `IDeltaTokenStore` so subsequent runs only fetch new messages.
+   (`/users/{upn}/mailFolders/sentitems/messages/delta`), up to a per-cycle bound (see *Bounded reads* below).
+2. Persists the delta token via `IDeltaTokenStore` so subsequent runs only fetch new messages - only after
+   the messages it covers have been saved.
 3. Inserts one `SentEmails` row per message and one `SentEmailRecipients` row per distinct recipient.
 4. Optionally calls Azure AI Language to compute a positive sentiment score for the message body.
 
@@ -47,7 +48,16 @@ enabled. Relevant settings:
   enable sentiment scoring (`SentEmail.CognitiveScore`). When not configured, messages are imported
   without a sentiment score.
 - **Delta tokens** – Stored per user (`SentEmails-{userPrincipalName}`) via `IDeltaTokenStore`. To
-  force a full re-scan for a user, clear that user's delta token.
+  force a full re-scan for a user, clear that user's delta token (and `SentEmailsNextPage-{userPrincipalName}`,
+  if present). A token Graph rejects as expired or reset (HTTP 410, `syncStateNotFound`, or
+  `Request_UnsupportedQuery`; for a saved continuation link, any 400 or 410) is discarded automatically and
+  the mailbox is read again from the start.
+- **Bounded reads** – One mailbox read returns at most 1,000 messages per import cycle (200 when message
+  bodies are read for sentiment scoring). A first read of a large Sent Items folder therefore spreads over
+  several cycles: the Graph `@odata.nextLink` it stopped at is saved under `SentEmailsNextPage-{userPrincipalName}`
+  once that cycle's messages are in SQL, and the next cycle continues from it (a delta token the read began from
+  is retired until the round finishes - the two keys are never set together). Ordinary incremental reads fit
+  in one cycle and are unaffected.
 
 ## Data model
 

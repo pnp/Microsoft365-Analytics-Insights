@@ -1,14 +1,80 @@
 ﻿using DataUtils.Health;
 using Microsoft.ApplicationInsights;
 using Microsoft.ApplicationInsights.DataContracts;
+using Microsoft.ApplicationInsights.Extensibility;
 using Microsoft.Extensions.Logging;
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Threading;
 
 namespace DataUtils
 {
+    /// <summary>
+    /// One <see cref="TelemetryClient"/> per Application Insights connection string, for the life of the process.
+    /// </summary>
+    /// <remarks>
+    /// A default <see cref="TelemetryConfiguration"/> owns an in-memory channel whose transmitter runs on its own
+    /// long-running thread until the configuration is disposed - and an <see cref="AnalyticsLogger"/> never disposes
+    /// anything. Built per logger, every web request that logged (each call-record webhook POST, each unhandled
+    /// exception, each 404) left one more of those threads behind for the life of the worker process. Sharing one
+    /// client per connection string bounds that at one thread per distinct string; in practice one per process, as a
+    /// connection-string change rewrites the configuration and recycles the web application.
+    /// <para>
+    /// The client is shared, so nothing per logger is written to its <see cref="TelemetryClient.Context"/>: each
+    /// logger stamps its own operation name on each item it sends.
+    /// </para>
+    /// </remarks>
+    internal sealed class SharedTelemetryClients
+    {
+        internal static readonly SharedTelemetryClients Process =
+            new SharedTelemetryClients(connectionString => new TelemetryConfiguration { ConnectionString = connectionString });
+
+        private readonly ConcurrentDictionary<string, Lazy<TelemetryClient>> _clients =
+            new ConcurrentDictionary<string, Lazy<TelemetryClient>>(StringComparer.Ordinal);
+        private readonly Func<string, TelemetryConfiguration> _createConfiguration;
+
+        internal SharedTelemetryClients(Func<string, TelemetryConfiguration> createConfiguration)
+        {
+            _createConfiguration = createConfiguration ?? throw new ArgumentNullException(nameof(createConfiguration));
+        }
+
+        internal TelemetryClient For(string connectionString)
+        {
+            var entry = _clients.GetOrAdd(connectionString, cs => new Lazy<TelemetryClient>(
+                () => new TelemetryClient(_createConfiguration(cs)), LazyThreadSafetyMode.ExecutionAndPublication));
+            try
+            {
+                return entry.Value;
+            }
+            catch
+            {
+                // An unusable connection string throws here, as it always has; don't keep the failure, so a corrected
+                // one in a later configuration read is not stuck behind it.
+                ((ICollection<KeyValuePair<string, Lazy<TelemetryClient>>>)_clients)
+                    .Remove(new KeyValuePair<string, Lazy<TelemetryClient>>(connectionString, entry));
+                throw;
+            }
+        }
+
+        /// <summary>Requests transmission of everything buffered by every shared client. Never throws.</summary>
+        internal void FlushAll()
+        {
+            foreach (var entry in _clients.Values)
+            {
+                try
+                {
+                    if (entry.IsValueCreated) entry.Value.Flush();
+                }
+                catch (Exception)
+                {
+                    // Best effort: this runs while a process is stopping.
+                }
+            }
+        }
+    }
+
     public abstract class BaseAnalyticsLogger : ILogger
     {
         public bool IsEnabled(LogLevel logLevel)
@@ -34,6 +100,12 @@ namespace DataUtils
 
         private TelemetryClient AppInsights { get; set; }
 
+        /// <summary>
+        /// This logger's App Insights operation name, stamped on every item it sends. Kept here rather than on the
+        /// client's context because the client is shared (see <see cref="SharedTelemetryClients"/>).
+        /// </summary>
+        private readonly string _operationName;
+
         #region Constructors
 
         private AnalyticsLogger() : this(string.Empty, string.Empty)
@@ -43,25 +115,24 @@ namespace DataUtils
         public AnalyticsLogger(TelemetryClient appInsights, string context)
         {
             AppInsights = appInsights;
-            if (AppInsights != null && !string.IsNullOrEmpty(context))
-            {
-                AppInsights.Context.Operation.Name = context;
-            }
+            _operationName = context;
         }
 
+        /// <summary>
+        /// A logger sending to the process-wide client for <paramref name="appInsightsConnectionString"/>: cheap to
+        /// create, so a request may build one without leaving a telemetry channel behind.
+        /// </summary>
         public AnalyticsLogger(string appInsightsConnectionString, string context)
+            : this(appInsightsConnectionString, context, SharedTelemetryClients.Process)
+        {
+        }
+
+        internal AnalyticsLogger(string appInsightsConnectionString, string context, SharedTelemetryClients clients)
         {
             if (!string.IsNullOrEmpty(appInsightsConnectionString))
             {
-                AppInsights = new TelemetryClient(new Microsoft.ApplicationInsights.Extensibility.TelemetryConfiguration()
-                {
-                    ConnectionString = appInsightsConnectionString
-                });
-
-                if (!string.IsNullOrEmpty(context))
-                {
-                    AppInsights.Context.Operation.Name = context;
-                }
+                AppInsights = clients.For(appInsightsConnectionString);
+                _operationName = context;
             }
             else
             {
@@ -71,6 +142,11 @@ namespace DataUtils
 
         public static AnalyticsLogger ConsoleOnlyTracer() { return new AnalyticsLogger(); }
 
+        /// <summary>
+        /// Requests transmission of everything every connection-string logger in this process has buffered. For a
+        /// host that is stopping; never throws.
+        /// </summary>
+        public static void FlushSharedTelemetry() => SharedTelemetryClients.Process.FlushAll();
 
         #endregion
 
@@ -118,9 +194,9 @@ namespace DataUtils
                 {
                     telemetry.Context.Operation.Id = effectiveOperationId;
                 }
-                if (!string.IsNullOrEmpty(AppInsights.Context.Operation.Name))
+                if (!string.IsNullOrEmpty(_operationName))
                 {
-                    telemetry.Context.Operation.Name = AppInsights.Context.Operation.Name;
+                    telemetry.Context.Operation.Name = _operationName;
                 }
                 if (safeDetails?.TelemetryProperties != null)
                 {
@@ -152,9 +228,9 @@ namespace DataUtils
                 {
                     telemetry.Context.Operation.Id = CurrentOperationId.Value;
                 }
-                if (!string.IsNullOrEmpty(AppInsights.Context.Operation.Name))
+                if (!string.IsNullOrEmpty(_operationName))
                 {
-                    telemetry.Context.Operation.Name = AppInsights.Context.Operation.Name;
+                    telemetry.Context.Operation.Name = _operationName;
                 }
                 AppInsights.TrackTrace(telemetry);
             }
@@ -248,9 +324,9 @@ namespace DataUtils
                 {
                     telemetry.Context.Operation.Id = effectiveOperationId;
                 }
-                if (!string.IsNullOrEmpty(AppInsights.Context.Operation.Name))
+                if (!string.IsNullOrEmpty(_operationName))
                 {
-                    telemetry.Context.Operation.Name = AppInsights.Context.Operation.Name;
+                    telemetry.Context.Operation.Name = _operationName;
                 }
                 if (context != null)
                 {

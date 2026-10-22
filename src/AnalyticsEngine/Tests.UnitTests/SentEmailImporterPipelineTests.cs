@@ -545,6 +545,35 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public async Task ImportSentEmailsForUser_BoundedRead_CommitsItsContinuationOnlyAfterThePagesAreSaved()
+        {
+            // A read that stopped at its per-cycle bound continues from its nextLink next cycle - but only once what
+            // it read is durable, or a failed save would skip those messages for good.
+            var user = await CreateSavedUserAsync("bounded");
+            var messageId = "c8-bounded-" + Guid.NewGuid().ToString("N");
+            const string nextPage = "https://graph.microsoft.com/v1.0/users/synthetic/mailFolders('sentitems')/messages/delta?$skiptoken=page-2";
+            var source = new RecordingSentEmailSourceLoader(user, Msg(messageId, user.Mail, new[] { "recipient-c8@contoso.com" }, "Καλημέρα κόσμε"))
+            {
+                NextPageLink = nextPage,
+            };
+            var committer = new RecordingDeltaTokenCommitter(async (committedUser, checkpoint) =>
+                Assert.AreEqual(1, await CountRecipientsAsync(messageId), "The checkpoint may only move once the page's rows are durable."));
+            var importer = NewImporter(source, committer);
+            importer.FailureInjectionPhase = SentEmailPersistenceFailurePhase.PhaseA;
+
+            await Assert.ThrowsExceptionAsync<InvalidOperationException>(() => importer.ImportSentEmailsForUser(user));
+            Assert.IsFalse(committer.TryGetContinuation(user, out _), "A failed save must not move the read past the unsaved page.");
+
+            importer.FailureInjectionPhase = SentEmailPersistenceFailurePhase.None;
+            await importer.ImportSentEmailsForUser(user);
+
+            Assert.IsTrue(committer.TryGetContinuation(user, out var continuation));
+            Assert.AreEqual(nextPage, continuation);
+            Assert.IsFalse(committer.TryGetToken(user, out _), "The round is not finished, so no delta token is committed.");
+            Assert.AreEqual(1, await CountSentEmailsAsync(messageId));
+        }
+
+        [TestMethod]
         public async Task ImportSentEmailsForUser_PhaseBFailure_RollsBackParent_AndReplayLeavesNoOrphan()
         {
             var user = await CreateSavedUserAsync("phase-b");
@@ -995,6 +1024,10 @@ namespace Tests.UnitTests
             }
 
             public string NextDeltaToken { get; } = "delta-after-success";
+
+            /// <summary>When set, every load reports a read that stopped at its bound, with this link to continue from.</summary>
+            public string NextPageLink { get; set; }
+
             public int LoadCount { get; private set; }
 
             public Task<bool> HasMailReadAccessAsync() => Task.FromResult(true);
@@ -1009,14 +1042,16 @@ namespace Tests.UnitTests
                         : new List<GraphSentMessage>(),
                     DeltaTokenReads = 1,
                     DeltaTokenWrites = 0,
-                    NextDeltaToken = NextDeltaToken
+                    NextDeltaToken = NextPageLink == null ? NextDeltaToken : null,
+                    NextPageLink = NextPageLink
                 });
             }
         }
 
-        private sealed class RecordingDeltaTokenCommitter : ISentEmailDeltaTokenCommitter
+        private sealed class RecordingDeltaTokenCommitter : ISentEmailDeltaTokenCommitter, ISentEmailSyncContinuationCommitter
         {
             private readonly Dictionary<int, string> _tokensByUserId = new Dictionary<int, string>();
+            private readonly Dictionary<int, string> _continuationsByUserId = new Dictionary<int, string>();
             private readonly Func<User, string, Task> _onCommit;
 
             public RecordingDeltaTokenCommitter(Func<User, string, Task> onCommit = null)
@@ -1035,8 +1070,20 @@ namespace Tests.UnitTests
                 WriteCount++;
             }
 
+            public async Task CommitContinuationAsync(User user, string nextPageLink)
+            {
+                if (_onCommit != null)
+                    await _onCommit(user, nextPageLink);
+
+                _continuationsByUserId[user.ID] = nextPageLink;
+                WriteCount++;
+            }
+
             public bool TryGetToken(User user, out string token)
                 => _tokensByUserId.TryGetValue(user.ID, out token);
+
+            public bool TryGetContinuation(User user, out string nextPageLink)
+                => _continuationsByUserId.TryGetValue(user.ID, out nextPageLink);
         }
 
         #endregion

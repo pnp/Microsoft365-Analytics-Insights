@@ -119,6 +119,10 @@ const errors: Record<keyof typeof en, string> = {
     'La base de datos de análisis no está disponible. Compruebe la conexión de base de datos y vuelva a intentarlo.',
   'errors.userScope.storageUnavailable':
     'No se ha podido conectar con Azure Table Storage, donde las purgas guardan su progreso. Compruebe que esta aplicación web puede conectarse a la cuenta de almacenamiento de la solución y que su identidad en tiempo de ejecución puede leer y escribir tablas, y vuelva a intentarlo.',
+  'errors.userScope.purgeExceedsConfirmed':
+    'Ahora hay más personas fuera del ámbito que el número que confirmó, por lo que la purga no se ha iniciado y no se ha eliminado nada. Revise el nuevo número y vuelva a marcar la casilla para confirmarlo.',
+  'errors.userScope.filterChanged':
+    'UserGroupsFilter ha cambiado desde que se cargó esta página, por lo que la purga no se ha iniciado y no se ha eliminado nada. Revise el filtro y los nuevos números y vuelva a confirmar.',
   'errors.updateCheck.failed': 'No se han podido buscar actualizaciones ({status}).',
 
   // Licence activity API

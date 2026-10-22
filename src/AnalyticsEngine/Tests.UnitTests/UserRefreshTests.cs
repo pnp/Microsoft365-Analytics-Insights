@@ -721,6 +721,8 @@ DELETE FROM dbo.license_types WHERE sku_id LIKE @prefix;",
             public Task<VersionedValue> GetVersionedAsync(string key, CancellationToken cancellationToken = default) => _inner.GetVersionedAsync(key, cancellationToken);
             public Task<bool> TrySetStringAsync(string key, string value, string expectedVersionToken, CancellationToken cancellationToken = default)
                 => _inner.TrySetStringAsync(key, value, expectedVersionToken, cancellationToken);
+            public Task<bool> TryDeleteAsync(string key, string expectedVersionToken, CancellationToken cancellationToken = default)
+                => _inner.TryDeleteAsync(key, expectedVersionToken, cancellationToken);
         }
 
         #endregion

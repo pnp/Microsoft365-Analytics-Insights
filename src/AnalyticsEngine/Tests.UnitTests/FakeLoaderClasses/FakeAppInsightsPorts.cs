@@ -111,6 +111,12 @@ namespace Tests.UnitTests.FakeLoaderClasses
         /// <summary>Throw when the page-view batch's first row falls on one of these days.</summary>
         public HashSet<DateTime> DaysThatFailToSave { get; } = new HashSet<DateTime>();
 
+        /// <summary>
+        /// Throw from the custom-event save when the event batch's first row falls on one of these days - after the
+        /// day's page views have saved, as when one event section fails. See <see cref="CustomEventSaveIncompleteException"/>.
+        /// </summary>
+        public HashSet<DateTime> DaysWhoseEventsFailToSave { get; } = new HashSet<DateTime>();
+
         public Task SavePageViewsAsync(PageViewCollection pageViews, List<FilterUrlConfig> filterUrls)
         {
             FiltersSeen = filterUrls;
@@ -125,6 +131,11 @@ namespace Tests.UnitTests.FakeLoaderClasses
 
         public Task SaveCustomEventsAsync(CustomEventsResultCollection events)
         {
+            var day = events.Rows.Count > 0 ? events.Rows[0].Timestamp.Date : (DateTime?)null;
+            if (day.HasValue && DaysWhoseEventsFailToSave.Contains(day.Value))
+            {
+                return Task.FromException(new CustomEventSaveIncompleteException(new[] { "Clicks" }));
+            }
             SavedCustomEvents.Add(events);
             return Task.CompletedTask;
         }

@@ -1,6 +1,7 @@
 using Microsoft.Graph.Models;
 using System;
 using System.Collections.Generic;
+using System.Linq;
 
 namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
 {
@@ -20,10 +21,13 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
     public static class TeamsCrawlRules
     {
         /// <summary>
-        /// Graph property (returned in <c>AdditionalData</c>) that says which workloads have been
-        /// provisioned onto an M365 group. A group with a Team has "Team" in this array.
+        /// Graph property that says which workloads have been provisioned onto an M365 group. A group with a Team has
+        /// "Team" in this array. Since Microsoft.Graph 5 the SDK returns it in the typed
+        /// <see cref="Group.ResourceProvisioningOptions"/>, not in <c>AdditionalData</c> as v4 did.
         /// </summary>
         public const string ResourceProvisioningOptionsProperty = "resourceProvisioningOptions";
+
+        private const string TeamWorkload = "Team";
 
         /// <summary>
         /// Whether a group returned by the v1 Graph endpoint has a Team attached, decided from its
@@ -71,7 +75,19 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
         /// </remarks>
         public static GroupTeamStatus ClassifyGroup(Group group)
         {
-            if (!group.AdditionalData.ContainsKey(ResourceProvisioningOptionsProperty))
+            // Microsoft.Graph 5+ (Kiota) deserialises the property into the typed list: null when Graph didn't return
+            // it, empty when the group has no workloads. Reading only AdditionalData - where the v4 SDK put it - classed
+            // every group as WorkloadsNotReported, so the crawl silently found no Teams at all.
+            var provisioningOptions = group.ResourceProvisioningOptions;
+            if (provisioningOptions != null)
+            {
+                return provisioningOptions.Any(option => string.Equals(option, TeamWorkload, StringComparison.OrdinalIgnoreCase))
+                    ? GroupTeamStatus.HasTeam
+                    : GroupTeamStatus.NoTeam;
+            }
+
+            // Fallback: a group built by hand with the raw JSON array in AdditionalData (the v4 shape).
+            if (group.AdditionalData == null || !group.AdditionalData.ContainsKey(ResourceProvisioningOptionsProperty))
             {
                 return GroupTeamStatus.WorkloadsNotReported;
             }
@@ -118,6 +134,43 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
 
             return !blacklistGroupIds.Contains(groupId) && whitelistGroupIds.Contains(groupId);
         }
+
+        /// <summary>
+        /// The Entra object id to UPN map Team members are resolved from, built once per crawl from the users already in
+        /// SQL. It replaces one SQL query per member per Team on <c>azure_ad_id</c>, an unindexable <c>nvarchar(max)</c>
+        /// column, which meant a full scan of <c>users</c> for every member at 200k-user scale.
+        /// </summary>
+        /// <remarks>
+        /// Object ids compare case-insensitively, as the database collation did. When several rows share an object id
+        /// (one person with logins on several domains) the lowest <c>users.id</c> wins - the row the old unordered
+        /// <c>FirstOrDefault</c> returned in practice - whatever order the rows arrive in. Rows with no object id or no
+        /// UPN are left out, so those members are looked up in Graph instead.
+        /// </remarks>
+        public static Dictionary<string, string> BuildUpnByAzureAdId(IEnumerable<(int UserId, string AzureAdId, string UserPrincipalName)> users)
+        {
+            var lowestRowByObjectId = new Dictionary<string, (int UserId, string UserPrincipalName)>(StringComparer.OrdinalIgnoreCase);
+            foreach (var user in users)
+            {
+                if (string.IsNullOrEmpty(user.AzureAdId) || string.IsNullOrEmpty(user.UserPrincipalName))
+                {
+                    continue;
+                }
+
+                if (!lowestRowByObjectId.TryGetValue(user.AzureAdId, out var current) || user.UserId < current.UserId)
+                {
+                    lowestRowByObjectId[user.AzureAdId] = (user.UserId, user.UserPrincipalName);
+                }
+            }
+
+            return lowestRowByObjectId.ToDictionary(row => row.Key, row => row.Value.UserPrincipalName, StringComparer.OrdinalIgnoreCase);
+        }
+
+        /// <summary>
+        /// A genuine cancellation, which the crawl lets through rather than treating as one Team's failure. Nothing in the
+        /// Teams crawl carries a cancellation token, so a <see cref="System.Threading.Tasks.TaskCanceledException"/> there
+        /// is an HttpClient timeout - a failure like any other.
+        /// </summary>
+        internal static bool IsCancellation(Exception ex) => ex is OperationCanceledException && !(ex is System.Threading.Tasks.TaskCanceledException);
     }
 
     /// <summary>

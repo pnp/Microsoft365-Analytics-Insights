@@ -69,7 +69,13 @@ namespace Web.AnalyticsWeb
             // This handler existed but was empty, so every unhandled ASP.NET-pipeline error was dropped
             // silently. Web API failures are covered separately by AnalyticsWebApiExceptionLogger; this
             // catches the MVC and pipeline half.
-            WebExceptionTelemetry.Report(Server?.GetLastError(), "AspNet pipeline");
+            var error = Server?.GetLastError();
+
+            // Every request for a path that does not exist lands here as an HttpException 404. Anyone can send
+            // those by the thousand, and none of them is a fault in this application.
+            if (WebExceptionTelemetry.IsRoutineNotFound(error)) return;
+
+            WebExceptionTelemetry.Report(error, "AspNet pipeline");
         }
 
         /// <summary>
@@ -91,6 +97,19 @@ namespace Web.AnalyticsWeb
             Models.LicenceActivity.LicenceActivityTelemetry.Shutdown();
             Models.UserOrgs.UserOrgImportAppInsights.Shutdown();
             CopilotAdoptionTelemetryHost.Shutdown(HostingEnvironment.ShutdownReason.ToString());
+
+            // Every AnalyticsLogger in the process shares one channel per connection string, buffered for up to 30
+            // seconds; send what is left. On the default channel a flush is a synchronous send, so it is bounded
+            // here rather than allowed to hold up shutdown when Application Insights cannot be reached.
+            try
+            {
+                System.Threading.Tasks.Task.Run(() => DataUtils.AnalyticsLogger.FlushSharedTelemetry())
+                    .Wait(TimeSpan.FromSeconds(2));
+            }
+            catch (Exception)
+            {
+                // The process is stopping; telemetry must never obstruct that.
+            }
         }
     }
 }

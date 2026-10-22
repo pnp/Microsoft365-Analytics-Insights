@@ -20,14 +20,18 @@ namespace Web.AnalyticsWeb.Models.UserScope
     /// <summary>A request the service refuses, with the HTTP status and stable code the controller answers with.</summary>
     public sealed class UserScopeRequestException : Exception
     {
-        public UserScopeRequestException(HttpStatusCode status, string code) : base(code)
+        public UserScopeRequestException(HttpStatusCode status, string code, UserScopeError error = null) : base(code)
         {
             Status = status;
             Code = code;
+            Error = error ?? new UserScopeError { Code = code };
         }
 
         public HttpStatusCode Status { get; }
         public string Code { get; }
+
+        /// <summary>The answer's body: the code, and for some refusals the facts behind it.</summary>
+        public UserScopeError Error { get; }
     }
 
     /// <summary>Starts purges in the background.</summary>
@@ -187,6 +191,7 @@ namespace Web.AnalyticsWeb.Models.UserScope
                 ["UsersSkipped"] = job.UsersSkipped,
                 ["RowsAffected"] = job.RowsAffected?.Values.Sum() ?? 0,
                 ["ScopeMemberCount"] = job.ScopeMemberCount ?? 0,
+                ["ConfirmedOutsideScopeCount"] = job.ConfirmedOutsideScopeCount ?? 0,
             };
 
             try
@@ -267,9 +272,16 @@ namespace Web.AnalyticsWeb.Models.UserScope
         /// Starts a purge. Only ever against a resolution read from Graph moments ago, complete and with at least one
         /// member: a cached, partial or fail-open scope could make people who are in scope look outside it.
         /// </summary>
-        internal async Task<UserScopePurgeJobModel> StartPurgeAsync(bool acknowledged, string requestedBy)
+        /// <remarks>
+        /// The confirmation the administrator gave was for the numbers the page showed, which come from a resolution up to
+        /// an hour old. So the purge only starts if it would remove no more people than that, under the same filter;
+        /// otherwise it is refused with the numbers as they are now, for the administrator to confirm again. Fewer is
+        /// fine. The confirmed count also travels with the purge, which never removes more people in all - not even
+        /// after a restart, when it reads the groups again.
+        /// </remarks>
+        internal async Task<UserScopePurgeJobModel> StartPurgeAsync(UserScopePurgeRequest request, string requestedBy)
         {
-            if (!acknowledged)
+            if (request == null || !request.Acknowledged)
             {
                 throw new UserScopeRequestException(HttpStatusCode.BadRequest, UserScopeErrorCodes.AcknowledgementRequired);
             }
@@ -311,10 +323,33 @@ namespace Web.AnalyticsWeb.Models.UserScope
                     throw new UserScopeRequestException(HttpStatusCode.Conflict, UserScopeErrorCodes.NothingToPurge);
                 }
 
-                var job = await State(() => _state.CreateAsync(requestedBy, _provider.Filter.Fingerprint, resolution.Members.Count)).ConfigureAwait(false);
+                var filterFingerprint = _provider.Filter.Fingerprint;
+                var confirmed = request.ConfirmedOutsideScopeCount ?? 0;
+                var changed = !string.Equals(request.ConfirmedFilterFingerprint, filterFingerprint, StringComparison.Ordinal)
+                    ? UserScopeErrorCodes.FilterChanged
+                    : counts.OutsideScope > confirmed ? UserScopeErrorCodes.PurgeExceedsConfirmed
+                    : null;
+                if (changed != null)
+                {
+                    _logger?.LogWarning($"User scope purge: not started from the web portal - " +
+                        (changed == UserScopeErrorCodes.FilterChanged
+                            ? "UserGroupsFilter changed after the page showed it. "
+                            : $"{counts.OutsideScope:N0} user(s) are outside the scope now, more than the {confirmed:N0} that were confirmed. ") +
+                        "Nobody was removed; the page shows the new numbers to confirm.");
+                    throw new UserScopeRequestException(HttpStatusCode.Conflict, changed, new UserScopeError
+                    {
+                        Code = changed,
+                        Database = ToCountsModel(counts),
+                        ConfirmedOutsideScopeCount = request.ConfirmedOutsideScopeCount,
+                        FilterFingerprint = filterFingerprint,
+                    });
+                }
+
+                var job = await State(() => _state.CreateAsync(requestedBy, filterFingerprint, resolution.Members.Count, confirmed,
+                    resolution.Members.MembershipFingerprint)).ConfigureAwait(false);
                 _logger?.LogWarning($"User scope purge {job.Id}: started from the web portal (Administration > User scope). " +
-                    $"About {counts.OutsideScope:N0} of {counts.Total:N0} user(s) are outside the scope of {resolution.Members.Count:N0} member(s). " +
-                    $"Its progress is kept in {_state.Description}.");
+                    $"About {counts.OutsideScope:N0} of {counts.Total:N0} user(s) are outside the scope of {resolution.Members.Count:N0} member(s); " +
+                    $"{confirmed:N0} were confirmed. Its progress is kept in {_state.Description}.");
                 UserScopePurgeTelemetry.Track(_logger, "started", job, null);
 
                 _runner.Start(job.Id, resolution, session);
@@ -385,6 +420,7 @@ namespace Web.AnalyticsWeb.Models.UserScope
             {
                 Filtered = _provider.Filter.IsNarrowing,
                 FilterPatterns = _provider.Filter.Patterns.ToList(),
+                FilterFingerprint = _provider.Filter.Fingerprint,
                 Resolution = ToModel(resolution),
                 PurgeStateDurable = _state.IsDurable,
             };
@@ -414,13 +450,7 @@ namespace Web.AnalyticsWeb.Models.UserScope
             if (resolution.Status == UserImportScopeStatus.Resolved)
             {
                 var scope = UserImportScope.ForMembers(resolution.Members, "status");
-                var counts = await Database(() => _database.CountUsersAsync(scope)).ConfigureAwait(false);
-                status.Database = new UserScopeDatabaseCountsModel
-                {
-                    TotalUsers = counts.Total,
-                    InScopeUsers = counts.Total - counts.OutsideScope,
-                    OutOfScopeUsers = counts.OutsideScope,
-                };
+                status.Database = ToCountsModel(await Database(() => _database.CountUsersAsync(scope)).ConfigureAwait(false));
             }
 
             status.PurgeUnavailableReason =
@@ -434,6 +464,13 @@ namespace Web.AnalyticsWeb.Models.UserScope
 
             return status;
         }
+
+        private static UserScopeDatabaseCountsModel ToCountsModel((int Total, int OutsideScope) counts) => new UserScopeDatabaseCountsModel
+        {
+            TotalUsers = counts.Total,
+            InScopeUsers = counts.Total - counts.OutsideScope,
+            OutOfScopeUsers = counts.OutsideScope,
+        };
 
         internal static UserScopeResolutionModel ToModel(UserImportScopeResolution resolution)
         {

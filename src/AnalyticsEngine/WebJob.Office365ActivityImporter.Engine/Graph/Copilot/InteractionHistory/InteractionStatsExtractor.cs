@@ -220,5 +220,35 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.InteractionHisto
             }
             return newest;
         }
+
+        /// <summary>
+        /// Newest <c>createdDateTime</c> Graph returned, read from the raw payload - so it is unaffected by the
+        /// projection dropping rows it can't key, and by de-duplication later dropping rows already stored.
+        /// Null when nothing usable was returned.
+        /// </summary>
+        /// <remarks>
+        /// A default (<c>0001-01-01</c>) timestamp is ignored: it places nothing in time, and as a watermark it
+        /// would make the next window start before <see cref="DateTime.MinValue"/>.
+        /// </remarks>
+        public static DateTime? GetNewestReadUtc(IEnumerable<AiInteraction> interactions)
+        {
+            if (interactions == null)
+                return null;
+
+            DateTime? newest = null;
+            foreach (var interaction in interactions)
+            {
+                if (interaction?.CreatedDateTime == null)
+                    continue;
+
+                var created = ToUtc(interaction.CreatedDateTime.Value);
+                if (created == default(DateTime))
+                    continue;
+
+                if (newest == null || created > newest.Value)
+                    newest = created;
+            }
+            return newest;
+        }
     }
 }

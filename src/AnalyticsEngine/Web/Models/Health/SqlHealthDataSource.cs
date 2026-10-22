@@ -7,6 +7,7 @@ using System.Data.Entity;
 using System.Data.Entity.Migrations;
 using Microsoft.Data.SqlClient;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace Web.AnalyticsWeb.Models.Health
@@ -62,9 +63,9 @@ namespace Web.AnalyticsWeb.Models.Health
         {
             var result = new DatabaseCountsResult();
 
-            // Approximate counts + DB size come from DMVs (sys.dm_db_partition_stats / sys.database_files),
-            // which need VIEW DATABASE STATE. Isolate them so a locked-down SQL login still gets the more
-            // important recent-volume + freshness signals.
+            // Approximate counts + DB size come from catalog views (sys.partitions / sys.database_files), which any
+            // login that can read the tables can see. Still isolated, so a failure there leaves the more important
+            // recent-volume + freshness signals.
             try
             {
                 using (var db = _contextFactory.Create())
@@ -250,15 +251,20 @@ namespace Web.AnalyticsWeb.Models.Health
             }
         }
 
-        private static async Task<Dictionary<string, long>> LoadApproxRowCounts(AnalyticsEntitiesContext db)
+        /// <summary>
+        /// Every user table's approximate row count from the <c>sys.partitions</c> catalog view - one cheap metadata
+        /// read in place of a <c>COUNT(*)</c> scan per table. Shared with the home page's figures.
+        /// </summary>
+        /// <remarks>
+        /// A catalog view, deliberately, not <c>sys.dm_db_partition_stats</c>. That DMV needs VIEW DATABASE STATE
+        /// (VIEW DATABASE PERFORMANCE STATE on Azure SQL), and on an Entra-only server the web app signs in as its
+        /// managed identity, which the installer makes only db_datareader, db_datawriter and db_ddladmin - so the
+        /// DMV failed on every such deployment, and every figure behind it fell back to a scan or to nothing. A
+        /// catalog view shows a table, and its row count, to anyone allowed to read the table.
+        /// </remarks>
+        internal static async Task<Dictionary<string, long>> LoadApproxRowCounts(AnalyticsEntitiesContext db, CancellationToken cancellationToken = default(CancellationToken))
         {
-            const string sql =
-                "SELECT o.name AS TableName, SUM(ps.row_count) AS Rows " +
-                "FROM sys.dm_db_partition_stats ps " +
-                "JOIN sys.objects o ON o.object_id = ps.object_id " +
-                "WHERE ps.index_id IN (0,1) AND o.[type] = 'U' " +
-                "GROUP BY o.name";
-            var rows = await db.Database.SqlQuery<TableRowCount>(sql).ToListAsync();
+            var rows = await db.Database.SqlQuery<TableRowCount>(ApproxRowCountsSql).ToListAsync(cancellationToken);
             var dict = new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase);
             foreach (var r in rows)
             {
@@ -266,6 +272,14 @@ namespace Web.AnalyticsWeb.Models.Health
             }
             return dict;
         }
+
+        /// <summary>The statement behind <see cref="LoadApproxRowCounts"/>: heaps (index 0) and clustered indexes (index 1) only.</summary>
+        internal const string ApproxRowCountsSql =
+            "SELECT o.name AS TableName, SUM(p.rows) AS Rows " +
+            "FROM sys.partitions p " +
+            "JOIN sys.objects o ON o.object_id = p.object_id " +
+            "WHERE p.index_id IN (0,1) AND o.[type] = 'U' " +
+            "GROUP BY o.name";
 
         private static long ApproxFor(Dictionary<string, long> counts, string tableName)
             => counts != null && counts.TryGetValue(tableName, out var n) ? n : 0;

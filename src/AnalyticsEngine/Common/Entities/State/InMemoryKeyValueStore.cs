@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -132,6 +133,21 @@ namespace Common.Entities.State
                 _entries.TryGetValue(key, out var current)
                 && string.Equals(current.Version, expectedVersionToken, StringComparison.Ordinal)
                 && _entries.TryUpdate(key, replacement, current));
+        }
+
+        public Task<bool> TryDeleteAsync(string key, string expectedVersionToken, CancellationToken cancellationToken = default)
+        {
+            ValidateKey(key);
+            cancellationToken.ThrowIfCancellationRequested();
+
+            if (expectedVersionToken == null) return Task.FromResult(false);
+
+            // Removing the exact key/entry pair compares the entry by reference, so it removes nothing if the row was
+            // replaced since it was read.
+            return Task.FromResult(
+                _entries.TryGetValue(key, out var current)
+                && string.Equals(current.Version, expectedVersionToken, StringComparison.Ordinal)
+                && ((ICollection<KeyValuePair<string, Entry>>)_entries).Remove(new KeyValuePair<string, Entry>(key, current)));
         }
 
         public async Task<bool> ExistsAsync(string key, CancellationToken cancellationToken = default)

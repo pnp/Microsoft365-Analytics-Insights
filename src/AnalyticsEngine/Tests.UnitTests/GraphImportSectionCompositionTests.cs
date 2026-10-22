@@ -214,13 +214,16 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
-        public async Task UsageReportSection_PassesTheDaysWindowAndTheSharedUserScope()
+        public async Task UsageReportSection_PassesTheUsageReportWindowAndTheSharedUserScope()
         {
             // Guards the one place the section list reads the per-cycle settings ARGUMENT rather than the
             // factory's own AppConfig, plus that the usage reports apply the process's shared UserGroupsFilter scope.
+            // The window is UsageReportsDaysBack, NOT the audit import's DaysBeforeNowToDownload: Graph keeps ~28 days
+            // of usage detail, and borrowing the audit's 6-day window lost any date that aged out before it imported.
             var fieldSettings = SettingsWithDistinctIntervals();
             var argumentSettings = SettingsWithDistinctIntervals();
-            argumentSettings.DaysBeforeNowToDownload = 42;
+            argumentSettings.DaysBeforeNowToDownload = 6;
+            argumentSettings.UsageReportsDaysBack = 21;
 
             int observedDays = -1;
             UserImportScope observedScope = null;
@@ -238,7 +241,7 @@ namespace Tests.UnitTests
             Assert.AreEqual(-1, observedDays, "Composing the sections must not run any of them.");
 
             Assert.IsTrue(await usageReports.RunAsync());
-            Assert.AreEqual(42, observedDays, "The days window comes from the settings passed to GetAndSaveAllGraphData.");
+            Assert.AreEqual(21, observedDays, "The days window is the UsageReportsDaysBack passed to GetAndSaveAllGraphData.");
             Assert.AreSame(sharedScope, observedScope,
                 "The usage reports apply the shared scope, so every import in the process uses the same resolution.");
         }

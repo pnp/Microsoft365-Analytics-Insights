@@ -592,6 +592,22 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public void ManagerResolution_RowLeftBehindByARename_ResolvesToTheManagersCurrentRow()
+        {
+            // A renamed manager keeps their object id, so the row under their old sign-in name still carries it.
+            var leftBehind = new Common.Entities.User { ID = 7, AzureAdId = ManagerAadId, UserPrincipalName = "boss.old@contoso.com" };
+            var current = new Common.Entities.User { ID = 9, AzureAdId = ManagerAadId, UserPrincipalName = "boss.new@contoso.com" };
+            var managerGraphUser = new GraphUser { Id = ManagerAadId, UserPrincipalName = "boss.new@contoso.com" };
+
+            Assert.AreEqual(9, UserBulkUpdateRules.ResolveManagerId(
+                ManagerAadId, UsersByAadId(leftBehind), UsersByUpn(leftBehind, current), GraphUsersByAadId(managerGraphUser)));
+
+            Assert.AreEqual(7, UserBulkUpdateRules.ResolveManagerId(
+                ManagerAadId, UsersByAadId(leftBehind), UsersByUpn(leftBehind), GraphUsersByAadId(managerGraphUser)),
+                "With no row under the current name, the old row is still the manager - better than no manager at all.");
+        }
+
+        [TestMethod]
         public void UserBulkUpdate_ManagerIdReachesTheRow()
         {
             // The chain above is only useful if BuildUpdateTable actually calls it for the user's

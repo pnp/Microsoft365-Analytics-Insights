@@ -132,14 +132,37 @@ namespace Tests.UnitTests.FakeLoaderClasses
             // just that subset (mirrors the real /users/delta which only
             // returns users whose tracked properties have changed).
             var existingDelta = await _deltaProvider.GetDeltaToken();
-            if (!string.IsNullOrEmpty(existingDelta) && DeltaUsersOverride != null)
-            {
-                return new List<GraphUser>(DeltaUsersOverride);
-            }
+            var read = !string.IsNullOrEmpty(existingDelta) && DeltaUsersOverride != null
+                ? DeltaUsersOverride
+                : _fakeUsers;
 
-            // Return a defensive copy so callers that Clear() the result
-            // do not wipe the original list (InsertAndUpdateDatabaseFromExternalUsers does this).
-            return new List<GraphUser>(_fakeUsers);
+            // Sorted by the same rule GraphUserLoader uses, so a test cannot pass only because the fake hands the
+            // updater accounts the real loader never would: disabled and deleted accounts go to LastLoadDeactivations,
+            // and a complete read from no token is the whole (fake) directory, exactly as GraphUserLoader treats it.
+            // ActiveUsers is a new list, so callers that Clear() it do not wipe the fake's state
+            // (InsertAndUpdateDatabaseFromExternalUsers does this).
+            var classified = UserDeltaReadRules.Classify(read, completeDirectoryRead: string.IsNullOrEmpty(existingDelta) && LastLoadReachedDeltaLink);
+            LastLoadDeactivations = classified.Deactivations;
+            return classified.ActiveUsers;
+        }
+
+        public GraphUserDeactivations LastLoadDeactivations { get; private set; } = GraphUserDeactivations.None;
+
+        /// <summary>
+        /// What <see cref="CountDirectoryUsersAsync"/> answers: Graph's own count of the directory's users. Null by default -
+        /// how the import sees a count it could not read - because most tests' fake directory is a handful of users in a
+        /// database shared with every other test, and a count matching it would let each full read disable everyone
+        /// else's rows. Set it to exercise the directory-count check.
+        /// </summary>
+        public int? DirectoryUserCount { get; set; }
+
+        /// <summary>How many times the import asked for the directory count.</summary>
+        public int CountDirectoryUsersCalls { get; private set; }
+
+        public Task<int?> CountDirectoryUsersAsync()
+        {
+            CountDirectoryUsersCalls++;
+            return Task.FromResult(DirectoryUserCount);
         }
 
         public Task<List<SubscribedSku>> LoadTenantSkus()

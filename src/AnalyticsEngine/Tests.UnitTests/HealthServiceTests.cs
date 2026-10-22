@@ -11,6 +11,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
+using System.Threading;
 using System.Threading.Tasks;
 using UnitTests.FakeLoaderClasses;
 
@@ -89,6 +90,59 @@ namespace Tests.UnitTests
             Assert.AreEqual("agentCostConnection.checkFailed", row.ReasonKey);
             Assert.AreEqual(HealthStatusNames.Degraded, components.Status);
             Assert.IsFalse(row.Detail.Contains("Private diagnostic"));
+        }
+
+        /// <summary>
+        /// A dependency that never answers used to hold its section's single-flight gate - and the Overview, which
+        /// waits for that section - for as long as it took: an App Insights query could take over 400 seconds,
+        /// longer than App Service lets a request run.
+        /// </summary>
+        [TestMethod]
+        [Timeout(60000)]
+        public async Task Components_ADependencyThatNeverAnswers_IsCutOffAtTheSectionDeadline()
+        {
+            var never = new TaskCompletionSource<string>();
+            var service = new HealthService(new FakeHealthDataSource(), new InMemoryHealthCache(), _ => never.Task, TimeSpan.FromMilliseconds(200));
+
+            var load = service.LoadComponentsAsync(AgentCostHealthConfig(true, false));
+
+            Assert.AreSame(load, await Task.WhenAny(load, Task.Delay(TimeSpan.FromSeconds(15))),
+                "The section must answer at its deadline, not when the dependency does.");
+            var section = await load;
+            StringAssert.Contains(section.ComponentHealthError, "Timed out");
+            Assert.AreNotEqual(HealthStatusNames.Healthy, section.Status);
+        }
+
+        [TestMethod]
+        [Timeout(60000)]
+        public async Task Components_ATimedOutBuildIsSharedByItsWaiters_AndRetriedOnceItsShortTtlEnds()
+        {
+            var calls = 0;
+            var never = new TaskCompletionSource<string>();
+            var reached = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var cache = new InMemoryHealthCache();
+            var service = new HealthService(new FakeHealthDataSource(), cache, _ =>
+            {
+                Interlocked.Increment(ref calls);
+                reached.TrySetResult(true);
+                return never.Task;
+            }, TimeSpan.FromMilliseconds(200));
+            var config = AgentCostHealthConfig(true, false);
+
+            var first = service.LoadComponentsAsync(config);
+            await reached.Task;
+            var second = service.LoadComponentsAsync(config);
+            var answers = await Task.WhenAll(first, second);
+
+            Assert.AreEqual(1, calls, "Two callers of a cold section must share one build, even one that times out.");
+            Assert.AreSame(answers[0], answers[1]);
+
+            await service.LoadComponentsAsync(config);
+            Assert.AreEqual(1, calls, "A section that timed out is not retried by every page load.");
+
+            cache.Advance(TimeSpan.FromSeconds(HealthService.TimedOutCacheSeconds + 1));
+            await service.LoadComponentsAsync(config);
+            Assert.AreEqual(2, calls, "Once its short TTL has passed, the section is built again - the gate was released.");
         }
 
         private static AppConfig AgentCostHealthConfig(bool credits, bool azureCosts)

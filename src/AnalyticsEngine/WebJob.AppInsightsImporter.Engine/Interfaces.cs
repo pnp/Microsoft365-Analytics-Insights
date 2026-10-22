@@ -41,6 +41,10 @@ namespace WebJob.AppInsightsImporter.Engine
     /// this is the seam the day loop needs. Issue #369 decomposes the SQL side further (page-views,
     /// searches, clicks, page-updates, hit-updates); those become collaborators of the SQL adapter rather
     /// than changes to this port.
+    ///
+    /// Either method throwing means the day did not save completely, and the importer retries it before any
+    /// later day (see <see cref="AppInsightsDayFailureTracker"/>). <see cref="SaveCustomEventsAsync"/> therefore
+    /// throws after the event sections have all been attempted if any of them failed.
     /// </summary>
     public interface IAppInsightsDayPersistenceManager
     {
@@ -59,8 +63,9 @@ namespace WebJob.AppInsightsImporter.Engine
     }
 
     /// <summary>
-    /// Writes the time-on-page patches carried by page-exit events. Returns the row count the merge
-    /// reported, which is what the event save summary prints.
+    /// Writes the time-on-page patches carried by page-exit events. Returns the number of hits whose time on page
+    /// the merge changed - not the number of events, which every cycle re-reads for the whole day - and that is
+    /// what the event save summary prints.
     /// </summary>
     public interface IHitUpdatePersistenceManager
     {

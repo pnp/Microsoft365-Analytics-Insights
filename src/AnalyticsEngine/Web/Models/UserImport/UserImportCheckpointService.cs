@@ -3,6 +3,7 @@ using Common.Entities.Config;
 using Common.Entities.State;
 using Common.Entities.UserOrgs;
 using DataUtils;
+using Microsoft.Data.SqlClient;
 using Microsoft.Extensions.Logging;
 using System;
 using System.Globalization;
@@ -56,6 +57,17 @@ namespace Web.AnalyticsWeb.Models.UserImport
     }
 
     /// <summary>
+    /// The user organisation types that qualify the checkpoint key could not be read for a reason other than their
+    /// tables not existing yet - a timeout, a deadlock, a lost connection - so which key holds the checkpoint is not known.
+    /// </summary>
+    public sealed class UserImportCheckpointKeyUnavailableException : Exception
+    {
+        public UserImportCheckpointKeyUnavailableException(string message, Exception innerException) : base(message, innerException)
+        {
+        }
+    }
+
+    /// <summary>
     /// What the portal's Administration &gt; User import page shows and does: whether the Graph user import has a
     /// stored checkpoint (its <c>/users/delta</c> token), and clearing it so the next run reads every user again.
     /// </summary>
@@ -94,7 +106,8 @@ namespace Web.AnalyticsWeb.Models.UserImport
         /// <param name="openStore">Opens the state store; null when no Storage connection string is configured. May throw when storage can't be reached.</param>
         /// <param name="loadOrgKeyQualifier">
         /// The qualifier the importer adds to the checkpoint key for the enabled Entra organisation types; null when there
-        /// can be none. May throw, which is taken as "no qualifier", as the importer takes it.
+        /// can be none. A failure because the organisation tables don't exist yet (SQL error 208) is taken as "no
+        /// qualifier", as the importer takes it; any other failure makes the checkpoint unavailable rather than guessed.
         /// </param>
         internal UserImportCheckpointService(Guid tenantId, Func<IUserImportCheckpointStore> openStore, ImportTaskSettings importSettings, int intervalHours, ILogger logger,
             Func<Task<string>> loadOrgKeyQualifier = null)
@@ -231,8 +244,13 @@ namespace Web.AnalyticsWeb.Models.UserImport
         /// <remarks>
         /// Looking only at the unqualified key would miss the token entirely on a tenant with Entra organisation types:
         /// the page would say nothing is stored, and a clear would not make the next run read every user. Organisation
-        /// types that cannot be read - a database not yet upgraded has no such tables - mean no qualifier, which is how
-        /// the importer treats the same failure.
+        /// types that cannot be read because a database not yet upgraded has no such tables (SQL error 208) mean no
+        /// qualifier, which is how the importer treats the same failure.
+        /// <para>
+        /// Any other failure - a timeout, a deadlock, a lost connection - is not "no qualifier": the qualified key may
+        /// well hold the importer's token, so answering from the unqualified key alone would let a clear delete the
+        /// wrong key and report success while the real checkpoint survived. That is reported as unavailable instead.
+        /// </para>
         /// </remarks>
         private async Task<string[]> ResolveCheckpointKeysAsync()
         {
@@ -243,9 +261,14 @@ namespace Web.AnalyticsWeb.Models.UserImport
                 {
                     qualifier = await _loadOrgKeyQualifier() ?? string.Empty;
                 }
-                catch (Exception ex) when (!(ex is OperationCanceledException))
+                catch (Exception ex) when (IsMissingTable(ex))
                 {
                     _logger?.LogWarning($"User import checkpoint - couldn't read the configured user organisation types ({ex.GetType().Name}), so the checkpoint key without them is used.");
+                }
+                catch (Exception ex) when (!(ex is OperationCanceledException))
+                {
+                    _logger?.LogError(ex, $"User import checkpoint - couldn't read the configured user organisation types ({ex.GetType().Name}), so the checkpoint key cannot be worked out: {ex.Message}");
+                    throw new UserImportCheckpointKeyUnavailableException("Couldn't read the user organisation types that qualify the user import checkpoint key.", ex);
                 }
             }
 
@@ -254,6 +277,20 @@ namespace Web.AnalyticsWeb.Models.UserImport
             return string.Equals(checkpoint, unqualified, StringComparison.Ordinal)
                 ? new[] { checkpoint }
                 : new[] { checkpoint, unqualified };
+        }
+
+        /// <summary>SQL error 208, "Invalid object name": the database predates the user organisation tables.</summary>
+        internal static bool IsMissingTable(Exception ex)
+        {
+            for (var current = ex; current != null; current = current.InnerException)
+            {
+                if (current is SqlException sql && sql.Number == 208)
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         /// <summary>

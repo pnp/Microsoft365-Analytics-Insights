@@ -62,6 +62,13 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities.Serialisation
         [JsonProperty("sessions")]
         public List<CallSessionDTO> Sessions { get; set; }
 
+        /// <summary>
+        /// Graph returns at most 60 sessions inline, even with <c>$expand=sessions</c>, and links to the rest here.
+        /// Null once <see cref="LoadRemainingSessionPages"/> has read them all.
+        /// </summary>
+        [JsonProperty("sessions@odata.nextLink", NullValueHandling = NullValueHandling.Ignore)]
+        public string SessionsNextLink { get; set; }
+
         [JsonIgnore]
         public string JsonText { get; set; }
         #endregion
@@ -69,10 +76,15 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities.Serialisation
         /// <summary>
         /// Load a Call Record from Graph, using call ID
         /// </summary>
+        /// <exception cref="CallRecordSessionPagingException">
+        /// Not every page of the call's sessions could be read. Nothing is returned: a partial call must not be saved,
+        /// nor its queue message completed.
+        /// </exception>
         public static async Task<CallRecordDTO> LoadFromGraphByID(string callId, ManualGraphCallClient manualClient, TeamsLoadContext teamsLoadContext, ILogger logger, string thisTenantId)
         {
             string callJsonText = string.Empty;
-            var callDTO = await manualClient.GetAsyncWithThrottleRetries<CallRecordDTO>($"https://graph.microsoft.com/v1.0/communications/callRecords/{callId}?$expand=sessions($expand=segments)",
+            var callRecordUrl = $"https://graph.microsoft.com/v1.0/communications/callRecords/{callId}?$expand=sessions($expand=segments)";
+            var callDTO = await manualClient.GetAsyncWithThrottleRetries<CallRecordDTO>(callRecordUrl,
                 jsonStringAction: s => callJsonText = s);
 
             if (callDTO == null)
@@ -83,11 +95,86 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities.Serialisation
 
             callDTO.JsonText = callJsonText;
 
+            // Every session first: the email look-ups, the UserGroupsFilter check and the save only see what is in
+            // Sessions, so a call whose in-scope people were all on a later page would be skipped as out of scope.
+            await callDTO.LoadRemainingSessionPages(manualClient, callRecordUrl, logger);
+
             // Find email addresses for user IDs
             await callDTO.PopulateEmailAddresses(teamsLoadContext, thisTenantId, logger);
 
 
             return callDTO;
+        }
+
+        /// <summary>
+        /// Follows <see cref="SessionsNextLink"/> until Graph has returned every session, appending each page to
+        /// <see cref="Sessions"/>. Each page is requested with the client's throttling retries.
+        /// </summary>
+        /// <param name="callRecordUrl">The absolute URL the call record was read from; continuation links must stay on its host.</param>
+        /// <exception cref="CallRecordSessionPagingException">
+        /// A page failed or was unreadable (retryable), or the paging ran away - more than
+        /// <see cref="CallRecordSessionPaging.MaxPages"/> pages, or a link repeated (not retryable).
+        /// </exception>
+        public async Task LoadRemainingSessionPages(ManualGraphCallClient manualClient, string callRecordUrl, ILogger logger)
+        {
+            if (string.IsNullOrEmpty(SessionsNextLink))
+            {
+                return;
+            }
+
+            if (Sessions == null)
+            {
+                Sessions = new List<CallSessionDTO>();
+            }
+
+            var requestedUrls = new HashSet<string>(StringComparer.Ordinal);
+            var pageNumber = 1;     // The call record itself carried the first page
+            var nextLink = SessionsNextLink;
+            while (!string.IsNullOrEmpty(nextLink))
+            {
+                pageNumber++;
+                if (pageNumber > CallRecordSessionPaging.MaxPages)
+                {
+                    throw new CallRecordSessionPagingException(GraphCallID,
+                        $"Call record '{GraphCallID}' has more than {CallRecordSessionPaging.MaxPages} pages of sessions " +
+                        $"({Sessions.Count} read so far). It is not saved, rather than saved without the rest.",
+                        isPermanent: true);
+                }
+
+                var pageUrl = CallRecordSessionPaging.ResolveContinuationUrl(nextLink, callRecordUrl, GraphCallID);
+                if (!requestedUrls.Add(pageUrl))
+                {
+                    throw new CallRecordSessionPagingException(GraphCallID,
+                        $"Call record '{GraphCallID}': Graph returned the same sessions continuation link twice (page {pageNumber}). " +
+                        "It is not saved, rather than saved without the rest.",
+                        isPermanent: true);
+                }
+
+                CallSessionListDTO page;
+                try
+                {
+                    page = await manualClient.GetAsyncWithThrottleRetries<CallSessionListDTO>(pageUrl);
+                }
+                catch (Exception ex)
+                {
+                    throw new CallRecordSessionPagingException(GraphCallID,
+                        $"Call record '{GraphCallID}': sessions page {pageNumber} could not be read ({GraphHttpException.DescribeForStorage(ex)}).",
+                        isPermanent: false, innerException: ex);
+                }
+
+                if (page?.Sessions == null)
+                {
+                    throw new CallRecordSessionPagingException(GraphCallID,
+                        $"Call record '{GraphCallID}': sessions page {pageNumber} was empty or unreadable.",
+                        isPermanent: false);
+                }
+
+                Sessions.AddRange(page.Sessions);
+                nextLink = page.ODataNextLink;
+            }
+
+            SessionsNextLink = null;
+            logger.LogInformation($"Call record '{GraphCallID}': read {Sessions.Count} sessions over {pageNumber} pages.");
         }
 
         /// <summary>
@@ -306,34 +393,56 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities.Serialisation
 
         public async Task PopulateEmailAddresses(TeamsLoadContext teamsLoadContext, string thisTenantId, ILogger logger)
         {
+            // One look-up per person on the call rather than per endpoint: with every page of sessions read, the same
+            // people (the organiser above all) can appear in hundreds of sessions.
+            var emailsByUserId = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
             if (Sessions != null)
             {
                 foreach (var callSession in this.Sessions)
                 {
-                    await PopuplateCallerEmail(callSession.Callee, teamsLoadContext, thisTenantId, logger);
-                    await PopuplateCallerEmail(callSession.Caller, teamsLoadContext, thisTenantId, logger);
+                    await PopuplateCallerEmail(callSession.Callee, teamsLoadContext, thisTenantId, logger, emailsByUserId);
+                    await PopuplateCallerEmail(callSession.Caller, teamsLoadContext, thisTenantId, logger, emailsByUserId);
                 }
             }
 
             if (this.Organizer != null)
             {
-                this.OrganizerEmail = await GetEmailAddress(this.Organizer, teamsLoadContext, logger);
+                this.OrganizerEmail = await GetEmailAddress(this.Organizer, teamsLoadContext, logger, emailsByUserId);
             }
         }
 
-        private static async Task PopuplateCallerEmail(ParticipantEndpointDTO callee, TeamsLoadContext teamsLoadContext, string thisTenantId, ILogger logger)
+        private static async Task PopuplateCallerEmail(ParticipantEndpointDTO callee, TeamsLoadContext teamsLoadContext, string thisTenantId, ILogger logger,
+            Dictionary<string, string> emailsByUserId)
         {
             if (callee?.Identity?.User != null)
             {
                 if (callee.Identity.User.TenantId == thisTenantId)
                 {
-                    callee.UserEmailAddress = await GetEmailAddress(callee.Identity, teamsLoadContext, logger);
+                    callee.UserEmailAddress = await GetEmailAddress(callee.Identity, teamsLoadContext, logger, emailsByUserId);
                 }
                 else
                 {
                     logger.LogInformation($"Ignoring external user from tenant Id {callee.Identity.User.TenantId}");
                 }
             }
+        }
+
+        private static async Task<string> GetEmailAddress(IdentitySetDTO callee, TeamsLoadContext teamsLoadContext, ILogger logger,
+            Dictionary<string, string> emailsByUserId)
+        {
+            var userId = callee?.User?.Id;
+            if (!string.IsNullOrEmpty(userId) && emailsByUserId.TryGetValue(userId, out var known))
+            {
+                return known;
+            }
+
+            var email = await GetEmailAddress(callee, teamsLoadContext, logger);
+            if (!string.IsNullOrEmpty(userId))
+            {
+                emailsByUserId[userId] = email;
+            }
+            return email;
         }
 
         private static async Task<string> GetEmailAddress(IdentitySetDTO callee, TeamsLoadContext teamsLoadContext, ILogger logger)

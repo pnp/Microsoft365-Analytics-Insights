@@ -118,14 +118,16 @@ namespace Web.AnalyticsWeb.Models.ActivityAnalysis
             }
         }
 
+        /// <summary>One logger for the process; loggers share their Application Insights channel anyway.</summary>
+        private static readonly Lazy<AnalyticsLogger> Logger = new Lazy<AnalyticsLogger>(
+            () => new AnalyticsLogger(new AppConfig().AppInsightsConnectionString, "ActivityAnalysis"));
+
         private static void ToApplicationInsights(Dictionary<string, string> dimensions, Dictionary<string, double> measurements)
         {
-            var logger = new AnalyticsLogger(new AppConfig().AppInsightsConnectionString, "ActivityAnalysis");
-            logger.TrackEvent(AnalyticsLogger.AnalyticsEvent.ActivityAnalysisLoad, dimensions, measurements);
-
-            // Loads are rare - one per period per quarter of an hour at most - and run on their own worker, so the
-            // flush costs no reader anything and the event is not lost if the process recycles soon after.
-            logger.Flush();
+            // Not flushed here. A flush on the default channel is a synchronous HTTP send of everything the shared
+            // channel holds, and this runs inside the load that holds the read model's cache slot. The channel sends
+            // on its own within 30 seconds, and Application_End flushes what is left when the process recycles.
+            Logger.Value.TrackEvent(AnalyticsLogger.AnalyticsEvent.ActivityAnalysisLoad, dimensions, measurements);
         }
     }
 }

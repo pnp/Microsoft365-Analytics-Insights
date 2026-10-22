@@ -317,6 +317,12 @@ namespace WebJob.Office365ActivityImporter
             // never while the scheduled user import is writing; the users-and-licences lock enforces that across instances.
             var userRefreshWorker = WebJob.Office365ActivityImporter.Engine.Graph.TargetedUserRefreshWorker.ForConfig(configuredSettings, logger, userScopeProvider);
 
+            // Anonymised Copilot/licence adoption metrics for the telemetry report. Created ONCE here, outside the cycle
+            // loop: the weekly block it computes is only counted as delivered once the report carrying it has been
+            // uploaded and stored, so it must survive a failed upload to be re-sent - not recomputed - on the retry.
+            // It also reuses graphLastRunStore (hoisted above) for its weekly cadence stamp.
+            var adoptionStatsCollector = new AdoptionStatsCollector(configuredSettings, graphLastRunStore, logger);
+
             // Run app
             using (var heartbeat = new DataUtils.Health.ImporterHeartbeat(logger, DataUtils.Health.ImporterHeartbeat.ActivityJob))
             using (var health = Common.Entities.Health.DefaultRuntimeHealth.Start(configuredSettings, logger, ImporterHeartbeat.ActivityJob))
@@ -490,12 +496,8 @@ namespace WebJob.Office365ActivityImporter
                 using (var db = new AnalyticsEntitiesContext())
                 {
                     // Anonymised Copilot/licence adoption metrics ride along with the deployment stats.
-                    // The collector does its own availability and weekly-cadence gating and fails soft,
-                    // so on most cycles this costs a single state-table read. It reuses graphLastRunStore -
-                    // hoisted outside this loop - so the in-memory fallback keeps its cadence stamp
-                    // across cycles rather than re-running the analysis every time.
-                    var adoptionStatsCollector = new AdoptionStatsCollector(configuredSettings, graphLastRunStore, logger);
-
+                    // The collector (created once, above the loop) does its own availability and weekly-cadence
+                    // gating and fails soft, so on most cycles this costs a single state-table read.
                     var sqlUsageBuilder = new SqlUsageStatsBuilder(db, logger, configuredSettings.TenantGUID, adoptionStatsCollector);
                     using (var statsUploader = new WebApiStatsUploader(configuredSettings.StatsApiUrl, configuredSettings.StatsApiSecret, logger))
                     {

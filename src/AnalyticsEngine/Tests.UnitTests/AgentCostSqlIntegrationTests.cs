@@ -386,6 +386,94 @@ namespace Tests.UnitTests
             }
         }
 
+        [TestMethod]
+        public async Task UserCredits_ReImportingAnUnlinkedRowOnceTheUserIsKnown_LinksIt()
+        {
+            // The re-import is the cheapest moment to attribute a row: it has just resolved the user. The upsert
+            // used to copy only the measures, so a row stored unlinked stayed unlinked however often it was re-read.
+            const string objectId = "00000000-0000-0000-0000-0000000000a1";
+            var user = new User { UserPrincipalName = TestMarker + "-relinked@contoso.onmicrosoft.com", AzureAdId = objectId };
+            using (var db = new AnalyticsEntitiesContext())
+            {
+                db.users.Add(user);
+                await db.SaveChangesAsync();
+            }
+
+            try
+            {
+                await _store.UpsertCopilotStudioUserCreditsAsync(new[] { UserCreditRow(Day1, credits: 3m) });
+
+                var resolved = UserCreditRow(Day1, credits: 3m);
+                resolved.UserId = user.ID;
+                await _store.UpsertCopilotStudioUserCreditsAsync(new[] { resolved });
+
+                Assert.AreEqual(user.ID, await StoredUserIdAsync(), "A re-read that resolved the user must link the stored row.");
+
+                // A later read whose resolution failed (a throttled lookup) must not undo the link.
+                await _store.UpsertCopilotStudioUserCreditsAsync(new[] { UserCreditRow(Day1, credits: 3m) });
+
+                Assert.AreEqual(user.ID, await StoredUserIdAsync(), "An unresolved re-read must never remove an existing link.");
+            }
+            finally
+            {
+                using (var db = new AnalyticsEntitiesContext())
+                {
+                    db.CopilotStudioCreditUserDaily.RemoveRange(db.CopilotStudioCreditUserDaily.Where(r => r.EnvironmentId == TestMarker));
+                    await db.SaveChangesAsync();
+                    db.users.RemoveRange(db.users.Where(u => u.UserPrincipalName.StartsWith(TestMarker)));
+                    await db.SaveChangesAsync();
+                }
+            }
+        }
+
+        private static async Task<int?> StoredUserIdAsync()
+        {
+            using (var db = new AnalyticsEntitiesContext())
+            {
+                return (await db.CopilotStudioCreditUserDaily.SingleAsync(r => r.EnvironmentId == TestMarker)).UserId;
+            }
+        }
+
+        [TestMethod]
+        public async Task UnresolvedObjectIds_AreOfferedMostRecentlyUsedFirst()
+        {
+            // The re-attribution pass is capped, so WHICH ids it takes matters. EF6 drops an OrderBy that comes before
+            // Distinct, so the cap used to take an arbitrary - and, in practice, the same - set of ids every pass.
+            // Ids are chosen so their alphabetical order is the reverse of their recency.
+            const string oldest = "00000000-0000-0000-0000-0000000000b1";
+            const string middle = "77777777-0000-0000-0000-0000000000b2";
+            const string newest = "ffffffff-0000-0000-0000-0000000000b3";
+            await _store.UpsertCopilotStudioUserCreditsAsync(new[]
+            {
+                UnlinkedRow(new DateTime(2099, 1, 1), oldest),
+                UnlinkedRow(new DateTime(2099, 2, 1), middle),
+                UnlinkedRow(new DateTime(2099, 3, 1), newest),
+                UnlinkedRow(new DateTime(2099, 1, 2), newest),
+            });
+
+            var linkStore = new SqlAgentCostUserLinkStore(DefaultAnalyticsDbContextFactory.Instance, NullLogger.Instance);
+            var offered = await linkStore.GetUnresolvedObjectIdsAsync(2);
+
+            CollectionAssert.AreEqual(new[] { newest, middle }, offered.ToList(),
+                "The cap must take the most recently used ids, newest first.");
+
+            // Skipped ids (settled directory misses) are passed over without using up the cap - across a page boundary,
+            // which exercises the keyset paging in SQL.
+            var afterSkipping = await linkStore.GetUnresolvedObjectIdsAsync(1, id => id == newest);
+            CollectionAssert.AreEqual(new[] { middle }, afterSkipping.ToList());
+        }
+
+        private static CopilotStudioCreditUserDaily UnlinkedRow(DateTime day, string objectId) => new CopilotStudioCreditUserDaily
+        {
+            UsageDate = day,
+            EntraObjectId = objectId,
+            EnvironmentId = TestMarker,
+            BilledCredits = 1m,
+            Unit = "Credits",
+            DimensionHash = AgentCostRowHasher.Hash(day.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture), objectId, TestMarker),
+            ImportedUtc = DateTime.UtcNow,
+        };
+
         private static CopilotStudioCreditDaily CreditRow(DateTime day, string agentId, string feature, decimal credits, int? users = null)
         {
             var hash = AgentCostRowHasher.Hash(day.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture), TestMarker, agentId, feature);

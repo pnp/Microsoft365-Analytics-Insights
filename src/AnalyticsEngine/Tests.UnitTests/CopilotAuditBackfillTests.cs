@@ -118,21 +118,51 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
-        public async Task Importer_TruncatedHourIsRecordedIncompleteAndContinues()
+        public async Task Importer_TruncatedHourSplitsIntoQuarterHoursThatKeepTheirRecordsAndStayIncomplete()
         {
+            // An hour is no longer the floor: a truncated hour is split like any other parent (and its own
+            // partial result discarded, because its children re-read the same window). A quarter-hour that is
+            // STILL truncated has nothing narrower to retry with, so the records Graph did return are imported
+            // rather than thrown away - and the slice is still recorded as incomplete, because it is.
             var state = new CopilotAuditBackfillStateStore(new InMemoryKeyValueStore(), false, () => new DateTime(2026, 10, 2, 12, 0, 0, DateTimeKind.Utc));
             var job = await state.CreateAsync(new DateTime(2026, 10, 1, 0, 0, 0, DateTimeKind.Utc), new DateTime(2026, 10, 1, 1, 0, 0, DateTimeKind.Utc), "admin@contoso.com");
             job.PendingSlices[0].SplitLevel = 2;
             await state.SaveAsync(job);
             var source = new FakeAuditSearchSource { Query = new CopilotAuditSearchQuery { Status = "succeeded", IsTruncated = true } };
-            var importer = NewImporter(state, source, new CountingPersistence());
+            for (var i = 1; i <= 4; i++)
+            {
+                source.Pages.Enqueue(new CopilotAuditSearchRecordPage
+                {
+                    Records = new List<CopilotAuditSearchRecord> { SyntheticRecord($"00000000-0000-0000-0000-{i:000000000000}") }
+                });
+            }
+            var persistence = new CountingPersistence();
+            var importer = NewImporter(state, source, persistence);
 
-            job = await importer.AdvanceLatestAsync();
+            var cycles = 0;
+            do
+            {
+                job = await importer.AdvanceLatestAsync();
+                Assert.IsTrue(++cycles <= 10, "The split hour did not converge.");
+            } while (job.IsActive);
 
             Assert.AreEqual(CopilotAuditBackfillStates.CompletedWithGaps, job.State);
-            Assert.AreEqual(1, job.Gaps.Count);
-            Assert.IsTrue(job.Gaps[0].Incomplete);
-            Assert.AreEqual(CopilotAuditBackfillErrorCodes.QueryTruncated, job.Gaps[0].ErrorCode);
+            Assert.AreEqual(1, job.SlicesSplit, "The truncated hour is split, not recorded as a gap.");
+            Assert.AreEqual(5, source.SubmitCount, "One hourly query, then one per quarter-hour.");
+            Assert.AreEqual(4, source.RecordPagesRead, "Only the quarter-hours' records are read - never the split hour's.");
+            Assert.AreEqual(4, persistence.CommitCount);
+            Assert.AreEqual(4L, job.RecordsImported, "A truncated quarter-hour keeps the records Graph returned.");
+            Assert.AreEqual(0, job.SlicesCompleted, "A truncated slice is incomplete, not completed.");
+            Assert.AreEqual(4, job.Gaps.Count);
+            Assert.IsTrue(job.Gaps.All(g => g.Incomplete && g.ErrorCode == CopilotAuditBackfillErrorCodes.QueryTruncated));
+            var windows = job.Gaps.OrderBy(g => g.StartUtc).ToList();
+            Assert.AreEqual(new DateTime(2026, 10, 1, 0, 0, 0, DateTimeKind.Utc), windows.First().StartUtc);
+            Assert.AreEqual(new DateTime(2026, 10, 1, 1, 0, 0, DateTimeKind.Utc), windows.Last().EndUtc);
+            for (var i = 0; i < windows.Count; i++)
+            {
+                Assert.AreEqual(TimeSpan.FromMinutes(15), windows[i].EndUtc - windows[i].StartUtc);
+                if (i > 0) Assert.AreEqual(windows[i - 1].EndUtc, windows[i].StartUtc);
+            }
             Assert.AreEqual(CopilotAuditBackfillErrorCodes.QueryTruncated, job.LastErrorCode);
         }
 

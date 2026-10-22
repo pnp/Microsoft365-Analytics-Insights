@@ -47,7 +47,10 @@ namespace Common.Entities.UserScope.Purge
         /// are created one at a time. Ids count up from a value seeded by the clock, so a restart that loses in-memory
         /// records never reuses an id that a browser may still be asking about.
         /// </summary>
-        public async Task<UserScopePurgeJob> CreateAsync(string requestedBy, string filterFingerprint, int scopeMemberCount)
+        /// <param name="confirmedOutsideScopeCount">How many people outside the scope the administrator agreed to remove.</param>
+        /// <param name="scopeMembershipFingerprint">The <see cref="UserScopeMembers.MembershipFingerprint"/> of the scope it was confirmed against.</param>
+        public async Task<UserScopePurgeJob> CreateAsync(string requestedBy, string filterFingerprint, int scopeMemberCount,
+            int confirmedOutsideScopeCount, string scopeMembershipFingerprint = null)
         {
             var now = _utcNow();
             var seed = (int)Math.Min(int.MaxValue - 1, Math.Max(1, (now - IdEpoch).TotalSeconds));
@@ -63,6 +66,8 @@ namespace Common.Entities.UserScope.Purge
                 RequestedBy = requestedBy == null || requestedBy.Length <= 256 ? requestedBy : requestedBy.Substring(0, 256),
                 FilterFingerprint = filterFingerprint,
                 ScopeMemberCount = scopeMemberCount,
+                ConfirmedOutsideScopeCount = Math.Max(0, confirmedOutsideScopeCount),
+                ScopeMembershipFingerprint = scopeMembershipFingerprint,
                 CreatedUtc = now,
                 UpdatedUtc = now,
             };

@@ -40,6 +40,9 @@ namespace Common.Entities.Models
 
     public class RefreshOAuthToken : AuthToken
     {
+        // One HttpClient - one connection pool - for every token request this process makes. A new, undisposed
+        // HttpClient per request leaks a socket each time.
+        private static readonly HttpClient TokenEndpointClient = new HttpClient();
 
         [JsonProperty("access_token")]
         public override string AccessToken { get; set; }
@@ -47,11 +50,17 @@ namespace Common.Entities.Models
         [JsonProperty("refresh_token")]
         public string RefreshToken { get; set; }
 
+        /// <summary>
+        /// How many seconds the access token lasts from when it was issued (Entra ID's <c>expires_in</c>: 60 to 90 minutes
+        /// for Microsoft Graph); <c>null</c> when the response didn't say.
+        /// </summary>
+        [JsonProperty("expires_in")]
+        public int? ExpiresIn { get; set; }
+
         public static async Task<RefreshOAuthToken> GetAccessToken(string code, string scopes, AppConfig azureADConfig)
         {
 
             // https://docs.microsoft.com/en-us/azure/active-directory/develop/v2-oauth2-auth-code-flow#request-an-access-token
-            HttpClient httpClient = new HttpClient();
             var loginData = new List<KeyValuePair<string, string>>
             {
                 new KeyValuePair<string, string>("redirect_uri", azureADConfig.WebAppURL),
@@ -63,7 +72,7 @@ namespace Common.Entities.Models
             };
 
             // V2 endpoint
-            var authResponse = await httpClient.PostAsync($"{azureADConfig.Authority}/oauth2/v2.0/token", new FormUrlEncodedContent(loginData));
+            var authResponse = await TokenEndpointClient.PostAsync($"{azureADConfig.Authority}/oauth2/v2.0/token", new FormUrlEncodedContent(loginData));
             var responseBody = await authResponse.Content.ReadAsStringAsync();
             try
             {
@@ -79,11 +88,19 @@ namespace Common.Entities.Models
             return JsonConvert.DeserializeObject<RefreshOAuthToken>(responseBody);
         }
 
-        public static async Task<RefreshOAuthToken> GetNewRefreshToken(string refreshToken, AppConfig azureADConfig)
+        /// <summary>
+        /// Redeems a refresh token for a new access token (and, normally, a new refresh token).
+        /// </summary>
+        /// <exception cref="RefreshTokenRequestException">Entra ID refused the request. It carries the OAuth error, so a
+        /// caller can tell a dead refresh token (<c>invalid_grant</c>) from anything else.</exception>
+        /// <exception cref="HttpRequestException">Entra ID couldn't be reached.</exception>
+        public static Task<RefreshOAuthToken> GetNewRefreshToken(string refreshToken, AppConfig azureADConfig)
+            => GetNewRefreshToken(refreshToken, azureADConfig, TokenEndpointClient);
+
+        internal static async Task<RefreshOAuthToken> GetNewRefreshToken(string refreshToken, AppConfig azureADConfig, HttpClient httpClient)
         {
 
             // https://docs.microsoft.com/en-us/azure/active-directory/develop/v2-oauth2-auth-code-flow#request-an-access-token
-            var httpClient = new HttpClient();
             var loginData = new List<KeyValuePair<string, string>>();
             loginData.Add(new KeyValuePair<string, string>("redirect_uri", azureADConfig.WebAppURL));
             loginData.Add(new KeyValuePair<string, string>("client_id", azureADConfig.ClientID));
@@ -102,12 +119,50 @@ namespace Common.Entities.Models
             }
             catch (HttpRequestException ex)
             {
-                Console.WriteLine($"Got HTTP exception renewing token: {ex.Message}. Response body: {responseBody}");
-                throw;
+                var refused = new RefreshTokenRequestException(ex.Message, authResponse.StatusCode, responseBody, ex);
+
+                // The error fields, not the body: a refusal carries no token, but its description can name the user.
+                Console.WriteLine($"Got HTTP exception renewing token: {ex.Message}. OAuth error: '{refused.Error}', suberror: '{refused.SubError}', " +
+                    $"error codes: [{string.Join(",", refused.ErrorCodes)}].");
+                throw refused;
             }
 
             return JsonConvert.DeserializeObject<RefreshOAuthToken>(responseBody);
         }
+    }
+
+    /// <summary>
+    /// Entra ID refused to redeem a refresh token.
+    /// </summary>
+    /// <remarks>
+    /// Still an <see cref="HttpRequestException"/> with the same message as before, so existing catch blocks - such as the
+    /// portal's site-token API - and anyone searching the logs see no difference. It adds the OAuth error, so the importer
+    /// deletes a Team's stored token only when Entra ID says the token itself is dead (<c>invalid_grant</c>), not when the
+    /// app's own credential has expired (<c>invalid_client</c>), Entra ID is throttling or Entra ID is down.
+    /// </remarks>
+    public class RefreshTokenRequestException : HttpRequestException
+    {
+        public RefreshTokenRequestException(string message, HttpStatusCode statusCode, string responseBody, Exception innerException)
+            : base(message, innerException)
+        {
+            StatusCode = statusCode;
+
+            var body = OAuthErrorBody.Parse(responseBody);
+            Error = body.Error;
+            SubError = body.SubError;
+            ErrorCodes = body.ErrorCodes;
+        }
+
+        public HttpStatusCode StatusCode { get; }
+
+        /// <summary>The OAuth <c>error</c>, e.g. <c>invalid_grant</c>; <c>null</c> when the body wasn't Entra ID's JSON.</summary>
+        public string Error { get; }
+
+        /// <summary>Entra ID's <c>suberror</c>, e.g. <c>bad_token</c>.</summary>
+        public string SubError { get; }
+
+        /// <summary>Entra ID's <c>error_codes</c>: <c>700082</c> is <c>AADSTS700082</c>.</summary>
+        public IReadOnlyList<int> ErrorCodes { get; }
     }
 
     /// <summary>
@@ -127,30 +182,11 @@ namespace Common.Entities.Models
             StatusCode = statusCode;
             ResponseBody = responseBody;
 
-            var body = TryParse(responseBody);
-            if (body == null)
-            {
-                return;
-            }
-
-            // Best effort: this runs while reporting a failure, so an unexpected shape must never replace the
-            // real error with a parsing one.
-            Error = StringField(body, "error");
-            SubError = StringField(body, "suberror");
-            ErrorDescription = StringField(body, "error_description");
-
-            if (body["error_codes"] is JArray codes)
-            {
-                // Json.NET holds an integer as a long, or a BigInteger when it's too big for one. Anything else - a
-                // string, a float, a number out of range - is simply not an error code.
-                ErrorCodes = codes
-                    .OfType<JValue>()
-                    .Select(code => code.Value)
-                    .OfType<long>()
-                    .Where(code => code >= int.MinValue && code <= int.MaxValue)
-                    .Select(code => (int)code)
-                    .ToList();
-            }
+            var body = OAuthErrorBody.Parse(responseBody);
+            Error = body.Error;
+            SubError = body.SubError;
+            ErrorDescription = body.ErrorDescription;
+            ErrorCodes = body.ErrorCodes;
         }
 
         public HttpStatusCode StatusCode { get; }
@@ -167,6 +203,51 @@ namespace Common.Entities.Models
 
         /// <summary>Entra ID's <c>error_codes</c>: <c>65001</c> is <c>AADSTS65001</c>.</summary>
         public IReadOnlyList<int> ErrorCodes { get; } = new int[0];
+    }
+
+    /// <summary>
+    /// The OAuth error fields of an Entra ID token-endpoint refusal, read on a best-effort basis.
+    /// </summary>
+    internal sealed class OAuthErrorBody
+    {
+        public string Error { get; private set; }
+
+        public string SubError { get; private set; }
+
+        public string ErrorDescription { get; private set; }
+
+        public IReadOnlyList<int> ErrorCodes { get; private set; } = new int[0];
+
+        public static OAuthErrorBody Parse(string responseBody)
+        {
+            var result = new OAuthErrorBody();
+            var body = TryParse(responseBody);
+            if (body == null)
+            {
+                return result;
+            }
+
+            // Best effort: this runs while reporting a failure, so an unexpected shape must never replace the
+            // real error with a parsing one.
+            result.Error = StringField(body, "error");
+            result.SubError = StringField(body, "suberror");
+            result.ErrorDescription = StringField(body, "error_description");
+
+            if (body["error_codes"] is JArray codes)
+            {
+                // Json.NET holds an integer as a long, or a BigInteger when it's too big for one. Anything else - a
+                // string, a float, a number out of range - is simply not an error code.
+                result.ErrorCodes = codes
+                    .OfType<JValue>()
+                    .Select(code => code.Value)
+                    .OfType<long>()
+                    .Where(code => code >= int.MinValue && code <= int.MaxValue)
+                    .Select(code => (int)code)
+                    .ToList();
+            }
+
+            return result;
+        }
 
         private static string StringField(JObject body, string name)
         {

@@ -1137,6 +1137,194 @@ namespace Tests.UnitTests
 
                 // Make sure doesn't crash
                 await clicksToSave.SaveAllEventTypesToSql(logger, new AppConfig());
+
+                // ...and that the click was stored exactly once across both saves.
+                Assert.AreEqual(1, await db.Clicks.CountAsync(c => c.HitID == testHit.ID));
+            }
+        }
+
+        /// <summary>
+        /// Every cycle re-reads the whole day, so a click that App Insights ingested after a later-stamped click
+        /// was already imported arrives in a later batch. Clicks used to be de-duplicated against the newest click
+        /// timestamp in the whole table, which dropped such a click for ever.
+        /// </summary>
+        [TestMethod]
+        public async Task ClickEvent_OlderThanTheNewestStoredClick_IsStillImported()
+        {
+            var logger = AnalyticsLogger.ConsoleOnlyTracer();
+            using (var db = new AnalyticsEntitiesContext())
+            {
+                var firstHit = await CreateTestHitAsync(db);
+                var laterArrivingHit = await CreateTestHitAsync(db);
+                try
+                {
+                    // Anchored on the newest click already stored, so the test holds whatever other tests left behind.
+                    var newestStored = await db.Clicks.MaxAsync(c => (DateTime?)c.TimeStamp) ?? DateTime.UtcNow;
+                    var newer = newestStored.AddMinutes(10);
+                    var older = newer.AddMinutes(-5);
+
+                    await ClicksOf(TestClick(firstHit.page_request_id, newer)).SaveClicksToSQL(logger, db);
+                    await ClicksOf(TestClick(laterArrivingHit.page_request_id, older)).SaveClicksToSQL(logger, db);
+
+                    Assert.AreEqual(1, await db.Clicks.CountAsync(c => c.HitID == firstHit.ID));
+                    Assert.AreEqual(1, await db.Clicks.CountAsync(c => c.HitID == laterArrivingHit.ID),
+                        "A click older than the newest stored click is a late arrival, not a duplicate.");
+                }
+                finally
+                {
+                    await DeleteClicksOf(db, firstHit, laterArrivingHit);
+                }
+            }
+        }
+
+        /// <summary>
+        /// The click time is the browser's clock. One browser with its clock in the future used to stop every
+        /// click in the tenant being imported until real time caught up with it.
+        /// </summary>
+        [TestMethod]
+        public async Task ClickEvent_FromABrowserWithAFutureClock_DoesNotBlockOtherClicks()
+        {
+            var logger = AnalyticsLogger.ConsoleOnlyTracer();
+            using (var db = new AnalyticsEntitiesContext())
+            {
+                var skewedHit = await CreateTestHitAsync(db);
+                var normalHit = await CreateTestHitAsync(db);
+                try
+                {
+                    await ClicksOf(TestClick(skewedHit.page_request_id, DateTime.UtcNow.AddYears(1))).SaveClicksToSQL(logger, db);
+                    await ClicksOf(TestClick(normalHit.page_request_id, DateTime.UtcNow)).SaveClicksToSQL(logger, db);
+
+                    Assert.AreEqual(1, await db.Clicks.CountAsync(c => c.HitID == normalHit.ID));
+                }
+                finally
+                {
+                    await DeleteClicksOf(db, skewedHit, normalHit);
+                }
+            }
+        }
+
+        /// <summary>
+        /// Two clicks in one batch that share the key the unique index enforces - (hit_id, url_id, timestamp) - but
+        /// differ in title used to both pass the merge's SELECT DISTINCT and fail the whole click batch on the index.
+        /// </summary>
+        [TestMethod]
+        public async Task ClickEvent_TwoClicksWithTheSameKeyInOneBatch_AreSavedOnceRatherThanFailingTheBatch()
+        {
+            var logger = AnalyticsLogger.ConsoleOnlyTracer();
+            using (var db = new AnalyticsEntitiesContext())
+            {
+                var hit = await CreateTestHitAsync(db);
+                try
+                {
+                    var at = (await db.Clicks.MaxAsync(c => (DateTime?)c.TimeStamp) ?? DateTime.UtcNow).AddMinutes(10);
+                    var href = "https://contoso.sharepoint.com/sites/example/Shared Documents/Καλημέρα κόσμε.pdf";
+                    var batch = ClicksOf(
+                        TestClick(hit.page_request_id, at, "Contoso A", href),
+                        TestClick(hit.page_request_id, at, "Contoso B", href));
+
+                    await batch.SaveClicksToSQL(logger, db);
+                    await batch.SaveClicksToSQL(logger, db);
+
+                    Assert.AreEqual(1, await db.Clicks.CountAsync(c => c.HitID == hit.ID));
+                }
+                finally
+                {
+                    await DeleteClicksOf(db, hit);
+                }
+            }
+        }
+
+        /// <summary>
+        /// The tracker can report the time on a page more than once (two tabs reading the same exit cookie, a resent
+        /// batch). The stored time used to be whichever update ran last; it is now the longest reported.
+        /// </summary>
+        [TestMethod]
+        public async Task PageExitEvents_RepeatedForOnePageRequest_StoreTheLongestTime_AndAReplayChangesNothing()
+        {
+            var logger = AnalyticsLogger.ConsoleOnlyTracer();
+            using (var db = new AnalyticsEntitiesContext())
+            {
+                var hit = await CreateTestHitAsync(db);
+
+                var exits = new CustomEventsResultCollection();
+                exits.Rows.Add(new PageExitEventAppInsightsQueryResult { CustomProperties = new PageExitCustomProps { PageRequestId = hit.page_request_id, ActiveTime = 12.5 } });
+                exits.Rows.Add(new PageExitEventAppInsightsQueryResult { CustomProperties = new PageExitCustomProps { PageRequestId = hit.page_request_id, ActiveTime = 5 } });
+
+                await exits.SaveHitsUpdatesToSQL(logger, db);
+
+                Assert.AreEqual(12.5, await db.hits.Where(h => h.ID == hit.ID).Select(h => h.seconds_on_page).SingleAsync());
+
+                // Every cycle re-reads the whole day, so the same exits come round again: nothing should be rewritten.
+                Assert.AreEqual(0, await exits.SaveHitsUpdatesToSQL(logger, db));
+                Assert.AreEqual(12.5, await db.hits.Where(h => h.ID == hit.ID).Select(h => h.seconds_on_page).SingleAsync());
+            }
+        }
+
+        /// <summary>
+        /// Tracker session ids are case-sensitive (dbo.sessions.ai_session_id has a CS collation). The search merge
+        /// used to join on LOWER() of both sides, which linked a search to every session differing only by case.
+        /// </summary>
+        [TestMethod]
+        public async Task Searches_AreLinkedOnlyToTheSessionWithExactlyTheSameTrackerId()
+        {
+            using (var db = new AnalyticsEntitiesContext())
+            {
+                var token = Guid.NewGuid().ToString("N");
+                var user = new User { UserPrincipalName = $"searcher-{token}@contoso.com" };
+                db.users.Add(user);
+                var trackerSessionId = "session-" + token;
+                var exactSession = new UserSession { ai_session_id = trackerSessionId, user = user };
+                db.sessions.Add(exactSession);
+                db.sessions.Add(new UserSession { ai_session_id = trackerSessionId.ToUpperInvariant(), user = user });
+                await db.SaveChangesAsync();
+
+                var searchTerm = "Καλημέρα κόσμε " + token;
+                var searches = new CustomEventsResultCollection();
+                var search = new SearchEventAppInsightsQueryResult { AppInsightsTimestamp = DateTime.UtcNow, Username = user.UserPrincipalName };
+                search.CustomProperties.SearchText = searchTerm;
+                search.CustomProperties.SessionId = trackerSessionId;
+                searches.Rows.Add(search);
+
+                await searches.SaveSearchesToSQL(AnalyticsLogger.ConsoleOnlyTracer(), db);
+
+                var saved = await db.searches.Where(s => s.search_term.search_term == searchTerm).Select(s => s.session.ID).ToListAsync();
+                CollectionAssert.AreEqual(new[] { exactSession.ID }, saved);
+            }
+        }
+
+        private static async Task<Hit> CreateTestHitAsync(AnalyticsEntitiesContext db)
+        {
+            var token = Guid.NewGuid().ToString("N");
+            var user = new User { UserPrincipalName = "testuser" + token };
+            var session = new UserSession { ai_session_id = Guid.NewGuid().ToString(), user = user };
+            var hit = new Hit { session = session, page_request_id = Guid.NewGuid(), hit_timestamp = DateTime.UtcNow, url = new Url { FullUrl = "http://contoso/" + token } };
+            db.hits.Add(hit);
+            await db.SaveChangesAsync();
+            return hit;
+        }
+
+        private static ClickEventAppInsightsQueryResult TestClick(Guid pageRequestId, DateTime at, string linkText = "Contoso link", string href = null)
+        {
+            return new ClickEventAppInsightsQueryResult
+            {
+                CustomProperties = new ClickCustomProps { LinkText = linkText, HRef = href, PageRequestId = pageRequestId },
+                AppInsightsTimestamp = at,
+            };
+        }
+
+        private static CustomEventsResultCollection ClicksOf(params ClickEventAppInsightsQueryResult[] clicks)
+        {
+            var events = new CustomEventsResultCollection();
+            events.Rows.AddRange(clicks);
+            return events;
+        }
+
+        /// <summary>Leaves no test click behind - a future-dated one in particular - for the other click tests.</summary>
+        private static async Task DeleteClicksOf(AnalyticsEntitiesContext db, params Hit[] hits)
+        {
+            foreach (var hit in hits)
+            {
+                await db.Database.ExecuteSqlCommandAsync("DELETE FROM dbo.hits_clicked_elements WHERE hit_id = @p0", hit.ID);
             }
         }
 

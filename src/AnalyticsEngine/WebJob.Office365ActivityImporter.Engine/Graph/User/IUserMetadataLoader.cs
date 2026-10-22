@@ -58,6 +58,23 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         Task<List<GraphUser>> LoadAllActiveUsers();
 
         /// <summary>
+        /// The accounts the most recent <see cref="LoadAllActiveUsers"/> read reported as disabled or deleted, which
+        /// its result leaves out - and, when that read was a complete read of the whole directory, every account it
+        /// listed (<see cref="GraphUserDeactivations.IsCompleteDirectoryRead"/>), since a full read never reports a
+        /// deletion. Nobody is inserted for them, but the import must mark every row it already has for one of them
+        /// disabled: Graph reports each change once, so an account left out here would otherwise stay enabled in the
+        /// users table for ever. Never null.
+        /// </summary>
+        GraphUserDeactivations LastLoadDeactivations { get; }
+
+        /// <summary>
+        /// Graph's own count of the users in the directory (<c>/users/$count</c>), independent of any delta read; null
+        /// when it could not be read. Before an account a complete read did not list is treated as deleted, the read is
+        /// checked against it - see <see cref="DirectoryReadCompleteness"/>.
+        /// </summary>
+        Task<int?> CountDirectoryUsersAsync();
+
+        /// <summary>
         /// Whether the most recent <see cref="LoadAllActiveUsers"/> read the complete delta result: every page,
         /// ending in an <c>@odata.deltaLink</c> whose token <see cref="CommitDeltaTokenAsync"/> can persist.
         /// </summary>

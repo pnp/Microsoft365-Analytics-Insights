@@ -42,6 +42,12 @@ namespace WebJob.Office365ActivityImporter
         private readonly ISentEmailMailboxSkipList _sentEmailMailboxSkipList;
         private static readonly InMemoryKeyValueStore InMemoryCopilotAuditBackfillStore = new InMemoryKeyValueStore();
 
+        // Process-lifetime agent-cost state. ProgramTasks is rebuilt every cycle, so these must be static to outlive
+        // it: the per-agent read's resume checkpoint where no Storage account is configured, and the Entra object ids
+        // the directory has said do not exist (so they are neither asked about nor offered for re-linking every pass).
+        private static readonly InMemoryKeyValueStore InMemoryAgentCostStateStore = new InMemoryKeyValueStore();
+        private static readonly AgentCostDirectoryMissCache AgentCostDirectoryMisses = new AgentCostDirectoryMissCache();
+
         public ProgramTasks(AnalyticsLogger logger, AppConfig settings, ISingleDateStore activityReportsLastImportedStore = null, IImportLastRunStore graphLastRunStore = null, ISentEmailMailboxSkipList sentEmailMailboxSkipList = null)
             : this(logger, settings, activityReportsLastImportedStore, graphLastRunStore, sentEmailMailboxSkipList, reportCompletionStore: null)
         {
@@ -212,6 +218,9 @@ namespace WebJob.Office365ActivityImporter
                 AgentCostConnectionStore connectionStore = null;
                 AgentCostConnectionHead connectionHead = null;
 
+                // The ImportSchedule partition, like the cadence stamps: the resume checkpoint is scheduling state.
+                var agentCostState = StateStore.TryOpen(_settings, StatePartitions.ImportSchedule, _logger) ?? InMemoryAgentCostStateStore;
+
                 var phase = new AgentCostImportPhase(
                     _logger,
                     _settings,
@@ -250,9 +259,12 @@ namespace WebJob.Office365ActivityImporter
                             userResolver: new AgentCostUserResolver(
                                 new SqlAgentCostUserLinkStore(DefaultAnalyticsDbContextFactory.Instance, _logger),
                                 _manualGraphCallClient == null ? null : new GraphEntraUserLookup(_manualGraphCallClient, _logger),
-                                _logger),
+                                _logger,
+                                misses: AgentCostDirectoryMisses),
                             // Per-user credits for anyone outside UserGroupsFilter are not stored.
-                            userScopeProvider: _userScopeProvider);
+                            userScopeProvider: _userScopeProvider,
+                            // Lets a retry skip the days an unfinished read already stored. Per connection generation.
+                            checkpoint: new CopilotStudioCreditCheckpointStore(agentCostState, connectionHead?.Version, _logger));
                     },
                     creditConnectionVersion: async () =>
                     {
@@ -272,7 +284,11 @@ namespace WebJob.Office365ActivityImporter
                             _logger,
                             new AzureCostManagementSource(httpClient, _settings.AzureCostImport, _logger),
                             store,
-                            _settings.AzureCostImport);
+                            _settings.AzureCostImport,
+                            clock: null,
+                            // Each scope's "last closed period read while final" marker. Process-lifetime (and durable
+                            // where Storage is configured), so a closed period leaves the window once it has been read.
+                            periodState: _graphLastRunStore);
                     });
 
                 await phase.RunAsync();

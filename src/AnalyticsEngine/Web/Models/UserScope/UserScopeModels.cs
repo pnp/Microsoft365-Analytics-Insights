@@ -18,6 +18,13 @@ namespace Web.AnalyticsWeb.Models.UserScope
         [JsonProperty("filterPatterns")]
         public List<string> FilterPatterns { get; set; } = new List<string>();
 
+        /// <summary>
+        /// Identifies the configured filter (<c>UserGroupsFilterModel.Fingerprint</c>; empty when it narrows nothing). The
+        /// page sends it back with a purge, which is refused if the filter has changed since the page read it.
+        /// </summary>
+        [JsonProperty("filterFingerprint")]
+        public string FilterFingerprint { get; set; }
+
         [JsonProperty("resolution")]
         public UserScopeResolutionModel Resolution { get; set; }
 
@@ -160,7 +167,11 @@ namespace Web.AnalyticsWeb.Models.UserScope
         [JsonProperty("completedUtc")]
         public DateTime? CompletedUtc { get; set; }
 
-        /// <summary>Why it failed: <c>scopeUnavailable</c>, <c>scopeEmpty</c>, <c>filterChanged</c>, <c>databaseError</c> or <c>unexpected</c>.</summary>
+        /// <summary>
+        /// Why it failed: <c>scopeUnavailable</c>, <c>scopeEmpty</c>, <c>filterChanged</c>, <c>filterChangedWhileRunning</c>,
+        /// <c>purgeExceedsConfirmed</c>, <c>scopeMembershipChanged</c>, <c>databaseError</c>, <c>stateUnavailable</c> or
+        /// <c>unexpected</c>.
+        /// </summary>
         [JsonProperty("errorCode")]
         public string ErrorCode { get; set; }
     }
@@ -180,13 +191,39 @@ namespace Web.AnalyticsWeb.Models.UserScope
         /// <summary>The administrator ticked "I understand this cannot be undone". Required.</summary>
         [JsonProperty("acknowledged")]
         public bool Acknowledged { get; set; }
+
+        /// <summary>
+        /// How many people outside the scope the confirmation showed: the most the purge may remove. Refused with
+        /// <c>purgeExceedsConfirmed</c> if more are outside the scope when it starts. Required; missing counts as none.
+        /// </summary>
+        [JsonProperty("confirmedOutsideScopeCount")]
+        public int? ConfirmedOutsideScopeCount { get; set; }
+
+        /// <summary>The <see cref="UserScopeStatusModel.FilterFingerprint"/> the confirmation was shown under. Required.</summary>
+        [JsonProperty("confirmedFilterFingerprint")]
+        public string ConfirmedFilterFingerprint { get; set; }
     }
 
-    /// <summary>A failed request's stable error code. The page maps it to a sentence; the server sends no text.</summary>
+    /// <summary>
+    /// A failed request's stable error code. The page maps it to a sentence; the server sends no text. A purge refused
+    /// because the scope changed since it was confirmed also carries the numbers as they are now, for the page to show.
+    /// </summary>
     public sealed class UserScopeError
     {
         [JsonProperty("code")]
         public string Code { get; set; }
+
+        /// <summary>For <c>purgeExceedsConfirmed</c> and <c>filterChanged</c>: the people in the database inside and outside the scope now.</summary>
+        [JsonProperty("database", NullValueHandling = NullValueHandling.Ignore)]
+        public UserScopeDatabaseCountsModel Database { get; set; }
+
+        /// <summary>For <c>purgeExceedsConfirmed</c> and <c>filterChanged</c>: the count the request confirmed.</summary>
+        [JsonProperty("confirmedOutsideScopeCount", NullValueHandling = NullValueHandling.Ignore)]
+        public int? ConfirmedOutsideScopeCount { get; set; }
+
+        /// <summary>For <c>purgeExceedsConfirmed</c> and <c>filterChanged</c>: the filter in force now.</summary>
+        [JsonProperty("filterFingerprint", NullValueHandling = NullValueHandling.Ignore)]
+        public string FilterFingerprint { get; set; }
     }
 
     /// <summary>Values of <see cref="UserScopeStatusModel.PurgeUnavailableReason"/>. Part of the API.</summary>
@@ -214,6 +251,18 @@ namespace Web.AnalyticsWeb.Models.UserScope
         public const string JobNotFound = "jobNotFound";
         public const string JobNotActive = "jobNotActive";
         public const string DatabaseUnavailable = "databaseUnavailable";
+
+        /// <summary>
+        /// More people are outside the scope than the confirmation showed - the groups shrank, or users arrived, since the
+        /// page read the numbers - so the purge did not start. The answer carries the numbers as they are now.
+        /// </summary>
+        public const string PurgeExceedsConfirmed = "purgeExceedsConfirmed";
+
+        /// <summary>
+        /// <c>UserGroupsFilter</c> is not the filter the confirmation was shown under, so the purge did not start. The answer
+        /// carries the numbers under the filter in force now.
+        /// </summary>
+        public const string FilterChanged = "filterChanged";
 
         /// <summary>Where purge records are kept - Azure Table storage - can't be reached. The same code as <c>api/UserImportCheckpoint</c>'s.</summary>
         public const string StorageUnavailable = "storageUnavailable";

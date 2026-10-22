@@ -15,6 +15,7 @@ const CODE_KEYS: Record<PromptCategoryErrorCode, TranslationKey> = {
   storageNotConfigured: 'promptCategories.error.storageNotConfigured',
   invalidTaxonomy: 'promptCategories.error.invalidTaxonomy',
   storedConfigurationInvalid: 'promptCategories.error.storedConfigurationInvalid',
+  configurationChanged: 'promptCategories.error.configurationChanged',
   databaseNotUpgraded: 'promptCategories.error.databaseNotUpgraded',
   reportUnavailable: 'promptCategories.error.reportUnavailable',
   clientTimeout: 'promptCategories.error.clientTimeout',
@@ -44,4 +45,9 @@ export function promptCategoryErrorText(error: unknown, t: (key: TranslationKey)
 
 export function isStoredConfigurationInvalid(error: unknown): boolean {
   return codeOf(error) === 'storedConfigurationInvalid';
+}
+
+/** Someone else saved or reset the settings after this page loaded them, so this save or reset was refused. */
+export function isConfigurationChanged(error: unknown): boolean {
+  return codeOf(error) === 'configurationChanged';
 }

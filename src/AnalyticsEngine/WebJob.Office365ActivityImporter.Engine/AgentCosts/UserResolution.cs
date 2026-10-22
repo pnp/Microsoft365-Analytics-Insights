@@ -69,16 +69,17 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
         Task<int> EnsureUserAsync(EntraUserRef user);
 
         /// <summary>
-        /// Distinct object ids on rows that are still unlinked, most recent usage first, capped at
-        /// <paramref name="max"/>.
+        /// Distinct object ids on rows that are still unlinked, most recent usage first (ties broken by id, so the
+        /// order is the same on every pass), capped at <paramref name="max"/>. Ids for which <paramref name="skip"/>
+        /// returns true are passed over and do not count towards the cap.
         /// </summary>
         /// <remarks>
         /// Recent first because an unlinked row is most likely to be a user created since the last user
         /// import, and those are the ones a fresh attempt will actually resolve. A row whose user was
         /// deleted years ago will never resolve, and must not be allowed to consume the whole budget on
-        /// every cycle for ever.
+        /// every cycle for ever - which is what <paramref name="skip"/> is for.
         /// </remarks>
-        Task<IReadOnlyList<string>> GetUnresolvedObjectIdsAsync(int max);
+        Task<IReadOnlyList<string>> GetUnresolvedObjectIdsAsync(int max, Func<string, bool> skip = null);
 
         /// <summary>
         /// Points every row carrying one of these object ids at the matching user. Returns rows updated.

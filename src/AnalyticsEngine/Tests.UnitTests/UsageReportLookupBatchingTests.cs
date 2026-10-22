@@ -13,6 +13,7 @@ using System.Threading.Tasks;
 using Tests.UnitTests.FakeLoaderClasses;
 using WebJob.Office365ActivityImporter.Engine.Entities.Serialisation.UsageReports;
 using WebJob.Office365ActivityImporter.Engine.Graph.UsageReports;
+using WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Rules;
 
 namespace Tests.UnitTests
 {
@@ -176,6 +177,86 @@ namespace Tests.UnitTests
             AssertMetric(completed, "LookupCacheHitCount", 2);
             CollectionAssert.AreEquivalent(new[] { 11, 22 }, fakeStore.Stored.Select(r => r.UserID).ToArray());
             Assert.AreEqual(11, phaseCache.GetCachedIdForName<User>("alice@contoso.com"), "The phase cache is keyed by the lookup type.");
+        }
+
+        // Shapes Graph substitutes for an identity when the tenant conceals user, group and site names in reports
+        // (synthetic: SHA-256 and MD5 of the word "test").
+        private const string Sha256Pseudonym = "9F86D081884C7D659A2FEAA0C55AD015A3BF4F1B2B0B822CD15D6C15B0F00A08";
+        private const string Md5Pseudonym = "098F6BCD4621D373CADE4E832627B4F6";
+
+        [TestMethod]
+        public async Task ConcealedIdentities_EveryRowConcealed_RefusesTheReportBeforeAnyLookupOrWrite()
+        {
+            // Microsoft's default for new tenants. Each pseudonym used to become a placeholder user with activity attached.
+            var table = new SyntheticUsersTable();
+            var loader = new InMemoryDailyActivityLoader(NullLogger.Instance);
+            loader.LoadedReportPages[Day1] = new List<FakeUserActivityDetail>
+            {
+                Page(Sha256Pseudonym, 1),
+                Page(Md5Pseudonym, 2),
+                Page("4f1c2b3a@9e8d7c6b", 3),   // hash@hash: no dotted domain
+            };
+            loader.LoadedReportPages[Day2] = new List<FakeUserActivityDetail> { Page(Sha256Pseudonym, 4), Page(null, 5) };
+            var store = new InMemoryUsageReportStore<FakeUserUsageActivityLog>();
+            loader.ReportStore = store;
+
+            var ex = await Assert.ThrowsExceptionAsync<ConcealedUsageReportException>(
+                () => loader.SaveLoadedReportsToSql(new ConcurrentLookupDbIdsCache(), table.NewCache()));
+
+            Assert.AreEqual(4, ex.ConcealedRowCount, "Every non-blank row was concealed; the blank one is the separate 'no identifier' case.");
+            Assert.AreEqual(0, table.BatchSizes.Count, "A pseudonym must not even be looked up.");
+            Assert.AreEqual(0, table.PerKeyCalls);
+            Assert.AreEqual(0, table.Created.Count, "Not one placeholder user may be created.");
+            Assert.AreEqual(0, store.Stored.Count);
+            Assert.AreEqual(0, store.SaveCount);
+        }
+
+        [TestMethod]
+        public async Task ConcealedIdentities_MixedReport_SavesTheRealUsersAndSkipsOnlyThePseudonyms()
+        {
+            var table = new SyntheticUsersTable();
+            table.Seed("alice@contoso.com", 11);
+            var instrumentation = new RecordingInstrumentation();
+            var loader = new InMemoryDailyActivityLoader(NullLogger.Instance) { SaveInstrumentation = instrumentation };
+            loader.LoadedReportPages[Day1] = new List<FakeUserActivityDetail>
+            {
+                Page("alice@contoso.com", 1),
+                Page("newstarter@contoso.com", 2),
+                Page(Sha256Pseudonym, 3),
+                Page("aaaabbbbccccddddeeeeffff00001111@contoso.com", 4),   // a 32-hex local part is a hash, even on a real domain
+            };
+            var store = new InMemoryUsageReportStore<FakeUserUsageActivityLog>();
+            loader.ReportStore = store;
+
+            await loader.SaveLoadedReportsToSql(new ConcurrentLookupDbIdsCache(), table.NewCache());
+
+            CollectionAssert.AreEqual(new[] { 2 }, table.BatchSizes.ToArray(), "Only the two real identities are looked up.");
+            CollectionAssert.AreEqual(new[] { "newstarter@contoso.com" }, table.Created.ToArray(), "Only a real new starter may be created.");
+            CollectionAssert.AreEquivalent(new[] { 1, 2 }, store.Stored.Select(r => r.ThingCount).ToArray());
+            AssertMetric(instrumentation.Single(UsageReportSaveStageIds.SaveCompleted), "ConcealedIdentityRowCount", 2);
+        }
+
+        [TestMethod]
+        public async Task YammerGroupLoader_ConcealedGroupNames_AreNeverCreated()
+        {
+            // Group names are free text, so only the hash shape is refused: a short hex word is still a real name.
+            var groups = new SyntheticYammerGroups();
+            var loader = new YammerGroupUsageLoader(null, NullLogger.Instance);
+            var store = new InMemoryUsageReportStore<YammerGroupActivityLog>();
+            loader.ReportStore = store;
+            loader.LoadedReportPages[Day1] = new List<YammerGroupActivityDetail>
+            {
+                new YammerGroupActivityDetail { GroupName = Md5Pseudonym, PostedCount = 1 },
+                new YammerGroupActivityDetail { GroupName = Sha256Pseudonym, PostedCount = 2 },
+                new YammerGroupActivityDetail { GroupName = "Contoso Engineering", PostedCount = 3 },
+                new YammerGroupActivityDetail { GroupName = "Καλημέρα κόσμε", PostedCount = 4 },
+                new YammerGroupActivityDetail { GroupName = "Deadbeef", PostedCount = 5 },
+            };
+
+            await loader.SaveLoadedReportsToSql(new ConcurrentLookupDbIdsCache(), groups.NewCache());
+
+            CollectionAssert.AreEquivalent(new[] { "Contoso Engineering", "Καλημέρα κόσμε", "Deadbeef" }, groups.Created.ToArray());
+            Assert.AreEqual(3, store.Stored.Count);
         }
 
         [TestMethod]

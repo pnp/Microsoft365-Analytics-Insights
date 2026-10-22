@@ -2,15 +2,18 @@ using ActivityImporter.Engine.ActivityAPI.Copilot;
 using Common.Entities;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Graph.Models.ODataErrors;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System;
 using System.Collections.Generic;
 using Microsoft.Data.SqlClient;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using UnitTests.FakeLoaderClasses;
 using WebJob.Office365ActivityImporter.Engine;
 using WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot;
+using WebJob.Office365ActivityImporter.Engine.ActivityAPI.Persistence;
 using WebJob.Office365ActivityImporter.Engine.Entities.Serialisation;
 
 namespace Tests.UnitTests
@@ -240,6 +243,524 @@ namespace Tests.UnitTests
         {
             new CopilotAuditEventManager((ICopilotStagingWriter)null, new FakeCopilotMetadataLoader(), NullLogger.Instance);
         }
+
+        #region Transient Graph failures during enrichment (B4)
+
+        /// <summary>
+        /// Meeting and file lookups that fail <c>FailuresLeft</c> times with the given exception, then succeed.
+        /// </summary>
+        private sealed class FlakyCopilotMetadataLoader : ICopilotMetadataLoader
+        {
+            private readonly Func<Exception> _failure;
+            public int FailuresLeft;
+            public int MeetingCalls;
+            public int FileCalls;
+            public string Subject = "Contoso weekly sync";
+
+            public FlakyCopilotMetadataLoader(int failures, Func<Exception> failure)
+            {
+                FailuresLeft = failures;
+                _failure = failure;
+            }
+
+            public Task<string> GetUserIdFromUpn(string userPrincipalName) => Task.FromResult("00000000-0000-0000-0000-000000000000");
+
+            public Task<MeetingMetadata> GetMeetingInfo(string meetingId, string userGuid)
+            {
+                MeetingCalls++;
+                if (FailuresLeft-- > 0) throw _failure();
+                return Task.FromResult(new MeetingMetadata { MeetingId = meetingId, CreatedUTC = new DateTime(2026, 4, 1, 9, 30, 0, DateTimeKind.Utc), Subject = Subject });
+            }
+
+            public Task<SpoDocumentFileInfo> GetSpoFileInfo(string copilotId, string eventUpn)
+            {
+                FileCalls++;
+                if (FailuresLeft-- > 0) throw _failure();
+                return Task.FromResult(new SpoDocumentFileInfo
+                {
+                    Filename = "Καλημέρα κόσμε.docx",
+                    Extension = "docx",
+                    Url = FileContextId,
+                    SiteUrl = "https://contoso.sharepoint.com/sites/example"
+                });
+            }
+        }
+
+        private static Exception TransientGraphFailure() => new CopilotEnrichmentTransientException("Graph returned HTTP 503.");
+
+        private static ODataError Unavailable() => new ODataError
+        {
+            ResponseStatusCode = 503,
+            Error = new MainError { Code = "serviceNotAvailable", Message = "Synthetic Graph error" }
+        };
+
+        private static CopilotAuditEventManager NewManagerWith(InMemoryCopilotStagingWriter writer, ICopilotMetadataLoader loader, Microsoft.Extensions.Logging.ILogger logger = null)
+            => new CopilotAuditEventManager(writer, loader, logger ?? NullLogger.Instance);
+
+        /// <summary>An interaction about the file at <paramref name="url"/>, by a user the prewarm can see.</summary>
+        private static CopilotAuditLogContent ContentWithFile(string url)
+        {
+            var content = ContentWith(new Context { Id = url, Type = "SharePointFile" });
+            content.UserId = "chris@contoso.onmicrosoft.com";
+            return content;
+        }
+
+        /// <summary>
+        /// Inside the save's SQL lock a meeting lookup is made once: a transient failure saves the interaction without
+        /// its meeting, and counts it, rather than waiting with the lock held.
+        /// </summary>
+        [TestMethod]
+        public async Task CopilotEventManager_TransientMeetingLookupFailure_IsTriedOnceAndCounted()
+        {
+            var writer = new InMemoryCopilotStagingWriter();
+            var loader = new FlakyCopilotMetadataLoader(1, TransientGraphFailure);
+            var manager = NewManagerWith(writer, loader);
+
+            await manager.SaveSingleCopilotEventToSqlStaging(ContentWith(Meeting()), NewEvent());
+
+            Assert.AreEqual(1, loader.MeetingCalls, "No retry inside the save lock.");
+            Assert.AreEqual(0, writer.TeamsRows.Count);
+            Assert.AreEqual(1, writer.ChatOnlyRows.Count, "The interaction is still saved.");
+            Assert.AreEqual(1, manager.UnenrichedAfterTransientFailureCount);
+        }
+
+        [TestMethod]
+        public async Task CopilotEventManager_PersistentTransientFileLookupFailure_IsTriedOnceCountedAndReported()
+        {
+            var writer = new InMemoryCopilotStagingWriter();
+            var loader = new FlakyCopilotMetadataLoader(int.MaxValue, TransientGraphFailure);
+            var logger = new Tests.UnitTests.FakeLoaderClasses.RecordingLogger();
+            var manager = NewManagerWith(writer, loader, logger);
+
+            await manager.SaveSingleCopilotEventToSqlStaging(ContentWith(File()), NewEvent());
+
+            Assert.AreEqual(1, loader.FileCalls, "No retry inside the save lock.");
+            Assert.AreEqual(1, writer.ChatOnlyRows.Count, "The interaction is still saved.");
+            Assert.AreEqual(1, manager.UnenrichedAfterTransientFailureCount);
+
+            await manager.CommitAllChanges();
+
+            var summary = logger.Entries.Where(e => e.Level == LogLevel.Warning && e.Message.StartsWith("Copilot enrichment:")).ToList();
+            Assert.AreEqual(1, summary.Count, "Interactions saved without their enrichment must be visible to operators.");
+            StringAssert.Contains(summary[0].Message, "1 interaction(s)");
+            Assert.AreEqual(0, manager.UnenrichedAfterTransientFailureCount, "The count is per batch.");
+        }
+
+        /// <summary>
+        /// Through the real Graph loader. The save holds the process-wide SQL lock while it stages, so it must never
+        /// wait: each file lookup is made once, however many fail transiently, and none of the run's retries is spent.
+        /// </summary>
+        [TestMethod]
+        public async Task CopilotEventManager_InTheSaveLock_TransientFileLookupsAreTriedOnceWithoutWaiting()
+        {
+            var graph = new Tests.UnitTests.FakeLoaderClasses.FakeSpoGraphClient { OnGetDriveItemByUrl = url => throw Unavailable() };
+            var loader = new GraphFileMetadataLoader(graph, NullLogger.Instance);
+            var waits = 0;
+            loader.RetryDelay = delay => { waits++; return Task.CompletedTask; };
+            var writer = new InMemoryCopilotStagingWriter();
+            var manager = NewManagerWith(writer, loader);
+            const int events = 5;
+
+            for (var i = 0; i < events; i++)
+            {
+                await manager.SaveSingleCopilotEventToSqlStaging(ContentWith(File()), NewEvent());
+            }
+
+            Assert.AreEqual(0, waits, "No back-off while the save lock is held.");
+            Assert.AreEqual(events, graph.GetDriveItemByUrlCalls, "One attempt per lookup.");
+            Assert.AreEqual(0, loader.TransientRetriesSpent);
+            Assert.AreEqual(events, manager.UnenrichedAfterTransientFailureCount);
+            Assert.AreEqual(events, writer.SharePointRows.Count + writer.ChatOnlyRows.Count, "Every interaction is still saved.");
+        }
+
+        /// <summary>
+        /// The retries happen in the prewarm, outside the save lock: a lookup that fails transiently once or twice still
+        /// resolves there, and the save then finds the file cached, with no Graph call or wait of its own.
+        /// </summary>
+        [DataTestMethod]
+        [DataRow(1)]
+        [DataRow(2)]
+        public async Task Prewarm_TransientFileLookup_IsRetriedOutsideTheLockAndTheSaveFindsItCached(int failures)
+        {
+            var failuresLeft = failures;
+            var graph = new Tests.UnitTests.FakeLoaderClasses.FakeSpoGraphClient
+            {
+                OnGetDriveItemByUrl = url => failuresLeft-- > 0 ? throw Unavailable() : new Microsoft.Graph.Models.DriveItem { WebUrl = url }
+            };
+            var loader = new GraphFileMetadataLoader(graph, NullLogger.Instance);
+            var waits = 0;
+            loader.RetryDelay = delay => { waits++; return Task.CompletedTask; };
+            var content = ContentWithFile(FileContextId);
+
+            await new CopilotMetadataPrewarmer(new Tests.UnitTests.FakeLoaderClasses.FakeCopilotMetadataLoaderFactory(loader), NullLogger.Instance)
+                .GetLoaderAndPrewarmAsync(new[] { content }, true);
+
+            Assert.AreEqual(failures, waits, "The prewarm waited before each retry.");
+            Assert.AreEqual(failures + 1, graph.GetDriveItemByUrlCalls);
+
+            var writer = new InMemoryCopilotStagingWriter();
+            var manager = NewManagerWith(writer, loader);
+            await manager.SaveSingleCopilotEventToSqlStaging(content, NewEvent());
+
+            Assert.AreEqual(failures + 1, graph.GetDriveItemByUrlCalls, "The save found the file cached.");
+            Assert.AreEqual(failures, waits, "And did not wait.");
+            Assert.AreEqual("καλημέρα.docx", writer.SharePointRows.Single().FileName);
+            Assert.AreEqual(0, manager.UnenrichedAfterTransientFailureCount);
+        }
+
+        /// <summary>
+        /// Under sustained throttling the retries must be bounded per RUN. Each batch has its own save session and
+        /// manager, so a per-batch budget started again with every batch - hundreds a cycle at 200k-user scale. The
+        /// shared loader's budget runs out once and says so once; after that every lookup is tried once.
+        /// </summary>
+        [TestMethod]
+        public async Task Prewarm_SustainedTransientFailures_SpendAtMostTheRunsRetryBudgetAcrossBatches()
+        {
+            var sharesCalls = 0;
+            var graph = new Tests.UnitTests.FakeLoaderClasses.FakeSpoGraphClient
+            {
+                OnGetDriveItemByUrl = url => { Interlocked.Increment(ref sharesCalls); throw Unavailable(); }
+            };
+            var logger = new Tests.UnitTests.FakeLoaderClasses.RecordingLogger();
+            var loader = new GraphFileMetadataLoader(graph, logger);
+            var waits = 0;
+            loader.RetryDelay = delay => { Interlocked.Increment(ref waits); return Task.CompletedTask; };
+            var prewarmer = new CopilotMetadataPrewarmer(new Tests.UnitTests.FakeLoaderClasses.FakeCopilotMetadataLoaderFactory(loader), NullLogger.Instance);
+            const int batches = 4, filesPerBatch = 20;
+            var unenriched = 0;
+
+            for (var batch = 0; batch < batches; batch++)
+            {
+                var contents = Enumerable.Range(0, filesPerBatch)
+                    .Select(i => ContentWithFile($"https://contoso.sharepoint.com/sites/example/Shared Documents/Καλημέρα κόσμε {batch}-{i}.docx"))
+                    .ToList();
+                await prewarmer.GetLoaderAndPrewarmAsync(contents, true);
+
+                var manager = NewManagerWith(new InMemoryCopilotStagingWriter(), loader);
+                foreach (var content in contents)
+                {
+                    await manager.SaveSingleCopilotEventToSqlStaging(content, NewEvent());
+                }
+                unenriched += manager.UnenrichedAfterTransientFailureCount;
+                await manager.CommitAllChanges();
+            }
+
+            const int lookups = batches * filesPerBatch;
+            Assert.AreEqual(GraphFileMetadataLoader.TransientRetryBudgetPerRun, waits, "Retries are bounded per run, not per batch.");
+            Assert.AreEqual(GraphFileMetadataLoader.TransientRetryBudgetPerRun, loader.TransientRetriesSpent);
+            Assert.AreEqual(2 * lookups + GraphFileMetadataLoader.TransientRetryBudgetPerRun, sharesCalls,
+                "One attempt in the prewarm and one in the save per lookup, plus the run's retries.");
+            Assert.AreEqual(lookups, unenriched, "Every interaction saved without its file is counted.");
+            Assert.AreEqual(1, logger.Entries.Count(e => e.Level == LogLevel.Warning && e.Message.StartsWith("Copilot file enrichment:")),
+                "The spent budget is reported once.");
+        }
+
+        [TestMethod]
+        public async Task CopilotEventManager_NonTransientLookupFailure_IsNotRetriedOrCountedAsTransient()
+        {
+            var writer = new InMemoryCopilotStagingWriter();
+            var loader = new FlakyCopilotMetadataLoader(int.MaxValue, () => new InvalidOperationException("Not a transient failure"));
+            var manager = NewManagerWith(writer, loader);
+
+            await manager.SaveSingleCopilotEventToSqlStaging(ContentWith(Meeting()), NewEvent());
+
+            Assert.AreEqual(1, loader.MeetingCalls);
+            Assert.AreEqual(1, writer.ChatOnlyRows.Count);
+            Assert.AreEqual(0, manager.UnenrichedAfterTransientFailureCount);
+        }
+
+        /// <summary>
+        /// Kiota throws a plain ApiException, not an ODataError, when an error response has no body it can parse. A 429
+        /// or a 5xx is still transient by its status code, so the interaction saved without its meeting is counted.
+        /// </summary>
+        [DataTestMethod]
+        [DataRow(429)]
+        [DataRow(503)]
+        public async Task CopilotEventManager_TransientApiExceptionWithoutABody_IsCounted(int status)
+        {
+            var writer = new InMemoryCopilotStagingWriter();
+            var loader = new FlakyCopilotMetadataLoader(int.MaxValue,
+                () => new Microsoft.Kiota.Abstractions.ApiException("No error body") { ResponseStatusCode = status });
+            var manager = NewManagerWith(writer, loader);
+
+            await manager.SaveSingleCopilotEventToSqlStaging(ContentWith(Meeting()), NewEvent());
+
+            Assert.AreEqual(1, writer.ChatOnlyRows.Count, "The interaction is still saved.");
+            Assert.AreEqual(1, manager.UnenrichedAfterTransientFailureCount);
+        }
+
+        /// <summary>
+        /// Through the real Graph loader: whatever the Graph error, the save makes one lookup and never waits. Only
+        /// throttling and server errors count as an interaction saved without its file after a transient failure.
+        /// </summary>
+        [DataTestMethod]
+        [DataRow(400, false)]
+        [DataRow(409, false)]
+        [DataRow(410, false)]
+        [DataRow(429, true)]
+        [DataRow(503, true)]
+        public async Task CopilotEventManager_FileLookupGraphError_IsTriedOnceAndCountedOnlyWhenTransient(int status, bool transient)
+        {
+            var graph = new Tests.UnitTests.FakeLoaderClasses.FakeSpoGraphClient
+            {
+                OnGetDriveItemByUrl = url => throw new ODataError
+                {
+                    ResponseStatusCode = status,
+                    Error = new MainError { Code = "synthetic", Message = "Synthetic Graph error" }
+                }
+            };
+            var loader = new GraphFileMetadataLoader(graph, NullLogger.Instance);
+            var waits = 0;
+            loader.RetryDelay = delay => { waits++; return Task.CompletedTask; };
+            var writer = new InMemoryCopilotStagingWriter();
+            var manager = NewManagerWith(writer, loader);
+
+            await manager.SaveSingleCopilotEventToSqlStaging(ContentWith(File()), NewEvent());
+
+            Assert.AreEqual(1, graph.GetDriveItemByUrlCalls);
+            Assert.AreEqual(0, waits);
+            Assert.AreEqual(transient ? 1 : 0, manager.UnenrichedAfterTransientFailureCount);
+            Assert.AreEqual(1, writer.SharePointRows.Count + writer.ChatOnlyRows.Count, "The interaction is saved either way.");
+        }
+        [TestMethod]
+        public async Task CopilotEventManager_LongMeetingSubject_IsStagedWithinTheColumnWithoutSplittingASurrogatePair()
+        {
+            var writer = new InMemoryCopilotStagingWriter();
+            // 99 characters, then an emoji (a surrogate pair) straddling online_meetings.name's 100-character limit.
+            var subject = new string('Κ', 99) + "\U0001F600" + " Contoso planning review";
+            var loader = new FlakyCopilotMetadataLoader(0, TransientGraphFailure) { Subject = subject };
+
+            await NewManagerWith(writer, loader).SaveSingleCopilotEventToSqlStaging(ContentWith(Meeting()), NewEvent());
+
+            Assert.AreEqual(new string('Κ', 99), writer.TeamsRows.Single().MeetingName);
+        }
+
+        #endregion
+
+        #region Teams meeting merge (B1)
+
+        [TestMethod]
+        public async Task TeamsMeetingMerge_SameMeetingInTwoBatches_IsStoredOnceAndLinkedToEachInteraction()
+        {
+            var meeting = NewMeeting();
+            using (var con = new SqlConnection(_config.ConnectionStrings.DatabaseConnectionString))
+            {
+                con.Open();
+                var first = InsertAuditEventForNewUser(con);
+                var second = InsertAuditEventForNewUser(con);
+                try
+                {
+                    // Each in its own commit, like two import batches. Before the fix the second stored the meeting
+                    // again and its link matched both copies: a primary-key violation that failed every retry.
+                    await CommitTeams(MeetingRow(first.EventId, meeting, "Contoso release sync"));
+                    await CommitTeams(MeetingRow(second.EventId, meeting, "Contoso release sync"));
+
+                    var meetingRows = MeetingRowIds(con, meeting.MeetingId);
+                    Assert.AreEqual(1, meetingRows.Count, "One meeting is one online_meetings row.");
+                    Assert.AreEqual(meetingRows[0], SingleLinkedMeetingRow(con, first.EventId));
+                    Assert.AreEqual(meetingRows[0], SingleLinkedMeetingRow(con, second.EventId));
+                }
+                finally
+                {
+                    DeleteMeetingTestRows(con, meeting.MeetingId, first, second);
+                }
+            }
+        }
+
+        [TestMethod]
+        public async Task TeamsMeetingMerge_SubjectLongerThanTheColumn_IsTrimmedAndLinked()
+        {
+            var meeting = NewMeeting();
+            var longSubject = string.Concat(Enumerable.Repeat("Καλημέρα κόσμε ", 8));    // 120 characters
+            Assert.AreEqual(120, longSubject.Length);
+            using (var con = new SqlConnection(_config.ConnectionStrings.DatabaseConnectionString))
+            {
+                con.Open();
+                var interaction = InsertAuditEventForNewUser(con);
+                try
+                {
+                    await CommitTeams(MeetingRow(interaction.EventId, meeting, longSubject));
+
+                    var meetingRows = MeetingRowIds(con, meeting.MeetingId);
+                    Assert.AreEqual(1, meetingRows.Count);
+                    Assert.AreEqual(longSubject.Substring(0, 100), Scalar(con, "SELECT name FROM dbo.online_meetings WHERE id = @id", ("@id", meetingRows[0])));
+                    Assert.AreEqual(meetingRows[0], SingleLinkedMeetingRow(con, interaction.EventId));
+                }
+                finally
+                {
+                    DeleteMeetingTestRows(con, meeting.MeetingId, interaction);
+                }
+            }
+        }
+
+        [TestMethod]
+        public async Task TeamsMeetingMerge_MeetingAlreadyStoredTwice_LinksToTheOldestRowAndAddsNoMore()
+        {
+            var meeting = NewMeeting();
+            using (var con = new SqlConnection(_config.ConnectionStrings.DatabaseConnectionString))
+            {
+                con.Open();
+                var interaction = InsertAuditEventForNewUser(con);
+                try
+                {
+                    // Two copies of one meeting, as older builds stored it.
+                    for (var i = 0; i < 2; i++)
+                    {
+                        Execute(con, "INSERT INTO dbo.online_meetings (created, meeting_id, name) VALUES (CAST(@created AS datetime), @meetingId, @name);",
+                            ("@created", meeting.Created), ("@meetingId", meeting.MeetingId), ("@name", "Contoso release sync"));
+                    }
+                    var seeded = MeetingRowIds(con, meeting.MeetingId);
+
+                    await CommitTeams(MeetingRow(interaction.EventId, meeting, "Contoso release sync"));
+
+                    CollectionAssert.AreEqual(seeded, MeetingRowIds(con, meeting.MeetingId), "No further copy may be stored.");
+                    Assert.AreEqual(seeded.Min(), SingleLinkedMeetingRow(con, interaction.EventId), "The interaction links to the oldest copy, once.");
+                }
+                finally
+                {
+                    DeleteMeetingTestRows(con, meeting.MeetingId, interaction);
+                }
+            }
+        }
+
+        /// <summary>
+        /// The Teams merge used to run before the chat-only one, so a failure in it (meeting enrichment) kept the
+        /// batch's plain interactions from being saved at all.
+        /// </summary>
+        [TestMethod]
+        public async Task SqlCopilotStagingWriter_TeamsMergeFailure_DoesNotStopChatOnlyInteractionsBeingSaved()
+        {
+            var meeting = NewMeeting();
+            var logger = new Tests.UnitTests.FakeLoaderClasses.RecordingLogger();
+            using (var con = new SqlConnection(_config.ConnectionStrings.DatabaseConnectionString))
+            {
+                con.Open();
+                var chat = InsertAuditEventForNewUser(con);
+                var orphanEventId = Guid.NewGuid();      // no audit event: the Teams merge fails on its foreign key
+                try
+                {
+                    var writer = new SqlCopilotStagingWriter(_config.ConnectionStrings.DatabaseConnectionString, logger);
+                    writer.StageTeams(MeetingRow(orphanEventId, meeting, "Contoso release sync"));
+                    writer.StageChatOnly(new ChatOnlyCopilotLogTempEntity { EventId = chat.EventId, AppHost = "Teams" });
+
+                    await Assert.ThrowsExceptionAsync<DataUtils.Sql.BatchSaveException>(() => writer.CommitAllChanges(),
+                        "The batch must still fail, so it is retried.");
+
+                    Assert.AreEqual(1, Convert.ToInt32(Scalar(con, "SELECT COUNT(*) FROM dbo.copilot_chats WHERE event_id = @id", ("@id", chat.EventId))),
+                        "The chat-only interaction must be saved even though the Teams merge failed.");
+                }
+                finally
+                {
+                    DeleteMeetingTestRows(con, meeting.MeetingId, chat);
+                }
+            }
+        }
+
+        private sealed class TestMeeting
+        {
+            public string MeetingId;
+            public DateTime Created;
+        }
+
+        private sealed class TestAuditEvent
+        {
+            public Guid EventId;
+            public string Upn;
+        }
+
+        /// <summary>A unique meeting id, created at a time with 7 fractional digits - which datetime can't hold.</summary>
+        private static TestMeeting NewMeeting() => new TestMeeting
+        {
+            MeetingId = "MSo" + Guid.NewGuid().ToString("N"),
+            Created = new DateTime(2026, 4, 1, 9, 30, 0, DateTimeKind.Utc).AddTicks(1234567),
+        };
+
+        private static TeamsCopilotLogTempEntity MeetingRow(Guid eventId, TestMeeting meeting, string subject) => new TeamsCopilotLogTempEntity
+        {
+            EventId = eventId,
+            AppHost = "Teams",
+            MeetingId = meeting.MeetingId,
+            MeetingCreatedUTC = meeting.Created,
+            MeetingName = subject
+        };
+
+        private async Task CommitTeams(TeamsCopilotLogTempEntity row)
+        {
+            var writer = new SqlCopilotStagingWriter(_config.ConnectionStrings.DatabaseConnectionString, NullLogger.Instance);
+            writer.StageTeams(row);
+            await writer.CommitAllChanges();
+        }
+
+        private static TestAuditEvent InsertAuditEventForNewUser(SqlConnection con)
+        {
+            var interaction = new TestAuditEvent { EventId = Guid.NewGuid(), Upn = $"meeting-merge-{Guid.NewGuid():N}@contoso.onmicrosoft.com" };
+            InsertAuditEvent(con, interaction.EventId, interaction.Upn);
+            return interaction;
+        }
+
+        private static List<int> MeetingRowIds(SqlConnection con, string meetingId)
+        {
+            var ids = new List<int>();
+            using (var cmd = new SqlCommand("SELECT id FROM dbo.online_meetings WHERE meeting_id = @meetingId ORDER BY id;", con))
+            {
+                cmd.Parameters.AddWithValue("@meetingId", meetingId);
+                using (var reader = cmd.ExecuteReader())
+                {
+                    while (reader.Read()) ids.Add(reader.GetInt32(0));
+                }
+            }
+            return ids;
+        }
+
+        private static int SingleLinkedMeetingRow(SqlConnection con, Guid eventId)
+        {
+            var ids = new List<int>();
+            using (var cmd = new SqlCommand("SELECT meeting_id FROM dbo.copilot_event_meetings WHERE copilot_chat_id = @eventId;", con))
+            {
+                cmd.Parameters.AddWithValue("@eventId", eventId);
+                using (var reader = cmd.ExecuteReader())
+                {
+                    while (reader.Read()) ids.Add(reader.GetInt32(0));
+                }
+            }
+            Assert.AreEqual(1, ids.Count, "An interaction links to exactly one meeting row.");
+            return ids[0];
+        }
+
+        private static object Scalar(SqlConnection con, string sql, params (string Name, object Value)[] parameters)
+        {
+            using (var cmd = new SqlCommand(sql, con))
+            {
+                foreach (var p in parameters) cmd.Parameters.AddWithValue(p.Name, p.Value);
+                return cmd.ExecuteScalar();
+            }
+        }
+
+        private static void Execute(SqlConnection con, string sql, params (string Name, object Value)[] parameters)
+        {
+            using (var cmd = new SqlCommand(sql, con))
+            {
+                foreach (var p in parameters) cmd.Parameters.AddWithValue(p.Name, p.Value);
+                cmd.ExecuteNonQuery();
+            }
+        }
+
+        private static void DeleteMeetingTestRows(SqlConnection con, string meetingId, params TestAuditEvent[] interactions)
+        {
+            foreach (var interaction in interactions)
+            {
+                Execute(con, @"
+DELETE FROM dbo.copilot_event_meetings WHERE copilot_chat_id = @eventId;
+DELETE FROM dbo.copilot_chats WHERE event_id = @eventId;
+DELETE FROM dbo.audit_events WHERE id = @eventId;
+DELETE FROM dbo.users WHERE user_name = @upn;", ("@eventId", interaction.EventId), ("@upn", interaction.Upn));
+            }
+            Execute(con, @"
+DELETE l FROM dbo.copilot_event_meetings l INNER JOIN dbo.online_meetings m ON m.id = l.meeting_id WHERE m.meeting_id = @meetingId;
+DELETE FROM dbo.online_meetings WHERE meeting_id = @meetingId;", ("@meetingId", meetingId));
+        }
+
+        #endregion
 
         [TestMethod]
         public async Task SqlCopilotStagingWriter_CommitAllChanges_ClearsAllThreeStagedBatches()

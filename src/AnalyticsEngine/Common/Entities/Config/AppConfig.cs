@@ -56,6 +56,11 @@ namespace Common.Entities.Config
                 ? daysBeforeNowToDownload
                 : 6;
 
+            // How far back the Graph daily usage reports look. Separate from DaysBeforeNowToDownload, which sizes the
+            // audit (Management Activity API) window: Graph keeps about 28 days of usage-report detail, and a day that
+            // falls out of a 6-day window before its import succeeds can never be fetched again.
+            this.UsageReportsDaysBack = ParseUsageReportsDaysBack(ConfigurationManager.AppSettings.Get("UsageReportsDaysBack"));
+
             // Resolve Copilot file/meeting metadata from Graph. Default true so behaviour is unchanged unless
             // a tenant opts out. (The Power Platform workload is toggled separately on ImportJobSettings.)
             this.ResolveCopilotResourceMetadata = bool.TryParse(ConfigurationManager.AppSettings.Get("ResolveCopilotResourceMetadata"), out var resolveCopilotResourceMetadata)
@@ -406,6 +411,32 @@ namespace Common.Entities.Config
         public string ContentTypesString { get; set; }
 
         public int DaysBeforeNowToDownload { get; set; }
+
+        /// <summary>Default for <see cref="UsageReportsDaysBack"/>: a few days inside the ~28 Graph retains.</summary>
+        public const int DefaultUsageReportsDaysBack = 25;
+
+        /// <summary>Graph only answers usage-report dates within about the last 28 days.</summary>
+        public const int MaxUsageReportsDaysBack = 28;
+
+        /// <summary>
+        /// How many days back the Graph daily usage reports (Teams, Outlook, OneDrive, SharePoint, Yammer, apps and
+        /// platforms) are requested. Independent of <see cref="DaysBeforeNowToDownload"/>, the audit-log window. Set with
+        /// the <c>UsageReportsDaysBack</c> AppSetting; a missing, invalid or non-positive value uses
+        /// <see cref="DefaultUsageReportsDaysBack"/>, and anything above <see cref="MaxUsageReportsDaysBack"/> is capped.
+        /// Once a report has completed, the days it stored that Graph no longer changes are skipped, so the whole window
+        /// is downloaded only on a report's first run - or again after a save that failed part-way.
+        /// </summary>
+        public int UsageReportsDaysBack { get; set; } = DefaultUsageReportsDaysBack;
+
+        private static int ParseUsageReportsDaysBack(string raw)
+        {
+            if (!int.TryParse(raw, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var days) || days <= 0)
+            {
+                return DefaultUsageReportsDaysBack;
+            }
+
+            return Math.Min(days, MaxUsageReportsDaysBack);
+        }
 
         /// <summary>
         /// Resolve Copilot file + meeting resource metadata from the Graph (file name/site, meeting

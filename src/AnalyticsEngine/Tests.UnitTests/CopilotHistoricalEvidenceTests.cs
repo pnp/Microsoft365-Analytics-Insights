@@ -197,8 +197,11 @@ WHERE r.copilot_chat_id = @id", new SqlParameter("@id", proven)).SingleAsync());
             using (var owner = new SqlConnection(_Connection()))
             {
                 await owner.OpenAsync();
+                // Its own batch: SQL Server compiles a batch whole, so a leftover table of another shape fails the INSERT (213) before a DROP in it runs.
+                using (var drop = new SqlCommand($"DROP TABLE IF EXISTS [{table}]", owner))
+                    await drop.ExecuteNonQueryAsync();
                 using (var create = new SqlCommand(
-                    $"DROP TABLE IF EXISTS [{table}]; CREATE TABLE [{table}] (sentinel int NOT NULL); INSERT [{table}] VALUES (42);", owner))
+                    $"CREATE TABLE [{table}] (sentinel int NOT NULL); INSERT [{table}] VALUES (42);", owner))
                     await create.ExecuteNonQueryAsync();
                 try
                 {

@@ -27,12 +27,20 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
             _groupSource = groupSource ?? throw new ArgumentNullException(nameof(groupSource));
         }
 
+        /// <summary>
+        /// Whether the last <see cref="FindGroupsWithTeamToCrawl"/> read groups but not one reported its provisioned
+        /// workloads, so no Team could be identified. The Teams section treats that as a failed run, not an empty tenant.
+        /// </summary>
+        public bool NoGroupReportedWorkloads { get; private set; }
+
         public async Task<List<Group>> FindGroupsWithTeamToCrawl(TeamsCrawlConfig filterConfig)
         {
             if (filterConfig is null)
             {
                 throw new ArgumentNullException(nameof(filterConfig));
             }
+
+            NoGroupReportedWorkloads = false;
 
             // For now we're using the V1 endpoint, but leaving the beta-endpoint code in anyway for when it becomes RTM
             bool legacyAPIMode = true;
@@ -43,6 +51,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
             if (legacyAPIMode)
             {
                 var v1Groups = await _groupSource.LoadGroupsWithProvisioningOptions();
+                var workloadsNotReported = 0;
 
                 foreach (var group in v1Groups)
                 {
@@ -58,8 +67,22 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
                     {
                         _logger.LogInformation($"Group name '{group.DisplayName}' has no Team associated.");
                     }
+                    else
+                    {
+                        // GroupTeamStatus.WorkloadsNotReported: neither crawled nor logged, as before.
+                        workloadsNotReported++;
+                    }
+                }
 
-                    // GroupTeamStatus.WorkloadsNotReported: neither crawled nor logged, as before.
+                // Microsoft 365 groups carry the property, if only as an empty array. If not one group did, the importer is
+                // almost certainly not reading it where the SDK puts it - which is how a Graph SDK upgrade once made the
+                // crawl import no Teams at all while reporting success. Say so rather than look like a tenant with no Teams.
+                if (v1Groups.Count > 0 && workloadsNotReported == v1Groups.Count)
+                {
+                    NoGroupReportedWorkloads = true;
+                    _logger.LogWarning($"Teams import: Graph returned {v1Groups.Count:N0} group(s) but none of them reported its provisioned " +
+                        $"workloads ('{TeamsCrawlRules.ResourceProvisioningOptionsProperty}'), so no Team could be identified and none will be imported " +
+                        "this cycle. Unless the tenant genuinely has no Microsoft 365 groups, this is an importer fault, not a tenant without Teams.");
                 }
             }
             else

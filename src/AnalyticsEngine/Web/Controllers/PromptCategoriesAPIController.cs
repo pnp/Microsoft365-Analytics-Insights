@@ -144,7 +144,8 @@ namespace Web.AnalyticsWeb.Controllers
             if (!_store.IsDurable) return Error(HttpStatusCode.Conflict, "storageNotConfigured");
             using (var timeout = new CancellationTokenSource(StorageTimeout))
             {
-                try { return NoStore(await _store.SaveAsync(configuration, timeout.Token)); }
+                // The body's revision is the one the administrator edited, so the save only lands on that same document.
+                try { return NoStore(await _store.SaveAsync(configuration, configuration.Revision, timeout.Token)); }
                 catch (Exception ex) { return Failure(ex, timeout); }
             }
         }
@@ -152,12 +153,12 @@ namespace Web.AnalyticsWeb.Controllers
         [HttpPost, Route("reset")]
         [RequirePortalPermission(PortalPermission.Administration)]
         [RequireSameOriginXhr]
-        public async Task<IHttpActionResult> Reset()
+        public async Task<IHttpActionResult> Reset([FromBody] PromptCategoryResetRequest request)
         {
             if (!_store.IsDurable) return Error(HttpStatusCode.Conflict, "storageNotConfigured");
             using (var timeout = new CancellationTokenSource(StorageTimeout))
             {
-                try { return NoStore(await _store.SaveAsync(PromptCategoryConfiguration.Defaults(), timeout.Token)); }
+                try { return NoStore(await _store.ResetAsync(request?.ExpectedRevision, timeout.Token)); }
                 catch (Exception ex) { return Failure(ex, timeout); }
             }
         }
@@ -190,6 +191,13 @@ namespace Web.AnalyticsWeb.Controllers
         /// </summary>
         private IHttpActionResult Failure(Exception ex, CancellationTokenSource timeout)
         {
+            if (ex is PromptCategoryConfigurationConflictException conflict)
+            {
+                // The configuration in force comes back with the refusal, so the page can show what it is now.
+                var response = Request.CreateResponse(HttpStatusCode.Conflict, new { code = "configurationChanged", configuration = conflict.Current });
+                response.Headers.CacheControl = new CacheControlHeaderValue { NoStore = true, Private = true };
+                return ResponseMessage(response);
+            }
             if (ex is ArgumentException) return Error(HttpStatusCode.BadRequest, "invalidTaxonomy");
             if (ex is PromptCategoryStoredConfigurationException) return Error(HttpStatusCode.InternalServerError, "storedConfigurationInvalid");
             if (ex is OperationCanceledException || timeout.IsCancellationRequested)
@@ -265,6 +273,17 @@ namespace Web.AnalyticsWeb.Controllers
     }
 
     public sealed class PromptCategoryVersionRow { public string Version { get; set; } }
+
+    /// <summary>Body of <c>POST api/PromptCategories/reset</c>.</summary>
+    public sealed class PromptCategoryResetRequest
+    {
+        /// <summary>
+        /// The <see cref="PromptCategoryConfiguration.Revision"/> the page showed. Null only to replace a saved configuration
+        /// that can't be read.
+        /// </summary>
+        [JsonProperty("expectedRevision")] public string ExpectedRevision { get; set; }
+    }
+
     public sealed class PromptCategoryTestRequest
     {
         [JsonProperty("prompt")] public string Prompt { get; set; }

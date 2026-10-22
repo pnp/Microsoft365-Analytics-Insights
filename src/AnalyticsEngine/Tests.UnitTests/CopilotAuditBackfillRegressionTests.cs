@@ -289,7 +289,8 @@ namespace Tests.UnitTests
             var state = await NewStateWithJobAsync();
             var job = await state.GetLatestAsync();
             job.PendingSlices = CopilotAuditBackfillSlicer.SplitIntoHours(job.PendingSlices.Single());
-            foreach (var slice in job.PendingSlices) slice.SplitLevel = 2;
+            // A truncated slice only becomes a gap once nothing narrower is left to try.
+            foreach (var slice in job.PendingSlices) slice.SplitLevel = truncated ? CopilotAuditBackfillSlicer.MaxSplitLevel : 2;
             if (!truncated) job.PendingSlices[0].AttemptCount = CopilotAuditBackfillImporter.MaxSliceAttempts - 1;
             await state.SaveAsync(job);
             var source = new FakeAuditSearchSource();
@@ -456,6 +457,56 @@ namespace Tests.UnitTests
             Assert.AreEqual(1, source.Submits);
             Assert.AreEqual(2L, job.RecordsImported);
             CollectionAssert.AreEqual(new string[] { null, "page-2" }, links);
+        }
+
+        [TestMethod]
+        public async Task Importer_TruncatedQuarterHourKeepsEveryPageAcrossRestartThenRecordsItsGapOnce()
+        {
+            var store = new InMemoryKeyValueStore();
+            var state = new CopilotAuditBackfillStateStore(store, true);
+            var start = new DateTime(2026, 10, 1, 0, 0, 0, DateTimeKind.Utc);
+            var job = await state.CreateAsync(start, start.AddMinutes(15), "admin@contoso.com");
+            // A quarter-hour produced by splitting a truncated hour: nothing narrower is left to try.
+            job.PendingSlices.Single().SplitLevel = CopilotAuditBackfillSlicer.MaxSplitLevel;
+            await state.SaveAsync(job);
+            var source = new FakeAuditSearchSource { Query = new CopilotAuditSearchQuery { Status = "succeeded", IsTruncated = true } };
+            source.Pages.Enqueue(new CopilotAuditSearchRecordPage
+            {
+                Records = new List<CopilotAuditSearchRecord> { SyntheticRecord(SyntheticId(1)) },
+                NextLink = "page-2"
+            });
+            source.Pages.Enqueue(new CopilotAuditSearchRecordPage
+            {
+                Records = new List<CopilotAuditSearchRecord> { SyntheticRecord(SyntheticId(2)) }
+            });
+            var persistence = new CountingPersistence();
+
+            job = await RegressionImporter(state, source, persistence,
+                () => source.RecordPagesRead > 0 ? CopilotAuditBackfillImporter.MaxCycleBudget : TimeSpan.Zero).AdvanceLatestAsync();
+
+            Assert.AreEqual(CopilotAuditBackfillStates.Running, job.State,
+                "A truncated query's records are read before its slice is closed, even across the cycle budget.");
+            Assert.AreEqual(0, job.Gaps.Count, "The gap is recorded once the returned pages have been read, not before.");
+            Assert.AreEqual(1L, job.RecordsImported);
+            Assert.AreEqual("page-2", job.InFlightSlices.Single().RecordsNextLink);
+
+            // A fresh store over the same state: the truncation must survive the reload, or the resumed slice
+            // would be closed as a clean, complete one.
+            job = await RegressionImporter(new CopilotAuditBackfillStateStore(store, true), source, persistence).AdvanceLatestAsync();
+
+            Assert.AreEqual(CopilotAuditBackfillStates.CompletedWithGaps, job.State);
+            Assert.AreEqual(1, source.SubmitCount, "Resuming must not resubmit the query.");
+            Assert.AreEqual(1, source.PollCount, "Resuming continues paging; it does not re-poll the query.");
+            Assert.AreEqual(2, source.RecordPagesRead);
+            Assert.AreEqual(2, persistence.CommitCount);
+            Assert.AreEqual(2L, job.RecordsImported, "Every record the truncated query returned is kept.");
+            Assert.AreEqual(0, job.SlicesCompleted, "A truncated slice is incomplete, not completed.");
+            var gap = job.Gaps.Single();
+            Assert.IsTrue(gap.Incomplete);
+            Assert.AreEqual(CopilotAuditBackfillErrorCodes.QueryTruncated, gap.ErrorCode);
+            Assert.AreEqual(start, gap.StartUtc);
+            Assert.AreEqual(start.AddMinutes(15), gap.EndUtc);
+            Assert.AreEqual(CopilotAuditBackfillErrorCodes.QueryTruncated, job.LastErrorCode);
         }
 
         [DataTestMethod]

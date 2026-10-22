@@ -12,7 +12,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
     {
         /// <summary>
         /// Load a call record and resolve its participants' email addresses, or return <c>null</c> when
-        /// the call can't be read (Graph returned nothing usable).
+        /// the call can't be read (Graph returned nothing usable). Every page of the call's sessions is read
+        /// first; if any page fails the load throws rather than returning a partial call.
         /// </summary>
         Task<CallRecordDTO> LoadCallRecord(string callId);
     }

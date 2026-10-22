@@ -10,6 +10,12 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
     {
         Task<string> GetDeltaToken(string key);
         Task SetDeltaToken(string key, string deltaToken);
+
+        /// <summary>
+        /// Forget the value stored under <paramref name="key"/>, so the next read is a full one. Used when Graph has
+        /// rejected the token: replaying it can never succeed.
+        /// </summary>
+        Task ClearDeltaToken(string key);
     }
 
     /// <summary>
@@ -30,6 +36,12 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
         public Task SetDeltaToken(string key, string deltaToken)
         {
             _tokens[key] = deltaToken;
+            return Task.CompletedTask;
+        }
+
+        public Task ClearDeltaToken(string key)
+        {
+            _tokens.TryRemove(key, out _);
             return Task.CompletedTask;
         }
     }
@@ -55,6 +67,11 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
         public async Task SetDeltaToken(string key, string deltaToken)
         {
             await _store.SetStringAsync(key, deltaToken);
+        }
+
+        public async Task ClearDeltaToken(string key)
+        {
+            await _store.DeleteAsync(key);
         }
     }
 }

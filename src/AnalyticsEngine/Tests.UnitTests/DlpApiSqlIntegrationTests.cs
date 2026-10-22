@@ -5,9 +5,12 @@ using Common.Entities.Entities.AuditLog;
 using Common.Entities.UserFilters;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System;
+using System.Data.Common;
+using System.Data.Entity.Infrastructure.Interception;
 using System.Data.Entity.Migrations;
 using Microsoft.Data.SqlClient;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using Configuration = Common.Entities.Migrations.Configuration;
 using DlpAPIController = AnalyticsWeb::Web.AnalyticsWeb.Controllers.DlpAPIController;
@@ -264,6 +267,91 @@ namespace Tests.UnitTests
             Assert.IsNotNull(summary.TopSensitivityLabels);
             Assert.IsNotNull(summary.Trend);
             Assert.IsNotNull(summary.TenantTopPolicies);
+        }
+
+        /// <summary>
+        /// The summary is a dozen or more statements run one after another, each allowed 90 seconds. Once the shared
+        /// deadline gives up on it, the statements not yet run must not still be sent to a database that is already
+        /// struggling - with or without the administrator's filter.
+        /// </summary>
+        [TestMethod]
+        public async Task Summary_OnceCancelled_SendsNoFurtherStatements()
+        {
+            foreach (var scope in new[] { null, ReportUserScope.ForUsers(new[] { 1, 2 }) })
+            {
+                var interceptor = new CancelAtStatement(_database, cancelAt: 2);
+                DbInterception.Add(interceptor);
+                try
+                {
+                    await NewController().BuildSummaryAsync(28, includeIndividuals: true, scope: scope, cancellationToken: interceptor.Token);
+                    Assert.Fail("A cancelled summary must not run to completion" + (scope == null ? "." : " under a filter."));
+                }
+                catch (Exception ex) when (IsCancellation(ex))
+                {
+                }
+                finally
+                {
+                    DbInterception.Remove(interceptor);
+                }
+
+                Assert.AreEqual(2, interceptor.StatementsBeforeCancellation, "It got as far as the statement that was cancelled.");
+                Assert.AreEqual(0, interceptor.StatementsAfterCancellation, scope == null ? "unfiltered" : "under a filter");
+            }
+        }
+
+        private static bool IsCancellation(Exception ex)
+        {
+            // EF wraps a query's cancelled command in EntityCommandExecutionException.
+            for (var current = ex; current != null; current = current.InnerException)
+            {
+                if (current is OperationCanceledException) return true;
+            }
+
+            return false;
+        }
+
+        /// <summary>Cancels its token as the summary's N-th statement starts, and counts any summary statement started after.</summary>
+        private sealed class CancelAtStatement : IDbCommandInterceptor
+        {
+            private readonly string _database;
+            private readonly int _cancelAt;
+            private readonly CancellationTokenSource _cancellation = new CancellationTokenSource();
+
+            internal CancelAtStatement(string database, int cancelAt)
+            {
+                _database = database;
+                _cancelAt = cancelAt;
+            }
+
+            internal CancellationToken Token => _cancellation.Token;
+            internal int StatementsBeforeCancellation { get; private set; }
+            internal int StatementsAfterCancellation { get; private set; }
+
+            private void Starting(DbCommand command)
+            {
+                // Only the summary's own statements: every one reads a DLP table, and the session set-up for a filter
+                // and EF's own model checks do not.
+                if (!string.Equals(command.Connection?.Database, _database, StringComparison.OrdinalIgnoreCase)
+                    || command.CommandText.IndexOf("dlp_", StringComparison.OrdinalIgnoreCase) < 0)
+                {
+                    return;
+                }
+
+                if (_cancellation.IsCancellationRequested)
+                {
+                    StatementsAfterCancellation++;
+                    return;
+                }
+
+                if (++StatementsBeforeCancellation == _cancelAt) _cancellation.Cancel();
+            }
+
+            public void ReaderExecuting(DbCommand command, DbCommandInterceptionContext<DbDataReader> interceptionContext) => Starting(command);
+            public void ScalarExecuting(DbCommand command, DbCommandInterceptionContext<object> interceptionContext) => Starting(command);
+            public void NonQueryExecuting(DbCommand command, DbCommandInterceptionContext<int> interceptionContext) => Starting(command);
+            public void ReaderExecuted(DbCommand command, DbCommandInterceptionContext<DbDataReader> interceptionContext) { }
+            public void ScalarExecuted(DbCommand command, DbCommandInterceptionContext<object> interceptionContext) { }
+            public void NonQueryExecuted(DbCommand command, DbCommandInterceptionContext<int> interceptionContext) { }
         }
 
         /// <summary>A hand-edited window snaps to an offered one rather than scanning years.</summary>

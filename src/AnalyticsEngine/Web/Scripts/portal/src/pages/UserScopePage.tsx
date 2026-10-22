@@ -36,6 +36,7 @@ import { formatUtc } from '../components/health/healthShared';
 import Spinner from '../components/Spinner';
 import { formatNumber, useT, type TranslationKey } from '../i18n';
 import type {
+  UserScopeDatabaseCounts,
   UserScopeFailureKind,
   UserScopePurgeJob,
   UserScopePurgePhase,
@@ -99,10 +100,22 @@ const JOB_ERROR_KEYS: Record<NonNullable<UserScopePurgeJob['errorCode']>, Transl
   scopeEmpty: 'admin.userScope.jobError.scopeEmpty',
   filterChanged: 'admin.userScope.jobError.filterChanged',
   filterChangedWhileRunning: 'admin.userScope.jobError.filterChangedWhileRunning',
+  purgeExceedsConfirmed: 'admin.userScope.jobError.purgeExceedsConfirmed',
+  scopeMembershipChanged: 'admin.userScope.jobError.scopeMembershipChanged',
   databaseError: 'admin.userScope.jobError.databaseError',
   stateUnavailable: 'admin.userScope.jobError.stateUnavailable',
   unexpected: 'admin.userScope.jobError.unexpected',
 };
+
+/**
+ * The server refused to start the purge because what the dialog showed is no longer true: more people are outside the
+ * scope, or the filter changed. Duck-typed on the error's stable code, so a test can mock the api module.
+ */
+function scopeChangedSinceConfirmed(error: unknown): { database: UserScopeDatabaseCounts | null } | null {
+  const candidate = error as { code?: unknown; database?: unknown } | null;
+  if (candidate?.code !== 'purgeExceedsConfirmed' && candidate?.code !== 'filterChanged') return null;
+  return { database: (candidate.database as UserScopeDatabaseCounts | null | undefined) ?? null };
+}
 
 const useStyles = makeStyles({
   header: {
@@ -544,6 +557,14 @@ export default function UserScopePage() {
 
   const latestJob = status?.latestJob ?? null;
 
+  // What the confirmation dialog asks the administrator to agree to, and what a purge is started with. If either
+  // changes while the dialog is open, the tick no longer stands for it.
+  const confirmCount = status?.database?.outOfScopeUsers ?? 0;
+  const confirmFilter = status?.filterFingerprint ?? '';
+  useEffect(() => {
+    setAcknowledged(false);
+  }, [confirmCount, confirmFilter]);
+
   useEffect(() => {
     if (!isActive(latestJob)) return undefined;
 
@@ -605,7 +626,7 @@ export default function UserScopePage() {
     setStarting(true);
     setStartError(null);
     try {
-      const job = await startUserScopePurge();
+      const job = await startUserScopePurge(confirmCount, confirmFilter);
       setStatus((current) =>
         current ? { ...current, latestJob: job, purgeUnavailableReason: isActive(job) ? 'jobActive' : null } : current,
       );
@@ -613,6 +634,14 @@ export default function UserScopePage() {
       setAcknowledged(false);
     } catch (err) {
       setStartError(err ?? new Error());
+      const changed = scopeChangedSinceConfirmed(err);
+      if (changed) {
+        // Nothing was removed. Show the numbers as they are now, and ask for those to be confirmed instead.
+        setAcknowledged(false);
+        const database = changed.database;
+        if (database) setStatus((current) => (current ? { ...current, database } : current));
+        void load(false);
+      }
     } finally {
       setStarting(false);
     }
@@ -717,7 +746,7 @@ export default function UserScopePage() {
                 checked={acknowledged}
                 onChange={(_, data) => setAcknowledged(data.checked === true)}
                 label={t('admin.userScope.confirm.acknowledge', {
-                  count: formatNumber(status?.database?.outOfScopeUsers ?? 0),
+                  count: formatNumber(confirmCount),
                 })}
               />
               {startError !== null && (
@@ -731,7 +760,7 @@ export default function UserScopePage() {
                 appearance="primary"
                 className={styles.dangerButton}
                 onClick={() => void startPurge()}
-                disabled={!acknowledged || starting}
+                disabled={!acknowledged || starting || (status?.purgeUnavailableReason ?? null) !== null}
               >
                 {starting ? t('admin.userScope.confirm.starting') : t('admin.userScope.confirm.start')}
               </Button>

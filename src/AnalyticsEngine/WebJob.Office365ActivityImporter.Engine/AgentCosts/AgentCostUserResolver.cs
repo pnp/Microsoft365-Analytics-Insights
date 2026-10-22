@@ -38,13 +38,20 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
         private readonly ILogger _logger;
         private readonly int _directoryLookupBudget;
 
+        /// <summary>
+        /// Ids the directory has said do not exist. Production passes one process-lifetime instance so the answer
+        /// survives from one cycle to the next; without one, it lasts as long as this resolver.
+        /// </summary>
+        private readonly AgentCostDirectoryMissCache _misses;
+
         public AgentCostUserResolver(IAgentCostUserLinkStore store, IEntraUserLookup directory, ILogger logger,
-            int directoryLookupBudget = DefaultDirectoryLookupBudget)
+            int directoryLookupBudget = DefaultDirectoryLookupBudget, AgentCostDirectoryMissCache misses = null)
         {
             _store = store ?? throw new ArgumentNullException(nameof(store));
             _directory = directory;
             _logger = logger;
             _directoryLookupBudget = directoryLookupBudget < 0 ? 0 : directoryLookupBudget;
+            _misses = misses ?? new AgentCostDirectoryMissCache();
         }
 
         /// <summary>
@@ -87,9 +94,17 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
             }
             else
             {
+                var directoryCalls = 0;
                 foreach (var objectId in unknown)
                 {
-                    if (fromDirectory + notInDirectory + failures >= _directoryLookupBudget)
+                    if (_misses.IsSettledMiss(objectId))
+                    {
+                        // Already asked, and the directory said there is no such user. Costs no call and no budget.
+                        notInDirectory++;
+                        continue;
+                    }
+
+                    if (directoryCalls >= _directoryLookupBudget)
                     {
                         deferred++;
                         continue;
@@ -97,13 +112,15 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
 
                     try
                     {
+                        directoryCalls++;
                         var user = await _directory.GetUserByObjectIdAsync(objectId);
 
                         if (user == null || string.IsNullOrWhiteSpace(user.UserPrincipalName))
                         {
                             // Settled: the object does not exist, or exists without a usable identity.
-                            // Retrying costs a call per cycle for ever and can never succeed.
+                            // Retrying costs a call per cycle for ever and can never succeed, so it is remembered.
                             notInDirectory++;
+                            _misses.RecordMiss(objectId);
                             continue;
                         }
 
@@ -143,7 +160,9 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
         /// </remarks>
         public async Task<AgentCostUserResolution> ResolveOutstandingAsync(int maxRows = 500)
         {
-            var outstanding = await _store.GetUnresolvedObjectIdsAsync(maxRows);
+            // Settled misses are skipped when choosing, not just when resolving: otherwise a long tail of deleted users
+            // fills the capped selection on every pass and an id that COULD be linked is never reached.
+            var outstanding = await _store.GetUnresolvedObjectIdsAsync(maxRows, _misses.IsSettledMiss);
             if (outstanding == null || outstanding.Count == 0)
             {
                 return new AgentCostUserResolution(new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase), 0, 0, 0, 0, 0);

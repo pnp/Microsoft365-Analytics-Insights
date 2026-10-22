@@ -242,6 +242,131 @@ namespace Tests.UnitTests
 
         #endregion
 
+        #region A 200 page without its value collection
+
+        private const string PageWithoutValueBody = "{\"@odata.nextLink\":\"https://graph.microsoft.com/v1.0/anything?$skiptoken=secret-skip-token\"}";
+
+        [TestMethod]
+        public async Task PageableResponse_RecordsWhetherTheValueCollectionWasThere()
+        {
+            // Through the client's own deserialiser, exactly as the pager reads every page.
+            Assert.IsTrue(await HasValueCollection("{\"value\":[{\"id\":\"1\"}]}"));
+            Assert.IsTrue(await HasValueCollection("{\"value\":[]}"), "An empty page is still a page.");
+            Assert.IsFalse(await HasValueCollection(PageWithoutValueBody), "No value collection at all.");
+            Assert.IsFalse(await HasValueCollection("{\"@odata.deltaLink\":\"https://graph.microsoft.com/v1.0/anything?$deltatoken=x\",\"value\":null}"), "\"value\": null.");
+        }
+
+        private static async Task<bool> HasValueCollection(string body)
+        {
+            using (var handler = new StubHandler(HttpStatusCode.OK, body))
+            using (var client = new ManualGraphCallClient(handler, NullLogger.Instance))
+            {
+                var page = await client.GetAsyncWithThrottleRetries<PageableGraphResponseWithDelta<JObject>>("https://graph.microsoft.com/v1.0/anything");
+                Assert.IsNotNull(page.PageResults, "Existing callers rely on PageResults never being null.");
+                return page.HasValueCollection;
+            }
+        }
+
+        [TestMethod]
+        public async Task LenientPaging_APageWithoutValue_FailsThatPage_AndNeverReachesTheDeltaLink()
+        {
+            using (var handler = new SequenceHandler(
+                Tuple.Create(HttpStatusCode.OK, PageWithNextLink("https://graph.microsoft.com/v1.0/anything?page=2")),
+                Tuple.Create(HttpStatusCode.OK, PageWithoutValueBody),
+                Tuple.Create(HttpStatusCode.OK, "{\"@odata.deltaLink\":\"https://graph.microsoft.com/v1.0/anything?$deltatoken=new\",\"value\":[{\"id\":\"3\"}]}")))
+            using (var client = new ManualGraphCallClient(handler, NullLogger.Instance))
+            {
+                var failures = new List<Tuple<HttpRequestException, int>>();
+                var deltaLinks = new List<string>();
+
+                var results = await client.LoadAllPagesPlusDeltaWithThrottleRetries<JObject>("https://graph.microsoft.com/v1.0/anything", NullLogger.Instance,
+                    deltaLink => { deltaLinks.Add(deltaLink); return Task.CompletedTask; },
+                    onPageFailed: (ex, page) => failures.Add(Tuple.Create(ex, page)));
+
+                Assert.AreEqual(1, results.Count, "Page 1's rows, as for any failed page.");
+                Assert.AreEqual(2, handler.CallCount, "Paging stops at the page that came back without its rows.");
+                Assert.AreEqual(0, deltaLinks.Count, "The deltaLink is never reached, so no checkpoint can be taken past the lost page.");
+                Assert.AreEqual(2, failures.Single().Item2);
+                Assert.AreEqual(2, ((GraphPageWithoutValueException)failures.Single().Item1).PageNumber);
+            }
+        }
+
+        [TestMethod]
+        public async Task LenientPaging_ValueNull_IsAFailedPageToo()
+        {
+            using (var handler = new StubHandler(HttpStatusCode.OK, "{\"@odata.deltaLink\":\"https://graph.microsoft.com/v1.0/anything?$deltatoken=new\",\"value\":null}"))
+            using (var client = new ManualGraphCallClient(handler, NullLogger.Instance))
+            {
+                var failedPages = new List<int>();
+                var deltaLinks = 0;
+
+                var results = await client.LoadAllPagesPlusDeltaWithThrottleRetries<JObject>("https://graph.microsoft.com/v1.0/anything", NullLogger.Instance,
+                    deltaLink => { deltaLinks++; return Task.CompletedTask; },
+                    onPageFailed: (ex, page) => failedPages.Add(page));
+
+                Assert.AreEqual(0, results.Count);
+                CollectionAssert.AreEqual(new[] { 1 }, failedPages);
+                Assert.AreEqual(0, deltaLinks, "A deltaLink on a page whose rows are unknown is not taken.");
+            }
+        }
+
+        [TestMethod]
+        public async Task StrictPaging_APageWithoutValue_Throws_NamingThePageButNotTheUrl()
+        {
+            using (var handler = new SequenceHandler(
+                Tuple.Create(HttpStatusCode.OK, PageWithNextLink("https://graph.microsoft.com/beta/reports/anything?$skiptoken=secret-skip-token")),
+                Tuple.Create(HttpStatusCode.OK, PageWithoutValueBody)))
+            using (var client = new ManualGraphCallClient(handler, NullLogger.Instance))
+            {
+                var ex = await Assert.ThrowsExceptionAsync<GraphPageWithoutValueException>(() =>
+                    client.LoadAllPagesWithThrottleRetries<JObject>("https://graph.microsoft.com/beta/reports/anything",
+                        NullLogger.Instance, throwOnNotFound: true, throwOnHttpError: true));
+
+                Assert.AreEqual(2, ex.PageNumber);
+                StringAssert.Contains(ex.Message, "page 2");
+                Assert.IsFalse(ex.Message.Contains("graph.microsoft.com") || ex.Message.Contains("secret-skip-token"), "The URL can carry a token.");
+                Assert.IsInstanceOfType(ex, typeof(HttpRequestException), "Every existing failed-page handler still catches it.");
+            }
+        }
+
+        [TestMethod]
+        public async Task Paging_ANormalMultiPageDeltaRead_IsUnchanged()
+        {
+            using (var handler = new SequenceHandler(
+                Tuple.Create(HttpStatusCode.OK, PageWithNextLink("https://graph.microsoft.com/v1.0/anything?page=2")),
+                Tuple.Create(HttpStatusCode.OK, "{\"@odata.deltaLink\":\"https://graph.microsoft.com/v1.0/anything?$deltatoken=new\",\"value\":[{\"id\":\"2\"}]}")))
+            using (var client = new ManualGraphCallClient(handler, NullLogger.Instance))
+            {
+                var deltaLinks = new List<string>();
+                var failures = 0;
+
+                var results = await client.LoadAllPagesPlusDeltaWithThrottleRetries<JObject>("https://graph.microsoft.com/v1.0/anything", NullLogger.Instance,
+                    deltaLink => { deltaLinks.Add(deltaLink); return Task.CompletedTask; },
+                    throwOnHttpError: true, onPageFailed: (ex, page) => failures++);
+
+                Assert.AreEqual(2, results.Count);
+                CollectionAssert.AreEqual(new[] { "https://graph.microsoft.com/v1.0/anything?$deltatoken=new" }, deltaLinks);
+                Assert.AreEqual(0, failures);
+            }
+        }
+
+        /// <summary>The strict usage-report callers: a page without its rows fails the day rather than recording it short.</summary>
+        [TestMethod]
+        public async Task DailyActivityLoader_PageWithoutValue_Throws_InsteadOfRecordingAPartialDay()
+        {
+            using (var handler = new StubHandler(HttpStatusCode.OK, PageWithoutValueBody))
+            using (var client = new ManualGraphCallClient(handler, NullLogger.Instance))
+            {
+                var loader = new OutlookUserActivityLoader(client, Common.Entities.UserScope.UserImportScope.Unfiltered, NullLogger.Instance);
+
+                await Assert.ThrowsExceptionAsync<GraphPageWithoutValueException>(() => loader.PopulateLoadedReportPagesFromGraph(1));
+
+                Assert.AreEqual(0, loader.LoadedReportPages.Count, "A day whose rows are unknown must NOT be recorded as loaded.");
+            }
+        }
+
+        #endregion
+
         #region The Copilot report source opts in
 
         [TestMethod]

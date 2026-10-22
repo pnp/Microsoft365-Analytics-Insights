@@ -1,4 +1,5 @@
 using Common.Entities;
+using Common.Entities.Models;
 using DataUtils;
 using Microsoft.Graph;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
@@ -8,15 +9,46 @@ using System.Collections.Generic;
 using System.Data.Entity;
 using System.Linq;
 using System.Threading.Tasks;
+using Tests.UnitTests.FakeLoaderClasses;
 using Tests.UnitTests.Properties;
+using UnitTests.FakeLoaderClasses;
 using WebJob.Office365ActivityImporter.Engine.Entities.Serialisation;
 using WebJob.Office365ActivityImporter.Engine.Graph;
+using WebJob.Office365ActivityImporter.Engine.Graph.Calls;
 
 namespace Tests.UnitTests
 {
     [TestClass]
     public class CallRecordTests
     {
+        /// <summary>
+        /// Against LocalDB, through the production loader and store: a call with more sessions than Graph puts on one
+        /// page (60) is saved with every session from every page, and the attendee who is only on the second page - the
+        /// one person on it in UserGroupsFilter - is stored as themselves. Reading only the first page skipped the call.
+        /// </summary>
+        [TestMethod]
+        public async Task CallRecordWithTwoPagesOfSessions_SavesEverySession()
+        {
+            var call = new SyntheticMultiPageCall();
+            var logger = AnalyticsLogger.ConsoleOnlyTracer();
+            var importer = new CallRecordImporter(SyntheticMultiPageCall.CreateSourceLoader(call.CreateGraph()), new SqlCallRecordPersistenceManager(logger), logger,
+                TestUserScopes.Provider(TestUserScopes.Of(call.LateAttendeeUpn)));
+
+            await importer.ImportFromNotification(new GraphChangeNotification { ResourceData = new ResourceData { Id = call.CallId } });
+
+            using (var db = new AnalyticsEntitiesContext())
+            {
+                var attendees = await db.CallSessions
+                    .Where(s => s.ParentRecord.GraphID == call.CallId)
+                    .Select(s => s.Attendee.UserPrincipalName)
+                    .ToListAsync();
+
+                Assert.AreEqual(call.TotalSessions, attendees.Count, "Every session, from both pages, is saved.");
+                Assert.AreEqual(1, attendees.Count(upn => upn == call.LateAttendeeUpn), "The in-scope attendee from the second page is stored as themselves.");
+                Assert.AreEqual(call.TotalSessions - 1, attendees.Count(upn => upn == "Unknown User"), "Everyone else is outside the scope.");
+            }
+        }
+
         // Verify call & feedback counts
         [TestMethod]
         public async Task CallRecordSaveTests()

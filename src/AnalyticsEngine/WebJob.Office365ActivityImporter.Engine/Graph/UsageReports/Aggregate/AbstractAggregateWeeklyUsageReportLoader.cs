@@ -42,32 +42,65 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Aggregate
         protected abstract Task AddItemToSaveList(T item);
         protected abstract Task CommitAllChanges();
 
+        /// <summary>How many rows Graph returned on the last <see cref="LoadReportData"/>, before any subclass dropped unusable ones.</summary>
+        public int LastLoadRowCount { get; private set; }
+
+        /// <summary>
+        /// The newest refresh date among the rows Graph returned on the last <see cref="LoadReportData"/> - unusable rows
+        /// included, because it says when the next refresh can be published whether or not any row could be saved.
+        /// </summary>
+        public DateTime? LastLoadLatestRefreshDate { get; private set; }
+
         public virtual async Task<IEnumerable<T>> LoadReportData()
         {
+            LastLoadRowCount = 0;
+            LastLoadLatestRefreshDate = null;
+
             var requestUrl = ReportGraphURL;
 
             var allStats = new List<T>();
 
-            // Keep loading until we run out of pages
+            // Keep loading until we run out of pages. Strict: a page that cannot be read fails the whole report for this
+            // cycle, before anything is saved, so the caller records it as failed and it is retried next cycle.
             int pageCount = 0;
             while (requestUrl != null)
             {
                 pageCount++;
                 var reportPage = await LoadReportDataForUrl(requestUrl);
-                if (reportPage != null)
+
+                // A 200 whose body was empty or not JSON comes back null (ManualGraphCallClient logs the body). This used
+                // to log a warning and request the same URL again, for ever - hanging the import cycle and hammering Graph.
+                // A page without its "value" collection is no more usable: its rows are unknown, not absent. Neither
+                // message names the URL, which carries a paging $skiptoken.
+                if (reportPage == null)
                 {
-                    if (reportPage.HasNextLink)
-                    {
-                        Telemetry.LogInformation($"Loading next page from '{reportPage.NextLink}'");
-                    }
-                    requestUrl = reportPage.NextLink;
-                    allStats.AddRange(reportPage.Stats);
+                    throw new InvalidOperationException($"{ReportName}: Graph returned page {pageCount} of the report in a form that could not be read. " +
+                        "Nothing from this report was saved; it is retried on a later cycle.");
                 }
-                else
+                if (reportPage.Stats == null)
                 {
-                    Telemetry.LogWarning($"No items loaded from {requestUrl}");
+                    throw new InvalidOperationException($"{ReportName}: page {pageCount} of the report came back from Graph without its \"value\" collection. " +
+                        "Nothing from this report was saved; it is retried on a later cycle.");
+                }
+
+                if (reportPage.HasNextLink)
+                {
+                    Telemetry.LogInformation($"Loading next page from '{reportPage.NextLink}'");
+                }
+                requestUrl = reportPage.NextLink;
+                allStats.AddRange(reportPage.Stats);
+            }
+
+            LastLoadRowCount = allStats.Count;
+            foreach (var row in allStats)
+            {
+                if (row != null && row.TryGetReportRefreshDate(out var refreshDate)
+                    && (!LastLoadLatestRefreshDate.HasValue || refreshDate > LastLoadLatestRefreshDate.Value))
+                {
+                    LastLoadLatestRefreshDate = refreshDate;
                 }
             }
+
             Telemetry.LogInformation($"Loaded {allStats.Count} items for '{ReportName}' across {pageCount} pages");
             return allStats;
         }
@@ -82,9 +115,11 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Aggregate
             Telemetry.LogInformation($"Loading {GetType().Name} and saving reports refreshed on a {uptoDay}");
 
             var report = await LoadReportData();
-            Telemetry.LogInformation($"Loaded {report.Count()} items for {ReportName} reports");
+            var usable = report as IReadOnlyList<T> ?? report.ToList();
+            Telemetry.LogInformation($"Loaded {usable.Count} usable item(s), of {Math.Max(LastLoadRowCount, usable.Count)} returned, for {ReportName} reports");
 
-            return await SaveLoadedReportsIfRefreshOnDayWithResult(uptoDay, report);
+            var result = await SaveLoadedReportsIfRefreshOnDayWithResult(uptoDay, usable);
+            return result.WithRowsReturned(LastLoadRowCount, LastLoadLatestRefreshDate);
         }
 
         public async Task<int> SaveLoadedReportsIfRefreshOnDay(DayOfWeek uptoDay, IEnumerable<T> data)
@@ -106,15 +141,22 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Aggregate
                 var itemsSaved = 0;
                 var alreadyUpToDate = 0;
                 var notRefreshedOnDay = 0;
+                DateTime? latestRefreshDate = null;
 
                 foreach (var item in items)
                 {
+                    var refreshDate = item.ReportRefreshDate;
+                    if (!latestRefreshDate.HasValue || refreshDate > latestRefreshDate.Value)
+                    {
+                        latestRefreshDate = refreshDate;
+                    }
+
                     // Only save new data if it's on our day of the week
-                    if (item.ReportRefreshDate.DayOfWeek == uptoDay)
+                    if (refreshDate.DayOfWeek == uptoDay)
                     {
                         // What's the last date we have stored for this item?
                         var itemLastDate = await GetLastStoredResultFor(item);
-                        if (!itemLastDate.HasValue || itemLastDate.Value < item.ReportRefreshDate)
+                        if (!itemLastDate.HasValue || itemLastDate.Value < refreshDate)
                         {
                             await AddItemToSaveList(item);
                             itemsSaved++;
@@ -140,7 +182,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Aggregate
                     Telemetry.LogInformation($"Saving {itemsSaved} items to SQL for {ReportName} reports");
                     await CommitAllChanges();
                 }
-                return new WeeklyUsageReportSaveResult(itemsSaved, alreadyUpToDate, notRefreshedOnDay);
+                return new WeeklyUsageReportSaveResult(itemsSaved, alreadyUpToDate, notRefreshedOnDay, latestRefreshDate);
             }
             finally
             {
@@ -165,16 +207,52 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Aggregate
 
     public sealed class WeeklyUsageReportSaveResult
     {
-        public WeeklyUsageReportSaveResult(int itemsSaved, int alreadyUpToDate, int notRefreshedOnDay)
+        public WeeklyUsageReportSaveResult(int itemsSaved, int alreadyUpToDate, int notRefreshedOnDay, DateTime? latestRefreshDate = null, int? rowsReturned = null)
         {
             ItemsSaved = itemsSaved;
             AlreadyUpToDate = alreadyUpToDate;
             NotRefreshedOnDay = notRefreshedOnDay;
+            LatestRefreshDate = latestRefreshDate;
+            RowsReturned = Math.Max(rowsReturned ?? 0, UsableRows);
         }
 
         public int ItemsSaved { get; }
         public int AlreadyUpToDate { get; }
         public int NotRefreshedOnDay { get; }
+
+        /// <summary>
+        /// The newest report refresh date among the rows Graph returned - usable or not - or null when it returned no
+        /// row with a readable one.
+        /// </summary>
+        public DateTime? LatestRefreshDate { get; }
+
+        /// <summary>How many rows Graph returned, before unusable ones (no site URL, say) were dropped.</summary>
+        public int RowsReturned { get; }
+
+        /// <summary>How many of those rows could be considered for saving at all.</summary>
+        public int UsableRows => ItemsSaved + AlreadyUpToDate + NotRefreshedOnDay;
+
+        /// <summary>
+        /// Graph returned rows, but not one could be used. Retrying within the hour cannot change that: the rows are
+        /// the tenant's (concealed site names, say), not a download that went wrong.
+        /// </summary>
+        public bool NoUsableRows => RowsReturned > 0 && UsableRows == 0;
+
         public bool ObservedRefreshDayReport => ItemsSaved + AlreadyUpToDate > 0;
+
+        /// <summary>
+        /// This result, with the rows Graph returned before any were dropped: a larger count, and a newer refresh date
+        /// when an unusable row carried one.
+        /// </summary>
+        public WeeklyUsageReportSaveResult WithRowsReturned(int rowsReturned, DateTime? latestReturnedRefreshDate)
+        {
+            var latest = LatestRefreshDate;
+            if (latestReturnedRefreshDate.HasValue && (!latest.HasValue || latestReturnedRefreshDate.Value > latest.Value))
+            {
+                latest = latestReturnedRefreshDate;
+            }
+
+            return new WeeklyUsageReportSaveResult(ItemsSaved, AlreadyUpToDate, NotRefreshedOnDay, latest, Math.Max(rowsReturned, RowsReturned));
+        }
     }
 }

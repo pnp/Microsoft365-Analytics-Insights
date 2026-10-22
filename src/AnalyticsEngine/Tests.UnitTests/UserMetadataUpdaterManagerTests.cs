@@ -141,6 +141,125 @@ namespace Tests.UnitTests
             }
         }
 
+        /// <summary>
+        /// A newcomer in an incremental delta whose manager is an established user Graph did not report as changed,
+        /// so the manager is in the database but not in this read. The newcomer is inserted, and inserted users are
+        /// left out of the existing-user update, so the insert is the only chance to link them.
+        /// </summary>
+        [TestMethod]
+        public async Task UserMetadataUpdater_IncrementalNewcomer_ManagerOnlyInDatabase_GetsManager()
+        {
+            var logger = AnalyticsLogger.ConsoleOnlyTracer();
+            var config = new AppConfig();
+            var timestamp = DateTime.Now.Ticks;
+            var managerUpn = $"delta_established_mgr{timestamp}@contoso.com";
+            var newcomerUpn = $"delta_newcomer{timestamp}@contoso.com";
+            var managerId = Guid.NewGuid().ToString();
+            var newcomerId = Guid.NewGuid().ToString();
+            await DeleteUsers(managerUpn, newcomerUpn);
+
+            try
+            {
+                var manager = new GraphUser { UserPrincipalName = managerUpn, Id = managerId, AccountEnabled = true, Mail = managerUpn };
+                var newcomer = new GraphUser { UserPrincipalName = newcomerUpn, Id = newcomerId, AccountEnabled = true, Mail = newcomerUpn, ManagerInfo = new List<ManagerInfo> { new ManagerInfo { Id = managerId } } };
+
+                // Cycle 1: the full read creates the manager and commits a delta token.
+                var loader = new FakeUserMetadataLoader(new List<GraphUser> { manager });
+                Assert.IsTrue(await new UserMetadataUpdater(logger, config, loader).InsertAndUpdateDatabaseFromExternalUsers(), "Cycle 1");
+
+                // Cycle 2: an incremental read reports only the newcomer.
+                loader.DeltaUsersOverride = new List<GraphUser> { newcomer };
+                Assert.IsTrue(await new UserMetadataUpdater(logger, config, loader).InsertAndUpdateDatabaseFromExternalUsers(), "Cycle 2");
+
+                using (var db = new AnalyticsEntitiesContext())
+                {
+                    var dbManager = await db.users.SingleAsync(u => u.UserPrincipalName == managerUpn);
+                    var dbNewcomer = await db.users.SingleAsync(u => u.UserPrincipalName == newcomerUpn);
+                    Assert.AreEqual(dbManager.ID, dbNewcomer.ManagerId,
+                        "An unchanged manager who is only in the database must still be linked, without waiting for a full re-read.");
+                }
+            }
+            finally
+            {
+                await DeleteUsers(newcomerUpn, managerUpn);
+            }
+        }
+
+        /// <summary>
+        /// A manager whose sign-in name changed keeps their Entra object id, and the import records the new name as a
+        /// new users row, so two rows carry the same azure_ad_id. A report must link to the current row - here the
+        /// newest, as the manager is not in this read - however the database happens to return the rows.
+        /// </summary>
+        [TestMethod]
+        public async Task UserMetadataUpdater_ManagerWithStaleRowFromRename_ReportLinksToTheCurrentRow()
+        {
+            var logger = AnalyticsLogger.ConsoleOnlyTracer();
+            var config = new AppConfig();
+            var timestamp = DateTime.Now.Ticks;
+            var managerOldUpn = $"renamed_mgr_old{timestamp}@contoso.com";
+            var managerNewUpn = $"renamed_mgr_new{timestamp}@contoso.com";
+            var reportUpn = $"renamed_mgr_report{timestamp}@contoso.com";
+            var managerId = Guid.NewGuid().ToString();
+            var reportId = Guid.NewGuid().ToString();
+            await DeleteUsers(reportUpn, managerOldUpn, managerNewUpn);
+
+            try
+            {
+                await new UserMetadataUpdater(logger, config, new FakeUserMetadataLoader(new List<GraphUser>
+                {
+                    new GraphUser { UserPrincipalName = reportUpn, Id = reportId, AccountEnabled = true, Mail = reportUpn },
+                })).InsertAndUpdateDatabaseFromExternalUsers();
+
+                // The old row first, so it has the lower id - the row an unordered, first-wins map tends to pick.
+                int newRowId;
+                using (var db = new AnalyticsEntitiesContext())
+                {
+                    db.users.Add(new Common.Entities.User { UserPrincipalName = managerOldUpn, AzureAdId = managerId, AccountEnabled = true, Mail = managerOldUpn });
+                    await db.SaveChangesAsync();
+                    var newRow = new Common.Entities.User { UserPrincipalName = managerNewUpn, AzureAdId = managerId, AccountEnabled = true, Mail = managerNewUpn };
+                    db.users.Add(newRow);
+                    await db.SaveChangesAsync();
+                    newRowId = newRow.ID;
+                }
+
+                var reportWithManager = new GraphUser { UserPrincipalName = reportUpn, Id = reportId, AccountEnabled = true, Mail = reportUpn, ManagerInfo = new List<ManagerInfo> { new ManagerInfo { Id = managerId } } };
+                await new UserMetadataUpdater(logger, config, new FakeUserMetadataLoader(new List<GraphUser> { reportWithManager })).InsertAndUpdateDatabaseFromExternalUsers();
+
+                using (var db = new AnalyticsEntitiesContext())
+                {
+                    var dbReport = await db.users.SingleAsync(u => u.UserPrincipalName == reportUpn);
+                    Assert.AreEqual(newRowId, dbReport.ManagerId, "The report must link to the manager's current row, not the one left behind by the rename.");
+                }
+            }
+            finally
+            {
+                await DeleteUsers(reportUpn, managerOldUpn, managerNewUpn);
+            }
+        }
+
+        private static async Task DeleteUsers(params string[] upns)
+        {
+            using (var db = new AnalyticsEntitiesContext())
+            {
+                var users = await db.users.Include(u => u.LicenseLookups).Where(u => upns.Contains(u.UserPrincipalName)).ToListAsync();
+                if (users.Count == 0)
+                {
+                    return;
+                }
+
+                // Reports first: manager_id is a foreign key.
+                foreach (var user in users)
+                {
+                    user.ManagerId = null;
+                    user.Manager = null;
+                    db.UserLicenseTypeLookups.RemoveRange(user.LicenseLookups);
+                }
+                await db.SaveChangesAsync();
+                db.users.RemoveRange(users);
+                await db.SaveChangesAsync();
+            }
+        }
+
         #region Duplicate Key Bug Reproductions
 
         [TestMethod]

@@ -38,5 +38,13 @@ namespace Common.Entities.State
         /// Returns false, writing nothing, when another writer got there first. Throws when the store cannot be reached.
         /// </summary>
         Task<bool> TrySetStringAsync(string key, string value, string expectedVersionToken, CancellationToken cancellationToken = default);
+
+        /// <summary>
+        /// Deletes the row only when it still carries <paramref name="expectedVersionToken"/>. Returns false, deleting
+        /// nothing, when another writer changed or removed the row since it was read, or when
+        /// <paramref name="expectedVersionToken"/> is <c>null</c> (there was nothing to delete). Throws when the store
+        /// cannot be reached.
+        /// </summary>
+        Task<bool> TryDeleteAsync(string key, string expectedVersionToken, CancellationToken cancellationToken = default);
     }
 }
