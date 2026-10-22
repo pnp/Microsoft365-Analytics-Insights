@@ -539,9 +539,25 @@ namespace Tests.UnitTests
 
         #region Teams meeting merge (B1)
 
+        /// <summary>
+        /// Brings the shared test database's schema up to date before a test here seeds it with raw SQL. Nothing else in
+        /// this class creates an AnalyticsEntitiesContext, so a filtered run could otherwise reach these tests with a
+        /// pending migration unapplied - UniqueOnlineMeetingIds' unique index among them - or with no database at all.
+        /// The context's DEBUG initializer applies pending migrations; in Release it creates a missing database. Called
+        /// per SQL test rather than from a [ClassInitialize], so this class's in-memory tests still need no SQL Server.
+        /// </summary>
+        private static void EnsureSchemaIsCurrent()
+        {
+            using (var db = new AnalyticsEntitiesContext())
+            {
+                db.Database.Initialize(force: false);
+            }
+        }
+
         [TestMethod]
         public async Task TeamsMeetingMerge_SameMeetingInTwoBatches_IsStoredOnceAndLinkedToEachInteraction()
         {
+            EnsureSchemaIsCurrent();
             var meeting = NewMeeting();
             using (var con = new SqlConnection(_config.ConnectionStrings.DatabaseConnectionString))
             {
@@ -570,6 +586,7 @@ namespace Tests.UnitTests
         [TestMethod]
         public async Task TeamsMeetingMerge_SubjectLongerThanTheColumn_IsTrimmedAndLinked()
         {
+            EnsureSchemaIsCurrent();
             var meeting = NewMeeting();
             var longSubject = string.Concat(Enumerable.Repeat("Καλημέρα κόσμε ", 8));    // 120 characters
             Assert.AreEqual(120, longSubject.Length);
@@ -594,8 +611,9 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
-        public async Task TeamsMeetingMerge_MeetingAlreadyStoredTwice_LinksToTheOldestRowAndAddsNoMore()
+        public async Task TeamsMeetingMerge_StoredMeeting_IsNeverStoredAgain_AndARenamedOneLinksToTheStoredRow()
         {
+            EnsureSchemaIsCurrent();
             var meeting = NewMeeting();
             using (var con = new SqlConnection(_config.ConnectionStrings.DatabaseConnectionString))
             {
@@ -603,18 +621,23 @@ namespace Tests.UnitTests
                 var interaction = InsertAuditEventForNewUser(con);
                 try
                 {
-                    // Two copies of one meeting, as older builds stored it.
+                    // Older builds stored a meeting again on every batch. Since UniqueOnlineMeetingIds the unique index
+                    // skips a second copy instead (IGNORE_DUP_KEY), so a previous-build importer can't add one either.
+                    // A database that still has copies - the migration not run yet - is covered by
+                    // UniqueOnlineMeetingIdsMigrationTests.TeamsMerge_BeforeTheMigration_LinksToTheOldestCopy_AndStoresNoMore.
                     for (var i = 0; i < 2; i++)
                     {
                         Execute(con, "INSERT INTO dbo.online_meetings (created, meeting_id, name) VALUES (CAST(@created AS datetime), @meetingId, @name);",
                             ("@created", meeting.Created), ("@meetingId", meeting.MeetingId), ("@name", "Contoso release sync"));
                     }
                     var seeded = MeetingRowIds(con, meeting.MeetingId);
+                    Assert.AreEqual(1, seeded.Count, "A second copy of a stored meeting is skipped.");
 
-                    await CommitTeams(MeetingRow(interaction.EventId, meeting, "Contoso release sync"));
+                    // The same meeting, renamed since it was stored: it is still that meeting.
+                    await CommitTeams(MeetingRow(interaction.EventId, meeting, "Contoso release sync (moved)"));
 
                     CollectionAssert.AreEqual(seeded, MeetingRowIds(con, meeting.MeetingId), "No further copy may be stored.");
-                    Assert.AreEqual(seeded.Min(), SingleLinkedMeetingRow(con, interaction.EventId), "The interaction links to the oldest copy, once.");
+                    Assert.AreEqual(seeded.Single(), SingleLinkedMeetingRow(con, interaction.EventId), "The interaction links to the stored row, once.");
                 }
                 finally
                 {
@@ -630,6 +653,7 @@ namespace Tests.UnitTests
         [TestMethod]
         public async Task SqlCopilotStagingWriter_TeamsMergeFailure_DoesNotStopChatOnlyInteractionsBeingSaved()
         {
+            EnsureSchemaIsCurrent();
             var meeting = NewMeeting();
             var logger = new Tests.UnitTests.FakeLoaderClasses.RecordingLogger();
             using (var con = new SqlConnection(_config.ConnectionStrings.DatabaseConnectionString))
@@ -765,6 +789,7 @@ DELETE FROM dbo.online_meetings WHERE meeting_id = @meetingId;", ("@meetingId", 
         [TestMethod]
         public async Task SqlCopilotStagingWriter_CommitAllChanges_ClearsAllThreeStagedBatches()
         {
+            EnsureSchemaIsCurrent();
             var logger = new Tests.UnitTests.FakeLoaderClasses.RecordingLogger();
             var meetingEventId = Guid.NewGuid();
             var fileEventId = Guid.NewGuid();
