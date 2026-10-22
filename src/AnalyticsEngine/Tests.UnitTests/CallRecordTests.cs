@@ -49,6 +49,45 @@ namespace Tests.UnitTests
             }
         }
 
+        /// <summary>
+        /// Against LocalDB: the same call notified twice - by both the old and the replacement webhook subscription while
+        /// the importer moves to a new clientState - is stored once. Saving a call replaces any copy saved before.
+        /// </summary>
+        [TestMethod]
+        public async Task CallRecord_NotifiedTwice_IsStoredOnce()
+        {
+            var testDate = DateTime.UtcNow;
+            Func<CallRecordDTO> sameCall = () => new CallRecordDTO
+            {
+                GraphCallID = "duplicate-notification-call",
+                StartDateTime = testDate.AddHours(-2),
+                EndDateTime = testDate.AddHours(-1),
+                CallType = "Unit test call",
+                OrganizerEmail = "unittests@contoso.local",
+                Sessions = new List<CallSessionDTO>
+                {
+                    new CallSessionDTO
+                    {
+                        Caller = new ParticipantEndpointDTO { UserEmailAddress = "unittests@contoso.local" },
+                        Callee = new ParticipantEndpointDTO { UserEmailAddress = "whoever@contoso.local", Feedback = new UserFeedbackDTO { Rating = "good", Text = "fine" } },
+                        StartDateTime = testDate.AddMinutes(-110),
+                        EndDateTime = testDate.AddMinutes(-70),
+                    }
+                }
+            };
+            var store = new SqlCallRecordPersistenceManager(AnalyticsLogger.ConsoleOnlyTracer());
+
+            await store.SaveOrReplaceCallRecord(sameCall(), null);
+            await store.SaveOrReplaceCallRecord(sameCall(), null);
+
+            using (var db = new AnalyticsEntitiesContext())
+            {
+                Assert.AreEqual(1, await db.CallRecords.CountAsync(c => c.GraphID == "duplicate-notification-call"));
+                Assert.AreEqual(1, await db.CallSessions.CountAsync(s => s.ParentRecord.GraphID == "duplicate-notification-call"));
+                Assert.AreEqual(1, await db.CallFeedback.CountAsync(f => f.Call.GraphID == "duplicate-notification-call"));
+            }
+        }
+
         // Verify call & feedback counts
         [TestMethod]
         public async Task CallRecordSaveTests()

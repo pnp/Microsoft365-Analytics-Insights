@@ -420,9 +420,27 @@ namespace DataUtils.Http
             if (host.Equals("login.microsoft.com", StringComparison.OrdinalIgnoreCase)) return true;
             if (host.EndsWith(".vault.azure.net", StringComparison.OrdinalIgnoreCase)) return true;
             var path = uri.AbsolutePath ?? string.Empty;
-            return path.IndexOf("aiInteractionHistory", StringComparison.OrdinalIgnoreCase) >= 0
+            return IsGraphSubscriptionsPath(path)
+                || path.IndexOf("aiInteractionHistory", StringComparison.OrdinalIgnoreCase) >= 0
                 || path.IndexOf("getAllEnterpriseInteractions", StringComparison.OrdinalIgnoreCase) >= 0
                 || path.IndexOf("/interactionHistory/", StringComparison.OrdinalIgnoreCase) >= 0;
+        }
+
+        /// <summary>
+        /// Graph change-notification subscriptions (<c>/v1.0/subscriptions</c>, <c>/beta/subscriptions</c>, and one by id).
+        /// Excluded outright, like the token and Key Vault endpoints, rather than redacted: the create and renew responses
+        /// echo the subscription's <c>clientState</c> - the credential its webhook checks, and for a Teams calls subscription
+        /// created before the derived clientState, the app's client secret itself - and a field-level redaction would have
+        /// to keep up with every field Graph might add. They carry no tenant data worth tracing. Matched by the leading
+        /// version segment, so Azure Resource Manager's <c>/subscriptions/{id}/...</c> and the Management Activity API's
+        /// <c>.../activity/feed/subscriptions/...</c> are still traced.
+        /// </summary>
+        private static bool IsGraphSubscriptionsPath(string path)
+        {
+            var segments = path.Split(new[] { '/' }, StringSplitOptions.RemoveEmptyEntries);
+            return segments.Length >= 2
+                && (segments[0].Equals("v1.0", StringComparison.OrdinalIgnoreCase) || segments[0].Equals("beta", StringComparison.OrdinalIgnoreCase))
+                && segments[1].Equals("subscriptions", StringComparison.OrdinalIgnoreCase);
         }
 
         public static Uri SanitizeUrl(Uri uri)

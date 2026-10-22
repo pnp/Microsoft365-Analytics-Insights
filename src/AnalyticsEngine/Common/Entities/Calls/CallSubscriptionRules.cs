@@ -19,6 +19,23 @@ namespace Common.Entities.Calls
         public const string CallRecordsResource = "/communications/callRecords";
 
         /// <summary>
+        /// Added to the webhook URL for subscriptions whose clientState is <see cref="CallWebhookClientState"/>. A
+        /// separate notification URL is what keeps a rollback safe: importers from before the derived clientState match
+        /// their subscription by exact URL, so they never find - and renew - one that the web app of their own version
+        /// would refuse every notification from. They create their own on the bare URL instead, and this one lapses.
+        /// The web app needs nothing to accept it: Graph adds its validation token as <c>&amp;validationToken=...</c>,
+        /// and the action ignores the extra parameter.
+        /// </summary>
+        public const string ClientStateVersionQuery = "cs=v1";
+
+        /// <summary>The notification URL subscriptions with the current clientState are created on.</summary>
+        public static Uri CurrentNotificationUrl(Uri webAppUrl)
+        {
+            if (webAppUrl == null) throw new ArgumentNullException(nameof(webAppUrl));
+            return new Uri(webAppUrl.ToString() + (string.IsNullOrEmpty(webAppUrl.Query) ? "?" : "&") + ClientStateVersionQuery);
+        }
+
+        /// <summary>
         /// How far ahead the subscription expiry is set. Two days is the maximum Graph will permit for
         /// this resource - see
         /// https://docs.microsoft.com/en-us/graph/api/resources/subscription?view=graph-rest-beta#properties
@@ -29,11 +46,14 @@ namespace Common.Entities.Calls
         /// Whether a Graph subscription is this deployment's call-records subscription. Both the
         /// resource and the notification URL must match: a tenant can legitimately have call-records
         /// subscriptions belonging to other applications, and renewing one of those would take over
-        /// another product's webhook.
+        /// another product's webhook. The URL is either the webhook's own (<paramref name="webAppUrl"/>,
+        /// which subscriptions from before the derived clientState use) or its
+        /// <see cref="CurrentNotificationUrl"/> - exactly, nothing else.
         /// </summary>
         public static bool IsCallRecordsSubscriptionFor(string resource, string notificationUrl, Uri webAppUrl)
         {
-            return resource == CallRecordsResource && notificationUrl == webAppUrl.ToString();
+            return resource == CallRecordsResource
+                && (notificationUrl == webAppUrl.ToString() || notificationUrl == CurrentNotificationUrl(webAppUrl).ToString());
         }
 
         /// <summary>When a subscription created or renewed at <paramref name="nowUtc"/> should expire.</summary>

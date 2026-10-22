@@ -23,12 +23,19 @@ namespace Web.AnalyticsWeb.Controllers
         private static readonly Lazy<AnalyticsLogger> Logger = new Lazy<AnalyticsLogger>(
             () => new AnalyticsLogger(Config.Value.AppInsightsConnectionString, nameof(CallRecordWebhookController)));
 
+        // The clientState derived from the app's client secret (and the legacy raw secret, while subscriptions created
+        // before that change are replaced). One per process, so its legacy warning is logged once per process.
+        private static readonly Lazy<CallNotificationAuthenticator> Authenticator = new Lazy<CallNotificationAuthenticator>(
+            () => new CallNotificationAuthenticator(CallWebhookClientState.ForConfig(Config.Value)));
+
         private static readonly object QueueLock = new object();
         private static ServiceBusClient _queueClient;
         private static ICallNotificationQueueSender _queue;
 
         // Webhook called by Graph for new calls
-        // POST: api/CallRecordWebhook
+        // POST: api/CallRecordWebhook - or api/CallRecordWebhook?cs=v1, the URL subscriptions with the derived clientState
+        // use (CallSubscriptionRules.CurrentNotificationUrl). The extra parameter needs no binding: Graph appends its
+        // validation token as "&validationToken=", which binds below either way.
         [HttpPost]
         public async Task<HttpResponseMessage> Post([FromBody] GraphChangeNotificationList changeMsg, string validationToken = "")
         {
@@ -55,9 +62,10 @@ namespace Web.AnalyticsWeb.Controllers
             var config = Config.Value;
             var logger = Logger.Value;
 
-            // Verify each msg is legit - compare ClientState to app secret. A null entry cannot be, and is counted as invalid.
+            // Verify each msg is legit - compare its ClientState to the one derived from the app secret. A null entry
+            // cannot be, and is counted as invalid.
             var notifications = changeMsg.Notifications.Where(n => n != null).ToList();
-            var selection = CallNotificationRules.SelectValidNotifications(notifications, config.ClientSecret);
+            var selection = Authenticator.Value.Select(notifications, logger);
             var changes = selection.Valid;
             var invalidChangeMsgs = selection.InvalidCount + (changeMsg.Notifications.Count - notifications.Count);
 

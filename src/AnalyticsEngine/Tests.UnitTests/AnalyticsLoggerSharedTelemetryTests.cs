@@ -2,6 +2,7 @@ extern alias AnalyticsWeb;
 
 using AnalyticsWeb::Web.AnalyticsWeb;
 using AnalyticsWeb::Web.AnalyticsWeb.Controllers;
+using AnalyticsWeb::Web.AnalyticsWeb.Security;
 using Common.Entities.Models;
 using DataUtils;
 using Microsoft.ApplicationInsights.Channel;
@@ -13,6 +14,8 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
 using System.Net;
+using System.Net.Http;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Web;
@@ -137,6 +140,35 @@ namespace Tests.UnitTests
             }, string.Empty);
 
             Assert.AreEqual(HttpStatusCode.OK, response.StatusCode);
+        }
+
+        /// <summary>
+        /// Subscriptions with the derived clientState notify the webhook URL plus "?cs=v1", so Graph's validation POST
+        /// arrives with the token after it ("&amp;validationToken=") - and must still be answered with the token, or Graph
+        /// refuses to create the subscription. Through Web API's real routing and binding, both URL forms.
+        /// </summary>
+        [TestMethod]
+        public async Task CallRecordWebhook_ValidationHandshakeAndNotifications_WorkOnBothNotificationUrls()
+        {
+            const string token = "Validation: Testing client application reachability for subscription Request-Id: 00000000-0000-0000-0000-000000000000";
+            using (var host = new PortalTestHost(new[] { typeof(CallRecordWebhookController) }, PortalTestHost.Anonymous(), PortalAccessPolicy.NotEnforcing))
+            {
+                foreach (var url in new[] { "api/CallRecordWebhook", "api/CallRecordWebhook?cs=v1" })
+                {
+                    var separator = url.Contains("?") ? "&" : "?";
+                    var validation = await host.Client.PostAsync(url + separator + "validationToken=" + Uri.EscapeDataString(token),
+                        new StringContent(string.Empty, Encoding.UTF8, "text/plain"));
+                    Assert.AreEqual(HttpStatusCode.OK, validation.StatusCode, url);
+                    Assert.AreEqual("text/plain", validation.Content.Headers.ContentType.MediaType, url);
+                    Assert.AreEqual(token, await validation.Content.ReadAsStringAsync(), url);
+
+                    // A notification on the same URL reaches the clientState check (this one fails it, so no Service Bus).
+                    var notification = await host.Client.PostAsync(url,
+                        new StringContent("{\"value\":[{\"clientState\":\"synthetic-not-the-secret\",\"resourceData\":{\"id\":\"call-1\"}}]}", Encoding.UTF8, "application/json"));
+                    Assert.AreEqual(HttpStatusCode.OK, notification.StatusCode, url);
+                    Assert.AreEqual("not null and that", await notification.Content.ReadAsStringAsync(), url);
+                }
+            }
         }
 
         private sealed class RecordingChannel : ITelemetryChannel
