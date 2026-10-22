@@ -35,6 +35,7 @@ namespace Tests.UnitTests
         private const string ForceGraphMetadataImport = "ForceGraphMetadataImport";
         private const string ImportStartStaggerMinutes = "ImportStartStaggerMinutes";
         private const string UsageReportsDaysBack = "UsageReportsDaysBack";
+        private const string CleanUpConcealedIdentityUsers = AppConfig.CleanUpConcealedIdentityUsersSettingName;
 
 
         private static readonly string[] _trackedKeys =
@@ -54,6 +55,7 @@ namespace Tests.UnitTests
             ForceGraphMetadataImport,
             ImportStartStaggerMinutes,
             UsageReportsDaysBack,
+            CleanUpConcealedIdentityUsers,
 
         };
 
@@ -84,6 +86,21 @@ namespace Tests.UnitTests
                 // previously-missing key is restored as empty; AppConfig treats
                 // both empty and missing as "no value" via its TryParse path.
                 ConfigurationManager.AppSettings.Set(kvp.Key, kvp.Value ?? string.Empty);
+            }
+        }
+
+        [TestMethod]
+        public void CleanUpConcealedIdentityUsers_IsOnUnlessSetToFalse()
+        {
+            ConfigurationManager.AppSettings.Set(CleanUpConcealedIdentityUsers, "false");
+            Assert.IsFalse(new AppConfig().CleanUpConcealedIdentityUsers, "The kill switch.");
+            ConfigurationManager.AppSettings.Set(CleanUpConcealedIdentityUsers, "False");
+            Assert.IsFalse(new AppConfig().CleanUpConcealedIdentityUsers);
+
+            foreach (var notFalse in new[] { string.Empty, "no", "0", "true" })
+            {
+                ConfigurationManager.AppSettings.Set(CleanUpConcealedIdentityUsers, notFalse);
+                Assert.IsTrue(new AppConfig().CleanUpConcealedIdentityUsers, $"'{notFalse}' must not turn the cleanup off.");
             }
         }
 

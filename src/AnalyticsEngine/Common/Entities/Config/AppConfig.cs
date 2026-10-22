@@ -145,6 +145,11 @@ namespace Common.Entities.Config
                 this.ForceUsageReportsImport = forceUsageReportsImportBool;
             }
 
+            // Deleting the placeholder users older builds created from concealed usage-report identities. On unless the
+            // setting is "false" (any case); anything unparseable keeps the default rather than silently turning it off.
+            this.CleanUpConcealedIdentityUsers = !bool.TryParse(ConfigurationManager.AppSettings.Get(CleanUpConcealedIdentityUsersSettingName), out var cleanUpConcealedIdentityUsers)
+                || cleanUpConcealedIdentityUsers;
+
             // Optional cap on simultaneous Activity API summary fetches (default 8).
             // Prevents burst throttling when (contentTypes × timeChunks) is large.
             this.MaxSummaryFetchConcurrency = int.TryParse(ConfigurationManager.AppSettings.Get("MaxSummaryFetchConcurrency"), out var maxSummaryFetchConcurrency)
@@ -528,6 +533,17 @@ namespace Common.Entities.Config
         /// Intended for development/manual reruns. Default false.
         /// </summary>
         public bool ForceUsageReportsImport { get; set; } = false;
+
+        /// <summary>App setting behind <see cref="CleanUpConcealedIdentityUsers"/>.</summary>
+        public const string CleanUpConcealedIdentityUsersSettingName = "CleanUpConcealedIdentityUsers";
+
+        /// <summary>
+        /// Whether the activity importer deletes, a bounded slice per cycle, the placeholder users that versions before the
+        /// concealed-identity fix created from concealed (hashed) usage-report identities, together with their usage-report
+        /// rows. Default true; set the <c>CleanUpConcealedIdentityUsers</c> app setting to <c>false</c> to turn it off. A
+        /// runtime setting only - not part of the installer's saved configuration.
+        /// </summary>
+        public bool CleanUpConcealedIdentityUsers { get; set; } = true;
 
         /// <summary>
         /// Maximum simultaneous Activity API summary fetches (per importer instance).

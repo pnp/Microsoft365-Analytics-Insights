@@ -24,6 +24,7 @@ using WebJob.Office365ActivityImporter.Engine;
 using WebJob.Office365ActivityImporter.Engine.ActivityAPI; // for AuditTraceConfig
 using WebJob.Office365ActivityImporter.Engine.Graph.Calls;
 using WebJob.Office365ActivityImporter.Engine.Graph.Email;
+using WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Maintenance;
 using WebJob.Office365ActivityImporter.Engine.MessageTracing;
 using WebJob.Office365ActivityImporter.Engine.StatsUploader;
 #endregion
@@ -331,6 +332,10 @@ namespace WebJob.Office365ActivityImporter
             // It also reuses graphLastRunStore (hoisted above) for its weekly cadence stamp.
             var adoptionStatsCollector = new AdoptionStatsCollector(configuredSettings, graphLastRunStore, logger);
 
+            // Deletes the placeholder users older versions created from concealed usage-report identities. Created ONCE, outside
+            // the loop: it remembers when there is nothing left, so an idle database is looked at once a day, not every cycle.
+            var concealedIdentityUserCleanup = ConcealedIdentityUserCleanup.ForConfig(configuredSettings, logger);
+
             // Run app
             using (var heartbeat = new DataUtils.Health.ImporterHeartbeat(logger, DataUtils.Health.ImporterHeartbeat.ActivityJob))
             using (var health = Common.Entities.Health.DefaultRuntimeHealth.Start(configuredSettings, logger, ImporterHeartbeat.ActivityJob))
@@ -459,6 +464,13 @@ namespace WebJob.Office365ActivityImporter
                 // (6 hours after a success, 1 hour after a failure). Off unless an administrator named a group; bounded
                 // to about eleven Graph calls; never throws.
                 await tasks.RefreshLeadershipCohortSafely();
+
+                // Placeholder users that older versions created from concealed (hashed) usage-report identities: deleted with
+                // their usage-report rows, a bounded slice per cycle, until none are left (see ConcealedIdentityUserCleanup).
+                // Here, outside every import gate, so a tenant that has since turned the usage reports off is cleaned too; and
+                // before the deferred pass is started, never while it runs - it is the only other writer of those rows. Takes
+                // the users-and-licences lock, so it cannot overlap a user import on any instance. Never throws.
+                await concealedIdentityUserCleanup.RunIfDueAsync(usageReportImportRunning: deferredGraphImport.IsRunning);
 
                 // Deferred Graph sections: the once-a-day usage-report phase (issue #706). It used to run inside
                 // GetGraphTeamsAndUserData above, so on the cycle it was due the audit import (Copilot, Power
