@@ -110,9 +110,13 @@ namespace Tests.UnitTests
         // (issue #699). It is raw-SQL, additive, and reuses the predecessor snapshot verbatim: neither is in
         // the EF model.
         // AddPromptCategories then adds the prompt taxonomy and classification tables. Raw-SQL, additive,
-        // and reuses the predecessor snapshot verbatim. As the chain head its snapshot is the one EF
-        // compares the live entity model against.
-        private const string LatestId = "202610080900001_AddPromptCategories";
+        // and reuses the predecessor snapshot verbatim.
+        // CopilotAgentNameAndFlagRecency then adds three NULLable columns to copilot_agents, and
+        // EventFileExtensionUnicode converts event_file_ext.extension_name to nvarchar. Both are raw-SQL and
+        // reuse the predecessor snapshot verbatim: the new columns are not in the EF model, and the model
+        // already maps extension_name as Unicode. As the chain head, EventFileExtensionUnicode's snapshot is
+        // the one EF compares the live entity model against.
+        private const string LatestId = "202610221500002_EventFileExtensionUnicode";
         private const string IndexName = "IX_urls_full_url";
 
         // "Καλημέρα κόσμε" - the classic Greek charset sample (synthetic; no customer data).

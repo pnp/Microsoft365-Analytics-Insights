@@ -18,13 +18,13 @@ INSERT INTO sites(url_base)
 		not exists(select top 1 url_base from sites where url_base = imports.url_base)
 
 		
--- event_file_ext.extension_name is varchar(250): insert, de-duplicate and join on the converted value, as
--- "Insert Activity from Staging Table.sql" does. Joining the stored value to the original nvarchar never
--- matches for characters outside the code page, so the insert was retried - and failed - every batch.
+-- event_file_ext.extension_name is nvarchar (migration EventFileExtensionUnicode), so the extension is stored
+-- exactly as logged. CONVERT still trims it to the column's 250 characters, so an over-long one can't fail the
+-- batch, and the insert, de-duplication and joins below all use that same trimmed value.
 INSERT INTO event_file_ext(extension_name)
 	SELECT distinct ext.extension_name
 	FROM (
-		SELECT CONVERT(varchar(250), imports.file_extension COLLATE DATABASE_DEFAULT) as extension_name
+		SELECT CONVERT(nvarchar(250), imports.file_extension COLLATE DATABASE_DEFAULT) as extension_name
 		FROM [${STAGING_TABLE_ACTIVITY}] imports
 		where imports.file_extension is not null and imports.file_extension != ''
 	) ext
@@ -47,7 +47,7 @@ insert into [copilot_event_files] (copilot_chat_id, file_name_id, file_extension
 		,sites.id as siteId
 	  FROM [${STAGING_TABLE_ACTIVITY}] imports
 	  inner join event_file_names on event_file_names.file_name = LEFT(imports.file_name, 250)
-	  inner join event_file_ext on event_file_ext.extension_name = CONVERT(varchar(250), imports.file_extension COLLATE DATABASE_DEFAULT)
+	  inner join event_file_ext on event_file_ext.extension_name = CONVERT(nvarchar(250), imports.file_extension COLLATE DATABASE_DEFAULT)
 	  inner join urls on urls.full_url = imports.url
 	  inner join sites on sites.url_base = imports.url_base
 	  where not exists (

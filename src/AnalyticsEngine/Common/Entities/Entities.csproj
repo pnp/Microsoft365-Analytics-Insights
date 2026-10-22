@@ -91,6 +91,20 @@
     <EmbeddedResource Include="Migrations\202610080900001_AddPromptCategories.resx">
       <DependentUpon>202610080900001_AddPromptCategories.cs</DependentUpon>
     </EmbeddedResource>
+    <Compile Update="Migrations\202610221500001_CopilotAgentNameAndFlagRecency.Designer.cs">
+      <DependentUpon>202610221500001_CopilotAgentNameAndFlagRecency.cs</DependentUpon>
+    </Compile>
+    <EmbeddedResource Include="Migrations\202610221500001_CopilotAgentNameAndFlagRecency.resx">
+      <DependentUpon>202610221500001_CopilotAgentNameAndFlagRecency.cs</DependentUpon>
+    </EmbeddedResource>
+    <None Include="Migrations\202610221500001_CopilotAgentNameAndFlagRecency.manual.sql" />
+    <Compile Update="Migrations\202610221500002_EventFileExtensionUnicode.Designer.cs">
+      <DependentUpon>202610221500002_EventFileExtensionUnicode.cs</DependentUpon>
+    </Compile>
+    <EmbeddedResource Include="Migrations\202610221500002_EventFileExtensionUnicode.resx">
+      <DependentUpon>202610221500002_EventFileExtensionUnicode.cs</DependentUpon>
+    </EmbeddedResource>
+    <None Include="Migrations\202610221500002_EventFileExtensionUnicode.manual.sql" />
     <Compile Update="Migrations\201808231327312_v1-0-6.Designer.cs">
       <DependentUpon>201808231327312_v1-0-6.cs</DependentUpon>
     </Compile>

@@ -1,3 +1,4 @@
+using ActivityImporter.Engine.ActivityAPI.Copilot;
 using Common.Entities;
 using Common.Entities.UserScope;
 using DataUtils.Sql;
@@ -11,6 +12,7 @@ using System.Threading.Tasks;
 using UnitTests.FakeLoaderClasses;
 using WebJob.Office365ActivityImporter.Engine;
 using WebJob.Office365ActivityImporter.Engine.ActivityAPI;
+using WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot;
 using WebJob.Office365ActivityImporter.Engine.ActivityAPI.Dlp;
 using WebJob.Office365ActivityImporter.Engine.ActivityAPI.Persistence;
 using WebJob.Office365ActivityImporter.Engine.Entities;
@@ -33,8 +35,8 @@ namespace Tests.UnitTests
         #region Lookup values that used to fail the whole batch (A1)
 
         /// <summary>
-        /// A file name longer than event_file_names.file_name (nvarchar(250)), and two extensions the database's
-        /// varchar code page can't hold, failed the merge for the whole batch - and again on every retry, until
+        /// A file name longer than event_file_names.file_name (nvarchar(250)), and two extensions the database's old
+        /// varchar code page couldn't hold, failed the merge for the whole batch - and again on every retry, until
         /// the content blob aged out.
         /// </summary>
         [TestMethod]
@@ -52,16 +54,87 @@ namespace Tests.UnitTests
                 {
                     var stored = StoredSharePointMetadata(e.Id);
                     Assert.AreEqual(e.SourceFileName.Substring(0, 250), stored.FileName, "The file name is trimmed to the column, not dropped.");
-                    Assert.IsNotNull(stored.ExtensionId, "The extension must be linked even when the database can't hold its characters.");
+                    Assert.IsNotNull(stored.ExtensionId, "The extension must be linked.");
                     Assert.AreEqual(1, Count("SELECT COUNT(*) FROM dbo.event_file_names WHERE file_name = @v", ("@v", stored.FileName)));
-                    Assert.AreEqual(1, Count("SELECT COUNT(*) FROM dbo.event_file_ext WHERE extension_name = CONVERT(varchar(250), @v COLLATE DATABASE_DEFAULT)",
-                        ("@v", e.SourceFileExtension)));
+                    Assert.AreEqual(1, Count("SELECT COUNT(*) FROM dbo.event_file_ext WHERE extension_name = @v", ("@v", e.SourceFileExtension)),
+                        "The retry must not store the extension a second time.");
                 }
             }
             finally
             {
                 DeleteEvents(upn, first.Id, second.Id);
             }
+        }
+
+        /// <summary>
+        /// event_file_ext.extension_name is nvarchar since migration EventFileExtensionUnicode. A Greek and an accented
+        /// extension used to be stored converted to the database's code page ("λόγος" and "χώρος" both as "?????", so the
+        /// two shared one row, and "přípona" as "prípona"). Each is now stored exactly as logged, in its own row, and an
+        /// over-long one is still trimmed to the column rather than failing the batch.
+        /// </summary>
+        [TestMethod]
+        public async Task CoreMerge_NonAsciiExtensions_AreStoredExactly_AndNoLongerShareARow()
+        {
+            var upn = NewUpn();
+            var greek = SpEvent(upn, $"Καλημέρα κόσμε {Guid.NewGuid():N}.λόγος", "λόγος");
+            var otherGreek = SpEvent(upn, $"Καλημέρα κόσμε {Guid.NewGuid():N}.χώρος", "χώρος");
+            var accented = SpEvent(upn, $"Contoso {Guid.NewGuid():N}.přípona", "přípona");
+            var overlong = SpEvent(upn, $"Contoso {Guid.NewGuid():N}.long", string.Concat(Enumerable.Repeat("κείμενο", 40)));
+            try
+            {
+                await Merge(greek, otherGreek, accented, overlong);
+
+                foreach (var e in new[] { greek, otherGreek, accented })
+                {
+                    Assert.AreEqual(e.SourceFileExtension, StoredExtension(StoredSharePointMetadata(e.Id).ExtensionId),
+                        "The extension must be stored exactly as logged.");
+                }
+                Assert.AreNotEqual(StoredSharePointMetadata(greek.Id).ExtensionId, StoredSharePointMetadata(otherGreek.Id).ExtensionId,
+                    "Two different extensions must not share a row.");
+                Assert.AreEqual(overlong.SourceFileExtension.Substring(0, 250), StoredExtension(StoredSharePointMetadata(overlong.Id).ExtensionId),
+                    "An over-long extension is trimmed to the column's 250 characters.");
+            }
+            finally
+            {
+                DeleteEvents(upn, greek.Id, otherGreek.Id, accented.Id, overlong.Id);
+            }
+        }
+
+        /// <summary>The Copilot file merge (insert_sp_copilot_events_from_staging_table.sql) stores the extension exactly too.</summary>
+        [TestMethod]
+        public async Task CopilotFileMerge_NonAsciiExtension_IsStoredExactly()
+        {
+            const string extension = "έγγραφο";
+            Guid eventId;
+            using (var manager = new CopilotAuditEventManager(ConnectionString, new SingleFileLoader(extension), Logger))
+            {
+                using (var db = new AnalyticsEntitiesContext())
+                {
+                    var commonEvent = new CommonAuditEvent
+                    {
+                        Id = Guid.NewGuid(),
+                        TimeStamp = DateTime.UtcNow,
+                        Operation = new EventOperation { Name = "Copilot file extension test " + Guid.NewGuid() },
+                        User = new User { AzureAdId = "test", UserPrincipalName = NewUpn() },
+                    };
+                    db.AuditEventsCommon.Add(commonEvent);
+                    await db.SaveChangesAsync();
+                    eventId = commonEvent.Id;
+
+                    await manager.SaveSingleCopilotEventToSqlStaging(new CopilotAuditLogContent
+                    {
+                        CopilotEventData = new CopilotEventData
+                        {
+                            AppHost = "Word",
+                            Contexts = new List<Context> { new Context { Id = $"{Site}/Shared Documents/{Guid.NewGuid():N}.{extension}", Type = "docx" } },
+                        },
+                    }, commonEvent);
+                }
+                await manager.CommitAllChanges();
+            }
+
+            var extensionId = Scalar("SELECT file_extension_id FROM dbo.copilot_event_files WHERE copilot_chat_id = @id", ("@id", eventId)) as int?;
+            Assert.AreEqual(extension, StoredExtension(extensionId));
         }
 
         /// <summary>
@@ -263,6 +336,9 @@ namespace Tests.UnitTests
             var pass = new ActivityStagingPass(new AllowAllFilterConfig(), UserImportScope.Unfiltered, Logger);
             using (var db = new AnalyticsEntitiesContext())
             {
+                // The merge is raw SQL, so nothing else here makes EF bring the test database to the latest migration
+                // first - and the merge relies on it (event_file_ext.extension_name is nvarchar from EventFileExtensionUnicode).
+                db.Database.Initialize(force: false);
                 var batch = new SqlActivityStagingWriter(Logger).CreateBatch(db);
                 var result = await pass.RunAsync(set, ActivityImportCache.GetEmptyCache(), batch, null, null);
                 Assert.AreEqual(events.Length, result.Stats.Imported);
@@ -309,6 +385,48 @@ WHERE m.event_id = @id", con))
                 con.Open();
                 return Convert.ToInt32(cmd.ExecuteScalar());
             }
+        }
+
+        private static object Scalar(string sql, params (string Name, object Value)[] parameters)
+        {
+            using (var con = new SqlConnection(ConnectionString))
+            using (var cmd = new SqlCommand(sql, con))
+            {
+                foreach (var p in parameters) cmd.Parameters.AddWithValue(p.Name, p.Value);
+                con.Open();
+                var value = cmd.ExecuteScalar();
+                return value == DBNull.Value ? null : value;
+            }
+        }
+
+        /// <summary>The extension_name an event_file_ext row holds.</summary>
+        private static string StoredExtension(int? extensionId)
+        {
+            Assert.IsNotNull(extensionId, "The extension must be linked.");
+            return (string)Scalar("SELECT extension_name FROM dbo.event_file_ext WHERE id = @id", ("@id", extensionId.Value));
+        }
+
+        /// <summary>Resolves every file context to one file with the given extension.</summary>
+        private sealed class SingleFileLoader : ICopilotMetadataLoader
+        {
+            private readonly string _extension;
+
+            public SingleFileLoader(string extension)
+            {
+                _extension = extension;
+            }
+
+            public Task<SpoDocumentFileInfo> GetSpoFileInfo(string copilotId, string eventUpn) => Task.FromResult(new SpoDocumentFileInfo
+            {
+                Extension = _extension,
+                Filename = "Καλημέρα κόσμε." + _extension,
+                Url = copilotId,
+                SiteUrl = Site,
+            });
+
+            public Task<MeetingMetadata> GetMeetingInfo(string meetingId, string userGuid) => Task.FromResult<MeetingMetadata>(null);
+
+            public Task<string> GetUserIdFromUpn(string userPrincipalName) => Task.FromResult(Guid.Empty.ToString());
         }
 
         private static void Execute(string sql, params (string Name, object Value)[] parameters)

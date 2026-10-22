@@ -49,7 +49,8 @@ namespace WebJob.Office365ActivityImporter
 
         /// <summary>
         /// Imports Activity/Graph data, or repairs one bounded historical Copilot batch with
-        /// --repair-copilot-history fromUtc toUtc privateCheckpointFile (without calling Graph).
+        /// --repair-copilot-history fromUtc toUtc privateCheckpointFile (without calling Graph), or replays the
+        /// Teams calls dead-letter queue with --replayCallDeadLetters (see CallDeadLetterReplayCommand.Usage).
         /// Other overrides: --webhook URL, --callId ID.
         /// </summary>
         static void Main(string[] args) => MainAsync(args).GetAwaiter().GetResult();
@@ -107,6 +108,13 @@ namespace WebJob.Office365ActivityImporter
                     Console.WriteLine($"Scanned={batch.Scanned}; Replayed={batch.Replayed}; Unrecoverable={batch.Unrecoverable}; UnknownKind={batch.UnknownKind}. "
                         + "Repeat until Scanned=0. Re-scan with a new checkpoint after historical writers finish.");
                 }
+                return;
+            }
+
+            // Explicit operator-only replay of the Teams calls dead-letter queue: Service Bus only - no SQL, no Graph, no import loop.
+            if (CallDeadLetterReplayCommand.IsRequested(args))
+            {
+                Environment.ExitCode = await CallDeadLetterReplayCommand.RunAsync(args, configuredSettings);
                 return;
             }
 

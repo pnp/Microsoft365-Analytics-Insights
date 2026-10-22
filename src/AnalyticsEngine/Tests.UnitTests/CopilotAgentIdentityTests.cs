@@ -330,6 +330,168 @@ namespace Tests.UnitTests
             Assert.AreEqual(true, agent.IsCustomAgent);
         }
 
+        #region Recency: imports commit newest-first, so an older batch can be committed after a newer one
+
+        /// <summary>
+        /// Scenario A. A stored schema-name fallback is replaced by a display name however old it is, even after a
+        /// newer interaction that carried no name. The time of that display name is then what later batches are
+        /// measured against.
+        /// </summary>
+        [TestMethod]
+        public async Task Recency_StoredFallback_IsReplacedByAnOlderDisplayName_ThenItsTimeCounts()
+        {
+            var agentId = NewAgentId();
+            var now = DateTime.UtcNow.AddMinutes(-10);
+
+            await CommitBatchAt(now, Record(agentId, fallbackName: SchemaName));
+            await CommitBatchAt(now.AddMinutes(5), Record(agentId));
+            await CommitBatchAt(now.AddDays(-2), Record(agentId, name: DisplayName));
+            Assert.AreEqual(DisplayName, (await SingleAgentRow(agentId)).Name, "A display name replaces the fallback, whatever its age.");
+
+            await CommitBatchAt(now.AddDays(-3), Record(agentId, name: "Contoso Helpdesk (old)"));
+            Assert.AreEqual(DisplayName, (await SingleAgentRow(agentId)).Name, "An even older display name must not replace it.");
+        }
+
+        /// <summary>Scenario B: a rename newer than the stored name is applied.</summary>
+        [TestMethod]
+        public async Task Recency_RenameNewerThanTheStoredName_IsApplied()
+        {
+            var agentId = NewAgentId();
+            var now = DateTime.UtcNow.AddMinutes(-10);
+
+            await CommitBatchAt(now.AddDays(-1), Record(agentId, name: DisplayName));
+            await CommitBatchAt(now, Record(agentId, name: Greek));
+
+            Assert.AreEqual(Greek, (await SingleAgentRow(agentId)).Name);
+        }
+
+        /// <summary>Scenario C: an older batch committed after a newer one must not revert the name.</summary>
+        [TestMethod]
+        public async Task Recency_OlderBatchCommittedAfterANewerOne_DoesNotRevertTheName()
+        {
+            var agentId = NewAgentId();
+            var now = DateTime.UtcNow.AddMinutes(-10);
+
+            await CommitBatchAt(now, Record(agentId, name: Greek));
+            await CommitBatchAt(now.AddDays(-1), Record(agentId, name: DisplayName));
+
+            Assert.AreEqual(Greek, (await SingleAgentRow(agentId)).Name);
+        }
+
+        /// <summary>Scenario D: nor the flag, in either direction, and the name is not touched by it.</summary>
+        [DataTestMethod]
+        [DataRow(true)]
+        [DataRow(false)]
+        public async Task Recency_OlderBatchCommittedAfterANewerOne_DoesNotRevertTheFlag(bool newestFlag)
+        {
+            var agentId = NewAgentId();
+            var now = DateTime.UtcNow.AddMinutes(-10);
+
+            await CommitBatchAt(now, Record(agentId, name: DisplayName, isCustomAgent: newestFlag));
+            await CommitBatchAt(now.AddDays(-1), Record(agentId, isCustomAgent: !newestFlag));
+
+            var row = await SingleAgentRow(agentId);
+            Assert.AreEqual(newestFlag, row.IsCustomAgent);
+            Assert.AreEqual(DisplayName, row.Name);
+        }
+
+        /// <summary>
+        /// Scenario E. A row stored before recency was recorded has no times: any agreed name and any flag apply to it, as
+        /// they always did. From then on their times are recorded, so an older batch can no longer revert them.
+        /// </summary>
+        [TestMethod]
+        public async Task Recency_ExistingRowWithoutTimes_TakesAnyAgreedNameAndFlag_ThenRecordsTheirTimes()
+        {
+            var agentId = NewAgentId();
+            var now = DateTime.UtcNow.AddMinutes(-10);
+            await AddLegacyAgentRow(agentId, "Contoso Legacy Name", isCustomAgent: false);
+
+            await CommitBatchAt(now.AddDays(-30), Record(agentId, name: DisplayName, isCustomAgent: true));
+            var row = await SingleAgentRow(agentId);
+            Assert.AreEqual(DisplayName, row.Name, "With no time stored, any agreed name applies.");
+            Assert.AreEqual(true, row.IsCustomAgent, "With no time stored, any flag applies.");
+
+            await CommitBatchAt(now.AddDays(-31), Record(agentId, name: "Contoso Older Name", isCustomAgent: false));
+            row = await SingleAgentRow(agentId);
+            Assert.AreEqual(DisplayName, row.Name);
+            Assert.AreEqual(true, row.IsCustomAgent);
+        }
+
+        /// <summary>
+        /// Scenario F. A batch whose records disagree leaves the name alone, and records no time either, so an agreed
+        /// rename that is newer than the stored name still applies afterwards.
+        /// </summary>
+        [TestMethod]
+        public async Task Recency_BatchThatDisagrees_LeavesTheNameAndItsTimeAlone()
+        {
+            var agentId = NewAgentId();
+            var now = DateTime.UtcNow.AddMinutes(-10);
+
+            await CommitBatchAt(now.AddDays(-2), Record(agentId, name: DisplayName));
+            await CommitTimedBatch((now, Record(agentId, name: "Contoso IT Helpdesk")), (now.AddMinutes(-1), Record(agentId, name: Greek)));
+            Assert.AreEqual(DisplayName, (await SingleAgentRow(agentId)).Name, "Records that disagree must not change the name.");
+
+            await CommitBatchAt(now.AddDays(-1), Record(agentId, name: Greek));
+            Assert.AreEqual(Greek, (await SingleAgentRow(agentId)).Name);
+        }
+
+        /// <summary>
+        /// Within one batch the newest record's flag wins too, so the result does not depend on how records happen to be
+        /// split between batches. Records of the same time still resolve to true, as they always did.
+        /// </summary>
+        [TestMethod]
+        public async Task Recency_WithinOneBatch_TheNewestFlagWins_AndATieStillResolvesToTrue()
+        {
+            var agentId = NewAgentId();
+            var now = DateTime.UtcNow.AddMinutes(-10);
+
+            await CommitTimedBatch((now, Record(agentId, isCustomAgent: false)), (now.AddHours(-1), Record(agentId, isCustomAgent: true)));
+            Assert.AreEqual(false, (await SingleAgentRow(agentId)).IsCustomAgent);
+
+            var tied = NewAgentId();
+            await CommitTimedBatch((now, Record(tied, isCustomAgent: false)), (now, Record(tied, isCustomAgent: true)));
+            Assert.AreEqual(true, (await SingleAgentRow(tied)).IsCustomAgent);
+        }
+
+        /// <summary>
+        /// One commit runs the upsert three times - chat-only, then file, then meeting interactions (see
+        /// SqlCopilotStagingWriter.CommitAllChanges) - so the newest record must win whichever of the three merges
+        /// carries it, rather than whichever runs last.
+        /// </summary>
+        [DataTestMethod]
+        [DataRow(0)]    // the newest record is in the chat-only merge, which runs first
+        [DataRow(1)]    // ...in the file merge
+        [DataRow(2)]    // ...in the meeting merge, which runs last
+        public async Task Recency_TheNewestRecordWins_WhicheverOfTheThreeMergesInOneCommitCarriesIt(int newestIn)
+        {
+            var agentId = NewAgentId();
+            var now = DateTime.UtcNow.AddMinutes(-10);
+            var names = new[] { "Contoso Chat Name", "Contoso File Name", Greek };
+            var records = new (DateTime? At, CopilotAuditLogContent Record)[3];
+            for (var i = 0; i < 3; i++)
+            {
+                var record = Record(agentId, name: names[i], isCustomAgent: i == newestIn);
+                if (i == 1) InFileContext(record);
+                if (i == 2) InMeetingContext(record);
+                records[i] = (i == newestIn ? now : now.AddHours(-1 - i), record);
+            }
+
+            var eventIds = await CommitTimedBatch(records);
+
+            var row = await SingleAgentRow(agentId);
+            Assert.AreEqual(names[newestIn], row.Name);
+            Assert.AreEqual(true, row.IsCustomAgent);
+            using (var db = new AnalyticsEntitiesContext())
+            {
+                var fileEventId = eventIds[1];
+                var meetingEventId = eventIds[2];
+                Assert.AreEqual(1, await db.CopilotEventMetadataFiles.CountAsync(f => f.ChatId == fileEventId), "The file merge must have run.");
+                Assert.AreEqual(1, await db.CopilotEventMetadataMeetings.CountAsync(m => m.ChatId == meetingEventId), "The meeting merge must have run.");
+            }
+        }
+
+        #endregion
+
         [TestMethod]
         public async Task Upsert_NameLongerThanTheColumn_IsTrimmedRatherThanFailingTheBatch()
         {
@@ -610,21 +772,46 @@ namespace Tests.UnitTests
                 IsCustomAgent = isCustomAgent,
             };
 
+        /// <summary>Routes the record to the file (SharePoint) staging table and merge.</summary>
+        private static void InFileContext(CopilotAuditLogContent record)
+            => record.CopilotEventData.Contexts = new List<Context>
+            {
+                new Context { Id = "https://contoso.sharepoint.com/sites/agents/Shared Documents/Contoso.docx", Type = "docx" },
+            };
+
+        /// <summary>Routes the record to the Teams meeting staging table and merge.</summary>
+        private static void InMeetingContext(CopilotAuditLogContent record)
+        {
+            record.CopilotEventData.AppHost = "Teams";
+            record.CopilotEventData.Contexts = new List<Context>
+            {
+                new Context
+                {
+                    Id = "https://microsoft.teams.com/threads/19:meeting_MDAwMDAwMDAtMDAwMC0wMDAwLTAwMDAtMDAwMDAwMDAwMDAw@thread.v2",
+                    Type = ActivityImportConstants.COPILOT_CONTEXT_TYPE_TEAMS_MEETING,
+                },
+            };
+        }
+
         /// <summary>Stages each record against its own new audit event, and commits them all as ONE batch.</summary>
         private Task<List<Guid>> CommitBatch(params CopilotAuditLogContent[] records) => CommitBatchAt(null, records);
 
         /// <summary>The same, with every audit event at <paramref name="timeStamp"/> (now when null).</summary>
-        private async Task<List<Guid>> CommitBatchAt(DateTime? timeStamp, params CopilotAuditLogContent[] records)
+        private Task<List<Guid>> CommitBatchAt(DateTime? timeStamp, params CopilotAuditLogContent[] records)
+            => CommitTimedBatch(records.Select(r => (timeStamp, r)).ToArray());
+
+        /// <summary>The same, with each audit event at its own time (now when null).</summary>
+        private async Task<List<Guid>> CommitTimedBatch(params (DateTime? At, CopilotAuditLogContent Record)[] records)
         {
             var manager = new CopilotAuditEventManager(_config.ConnectionStrings.DatabaseConnectionString, new FakeCopilotMetadataLoader(), _logger);
             var eventIds = new List<Guid>();
             using (var db = new AnalyticsEntitiesContext())
             {
-                foreach (var record in records)
+                foreach (var (at, record) in records)
                 {
                     var commonEvent = new CommonAuditEvent
                     {
-                        TimeStamp = timeStamp ?? DateTime.UtcNow,
+                        TimeStamp = at ?? DateTime.UtcNow,
                         Operation = new EventOperation { Name = "Copilot agent identity test " + Guid.NewGuid() },
                         User = new User { AzureAdId = "test", UserPrincipalName = $"agent.identity.{Guid.NewGuid():N}@contoso.com" },
                         Id = Guid.NewGuid(),
