@@ -1,6 +1,8 @@
 ﻿using ActivityImporter.Engine.ActivityAPI.Copilot;
 using Common.Entities;
 using Common.Entities.Config;
+using Common.Entities.Copilot;
+using Common.Entities.State;
 using Common.Entities.Entities.AuditLog;
 using Microsoft.Extensions.Logging;
 using System;
@@ -59,7 +61,9 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI
                 await _authContext.InitClientCredential();
                 loader = new GraphFileMetadataLoader(GraphServiceClientFactory.CreateWithTimeout(_authContext.Creds, GraphServiceClientFactory.DefaultGraphSdkTimeout), _logger);
             }
-            _copilotEventResolver = new CopilotAuditEventManager(_appConfig.ConnectionStrings.DatabaseConnectionString, loader, _logger, _appConfig.ResolveCopilotResourceMetadata);
+            var enrichmentQueue = StateStore.IsConfigured(_appConfig) ? new CopilotEnrichmentQueue(_appConfig, _logger) : null;
+            _copilotEventResolver = new CopilotAuditEventManager(_appConfig.ConnectionStrings.DatabaseConnectionString, loader, _logger,
+                _appConfig.ResolveCopilotResourceMetadata, enrichmentQueue == null ? (Func<Guid, Task>)null : enrichmentQueue.EnqueueAsync);
             _powerPlatformEventResolver = new PowerPlatformAuditEventManager(_appConfig.ConnectionStrings.DatabaseConnectionString, _logger);
             _dlpEventResolver = new DlpAuditEventManager(_appConfig.ConnectionStrings.DatabaseConnectionString, _logger);
         }

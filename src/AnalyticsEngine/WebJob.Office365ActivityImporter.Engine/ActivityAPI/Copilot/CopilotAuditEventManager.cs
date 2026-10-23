@@ -28,6 +28,7 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
         private readonly ILogger _logger;
         private readonly bool _resolveResourceMetadata;
         private readonly ICopilotStagingWriter _stagingWriter;
+        private readonly Func<Guid, Task> _enqueueEnrichmentRetry;
 
         // Batch-level totals (across all processed events since last commit)
         private int _totalMeetingsCount;
@@ -48,8 +49,9 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
         /// Production entry point: builds the SQL staging writer from a connection string. Kept as a thin
         /// overload so SaveSession.Init() and every other existing call site is unchanged. See issue #367.
         /// </summary>
-        public CopilotAuditEventManager(string connectionString, ICopilotMetadataLoader copilotEventAdaptor, ILogger logger, bool resolveResourceMetadata = true)
-            : this(BuildSqlStagingWriter(connectionString, copilotEventAdaptor, logger), copilotEventAdaptor, logger, resolveResourceMetadata)
+        public CopilotAuditEventManager(string connectionString, ICopilotMetadataLoader copilotEventAdaptor, ILogger logger, bool resolveResourceMetadata = true,
+            Func<Guid, Task> enqueueEnrichmentRetry = null)
+            : this(BuildSqlStagingWriter(connectionString, copilotEventAdaptor, logger), copilotEventAdaptor, logger, resolveResourceMetadata, enqueueEnrichmentRetry)
         {
         }
 
@@ -73,12 +75,14 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
         /// so the context-priority order, agent-metadata-only mode and the null-record guard can all be
         /// asserted with no database.
         /// </summary>
-        internal CopilotAuditEventManager(ICopilotStagingWriter stagingWriter, ICopilotMetadataLoader copilotEventAdaptor, ILogger logger, bool resolveResourceMetadata = true)
+        internal CopilotAuditEventManager(ICopilotStagingWriter stagingWriter, ICopilotMetadataLoader copilotEventAdaptor, ILogger logger, bool resolveResourceMetadata = true,
+            Func<Guid, Task> enqueueEnrichmentRetry = null)
         {
             _stagingWriter = stagingWriter ?? throw new ArgumentNullException(nameof(stagingWriter));
             _copilotEventAdaptor = copilotEventAdaptor ?? throw new ArgumentNullException(nameof(copilotEventAdaptor));
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
             _resolveResourceMetadata = resolveResourceMetadata;
+            _enqueueEnrichmentRetry = enqueueEnrichmentRetry;
         }
 
         /// <summary>
@@ -205,7 +209,7 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
             }
             catch (Exception ex)
             {
-                CountIfUnenrichedAfterTransientFailure(ex);
+                await QueueTransientFailureAsync(baseOfficeEvent.Id, ex);
                 _logger.LogWarning(ex,
                     $"Failed to resolve optional meeting metadata for event {baseOfficeEvent.Id} context {contextId}; staging the Copilot interaction without meeting enrichment.");
                 return false;
@@ -261,18 +265,24 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
             }
             catch (Exception ex)
             {
-                CountIfUnenrichedAfterTransientFailure(ex);
+                await QueueTransientFailureAsync(baseOfficeEvent.Id, ex);
                 _logger.LogWarning(ex,
                     $"Failed to resolve optional file metadata for event {baseOfficeEvent.Id} context {contextId}; staging the Copilot interaction without file enrichment.");
                 return false;
             }
         }
 
-        private void CountIfUnenrichedAfterTransientFailure(Exception ex)
+        private async Task QueueTransientFailureAsync(Guid eventId, Exception ex)
         {
             if (IsTransientEnrichmentFailure(ex))
             {
                 _totalUnenrichedAfterTransientFailure++;
+                if (_enqueueEnrichmentRetry == null)
+                    throw new InvalidOperationException("Copilot enrichment failed transiently and no durable retry store is configured. " +
+                        "The audit batch must be retried, not checkpointed without its enrichment retry. Configure Storage or disable resource metadata resolution.", ex);
+                // A storage failure deliberately escapes the optional-enrichment catch: the source blob must not
+                // be acknowledged until there is either durable enrichment or durable work to recover it.
+                await _enqueueEnrichmentRetry(eventId);
             }
         }
 

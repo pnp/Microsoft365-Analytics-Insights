@@ -82,7 +82,7 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI
                 return true;
             }
 
-            var siteCollectionUrl = (dlpContent as Dlp.DlpAuditLogContentWithSharePointMetadata)?.SharePointMetaData?.SiteCollectionUrl?.TrimEnd('/');
+            var siteCollectionUrl = dlpContent.SharePointMetaData?.SiteCollectionUrl?.TrimEnd('/');
             if (string.IsNullOrEmpty(siteCollectionUrl))
             {
                 var startsWithRules = OrgUrlConfigs.Where(rule => !rule.ExactSiteMatch).ToList();

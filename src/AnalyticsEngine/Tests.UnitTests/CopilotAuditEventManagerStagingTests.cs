@@ -1,5 +1,7 @@
 using ActivityImporter.Engine.ActivityAPI.Copilot;
 using Common.Entities;
+using Common.Entities.Copilot;
+using Common.Entities.UserScope;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Graph.Models.ODataErrors;
@@ -295,7 +297,53 @@ namespace Tests.UnitTests
         };
 
         private static CopilotAuditEventManager NewManagerWith(InMemoryCopilotStagingWriter writer, ICopilotMetadataLoader loader, Microsoft.Extensions.Logging.ILogger logger = null)
-            => new CopilotAuditEventManager(writer, loader, logger ?? NullLogger.Instance);
+            => new CopilotAuditEventManager(writer, loader, logger ?? NullLogger.Instance,
+                enqueueEnrichmentRetry: id => Task.CompletedTask);
+
+        [TestMethod]
+        public async Task CopilotEventManager_TransientEnrichment_QueuesTheEventBeforeFallingBackToChatOnly()
+        {
+            var writer = new InMemoryCopilotStagingWriter();
+            var record = NewEvent();
+            var queued = new List<Guid>();
+            var manager = new CopilotAuditEventManager(writer,
+                new FlakyCopilotMetadataLoader(int.MaxValue, TransientGraphFailure), NullLogger.Instance,
+                enqueueEnrichmentRetry: id =>
+                {
+                    Assert.AreEqual(0, writer.ChatOnlyRows.Count, "Durable retry must precede the successful fallback.");
+                    queued.Add(id);
+                    return Task.CompletedTask;
+                });
+            await manager.SaveSingleCopilotEventToSqlStaging(ContentWith(File()), record);
+            CollectionAssert.AreEqual(new[] { record.Id }, queued);
+            Assert.AreEqual(1, writer.ChatOnlyRows.Count);
+        }
+
+        [TestMethod]
+        public async Task CopilotEventManager_EnrichmentQueueWriteFails_PropagatesInsteadOfAcknowledgingTheFallback()
+        {
+            var writer = new InMemoryCopilotStagingWriter();
+            var failure = new InvalidOperationException("Synthetic table outage");
+            var manager = new CopilotAuditEventManager(writer,
+                new FlakyCopilotMetadataLoader(int.MaxValue, TransientGraphFailure), NullLogger.Instance,
+                enqueueEnrichmentRetry: id => throw failure);
+            var thrown = await Assert.ThrowsExceptionAsync<InvalidOperationException>(() =>
+                manager.SaveSingleCopilotEventToSqlStaging(ContentWith(Meeting()), NewEvent()));
+            Assert.AreSame(failure, thrown);
+            Assert.AreEqual(0, writer.ChatOnlyRows.Count);
+        }
+
+        [TestMethod]
+        public async Task CopilotEventManager_TransientEnrichmentWithoutDurableStorage_DoesNotSilentlyDropTheRetry()
+        {
+            var writer = new InMemoryCopilotStagingWriter();
+            var manager = new CopilotAuditEventManager(writer,
+                new FlakyCopilotMetadataLoader(int.MaxValue, TransientGraphFailure), NullLogger.Instance);
+            var thrown = await Assert.ThrowsExceptionAsync<InvalidOperationException>(() =>
+                manager.SaveSingleCopilotEventToSqlStaging(ContentWith(File()), NewEvent()));
+            StringAssert.Contains(thrown.Message, "no durable retry store");
+            Assert.AreEqual(0, writer.ChatOnlyRows.Count);
+        }
 
         /// <summary>An interaction about the file at <paramref name="url"/>, by a user the prewarm can see.</summary>
         private static CopilotAuditLogContent ContentWithFile(string url)
@@ -551,6 +599,160 @@ namespace Tests.UnitTests
             using (var db = new AnalyticsEntitiesContext())
             {
                 db.Database.Initialize(force: false);
+            }
+        }
+
+        [DataTestMethod]
+        [DataRow(false, false)]
+        [DataRow(true, false)]
+        [DataRow(false, true)]
+        [DataRow(true, true)]
+        public async Task EnrichmentWorker_RecoversMissingLinksWithoutRewritingCoreEvidence_AndReplayIsIdempotent(bool isMeeting, bool missingAppHost)
+        {
+            EnsureSchemaIsCurrent();
+            using (var connection = new SqlConnection(_config.ConnectionStrings.DatabaseConnectionString))
+            {
+                connection.Open();
+                var record = InsertAuditEventForNewUser(connection);
+                var agentId = "synthetic-agent-" + Guid.NewGuid().ToString("N");
+                var payload = ContentWith(isMeeting ? Meeting() : File()).CopilotEventData;
+                if (missingAppHost) payload.AppHost = null;
+                try
+                {
+                    Execute(connection, "UPDATE dbo.audit_events SET event_data = @data WHERE id = @event",
+                        ("@data", Newtonsoft.Json.JsonConvert.SerializeObject(payload)), ("@event", record.EventId));
+                    var original = new SqlCopilotStagingWriter(_config.ConnectionStrings.DatabaseConnectionString, NullLogger.Instance);
+                    original.StageChatOnly(new ChatOnlyCopilotLogTempEntity
+                    {
+                        EventId = record.EventId, AppHost = "Teams", AgentId = agentId,
+                        AgentName = "Contoso original agent", IsCustomAgent = true
+                    });
+                    await original.CommitAllChanges();
+                    var storedAgent = Scalar(connection, "SELECT agent_id FROM dbo.copilot_chats WHERE event_id = @event", ("@event", record.EventId));
+                    var loader = new FlakyCopilotMetadataLoader(0, TransientGraphFailure);
+                    var queue = new CopilotEnrichmentQueue(new Azure.Data.Tables.TableClient("UseDevelopmentStorage=true", "Unused"), "Unused");
+                    var worker = new CopilotEnrichmentWorker(_config.ConnectionStrings.DatabaseConnectionString, queue, loader,
+                        UserImportScope.Everyone("Synthetic unfiltered scope"), NullLogger.Instance);
+
+                    Assert.IsTrue(await worker.EnrichEventAsync(record.EventId));
+                    Assert.IsTrue(await worker.EnrichEventAsync(record.EventId), "A crash after SQL commit but before queue acknowledgement must replay safely.");
+
+                    var table = isMeeting ? "copilot_event_meetings" : "copilot_event_files";
+                    Assert.AreEqual(1, Convert.ToInt32(Scalar(connection, $"SELECT COUNT(*) FROM dbo.{table} WHERE copilot_chat_id = @event", ("@event", record.EventId))));
+                    Assert.AreEqual(1, isMeeting ? loader.MeetingCalls : loader.FileCalls);
+                    Assert.AreEqual(storedAgent, Scalar(connection, "SELECT agent_id FROM dbo.copilot_chats WHERE event_id = @event", ("@event", record.EventId)));
+                    Assert.AreEqual("Contoso original agent", Scalar(connection, "SELECT name FROM dbo.copilot_agents WHERE id = @agent", ("@agent", storedAgent)));
+                    if (!isMeeting)
+                        Assert.AreEqual("Καλημέρα κόσμε.docx", Scalar(connection,
+                            "SELECT n.file_name FROM dbo.copilot_event_files f JOIN dbo.event_file_names n ON n.id = f.file_name_id WHERE f.copilot_chat_id = @event",
+                            ("@event", record.EventId)));
+                    Assert.AreEqual(Newtonsoft.Json.JsonConvert.SerializeObject(payload),
+                        Scalar(connection, "SELECT event_data FROM dbo.audit_events WHERE id = @event", ("@event", record.EventId)));
+                }
+                finally
+                {
+                    Execute(connection, "DELETE dbo.copilot_event_files WHERE copilot_chat_id = @event", ("@event", record.EventId));
+                    Execute(connection, "DELETE dbo.copilot_event_meetings WHERE copilot_chat_id = @event", ("@event", record.EventId));
+                    Execute(connection, "DELETE dbo.copilot_chats WHERE event_id = @event", ("@event", record.EventId));
+                    Execute(connection, "DELETE dbo.audit_events WHERE id = @event", ("@event", record.EventId));
+                    Execute(connection, "DELETE dbo.users WHERE user_name = @upn", ("@upn", record.Upn));
+                    Execute(connection, "DELETE dbo.copilot_agents WHERE agent_id = @agent", ("@agent", agentId));
+                    // The synthetic meeting id can be shared with other tests; leave shared dimensions intact.
+                }
+            }
+        }
+
+        [DataTestMethod]
+        [DataRow(false, 400, true)]
+        [DataRow(true, 409, true)]
+        [DataRow(false, 404, false)]
+        [DataRow(true, 403, false)]
+        public async Task EnrichmentWorker_OnlyDefiniteGraphNoResult_ReturnsCompleted(bool isMeeting, int status, bool unexpected)
+        {
+            EnsureSchemaIsCurrent();
+            using (var connection = new SqlConnection(_config.ConnectionStrings.DatabaseConnectionString))
+            {
+                connection.Open();
+                var record = InsertAuditEventForNewUser(connection);
+                try
+                {
+                    var payload = ContentWith(isMeeting ? Meeting() : File()).CopilotEventData;
+                    Execute(connection, "UPDATE dbo.audit_events SET event_data = @data WHERE id = @event",
+                        ("@data", Newtonsoft.Json.JsonConvert.SerializeObject(payload)), ("@event", record.EventId));
+                    var original = new SqlCopilotStagingWriter(_config.ConnectionStrings.DatabaseConnectionString, NullLogger.Instance);
+                    original.StageChatOnly(new ChatOnlyCopilotLogTempEntity { EventId = record.EventId, AppHost = "Teams" });
+                    await original.CommitAllChanges();
+                    var failure = new ODataError
+                    {
+                        ResponseStatusCode = status,
+                        Error = new MainError { Code = "syntheticUnexpected", Message = "Synthetic unexpected Graph response" }
+                    };
+                    var graph = new Tests.UnitTests.FakeLoaderClasses.FakeSpoGraphClient
+                    {
+                        OnGetDriveItemByUrl = _ => throw failure,
+                        OnGetOnlineMeeting = (user, meeting) => throw failure
+                    };
+                    var loader = new GraphFileMetadataLoader(graph, NullLogger.Instance);
+                    var queue = new CopilotEnrichmentQueue(new Azure.Data.Tables.TableClient("UseDevelopmentStorage=true", "Unused"), "Unused");
+                    var worker = new CopilotEnrichmentWorker(_config.ConnectionStrings.DatabaseConnectionString, queue, loader,
+                        UserImportScope.Everyone("Synthetic unfiltered scope"), NullLogger.Instance);
+
+                    if (!unexpected)
+                        Assert.IsTrue(await worker.EnrichEventAsync(record.EventId));
+                    else if (isMeeting)
+                        await Assert.ThrowsExceptionAsync<ODataError>(() => worker.EnrichEventAsync(record.EventId));
+                    else
+                        await Assert.ThrowsExceptionAsync<InvalidOperationException>(() => worker.EnrichEventAsync(record.EventId));
+                    Assert.AreEqual(0, Convert.ToInt32(Scalar(connection,
+                        "SELECT COUNT(*) FROM dbo.copilot_event_files WHERE copilot_chat_id = @event", ("@event", record.EventId))));
+                    Assert.AreEqual(0, Convert.ToInt32(Scalar(connection,
+                        "SELECT COUNT(*) FROM dbo.copilot_event_meetings WHERE copilot_chat_id = @event", ("@event", record.EventId))));
+                    if (!unexpected) return;
+
+                    graph.OnGetDriveItemByUrl = url => new Microsoft.Graph.Models.DriveItem { WebUrl = url };
+                    graph.OnGetOnlineMeeting = (user, meeting) => new Microsoft.Graph.Models.OnlineMeeting
+                    {
+                        Id = meeting, Subject = "Contoso recovered meeting", CreationDateTime = DateTimeOffset.UtcNow
+                    };
+                    Assert.IsTrue(await worker.EnrichEventAsync(record.EventId),
+                        "An unexpected error must not poison the run-scoped negative cache.");
+                }
+                finally
+                {
+                    Execute(connection, "DELETE dbo.copilot_event_files WHERE copilot_chat_id = @event", ("@event", record.EventId));
+                    Execute(connection, "DELETE dbo.copilot_event_meetings WHERE copilot_chat_id = @event", ("@event", record.EventId));
+                    Execute(connection, "DELETE dbo.copilot_chats WHERE event_id = @event", ("@event", record.EventId));
+                    Execute(connection, "DELETE dbo.audit_events WHERE id = @event", ("@event", record.EventId));
+                    Execute(connection, "DELETE dbo.users WHERE user_name = @upn", ("@upn", record.Upn));
+                }
+            }
+        }
+
+        [TestMethod]
+        public async Task EnrichmentWorker_ChatNotYetCommitted_DefersWithoutCallingGraph_AndNeverRecreatesPurgedEvents()
+        {
+            EnsureSchemaIsCurrent();
+            using (var connection = new SqlConnection(_config.ConnectionStrings.DatabaseConnectionString))
+            {
+                connection.Open();
+                var record = InsertAuditEventForNewUser(connection);
+                var loader = new FlakyCopilotMetadataLoader(0, TransientGraphFailure);
+                var queue = new CopilotEnrichmentQueue(new Azure.Data.Tables.TableClient("UseDevelopmentStorage=true", "Unused"), "Unused");
+                var worker = new CopilotEnrichmentWorker(_config.ConnectionStrings.DatabaseConnectionString, queue, loader,
+                    UserImportScope.Everyone("Synthetic unfiltered scope"), NullLogger.Instance);
+                try
+                {
+                    Assert.IsFalse(await worker.EnrichEventAsync(record.EventId));
+                    Execute(connection, "DELETE dbo.audit_events WHERE id = @event", ("@event", record.EventId));
+                    Assert.IsTrue(await worker.EnrichEventAsync(record.EventId));
+                    Assert.AreEqual(0, loader.FileCalls + loader.MeetingCalls);
+                    Assert.AreEqual(0, Convert.ToInt32(Scalar(connection, "SELECT COUNT(*) FROM dbo.audit_events WHERE id = @event", ("@event", record.EventId))));
+                }
+                finally
+                {
+                    Execute(connection, "DELETE dbo.audit_events WHERE id = @event", ("@event", record.EventId));
+                    Execute(connection, "DELETE dbo.users WHERE user_name = @upn", ("@upn", record.Upn));
+                }
             }
         }
 

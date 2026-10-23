@@ -560,6 +560,13 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                     : await db.users.AsNoTracking().ToListAsync();
                 _logger.LogInformation($"User import - loaded {allDbUsers.Count.ToString("N0")} users from database");
 
+                if (!await UserRenameProcessor.RenameAsync(db.Database.Connection.ConnectionString,
+                    allActiveGraphUsers.Concat(disabledGraphUsers), allDbUsers, _logger,
+                    () => EnsureWriterLockHeldAsync("user rename")))
+                {
+                    return false;
+                }
+
                 // Create lookup dictionaries for performance - pre-allocate capacity
                 var dbUsersByUpn = new Dictionary<string, Common.Entities.User>(allDbUsers.Count, StringComparer.OrdinalIgnoreCase);
                 var dbUsersByAadId = new Dictionary<string, Common.Entities.User>(allDbUsers.Count, StringComparer.OrdinalIgnoreCase);

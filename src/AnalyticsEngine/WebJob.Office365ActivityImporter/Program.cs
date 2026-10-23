@@ -22,6 +22,7 @@ using System.Linq;
 using System.Threading.Tasks;
 using WebJob.Office365ActivityImporter.Engine;
 using WebJob.Office365ActivityImporter.Engine.ActivityAPI; // for AuditTraceConfig
+using WebJob.Office365ActivityImporter.Engine.ActivityAPI.Dlp;
 using WebJob.Office365ActivityImporter.Engine.Graph.Calls;
 using WebJob.Office365ActivityImporter.Engine.Graph.Email;
 using WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Maintenance;
@@ -109,6 +110,12 @@ namespace WebJob.Office365ActivityImporter
                     Console.WriteLine($"Scanned={batch.Scanned}; Replayed={batch.Replayed}; Unrecoverable={batch.Unrecoverable}; UnknownKind={batch.UnknownKind}. "
                         + "Repeat until Scanned=0. Re-scan with a new checkpoint after historical writers finish.");
                 }
+                return;
+            }
+
+            if (args.Length > 0 && args[0] == DlpHistoricalRepairCommand.Option)
+            {
+                await DlpHistoricalRepairCommand.RunAsync(args, configuredSettings);
                 return;
             }
 

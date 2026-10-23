@@ -9,7 +9,6 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Dlp
     /// </summary>
     public class DlpAuditLogContentWithSharePointMetadata : DlpAuditLogContent
     {
-        public DlpSharePointMetadata SharePointMetaData { get; set; }
     }
 
     /// <summary>The fields of the DLP schema's SharePointMetadata complex type that the importer reads.</summary>

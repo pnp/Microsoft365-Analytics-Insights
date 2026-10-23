@@ -16,6 +16,7 @@ using System.Linq;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using WebJob.Office365ActivityImporter.Engine.ActivityAPI;
 
 namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
 {
@@ -201,6 +202,17 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
                 $"Processing in chunks of {_userChunkSize} (Graph load parallelism: {_graphLoadParallelism}; " +
                 $"persistence uses single-connection multi-row SQL inserts to avoid unique-index deadlocks).");
 
+            var failures = await ProcessUserChunksAsync(usersToScan);
+            await PersistMailboxSkipListAsync(skipList, knownNoMailbox, fullSweepDue);
+
+            swTotal.Stop();
+            LogRunSummary(swTotal.Elapsed);
+            CommitFailures.Rethrow(failures, "sent-email mailbox chunks");
+        }
+
+        private async Task<List<Exception>> ProcessUserChunksAsync(List<Common.Entities.User> usersToScan)
+        {
+            var failures = new List<Exception>();
             for (int i = 0; i < usersToScan.Count; i += _userChunkSize)
             {
                 // GetRange instead of Skip().Take() - Skip() on a List walks past every
@@ -211,13 +223,20 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
                     $"Processing user chunk {(i / _userChunkSize) + 1} of " +
                     $"{(usersToScan.Count + _userChunkSize - 1) / _userChunkSize} ({chunk.Count} users).");
 
-                await ProcessUserChunkAsync(chunk);
+                try
+                {
+                    await ProcessUserChunkAsync(chunk);
+                }
+                catch (Exception ex)
+                {
+                    failures.Add(ex);
+                    _logger.LogError(ex,
+                        "Sent emails: a chunk completed with failures. Successful mailboxes keep their committed rows and checkpoints; " +
+                        "failed mailboxes retain their previous checkpoints for retry. Continuing with the next chunk.");
+                }
             }
 
-            await PersistMailboxSkipListAsync(skipList, knownNoMailbox, fullSweepDue);
-
-            swTotal.Stop();
-            LogRunSummary(swTotal.Elapsed);
+            return failures;
         }
 
         /// <summary>
@@ -275,9 +294,9 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
             return ProcessUserChunkAsync(new List<Common.Entities.User> { user });
         }
 
-        internal Task ImportSentEmailsForUsersForTest(List<Common.Entities.User> users)
+        internal async Task ImportSentEmailsForUsersForTest(List<Common.Entities.User> users)
         {
-            return ProcessUserChunkAsync(users);
+            CommitFailures.Rethrow(await ProcessUserChunksAsync(users), "sent-email mailbox chunks");
         }
 
         // For test-only access to the HTML stripper - kept on this class for backwards compatibility.
@@ -331,7 +350,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
 
             if (perUser.Count == 0)
             {
-                await CommitDeltaTokensAsync(loaded);
+                await PersistMailboxesAsync(loaded, perUser, null, null);
                 return;
             }
 
@@ -376,7 +395,6 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
             // Filter each user's candidate list to the genuinely-new ones.
             int totalToInsert = 0;
             int totalOrphanRepairs = 0;
-            var orphanRepairsBySentEmailId = new HashSet<int>();
             foreach (var u in perUser)
             {
                 u.ToInsert = u.Candidates
@@ -385,13 +403,13 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
                 totalToInsert += u.ToInsert.Count;
 
                 u.OrphanRecipientRepairs = u.Candidates
-                    .Where(c => existingByKey.TryGetValue(c.GraphMessageId, out var existing) && !existing.HasRecipients)
+                    .Where(c => existingByKey.TryGetValue(c.GraphMessageId, out var existing)
+                        && existing.UserId == u.User.ID && !existing.HasRecipients)
                     .Select(c => new ExistingRecipientRepair
                     {
                         SentEmailId = existingByKey[c.GraphMessageId].SentEmailId,
                         Candidate = c
                     })
-                    .Where(r => orphanRepairsBySentEmailId.Add(r.SentEmailId))
                     .ToList();
                 totalOrphanRepairs += u.OrphanRecipientRepairs.Count;
             }
@@ -404,12 +422,64 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
             _logger.LogInformation(
                 $"  [chunk] persisting {totalToInsert} new messages and repairing {totalOrphanRepairs} orphaned parents across {perUser.Count} users " +
                 "(serial multi-row INSERTs on one connection to avoid unique-index races)...");
-            await PersistChunkAsync(perUser, addressIds, sentimentByMessageId);
+            await PersistMailboxesAsync(loaded, perUser, addressIds, sentimentByMessageId);
             swPhase.Stop();
             _logger.LogInformation(
                 $"  [chunk] persistence done in {swPhase.ElapsedMilliseconds}ms.");
 
-            await CommitDeltaTokensAsync(loaded);
+        }
+
+        private async Task PersistMailboxesAsync(List<LoadedUser> loaded, List<UserChunkResult> perUser,
+            Dictionary<string, int> addressIds, Dictionary<string, double?> sentimentByMessageId)
+        {
+            var workByUserId = perUser.ToDictionary(u => u.User.ID);
+            var savedMessages = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+            var repairedParents = new HashSet<int>();
+            var failures = new List<Exception>();
+            foreach (var mailbox in loaded)
+            {
+                try
+                {
+                    if (workByUserId.TryGetValue(mailbox.User.ID, out var work))
+                    {
+                        work.ToInsert = work.ToInsert.Where(candidate =>
+                        {
+                            if (!savedMessages.TryGetValue(candidate.GraphMessageId, out var firstUserId))
+                                return true;
+                            Interlocked.Increment(ref _duplicateMessageIdsSkippedInChunk);
+                            _logger.LogWarning(
+                                $"Sent emails: duplicate graph_message_id found within one user chunk for user IDs " +
+                                $"{firstUserId} and {work.User.ID}; keeping the first row (user ID {firstUserId}) " +
+                                $"and skipping user ID {work.User.ID}.");
+                            return false;
+                        }).ToList();
+                        work.OrphanRecipientRepairs = work.OrphanRecipientRepairs
+                            .Where(repair => !repairedParents.Contains(repair.SentEmailId)).ToList();
+
+                        // Keep the chunk-wide lookups and Graph concurrency, but commit one mailbox's parents and
+                        // recipients together. A later mailbox cannot roll this one back or withhold its checkpoint.
+                        await PersistChunkAsync(new List<UserChunkResult> { work }, addressIds, sentimentByMessageId);
+                        foreach (var candidate in work.ToInsert)
+                            savedMessages[candidate.GraphMessageId] = work.User.ID;
+                        foreach (var repair in work.OrphanRecipientRepairs)
+                            repairedParents.Add(repair.SentEmailId);
+                    }
+                    else
+                    {
+                        Interlocked.Increment(ref _mailboxesScanned);
+                    }
+                    await CommitDeltaTokensAsync(new[] { mailbox });
+                }
+                catch (Exception ex)
+                {
+                    RecordMailboxFailure(ex);
+                    failures.Add(ex);
+                    _logger.LogError(ex,
+                        $"Sent emails: persistence or checkpoint failed for user ID {mailbox.User.ID}; " +
+                        "its previous checkpoint is retained for replay. Continuing with the other mailboxes.");
+                }
+            }
+            CommitFailures.Rethrow(failures, "sent-email mailbox commits");
         }
 
         private async Task<List<LoadedUser>> LoadChunkInParallelAsync(List<Common.Entities.User> users)
@@ -1105,6 +1175,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
                     .Select(s => new
                     {
                         s.ID,
+                        s.UserID,
                         s.GraphMessageId,
                         HasRecipients = s.Recipients.Any()
                     })
@@ -1115,6 +1186,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
                     existingByKey[h.GraphMessageId] = new ExistingEmailState
                     {
                         SentEmailId = h.ID,
+                        UserId = h.UserID,
                         HasRecipients = h.HasRecipients
                     };
                 }
@@ -1316,6 +1388,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
         private sealed class ExistingEmailState
         {
             public int SentEmailId;
+            public int UserId;
             public bool HasRecipients;
         }
 

@@ -67,12 +67,13 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
         private readonly InsertBatch<ChatOnlyCopilotLogTempEntity> _copilotInsertsChatsNoContext;
         private readonly ProjectResourceReader _rr;
         private readonly bool _throwOnPairingFailure;
+        private readonly bool _enrichmentOnly;
         private readonly string _sharePointStagingTable;
         private readonly string _teamsStagingTable;
         private readonly string _chatOnlyStagingTable;
 
         public SqlCopilotStagingWriter(string connectionString, ILogger logger, bool throwOnPairingFailure = false,
-            bool isolateStagingTables = false)
+            bool isolateStagingTables = false, bool enrichmentOnly = false)
         {
             if (string.IsNullOrEmpty(connectionString))
             {
@@ -85,6 +86,7 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
 
             _rr = new ProjectResourceReader(System.Reflection.Assembly.GetExecutingAssembly());
             _throwOnPairingFailure = throwOnPairingFailure;
+            _enrichmentOnly = enrichmentOnly;
             // Operator replays run beside the live process; keep shards temporary even in DEBUG.
             var shard = isolateStagingTables ? Guid.NewGuid().ToString("N") : null;
             string StagingName(string name) => isolateStagingTables ? "##" + name.TrimStart('#') + "_" + shard : name;
@@ -152,8 +154,9 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
 
         private string GetSql(string tempTableName, string workloadSpecificScriptName)
         {
-            var commonMergeSql = _rr.ReadResourceString("WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot.SQL.common_upsert_copilot_agents.sql")
-                .Replace(ActivityImportConstants.STAGING_TABLE_VARNAME, tempTableName);
+            var commonMergeSql = _enrichmentOnly ? string.Empty
+                : _rr.ReadResourceString("WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot.SQL.common_upsert_copilot_agents.sql")
+                    .Replace(ActivityImportConstants.STAGING_TABLE_VARNAME, tempTableName);
 
             var workloadSpecificSql = workloadSpecificScriptName != null
                 ? _rr.ReadResourceString(workloadSpecificScriptName).Replace(ActivityImportConstants.STAGING_TABLE_VARNAME, tempTableName)

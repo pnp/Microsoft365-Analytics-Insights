@@ -111,7 +111,10 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
             _userGraphCache = new UserGraphCache(spoGraphClient);
         }
 
-        public async Task<MeetingMetadata> GetMeetingInfo(string meetingId, string userGuid)
+        public Task<MeetingMetadata> GetMeetingInfo(string meetingId, string userGuid)
+            => GetMeetingInfo(meetingId, userGuid, requireDefiniteResult: false);
+
+        internal async Task<MeetingMetadata> GetMeetingInfo(string meetingId, string userGuid, bool requireDefiniteResult)
         {
             // Requires OnlineMeetings.Read.All and https://learn.microsoft.com/en-us/graph/cloud-communication-online-meeting-application-access-policy#configure-application-access-policy
 
@@ -214,6 +217,7 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
             catch (ApiException ex)
             {
                 _logger.LogWarning(ex, "Error getting meeting info for meetingId {meetingId}", meetingId);
+                if (requireDefiniteResult) throw;
                 return null;
             }
         }
@@ -269,7 +273,10 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
         /// The same lookup, made once and without waiting, for a caller holding the save lock. A transient failure throws
         /// <see cref="CopilotEnrichmentTransientException"/>, and is not cached, so the next lookup tries again.
         /// </summary>
-        public async Task<SpoDocumentFileInfo> GetSpoFileInfoSingleAttempt(string copilotDocContextId, string eventUpn)
+        public Task<SpoDocumentFileInfo> GetSpoFileInfoSingleAttempt(string copilotDocContextId, string eventUpn)
+            => GetSpoFileInfoSingleAttempt(copilotDocContextId, eventUpn, requireDefiniteResult: false);
+
+        internal async Task<SpoDocumentFileInfo> GetSpoFileInfoSingleAttempt(string copilotDocContextId, string eventUpn, bool requireDefiniteResult)
         {
             // Skip anything that can't be a SharePoint/OneDrive file (securitycopilot.microsoft.com, local
             // Outlook attachment paths, other hosts) before doing any Graph work - these fail on every import.
@@ -308,6 +315,10 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
                     // Throttling or a server error rather than an answer, so not "no such file": GetSpoFileInfo retries
                     // it (outside the save lock), and the save counts the interaction if it goes without its file.
                     throw new CopilotEnrichmentTransientException("Microsoft Graph failed transiently resolving a Copilot file context.");
+                }
+                else if (requireDefiniteResult && result.Failure == ResolutionFailure.Unexpected)
+                {
+                    throw new InvalidOperationException("Microsoft Graph did not give a definite file-resolution result; durable enrichment must be retried.");
                 }
                 // Otherwise an unexpected Graph error, already logged with its exception: not cached, so a later
                 // batch tries again, but not retried now - waiting a few seconds doesn't change a 400.

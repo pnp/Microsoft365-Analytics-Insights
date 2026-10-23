@@ -809,6 +809,104 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public async Task ImportSentEmailsForUsers_FailedOrphanOwner_DoesNotRepairWithAnotherMailboxesRecipients()
+        {
+            var owner = await CreateSavedUserAsync("orphan-owner");
+            var other = await CreateSavedUserAsync("orphan-other");
+            var suffix = Guid.NewGuid().ToString("N");
+            var orphanId = "orphan-owned-" + suffix;
+            var failedId = "orphan-fail-" + suffix;
+            await SeedOrphanParentAsync(owner, orphanId);
+            var source = new RecordingSentEmailSourceLoader(
+                (owner, Msg(orphanId, owner.Mail, new[] { "correct@contoso.com" })),
+                (owner, Msg(failedId, owner.Mail, new[] { "correct@contoso.com" })),
+                (other, Msg(orphanId, other.Mail, new[] { "wrong@contoso.com" })));
+            var committer = new RecordingDeltaTokenCommitter();
+            var importer = NewImporter(source, committer);
+            importer.BeforeSentEmailBatchInsertAsync = (connection, id) => id == failedId
+                ? throw new InvalidOperationException("Synthetic owner transaction failure.")
+                : Task.CompletedTask;
+
+            await Assert.ThrowsExceptionAsync<InvalidOperationException>(() =>
+                importer.ImportSentEmailsForUsersForTest(new List<User> { owner, other }));
+            Assert.AreEqual(0, await CountRecipientsAsync(orphanId), "Only the parent mailbox may repair its orphan.");
+            Assert.IsFalse(committer.TryGetToken(owner, out _));
+            Assert.IsTrue(committer.TryGetToken(other, out _));
+
+            importer.BeforeSentEmailBatchInsertAsync = null;
+            await importer.ImportSentEmailsForUser(owner);
+            using (var db = new AnalyticsEntitiesContext())
+            {
+                var addresses = await db.SentEmailRecipients.Where(r => r.SentEmail.GraphMessageId == orphanId)
+                    .Select(r => r.RecipientAddress.Address).ToListAsync();
+                CollectionAssert.AreEqual(new[] { "correct@contoso.com" }, addresses);
+            }
+        }
+
+        [DataTestMethod]
+        [DataRow(1)]
+        [DataRow(25)]
+        public async Task ImportSentEmailsForUsers_OneMailboxFails_OtherMailboxesCommitAndFailureReplays(int chunkSize)
+        {
+            var failed = await CreateSavedUserAsync("isolated-failed");
+            var healthy = await CreateSavedUserAsync("isolated-healthy");
+            var empty = await CreateSavedUserAsync("isolated-empty");
+            var suffix = Guid.NewGuid().ToString("N");
+            var failedMessageId = "isolated-failed-" + suffix;
+            var healthyMessageId = "isolated-healthy-" + suffix;
+            var source = new RecordingSentEmailSourceLoader(
+                (failed, Msg(failedMessageId, failed.Mail, new[] { "recipient@contoso.com" })),
+                (healthy, Msg(healthyMessageId, healthy.Mail, new[] { "recipient@contoso.com" })));
+            var committer = new RecordingDeltaTokenCommitter();
+            var importer = NewImporter(source, committer, userChunkSize: chunkSize);
+            importer.BeforeSentEmailBatchInsertAsync = (connection, id) =>
+            {
+                if (id == failedMessageId)
+                    throw new InvalidOperationException("Synthetic mailbox persistence failure.");
+                return Task.CompletedTask;
+            };
+
+            await Assert.ThrowsExceptionAsync<InvalidOperationException>(() =>
+                importer.ImportSentEmailsForUsersForTest(new List<User> { failed, healthy, empty }));
+
+            Assert.AreEqual(0, await CountSentEmailsAsync(failedMessageId));
+            Assert.IsFalse(committer.TryGetToken(failed, out _));
+            Assert.AreEqual(1, await CountSentEmailsAsync(healthyMessageId));
+            Assert.AreEqual(1, await CountRecipientsAsync(healthyMessageId));
+            Assert.IsTrue(committer.TryGetToken(healthy, out _));
+            Assert.IsTrue(committer.TryGetToken(empty, out _));
+
+            importer.BeforeSentEmailBatchInsertAsync = null;
+            await importer.ImportSentEmailsForUsersForTest(new List<User> { failed, healthy, empty });
+            Assert.AreEqual(1, await CountSentEmailsAsync(failedMessageId));
+            Assert.AreEqual(1, await CountRecipientsAsync(failedMessageId));
+            Assert.AreEqual(1, await CountSentEmailsAsync(healthyMessageId));
+            Assert.IsTrue(committer.TryGetToken(failed, out _));
+        }
+
+        [TestMethod]
+        public async Task ImportSentEmailsForUsers_CheckpointFailure_DoesNotBlockLaterMailbox()
+        {
+            var failed = await CreateSavedUserAsync("checkpoint-failed");
+            var healthy = await CreateSavedUserAsync("checkpoint-healthy");
+            var suffix = Guid.NewGuid().ToString("N");
+            var source = new RecordingSentEmailSourceLoader(
+                (failed, Msg("checkpoint-failed-" + suffix, failed.Mail, new[] { "recipient@contoso.com" })),
+                (healthy, Msg("checkpoint-healthy-" + suffix, healthy.Mail, new[] { "recipient@contoso.com" })));
+            var committer = new RecordingDeltaTokenCommitter((user, token) =>
+                user.ID == failed.ID ? Task.FromException(new InvalidOperationException("Synthetic checkpoint outage.")) : Task.CompletedTask);
+
+            await Assert.ThrowsExceptionAsync<InvalidOperationException>(() =>
+                NewImporter(source, committer).ImportSentEmailsForUsersForTest(new List<User> { failed, healthy }));
+
+            Assert.AreEqual(1, await CountRecipientsAsync("checkpoint-failed-" + suffix),
+                "SQL remains committed when its subsequent checkpoint fails, so replay must deduplicate it.");
+            Assert.IsFalse(committer.TryGetToken(failed, out _));
+            Assert.IsTrue(committer.TryGetToken(healthy, out _));
+            Assert.AreEqual(1, await CountRecipientsAsync("checkpoint-healthy-" + suffix));
+        }
+
+        [TestMethod]
         public void AddDistinctRecipientPair_SkipsDuplicatePairs()
         {
             var pairs = new List<(int SentEmailId, int RecipientAddressId)>();
@@ -1011,7 +1109,7 @@ namespace Tests.UnitTests
 
         private sealed class RecordingSentEmailSourceLoader : ISentEmailSourceLoader
         {
-            private readonly Dictionary<int, GraphSentMessage> _messagesByUserId;
+            private readonly Dictionary<int, List<GraphSentMessage>> _messagesByUserId;
 
             public RecordingSentEmailSourceLoader(User user, GraphSentMessage message)
                 : this((user, message))
@@ -1020,7 +1118,7 @@ namespace Tests.UnitTests
 
             public RecordingSentEmailSourceLoader(params (User User, GraphSentMessage Message)[] messages)
             {
-                _messagesByUserId = messages.ToDictionary(m => m.User.ID, m => m.Message);
+                _messagesByUserId = messages.GroupBy(m => m.User.ID).ToDictionary(g => g.Key, g => g.Select(m => m.Message).ToList());
             }
 
             public string NextDeltaToken { get; } = "delta-after-success";
@@ -1037,8 +1135,8 @@ namespace Tests.UnitTests
                 LoadCount++;
                 return Task.FromResult(new SentEmailLoadResult
                 {
-                    Messages = _messagesByUserId.TryGetValue(user.ID, out var message)
-                        ? new List<GraphSentMessage> { message }
+                    Messages = _messagesByUserId.TryGetValue(user.ID, out var messages)
+                        ? new List<GraphSentMessage>(messages)
                         : new List<GraphSentMessage>(),
                     DeltaTokenReads = 1,
                     DeltaTokenWrites = 0,

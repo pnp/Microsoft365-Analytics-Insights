@@ -2,6 +2,8 @@ using Common.Entities;
 using Common.Entities.Calls;
 using Common.Entities.Config;
 using Common.Entities.CopilotAuditBackfill;
+using Common.Entities.Copilot;
+using ActivityImporter.Engine.ActivityAPI.Copilot;
 using Common.Entities.State;
 using Common.Entities.UserScope;
 using DataUtils;
@@ -313,6 +315,7 @@ namespace WebJob.Office365ActivityImporter
         internal async Task DownloadActivityData()
         {
             await InitAuth();
+            await AdvanceCopilotEnrichmentSafely();
 
             // Remember start time
             DateTime startTime = DateTime.Now;
@@ -405,6 +408,23 @@ namespace WebJob.Office365ActivityImporter
                     _logger);
                 await backfill.AdvanceLatestAsync();
             }, _logger);
+        }
+
+        internal async Task AdvanceCopilotEnrichmentSafely()
+        {
+            if (!_settings.ResolveCopilotResourceMetadata || !StateStore.IsConfigured(_settings))
+                return;
+            try
+            {
+                var worker = new CopilotEnrichmentWorker(_settings.ConnectionStrings.DatabaseConnectionString,
+                    new CopilotEnrichmentQueue(_settings, _logger), new GraphFileMetadataLoader(_graphClient, _logger),
+                    await _userScopeProvider.GetScopeAsync(), _logger);
+                await worker.RunAsync();
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Copilot enrichment retry pass failed; queued work remains durable and will retry next cycle. New audit import can continue.");
+            }
         }
     }
 }

@@ -4,7 +4,9 @@ using Newtonsoft.Json.Linq;
 using System.Collections.Generic;
 using System.Linq;
 using Common.Entities;
+using DataUtils;
 using WebJob.Office365ActivityImporter.Engine;
+using WebJob.Office365ActivityImporter.Engine.ActivityAPI;
 using WebJob.Office365ActivityImporter.Engine.ActivityAPI.Dlp;
 using WebJob.Office365ActivityImporter.Engine.ActivityAPI.Loaders;
 using WebJob.Office365ActivityImporter.Engine.Entities.Serialisation;
@@ -23,6 +25,26 @@ namespace Tests.UnitTests
     public class DlpCopilotTests
     {
         private static ILogger Logger => new LoggerFactory().CreateLogger("DlpCopilotTests");
+
+        [TestMethod]
+        public void DlpBaseRecord_UsesItsSiteCollectionMetadataForExactOrgUrlScope()
+        {
+            const string site = "https://contoso.sharepoint.com/sites/example";
+            var filter = new SharePointOrgUrlsFilterConfig
+            {
+                OrgUrlConfigs = new List<FilterUrlConfig> { new FilterUrlConfig { Url = site, ExactSiteMatch = true } }
+            };
+            var record = new DlpAuditLogContent
+            {
+                Workload = ActivityImportConstants.WORKLOAD_SP,
+                ObjectId = site + "/subsite/Shared Documents/Καλημέρα κόσμε.docx",
+                SharePointMetaData = new DlpSharePointMetadata { SiteCollectionUrl = site }
+            };
+
+            Assert.IsTrue(filter.InScope(record));
+            record.SharePointMetaData.SiteCollectionUrl = "https://contoso.sharepoint.com/sites/excluded";
+            Assert.IsFalse(filter.InScope(record));
+        }
 
         #region Parsing the Copilot-embedded DLP fields
 
