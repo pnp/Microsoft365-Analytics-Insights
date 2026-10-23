@@ -60,6 +60,7 @@ namespace Web.AnalyticsWeb.Models.Health
                 { nameof(ImportTaskSettings.Calls), "Teams calls" },
                 { nameof(ImportTaskSettings.CopilotStudioCredits), "Copilot Studio credits (billed)" },
                 { nameof(ImportTaskSettings.AzureCostManagement), "Azure costs (Cost Management)" },
+                { nameof(ImportTaskSettings.CopilotCostManagement), "Copilot credit history (preview)" },
             };
 
         // A full activity import cycle should complete at least this often (see HEALTH-MONITORING-DESIGN.md).

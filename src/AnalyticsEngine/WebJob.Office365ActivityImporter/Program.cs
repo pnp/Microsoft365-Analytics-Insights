@@ -466,6 +466,7 @@ namespace WebJob.Office365ActivityImporter
                 // assignments neither of those imports require, so a failure in one must not implicate the
                 // others. The phase handles its own errors and cadence gating.
                 await tasks.ImportAgentCosts();
+                await tasks.ImportCopilotCosts();
 
                 // The Copilot Adoption leadership cohort (#654): re-reads the configured group's direct members when due
                 // (6 hours after a success, 1 hour after a failure). Off unless an administrator named a group; bounded
@@ -537,7 +538,21 @@ namespace WebJob.Office365ActivityImporter
 
                 if (runAgain)
                 {
-                    ConsoleApp.WebjobWait(logger, configuredSettings.ImportCyclePauseMinutes);
+                    if (!tasks.CopilotCostsEnabled)
+                        ConsoleApp.WebjobWait(logger, configuredSettings.ImportCyclePauseMinutes);
+                    else
+                    {
+                        // Preview work uses the otherwise idle pause, never a tenant-wide sweep in
+                        // front of ordinary imports. Leave headroom for the bounded final slice.
+                        var resumeAt = DateTimeOffset.UtcNow.AddMinutes(configuredSettings.ImportCyclePauseMinutes);
+                        while (DateTimeOffset.UtcNow.AddSeconds(45) < resumeAt)
+                        {
+                            await tasks.ImportCopilotCosts();
+                            await Task.Delay(TimeSpan.FromSeconds(5));
+                        }
+                        var remaining = resumeAt - DateTimeOffset.UtcNow;
+                        if (remaining > TimeSpan.Zero) await Task.Delay(remaining);
+                    }
                 }
             } // Go around again?
 

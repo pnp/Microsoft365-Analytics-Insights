@@ -955,6 +955,14 @@ namespace App.ControlPanel.Engine
                 + "RBAC (or, for EA/MCA billing accounts, a billing-portal) assignment outside this installer's "
                 + "control. The scope itself comes from the AzureCostScopes App Service application setting, "
                 + "which is not set at install time."),
+
+            new ImportToggleCoverage(nameof(ImportTaskSettings.CopilotCostManagement), null,
+                "this PREVIEW reads Microsoft Graph beta APIs with a DELEGATED reader account, and Test Configuration "
+                + "only signs in as the runtime app with application permissions - so a passing run proves nothing "
+                + "about the delegated access it needs. The installer grants no permission, consent or app-role "
+                + "assignment for it: assign the 'CopilotCostConnection.Operator' app role by hand, then connect the "
+                + "reader from the web app's Administration page, which reports whether the connection works. The "
+                + "beta APIs can change without notice and are not supported for production use."),
         };
 
         /// <summary>

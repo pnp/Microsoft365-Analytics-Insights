@@ -14,26 +14,27 @@ namespace DataUtils
         public const string CertificateName = "O365AdvancedAnalytics";
         private static X509Certificate2 _cachedCert = null;
         public static async Task<IConfidentialClientApplication> GetNewClientApp(
-            string tenantId, string clientId, string clientSecret, string keyVaultUrl, bool useClientCertificate, ILogger logger)
+            string tenantId, string clientId, string clientSecret, string keyVaultUrl, bool useClientCertificate, ILogger logger,
+            string redirectUri = null)
         {
             IConfidentialClientApplication app = null;
             if (useClientCertificate)
             {
                 var appRegistrationCert = await RetrieveKeyVaultCertificate(CertificateName, keyVaultUrl, logger);
 
-                app = ConfidentialClientApplicationBuilder.Create(clientId)
-                                                      .WithCertificate(appRegistrationCert)
-                                                      .WithAuthority($"https://login.microsoftonline.com/{tenantId}")
-                                                      .Build();
-
-                return app;
+                var builder = ConfidentialClientApplicationBuilder.Create(clientId)
+                    .WithCertificate(appRegistrationCert)
+                    .WithAuthority($"https://login.microsoftonline.com/{tenantId}");
+                if (redirectUri != null) builder = builder.WithRedirectUri(redirectUri);
+                return builder.Build();
             }
             else
             {
-                app = ConfidentialClientApplicationBuilder.Create(clientId)
-                                                     .WithClientSecret(clientSecret)
-                                                     .WithAuthority($"https://login.microsoftonline.com/{tenantId}")
-                                                     .Build();
+                var builder = ConfidentialClientApplicationBuilder.Create(clientId)
+                    .WithClientSecret(clientSecret)
+                    .WithAuthority($"https://login.microsoftonline.com/{tenantId}");
+                if (redirectUri != null) builder = builder.WithRedirectUri(redirectUri);
+                app = builder.Build();
             }
             return app;
         }

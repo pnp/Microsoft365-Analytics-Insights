@@ -117,7 +117,7 @@ namespace Tests.UnitTests
         // already maps extension_name as Unicode. UniqueOnlineMeetingIds then removes duplicate online_meetings
         // rows and makes meeting_id a UNIQUE nvarchar(850); also raw-SQL with the model unchanged, so it reuses
         // the same snapshot. As the chain head its snapshot is the one EF compares the live entity model against.
-        private const string LatestId = "202610221500003_UniqueOnlineMeetingIds";
+        private const string LatestId = "202610230900001_AddCopilotCostPreview";
         private const string IndexName = "IX_urls_full_url";
 
         // "Καλημέρα κόσμε" - the classic Greek charset sample (synthetic; no customer data).

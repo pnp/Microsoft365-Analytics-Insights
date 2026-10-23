@@ -89,6 +89,7 @@ export const ENABLED_IMPORT_LABELS_BY_SETTING_PROPERTY: Record<string, { english
   Calls: { english: 'Teams calls', key: 'overview.enabledImport.teamsCalls' },
   CopilotStudioCredits: { english: phrase('Copilot', 'Studio', 'credits', '(billed)'), key: 'overview.enabledImport.copilotStudioCredits' },
   AzureCostManagement: { english: phrase('Azure', 'costs', '(Cost', 'Management)'), key: 'overview.enabledImport.azureCosts' },
+  CopilotCostManagement: { english: phrase('Copilot', 'credit', 'history', '(preview)'), key: 'overview.enabledImport.copilotCreditHistory' },
 };
 
 const ENABLED_IMPORT_KEY_BY_ENGLISH = new Map(

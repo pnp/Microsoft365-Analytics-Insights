@@ -60,6 +60,13 @@
     <AssemblyOriginatorKeyFile>..\Certificates\SPOInsightsBinaries.pfx</AssemblyOriginatorKeyFile>
   </PropertyGroup>
   <ItemGroup>
+    <Compile Update="Migrations\202610230900001_AddCopilotCostPreview.Designer.cs">
+      <DependentUpon>202610230900001_AddCopilotCostPreview.cs</DependentUpon>
+    </Compile>
+    <EmbeddedResource Include="Migrations\202610230900001_AddCopilotCostPreview.resx">
+      <DependentUpon>202610230900001_AddCopilotCostPreview.cs</DependentUpon>
+    </EmbeddedResource>
+    <None Include="Migrations\202610230900001_AddCopilotCostPreview.manual.sql" />
     <Reference Include="Microsoft.CSharp" />
     <Reference Include="System" />
     <Reference Include="System.ComponentModel.Composition" />
