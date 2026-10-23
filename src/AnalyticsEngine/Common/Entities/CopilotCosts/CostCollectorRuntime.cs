@@ -11,9 +11,9 @@ using System.Linq;
 using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
-using WebJob.Office365ActivityImporter.Engine.ActivityAPI.BlobCheckpoint;
+using Common.Entities.State;
 
-namespace WebJob.Office365ActivityImporter.Engine.CopilotCosts
+namespace Common.Entities.CopilotCosts
 {
     public static class CostCollectorRuntime
     {
@@ -28,8 +28,8 @@ namespace WebJob.Office365ActivityImporter.Engine.CopilotCosts
                 options.Retry.NetworkTimeout = TimeSpan.FromSeconds(5);
                 options.Retry.MaxRetries = 1;
                 return new TableCostDocumentStore(
-                    CheckpointTableClientFactory.CreateAndEnsureTable(config.ConnectionStrings.StorageConnectionString,
-                        "CopilotCostConnections", config, NullLogger.Instance, options),
+                    StorageTableClientFactory.CreateAndEnsureTable(config.ConnectionStrings.StorageConnectionString,
+                        "CopilotCostConnections", config, NullLogger.Instance, "Copilot cost connection", options),
                     config.TenantGUID.ToString(), config.ClientID);
             }
             catch (RequestFailedException) { throw new CostConnectionException("storageUnavailable"); }

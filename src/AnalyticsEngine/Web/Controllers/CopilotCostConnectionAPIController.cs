@@ -12,7 +12,7 @@ using System.Web;
 using System.Web.Helpers;
 using System.Web.Http;
 using Web.AnalyticsWeb.Models.CopilotCosts;
-using WebJob.Office365ActivityImporter.Engine.CopilotCosts;
+using Common.Entities.CopilotCosts;
 
 namespace Web.AnalyticsWeb.Controllers
 {

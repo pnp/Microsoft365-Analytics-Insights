@@ -21,7 +21,7 @@ using System.IdentityModel.Tokens.Jwt;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.Owin;
 using System.Web.Helpers;
-using WebJob.Office365ActivityImporter.Engine.CopilotCosts;
+using Common.Entities.CopilotCosts;
 
 namespace Tests.UnitTests
 {
@@ -196,9 +196,9 @@ namespace Tests.UnitTests
             });
             var options = new TableClientOptions { Transport = new HttpClientTransport(new HttpClient(handler)) };
             options.Retry.MaxRetries = 0;
-            var table = WebJob.Office365ActivityImporter.Engine.ActivityAPI.BlobCheckpoint.CheckpointTableClientFactory.CreateAndEnsureTable(
+            var table = Common.Entities.State.StorageTableClientFactory.CreateAndEnsureTable(
                 "DefaultEndpointsProtocol=https;AccountName=contoso;AccountKey=" + Convert.ToBase64String(new byte[32]) + ";EndpointSuffix=core.windows.net",
-                "CopilotCostConnections", Tenant, Client, null, null, options);
+                "CopilotCostConnections", Tenant, Client, null, null, "Copilot cost connection", options);
             var store = new TableCostDocumentStore(table, Tenant, Client);
             var cache = Enumerable.Range(0, TableCostDocumentStore.ChunkSize + 1).Select(i => (byte)(i % 251)).ToArray();
             var version = await store.WriteAsync("connection", cache, null, Ct);

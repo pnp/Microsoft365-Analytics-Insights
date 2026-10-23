@@ -11,7 +11,7 @@ using System.IdentityModel.Tokens.Jwt;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
-using WebJob.Office365ActivityImporter.Engine.CopilotCosts;
+using Common.Entities.CopilotCosts;
 
 namespace Web.AnalyticsWeb.Models.CopilotCosts
 {

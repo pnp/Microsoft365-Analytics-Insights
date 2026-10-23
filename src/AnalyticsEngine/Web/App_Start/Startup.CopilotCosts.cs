@@ -12,7 +12,7 @@ using System.Security.Claims;
 using System.Threading;
 using System.Threading.Tasks;
 using Web.AnalyticsWeb.Models.CopilotCosts;
-using WebJob.Office365ActivityImporter.Engine.CopilotCosts;
+using Common.Entities.CopilotCosts;
 
 namespace Web.AnalyticsWeb
 {

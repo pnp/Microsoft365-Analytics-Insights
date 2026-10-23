@@ -12,7 +12,7 @@ using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Xml.Linq;
-using WebJob.Office365ActivityImporter.Engine.CopilotCosts;
+using Common.Entities.CopilotCosts;
 
 namespace Tests.UnitTests
 {

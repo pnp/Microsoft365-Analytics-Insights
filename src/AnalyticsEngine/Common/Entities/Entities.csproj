@@ -84,6 +84,7 @@
     <Reference Include="System.Security" />
     <Reference Include="System.Data" />
     <Reference Include="System.Windows.Forms" />
+    <Reference Include="System.Web" />
     <Reference Include="System.Xml" />
     <Reference Include="System.Xml.Linq" />
   </ItemGroup>

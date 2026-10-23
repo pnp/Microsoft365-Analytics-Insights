@@ -367,10 +367,6 @@
     <Folder Include="Scripts\portal\build\" />
   </ItemGroup>
   <ItemGroup>
-    <ProjectReference Include="..\WebJob.Office365ActivityImporter.Engine\WebJob.Office365ActivityImporter.Engine.csproj">
-      <Project>{1919BDE6-C311-426D-ADB3-A1487133E397}</Project>
-      <Name>WebJob.Office365ActivityImporter.Engine</Name>
-    </ProjectReference>
     <ProjectReference Include="..\Common\DataUtils\DataUtils.csproj">
       <Project>{B8DA83AC-9151-4922-B255-12D105B33DC6}</Project>
       <Name>Common.DataUtils</Name>

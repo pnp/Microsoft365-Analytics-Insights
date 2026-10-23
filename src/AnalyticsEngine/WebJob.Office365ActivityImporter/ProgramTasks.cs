@@ -18,7 +18,7 @@ using WebJob.Office365ActivityImporter.Engine;
 using WebJob.Office365ActivityImporter.Engine.ActivityAPI;
 using WebJob.Office365ActivityImporter.Engine.ActivityAPI.Loaders;
 using WebJob.Office365ActivityImporter.Engine.AgentCosts;
-using WebJob.Office365ActivityImporter.Engine.CopilotCosts;
+using Common.Entities.CopilotCosts;
 using WebJob.Office365ActivityImporter.Engine.Graph;
 using WebJob.Office365ActivityImporter.Engine.Graph.Copilot.AuditBackfill;
 using WebJob.Office365ActivityImporter.Engine.Graph.Calls;

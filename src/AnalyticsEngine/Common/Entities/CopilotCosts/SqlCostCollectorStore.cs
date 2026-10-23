@@ -9,7 +9,7 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 
-namespace WebJob.Office365ActivityImporter.Engine.CopilotCosts
+namespace Common.Entities.CopilotCosts
 {
     public sealed class SqlCostCollectorStore : ICostPublicationFence
     {

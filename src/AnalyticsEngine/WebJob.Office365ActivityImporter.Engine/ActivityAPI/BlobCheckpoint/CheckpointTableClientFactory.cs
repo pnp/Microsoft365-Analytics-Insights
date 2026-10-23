@@ -34,15 +34,15 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.BlobCheckpoint
         /// available, so the caller can fall back to the in-memory store.
         /// </summary>
         public static TableClient CreateAndEnsureTable(string storageConnectionString, string tableName,
-            string tenantId, string clientId, string clientSecret, ILogger logger, TableClientOptions options = null)
-            => StorageTableClientFactory.CreateAndEnsureTable(storageConnectionString, tableName, tenantId, clientId, clientSecret, logger, Purpose, options);
+            string tenantId, string clientId, string clientSecret, ILogger logger)
+            => StorageTableClientFactory.CreateAndEnsureTable(storageConnectionString, tableName, tenantId, clientId, clientSecret, logger, Purpose);
 
         /// <summary>
         /// The production path: uses the runtime account's configured certificate or client secret when RBAC is needed.
         /// </summary>
         public static TableClient CreateAndEnsureTable(
-            string storageConnectionString, string tableName, AppConfig config, ILogger logger, TableClientOptions options = null)
-            => StorageTableClientFactory.CreateAndEnsureTable(storageConnectionString, tableName, config, logger, Purpose, options);
+            string storageConnectionString, string tableName, AppConfig config, ILogger logger)
+            => StorageTableClientFactory.CreateAndEnsureTable(storageConnectionString, tableName, config, logger, Purpose);
 
         /// <summary>True when the storage account rejected the request because account-key auth is turned off.</summary>
         public static bool IsKeyAuthDisabled(RequestFailedException ex) => StorageTableClientFactory.IsKeyAuthDisabled(ex);

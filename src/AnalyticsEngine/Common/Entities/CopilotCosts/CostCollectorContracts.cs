@@ -4,7 +4,7 @@ using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 
-namespace WebJob.Office365ActivityImporter.Engine.CopilotCosts
+namespace Common.Entities.CopilotCosts
 {
     public interface ICostPublicationFence
     {

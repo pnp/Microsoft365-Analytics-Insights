@@ -6,8 +6,7 @@ using System.Threading;
 using Azure;
 using Azure.Identity;
 using Azure.Data.Tables;
-using WebJob.Office365ActivityImporter.Engine.ActivityAPI.BlobCheckpoint;
-using WebJob.Office365ActivityImporter.Engine.CopilotCosts;
+using Common.Entities.CopilotCosts;
 
 namespace Web.AnalyticsWeb.Models.CopilotCosts
 {
@@ -47,8 +46,8 @@ namespace Web.AnalyticsWeb.Models.CopilotCosts
                 options.Retry.NetworkTimeout = TimeSpan.FromSeconds(5);
                 options.Retry.MaxRetries = 1;
                 return new TableCostDocumentStore(
-                    CheckpointTableClientFactory.CreateAndEnsureTable(config.ConnectionStrings.StorageConnectionString,
-                        "CopilotCostConnections", config, NullLogger.Instance, options),
+                    Common.Entities.State.StorageTableClientFactory.CreateAndEnsureTable(config.ConnectionStrings.StorageConnectionString,
+                        "CopilotCostConnections", config, NullLogger.Instance, "Copilot cost connection", options),
                     config.TenantGUID.ToString(), config.ClientID);
             }
             catch (RequestFailedException) { throw new CostConnectionException("storageUnavailable"); }
