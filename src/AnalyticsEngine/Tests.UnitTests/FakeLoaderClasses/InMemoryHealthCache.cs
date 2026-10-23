@@ -34,20 +34,27 @@ namespace UnitTests.FakeLoaderClasses
 
         public bool TryGet<T>(string key, out T value) where T : class
         {
-            value = null;
-            if (_entries.TryGetValue(key, out var entry) && entry.ExpiresUtc > UtcNow)
+            // Locked: like MemoryCache, this is read and written from parallel section builds.
+            lock (_entries)
             {
-                value = entry.Value as T;
-            }
+                value = null;
+                if (_entries.TryGetValue(key, out var entry) && entry.ExpiresUtc > UtcNow)
+                {
+                    value = entry.Value as T;
+                }
 
-            if (value != null) HitCount++; else MissCount++;
-            return value != null;
+                if (value != null) HitCount++; else MissCount++;
+                return value != null;
+            }
         }
 
         public void Set<T>(string key, T value, TimeSpan ttl) where T : class
         {
-            Writes.Add(key);
-            _entries[key] = new Entry { Value = value, ExpiresUtc = UtcNow.Add(ttl) };
+            lock (_entries)
+            {
+                Writes.Add(key);
+                _entries[key] = new Entry { Value = value, ExpiresUtc = UtcNow.Add(ttl) };
+            }
         }
     }
 }

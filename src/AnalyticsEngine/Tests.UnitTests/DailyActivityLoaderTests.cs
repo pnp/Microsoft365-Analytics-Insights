@@ -611,6 +611,95 @@ namespace Tests.UnitTests
 
 
 
+        [TestMethod]
+        public async Task DailyActivityLoader_TwoRowsForOneNewUserOnOneDate_KeepTheLastRowInsteadOfFailingTheReport()
+        {
+            // Graph is meant to send one row per user per date, but OneDrive keys its rows by owner UPN alone, so a
+            // re-hired owner can appear twice. The second row used to reach EF6's OriginalValues for an entity still in
+            // the Added state - the in-memory store throws there exactly as EF6 does - which failed the whole report on
+            // every cycle.
+            var instrumentation = new RecordingUsageReportSaveInstrumentation();
+            var loader = new InMemoryDailyActivityLoader(NullLogger.Instance) { SaveInstrumentation = instrumentation };
+            loader.LoadedReportPages[Day1] = new List<FakeUserActivityDetail> { Page(UserA, 5), Page(UserB, 7), Page(UserA, 9) };
+
+            var store = await SaveAsync(loader, new InMemoryUsageReportStore<FakeUserUsageActivityLog>());
+
+            Assert.AreEqual(2, store.Stored.Count, "One row per user and date, not one per Graph row.");
+            Assert.AreEqual(9, store.Stored.Single(r => r.UserID == UserAId).ThingCount, "The last row for a user wins.");
+            Assert.AreEqual(2, store.Inserted.Count);
+            Assert.AreEqual(0, store.Updated.Count, "The duplicate is folded into the queued insert, not written separately.");
+            Assert.AreEqual(2, loader.LastSaveDbWriteCount);
+            AssertMetric(instrumentation.Single(UsageReportSaveStageIds.SaveCompleted), "DuplicateLookupRowCount", 1);
+        }
+
+        [TestMethod]
+        public async Task DailyActivityLoader_DuplicateRowAfterAFlush_UpdatesTheRowJustWritten()
+        {
+            // Batch size 1 puts the flush between the two rows: the duplicate is then dirty-checked against what was
+            // just written, so it is an UPDATE of that row - never a second INSERT.
+            var loader = new InMemoryDailyActivityLoader(NullLogger.Instance) { SaveBatchSize = 1 };
+            loader.LoadedReportPages[Day1] = new List<FakeUserActivityDetail> { Page(UserA, 5), Page(UserA, 9) };
+
+            var store = await SaveAsync(loader, new InMemoryUsageReportStore<FakeUserUsageActivityLog>());
+
+            Assert.AreEqual(1, store.Stored.Count);
+            Assert.AreEqual(9, store.Stored[0].ThingCount, "The last row for a user wins on this side of the flush too.");
+            Assert.AreEqual(1, store.Inserted.Count);
+            Assert.AreEqual(1, store.Updated.Count);
+        }
+
+        [TestMethod]
+        public async Task DailyActivityLoader_TwoRowsForAStoredRow_UpdateItOnceWithTheLastValue()
+        {
+            var loader = new InMemoryDailyActivityLoader(NullLogger.Instance);
+            loader.LoadedReportPages[Day1] = new List<FakeUserActivityDetail> { Page(UserA, 6), Page(UserA, 8) };
+
+            var store = new InMemoryUsageReportStore<FakeUserUsageActivityLog>()
+                .Seed(StoredRow(Day1, UserAId, thingCount: 5));
+
+            await SaveAsync(loader, store);
+
+            Assert.AreEqual(1, store.Stored.Count);
+            Assert.AreEqual(0, store.Inserted.Count, "The stored row is reused, not duplicated.");
+            Assert.AreEqual(1, store.Updated.Count);
+            Assert.AreEqual(8, store.Stored[0].ThingCount);
+            Assert.AreEqual(1, loader.LastSaveDbWriteCount, "One row is written once, however many Graph rows named it.");
+        }
+
+        [TestMethod]
+        public async Task DailyActivityLoader_ADateWhoseEveryIdentityIsConcealed_StopsTheRestOfTheDownload()
+        {
+            // A tenant that conceals identities conceals every row of every date, and the save refuses such a report,
+            // so paging through the rest of the window would only fetch rows that cannot be used.
+            var now = new DateTime(2026, 6, 20, 11, 15, 0, DateTimeKind.Utc);
+            var concealed = new InMemoryDailyActivityLoader(NullLogger.Instance) { Clock = new FixedClock(now) };
+            for (var daysBack = 2; daysBack <= 5; daysBack++)
+            {
+                concealed.PagesByDate[now.Date.AddDays(-daysBack)] = new List<FakeUserActivityDetail>
+                {
+                    Page("9F86D081884C7D659A2FEAA0C55AD015A3BF4F1B2B0B822CD15D6C15B0F00A08", 1),
+                    Page("hash@hash", 2),
+                };
+            }
+
+            await concealed.PopulateLoadedReportPagesFromGraph(daysBackMax: 5);
+
+            CollectionAssert.AreEqual(new[] { now.Date.AddDays(-1), now.Date.AddDays(-2) }, concealed.GraphRequests.ToArray(),
+                "An empty date (not yet published) says nothing; the first fully concealed date ends the download.");
+
+            // One real identity anywhere earlier in the window means the report is importable: download it all.
+            var mixed = new InMemoryDailyActivityLoader(NullLogger.Instance) { Clock = new FixedClock(now) };
+            mixed.PagesByDate[now.Date.AddDays(-1)] = new List<FakeUserActivityDetail> { Page(UserA, 1) };
+            for (var daysBack = 2; daysBack <= 5; daysBack++)
+            {
+                mixed.PagesByDate[now.Date.AddDays(-daysBack)] = new List<FakeUserActivityDetail> { Page("hash@hash", 2) };
+            }
+
+            await mixed.PopulateLoadedReportPagesFromGraph(daysBackMax: 5);
+
+            Assert.AreEqual(5, mixed.GraphRequests.Count);
+        }
+
         private static FakeUserUsageActivityLog CloneRow(FakeUserUsageActivityLog row)
             => new FakeUserUsageActivityLog
             {

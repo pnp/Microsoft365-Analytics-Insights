@@ -80,6 +80,34 @@ namespace Tests.UnitTests
             Assert.IsFalse(logger.Messages.Any(m => m.Contains("TeamsChannelBudgetExhausted")));
         }
 
+        /// <summary>
+        /// A channel this authorisation can't read (a private channel the person isn't in) is skipped, and scheduling
+        /// moves past it - otherwise a budget of one would pick the same unreadable channel every cycle and starve the
+        /// rest. Nothing was read from it, so it must not claim an incomplete read that could double-count statistics.
+        /// </summary>
+        [TestMethod]
+        public async Task SkippedChannel_AdvancesTheCursor_WithoutClaimingAnIncompleteRead()
+        {
+            var state = new InMemoryKeyValueStore();
+            var logger = new BudgetLogger();
+            var source = new FakeChannelMessagesSourceLoader()
+                .Failing("channel-000000", ChannelReadFailureKind.SkipChannel)
+                .ReturningToken("channel-000001", "complete");
+
+            var first = new TeamsChannelBudgetProgress(state, 1, logger);
+            var pending = await new TeamsChannelCrawler(source, first).PopulateNewMessagesAndReactions(Channels(2), "contoso-team");
+            await first.CommitAfterPersistence();
+
+            Assert.AreEqual(0, pending.Count, "The skipped channel has no Graph checkpoint.");
+            Assert.AreEqual("channel-000000", await state.GetStringAsync("budget|contoso-team"));
+            Assert.IsFalse(logger.Messages.Any(m => m.Contains("TeamsChannelReadIncomplete") || m.Contains("TeamsChannelGraphFailure")));
+            Assert.IsTrue(logger.Messages.Any(m => m.Contains("TeamsChannelReadSkipped")));
+
+            var second = new TeamsChannelBudgetProgress(state, 1, logger);
+            pending = await new TeamsChannelCrawler(source, second).PopulateNewMessagesAndReactions(Channels(2), "contoso-team");
+            Assert.AreEqual("channel-000001", pending.Single().ChannelId, "The next cycle moves on to the next channel.");
+        }
+
         [TestMethod]
         public async Task CanceledReadNeverPublishesProgress()
         {

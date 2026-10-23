@@ -319,6 +319,7 @@
     <Compile Include="Models\Health\IHealthDataSource.cs" />
     <Compile Include="Models\Health\SqlHealthDataSource.cs" />
     <Compile Include="Models\SystemStatusApiModel.cs" />
+    <Compile Include="Models\SharedComputation.cs" />
     <Compile Include="Models\UpdateCheck\BuildVersion.cs" />
     <Compile Include="Models\UpdateCheck\UpdateCheckApiModel.cs" />
     <Compile Include="Models\UpdateCheck\UpdateChecker.cs" />

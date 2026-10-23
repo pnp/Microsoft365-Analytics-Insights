@@ -32,8 +32,9 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
         /// A channel that returns no delta token leaves the stored token untouched, so a read that
         /// couldn't produce one doesn't destroy the incremental position. Channels are crawled in
         /// source order by default, or in durable round-robin order when budgeting is enabled.
-        /// A read failure aborts the whole team's crawl, exactly as before - the caller
-        /// deletes the team's auth token and retries next cycle.
+        /// A channel only this person's token can't read (<see cref="ChannelReadFailureKind.SkipChannel"/>) is
+        /// skipped and the crawl carries on; any other read failure stops the Team's crawl and is rethrown for the
+        /// caller to act on (see <see cref="ChannelReadFailureKind"/>), with the earlier channels' tokens still pending.
         /// </remarks>
         public async Task<List<TeamChannelDeltaTokenCommit>> PopulateNewMessagesAndReactions(
             List<ChannelWithReactions> channels,
@@ -45,11 +46,18 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
             var selected = _budget == null ? channels : await _budget.SelectChannels(channels, teamId);
             foreach (var channel in selected)
             {
-                // Load stats. Will throw ChannelMessagesReadException if token is invalid
+                // Load stats. Throws ChannelMessagesReadException if the channel couldn't be read
                 TeamChannelDeltaTokenInfo channelDelta;
                 try
                 {
                     channelDelta = await _messagesSource.LoadMessagesAndReactions(channel, teamId);
+                }
+                catch (ChannelMessagesReadException ex) when (ex.Kind == ChannelReadFailureKind.SkipChannel)
+                {
+                    // No delta token, so it is read again next cycle; the scheduling cursor still moves past it, or a
+                    // budget of one would pick the same unreadable channel for ever.
+                    _budget?.ReadSkipped(channel.Id);
+                    continue;
                 }
                 catch (ChannelMessagesReadException)
                 {
@@ -115,6 +123,17 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
             _read++;
             if (!completedDelta)
                 _logger.LogWarning("TeamsChannelReadIncomplete: section=channelMessages; teamRef={TeamRef}; no completed delta; scheduling may continue but Graph checkpoint is unchanged. On retry, additive statistics may be counted again.", _teamReference);
+        }
+
+        /// <summary>
+        /// A channel this authorisation can't read. Nothing was read from it, so nothing can be counted twice: scheduling
+        /// moves past it and its Graph checkpoint is left as it was.
+        /// </summary>
+        internal void ReadSkipped(string channelId)
+        {
+            _lastRead = channelId;
+            _read++;
+            _logger.LogInformation("TeamsChannelReadSkipped: section=channelMessages; teamRef={TeamRef}; channel unreadable with this authorisation; scheduling continues past it and its Graph checkpoint is unchanged.", _teamReference);
         }
 
         internal void ReadFailed() => _logger.LogWarning("TeamsChannelGraphFailure: section=channelMessages; teamRef={TeamRef}; budget exhaustion is not the cause; failed read has no scheduling or Graph checkpoint.", _teamReference);

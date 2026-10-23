@@ -12,7 +12,7 @@ import {
 import Spinner from '../components/Spinner';
 import PromptCategoryRuns from '../components/PromptCategoryRuns';
 import PromptCategoryTestDrive from '../components/PromptCategoryTestDrive';
-import { isStoredConfigurationInvalid, promptCategoryErrorText } from '../components/promptCategoryErrors';
+import { isConfigurationChanged, isStoredConfigurationInvalid, promptCategoryErrorText } from '../components/promptCategoryErrors';
 import {
   MAX_CATEGORIES, MAX_DESCRIPTION_LENGTH, MAX_NAME_LENGTH, MAX_PROMPTS_CAP,
   configurationSnapshot, validateTaxonomy,
@@ -131,7 +131,8 @@ export default function PromptCategoriesPage() {
     setBusy(true);
     setSaveError(null);
     try {
-      const configuration = reset ? await resetPromptCategories() : await savePromptCategories(config);
+      // Both carry the revision this page loaded, so neither lands on settings someone else has saved since.
+      const configuration = reset ? await resetPromptCategories(config.revision ?? null) : await savePromptCategories(config);
       adopt({ ...admin, configuration });
       setSaved(true);
       setRunsKey(k => k + 1);
@@ -140,7 +141,8 @@ export default function PromptCategoriesPage() {
   };
   const repair = async () => {
     setBusy(true);
-    try { await resetPromptCategories(); await load(); }
+    // No revision: only a saved configuration the server can't read is replaced this way.
+    try { await resetPromptCategories(null); await load(); }
     catch (e) { setLoadError(e); }
     finally { setBusy(false); }
   };
@@ -293,7 +295,12 @@ export default function PromptCategoriesPage() {
         </div>
       </Card>
 
-      {saveError !== null && <MessageBar intent="error" layout="multiline"><MessageBarBody>{promptCategoryErrorText(saveError, t)}</MessageBarBody></MessageBar>}
+      {saveError !== null && <MessageBar intent="error" layout="multiline">
+        <MessageBarBody>{promptCategoryErrorText(saveError, t)}</MessageBarBody>
+        {isConfigurationChanged(saveError) && <MessageBarActions>
+          <Button size="small" disabled={busy} icon={<ArrowClockwise16Regular />} onClick={discard}>{t('promptCategories.reload')}</Button>
+        </MessageBarActions>}
+      </MessageBar>}
       {saved && !dirty && <MessageBar intent="success" role="status"><MessageBarBody>{t('promptCategories.saved')}</MessageBarBody></MessageBar>}
 
       <div className={styles.bar} role="group" aria-label={t('promptCategories.save')}>

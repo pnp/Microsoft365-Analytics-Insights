@@ -9,11 +9,18 @@
 -- Shares the dlp_policies / dlp_rules / dlp_actions dimensions with the Copilot-embedded source so the
 -- same policy is one row however it was observed. is_blocked arrives already decided by CopilotDlpRules,
 -- the same classifier both sources use.
-IF OBJECT_ID('dbo.dlp_rule_matches', 'U') IS NOT NULL
-   AND OBJECT_ID('dbo.dlp_policies', 'U') IS NOT NULL
-   AND OBJECT_ID('dbo.dlp_rules', 'U') IS NOT NULL
-   AND OBJECT_ID('dbo.dlp_actions', 'U') IS NOT NULL
+--
+-- The importer only runs this script when it has staged rows, so a missing table means the database is behind
+-- the importer: fail the batch rather than discard the rows. A failed batch's content blob is not checkpointed,
+-- so these records are imported again once the database has been upgraded. (This used to skip the rows
+-- silently; the batch then counted as saved and its blob was checkpointed, which made the loss permanent.)
+IF OBJECT_ID('dbo.dlp_rule_matches', 'U') IS NULL
+   OR OBJECT_ID('dbo.dlp_policies', 'U') IS NULL
+   OR OBJECT_ID('dbo.dlp_rules', 'U') IS NULL
+   OR OBJECT_ID('dbo.dlp_actions', 'U') IS NULL
 BEGIN
+    ;THROW 50002, N'Database upgrade required: a DLP table (dlp_rule_matches, dlp_policies, dlp_rules or dlp_actions) is missing, so this batch''s DLP.All rule matches cannot be saved. Upgrade the database with the installer; the affected audit content is retried automatically and nothing is lost while it is within the import look-back window.', 1;
+END
 
 -- 1. Upsert policies.
 INSERT INTO dlp_policies (policy_id, [name])
@@ -117,5 +124,3 @@ WHERE NOT EXISTS (
           SELECT s.dlp_policy_id, s.dlp_rule_id, s.dlp_action_id, s.is_blocked
       )
 );
-
-END

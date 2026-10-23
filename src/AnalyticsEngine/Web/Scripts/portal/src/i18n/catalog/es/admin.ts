@@ -88,7 +88,7 @@ const admin: Record<keyof typeof en, string> = {
   'admin.copilotAuditBackfill.error.queryFailed': 'Microsoft Graph Audit Search notificó una consulta con error.',
   'admin.copilotAuditBackfill.error.queryRejected': 'Microsoft Graph rechazó la forma de la consulta de Audit Search. Notifíquelo para que el relleno pueda actualizarse para esta respuesta del inquilino o de la API.',
   'admin.copilotAuditBackfill.error.queryThrottled': 'Microsoft Graph limitó los envíos de consultas de Audit Search. El relleno está en pausa y volverá a intentarlo más tarde.',
-  'admin.copilotAuditBackfill.error.queryTruncated': 'Un segmento de Microsoft Graph Audit Search siguió truncado después de dividirlo en horas.',
+  'admin.copilotAuditBackfill.error.queryTruncated': 'Un segmento de Microsoft Graph Audit Search siguió truncado después de dividirlo en cuartos de hora. Se importaron los registros que devolvió; falta el resto de ese intervalo.',
   'admin.copilotAuditBackfill.error.graphAccessDenied': 'Microsoft Graph rechazó la solicitud de Audit Search con 401 o 403. Compruebe el consentimiento de AuditLogsQuery.Read.All.',
   'admin.copilotAuditBackfill.error.jobActive': 'Ya hay un relleno de auditoría de Copilot en ejecución.',
   'admin.copilotAuditBackfill.error.jobNotActive': 'Ese relleno de auditoría de Copilot ya no está en ejecución.',
@@ -145,6 +145,9 @@ const admin: Record<keyof typeof en, string> = {
   'admin.teamsPermissions.connect.outcomeTitle': 'Microsoft Teams no está conectado',
   'admin.teamsPermissions.description':
     'Esta página permite autorizar análisis detallados para un equipo. Esto permitirá a Microsoft 365 Advanced Analytics and Insights leer mensajes únicamente con fines de informes estadísticos anónimos.',
+  'admin.teamsPermissions.entraUnavailable.message':
+    'No se pudo contactar con Microsoft Entra ID para renovar su conexión con Teams. Vuelva a intentarlo dentro de unos minutos.',
+  'admin.teamsPermissions.entraUnavailable.retry': 'Reintentar',
   'admin.teamsPermissions.errors.fetchGraphProfile': 'No se pudo obtener el perfil de Graph.',
   'admin.teamsPermissions.errors.fetchJoinedTeams': 'No se pudieron obtener los Teams unidos.',
   'admin.teamsPermissions.loadingTeams': 'Cargando sus Teams...',
@@ -601,7 +604,7 @@ const admin: Record<keyof typeof en, string> = {
   'admin.userScope.purge.operationalList':
     'Se ejecuta de forma asíncrona en pequeños lotes mientras los importadores siguen ejecutándose. Si llegan datos nuevos de alguien durante la purga, esa persona se conserva y se cuenta como omitida; ejecutar la purga de nuevo la elimina.',
   'admin.userScope.purge.restartDurable':
-    'Si la aplicación web se reinicia, la purga vuelve a empezar por sí sola y termina, salvo que UserGroupsFilter haya cambiado, en cuyo caso se detiene.',
+    'Si la aplicación web se reinicia, la purga vuelve a empezar por sí sola y termina, salvo que UserGroupsFilter o los miembros de sus grupos hayan cambiado, en cuyo caso se detiene para que pueda volver a confirmarla.',
   'admin.userScope.purge.restartMemory':
     'Esta aplicación web guarda el progreso de la purga en su propia memoria, porque no hay ninguna conexión de Azure Storage configurada. Si la aplicación web se reinicia, una purga en curso se detiene: iníciela de nuevo para terminarla. Con más de una instancia de la aplicación web, solo la instancia que ejecuta la purga muestra su progreso.',
   'admin.userScope.purge.irreversible': 'Esto no se puede deshacer.',
@@ -672,6 +675,10 @@ const admin: Record<keyof typeof en, string> = {
     'La purga no eliminó a nadie porque UserGroupsFilter cambió después de confirmar la purga. Compruebe el filtro e inicie la purga de nuevo.',
   'admin.userScope.jobError.filterChangedWhileRunning':
     'La purga se detuvo porque UserGroupsFilter cambió mientras se ejecutaba. Lo que ya había eliminado permanece eliminado y no se eliminó a nadie más. Compruebe el filtro e inicie la purga de nuevo para ver quién queda fuera ahora.',
+  'admin.userScope.jobError.purgeExceedsConfirmed':
+    'La purga se detuvo porque hay más personas fuera del ámbito que el número confirmado al iniciarla: los grupos perdieron miembros o llegaron usuarios nuevos. Lo que ya había eliminado permanece eliminado y no se eliminó a nadie más. Compruebe los grupos e inicie la purga de nuevo para confirmar el nuevo número.',
+  'admin.userScope.jobError.scopeMembershipChanged':
+    'La purga se detuvo al volver a empezar tras un reinicio, porque los miembros de los grupos de UserGroupsFilter habían cambiado desde que se confirmó. Lo que ya había eliminado permanece eliminado y no se eliminó a nadie más. Inicie la purga de nuevo para confirmar quién queda fuera del ámbito ahora.',
   'admin.userScope.jobError.databaseError':
     'La purga se detuvo porque la base de datos de análisis devolvió un error.',
   'admin.userScope.jobError.stateUnavailable':

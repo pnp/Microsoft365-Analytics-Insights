@@ -98,8 +98,11 @@ namespace WebJob.AppInsightsImporter.Engine
                     // Stats
                     StatsCheck(record);
 
-                    // Only add results that are newer
-                    if (record.Timestamp >= fromWhen)
+                    // Admitted by App Insights' own timestamp - the one the query's window selected the row by. A row's
+                    // Timestamp can be the time the browser recorded instead (a click the tracker held until the first
+                    // page view, anything from a browser whose clock is behind), and filtering on that dropped rows,
+                    // just after midnight, that no other day's query returns.
+                    if (record.AppInsightsTimestamp >= fromWhen)
                     {
                         this.Rows.Add(record);
                     }

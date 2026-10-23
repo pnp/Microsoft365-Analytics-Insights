@@ -1,8 +1,10 @@
 ﻿using Common.Entities.Config;
 using DataUtils;
 using System;
+using System.Net;
 using System.Runtime.CompilerServices;
 using System.Threading;
+using System.Web;
 using System.Web.Http.ExceptionHandling;
 using Web.AnalyticsWeb.Models.CopilotAdoption;
 
@@ -116,12 +118,23 @@ namespace Web.AnalyticsWeb
         /// </param>
         public static void Report(Exception ex, string context)
         {
-            Report(ex, context, ctx =>
-            {
-                var config = new AppConfig();
-                return new AnalyticsLogger(config.AppInsightsConnectionString, ctx);
-            });
+            Report(ex, context, ctx => new AnalyticsLogger(AppInsightsConnectionString.Value, ctx));
         }
+
+        /// <summary>
+        /// Read once: this runs for every failed request, and a full <see cref="AppConfig"/> per failure was the
+        /// most expensive part of reporting one. A configuration change recycles the application anyway.
+        /// </summary>
+        private static readonly Lazy<string> AppInsightsConnectionString =
+            new Lazy<string>(() => new AppConfig().AppInsightsConnectionString);
+
+        /// <summary>
+        /// A request for something that does not exist - a scanner probing for <c>/wp-login.php</c>, a stale
+        /// bookmark. That is the caller's mistake, not a fault in this application, and anyone on the internet can
+        /// produce them by the thousand, so they are not sent to Application Insights as exceptions.
+        /// </summary>
+        public static bool IsRoutineNotFound(Exception ex)
+            => ex is HttpException http && http.GetHttpCode() == (int)HttpStatusCode.NotFound;
 
         internal static void Report(
             Exception ex,
@@ -179,6 +192,27 @@ namespace Web.AnalyticsWeb
             var where = string.IsNullOrEmpty(route) ? "WebApi" : $"WebApi {route}";
 
             WebExceptionTelemetry.Report(context.Exception, where);
+        }
+    }
+
+    /// <summary>
+    /// Reports an exception from an MVC action. Registered in <see cref="FilterConfig"/>.
+    /// </summary>
+    /// <remarks>
+    /// MVC failures used to reach Application Insights only through <c>Application_Error</c>. With custom errors on
+    /// for remote callers (the Release configuration), <see cref="System.Web.Mvc.HandleErrorAttribute"/> handles the
+    /// exception itself to render the error page, so <c>Application_Error</c> never sees it - this keeps those
+    /// failures visible. An exception both report is sent once (<see cref="WebExceptionTelemetry.TryClaim"/>).
+    /// </remarks>
+    public sealed class AnalyticsMvcExceptionReporter : System.Web.Mvc.IExceptionFilter
+    {
+        public void OnException(System.Web.Mvc.ExceptionContext filterContext)
+        {
+            var exception = filterContext?.Exception;
+            if (exception == null || WebExceptionTelemetry.IsRoutineNotFound(exception)) return;
+
+            var path = filterContext.HttpContext?.Request?.Path;
+            WebExceptionTelemetry.Report(exception, string.IsNullOrEmpty(path) ? "Mvc" : $"Mvc {path}");
         }
     }
 }

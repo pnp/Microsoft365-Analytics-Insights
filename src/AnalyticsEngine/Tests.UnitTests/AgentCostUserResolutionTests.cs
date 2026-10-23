@@ -54,8 +54,8 @@ namespace Tests.UnitTests
                 return Task.FromResult(NextId++);
             }
 
-            public Task<IReadOnlyList<string>> GetUnresolvedObjectIdsAsync(int max)
-                => Task.FromResult((IReadOnlyList<string>)Outstanding.Take(max).ToList());
+            public Task<IReadOnlyList<string>> GetUnresolvedObjectIdsAsync(int max, Func<string, bool> skip = null)
+                => Task.FromResult((IReadOnlyList<string>)Outstanding.Where(id => skip == null || !skip(id)).Take(max).ToList());
 
             public Task<int> ApplyUserLinksAsync(IReadOnlyDictionary<string, int> userIdsByObjectId)
             {
@@ -133,6 +133,62 @@ namespace Tests.UnitTests
             Assert.AreEqual(1, result.NotInDirectory);
             Assert.AreEqual(0, result.LookupFailures, "A definitive 'no such user' is not a failure to look up.");
             Assert.AreEqual(0, store.Created.Count, "Nothing should be invented for a user the directory does not have.");
+        }
+
+        [TestMethod]
+        public async Task ADeletedUserIsAskedAboutOnceNotOnEveryPass()
+        {
+            // "Settled" used to be only a counter: the next pass asked the directory again, spending its lookup budget
+            // on people who can never be found.
+            var directory = new FakeDirectory();
+            var resolver = Resolver(new FakeLinkStore(), directory);
+
+            await resolver.ResolveAsync(new[] { "33333333-3333-3333-3333-333333333333" });
+            var second = await resolver.ResolveAsync(new[] { "33333333-3333-3333-3333-333333333333" });
+
+            Assert.AreEqual(1, directory.Calls, "A user the directory has said does not exist must not be asked about again.");
+            Assert.AreEqual(1, second.NotInDirectory, "It is still reported as settled, not as deferred or failed.");
+        }
+
+        [TestMethod]
+        public async Task ASettledMissOutlivesTheResolverThatLearnedIt()
+        {
+            // A resolver is built every cycle; the importer holds one miss cache for the life of the process.
+            var misses = new AgentCostDirectoryMissCache();
+            var directory = new FakeDirectory();
+
+            await new AgentCostUserResolver(new FakeLinkStore(), directory, NullLogger.Instance, misses: misses)
+                .ResolveAsync(new[] { "33333333-3333-3333-3333-333333333333" });
+            await new AgentCostUserResolver(new FakeLinkStore(), directory, NullLogger.Instance, misses: misses)
+                .ResolveAsync(new[] { "33333333-3333-3333-3333-333333333333" });
+
+            Assert.AreEqual(1, directory.Calls, "The next cycle must not ask about a user the directory already said is gone.");
+        }
+
+        [TestMethod]
+        public async Task SettledMissesDoNotCrowdAResolvableUserOutOfTheReAttributionPass()
+        {
+            // The pass is capped. With the cap full of deleted users every pass, a user who COULD be linked behind them
+            // was never reached.
+            var store = new FakeLinkStore();
+            store.Outstanding.AddRange(new[]
+            {
+                "d0000000-0000-0000-0000-000000000001",
+                "d0000000-0000-0000-0000-000000000002",
+                "e0000000-0000-0000-0000-000000000003",
+            });
+            store.Known["e0000000-0000-0000-0000-000000000003"] = 77;
+            var directory = new FakeDirectory();
+            var resolver = new AgentCostUserResolver(store, directory, NullLogger.Instance, misses: new AgentCostDirectoryMissCache());
+
+            var first = await resolver.ResolveOutstandingAsync(maxRows: 2);
+            Assert.AreEqual(0, first.TotalResolved);
+            Assert.AreEqual(2, first.NotInDirectory);
+
+            var second = await resolver.ResolveOutstandingAsync(maxRows: 2);
+            Assert.AreEqual(77, second.UserIdsByObjectId["e0000000-0000-0000-0000-000000000003"],
+                "Once the misses are settled they make way for ids that can still be linked.");
+            Assert.AreEqual(2, directory.Calls, "...and are not asked about again.");
         }
 
         [TestMethod]

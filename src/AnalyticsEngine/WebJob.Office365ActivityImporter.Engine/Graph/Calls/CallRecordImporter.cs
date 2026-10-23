@@ -7,6 +7,39 @@ using WebJob.Office365ActivityImporter.Engine.Entities.Serialisation;
 
 namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
 {
+    /// <summary>What importing one call notification did.</summary>
+    public enum CallImportOutcome
+    {
+        /// <summary>Graph returned nothing usable, so nothing was imported: retry later.</summary>
+        NotImported,
+
+        /// <summary>The call was saved to SQL.</summary>
+        Saved,
+
+        /// <summary>
+        /// Processed but deliberately not saved - no organiser email, or nobody on it in <c>UserGroupsFilter</c>.
+        /// SQL was never touched, so this says nothing about whether saving works.
+        /// </summary>
+        ProcessedWithoutSaving
+    }
+
+    /// <summary>The result of <see cref="CallRecordImporter.Import"/>.</summary>
+    public sealed class CallImportResult
+    {
+        public static readonly CallImportResult NotImported = new CallImportResult(CallImportOutcome.NotImported, null);
+
+        public CallImportResult(CallImportOutcome outcome, CallRecordDTO call)
+        {
+            Outcome = outcome;
+            Call = call;
+        }
+
+        public CallImportOutcome Outcome { get; }
+
+        /// <summary>The call record read from Graph; null when <see cref="CallImportOutcome.NotImported"/>.</summary>
+        public CallRecordDTO Call { get; }
+    }
+
     /// <summary>
     /// Turns a Graph change notification about a finished Teams call into a saved call record.
     /// Extracted from <see cref="CallQueueProcessor"/> so the import logic is separated from the
@@ -37,8 +70,13 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
         /// </summary>
         /// <returns>
         /// The call record when the notification was processed successfully, or <c>null</c> when it
-        /// wasn't - the caller uses that to decide whether to complete or abandon the queue message.
+        /// wasn't - the caller uses that to decide whether to complete the queue message or retry it later.
+        /// Whether the call was actually saved is reported by <see cref="Import"/>.
         /// </returns>
+        /// <exception cref="CallRecordSessionPagingException">
+        /// Not all of the call's sessions could be read; nothing was saved. See <see cref="CallQueueMessageHandler"/>
+        /// for how the queue message is then retried or dead-lettered.
+        /// </exception>
         /// <remarks>
         /// A call with no organiser email is deliberately NOT saved but IS reported as processed: the
         /// organiser is a required foreign key on the call record, and a call we can't resolve an
@@ -48,18 +86,26 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
         /// </remarks>
         public async Task<CallRecordDTO> ImportFromNotification(GraphChangeNotification change)
         {
+            return (await Import(change)).Call;
+        }
+
+        /// <summary>
+        /// As <see cref="ImportFromNotification"/>, also saying whether the call was saved or only processed.
+        /// </summary>
+        public async Task<CallImportResult> Import(GraphChangeNotification change)
+        {
             string callId = change?.ResourceData.Id;
             if (string.IsNullOrEmpty(callId))
             {
                 _logger.LogInformation("ServiceBus error: couldn't find call ID in JSon. Ignoring event.");
-                return null;
+                return CallImportResult.NotImported;
             }
 
             var callResponse = await _source.LoadCallRecord(callId);
             if (callResponse == null)
             {
                 _logger.LogWarning($"Could not load call record '{callId}' from Graph. Skipping.");
-                return null;
+                return CallImportResult.NotImported;
             }
 
             if (!string.IsNullOrEmpty(callResponse.OrganizerEmail))
@@ -68,13 +114,14 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
                 if (!CallRecordScopeRules.AnyParticipantInScope(callResponse, userScope))
                 {
                     _logger.LogInformation($"Call record '{callId}': nobody on the call is in UserGroupsFilter, so it is not saved.");
-                    return callResponse;
+                    return new CallImportResult(CallImportOutcome.ProcessedWithoutSaving, callResponse);
                 }
 
                 await _store.SaveOrReplaceCallRecord(callResponse, userScope);
+                return new CallImportResult(CallImportOutcome.Saved, callResponse);
             }
 
-            return callResponse;
+            return new CallImportResult(CallImportOutcome.ProcessedWithoutSaving, callResponse);
         }
     }
 }

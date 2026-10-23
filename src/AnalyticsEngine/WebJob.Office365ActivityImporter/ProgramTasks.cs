@@ -1,6 +1,9 @@
 using Common.Entities;
+using Common.Entities.Calls;
 using Common.Entities.Config;
 using Common.Entities.CopilotAuditBackfill;
+using Common.Entities.Copilot;
+using ActivityImporter.Engine.ActivityAPI.Copilot;
 using Common.Entities.State;
 using Common.Entities.UserScope;
 using DataUtils;
@@ -42,6 +45,15 @@ namespace WebJob.Office365ActivityImporter
         private readonly ISentEmailMailboxSkipList _sentEmailMailboxSkipList;
         private static readonly InMemoryKeyValueStore InMemoryCopilotAuditBackfillStore = new InMemoryKeyValueStore();
 
+        // This process's copy of which calls-webhook subscription it created: static, as ProgramTasks is rebuilt every cycle.
+        private static readonly InMemoryKeyValueStore CallWebhookProcessState = new InMemoryKeyValueStore();
+
+        // Process-lifetime agent-cost state. ProgramTasks is rebuilt every cycle, so these must be static to outlive
+        // it: the per-agent read's resume checkpoint where no Storage account is configured, and the Entra object ids
+        // the directory has said do not exist (so they are neither asked about nor offered for re-linking every pass).
+        private static readonly InMemoryKeyValueStore InMemoryAgentCostStateStore = new InMemoryKeyValueStore();
+        private static readonly AgentCostDirectoryMissCache AgentCostDirectoryMisses = new AgentCostDirectoryMissCache();
+
         public ProgramTasks(AnalyticsLogger logger, AppConfig settings, ISingleDateStore activityReportsLastImportedStore = null, IImportLastRunStore graphLastRunStore = null, ISentEmailMailboxSkipList sentEmailMailboxSkipList = null)
             : this(logger, settings, activityReportsLastImportedStore, graphLastRunStore, sentEmailMailboxSkipList, reportCompletionStore: null)
         {
@@ -78,8 +90,10 @@ namespace WebJob.Office365ActivityImporter
             _ = callQueueProcessor.BeginProcessCallsQueue();
 
             _logger.LogInformation("Verifying call webhook subscription.");
-            var callWebhook = new CallWebhook(_settings, _logger);
-            await callWebhook.CreateOrUpdateWebhook(webHookUrl, _settings.ClientSecret);
+            var subscriptionRecords = new CallSubscriptionRecordStore(
+                StateStore.TryOpen(_settings, CallSubscriptionRecordStore.Partition, _logger), CallWebhookProcessState);
+            var callWebhook = new CallWebhook(_settings, _logger, subscriptionRecords);
+            await callWebhook.CreateOrUpdateWebhook(webHookUrl, CallWebhookClientState.ForConfig(_settings));
 
         }
 
@@ -212,6 +226,9 @@ namespace WebJob.Office365ActivityImporter
                 AgentCostConnectionStore connectionStore = null;
                 AgentCostConnectionHead connectionHead = null;
 
+                // The ImportSchedule partition, like the cadence stamps: the resume checkpoint is scheduling state.
+                var agentCostState = StateStore.TryOpen(_settings, StatePartitions.ImportSchedule, _logger) ?? InMemoryAgentCostStateStore;
+
                 var phase = new AgentCostImportPhase(
                     _logger,
                     _settings,
@@ -250,9 +267,12 @@ namespace WebJob.Office365ActivityImporter
                             userResolver: new AgentCostUserResolver(
                                 new SqlAgentCostUserLinkStore(DefaultAnalyticsDbContextFactory.Instance, _logger),
                                 _manualGraphCallClient == null ? null : new GraphEntraUserLookup(_manualGraphCallClient, _logger),
-                                _logger),
+                                _logger,
+                                misses: AgentCostDirectoryMisses),
                             // Per-user credits for anyone outside UserGroupsFilter are not stored.
-                            userScopeProvider: _userScopeProvider);
+                            userScopeProvider: _userScopeProvider,
+                            // Lets a retry skip the days an unfinished read already stored. Per connection generation.
+                            checkpoint: new CopilotStudioCreditCheckpointStore(agentCostState, connectionHead?.Version, _logger));
                     },
                     creditConnectionVersion: async () =>
                     {
@@ -272,7 +292,11 @@ namespace WebJob.Office365ActivityImporter
                             _logger,
                             new AzureCostManagementSource(httpClient, _settings.AzureCostImport, _logger),
                             store,
-                            _settings.AzureCostImport);
+                            _settings.AzureCostImport,
+                            clock: null,
+                            // Each scope's "last closed period read while final" marker. Process-lifetime (and durable
+                            // where Storage is configured), so a closed period leaves the window once it has been read.
+                            periodState: _graphLastRunStore);
                     });
 
                 await phase.RunAsync();
@@ -291,6 +315,7 @@ namespace WebJob.Office365ActivityImporter
         internal async Task DownloadActivityData()
         {
             await InitAuth();
+            await AdvanceCopilotEnrichmentSafely();
 
             // Remember start time
             DateTime startTime = DateTime.Now;
@@ -383,6 +408,23 @@ namespace WebJob.Office365ActivityImporter
                     _logger);
                 await backfill.AdvanceLatestAsync();
             }, _logger);
+        }
+
+        internal async Task AdvanceCopilotEnrichmentSafely()
+        {
+            if (!_settings.ResolveCopilotResourceMetadata || !StateStore.IsConfigured(_settings))
+                return;
+            try
+            {
+                var worker = new CopilotEnrichmentWorker(_settings.ConnectionStrings.DatabaseConnectionString,
+                    new CopilotEnrichmentQueue(_settings, _logger), new GraphFileMetadataLoader(_graphClient, _logger),
+                    await _userScopeProvider.GetScopeAsync(), _logger);
+                await worker.RunAsync();
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Copilot enrichment retry pass failed; queued work remains durable and will retry next cycle. New audit import can continue.");
+            }
         }
     }
 }

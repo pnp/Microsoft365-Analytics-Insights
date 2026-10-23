@@ -86,6 +86,14 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
             return ToCallRecordSubscription(result);
         }
 
+        public async Task DeleteSubscription(string subscriptionId)
+        {
+            if (string.IsNullOrEmpty(subscriptionId)) throw new ArgumentException("A subscription id is required.", nameof(subscriptionId));
+
+            // https://learn.microsoft.com/en-us/graph/api/subscription-delete?view=graph-rest-1.0
+            await _client.Subscriptions[subscriptionId].DeleteAsync();
+        }
+
         private static CallRecordSubscription ToCallRecordSubscription(Subscription sub)
         {
             if (sub == null) return null;

@@ -1,6 +1,7 @@
 using Common.Entities.Models;
 using Microsoft.Extensions.Logging;
 using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
 using System.Collections.Generic;
 using System.Threading.Tasks;
 
@@ -12,8 +13,15 @@ namespace Common.Entities.Calls
     /// exactly what the importer's <c>CallQueueProcessor</c> deserialises on the other side - so the
     /// producer (web app) and consumer (importer) share this rather than each writing their own.
     /// </summary>
+    /// <remarks>
+    /// The body leaves out the notification's <c>clientState</c>. It has been checked by then, nothing downstream reads
+    /// it, and it is a credential for the webhook (before <see cref="CallWebhookClientState"/>, the app's client
+    /// secret itself) that every queued and dead-lettered message would otherwise keep.
+    /// </remarks>
     public static class CallNotificationDispatcher
     {
+        private const string ClientStateProperty = "clientState";
+
         /// <summary>
         /// Queue each notification for processing. Takes the queue as a port so the dispatch can be
         /// tested without Service Bus. See issue #378.
@@ -33,8 +41,9 @@ namespace Common.Entities.Calls
                     logger.LogInformation($"New call POSTed from Graph with unknown ID. Adding to service-bus queue anyway.");
                 }
 
-                var json = JsonConvert.SerializeObject(change);
-                await queue.SendAsync(json);
+                var body = JObject.FromObject(change);
+                body.Remove(ClientStateProperty);
+                await queue.SendAsync(body.ToString(Formatting.None));
             }
         }
     }

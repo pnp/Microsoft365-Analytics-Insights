@@ -29,7 +29,7 @@ namespace Web.AnalyticsWeb
         {
             var config = new AppConfig();
 
-            // One logger for the life of the app: each AnalyticsLogger builds its own TelemetryClient.
+            // One logger for the life of the app (loggers share one Application Insights channel per connection string).
             var teamsConnectionLog = new Lazy<AnalyticsLogger>(
                 () => new AnalyticsLogger(config.AppInsightsConnectionString, TeamsConnectionTelemetryContext));
 

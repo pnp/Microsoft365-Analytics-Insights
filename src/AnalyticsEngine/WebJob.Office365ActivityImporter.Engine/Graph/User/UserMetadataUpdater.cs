@@ -301,6 +301,13 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         /// </summary>
         public Func<Task<DirectoryWriterLock>> WriterLockFactory { get; set; }
 
+        /// <summary>
+        /// Builds the writer that marks rows disabled for accounts Graph reported disabled or deleted, from the import's
+        /// connection string. Overridable by tests.
+        /// </summary>
+        internal Func<string, IUserAccountStatusWriter> AccountStatusWriterFactory { get; set; } =
+            connectionString => new SqlUserAccountStatusWriter(connectionString);
+
         private sealed class HeldLock : IDisposable
         {
             public HeldLock(DirectoryWriterLock writerLock) { Lock = writerLock; }
@@ -343,6 +350,89 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 throw new InvalidOperationException(
                     $"User import - lost the users-and-licences writer lock before the {phase}; not writing an answer that may now be out of date. The run is retried on the next cycle.");
             }
+        }
+
+        /// <summary>
+        /// Graph's count of the directory's users, or null when it could not be read. Never throws: it only decides how
+        /// much a complete read is trusted, so a failure falls back to the safer check rather than failing the import.
+        /// </summary>
+        private async Task<int?> CountDirectoryUsersAsync()
+        {
+            try
+            {
+                return await _userLoader.CountDirectoryUsersAsync();
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning($"User import - couldn't read Graph's count of the directory's users: {ex.Message}");
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// Marks rows disabled for the accounts Graph reported disabled or deleted, then - after a complete read of the
+        /// directory that <see cref="DirectoryReadCompleteness"/> trusts - for the accounts that read did not list. A
+        /// failed write throws, which withholds the delta token.
+        /// </summary>
+        /// <param name="usersInDirectory">Graph's count of the directory's users, or null when it could not be read.</param>
+        private async Task MarkRowsDisabledAsync(AnalyticsEntitiesContext db, UserRowsToDeactivate rows, GraphUserDeactivations deactivations,
+            int? usersInDirectory, DateTime lastUpdatedUtc)
+        {
+            IUserAccountStatusWriter writer = null;
+            if (rows.Reported.Count > 0)
+            {
+                await EnsureWriterLockHeldAsync("account status update");
+                writer = AccountStatusWriterFactory(db.Database.Connection.ConnectionString);
+                var marked = await writer.MarkDisabledAsync(rows.Reported, lastUpdatedUtc);
+                _logger.LogInformation($"User import - marked {marked:N0} users row(s) disabled for the {deactivations.DisabledObjectIds.Count:N0} disabled and " +
+                    $"{deactivations.RemovedObjectIds.Count:N0} deleted account(s) Graph reported.");
+            }
+
+            if (rows.NoLongerInDirectory.Count == 0)
+            {
+                return;
+            }
+
+            var leftOut = rows.NoLongerInDirectory.Count;
+            var read = deactivations.CompleteReadCount;
+            var verdict = DirectoryReadCompleteness.Judge(read, usersInDirectory, leftOut, rows.ConfirmedByCompleteRead);
+            if (!DirectoryReadCompleteness.IsTrusted(verdict))
+            {
+                string why;
+                switch (verdict)
+                {
+                    case DirectoryReadVerdict.ShortOfDirectoryCount:
+                        why = $"it listed {read:N0} users, but Graph counts {usersInDirectory:N0} in the directory, so it may have missed some. " +
+                            "Graph's count can lag behind a large deletion for a while";
+                        break;
+                    case DirectoryReadVerdict.BeyondDirectoryCount:
+                        why = $"it listed {read:N0} users, but Graph counts only {usersInDirectory:N0} in the directory - too far apart for either to be relied on";
+                        break;
+                    case DirectoryReadVerdict.LeftOutMoreThanConfirmed:
+                        why = $"Graph's count of the directory's users could not be read to confirm the read was complete, and the read left out more of the " +
+                            $"users table's accounts ({leftOut:N0}) than it listed ({rows.ConfirmedByCompleteRead:N0}), as a read that lost part of the directory would";
+                        break;
+                    default:
+                        why = "it listed no users at all";
+                        break;
+                }
+
+                _logger.LogWarning($"User import - NOT marking {leftOut:N0} account(s) disabled although this complete read of the directory did not list them: {why}. " +
+                    "They are checked again on the next complete read (clearing the user checkpoint on the User import page forces one). " +
+                    "Accounts Graph reports as disabled or deleted are still marked as usual.");
+                return;
+            }
+
+            await EnsureWriterLockHeldAsync("account status update");
+            writer = writer ?? AccountStatusWriterFactory(db.Database.Connection.ConnectionString);
+            var gone = await writer.MarkDisabledAsync(rows.NoLongerInDirectory, lastUpdatedUtc);
+            var evidence = verdict == DirectoryReadVerdict.MatchesDirectoryCount
+                ? $"this complete read listed {read:N0} users, in line with Graph's count of {usersInDirectory:N0}, and not them"
+                : $"this complete read listed {read:N0} users and not them; Graph's count of the directory's users could not be read, but the read listed " +
+                    $"{rows.ConfirmedByCompleteRead:N0} of the users table's accounts, more than it left out";
+            _logger.LogInformation($"User import - marked {gone:N0} users row(s) disabled whose account is no longer in Entra ID: {evidence}, so they have been deleted. " +
+                "The first complete read after upgrading to this version also catches up every account deleted before it, so expect a one-off drop in the " +
+                "number of enabled users of about this many.");
         }
 
         /// <summary>Checks the writer lock before each batch of the bulk metadata update, not just once for the phase.</summary>
@@ -439,6 +529,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 // Load from Graph & update delta code once done
                 var allActiveGraphUsers = await _userLoader.LoadAllActiveUsers();
                 var deltaReadCompleted = _userLoader.LastLoadReachedDeltaLink;
+                var deactivations = _userLoader.LastLoadDeactivations ?? GraphUserDeactivations.None;
+                var disabledGraphUsers = new List<GraphUser>(deactivations.DisabledUsers);
                 _logger.LogInformation($"User import - loaded {allActiveGraphUsers.Count.ToString("N0")} users from Graph");
 
                 if (userScope.IsFiltered)
@@ -446,6 +538,9 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                     var readFromGraph = allActiveGraphUsers.Count;
                     allActiveGraphUsers = SelectGraphUsersInScope(allActiveGraphUsers, userScope);
                     _logger.LogInformation($"User import - {allActiveGraphUsers.Count:N0} of the {readFromGraph:N0} users read are in UserGroupsFilter; only they are written.");
+
+                    // Disabled members are still members, so their rows are still kept up to date.
+                    disabledGraphUsers = SelectGraphUsersInScope(disabledGraphUsers, userScope);
                 }
 
                 // Pre-build dictionary for O(1) graph user lookups by AAD ID (avoids O(n) scans per user in manager resolution)
@@ -465,13 +560,41 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                     : await db.users.AsNoTracking().ToListAsync();
                 _logger.LogInformation($"User import - loaded {allDbUsers.Count.ToString("N0")} users from database");
 
+                if (!await UserRenameProcessor.RenameAsync(db.Database.Connection.ConnectionString,
+                    allActiveGraphUsers.Concat(disabledGraphUsers), allDbUsers, _logger,
+                    () => EnsureWriterLockHeldAsync("user rename")))
+                {
+                    return false;
+                }
+
                 // Create lookup dictionaries for performance - pre-allocate capacity
                 var dbUsersByUpn = new Dictionary<string, Common.Entities.User>(allDbUsers.Count, StringComparer.OrdinalIgnoreCase);
                 var dbUsersByAadId = new Dictionary<string, Common.Entities.User>(allDbUsers.Count, StringComparer.OrdinalIgnoreCase);
 
+                // A renamed user's old row keeps their object id, so an object id can be on more than one row. Managers
+                // are resolved through this map, so it holds the row with Graph's current sign-in name, or else the
+                // newest one - never whichever the unordered load returned first, which left reports linked to the row
+                // a rename left behind.
+                var disabledGraphUsersByAadId = new Dictionary<string, GraphUser>(StringComparer.OrdinalIgnoreCase);
+                foreach (var disabledUser in disabledGraphUsers)
+                {
+                    if (!string.IsNullOrEmpty(disabledUser.Id))
+                    {
+                        disabledGraphUsersByAadId[disabledUser.Id] = disabledUser;
+                    }
+                }
+                Func<string, string> currentUpnOf = aadId =>
+                {
+                    GraphUser current;
+                    return _dataMapper.GraphUsersByAadId.TryGetValue(aadId, out current) || disabledGraphUsersByAadId.TryGetValue(aadId, out current)
+                        ? current.UserPrincipalName
+                        : null;
+                };
+
                 // Single pass to populate both dictionaries. Under UserGroupsFilter, people outside the scope are left
                 // out: these maps are also where managers are resolved, and a manager outside the scope must resolve
                 // to no manager rather than to their (still unpurged) row.
+                var rowsSharingAnObjectId = 0;
                 foreach (var user in allDbUsers)
                 {
                     if (userScope.IsFiltered && !IsDbUserInScope(user, userScope))
@@ -482,18 +605,42 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                     {
                         dbUsersByUpn[user.UserPrincipalName] = user;
                     }
-                    if (!string.IsNullOrEmpty(user.AzureAdId) && !dbUsersByAadId.ContainsKey(user.AzureAdId))
+                    if (UserIdentityRules.AddByObjectId(dbUsersByAadId, user, currentUpnOf))
                     {
-                        dbUsersByAadId[user.AzureAdId] = user;
+                        rowsSharingAnObjectId++;
                     }
+                }
+                if (rowsSharingAnObjectId > 0)
+                {
+                    _logger.LogInformation($"User import - {rowsSharingAnObjectId:N0} users row(s) carry the same Entra object id as another row, usually because the user's " +
+                        "sign-in name changed. Manager links use the row with the user's current sign-in name, or else the newest row.");
+                }
+
+                // Accounts Graph reported disabled or deleted - and, after a complete read of the directory, accounts it
+                // did not list. Nobody is inserted for them; a row the table has for a disabled user is updated with
+                // everyone else's below, and every row carrying one of their object ids - a rename's left-behind row
+                // too - is then marked disabled, whether or not they are still in UserGroupsFilter (see
+                // SelectRowsToDeactivate). Resolved now, against the rows just loaded: a deleted account's entry carries
+                // nothing but its object id, and azure_ad_id cannot be queried efficiently.
+                var disabledGraphUsersWithRows = disabledGraphUsers.Where(u => dbUsersByUpn.ContainsKey(u.UserPrincipalName)).ToList();
+                var rowsToDeactivate = UserIdentityRules.SelectRowsToDeactivate(allDbUsers, deactivations);
+
+                // Absence only means deletion if the read really listed the whole directory. Graph's own count of the
+                // directory's users is read now, as close to the read as possible, and only when absence would disable
+                // someone: see DirectoryReadCompleteness.
+                int? usersInDirectory = null;
+                if (rowsToDeactivate.NoLongerInDirectory.Count > 0)
+                {
+                    usersInDirectory = await CountDirectoryUsersAsync();
                 }
 
                 var graphMentionedExistingDbUsers = _dataMapper.GetDbUsersFromGraphUsers(allActiveGraphUsers, allDbUsers);
                 var fallbackLicenceUserIds = skus == null ? new HashSet<int>() : null;
                 var fallbackDesiredLicences = skus == null ? new HashSet<UserLicenseAssignment>() : null;
 
-                // Insert any user we've not seen so far
-                var insertedDbUsers = await InsertMissingUsersFenced(db, allActiveGraphUsers, graphMentionedExistingDbUsers, skus == null, importCycleLastUpdatedUtc, fallbackLicenceUserIds, fallbackDesiredLicences);
+                // Insert any user we've not seen so far. Their managers are resolved against every user already in the
+                // database: in an incremental read, a newcomer's manager is usually someone Graph did not report as changed.
+                var insertedDbUsers = await InsertMissingUsersFenced(db, allActiveGraphUsers, graphMentionedExistingDbUsers, skus == null, importCycleLastUpdatedUtc, fallbackLicenceUserIds, fallbackDesiredLicences, dbUsersByAadId);
                 phaseResults.InsertPhaseSucceeded = true;
                 _logger.LogInformation($"User import - Insert phase completed. {insertedDbUsers.Count.ToString("N0")} new users inserted.");
 
@@ -565,6 +712,19 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                     }
                 }
 
+                // Disabled users with a row are updated like everyone else, account_enabled included.
+                var graphUsersToUpdate = allActiveGraphUsers;
+                if (disabledGraphUsersWithRows.Count > 0)
+                {
+                    graphUsersToUpdate = new List<GraphUser>(allActiveGraphUsers.Count + disabledGraphUsersWithRows.Count);
+                    graphUsersToUpdate.AddRange(allActiveGraphUsers);
+                    graphUsersToUpdate.AddRange(disabledGraphUsersWithRows);
+                    foreach (var disabledUser in disabledGraphUsersWithRows)
+                    {
+                        notInsertedUpns.Add(disabledUser.UserPrincipalName);
+                    }
+                }
+
                 // NOTE: we deliberately do NOT clear allDbUsers here yet when
                 // tenant-level SKUs are available. The licence refresh step below
                 // (ProcessSKUsForAllUsers) MUST iterate over the entire DB user
@@ -597,7 +757,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                     {
                         existingUsersUpdated = await _batchProcessor.BulkUpdateExistingUsers(
                             db,
-                            allActiveGraphUsers,
+                            graphUsersToUpdate,
                             notInsertedUpns,
                             dbUsersByUpn,
                             dbUsersByAadId,
@@ -610,7 +770,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                     {
                         existingUsersUpdated = await _batchProcessor.ProcessExistingUsersInBatches(
                             db,
-                            allActiveGraphUsers,
+                            graphUsersToUpdate,
                             notInsertedUpns,
                             dbUsersByUpn,
                             dbUsersByAadId,
@@ -621,6 +781,10 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                             BATCH_SIZE,
                             beforeSave: () => EnsureWriterLockHeldAsync("metadata update"));
                     }
+
+                    // Last, so nothing written above can turn a row back on. Part of this phase, so a failure withholds
+                    // the delta token exactly like any other write: the next cycle reads these accounts again.
+                    await MarkRowsDisabledAsync(db, rowsToDeactivate, deactivations, usersInDirectory, importCycleLastUpdatedUtc);
                     phaseResults.UpdatePhaseSucceeded = true;
                     _logger.LogInformation($"User import - Completed metadata update for {existingUsersUpdated.ToString("N0")} existing users");
                 }
@@ -711,8 +875,14 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 }
 
                 // Apply the org values last, once every Graph user is guaranteed to have a dbo.users row
-                // (the insert phase above creates the missing ones) so their ids can be resolved.
-                await ApplyUserOrgValues(allActiveGraphUsers, entraOrgTypes, dbUsersByUpn, phaseResults, importCycleLastUpdatedUtc);
+                // (the insert phase above creates the missing ones) so their ids can be resolved. Only from a read
+                // that reached its deltaLink: the organisation merge has only ever been given a complete read - any
+                // other failure of an org-carrying read is retried without the attributes - and a page that came back
+                // without its value collection is now a failed page that is not.
+                if (deltaReadCompleted)
+                {
+                    await ApplyUserOrgValues(allActiveGraphUsers, entraOrgTypes, dbUsersByUpn, phaseResults, importCycleLastUpdatedUtc);
+                }
 
                 _logger.LogInformation($"{DateTime.Now.ToShortTimeString()} User import - complete. Inserted {insertedDbUsers.Count.ToString("N0")} new users, updated metadata for {existingUsersUpdated.ToString("N0")} existing users (from {allActiveGraphUsers.Count.ToString("N0")} Graph users)");
 
@@ -1294,13 +1464,18 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         /// Inserts missing users into DB using two-phase approach: fast bulk insert, then metadata enrichment.
         /// Delegates to UserInsertProcessor for the heavy lifting.
         /// </summary>
-        private async Task<List<Common.Entities.User>> InsertMissingUsersFenced(AnalyticsEntitiesContext db, List<GraphUser> allGraphUsers, List<Common.Entities.User> graphMentionedDbUsers, bool readUserSkus, DateTime? importCycleLastUpdatedUtc, HashSet<int> fallbackLicenceUserIds, HashSet<UserLicenseAssignment> fallbackDesiredLicences)
+        private async Task<List<Common.Entities.User>> InsertMissingUsersFenced(AnalyticsEntitiesContext db, List<GraphUser> allGraphUsers, List<Common.Entities.User> graphMentionedDbUsers, bool readUserSkus, DateTime? importCycleLastUpdatedUtc, HashSet<int> fallbackLicenceUserIds, HashSet<UserLicenseAssignment> fallbackDesiredLicences, Dictionary<string, Common.Entities.User> existingDbUsersByAadId)
         {
             await EnsureWriterLockHeldAsync("user insert");
-            return await InsertMissingUsers(db, allGraphUsers, graphMentionedDbUsers, readUserSkus, importCycleLastUpdatedUtc, fallbackLicenceUserIds, fallbackDesiredLicences);
+            return await InsertMissingUsers(db, allGraphUsers, graphMentionedDbUsers, readUserSkus, importCycleLastUpdatedUtc, fallbackLicenceUserIds, fallbackDesiredLicences, existingDbUsersByAadId);
         }
 
-        public async Task<List<Common.Entities.User>> InsertMissingUsers(AnalyticsEntitiesContext db, List<GraphUser> allGraphUsers, List<Common.Entities.User> graphMentionedDbUsers, bool readUserSkus, DateTime? importCycleLastUpdatedUtc = null, HashSet<int> fallbackLicenceUserIds = null, HashSet<UserLicenseAssignment> fallbackDesiredLicences = null)
+        /// <param name="existingDbUsersByAadId">
+        /// Every in-scope users row already in the database, by object id, for resolving new users' managers. Null
+        /// resolves them against <paramref name="graphMentionedDbUsers"/> only, which misses a manager Graph did not
+        /// report in this read.
+        /// </param>
+        public async Task<List<Common.Entities.User>> InsertMissingUsers(AnalyticsEntitiesContext db, List<GraphUser> allGraphUsers, List<Common.Entities.User> graphMentionedDbUsers, bool readUserSkus, DateTime? importCycleLastUpdatedUtc = null, HashSet<int> fallbackLicenceUserIds = null, HashSet<UserLicenseAssignment> fallbackDesiredLicences = null, Dictionary<string, Common.Entities.User> existingDbUsersByAadId = null)
         {
             // Ensure cache and helpers are initialized (for direct method calls from tests)
             if (_userMetaCache == null)
@@ -1325,7 +1500,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 _dataMapper,
                 _licenseProcessor,
                 async (ctx, graphUser, allGraph, allDb, dbUser, readSkus, dbByAadId) =>
-                    await UpdateDbUserWithGraphData(ctx, graphUser, allGraph, allDb, dbUser, readSkus, dbByAadId, importCycleLastUpdatedUtc, fallbackLicenceUserIds, fallbackDesiredLicences));
+                    await UpdateDbUserWithGraphData(ctx, graphUser, allGraph, allDb, dbUser, readSkus, dbByAadId, importCycleLastUpdatedUtc, fallbackLicenceUserIds, fallbackDesiredLicences),
+                existingDbUsersByAadId);
         }
 
         /// <summary>

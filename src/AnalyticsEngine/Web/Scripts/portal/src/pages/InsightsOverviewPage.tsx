@@ -187,7 +187,7 @@ export default function InsightsOverviewPage() {
 
   const counts = useMemo(() => status?.dataCounts ?? [], [status]);
   const countKeys = useMemo(() => counts.map((c) => c.key), [counts]);
-  const hasAnyData = useMemo(() => counts.some((c) => c.count > 0), [counts]);
+  const hasAnyData = useMemo(() => counts.some((c) => (c.count ?? 0) > 0), [counts]);
 
   if (loading) {
     return (

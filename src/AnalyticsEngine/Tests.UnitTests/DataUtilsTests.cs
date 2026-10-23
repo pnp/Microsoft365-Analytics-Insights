@@ -384,6 +384,96 @@ namespace Tests.UnitTests
                 Assert.IsNotNull(cached);
             }
         }
+
+        /// <summary>
+        /// Regression (B6/D6): the cache used to hold one lock across every load, so two unrelated ids could not be
+        /// looked up at the same time and even a cache hit queued behind somebody else's slow (e.g. throttled) Graph call.
+        /// </summary>
+        [TestMethod]
+        public async Task ObjectByIdCache_UnrelatedKeysLoadConcurrently_AndAHitNeverWaitsBehindALoad()
+        {
+            var cache = new GatedObjectByIdCache();
+            cache.Release("primed");
+            var primed = await cache.GetResource("primed");
+
+            var slowA = cache.GetResource("slow-a");
+            var slowB = cache.GetResource("slow-b");
+            Assert.IsTrue(await cache.WaitUntilLoading(TimeSpan.FromSeconds(10), "slow-a", "slow-b"),
+                "Two unrelated ids must be able to load at the same time.");
+
+            var hit = cache.GetResource("PRIMED");
+            Assert.AreSame(hit, await Task.WhenAny(hit, Task.Delay(TimeSpan.FromSeconds(10))),
+                "A cache hit must not wait for an unrelated load to finish.");
+            Assert.AreSame(primed, await hit);
+
+            cache.Release("slow-a");
+            cache.Release("slow-b");
+            await Task.WhenAll(slowA, slowB);
+        }
+
+        /// <summary>
+        /// Callers asking for the same id share one load, and a load that failed is retried by the next caller rather
+        /// than remembered.
+        /// </summary>
+        [TestMethod]
+        public async Task ObjectByIdCache_SameKeySharesOneLoad_AndAFailedLoadIsRetried()
+        {
+            var cache = new GatedObjectByIdCache();
+            var callers = Enumerable.Range(0, 10).Select(i => cache.GetResource(i % 2 == 0 ? "shared" : "SHARED")).ToList();
+            Assert.IsTrue(await cache.WaitUntilLoading(TimeSpan.FromSeconds(10), "shared"));
+            cache.Release("shared");
+            var results = await Task.WhenAll(callers);
+            Assert.IsTrue(results.All(r => ReferenceEquals(r, results[0])));
+            Assert.AreEqual(1, cache.LoadCount("shared"), "Concurrent callers for one id share a single load.");
+
+            cache.FailNextLoad("flaky");
+            cache.Release("flaky");
+            await Assert.ThrowsExceptionAsync<InvalidOperationException>(() => cache.GetResource("flaky"));
+            Assert.IsNotNull(await cache.GetResource("flaky"), "A failed load must not be cached.");
+            Assert.AreEqual(2, cache.LoadCount("flaky"));
+        }
+
+        /// <summary>A cache whose loads wait until the test releases them, recording which ids are loading.</summary>
+        class GatedObjectByIdCache : ObjectByIdCache<TestObject>
+        {
+            private readonly System.Collections.Concurrent.ConcurrentDictionary<string, TaskCompletionSource<bool>> _gates
+                = new System.Collections.Concurrent.ConcurrentDictionary<string, TaskCompletionSource<bool>>(StringComparer.OrdinalIgnoreCase);
+            private readonly System.Collections.Concurrent.ConcurrentDictionary<string, int> _loads
+                = new System.Collections.Concurrent.ConcurrentDictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+            private readonly System.Collections.Concurrent.ConcurrentDictionary<string, bool> _failNext
+                = new System.Collections.Concurrent.ConcurrentDictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
+
+            private TaskCompletionSource<bool> Gate(string id) =>
+                _gates.GetOrAdd(id, _ => new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously));
+
+            public void Release(string id) => Gate(id).TrySetResult(true);
+
+            public void FailNextLoad(string id) => _failNext[id] = true;
+
+            public int LoadCount(string id) => _loads.TryGetValue(id, out var count) ? count : 0;
+
+            public async Task<bool> WaitUntilLoading(TimeSpan timeout, params string[] ids)
+            {
+                var deadline = DateTime.UtcNow + timeout;
+                while (!ids.All(id => LoadCount(id) > 0))
+                {
+                    if (DateTime.UtcNow > deadline) return false;
+                    await Task.Delay(10);
+                }
+                return true;
+            }
+
+            public override async Task<TestObject> Load(string id)
+            {
+                _loads.AddOrUpdate(id, 1, (_, count) => count + 1);
+                await Gate(id).Task;
+                if (_failNext.TryRemove(id, out _))
+                {
+                    throw new InvalidOperationException("Synthetic load failure");
+                }
+                return new TestObject();
+            }
+        }
         class TestObjectByIdCache : ObjectByIdCache<TestObject>
         {
             List<string> ids = new List<string>();

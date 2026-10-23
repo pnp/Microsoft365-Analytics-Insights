@@ -44,16 +44,30 @@ describe('userScopeApi', () => {
     expect(init?.body).toBeUndefined();
   });
 
-  it('starts a purge with the required acknowledgement body', async () => {
+  it('starts a purge with the acknowledgement and what was confirmed: the count shown and the filter it was shown under', async () => {
     mockedFetch.mockResolvedValue(jsonResponse({ id: 12, state: 'queued' }, 202));
 
-    await expect(startUserScopePurge()).resolves.toMatchObject({ id: 12, state: 'queued' });
+    await expect(startUserScopePurge(25, 'sha256:0000')).resolves.toMatchObject({ id: 12, state: 'queued' });
 
     const [url, init] = mockedFetch.mock.calls[0];
     expect(url).toMatch(/\/api\/UserScope\/purge$/);
     expect(init?.method).toBe('POST');
-    expect(JSON.parse(String(init?.body))).toEqual({ acknowledged: true });
+    expect(JSON.parse(String(init?.body))).toEqual({
+      acknowledged: true,
+      confirmedOutsideScopeCount: 25,
+      confirmedFilterFingerprint: 'sha256:0000',
+    });
     expect((init?.headers as Record<string, string>)['Content-Type']).toBe('application/json');
+  });
+
+  it('keeps the code and the numbers as they are now when a purge is refused because the scope changed', async () => {
+    const database = { totalUsers: 120, inScopeUsers: 80, outOfScopeUsers: 40 };
+    mockedFetch.mockResolvedValue(jsonResponse({ code: 'purgeExceedsConfirmed', database, confirmedOutsideScopeCount: 25 }, 409));
+
+    const error = await startUserScopePurge(25, 'sha256:0000').catch((e: unknown) => e);
+
+    expect(error).toMatchObject({ name: 'UserScopeApiError', code: 'purgeExceedsConfirmed', database });
+    expect((error as Error).message).toMatch(/More people are outside the scope now than the number you confirmed/);
   });
 
   it('polls a purge job by id', async () => {
@@ -83,10 +97,12 @@ describe('userScopeApi', () => {
     ['jobNotActive', 'That purge job is no longer running.'],
     ['databaseUnavailable', 'The analytics database is unavailable.'],
     ['storageUnavailable', "Couldn't reach Azure Table storage, where purges keep their progress."],
+    ['purgeExceedsConfirmed', 'More people are outside the scope now than the number you confirmed'],
+    ['filterChanged', 'UserGroupsFilter has changed since this page was loaded'],
   ])("turns server error code '%s' into its catalog sentence", async (code, expected) => {
     mockedFetch.mockResolvedValue(jsonResponse({ code }, 409));
 
-    await expect(startUserScopePurge()).rejects.toThrow(expected);
+    await expect(startUserScopePurge(25, 'sha256:0000')).rejects.toThrow(expected);
   });
 
   it("falls back to the HTTP status for unknown codes and the same-origin check's bare response", async () => {

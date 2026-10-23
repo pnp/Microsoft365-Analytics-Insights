@@ -94,23 +94,36 @@ namespace DataUtils.AppInsights
         /// <summary>
         /// Runs a KQL query and returns the primary result table, or an empty table if the query yielded no tables.
         /// </summary>
-        public async Task<AppInsightsQueryTable> RunQueryAsync(string kql)
+        public Task<AppInsightsQueryTable> RunQueryAsync(string kql)
+            => RunQueryAsync(kql, CancellationToken.None);
+
+        /// <summary>
+        /// Runs a KQL query and returns the primary result table, or an empty table if the query yielded no tables.
+        /// <paramref name="cancellationToken"/> stops the token request, the HTTP call and any back-off between retries.
+        /// </summary>
+        public async Task<AppInsightsQueryTable> RunQueryAsync(string kql, CancellationToken cancellationToken)
         {
-            var response = await RunQueryRawAsync(kql);
+            var response = await RunQueryRawAsync(kql, cancellationToken);
             return response?.PrimaryTable ?? AppInsightsQueryTable.Empty;
         }
 
         /// <summary>
         /// Runs a KQL query and returns the full deserialised response (all tables).
         /// </summary>
-        public async Task<AppInsightsQueryResponse> RunQueryRawAsync(string kql)
+        public Task<AppInsightsQueryResponse> RunQueryRawAsync(string kql)
+            => RunQueryRawAsync(kql, CancellationToken.None);
+
+        /// <summary>
+        /// Runs a KQL query and returns the full deserialised response (all tables).
+        /// </summary>
+        public async Task<AppInsightsQueryResponse> RunQueryRawAsync(string kql, CancellationToken cancellationToken)
         {
             if (string.IsNullOrWhiteSpace(kql)) throw new ArgumentException("Query cannot be empty.", nameof(kql));
 
-            await SetBearerToken();
+            await SetBearerToken(cancellationToken);
 
             var url = $"https://api.applicationinsights.io/v1/apps/{_appInsightsId}/query?query={Uri.EscapeDataString(kql)}";
-            var response = await GetWithRetry(url);
+            var response = await GetWithRetry(url, cancellationToken);
             using (response)
             {
                 var body = await response.Content.ReadAsStringAsync();
@@ -126,16 +139,16 @@ namespace DataUtils.AppInsights
             }
         }
 
-        private async Task SetBearerToken()
+        private async Task SetBearerToken(CancellationToken cancellationToken)
         {
             // Refresh only when missing or within 5 minutes of expiry, to avoid a token call per query.
-            await _tokenLock.WaitAsync();
+            await _tokenLock.WaitAsync(cancellationToken);
             try
             {
                 if (!_cachedToken.HasValue || _cachedToken.Value.ExpiresOn <= DateTimeOffset.UtcNow.AddMinutes(5))
                 {
                     var tokenRequestContext = new TokenRequestContext(AppInsightsScope);
-                    _cachedToken = await _credential.GetTokenAsync(tokenRequestContext, CancellationToken.None);
+                    _cachedToken = await _credential.GetTokenAsync(tokenRequestContext, cancellationToken);
                     _client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", _cachedToken.Value.Token);
                     _logger?.LogInformation("Refreshed App Insights query bearer token.");
                 }
@@ -146,13 +159,18 @@ namespace DataUtils.AppInsights
             }
         }
 
-        private async Task<HttpResponseMessage> GetWithRetry(string url)
+        /// <remarks>
+        /// A timeout is not retried. <see cref="HttpClient.Timeout"/> surfaces as a <see cref="TaskCanceledException"/>,
+        /// and retrying it made one unanswered query cost four 100-second attempts plus back-off - longer than App
+        /// Service lets a request run. A query that timed out once is not likely to finish on the next try either.
+        /// </remarks>
+        private async Task<HttpResponseMessage> GetWithRetry(string url, CancellationToken cancellationToken)
         {
             for (int attempt = 0; ; attempt++)
             {
                 try
                 {
-                    var response = await _client.GetAsync(url);
+                    var response = await _client.GetAsync(url, cancellationToken);
                     if (response.IsSuccessStatusCode || !IsTransientStatusCode(response.StatusCode) || attempt >= MaxRetries)
                     {
                         return response;
@@ -161,13 +179,13 @@ namespace DataUtils.AppInsights
                     var backoff = Math.Min((int)Math.Pow(2, attempt), MaxBackoffSeconds);
                     _logger?.LogWarning($"Transient HTTP {(int)response.StatusCode} from App Insights query API. Retrying in {backoff}s (attempt {attempt + 1}/{MaxRetries})...");
                     response.Dispose();
-                    await Task.Delay(TimeSpan.FromSeconds(backoff));
+                    await Task.Delay(TimeSpan.FromSeconds(backoff), cancellationToken);
                 }
-                catch (Exception ex) when ((ex is HttpRequestException || ex is TaskCanceledException) && attempt < MaxRetries)
+                catch (HttpRequestException ex) when (attempt < MaxRetries)
                 {
                     var backoff = Math.Min((int)Math.Pow(2, attempt), MaxBackoffSeconds);
                     _logger?.LogWarning($"Transient error calling App Insights query API: {ex.Message}. Retrying in {backoff}s (attempt {attempt + 1}/{MaxRetries})...");
-                    await Task.Delay(TimeSpan.FromSeconds(backoff));
+                    await Task.Delay(TimeSpan.FromSeconds(backoff), cancellationToken);
                 }
             }
         }

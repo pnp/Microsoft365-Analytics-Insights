@@ -79,16 +79,25 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
     /// </remarks>
     public class AgentCostImportOutcome
     {
-        public AgentCostImportOutcome(AgentCostImportLog log, bool isAuthorisationFailure = false, bool isConnectionRequired = false)
+        public AgentCostImportOutcome(AgentCostImportLog log, bool isAuthorisationFailure = false, bool isConnectionRequired = false,
+            bool isConfigurationFailure = false)
         {
             Log = log;
             IsAuthorisationFailure = isAuthorisationFailure;
             IsConnectionRequired = isConnectionRequired;
+            IsConfigurationFailure = isConfigurationFailure;
         }
 
         public AgentCostImportLog Log { get; }
 
         public bool IsAuthorisationFailure { get; }
+
+        /// <summary>
+        /// Every failing part was rejected as misconfigured - a scope that does not exist, a grouping or filter the
+        /// API will not accept. Like a refusal, retrying the same request cannot fix it; unlike a refusal, the fix is
+        /// a setting, so a changed configuration should be tried straight away.
+        /// </summary>
+        public bool IsConfigurationFailure { get; }
 
         /// <summary>
         /// Consumption was not attempted because no delegated administrator connection exists. A state to
@@ -104,12 +113,13 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
         /// Failed for a reason that retrying might fix - a timeout, a 500, an incomplete read.
         /// </summary>
         /// <remarks>
-        /// The complement of <see cref="IsAuthorisationFailure"/> among failures, and the reason the two are
-        /// tracked separately: a run made of several parts must only back off if <b>every</b> failing part
-        /// was refused. If one part is permanently unauthorised and another merely timed out, treating the
-        /// whole run as "refused" would suppress the retry the timeout deserves for a full interval.
+        /// The complement of <see cref="IsAuthorisationFailure"/> and <see cref="IsConfigurationFailure"/> among
+        /// failures, and the reason they are tracked separately: a run made of several parts must only back off if
+        /// <b>every</b> failing part was refused or rejected. If one part is permanently unauthorised and another
+        /// merely timed out, treating the whole run as "refused" would suppress the retry the timeout deserves for a
+        /// full interval.
         /// </remarks>
-        public bool IsTransientFailure => !Succeeded && !IsAuthorisationFailure;
+        public bool IsTransientFailure => !Succeeded && !IsAuthorisationFailure && !IsConfigurationFailure;
     }
 
     /// <summary>

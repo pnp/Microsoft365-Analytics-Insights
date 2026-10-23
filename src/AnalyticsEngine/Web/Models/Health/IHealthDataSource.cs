@@ -18,7 +18,7 @@ namespace Web.AnalyticsWeb.Models.Health
         Task<DatabaseProbeResult> ProbeDatabaseAsync();
 
         /// <summary>
-        /// Approximate row counts + database size (DMVs), the tracked-Teams count and the latest Copilot
+        /// Approximate row counts + database size (catalog views), the tracked-Teams count and the latest Copilot
         /// usage-report import per report. Never throws: partial failures come back as
         /// <see cref="DatabaseCountsResult.CountsError"/> / <see cref="DatabaseCountsResult.DataError"/>.
         /// </summary>
@@ -67,7 +67,7 @@ namespace Web.AnalyticsWeb.Models.Health
 
     /// <summary>
     /// The SQL "data overview" figures. Each block fails independently, mirroring the two nested
-    /// try/catch scopes this replaces: a DMV permission failure only sets <see cref="CountsError"/> and
+    /// try/catch scopes this replaces: a failure reading those only sets <see cref="CountsError"/> and
     /// still returns the tracked-Teams / Copilot-import figures, while a hard connection failure sets
     /// <see cref="DataError"/> and leaves whatever had already been read in place.
     /// </summary>
@@ -82,7 +82,7 @@ namespace Web.AnalyticsWeb.Models.Health
         public long UserCount { get; set; }
         public long DatabaseSizeMb { get; set; }
 
-        /// <summary>Set when the cheap DMV counts / DB size couldn't be read (e.g. no VIEW DATABASE STATE).</summary>
+        /// <summary>Set when the cheap catalog-view counts / DB size couldn't be read.</summary>
         public string CountsError { get; set; }
 
         public int TeamsBeingTrackedCount { get; set; }

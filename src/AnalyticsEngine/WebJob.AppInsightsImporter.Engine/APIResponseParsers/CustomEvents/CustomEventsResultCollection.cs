@@ -59,7 +59,7 @@ namespace WebJob.AppInsightsImporter.Engine.APIResponseParsers.CustomEvents
         /// <summary>
         /// Apply hit patches, save searches & clicks
         /// </summary>
-        public Task SaveAllEventTypesToSql(AnalyticsLogger logger, AppConfig config)
+        public Task<CustomEventSaveResult> SaveAllEventTypesToSql(AnalyticsLogger logger, AppConfig config)
         {
             return SaveAllEventTypesToSql(logger, config, DefaultAnalyticsDbContextFactory.Instance);
         }
@@ -67,9 +67,10 @@ namespace WebJob.AppInsightsImporter.Engine.APIResponseParsers.CustomEvents
         /// <summary>
         /// As above, with the context factory supplied (issue #368/#369). Production behaviour is
         /// unchanged: DefaultAnalyticsDbContextFactory.Create() is `new AnalyticsEntitiesContext()`, and the
-        /// single context still spans the whole event save exactly as it did.
+        /// single context still spans the whole event save exactly as it did. Returns which sections, if any,
+        /// failed - see <see cref="CustomEventSaveResult"/>.
         /// </summary>
-        public async Task SaveAllEventTypesToSql(AnalyticsLogger logger, AppConfig config, IAnalyticsDbContextFactory contextFactory)
+        public async Task<CustomEventSaveResult> SaveAllEventTypesToSql(AnalyticsLogger logger, AppConfig config, IAnalyticsDbContextFactory contextFactory)
         {
             if (contextFactory == null) throw new ArgumentNullException(nameof(contextFactory));
 
@@ -85,7 +86,7 @@ namespace WebJob.AppInsightsImporter.Engine.APIResponseParsers.CustomEvents
                     new SqlPageUpdatePersistenceManager(logger, config, contextFactory),
                     new SqlClicksPersistenceManager(database, logger));
 
-                await saver.SaveAllSectionsAsync(this);
+                return await saver.SaveAllSectionsAsync(this);
             }
         }
     }

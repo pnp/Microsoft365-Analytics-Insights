@@ -45,7 +45,7 @@ namespace Tests.UnitTests
             /// <summary>The four section ports in the order the saver runs them.</summary>
             public readonly InMemoryEventSectionPort[] Ports;
 
-            public Task RunAsync(CustomEventsResultCollection events)
+            public Task<CustomEventSaveResult> RunAsync(CustomEventsResultCollection events)
             {
                 return new CustomEventSectionSaver(AnalyticsLogger.ConsoleOnlyTracer(),
                     HitUpdates, Searches, PageUpdates, Clicks).SaveAllSectionsAsync(events);
@@ -172,6 +172,28 @@ namespace Tests.UnitTests
                 new[] { "Hit updates", "Searches", "Page updates", "Clicks" },
                 h.CallLog.ToArray(),
                 "A failing section must be attempted, and must not stop the ones after it.");
+        }
+
+        [TestMethod]
+        public async Task EventSections_AFailingSection_MakesTheBatchIncomplete_SoItsDayIsNotTreatedAsSaved()
+        {
+            // Isolating a failed section used to be the end of it: the day counted as saved and the importer moved
+            // past it, so the section's data for any day but the last was lost. The siblings still run (above), but
+            // the failure now reaches the day loop, which retries the day.
+            var h = new SectionHarness();
+            h.Searches.FailWith = new InvalidOperationException("boom");
+            h.Clicks.FailWith = new InvalidOperationException("bang");
+
+            var result = await h.RunAsync(SomeEvents());
+
+            Assert.IsFalse(result.IsComplete);
+            CollectionAssert.AreEqual(new[] { "Searches", "Clicks" }, result.FailedSections.ToArray());
+            var ex = Assert.ThrowsException<CustomEventSaveIncompleteException>(() => result.ThrowIfIncomplete());
+            StringAssert.Contains(ex.Message, "Searches, Clicks");
+
+            var clean = await new SectionHarness().RunAsync(SomeEvents());
+            Assert.IsTrue(clean.IsComplete);
+            clean.ThrowIfIncomplete();
         }
 
         [TestMethod]
@@ -334,6 +356,35 @@ namespace Tests.UnitTests
             Assert.AreSame(batch, port.SavedPageViews.Single());
             Assert.AreSame(filters, port.FiltersSeen, "The loaded org-URL filters must reach the port unchanged.");
             Assert.AreEqual(0, contextFactory.CreateAttempts);
+        }
+
+        [TestMethod]
+        public async Task DayPersistenceManager_AFailedEventSection_FailsTheDaysEventSave_AfterEverySectionWasTried()
+        {
+            // The day manager is where an isolated section failure becomes a failed day: without this the importer
+            // would treat the day as saved and move past it, losing the failed section's data for good.
+            var sections = new SectionHarness();
+            sections.Clicks.FailWith = new InvalidOperationException("click merge exploded");
+            var manager = new SqlAppInsightsDayPersistenceManager(new InMemoryPageViewsPersistenceManager(), sections.RunAsync,
+                AnalyticsLogger.ConsoleOnlyTracer());
+
+            var ex = await Assert.ThrowsExceptionAsync<CustomEventSaveIncompleteException>(() => manager.SaveCustomEventsAsync(SomeEvents()));
+
+            CollectionAssert.AreEqual(new[] { "Clicks" }, ex.FailedSections.ToArray());
+            CollectionAssert.AreEqual(new[] { "Hit updates", "Searches", "Page updates", "Clicks" }, sections.CallLog.ToArray(),
+                "Every section is still attempted before the day is failed.");
+        }
+
+        [TestMethod]
+        public async Task DayPersistenceManager_EventSectionsThatAllSave_DoNotFailTheDay()
+        {
+            var sections = new SectionHarness();
+            var manager = new SqlAppInsightsDayPersistenceManager(new InMemoryPageViewsPersistenceManager(), sections.RunAsync,
+                AnalyticsLogger.ConsoleOnlyTracer());
+
+            await manager.SaveCustomEventsAsync(SomeEvents());
+
+            Assert.AreEqual(4, sections.CallLog.Count);
         }
 
         #endregion

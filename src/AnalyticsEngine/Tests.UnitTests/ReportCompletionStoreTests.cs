@@ -1,6 +1,8 @@
 using Common.Entities.Config;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -10,6 +12,7 @@ using WebJob.Office365ActivityImporter.Engine;
 using WebJob.Office365ActivityImporter.Engine.Graph;
 using WebJob.Office365ActivityImporter.Engine.Graph.UsageReports;
 using WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Aggregate;
+using WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Rules;
 
 namespace Tests.UnitTests
 {
@@ -33,7 +36,8 @@ namespace Tests.UnitTests
         /// A GraphImporter wired to a real completion store, so the production decision methods are exercised
         /// rather than re-implemented in the test.
         /// </summary>
-        private static GraphImporter NewImporter(IReportCompletionStore store, bool forceImport = false, DataUtils.IClock clock = null)
+        private static GraphImporter NewImporter(IReportCompletionStore store, bool forceImport = false, DataUtils.IClock clock = null,
+            ISingleDateStore phaseStore = null)
         {
             var settings = new AppConfig { ForceUsageReportsImport = forceImport };
 
@@ -43,7 +47,7 @@ namespace Tests.UnitTests
                 graphAppIndentityOAuthContext: null,
                 graphClient: null,
                 settings: settings,
-                activityReportsLastImportedStore: null,
+                activityReportsLastImportedStore: phaseStore,
                 lastRunStore: null,
                 sentEmailMailboxSkipList: null,
                 reportCompletionStore: store,
@@ -230,8 +234,8 @@ namespace Tests.UnitTests
         [TestMethod]
         public async Task ClearingBeforeARunMeansACrashMidSaveReImportsThatReportOnly()
         {
-            // Stamps are cleared before the report runs, so a crash between download and save cannot leave a
-            // stamp claiming a window that was only partly written.
+            // Stamps are cleared before the report saves, so a crash part-way through the save cannot leave a stamp
+            // claiming a window that was only partly written.
             var store = new InMemoryReportCompletionStore();
             await store.SaveSuccessAsync(ReportA);
             await store.SaveSuccessAsync(ReportB);
@@ -352,6 +356,400 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public async Task WeeklyReportRetriesOnItsOwnScheduleWhileTheDailyReportsWaitOutTheirDay()
+        {
+            // Driven through the phase orchestration, not RunWeeklyReportIfDueAsync: the one-hour retry used to sit
+            // behind the daily phase's 24-hour gate, so it could only run a day later - by when Sunday's report, which
+            // Graph offers for about a day, may be gone for good. Monday 04:00 UTC; the newest refresh is Saturday's.
+            var clock = new FixedClock(new DateTime(2026, 9, 14, 4, 0, 0, DateTimeKind.Utc));
+            var completion = new InMemoryReportCompletionStore();
+            var importer = NewImporter(completion, clock: clock, phaseStore: new ClockedSingleDateStore(clock));
+            var weekly = TestSharePointSitesWeeklyUsageReportLoader.WithSingleReport(
+                new DateTime(2026, 9, 12), "https://contoso.sharepoint.com/sites/weekly");
+            var dailyRuns = 0;
+
+            Task<bool> RunPhase() => importer.RunActivityReportPhaseAsync(25,
+                () => Task.FromResult(true),
+                (lookupIdCache, lastImported) => new[]
+                {
+                    new GraphImporter.ActivityReportRun("Teams user activity", () => { dailyRuns++; return Task.CompletedTask; }),
+                },
+                run => run(weekly));
+
+            Assert.IsTrue(await RunPhase(), "The daily reports completed, and a Sunday report not yet published is not a failure.");
+            Assert.AreEqual(1, dailyRuns);
+            Assert.AreEqual(1, weekly.LoadCount);
+
+            clock.Advance(TimeSpan.FromMinutes(30));
+            await RunPhase();
+            Assert.AreEqual(1, dailyRuns, "The daily reports are inside their 24-hour gate.");
+            Assert.AreEqual(1, weekly.LoadCount, "The weekly report is inside its one-hour retry.");
+
+            clock.Advance(TimeSpan.FromMinutes(31));
+            Assert.IsFalse(await RunPhase(), "The daily phase did not run, so the phase is not reported finished.");
+            Assert.AreEqual(1, dailyRuns, "Retrying the weekly report must not make the daily reports hourly.");
+            Assert.AreEqual(2, weekly.LoadCount, "The weekly report retries after its own hour, although the daily phase is still gated.");
+
+            // Graph publishes Sunday's report; the next hourly retry stores it.
+            weekly.Report = new SharePointSiteUsageDetail { SiteUrl = "https://contoso.sharepoint.com/sites/weekly", ReportRefreshDate = new DateTime(2026, 9, 13), FileCount = 1 };
+            clock.Advance(TimeSpan.FromMinutes(61));
+            await RunPhase();
+            Assert.AreEqual(3, weekly.LoadCount);
+            Assert.AreEqual(1, weekly.Store.WeeklyStats.Count, "Sunday's report is stored.");
+            Assert.IsNotNull(await completion.GetLastSuccessAsync(GraphImporter.GetReportKey(weekly.GetType())));
+            Assert.AreEqual(1, dailyRuns);
+        }
+
+        [TestMethod]
+        public async Task WeeklyReportSeenMidWeekWaitsForTheNextSundayRatherThanRetryingHourly()
+        {
+            // Wednesday, and Graph's newest refresh is Monday's: next Sunday's report cannot exist until Sunday has
+            // ended. Re-downloading the whole sites report every hour until then would be six days of waste a week.
+            var clock = new FixedClock(new DateTime(2026, 9, 9, 10, 0, 0, DateTimeKind.Utc));
+            var completion = new InMemoryReportCompletionStore();
+            var importer = NewImporter(completion, clock: clock);
+            var weekly = TestSharePointSitesWeeklyUsageReportLoader.WithSingleReport(
+                new DateTime(2026, 9, 7), "https://contoso.sharepoint.com/sites/mid-week");
+            var reportKey = GraphImporter.GetReportKey(weekly.GetType());
+
+            await importer.RunWeeklyReportIfDueAsync(weekly, OneDay);
+
+            Assert.AreEqual(new DateTime(2026, 9, 14, 0, 0, 0, DateTimeKind.Utc), await completion.GetNextAttemptUtcAsync(reportKey),
+                "The next attempt is the start of the Monday after the next Sunday.");
+            clock.Advance(TimeSpan.FromDays(4));
+            Assert.IsFalse(await importer.IsReportDueAsync(reportKey, OneDay), "Sunday 10:00: its report cannot be published yet.");
+            clock.Advance(TimeSpan.FromHours(14));
+            Assert.IsTrue(await importer.IsReportDueAsync(reportKey, OneDay), "Monday 00:00: from now on it is retried hourly.");
+        }
+
+        [TestMethod]
+        public async Task WeeklyReportFailureNeitherBlocksTheDailyStampNorRetriesEveryCycle()
+        {
+            var clock = new FixedClock(new DateTime(2026, 9, 14, 4, 0, 0, DateTimeKind.Utc));
+            var phaseStore = new ClockedSingleDateStore(clock);
+            var importer = NewImporter(new InMemoryReportCompletionStore(), clock: clock, phaseStore: phaseStore);
+            var weekly = TestSharePointSitesWeeklyUsageReportLoader.WithSingleReport(
+                new DateTime(2026, 9, 13), "https://contoso.sharepoint.com/sites/failing");
+            weekly.Failure = new InvalidOperationException("Synthetic weekly report failure.");
+            var dailyRuns = 0;
+
+            Task<bool> RunPhase() => importer.RunActivityReportPhaseAsync(25,
+                () => Task.FromResult(true),
+                (lookupIdCache, lastImported) => new[]
+                {
+                    new GraphImporter.ActivityReportRun("Teams user activity", () => { dailyRuns++; return Task.CompletedTask; }),
+                },
+                run => run(weekly));
+
+            Assert.IsFalse(await RunPhase(), "A failed report means the phase did not fully import.");
+            Assert.IsNotNull(await phaseStore.GetLastDT(), "The daily reports all succeeded, so they are stamped and wait out their day.");
+
+            clock.Advance(TimeSpan.FromMinutes(20));
+            await RunPhase();
+            Assert.AreEqual(1, dailyRuns, "A weekly failure must not make the daily reports re-run every cycle.");
+            Assert.AreEqual(1, weekly.LoadCount, "Nor is the failed weekly report retried on every cycle.");
+
+            weekly.Failure = null;
+            clock.Advance(TimeSpan.FromMinutes(41));
+            await RunPhase();
+            Assert.AreEqual(2, weekly.LoadCount, "It retries after its own hour.");
+            Assert.AreEqual(1, weekly.Store.WeeklyStats.Count);
+            Assert.AreEqual(1, dailyRuns);
+        }
+
+        [TestMethod]
+        public async Task AReportRefusedForConcealedIdentitiesDoesNotMakeThePhaseRunEveryCycle_ThoughNothingIsStored()
+        {
+            // Retrying cannot succeed until an administrator changes the tenant's report-privacy setting, so a refused
+            // report fails the phase (no "finished" event) without disarming the once-a-day throttle. Such a tenant never
+            // stores a row, so the usage table stays empty - and the "fresh or wiped database" reset must not take that
+            // for a reason to run the whole phase, every report downloading a day, again on every cycle.
+            var clock = new FixedClock(new DateTime(2026, 9, 14, 4, 0, 0, DateTimeKind.Utc));
+            var phaseStore = new ClockedSingleDateStore(clock);
+            var importer = NewImporter(new InMemoryReportCompletionStore(), clock: clock, phaseStore: phaseStore);
+            var attempts = 0;
+            var concealed = true;
+
+            Task<bool> RunPhase() => importer.RunActivityReportPhaseAsync(25,
+                () => Task.FromResult(false),
+                (lookupIdCache, lastImported) => new[]
+                {
+                    new GraphImporter.ActivityReportRun("Teams user activity", () =>
+                    {
+                        attempts++;
+                        if (concealed) throw new ConcealedUsageReportException("TeamsUserUsageLoader", 3);
+                        return Task.CompletedTask;
+                    }),
+                },
+                run => Task.CompletedTask);
+
+            Assert.IsFalse(await RunPhase(), "A refused report means the phase did not fully import.");
+            Assert.IsNotNull(await phaseStore.GetLastDT());
+
+            clock.Advance(TimeSpan.FromMinutes(20));
+            await RunPhase();
+            Assert.AreEqual(1, attempts, "Tried again with the next daily run, not on every cycle - though nothing is stored.");
+
+            clock.Advance(TimeSpan.FromHours(24));
+            await RunPhase();
+            Assert.AreEqual(2, attempts, "A day later it is tried again.");
+
+            // The administrator turns concealment off: the next daily run imports and the refusal no longer stands, so an
+            // empty table once again means a fresh or wiped database, imported straight away.
+            concealed = false;
+            clock.Advance(TimeSpan.FromHours(25));
+            Assert.IsTrue(await RunPhase());
+            Assert.AreEqual(3, attempts);
+            clock.Advance(TimeSpan.FromMinutes(20));
+            await RunPhase();
+            Assert.AreEqual(4, attempts, "With no refusal standing, the empty-table reset works as it always did.");
+        }
+
+        [TestMethod]
+        public async Task AFailedDownloadKeepsTheReportsCompletionStamp_AFailedSaveClearsIt()
+        {
+            // A failed download has written nothing, so the stamp - and the finalized-date skip list it feeds - still
+            // holds. Clearing it before the download made one failed Graph call cost a download of the whole window next
+            // time, all held in memory. A failed save may have written part of the window, so that stamp must go.
+            var store = new InMemoryReportCompletionStore();
+            var importer = NewImporter(store);
+            var now = new DateTime(2026, 9, 14, 4, 0, 0, DateTimeKind.Utc);
+
+            var failingDownload = new FailingDownloadLoader
+            {
+                Clock = new FixedClock(now),
+                StorageInspector = new FakeUsageReportStorageInspector(),
+                ReportStore = new InMemoryUsageReportStore<FakeUserUsageActivityLog>(),
+            };
+            var downloadKey = GraphImporter.GetReportKey(failingDownload.GetType());
+            await store.SaveSuccessAsync(downloadKey);
+
+            await Assert.ThrowsExceptionAsync<GraphHttpException>(() => importer.LoadAndSaveDailyImportReport(
+                failingDownload, 3, "Synthetic report", NullLogger.Instance, new DataUtils.ConcurrentLookupDbIdsCache(), null));
+
+            Assert.IsNotNull(await store.GetLastSuccessAsync(downloadKey), "A failed download must not cost the report its stamp.");
+
+            var failingSave = new InMemoryDailyActivityLoader(NullLogger.Instance)
+            {
+                Clock = new FixedClock(now),
+                StorageInspector = new FakeUsageReportStorageInspector(),
+                ReportStore = new ThrowOnSaveUsageReportStore(),
+            };
+            failingSave.PagesByDate[now.Date.AddDays(-1)] = new List<FakeUserActivityDetail>
+            {
+                new FakeUserActivityDetail { UserPrincipalName = "alice@contoso.com", ThingCount = 1 },
+            };
+            var saveKey = GraphImporter.GetReportKey(failingSave.GetType());
+            await store.SaveSuccessAsync(saveKey);
+            var idCache = new DataUtils.ConcurrentLookupDbIdsCache();
+            idCache.AddOrUpdateForName<Common.Entities.User>("alice@contoso.com", 11);
+
+            await Assert.ThrowsExceptionAsync<InvalidOperationException>(() => importer.LoadAndSaveDailyImportReport(
+                failingSave, 3, "Synthetic report", NullLogger.Instance, idCache, null));
+
+            Assert.IsNull(await store.GetLastSuccessAsync(saveKey), "A save that failed part-way must not leave a stamp claiming its window.");
+        }
+
+        [TestMethod]
+        public async Task AnUnreadableWeeklyReportPageFailsThatReportOnce_TheDailyReportsAreUnaffected()
+        {
+            // The weekly loader used to re-request an unreadable page for ever, hanging the whole phase. It must fail
+            // after one request, be recorded as failed, and leave the daily reports to run and be stamped.
+            var clock = new FixedClock(new DateTime(2026, 9, 14, 4, 0, 0, DateTimeKind.Utc));
+            var phaseStore = new ClockedSingleDateStore(clock);
+            var importer = NewImporter(new InMemoryReportCompletionStore(), clock: clock, phaseStore: phaseStore);
+            var weekly = TestSharePointSitesWeeklyUsageReportLoader.WithSingleReport(
+                new DateTime(2026, 9, 13), "https://contoso.sharepoint.com/sites/unreadable");
+            weekly.UnreadablePage = true;
+            var dailyRuns = 0;
+
+            var completed = await importer.RunActivityReportPhaseAsync(25,
+                () => Task.FromResult(true),
+                (lookupIdCache, lastImported) => new[]
+                {
+                    new GraphImporter.ActivityReportRun("Teams user activity", () => { dailyRuns++; return Task.CompletedTask; }),
+                },
+                run => run(weekly));
+
+            Assert.IsFalse(completed, "A failed report means the phase did not fully import.");
+            Assert.AreEqual(1, weekly.LoadCount, "One request, not the same URL again and again.");
+            Assert.AreEqual(0, weekly.Store.WeeklyStats.Count, "Nothing from the report is saved.");
+            Assert.AreEqual(1, dailyRuns);
+            Assert.IsNotNull(await phaseStore.GetLastDT(), "The daily reports completed, so they are stamped as usual.");
+        }
+
+        private const string ConcealedSiteId = "00000000-0000-0000-0000-000000000000";
+
+        private static SharePointSiteUsageDetail ConcealedSiteRow(DateTime refreshDate)
+            => new SharePointSiteUsageDetail { SiteId = ConcealedSiteId, SiteUrl = "", ReportRefreshDate = refreshDate, FileCount = 1 };
+
+        [TestMethod]
+        public async Task AWeeklyReportWhoseSitesAreAllConcealed_IsNotLookedUpAndWaitsForTheNextRefreshDay()
+        {
+            // With "Display concealed user, group, and site names" on, every row has a blank URL and an all-zero site id.
+            // Each used to cost a failing Graph site lookup, and a report with no usable row was retried every hour, for
+            // good: on a 10,000-site tenant, 10,000 failing calls and logged errors and a full download, every hour.
+            var clock = new FixedClock(new DateTime(2026, 9, 9, 10, 0, 0, DateTimeKind.Utc));   // a Wednesday
+            var completion = new InMemoryReportCompletionStore();
+            var importer = NewImporter(completion, clock: clock);
+            var lookup = new CountingSiteLookup();
+            var monday = new DateTime(2026, 9, 7);
+            var weekly = TestSharePointSitesWeeklyUsageReportLoader.WithRows(lookup,
+                ConcealedSiteRow(monday), ConcealedSiteRow(monday), ConcealedSiteRow(monday));
+            var loaderLog = new RecordingLogger();
+            weekly.Telemetry = loaderLog;
+
+            await importer.RunWeeklyReportIfDueAsync(weekly, OneDay);
+
+            Assert.AreEqual(0, lookup.Lookups.Count, "A concealed site id can never resolve, so it must not cost a Graph call.");
+            Assert.AreEqual(1, loaderLog.Entries.Count(e => e.Message.Contains("concealed")), "One line a run, not one a row.");
+            Assert.AreEqual(3, weekly.LastSaveResult.RowsReturned, "What Graph returned is reported, not just what could be used.");
+            Assert.AreEqual(new DateTime(2026, 9, 14, 0, 0, 0, DateTimeKind.Utc),
+                await completion.GetNextAttemptUtcAsync(GraphImporter.GetReportKey(weekly.GetType())),
+                "Rows that cannot be used wait for the next refresh day - never an hour.");
+        }
+
+        [TestMethod]
+        public async Task AnAllConcealedSundayReport_IsRetriedWithinHoursWhileItCanStillBeDownloaded()
+        {
+            // Sunday's report can be downloaded only until Graph replaces it with Monday's. Waiting a week for the next one
+            // lost that week for good - even when the admin turned concealment off within the hour of the IMPORTANT error.
+            var clock = new FixedClock(new DateTime(2026, 9, 15, 10, 0, 0, DateTimeKind.Utc));   // the Tuesday after
+            var completion = new InMemoryReportCompletionStore();
+            var importer = NewImporter(completion, clock: clock);
+            var sunday = new DateTime(2026, 9, 13);
+            var weekly = TestSharePointSitesWeeklyUsageReportLoader.WithRows(new CountingSiteLookup(),
+                ConcealedSiteRow(sunday), ConcealedSiteRow(sunday), ConcealedSiteRow(sunday));
+
+            await importer.RunWeeklyReportIfDueAsync(weekly, OneDay);
+
+            var reportKey = GraphImporter.GetReportKey(weekly.GetType());
+            Assert.AreEqual(new DateTime(2026, 9, 15, 14, 0, 0, DateTimeKind.Utc), await completion.GetNextAttemptUtcAsync(reportKey),
+                "While Sunday's report can still be the newest, it is retried within hours - not 8 days later.");
+            Assert.IsNull(await completion.GetLastSuccessAsync(reportKey), "Nothing was stored, so it is not a data success.");
+        }
+
+        [TestMethod]
+        public async Task AnAllConcealedSundayReport_WaitsForTheNextRefreshDayOnceItCanHaveBeenReplaced()
+        {
+            // By the Friday, Monday's report can have been published even at Graph's slowest: retrying would only re-download
+            // a stalled report, so the wait is for the next Sunday's, as before.
+            var clock = new FixedClock(new DateTime(2026, 9, 18, 10, 0, 0, DateTimeKind.Utc));   // the Friday after
+            var completion = new InMemoryReportCompletionStore();
+            var importer = NewImporter(completion, clock: clock);
+            var sunday = new DateTime(2026, 9, 13);
+            var weekly = TestSharePointSitesWeeklyUsageReportLoader.WithRows(new CountingSiteLookup(),
+                ConcealedSiteRow(sunday), ConcealedSiteRow(sunday), ConcealedSiteRow(sunday));
+
+            await importer.RunWeeklyReportIfDueAsync(weekly, OneDay);
+
+            Assert.AreEqual(new DateTime(2026, 9, 21, 0, 0, 0, DateTimeKind.Utc),
+                await completion.GetNextAttemptUtcAsync(GraphImporter.GetReportKey(weekly.GetType())));
+        }
+
+        [TestMethod]
+        public void WeeklyRetryPolicy_RetriesAnUnusableSundayReportOnlyWhileItCanStillBeTheNewest()
+        {
+            var sunday = new DateTime(2026, 9, 13);
+            var monday = new DateTime(2026, 9, 14, 10, 0, 0, DateTimeKind.Utc);
+            var thursdayNight = new DateTime(2026, 9, 17, 23, 0, 0, DateTimeKind.Utc);
+            var friday = new DateTime(2026, 9, 18, 0, 0, 0, DateTimeKind.Utc);
+
+            Assert.AreEqual(friday, WeeklyUsageReportRetryPolicy.ReportReplacedByUtc(sunday),
+                "Monday's report cannot be published before Tuesday, and Graph can be up to three days later than that.");
+            Assert.AreEqual(monday.AddHours(4),
+                WeeklyUsageReportRetryPolicy.NextAttemptAfterMissedRefreshDayUtc(monday, sunday, DayOfWeek.Sunday, noUsableRows: true));
+            Assert.AreEqual(thursdayNight.AddHours(4),
+                WeeklyUsageReportRetryPolicy.NextAttemptAfterMissedRefreshDayUtc(thursdayNight, sunday, DayOfWeek.Sunday, noUsableRows: true),
+                "Monday's report may still be on its way.");
+            Assert.AreEqual(new DateTime(2026, 9, 21, 0, 0, 0, DateTimeKind.Utc),
+                WeeklyUsageReportRetryPolicy.NextAttemptAfterMissedRefreshDayUtc(friday, sunday, DayOfWeek.Sunday, noUsableRows: true),
+                "Once it can have been replaced, the wait is for the next refresh day's report.");
+            Assert.AreEqual(new DateTime(2026, 9, 21, 0, 0, 0, DateTimeKind.Utc),
+                WeeklyUsageReportRetryPolicy.NextAttemptAfterMissedRefreshDayUtc(new DateTime(2026, 9, 16, 10, 0, 0, DateTimeKind.Utc),
+                    new DateTime(2026, 9, 14), DayOfWeek.Sunday, noUsableRows: true),
+                "Graph has already moved on to Monday's report: Sunday's is gone, whatever the time.");
+        }
+
+        [TestMethod]
+        public async Task AWeeklyReportMixingConcealedAndNormalSites_SavesTheNormalOnes()
+        {
+            var clock = new FixedClock(new DateTime(2026, 9, 15, 10, 0, 0, DateTimeKind.Utc));   // a Tuesday
+            var completion = new InMemoryReportCompletionStore();
+            var importer = NewImporter(completion, clock: clock);
+            var lookup = new CountingSiteLookup();
+            var sunday = new DateTime(2026, 9, 13);
+            var weekly = TestSharePointSitesWeeklyUsageReportLoader.WithRows(lookup,
+                new SharePointSiteUsageDetail { SiteId = "11111111-1111-1111-1111-111111111111", SiteUrl = "https://contoso.sharepoint.com/sites/marketing", ReportRefreshDate = sunday, FileCount = 3 },
+                ConcealedSiteRow(sunday),
+                new SharePointSiteUsageDetail { SiteId = "22222222-2222-2222-2222-222222222222", SiteUrl = "https://contoso.sharepoint.com/sites/Καλημέρα", ReportRefreshDate = sunday, FileCount = 5 },
+                ConcealedSiteRow(sunday));
+
+            await importer.RunWeeklyReportIfDueAsync(weekly, OneDay);
+
+            CollectionAssert.AreEquivalent(
+                new[] { "https://contoso.sharepoint.com/sites/marketing", "https://contoso.sharepoint.com/sites/Καλημέρα" },
+                weekly.Store.Sites.Select(s => s.UrlBase).ToArray());
+            Assert.AreEqual(2, weekly.Store.WeeklyStats.Count);
+            Assert.AreEqual(0, lookup.Lookups.Count);
+            Assert.IsNotNull(await completion.GetLastSuccessAsync(GraphImporter.GetReportKey(weekly.GetType())),
+                "The usable Sunday rows are a data success.");
+        }
+
+        [TestMethod]
+        public async Task AFailingSiteLookupIsNotRepeatedWithinARun()
+        {
+            // A failed lookup is cached nowhere, so the same unresolvable id on several rows cost a failing Graph call each.
+            const string unresolvable = "33333333-3333-3333-3333-333333333333";
+            const string resolvable = "44444444-4444-4444-4444-444444444444";
+            var lookup = new CountingSiteLookup(new Dictionary<string, string> { [resolvable] = "https://contoso.sharepoint.com/sites/resolved" });
+            var sunday = new DateTime(2026, 9, 13);
+            var weekly = TestSharePointSitesWeeklyUsageReportLoader.WithRows(lookup,
+                new SharePointSiteUsageDetail { SiteId = unresolvable, SiteUrl = "", ReportRefreshDate = sunday },
+                new SharePointSiteUsageDetail { SiteId = resolvable, SiteUrl = "", ReportRefreshDate = sunday },
+                new SharePointSiteUsageDetail { SiteId = unresolvable, SiteUrl = "", ReportRefreshDate = sunday });
+
+            var usable = (await weekly.LoadReportData()).ToList();
+
+            CollectionAssert.AreEqual(new[] { unresolvable, resolvable }, lookup.Lookups.ToArray(), "Each id is looked up at most once a run.");
+            Assert.AreEqual(1, usable.Count);
+            Assert.AreEqual("https://contoso.sharepoint.com/sites/resolved", usable[0].SiteUrl);
+        }
+
+        [TestMethod]
+        public async Task AWeeklyReportThatFailsToLoadStillRetriesWithinTheHour()
+        {
+            // A download that went wrong may well work soon - unlike rows that cannot be used.
+            var clock = new FixedClock(new DateTime(2026, 9, 9, 10, 0, 0, DateTimeKind.Utc));
+            var completion = new InMemoryReportCompletionStore();
+            var importer = NewImporter(completion, clock: clock);
+            var weekly = TestSharePointSitesWeeklyUsageReportLoader.WithSingleReport(new DateTime(2026, 9, 7), "https://contoso.sharepoint.com/sites/unreadable");
+            weekly.UnreadablePage = true;
+
+            await Assert.ThrowsExceptionAsync<InvalidOperationException>(() => importer.RunWeeklyReportIfDueAsync(weekly, OneDay));
+
+            Assert.AreEqual(clock.UtcNow.AddHours(1), await completion.GetNextAttemptUtcAsync(GraphImporter.GetReportKey(weekly.GetType())));
+        }
+
+        [TestMethod]
+        public void WeeklyRetryPolicy_WaitsForTheNextRefreshDayButNeverLessThanTheRetryInterval()
+        {
+            var wednesday = new DateTime(2026, 9, 9, 10, 0, 0, DateTimeKind.Utc);
+
+            Assert.AreEqual(new DateTime(2026, 9, 14, 0, 0, 0, DateTimeKind.Utc),
+                WeeklyUsageReportRetryPolicy.NextAttemptAfterMissedRefreshDayUtc(wednesday, new DateTime(2026, 9, 7), DayOfWeek.Sunday));
+            Assert.AreEqual(wednesday.AddHours(1),
+                WeeklyUsageReportRetryPolicy.NextAttemptAfterMissedRefreshDayUtc(wednesday, new DateTime(2026, 9, 5), DayOfWeek.Sunday),
+                "Saturday's refresh: Sunday's report may be published at any time now.");
+            Assert.AreEqual(wednesday.AddHours(1),
+                WeeklyUsageReportRetryPolicy.NextAttemptAfterMissedRefreshDayUtc(wednesday, null, DayOfWeek.Sunday),
+                "An empty report says nothing about when the next refresh falls.");
+            Assert.AreEqual(wednesday.AddDays(1),
+                WeeklyUsageReportRetryPolicy.NextAttemptAfterMissedRefreshDayUtc(wednesday, new DateTime(2026, 9, 5), DayOfWeek.Sunday, noUsableRows: true),
+                "Rows that cannot be used never earn the hourly retry, even when Sunday's report may be due.");
+        }
+
+        [TestMethod]
         public async Task AReportThatSucceededLongerAgoThanTheWindowIsDueAgain()
         {
             var store = new StubCompletionStore { LastSuccess = DateTime.Now.AddDays(-2) };
@@ -404,20 +802,64 @@ namespace Tests.UnitTests
             public Task ClearAsync(string reportKey) { LastSuccess = null; return Task.CompletedTask; }
         }
 
+        /// <summary>The phase marker, stamped from the test's clock rather than the wall clock.</summary>
+        private sealed class ClockedSingleDateStore : ISingleDateStore
+        {
+            private readonly DataUtils.IClock _clock;
+            private DateTime? _last;
+
+            public ClockedSingleDateStore(DataUtils.IClock clock) => _clock = clock;
+
+            public Task<DateTime?> GetLastDT() => Task.FromResult(_last);
+            public Task SaveDT() { _last = _clock.UtcNow; return Task.CompletedTask; }
+            public Task DeleteDt() { _last = null; return Task.CompletedTask; }
+        }
+
+        /// <summary>A daily report whose Graph download fails, as a 500 that outlived its retries would.</summary>
+        private sealed class FailingDownloadLoader : InMemoryDailyActivityLoader
+        {
+            public FailingDownloadLoader() : base(NullLogger.Instance)
+            {
+            }
+
+            protected override Task<List<FakeUserActivityDetail>> LoadReportPageForDateFromGraph(DateTime date)
+                => Task.FromException<List<FakeUserActivityDetail>>(new GraphHttpException(
+                    System.Net.HttpStatusCode.InternalServerError, "https://graph.microsoft.com/beta/reports/synthetic", "{}", null));
+        }
+
+        private sealed class ThrowOnSaveUsageReportStore : InMemoryUsageReportStore<FakeUserUsageActivityLog>
+        {
+            public override Task SaveChangesAsync()
+                => Task.FromException(new InvalidOperationException("Synthetic save failure."));
+        }
+
         private class TestSharePointSitesWeeklyUsageReportLoader : SharePointSitesWeeklyUsageReportLoader
         {
-            private readonly SharePointSiteUsageDetail _report;
-
-            private TestSharePointSitesWeeklyUsageReportLoader(InMemorySharePointSiteUsageStore store, SharePointSiteUsageDetail report)
-                : base(store, null, DataUtils.AnalyticsLogger.ConsoleOnlyTracer(), null)
+            private TestSharePointSitesWeeklyUsageReportLoader(InMemorySharePointSiteUsageStore store, SharePointSiteUsageDetail report, SPSiteIdToUrlCache siteLookup = null)
+                : base(store, null, DataUtils.AnalyticsLogger.ConsoleOnlyTracer(), siteLookup)
             {
                 Store = store;
-                _report = report;
+                Report = report;
             }
 
             public InMemorySharePointSiteUsageStore Store { get; }
             public int LoadCount { get; private set; }
             public WeeklyUsageReportSaveResult LastSaveResult { get; private set; }
+
+            /// <summary>What "Graph" returns; replaceable, as Graph publishes a new refresh.</summary>
+            public SharePointSiteUsageDetail Report { get; set; }
+
+            /// <summary>When set, "Graph" returns these rows instead of <see cref="Report"/>.</summary>
+            public List<SharePointSiteUsageDetail> Rows { get; set; }
+
+            /// <summary>When set, the download fails with this.</summary>
+            public Exception Failure { get; set; }
+
+            /// <summary>
+            /// When set, "Graph" answers with a page that could not be read (a null page). Fails fast after a handful of
+            /// requests, so a loader that keeps re-requesting it shows up as a count, not as a hung test.
+            /// </summary>
+            public bool UnreadablePage { get; set; }
 
             public static TestSharePointSitesWeeklyUsageReportLoader WithSingleReport(DateTime refreshDate, string siteUrl)
             {
@@ -426,12 +868,32 @@ namespace Tests.UnitTests
                     new SharePointSiteUsageDetail { SiteUrl = siteUrl, ReportRefreshDate = refreshDate, FileCount = 1 });
             }
 
+            public static TestSharePointSitesWeeklyUsageReportLoader WithRows(SPSiteIdToUrlCache siteLookup, params SharePointSiteUsageDetail[] rows)
+            {
+                return new TestSharePointSitesWeeklyUsageReportLoader(new InMemorySharePointSiteUsageStore(), null, siteLookup)
+                {
+                    Rows = rows.ToList(),
+                };
+            }
+
             public override Task<AggregateResourceUsageDetail<SharePointSiteUsageDetail>> LoadReportDataForUrl(string requestUrl)
             {
                 LoadCount++;
+                if (Failure != null)
+                {
+                    return Task.FromException<AggregateResourceUsageDetail<SharePointSiteUsageDetail>>(Failure);
+                }
+
+                if (UnreadablePage)
+                {
+                    return LoadCount > 5
+                        ? Task.FromException<AggregateResourceUsageDetail<SharePointSiteUsageDetail>>(new TimeoutException("The weekly report is being requested in a loop."))
+                        : Task.FromResult<AggregateResourceUsageDetail<SharePointSiteUsageDetail>>(null);
+                }
+
                 return Task.FromResult(new AggregateResourceUsageDetail<SharePointSiteUsageDetail>
                 {
-                    Stats = new[] { _report }
+                    Stats = Rows ?? new List<SharePointSiteUsageDetail> { Report },
                 });
             }
 
@@ -439,6 +901,31 @@ namespace Tests.UnitTests
             {
                 LastSaveResult = await base.LoadAndSaveLastWeeksReportsIfRefreshOnDayWithResult(uptoDay);
                 return LastSaveResult;
+            }
+        }
+
+        /// <summary>
+        /// Site-id lookups answered from a script, each one counted - in production each is a Graph call. An id with no
+        /// scripted URL fails, as a lookup of a concealed or vanished site does; the cache turns that into "no site".
+        /// </summary>
+        private sealed class CountingSiteLookup : SPSiteIdToUrlCache
+        {
+            private readonly Dictionary<string, string> _urlBySiteId;
+
+            public CountingSiteLookup(Dictionary<string, string> urlBySiteId = null)
+                : base(new InMemorySiteUrlStore(), NullLogger.Instance)
+            {
+                _urlBySiteId = urlBySiteId ?? new Dictionary<string, string>();
+            }
+
+            public List<string> Lookups { get; } = new List<string>();
+
+            public override Task<Microsoft.Graph.Models.Site> LoadSite(string id)
+            {
+                Lookups.Add(id);
+                return _urlBySiteId.TryGetValue(id, out var url)
+                    ? Task.FromResult(new Microsoft.Graph.Models.Site { Id = id, WebUrl = url })
+                    : Task.FromException<Microsoft.Graph.Models.Site>(new InvalidOperationException("Synthetic site lookup failure."));
             }
         }
 

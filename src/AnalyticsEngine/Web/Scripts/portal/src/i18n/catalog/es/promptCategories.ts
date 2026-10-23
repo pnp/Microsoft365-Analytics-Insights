@@ -157,6 +157,8 @@ const es: Record<keyof typeof en, string> = {
   'promptCategories.error.storageNotConfigured': 'La aplicación web no tiene configurada ninguna cadena de conexión de Azure Storage, por lo que no se puede guardar esta configuración.',
   'promptCategories.error.invalidTaxonomy': 'El servidor rechazó la taxonomía. Compruebe los identificadores, nombres y descripciones de las categorías y vuelva a guardar.',
   'promptCategories.error.storedConfigurationInvalid': 'No se puede leer la configuración guardada. Restablezca los valores predeterminados para sustituirla; la categorización seguirá desactivada.',
+  'promptCategories.error.configurationChanged': 'La configuración de categorización de indicaciones cambió después de que esta página la cargara, por lo que no se guardó nada. Recargue para ver la configuración actual y vuelva a hacer sus cambios.',
+  'promptCategories.reload': 'Recargar',
   'promptCategories.error.databaseNotUpgraded': 'La base de datos no se ha actualizado para las categorías de indicaciones. Aplique la actualización 202610080900001_AddPromptCategories y reintente.',
   'promptCategories.error.reportUnavailable': 'No se pudo cargar el informe de categorías. Reintente en unos instantes.',
   'promptCategories.error.clientTimeout': 'El servidor no respondió a tiempo. Reintente en unos instantes.',

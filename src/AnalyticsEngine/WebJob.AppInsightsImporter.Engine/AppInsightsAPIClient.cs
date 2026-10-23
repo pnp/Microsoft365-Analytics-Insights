@@ -2,7 +2,9 @@ using Azure.Core;
 using Microsoft.Extensions.Logging;
 using Newtonsoft.Json;
 using System;
+using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
@@ -66,6 +68,18 @@ namespace WebJob.AppInsightsImporter.Engine
         /// App Insights endpoint (issue #374). A <c>null</c> handler means the production transport.
         /// </summary>
         public AppInsightsAPIClient(string appInsightsConnectionString, TokenCredential credential, ILogger logger, HttpMessageHandler messageHandler)
+            : this(appInsightsConnectionString, credential, logger, messageHandler, null)
+        {
+        }
+
+        /// <summary>
+        /// As above, with the windows each day's queries needed remembered in <paramref name="queryWindows"/>, which
+        /// outlives this client: the importer creates a client per cycle, and the host keeps one cache for the life of
+        /// the process so a day over the API's limits is not split from the whole day again every cycle. See
+        /// <see cref="AppInsightsQueryWindowCache"/>. Null keeps the memory for this client only.
+        /// </summary>
+        public AppInsightsAPIClient(string appInsightsConnectionString, TokenCredential credential, ILogger logger, HttpMessageHandler messageHandler,
+            AppInsightsQueryWindowCache queryWindows)
         {
             if (string.IsNullOrEmpty(appInsightsConnectionString))
             {
@@ -87,11 +101,15 @@ namespace WebJob.AppInsightsImporter.Engine
             client.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
 
             _logger = logger;
+            _queryWindows = queryWindows ?? new AppInsightsQueryWindowCache();
         }
 
         #endregion
 
         #region Props
+
+        // Which windows each day's queries last needed - see AppInsightsQueryWindowCache.
+        private readonly AppInsightsQueryWindowCache _queryWindows;
 
         // Per-instance HttpClient. Cannot be made static because callers set the
         // Authorization header on DefaultRequestHeaders per token refresh; sharing
@@ -230,19 +248,8 @@ namespace WebJob.AppInsightsImporter.Engine
         /// </summary>
         public async Task<PageViewCollection> GetPageViewsFromAppInsights(DateTime forDate, bool saveRestResponses)
         {
-            await SetBearerToken();
-
-            // Only from the last hit timestamp
-            var adxQuery = $"pageViews | where " + GetWhereString(forDate) +
-                $" | order by timestamp asc";
-
-            // API Doc: https://docs.microsoft.com/en-us/rest/api/application-insights/query/get
-            var req = $"https://api.applicationinsights.io/v1/apps/{_appInsightsId}/query?query={Uri.EscapeDataString(adxQuery)}";
-            using (var response = await GetWithRetry(req))
-            {
-                var result = await HandleResponse<AppInsightsQueryResult>(response, saveRestResponses, "pageview");
-                return new PageViewCollection(result.DefaultTable, forDate, this._logger);
-            }
+            var table = await QueryDayAsync(BuildPageViewsQuery, forDate, saveRestResponses, "pageview");
+            return new PageViewCollection(table, forDate, this._logger);
         }
 
         /// <summary>
@@ -250,18 +257,133 @@ namespace WebJob.AppInsightsImporter.Engine
         /// </summary>
         public async Task<CustomEventsResultCollection> GetCustomEventsFromAppInsights(DateTime forDate, bool saveRestResponses)
         {
+            var table = await QueryDayAsync(BuildCustomEventsQuery, forDate, saveRestResponses, "event");
+            return new CustomEventsResultCollection(table, forDate, _logger);
+        }
+
+        /// <summary>
+        /// Only the columns the result parsers map - the <see cref="AppInsightsQueryResultPropertyAttribute"/>s on
+        /// the result classes - are requested. Fetching every column of a whole day is what reaches the API's row
+        /// and response-size limits first, and the other columns were thrown away on arrival.
+        /// </summary>
+        internal static readonly string PageViewColumns = ProjectedColumns(typeof(PageViewAppInsightsQueryResult));
+
+        /// <summary>
+        /// As <see cref="PageViewColumns"/>, across every result type <see cref="CustomEventsResultCollection"/>
+        /// builds a custom event into - add any new one here too.
+        /// </summary>
+        internal static readonly string CustomEventColumns = ProjectedColumns(
+            typeof(NameOnlyCustomEventAppInsightsQueryResult),
+            typeof(PageExitEventAppInsightsQueryResult),
+            typeof(SearchEventAppInsightsQueryResult),
+            typeof(ClickEventAppInsightsQueryResult),
+            typeof(PageUpdateEventAppInsightsQueryResult));
+
+        /// <summary>
+        /// The custom events <see cref="CustomEventsResultCollection"/> turns into results; it drops any other, so
+        /// they are not downloaded. The App Insights resource also receives this solution's own telemetry events.
+        /// </summary>
+        private static readonly string ImportedCustomEventNames = string.Join(", ", new[]
+        {
+            AppInsightsImporterConstants.EVENT_NAME_PAGE_EXIT,
+            AppInsightsImporterConstants.EVENT_NAME_USER_SEARCH,
+            AppInsightsImporterConstants.EVENT_NAME_CLICK,
+            AppInsightsImporterConstants.EVENT_NAME_PAGE_UPDATE,
+        }.Select(name => "'" + name + "'"));
+
+        internal string BuildPageViewsQuery(DateTime fromUtc, DateTime toUtc) =>
+            $"pageViews | where {GetWhereString(fromUtc, toUtc)} | project {PageViewColumns} | order by timestamp asc";
+
+        internal string BuildCustomEventsQuery(DateTime fromUtc, DateTime toUtc) =>
+            $"customEvents | where {GetWhereString(fromUtc, toUtc)} | where name in ({ImportedCustomEventNames}) | project {CustomEventColumns} | order by timestamp asc";
+
+        private static string ProjectedColumns(params Type[] resultTypes)
+        {
+            var columns = resultTypes
+                .SelectMany(t => t.GetProperties())
+                .SelectMany(p => p.GetCustomAttributes(true).OfType<AppInsightsQueryResultPropertyAttribute>())
+                .Select(a => a.PropName)
+                .Distinct()
+                .ToList();
+            return string.Join(", ", columns);
+        }
+
+        /// <summary>
+        /// Every row of one UTC day, from as many query windows as the API's limits need. The day is asked for
+        /// whole, unless an earlier query for it - in this process - had to be split: then it starts from the windows
+        /// that came back complete last time (see <see cref="AppInsightsQueryWindowCache"/>). Either way each window
+        /// is read by <see cref="AddCompleteWindowsAsync"/>, which splits it further if its result is partial.
+        /// </summary>
+        private async Task<AppInsightsTable> QueryDayAsync(Func<DateTime, DateTime, string> queryForWindow, DateTime forDate,
+            bool saveRestResponses, string operationType)
+        {
+            var startWindows = _queryWindows.WindowsFor(operationType, forDate)
+                ?? new[] { (FromUtc: forDate, ToUtc: forDate.AddDays(1)) };
+
+            var completeWindows = new List<(DateTime FromUtc, DateTime ToUtc, AppInsightsTable Table)>();
+            foreach (var window in startWindows)
+            {
+                await AddCompleteWindowsAsync(queryForWindow, window.FromUtc, window.ToUtc, saveRestResponses, operationType, completeWindows);
+            }
+
+            _queryWindows.Remember(operationType, forDate, completeWindows.Select(w => (w.FromUtc, w.ToUtc)).ToList());
+            if (completeWindows.Count > 1)
+            {
+                _logger.LogInformation($"Read {forDate:yyyy-MM-dd}'s {operationType}s in {completeWindows.Count} windows, as the whole day is over the Application Insights query limits.");
+            }
+            return AppInsightsTable.Concatenate(completeWindows.Select(w => w.Table).ToList());
+        }
+
+        /// <summary>
+        /// Queries the half-open window [<paramref name="fromUtc"/>, <paramref name="toUtc"/>) and appends its
+        /// result to <paramref name="completeWindows"/>. When App Insights says the result is partial - cut off at
+        /// its row or size limit - those rows are discarded and each half of the window is queried instead, first
+        /// half first, so the windows (and the rows, each window being in time order) stay in time order. Down to
+        /// <see cref="AppInsightsImportWindow.MinimumQueryWindow"/>; a partial result even there fails the import
+        /// of the day rather than saving part of it.
+        /// </summary>
+        private async Task AddCompleteWindowsAsync(Func<DateTime, DateTime, string> queryForWindow, DateTime fromUtc, DateTime toUtc,
+            bool saveRestResponses, string operationType, List<(DateTime FromUtc, DateTime ToUtc, AppInsightsTable Table)> completeWindows)
+        {
+            var table = await QueryCompleteResultAsync(queryForWindow(fromUtc, toUtc), saveRestResponses, operationType);
+            if (table != null)
+            {
+                completeWindows.Add((fromUtc, toUtc, table));
+                return;
+            }
+
+            if (!AppInsightsImportWindow.TrySplitQueryWindow(fromUtc, toUtc, out var midpointUtc))
+            {
+                throw new InvalidDataException($"Application Insights returned partial {operationType} results even for the {(toUtc - fromUtc).TotalSeconds:N0}-second window " +
+                    $"from {fromUtc:yyyy-MM-dd HH:mm:ss} UTC, the smallest it is split into. The import is halted to avoid losing data.");
+            }
+
+            _logger.LogWarning($"Application Insights returned partial {operationType} results for {fromUtc:yyyy-MM-dd HH:mm:ss} to {toUtc:yyyy-MM-dd HH:mm:ss} UTC " +
+                "(the query reached its row or size limit). Querying each half of that window instead.");
+            await AddCompleteWindowsAsync(queryForWindow, fromUtc, midpointUtc, saveRestResponses, operationType, completeWindows);
+            await AddCompleteWindowsAsync(queryForWindow, midpointUtc, toUtc, saveRestResponses, operationType, completeWindows);
+        }
+
+        /// <summary>
+        /// Runs one query and returns its table, or null when App Insights reports the result as partial. Returning
+        /// nothing of a partial result means none of its truncated rows - up to the API's ~104 MB - stay referenced
+        /// while the smaller windows are queried. Any other error throws: a smaller window does not help those.
+        /// </summary>
+        private async Task<AppInsightsTable> QueryCompleteResultAsync(string adxQuery, bool saveRestResponses, string operationType)
+        {
+            // Per request rather than per day: splitting a large day can take long enough for the token to need refreshing.
             await SetBearerToken();
 
-            // Only from the last hit timestamp
-            var adxQuery = $"customEvents | where " + GetWhereString(forDate) + " | order by timestamp asc";
-
-            // Doc: https://dev.applicationinsights.io/reference/get-events
+            // API Doc: https://docs.microsoft.com/en-us/rest/api/application-insights/query/get
             var req = $"https://api.applicationinsights.io/v1/apps/{_appInsightsId}/query?query={Uri.EscapeDataString(adxQuery)}";
-
             using (var response = await GetWithRetry(req))
             {
-                var result = await HandleResponse<AppInsightsQueryResult>(response, saveRestResponses, "event");
-                return new CustomEventsResultCollection(result.DefaultTable, forDate, _logger);
+                var result = await HandleResponse<AppInsightsQueryResult>(response, saveRestResponses, operationType);
+                if (result == null)
+                {
+                    throw new InvalidDataException("App Insights returned an empty query response.");
+                }
+                return result.IsPartialResult ? null : result.DefaultTable;
             }
         }
 
@@ -276,8 +398,23 @@ namespace WebJob.AppInsightsImporter.Engine
         /// </summary>
         internal string GetWhereString(DateTime forDate)
         {
-            var culture = System.Globalization.CultureInfo.InvariantCulture;
-            return $"timestamp >= todatetime('{forDate.ToString("yyyy-MM-dd HH:mm:ss", culture)}') and timestamp < todatetime('{forDate.AddDays(1).ToString("yyyy-MM-dd HH:mm:ss", culture)}')";
+            return GetWhereString(forDate, forDate.AddDays(1));
+        }
+
+        /// <summary>
+        /// The KQL filter for the half-open window [<paramref name="fromUtc"/>, <paramref name="toUtc"/>), so a row on
+        /// a boundary between two windows is returned by exactly one of them. Invariant culture, as above.
+        /// </summary>
+        internal string GetWhereString(DateTime fromUtc, DateTime toUtc)
+        {
+            return $"timestamp >= todatetime('{FormatKqlTime(fromUtc)}') and timestamp < todatetime('{FormatKqlTime(toUtc)}')";
+        }
+
+        private static string FormatKqlTime(DateTime value)
+        {
+            // Window bounds are whole seconds (see AppInsightsImportWindow.TrySplitQueryWindow); anything finer is kept rather than rounded.
+            var format = value.Ticks % TimeSpan.TicksPerSecond == 0 ? "yyyy-MM-dd HH:mm:ss" : "yyyy-MM-dd HH:mm:ss.fffffff";
+            return value.ToString(format, System.Globalization.CultureInfo.InvariantCulture);
         }
 
         async Task<T> HandleResponse<T>(HttpResponseMessage response, bool saveRestResponses, string operationType)

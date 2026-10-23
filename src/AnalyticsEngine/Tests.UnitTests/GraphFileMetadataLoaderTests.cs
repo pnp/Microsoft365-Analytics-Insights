@@ -3,6 +3,7 @@ using DataUtils;
 using Microsoft.Extensions.Logging;
 using Microsoft.Graph.Models;
 using Microsoft.Graph.Models.ODataErrors;
+using Microsoft.Kiota.Abstractions;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System;
 using System.Collections.Generic;
@@ -289,10 +290,12 @@ namespace Tests.UnitTests
         [TestMethod]
         public async Task GetMeetingInfo_OtherGraphError_StillLoggedWithException()
         {
+            // A non-transient, unexpected error (a 500 used to be the example here; it is now reported as
+            // transient - see GetMeetingInfo_TransientGraphError_IsReportedAsTransientNotAsNoMeeting).
             var otherError = new ODataError
             {
-                ResponseStatusCode = (int)HttpStatusCode.InternalServerError,
-                Error = new MainError { Code = "ServiceError", Message = "Graph service unavailable" }
+                ResponseStatusCode = (int)HttpStatusCode.BadRequest,
+                Error = new MainError { Code = "BadRequest", Message = "Graph rejected the request" }
             };
             var fake = new FakeSpoGraphClient { OnGetOnlineMeeting = (userId, meetingId) => throw otherError };
             var log = new CapturingLogger();
@@ -305,6 +308,154 @@ namespace Tests.UnitTests
             var warnings = log.Entries.FindAll(e => e.Level == LogLevel.Warning);
             Assert.AreEqual(2, warnings.Count);
             Assert.IsNotNull(warnings[0].Exception);
+        }
+
+        /// <summary>
+        /// B4: a meeting lookup that Graph failed transiently (after the SDK's own retries) used to come back as
+        /// "no meeting details", so the interaction was saved without its meeting for good. It must be reported as
+        /// transient - so the caller can retry and count it - and must not stop the next lookup.
+        /// </summary>
+        [TestMethod]
+        public async Task GetMeetingInfo_TransientGraphError_IsReportedAsTransientNotAsNoMeeting()
+        {
+            var unavailable = new ODataError
+            {
+                ResponseStatusCode = (int)HttpStatusCode.ServiceUnavailable,
+                Error = new MainError { Code = "serviceNotAvailable", Message = "Service unavailable" }
+            };
+            var fake = new FakeSpoGraphClient { OnGetOnlineMeeting = (userId, meetingId) => throw unavailable };
+            var loader = NewLoader(fake);
+
+            for (var i = 0; i < 2; i++)
+            {
+                try
+                {
+                    await loader.GetMeetingInfo("19:meeting_abc@thread.v2", "user-guid");
+                    Assert.Fail("A transient Graph failure must not look like a meeting with no details.");
+                }
+                catch (CopilotEnrichmentTransientException ex)
+                {
+                    Assert.AreSame(unavailable, ex.InnerException);
+                }
+            }
+            Assert.AreEqual(2, fake.GetOnlineMeetingCalls, "A transient failure must not be remembered as unresolvable.");
+        }
+
+        /// <summary>
+        /// B4: a file lookup that failed transiently returned null - indistinguishable from a file that doesn't
+        /// exist - so the interaction was saved without its file for good. The single attempt the save makes inside its
+        /// lock reports it without waiting; the prewarm's <c>GetSpoFileInfo</c>, outside the lock, retries it with a
+        /// back-off first. Neither caches it.
+        /// </summary>
+        [DataTestMethod]
+        [DataRow(429)]
+        [DataRow(503)]
+        public async Task GetSpoFileInfo_TransientGraphError_IsReportedAsTransientAndNotCached(int status)
+        {
+            var ctx = "https://contoso.sharepoint.com/sites/project/Shared Documents/Καλημέρα κόσμε.docx";
+            var transient = new ODataError
+            {
+                ResponseStatusCode = status,
+                Error = new MainError { Code = "transient", Message = "Throttled or unavailable" }
+            };
+            var fake = new FakeSpoGraphClient { OnGetDriveItemByUrl = url => throw transient };
+            var loader = NewLoader(fake);
+            var waits = new List<TimeSpan>();
+            loader.RetryDelay = delay => { waits.Add(delay); return Task.CompletedTask; };
+
+            await Assert.ThrowsExceptionAsync<CopilotEnrichmentTransientException>(
+                () => loader.GetSpoFileInfoSingleAttempt(ctx, "alice@contoso.com"));
+            Assert.AreEqual(1, fake.GetDriveItemByUrlCalls);
+            Assert.AreEqual(0, waits.Count, "A single attempt never waits.");
+
+            await Assert.ThrowsExceptionAsync<CopilotEnrichmentTransientException>(
+                () => loader.GetSpoFileInfo(ctx, "alice@contoso.com"));
+            Assert.AreEqual(1 + GraphFileMetadataLoader.TransientRetryMaxAttempts, fake.GetDriveItemByUrlCalls,
+                "A transient failure must not be cached as an unresolvable context, and the prewarm's lookup retries it.");
+            CollectionAssert.AreEqual(new[] { TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(4) }, waits);
+
+            fake.OnGetDriveItemByUrl = url => new DriveItem { WebUrl = url };
+            var recovered = await loader.GetSpoFileInfoSingleAttempt(ctx, "alice@contoso.com");
+            Assert.AreEqual("Καλημέρα κόσμε.docx", recovered?.Filename, "Once Graph recovers the same context resolves.");
+        }
+
+        /// <summary>
+        /// Any other Graph error is not worth waiting for, so it must not be reported as transient - that cost two
+        /// back-offs and two more full lookups inside the save lock, for every interaction with the file, in every
+        /// batch. It is still not cached, as before.
+        /// </summary>
+        [DataTestMethod]
+        [DataRow(400)]
+        [DataRow(409)]
+        [DataRow(410)]
+        public async Task GetSpoFileInfo_UnexpectedGraphError_ReturnsNoFileWithoutCachingIt(int status)
+        {
+            var ctx = "https://contoso.sharepoint.com/sites/project/Shared Documents/Καλημέρα κόσμε.docx";
+            var unexpected = new ODataError
+            {
+                ResponseStatusCode = status,
+                Error = new MainError { Code = "unexpected", Message = "Synthetic Graph error" }
+            };
+            var fake = new FakeSpoGraphClient { OnGetDriveItemByUrl = url => throw unexpected };
+            var log = new CapturingLogger();
+            var loader = new GraphFileMetadataLoader(fake, log);
+
+            Assert.IsNull(await loader.GetSpoFileInfo(ctx, "alice@contoso.com"));
+            Assert.IsNull(await loader.GetSpoFileInfo(ctx, "alice@contoso.com"));
+
+            Assert.AreEqual(2, fake.GetDriveItemByUrlCalls, "An unexpected error is not cached as unresolvable.");
+            Assert.IsTrue(log.Entries.Exists(e => e.Level == LogLevel.Warning && e.Exception == unexpected), "It is logged with its exception.");
+        }
+
+        /// <summary>
+        /// What Kiota throws for an error response whose body is empty or can't be parsed - common for throttling and
+        /// gateway errors: a plain ApiException with the status code, not an ODataError.
+        /// </summary>
+        private static ApiException ApiErrorWithoutABody(int status) => new ApiException(
+            $"The server returned an unexpected status code and no error factory is registered for this code: {status}")
+        { ResponseStatusCode = status };
+
+        [TestMethod]
+        public async Task GetSpoFileInfoSingleAttempt_ServerErrorWithoutABody_IsTransientAndNotCached()
+        {
+            var ctx = "https://contoso.sharepoint.com/sites/project/Shared Documents/Καλημέρα κόσμε.docx";
+            var fake = new FakeSpoGraphClient { OnGetDriveItemByUrl = url => throw ApiErrorWithoutABody(503) };
+            var loader = NewLoader(fake);
+
+            for (var i = 0; i < 2; i++)
+            {
+                await Assert.ThrowsExceptionAsync<CopilotEnrichmentTransientException>(
+                    () => loader.GetSpoFileInfoSingleAttempt(ctx, "alice@contoso.com"));
+            }
+            Assert.AreEqual(2, fake.GetDriveItemByUrlCalls, "A transient failure is not cached as unresolvable.");
+        }
+
+        [TestMethod]
+        public async Task GetSpoFileInfoSingleAttempt_NotFoundWithoutABody_IsUnresolvableAndCached()
+        {
+            var ctx = "https://contoso.sharepoint.com/sites/project/Shared Documents/Καλημέρα κόσμε.docx";
+            var fake = new FakeSpoGraphClient { OnGetDriveItemByUrl = url => throw ApiErrorWithoutABody(404) };
+            var loader = NewLoader(fake);
+
+            Assert.IsNull(await loader.GetSpoFileInfoSingleAttempt(ctx, "alice@contoso.com"));
+            Assert.IsNull(await loader.GetSpoFileInfoSingleAttempt(ctx, "alice@contoso.com"));
+            Assert.AreEqual(1, fake.GetDriveItemByUrlCalls, "An unresolvable context is cached for the run.");
+        }
+
+        [TestMethod]
+        public async Task GetMeetingInfo_GraphErrorWithoutABody_IsClassifiedByItsStatusCode()
+        {
+            const string user = "00000000-0000-0000-0000-000000000000";
+            var fake = new FakeSpoGraphClient { OnGetOnlineMeeting = (userId, meetingId) => throw ApiErrorWithoutABody(503) };
+            var loader = NewLoader(fake);
+
+            await Assert.ThrowsExceptionAsync<CopilotEnrichmentTransientException>(
+                () => loader.GetMeetingInfo(user + "_19:meeting_unavailable@thread.v2", user));
+
+            fake.OnGetOnlineMeeting = (userId, meetingId) => throw ApiErrorWithoutABody(404);
+            Assert.IsNull(await loader.GetMeetingInfo(user + "_19:meeting_gone@thread.v2", user));
+            Assert.IsNull(await loader.GetMeetingInfo(user + "_19:meeting_gone@thread.v2", user));
+            Assert.AreEqual(2, fake.GetOnlineMeetingCalls, "A meeting that isn't found is not asked for again.");
         }
 
         [TestMethod]

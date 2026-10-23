@@ -1,5 +1,48 @@
 import { apiFetch } from '../api/http';
+import type { TranslationKey } from '../i18n/catalog';
+import { translateActive } from '../i18n/runtime';
 import type { GraphAccessToken } from '../types/graphToken';
+
+/**
+ * Codes `POST api/SiteTokenAPI` answers a 503 with (`SiteTokenAPIController.*Code`), and the sentence for each.
+ * The API sends the code, never text; `i18n/lint/serverAuthoredText.test.ts` checks this against the C#.
+ */
+export const SITE_TOKEN_ERROR_KEYS = {
+  entraUnavailable: 'admin.teamsPermissions.entraUnavailable.message',
+} as const satisfies Record<string, TranslationKey>;
+
+export type SiteTokenErrorCode = keyof typeof SITE_TOKEN_ERROR_KEYS;
+
+/**
+ * The site couldn't mint a Graph token for a reason connecting again won't fix: Microsoft Entra ID couldn't be
+ * reached, timed out, was throttling or failing. The Teams connection's own sign-in ends by redeeming a code at
+ * that same token endpoint, from the same server, so the remedy is to try again later.
+ */
+export class SiteTokenUnavailableError extends Error {
+  readonly code: SiteTokenErrorCode;
+  readonly messageKey: TranslationKey;
+
+  constructor(code: SiteTokenErrorCode) {
+    super(translateActive(SITE_TOKEN_ERROR_KEYS[code]));
+    this.name = 'SiteTokenUnavailableError';
+    this.code = code;
+    this.messageKey = SITE_TOKEN_ERROR_KEYS[code];
+  }
+}
+
+async function siteTokenUnavailable(response: Response): Promise<SiteTokenUnavailableError | null> {
+  if (response.status !== 503) return null;
+
+  try {
+    const body = (await response.clone().json()) as { code?: unknown } | null;
+    const code = body?.code;
+    return typeof code === 'string' && Object.prototype.hasOwnProperty.call(SITE_TOKEN_ERROR_KEYS, code)
+      ? new SiteTokenUnavailableError(code as SiteTokenErrorCode)
+      : null;
+  } catch {
+    return null;
+  }
+}
 
 /**
  * Gets a Microsoft Graph access token for the signed-in admin from `POST api/SiteTokenAPI`.
@@ -19,6 +62,9 @@ import type { GraphAccessToken } from '../types/graphToken';
  * the stored token has expired or been revoked. The caller then offers "Connect to Microsoft Teams"
  * (`src/auth/teamsConnect.ts`). A genuinely expired *site* session is handled by
  * {@link apiFetch}, which re-authenticates instead of returning.
+ *
+ * Throws {@link SiteTokenUnavailableError} when the site answered with a code instead - Microsoft
+ * Entra ID couldn't be reached - because connecting again would fail the same way.
  */
 export async function fetchGraphToken(): Promise<GraphAccessToken | null> {
   // Undefined when the SPA runs outside ASP.NET (the Vite dev server), where there is no token API.
@@ -33,7 +79,16 @@ export async function fetchGraphToken(): Promise<GraphAccessToken | null> {
     return null;
   });
 
-  if (!response || !response.ok) {
+  if (!response) {
+    return null;
+  }
+
+  const unavailable = await siteTokenUnavailable(response);
+  if (unavailable) {
+    throw unavailable;
+  }
+
+  if (!response.ok) {
     return null;
   }
 

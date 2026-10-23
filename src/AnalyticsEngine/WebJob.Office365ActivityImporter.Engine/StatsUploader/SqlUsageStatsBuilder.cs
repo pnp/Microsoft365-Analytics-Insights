@@ -203,5 +203,16 @@ ORDER BY
             });
             await _db.SaveChangesAsync();
         }
+
+        /// <summary>
+        /// The report was uploaded and stored, so the adoption block it carried has been delivered and its week can
+        /// be used up. A re-sent (older) block is acknowledged too; the provider ignores one it is not waiting on.
+        /// </summary>
+        public override async Task OnReportDeliveredAsync(AnonUsageStatsModel deliveredStats)
+        {
+            if (_adoptionStatsProvider == null || deliveredStats?.Adoption == null) return;
+
+            await _adoptionStatsProvider.AcknowledgeDeliveredAsync(deliveredStats.Adoption);
+        }
     }
 }

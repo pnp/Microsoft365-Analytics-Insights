@@ -1,6 +1,7 @@
 ﻿using Microsoft.Extensions.Logging;
 using Newtonsoft.Json.Linq;
 using System;
+using WebJob.Office365ActivityImporter.Engine.ActivityAPI.Dlp;
 using WebJob.Office365ActivityImporter.Engine.ActivityAPI.PowerPlatform;
 using WebJob.Office365ActivityImporter.Engine.Entities;
 using WebJob.Office365ActivityImporter.Engine.Entities.Serialisation;
@@ -46,7 +47,9 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Loaders
                     return null;
                 }
 
-                return reportItem.ToObject<DlpAuditLogContent>();
+                // With its SharePointMetaData, so the org-URL whitelist can tell which site collection a SharePoint or
+                // OneDrive match came from.
+                return reportItem.ToObject<DlpAuditLogContentWithSharePointMetadata>();
             }
 
             // Copilot Studio authoring records publish a top-level BotId. Route by that documented

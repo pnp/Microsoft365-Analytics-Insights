@@ -49,6 +49,11 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         /// <summary>
         /// Inserts missing users into DB using two-phase approach: fast bulk insert, then metadata enrichment
         /// </summary>
+        /// <param name="existingDbUsersByAadId">
+        /// Every in-scope users row already in the database, by object id, so a new user's manager is found even when
+        /// Graph did not report the manager in this read - the usual case for a newcomer in an incremental read. Copied,
+        /// not modified. Null falls back to <paramref name="graphMentionedDbUsers"/>.
+        /// </param>
         public async Task<List<Common.Entities.User>> InsertMissingUsers(
             AnalyticsEntitiesContext db,
             List<GraphUser> allGraphUsers,
@@ -57,7 +62,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             UserMetadataCache userMetaCache,
             UserDataMapper dataMapper,
             UserLicenseProcessor licenseProcessor,
-            Func<AnalyticsEntitiesContext, GraphUser, List<GraphUser>, List<Common.Entities.User>, Common.Entities.User, bool, Dictionary<string, Common.Entities.User>, Task> updateAction)
+            Func<AnalyticsEntitiesContext, GraphUser, List<GraphUser>, List<Common.Entities.User>, Common.Entities.User, bool, Dictionary<string, Common.Entities.User>, Task> updateAction,
+            Dictionary<string, Common.Entities.User> existingDbUsersByAadId = null)
         {
             _logger.LogInformation($"User import - Inserting missing users (two-phase: bulk insert + metadata enrichment)...");
 
@@ -104,7 +110,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 METADATA_BATCH_SIZE,
                 userMetaCache,
                 dataMapper,
-                updateAction);
+                updateAction,
+                existingDbUsersByAadId);
 
             _logger.LogInformation($"User import - Phase 2: Metadata enrichment completed for {insertedDbUsers.Count.ToString("N0")} new users");
 
@@ -346,7 +353,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             int batchSize,
             UserMetadataCache userMetaCache,
             UserDataMapper dataMapper,
-            Func<AnalyticsEntitiesContext, GraphUser, List<GraphUser>, List<Common.Entities.User>, Common.Entities.User, bool, Dictionary<string, Common.Entities.User>, Task> updateAction)
+            Func<AnalyticsEntitiesContext, GraphUser, List<GraphUser>, List<Common.Entities.User>, Common.Entities.User, bool, Dictionary<string, Common.Entities.User>, Task> updateAction,
+            Dictionary<string, Common.Entities.User> existingDbUsersByAadId)
         {
             var enrichedUsers = new List<Common.Entities.User>(insertedUserUpns.Count);
 
@@ -360,18 +368,19 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 }
             }
 
-            // Build DB user dictionary for manager resolution from existing users
-            // (newly inserted users added incrementally as each batch is loaded with tracking;
-            // cross-batch managers resolved via DB fallback in UpdateUserManager)
-            var dbUsersByAadId = new Dictionary<string, Common.Entities.User>(
-                graphMentionedDbUsers.Count, StringComparer.OrdinalIgnoreCase);
-
-            foreach (var user in graphMentionedDbUsers)
+            // DB user dictionary for manager resolution: existing users, then the newly inserted ones added as each batch
+            // is loaded with tracking (cross-batch managers resolved via the prefetch / DB fallback in UpdateUserManager).
+            // Seeded from every existing user when the caller has them, not just those this read mentions: in an
+            // incremental read a newcomer's manager is usually someone Graph did not report, and was never linked. A copy,
+            // because resolving a manager swaps its entry for an entity tracked by this context.
+            Dictionary<string, Common.Entities.User> dbUsersByAadId;
+            if (existingDbUsersByAadId != null)
             {
-                if (!string.IsNullOrEmpty(user.AzureAdId) && !dbUsersByAadId.ContainsKey(user.AzureAdId))
-                {
-                    dbUsersByAadId[user.AzureAdId] = user;
-                }
+                dbUsersByAadId = new Dictionary<string, Common.Entities.User>(existingDbUsersByAadId, StringComparer.OrdinalIgnoreCase);
+            }
+            else
+            {
+                dbUsersByAadId = UserIdentityRules.IndexByObjectId(graphMentionedDbUsers, dataMapper.CurrentUpnInThisRead);
             }
 
             // Process in batches - use GetRange for O(1) extraction

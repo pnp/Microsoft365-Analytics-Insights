@@ -23,9 +23,9 @@ namespace Tests.UnitTests.FakeLoaderClasses
     /// the row itself. Comparing an object with itself is always "unchanged", which is how a dirty-check
     /// test can pass by reference identity and prove nothing.</item>
     /// <item><see cref="MarkUpdatedIfChanged"/> on a row that is queued for INSERT throws, because EF6's
-    /// <c>DbEntityEntry.OriginalValues</c> throws for an entity in the <c>Added</c> state. That is a real,
-    /// pre-existing edge of the save loop (two Graph rows for the same new lookup on one date) and the
-    /// fake must not paper over it.</item>
+    /// <c>DbEntityEntry.OriginalValues</c> throws for an entity in the <c>Added</c> state. Two Graph rows for the
+    /// same new lookup on one date used to reach it and fail the whole report; the save loop now folds the second
+    /// row into the queued insert instead, and this keeps any regression to that visible.</item>
     /// <item><see cref="ReleaseSavedRows"/> DISCARDS anything still queued, because detaching an unsaved
     /// entity in EF6 drops the pending insert. A refactor that released before the final flush would
     /// silently lose a day's rows, and this is what catches it.</item>

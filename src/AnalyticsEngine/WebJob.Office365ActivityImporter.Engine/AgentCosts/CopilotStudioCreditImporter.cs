@@ -7,6 +7,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
+using System.Net.Http;
 using System.Runtime.ExceptionServices;
 using System.Threading;
 using System.Threading.Tasks;
@@ -47,11 +48,28 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
     {
         /// <summary>Parallel per-user reads. Modest on purpose: the throttle-aware client retries a 429.</summary>
         private const int MaxConcurrentUserReads = 6;
+
+        /// <summary>
+        /// Attempts at one user's per-agent read for one day before the day is given up on. The HTTP client already
+        /// retries a 429 and a 502/503/504, but not a 500 - and one 500 for one of thousands of users used to fail the
+        /// whole window.
+        /// </summary>
+        internal const int MaxUserReadAttempts = 3;
+
+        /// <summary>Wait before the first retry of a user's read; doubled before the second. Settable for tests.</summary>
+        internal TimeSpan UserReadRetryDelay { get; set; } = TimeSpan.FromSeconds(2);
+
         private readonly ILogger _logger;
         private readonly ICopilotStudioCreditSource _source;
         private readonly IAgentCostStore _store;
         private readonly IClock _clock;
         private readonly int _trailingWindowDays;
+
+        /// <summary>
+        /// Lets a retry skip the days an unfinished attempt already stored. Optional: without it a retry re-reads the
+        /// whole window, which is slower but loses nothing.
+        /// </summary>
+        private readonly CopilotStudioCreditCheckpointStore _checkpoint;
 
         /// <summary>
         /// Resolves the Entra object ids on per-user rows to <c>dbo.users</c>. Optional: when absent the
@@ -78,7 +96,8 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
             int trailingWindowDays = AppConfig.DefaultCopilotStudioCreditsTrailingWindowDays,
             IClock clock = null,
             AgentCostUserResolver userResolver = null,
-            IUserImportScopeProvider userScopeProvider = null)
+            IUserImportScopeProvider userScopeProvider = null,
+            CopilotStudioCreditCheckpointStore checkpoint = null)
         {
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
             _source = source ?? throw new ArgumentNullException(nameof(source));
@@ -86,6 +105,7 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
             _clock = clock ?? SystemClock.Instance;
             _userResolver = userResolver;
             _userScopeProvider = userScopeProvider;
+            _checkpoint = checkpoint;
             _trailingWindowDays = trailingWindowDays > 0
                 ? Math.Min(trailingWindowDays, AppConfig.MaxCopilotStudioCreditsTrailingWindowDays)
                 : AppConfig.DefaultCopilotStudioCreditsTrailingWindowDays;
@@ -164,24 +184,49 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
                     + $"{(today - from).Days + 1} day(s), stored {userLog.RowsSaved:N0}.");
                 await SafeSaveLogAsync(userLog);
 
-                // Phase B: the per-agent figures. See ReadDayResourcesAsync for the call volume.
-                var agentRows = new List<CopilotStudioCreditDaily>();
+                // Phase B: the per-agent figures, a day at a time. See ReadDayResourcesAsync for the call volume.
+                var alreadyStored = _checkpoint == null
+                    ? new HashSet<DateTime>()
+                    : await _checkpoint.GetCompletedDaysAsync(from, today);
+                var completedDays = new List<DateTime>(alreadyStored);
                 var resourceRowsRead = 0;
+                var daysResumed = 0;
+
                 foreach (var entry in activeUsersByDay)
                 {
+                    if (alreadyStored.Contains(entry.Key))
+                    {
+                        daysResumed++;
+                        continue;
+                    }
+
                     var rows = await ReadDayResourcesAsync(entry.Key, entry.Value);
                     resourceRowsRead += rows.Count;
-                    agentRows.AddRange(MapAndAggregate(rows, entry.Key, entry.Key, environmentNames, _clock.UtcNow));
+                    agentLog.RowsRead = resourceRowsRead;
+
+                    // Stored as soon as the day is complete. Every active user's read for the day succeeded, so this
+                    // is the day's whole figure rather than a partial one - and storing it now means a failure on a
+                    // later day no longer throws away the days already read. A day that fails is not written at all.
+                    agentLog.RowsSaved += await _store.UpsertCopilotStudioCreditsAsync(
+                        MapAndAggregate(rows, entry.Key, entry.Key, environmentNames, _clock.UtcNow));
+
+                    completedDays.Add(entry.Key);
+                    if (_checkpoint != null) await _checkpoint.SaveAsync(from, today, completedDays);
                 }
 
-                // Stored only once every day has been read, so a failed window never leaves a partial figure.
-                agentLog.RowsRead = resourceRowsRead;
-                agentLog.RowsSaved = await _store.UpsertCopilotStudioCreditsAsync(agentRows);
+                if (_checkpoint != null) await _checkpoint.ClearAsync();
+
+                if (daysResumed > 0)
+                {
+                    _logger.LogInformation($"Copilot Studio credits: resumed an unfinished read. {daysResumed:N0} day(s) had "
+                        + "already been read in full and stored by the previous attempt, so their per-user reads were not "
+                        + "repeated; the next scheduled run re-reads the whole window as usual.");
+                }
 
                 _logger.LogInformation(
                     $"Copilot Studio credits: read {agentLog.RowsRead:N0} per-user agent row(s) for "
-                    + $"{activeUsersByDay.Sum(e => e.Value.Count):N0} active user-day(s) ({from:yyyy-MM-dd}..{today:yyyy-MM-dd}), "
-                    + $"stored {agentLog.RowsSaved:N0} per-agent row(s).");
+                    + $"{activeUsersByDay.Where(e => !alreadyStored.Contains(e.Key)).Sum(e => e.Value.Count):N0} active user-day(s) "
+                    + $"({from:yyyy-MM-dd}..{today:yyyy-MM-dd}), stored {agentLog.RowsSaved:N0} per-agent row(s).");
                 await SafeSaveLogAsync(agentLog);
                 return new ConsumptionImportOutcomes(new AgentCostImportOutcome(agentLog), new AgentCostImportOutcome(userLog));
             }
@@ -193,7 +238,10 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
             catch (Exception ex)
             {
                 _logger.LogError(ex, $"Copilot Studio credit import failed: {ex.Message}. "
-                    + "No other import is affected; this one will be retried on the next cycle.");
+                    + (agentLog.RowsSaved > 0
+                        ? $"The {agentLog.RowsSaved:N0} per-agent row(s) of the days read in full before the failure were stored. "
+                        : string.Empty)
+                    + "No other import is affected; this one will be retried.");
                 return await FailAsync(agentLog, userLog, ex.Message, false, userPhaseCompleted);
             }
         }
@@ -286,8 +334,10 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
         /// calls ~ window days (default 7) x daily active users, plus a few <c>/users</c> pages. With 10,000
         /// daily active users that is ~70,000 calls per import (a few minutes at 6-way concurrency), which is
         /// why only users with consumption are fanned out and why the import runs on its own cadence.</para>
-        /// <para>Any failed read fails the day (and so the window): a figure silently missing a user would
-        /// look like a drop in spend.</para>
+        /// <para>A user's read is retried a bounded number of times when the failure is one retrying can fix (see
+        /// <see cref="IsRetryableReadFailure"/>). After that any failed read fails the day: a figure silently missing
+        /// a user would look like a drop in spend. Days already completed are stored by then, so only the failing day
+        /// and those after it are lost to this run.</para>
         /// </remarks>
         private async Task<List<CopilotStudioCreditRow>> ReadDayResourcesAsync(DateTime day, IReadOnlyList<string> userIds)
         {
@@ -307,7 +357,7 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
 
                     try
                     {
-                        var rows = await ReadUserResourcesAsync(userIds[i], day);
+                        var rows = await ReadUserResourcesWithRetryAsync(userIds[i], day, () => Volatile.Read(ref failed) != 0);
                         lock (all) all.AddRange(rows);
                     }
                     catch (Exception ex)
@@ -323,6 +373,40 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
 
             if (firstError != null) ExceptionDispatchInfo.Capture(firstError).Throw();
             return all;
+        }
+
+        /// <summary>
+        /// One user's read for one day, retried up to <see cref="MaxUserReadAttempts"/> times while the failure is one
+        /// retrying can fix and the day has not already failed for another user.
+        /// </summary>
+        private async Task<List<CopilotStudioCreditRow>> ReadUserResourcesWithRetryAsync(string userId, DateTime day, Func<bool> dayAbandoned)
+        {
+            for (var attempt = 1; ; attempt++)
+            {
+                try
+                {
+                    return await ReadUserResourcesAsync(userId, day);
+                }
+                catch (Exception ex) when (attempt < MaxUserReadAttempts && IsRetryableReadFailure(ex) && !dayAbandoned())
+                {
+                    var delay = TimeSpan.FromTicks(UserReadRetryDelay.Ticks * attempt);
+                    _logger.LogWarning($"Copilot Studio credits: a user's per-agent read for "
+                        + $"{day.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)} failed ({ex.Message}). Retrying in "
+                        + $"{delay.TotalSeconds:N0}s (attempt {attempt + 1} of {MaxUserReadAttempts}).");
+                    if (delay > TimeSpan.Zero) await Task.Delay(delay);
+                }
+            }
+        }
+
+        /// <summary>
+        /// Whether asking again might succeed: an HTTP error the client did not retry itself (a 500, or a 502-504 or
+        /// network failure that outlasted its retries) or a timeout. A refusal and broken paging are deterministic -
+        /// the same request gets the same answer - so they fail the day straight away.
+        /// </summary>
+        internal static bool IsRetryableReadFailure(Exception ex)
+        {
+            if (ex is AgentCostAuthorisationException || ex is AgentCostIncompleteReadException) return false;
+            return ex is HttpRequestException || ex is TimeoutException || ex is TaskCanceledException || ex is System.IO.IOException;
         }
 
         private async Task<List<CopilotStudioCreditRow>> ReadUserResourcesAsync(string userId, DateTime day)
@@ -354,8 +438,7 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
                 {
                     throw new AgentCostIncompleteReadException(
                         "The Power Platform licensing API returned a continuation token it had already returned, so "
-                        + "paging could not complete. Nothing was stored for this window; it will be retried on the next "
-                        + "cycle.");
+                        + "paging could not complete. Nothing was stored for that day; it will be retried.");
                 }
 
                 continuationToken = page.ContinuationToken;

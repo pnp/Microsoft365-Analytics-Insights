@@ -18,17 +18,25 @@ INSERT INTO sites(url_base)
 		not exists(select top 1 url_base from sites where url_base = imports.url_base)
 
 		
+-- event_file_ext.extension_name is nvarchar (migration EventFileExtensionUnicode), so the extension is stored
+-- exactly as logged. CONVERT still trims it to the column's 250 characters, so an over-long one can't fail the
+-- batch, and the insert, de-duplication and joins below all use that same trimmed value.
 INSERT INTO event_file_ext(extension_name)
-	SELECT distinct imports.file_extension 
-	FROM [${STAGING_TABLE_ACTIVITY}] imports
-	left join event_file_ext on event_file_ext.extension_name = imports.file_extension
-	where event_file_ext.extension_name is null and imports.file_extension is not null and imports.file_extension != '';
+	SELECT distinct ext.extension_name
+	FROM (
+		SELECT CONVERT(nvarchar(250), imports.file_extension COLLATE DATABASE_DEFAULT) as extension_name
+		FROM [${STAGING_TABLE_ACTIVITY}] imports
+		where imports.file_extension is not null and imports.file_extension != ''
+	) ext
+	where not exists (select 1 from event_file_ext existing where existing.extension_name = ext.extension_name);
 
+-- file_name is staged trimmed to event_file_names.file_name's nvarchar(250) without splitting a surrogate pair
+-- (CopilotAuditEventManager). LEFT() is the backstop that stops an untrimmed name failing the whole batch.
 INSERT INTO event_file_names(file_name)
-	SELECT distinct imports.file_name 
+	SELECT distinct LEFT(imports.file_name, 250)
 	FROM [${STAGING_TABLE_ACTIVITY}] imports
-	left join event_file_names on event_file_names.file_name = imports.file_name
-	where event_file_names.file_name is null and imports.file_name is not null and imports.file_name != '';
+	where imports.file_name is not null and imports.file_name != ''
+		and not exists (select 1 from event_file_names existing where existing.file_name = LEFT(imports.file_name, 250));
 
 
 insert into [copilot_event_files] (copilot_chat_id, file_name_id, file_extension_id, url_id, site_id)
@@ -38,8 +46,8 @@ insert into [copilot_event_files] (copilot_chat_id, file_name_id, file_extension
 		,urls.id as urlId
 		,sites.id as siteId
 	  FROM [${STAGING_TABLE_ACTIVITY}] imports
-	  inner join event_file_names on event_file_names.file_name = imports.file_name
-	  inner join event_file_ext on event_file_ext.extension_name = imports.file_extension
+	  inner join event_file_names on event_file_names.file_name = LEFT(imports.file_name, 250)
+	  inner join event_file_ext on event_file_ext.extension_name = CONVERT(nvarchar(250), imports.file_extension COLLATE DATABASE_DEFAULT)
 	  inner join urls on urls.full_url = imports.url
 	  inner join sites on sites.url_base = imports.url_base
 	  where not exists (

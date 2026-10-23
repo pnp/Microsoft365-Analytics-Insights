@@ -69,9 +69,10 @@ CREATE TABLE [dbo].[devices] (
 
 
 -- Creating table 'event_file_ext'
+-- nvarchar, so an extension in any script is stored exactly (migration EventFileExtensionUnicode converts older databases).
 CREATE TABLE [dbo].[event_file_ext] (
     [id] int IDENTITY(1,1) NOT NULL,
-    [extension_name] varchar(250)  NOT NULL
+    [extension_name] nvarchar(250)  NOT NULL
 );
 
 

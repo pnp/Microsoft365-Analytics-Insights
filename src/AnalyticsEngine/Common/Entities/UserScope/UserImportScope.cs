@@ -21,6 +21,7 @@ namespace Common.Entities.UserScope
         private readonly HashSet<Guid> _disabledObjectIds = new HashSet<Guid>();
         private readonly HashSet<string> _userPrincipalNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         private string _enabledMembershipFingerprint;
+        private string _membershipFingerprint;
 
         // Only mail addresses that differ from the member's UPN, so the common case costs one string, not two.
         private readonly HashSet<string> _otherAddresses = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -69,11 +70,58 @@ namespace Common.Entities.UserScope
             }
         }
 
+        /// <summary>
+        /// Stable fingerprint of everything that decides who is a member - object ids, user principal names and other
+        /// mail addresses - whatever the order they were read in or the case of a name. Two resolutions with the same
+        /// fingerprint put exactly the same people in scope. A purge records it, so that one starting again after a
+        /// restart can tell that the people it was confirmed against are no longer the ones in scope.
+        /// </summary>
+        public string MembershipFingerprint
+        {
+            get
+            {
+                var cached = Volatile.Read(ref _membershipFingerprint);
+                if (cached != null)
+                {
+                    return cached;
+                }
+
+                var ids = _objectIds.ToList();
+                ids.Sort();
+                using (var sha = SHA256.Create())
+                {
+                    foreach (var id in ids)
+                    {
+                        var bytes = id.ToByteArray();
+                        sha.TransformBlock(bytes, 0, bytes.Length, bytes, 0);
+                    }
+
+                    // Names compare case-insensitively (OrdinalIgnoreCase is an ordinal comparison of the upper-case
+                    // forms), so they are hashed in that form. Each set is preceded by its size and every name ends in a
+                    // character no name contains, so one set's names can never run into the next set's.
+                    foreach (var names in new[] { _userPrincipalNames, _otherAddresses })
+                    {
+                        var sorted = names.Select(n => n.ToUpperInvariant()).ToList();
+                        sorted.Sort(StringComparer.Ordinal);
+                        var text = sorted.Count.ToString(System.Globalization.CultureInfo.InvariantCulture) + "\n" +
+                                   string.Concat(sorted.Select(n => n + "\n"));
+                        var bytes = System.Text.Encoding.UTF8.GetBytes(text);
+                        sha.TransformBlock(bytes, 0, bytes.Length, bytes, 0);
+                    }
+                    sha.TransformFinalBlock(Array.Empty<byte>(), 0, 0);
+                    var computed = "sha256:" + BitConverter.ToString(sha.Hash).Replace("-", string.Empty).ToLowerInvariant();
+                    Interlocked.CompareExchange(ref _membershipFingerprint, computed, null);
+                }
+                return _membershipFingerprint;
+            }
+        }
+
         /// <summary>Adds a member. Returns false when the member was already present.</summary>
         public bool Add(string objectId, string userPrincipalName, string mail, bool accountEnabled = true)
         {
             var upn = Clean(userPrincipalName);
             var address = Clean(mail);
+            _membershipFingerprint = null;
 
             bool isNew;
             if (Guid.TryParse(objectId, out var id) && id != Guid.Empty)

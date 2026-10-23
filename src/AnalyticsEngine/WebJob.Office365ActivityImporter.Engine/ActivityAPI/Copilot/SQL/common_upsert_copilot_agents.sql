@@ -25,24 +25,64 @@ DECLARE @rows INT = 0;
 --    for records that carry no name) only ever fills a NULL name, so it never replaces a display name.
 --    Nothing here sets a name to NULL. Comparisons are NULL-safe: "agent_name <> name" is UNKNOWN for a
 --    NULL stored name, which is why an agent first seen without a name used to stay unnamed for good.
--- 3. is_custom_agent. A non-NULL flag replaces a different stored one (true wins within a batch). Name
+-- 3. is_custom_agent. A non-NULL flag replaces a different stored one. Name
 --    and flag are updated independently: each used to be set from a subquery that returned NULL
 --    whenever only the OTHER column had changed, wiping it.
 -- 4. Names are trimmed to the column's 100 characters, so an over-long name can't fail the batch.
+-- 5. Recency. Imports commit newest-first in batches, and every commit runs this upsert three times (chat-only,
+--    file, then meeting staging tables), so an older batch can arrive after a newer one. Each batch therefore
+--    carries the audit time (dbo.audit_events.time_stamp) of its newest record that had a name, and of its
+--    newest record that had a flag, and only replaces a stored name or flag that is older
+--    (copilot_agents.name_seen_utc / flag_seen_utc, migration CopilotAgentNameAndFlagRecency). A missing name or
+--    flag is always filled, and a stored time of NULL - a row from before that migration - counts as older than
+--    anything, so such a row behaves as it always did until the next batch records a time. Within a batch the
+--    newest record's flag wins, and records of the same time resolve to true. A schema-name fallback
+--    (name_is_fallback = 1) is replaced by any agreed display name, however old, and records no time itself; nor
+--    does a name taken from a batch that disagrees. Nothing here infers recency from copilot_chats, which cannot
+--    say whether an interaction carried a name.
+--    These predicates only run on the copilot_agents rows already joined to the batch's agents, so they add no
+--    scan; the time costs one clustered-index seek on audit_events per staged agent interaction, the seek the
+--    interaction insert below makes anyway.
 -- ================================================================================================
+;WITH staged AS (
+	SELECT
+		imports.agent_id,
+		LEFT(NULLIF(imports.agent_name, N''), 100) AS agent_name,
+		LEFT(NULLIF(imports.agent_fallback_name, N''), 100) AS fallback_name,
+		imports.is_custom_agent,
+		-- Typed like the stored columns: compared with them as datetime, a value equal to a stored one can read as newer.
+		CAST(ae.time_stamp AS datetime2(3)) AS seen_utc
+	FROM [${STAGING_TABLE_ACTIVITY}] imports
+	LEFT JOIN dbo.audit_events AS ae
+		ON ae.id = imports.event_id
+	WHERE imports.agent_id IS NOT NULL
+), newest_flag AS (
+	SELECT agent_id, is_custom_agent, seen_utc,
+		ROW_NUMBER() OVER (PARTITION BY agent_id
+			ORDER BY CASE WHEN seen_utc IS NULL THEN 1 ELSE 0 END, seen_utc DESC, CAST(is_custom_agent AS tinyint) DESC) AS rn
+	FROM staged
+	WHERE is_custom_agent IS NOT NULL
+)
 SELECT
-	imports.agent_id,
-	MIN(LEFT(NULLIF(imports.agent_name, N''), 100)) AS name_min,
-	MAX(LEFT(NULLIF(imports.agent_name, N''), 100)) AS name_max,
-	MIN(LEFT(NULLIF(imports.agent_fallback_name, N''), 100)) AS fallback_name,
-	CAST(MAX(CAST(imports.is_custom_agent AS tinyint)) AS bit) AS is_custom_agent
+	s.agent_id,
+	MIN(s.agent_name) AS name_min,
+	MAX(s.agent_name) AS name_max,
+	MAX(CASE WHEN s.agent_name IS NOT NULL THEN s.seen_utc END) AS name_seen_utc,
+	MIN(s.fallback_name) AS fallback_name,
+	CAST(MAX(CAST(f.is_custom_agent AS tinyint)) AS bit) AS is_custom_agent,
+	MAX(f.seen_utc) AS flag_seen_utc
 INTO #batch_agents
-FROM [${STAGING_TABLE_ACTIVITY}] imports
-WHERE imports.agent_id IS NOT NULL
-GROUP BY imports.agent_id;
+FROM staged AS s
+LEFT JOIN newest_flag AS f
+	ON f.agent_id = s.agent_id AND f.rn = 1
+GROUP BY s.agent_id;
 
-INSERT INTO dbo.copilot_agents ([name], [agent_id], [is_custom_agent])
-SELECT COALESCE(b.name_min, b.fallback_name), b.agent_id, b.is_custom_agent
+-- A name the batch disagrees on, and a fallback, record no time: any later agreed display name replaces them.
+INSERT INTO dbo.copilot_agents ([name], [agent_id], [is_custom_agent], [name_seen_utc], [name_is_fallback], [flag_seen_utc])
+SELECT COALESCE(b.name_min, b.fallback_name), b.agent_id, b.is_custom_agent,
+	CASE WHEN b.name_min = b.name_max THEN b.name_seen_utc END,
+	CASE WHEN b.name_min IS NOT NULL THEN CAST(0 AS bit) WHEN b.fallback_name IS NOT NULL THEN CAST(1 AS bit) END,
+	b.flag_seen_utc
 FROM #batch_agents AS b
 WHERE NOT EXISTS (SELECT 1 FROM dbo.copilot_agents AS ca WHERE ca.[agent_id] = b.agent_id);
 
@@ -54,20 +94,37 @@ SET @t = SYSUTCDATETIME();
 
 UPDATE ca
 SET [name] = n.new_name,
-	[is_custom_agent] = COALESCE(b.is_custom_agent, ca.[is_custom_agent])
+	[name_seen_utc] = n.new_name_seen_utc,
+	[name_is_fallback] = n.new_name_is_fallback,
+	[is_custom_agent] = f.new_flag,
+	[flag_seen_utc] = f.new_flag_seen_utc
 FROM dbo.copilot_agents AS ca
 INNER JOIN #batch_agents AS b
 	ON b.agent_id = ca.[agent_id]
 CROSS APPLY (
 	SELECT CASE
-		WHEN b.name_min IS NULL THEN COALESCE(ca.[name], b.fallback_name)	-- no display name in the batch
-		WHEN ca.[name] IS NULL THEN b.name_min								-- the first display name
-		WHEN b.name_min = b.name_max THEN b.name_min						-- the batch agrees: take it
-		ELSE ca.[name]														-- the batch disagrees: keep it
-	END AS new_name
+		WHEN b.name_min = b.name_max																-- the batch agrees on a display name,
+			AND (ca.[name] IS NULL OR ca.[name_is_fallback] = 1										-- and nothing better is stored:
+				OR ca.[name_seen_utc] IS NULL OR b.name_seen_utc > ca.[name_seen_utc]) THEN 1		-- take it, with its time
+		WHEN b.name_min IS NOT NULL AND ca.[name] IS NULL THEN 2									-- the batch disagrees: name an unnamed agent
+		WHEN b.name_min IS NULL AND ca.[name] IS NULL AND b.fallback_name IS NOT NULL THEN 3		-- no display name: the fallback
+		ELSE 0																						-- keep the stored name
+	END AS action
+) AS a
+CROSS APPLY (
+	SELECT
+		CASE WHEN a.action IN (1, 2) THEN b.name_min WHEN a.action = 3 THEN b.fallback_name ELSE ca.[name] END AS new_name,
+		CASE WHEN a.action = 1 THEN b.name_seen_utc WHEN a.action IN (2, 3) THEN NULL ELSE ca.[name_seen_utc] END AS new_name_seen_utc,
+		CASE WHEN a.action IN (1, 2) THEN CAST(0 AS bit) WHEN a.action = 3 THEN CAST(1 AS bit) ELSE ca.[name_is_fallback] END AS new_name_is_fallback,
+		CASE WHEN b.is_custom_agent IS NOT NULL
+			AND (ca.[is_custom_agent] IS NULL OR ca.[flag_seen_utc] IS NULL OR b.flag_seen_utc > ca.[flag_seen_utc]) THEN 1 ELSE 0 END AS take_flag
 ) AS n
-WHERE (n.new_name IS NOT NULL AND (ca.[name] IS NULL OR n.new_name <> ca.[name]))
-	OR (b.is_custom_agent IS NOT NULL AND (ca.[is_custom_agent] IS NULL OR b.is_custom_agent <> ca.[is_custom_agent]));
+CROSS APPLY (
+	SELECT
+		CASE WHEN n.take_flag = 1 THEN b.is_custom_agent ELSE ca.[is_custom_agent] END AS new_flag,
+		CASE WHEN n.take_flag = 1 THEN b.flag_seen_utc ELSE ca.[flag_seen_utc] END AS new_flag_seen_utc
+) AS f
+WHERE a.action <> 0 OR n.take_flag = 1;
 
 
 SET @rows = @@ROWCOUNT;

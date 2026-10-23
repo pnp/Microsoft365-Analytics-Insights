@@ -238,8 +238,14 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.InteractionHisto
                         return new AiInteractionLoadResult { Error = $"Graph returned an empty body on page {page}." };
                     }
 
-                    if (pageResult.PageResults != null)
-                        all.AddRange(pageResult.PageResults);
+                    // A page without its value collection is not an empty page: its interactions are unknown, and
+                    // stepping over it would advance the watermark past them (see 1. above).
+                    if (!pageResult.HasValueCollection)
+                    {
+                        return new AiInteractionLoadResult { Error = $"Graph returned page {page} without its 'value' collection." };
+                    }
+
+                    all.AddRange(pageResult.PageResults);
 
                     nextUrl = pageResult.OdataNextLink;
                 }

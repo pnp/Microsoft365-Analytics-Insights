@@ -30,6 +30,10 @@ namespace Tests.UnitTests
             public readonly InMemoryAppInsightsDayPersistenceManager Persistence = new InMemoryAppInsightsDayPersistenceManager();
             public FixedClock Clock = new FixedClock(FixedNowUtc);
 
+            // Outlives each run's importer, as the web-job host's does.
+            public readonly AppInsightsDayFailureTracker DayFailures = new AppInsightsDayFailureTracker();
+            public readonly AppInsightsQueryWindowCache QueryWindows = new AppInsightsQueryWindowCache();
+
             public Task RunAsync(int? daysBeforeOverride = null) => new AppInsightsImporter(
                 null,
                 AnalyticsLogger.ConsoleOnlyTracer(),
@@ -37,7 +41,9 @@ namespace Tests.UnitTests
                 Source,
                 SiteFilters,
                 Watermark,
-                Persistence).ImportAndSave(saveRestResponses: false, daysBeforeOverride: daysBeforeOverride);
+                Persistence,
+                dayFailureTracker: DayFailures,
+                queryWindowCache: QueryWindows).ImportAndSave(saveRestResponses: false, daysBeforeOverride: daysBeforeOverride);
         }
 
         [TestMethod]
@@ -208,25 +214,160 @@ namespace Tests.UnitTests
             StringAssert.Matches(console.ToString(), new Regex("New event '" + nameof(AnalyticsLogger.AnalyticsEvent.FinishedSectionImport) + "'"));
         }
 
-        [TestMethod]
-        public async Task AppInsightsImporter_OneDayFailing_DoesNotAbortRemainingDays()
+        private static readonly DateTime May8 = new DateTime(2026, 5, 8), May9 = new DateTime(2026, 5, 9), May10 = new DateTime(2026, 5, 10);
+
+        /// <summary>The 8th, 9th and 10th each have a page view; the newest stored hit is on the 8th.</summary>
+        private static Harness ThreeDaysOfPageViews()
         {
-            // A single bad day - historically a page-update event tripping a DbUpdateException - must not
-            // stall the whole multi-day run and freeze the watermark.
             var h = new Harness();
             h.Watermark.NewestHitTimestampUtc = new DateTime(2026, 5, 8, 14, 0, 0, DateTimeKind.Utc);
-            foreach (var day in new[] { new DateTime(2026, 5, 8), new DateTime(2026, 5, 9), new DateTime(2026, 5, 10) })
+            foreach (var day in new[] { May8, May9, May10 })
             {
                 h.Source.PageViewCountByDay[day] = 1;
             }
-            h.Persistence.DaysThatFailToSave.Add(new DateTime(2026, 5, 9));
+            return h;
+        }
+
+        private static DateTime[] SavedDays(Harness h) => h.Persistence.SavedPageViews.Select(p => p.Rows[0].Timestamp.Date).ToArray();
+
+        private static async Task<string> CaptureConsole(Func<Task> action)
+        {
+            var console = new StringWriter();
+            var original = Console.Out;
+            Console.SetOut(console);
+            try
+            {
+                await action();
+            }
+            finally
+            {
+                Console.SetOut(original);
+            }
+            return console.ToString();
+        }
+
+        [TestMethod]
+        public async Task AppInsightsImporter_ADayThatFailsToSave_StopsTheRunBeforeAnyLaterDay()
+        {
+            // Replaces AppInsightsImporter_OneDayFailing_DoesNotAbortRemainingDays, which pinned the old behaviour of
+            // skipping the failed day and carrying on. The next day's hits then moved the watermark (the newest stored
+            // hit_timestamp) past it, so a transient SQL error on any day but the last lost that day for good.
+            var h = ThreeDaysOfPageViews();
+            h.Persistence.DaysThatFailToSave.Add(May9);
+
+            var log = await CaptureConsole(() => h.RunAsync());
+
+            CollectionAssert.AreEqual(new[] { May8, May9 }, h.Source.PageViewDaysRequested.ToArray(), "Nothing after the failed day may be read.");
+            CollectionAssert.AreEqual(new[] { May8 }, SavedDays(h));
+            StringAssert.Contains(log, "Failed saving data for day 2026-05-09");
+            StringAssert.DoesNotMatch(log, new Regex("New event '" + nameof(AnalyticsLogger.AnalyticsEvent.FinishedSectionImport) + "'"),
+                "A run that stopped at a failed day must not report the section as finished.");
+        }
+
+        [TestMethod]
+        public async Task AppInsightsImporter_ADayThatFailedToSave_IsRetriedNextCycle_EvenIfTheStoredWatermarkHasMovedPastIt()
+        {
+            var h = ThreeDaysOfPageViews();
+            h.Persistence.DaysThatFailToSave.Add(May9);
+            await h.RunAsync();
+
+            // The fault was transient. Meanwhile the newest stored hit has moved past the failed day - which is what
+            // skipping it used to cause, and what a browser with its clock ahead can still cause.
+            h.Persistence.DaysThatFailToSave.Clear();
+            h.Persistence.SavedPageViews.Clear();
+            h.Source.PageViewDaysRequested.Clear();
+            h.Watermark.NewestHitTimestampUtc = new DateTime(2026, 5, 10, 6, 0, 0, DateTimeKind.Utc);
+            await h.RunAsync();
+
+            CollectionAssert.AreEqual(new[] { May9, May10 }, h.Source.PageViewDaysRequested.ToArray(), "The failed day is retried before any later day.");
+            CollectionAssert.AreEqual(new[] { May9, May10 }, SavedDays(h));
+
+            // Once it has saved, it is not read again for its own sake.
+            h.Source.PageViewDaysRequested.Clear();
+            await h.RunAsync();
+            CollectionAssert.AreEqual(new[] { May10 }, h.Source.PageViewDaysRequested.ToArray());
+        }
+
+        [TestMethod]
+        public async Task AppInsightsImporter_ADayThatKeepsFailing_IsGivenUpOnTheThirdAttempt_SoTheImportCannotStallOnIt()
+        {
+            // The reason 895ff223 skipped failed days: one deterministic "poison" day used to stall the importer for
+            // months. A failed day is now retried, but only a bounded number of times.
+            var h = ThreeDaysOfPageViews();
+            h.Persistence.DaysThatFailToSave.Add(May9);
+
+            for (var attempt = 1; attempt <= 2; attempt++)
+            {
+                h.Source.PageViewDaysRequested.Clear();
+                await h.RunAsync();
+                CollectionAssert.AreEqual(new[] { May8, May9 }, h.Source.PageViewDaysRequested.ToArray(), $"Attempt {attempt} stops at the failed day.");
+            }
+
+            h.Source.PageViewDaysRequested.Clear();
+            h.Persistence.SavedPageViews.Clear();
+            var log = await CaptureConsole(() => h.RunAsync());
+
+            CollectionAssert.AreEqual(new[] { May8, May9, May10 }, h.Source.PageViewDaysRequested.ToArray(), "The third failure gives up on the day.");
+            CollectionAssert.AreEqual(new[] { May8, May10 }, SavedDays(h));
+            StringAssert.Contains(log, "2026-05-09");
+            StringAssert.Contains(log, "permanent gap");
+            StringAssert.Matches(log, new Regex("New event '" + nameof(AnalyticsLogger.AnalyticsEvent.FinishedSectionImport) + "'"));
+
+            // A given-up day never stalls the import again.
+            h.Source.PageViewDaysRequested.Clear();
+            await h.RunAsync();
+            CollectionAssert.AreEqual(new[] { May8, May9, May10 }, h.Source.PageViewDaysRequested.ToArray());
+        }
+
+        [TestMethod]
+        public async Task AppInsightsImporter_ADayWhoseEventSectionFails_StopsTheRunAfterItsPageViews_AndIsRetriedNextCycle()
+        {
+            // A failed custom-event section used to be swallowed, so the day counted as saved and its page views moved
+            // the watermark past it. Now the event save throws once every section has been tried, and the day is retried.
+            var h = ThreeDaysOfPageViews();
+            foreach (var day in new[] { May8, May9, May10 })
+            {
+                h.Source.CustomEventCountByDay[day] = 1;
+            }
+            h.Persistence.DaysWhoseEventsFailToSave.Add(May9);
+
+            var log = await CaptureConsole(() => h.RunAsync());
+
+            CollectionAssert.AreEqual(new[] { May8, May9 }, h.Source.PageViewDaysRequested.ToArray(), "Nothing after the failed day may be read.");
+            CollectionAssert.AreEqual(new[] { May8, May9 }, SavedDays(h), "The failed day's page views did save.");
+            CollectionAssert.AreEqual(new[] { May8 }, SavedEventDays(h));
+            StringAssert.Contains(log, "Failed saving data for day 2026-05-09");
+            StringAssert.DoesNotMatch(log, new Regex("New event '" + nameof(AnalyticsLogger.AnalyticsEvent.FinishedSectionImport) + "'"));
+
+            // The section's fault has cleared, and the failed day's own page views have moved the newest stored hit into it.
+            h.Persistence.DaysWhoseEventsFailToSave.Clear();
+            h.Persistence.SavedCustomEvents.Clear();
+            h.Source.PageViewDaysRequested.Clear();
+            h.Watermark.NewestHitTimestampUtc = new DateTime(2026, 5, 9, 14, 0, 0, DateTimeKind.Utc);
+            await h.RunAsync();
+
+            CollectionAssert.AreEqual(new[] { May9, May10 }, h.Source.PageViewDaysRequested.ToArray());
+            CollectionAssert.AreEqual(new[] { May9, May10 }, SavedEventDays(h), "The failed day's events are saved on the retry.");
+        }
+
+        private static DateTime[] SavedEventDays(Harness h) => h.Persistence.SavedCustomEvents.Select(e => e.Rows[0].Timestamp.Date).ToArray();
+
+        [TestMethod]
+        public async Task AppInsightsImporter_ForgetsTheQueryWindowsOfDaysItNoLongerReads()
+        {
+            // The windows remembered for a day over the API's limits are only useful while that day is still read.
+            var h = new Harness();
+            h.Watermark.NewestHitTimestampUtc = new DateTime(2026, 5, 9, 14, 0, 0, DateTimeKind.Utc);
+            foreach (var day in new[] { May8, May9 })
+            {
+                h.QueryWindows.Remember("pageview", day, new[] { (day, day.AddHours(12)), (day.AddHours(12), day.AddDays(1)) });
+            }
 
             await h.RunAsync();
 
-            Assert.AreEqual(3, h.Source.PageViewDaysRequested.Count, "Every day should still be fetched.");
-            CollectionAssert.AreEqual(
-                new[] { new DateTime(2026, 5, 8), new DateTime(2026, 5, 10) },
-                h.Persistence.SavedPageViews.Select(p => p.Rows[0].Timestamp.Date).ToArray());
+            CollectionAssert.AreEqual(new[] { May9, May10 }, h.Source.PageViewDaysRequested.ToArray());
+            Assert.IsNull(h.QueryWindows.WindowsFor("pageview", May8), "The 8th is no longer read, so its windows are forgotten.");
+            Assert.IsNotNull(h.QueryWindows.WindowsFor("pageview", May9), "The 9th is still read.");
         }
 
         [TestMethod]

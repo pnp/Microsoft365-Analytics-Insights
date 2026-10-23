@@ -35,34 +35,42 @@ namespace Common.Entities.CopilotAuditBackfill
         }
 
 
+        /// <summary>
+        /// The narrowest slice a truncated query is split down to: a day splits into six-hour slices, those into
+        /// hours, and an hour into quarter-hours.
+        /// </summary>
+        public static readonly TimeSpan MinimumSliceDuration = TimeSpan.FromMinutes(15);
+
+        /// <summary>Split depth of a quarter-hour slice (a day is 0, six hours 1, an hour 2).</summary>
+        public const int MaxSplitLevel = 3;
+
+        /// <summary>
+        /// Whether a truncated slice can be re-queried as smaller slices. When it can't, the importer keeps the
+        /// records the truncated query did return and records the slice as incomplete.
+        /// </summary>
+        public static bool CanSplitForTruncation(CopilotAuditBackfillSlice slice)
+            => slice.SplitLevel < MaxSplitLevel && slice.EndUtc - slice.StartUtc > MinimumSliceDuration;
+
         public static List<CopilotAuditBackfillSlice> SplitForTruncation(CopilotAuditBackfillSlice slice)
         {
-            return slice.SplitLevel == 0
-                ? SplitByHours(slice, 6)
-                : SplitIntoHours(slice);
-        }
-
-        private static List<CopilotAuditBackfillSlice> SplitByHours(CopilotAuditBackfillSlice slice, int hours)
-        {
-            var result = new List<CopilotAuditBackfillSlice>();
-            var cursor = slice.EndUtc;
-            while (cursor > slice.StartUtc)
+            switch (slice.SplitLevel)
             {
-                var start = cursor.AddHours(-hours);
-                if (start < slice.StartUtc) start = slice.StartUtc;
-                result.Add(new CopilotAuditBackfillSlice { StartUtc = start, EndUtc = cursor, SplitLevel = slice.SplitLevel + 1 });
-                cursor = start;
+                case 0: return SplitBy(slice, TimeSpan.FromHours(6));
+                case 1: return SplitIntoHours(slice);
+                default: return SplitBy(slice, MinimumSliceDuration);
             }
-            return result;
         }
 
         public static List<CopilotAuditBackfillSlice> SplitIntoHours(CopilotAuditBackfillSlice slice)
+            => SplitBy(slice, TimeSpan.FromHours(1));
+
+        private static List<CopilotAuditBackfillSlice> SplitBy(CopilotAuditBackfillSlice slice, TimeSpan width)
         {
             var result = new List<CopilotAuditBackfillSlice>();
             var cursor = slice.EndUtc;
             while (cursor > slice.StartUtc)
             {
-                var start = cursor.AddHours(-1);
+                var start = cursor.Subtract(width);
                 if (start < slice.StartUtc) start = slice.StartUtc;
                 result.Add(new CopilotAuditBackfillSlice { StartUtc = start, EndUtc = cursor, SplitLevel = slice.SplitLevel + 1 });
                 cursor = start;

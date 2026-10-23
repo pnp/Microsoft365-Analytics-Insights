@@ -40,16 +40,39 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Aggregate
         {
             var usageReports = await base.LoadReportData();
             var filteredReports = new List<SharePointSiteUsageDetail>();
+
+            // Site ids whose lookup failed in this run. A miss is not cached anywhere else, and the same unresolvable id
+            // can appear on several rows: each would otherwise cost another failing Graph call and another logged error.
+            var unresolvableSiteIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var rowsReturned = 0;
+            var concealedRows = 0;
+
             foreach (var r in usageReports)
             {
-                if (!string.IsNullOrEmpty(r.SiteId) && string.IsNullOrEmpty(r.SiteUrl) && !r.IsDeleted)
+                rowsReturned++;
+                if (string.IsNullOrEmpty(r.SiteUrl))
                 {
-                    // No URL in results, despite the clear indication it should be there? Look it up in Graph
-                    // Known issue: https://admin.microsoft.com/Adminportal/Home?#/servicehealth/:/alerts/SP676147
-                    var urlLookupCache = await _sPSiteIdToUrlCache.GetResourceOrNullIfNotExists(r.SiteId);
-                    if (urlLookupCache != null)
+                    // With "Display concealed user, group, and site names" on, Graph returns a blank URL and an all-zero
+                    // site id: no lookup can resolve that, and each used to cost a failing Graph call per row, per run.
+                    if (IsConcealedSiteId(r.SiteId))
                     {
-                        r.SiteUrl = urlLookupCache.SiteUrl;
+                        concealedRows++;
+                        continue;
+                    }
+
+                    if (!r.IsDeleted && !unresolvableSiteIds.Contains(r.SiteId))
+                    {
+                        // No URL in results, despite the clear indication it should be there? Look it up in Graph
+                        // Known issue: https://admin.microsoft.com/Adminportal/Home?#/servicehealth/:/alerts/SP676147
+                        var urlLookupCache = await _sPSiteIdToUrlCache.GetResourceOrNullIfNotExists(r.SiteId);
+                        if (urlLookupCache != null)
+                        {
+                            r.SiteUrl = urlLookupCache.SiteUrl;
+                        }
+                        else
+                        {
+                            unresolvableSiteIds.Add(r.SiteId);
+                        }
                     }
                 }
 
@@ -60,8 +83,28 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Aggregate
                 }
             }
 
+            if (concealedRows > 0)
+            {
+                var message = $"{ReportName}: {concealedRows:N0} of the {rowsReturned:N0} row(s) Graph returned have no site URL and a blank or all-zero site id, " +
+                    "which is how Graph reports sites while the tenant has 'Display concealed user, group, and site names in all reports' turned on. Those sites " +
+                    "cannot be identified, so their rows were skipped without being looked up. To import them, turn that setting off in the Microsoft 365 " +
+                    "admin centre (Settings > Org settings > Services > Reports).";
+                if (concealedRows == rowsReturned)
+                {
+                    Telemetry.LogError("IMPORTANT: " + message);
+                }
+                else
+                {
+                    Telemetry.LogWarning(message);
+                }
+            }
+
             return filteredReports;
         }
+
+        /// <summary>A site id no lookup can resolve: blank, or the all-zero GUID Graph returns when site names are concealed.</summary>
+        internal static bool IsConcealedSiteId(string siteId)
+            => string.IsNullOrWhiteSpace(siteId) || (Guid.TryParse(siteId, out var id) && id == Guid.Empty);
 
         public override string ReportGraphURL => "https://graph.microsoft.com/beta/reports/getSharePointSiteUsageDetail(period='D7')?$format=application/json";
 

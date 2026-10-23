@@ -238,6 +238,26 @@ namespace Tests.UnitTests
             Assert.AreEqual(1, store.Count);
         }
 
+        /// <summary>A conditional delete removes only the version that was read; a row that moved on since is not an error.</summary>
+        [TestMethod]
+        public async Task InMemory_ConditionalDelete_RemovesOnlyTheVersionRead()
+        {
+            var store = new InMemoryKeyValueStore();
+            await store.SetStringAsync("k", "v1");
+            var read = await store.GetVersionedAsync("k");
+            await store.SetStringAsync("k", "v2");
+
+            Assert.IsFalse(await store.TryDeleteAsync("k", read.VersionToken), "The row changed since it was read.");
+            Assert.AreEqual("v2", await store.GetStringAsync("k"));
+
+            var current = await store.GetVersionedAsync("k");
+            Assert.IsTrue(await store.TryDeleteAsync("k", current.VersionToken));
+            Assert.IsNull(await store.GetStringAsync("k"));
+
+            Assert.IsFalse(await store.TryDeleteAsync("k", current.VersionToken), "Already deleted.");
+            Assert.IsFalse(await store.TryDeleteAsync("k", null), "Nothing was read, so there is nothing to delete.");
+        }
+
         #endregion
 
         #region StateStore
@@ -568,7 +588,7 @@ namespace Tests.UnitTests
                 });
         }
 
-        private static TableClientOptions OptionsFor(ScriptedTableService service)
+        private static TableClientOptions OptionsFor(HttpMessageHandler service)
         {
             var options = new TableClientOptions { Transport = new HttpClientTransport(new HttpClient(service)) };
             options.Retry.MaxRetries = 0;
@@ -684,6 +704,207 @@ namespace Tests.UnitTests
 
             Assert.ThrowsException<ArgumentException>(() => tokens.GetRefreshTokenAsync(null).GetAwaiter().GetResult());
             Assert.ThrowsException<ArgumentException>(() => tokens.SetRefreshTokenAsync("team", "").GetAwaiter().GetResult());
+        }
+
+        /// <summary>
+        /// Entra ID issues a new refresh token each time one is redeemed. It replaces the stored one only while the stored one
+        /// is still the token that was redeemed: an authorisation an administrator removed must never come back, and one they
+        /// renewed must not be overwritten with a token from the older grant.
+        /// </summary>
+        [TestMethod]
+        public async Task TeamsTokens_ARenewedTokenReplacesOnlyTheTokenThatWasRedeemed()
+        {
+            const string team = "00000000-0000-0000-0000-000000000001";
+            var tokens = new TeamsTokenStore(new InMemoryKeyValueStore());
+            await tokens.SetRefreshTokenAsync(team, "synthetic-refresh-1");
+
+            Assert.IsTrue(await tokens.TryReplaceRefreshTokenAsync(team, "synthetic-refresh-1", "synthetic-refresh-2"));
+            Assert.AreEqual("synthetic-refresh-2", await tokens.GetRefreshTokenAsync(team));
+
+            Assert.IsFalse(await tokens.TryReplaceRefreshTokenAsync(team, "synthetic-refresh-1", "synthetic-refresh-3"), "A stale redemption loses.");
+            Assert.AreEqual("synthetic-refresh-2", await tokens.GetRefreshTokenAsync(team));
+
+            Assert.IsFalse(await tokens.TryReplaceRefreshTokenAsync(team, "synthetic-refresh-2", "synthetic-refresh-2"), "Nothing new to store.");
+
+            await tokens.RemoveRefreshTokenAsync(team);
+            Assert.IsFalse(await tokens.TryReplaceRefreshTokenAsync(team, "synthetic-refresh-2", "synthetic-refresh-4"));
+            Assert.IsNull(await tokens.GetRefreshTokenAsync(team), "A removed authorisation is never resurrected.");
+        }
+
+        /// <summary>
+        /// The write is conditional on the version read, so a removal or re-authorisation that lands between the read and
+        /// the write wins rather than being undone.
+        /// </summary>
+        [DataTestMethod]
+        [DataRow(true)]
+        [DataRow(false)]
+        public async Task TeamsTokens_ARemovalOrReauthorisationBetweenTheReadAndTheWrite_Wins(bool removed)
+        {
+            const string team = "00000000-0000-0000-0000-000000000001";
+            var state = new InterleavingConditionalStore();
+            var tokens = new TeamsTokenStore(state);
+            await tokens.SetRefreshTokenAsync(team, "synthetic-refresh-1");
+            state.AfterVersionedRead = () => removed
+                ? (Task)state.Inner.DeleteAsync(team)
+                : state.Inner.SetStringAsync(team, "synthetic-admin-reauthorised");
+
+            Assert.IsFalse(await tokens.TryReplaceRefreshTokenAsync(team, "synthetic-refresh-1", "synthetic-refresh-2"));
+
+            Assert.AreEqual(removed ? null : "synthetic-admin-reauthorised", await tokens.GetRefreshTokenAsync(team));
+        }
+
+        /// <summary>
+        /// A store without versions can only re-read the token immediately before writing: a token already removed or
+        /// renewed by then is still left alone (a change landing in the one round trip between the two is the residual race).
+        /// </summary>
+        [TestMethod]
+        public async Task TeamsTokens_WithoutVersions_TheStoredTokenIsComparedBeforeWriting()
+        {
+            const string team = "00000000-0000-0000-0000-000000000001";
+            var tokens = new TeamsTokenStore(new CountingKeyValueStore());
+            await tokens.SetRefreshTokenAsync(team, "synthetic-refresh-1");
+
+            Assert.IsTrue(await tokens.TryReplaceRefreshTokenAsync(team, "synthetic-refresh-1", "synthetic-refresh-2"));
+            Assert.AreEqual("synthetic-refresh-2", await tokens.GetRefreshTokenAsync(team));
+
+            await tokens.RemoveRefreshTokenAsync(team);
+            Assert.IsFalse(await tokens.TryReplaceRefreshTokenAsync(team, "synthetic-refresh-2", "synthetic-refresh-3"));
+            Assert.IsNull(await tokens.GetRefreshTokenAsync(team));
+        }
+
+        /// <summary>
+        /// A token the importer found dead is removed only while the stored token is one the crawl owns - the one it read,
+        /// or a renewed one it stored itself. An authorisation made since is kept.
+        /// </summary>
+        [TestMethod]
+        public async Task TeamsTokens_ARefusedTokenIsRemovedOnlyWhileItIsStillTheOneStored()
+        {
+            const string team = "00000000-0000-0000-0000-000000000001";
+            var owned = new[] { "synthetic-refresh-1", "synthetic-refresh-2" };
+            var tokens = new TeamsTokenStore(new InMemoryKeyValueStore());
+
+            await tokens.SetRefreshTokenAsync(team, "synthetic-admin-reauthorised");
+            Assert.IsFalse(await tokens.TryRemoveRefreshTokenAsync(team, owned));
+            Assert.AreEqual("synthetic-admin-reauthorised", await tokens.GetRefreshTokenAsync(team), "A newer authorisation is kept.");
+
+            await tokens.SetRefreshTokenAsync(team, "synthetic-refresh-2");
+            Assert.IsTrue(await tokens.TryRemoveRefreshTokenAsync(team, owned));
+            Assert.IsNull(await tokens.GetRefreshTokenAsync(team));
+
+            Assert.IsFalse(await tokens.TryRemoveRefreshTokenAsync(team, owned), "Nothing left to remove.");
+            Assert.IsFalse(await tokens.TryRemoveRefreshTokenAsync(team, new string[0]));
+        }
+
+        /// <summary>
+        /// The delete is conditional on the version read, so a removal or re-authorisation that lands between the read and
+        /// the delete stands, and losing that race is not an error.
+        /// </summary>
+        [DataTestMethod]
+        [DataRow(true)]
+        [DataRow(false)]
+        public async Task TeamsTokens_ARemovalOrReauthorisationBetweenTheReadAndTheDelete_Wins(bool removed)
+        {
+            const string team = "00000000-0000-0000-0000-000000000001";
+            var state = new InterleavingConditionalStore();
+            var tokens = new TeamsTokenStore(state);
+            await tokens.SetRefreshTokenAsync(team, "synthetic-refresh-1");
+            state.AfterVersionedRead = () => removed
+                ? (Task)state.Inner.DeleteAsync(team)
+                : state.Inner.SetStringAsync(team, "synthetic-admin-reauthorised");
+
+            Assert.IsFalse(await tokens.TryRemoveRefreshTokenAsync(team, new[] { "synthetic-refresh-1" }));
+
+            Assert.AreEqual(removed ? null : "synthetic-admin-reauthorised", await tokens.GetRefreshTokenAsync(team));
+        }
+
+        /// <summary>Without versions, the stored token is re-read and compared immediately before deleting it.</summary>
+        [TestMethod]
+        public async Task TeamsTokens_WithoutVersions_TheStoredTokenIsComparedBeforeDeleting()
+        {
+            const string team = "00000000-0000-0000-0000-000000000001";
+            var tokens = new TeamsTokenStore(new CountingKeyValueStore());
+            await tokens.SetRefreshTokenAsync(team, "synthetic-admin-reauthorised");
+
+            Assert.IsFalse(await tokens.TryRemoveRefreshTokenAsync(team, new[] { "synthetic-refresh-1" }));
+            Assert.AreEqual("synthetic-admin-reauthorised", await tokens.GetRefreshTokenAsync(team));
+
+            Assert.IsTrue(await tokens.TryRemoveRefreshTokenAsync(team, new[] { "synthetic-admin-reauthorised" }));
+            Assert.IsNull(await tokens.GetRefreshTokenAsync(team));
+        }
+
+        /// <summary>
+        /// Azure Tables: the delete carries the ETag that was read, never <c>*</c>, and a row that changed (412) or went away
+        /// (404) since is "not deleted" rather than an exception.
+        /// </summary>
+        [DataTestMethod]
+        [DataRow(HttpStatusCode.NoContent, null, true)]
+        [DataRow(HttpStatusCode.PreconditionFailed, "UpdateConditionNotSatisfied", false)]
+        [DataRow(HttpStatusCode.NotFound, "ResourceNotFound", false)]
+        public async Task AzureTables_ConditionalDelete_SendsTheETagRead_AndARowThatMovedIsNotAnError(HttpStatusCode answer, string errorCode, bool deleted)
+        {
+            const string etagRead = "W/\"datetime'2026-09-01T00%3A00%3A00.0000000Z'\"";
+            var service = new RecordingTableService(() => errorCode == null
+                ? ScriptedTableService.Created()
+                : ScriptedTableService.Refused(answer, errorCode));
+            var client = new TableClient(KeyConnectionString, StateStore.TableName, OptionsFor(service));
+            var store = StateStore.Open(new StateStore.LazyTableClient(_ => Task.FromResult(client)), StatePartitions.TeamsAuth);
+
+            Assert.AreEqual(deleted, await store.TryDeleteAsync("00000000-0000-0000-0000-000000000001", etagRead));
+
+            Assert.AreEqual(1, service.Requests.Count);
+            Assert.AreEqual("DELETE", service.Requests[0].Method);
+            Assert.AreEqual(etagRead, service.Requests[0].IfMatch);
+
+            Assert.IsFalse(await store.TryDeleteAsync("00000000-0000-0000-0000-000000000001", null), "Nothing was read, so there is nothing to delete.");
+            Assert.AreEqual(1, service.Requests.Count, "...and it isn't sent.");
+        }
+
+        /// <summary>Answers every Table request from a script and records each one's method and <c>If-Match</c> header.</summary>
+        private sealed class RecordingTableService : HttpMessageHandler
+        {
+            private readonly Func<HttpResponseMessage> _answer;
+
+            public RecordingTableService(Func<HttpResponseMessage> answer)
+            {
+                _answer = answer;
+            }
+
+            public List<(string Method, string IfMatch)> Requests { get; } = new List<(string Method, string IfMatch)>();
+
+            protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+            {
+                var ifMatch = request.Headers.TryGetValues("If-Match", out var values) ? string.Join(",", values) : null;
+                lock (Requests)
+                {
+                    Requests.Add((request.Method.Method, ifMatch));
+                }
+                return Task.FromResult(_answer());
+            }
+        }
+
+        /// <summary>An in-memory versioned store that lets a test act between a versioned read and the write that follows.</summary>
+        private sealed class InterleavingConditionalStore : IConditionalKeyValueStore
+        {
+            public InMemoryKeyValueStore Inner { get; } = new InMemoryKeyValueStore();
+            public Func<Task> AfterVersionedRead { get; set; }
+            public string Description => Inner.Description;
+
+            public async Task<VersionedValue> GetVersionedAsync(string key, CancellationToken cancellationToken = default)
+            {
+                var read = await Inner.GetVersionedAsync(key, cancellationToken);
+                if (AfterVersionedRead != null) await AfterVersionedRead();
+                return read;
+            }
+
+            public Task<bool> TrySetStringAsync(string key, string value, string expectedVersionToken, CancellationToken cancellationToken = default)
+                => Inner.TrySetStringAsync(key, value, expectedVersionToken, cancellationToken);
+            public Task<bool> TryDeleteAsync(string key, string expectedVersionToken, CancellationToken cancellationToken = default)
+                => Inner.TryDeleteAsync(key, expectedVersionToken, cancellationToken);
+            public Task<string> GetStringAsync(string key, CancellationToken cancellationToken = default) => Inner.GetStringAsync(key, cancellationToken);
+            public Task SetStringAsync(string key, string value, TimeSpan? timeToLive = null, CancellationToken cancellationToken = default)
+                => Inner.SetStringAsync(key, value, timeToLive, cancellationToken);
+            public Task<bool> DeleteAsync(string key, CancellationToken cancellationToken = default) => Inner.DeleteAsync(key, cancellationToken);
+            public Task<bool> ExistsAsync(string key, CancellationToken cancellationToken = default) => Inner.ExistsAsync(key, cancellationToken);
         }
 
         [TestMethod]

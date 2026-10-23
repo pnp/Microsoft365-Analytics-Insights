@@ -243,6 +243,29 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public async Task IncompleteFigures_AreReusedBriefly_CompleteFiguresForTheConfiguredTtl()
+        {
+            // An analysis whose headline inputs failed is still cached, so polling does not re-run the failed
+            // queries every few seconds - but not for the ten minutes a complete one is kept.
+            var incomplete = new CopilotAdoptionAnalysis();
+            incomplete.Summary.MarkFiguresIncomplete("synthetic licensed-user population");
+            var complete = new CopilotAdoptionAnalysis();
+            var runner = new SequencedRunner(Task.FromResult(incomplete), Task.FromResult(complete));
+            var cache = new InMemoryAnalysisCache();
+            var coordinator = NewCoordinator(runner, cache, new RecordingSink(), new ManualHeartbeatFactory());
+
+            Assert.AreSame(incomplete, await coordinator.GetAsync(28, new List<int>()));
+            Assert.AreEqual(AdoptionCoordinator.IncompleteFiguresCacheTtl, cache.LastTtl);
+            Assert.IsTrue(AdoptionCoordinator.IncompleteFiguresCacheTtl <= TimeSpan.FromMinutes(1));
+
+            Assert.AreSame(incomplete, await coordinator.GetAsync(28, new List<int>()), "Inside its TTL it is still reused.");
+            Assert.AreEqual(1, runner.CallCount);
+
+            Assert.AreSame(complete, await coordinator.GetAsync(7, new List<int>()));
+            Assert.AreEqual(TimeSpan.FromMinutes(10), cache.LastTtl);
+        }
+
+        [TestMethod]
         public async Task FailedRun_IsEvictedAndTheNextRequestRetries()
         {
             var sink = new RecordingSink();
@@ -2017,6 +2040,9 @@ namespace Tests.UnitTests
 
             public int SetCount { get; private set; }
 
+            /// <summary>The TTL of the most recent <see cref="Set"/>.</summary>
+            public TimeSpan? LastTtl { get; private set; }
+
             public bool TryGet(string key, out CopilotAdoptionAnalysis analysis)
             {
                 lock (_gate)
@@ -2031,6 +2057,7 @@ namespace Tests.UnitTests
                 {
                     _items[key] = analysis;
                     SetCount++;
+                    LastTtl = ttl;
                 }
                 _order?.Enqueue("CacheSet");
             }

@@ -1,10 +1,19 @@
 extern alias AnalyticsWeb;
 
+using AnalyticsWeb::Web.AnalyticsWeb.Controllers;
+using AnalyticsWeb::Web.AnalyticsWeb.Models;
+using AnalyticsWeb::Web.AnalyticsWeb.Security;
+using Common.Entities;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
+using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Net;
+using System.Runtime.Caching;
+using System.Threading;
+using System.Threading.Tasks;
 using DlpGovernanceLabelShare = AnalyticsWeb::Web.AnalyticsWeb.Models.Dlp.DlpGovernanceLabelShare;
 using DlpGovernanceMaths = AnalyticsWeb::Web.AnalyticsWeb.Models.Dlp.DlpGovernanceMaths;
 using DlpGovernanceMixRow = AnalyticsWeb::Web.AnalyticsWeb.Models.Dlp.DlpGovernanceMixRow;
@@ -136,6 +145,56 @@ namespace Tests.UnitTests
             Assert.AreEqual(JTokenType.Null, json["xpia"]["ratePer10000"].Type);
             Assert.AreEqual(JTokenType.Null, json["sensitivityLabels"]["share"].Type);
             Assert.AreEqual(0, (long)json["jailbreak"]["reportedInteractions"]);
+        }
+
+        /// <summary>
+        /// The governance figures read the largest Copilot tables. Every request that found the cache cold used to run
+        /// them itself, and a failure was not remembered at all, so each reload of a struggling database ran them again.
+        /// </summary>
+        [TestMethod]
+        public async Task Governance_ConcurrentColdRequestsShareOneBuild_AndItsFailureIsNotRetriedByEveryReload()
+        {
+            var database = new BlockedThenFailingDatabase();
+            using (var cache = new MemoryCache("DlpGovernanceTests"))
+            {
+                var governance = new SharedComputation<DlpGovernanceSummary>(cache, "test::",
+                    TimeSpan.FromMinutes(10), TimeSpan.FromSeconds(30), TimeSpan.FromSeconds(30));
+                using (var host = new PortalTestHost(
+                    new[] { typeof(DlpAPIController) },
+                    PortalTestHost.SignedIn(),
+                    PortalAccessPolicy.Enforcing,
+                    _ => new DlpAPIController(database, governance: governance)))
+                {
+                    var requests = Enumerable.Range(0, 5).Select(_ => host.Client.GetAsync("api/Dlp/governance?days=28")).ToArray();
+                    for (var waited = 0; Volatile.Read(ref database.Opens) == 0 && waited < 100; waited++) await Task.Delay(50);
+                    await Task.Delay(200);
+                    database.Release.Set();
+
+                    foreach (var response in await Task.WhenAll(requests))
+                    {
+                        Assert.AreEqual(HttpStatusCode.InternalServerError, response.StatusCode);
+                    }
+
+                    Assert.AreEqual(1, database.Opens, "Five cold requests must share one build.");
+
+                    Assert.AreEqual(HttpStatusCode.InternalServerError, (await host.Client.GetAsync("api/Dlp/governance?days=28")).StatusCode);
+                    Assert.AreEqual(1, database.Opens, "A failure is remembered briefly rather than retried by the next reload.");
+                }
+            }
+        }
+
+        /// <summary>A database that keeps the first caller waiting, then fails - the shape of a struggling server.</summary>
+        private sealed class BlockedThenFailingDatabase : IAnalyticsDbContextFactory
+        {
+            internal int Opens;
+            internal ManualResetEventSlim Release { get; } = new ManualResetEventSlim(false);
+
+            public AnalyticsEntitiesContext Create()
+            {
+                Interlocked.Increment(ref Opens);
+                Release.Wait(TimeSpan.FromSeconds(10));
+                throw new InvalidOperationException("synthetic: the database did not answer");
+            }
         }
     }
 }

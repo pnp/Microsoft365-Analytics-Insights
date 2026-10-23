@@ -65,7 +65,12 @@ namespace WebJob.AppInsightsImporter.Engine.Sql.Models
         [Column("site_url", true)]
         public string SiteUrl { get; set; }
 
-        [Column("ai_session_id", ColationOverride = "SQL_Latin1_General_CP1_CS_AS")]
+        // Must match dbo.sessions.ai_session_id - varchar(50), case-sensitive - which both the session insert and the
+        // hit insert in "Migrate Hits Import into Hits.sql" join on. As the default nvarchar(max) the join converted
+        // the table's column instead, so IX_ai_session_id could not seek and every merge scanned dbo.sessions; and an
+        // id too long for the table failed the whole merge, where InsertBatch now skips (and logs) just that row.
+        // Tracker session ids are machine-generated ASCII, not tenant text, so varchar is right (see RetireImportDbHacks).
+        [Column("ai_session_id", SqlTypeOverride = "varchar(50)", ColationOverride = "SQL_Latin1_General_CP1_CS_AS")]
         public string AppInsightsSessionId { get; set; }
 
         [Column("os_name", true)]

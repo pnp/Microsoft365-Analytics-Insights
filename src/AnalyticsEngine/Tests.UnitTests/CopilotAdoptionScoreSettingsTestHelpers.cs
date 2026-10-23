@@ -180,6 +180,9 @@ namespace Tests.UnitTests
             public Task<bool> TrySetStringAsync(string key, string value, string expectedVersionToken, CancellationToken cancellationToken = default) =>
                 Fail ? Task.FromException<bool>(new InvalidOperationException("Synthetic storage outage.")) : Task.FromResult(true);
 
+            public Task<bool> TryDeleteAsync(string key, string expectedVersionToken, CancellationToken cancellationToken = default) =>
+                Fail ? Task.FromException<bool>(new InvalidOperationException("Synthetic storage outage.")) : Task.FromResult(false);
+
             public Task SetStringAsync(string key, string value, TimeSpan? timeToLive = null, CancellationToken cancellationToken = default) =>
                 Fail ? Task.FromException(new InvalidOperationException("Synthetic storage outage.")) : Task.CompletedTask;
 
@@ -249,6 +252,9 @@ namespace Tests.UnitTests
 
             public Task SetStringAsync(string key, string value, TimeSpan? timeToLive = null, CancellationToken cancellationToken = default) =>
                 _inner.SetStringAsync(key, value, timeToLive, cancellationToken);
+
+            public Task<bool> TryDeleteAsync(string key, string expectedVersionToken, CancellationToken cancellationToken = default) =>
+                _inner.TryDeleteAsync(key, expectedVersionToken, cancellationToken);
 
             public Task<bool> DeleteAsync(string key, CancellationToken cancellationToken = default) => _inner.DeleteAsync(key, cancellationToken);
 

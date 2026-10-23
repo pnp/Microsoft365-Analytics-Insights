@@ -108,6 +108,34 @@ namespace Tests.UnitTests
             Assert.AreEqual(0, sink.Envelopes.Count);
         }
 
+        /// <summary>
+        /// Graph echoes a subscription's clientState in its create and renew responses - for the Teams calls webhook, a
+        /// credential for it, and for a subscription created before the derived clientState, the app's client secret. A
+        /// pattern that happens to match one (the resource, or the web app's host in its notificationUrl) must never put it
+        /// in the trace container. Only Graph's own subscriptions resource is excluded, though: Azure Resource Manager's
+        /// /subscriptions/{id} and the Management Activity API's feed subscriptions are still traced.
+        /// </summary>
+        [TestMethod]
+        public async Task Tracer_GraphSubscriptionResponses_AreNeverEnqueued()
+        {
+            var sink = new RecordingSink();
+            Assert.IsTrue(MessageTracePatternMatcher.TryCreate("*callRecords*", NullLogger.Instance, out var matcher, out _));
+            var tracer = new MessageTraceInspectingTracer(matcher, sink, 1024 * 1024, 500, NullLogger.Instance);
+            const string subscription = "{\"id\":\"sub-1\",\"resource\":\"/communications/callRecords\",\"clientState\":\"contoso-synthetic-client-state\"," +
+                "\"notificationUrl\":\"https://contoso-analytics.example/api/CallRecordWebhook?cs=v1\"}";
+
+            await tracer.TraceAsync("graph", new HttpRequestMessage(HttpMethod.Post, "https://graph.microsoft.com/v1.0/subscriptions"), Response("application/json", subscription), CancellationToken.None);
+            await tracer.TraceAsync("graph", new HttpRequestMessage(new HttpMethod("PATCH"), "https://graph.microsoft.com/v1.0/subscriptions/sub-1"), Response("application/json", subscription), CancellationToken.None);
+            await tracer.TraceAsync("graph", Request("https://graph.microsoft.com/beta/Subscriptions?$skiptoken=x"), Response("application/json", "{\"value\":[" + subscription + "]}"), CancellationToken.None);
+            Assert.AreEqual(0, sink.Envelopes.Count);
+
+            await tracer.TraceAsync("azure", Request("https://management.azure.com/subscriptions/00000000-0000-0000-0000-000000000000/providers/Microsoft.CostManagement/query"),
+                Response("application/json", "{\"name\":\"callRecords\"}"), CancellationToken.None);
+            await tracer.TraceAsync("activity-api", Request("https://manage.office.com/api/v1.0/00000000-0000-0000-0000-000000000000/activity/feed/subscriptions/content"),
+                Response("application/json", "{\"contentType\":\"callRecords\"}"), CancellationToken.None);
+            Assert.AreEqual(2, sink.Envelopes.Count);
+        }
+
         [TestMethod]
         public async Task Tracer_UnknownLengthOversizeJson_IsSkippedWithoutCorruptingCallerBody()
         {

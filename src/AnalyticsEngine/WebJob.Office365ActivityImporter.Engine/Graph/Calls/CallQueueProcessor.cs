@@ -8,7 +8,6 @@ using DataUtils;
 using DataUtils.Http;
 using Microsoft.Extensions.Logging;
 using Microsoft.Graph;
-using Newtonsoft.Json;
 using System;
 using System.Collections.Generic;
 using System.Threading;
@@ -28,10 +27,12 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
 
         private ServiceBusClient _sbClient;
         private ServiceBusProcessor _processor;
+        private ServiceBusSender _retrySender;
         private ILogger _logger;
         private ImportAppIndentityOAuthContext _auth;
         private string _thisTenantId = null;
         private CallRecordImporter _callRecordImporter;
+        private CallQueueMessageHandler _messageHandler;
         private bool _isInitialised = false;
         private readonly IUserImportScopeProvider _userScopeProvider;
 
@@ -71,6 +72,9 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
                 MaxAutoLockRenewalDuration = TimeSpan.FromHours(24),        // Queue should be configured for 5 minute lock timeout
                 AutoCompleteMessages = false                                // Messages are completed only when the migrator has succeeded to migrate the file
             });
+
+            // Failed calls are re-queued to this same queue with a delay, rather than abandoned for immediate redelivery.
+            _retrySender = _sbClient.CreateSender(sbProps.EntityPath);
         }
 
         #endregion
@@ -116,6 +120,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
                 _logger,
                 _userScopeProvider);
 
+            _messageHandler = new CallQueueMessageHandler(ProcessGraphChange, _logger);
+
             _isInitialised = true;
         }
 
@@ -152,80 +158,34 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
         /// <summary>
         /// Process new message in Service Bus queue. Called automatically.
         /// </summary>
-        async Task ProcessSBMessagesAsync(ProcessMessageEventArgs args)
+        /// <remarks>
+        /// A failed import is no longer abandoned (which made Service Bus redeliver it at once, dead-lettering it after
+        /// the queue's 10 deliveries - a short SQL failover lost every call that arrived during it). See
+        /// <see cref="CallQueueMessageHandler"/>.
+        /// </remarks>
+        Task ProcessSBMessagesAsync(ProcessMessageEventArgs args)
         {
-            string msgBody = args.Message.Body.ToString();
-
-            _logger.LogInformation($"New message received from ServiceBus with ID '{args.Message.MessageId}'.");
-
-            GraphChangeNotification change = null;
-            try
-            {
-                change = JsonConvert.DeserializeObject<GraphChangeNotification>(msgBody);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, $"Error deserialising body '{msgBody}' from ServiceBus. Exception: {ex.Message}");
-            }
-            if (change == null)
-            {
-                // Unexpected message contents. Deadletter.
-                await args.DeadLetterMessageAsync(args.Message);
-                return;
-            }
-
-            bool success = false;
-            if (change != null)
-            {
-                try
-                {
-                    // Process change
-                    success = await ProcessGraphChange(change);
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogError(ex, $"ServiceBus processing error: processing call notification with msg body '{msgBody}'. Exception: {ex.Message}");
-                }
-            }
-            if (success)
-            {
-                // Complete the message. messages is deleted from the queue. 
-                try
-                {
-                    await args.CompleteMessageAsync(args.Message);
-                    _logger.LogInformation($"Succesfully processed & completed ServiceBus message ID '{args.Message.MessageId}'");
-                }
-                catch (ServiceBusException ex)
-                {
-                    _logger.LogError(ex, $"Couldn't complete ServiceBus message '{args.Message.MessageId}': " + ex.Message);
-#if DEBUG
-                    throw;
-#endif
-                }
-            }
-            else
-            {
-                // Leave for processing later
-                _logger.LogInformation($"Abandoning ServiceBus message ID '{args.Message.MessageId}' as import was NOT succesful");
-                await args.AbandonMessageAsync(args.Message);
-            }
+            return _messageHandler.HandleAsync(CallQueueMessage.From(args.Message), new ServiceBusCallQueueMessageSettlement(args, _retrySender), args.CancellationToken);
         }
 
-        async Task<bool> ProcessGraphChange(GraphChangeNotification graphChangeNotification)
+        async Task<CallImportOutcome> ProcessGraphChange(GraphChangeNotification graphChangeNotification)
         {
-            var call = await _callRecordImporter.ImportFromNotification(graphChangeNotification);
+            var result = await _callRecordImporter.Import(graphChangeNotification);
 
-            if (call != null)
+            if (result.Call != null)
             {
                 CallProcessed?.Invoke(this, EventArgs.Empty);
 
-                _logger.LogInformation($"Added call ID '{call.GraphCallID}' to database from ServiceBus.");
-                return true;
+                if (result.Outcome == CallImportOutcome.Saved)
+                {
+                    _logger.LogInformation($"Added call ID '{result.Call.GraphCallID}' to database from ServiceBus.");
+                }
+                else
+                {
+                    _logger.LogInformation($"Processed call ID '{result.Call.GraphCallID}' from ServiceBus without saving it.");
+                }
             }
-            else
-            {
-                return false;
-            }
+            return result.Outcome;
         }
 
 
@@ -283,6 +243,12 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
                 await _processor.DisposeAsync().ConfigureAwait(false);
 
                 _processor = null;
+            }
+
+            if (_retrySender != null)
+            {
+                await _retrySender.DisposeAsync().ConfigureAwait(false);
+                _retrySender = null;
             }
         }
 

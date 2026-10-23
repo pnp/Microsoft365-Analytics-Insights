@@ -51,6 +51,22 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         public List<ManagerInfo> ManagerInfo { get; set; } = new List<ManagerInfo>();
 
         /// <summary>
+        /// The <c>@removed</c> annotation <c>/users/delta</c> puts on a deleted user. Such an entry carries nothing
+        /// else but <see cref="Id"/> (the annotation's <c>reason</c> is <c>changed</c> for a soft delete that can still
+        /// be restored, <c>deleted</c> for a permanent one).
+        /// </summary>
+        /// <remarks>
+        /// A <see cref="JToken"/> so that no shape Graph sends can fail the page it arrives on. Modelled, rather than
+        /// left in <see cref="AdditionalProperties"/>, so a deletion is recognised by one typed check.
+        /// </remarks>
+        [JsonProperty("@removed")]
+        public JToken Removed { get; set; }
+
+        /// <summary>True when <c>/users/delta</c> reported this user as deleted. See <see cref="Removed"/>.</summary>
+        [JsonIgnore]
+        public bool IsRemoved => Removed != null && Removed.Type != JTokenType.Null;
+
+        /// <summary>
         /// The licence arrays, accepted and immediately discarded.
         /// </summary>
         /// <remarks>
@@ -100,6 +116,17 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
 
         [JsonIgnore]
         public ManagerInfo DefaultManagerInfo => ManagerInfo?.FirstOrDefault();
+
+        /// <summary>
+        /// A shallow copy with <see cref="AccountEnabled"/> replaced: an object's profile can come from an earlier entry in
+        /// a delta read than its account status. The entries themselves are never modified.
+        /// </summary>
+        internal GraphUser WithAccountEnabled(bool? accountEnabled)
+        {
+            var copy = (GraphUser)MemberwiseClone();
+            copy.AccountEnabled = accountEnabled;
+            return copy;
+        }
 
     }
     public class ManagerInfo

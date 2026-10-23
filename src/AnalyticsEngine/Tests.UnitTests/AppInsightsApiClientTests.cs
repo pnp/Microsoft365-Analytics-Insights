@@ -9,6 +9,7 @@ using System.Globalization;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using WebJob.AppInsightsImporter.Engine;
@@ -37,6 +38,12 @@ namespace Tests.UnitTests
             public int RequestCount { get; private set; }
             public List<string> AuthorizationHeaders { get; } = new List<string>();
 
+            /// <summary>The decoded KQL of every request, in order.</summary>
+            public List<string> Queries { get; } = new List<string>();
+
+            /// <summary>When set, answers every request from its decoded KQL instead of the queue.</summary>
+            public Func<string, HttpResponseMessage> RespondToQuery { get; set; }
+
             public StubHandler Then(Func<HttpResponseMessage> response)
             {
                 _responses.Enqueue(response);
@@ -50,6 +57,13 @@ namespace Tests.UnitTests
             {
                 RequestCount++;
                 AuthorizationHeaders.Add(request.Headers.Authorization?.Parameter);
+                var query = request.RequestUri.Query;
+                var kql = query.StartsWith("?query=") ? Uri.UnescapeDataString(query.Substring("?query=".Length)) : query;
+                Queries.Add(kql);
+                if (RespondToQuery != null)
+                {
+                    return Task.FromResult(RespondToQuery(kql));
+                }
                 var factory = _responses.Count > 0 ? _responses.Dequeue() : Fallback;
                 if (factory == null)
                 {
@@ -114,10 +128,11 @@ namespace Tests.UnitTests
         /// include scheduling, GC and deserialisation as well as the back-off, which makes it both flaky
         /// under CI load and capable of passing after a no-back-off regression.
         /// </summary>
-        private static AppInsightsAPIClient NewClient(StubHandler handler, TokenCredential credential = null, RecordingDelay delay = null)
+        private static AppInsightsAPIClient NewClient(StubHandler handler, TokenCredential credential = null, RecordingDelay delay = null,
+            AppInsightsQueryWindowCache queryWindows = null)
         {
             var client = new AppInsightsAPIClient(ConnectionString, credential ?? new CountingCredential(TimeSpan.FromHours(1)),
-                NullLogger.Instance, handler);
+                NullLogger.Instance, handler, queryWindows);
             client.RetryDelay = (delay ?? new RecordingDelay()).Wait;
             return client;
         }
@@ -182,6 +197,54 @@ namespace Tests.UnitTests
                 var table = await client.RunQueryAsync("customEvents | count");
                 Assert.AreEqual("PrimaryResult", table.Name);
                 Assert.AreEqual(0, table.RowCount);
+            }
+        }
+
+        /// <summary>
+        /// HttpClient reports its timeout as a TaskCanceledException. The Health client used to retry it three times,
+        /// so a query App Insights never answered cost four 100-second attempts plus back-off before the page heard.
+        /// </summary>
+        [TestMethod]
+        public async Task HealthQueryClient_ATimedOutQueryIsNotRetried()
+        {
+            var handler = new StubHandler { Fallback = () => throw new TaskCanceledException("synthetic: HttpClient.Timeout elapsed") };
+            using (var client = new DataUtils.AppInsights.AppInsightsQueryClient(ConnectionString,
+                new CountingCredential(TimeSpan.FromHours(1)), NullLogger.Instance, handler))
+            {
+                await Assert.ThrowsExceptionAsync<TaskCanceledException>(() => client.RunQueryAsync("customEvents | count"));
+                Assert.AreEqual(1, handler.RequestCount);
+            }
+        }
+
+        [TestMethod]
+        public async Task HealthQueryClient_CancellationStopsAQueryThatIsNeverAnswered()
+        {
+            using (var handler = new NeverAnsweringHandler())
+            using (var client = new DataUtils.AppInsights.AppInsightsQueryClient(ConnectionString,
+                new CountingCredential(TimeSpan.FromHours(1)), NullLogger.Instance, handler))
+            using (var cancellation = new CancellationTokenSource(TimeSpan.FromMilliseconds(200)))
+            {
+                var watch = Stopwatch.StartNew();
+                try
+                {
+                    await client.RunQueryAsync("customEvents | count", cancellation.Token);
+                    Assert.Fail("A query nobody answers cannot succeed.");
+                }
+                catch (OperationCanceledException)
+                {
+                }
+
+                Assert.IsTrue(watch.Elapsed < TimeSpan.FromSeconds(10), $"Cancellation took {watch.Elapsed}.");
+            }
+        }
+
+        /// <summary>Waits until the request is cancelled - an App Insights endpoint that accepted the connection and went quiet.</summary>
+        private sealed class NeverAnsweringHandler : HttpMessageHandler
+        {
+            protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+            {
+                await Task.Delay(Timeout.Infinite, cancellationToken);
+                throw new InvalidOperationException("unreachable");
             }
         }
 
@@ -364,5 +427,225 @@ namespace Tests.UnitTests
                 Thread.CurrentThread.CurrentCulture = original;
             }
         }
+
+        #region Query shape and partial-result splitting
+
+        private static readonly Regex WindowPattern =
+            new Regex(@"timestamp >= todatetime\('(?<from>[^']+)'\) and timestamp < todatetime\('(?<to>[^']+)'\)");
+
+        private static (DateTime From, DateTime To) WindowOf(string kql)
+        {
+            var match = WindowPattern.Match(kql);
+            Assert.IsTrue(match.Success, "No time window in: " + kql);
+            DateTime Parse(string value) => DateTime.SpecifyKind(
+                DateTime.ParseExact(value, "yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture), DateTimeKind.Utc);
+            return (Parse(match.Groups["from"].Value), Parse(match.Groups["to"].Value));
+        }
+
+        private static string[] ProjectedColumns(string kql)
+        {
+            var match = Regex.Match(kql, @"\| project (?<columns>[^|]+)");
+            Assert.IsTrue(match.Success, "No project clause in: " + kql);
+            return match.Groups["columns"].Value.Split(',').Select(c => c.Trim()).ToArray();
+        }
+
+        /// <summary>A 200 response whose table holds <paramref name="rows"/>, optionally with a top-level error.</summary>
+        private static HttpResponseMessage Table(string errorCode, string[] columns, IEnumerable<object[]> rows)
+        {
+            var body = new Dictionary<string, object>
+            {
+                ["tables"] = new[] { new { name = "PrimaryResult", columns = columns.Select(c => new { name = c, type = "string" }), rows } }
+            };
+            if (errorCode != null)
+            {
+                body["error"] = new { code = errorCode, message = "Query limit reached." };
+            }
+            return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(JsonConvert.SerializeObject(body)) };
+        }
+
+        private static HttpResponseMessage PageViewRows(string errorCode, params DateTime[] timestamps) =>
+            Table(errorCode, new[] { "timestamp", "url" },
+                timestamps.Select(t => new object[] { t, "https://contoso.sharepoint.com/sites/example/Καλημέρα-" + t.Ticks + ".aspx" }));
+
+        private static HttpResponseMessage PageExitRows(string errorCode, params DateTime[] timestamps) =>
+            Table(errorCode, new[] { "timestamp", "customDimensions", "user_AuthenticatedId", "name" },
+                timestamps.Select(t => new object[]
+                {
+                    t,
+                    JsonConvert.SerializeObject(new { pageRequestId = Guid.NewGuid(), activeTime = 3 }),
+                    "user@contoso.com",
+                    "PAGE_EXIT"
+                }));
+
+        [TestMethod]
+        public async Task AppInsightsClient_QueriesProjectOnlyTheColumnsTheParsersRead()
+        {
+            // A whole day of every column is what runs into the API's row and response-size caps first.
+            var handler = new StubHandler { Fallback = Ok };
+            using (var client = NewClient(handler))
+            {
+                await client.GetPageViewsAsync(Day, false);
+                await client.GetCustomEventsAsync(Day, false);
+            }
+
+            StringAssert.StartsWith(handler.Queries[0], "pageViews ");
+            CollectionAssert.AreEquivalent(
+                new[] { "timestamp", "customDimensions", "user_AuthenticatedId", "url", "client_Model", "client_OS", "duration",
+                    "client_City", "client_StateOrProvince", "client_CountryOrRegion", "client_Browser" },
+                ProjectedColumns(handler.Queries[0]));
+
+            StringAssert.StartsWith(handler.Queries[1], "customEvents ");
+            CollectionAssert.AreEquivalent(new[] { "timestamp", "customDimensions", "user_AuthenticatedId", "name" },
+                ProjectedColumns(handler.Queries[1]));
+            foreach (var eventName in new[] { "PAGE_EXIT", "UserSearch", "LinkClick", "PageMetadataUpdate" })
+            {
+                StringAssert.Contains(handler.Queries[1], eventName, "Only the custom events the importer reads are requested.");
+            }
+        }
+
+        [TestMethod]
+        public async Task AppInsightsClient_PartialResultForADay_IsSplitInHalf_AndEveryRowIsReturnedOnceInOrder()
+        {
+            var noon = Day.AddHours(12);
+            var handler = new StubHandler
+            {
+                RespondToQuery = kql =>
+                {
+                    var window = WindowOf(kql);
+                    if (window == (Day, Day.AddDays(1))) return PageViewRows("PartialError", Day.AddHours(1));  // truncated: discarded
+                    if (window == (Day, noon)) return PageViewRows(null, Day.AddHours(1), Day.AddHours(11));
+                    if (window == (noon, Day.AddDays(1))) return PageViewRows(null, noon, Day.AddHours(23));
+                    throw new AssertFailedException("Unexpected window " + window);
+                }
+            };
+
+            using (var client = NewClient(handler))
+            {
+                var views = await client.GetPageViewsAsync(Day, false);
+
+                // A row exactly on the split point belongs to the later half only: the windows are half-open.
+                CollectionAssert.AreEqual(new[] { Day.AddHours(1), Day.AddHours(11), noon, Day.AddHours(23) },
+                    views.Rows.Select(r => r.AppInsightsTimestamp).ToArray());
+            }
+            Assert.AreEqual(3, handler.RequestCount);
+        }
+
+        [TestMethod]
+        public async Task AppInsightsClient_PartialResultForAHalf_IsSplitAgain()
+        {
+            var sixAm = Day.AddHours(6);
+            var noon = Day.AddHours(12);
+            var handler = new StubHandler
+            {
+                RespondToQuery = kql =>
+                {
+                    var window = WindowOf(kql);
+                    if (window == (Day, Day.AddDays(1)) || window == (Day, noon)) return PageExitRows("PartialError", Day.AddHours(1));
+                    if (window == (Day, sixAm)) return PageExitRows(null, Day.AddHours(1));
+                    if (window == (sixAm, noon)) return PageExitRows(null, sixAm);
+                    if (window == (noon, Day.AddDays(1))) return PageExitRows(null, Day.AddHours(13));
+                    throw new AssertFailedException("Unexpected window " + window);
+                }
+            };
+
+            using (var client = NewClient(handler))
+            {
+                var events = await client.GetCustomEventsAsync(Day, false);
+
+                CollectionAssert.AreEqual(new[] { Day.AddHours(1), sixAm, Day.AddHours(13) },
+                    events.Rows.Select(r => r.AppInsightsTimestamp).ToArray());
+            }
+            CollectionAssert.AreEqual(
+                new[] { (Day, Day.AddDays(1)), (Day, noon), (Day, sixAm), (sixAm, noon), (noon, Day.AddDays(1)) },
+                handler.Queries.Select(WindowOf).ToArray());
+        }
+
+        [TestMethod]
+        public async Task AppInsightsClient_StillPartialAtTheSmallestWindow_FailsRatherThanSavingTruncatedData()
+        {
+            var handler = new StubHandler { RespondToQuery = kql => PageViewRows("PartialError", Day.AddHours(1)) };
+
+            using (var client = NewClient(handler))
+            {
+                await Assert.ThrowsExceptionAsync<System.IO.InvalidDataException>(() => client.GetPageViewsAsync(Day, false));
+            }
+
+            var windows = handler.Queries.Select(WindowOf).ToList();
+            Assert.IsTrue(windows.Count > 1, "Smaller windows must be tried before giving up.");
+            Assert.IsTrue(windows.Count < 20, "Splitting must stop at a minimum window rather than going on for ever.");
+            Assert.IsTrue(windows.All(w => w.To - w.From >= TimeSpan.FromMinutes(1)), "No window is smaller than a minute.");
+        }
+
+        [TestMethod]
+        public async Task AppInsightsClient_AnErrorThatIsNotAPartialResult_FailsWithoutSplitting()
+        {
+            var handler = new StubHandler { Fallback = () => PageViewRows("BadArgumentError") };
+
+            using (var client = NewClient(handler))
+            {
+                await Assert.ThrowsExceptionAsync<System.IO.InvalidDataException>(() => client.GetPageViewsAsync(Day, false));
+            }
+            Assert.AreEqual(1, handler.RequestCount);
+        }
+
+        [TestMethod]
+        public async Task AppInsightsClient_NextCycle_StartsFromTheWindowsTheDayLastNeeded_AndSplitsOnlyWhatHasGrown()
+        {
+            // Every cycle re-reads the current day. Splitting it from the whole day every time downloaded - and threw
+            // away - a capped response for each window already known to be over the limits.
+            var sixAm = Day.AddHours(6);
+            var noon = Day.AddHours(12);
+            var sixPm = Day.AddHours(18);
+            var dayEnd = Day.AddDays(1);
+            var overTheLimits = new HashSet<(DateTime, DateTime)> { (Day, dayEnd), (Day, noon) };
+            var handler = new StubHandler
+            {
+                RespondToQuery = kql =>
+                {
+                    var window = WindowOf(kql);
+                    return overTheLimits.Contains(window)
+                        ? PageViewRows("PartialError", window.From.AddMinutes(1))
+                        : PageViewRows(null, window.From.AddMinutes(1));
+                }
+            };
+            var queryWindows = new AppInsightsQueryWindowCache();
+
+            async Task<(DateTime, DateTime)[]> CycleAsync()
+            {
+                handler.Queries.Clear();
+                using (var client = NewClient(handler, queryWindows: queryWindows))   // a new client each cycle, as the importer creates
+                {
+                    await client.GetPageViewsAsync(Day, false);
+                }
+                return handler.Queries.Select(WindowOf).Select(w => (w.From, w.To)).ToArray();
+            }
+
+            CollectionAssert.AreEqual(new[] { (Day, dayEnd), (Day, noon), (Day, sixAm), (sixAm, noon), (noon, dayEnd) }, await CycleAsync());
+
+            CollectionAssert.AreEqual(new[] { (Day, sixAm), (sixAm, noon), (noon, dayEnd) }, await CycleAsync(),
+                "The whole day and the morning are known to be over the limits, so they are not requested again.");
+
+            // The afternoon has since grown past the limits too: just that window is split, and that is remembered as well.
+            overTheLimits.Add((noon, dayEnd));
+            CollectionAssert.AreEqual(new[] { (Day, sixAm), (sixAm, noon), (noon, dayEnd), (noon, sixPm), (sixPm, dayEnd) }, await CycleAsync());
+            CollectionAssert.AreEqual(new[] { (Day, sixAm), (sixAm, noon), (noon, sixPm), (sixPm, dayEnd) }, await CycleAsync());
+
+            using (var client = NewClient(handler, queryWindows: queryWindows))
+            {
+                var views = await client.GetPageViewsAsync(Day, false);
+                CollectionAssert.AreEqual(new[] { Day, sixAm, noon, sixPm }.Select(t => t.AddMinutes(1)).ToArray(),
+                    views.Rows.Select(r => r.AppInsightsTimestamp).ToArray(), "Every window's rows, once each, in time order.");
+            }
+
+            // The day's custom events are planned separately from its page views.
+            handler.Queries.Clear();
+            using (var client = NewClient(handler, queryWindows: queryWindows))
+            {
+                await client.GetCustomEventsAsync(Day, false);
+            }
+            Assert.AreEqual((Day, dayEnd), WindowOf(handler.Queries.First()));
+        }
+
+        #endregion
     }
 }

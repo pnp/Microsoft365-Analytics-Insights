@@ -1250,7 +1250,7 @@ namespace Tests.UnitTests
 
             Assert.IsFalse(result.Agents.Succeeded);
             StringAssert.Contains(result.Agents.Log.Error, "already returned");
-            Assert.AreEqual(0, store.Credits.Count, "A partial window must not be written.");
+            Assert.AreEqual(0, store.Credits.Count, "A day that was not read in full must not be written.");
             Assert.IsTrue(result.Users.Succeeded, "The per-user rows were complete and stay stored.");
         }
 
@@ -1369,6 +1369,171 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public async Task CreditImporter_AFailureLateInTheWindow_KeepsTheDaysAlreadyReadInFull()
+        {
+            // The per-agent read is ~70,000 calls on a large tenant. It used to store nothing until every day had
+            // been read, so one failure on the last day threw away every complete day before it.
+            var day1 = new DateTime(2026, 9, 8);
+            var day2 = new DateTime(2026, 9, 9);
+            var source = new ScriptedCreditSource();
+            source.AddUsers(day1, null, null, new CopilotStudioUserCreditRow { UserId = "u1", Consumed = 2m });
+            source.AddUsers(day2, null, null, new CopilotStudioUserCreditRow { UserId = "u1", Consumed = 3m });
+            source.AddResources("u1", day1, null, null, AgentRow("a", 2m));
+            source.FailResources("u1", day2, new AgentCostIncompleteReadException("Synthetic paging failure"));
+            var store = new RecordingAgentCostStore();
+
+            var result = await new CopilotStudioCreditImporter(Logger, source, store, 2, new FixedClock(day2.AddHours(6)))
+                .ImportConsumptionAsync();
+
+            Assert.IsFalse(result.Agents.Succeeded, "The window as a whole did not complete, and must say so.");
+            Assert.AreEqual(1, store.Credits.Count, "The day every user was read for is a complete figure and must be kept.");
+            Assert.AreEqual(day1, store.Credits[0].UsageDate);
+            Assert.AreEqual(2m, store.Credits[0].BilledCredits);
+            Assert.IsFalse(store.Credits.Any(r => r.UsageDate == day2), "A day that was not read in full must not be written.");
+        }
+
+        [TestMethod]
+        public async Task CreditImporter_ATransientFailureOnOneUsersRead_IsRetriedAndTheDayCompletes()
+        {
+            // An HTTP 500 is not retried by the HTTP client (only 429 and 502/503/504 are), so one blip for one of
+            // thousands of users used to fail the whole window.
+            var day = new DateTime(2026, 9, 9);
+            var source = new ScriptedCreditSource();
+            source.AddUsers(day, null, null,
+                new CopilotStudioUserCreditRow { UserId = "u1", Consumed = 3m },
+                new CopilotStudioUserCreditRow { UserId = "u2", Consumed = 4m });
+            source.AddResources("u1", day, null, null, AgentRow("a", 3m));
+            source.AddResources("u2", day, null, null, AgentRow("a", 4m));
+            source.FailResources("u2", day, new HttpRequestException(
+                "The Power Platform licensing API returned HTTP 500 (InternalServerError) for a synthetic read."));
+            var store = new RecordingAgentCostStore();
+
+            var result = await new CopilotStudioCreditImporter(Logger, source, store, 1, new FixedClock(day.AddHours(6)))
+                { UserReadRetryDelay = TimeSpan.Zero }
+                .ImportConsumptionAsync();
+
+            Assert.IsTrue(result.Agents.Succeeded, "One transient failure for one user must not cost the day.");
+            Assert.AreEqual(2, source.ResourceCalls.Count(c => c.Item1 == "u2"), "The failed read must be retried exactly once.");
+            Assert.AreEqual(7m, store.Credits.Single().BilledCredits);
+            Assert.AreEqual(2, store.Credits.Single().DistinctUsers);
+        }
+
+        [TestMethod]
+        public async Task CreditImporter_APersistentlyFailingUsersRead_IsRetriedABoundedNumberOfTimesThenFailsTheDay()
+        {
+            var day = new DateTime(2026, 9, 9);
+            var source = new ScriptedCreditSource();
+            source.AddUsers(day, null, null, new CopilotStudioUserCreditRow { UserId = "u1", Consumed = 3m });
+            source.FailResources("u1", day, Enumerable.Range(0, 10)
+                .Select(_ => (Exception)new HttpRequestException("Synthetic HTTP 500")).ToArray());
+            var store = new RecordingAgentCostStore();
+
+            var result = await new CopilotStudioCreditImporter(Logger, source, store, 1, new FixedClock(day.AddHours(6)))
+                { UserReadRetryDelay = TimeSpan.Zero }
+                .ImportConsumptionAsync();
+
+            Assert.IsTrue(result.Agents.IsTransientFailure, "Still failing after its retries, the day fails - and may be retried later.");
+            Assert.AreEqual(CopilotStudioCreditImporter.MaxUserReadAttempts, source.ResourceCalls.Count, "Bounded, not endless.");
+            Assert.AreEqual(0, store.Credits.Count);
+        }
+
+        [TestMethod]
+        public async Task CreditImporter_ARetryOfTheSameWindow_ResumesAfterTheDaysAlreadyStored()
+        {
+            var day1 = new DateTime(2026, 9, 8);
+            var day2 = new DateTime(2026, 9, 9);
+            var source = new ScriptedCreditSource();
+            source.AddUsers(day1, null, null, new CopilotStudioUserCreditRow { UserId = "u1", Consumed = 2m });
+            source.AddUsers(day2, null, null, new CopilotStudioUserCreditRow { UserId = "u1", Consumed = 3m });
+            source.AddResources("u1", day1, null, null, AgentRow("a", 2m));
+            source.AddResources("u1", day2, null, null, AgentRow("a", 3m));
+            source.FailResources("u1", day2, new AgentCostIncompleteReadException("Synthetic paging failure"));
+            var state = new InMemoryKeyValueStore();
+            var store = new RecordingAgentCostStore();
+            var clock = new FixedClock(day2.AddHours(6));
+            CopilotStudioCreditImporter Importer() => new CopilotStudioCreditImporter(Logger, source, store, 2, clock,
+                checkpoint: new CopilotStudioCreditCheckpointStore(state, "synthetic-generation", Logger));
+
+            Assert.IsFalse((await Importer().ImportConsumptionAsync()).Agents.Succeeded);
+            Assert.AreEqual(1, source.ResourceCalls.Count(c => c.Item2 == day1));
+
+            clock.UtcNow = clock.UtcNow.AddHours(1);
+            var retry = await Importer().ImportConsumptionAsync();
+
+            Assert.IsTrue(retry.Agents.Succeeded);
+            Assert.AreEqual(1, source.ResourceCalls.Count(c => c.Item2 == day1),
+                "The day stored by the failed attempt must not be fanned out again.");
+            Assert.AreEqual(2, source.ResourceCalls.Count(c => c.Item2 == day2), "The failed day is read again.");
+            Assert.AreEqual(2, source.UserCalls.Count(c => c.Item1 == day1), "The cheap /users read is still repeated.");
+            Assert.AreEqual(3m, store.Credits.Single(r => r.UsageDate == day2).BilledCredits);
+            Assert.IsNull(await state.GetStringAsync(CopilotStudioCreditCheckpointStore.KeyPrefix + "_synthetic-generation"),
+                "A completed window clears its checkpoint, so the next scheduled run re-reads every day.");
+        }
+
+        [TestMethod]
+        public async Task CreditImporter_ACheckpointFromAnotherWindowOrConnection_IsIgnored()
+        {
+            // A new day is a new scheduled window, and Microsoft restates recent days: everything must be re-read.
+            var day1 = new DateTime(2026, 9, 8);
+            var day2 = new DateTime(2026, 9, 9);
+            var state = new InMemoryKeyValueStore();
+            await new CopilotStudioCreditCheckpointStore(state, "synthetic-generation", Logger)
+                .SaveAsync(day1.AddDays(-1), day1, new[] { day1 });
+            await new CopilotStudioCreditCheckpointStore(state, "another-generation", Logger)
+                .SaveAsync(day1, day2, new[] { day1 });
+
+            var source = new ScriptedCreditSource();
+            source.AddUsers(day1, null, null, new CopilotStudioUserCreditRow { UserId = "u1", Consumed = 2m });
+            source.AddResources("u1", day1, null, null, AgentRow("a", 2m));
+
+            await new CopilotStudioCreditImporter(Logger, source, new RecordingAgentCostStore(), 2, new FixedClock(day2.AddHours(6)),
+                checkpoint: new CopilotStudioCreditCheckpointStore(state, "synthetic-generation", Logger)).ImportConsumptionAsync();
+
+            Assert.AreEqual(1, source.ResourceCalls.Count(c => c.Item2 == day1),
+                "Neither the previous window's checkpoint nor another connection's may skip a day.");
+        }
+
+        [TestMethod]
+        public async Task Phase_ATransientCreditFailure_BacksOffInsteadOfRepeatingTheWholeReadNextCycle()
+        {
+            // Without a back-off the next cycle - minutes later - repeated the whole read, every cycle, for as long
+            // as the failure lasted.
+            var settings = new AppConfig
+            {
+                ImportJobSettings = new ImportTaskSettings { CopilotStudioCredits = true },
+                CopilotStudioCreditsIntervalHours = 24,
+            };
+            var clock = new FixedClock(new DateTime(2026, 9, 9, 6, 0, 0, DateTimeKind.Utc));
+            var day = clock.UtcNow.Date;
+            var source = new ScriptedCreditSource();
+            source.AddUsers(day, null, null, new CopilotStudioUserCreditRow { UserId = "u1", Consumed = 3m });
+            source.AddResources("u1", day, null, null, AgentRow("a", 3m));
+            source.FailResources("u1", day, new AgentCostIncompleteReadException("Synthetic paging failure"));
+            var stamps = new InMemoryImportLastRunStore();
+            var store = new RecordingAgentCostStore();
+            var phase = new AgentCostImportPhase(Logger, settings, stamps,
+                () => new CopilotStudioCreditImporter(Logger, source, store, 1, clock),
+                () => throw new AssertFailedException("The Azure import is not enabled."),
+                clock);
+
+            await phase.RunAsync();
+            Assert.AreEqual(1, source.UserCalls.Count);
+            Assert.IsNull(await stamps.GetLastRunUtc(AgentCostImportPhase.CopilotStudioCreditsLastImportedKey),
+                "A failed run is not up to date.");
+
+            clock.UtcNow = clock.UtcNow.AddMinutes(15);
+            await phase.RunAsync();
+            Assert.AreEqual(1, source.UserCalls.Count, "The next cycle must not repeat the whole read straight away...");
+
+            clock.UtcNow = clock.UtcNow.AddHours(1);
+            await phase.RunAsync();
+            Assert.AreEqual(2, source.UserCalls.Count, "...but it must retry long before the normal 24-hour interval.");
+            Assert.AreEqual(1, store.Credits.Count);
+            Assert.IsNotNull(await stamps.GetLastRunUtc(AgentCostImportPhase.CopilotStudioCreditsLastImportedKey),
+                "Once it succeeds the gate is stamped as usual.");
+        }
+
+        [TestMethod]
         public async Task CreditImporter_WithNoConnection_ReadsNothingAndRecordsConnectionRequired()
         {
             var source = new ScriptedCreditSource { CanRead = false };
@@ -1478,7 +1643,9 @@ namespace Tests.UnitTests
             var store = new RecordingAgentCostStore();
             var source = new PerScopeAzureCostSource();
 
-            await new AzureCostImporter(Logger, source, store, settings).ImportAsync();
+            // A fixed date on which the window already covers the latest closed period, so it needs no catch-up read.
+            await new AzureCostImporter(Logger, source, store, settings,
+                new FixedClock(new DateTime(2026, 9, 7, 6, 0, 0, DateTimeKind.Utc))).ImportAsync();
 
             Assert.AreEqual(1, store.AzureReplaceCalls.Count, "The write must go through the replace path.");
             Assert.AreEqual("/subscriptions/a", store.AzureReplaceCalls[0].Item1,
@@ -1486,15 +1653,250 @@ namespace Tests.UnitTests
             Assert.IsNotNull(store.AzureReplaceCalls[0].Item2, "The window must be passed even when no rows came back.");
         }
 
-        /// <summary>An Azure source that throws a configured exception per scope.</summary>
+        [TestMethod]
+        public async Task AzureImporter_APeriodNotYetReadWhileFinal_IsStillReadAfterItsPostCloseDays()
+        {
+            // The previous period used to leave the window on the 9th whether or not a run on the 6th-8th had
+            // succeeded. If none had, its rows kept their last estimate - and is_estimated = 1 - for ever.
+            const string scope = "/subscriptions/00000000-0000-0000-0000-000000000000";
+            var settings = new AzureCostImportSettings { Scopes = new[] { scope } };
+            var source = new PerScopeAzureCostSource();
+            source.Rows.Add(new AzureCostRow { UsageDate = new DateTime(2026, 8, 31), MeterName = "Contoso meter", Currency = "GBP", Cost = 4m });
+            var store = new RecordingAgentCostStore();
+
+            var outcome = await new AzureCostImporter(Logger, source, store, settings,
+                new FixedClock(new DateTime(2026, 9, 9, 6, 0, 0, DateTimeKind.Utc))).ImportAsync();
+
+            Assert.IsTrue(outcome.Succeeded);
+            Assert.IsTrue(source.Calls.Any(c => c.Item2 == new DateTime(2026, 8, 1) && c.Item3 == new DateTime(2026, 8, 31)),
+                "Nothing records August being read since it became final, so it must still be re-read.");
+            Assert.AreEqual(new DateTime(2026, 9, 1), source.Calls.Max(c => c.Item2),
+                "As a query of its own: the usual window is not widened by it.");
+            Assert.IsFalse(store.Costs.Single().IsEstimated, "Read after its close, August is stored as final.");
+        }
+
+        [TestMethod]
+        public async Task AzureImporter_AClosedPeriodIsLetGoOnlyOnceEachScopeHasReadItAsFinal()
+        {
+            // No run succeeds on the 6th-8th. On the 9th August must still be read - for the scope that failed on the
+            // 9th, again on the 10th - and only after that may each scope stop reading it.
+            const string healthy = "/subscriptions/00000000-0000-0000-0000-00000000000a";
+            const string flaky = "/subscriptions/00000000-0000-0000-0000-00000000000b";
+            var august = Tuple.Create(new DateTime(2026, 8, 1), new DateTime(2026, 8, 31));
+            var settings = new AzureCostImportSettings { Scopes = new[] { healthy, flaky } };
+            var markers = new InMemoryImportLastRunStore();
+            var source = new PerScopeAzureCostSource();
+            var clock = new FixedClock(new DateTime(2026, 9, 5, 6, 0, 0, DateTimeKind.Utc));
+            async Task<List<Tuple<string, DateTime, DateTime>>> RunOn(DateTime day)
+            {
+                clock.UtcNow = day.AddHours(6);
+                var before = source.Calls.Count;
+                await new AzureCostImporter(Logger, source, new RecordingAgentCostStore(), settings, clock, markers).ImportAsync();
+                return source.Calls.Skip(before).ToList();
+            }
+            bool ReadAugust(IEnumerable<Tuple<string, DateTime, DateTime>> calls, string scope)
+                => calls.Any(c => c.Item1 == scope && c.Item2 <= august.Item1 && c.Item3 >= august.Item2);
+
+            var fifth = await RunOn(new DateTime(2026, 9, 5));
+            Assert.IsTrue(ReadAugust(fifth, healthy), "August is still provisional on the 5th, so it is in the window anyway.");
+
+            source.Failures[flaky] = new InvalidOperationException("Synthetic timeout");
+            var ninth = await RunOn(new DateTime(2026, 9, 9));
+            Assert.IsTrue(ReadAugust(ninth, healthy), "Never read while final, so it must still be read on the 9th.");
+
+            source.Failures.Remove(flaky);
+            var tenth = await RunOn(new DateTime(2026, 9, 10));
+            Assert.IsFalse(ReadAugust(tenth, healthy), "Read as final on the 9th, so this scope can let August go.");
+            Assert.IsTrue(ReadAugust(tenth, flaky), "The scope that failed on the 9th has not read August as final, so it still must.");
+
+            var eleventh = await RunOn(new DateTime(2026, 9, 11));
+            Assert.IsFalse(ReadAugust(eleventh, flaky));
+            Assert.IsFalse(ReadAugust(eleventh, healthy));
+        }
+
+        [TestMethod]
+        public void AzureImporter_FinalisationCatchUp_IsTheLatestClosedPeriodOnly()
+        {
+            var today = new DateTime(2026, 9, 20);
+
+            Assert.IsNull(AzureCostImporter.PeriodAwaitingFinalRead(today, new DateTime(2026, 8, 1)),
+                "August has been read while final: nothing is due.");
+            Assert.AreEqual(new DateTime(2026, 8, 1), AzureCostImporter.PeriodAwaitingFinalRead(today, null),
+                "With no record, the latest closed period is read once.");
+            Assert.AreEqual(new DateTime(2026, 8, 1), AzureCostImporter.PeriodAwaitingFinalRead(today, new DateTime(2026, 6, 1)),
+                "After a long outage only the latest closed period is caught up - one bounded query, not the whole gap.");
+            Assert.AreEqual(new DateTime(2026, 7, 1), AzureCostImporter.PeriodAwaitingFinalRead(new DateTime(2026, 9, 3), null),
+                "On the 3rd August is not final yet, so the latest final period is July.");
+        }
+
+        [TestMethod]
+        public async Task AzureImporter_RejectedAndTransientScopes_AreStillRetriedPromptly()
+        {
+            // One scope misconfigured and another merely timing out: the timeout still deserves a prompt retry.
+            var settings = new AzureCostImportSettings { Scopes = new[] { "/subscriptions/a", "/subscriptions/b", "/subscriptions/c" } };
+            var source = new PerScopeAzureCostSource
+            {
+                Failures =
+                {
+                    { "/subscriptions/a", new AgentCostConfigurationException("Synthetic 404") },
+                    { "/subscriptions/b", new InvalidOperationException("Synthetic timeout") },
+                },
+            };
+
+            var mixed = await new AzureCostImporter(Logger, source, new RecordingAgentCostStore(), settings).ImportAsync();
+            Assert.IsTrue(mixed.IsTransientFailure);
+            Assert.IsFalse(mixed.IsConfigurationFailure);
+
+            source.Failures.Remove("/subscriptions/b");
+            var rejectedOnly = await new AzureCostImporter(Logger, source, new RecordingAgentCostStore(), settings).ImportAsync();
+            Assert.IsTrue(rejectedOnly.IsConfigurationFailure, "Every failure is a rejected query, which retrying cannot fix.");
+            Assert.IsFalse(rejectedOnly.IsTransientFailure);
+            Assert.IsFalse(rejectedOnly.IsAuthorisationFailure, "A rejected query is not a permissions problem.");
+        }
+
+        [TestMethod]
+        public async Task Phase_AzureFailureThatOutlastsAnHour_IsRetriedHourlyNotEveryCycle()
+        {
+            const string scope = "/subscriptions/00000000-0000-0000-0000-000000000000";
+            var azure = new AzureCostImportSettings { Scopes = new[] { scope }, IntervalHours = 24 };
+            var settings = new AppConfig
+            {
+                ImportJobSettings = new ImportTaskSettings { AzureCostManagement = true },
+                AzureCostImport = azure,
+            };
+            var clock = new FixedClock(new DateTime(2026, 9, 7, 6, 0, 0, DateTimeKind.Utc));
+            var source = new PerScopeAzureCostSource { Failures = { { scope, new InvalidOperationException("Synthetic outage") } } };
+            var phase = new AgentCostImportPhase(Logger, settings, new InMemoryImportLastRunStore(),
+                () => throw new AssertFailedException("The Copilot Studio import is not enabled."),
+                () => new AzureCostImporter(Logger, source, new RecordingAgentCostStore(), azure, clock),
+                clock);
+
+            // Every 15 minutes for an hour: a blip is retried on every cycle.
+            for (var i = 0; i < 5; i++)
+            {
+                await phase.RunAsync();
+                clock.UtcNow = clock.UtcNow.AddMinutes(15);
+            }
+            Assert.AreEqual(5, source.Calls.Count, "Attempts at 0, 15, 30, 45 and 60 minutes.");
+
+            // The attempt at 60 minutes found it had been failing for an hour, so the next cycle waits.
+            await phase.RunAsync();
+            Assert.AreEqual(5, source.Calls.Count, "A persistent failure must stop re-reading every scope every cycle.");
+
+            source.Failures.Clear();
+            clock.UtcNow = clock.UtcNow.AddMinutes(50);
+            await phase.RunAsync();
+            Assert.AreEqual(6, source.Calls.Count, "...but it is still retried hourly, well within the day.");
+        }
+
+        [DataTestMethod]
+        [DataRow(HttpStatusCode.NotFound)]
+        [DataRow(HttpStatusCode.BadRequest)]
+        public async Task Phase_AzureQueryRejectedAsMisconfigured_WaitsInsteadOfRetryingEveryCycle(HttpStatusCode status)
+        {
+            // A 404 (a scope that does not exist, a cancelled subscription) or a 400 (a grouping or filter Cost
+            // Management does not accept) cannot fix itself. Treated as transient, every scope was queried again -
+            // and the healthy ones rewritten - on every cycle, indefinitely.
+            const string scope = "/subscriptions/00000000-0000-0000-0000-000000000000";
+            var azure = new AzureCostImportSettings { Scopes = new[] { scope }, IntervalHours = 24 };
+            var settings = new AppConfig
+            {
+                ImportJobSettings = new ImportTaskSettings { AzureCostManagement = true },
+                AzureCostImport = azure,
+            };
+            var clock = new FixedClock(new DateTime(2026, 9, 7, 6, 0, 0, DateTimeKind.Utc));
+            var handler = new RecordingPostHandler(
+                new HttpResponseMessage(status)
+                {
+                    Content = new StringContent(@"{ ""error"": { ""code"": ""BadRequest"", ""message"": ""Synthetic rejection"" } }"),
+                },
+                OkCostPage());
+            var store = new RecordingAgentCostStore();
+
+            using (var client = new DataUtils.Http.AutoThrottleHttpClient(handler, Logger,
+                new AutoThrottleHttpClientTests.FakeRetryClock(new DateTimeOffset(2026, 9, 7, 6, 0, 0, TimeSpan.Zero))))
+            {
+                var phase = new AgentCostImportPhase(Logger, settings, new InMemoryImportLastRunStore(),
+                    () => throw new AssertFailedException("The Copilot Studio import is not enabled."),
+                    () => new AzureCostImporter(Logger, new AzureCostManagementSource(client, azure, Logger), store, azure, clock),
+                    clock);
+
+                await phase.RunAsync();
+                Assert.AreEqual(1, handler.Uris.Count);
+                StringAssert.Contains(store.Logs.Single().Error, ((int)status).ToString(CultureInfo.InvariantCulture),
+                    "The rejection must still be recorded, so the Health page shows it.");
+
+                clock.UtcNow = clock.UtcNow.AddMinutes(15);
+                await phase.RunAsync();
+                Assert.AreEqual(1, handler.Uris.Count, "Retrying cannot fix a rejected query, so the next cycle must not resend it.");
+
+                // Correcting the configuration must not have to wait out the back-off.
+                azure.GroupBy = new[] { "ResourceId" };
+                clock.UtcNow = clock.UtcNow.AddMinutes(15);
+                await phase.RunAsync();
+                Assert.AreEqual(2, handler.Uris.Count, "A changed configuration is a new query, and must run on the next cycle.");
+                Assert.IsTrue(string.IsNullOrEmpty(store.Logs.Last().Error));
+            }
+        }
+
+        [TestMethod]
+        public async Task Phase_AzureServerError_IsStillRetriedOnTheNextCycle()
+        {
+            // The other side of the test above: a 500 may well be gone by the next cycle, so it must not wait a day.
+            const string scope = "/subscriptions/00000000-0000-0000-0000-000000000000";
+            var azure = new AzureCostImportSettings { Scopes = new[] { scope }, IntervalHours = 24 };
+            var settings = new AppConfig
+            {
+                ImportJobSettings = new ImportTaskSettings { AzureCostManagement = true },
+                AzureCostImport = azure,
+            };
+            var clock = new FixedClock(new DateTime(2026, 9, 7, 6, 0, 0, DateTimeKind.Utc));
+            var handler = new RecordingPostHandler(
+                new HttpResponseMessage(HttpStatusCode.InternalServerError) { Content = new StringContent(string.Empty) },
+                OkCostPage());
+
+            using (var client = new DataUtils.Http.AutoThrottleHttpClient(handler, Logger,
+                new AutoThrottleHttpClientTests.FakeRetryClock(new DateTimeOffset(2026, 9, 7, 6, 0, 0, TimeSpan.Zero))))
+            {
+                var stamps = new InMemoryImportLastRunStore();
+                var phase = new AgentCostImportPhase(Logger, settings, stamps,
+                    () => throw new AssertFailedException("The Copilot Studio import is not enabled."),
+                    () => new AzureCostImporter(Logger, new AzureCostManagementSource(client, azure, Logger),
+                        new RecordingAgentCostStore(), azure, clock),
+                    clock);
+
+                await phase.RunAsync();
+                clock.UtcNow = clock.UtcNow.AddMinutes(15);
+                await phase.RunAsync();
+
+                Assert.AreEqual(2, handler.Uris.Count, "A server error must be retried on the next cycle.");
+                Assert.IsNotNull(await stamps.GetLastRunUtc(AgentCostImportPhase.AzureCostLastImportedKey));
+            }
+        }
+
+        private static HttpResponseMessage OkCostPage() => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(@"{ ""properties"": { ""columns"": [ { ""name"": ""UsageDate"" }, { ""name"": ""PreTaxCost"" } ],
+                ""rows"": [ [ 20260916, 5 ] ] } }", Encoding.UTF8, "application/json"),
+        };
+
+        /// <summary>An Azure source that throws a configured exception per scope, and records every window asked for.</summary>
         private class PerScopeAzureCostSource : IAzureCostSource
         {
             public Dictionary<string, Exception> Failures { get; } = new Dictionary<string, Exception>();
 
+            /// <summary>(scope, from, to) of every query.</summary>
+            public List<Tuple<string, DateTime, DateTime>> Calls { get; } = new List<Tuple<string, DateTime, DateTime>>();
+
+            /// <summary>Returned for every successful query, limited to the window asked for.</summary>
+            public List<AzureCostRow> Rows { get; } = new List<AzureCostRow>();
+
             public Task<IReadOnlyList<AzureCostRow>> GetDailyCostsAsync(string scope, DateTime fromDate, DateTime toDate)
             {
+                Calls.Add(Tuple.Create(scope, fromDate.Date, toDate.Date));
                 if (Failures.TryGetValue(scope, out var ex)) throw ex;
-                return Task.FromResult<IReadOnlyList<AzureCostRow>>(new List<AzureCostRow>());
+                return Task.FromResult<IReadOnlyList<AzureCostRow>>(
+                    Rows.Where(r => r.UsageDate.Date >= fromDate.Date && r.UsageDate.Date <= toDate.Date).ToList());
             }
         }
 
@@ -1631,6 +2033,13 @@ namespace Tests.UnitTests
             public bool CanRead { get; set; } = true;
             public bool UsersRouteMissing { get; set; }
             public Exception ResourcesError { get; set; }
+
+            /// <summary>(user id, day) =&gt; failures thrown, in order, before that user's read for the day succeeds.</summary>
+            private readonly Dictionary<Tuple<string, DateTime>, Queue<Exception>> _resourceFailures
+                = new Dictionary<Tuple<string, DateTime>, Queue<Exception>>();
+
+            public void FailResources(string userId, DateTime day, params Exception[] failures)
+                => _resourceFailures[Tuple.Create(userId, day.Date)] = new Queue<Exception>(failures);
             public bool TrackConcurrency { get; set; }
             public bool ThrowOnEnvironmentNames { get; set; }
             public CopilotStudioCapacitySnapshot Capacity { get; set; }
@@ -1662,15 +2071,21 @@ namespace Tests.UnitTests
 
             public async Task<CopilotStudioCreditPage> GetUserResourceConsumptionPageAsync(string userId, DateTime day, string continuationToken)
             {
+                Exception scripted = null;
                 lock (_gate)
                 {
                     ResourceCalls.Add(Tuple.Create(userId, day.Date, continuationToken));
                     _current++;
                     if (_current > MaxConcurrency) MaxConcurrency = _current;
+                    if (_resourceFailures.TryGetValue(Tuple.Create(userId, day.Date), out var queue) && queue.Count > 0)
+                    {
+                        scripted = queue.Dequeue();
+                    }
                 }
                 try
                 {
                     if (TrackConcurrency) await Task.Delay(5);
+                    if (scripted != null) throw scripted;
                     if (ResourcesError != null) throw ResourcesError;
                     return _resources.TryGetValue(Tuple.Create(userId, day.Date, continuationToken ?? string.Empty), out var page)
                         ? page
@@ -1692,11 +2107,11 @@ namespace Tests.UnitTests
             }
         }
 
-        /// <summary>A clock fixed at a known instant, so window arithmetic is assertable.</summary>
+        /// <summary>A clock fixed at a known instant, so window arithmetic is assertable. A test may move it on.</summary>
         private class FixedClock : IClock
         {
             public FixedClock(DateTime utcNow) { UtcNow = utcNow; }
-            public DateTime UtcNow { get; }
+            public DateTime UtcNow { get; set; }
         }
 
         private static AzureCostImporter NewAzureImporter(AzureCostImportSettings settings)

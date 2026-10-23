@@ -48,6 +48,33 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Loaders
             _importPowerPlatform = importPowerPlatform;
             _importCopilot = importCopilot;
             _importDlp = importDlp;
+
+            LogTraceConfiguration();
+        }
+
+        /// <summary>
+        /// Says once per loader - so once per import cycle - whether raw audit records are being written to disk,
+        /// because they contain personal data. Silent when tracing is off.
+        /// </summary>
+        private void LogTraceConfiguration()
+        {
+            var directory = AuditTraceConfig.TraceDirectory;
+            var hasEmailFilter = !string.IsNullOrWhiteSpace(AuditTraceConfig.TraceEmail);
+            var emailParam = ActivityImportConstants.PARAM_TRACE_AUDIT_EMAIL;
+            var directoryParam = ActivityImportConstants.PARAM_TRACE_AUDIT_DIR;
+
+            if (!string.IsNullOrWhiteSpace(directory))
+            {
+                _logger?.LogWarning(hasEmailFilter
+                    ? $"TRACE: raw audit records that contain the {emailParam} address are being written to '{directory}'. " +
+                        $"They contain personal data; remove {directoryParam} to stop."
+                    : $"TRACE: no {emailParam} filter is set, so EVERY raw audit record downloaded is being written to '{directory}'. " +
+                        $"They contain personal data; remove {directoryParam} to stop.");
+            }
+            else if (hasEmailFilter)
+            {
+                _logger?.LogWarning($"TRACE: {emailParam} is set without a usable {directoryParam}, so no audit records are being traced.");
+            }
         }
 
         /// <summary>
@@ -188,8 +215,9 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Loaders
 
             #region Debug Disk Logging if Configure
 
-            // Only convert to string if trace logging is enabled to save memory
-            if (!string.IsNullOrWhiteSpace(AuditTraceConfig.TraceDirectory))
+            // Only convert to string if this record is to be traced, to save memory. With --traceAuditEmail set,
+            // only the records that contain that address are written; a trace directory on its own writes them all.
+            if (AuditTraceConfig.ShouldTrace(reportItem))
             {
                 try
                 {

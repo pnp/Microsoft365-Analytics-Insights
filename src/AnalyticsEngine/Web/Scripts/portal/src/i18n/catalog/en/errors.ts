@@ -122,6 +122,10 @@ export const errors = {
     'The analytics database is unavailable. Check the database connection and try again.',
   'errors.userScope.storageUnavailable':
     "Couldn't reach Azure Table storage, where purges keep their progress. Check that this web app can reach the solution's storage account and that its runtime identity can read and write tables, then try again.",
+  'errors.userScope.purgeExceedsConfirmed':
+    'More people are outside the scope now than the number you confirmed, so the purge did not start and nothing was removed. Check the new number, then tick the box again to confirm it.',
+  'errors.userScope.filterChanged':
+    'UserGroupsFilter has changed since this page was loaded, so the purge did not start and nothing was removed. Check the filter and the new numbers, then confirm again.',
   'errors.updateCheck.failed': "Couldn't check for updates ({status}).",
 
   // Licence activity API

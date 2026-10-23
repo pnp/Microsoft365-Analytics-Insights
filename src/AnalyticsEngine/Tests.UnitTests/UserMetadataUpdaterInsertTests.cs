@@ -19,6 +19,101 @@ namespace Tests.UnitTests
     public class UserMetadataUpdaterInsertTests
     {
         [TestMethod]
+        public async Task UserMetadataUpdater_RenamedUser_KeepsTheSameRowAndAuditHistory()
+        {
+            var suffix = Guid.NewGuid().ToString("N");
+            var objectId = Guid.NewGuid().ToString();
+            var oldUpn = "old-" + suffix + "@contoso.com";
+            var newUpn = "new-" + suffix + "@contoso.com";
+            var eventId = Guid.NewGuid();
+            int userId;
+            using (var db = new AnalyticsEntitiesContext())
+            {
+                var user = new User { UserPrincipalName = oldUpn, AzureAdId = objectId, AccountEnabled = true };
+                db.users.Add(user);
+                await db.SaveChangesAsync();
+                userId = user.ID;
+                db.AuditEventsCommon.Add(new CommonAuditEvent
+                {
+                    Id = eventId, UserId = userId, OperationId = null, TimeStamp = DateTime.UtcNow
+                });
+                await db.SaveChangesAsync();
+            }
+            var loader = new FakeUserMetadataLoader(new List<GraphUser>
+            {
+                new GraphUser { Id = objectId, UserPrincipalName = newUpn, AccountEnabled = true, Mail = newUpn }
+            });
+
+            Assert.IsTrue(await new UserMetadataUpdater(AnalyticsLogger.ConsoleOnlyTracer(), new AppConfig(), loader)
+                .InsertAndUpdateDatabaseFromExternalUsers());
+
+            using (var db = new AnalyticsEntitiesContext())
+            {
+                var user = await db.users.SingleAsync(u => u.ID == userId);
+                Assert.AreEqual(newUpn, user.UserPrincipalName);
+                Assert.AreEqual(newUpn, user.Mail);
+                Assert.AreEqual(1, await db.users.CountAsync(u => u.AzureAdId == objectId));
+                Assert.AreEqual(userId, (await db.AuditEventsCommon.SingleAsync(e => e.Id == eventId)).UserId);
+            }
+        }
+
+        [TestMethod]
+        public async Task UserMetadataUpdater_RenameConflicts_PreservesBothRowsAndWithholdsCheckpoint()
+        {
+            var suffix = Guid.NewGuid().ToString("N");
+            var objectId = Guid.NewGuid().ToString();
+            var otherObjectId = Guid.NewGuid().ToString();
+            var oldUpn = "old-conflict-" + suffix + "@contoso.com";
+            var newUpn = "new-conflict-" + suffix + "@contoso.com";
+            using (var db = new AnalyticsEntitiesContext())
+            {
+                db.users.Add(new User { UserPrincipalName = oldUpn, AzureAdId = objectId, AccountEnabled = true });
+                db.users.Add(new User { UserPrincipalName = newUpn, AzureAdId = otherObjectId, AccountEnabled = true });
+                await db.SaveChangesAsync();
+            }
+            var loader = new FakeUserMetadataLoader(new List<GraphUser>
+            {
+                new GraphUser { Id = objectId, UserPrincipalName = newUpn, AccountEnabled = true }
+            });
+
+            Assert.IsFalse(await new UserMetadataUpdater(AnalyticsLogger.ConsoleOnlyTracer(), new AppConfig(), loader)
+                .InsertAndUpdateDatabaseFromExternalUsers());
+            Assert.IsNull(await loader.DeltaValueProvider.GetDeltaToken());
+            using (var db = new AnalyticsEntitiesContext())
+            {
+                Assert.AreEqual(objectId, (await db.users.SingleAsync(u => u.UserPrincipalName == oldUpn)).AzureAdId);
+                Assert.AreEqual(otherObjectId, (await db.users.SingleAsync(u => u.UserPrincipalName == newUpn)).AzureAdId);
+            }
+        }
+
+        [TestMethod]
+        public async Task UserMetadataUpdater_AmbiguousHistoricalRename_DoesNotAddAThirdRow()
+        {
+            var suffix = Guid.NewGuid().ToString("N");
+            var objectId = Guid.NewGuid().ToString();
+            var firstUpn = "first-" + suffix + "@contoso.com";
+            var secondUpn = "second-" + suffix + "@contoso.com";
+            var currentUpn = "current-" + suffix + "@contoso.com";
+            using (var db = new AnalyticsEntitiesContext())
+            {
+                db.users.Add(new User { UserPrincipalName = firstUpn, AzureAdId = objectId, AccountEnabled = true });
+                db.users.Add(new User { UserPrincipalName = secondUpn, AzureAdId = objectId, AccountEnabled = true });
+                await db.SaveChangesAsync();
+            }
+            var loader = new FakeUserMetadataLoader(new List<GraphUser>
+            {
+                new GraphUser { Id = objectId, UserPrincipalName = currentUpn, AccountEnabled = true }
+            });
+            Assert.IsFalse(await new UserMetadataUpdater(AnalyticsLogger.ConsoleOnlyTracer(), new AppConfig(), loader)
+                .InsertAndUpdateDatabaseFromExternalUsers());
+            using (var db = new AnalyticsEntitiesContext())
+            {
+                Assert.AreEqual(2, await db.users.CountAsync(u => u.AzureAdId == objectId));
+                Assert.IsFalse(await db.users.AnyAsync(u => u.UserPrincipalName == currentUpn));
+            }
+        }
+
+        [TestMethod]
         public async Task UserMetadataUpdater_InsertMissingUsers_InsertsNewUsersOnly()
         {
             var logger = AnalyticsLogger.ConsoleOnlyTracer();

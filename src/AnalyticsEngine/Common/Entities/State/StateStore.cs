@@ -51,11 +51,15 @@ namespace Common.Entities.State
             if (string.IsNullOrEmpty(partition)) throw new ArgumentException("A partition is required.", nameof(partition));
             if (!IsConfigured(config)) return null;
 
-            var connectionString = config.ConnectionStrings.StorageConnectionString;
-            var table = Tables.GetOrAdd(TableCacheKey(connectionString, config), _ => new LazyTableClient(ct =>
-                StorageTableClientFactory.CreateAndEnsureTableAsync(connectionString, TableName, config, logger, Purpose, ct)));
+            return Open(GetTable(config, logger), partition);
+        }
 
-            return Open(table, partition);
+        internal static LazyTableClient GetTable(AppConfig config, ILogger logger)
+        {
+            if (!IsConfigured(config)) throw new InvalidOperationException("A Storage connection string is required for durable runtime state.");
+            var connectionString = config.ConnectionStrings.StorageConnectionString;
+            return Tables.GetOrAdd(TableCacheKey(connectionString, config), _ => new LazyTableClient(ct =>
+                StorageTableClientFactory.CreateAndEnsureTableAsync(connectionString, TableName, config, logger, Purpose, ct)));
         }
 
         /// <summary>
@@ -137,6 +141,12 @@ namespace Common.Entities.State
     /// </summary>
     public static class StatePartitions
     {
+        /// <summary>Event ids awaiting optional Copilot file/meeting enrichment; due index and ETag-protected leases.</summary>
+        public const string CopilotEnrichment = "CopilotEnrichment";
+
+        /// <summary>Immutable content-addressed copies of historical DLP workload metadata, archived before correction. No automatic expiry.</summary>
+        public const string DlpHistoricalArchive = "DlpHistoricalArchive";
+
         public const string PromptCategories = "PromptCategories";
 
         /// <summary>When each interval-gated import last ran (and when a failing usage report may next retry). Round-trip ("o") timestamps.</summary>
