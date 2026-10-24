@@ -8,6 +8,7 @@ using DataUtils;
 using Microsoft.ApplicationInsights.Channel;
 using Microsoft.ApplicationInsights.DataContracts;
 using Microsoft.ApplicationInsights.Extensibility;
+using Microsoft.Extensions.Logging;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System;
 using System.Collections.Generic;
@@ -168,6 +169,97 @@ namespace Tests.UnitTests
                     Assert.AreEqual(HttpStatusCode.OK, notification.StatusCode, url);
                     Assert.AreEqual("not null and that", await notification.Content.ReadAsStringAsync(), url);
                 }
+            }
+        }
+
+        [TestMethod]
+        public void ProcessConfiguration_StampsBuildLabelJobNameAndRunIdOnEveryItem()
+        {
+            var channel = new RecordingChannel();
+            var clients = new SharedTelemetryClients(cs =>
+            {
+                var configuration = SharedTelemetryClients.CreateProcessConfiguration(cs);
+                configuration.TelemetryChannel = channel;
+                return configuration;
+            });
+            var logger = new AnalyticsLogger(SyntheticConnectionString, "Office365ActivityImporter", clients);
+
+            ProcessIdentity.Configure("Office365ActivityImporter", "Build 0000 (synthetic)");
+            try
+            {
+                logger.LogInformation("a trace");
+                logger.TrackEvent(AnalyticsLogger.AnalyticsEvent.HealthCheck, "an event");
+                logger.TrackException(new InvalidOperationException("synthetic"));
+                logger.TrackImporterHeartbeat("AppInsightsImporter", (DateTime?)null, null, DateTime.UtcNow.AddHours(-3));
+            }
+            finally
+            {
+                ProcessIdentity.Configure(null, null);
+            }
+
+            Assert.AreEqual(4, channel.Sent.Count);
+            foreach (var item in channel.Sent.Cast<ISupportProperties>())
+            {
+                Assert.AreEqual(ProcessIdentity.RunId, item.Properties["RunId"]);
+                Assert.AreEqual("Build 0000 (synthetic)", item.Properties["BuildLabel"]);
+                Assert.IsTrue(DateTime.TryParse(item.Properties["ProcessStartedUtc"], out _));
+            }
+            Assert.AreEqual("Office365ActivityImporter", ((ISupportProperties)channel.Sent.OfType<TraceTelemetry>().Single()).Properties["JobName"]);
+            Assert.AreEqual("AppInsightsImporter", channel.Sent.OfType<EventTelemetry>().Single(e => e.Name == "ImporterHeartbeat").Properties["JobName"],
+                "An item's own JobName must not be overwritten by the process default.");
+            Assert.AreEqual("InvalidOperationException", channel.Sent.OfType<ExceptionTelemetry>().Single().Properties["ExceptionType"]);
+        }
+
+        [TestMethod]
+        public void AnException_IsSentToAppInsightsOnce_HoweverManyTimesItIsLogged()
+        {
+            var channel = new RecordingChannel();
+            var clients = new SharedTelemetryClients(cs => new TelemetryConfiguration { ConnectionString = cs, TelemetryChannel = channel });
+            var logger = new AnalyticsLogger(SyntheticConnectionString, "Office365ActivityImporter", clients);
+            var other = new AnalyticsLogger(SyntheticConnectionString, "Elsewhere", clients);
+            var ex = new InvalidOperationException("synthetic {with braces}");
+
+            logger.TrackException(ex);
+            logger.LogError("logged after TrackException, with {braces} that are not a template", ex);
+            ((ILogger)other).LogError(ex, "rethrown and logged again further up");
+
+            Assert.AreEqual(1, channel.Sent.OfType<ExceptionTelemetry>().Count(), "One telemetry owner per exception.");
+            Assert.AreEqual(2, channel.Sent.OfType<TraceTelemetry>().Count(), "Every log line is still a trace.");
+        }
+
+        [TestMethod]
+        public void FlushAllBounded_WaitsForAFlushThatCompletes_AndGivesUpOnOneThatNeverDoes()
+        {
+            var completing = new SharedTelemetryClients(cs => new TelemetryConfiguration { ConnectionString = cs, TelemetryChannel = new AsyncFlushChannel(hang: false) });
+            new AnalyticsLogger(SyntheticConnectionString, "Completing", completing);
+            Assert.IsTrue(completing.FlushAllBounded(TimeSpan.FromSeconds(5)));
+
+            var hanging = new SharedTelemetryClients(cs => new TelemetryConfiguration { ConnectionString = cs, TelemetryChannel = new AsyncFlushChannel(hang: true) });
+            new AnalyticsLogger(SyntheticConnectionString, "Hanging", hanging);
+            var clock = Stopwatch.StartNew();
+            Assert.IsFalse(hanging.FlushAllBounded(TimeSpan.FromMilliseconds(300)));
+            Assert.IsTrue(clock.Elapsed < TimeSpan.FromSeconds(5), "An exit path must never wait longer than its bound for the ingestion endpoint.");
+        }
+
+        private sealed class AsyncFlushChannel : ITelemetryChannel, IAsyncFlushable
+        {
+            private readonly bool _hang;
+
+            public AsyncFlushChannel(bool hang)
+            {
+                _hang = hang;
+            }
+
+            public bool? DeveloperMode { get; set; }
+            public string EndpointAddress { get; set; }
+            public void Send(ITelemetry item) { }
+            public void Flush() { }
+            public void Dispose() { }
+
+            public async Task<bool> FlushAsync(CancellationToken cancellationToken)
+            {
+                if (_hang) await Task.Delay(Timeout.Infinite, cancellationToken);
+                return true;
             }
         }
 

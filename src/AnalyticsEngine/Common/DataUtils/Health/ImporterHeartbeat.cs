@@ -13,6 +13,7 @@ namespace DataUtils.Health
         private readonly object _gate = new object();
         private readonly AnalyticsLogger _logger;
         private readonly string _jobName;
+        private readonly StageTracker _stages;
         private readonly Timer _timer;
         private readonly DateTime _processStartedUtc = DateTime.UtcNow;
         private DateTime? _lastCycleUtc;
@@ -24,13 +25,14 @@ namespace DataUtils.Health
         {
         }
 
-        internal ImporterHeartbeat(AnalyticsLogger logger, string jobName, TimeSpan interval)
+        internal ImporterHeartbeat(AnalyticsLogger logger, string jobName, TimeSpan interval, StageTracker stages = null)
         {
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
             if (jobName != ActivityJob && jobName != WebTrafficJob)
                 throw new ArgumentException("Unrecognised importer job.", nameof(jobName));
             if (interval <= TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(interval));
             _jobName = jobName;
+            _stages = stages ?? StageTracker.Process;
             _timer = new Timer(_ => Emit(), null, Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
             Emit();
             _timer.Change(interval, interval);
@@ -55,7 +57,11 @@ namespace DataUtils.Health
                 if (_disposed) return;
                 try
                 {
-                    _logger.TrackImporterHeartbeat(_jobName, _lastCycleUtc, _lastCycleSeconds, _processStartedUtc);
+                    var cycleStage = _stages.Snapshot(StageSlot.Cycle);
+                    var backgroundStage = _stages.Snapshot(StageSlot.Background);
+                    _logger.TrackImporterHeartbeat(_jobName, _lastCycleUtc, _lastCycleSeconds, _processStartedUtc,
+                        ProcessIdentity.BuildLabel, cycleStage?.Stage, cycleStage?.StartedUtc,
+                        backgroundStage?.Stage, backgroundStage?.StartedUtc);
                 }
                 catch (Exception ex)
                 {
