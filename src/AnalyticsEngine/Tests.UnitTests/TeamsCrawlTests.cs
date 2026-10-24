@@ -721,22 +721,24 @@ namespace Tests.UnitTests
         }
 
         /// <summary>
-        /// Several users rows can share an Entra object id (one person, logins on several domains). Which one a member
-        /// resolves to must not depend on the order SQL happens to return rows in: the lowest row id wins.
+        /// F-4: several users rows can share an Entra object id - a renamed user's rows, from before renames were done in
+        /// place. A member resolves to the same row manager links use (<see cref="UserIdentityRules.IsPreferredRow(int, string, int, string, string)"/>):
+        /// the newest, which carries the latest sign-in name - not the lowest, the row the rename left behind - whatever
+        /// order SQL returns them in.
         /// </summary>
         [TestMethod]
-        public void BuildUpnByAzureAdId_LowestUserRowWins_WhateverTheOrder()
+        public void BuildUpnByAzureAdId_NewestUserRowWins_WhateverTheOrder()
         {
             var map = TeamsCrawlRules.BuildUpnByAzureAdId(new (int, string, string)[]
             {
                 (7, "00000000-0000-0000-0000-00000000000a", "later@contoso.example"),
-                (3, "00000000-0000-0000-0000-00000000000A", "first@contoso.example"),
                 (9, "00000000-0000-0000-0000-00000000000a", "latest@contoso.example"),
+                (3, "00000000-0000-0000-0000-00000000000A", "first@contoso.example"),
                 (5, "00000000-0000-0000-0000-00000000000b", ""),
                 (6, null, "no-object-id@contoso.example"),
             });
 
-            Assert.AreEqual("first@contoso.example", map["00000000-0000-0000-0000-00000000000a"]);
+            Assert.AreEqual("latest@contoso.example", map["00000000-0000-0000-0000-00000000000a"]);
             Assert.IsFalse(map.ContainsKey("00000000-0000-0000-0000-00000000000b"), "A row with no UPN is left to Graph.");
             Assert.AreEqual(1, map.Count);
         }

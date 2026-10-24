@@ -651,6 +651,36 @@ namespace Tests.UnitTests
         private static GraphUser Tombstone(string id)
             => new GraphUser { Id = id, Removed = Newtonsoft.Json.Linq.JObject.Parse("{\"reason\":\"deleted\"}") };
 
+        /// <summary>
+        /// C-4: Graph includes <c>manager@delta</c> in every entry of a read's initial round, but an incremental entry can
+        /// leave it out when the manager did not change. The loader says which it was, so the import clears a manager only
+        /// when Graph reported that there is none.
+        /// </summary>
+        [TestMethod]
+        public async Task ManagerAnnotation_AbsentFromAFullRead_MeansNoManager_ButAbsentFromAnIncrementalRead_MeansUnchanged()
+        {
+            var store = new RecordingDeltaValueProvider();
+            var logger = new CapturingLogger();
+            var handler = new ScriptedGraphHandler()
+                .Then(HttpStatusCode.OK, FinalPage("checkpoint-1", UserJson(1)))
+                .Then(HttpStatusCode.OK, FinalPage("checkpoint-2", UserJson(1)));
+
+            using (var client = new ManualGraphCallClient(handler, logger))
+            {
+                var loader = new GraphUserLoader(client, store, logger, null);
+
+                var full = (await loader.LoadAllActiveUsers()).Single();
+                Assert.IsTrue(full.ManagerReported, "In a full read, no manager@delta means no manager.");
+                Assert.IsNull(full.DefaultManagerInfo);
+                Assert.IsTrue(await loader.CommitDeltaTokenAsync());
+
+                var incremental = (await loader.LoadAllActiveUsers()).Single();
+                StringAssert.Contains(handler.Requests[1], "$deltatoken=checkpoint-1");
+                Assert.IsFalse(incremental.ManagerReported, "In an incremental read, it only means the manager did not change.");
+                Assert.IsFalse(UserMetadataMappingRules.BuildPlan(incremental).ManagerReported);
+            }
+        }
+
         private static GraphUser Live(string id, string upn, bool? enabled)
             => new GraphUser { Id = id, UserPrincipalName = upn, AccountEnabled = enabled };
 

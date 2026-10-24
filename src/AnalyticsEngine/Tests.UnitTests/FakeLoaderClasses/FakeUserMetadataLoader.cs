@@ -141,7 +141,8 @@ namespace Tests.UnitTests.FakeLoaderClasses
             // and a complete read from no token is the whole (fake) directory, exactly as GraphUserLoader treats it.
             // ActiveUsers is a new list, so callers that Clear() it do not wipe the fake's state
             // (InsertAndUpdateDatabaseFromExternalUsers does this).
-            var classified = UserDeltaReadRules.Classify(read, completeDirectoryRead: string.IsNullOrEmpty(existingDelta) && LastLoadReachedDeltaLink);
+            var classified = UserDeltaReadRules.Classify(read, completeDirectoryRead: string.IsNullOrEmpty(existingDelta) && LastLoadReachedDeltaLink,
+                initialRound: string.IsNullOrEmpty(existingDelta));
             LastLoadDeactivations = classified.Deactivations;
             return classified.ActiveUsers;
         }
