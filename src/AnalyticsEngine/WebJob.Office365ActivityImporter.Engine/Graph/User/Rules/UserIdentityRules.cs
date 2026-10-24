@@ -81,17 +81,25 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         /// rename inserted.
         /// </summary>
         public static bool IsPreferredRow(Common.Entities.User candidate, Common.Entities.User held, string currentUpn)
+            => IsPreferredRow(candidate.ID, candidate.UserPrincipalName, held.ID, held.UserPrincipalName, currentUpn);
+
+        /// <summary>
+        /// <see cref="IsPreferredRow(Common.Entities.User, Common.Entities.User, string)"/> for callers holding only a row's
+        /// id and sign-in name, such as the Teams member map. Pass a null <paramref name="currentUpn"/> when the caller has
+        /// no current sign-in name for the object id: the newest row then wins.
+        /// </summary>
+        public static bool IsPreferredRow(int candidateId, string candidateUpn, int heldId, string heldUpn, string currentUpn)
         {
             if (!string.IsNullOrEmpty(currentUpn))
             {
-                var candidateIsCurrent = string.Equals(candidate.UserPrincipalName, currentUpn, StringComparison.OrdinalIgnoreCase);
-                var heldIsCurrent = string.Equals(held.UserPrincipalName, currentUpn, StringComparison.OrdinalIgnoreCase);
+                var candidateIsCurrent = string.Equals(candidateUpn, currentUpn, StringComparison.OrdinalIgnoreCase);
+                var heldIsCurrent = string.Equals(heldUpn, currentUpn, StringComparison.OrdinalIgnoreCase);
                 if (candidateIsCurrent != heldIsCurrent)
                 {
                     return candidateIsCurrent;
                 }
             }
-            return candidate.ID > held.ID;
+            return candidateId > heldId;
         }
 
         /// <summary>

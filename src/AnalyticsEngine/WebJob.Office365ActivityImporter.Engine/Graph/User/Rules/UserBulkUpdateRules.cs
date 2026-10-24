@@ -59,6 +59,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             "state_or_province_id",
             "company_name_id",
             "manager_id",
+            "manager_reported",
             "last_updated",
         };
 
@@ -80,6 +81,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             dt.Columns.Add("state_or_province_id", typeof(int));
             dt.Columns.Add("company_name_id", typeof(int));
             dt.Columns.Add("manager_id", typeof(int));
+            dt.Columns.Add("manager_reported", typeof(bool));
             dt.Columns.Add("last_updated", typeof(DateTime));
             return dt;
         }
@@ -135,7 +137,10 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 row["country_or_region_id"] = ResolveLookupId(plan.CountryName, maps.Countries);
                 row["state_or_province_id"] = ResolveLookupId(plan.StateOrProvinceName, maps.StatesOrProvinces);
                 row["company_name_id"] = ResolveLookupId(plan.CompanyName, maps.CompanyNames);
-                row["manager_id"] = ResolveManagerId(plan.ManagerAadId, dbUsersByAadId, dbUsersByUpn, graphUsersByAadId);
+                row["manager_id"] = plan.ManagerReported
+                    ? ResolveManagerId(plan.ManagerAadId, dbUsersByAadId, dbUsersByUpn, graphUsersByAadId)
+                    : DBNull.Value;
+                row["manager_reported"] = plan.ManagerReported;
                 row["last_updated"] = lastUpdated;
 
                 dt.Rows.Add(row);
@@ -167,7 +172,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         /// <item>otherwise the row a rename left behind, if that is all there is - it is still the manager;</item>
         /// <item>otherwise leave the column NULL, which clears any previously stored manager.</item>
         /// </list>
-        /// A user Graph reports no manager for also clears the column. In every case the candidate
+        /// A user Graph reports no manager for also clears the column; an entry that did not report the manager at all
+        /// (<see cref="UserMetadataChangePlan.ManagerReported"/> false) leaves it as it is. In every case the candidate
         /// must already be saved (<c>ID &gt; 0</c>), because the value becomes a foreign key.
         /// </summary>
         /// <param name="managerAadId">

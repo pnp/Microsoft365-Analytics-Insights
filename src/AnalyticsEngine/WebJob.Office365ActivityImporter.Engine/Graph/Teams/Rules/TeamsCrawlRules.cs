@@ -141,14 +141,16 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
         /// column, which meant a full scan of <c>users</c> for every member at 200k-user scale.
         /// </summary>
         /// <remarks>
-        /// Object ids compare case-insensitively, as the database collation did. When several rows share an object id
-        /// (one person with logins on several domains) the lowest <c>users.id</c> wins - the row the old unordered
-        /// <c>FirstOrDefault</c> returned in practice - whatever order the rows arrive in. Rows with no object id or no
-        /// UPN are left out, so those members are looked up in Graph instead.
+        /// Object ids compare case-insensitively, as the database collation did. When several rows share an object id -
+        /// usually a renamed user, whose old row a rename left behind on earlier versions - the row
+        /// <see cref="UserIdentityRules.IsPreferredRow(int, string, int, string, string)"/> prefers wins, the same one
+        /// manager links use: with no current sign-in name to hand here, the newest row (highest <c>users.id</c>), which
+        /// is the one carrying the user's latest sign-in name. It used to be the lowest id, the row the rename left
+        /// behind. Rows with no object id or no UPN are left out, so those members are looked up in Graph instead.
         /// </remarks>
         public static Dictionary<string, string> BuildUpnByAzureAdId(IEnumerable<(int UserId, string AzureAdId, string UserPrincipalName)> users)
         {
-            var lowestRowByObjectId = new Dictionary<string, (int UserId, string UserPrincipalName)>(StringComparer.OrdinalIgnoreCase);
+            var preferredRowByObjectId = new Dictionary<string, (int UserId, string UserPrincipalName)>(StringComparer.OrdinalIgnoreCase);
             foreach (var user in users)
             {
                 if (string.IsNullOrEmpty(user.AzureAdId) || string.IsNullOrEmpty(user.UserPrincipalName))
@@ -156,13 +158,14 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
                     continue;
                 }
 
-                if (!lowestRowByObjectId.TryGetValue(user.AzureAdId, out var current) || user.UserId < current.UserId)
+                if (!preferredRowByObjectId.TryGetValue(user.AzureAdId, out var current)
+                    || UserIdentityRules.IsPreferredRow(user.UserId, user.UserPrincipalName, current.UserId, current.UserPrincipalName, currentUpn: null))
                 {
-                    lowestRowByObjectId[user.AzureAdId] = (user.UserId, user.UserPrincipalName);
+                    preferredRowByObjectId[user.AzureAdId] = (user.UserId, user.UserPrincipalName);
                 }
             }
 
-            return lowestRowByObjectId.ToDictionary(row => row.Key, row => row.Value.UserPrincipalName, StringComparer.OrdinalIgnoreCase);
+            return preferredRowByObjectId.ToDictionary(row => row.Key, row => row.Value.UserPrincipalName, StringComparer.OrdinalIgnoreCase);
         }
 
         /// <summary>

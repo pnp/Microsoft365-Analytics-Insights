@@ -229,8 +229,11 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 dbUser.CompanyNameId = null;
             }
 
-            // Update manager
-            await UpdateUserManager(db, plan.ManagerAadId, allGraphUsers, dbUser, dbUsersByAadId, allDbUsers);
+            // Update manager - only when Graph said something about it (see GraphUser.ManagerReported).
+            if (plan.ManagerReported)
+            {
+                await UpdateUserManager(db, plan.ManagerAadId, allGraphUsers, dbUser, dbUsersByAadId, allDbUsers);
+            }
 
             dbUser.LastUpdated = lastUpdatedUtc ?? _clock.UtcNow;
         }
