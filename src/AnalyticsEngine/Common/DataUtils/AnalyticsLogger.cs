@@ -8,6 +8,7 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Threading;
+using System.Threading.Tasks;
 
 namespace DataUtils
 {
@@ -29,7 +30,17 @@ namespace DataUtils
     internal sealed class SharedTelemetryClients
     {
         internal static readonly SharedTelemetryClients Process =
-            new SharedTelemetryClients(connectionString => new TelemetryConfiguration { ConnectionString = connectionString });
+            new SharedTelemetryClients(CreateProcessConfiguration);
+
+        /// <summary>
+        /// The process-wide configuration: stamps <see cref="ProcessIdentity"/> (build label, job name, run id) on every item.
+        /// </summary>
+        internal static TelemetryConfiguration CreateProcessConfiguration(string connectionString)
+        {
+            var configuration = new TelemetryConfiguration { ConnectionString = connectionString };
+            configuration.TelemetryInitializers.Add(new ProcessIdentityTelemetryInitializer());
+            return configuration;
+        }
 
         private readonly ConcurrentDictionary<string, Lazy<TelemetryClient>> _clients =
             new ConcurrentDictionary<string, Lazy<TelemetryClient>>(StringComparer.Ordinal);
@@ -70,6 +81,40 @@ namespace DataUtils
                 catch (Exception)
                 {
                     // Best effort: this runs while a process is stopping.
+                }
+            }
+        }
+
+        /// <summary>
+        /// Flushes every shared client and waits at most <paramref name="timeout"/> for the buffered items to be sent.
+        /// Never throws. The in-memory channel buffers for about 30 seconds, so anything logged just before an exit or
+        /// crash is lost unless this runs first.
+        /// </summary>
+        /// <returns>False when the wait ran out, or a flush failed, before everything was sent.</returns>
+        internal bool FlushAllBounded(TimeSpan timeout)
+        {
+            var flushes = new List<Task<bool>>();
+            using (var cts = new CancellationTokenSource(timeout))
+            {
+                foreach (var entry in _clients.Values)
+                {
+                    try
+                    {
+                        if (entry.IsValueCreated) flushes.Add(entry.Value.FlushAsync(cts.Token));
+                    }
+                    catch (Exception)
+                    {
+                        // Best effort: this runs while a process is stopping.
+                    }
+                }
+
+                try
+                {
+                    return Task.WaitAll(flushes.ToArray(), timeout) && flushes.TrueForAll(f => f.Status == TaskStatus.RanToCompletion && f.Result);
+                }
+                catch (Exception)
+                {
+                    return false;
                 }
             }
         }
@@ -148,6 +193,17 @@ namespace DataUtils
         /// </summary>
         public static void FlushSharedTelemetry() => SharedTelemetryClients.Process.FlushAll();
 
+        /// <summary>
+        /// Flushes everything this process has buffered and waits at most <paramref name="timeout"/> (default 5 seconds)
+        /// for it to be sent. Every exit path of a host goes through this. Never throws.
+        /// </summary>
+        /// <returns>False when the wait ran out before everything was sent.</returns>
+        public static bool DrainSharedTelemetry(TimeSpan? timeout = null) =>
+            SharedTelemetryClients.Process.FlushAllBounded(timeout ?? DefaultDrainTimeout);
+
+        /// <summary>How long an exit path waits for telemetry to leave the process.</summary>
+        public static readonly TimeSpan DefaultDrainTimeout = TimeSpan.FromSeconds(5);
+
         #endregion
 
         public override IDisposable BeginScope<TState>(TState state)
@@ -177,12 +233,14 @@ namespace DataUtils
         {
             if (AppInsights != null && ex != null)
             {
-                var safeDetails = ex as IExceptionTelemetryDetails;
-                if (safeDetails != null && !TryMarkExceptionAsTracked(ex))
+                // One telemetry owner per exception: the same exception object logged twice (TrackException then
+                // LogError(ex, ...)), or again further up after a rethrow, is sent once.
+                if (!TryMarkExceptionAsTracked(ex))
                 {
                     return;
                 }
 
+                var safeDetails = ex as IExceptionTelemetryDetails;
                 var telemetry = new ExceptionTelemetry(safeDetails?.ToTelemetryException() ?? ex);
                 if (safeDetails != null && !string.IsNullOrEmpty(safeDetails.TelemetryProblemId))
                 {
@@ -205,6 +263,10 @@ namespace DataUtils
                         telemetry.Properties[property.Key] = property.Value;
                     }
                 }
+                foreach (var dimension in ExceptionDescriber.Dimensions(ex))
+                {
+                    if (!telemetry.Properties.ContainsKey(dimension.Key)) telemetry.Properties[dimension.Key] = dimension.Value;
+                }
                 if (properties != null)
                 {
                     foreach (var property in properties)
@@ -217,9 +279,9 @@ namespace DataUtils
             }
         }
 
-        void TrackTrace(string sayWut, Microsoft.ApplicationInsights.DataContracts.SeverityLevel severityLevel)
+        void TrackTrace(string sayWut, Microsoft.ApplicationInsights.DataContracts.SeverityLevel severityLevel, Exception exception = null)
         {
-            Console.WriteLine($"{DateTime.Now.ToString("HH:mm:ss")}: {sayWut}");
+            ConsoleLog.Write(severityLevel, CurrentOperationId.Value, sayWut, exception);
 
             if (AppInsights != null)
             {
@@ -256,6 +318,30 @@ namespace DataUtils
         public void LogWarning(string sayWut)
         {
             TrackTrace(sayWut, Microsoft.ApplicationInsights.DataContracts.SeverityLevel.Warning);
+        }
+
+        // The overloads below take the message as plain text. The ILogger extensions (LogError(ex, message, ...)) parse
+        // the message as a template, so an exception message that contains braces can make them throw.
+
+        /// <summary>Warning with the exception: tracked once as exception telemetry, and its chain printed on the console.</summary>
+        public void LogWarning(string sayWut, Exception exception)
+        {
+            TrackException(exception);
+            TrackTrace(sayWut, Microsoft.ApplicationInsights.DataContracts.SeverityLevel.Warning, exception);
+        }
+
+        /// <summary>Error with the exception: tracked once as exception telemetry; the chain and full stack go to stderr.</summary>
+        public void LogError(string sayWut, Exception exception)
+        {
+            TrackException(exception);
+            TrackTrace(sayWut, Microsoft.ApplicationInsights.DataContracts.SeverityLevel.Error, exception);
+        }
+
+        /// <summary>Critical with the exception: tracked once as exception telemetry; the chain and full stack go to stderr.</summary>
+        public void LogCritical(string sayWut, Exception exception)
+        {
+            TrackException(exception);
+            TrackTrace(sayWut, Microsoft.ApplicationInsights.DataContracts.SeverityLevel.Critical, exception);
         }
         /// <summary>
         /// Track event with a default "context=X" value for X
@@ -309,7 +395,8 @@ namespace DataUtils
                 }
                 contextString = contextString.TrimEnd(SEP.ToCharArray());
             }
-            Console.WriteLine($"New event '{Enum.GetName(typeof(AnalyticsEvent), analyticsEvent)}'; '{contextString}'.");
+            ConsoleLog.WriteEvent(CurrentOperationId.Value,
+                $"New event '{Enum.GetName(typeof(AnalyticsEvent), analyticsEvent)}'; '{contextString}'.");
 
             if (AppInsights != null)
             {
@@ -405,7 +492,9 @@ namespace DataUtils
             TrackImporterHeartbeat(jobName, (DateTime?)lastCycleUtc, lastCycleDurationSeconds);
         }
 
-        public void TrackImporterHeartbeat(string jobName, DateTime? lastCycleUtc, double? lastCycleDurationSeconds, DateTime? processStartedUtc = null)
+        public void TrackImporterHeartbeat(string jobName, DateTime? lastCycleUtc, double? lastCycleDurationSeconds, DateTime? processStartedUtc = null,
+            string buildLabel = null, string currentStage = null, DateTime? stageStartedUtc = null,
+            string backgroundStage = null, DateTime? backgroundStageStartedUtc = null)
         {
             var context = new Dictionary<string, string>
             {
@@ -417,6 +506,17 @@ namespace DataUtils
                 context.Add("LastCycleDurationSeconds", lastCycleDurationSeconds.Value.ToString(CultureInfo.InvariantCulture));
             if (processStartedUtc.HasValue)
                 context.Add("ProcessStartedUtc", processStartedUtc.Value.ToUniversalTime().ToString("o", CultureInfo.InvariantCulture));
+            if (!string.IsNullOrEmpty(buildLabel))
+                context.Add("BuildLabel", buildLabel);
+            // What the process is doing right now, and since when: a stuck stage is visible without a Kudu session.
+            if (!string.IsNullOrEmpty(currentStage))
+                context.Add("CurrentStage", currentStage);
+            if (stageStartedUtc.HasValue)
+                context.Add("StageStartedUtc", stageStartedUtc.Value.ToUniversalTime().ToString("o", CultureInfo.InvariantCulture));
+            if (!string.IsNullOrEmpty(backgroundStage))
+                context.Add("BackgroundStage", backgroundStage);
+            if (backgroundStageStartedUtc.HasValue)
+                context.Add("BackgroundStageStartedUtc", backgroundStageStartedUtc.Value.ToUniversalTime().ToString("o", CultureInfo.InvariantCulture));
             TrackEvent(AnalyticsEvent.ImporterHeartbeat, context);
         }
 
@@ -515,30 +615,18 @@ namespace DataUtils
             // stack trace entirely - it is NOT recorded as App Insights exception telemetry unless we do this.
             if (exception != null) TrackException(exception);
 
-            if (logLevel == LogLevel.Debug)
+            var severity = ToSeverity(logLevel);
+            TrackTrace(message, severity, exception);
+        }
+
+        private static SeverityLevel ToSeverity(LogLevel logLevel)
+        {
+            switch (logLevel)
             {
-                LogInformation(message);
-            }
-            else if (logLevel == LogLevel.Information)
-            {
-                LogInformation(message);
-            }
-            else if (logLevel == LogLevel.Warning)
-            {
-                LogWarning(message);
-            }
-            else if (logLevel == LogLevel.Error)
-            {
-                LogError(message);
-            }
-            else if (logLevel == LogLevel.Critical)
-            {
-                LogCritical(message);
-            }
-            else
-            {
-                // Unknown log level
-                LogInformation(message);
+                case LogLevel.Warning: return SeverityLevel.Warning;
+                case LogLevel.Error: return SeverityLevel.Error;
+                case LogLevel.Critical: return SeverityLevel.Critical;
+                default: return SeverityLevel.Information; // Debug and any unknown level, as before
             }
         }
 
@@ -558,7 +646,8 @@ namespace DataUtils
             UserScopePurge,
             CopilotAuditBackfill,
             GlobalFilterChanged,
-            ActivityAnalysisLoad
+            ActivityAnalysisLoad,
+            ImportStage
         }
 
         private static bool TryMarkExceptionAsTracked(Exception ex)
