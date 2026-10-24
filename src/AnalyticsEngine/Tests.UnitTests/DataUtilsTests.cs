@@ -1352,6 +1352,35 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public void SqlStartupProbe_PassesAgainstTheTestDatabase_AndNeverCountsTheWholeTable()
+        {
+            var logger = AnalyticsLogger.ConsoleOnlyTracer();
+            var connectionStrings = new AppConfig().ConnectionStrings;
+
+            var captured = CaptureConsole(() =>
+            {
+                Assert.IsTrue(connectionStrings.TestSQLSettings(logger));
+                Assert.IsTrue(connectionStrings.TestAuditSQLSettings(logger));
+            });
+
+            StringAssert.Contains(captured[0], "SQL startup probe passed: table=hits; ElapsedMs=");
+            StringAssert.Contains(captured[0], "SQL startup probe passed: table=audit_events; ElapsedMs=");
+
+            // The query the probe runs: a COUNT over a TOP (1) subquery, not over the table.
+            var sql = new System.Text.StringBuilder();
+            using (var db = new AnalyticsEntitiesContext())
+            {
+                db.Database.Log = s => sql.Append(s);
+                db.hits.Take(1).Count();
+                db.AuditEventsCommon.Take(1).Count();
+            }
+            var executed = sql.ToString();
+            StringAssert.Contains(executed, "TOP (1)");
+            Assert.IsFalse(System.Text.RegularExpressions.Regex.IsMatch(executed, @"COUNT\(1\) AS \[A1\]\s+FROM \[dbo\]\.\[(hits|audit_events)\]"),
+                "The probe must not count every row of the table.");
+        }
+
+        [TestMethod]
         public void ExceptionDescriber_Chain_NamesEveryExceptionAndTheSqlErrorNumber()
         {
             var sql = RealSqlException();
