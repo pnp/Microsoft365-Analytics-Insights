@@ -92,7 +92,8 @@ namespace DataUtils.Health
             if (input.SqlCapacityExceptions24h > 0)
                 Raise(HealthStatus.Degraded, $"{input.SqlCapacityExceptions24h} SQL capacity / read-only exception(s) in the last 24h - check database storage.");
 
-            // Missing is often transient (the importer re-registers each cycle), so treat as Degraded, not Unhealthy.
+            // Missing is usually transient - the importer's subscription timer re-creates it within minutes (and logs the gap as
+            // "[Calls Webhook] Subscription lapsed") - so treat it as Degraded, not Unhealthy.
             if (input.CallsImportEnabled && (string.Equals(input.WebhookState, "Missing", StringComparison.OrdinalIgnoreCase)
                                              || string.Equals(input.WebhookState, "Error", StringComparison.OrdinalIgnoreCase)))
                 Raise(HealthStatus.Degraded, $"Teams calls webhook subscription is '{input.WebhookState}'.");

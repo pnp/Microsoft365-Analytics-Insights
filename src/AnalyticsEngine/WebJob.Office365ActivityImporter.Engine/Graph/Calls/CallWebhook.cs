@@ -8,6 +8,7 @@ using Microsoft.Graph;
 using Microsoft.Graph.Models.ODataErrors;
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 using System.Net;
 using System.Threading.Tasks;
@@ -90,24 +91,56 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
         /// </summary>
         public static readonly TimeSpan LegacyGracePeriod = TimeSpan.FromHours(1);
 
+        /// <summary>
+        /// The level <see cref="LogSubscriptionFailure"/> reports a failed create or renewal at. Critical by default: the
+        /// calls import is down. <c>CallSubscriptionMaintainer</c> lowers it to Warning for the first attempts of a retry
+        /// series - a cold web app failing Graph's validation once is degraded, not down - and raises it back after that.
+        /// </summary>
+        public LogLevel SubscriptionFailureLevel { get; set; } = LogLevel.Critical;
+
+        /// <summary>
+        /// Called just before every create or renewal, each of which makes Graph validate the notification endpoint.
+        /// <c>CallSubscriptionMaintainer</c> warms the webhook up here so a cold web app doesn't fail the validation.
+        /// Failures are the hook's to report; they never stop the Graph call.
+        /// </summary>
+        public Func<Task> BeforeValidatedChangeAsync { get; set; }
+
+        // When this instance last found the subscription it created in place. Process lifetime (the maintainer keeps one
+        // CallWebhook), so a lapse can be dated from it when the record holds no expiry.
+        private DateTime? _lastConfirmedUtc;
+
         /// <param name="webAppUrl">The webhook's own URL. The subscription itself is on <see cref="CallSubscriptionRules.CurrentNotificationUrl"/>.</param>
-        public async Task CreateOrUpdateWebhook(Uri webAppUrl, CallWebhookClientState clientState)
+        /// <returns>What changed, and the subscription now in place.</returns>
+        public async Task<CallWebhookMaintenanceResult> CreateOrUpdateWebhook(Uri webAppUrl, CallWebhookClientState clientState)
         {
             if (clientState == null) throw new ArgumentNullException(nameof(clientState));
             if (!clientState.IsAvailable) throw new InvalidOperationException(NO_CLIENT_SECRET_MESSAGE);
 
             var currentUrl = CallSubscriptionRules.CurrentNotificationUrl(webAppUrl);
+            var now = _clock.UtcNow;
 
             // https://docs.microsoft.com/en-us/graph/api/resources/webhooks?view=graph-rest-1.0
             // Both of this webhook's URLs, and nothing else: see CallSubscriptionRules.IsCallRecordsSubscriptionFor.
             var matchingSubs = await _subscriptions.FindCallRecordSubscriptions(webAppUrl);
             var current = matchingSubs.Where(s => s.NotificationUrl == currentUrl.ToString()).ToList();
             var legacy = matchingSubs.Where(s => s.NotificationUrl == webAppUrl.ToString()).ToList();
-            var action = CallSubscriptionRules.Decide(matchingSubs, _clock.UtcNow);
+            var action = CallSubscriptionRules.Decide(matchingSubs, now);
 
             if (action.Kind == CallSubscriptionActionKind.Create)
             {
-                Telemetry.LogInformation($"{LOG_TAG} No subscription found for call-records, for URL '{currentUrl}'. Creating...");
+                var lapsed = await TryGetRecordAsync(currentUrl);
+                var isLapse = lapsed != null && !string.IsNullOrEmpty(lapsed.SubscriptionId);
+                if (isLapse)
+                {
+                    LogLapse(lapsed, currentUrl, now);
+                }
+                else
+                {
+                    Telemetry.LogInformation($"{LOG_TAG} No subscription found for call-records, for URL '{currentUrl}'. Creating...");
+                }
+
+                await BeforeValidatedChange();
+                var timer = Stopwatch.StartNew();
                 CallRecordSubscription result;
                 try
                 {
@@ -118,9 +151,12 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
                     LogSubscriptionFailure(ex, currentUrl, isUpdate: false);
                     throw;
                 }
-                Telemetry.LogInformation($"{LOG_TAG} Created subscription id '{result.Id}' for webhook at '{currentUrl}'. Teams call records will start importing as calls end.");
-                await RecordAsync(currentUrl, result, clientState);
-                return;
+                var expires = ExpiryOf(result, action.ExpiryUtc);
+                Telemetry.LogInformation($"{LOG_TAG} Created subscription id '{result.Id}' for webhook at '{currentUrl}' in {timer.ElapsedMilliseconds} ms; " +
+                    $"expires {expires:u}. Teams call records will start importing as calls end.");
+                await RecordAsync(currentUrl, result, clientState, expires);
+                _lastConfirmedUtc = now;
+                return new CallWebhookMaintenanceResult(isLapse ? CallWebhookChange.Recreated : CallWebhookChange.Created, result.Id, expires);
             }
 
             CallSubscriptionRecord record;
@@ -133,16 +169,37 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
                 // Can't tell whether anything needs replacing, so keep what exists alive rather than replace one that may be fine.
                 var keep = current.FirstOrDefault() ?? legacy[0];
                 Telemetry.LogWarning($"{LOG_TAG} Couldn't read which call-records subscription the importer created ({ex.Message}). " +
-                    $"Renewing subscription id '{keep.Id}' without checking its clientState; it is checked again next cycle.");
-                await RenewAsync(keep.Id, action.ExpiryUtc, current.Count > 0 ? currentUrl : webAppUrl);
-                return;
+                    $"Keeping subscription id '{keep.Id}' without checking its clientState; it is checked again on the next check.");
+                if (!CallSubscriptionRules.NeedsRenewal(keep.ExpirationDateTime, now))
+                {
+                    return new CallWebhookMaintenanceResult(CallWebhookChange.None, keep.Id, keep.ExpirationDateTime?.UtcDateTime);
+                }
+                var renewedKeep = await RenewAsync(keep.Id, action.ExpiryUtc, current.Count > 0 ? currentUrl : webAppUrl);
+                return new CallWebhookMaintenanceResult(CallWebhookChange.Renewed, keep.Id, ExpiryOf(renewedKeep, action.ExpiryUtc));
             }
 
             var keyUnchanged = record != null && string.Equals(record.ClientStateFingerprint, clientState.Fingerprint, StringComparison.Ordinal);
+            if (record != null && !keyUnchanged)
+            {
+                await MarkSupersededAsync(currentUrl, record, now);
+            }
+
             var ours = keyUnchanged ? current.FirstOrDefault(s => s.Id == record.SubscriptionId) : null;
+            var deleted = new HashSet<string>(StringComparer.Ordinal);
+            CallWebhookMaintenanceResult outcome;
             if (ours != null)
             {
-                await RenewAsync(ours.Id, action.ExpiryUtc, currentUrl);
+                _lastConfirmedUtc = now;
+                if (CallSubscriptionRules.NeedsRenewal(ours.ExpirationDateTime, now))
+                {
+                    var renewed = await RenewAsync(ours.Id, action.ExpiryUtc, currentUrl);
+                    outcome = new CallWebhookMaintenanceResult(CallWebhookChange.Renewed, ours.Id, ExpiryOf(renewed, action.ExpiryUtc));
+                }
+                else
+                {
+                    outcome = new CallWebhookMaintenanceResult(CallWebhookChange.None, ours.Id, ours.ExpirationDateTime?.UtcDateTime);
+                }
+                await RecordExpiryAsync(currentUrl, record, outcome.ExpiresUtc);
             }
             else
             {
@@ -152,35 +209,198 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
                     : record == null
                         ? "the importer has no record of creating it"
                         : !keyUnchanged
-                            ? "it was created with a client secret that has since changed, so the webhook refuses its notifications"
+                            ? "it was created with a client secret that has since changed, so the webhook only accepts its notifications for a limited time"
                             : "the subscription the importer last created no longer exists";
                 ours = current.Count > 0
-                    ? await ReplaceAsync(currentUrl, current, currentUrl, clientState, action.ExpiryUtc, reason)
-                    : await ReplaceAsync(currentUrl, legacy, webAppUrl, clientState, action.ExpiryUtc, reason);
+                    ? await ReplaceAsync(currentUrl, current, currentUrl, matchingSubs, clientState, action.ExpiryUtc, reason, deleted)
+                    : await ReplaceAsync(currentUrl, legacy, webAppUrl, matchingSubs, clientState, action.ExpiryUtc, reason, deleted);
+                _lastConfirmedUtc = now;
+                outcome = new CallWebhookMaintenanceResult(CallWebhookChange.Replaced, ours.Id, ExpiryOf(ours, action.ExpiryUtc));
             }
 
             // Any other subscription on the current URL is one this replaced: the web app refuses or duplicates its
             // notifications, and an older web app refuses them all, so it goes at once.
-            foreach (var replaced in current.Where(s => s.Id != ours.Id))
+            foreach (var replaced in current.Where(s => s.Id != ours.Id && !deleted.Contains(s.Id)))
             {
                 await DeleteReplacedAsync(replaced);
             }
 
-            await RetireLegacyAsync(currentUrl, legacy);
+            await RetireLegacyAsync(currentUrl, legacy.Where(s => !deleted.Contains(s.Id)).ToList());
+            return outcome;
+        }
+
+        private static DateTime ExpiryOf(CallRecordSubscription subscription, DateTime requestedExpiryUtc)
+        {
+            return subscription?.ExpirationDateTime?.UtcDateTime ?? requestedExpiryUtc;
+        }
+
+        private async Task BeforeValidatedChange()
+        {
+            var hook = BeforeValidatedChangeAsync;
+            if (hook == null) return;
+            try
+            {
+                await hook();
+            }
+            catch (Exception ex)
+            {
+                Telemetry.LogWarning($"{LOG_TAG} Warming the webhook up failed ({ex.GetType().Name}: {ex.Message}); asking Graph anyway.");
+            }
+        }
+
+        /// <summary>The record, or null when there is none or it can't be read - only used to date a lapse.</summary>
+        private async Task<CallSubscriptionRecord> TryGetRecordAsync(Uri currentUrl)
+        {
+            try
+            {
+                return await _records.GetAsync(currentUrl);
+            }
+            catch (Exception)
+            {
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// The subscription the importer created is gone, so Graph sent nothing in between. Warning, not Information: those
+        /// calls are not imported by the webhook, and the gap is what an operator needs to see. See E-7 of the release review.
+        /// </summary>
+        private void LogLapse(CallSubscriptionRecord record, Uri currentUrl, DateTime now)
+        {
+            var expiredAt = record.ExpiresUtc;
+            string what;
+            DateTime? gapFrom;
+            if (expiredAt.HasValue && expiredAt.Value <= now)
+            {
+                what = $"expired at {expiredAt.Value:u} without being renewed";
+                gapFrom = expiredAt.Value;
+            }
+            else
+            {
+                what = expiredAt.HasValue
+                    ? $"no longer exists although it was due to expire at {expiredAt.Value:u} - it was deleted outside the importer"
+                    : "no longer exists, and the importer has no record of when it expired";
+                gapFrom = _lastConfirmedUtc;
+            }
+
+            var gap = gapFrom.HasValue
+                ? $"from {gapFrom.Value:u} to {now:u} ({(now - gapFrom.Value).TotalHours:0.#} h)"
+                : $"up to {now:u} (start unknown: the importer has not seen it since it last restarted)";
+            Telemetry.LogWarning($"{LOG_TAG} Subscription lapsed: subscription id '{record.SubscriptionId}', which the importer created for '{currentUrl}', {what}. " +
+                $"Gap {gap}: Teams calls that ended in it were not notified to the webhook and are not imported. Re-creating the subscription now.");
+        }
+
+        /// <summary>
+        /// The client secret changed since the importer created its subscription. Recording when it noticed is what opens -
+        /// and bounds - the web app's window for that subscription's notifications while it is replaced
+        /// (<see cref="CallSubscriptionRules.PreviousClientStateWindow"/>). Recorded once; best effort.
+        /// </summary>
+        private async Task MarkSupersededAsync(Uri currentUrl, CallSubscriptionRecord record, DateTime now)
+        {
+            if (record.SupersededUtc.HasValue) return;
+
+            record.SupersededUtc = now;
+            var until = now + CallSubscriptionRules.PreviousClientStateWindow;
+            try
+            {
+                await _records.SaveAsync(currentUrl, record);
+                Telemetry.LogWarning($"{LOG_TAG} The client secret has changed since subscription id '{record.SubscriptionId}' was created, so its clientState " +
+                    $"is no longer current. The web app keeps accepting that subscription's notifications until {until:u} at the latest; replacing it now.");
+            }
+            catch (Exception ex)
+            {
+                Telemetry.LogWarning($"{LOG_TAG} The client secret has changed since subscription id '{record.SubscriptionId}' was created, but noting that in the " +
+                    $"runtime state table failed ({ex.GetType().Name}: {ex.Message}), so the web app accepts its notifications only until its recorded expiry. Replacing it now.");
+            }
+        }
+
+        /// <summary>Keeps the record's expiry in step with Graph's, for lapse reports and the web app's window. Best effort.</summary>
+        private async Task RecordExpiryAsync(Uri currentUrl, CallSubscriptionRecord record, DateTime? expiresUtc)
+        {
+            if (record == null || !expiresUtc.HasValue || record.ExpiresUtc == expiresUtc) return;
+            record.ExpiresUtc = expiresUtc;
+            try
+            {
+                await _records.SaveAsync(currentUrl, record);
+            }
+            catch (Exception ex)
+            {
+                Telemetry.LogWarning($"{LOG_TAG} Couldn't record subscription id '{record.SubscriptionId}''s new expiry {expiresUtc:u} in the runtime state table: {ex.Message}");
+            }
         }
 
         /// <summary>
         /// Graph cannot change a subscription's clientState, so create the replacement and only then remove the old
         /// one(s) - never a moment with no subscription. Notifications from both in between are harmless: a call is saved
-        /// by its Graph id, replacing any copy already saved.
+        /// by its Graph id, replacing any copy already saved. If Graph refuses the duplicate (409, as documented though not
+        /// observed for call records), this webhook's subscriptions are deleted first instead - see <see cref="ReplaceAfterConflictAsync"/>.
         /// </summary>
         /// <returns>The new subscription.</returns>
         private async Task<CallRecordSubscription> ReplaceAsync(Uri currentUrl, IReadOnlyList<CallRecordSubscription> existing, Uri existingUrl,
-            CallWebhookClientState clientState, DateTime expiryUtc, string reason)
+            IReadOnlyList<CallRecordSubscription> allOurs, CallWebhookClientState clientState, DateTime expiryUtc, string reason, ISet<string> deleted)
         {
             var existingIds = string.Join("', '", existing.Select(s => s.Id));
             Telemetry.LogInformation($"{LOG_TAG} Replacing call-records subscription id '{existingIds}' with one for webhook at '{currentUrl}': {reason}. " +
                 "The new subscription is created first and the old one removed after it.");
+
+            await BeforeValidatedChange();
+            var timer = Stopwatch.StartNew();
+            CallRecordSubscription created;
+            try
+            {
+                created = await _subscriptions.CreateSubscription(currentUrl, clientState.Value, expiryUtc);
+            }
+            catch (ODataError ex) when (CallSubscriptionRules.IsDuplicateSubscriptionConflict(ex.ResponseStatusCode))
+            {
+                created = await ReplaceAfterConflictAsync(currentUrl, allOurs, clientState, expiryUtc, ex, deleted);
+                await RecordAsync(currentUrl, created, clientState, ExpiryOf(created, expiryUtc));
+                return created;
+            }
+            catch (ODataError ex)
+            {
+                LogSubscriptionFailure(ex, currentUrl, isUpdate: false, replacingSubId: existing[0].Id);
+
+                // Keep the old subscription from lapsing while the replacement is retried.
+                if (CallSubscriptionRules.NeedsRenewal(existing[0].ExpirationDateTime, _clock.UtcNow))
+                {
+                    await RenewAsync(existing[0].Id, expiryUtc, existingUrl);
+                }
+                throw;
+            }
+
+            Telemetry.LogInformation($"{LOG_TAG} Created subscription id '{created.Id}' for webhook at '{currentUrl}' in {timer.ElapsedMilliseconds} ms, " +
+                $"replacing '{existingIds}'; expires {ExpiryOf(created, expiryUtc):u}.");
+            await RecordAsync(currentUrl, created, clientState, ExpiryOf(created, expiryUtc));
+            return created;
+        }
+
+        /// <summary>
+        /// Graph's documented answer to a second subscription for the same resource and change type is 409 Conflict. Then the
+        /// only way to a subscription with the current clientState is to delete this webhook's own first (never another
+        /// URL's) and create straight after - a gap of a Graph round-trip or two, which is logged. If the create then fails,
+        /// there is no subscription at all until the subscription timer's retry, which is why that is an Error.
+        /// </summary>
+        private async Task<CallRecordSubscription> ReplaceAfterConflictAsync(Uri currentUrl, IReadOnlyList<CallRecordSubscription> allOurs,
+            CallWebhookClientState clientState, DateTime expiryUtc, ODataError conflict, ISet<string> deleted)
+        {
+            var ids = string.Join("', '", allOurs.Select(s => s.Id));
+            Telemetry.LogWarning($"{LOG_TAG} Graph refused a second call-records subscription: {StatusLine(conflict)} Graph error: " +
+                $"'{conflict.Error?.Message ?? conflict.Message}'. Deleting this webhook's subscription(s) '{ids}' first, then creating the replacement; " +
+                "call notifications are not delivered in between.");
+
+            var gap = Stopwatch.StartNew();
+            foreach (var old in allOurs)
+            {
+                try
+                {
+                    await _subscriptions.DeleteSubscription(old.Id);
+                }
+                catch (ODataError ex) when (ex.ResponseStatusCode == (int)HttpStatusCode.NotFound)
+                {
+                    // Already gone: nothing in the way.
+                }
+                deleted.Add(old.Id);
+            }
 
             CallRecordSubscription created;
             try
@@ -189,15 +409,14 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
             }
             catch (ODataError ex)
             {
-                LogSubscriptionFailure(ex, currentUrl, isUpdate: false, replacingSubId: existing[0].Id);
-
-                // Keep the old subscription from lapsing while the replacement is retried each cycle.
-                await RenewAsync(existing[0].Id, expiryUtc, existingUrl);
+                LogSubscriptionFailure(ex, currentUrl, isUpdate: false);
+                Telemetry.LogError($"{LOG_TAG} Deleted subscription(s) '{ids}' to make room after a 409 Conflict, but the replacement could not be created " +
+                    $"({StatusLine(ex)}): this webhook has NO call-records subscription until the next attempt.");
                 throw;
             }
 
-            Telemetry.LogInformation($"{LOG_TAG} Created subscription id '{created.Id}' for webhook at '{currentUrl}', replacing '{existingIds}'.");
-            await RecordAsync(currentUrl, created, clientState);
+            Telemetry.LogWarning($"{LOG_TAG} Created subscription id '{created.Id}' for webhook at '{currentUrl}' after deleting '{ids}' (409 Conflict fallback); " +
+                $"notifications were not delivered for {gap.ElapsedMilliseconds} ms. Expires {ExpiryOf(created, expiryUtc):u}.");
             return created;
         }
 
@@ -250,18 +469,21 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
                 var error = ex is ODataError graphError ? $"{StatusLine(graphError)} Graph error: '{graphError.Error?.Message ?? graphError.Message}'" : ex.Message;
                 var expires = old.ExpirationDateTime.HasValue ? $" at {old.ExpirationDateTime.Value.UtcDateTime:u}" : string.Empty;
                 Telemetry.LogWarning($"{LOG_TAG} Couldn't delete replaced subscription id '{old.Id}': {error} " +
-                    $"It is no longer renewed, so Graph removes it when it expires{expires}; deleting it is retried next cycle. Until then " +
+                    $"It is no longer renewed, so Graph removes it when it expires{expires}; deleting it is retried on the next check. Until then " +
                     "a call may be notified twice, which is harmless - saving a call replaces any copy already saved.");
             }
         }
 
-        private async Task RenewAsync(string subscriptionId, DateTime expiryUtc, Uri webAppUrl)
+        private async Task<CallRecordSubscription> RenewAsync(string subscriptionId, DateTime expiryUtc, Uri webAppUrl)
         {
             // https://docs.microsoft.com/en-us/graph/api/subscription-update?view=graph-rest-beta&tabs=http
+            await BeforeValidatedChange();
+            var timer = Stopwatch.StartNew();
             try
             {
                 var result = await _subscriptions.RenewSubscription(subscriptionId, expiryUtc);
-                Telemetry.LogInformation($"{LOG_TAG} Renewed subscription id '{result.Id}' for webhook at '{webAppUrl}'. New expiry: {result.ExpirationDateTime:u}.");
+                Telemetry.LogInformation($"{LOG_TAG} Renewed subscription id '{result.Id}' for webhook at '{webAppUrl}' in {timer.ElapsedMilliseconds} ms. New expiry: {result.ExpirationDateTime:u}.");
+                return result;
             }
             catch (ODataError ex)
             {
@@ -274,7 +496,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
         /// A record that cannot be written is not fatal: <see cref="CallSubscriptionRecordStore"/> keeps this process's
         /// copy, so the worst case is one more replacement after a restart.
         /// </summary>
-        private async Task RecordAsync(Uri webAppUrl, CallRecordSubscription created, CallWebhookClientState clientState)
+        private async Task RecordAsync(Uri webAppUrl, CallRecordSubscription created, CallWebhookClientState clientState, DateTime expiresUtc)
         {
             try
             {
@@ -282,7 +504,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
                 {
                     SubscriptionId = created.Id,
                     ClientStateFingerprint = clientState.Fingerprint,
-                    CreatedUtc = _clock.UtcNow
+                    CreatedUtc = _clock.UtcNow,
+                    ExpiresUtc = expiresUtc
                 });
             }
             catch (Exception ex)
@@ -303,17 +526,17 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
         }
 
         /// <summary>
-        /// Emit a single, actionable critical log so operators can immediately tell:
+        /// Emit a single, actionable log - at <see cref="SubscriptionFailureLevel"/> - so operators can immediately tell:
         ///   (a) that the Teams calls import is broken,
         ///   (b) what Graph returned (status + message),
         ///   (c) for the common 403 case, exactly which Graph Application permission to grant, and
         ///   (d) for a failed validation callback, that the fault is at OUR endpoint rather than in
         ///       Graph permissions - see issue #273.
-        /// The exception is then re-thrown by the caller so Program.cs's outer catch also runs
-        /// TrackException, surfacing it in App Insights' Failures blade.
+        /// The exception is then re-thrown by the caller so <c>CallSubscriptionMaintainer</c> schedules the retry and, once
+        /// it escalates, tracks the exception for App Insights' Failures blade.
         /// </summary>
         /// <param name="replacingSubId">
-        /// Set when the failed create was to replace this subscription, which is renewed meanwhile - so the impact is
+        /// Set when the failed create was to replace this subscription, which is kept alive meanwhile - so the impact is
         /// stated as it is rather than as "nothing is imported".
         /// </param>
         private void LogSubscriptionFailure(ODataError ex, Uri webAppUrl, bool isUpdate, string existingSubId = null, string replacingSubId = null)
@@ -326,21 +549,21 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
             var graphError = ex.Error?.Message ?? ex.Message;
             var impact = replacingSubId == null
                 ? "Until this is fixed, NO Teams call records will be imported."
-                : $"Subscription '{replacingSubId}' is renewed meanwhile and the replacement retried every cycle, but its notifications are " +
-                  "only imported while the webhook accepts its clientState - not at all if the client secret has been rotated since it was created.";
+                : $"Subscription '{replacingSubId}' is kept alive meanwhile and the replacement retried within minutes. After a client-secret rotation the " +
+                  $"webhook accepts its notifications for up to {CallSubscriptionRules.PreviousClientStateWindow.TotalHours:0} hours, so calls are only lost if the replacement keeps failing.";
 
             var validation = CallSubscriptionRules.ClassifyValidationCallbackFailure(graphError);
 
             if (validation.IsValidationCallbackFailure)
             {
-                Telemetry.LogCritical(
+                Telemetry.Log(SubscriptionFailureLevel,
                     $"{LOG_TAG} Couldn't {action} for call-records at '{webAppUrl}'. {statusLine} " +
                     BuildValidationCallbackDiagnosis(validation, webAppUrl) +
                     $" {impact} Graph error: '{graphError}'");
             }
             else if (statusCode == (int)HttpStatusCode.Forbidden)
             {
-                Telemetry.LogCritical(
+                Telemetry.Log(SubscriptionFailureLevel,
                     $"{LOG_TAG} Couldn't {action} for call-records at '{webAppUrl}'. {statusLine} " +
                     $"This is almost always because the importer's Azure AD app registration is missing the " +
                     $"'{REQUIRED_GRAPH_PERMISSION}' Application permission on Microsoft Graph, or admin consent " +
@@ -350,9 +573,17 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
                     $"Grant admin consent for the tenant. " +
                     $"{impact} Graph error: '{graphError}'");
             }
+            else if (!isUpdate && CallSubscriptionRules.IsDuplicateSubscriptionConflict(statusCode))
+            {
+                Telemetry.Log(SubscriptionFailureLevel,
+                    $"{LOG_TAG} Couldn't {action} for call-records at '{webAppUrl}'. {statusLine} " +
+                    "Graph says a call-records subscription already exists for this app, but none is on this webhook's URLs, so the importer " +
+                    "deletes nothing: look for one this app registration created on an earlier web app URL, and delete it if it is this deployment's. " +
+                    $"{impact} Graph error: '{graphError}'");
+            }
             else
             {
-                Telemetry.LogCritical(
+                Telemetry.Log(SubscriptionFailureLevel,
                     $"{LOG_TAG} Couldn't {action} for call-records at '{webAppUrl}'. {statusLine} " +
                     $"{impact} Graph error: '{graphError}'");
             }

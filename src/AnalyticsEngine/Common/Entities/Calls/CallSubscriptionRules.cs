@@ -43,6 +43,48 @@ namespace Common.Entities.Calls
         public const int SubscriptionLifetimeDays = 2;
 
         /// <summary>
+        /// A subscription is renewed once less than this is left of it. Graph validates the notification endpoint on a
+        /// renewal as well as on a create, so renewing on every check (the importer checks every
+        /// <c>CallSubscriptionMaintainer.HealthyCheckInterval</c>) would put the webhook through a validation round-trip
+        /// that often for nothing. Half the lifetime leaves a day for a failing renewal to be retried before it lapses.
+        /// </summary>
+        public static readonly TimeSpan RenewWhenRemainingBelow = TimeSpan.FromHours(24);
+
+        /// <summary>
+        /// How long, after the importer notices a client-secret rotation, the web app keeps accepting notifications from
+        /// the subscription created with the previous secret's clientState (<see cref="CallSubscriptionRecord.SupersededUtc"/>).
+        /// The importer replaces that subscription within minutes when the webhook is reachable; this only has to cover a
+        /// replacement that keeps failing, and it bounds how long a previous secret's clientState is honoured at all.
+        /// </summary>
+        public static readonly TimeSpan PreviousClientStateWindow = TimeSpan.FromHours(24);
+
+        /// <summary>The webhook's path under the web app's URL. Program.cs and the status page build the same URL.</summary>
+        public const string WebhookPath = "api/CallRecordWebhook";
+
+        /// <summary>The webhook's own URL for a deployment's <c>WebAppURL</c> setting, or null when that isn't a valid absolute URL.</summary>
+        public static Uri WebhookUrlFor(string webAppUrl)
+        {
+            if (string.IsNullOrWhiteSpace(webAppUrl)) return null;
+            return Uri.TryCreate(webAppUrl + WebhookPath, UriKind.Absolute, out var url) ? url : null;
+        }
+
+        /// <summary>
+        /// Whether a subscription expiring at <paramref name="expiry"/> should be renewed now. An unknown expiry is renewed:
+        /// renewing a healthy subscription costs one Graph call, letting one lapse costs every call until it is noticed.
+        /// </summary>
+        public static bool NeedsRenewal(DateTimeOffset? expiry, DateTime nowUtc)
+        {
+            return expiry == null || expiry.Value.UtcDateTime - nowUtc < RenewWhenRemainingBelow;
+        }
+
+        /// <summary>
+        /// Graph documents a <b>409 Conflict</b> for a subscription that duplicates an existing one ("already exists for the
+        /// requested combination"). Observed behaviour for call records is to accept the duplicate, which the create-then-
+        /// delete replacement relies on; this is what the importer falls back on if Graph starts enforcing it.
+        /// </summary>
+        public static bool IsDuplicateSubscriptionConflict(int httpStatus) => httpStatus == 409;
+
+        /// <summary>
         /// Whether a Graph subscription is this deployment's call-records subscription. Both the
         /// resource and the notification URL must match: a tenant can legitimately have call-records
         /// subscriptions belonging to other applications, and renewing one of those would take over
@@ -66,10 +108,10 @@ namespace Common.Entities.Calls
         /// Decide whether to create a new subscription or renew an existing one.
         /// </summary>
         /// <remarks>
-        /// Renewal is unconditional when a subscription exists - it does not wait for the expiry to get
-        /// close. The importer runs on a cycle that may be hours apart and Graph caps the lifetime at
-        /// two days, so pushing the expiry out every cycle is what keeps the webhook alive.
-        /// When more than one matches, the first is renewed (Graph's own ordering), which is what the
+        /// <see cref="CallSubscriptionActionKind.Renew"/> means "a subscription exists, keep it": whether it is actually
+        /// renewed now is <see cref="NeedsRenewal"/>'s decision, because the importer checks far more often than the
+        /// subscription needs renewing (see <see cref="RenewWhenRemainingBelow"/>).
+        /// When more than one matches, the first is the one kept (Graph's own ordering), which is what the
         /// importer has always done.
         /// </remarks>
         public static CallSubscriptionAction Decide(IReadOnlyList<CallRecordSubscription> existingSubscriptions, DateTime nowUtc)

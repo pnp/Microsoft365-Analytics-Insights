@@ -23,6 +23,8 @@ namespace UnitTests.FakeLoaderClasses
         private readonly List<CallRecordSubscription> _existing = new List<CallRecordSubscription>();
 
         private Exception _createFailure;
+        private int _createFailuresLeft;
+        private bool _refuseDuplicates;
         private Exception _renewFailure;
         private Exception _deleteFailure;
         private int _created;
@@ -75,9 +77,21 @@ namespace UnitTests.FakeLoaderClasses
             return this;
         }
 
-        public FakeCallRecordSubscriptionManager FailingCreateWith(Exception ex)
+        /// <param name="times">How many creates fail before they start succeeding - a cold web app warms up.</param>
+        public FakeCallRecordSubscriptionManager FailingCreateWith(Exception ex, int times = int.MaxValue)
         {
             _createFailure = ex;
+            _createFailuresLeft = times;
+            return this;
+        }
+
+        /// <summary>
+        /// Enforce what Graph documents but does not do today for call records: a second subscription on the same resource
+        /// is refused with 409 Conflict.
+        /// </summary>
+        public FakeCallRecordSubscriptionManager RefusingDuplicates()
+        {
+            _refuseDuplicates = true;
             return this;
         }
 
@@ -107,7 +121,22 @@ namespace UnitTests.FakeLoaderClasses
             // surfaces when the returned task is awaited. Throwing synchronously here would let a
             // caller that forgot to await still land in the catch block - which is exactly the
             // silent-failure bug commit 560e501 had to fix.
-            if (_createFailure != null) return Task.FromException<CallRecordSubscription>(_createFailure);
+            if (_createFailure != null && _createFailuresLeft > 0)
+            {
+                _createFailuresLeft--;
+                return Task.FromException<CallRecordSubscription>(_createFailure);
+            }
+
+            if (_refuseDuplicates && _existing.Any(s => s.Resource == CallSubscriptionRules.CallRecordsResource
+                && CallSubscriptionRules.IsCallRecordsSubscriptionFor(s.Resource, s.NotificationUrl, new Uri("https://contoso-analytics.example/api/CallRecordWebhook"))))
+            {
+                Operations.Add("conflict");
+                return Task.FromException<CallRecordSubscription>(new Microsoft.Graph.Models.ODataErrors.ODataError
+                {
+                    ResponseStatusCode = 409,
+                    Error = new Microsoft.Graph.Models.ODataErrors.MainError { Code = "ExtensionError", Message = "Subscription already exists for the requested combination." }
+                });
+            }
 
             _created++;
             var created = new CallRecordSubscription
@@ -130,6 +159,7 @@ namespace UnitTests.FakeLoaderClasses
             if (_renewFailure != null) return Task.FromException<CallRecordSubscription>(_renewFailure);
 
             Operations.Add("renew:" + subscriptionId);
+            foreach (var renewed in _existing.Where(s => s.Id == subscriptionId)) renewed.ExpirationDateTime = expiryUtc;
             return Task.FromResult(new CallRecordSubscription
             {
                 Id = subscriptionId,
