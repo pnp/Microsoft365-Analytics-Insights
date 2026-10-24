@@ -122,7 +122,10 @@ namespace Tests.UnitTests
             {
                 db.Open();
                 var mdf = Path.Combine(_folder, "CopilotCostPreview.mdf").Replace("'", "''");
-                using (var cmd = new SqlCommand($"CREATE DATABASE CopilotCostPreview ON (NAME=CopilotCostPreview,FILENAME=N'{mdf}');", db))
+                var ldf = Path.Combine(_folder, "CopilotCostPreview_log.ldf").Replace("'", "''");
+                using (var cmd = new SqlCommand(
+                    $"CREATE DATABASE CopilotCostPreview ON (NAME=CopilotCostPreview,FILENAME=N'{mdf}') " +
+                    $"LOG ON (NAME=CopilotCostPreview_log,FILENAME=N'{ldf}');", db))
                     cmd.ExecuteNonQuery();
             }
             _connection = $@"Server=(localdb)\{_instance};Database=CopilotCostPreview;Integrated Security=true;TrustServerCertificate=true";

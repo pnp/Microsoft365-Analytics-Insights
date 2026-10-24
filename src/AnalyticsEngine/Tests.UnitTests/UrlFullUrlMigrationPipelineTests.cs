@@ -3,11 +3,9 @@ using Common.Entities.Migrations;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System;
 using System.Data;
+using System.Data.Entity.Infrastructure;
 using System.Data.Entity.Migrations;
 using Microsoft.Data.SqlClient;
-// Aliased rather than imported: an unqualified `using System.Configuration` makes `Configuration`
-// ambiguous with the EF migrations Configuration this file already uses.
-using ConfigurationManager = System.Configuration.ConfigurationManager;
 
 namespace Tests.UnitTests
 {
@@ -33,6 +31,8 @@ namespace Tests.UnitTests
     /// <see cref="AnalyticsEntitiesContext"/> so the DEBUG auto-migrate initializer
     /// (<c>MigrateDatabaseToLatestVersion</c>) does not fire and silently jump the DB to latest
     /// before we have asserted the intermediate state.
+    /// Each test starts with an empty scratch database, so preparing an old state never rolls back
+    /// unrelated later migrations that deliberately refuse to discard retained data.
     /// </summary>
     [TestClass]
     public class UrlFullUrlMigrationPipelineTests
@@ -125,34 +125,17 @@ namespace Tests.UnitTests
             "https://contoso.sharepoint.com/sites/example/Shared Documents/" +
             "\u039A\u03B1\u03BB\u03B7\u03BC\u03AD\u03C1\u03B1 \u03BA\u03CC\u03C3\u03BC\u03B5.pdf";
 
-        private static string _connStr;
-        private static string ConnStr()
-        {
-            if (_connStr == null)
-            {
-                // Read the connection string from configuration rather than from a DbContext instance.
-                // These tests deliberately park the database on an OLD migration, and in a Release build the
-                // context's initializer is CreateDatabaseIfNotExists, which validates the current model
-                // against the last __MigrationHistory row and throws "The model backing the
-                // 'AnalyticsEntitiesContext' context has changed since the database was created" whenever the
-                // two differ. In DEBUG the constructor is worse still: it touches ObjectContext (to set
-                // CommandTimeout), which is enough to run MigrateDatabaseToLatestVersion and silently jump the
-                // database forward in between MigrateTo(...) and the assertion. The connection string is the
-                // only thing wanted here, so take it from config and never touch EF.
-                var configured = System.Configuration.ConfigurationManager.ConnectionStrings["SPOInsightsEntities"];
-                if (configured != null)
-                {
-                    _connStr = configured.ConnectionString;
-                }
-                else
-                {
-                    throw new InvalidOperationException("Connection string 'SPOInsightsEntities' is not configured for the test run.");
-                }
-            }
-            return _connStr;
-        }
+        private ScratchDatabase _database;
 
-        private static void ExecRaw(string sql)
+        [TestInitialize]
+        public void CreateDatabase() => _database = ScratchDatabase.Create("UrlMigrationPipeline");
+
+        [TestCleanup]
+        public void DropDatabase() => _database?.Dispose();
+
+        private string ConnStr() => _database.ConnectionString;
+
+        private void ExecRaw(string sql)
         {
             using (var c = new SqlConnection(ConnStr()))
             {
@@ -162,7 +145,7 @@ namespace Tests.UnitTests
             }
         }
 
-        private static T ScalarRaw<T>(string sql)
+        private T ScalarRaw<T>(string sql)
         {
             using (var c = new SqlConnection(ConnStr()))
             {
@@ -175,7 +158,7 @@ namespace Tests.UnitTests
             }
         }
 
-        private static int InsertUrlRaw(string url)
+        private int InsertUrlRaw(string url)
         {
             using (var c = new SqlConnection(ConnStr()))
             {
@@ -191,7 +174,7 @@ namespace Tests.UnitTests
             }
         }
 
-        private static string GetUrlRaw(int id)
+        private string GetUrlRaw(int id)
         {
             using (var c = new SqlConnection(ConnStr()))
             {
@@ -204,7 +187,7 @@ namespace Tests.UnitTests
             }
         }
 
-        private static void DeleteUrlRaw(int id)
+        private void DeleteUrlRaw(int id)
         {
             using (var c = new SqlConnection(ConnStr()))
             {
@@ -217,11 +200,11 @@ namespace Tests.UnitTests
             }
         }
 
-        private static string LastMigrationId()
+        private string LastMigrationId()
             => ScalarRaw<string>("SELECT TOP 1 MigrationId FROM dbo.__MigrationHistory ORDER BY LEFT(MigrationId, 15) DESC");
 
         /// <summary>True when full_url is exactly nvarchar(850) (= 1700 bytes).</summary>
-        private static bool ColumnIsNvarchar850()
+        private bool ColumnIsNvarchar850()
             => ScalarRaw<int>(
                 @"SELECT COUNT(*) FROM sys.columns c
                   INNER JOIN sys.types t ON c.user_type_id = t.user_type_id
@@ -229,7 +212,7 @@ namespace Tests.UnitTests
                     AND t.name = N'nvarchar' AND c.max_length = 1700") > 0;
 
         /// <summary>Human-readable current full_url type, for assertion messages.</summary>
-        private static string ColumnType()
+        private string ColumnType()
             => ScalarRaw<string>(
                 @"SELECT t.name + N'(' +
                     CASE WHEN c.max_length = -1 THEN N'max'
@@ -239,12 +222,17 @@ namespace Tests.UnitTests
                   INNER JOIN sys.types t ON c.user_type_id = t.user_type_id
                   WHERE c.object_id = OBJECT_ID(N'dbo.urls') AND c.name = N'full_url'");
 
-        private static bool IndexExists()
+        private bool IndexExists()
             => ScalarRaw<int>(
                 "SELECT COUNT(*) FROM sys.indexes WHERE object_id = OBJECT_ID(N'dbo.urls') AND name = N'" + IndexName + "'") > 0;
 
-        private static void MigrateTo(string migrationId) => new DbMigrator(new Configuration()).Update(migrationId);
-        private static void MigrateToLatest() => new DbMigrator(new Configuration()).Update();
+        private DbMigrator NewMigrator() => new DbMigrator(new Configuration
+        {
+            TargetDatabase = new DbConnectionInfo(ConnStr(), "Microsoft.Data.SqlClient")
+        });
+
+        private void MigrateTo(string migrationId) => NewMigrator().Update(migrationId);
+        private void MigrateToLatest() => NewMigrator().Update();
 
         /// <summary>
         /// State B: a database whose last migration is <c>RemoveDataverseTables</c> (the previous
@@ -286,7 +274,6 @@ namespace Tests.UnitTests
             finally
             {
                 if (seededId > 0) { try { DeleteUrlRaw(seededId); } catch { /* best effort */ } }
-                MigrateToLatest(); // leave the shared DB fully migrated for other tests
             }
         }
 
@@ -339,7 +326,6 @@ namespace Tests.UnitTests
             finally
             {
                 if (seededId > 0) { try { DeleteUrlRaw(seededId); } catch { /* best effort */ } }
-                MigrateToLatest(); // leave the shared DB fully migrated for other tests
             }
         }
 
