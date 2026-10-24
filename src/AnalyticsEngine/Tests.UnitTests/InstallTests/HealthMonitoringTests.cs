@@ -96,6 +96,55 @@ namespace Tests.UnitTests.InstallTests
         }
 
         [TestMethod]
+        public void Heartbeat_ReportsTheBuildAndTheStageInProgress_OnEachSlot()
+        {
+            var channel = new RecordingChannel();
+            var stages = new StageTracker();
+            ProcessIdentity.Configure(ImporterHeartbeat.ActivityJob, "Build 0000 (synthetic)");
+            try
+            {
+                using (var configuration = new TelemetryConfiguration
+                {
+                    TelemetryChannel = channel,
+                    ConnectionString = "InstrumentationKey=00000000-0000-0000-0000-000000000000"
+                })
+                {
+                    var logger = new AnalyticsLogger(new TelemetryClient(configuration), ImporterHeartbeat.ActivityJob);
+                    using (var heartbeat = new ImporterHeartbeat(logger, ImporterHeartbeat.ActivityJob, TimeSpan.FromHours(1), stages))
+                    {
+                        var idle = channel.Events.Last();
+                        Assert.AreEqual("Build 0000 (synthetic)", idle.Properties["BuildLabel"]);
+                        Assert.IsFalse(idle.Properties.ContainsKey("CurrentStage"), "An idle process reports no stage.");
+
+                        var main = stages.Begin(logger, "GraphMainPass");
+                        var section = stages.Begin(logger, "UserMetadata");
+                        var deferred = stages.Begin(logger, "GraphDeferredPass", StageSlot.Background);
+                        heartbeat.CycleCompleted(TimeSpan.FromSeconds(1));
+
+                        var busy = channel.Events.Last();
+                        Assert.AreEqual("GraphMainPass/UserMetadata", busy.Properties["CurrentStage"]);
+                        Assert.IsTrue(DateTime.TryParse(busy.Properties["StageStartedUtc"], out var started));
+                        Assert.IsTrue(DateTime.UtcNow - started.ToUniversalTime() < TimeSpan.FromMinutes(1));
+                        Assert.AreEqual("GraphDeferredPass", busy.Properties["BackgroundStage"]);
+                        Assert.IsTrue(busy.Properties.ContainsKey("BackgroundStageStartedUtc"));
+
+                        section.Succeeded();
+                        main.Succeeded();
+                        deferred.Succeeded();
+                        heartbeat.CycleCompleted(TimeSpan.FromSeconds(2));
+                        var finished = channel.Events.Last();
+                        Assert.IsFalse(finished.Properties.ContainsKey("CurrentStage"));
+                        Assert.IsFalse(finished.Properties.ContainsKey("BackgroundStage"));
+                    }
+                }
+            }
+            finally
+            {
+                ProcessIdentity.Configure(null, null);
+            }
+        }
+
+        [TestMethod]
         public async Task Provisioning_CreatesOnlyExpectedRules_WithEmptyInputDetectionAndDependencies()
         {
             var task = new FakeTask(true, true, false);

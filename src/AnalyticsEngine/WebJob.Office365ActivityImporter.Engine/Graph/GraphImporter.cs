@@ -116,7 +116,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         /// that is running it (<see cref="GetAndSaveAllGraphData"/>, <see cref="GetAndSaveNonDeferredGraphData"/>
         /// or <see cref="GetAndSaveDeferredGraphData"/>) and skipping the sections that come after it.
         /// </summary>
-        private async Task RunGraphSectionIfDueAsync(string key, int intervalHours, string sectionName, Func<Task<bool>> sectionWork)
+        private async Task RunGraphSectionIfDueAsync(string key, int intervalHours, string sectionName, Func<Task<bool>> sectionWork, StageSlot slot)
         {
             var force = _settings.ForceGraphMetadataImport;
             var lastRun = await _lastRunStore.GetLastRunUtc(key);
@@ -138,16 +138,30 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             var timer = new JobTimer(_logger, sectionName);
             timer.Start();
 
-            var succeeded = await sectionWork();
+            // A stage per section, so a hang or a slow section shows in the heartbeat and an ImportStage event is sent
+            // for a failure too (JobTimer's finished event is only sent on success).
+            var stage = StageTracker.Process.Begin(_logger, sectionName, slot);
+            bool succeeded;
+            try
+            {
+                succeeded = await sectionWork();
+            }
+            catch (Exception ex)
+            {
+                stage.Failed(ex);
+                throw;
+            }
 
             // Only claim the section finished when it actually did; otherwise a permanently failing section
             // would emit a healthy "finished" event on every cycle.
             if (succeeded)
             {
+                stage.Succeeded();
                 timer.TrackFinishedEventAndStopTimer(AnalyticsLogger.AnalyticsEvent.FinishedSectionImport);
             }
             else
             {
+                stage.Failed(reason: "DidNotComplete");
                 _logger.LogWarning($"{sectionName} did not complete successfully; it will be retried on the next cycle.");
             }
 
@@ -164,14 +178,31 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         /// for that phase, returning false is the ordinary "throttled, nothing to do" answer and would warn on
         /// every cycle inside the window.
         /// </summary>
-        private async Task RunUngatedSectionAsync(IGraphImportSection section)
+        private async Task RunUngatedSectionAsync(IGraphImportSection section, StageSlot slot)
         {
             var timer = new JobTimer(_logger, section.Name);
             timer.Start();
 
-            if (await section.RunAsync())
+            var stage = StageTracker.Process.Begin(_logger, section.Name, slot);
+            bool ran;
+            try
             {
+                ran = await section.RunAsync();
+            }
+            catch (Exception ex)
+            {
+                stage.Failed(ex);
+                throw;
+            }
+
+            if (ran)
+            {
+                stage.Succeeded();
                 timer.TrackFinishedEventAndStopTimer(AnalyticsLogger.AnalyticsEvent.FinishedSectionImport);
+            }
+            else
+            {
+                stage.Skipped("throttled");
             }
         }
 
@@ -236,13 +267,14 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                     continue;
                 }
 
+                var slot = deferredPass ? StageSlot.Background : StageSlot.Cycle;
                 if (section.CadenceKey != null)
                 {
-                    await RunGraphSectionIfDueAsync(section.CadenceKey, section.IntervalHours, section.Name, section.RunAsync);
+                    await RunGraphSectionIfDueAsync(section.CadenceKey, section.IntervalHours, section.Name, section.RunAsync, slot);
                 }
                 else
                 {
-                    await RunUngatedSectionAsync(section);
+                    await RunUngatedSectionAsync(section, slot);
                 }
             }
         }

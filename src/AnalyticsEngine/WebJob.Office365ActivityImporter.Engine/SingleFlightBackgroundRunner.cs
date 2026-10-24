@@ -99,8 +99,7 @@ namespace WebJob.Office365ActivityImporter.Engine
                 {
                     try
                     {
-                        _logger.TrackException(ex);
-                        _logger.LogCritical($"Got exception on {_name}: {ex.Message}");
+                        _logger.LogCritical($"Got exception on {_name}: {CommonExceptionHandler.GetErrorText(ex)}", ex);
                     }
                     catch
                     {
