@@ -421,4 +421,10 @@
   <Target Name="BeforeBuild">
     <TransformXml Source="Web.Template.config" Transform="Web.$(Configuration).config" Destination="Web.config" />
   </Target>
+  <ItemGroup>
+    <Compile Include="App_Start\Startup.CopilotCosts.cs" />
+    <Compile Include="Controllers\CopilotCostConnectionAPIController.cs" />
+    <Compile Include="Models\CopilotCosts\CostConnectionRuntime.cs" />
+    <Compile Include="Models\CopilotCosts\CostMsalIdentity.cs" />
+  </ItemGroup>
 </Project>

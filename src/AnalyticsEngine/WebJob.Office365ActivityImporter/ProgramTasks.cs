@@ -18,6 +18,7 @@ using WebJob.Office365ActivityImporter.Engine;
 using WebJob.Office365ActivityImporter.Engine.ActivityAPI;
 using WebJob.Office365ActivityImporter.Engine.ActivityAPI.Loaders;
 using WebJob.Office365ActivityImporter.Engine.AgentCosts;
+using Common.Entities.CopilotCosts;
 using WebJob.Office365ActivityImporter.Engine.Graph;
 using WebJob.Office365ActivityImporter.Engine.Graph.Copilot.AuditBackfill;
 using WebJob.Office365ActivityImporter.Engine.Graph.Calls;
@@ -53,6 +54,7 @@ namespace WebJob.Office365ActivityImporter
         // the directory has said do not exist (so they are neither asked about nor offered for re-linking every pass).
         private static readonly InMemoryKeyValueStore InMemoryAgentCostStateStore = new InMemoryKeyValueStore();
         private static readonly AgentCostDirectoryMissCache AgentCostDirectoryMisses = new AgentCostDirectoryMissCache();
+        private DateTimeOffset _copilotCostRetryAt;
 
         public ProgramTasks(AnalyticsLogger logger, AppConfig settings, ISingleDateStore activityReportsLastImportedStore = null, IImportLastRunStore graphLastRunStore = null, ISentEmailMailboxSkipList sentEmailMailboxSkipList = null)
             : this(logger, settings, activityReportsLastImportedStore, graphLastRunStore, sentEmailMailboxSkipList, reportCompletionStore: null)
@@ -168,6 +170,7 @@ namespace WebJob.Office365ActivityImporter
             {
                 return;
             }
+
             await _graphAppIndentityOAuthContext.InitClientCredential();
             _graphClient = GraphServiceClientFactory.CreateForGraphImport(_graphAppIndentityOAuthContext.Creds, _logger);
             _manualGraphCallClient = new ManualGraphCallClient(_graphAppIndentityOAuthContext, _logger);
@@ -176,6 +179,21 @@ namespace WebJob.Office365ActivityImporter
             _isInitialized = true;
 
         }
+
+        internal async Task ImportCopilotCosts()
+        {
+            if (!_settings.ImportJobSettings.CopilotCostManagement) return;
+            if (DateTimeOffset.UtcNow < _copilotCostRetryAt) return;
+            var status = await CostCollectorRuntime.RunAsync(_settings, System.Threading.CancellationToken.None);
+            if (status != "sliceCompleted" && status != "observed" && status != "partial")
+                _copilotCostRetryAt = DateTimeOffset.UtcNow.AddMinutes(status == "idle" ? 1 : 5);
+            // Only stable, application-authored classifications; never exception text/SQL/request URLs.
+            _logger.LogInformation("Copilot cost preview collection: {Outcome}", status);
+        }
+
+        internal bool CopilotCostsEnabled => _settings.ImportJobSettings.CopilotCostManagement
+            && _settings.CopilotCostConnectionEnabled
+            && !string.IsNullOrWhiteSpace(_settings.ConnectionStrings?.StorageConnectionString);
 
         /// <summary>
         /// Refreshes the Copilot Adoption leadership cohort's membership when it is due (#654). Does nothing when no

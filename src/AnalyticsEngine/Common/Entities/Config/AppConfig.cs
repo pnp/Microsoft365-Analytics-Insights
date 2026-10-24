@@ -124,6 +124,8 @@ namespace Common.Entities.Config
                     throw new ConfigurationErrorsException("TeamsMaxChannelsPerTeamPerCycle must be an integer between 0 and 2147483647. Zero disables the budget.");
                 this.TeamsMaxChannelsPerTeamPerCycle = teamsChannelBudget;
             }
+            this.CopilotCostConnectionEnabled = ParseCopilotCostConnectionEnabled(
+                ConfigurationManager.AppSettings.Get(CopilotCostConnectionEnabledSettingName));
 
             this.StatsApiSecret = ConfigurationManager.AppSettings.Get("StatsApiSecret");
             this.StatsApiUrl = ConfigurationManager.AppSettings.Get("StatsApiUrl");
@@ -517,6 +519,25 @@ namespace Common.Entities.Config
         /// Reads stop between channels, never part-way through an additive statistics batch.
         /// </summary>
         public int TeamsMaxChannelsPerTeamPerCycle { get; set; }
+
+        /// <summary>App Service application setting that switches the Copilot credit history preview on.</summary>
+        public const string CopilotCostConnectionEnabledSettingName = "CopilotCostConnectionEnabled";
+
+        /// <summary>
+        /// PREVIEW. Whether the Copilot credit history connection is switched on for this deployment.
+        /// </summary>
+        /// <remarks>
+        /// The installer writes this setting from <see cref="ImportTaskSettings.CopilotCostManagement"/> on
+        /// every run (always "true" or "false"), so it mirrors the saved installer toggle. Only a value that
+        /// parses as <c>true</c> enables it; a missing or malformed value is off rather than guessed.
+        /// </remarks>
+        public bool CopilotCostConnectionEnabled { get; set; } = false;
+
+        /// <summary>Strict parse of <see cref="CopilotCostConnectionEnabledSettingName"/>: anything but "true" is off.</summary>
+        public static bool ParseCopilotCostConnectionEnabled(string value)
+        {
+            return bool.TryParse(value?.Trim(), out var enabled) && enabled;
+        }
 
         public string StatsApiSecret { get; set; } = null;
         public string StatsApiUrl { get; set; } = null;

@@ -98,6 +98,15 @@ namespace Tests.UnitTests
             ["CopilotAdoptionAPIController.ExportCowork"] = Pii,
             ["CopilotAdoptionAPIController.ExportWorkbook"] = Any,     // trims the per-person sheets
 
+            // These actions enforce the separate tenant/application-bound CopilotCostConnection.Operator
+            // role inline. Other signed-in users receive only operatorRequired, never connection data.
+            ["CopilotCostConnectionAPIController.Status"] = Any,
+            ["CopilotCostConnectionAPIController.Collection"] = Any,
+            ["CopilotCostConnectionAPIController.Connect"] = Any,
+            ["CopilotCostConnectionAPIController.Disconnect"] = Any,
+            ["CopilotCostConnectionAPIController.Probe"] = Any,
+            ["CopilotCostConnectionAPIController.ResetProbe"] = Any,
+
             ["DlpAPIController.Availability"] = Any,
             ["DlpAPIController.Summary"] = Any,                        // trims the top-users table
             ["DlpAPIController.Governance"] = Any,                     // tenant-level rates and model/plugin names only

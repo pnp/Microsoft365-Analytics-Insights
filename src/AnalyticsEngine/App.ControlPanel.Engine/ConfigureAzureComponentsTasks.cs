@@ -559,16 +559,17 @@ namespace App.ControlPanel.Engine
                 appSettings.Properties.Add(setting.Key, setting.Value);
             }
 
-            appSettings.Properties.Add("ImportJobSettings", this.Config.SolutionConfig.ImportTaskSettings.ToSettingsString());
+            AddImportSelectionAppSettings(appSettings.Properties, this.Config.SolutionConfig.ImportTaskSettings);
             appSettings.Properties.Add("EnableDefaultHealthChecks", (this.Config.HealthMonitoring?.Enabled == true).ToString());
             if (this.Config.TeamsMaxChannelsPerTeamPerCycle < 0)
                 throw new InvalidOperationException("TeamsMaxChannelsPerTeamPerCycle must be zero or positive.");
             appSettings.Properties.Add("TeamsMaxChannelsPerTeamPerCycle",
                 this.Config.TeamsMaxChannelsPerTeamPerCycle.ToString(System.Globalization.CultureInfo.InvariantCulture));
 
-            // Office 365 Management Activity API feeds to subscribe to, derived from the selected
-            // audit-based imports (Copilot => Audit.General, SharePoint audit => Audit.SharePoint).
-            appSettings.Properties.Add("ContentTypesListAsString", this.Config.SolutionConfig.ImportTaskSettings.ToActivityApiContentTypesString());
+            if (this.Config.SolutionConfig.ImportTaskSettings.CopilotCostManagement)
+            {
+                _logger.LogWarning(CopilotCostPreviewDeploymentWarning);
+            }
 
             // When private VNet is enabled, ensure the app service routes all outbound traffic through
             // the VNet so that private DNS zones resolve Azure PaaS hostnames to private endpoint IPs.
@@ -623,6 +624,34 @@ namespace App.ControlPanel.Engine
             await webApp.UpdateConnectionStringsAsync(connectionStrings);
 
             _logger.LogInformation("App Service connection-strings & app-settings configured");
+        }
+
+        internal const string CopilotCostPreviewDeploymentWarning =
+            "Copilot credit history (PREVIEW) is enabled. It reads Microsoft Graph beta APIs that can change without "
+            + "notice and are not supported for production use. The installer has NOT granted any permission, consent "
+            + "or app-role assignment for it: assign the 'CopilotCostConnection.Operator' app role to the administrators "
+            + "who will operate it, then sign in to the web app and connect a delegated reader account from the "
+            + "Administration page. Nothing is collected until that connection exists. Connection state is kept in "
+            + "Azure Table storage on the solution's storage account.";
+
+        /// <summary>
+        /// Writes the App Service settings that carry the installer's import selection.
+        /// </summary>
+        /// <remarks>
+        /// Every key is written on every run, enabled or not, so turning a toggle off in the installer clears it
+        /// on the next deployment instead of <c>PreserveUnmanagedAppSettingsAsync</c> keeping the old value.
+        /// The web app and the importer web-job run in the same App Service, so one set of settings serves both.
+        /// </remarks>
+        internal static void AddImportSelectionAppSettings(IDictionary<string, string> properties, Common.Entities.ImportTaskSettings settings)
+        {
+            properties.Add("ImportJobSettings", settings.ToSettingsString());
+
+            // Office 365 Management Activity API feeds to subscribe to, derived from the selected
+            // audit-based imports (Copilot => Audit.General, SharePoint audit => Audit.SharePoint).
+            properties.Add("ContentTypesListAsString", settings.ToActivityApiContentTypesString());
+
+            // Runtime switch for the Copilot credit history preview; mirrors the saved installer toggle.
+            properties.Add(Common.Entities.Config.AppConfig.CopilotCostConnectionEnabledSettingName, settings.CopilotCostManagement ? "true" : "false");
         }
 
         public static SiteConfigProperties BuildPostCreateSiteConfig(AppServiceSkuDescription appServicePlanSku, bool includePlanSensitiveSettings = true)

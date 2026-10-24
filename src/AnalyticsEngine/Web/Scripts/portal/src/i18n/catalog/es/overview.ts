@@ -74,6 +74,7 @@ const overview: Record<keyof typeof en, string> = {
   'overview.enabledImport.teamsCalls': 'Llamadas de Teams',
   'overview.enabledImport.copilotStudioCredits': 'Créditos de Copilot Studio (facturados)',
   'overview.enabledImport.azureCosts': 'Costes de Azure (Cost Management)',
+  'overview.enabledImport.copilotCreditHistory': 'Historial de créditos de Copilot (versión preliminar)',
   'overview.page.whereToNextHeading': 'Ir a continuación',
   'overview.page.whereToNextNote': 'Las partes del portal que se aplican a esta implementación.',
 

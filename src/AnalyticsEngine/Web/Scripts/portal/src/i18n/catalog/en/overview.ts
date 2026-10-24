@@ -77,6 +77,7 @@ export const overview = {
   'overview.enabledImport.teamsCalls': 'Teams calls',
   'overview.enabledImport.copilotStudioCredits': 'Copilot Studio credits (billed)',
   'overview.enabledImport.azureCosts': 'Azure costs (Cost Management)',
+  'overview.enabledImport.copilotCreditHistory': 'Copilot credit history (preview)',
   'overview.page.whereToNextHeading': 'Where to next',
   'overview.page.whereToNextNote': 'The parts of the portal that apply to this deployment.',
 
