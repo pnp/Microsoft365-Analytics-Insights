@@ -1,6 +1,7 @@
 using DataUtils.Sql;
 using Microsoft.Data.SqlClient;
 using Microsoft.Graph.Models.ODataErrors;
+using Microsoft.Kiota.Abstractions;
 using System;
 using System.Collections.Generic;
 using System.Globalization;
@@ -102,7 +103,40 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
             {
                 return $"Graph returned {odata.ResponseStatusCode} ({odata.Error?.Code ?? "unknown"}): {odata.Error?.Message}";
             }
+            if (ex is ApiException api && api.ResponseStatusCode > 0)
+            {
+                // The Graph SDK's own error for a response it could not read as OData, such as a gateway's HTML 503.
+                return $"Graph returned {api.ResponseStatusCode}: {api.Message}";
+            }
             return GraphHttpException.DescribeForStorage(ex);
+        }
+
+        /// <summary>
+        /// A short, stable classification of a failure for the outcome log line - exception type plus the HTTP status,
+        /// Graph error code or SQL error number that decides how it is handled. No messages, so nothing a person's name
+        /// or a URL could be in.
+        /// </summary>
+        public static string Code(Exception failure)
+        {
+            for (var e = failure; e != null; e = e.InnerException)
+            {
+                switch (e)
+                {
+                    case CallRecordPayloadException payload:
+                        return payload.Reason;
+                    case CallRecordSessionPagingException paging:
+                        return paging.IsPermanent ? "SessionPagingPermanent" : "SessionPagingFailed";
+                    case GraphHttpException graph:
+                        return $"{nameof(GraphHttpException)}/{(int)graph.StatusCode}";
+                    case ODataError odata:
+                        return $"{nameof(ODataError)}/{odata.ResponseStatusCode}" + (string.IsNullOrEmpty(odata.Error?.Code) ? string.Empty : $"/{odata.Error.Code}");
+                    case ApiException api when api.ResponseStatusCode > 0:
+                        return $"{nameof(ApiException)}/{api.ResponseStatusCode}";
+                    case SqlException sql when sql.Errors.Count > 0:
+                        return $"{nameof(SqlException)}/{sql.Errors[0].Number}";
+                }
+            }
+            return failure?.GetType().Name ?? "Unknown";
         }
 
         private static bool AnySystemic(Exception ex)
@@ -136,8 +170,10 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
                 case HttpRequestException _:
                     // Not a Graph error response: the transport failed, or the client ran out of throttling retries.
                     return true;
-                case ODataError odata:
-                    return IsSystemicGraphStatus(odata.ResponseStatusCode);
+                case ApiException api:
+                    // Every Kiota status error: ODataError (a JSON error body) derives from it, and so does the plain
+                    // ApiException GraphTransientErrorHandler throws for a 429/5xx whose body isn't JSON.
+                    return IsSystemicGraphStatus(api.ResponseStatusCode);
                 case SqlException sql:
                     return sql.Errors.Cast<SqlError>().Any(e => SqlUnreachableErrorNumbers.Contains(e.Number));
                 case System.Data.Entity.Core.EntityException entity:
@@ -154,11 +190,11 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
             return false;
         }
 
-        // 401/403: the app's credentials or permissions; 429: the tenant is throttled; 503/504: Graph is unavailable.
-        // A 404 or 500 is about the one call record.
+        // 401/403: the app's credentials or permissions; 429: the tenant is throttled; 502/503/504: Graph or its gateway is
+        // unavailable. A 404 or 500 is about the one call record.
         private static bool IsSystemicGraphStatus(int status)
         {
-            return status == 401 || status == 403 || status == 429 || status == 503 || status == 504;
+            return status == 401 || status == 403 || status == 429 || status == 502 || status == 503 || status == 504;
         }
 
         private static IEnumerable<Exception> Flatten(Exception ex)

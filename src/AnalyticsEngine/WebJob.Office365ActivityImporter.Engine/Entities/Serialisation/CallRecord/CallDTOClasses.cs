@@ -35,11 +35,6 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities.Serialisation
         public ParticipantEndpointDTO Callee { get; set; }
     }
 
-    public class CallSessionSegment : BaseCallRecordDTO
-    {
-
-    }
-
     /// <summary>
     /// One continuation page of a call record's sessions: what <c>sessions@odata.nextLink</c> (and each page's own
     /// <c>@odata.nextLink</c>) returns. See <see cref="CallRecordDTO.LoadRemainingSessionPages"/>.
@@ -55,7 +50,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities.Serialisation
     }
 
 
-    // https://docs.microsoft.com/en-us/graph/api/resources/callrecords-participantendpoint?view=graph-rest-beta
+    // https://docs.microsoft.com/en-us/graph/api/resources/callrecords-participantendpoint?view=graph-rest-1.0
     public class ParticipantEndpointDTO
     {
         [JsonProperty("userAgent")]
@@ -70,8 +65,19 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities.Serialisation
         [JsonIgnore]
         public bool HaveUserEmail { get { return !string.IsNullOrEmpty(UserEmailAddress); } }
 
+        /// <summary>Retired by Graph on 30 June 2026 in favour of <see cref="AssociatedIdentity"/>; read as a fallback.</summary>
         [JsonProperty("identity")]
         public IdentitySetDTO Identity { get; set; }
+
+        [JsonProperty("associatedIdentity")]
+        public AssociatedIdentityDTO AssociatedIdentity { get; set; }
+
+        /// <summary>
+        /// The Entra user this endpoint belongs to: <see cref="AssociatedIdentity"/> when Graph returns it, else the
+        /// retired <see cref="Identity"/>. Null for an endpoint with neither (a phone number, say).
+        /// </summary>
+        [JsonIgnore]
+        public UserDTO IdentityUser => !string.IsNullOrEmpty(AssociatedIdentity?.Id) ? AssociatedIdentity : Identity?.User;
     }
 
     // https://docs.microsoft.com/en-us/graph/api/resources/callrecords-useragent?view=graph-rest-beta
