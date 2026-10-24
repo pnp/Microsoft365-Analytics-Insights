@@ -98,8 +98,10 @@ namespace WebJob.Office365ActivityImporter
         {
             _logger.LogInformation("Starting Teams & Graph import.");
 
-            if (await RunGraphImportPass(graphReader => graphReader.GetAndSaveNonDeferredGraphData(_settings),
-                "ERROR: Can't access Teams user data - are application permissions configured correctly?"))
+            var completed = await RunGraphStageAsync("GraphMainPass", StageSlot.Cycle, graphReader => graphReader.GetAndSaveNonDeferredGraphData(_settings),
+                "ERROR: Can't access Teams user data - are application permissions configured correctly?");
+
+            if (completed)
             {
                 _logger.LogInformation("Finished Graph API import tasks.");
             }
@@ -117,10 +119,29 @@ namespace WebJob.Office365ActivityImporter
         {
             _logger.LogInformation("Starting deferred Graph import (usage reports) in the background.");
 
-            if (await RunGraphImportPass(graphReader => graphReader.GetAndSaveDeferredGraphData(_settings),
-                "ERROR: Can't access Graph usage reports - are application permissions configured correctly?"))
+            var completed = await RunGraphStageAsync("GraphDeferredPass", StageSlot.Background, graphReader => graphReader.GetAndSaveDeferredGraphData(_settings),
+                "ERROR: Can't access Graph usage reports - are application permissions configured correctly?");
+
+            if (completed)
             {
                 _logger.LogInformation("Finished deferred Graph API import tasks.");
+            }
+        }
+
+        /// <summary>A Graph pass as a stage: a 403 (not completed, already logged as a warning) is recorded as a failed stage.</summary>
+        private async Task<bool> RunGraphStageAsync(string stageName, StageSlot slot, Func<GraphImporter, Task> pass, string forbiddenWarning)
+        {
+            var stage = StageTracker.Process.Begin(_logger, stageName, slot);
+            try
+            {
+                var completed = await RunGraphImportPass(pass, forbiddenWarning);
+                if (completed) stage.Succeeded(); else stage.Failed(reason: "GraphForbidden");
+                return completed;
+            }
+            catch (Exception ex)
+            {
+                stage.Failed(ex);
+                throw;
             }
         }
 
@@ -149,7 +170,9 @@ namespace WebJob.Office365ActivityImporter
                 }
                 else
                 {
-                    _logger.LogError(ex, ex.Message);
+                    // Tracked once: the caller that catches the rethrow below logs the same exception object again, and
+                    // the logger sends an exception to App Insights only the first time it sees it.
+                    _logger.LogError($"Graph import pass failed: {CommonExceptionHandler.GetErrorText(ex)} (HTTP {ex.ResponseStatusCode}, Graph error code '{ex.Error?.Code}').", ex);
                     throw;
                 }
             }
@@ -204,7 +227,7 @@ namespace WebJob.Office365ActivityImporter
             }
             catch (Exception ex)
             {
-                _logger.LogWarning($"Leadership cohort refresh skipped this cycle ({ex.GetType().Name}): {ex.Message}");
+                _logger.LogWarning($"Leadership cohort refresh skipped this cycle ({ex.GetType().Name}): {CommonExceptionHandler.GetErrorText(ex)}", ex);
             }
         }
 
@@ -312,9 +335,8 @@ namespace WebJob.Office365ActivityImporter
             }
             catch (Exception ex)
             {
-                _logger.TrackException(ex);
-                _logger.LogError(ex, $"Agent cost import phase failed to run: {ex.Message}. "
-                    + "No other import is affected; it will be retried on the next cycle.");
+                _logger.LogError($"Agent cost import phase failed to run: {CommonExceptionHandler.GetErrorText(ex)}. "
+                    + "No other import is affected; it will be retried on the next cycle.", ex);
             }
         }
 
@@ -394,7 +416,7 @@ namespace WebJob.Office365ActivityImporter
                 }
                 catch (System.Net.Http.HttpRequestException ex)
                 {
-                    _logger.LogError(ex, $"Got unexpected exception importing activity: {ex.Message}");
+                    _logger.LogError($"Got unexpected exception importing activity: {CommonExceptionHandler.GetErrorText(ex)}", ex);
                 }
 
                 await AdvanceCopilotAuditBackfillSafely(sqlAdaptor);

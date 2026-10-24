@@ -55,15 +55,35 @@ namespace WebJob.Office365ActivityImporter
         /// Teams calls dead-letter queue with --replayCallDeadLetters (see CallDeadLetterReplayCommand.Usage).
         /// Other overrides: --webhook URL, --callId ID.
         /// </summary>
-        static void Main(string[] args) => MainAsync(args).GetAwaiter().GetResult();
-        static async Task MainAsync(string[] args)
+        static int Main(string[] args)
         {
-            int argIdx = 0;
-            var repairHistory = args.Length > 0 && args[0] == "--repair-copilot-history";
+            HostRuntime.InstallFatalHandlers(ImporterHeartbeat.ActivityJob);
+
+            // Read the whole command line first: a mistyped or misplaced option must not fall through to the endless import.
+#if DEBUG
+            const bool interactiveImportAllowed = true;
+#else
+            const bool interactiveImportAllowed = false;
+#endif
+            var commandLine = ImporterCommandLine.Parse(args, interactiveImportAllowed: interactiveImportAllowed);
+            if (!commandLine.IsValid)
+            {
+                Console.Error.WriteLine("ERROR: " + commandLine.Error);
+                Console.Error.WriteLine(ImporterCommandLine.Usage);
+                return HostRuntime.UsageExitCode;
+            }
+
+            var exitCode = HostRuntime.RunGuarded("Office365ActivityImporter.Main", () => MainAsync(args, commandLine));
+            AnalyticsLogger.DrainSharedTelemetry();
+            return exitCode != 0 ? exitCode : Environment.ExitCode;
+        }
+
+        static async Task MainAsync(string[] args, ImporterCommandLine commandLine)
+        {
+            var repairHistory = commandLine.Mode == ImporterMode.RepairCopilotHistory;
             string checkpointPath = null;
             if (repairHistory)
             {
-                if (args.Length != 4) throw new ArgumentException("--repair-copilot-history <from UTC ISO-8601> <to UTC ISO-8601> <private checkpoint file>");
                 checkpointPath = ActivityImporter.Engine.ActivityAPI.Copilot.CopilotHistoricalRepair.ValidateCheckpointPath(args[3]);
             }
 
@@ -75,7 +95,7 @@ namespace WebJob.Office365ActivityImporter
             }
             catch (FormatException)
             {
-                Console.WriteLine("Error converting configurations values to int/guid/timespan. Please verify App Settings.");
+                Console.Error.WriteLine("Error converting configurations values to int/guid/timespan. Please verify App Settings.");
                 ConsoleApp.BombOut(true);
             }
 
@@ -113,14 +133,14 @@ namespace WebJob.Office365ActivityImporter
                 return;
             }
 
-            if (args.Length > 0 && args[0] == DlpHistoricalRepairCommand.Option)
+            if (commandLine.Mode == ImporterMode.RepairDlpHistory)
             {
                 await DlpHistoricalRepairCommand.RunAsync(args, configuredSettings);
                 return;
             }
 
             // Explicit operator-only replay of the Teams calls dead-letter queue: Service Bus only - no SQL, no Graph, no import loop.
-            if (CallDeadLetterReplayCommand.IsRequested(args))
+            if (commandLine.Mode == ImporterMode.ReplayCallDeadLetters)
             {
                 Environment.ExitCode = await CallDeadLetterReplayCommand.RunAsync(args, configuredSettings);
                 return;
@@ -152,7 +172,10 @@ namespace WebJob.Office365ActivityImporter
 #endif
 
             // Create new telemetry client with AppInsights key
-            var logger = new AnalyticsLogger(configuredSettings.AppInsightsConnectionString, "Office365ActivityImporter");
+            var logger = new AnalyticsLogger(configuredSettings.AppInsightsConnectionString, ImporterHeartbeat.ActivityJob);
+            // From here every telemetry item carries the build label, job name and run id, and an unhandled exception or a Kudu stop
+            // request is reported through this logger.
+            HostRuntime.Attach(logger, ImporterHeartbeat.ActivityJob, configuredSettings.BuildLabel);
             MessageTraceBlobUploader messageTraceUploader = ConfigureMessageTracing(configuredSettings, logger);
 
             // The UserGroupsFilter scope, shared by every import in this process - the Graph sections, the audit
@@ -174,82 +197,66 @@ namespace WebJob.Office365ActivityImporter
                 webHookUrl = new Uri(webhookUrl);
             }
 
-            // Look for start-up args to override execution
-            foreach (var arg in args)
+            // Start-up options (already validated by ImporterCommandLine)
+            if (commandLine.WebhookOverride != null)
             {
-                if (arg.ToLower() == ActivityImportConstants.PARAM_WEBHOOK_OVERRIDE)
-                {
-                    // Override webhook config to param
-                    // ngrok http -host-header=localhost 55573
-                    if (args.Length >= argIdx + 2)
-                    {
-                        var nextArg = args[argIdx + 1];
-                        if (StringUtils.IsValidAbsoluteUrl(nextArg))
-                        {
-                            webHookUrl = new Uri(nextArg);
-                            Console.WriteLine($"DEBUG: Using custom webhook '{webHookUrl}' URL from args");
-                        }
-                    }
-                }
-                else if (arg.ToLower() == ActivityImportConstants.PARAM_CALL_ID.ToLower())
-                {
-                    if (args.Length >= argIdx + 2)
-                    {
-                        // Import a single call ID
-                        logger.LogInformation($"Detected '{ActivityImportConstants.PARAM_CALL_ID}' parameter value. Importing single call-record from Graph and exiting.");
-                        var nextArg = args[argIdx + 1];
+                // Override webhook config to param
+                // ngrok http -host-header=localhost 55573
+                webHookUrl = commandLine.WebhookOverride;
+                Console.WriteLine($"DEBUG: Using custom webhook '{webHookUrl}' URL from args");
+            }
 
-                        var auth = new GraphAppIndentityOAuthContext(logger, configuredSettings.ClientID, configuredSettings.TenantGUID.ToString(), configuredSettings.ClientSecret, configuredSettings.KeyVaultUrl, configuredSettings.UseClientCertificate);
+            if (commandLine.Mode == ImporterMode.SingleCall)
+            {
+                // Import a single call ID
+                logger.LogInformation($"Detected '{ActivityImportConstants.PARAM_CALL_ID}' parameter value. Importing single call-record from Graph and exiting.");
 
-                        var newCall = await Engine.Entities.Serialisation.CallRecordDTO.SaveNewCallToDB(
-                            nextArg,
-                            new Engine.Graph.ManualGraphCallClient(auth, logger),
-                            auth.Creds, logger, configuredSettings.TenantGUID.ToString(),
-                            await userScopeProvider.GetScopeAsync());
+                var auth = new GraphAppIndentityOAuthContext(logger, configuredSettings.ClientID, configuredSettings.TenantGUID.ToString(), configuredSettings.ClientSecret, configuredSettings.KeyVaultUrl, configuredSettings.UseClientCertificate);
 
-                        await ShutdownMessageTracingAsync(messageTraceUploader);
-                        ConsoleApp.BombOut(false);
-                    }
-                }
-                else if (arg.ToLower() == ActivityImportConstants.PARAM_TRACE_AUDIT_EMAIL.ToLower())
+                var newCall = await Engine.Entities.Serialisation.CallRecordDTO.SaveNewCallToDB(
+                    commandLine.CallId,
+                    new Engine.Graph.ManualGraphCallClient(auth, logger),
+                    auth.Creds, logger, configuredSettings.TenantGUID.ToString(),
+                    await userScopeProvider.GetScopeAsync());
+
+                await ShutdownMessageTracingAsync(messageTraceUploader);
+                ConsoleApp.BombOut(false);
+            }
+
+            if (commandLine.TraceAuditEmail != null)
+            {
+                TraceAuditEmail = commandLine.TraceAuditEmail;
+                AuditTraceConfig.TraceEmail = TraceAuditEmail;
+                Console.WriteLine($"TRACE: Will capture audit imports containing email '{TraceAuditEmail}'.");
+            }
+
+            if (commandLine.TraceAuditDirectory != null)
+            {
+                TraceAuditDirectory = commandLine.TraceAuditDirectory;
+                try
                 {
-                    if (args.Length >= argIdx + 2)
-                    {
-                        TraceAuditEmail = args[argIdx + 1];
-                        AuditTraceConfig.TraceEmail = TraceAuditEmail;
-                        Console.WriteLine($"TRACE: Will capture audit imports containing email '{TraceAuditEmail}'.");
-                    }
+                    System.IO.Directory.CreateDirectory(TraceAuditDirectory);
+                    AuditTraceConfig.TraceDirectory = TraceAuditDirectory;
+                    Console.WriteLine($"TRACE: Will save matching audit import files to '{TraceAuditDirectory}'.");
                 }
-                else if (arg.ToLower() == ActivityImportConstants.PARAM_TRACE_AUDIT_DIR.ToLower())
+                catch (Exception ex)
                 {
-                    if (args.Length >= argIdx + 2)
-                    {
-                        TraceAuditDirectory = args[argIdx + 1];
-                        try
-                        {
-                            if (!string.IsNullOrWhiteSpace(TraceAuditDirectory))
-                            {
-                                System.IO.Directory.CreateDirectory(TraceAuditDirectory);
-                                AuditTraceConfig.TraceDirectory = TraceAuditDirectory;
-                                Console.WriteLine($"TRACE: Will save matching audit import files to '{TraceAuditDirectory}'.");
-                            }
-                        }
-                        catch (Exception ex)
-                        {
-                            Console.WriteLine($"TRACE: Failed to create trace directory '{TraceAuditDirectory}': {ex.Message}");
-                            TraceAuditDirectory = null;
-                            AuditTraceConfig.TraceDirectory = null;
-                        }
-                    }
+                    Console.WriteLine($"TRACE: Failed to create trace directory '{TraceAuditDirectory}': {ex.Message}");
+                    TraceAuditDirectory = null;
+                    AuditTraceConfig.TraceDirectory = null;
                 }
-                argIdx++;
             }
 
             // Output program
             PrintStartupDetails(configuredSettings, logger);
 
-            // Test DB
-            TestDB(logger);
+            // Test SQL: a failure is logged at Critical and retried with a back-off, not left to crash the process
+            // (Kudu would restart it straight into the same failure).
+            if (!StartupSqlCheck.WaitUntilReachable(() => configuredSettings.ConnectionStrings.TestAuditSQLSettings(logger), logger, ImporterHeartbeat.ActivityJob))
+            {
+                await ShutdownMessageTracingAsync(messageTraceUploader);
+                ConsoleApp.BombOut(false);
+            }
 
             // Loop forever?
             var runAgain = true;
@@ -348,14 +355,16 @@ namespace WebJob.Office365ActivityImporter
             var callSubscriptionMaintainer = CallSubscriptionMaintainer.StartIfEnabled(configuredSettings, webHookUrl, logger);
 
             // Run app
+            var stages = StageTracker.Process;
             using (var heartbeat = new DataUtils.Health.ImporterHeartbeat(logger, DataUtils.Health.ImporterHeartbeat.ActivityJob))
             using (var health = Common.Entities.Health.DefaultRuntimeHealth.Start(configuredSettings, logger, ImporterHeartbeat.ActivityJob))
-            while (runAgain)
+            while (runAgain && !HostRuntime.ShutdownRequested)
             {
                 var importCycleTelemetryScope = logger.BeginOperationScope(Guid.NewGuid().ToString("N"));
                 var importCycleTimer = new JobTimer(logger, Process.GetCurrentProcess().ProcessName);
                 importCycleTimer.Start();
-
+                try
+                {
                 // States which users this cycle's imports cover - including when a filter matches no group or is
                 // failing open - every cycle, not only when the scope is refreshed.
                 await userScopeProvider.GetScopeForCycleAsync();
@@ -367,6 +376,7 @@ namespace WebJob.Office365ActivityImporter
                 var tasks = new ProgramTasks(logger, configuredSettings, activityReportsLastImportedStore, graphLastRunStore, sentEmailMailboxSkipList, reportCompletionStore, userScopeProvider);
 
                 // Start listening for SB messages & register notifications web-hook with Graph 
+                HostRuntime.ThrowIfShutdownRequested();
                 if (webHookUrl != null && configuredSettings.ImportJobSettings.Calls)
                 {
                     if (string.IsNullOrWhiteSpace(configuredSettings.ConnectionStrings.ServiceBusConnectionString))
@@ -377,19 +387,21 @@ namespace WebJob.Office365ActivityImporter
                     {
                         try
                         {
-                            if (callQueueProcessor == null)
+                            await stages.RunAsync(logger, "CallQueueWebhook", async () =>
                             {
-                                var newProcessor = new CallQueueProcessor(configuredSettings, configuredSettings.TenantGUID.ToString(), userScopeProvider);
-                                await newProcessor.Init();
-                                callQueueProcessor = newProcessor;
-                            }
+                                if (callQueueProcessor == null)
+                                {
+                                    var newProcessor = new CallQueueProcessor(configuredSettings, configuredSettings.TenantGUID.ToString(), userScopeProvider);
+                                    await newProcessor.Init();
+                                    callQueueProcessor = newProcessor;
+                                }
 
-                            await tasks.ProcessCallQueueAndWebhook(webHookUrl, callQueueProcessor);
+                                await tasks.ProcessCallQueueAndWebhook(webHookUrl, callQueueProcessor);
+                            });
                         }
                         catch (Exception ex)
                         {
-                            logger.TrackException(ex);
-                            logger.LogCritical($"Got exception on {nameof(ProgramTasks.ProcessCallQueueAndWebhook)}: {ex.Message}");
+                            logger.LogCritical($"Got exception on {nameof(ProgramTasks.ProcessCallQueueAndWebhook)}: {CommonExceptionHandler.GetErrorText(ex)}", ex);
                         }
                     }
                 }
@@ -398,6 +410,7 @@ namespace WebJob.Office365ActivityImporter
                     logger.LogInformation("Skipping Call Queue import & webhook validation.");
                 }
 
+                HostRuntime.ThrowIfShutdownRequested();
                 try
                 {
                     // Get Teams & user data: every Graph section except the deferred usage reports, which are
@@ -406,8 +419,7 @@ namespace WebJob.Office365ActivityImporter
                 }
                 catch (Exception ex)
                 {
-                    logger.TrackException(ex);
-                    logger.LogCritical($"Got exception on {nameof(ProgramTasks.GetGraphTeamsAndUserData)}: {ex.Message}");
+                    logger.LogCritical($"Got exception on {nameof(ProgramTasks.GetGraphTeamsAndUserData)}: {CommonExceptionHandler.GetErrorText(ex)}", ex);
 #if DEBUG
                     throw;
 #endif
@@ -419,22 +431,21 @@ namespace WebJob.Office365ActivityImporter
 
                 // Activity import (Office 365 Management Activity API). Runs when any workload needs
                 // Audit.SharePoint or Audit.General (SharePoint audit, Copilot, or Power Platform).
+                HostRuntime.ThrowIfShutdownRequested();
                 if (configuredSettings.ImportJobSettings.UsesActivityApi)
                 {
 #if !DEBUG
                     try
                     {
 #endif
-                        await tasks.DownloadActivityData();
+                        await stages.RunAsync(logger, "ActivityImport", () => tasks.DownloadActivityData());
 #if !DEBUG
                     }
                     catch (Exception ex)
                     {
-                        logger.TrackException(ex);
-                        // Also emit a trace (TrackException goes to a separate telemetry stream): a save/merge
-                        // failure that escapes here means the whole cycle was aborted. Batch-level failures are
-                        // now isolated in LoadReportsAndSave, so reaching here indicates a non-batch failure.
-                        logger.LogError($"Audit import cycle ABORTED by an unhandled exception in {nameof(ProgramTasks.DownloadActivityData)}: {ex.Message}. The cycle will restart on the next timer interval.");
+                        // A save/merge failure that escapes here means the whole cycle was aborted. Batch-level failures
+                        // are now isolated in LoadReportsAndSave, so reaching here indicates a non-batch failure.
+                        logger.LogError($"Audit import cycle ABORTED by an unhandled exception in {nameof(ProgramTasks.DownloadActivityData)}: {CommonExceptionHandler.GetErrorText(ex)}. The cycle will restart on the next timer interval.", ex);
                     }
 #endif
                 }
@@ -455,34 +466,38 @@ namespace WebJob.Office365ActivityImporter
                 //
                 // The script self-guards on the columns existing, so it is a no-op on a database that has
                 // not been upgraded yet. Costs 4 logical reads when there is nothing to do, and never throws.
-                await ActivityImporter.Engine.ActivityAPI.Copilot.CopilotAuditEventManager
-                    .RepairDenormalisedColumnsAsync(configuredSettings.ConnectionStrings.DatabaseConnectionString, logger);
+                HostRuntime.ThrowIfShutdownRequested();
+                await stages.RunAsync(logger, "RepairDenormalisedCopilotColumns", () => ActivityImporter.Engine.ActivityAPI.Copilot.CopilotAuditEventManager
+                    .RepairDenormalisedColumnsAsync(configuredSettings.ConnectionStrings.DatabaseConnectionString, logger));
 
                 // Merge Copilot agents an older importer split across several copilot_agents rows (#699). It is
                 // here, outside every gate, for the same reasons as the repair above. Two scans of copilot_agents
                 // when there is nothing to merge, and it never throws.
-                await ActivityImporter.Engine.ActivityAPI.Copilot.CopilotAuditEventManager
-                    .RepairSplitAgentsAsync(configuredSettings.ConnectionStrings.DatabaseConnectionString, logger);
+                await stages.RunAsync(logger, "RepairSplitCopilotAgents", () => ActivityImporter.Engine.ActivityAPI.Copilot.CopilotAuditEventManager
+                    .RepairSplitAgentsAsync(configuredSettings.ConnectionStrings.DatabaseConnectionString, logger));
 
                 // Agent cost imports (Copilot Studio billed credits + Azure Cost Management). Kept as their
                 // own phase rather than folded into the Graph or Activity API imports: they authenticate to
                 // different audiences (api.powerplatform.com and management.azure.com) and need role
                 // assignments neither of those imports require, so a failure in one must not implicate the
                 // others. The phase handles its own errors and cadence gating.
-                await tasks.ImportAgentCosts();
-                await tasks.ImportCopilotCosts();
+                HostRuntime.ThrowIfShutdownRequested();
+                await stages.RunAsync(logger, "AgentCosts", () => tasks.ImportAgentCosts());
+                await stages.RunAsync(logger, "CopilotCosts", () => tasks.ImportCopilotCosts());
 
                 // The Copilot Adoption leadership cohort (#654): re-reads the configured group's direct members when due
                 // (6 hours after a success, 1 hour after a failure). Off unless an administrator named a group; bounded
                 // to about eleven Graph calls; never throws.
-                await tasks.RefreshLeadershipCohortSafely();
+                HostRuntime.ThrowIfShutdownRequested();
+                await stages.RunAsync(logger, "LeadershipCohort", () => tasks.RefreshLeadershipCohortSafely());
 
                 // Placeholder users that older versions created from concealed (hashed) usage-report identities: deleted with
                 // their usage-report rows, a bounded slice per cycle, until none are left (see ConcealedIdentityUserCleanup).
                 // Here, outside every import gate, so a tenant that has since turned the usage reports off is cleaned too; and
                 // before the deferred pass is started, never while it runs - it is the only other writer of those rows. Takes
                 // the users-and-licences lock, so it cannot overlap a user import on any instance. Never throws.
-                await concealedIdentityUserCleanup.RunIfDueAsync(usageReportImportRunning: deferredGraphImport.IsRunning);
+                HostRuntime.ThrowIfShutdownRequested();
+                await stages.RunAsync(logger, "ConcealedIdentityCleanup", () => concealedIdentityUserCleanup.RunIfDueAsync(usageReportImportRunning: deferredGraphImport.IsRunning));
 
                 // Deferred Graph sections: the once-a-day usage-report phase (issue #706). It used to run inside
                 // GetGraphTeamsAndUserData above, so on the cycle it was due the audit import (Copilot, Power
@@ -498,6 +513,7 @@ namespace WebJob.Office365ActivityImporter
                 // telemetry operation; the runner catches, tracks and logs its exceptions. The process-lifetime
                 // stores it shares are only used by this pass (the report throttle and completion stamps) or are
                 // safe for concurrent use (the user scope provider, the cadence store).
+                HostRuntime.ThrowIfShutdownRequested();
                 deferredGraphImport.TryStart(() =>
                     new ProgramTasks(logger, configuredSettings, activityReportsLastImportedStore, graphLastRunStore,
                         sentEmailMailboxSkipList, reportCompletionStore, userScopeProvider)
@@ -525,6 +541,7 @@ namespace WebJob.Office365ActivityImporter
                 // accepting payloads from versions that pre-date this re-enable.
                 // statsDatesLoader is hoisted outside this loop so the in-memory fallback retains
                 // its "last uploaded" timestamp across cycles.
+                HostRuntime.ThrowIfShutdownRequested();
                 using (var db = new AnalyticsEntitiesContext())
                 {
                     // Anonymised Copilot/licence adoption metrics ride along with the deployment stats.
@@ -534,7 +551,7 @@ namespace WebJob.Office365ActivityImporter
                     using (var statsUploader = new WebApiStatsUploader(configuredSettings.StatsApiUrl, configuredSettings.StatsApiSecret, logger))
                     {
                         var stats = new UsageStatsManager(sqlUsageBuilder, statsDatesLoader, statsUploader, logger);
-                        await stats.ProcessAndFailSilently();
+                        await stages.RunAsync(logger, "Stats", () => stats.ProcessAndFailSilently());
                     }
                 }
 
@@ -549,17 +566,28 @@ namespace WebJob.Office365ActivityImporter
                         // Preview work uses the otherwise idle pause, never a tenant-wide sweep in
                         // front of ordinary imports. Leave headroom for the bounded final slice.
                         var resumeAt = DateTimeOffset.UtcNow.AddMinutes(configuredSettings.ImportCyclePauseMinutes);
-                        while (DateTimeOffset.UtcNow.AddSeconds(45) < resumeAt)
+                        while (DateTimeOffset.UtcNow.AddSeconds(45) < resumeAt && !HostRuntime.ShutdownRequested)
                         {
                             await tasks.ImportCopilotCosts();
                             await Task.Delay(TimeSpan.FromSeconds(5));
                         }
                         var remaining = resumeAt - DateTimeOffset.UtcNow;
-                        if (remaining > TimeSpan.Zero) await Task.Delay(remaining);
+                        if (remaining > TimeSpan.Zero && !HostRuntime.ShutdownRequested) HostRuntime.Wait(remaining);
                     }
+                }
+                }
+                catch (ShutdownRequestedException)
+                {
+                    // Kudu asked the WebJob to stop: no new work was started, and the loop ends.
+                    importCycleTelemetryScope.Dispose();
+                    break;
                 }
             } // Go around again?
 
+            if (HostRuntime.ShutdownRequested)
+            {
+                logger.LogInformation("Shutdown requested by host: the import loop has stopped; flushing telemetry and exiting.");
+            }
             await ShutdownMessageTracingAsync(messageTraceUploader);
             ConsoleApp.BombOut(false);
         }
@@ -642,29 +670,6 @@ namespace WebJob.Office365ActivityImporter
                 reasonKey: "messageTracing.enabled");
         }
 
-
-        /// <summary>
-        /// Tests the SQL DB configured. Bombs out if a problem
-        /// </summary>
-        private static void TestDB(ILogger logger)
-        {
-            logger.LogInformation("Testing SQL configuration...");
-
-            using (AnalyticsEntitiesContext db = new AnalyticsEntitiesContext())
-            {
-                try
-                {
-                    int count = (from allDownloads in db.AuditEventsCommon
-                                 select allDownloads).Count();
-                    logger.LogInformation($"Found {count.ToString("n0")} events in table already. Test passed!");
-                }
-                catch (Microsoft.Data.SqlClient.SqlException ex)
-                {
-                    logger.LogError(ex, $"Got a SQL error: {ex.Message}");
-                    ConsoleApp.BombOut(true);
-                }
-            }
-        }
 
         /// <summary>
         /// Confirm and validate settings
