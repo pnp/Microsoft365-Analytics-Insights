@@ -9,10 +9,12 @@ using Microsoft.Graph.Models.ODataErrors;
 using Newtonsoft.Json;
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using WebJob.Office365ActivityImporter.Engine.Graph;
+using WebJob.Office365ActivityImporter.Engine.Graph.Calls;
 
 namespace WebJob.Office365ActivityImporter.Engine.Entities.Serialisation
 {
@@ -55,9 +57,32 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities.Serialisation
     {
         #region Props
 
+        /// <summary>
+        /// The organiser as the retired <c>callRecord.organizer</c> returned it. Graph stops returning it on 30 June 2026
+        /// (<see cref="OrganizerV2"/> replaces it); it is only read as a fallback.
+        /// </summary>
         [JsonProperty("organizer", NullValueHandling = NullValueHandling.Ignore)]
         public IdentitySetDTO Organizer { get; set; }
+
+        /// <summary><c>organizer_v2</c>, which Graph expands by default on a call record.</summary>
+        [JsonProperty("organizer_v2", NullValueHandling = NullValueHandling.Ignore)]
+        public OrganizerV2DTO OrganizerV2 { get; set; }
+
+        /// <summary>The organiser's Entra user: <see cref="OrganizerV2"/> first, else the retired <see cref="Organizer"/>.</summary>
+        [JsonIgnore]
+        public UserDTO OrganizerUser => OrganizerV2?.Identity?.User ?? Organizer?.User;
+
+        /// <summary>Whether the payload names an organiser at all, in either shape. See <see cref="CallOrganiserStatus.NoIdentity"/>.</summary>
+        [JsonIgnore]
+        public bool HasOrganiserIdentity => OrganizerV2?.Identity != null || Organizer != null;
+
         public string OrganizerEmail { get; set; }
+
+        [JsonIgnore]
+        public CallOrganiserStatus OrganiserStatus { get; set; }
+
+        [JsonIgnore]
+        public CallLoadStats LoadStats { get; } = new CallLoadStats();
 
         [JsonProperty("sessions")]
         public List<CallSessionDTO> Sessions { get; set; }
@@ -83,7 +108,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities.Serialisation
         public static async Task<CallRecordDTO> LoadFromGraphByID(string callId, ManualGraphCallClient manualClient, TeamsLoadContext teamsLoadContext, ILogger logger, string thisTenantId)
         {
             string callJsonText = string.Empty;
-            var callRecordUrl = $"https://graph.microsoft.com/v1.0/communications/callRecords/{callId}?$expand=sessions($expand=segments)";
+            var callRecordUrl = $"https://graph.microsoft.com/v1.0/communications/callRecords/{callId}?$expand=sessions";
             var callDTO = await manualClient.GetAsyncWithThrottleRetries<CallRecordDTO>(callRecordUrl,
                 jsonStringAction: s => callJsonText = s);
 
@@ -174,7 +199,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities.Serialisation
             }
 
             SessionsNextLink = null;
-            logger.LogInformation($"Call record '{GraphCallID}': read {Sessions.Count} sessions over {pageNumber} pages.");
+            LoadStats.SessionPages = pageNumber;
         }
 
         /// <summary>
@@ -391,87 +416,78 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities.Serialisation
         }
 
 
+        /// <summary>
+        /// Works out the UPN of the organiser and of every session participant, with one look-up per distinct person of
+        /// this tenant: the same people (the organiser above all) appear in hundreds of sessions, and
+        /// <see cref="CallUserUpnCache"/> remembers them across calls too. People from other tenants are counted, never
+        /// looked up. A failed look-up (throttling, an outage) throws.
+        /// </summary>
         public async Task PopulateEmailAddresses(TeamsLoadContext teamsLoadContext, string thisTenantId, ILogger logger)
         {
-            // One look-up per person on the call rather than per endpoint: with every page of sessions read, the same
-            // people (the organiser above all) can appear in hundreds of sessions.
-            var emailsByUserId = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            var stopwatch = Stopwatch.StartNew();
+            var upns = teamsLoadContext.CallUsers ?? throw new InvalidOperationException($"{nameof(TeamsLoadContext)}.{nameof(TeamsLoadContext.CallUsers)} is not set.");
 
-            if (Sessions != null)
+            var internalIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var externalIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            // Anyone whose tenant is not this one is external; a user with no tenant on the identity is looked up, which
+            // only ever finds people of this tenant.
+            bool IsInternal(UserDTO user) => string.IsNullOrEmpty(user.TenantId) || string.Equals(user.TenantId, thisTenantId, StringComparison.OrdinalIgnoreCase);
+            string Register(UserDTO user)
             {
-                foreach (var callSession in this.Sessions)
+                if (user == null || string.IsNullOrEmpty(user.Id))
                 {
-                    await PopuplateCallerEmail(callSession.Callee, teamsLoadContext, thisTenantId, logger, emailsByUserId);
-                    await PopuplateCallerEmail(callSession.Caller, teamsLoadContext, thisTenantId, logger, emailsByUserId);
+                    return null;
+                }
+                (IsInternal(user) ? internalIds : externalIds).Add(user.Id);
+                return user.Id;
+            }
+
+            var endpoints = new List<ParticipantEndpointDTO>();
+            foreach (var session in Sessions ?? new List<CallSessionDTO>())
+            {
+                foreach (var endpoint in new[] { session?.Callee, session?.Caller })
+                {
+                    if (endpoint != null)
+                    {
+                        endpoints.Add(endpoint);
+                        Register(endpoint.IdentityUser);
+                    }
                 }
             }
 
-            if (this.Organizer != null)
-            {
-                this.OrganizerEmail = await GetEmailAddress(this.Organizer, teamsLoadContext, logger, emailsByUserId);
-            }
-        }
+            var organiser = OrganizerUser;
+            Register(organiser);
 
-        private static async Task PopuplateCallerEmail(ParticipantEndpointDTO callee, TeamsLoadContext teamsLoadContext, string thisTenantId, ILogger logger,
-            Dictionary<string, string> emailsByUserId)
-        {
-            if (callee?.Identity?.User != null)
+            var resolved = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            var lookups = await Task.WhenAll(internalIds.Select(async id => new KeyValuePair<string, string>(id, await upns.GetUpnAsync(id))));
+            foreach (var lookup in lookups)
             {
-                if (callee.Identity.User.TenantId == thisTenantId)
-                {
-                    callee.UserEmailAddress = await GetEmailAddress(callee.Identity, teamsLoadContext, logger, emailsByUserId);
-                }
-                else
-                {
-                    logger.LogInformation($"Ignoring external user from tenant Id {callee.Identity.User.TenantId}");
-                }
-            }
-        }
-
-        private static async Task<string> GetEmailAddress(IdentitySetDTO callee, TeamsLoadContext teamsLoadContext, ILogger logger,
-            Dictionary<string, string> emailsByUserId)
-        {
-            var userId = callee?.User?.Id;
-            if (!string.IsNullOrEmpty(userId) && emailsByUserId.TryGetValue(userId, out var known))
-            {
-                return known;
+                resolved[lookup.Key] = lookup.Value;
             }
 
-            var email = await GetEmailAddress(callee, teamsLoadContext, logger);
-            if (!string.IsNullOrEmpty(userId))
-            {
-                emailsByUserId[userId] = email;
-            }
-            return email;
-        }
+            string UpnOf(UserDTO user) => user?.Id != null && resolved.TryGetValue(user.Id, out var upn) ? upn : null;
 
-        private static async Task<string> GetEmailAddress(IdentitySetDTO callee, TeamsLoadContext teamsLoadContext, ILogger logger)
-        {
-            Microsoft.Graph.Models.User graphUser = null;
-            try
+            foreach (var endpoint in endpoints)
             {
-                graphUser = await teamsLoadContext.UserCache.Load(callee?.User?.Id);
-            }
-            catch (ODataError ex)
-            {
-                if (ex.Message.Contains("Request_ResourceNotFound"))
+                var upn = UpnOf(endpoint.IdentityUser);
+                if (!string.IsNullOrEmpty(upn))
                 {
-                    logger.LogInformation($"Cannot find user with id '{callee?.User?.Id} in tenant '{callee?.User?.TenantId}' - user not found.");
-                    return string.Empty;
-                }
-                else
-                {
-                    throw;
+                    endpoint.UserEmailAddress = upn;
                 }
             }
-            if (graphUser != null)
-            {
-                return graphUser.UserPrincipalName;
-            }
-            else
-            {
-                return string.Empty;
-            }
+
+            OrganizerEmail = UpnOf(organiser);
+            OrganiserStatus = !HasOrganiserIdentity ? CallOrganiserStatus.NoIdentity
+                : string.IsNullOrEmpty(organiser?.Id) ? CallOrganiserStatus.NotAUser
+                : !string.IsNullOrEmpty(OrganizerEmail) ? CallOrganiserStatus.Resolved
+                : externalIds.Contains(organiser.Id) ? CallOrganiserStatus.ExternalTenant
+                : CallOrganiserStatus.NotFoundInDirectory;
+
+            LoadStats.DistinctUsers = internalIds.Count;
+            LoadStats.ExternalUsers = externalIds.Count;
+            LoadStats.UnresolvedUsers = resolved.Count(r => string.IsNullOrEmpty(r.Value));
+            LoadStats.ResolveMs = stopwatch.ElapsedMilliseconds;
         }
     }
 

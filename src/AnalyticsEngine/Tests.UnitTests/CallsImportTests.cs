@@ -942,7 +942,7 @@ namespace Tests.UnitTests
         {
             var ex = Assert.ThrowsException<CallRecordSessionPagingException>(() => CallRecordSessionPaging.ResolveContinuationUrl(
                 "https://contoso.example/v1.0/communications/callRecords('c')/sessions?$skiptoken=x",
-                "https://graph.microsoft.com/v1.0/communications/callRecords/c?$expand=sessions($expand=segments)", "c"));
+                "https://graph.microsoft.com/v1.0/communications/callRecords/c?$expand=sessions", "c"));
 
             Assert.IsTrue(ex.IsPermanent);
         }
@@ -1031,6 +1031,224 @@ namespace Tests.UnitTests
 
         #endregion
 
+        #region Graph schema: organizer_v2, associatedIdentity and the request
+
+        private static async Task<CallImportResult> ImportOnce(SyntheticMultiPageCall call, SyntheticCallGraphHandler graph, InMemoryCallRecordPersistenceManager store, ILogger logger = null)
+        {
+            var importer = new CallRecordImporter(SyntheticMultiPageCall.CreateSourceLoader(graph), store, logger ?? new CapturingLogger());
+            return await importer.Import(Notification(call.CallId));
+        }
+
+        /// <summary>
+        /// Graph stops returning <c>organizer</c> and the endpoint <c>identity</c> on 30 June 2026, in favour of
+        /// <c>organizer_v2</c> and <c>associatedIdentity</c>. Reading only the retired fields made every call look as though
+        /// it had no organiser - processed without saving, and its queue message completed. All three shapes must import
+        /// the same call: the new schema only, the old only, and both.
+        /// </summary>
+        [DataTestMethod]
+        [DataRow(CallPayloadShape.Legacy)]
+        [DataRow(CallPayloadShape.V2)]
+        [DataRow(CallPayloadShape.Both)]
+        public async Task CallRecordImporter_ReadsOrganiserAndParticipants_InEitherGraphSchema(CallPayloadShape shape)
+        {
+            var call = new SyntheticMultiPageCall(firstPageAttendees: 2, secondPageAttendees: 1, shape: shape);
+            var store = new InMemoryCallRecordPersistenceManager();
+
+            var result = await ImportOnce(call, call.CreateGraph(), store);
+
+            Assert.AreEqual(CallImportOutcome.Saved, result.Outcome, $"Shape {shape}: the organiser and participants must be read.");
+            var saved = store.Saved.Single();
+            Assert.AreEqual(call.Organiser.Upn, saved.OrganizerEmail);
+            CollectionAssert.AreEqual(call.Attendees.Select(a => a.Upn).ToList(), saved.Sessions.Select(s => s.Callee.UserEmailAddress).ToList());
+            Assert.IsTrue(saved.Sessions.All(s => s.Caller.UserEmailAddress == call.Organiser.Upn));
+        }
+
+        /// <summary>
+        /// A payload with no organiser identity at all is a schema problem, not a property of the call: it must be a
+        /// failure - retried, as a later version of a call record can carry more - and finally dead-lettered with its own
+        /// reason, never completed as though it had been processed (Graph keeps a call record for only 30 days).
+        /// </summary>
+        [TestMethod]
+        public async Task QueueHandler_ACallWithNoOrganiserIdentityInEitherSchema_IsRetriedThenDeadLetteredAsNoOrganiserIdentity()
+        {
+            var call = new SyntheticMultiPageCall(firstPageAttendees: 2, secondPageAttendees: 1, shape: CallPayloadShape.NoOrganiser);
+            var store = new InMemoryCallRecordPersistenceManager();
+            var logger = new CapturingLogger();
+            var importer = new CallRecordImporter(SyntheticMultiPageCall.CreateSourceLoader(call.CreateGraph()), store, logger);
+            var clock = new FixedClock(QueueNow);
+            var handler = QueueHandler(async n => (await importer.Import(n)).Outcome, clock, logger: logger);
+
+            var first = new FakeCallQueueMessageSettlement();
+            Assert.AreEqual(CallQueueMessageOutcome.RetryScheduled, await handler.HandleAsync(QueueMessage(call.CallId), first),
+                "Not completed as processed: it has to be tried again.");
+            Assert.AreEqual(1, first.ScheduledState.Failures, "Counted as a failure of the call, towards its dead-lettering.");
+            Assert.AreEqual(0, first.ScheduledState.SystemicFailures);
+
+            var properties = new Dictionary<string, object>();
+            FakeCallQueueMessageSettlement settlement = first;
+            var attempts = 1;
+            while (attempts < 50)
+            {
+                properties = new Dictionary<string, object>();
+                settlement.ScheduledState.WriteTo(properties);
+                clock.Advance(settlement.ScheduledForUtc.Value - clock.UtcNow);
+
+                attempts++;
+                settlement = new FakeCallQueueMessageSettlement();
+                if (await handler.HandleAsync(QueueMessage(call.CallId, $"message-{attempts}", properties), settlement) == CallQueueMessageOutcome.DeadLettered)
+                {
+                    break;
+                }
+            }
+
+            Assert.AreEqual(CallQueueRetryPolicy.Default.MaxFailures, attempts);
+            Assert.AreEqual("NoOrganiserIdentity", settlement.DeadLetterReason, "The dead-letter queue says what is wrong, not only that retries ran out.");
+            Assert.AreEqual(0, store.Saved.Count);
+            Assert.AreEqual(attempts, CallPayloadWarnings(logger).Count, "A Warning on every attempt...");
+            Assert.IsTrue(logger.Entries.Any(e => e.Level == LogLevel.Error && e.Message.StartsWith("CallImport outcome:") && e.Message.Contains("outcome=DeadLettered:NoOrganiserIdentity")),
+                "...and an Error, with the outcome prefix, when it is dead-lettered.");
+        }
+
+        private static List<CapturingLogger.Entry> CallPayloadWarnings(CapturingLogger logger) =>
+            logger.Entries.Where(e => e.Level == LogLevel.Warning && e.Message.StartsWith("Call record '") && e.Message.Contains("no organiser identity")).ToList();
+
+        /// <summary>
+        /// An organiser identity that is present but cannot be turned into a user of this tenant - someone from another
+        /// tenant, a deleted account - will never resolve, so the call stays processed-without-saving and its message is
+        /// completed (retrying would only block the queue). It says why, rate-limited so a tenant with many external
+        /// organisers is not flooded.
+        /// </summary>
+        [DataTestMethod]
+        [DataRow(true, "ExternalTenant")]
+        [DataRow(false, "NotFoundInDirectory")]
+        public async Task QueueHandler_AnOrganiserThatCannotBeResolved_IsProcessedWithoutSavingAndWarnedAboutOnce(bool externalOrganiser, string expectedStatus)
+        {
+            var calls = Enumerable.Range(0, 3).Select(i => new SyntheticMultiPageCall(2, 1, shape: CallPayloadShape.V2,
+                organiserTenantId: externalOrganiser ? SyntheticMultiPageCall.OtherTenantId : SyntheticMultiPageCall.TenantId)).ToList();
+            var graph = calls[0].CreateGraph();
+            calls.Skip(1).ToList().ForEach(c => c.ServeOn(graph));
+            if (!externalOrganiser)
+            {
+                calls.ForEach(c => graph.Users.Remove(c.Organiser.Id));
+            }
+            var store = new InMemoryCallRecordPersistenceManager();
+            var logger = new CapturingLogger();
+            var importer = new CallRecordImporter(SyntheticMultiPageCall.CreateSourceLoader(graph), store, logger);
+            var handler = QueueHandler(async n => (await importer.Import(n)).Outcome, logger: logger);
+
+            for (var i = 0; i < calls.Count; i++)
+            {
+                Assert.AreEqual(CallQueueMessageOutcome.Completed, await handler.HandleAsync(QueueMessage(calls[i].CallId, $"message-{i}"), new FakeCallQueueMessageSettlement()),
+                    "Never retried: it can never be resolved.");
+            }
+
+            Assert.AreEqual(0, store.Saved.Count);
+            var outcomes = logger.Entries.Where(e => e.Message.StartsWith("CallImport outcome:")).ToList();
+            Assert.AreEqual(calls.Count, outcomes.Count, "One outcome line per call.");
+            Assert.IsTrue(outcomes.All(e => e.Level == LogLevel.Information && e.Message.Contains($"outcome=NotSaved:OrganiserNotResolved:{expectedStatus}")));
+            Assert.AreEqual(1, logger.Entries.Count(e => e.Level == LogLevel.Warning && e.Message.Contains("organiser could not be resolved")),
+                "Said once for the three calls, not once each.");
+            if (externalOrganiser)
+            {
+                Assert.IsFalse(graph.UserRequests.Any(r => r.Contains(calls[0].Organiser.Id)), "An external user is never looked up.");
+            }
+        }
+
+        /// <summary>
+        /// Nothing the importer reads uses a call's segments, so the request must not ask for them. Graph's own continuation
+        /// link then carries only what was requested.
+        /// </summary>
+        [TestMethod]
+        public async Task GraphCallRecordSourceLoader_RequestsSessionsOnly_NotSegments()
+        {
+            var call = new SyntheticMultiPageCall(shape: CallPayloadShape.V2);
+            var graph = call.CreateGraph();
+
+            var loaded = await SyntheticMultiPageCall.CreateSourceLoader(graph).LoadCallRecord(call.CallId);
+
+            Assert.AreEqual(call.TotalSessions, loaded.Sessions.Count);
+            Assert.IsTrue(graph.CallRecordRequests.Count > 0 && graph.CallRecordRequests.All(r => !r.Contains("segments")), string.Join(", ", graph.CallRecordRequests));
+            StringAssert.EndsWith(graph.CallRecordRequests.First(), "?$expand=sessions");
+        }
+
+        /// <summary>
+        /// The same people are on call after call, and a call is often notified more than once (the old and the new webhook
+        /// subscription both fire). With one process-lifetime context a person is looked up once, with only the property
+        /// that is used selected - not once per call.
+        /// </summary>
+        [TestMethod]
+        public async Task GraphCallRecordSourceLoader_LooksEachPersonUpOnceAcrossCalls_SelectingOnlyTheUpn()
+        {
+            var call = new SyntheticMultiPageCall(firstPageAttendees: 2, secondPageAttendees: 1, shape: CallPayloadShape.V2);
+            var graph = call.CreateGraph();
+            var loader = SyntheticMultiPageCall.CreateSourceLoader(graph, SyntheticMultiPageCall.CreateLoadContext(graph));
+
+            await loader.LoadCallRecord(call.CallId);
+            var afterFirst = graph.UserRequests.Count;
+            await loader.LoadCallRecord(call.CallId);
+
+            Assert.AreEqual(call.TotalSessions + 1, afterFirst, "The organiser and each attendee, once.");
+            Assert.AreEqual(afterFirst, graph.UserRequests.Count, "The second call needs no Graph look-ups at all.");
+            Assert.IsTrue(graph.UserRequests.All(r => r.Contains("select=userPrincipalName")), string.Join(", ", graph.UserRequests));
+        }
+
+        #endregion
+
+        #region A Graph outage on the user look-ups
+
+        /// <summary>
+        /// The SDK throws a plain Kiota ApiException (not an ODataError) for a 429/5xx with a non-JSON body, such as a
+        /// gateway's HTML page; <see cref="ODataError"/> derives from it. The status decides, as it does for OData errors,
+        /// and 502 is an outage like 503 and 504.
+        /// </summary>
+        [TestMethod]
+        public void FailureClassifier_JudgesAKiotaApiExceptionByItsStatus()
+        {
+            Func<int, Exception> api = status => new Microsoft.Kiota.Abstractions.ApiException("Graph returned a transient HTTP error.") { ResponseStatusCode = status };
+
+            foreach (var status in new[] { 429, 502, 503, 504 })
+            {
+                Assert.AreEqual(CallImportFailureKind.Systemic, CallImportFailureClassifier.Classify(api(status)), $"ApiException {status}");
+                Assert.AreEqual(CallImportFailureKind.Systemic, CallImportFailureClassifier.Classify(new ODataError { ResponseStatusCode = status }), $"ODataError {status}");
+            }
+            foreach (var status in new[] { 404, 500 })
+            {
+                Assert.AreEqual(CallImportFailureKind.Transient, CallImportFailureClassifier.Classify(api(status)), $"ApiException {status}");
+            }
+            Assert.AreEqual(CallImportFailureKind.Transient, CallImportFailureClassifier.Classify(new Microsoft.Kiota.Abstractions.ApiException("No status was read.")));
+        }
+
+        /// <summary>
+        /// Through the real Graph SDK pipeline: a gateway's HTML 502 on the user look-ups reaches the classifier as a Kiota
+        /// ApiException. It must be an outage - two different calls failing that way pause the queue, and neither call
+        /// spends one of its own attempts - rather than every call burning all 10 and being dead-lettered as exhausted.
+        /// </summary>
+        [TestMethod]
+        public async Task QueueHandler_WhenTheUserLookupsGetAnHtmlBadGateway_PausesTheQueueWithoutSpendingEachCallsAttempts()
+        {
+            var first = new SyntheticMultiPageCall(2, 1, shape: CallPayloadShape.Both);
+            var second = new SyntheticMultiPageCall(2, 1, shape: CallPayloadShape.Both);
+            var graph = first.CreateGraph();
+            second.ServeOn(graph);
+            graph.FailUserLookups = () => new HttpResponseMessage(HttpStatusCode.BadGateway) { Content = new StringContent("<html>Bad gateway</html>", System.Text.Encoding.UTF8, "text/html") };
+            var graphClient = GraphServiceClientFactory.CreateWithTimeout(new BearerTokenAuthenticationProvider("test-token"), TimeSpan.FromSeconds(30), graph);
+            var importer = new CallRecordImporter(SyntheticMultiPageCall.CreateSourceLoader(graph, new TeamsLoadContext(graphClient)), new InMemoryCallRecordPersistenceManager(), new CapturingLogger());
+            var breaker = new CallImportCircuitBreaker();
+            var handler = QueueHandler(async n => (await importer.Import(n)).Outcome, breaker: breaker);
+
+            var firstSettlement = new FakeCallQueueMessageSettlement();
+            var secondSettlement = new FakeCallQueueMessageSettlement();
+            Assert.AreEqual(CallQueueMessageOutcome.RetryScheduled, await handler.HandleAsync(QueueMessage(first.CallId), firstSettlement));
+            Assert.AreEqual(CallQueueMessageOutcome.RetryScheduled, await handler.HandleAsync(QueueMessage(second.CallId, "message-2"), secondSettlement));
+
+            Assert.AreEqual(0, firstSettlement.ScheduledState.Failures, "An outage is not the call's fault: no attempt of its own is used.");
+            Assert.AreEqual(1, firstSettlement.ScheduledState.SystemicFailures);
+            Assert.AreEqual(0, secondSettlement.ScheduledState.Failures);
+            Assert.IsTrue(breaker.IsPaused, "Two different calls failing like an outage pause the queue.");
+        }
+
+        #endregion
+
         #region Queue message settlement and back-off
 
         private static readonly DateTime QueueNow = new DateTime(2026, 3, 2, 10, 0, 0, DateTimeKind.Utc);
@@ -1047,10 +1265,10 @@ namespace Tests.UnitTests
 
         /// <summary>A handler on a fixed clock, whose pause waits move the clock on instead of sleeping.</summary>
         private static CallQueueMessageHandler QueueHandler(Func<GraphChangeNotification, Task<CallImportOutcome>> importCall, FixedClock clock = null,
-            CallImportCircuitBreaker breaker = null, List<TimeSpan> waits = null)
+            CallImportCircuitBreaker breaker = null, List<TimeSpan> waits = null, ILogger logger = null)
         {
             clock = clock ?? new FixedClock(QueueNow);
-            return new CallQueueMessageHandler(importCall, new CapturingLogger(), clock, CallQueueRetryPolicy.Default, breaker ?? new CallImportCircuitBreaker(),
+            return new CallQueueMessageHandler(importCall, logger ?? new CapturingLogger(), clock, CallQueueRetryPolicy.Default, breaker ?? new CallImportCircuitBreaker(),
                 (wait, token) =>
                 {
                     token.ThrowIfCancellationRequested();
@@ -1470,7 +1688,7 @@ namespace Tests.UnitTests
         #endregion
 
         /// <summary>Minimal <see cref="ILogger"/> that records level and formatted message for assertions.</summary>
-        private class CapturingLogger : ILogger
+        internal class CapturingLogger : ILogger
         {
             public class Entry
             {

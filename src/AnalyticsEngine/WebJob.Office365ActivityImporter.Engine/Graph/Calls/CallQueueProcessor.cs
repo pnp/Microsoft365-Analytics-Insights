@@ -172,18 +172,10 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
         {
             var result = await _callRecordImporter.Import(graphChangeNotification);
 
+            // The importer has already logged this call's one outcome line.
             if (result.Call != null)
             {
                 CallProcessed?.Invoke(this, EventArgs.Empty);
-
-                if (result.Outcome == CallImportOutcome.Saved)
-                {
-                    _logger.LogInformation($"Added call ID '{result.Call.GraphCallID}' to database from ServiceBus.");
-                }
-                else
-                {
-                    _logger.LogInformation($"Processed call ID '{result.Call.GraphCallID}' from ServiceBus without saving it.");
-                }
             }
             return result.Outcome;
         }

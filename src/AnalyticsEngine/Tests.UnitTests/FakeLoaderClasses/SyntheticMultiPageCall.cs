@@ -14,6 +14,22 @@ using WebJob.Office365ActivityImporter.Engine.Graph.Calls;
 
 namespace UnitTests.FakeLoaderClasses
 {
+    /// <summary>Which of Graph's two schemas the synthetic payload speaks.</summary>
+    public enum CallPayloadShape
+    {
+        /// <summary>The retired <c>organizer</c> and endpoint <c>identity</c> only (what Graph returned until 30 June 2026).</summary>
+        Legacy,
+
+        /// <summary><c>organizer_v2</c> and endpoint <c>associatedIdentity</c> only (what Graph returns once the legacy fields stop).</summary>
+        V2,
+
+        /// <summary>Both, as Graph returned while the two overlapped.</summary>
+        Both,
+
+        /// <summary>Endpoints in the v2 shape and no organiser identity in either schema.</summary>
+        NoOrganiser
+    }
+
     /// <summary>
     /// A synthetic Teams group call whose sessions span two Graph pages, as Graph returns any call with more than 60:
     /// the call record carries the first 60 sessions inline plus a <c>sessions@odata.nextLink</c>, and that link returns
@@ -23,19 +39,23 @@ namespace UnitTests.FakeLoaderClasses
     public sealed class SyntheticMultiPageCall
     {
         public const string TenantId = "00000000-0000-0000-0000-000000000000";
+        public const string OtherTenantId = "00000000-0000-0000-0000-000000000001";
 
         private static readonly DateTime CallStartUtc = new DateTime(2026, 3, 2, 9, 0, 0, DateTimeKind.Utc);
 
         private readonly string _tail;
         private readonly List<Person> _attendees = new List<Person>();
+        private readonly CallPayloadShape _shape;
 
-        public SyntheticMultiPageCall(int firstPageAttendees = 60, int secondPageAttendees = 1, bool documentedNextLinkShape = false)
+        public SyntheticMultiPageCall(int firstPageAttendees = 60, int secondPageAttendees = 1, bool documentedNextLinkShape = false,
+            CallPayloadShape shape = CallPayloadShape.Legacy, string organiserTenantId = TenantId)
         {
             if (firstPageAttendees < 1 || secondPageAttendees < 1) throw new ArgumentOutOfRangeException(nameof(firstPageAttendees));
 
+            _shape = shape;
             _tail = Guid.NewGuid().ToString("N").Substring(0, 12);
             CallId = $"00000000-0000-0000-ca11-{_tail}";
-            Organiser = new Person(0, $"organiser.{_tail}@contoso.com", "Contoso Organiser", _tail);
+            Organiser = new Person(0, $"organiser.{_tail}@contoso.com", "Contoso Organiser", _tail, organiserTenantId);
             for (var i = 1; i <= firstPageAttendees + secondPageAttendees; i++)
             {
                 var isLate = i == firstPageAttendees + secondPageAttendees;
@@ -45,8 +65,8 @@ namespace UnitTests.FakeLoaderClasses
             }
             FirstPageAttendees = firstPageAttendees;
 
-            CallRecordUrl = $"https://graph.microsoft.com/v1.0/communications/callRecords/{CallId}?$expand=sessions($expand=segments)";
-            SecondPageUrl = $"https://graph.microsoft.com/v1.0/communications/callRecords('{CallId}')/sessions?$expand=segments&$skiptoken=page2-{_tail}";
+            CallRecordUrl = $"https://graph.microsoft.com/v1.0/communications/callRecords/{CallId}?$expand=sessions";
+            SecondPageUrl = $"https://graph.microsoft.com/v1.0/communications/callRecords('{CallId}')/sessions?$skiptoken=page2-{_tail}";
 
             // The shape Graph's own documentation shows, which cannot be requested as it stands.
             SecondPageLinkAsReturned = documentedNextLinkShape
@@ -74,7 +94,7 @@ namespace UnitTests.FakeLoaderClasses
         {
             var call = new JObject
             {
-                ["@odata.context"] = "https://graph.microsoft.com/v1.0/$metadata#communications/callRecords(sessions(segments()))/$entity",
+                ["@odata.context"] = "https://graph.microsoft.com/v1.0/$metadata#communications/callRecords(sessions())/$entity",
                 ["version"] = 1,
                 ["type"] = "groupCall",
                 ["modalities"] = new JArray("audio", "video"),
@@ -82,11 +102,18 @@ namespace UnitTests.FakeLoaderClasses
                 ["startDateTime"] = CallStartUtc,
                 ["endDateTime"] = CallStartUtc.AddHours(1),
                 ["id"] = CallId,
-                ["organizer"] = new JObject { ["user"] = Organiser.UserJson() },
-                ["sessions@odata.context"] = $"https://graph.microsoft.com/v1.0/$metadata#communications/callRecords('{CallId}')/sessions(segments())",
+                ["sessions@odata.context"] = $"https://graph.microsoft.com/v1.0/$metadata#communications/callRecords('{CallId}')/sessions",
                 ["sessions"] = new JArray(_attendees.Take(FirstPageAttendees).Select(SessionJson)),
                 ["sessions@odata.nextLink"] = SecondPageLinkAsReturned
             };
+            if (_shape == CallPayloadShape.Legacy || _shape == CallPayloadShape.Both)
+            {
+                call["organizer"] = new JObject { ["user"] = Organiser.UserJson() };
+            }
+            if (_shape == CallPayloadShape.V2 || _shape == CallPayloadShape.Both)
+            {
+                call["organizer_v2"] = new JObject { ["id"] = Organiser.Id, ["identity"] = new JObject { ["user"] = Organiser.UserJson() } };
+            }
             return call.ToString();
         }
 
@@ -95,7 +122,7 @@ namespace UnitTests.FakeLoaderClasses
         {
             var page = new JObject
             {
-                ["@odata.context"] = $"https://graph.microsoft.com/v1.0/$metadata#communications/callRecords('{CallId}')/sessions(segments())",
+                ["@odata.context"] = $"https://graph.microsoft.com/v1.0/$metadata#communications/callRecords('{CallId}')/sessions",
                 ["value"] = new JArray(_attendees.Skip(FirstPageAttendees).Select(SessionJson))
             };
             if (nextLink != null)
@@ -109,20 +136,32 @@ namespace UnitTests.FakeLoaderClasses
         public SyntheticCallGraphHandler CreateGraph()
         {
             var graph = new SyntheticCallGraphHandler();
+            ServeOn(graph);
+            return graph;
+        }
+
+        /// <summary>Makes <paramref name="graph"/> answer for this call too, so one Graph can serve several calls.</summary>
+        public void ServeOn(SyntheticCallGraphHandler graph)
+        {
             graph.Serve(CallRecordUrl, CallRecordJson());
             graph.Serve(SecondPageUrl, SecondPageJson());
             foreach (var person in new[] { Organiser }.Concat(_attendees))
             {
                 graph.Users[person.Id] = new JObject { ["id"] = person.Id, ["userPrincipalName"] = person.Upn }.ToString();
             }
-            return graph;
         }
 
         /// <summary>The production source loader, reading from <paramref name="graph"/>.</summary>
-        public static GraphCallRecordSourceLoader CreateSourceLoader(SyntheticCallGraphHandler graph)
+        public static GraphCallRecordSourceLoader CreateSourceLoader(SyntheticCallGraphHandler graph, TeamsLoadContext context = null)
+        {
+            return new GraphCallRecordSourceLoader(new ManualGraphCallClient(graph, NullLogger.Instance), context ?? CreateLoadContext(graph), NullLogger.Instance, TenantId);
+        }
+
+        /// <summary>A Teams load context whose Graph client reads from <paramref name="graph"/>.</summary>
+        public static TeamsLoadContext CreateLoadContext(SyntheticCallGraphHandler graph)
         {
             var graphClient = new GraphServiceClient(new HttpClient(graph, disposeHandler: false), new BearerTokenAuthenticationProvider("test-token"));
-            return new GraphCallRecordSourceLoader(new ManualGraphCallClient(graph, NullLogger.Instance), new TeamsLoadContext(graphClient), NullLogger.Instance, TenantId);
+            return new TeamsLoadContext(graphClient);
         }
 
         private JObject SessionJson(Person attendee)
@@ -136,19 +175,13 @@ namespace UnitTests.FakeLoaderClasses
                 ["endDateTime"] = start.AddMinutes(25),
                 ["isTest"] = false,
                 ["caller"] = Endpoint(Organiser),
-                ["callee"] = Endpoint(attendee),
-                ["segments"] = new JArray(new JObject
-                {
-                    ["id"] = $"00000000-0000-0002-{attendee.Index:x4}-{_tail}",
-                    ["startDateTime"] = start,
-                    ["endDateTime"] = start.AddMinutes(25)
-                })
+                ["callee"] = Endpoint(attendee)
             };
         }
 
-        private static JObject Endpoint(Person person)
+        private JObject Endpoint(Person person)
         {
-            return new JObject
+            var endpoint = new JObject
             {
                 ["@odata.type"] = "#microsoft.graph.callRecords.participantEndpoint",
                 ["userAgent"] = new JObject
@@ -157,31 +190,41 @@ namespace UnitTests.FakeLoaderClasses
                     ["headerValue"] = "Contoso-Synthetic/1.0 (Teams)",
                     ["platform"] = "windows",
                     ["productFamily"] = "teams"
-                },
-                ["identity"] = new JObject
+                }
+            };
+            if (_shape == CallPayloadShape.Legacy || _shape == CallPayloadShape.Both)
+            {
+                endpoint["identity"] = new JObject
                 {
                     ["@odata.type"] = "#microsoft.graph.identitySet",
                     ["user"] = person.UserJson()
-                }
-            };
+                };
+            }
+            if (_shape != CallPayloadShape.Legacy)
+            {
+                endpoint["associatedIdentity"] = person.UserJson();
+            }
+            return endpoint;
         }
 
         public sealed class Person
         {
-            public Person(int index, string upn, string displayName, string tail)
+            public Person(int index, string upn, string displayName, string tail, string tenantId = TenantId)
             {
                 Index = index;
                 Upn = upn;
                 DisplayName = displayName;
                 Id = $"00000000-0000-0000-{index:x4}-{tail}";
+                PersonTenantId = tenantId;
             }
 
             public int Index { get; }
             public string Id { get; }
             public string Upn { get; }
             public string DisplayName { get; }
+            public string PersonTenantId { get; }
 
-            public JObject UserJson() => new JObject { ["id"] = Id, ["displayName"] = DisplayName, ["tenantId"] = TenantId };
+            public JObject UserJson() => new JObject { ["id"] = Id, ["displayName"] = DisplayName, ["tenantId"] = PersonTenantId };
         }
     }
 
@@ -198,8 +241,16 @@ namespace UnitTests.FakeLoaderClasses
         /// <summary>Answers any request with no canned response, when it returns JSON; for scripting endless paging.</summary>
         public Func<Uri, string> Generate { get; set; }
 
+        /// <summary>Answers every user look-up with this instead of the user, e.g. a gateway's HTML 502.</summary>
+        public Func<HttpResponseMessage> FailUserLookups { get; set; }
+
         public List<string> Requests { get; } = new List<string>();
 
+        /// <summary>The user look-ups made, in order.</summary>
+        public List<string> UserRequests
+        {
+            get { lock (Requests) { return Requests.Where(r => r.IndexOf("/v1.0/users/", StringComparison.OrdinalIgnoreCase) >= 0).ToList(); } }
+        }
         /// <summary>The requests made for the call record and its sessions, in order (user look-ups left out).</summary>
         public List<string> CallRecordRequests
         {
@@ -217,6 +268,13 @@ namespace UnitTests.FakeLoaderClasses
             lock (Requests)
             {
                 Requests.Add(url);
+            }
+
+            if (FailUserLookups != null && request.RequestUri.AbsolutePath.StartsWith("/v1.0/users/", StringComparison.OrdinalIgnoreCase))
+            {
+                var failure = FailUserLookups();
+                failure.RequestMessage = request;
+                return Task.FromResult(failure);
             }
 
             Tuple<HttpStatusCode, string> response;
