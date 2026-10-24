@@ -185,7 +185,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             // from no token is the whole directory (no $filter, members and guests alike), so it also tells the import
             // which accounts no longer exist: a full read never reports deletions.
             var completeDirectoryRead = LastLoadReachedDeltaLink && string.IsNullOrEmpty(usersQueryDelta);
-            var classified = UserDeltaReadRules.Classify(results, completeDirectoryRead);
+            var classified = UserDeltaReadRules.Classify(results, completeDirectoryRead, initialRound: string.IsNullOrEmpty(usersQueryDelta));
             LastLoadDeactivations = classified.Deactivations;
             if (LastLoadDeactivations.DisabledObjectIds.Count > 0 || LastLoadDeactivations.RemovedObjectIds.Count > 0)
             {

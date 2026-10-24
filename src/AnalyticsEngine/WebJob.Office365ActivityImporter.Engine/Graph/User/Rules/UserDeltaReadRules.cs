@@ -91,6 +91,11 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         /// True when <paramref name="entries"/> are a complete read of the whole directory (see
         /// <see cref="GraphUserDeactivations.IsCompleteDirectoryRead"/>), so absence from them means deletion.
         /// </param>
+        /// <param name="initialRound">
+        /// True when the entries come from a read that started without a delta token. Graph includes relationship
+        /// annotations such as <c>manager@delta</c> in every entry of that round, so an entry without one has no manager;
+        /// in a later round its absence only means the manager did not change (see <see cref="GraphUser.ManagerReported"/>).
+        /// </param>
         /// <remarks>
         /// Graph lists an object once per change, in the order the changes happened, so each object is first resolved to
         /// its final state, and only then sorted:
@@ -98,6 +103,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         /// <item>Its account status is the one its latest entry reports: deleted (<c>@removed</c>), enabled or disabled.
         /// A later entry can leave out what did not change - <c>accountEnabled</c> too, which then changes nothing.</item>
         /// <item>Its profile is the latest entry that carries a sign-in name, written with that final status.</item>
+        /// <item>Its manager is the one the latest entry that reported a manager names; when none did, it is "unchanged" -
+        /// or, in the initial round, none.</item>
         /// <item>Enabled with a sign-in name: imported. Disabled: every row with its object id is marked disabled, and a
         /// row with its sign-in name is updated from the profile. Deleted: every row with its object id is marked
         /// disabled. No status at all: neither, as before.</item>
@@ -105,7 +112,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         /// later profile has it.</item>
         /// </list>
         /// </remarks>
-        public static UserDeltaRead Classify(IReadOnlyList<GraphUser> entries, bool completeDirectoryRead = false)
+        public static UserDeltaRead Classify(IReadOnlyList<GraphUser> entries, bool completeDirectoryRead = false, bool initialRound = false)
         {
             var count = entries?.Count ?? 0;
             var byObjectId = new Dictionary<string, ObjectInRead>(count, StringComparer.OrdinalIgnoreCase);
@@ -181,6 +188,14 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 }
                 var found = withProfileAt[i];
                 var user = found.Profile.AccountEnabled == found.Enabled ? found.Profile : found.Profile.WithAccountEnabled(found.Enabled);
+                if (found.ManagerSource != null && !ReferenceEquals(found.ManagerSource, found.Profile))
+                {
+                    user = user.WithManagerFrom(found.ManagerSource);
+                }
+                else if (found.ManagerSource == null && initialRound)
+                {
+                    user = user.WithManagerFrom(null);
+                }
                 if (found.Enabled == true)
                 {
                     active.Add(user);
@@ -218,12 +233,16 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
 
             public int ProfileAt { get; private set; }
 
+            /// <summary>The latest entry that reported the user's manager, if any did.</summary>
+            public GraphUser ManagerSource { get; private set; }
+
             public void Apply(GraphUser entry, int position)
             {
                 if (entry.IsRemoved)
                 {
                     Removed = true;
                     Enabled = null;
+                    ManagerSource = null;
                     return;
                 }
 
@@ -231,6 +250,10 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 if (entry.AccountEnabled.HasValue)
                 {
                     Enabled = entry.AccountEnabled;
+                }
+                if (entry.ManagerReported)
+                {
+                    ManagerSource = entry;
                 }
                 if (!string.IsNullOrEmpty(entry.UserPrincipalName))
                 {

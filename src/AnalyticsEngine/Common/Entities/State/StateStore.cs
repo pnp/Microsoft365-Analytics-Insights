@@ -215,5 +215,13 @@ namespace Common.Entities.State
         /// expire after 30 days. Holds UPNs and who asked, so it is protected like every other runtime state partition.
         /// </summary>
         public const string UserRefresh = "UserRefresh";
+
+        /// <summary>
+        /// Users the Graph user import could not safely match to a users row - their new sign-in name is held by another
+        /// person's row, Graph listed two names for them, and so on - with the latest Graph profile of each, so they are
+        /// re-checked every cycle while the <c>/users/delta</c> checkpoint moves on. A header row plus pages, rewritten only
+        /// when the set changes. Holds UPNs, so it is protected like every other runtime state partition.
+        /// </summary>
+        public const string UserIdentityQuarantine = "UserIdentityQuarantine";
     }
 }

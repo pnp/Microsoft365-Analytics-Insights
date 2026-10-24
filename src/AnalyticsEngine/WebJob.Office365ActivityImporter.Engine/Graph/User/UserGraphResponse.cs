@@ -47,8 +47,44 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         [JsonProperty("id")]
         public string Id { get; set; }
 
-        [JsonProperty("manager@delta")]
-        public List<ManagerInfo> ManagerInfo { get; set; } = new List<ManagerInfo>();
+        private List<ManagerInfo> _managerInfo = new List<ManagerInfo>();
+        private bool _managerInfoAssigned;
+
+        /// <summary>
+        /// The <c>manager@delta</c> annotation. Assigning it - as the JSON reader does whenever the entry carries the
+        /// annotation, even as an empty array - marks the manager as reported (see <see cref="ManagerReported"/>).
+        /// </summary>
+        [JsonProperty("manager@delta", ObjectCreationHandling = ObjectCreationHandling.Replace)]
+        public List<ManagerInfo> ManagerInfo
+        {
+            get => _managerInfo;
+            set
+            {
+                _managerInfo = value ?? new List<ManagerInfo>();
+                _managerInfoAssigned = true;
+            }
+        }
+
+        /// <summary>
+        /// Whether this entry says anything about the user's manager, so their stored manager may be changed from it.
+        /// </summary>
+        /// <remarks>
+        /// <c>/users/delta</c> only guarantees the <c>manager@delta</c> annotation in the initial round of a read (see
+        /// https://learn.microsoft.com/graph/delta-query-overview, "Resource representation in the delta query response").
+        /// An incremental entry for a user whose only change was, say, <c>accountEnabled</c> can leave it out, and reading
+        /// that as "no manager" cleared the stored manager of every leaver. So the annotation's absence from an incremental
+        /// entry means "unchanged"; in the initial round the loader marks every entry reported
+        /// (<see cref="UserDeltaReadRules.Classify"/>), because there absence does mean "no manager".
+        /// </remarks>
+        [JsonIgnore]
+        public bool ManagerReported
+        {
+            get => _managerInfoAssigned || (_managerInfo != null && _managerInfo.Count > 0);
+            set => _managerInfoAssigned = value;
+        }
+
+        /// <summary>Keeps an entry that never reported a manager from coming back from a stored copy as "no manager".</summary>
+        public bool ShouldSerializeManagerInfo() => ManagerReported;
 
         /// <summary>
         /// The <c>@removed</c> annotation <c>/users/delta</c> puts on a deleted user. Such an entry carries nothing
@@ -114,8 +150,9 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         [JsonExtensionData]
         public IDictionary<string, JToken> AdditionalProperties { get; set; } = new Dictionary<string, JToken>();
 
+        /// <summary>The manager the entry names, ignoring a link it reports as removed; null when there is none.</summary>
         [JsonIgnore]
-        public ManagerInfo DefaultManagerInfo => ManagerInfo?.FirstOrDefault();
+        public ManagerInfo DefaultManagerInfo => ManagerInfo?.FirstOrDefault(m => m != null && !m.IsRemoved && !string.IsNullOrEmpty(m.Id));
 
         /// <summary>
         /// A shallow copy with <see cref="AccountEnabled"/> replaced: an object's profile can come from an earlier entry in
@@ -128,6 +165,17 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             return copy;
         }
 
+        /// <summary>
+        /// A shallow copy whose manager is the one <paramref name="managerSource"/> reported, or - when it is null -
+        /// explicitly none. The entries themselves are never modified.
+        /// </summary>
+        internal GraphUser WithManagerFrom(GraphUser managerSource)
+        {
+            var copy = (GraphUser)MemberwiseClone();
+            copy.ManagerInfo = managerSource == null ? new List<ManagerInfo>() : new List<ManagerInfo>(managerSource.ManagerInfo);
+            return copy;
+        }
+
     }
     public class ManagerInfo
     {
@@ -136,5 +184,16 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
 
         [JsonProperty("id")]
         public string Id { get; set; }
+
+        /// <summary>
+        /// The <c>@removed</c> annotation on a relationship link that no longer exists. A <see cref="JToken"/> for the same
+        /// reason as <see cref="GraphUser.Removed"/>.
+        /// </summary>
+        [JsonProperty("@removed", NullValueHandling = NullValueHandling.Ignore)]
+        public JToken Removed { get; set; }
+
+        /// <summary>True when the link is reported as removed: the user no longer has this manager.</summary>
+        [JsonIgnore]
+        public bool IsRemoved => Removed != null && Removed.Type != JTokenType.Null;
     }
 }

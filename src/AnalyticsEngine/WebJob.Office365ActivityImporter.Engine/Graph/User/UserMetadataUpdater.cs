@@ -77,6 +77,9 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             _lastRunStore = lastRunStore;
             IDeltaValueProvider deltaProvider = null;
             var deltaTokenStore = StateStore.TryOpen(settings, StatePartitions.UserImport, logger);
+            IdentityQuarantineStore = new UserIdentityQuarantineStore(
+                StateStore.TryOpen(settings, StatePartitions.UserIdentityQuarantine, logger) ?? ProcessIdentityQuarantineFallback,
+                settings.TenantGUID);
             if (deltaTokenStore != null)
             {
                 deltaProvider = new PersistedDeltaValueProvider(settings, logger, deltaTokenStore);
@@ -129,8 +132,22 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             _clock = clock ?? SystemClock.Instance;
             _orgTypeStore = orgTypeStore ?? CreateOrgTypeStore(settings, logger);
             _orgAssignmentStore = orgAssignmentStore ?? CreateOrgAssignmentStore(settings, logger);
+            IdentityQuarantineStore = new UserIdentityQuarantineStore(new InMemoryKeyValueStore(), Guid.Empty);
             InitializeHelpers();
         }
+
+        /// <summary>
+        /// The quarantine when no Storage connection string is configured: once per process, so quarantined users are
+        /// still carried from one cycle to the next while the process lives. The updater itself is rebuilt every cycle.
+        /// </summary>
+        private static readonly InMemoryKeyValueStore ProcessIdentityQuarantineFallback = new InMemoryKeyValueStore();
+
+        /// <summary>
+        /// Where users quarantined for an identity conflict are kept between cycles. The production constructor opens
+        /// <see cref="StatePartitions.UserIdentityQuarantine"/>; the others start with an empty store of their own, so tests
+        /// share one only when they set it.
+        /// </summary>
+        internal IUserIdentityQuarantineStore IdentityQuarantineStore { get; set; }
 
         /// <summary>
         /// Builds the org type store, or returns <c>null</c> when no SQL connection string is
@@ -543,8 +560,11 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                     disabledGraphUsers = SelectGraphUsersInScope(disabledGraphUsers, userScope);
                 }
 
-                // Pre-build dictionary for O(1) graph user lookups by AAD ID (avoids O(n) scans per user in manager resolution)
-                _dataMapper.SetGraphUserLookup(allActiveGraphUsers);
+                // Users quarantined by an earlier cycle are checked again beside this read: their stored profile, or this
+                // read's newer one. See UserIdentityQuarantineRules.
+                var quarantineLoad = await LoadIdentityQuarantineAsync();
+                var quarantineMerge = UserIdentityQuarantineRules.Merge(quarantineLoad.Entries, allActiveGraphUsers, disabledGraphUsers, deactivations,
+                    u => !userScope.IsFiltered || userScope.IsAnyInScope(u.Id, u.UserPrincipalName, u.Mail));
 
                 // Get SKUs from tenant
                 var skus = await _userLoader.LoadTenantSkus();
@@ -560,12 +580,31 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                     : await db.users.AsNoTracking().ToListAsync();
                 _logger.LogInformation($"User import - loaded {allDbUsers.Count.ToString("N0")} users from database");
 
-                if (!await UserRenameProcessor.RenameAsync(db.Database.Connection.ConnectionString,
-                    allActiveGraphUsers.Concat(disabledGraphUsers), allDbUsers, _logger,
-                    () => EnsureWriterLockHeldAsync("user rename")))
+                // Renamed users keep their row. Users whose identity cannot be matched safely are quarantined: left out of
+                // everything below that depends on who they are, and carried to the next cycle. Nobody else waits for them.
+                var profilesByObjectId = new Dictionary<string, GraphUser>(StringComparer.OrdinalIgnoreCase);
+                foreach (var graphUser in allActiveGraphUsers.Concat(disabledGraphUsers))
                 {
-                    return false;
+                    if (!string.IsNullOrEmpty(graphUser?.Id))
+                    {
+                        profilesByObjectId[graphUser.Id] = graphUser;
+                    }
                 }
+                var reconciliation = await UserRenameProcessor.ReconcileAsync(db.Database.Connection.ConnectionString,
+                    allActiveGraphUsers.Concat(disabledGraphUsers), allDbUsers, _logger,
+                    () => EnsureWriterLockHeldAsync("user rename"));
+                var quarantinedRowIds = new HashSet<int>();
+                if (reconciliation.Conflicts.Count > 0)
+                {
+                    allActiveGraphUsers = allActiveGraphUsers.Where(u => !IsQuarantined(u, reconciliation)).ToList();
+                    disabledGraphUsers = disabledGraphUsers.Where(u => !IsQuarantined(u, reconciliation)).ToList();
+                    quarantinedRowIds = RowsOfQuarantinedIdentities(allDbUsers, reconciliation, profilesByObjectId);
+                }
+                LogIdentityReconciliation(reconciliation, quarantineLoad, quarantineMerge);
+
+                // Pre-build dictionary for O(1) graph user lookups by AAD ID (avoids O(n) scans per user in manager resolution).
+                // After the quarantine, so a quarantined manager is never looked up under the name that is in conflict.
+                _dataMapper.SetGraphUserLookup(allActiveGraphUsers);
 
                 // Create lookup dictionaries for performance - pre-allocate capacity
                 var dbUsersByUpn = new Dictionary<string, Common.Entities.User>(allDbUsers.Count, StringComparer.OrdinalIgnoreCase);
@@ -825,8 +864,10 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                     {
                         foreach (var u in allDbUsers)
                         {
-                            // Licences are directory metadata too: not refreshed for anyone outside UserGroupsFilter.
-                            if (u.ID > 0 && (!userScope.IsFiltered || IsDbUserInScope(u, userScope)))
+                            // Licences are directory metadata too: not refreshed for anyone outside UserGroupsFilter,
+                            // nor for a quarantined identity - SKU holders are matched by sign-in name, which is what is in
+                            // conflict, so their licence rows are left exactly as they are.
+                            if (u.ID > 0 && (!userScope.IsFiltered || IsDbUserInScope(u, userScope)) && !quarantinedRowIds.Contains(u.ID))
                             {
                                 combinedById[u.ID] = u;
                             }
@@ -897,6 +938,9 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 // The check is explicit rather than implied by that control flow so the
                 // guarantee survives someone adding a catch: see UserImportCommitPolicy (#372).
                 bool cycleCompleted;
+                var checkpointWouldMove = deltaReadCompleted && UserImportCommitPolicy.ShouldCommitDelta(phaseResults);
+                phaseResults.IdentityQuarantineSaved = await SaveIdentityQuarantineAsync(quarantineLoad, quarantineMerge, reconciliation, profilesByObjectId,
+                    checkpointWouldMove);
                 if (!deltaReadCompleted)
                 {
                     // The read never reached an @odata.deltaLink, so there is no new token and
@@ -954,6 +998,152 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         /// <summary>True when a users-table row belongs to someone in the <c>UserGroupsFilter</c> scope.</summary>
         internal static bool IsDbUserInScope(Common.Entities.User user, UserImportScope userScope)
             => user != null && userScope.IsAnyInScope(user.AzureAdId, user.UserPrincipalName, user.Mail);
+
+        private sealed class IdentityQuarantineLoad
+        {
+            public List<QuarantinedUserIdentity> Entries { get; set; } = new List<QuarantinedUserIdentity>();
+
+            /// <summary>False when the stored set could not be read: it is then never overwritten this cycle.</summary>
+            public bool Available { get; set; }
+        }
+
+        private async Task<IdentityQuarantineLoad> LoadIdentityQuarantineAsync()
+        {
+            if (IdentityQuarantineStore == null)
+            {
+                return new IdentityQuarantineLoad { Available = false };
+            }
+
+            try
+            {
+                return new IdentityQuarantineLoad { Entries = await IdentityQuarantineStore.LoadAsync(), Available = true };
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning($"User import - identity quarantine: could not read the stored set from {IdentityQuarantineStore.Description} ({DescribeStateFailure(ex)}). " +
+                    "Users quarantined by earlier cycles are not re-checked this cycle and stay stored. If anyone is quarantined this cycle, the user checkpoint does not move.");
+                return new IdentityQuarantineLoad { Available = false };
+            }
+        }
+
+        private static bool IsQuarantined(GraphUser user, UserIdentityReconciliation reconciliation)
+            => !string.IsNullOrEmpty(user?.Id) && reconciliation.Conflicts.ContainsKey(user.Id);
+
+        /// <summary>
+        /// The rows a quarantined identity could touch: those carrying their object id, and the one holding the sign-in name
+        /// Graph now reports for them.
+        /// </summary>
+        private static HashSet<int> RowsOfQuarantinedIdentities(List<Common.Entities.User> dbUsers, UserIdentityReconciliation reconciliation,
+            Dictionary<string, GraphUser> profilesByObjectId)
+        {
+            var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var objectId in reconciliation.Conflicts.Keys)
+            {
+                if (profilesByObjectId.TryGetValue(objectId, out var profile) && !string.IsNullOrEmpty(profile.UserPrincipalName))
+                {
+                    names.Add(profile.UserPrincipalName);
+                }
+            }
+
+            var rows = new HashSet<int>();
+            foreach (var user in dbUsers)
+            {
+                if ((!string.IsNullOrEmpty(user.AzureAdId) && reconciliation.Conflicts.ContainsKey(user.AzureAdId))
+                    || (!string.IsNullOrEmpty(user.UserPrincipalName) && names.Contains(user.UserPrincipalName)))
+                {
+                    rows.Add(user.ID);
+                }
+            }
+            return rows;
+        }
+
+        private void LogIdentityReconciliation(UserIdentityReconciliation reconciliation, IdentityQuarantineLoad load, UserIdentityQuarantineMerge merge)
+        {
+            var resolved = merge.Considered.Keys.Count(id => !reconciliation.Conflicts.ContainsKey(id));
+            var message = $"User import - identity reconciliation: {reconciliation.RenamesApplied:N0} renamed in place " +
+                $"({reconciliation.RenamedFromSeveralRows:N0} from several rows, {reconciliation.ChainedRenames:N0} after another rename freed the name), " +
+                $"{reconciliation.PlaceholdersAdopted:N0} placeholder row(s) adopted (path: object id stamped on the row another import created under the new sign-in name; earlier rows kept as history), " +
+                $"{reconciliation.Conflicts.Count:N0} quarantined, {merge.Retried:N0} retried from earlier cycles, {resolved:N0} resolved, " +
+                $"{merge.Dropped:N0} dropped (deleted or outside UserGroupsFilter), in {reconciliation.ElapsedMs:N0} ms.";
+            if (reconciliation.Conflicts.Count > 0 || !load.Available)
+            {
+                _logger.LogWarning(message);
+            }
+            else
+            {
+                _logger.LogInformation(message);
+            }
+        }
+
+        /// <summary>
+        /// Stores who is quarantined after this cycle, and returns whether the user checkpoint may move: only when every
+        /// quarantined user's latest profile is safely stored (see <see cref="UserIdentityQuarantineRules"/>).
+        /// </summary>
+        private async Task<bool> SaveIdentityQuarantineAsync(IdentityQuarantineLoad load, UserIdentityQuarantineMerge merge,
+            UserIdentityReconciliation reconciliation, Dictionary<string, GraphUser> profilesByObjectId, bool checkpointWouldMove)
+        {
+            var next = UserIdentityQuarantineRules.Next(merge, reconciliation.Conflicts, profilesByObjectId, _clock.UtcNow, checkpointWouldMove);
+            if (next.Count > 0 || load.Entries.Count > 0)
+            {
+                var resolved = merge.Considered.Keys.Count(id => !reconciliation.Conflicts.ContainsKey(id));
+                var oldest = next.Count > 0 ? next.Min(e => e.SinceUtc).ToString("u") : "n/a";
+                var message = $"User import - identity quarantine: {next.Count:N0} user(s) quarantined, oldest since {oldest}, {merge.Retried:N0} retried, {resolved:N0} resolved" +
+                    (checkpointWouldMove ? "." : "; resolved users stay stored until a cycle whose checkpoint moves.");
+                if (next.Count > 0)
+                {
+                    _logger.LogWarning(message);
+                }
+                else
+                {
+                    _logger.LogInformation(message);
+                }
+            }
+
+            if (!load.Available)
+            {
+                if (reconciliation.Conflicts.Count == 0)
+                {
+                    return true;
+                }
+                _logger.LogError($"User import - identity quarantine: {reconciliation.Conflicts.Count:N0} user(s) were quarantined this cycle, but the stored set could not be read, " +
+                    "so it is not overwritten. NOT moving the user checkpoint forward, so none of their changes are lost; they are read again next cycle.");
+                return false;
+            }
+
+            var fits = next.Count <= UserIdentityQuarantineStore.MaxEntries;
+            if (!fits)
+            {
+                _logger.LogError($"User import - identity quarantine: {next.Count:N0} user(s) are quarantined, more than the {UserIdentityQuarantineStore.MaxEntries:N0} the state store keeps. " +
+                    "Storing the longest-quarantined and NOT moving the user checkpoint forward, so none of the others' changes are lost; they are read again next cycle.");
+                next = next.OrderBy(e => e.SinceUtc).Take(UserIdentityQuarantineStore.MaxEntries).ToList();
+            }
+
+            if (!UserIdentityQuarantineRules.Differs(load.Entries, next))
+            {
+                return fits;
+            }
+
+            try
+            {
+                await IdentityQuarantineStore.SaveAsync(next);
+                return fits;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError($"User import - identity quarantine: could not save {next.Count:N0} user(s) to {IdentityQuarantineStore.Description} ({DescribeStateFailure(ex)}). " +
+                    "NOT moving the user checkpoint forward, so none of their changes are lost; they are read again next cycle.");
+                return false;
+            }
+        }
+
+        /// <summary>The exception type and, for a storage failure, its HTTP status and error code. Never a URL.</summary>
+        private static string DescribeStateFailure(Exception ex)
+        {
+            var requestFailed = ex as Azure.RequestFailedException;
+            return requestFailed == null
+                ? ex.GetType().Name
+                : $"{ex.GetType().Name}, HTTP {requestFailed.Status}, error code '{requestFailed.ErrorCode ?? "unknown"}'";
+        }
 
         /// <summary>
         /// Discards the stored <c>/users/delta</c> tokens when the one this cycle would resume was taken under a

@@ -18,10 +18,17 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         public TeamsLoadContext(GraphServiceClient graphClient)
         {
             this.UserCache = new UserLookupCache(graphClient);
+            this.CallUsers = graphClient == null ? null : Calls.CallUserUpnCache.ForGraph(graphClient);
             this.GraphClient = graphClient;
         }
         public GraphServiceClient GraphClient { get; set; }
         public UserLookupCache UserCache { get; set; }
+
+        /// <summary>
+        /// Id to UPN look-ups for the people on Teams calls. Process-lifetime and shared across queue workers when the
+        /// context is (as <see cref="Calls.CallQueueProcessor"/> keeps one for the life of the process).
+        /// </summary>
+        public Calls.CallUserUpnCache CallUsers { get; set; }
 
         /// <summary>
         /// The <c>UserGroupsFilter</c> scope for this crawl. People outside it are not stored as owners or members,

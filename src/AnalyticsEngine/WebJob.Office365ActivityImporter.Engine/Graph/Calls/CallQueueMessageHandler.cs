@@ -5,8 +5,10 @@ using Microsoft.Extensions.Logging;
 using Newtonsoft.Json;
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Threading;
 using System.Threading.Tasks;
+using WebJob.Office365ActivityImporter.Engine.Entities.Serialisation;
 
 namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
 {
@@ -132,6 +134,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
             }
 
             var outcomeRecorded = false;
+            var importStopwatch = Stopwatch.StartNew();
             try
             {
                 Exception failure = null;
@@ -166,22 +169,26 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
 
                 var kind = failure == null ? CallImportFailureKind.Transient : CallImportFailureClassifier.Classify(failure);
                 var error = failure == null ? "Graph returned no readable call record." : CallImportFailureClassifier.Describe(failure);
+                var failureCode = failure == null ? "NoReadableCallRecord" : CallImportFailureClassifier.Code(failure);
 
                 outcomeRecorded = true;
                 LogPause(_breaker.RecordFailure(kind, callId, isProbe, _clock.UtcNow), callId, error);
 
                 if (kind == CallImportFailureKind.Permanent)
                 {
-                    return await DeadLetterAsync(message, settlement, NotRetryableReason, $"Call '{callId}': {error}");
+                    return await DeadLetterAsync(message, settlement, NotRetryableReason, $"Call '{callId}': {error}", callId, failureCode, importStopwatch.ElapsedMilliseconds);
                 }
 
                 var decision = _policy.Decide(CallQueueRetryState.FromMessage(message), kind, _clock.UtcNow, error);
                 if (decision.DeadLetter)
                 {
-                    return await DeadLetterAsync(message, settlement, decision.DeadLetterReason, $"Call '{callId}': {decision.DeadLetterDescription}");
+                    // A payload problem is dead-lettered under its own reason (e.g. NoOrganiserIdentity), so the dead-letter
+                    // queue says what is wrong rather than only that the retries ran out.
+                    var reason = PayloadFailure(failure)?.Reason ?? decision.DeadLetterReason;
+                    return await DeadLetterAsync(message, settlement, reason, $"Call '{callId}': {decision.DeadLetterDescription}", callId, failureCode, importStopwatch.ElapsedMilliseconds);
                 }
 
-                return await ScheduleRetryAsync(message, settlement, callId, kind, decision);
+                return await ScheduleRetryAsync(message, settlement, callId, kind, decision, failureCode, importStopwatch.ElapsedMilliseconds);
             }
             finally
             {
@@ -247,7 +254,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
         }
 
         private async Task<CallQueueMessageOutcome> ScheduleRetryAsync(CallQueueMessage message, ICallQueueMessageSettlement settlement, string callId,
-            CallImportFailureKind kind, CallQueueRetryDecision decision)
+            CallImportFailureKind kind, CallQueueRetryDecision decision, string failureCode, long elapsedMs)
         {
             try
             {
@@ -275,15 +282,31 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
                 _logger.LogWarning($"Queued a retry of call '{callId}' but couldn't complete ServiceBus message '{message.MessageId}': {ex.Message}. It will be delivered again.");
             }
 
-            _logger.LogWarning($"Call '{callId}' was not imported ({kind}; failed attempts used: {decision.NextState.Failures} of {_policy.MaxFailures} " +
+            _logger.LogWarning($"{CallImportLog.Prefix} call='{callId}' outcome=Retry:{kind} failure={failureCode} elapsedMs={elapsedMs}. " +
+                $"Not imported ({kind}; failed attempts used: {decision.NextState.Failures} of {_policy.MaxFailures} " +
                 $"for this call, {decision.NextState.SystemicFailures} of {_policy.MaxSystemicFailures} outage-type). " +
                 $"Retry {decision.NextState.Retries} queued for {decision.RetryAtUtc:u}. Last error: {decision.NextState.LastError}");
             return CallQueueMessageOutcome.RetryScheduled;
         }
 
-        private async Task<CallQueueMessageOutcome> DeadLetterAsync(CallQueueMessage message, ICallQueueMessageSettlement settlement, string reason, string description)
+        private static CallRecordPayloadException PayloadFailure(Exception failure)
         {
-            _logger.LogError($"Dead-lettering ServiceBus message ID '{message.MessageId}' ({reason}): {description}");
+            for (var e = failure; e != null; e = e.InnerException)
+            {
+                if (e is CallRecordPayloadException payload)
+                {
+                    return payload;
+                }
+            }
+            return null;
+        }
+
+        private async Task<CallQueueMessageOutcome> DeadLetterAsync(CallQueueMessage message, ICallQueueMessageSettlement settlement, string reason, string description,
+            string callId = null, string failureCode = null, long? elapsedMs = null)
+        {
+            _logger.LogError($"{CallImportLog.Prefix} call='{callId ?? "(unknown)"}' outcome=DeadLettered:{reason}" +
+                (failureCode == null ? string.Empty : $" failure={failureCode}") + (elapsedMs == null ? string.Empty : $" elapsedMs={elapsedMs}") +
+                $". Dead-lettering ServiceBus message ID '{message.MessageId}': {description}");
             await settlement.DeadLetterAsync(reason, description);
             return CallQueueMessageOutcome.DeadLettered;
         }

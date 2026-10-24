@@ -237,6 +237,59 @@ namespace Tests.UnitTests
             }
         }
 
+        /// <summary>
+        /// C-4: an incremental <c>/users/delta</c> entry for a user whose only change was <c>accountEnabled</c> can leave
+        /// out <c>manager@delta</c>. That must leave the stored manager alone - on both write paths - rather than read as
+        /// "no manager" and clear it for every leaver. An entry that does report an empty manager still clears it.
+        /// </summary>
+        [DataTestMethod]
+        [DataRow(true, DisplayName = "Bulk SQL path (tenant SKUs readable)")]
+        [DataRow(false, DisplayName = "EF per-user path (no tenant SKUs)")]
+        public async Task UserMetadataUpdater_IncrementalEntryWithoutManagerAnnotation_KeepsTheStoredManager(bool tenantSkusReadable)
+        {
+            var logger = AnalyticsLogger.ConsoleOnlyTracer();
+            var timestamp = DateTime.Now.Ticks;
+            var managerUpn = $"leaver_mgr{timestamp}@contoso.com";
+            var leaverUpn = $"leaver{timestamp}@contoso.com";
+            var stayerUpn = $"stayer{timestamp}@contoso.com";
+            var managerId = Guid.NewGuid().ToString();
+            var leaverId = Guid.NewGuid().ToString();
+            var stayerId = Guid.NewGuid().ToString();
+            await DeleteUsers(managerUpn, leaverUpn, stayerUpn);
+
+            try
+            {
+                var manager = new GraphUser { UserPrincipalName = managerUpn, Id = managerId, AccountEnabled = true, Mail = managerUpn };
+                var leaver = new GraphUser { UserPrincipalName = leaverUpn, Id = leaverId, AccountEnabled = true, Mail = leaverUpn, ManagerInfo = new List<ManagerInfo> { new ManagerInfo { Id = managerId } } };
+                var stayer = new GraphUser { UserPrincipalName = stayerUpn, Id = stayerId, AccountEnabled = true, Mail = stayerUpn, ManagerInfo = new List<ManagerInfo> { new ManagerInfo { Id = managerId } } };
+                var skus = tenantSkusReadable ? new List<Microsoft.Graph.Models.SubscribedSku>() : null;
+                var loader = new FakeUserMetadataLoader(new List<GraphUser> { manager, leaver, stayer }, skus);
+                Assert.IsTrue(await new UserMetadataUpdater(logger, new AppConfig(), loader).InsertAndUpdateDatabaseFromExternalUsers(), "Cycle 1");
+
+                // Incremental: the leaver is disabled, and the entry carries no manager@delta. The stayer's manager was removed.
+                loader.DeltaUsersOverride = new List<GraphUser>
+                {
+                    new GraphUser { UserPrincipalName = leaverUpn, Id = leaverId, AccountEnabled = false, Mail = leaverUpn },
+                    new GraphUser { UserPrincipalName = stayerUpn, Id = stayerId, AccountEnabled = true, Mail = stayerUpn, ManagerInfo = new List<ManagerInfo>() },
+                };
+                Assert.IsTrue(await new UserMetadataUpdater(logger, new AppConfig(), loader).InsertAndUpdateDatabaseFromExternalUsers(), "Cycle 2");
+
+                using (var db = new AnalyticsEntitiesContext())
+                {
+                    var dbManager = await db.users.SingleAsync(u => u.UserPrincipalName == managerUpn);
+                    var dbLeaver = await db.users.SingleAsync(u => u.UserPrincipalName == leaverUpn);
+                    var dbStayer = await db.users.SingleAsync(u => u.UserPrincipalName == stayerUpn);
+                    Assert.AreEqual(false, dbLeaver.AccountEnabled);
+                    Assert.AreEqual(dbManager.ID, dbLeaver.ManagerId, "An entry that says nothing about the manager must not clear it.");
+                    Assert.IsNull(dbStayer.ManagerId, "An entry that reports no manager still clears it.");
+                }
+            }
+            finally
+            {
+                await DeleteUsers(leaverUpn, stayerUpn, managerUpn);
+            }
+        }
+
         private static async Task DeleteUsers(params string[] upns)
         {
             using (var db = new AnalyticsEntitiesContext())
