@@ -1226,8 +1226,8 @@ namespace Tests.UnitTests
         [TestMethod]
         public async Task QueueHandler_WhenTheUserLookupsGetAnHtmlBadGateway_PausesTheQueueWithoutSpendingEachCallsAttempts()
         {
-            var first = new SyntheticMultiPageCall(2, 1, shape: CallPayloadShape.V2);
-            var second = new SyntheticMultiPageCall(2, 1, shape: CallPayloadShape.V2);
+            var first = new SyntheticMultiPageCall(2, 1, shape: CallPayloadShape.Both);
+            var second = new SyntheticMultiPageCall(2, 1, shape: CallPayloadShape.Both);
             var graph = first.CreateGraph();
             second.ServeOn(graph);
             graph.FailUserLookups = () => new HttpResponseMessage(HttpStatusCode.BadGateway) { Content = new StringContent("<html>Bad gateway</html>", System.Text.Encoding.UTF8, "text/html") };
