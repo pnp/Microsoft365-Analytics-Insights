@@ -403,8 +403,8 @@ namespace Tests.UnitTests
 
             clock.Advance(TimeSpan.FromMinutes(30));
             await webhook.CreateOrUpdateWebhook(WebhookUrl, ClientState);
-            Assert.AreEqual("renew:new-subscription-id", subscriptions.Operations.Last(), "Within the hour: the new one is renewed, the legacy one neither renewed nor deleted.");
-            Assert.AreEqual(0, subscriptions.Deletes.Count);
+            CollectionAssert.AreEqual(new[] { "create:new-subscription-id" }, subscriptions.Operations,
+                "Within the hour: the new one has two days left, so it is left alone, and the legacy one is neither renewed nor deleted.");
 
             clock.Advance(TimeSpan.FromMinutes(31));
             await webhook.CreateOrUpdateWebhook(WebhookUrl, ClientState);
@@ -413,11 +413,8 @@ namespace Tests.UnitTests
             CollectionAssert.AreEqual(new[]
             {
                 "create:new-subscription-id",
-                "renew:new-subscription-id",
-                "renew:new-subscription-id",
                 "delete:legacy-sub-id",
-                "renew:new-subscription-id",
-            }, subscriptions.Operations, "Replaced once; the legacy one deleted on a cycle more than an hour later.");
+            }, subscriptions.Operations, "Replaced once; the legacy one deleted on a check more than an hour later.");
             CollectionAssert.AreEquivalent(new[] { "new-subscription-id", "other-install", "other-resource", "other-query" }, subscriptions.All.Select(s => s.Id).ToList(),
                 "Nothing but this webhook's own two URLs is touched.");
             Assert.AreEqual("new-subscription-id", (await webhook.GetCallRecordsSubscriptionInfo(WebhookUrl)).SubscriptionId,
@@ -459,7 +456,7 @@ namespace Tests.UnitTests
             await reUpgraded.CreateOrUpdateWebhook(WebhookUrl, ClientState);
 
             CollectionAssert.AreEqual(new[] { "new-subscription-id" }, subscriptions.All.Select(s => s.Id).ToList());
-            Assert.AreEqual(1, subscriptions.Creates.Count(c => c.ClientState == ClientState.Value), "The ?cs=v1 subscription was still alive, so it was renewed, not recreated.");
+            Assert.AreEqual(1, subscriptions.Creates.Count(c => c.ClientState == ClientState.Value), "The ?cs=v1 subscription was still alive, so it was kept, not recreated.");
         }
 
         /// <summary>
@@ -485,8 +482,7 @@ namespace Tests.UnitTests
                 "create:new-subscription-id",
                 "create:new-subscription-id-2",
                 "delete:new-subscription-id",
-                "renew:new-subscription-id-2",
-            }, subscriptions.Operations);
+            }, subscriptions.Operations, "Replaced once; the replacement then has two days left and is left alone.");
             Assert.AreEqual(rotated.Value, subscriptions.Creates[1].ClientState);
             Assert.AreEqual(rotated.Fingerprint, (await records.GetAsync(CurrentUrl)).ClientStateFingerprint);
             StringAssert.Contains(logger.Entries.Single(e => e.Message.Contains("Replacing")).Message, "client secret that has since changed");
@@ -545,7 +541,7 @@ namespace Tests.UnitTests
             await webhook.CreateOrUpdateWebhook(WebhookUrl, ClientState);
             await webhook.CreateOrUpdateWebhook(WebhookUrl, ClientState);
 
-            CollectionAssert.AreEqual(new[] { "create:new-subscription-id", "renew:new-subscription-id" }, subscriptions.Operations);
+            CollectionAssert.AreEqual(new[] { "create:new-subscription-id" }, subscriptions.Operations, "Replaced once, then left alone.");
             Assert.AreEqual(1, logger.Entries.Count(e => e.Level == LogLevel.Warning && e.Message.Contains("couldn't record it")));
         }
 
@@ -567,7 +563,7 @@ namespace Tests.UnitTests
             CollectionAssert.AreEqual(new[] { "renew:legacy-sub-id" }, subscriptions.Operations);
             var critical = logger.Entries.Single(e => e.Level == LogLevel.Critical).Message;
             StringAssert.Contains(critical, "replace 'legacy-sub-id'");
-            StringAssert.Contains(critical, "renewed meanwhile");
+            StringAssert.Contains(critical, "kept alive meanwhile");
         }
 
         /// <summary>
@@ -589,7 +585,7 @@ namespace Tests.UnitTests
             clock.Advance(TimeSpan.FromMinutes(61));
             await webhook.CreateOrUpdateWebhook(WebhookUrl, ClientState);
 
-            CollectionAssert.AreEqual(new[] { "create:new-subscription-id", "renew:new-subscription-id" }, subscriptions.Operations,
+            CollectionAssert.AreEqual(new[] { "create:new-subscription-id" }, subscriptions.Operations,
                 "The old one is not renewed again, and the new one is not replaced again.");
             CollectionAssert.AreEqual(new[] { "legacy-sub-id" }, subscriptions.Deletes, "Deleted only after the grace period - and that failed.");
             StringAssert.Contains(logger.Entries.Single(e => e.Level == LogLevel.Warning).Message, "no longer renewed");
@@ -630,6 +626,366 @@ namespace Tests.UnitTests
 
             public Task<bool> ExistsAsync(string key, CancellationToken cancellationToken = default) =>
                 Task.FromException<bool>(new InvalidOperationException("simulated storage outage"));
+        }
+
+        #endregion
+
+        #region Subscription timer, rotation, lapse and 409 (release review E-2, E-6, E-7)
+
+        private static readonly CallWebhookClientState RotatedClientState = CallWebhookClientState.For(RotatedSyntheticSecret, SyntheticTenantId, SyntheticClientId);
+        private const string SubscriptionA = "00000000-0000-0000-0000-0000000000a1";
+        private const string SubscriptionB = "00000000-0000-0000-0000-0000000000b2";
+
+        /// <summary>Records each warm-up into the fake's operation log, so the order against Graph calls can be asserted.</summary>
+        private sealed class RecordingWarmer : ICallWebhookWarmer
+        {
+            private readonly FakeCallRecordSubscriptionManager _subscriptions;
+            private readonly bool _succeeds;
+
+            public RecordingWarmer(FakeCallRecordSubscriptionManager subscriptions, bool succeeds = true)
+            {
+                _subscriptions = subscriptions;
+                _succeeds = succeeds;
+            }
+
+            public List<Uri> Urls { get; } = new List<Uri>();
+
+            public Task<CallWebhookWarmUpResult> WarmUpAsync(Uri notificationUrl, CancellationToken cancellationToken)
+            {
+                Urls.Add(notificationUrl);
+                _subscriptions.Operations.Add("warm-up");
+                return Task.FromResult(_succeeds
+                    ? new CallWebhookWarmUpResult { Succeeded = true, ElapsedMs = 8000 }
+                    : new CallWebhookWarmUpResult { ElapsedMs = 120000, Failure = "no answer within 120 s" });
+            }
+        }
+
+        /// <summary>
+        /// E-7: the importer now checks every 30 minutes, so renewing on every check would put the webhook through Graph's
+        /// validation every 30 minutes for nothing. It renews once less than a day of the two-day lifetime is left.
+        /// </summary>
+        [TestMethod]
+        public async Task CreateOrUpdateWebhook_WithMoreThanADayLeft_LeavesItAlone_AndRenewsItOnceUnderADayIsLeft()
+        {
+            var subscriptions = new FakeCallRecordSubscriptionManager().WithCurrentSubscription("existing-sub-id", Now.AddHours(40));
+            var clock = new FixedClock(Now);
+            var webhook = new CallWebhook(subscriptions, RecordedAs("existing-sub-id"), new CapturingLogger(), clock);
+
+            var untouched = await webhook.CreateOrUpdateWebhook(WebhookUrl, ClientState);
+            Assert.AreEqual(0, subscriptions.Operations.Count, "40 hours left: nothing to do.");
+            Assert.AreEqual(CallWebhookChange.None, untouched.Change);
+            Assert.AreEqual(Now.AddHours(40), untouched.ExpiresUtc);
+
+            clock.Advance(TimeSpan.FromHours(17));
+            var renewed = await webhook.CreateOrUpdateWebhook(WebhookUrl, ClientState);
+
+            CollectionAssert.AreEqual(new[] { "renew:existing-sub-id" }, subscriptions.Operations, "23 hours left: renewed.");
+            Assert.AreEqual(CallWebhookChange.Renewed, renewed.Change);
+            Assert.AreEqual(clock.UtcNow.AddDays(2), renewed.ExpiresUtc);
+        }
+
+        /// <summary>
+        /// E-7: when the subscription the importer created is gone, the calls in between were never notified. That used to be
+        /// an Information line ("No subscription found... Creating"); it must be a Warning that dates the gap.
+        /// </summary>
+        [TestMethod]
+        public async Task CreateOrUpdateWebhook_WhenTheSubscriptionItCreatedHasLapsed_WarnsWithTheGapAndRecreatesIt()
+        {
+            var logger = new CapturingLogger();
+            var subscriptions = new FakeCallRecordSubscriptionManager();
+            var clock = new FixedClock(Now);
+            var webhook = new CallWebhook(subscriptions, new CallSubscriptionRecordStore(new InMemoryKeyValueStore(), new InMemoryKeyValueStore()), logger, clock);
+            await webhook.CreateOrUpdateWebhook(WebhookUrl, ClientState);
+
+            // Nothing renewed it - a three-day import cycle, before the subscription timer - and Graph removed it at expiry.
+            await subscriptions.DeleteSubscription("new-subscription-id");
+            clock.Advance(TimeSpan.FromDays(3));
+            var result = await webhook.CreateOrUpdateWebhook(WebhookUrl, ClientState);
+
+            Assert.AreEqual(CallWebhookChange.Recreated, result.Change);
+            var lapse = logger.Entries.Single(e => e.Message.Contains("Subscription lapsed"));
+            Assert.AreEqual(LogLevel.Warning, lapse.Level, "Calls in the gap are lost to the webhook: not Information.");
+            StringAssert.Contains(lapse.Message, "'new-subscription-id'");
+            StringAssert.Contains(lapse.Message, $"expired at {Now.AddDays(2):u}");
+            StringAssert.Contains(lapse.Message, $"from {Now.AddDays(2):u} to {clock.UtcNow:u} (24 h)");
+            Assert.AreEqual(1, logger.Entries.Count(e => e.Message.Contains("No subscription found")), "Only the first create, which had nothing to lapse.");
+        }
+
+        /// <summary>
+        /// E-6 (insurance): Graph documents 409 Conflict for a second subscription on the same resource, though it accepts one
+        /// for call records today. If it starts refusing, the replacement must still happen - by deleting this webhook's own
+        /// subscription first - rather than failing every attempt and leaving the rotated secret's subscription in place.
+        /// </summary>
+        [TestMethod]
+        public async Task CreateOrUpdateWebhook_WhenGraphRefusesTheDuplicate_DeletesOursFirstThenCreates_AndSaysSo()
+        {
+            var logger = new CapturingLogger();
+            var subscriptions = new FakeCallRecordSubscriptionManager()
+                .WithCurrentSubscription("old-sub-id", Now.AddHours(30))
+                .WithSubscription("other-install", CallSubscriptionRules.CallRecordsResource, "https://another-install.example/api/CallRecordWebhook", Now.AddDays(1))
+                .RefusingDuplicates();
+            var records = RecordedAs("old-sub-id", RotatedClientState);
+            var webhook = new CallWebhook(subscriptions, records, logger, new FixedClock(Now));
+
+            var result = await webhook.CreateOrUpdateWebhook(WebhookUrl, ClientState);
+
+            CollectionAssert.AreEqual(new[] { "conflict", "delete:old-sub-id", "create:new-subscription-id" }, subscriptions.Operations);
+            Assert.AreEqual(CallWebhookChange.Replaced, result.Change);
+            Assert.AreEqual("new-subscription-id", (await records.GetAsync(CurrentUrl)).SubscriptionId);
+            CollectionAssert.AreEquivalent(new[] { "new-subscription-id", "other-install" }, subscriptions.All.Select(s => s.Id).ToList(),
+                "Only this webhook's own subscription is deleted to make room.");
+            StringAssert.Contains(logger.Entries.First(e => e.Message.Contains("refused a second")).Message, "409");
+            StringAssert.Contains(logger.Entries.Single(e => e.Message.Contains("409 Conflict fallback")).Message, "not delivered for");
+            Assert.AreEqual(0, logger.Entries.Count(e => e.Level >= LogLevel.Error));
+        }
+
+        /// <summary>
+        /// E-2: the importer records when it noticed the rotation. That is what opens - and bounds - the web app's window for
+        /// the old subscription's notifications, so it must be written even when the replacement then fails.
+        /// </summary>
+        [TestMethod]
+        public async Task CreateOrUpdateWebhook_AfterARotation_RecordsWhenItWasSuperseded_EvenIfTheReplacementFails()
+        {
+            var logger = new CapturingLogger();
+            var subscriptions = new FakeCallRecordSubscriptionManager()
+                .WithCurrentSubscription(SubscriptionA, Now.AddHours(30))
+                .FailingCreateWith(GraphError(400, "Subscription validation request timed out."));
+            var records = RecordedAs(SubscriptionA, ClientState);
+            var webhook = new CallWebhook(subscriptions, records, logger, new FixedClock(Now));
+
+            await Assert.ThrowsExceptionAsync<ODataError>(() => webhook.CreateOrUpdateWebhook(WebhookUrl, RotatedClientState));
+
+            var record = await records.GetAsync(CurrentUrl);
+            Assert.AreEqual(SubscriptionA, record.SubscriptionId, "Still the old subscription's record: it is what the web app checks.");
+            Assert.AreEqual(ClientState.Fingerprint, record.ClientStateFingerprint);
+            Assert.AreEqual(Now, record.SupersededUtc);
+            StringAssert.Contains(logger.Entries.Single(e => e.Message.Contains("client secret has changed")).Message, $"until {Now.AddHours(24):u}");
+            AssertNeverLogged(logger, SyntheticSecret, ClientState.Value, RotatedSyntheticSecret, RotatedClientState.Value);
+        }
+
+        /// <summary>
+        /// E-2, the scenario from the review: the secret is rotated, the web app restarts cold, and the first create fails
+        /// Graph's validation. The retry must come from the subscription timer within minutes - not from the next import
+        /// cycle hours later - and the webhook must be warmed up before each attempt.
+        /// </summary>
+        [TestMethod]
+        public async Task SubscriptionTimer_AfterARotationWithAColdWebhook_RetriesWithinMinutes_WarmingTheWebhookFirst()
+        {
+            var logger = new CapturingLogger();
+            var subscriptions = new FakeCallRecordSubscriptionManager()
+                .WithCurrentSubscription("old-sub-id", Now.AddHours(30))
+                .FailingCreateWith(GraphError(400, "Subscription validation request timed out."), times: 1);
+            var records = RecordedAs("old-sub-id", ClientState);
+            var clock = new FixedClock(Now);
+            var warmer = new RecordingWarmer(subscriptions);
+            var timer = new CallSubscriptionMaintainer(new CallWebhook(subscriptions, records, logger, clock), WebhookUrl, RotatedClientState, warmer, logger, clock);
+
+            await timer.RunOnceAsync();
+
+            Assert.AreEqual(1, subscriptions.Creates.Count);
+            Assert.AreEqual(1, timer.ConsecutiveFailures);
+            Assert.AreEqual(Now.AddMinutes(1), timer.NextRunUtc, "Retried after a minute, not a cycle later.");
+            Assert.AreEqual(0, logger.Entries.Count(e => e.Level >= LogLevel.Error), "One failed attempt against a cold web app is degraded, not down.");
+            StringAssert.Contains(logger.Entries.Single(e => e.Message.Contains("Retry pending")).Message, "attempt 1");
+            CollectionAssert.AreEqual(new[] { CurrentUrl }, warmer.Urls, "Warmed up on the URL Graph validates.");
+
+            clock.Advance(TimeSpan.FromSeconds(30));
+            await timer.RunOnceAsync();
+            Assert.AreEqual(1, subscriptions.Creates.Count, "Not before the retry is due.");
+
+            clock.Advance(TimeSpan.FromSeconds(31));
+            await timer.RunOnceAsync();
+
+            CollectionAssert.AreEqual(new[] { "warm-up", "warm-up", "create:new-subscription-id", "delete:old-sub-id" }, subscriptions.Operations);
+            Assert.AreEqual(0, timer.ConsecutiveFailures);
+            Assert.AreEqual(clock.UtcNow + CallSubscriptionMaintainer.HealthyCheckInterval, timer.NextRunUtc);
+            var record = await records.GetAsync(CurrentUrl);
+            Assert.AreEqual(RotatedClientState.Fingerprint, record.ClientStateFingerprint);
+            Assert.IsNull(record.SupersededUtc, "The new subscription's record closes the web app's window for the old one.");
+            StringAssert.Contains(logger.Entries.Single(e => e.Message.Contains("Recovered")).Message, "attempt 2");
+            AssertNeverLogged(logger, SyntheticSecret, ClientState.Value, RotatedSyntheticSecret, RotatedClientState.Value);
+        }
+
+        /// <summary>A failure that persists backs off (1, 2, 5, 10, then every 30 minutes) and only then reports the import as down.</summary>
+        [TestMethod]
+        public async Task SubscriptionTimer_BacksOff_AndEscalatesOnlyAfterRepeatedFailures()
+        {
+            var logger = new CapturingLogger();
+            var subscriptions = new FakeCallRecordSubscriptionManager().FailingCreateWith(GraphError(403, "Insufficient privileges to complete the operation."));
+            var clock = new FixedClock(Now);
+            var timer = new CallSubscriptionMaintainer(new CallWebhook(subscriptions, logger, clock), WebhookUrl, ClientState, null, logger, clock);
+
+            var waits = new List<double>();
+            for (var attempt = 1; attempt <= 6; attempt++)
+            {
+                await timer.RunOnceAsync();
+                waits.Add((timer.NextRunUtc - clock.UtcNow).TotalMinutes);
+                if (attempt == 2)
+                {
+                    Assert.AreEqual(0, logger.Entries.Count(e => e.Level >= LogLevel.Error), "Two failures: still Warnings.");
+                }
+                clock.Advance(timer.NextRunUtc - clock.UtcNow);
+            }
+
+            CollectionAssert.AreEqual(new double[] { 1, 2, 5, 10, 30, 30 }, waits);
+            Assert.AreEqual(4, logger.Entries.Count(e => e.Level == LogLevel.Critical && e.Message.Contains("CallRecords.Read.All")),
+                "From the third attempt on, the permission diagnosis is Critical.");
+            Assert.AreEqual(4, logger.Entries.Count(e => e.Level == LogLevel.Error && e.Message.Contains("Retry pending")));
+        }
+
+        /// <summary>The hourly summary names the subscription and its expiry, so a log export shows the webhook's state at any hour.</summary>
+        [TestMethod]
+        public async Task SubscriptionTimer_LogsAnHourlySummary_WithTheSubscriptionAndItsExpiry()
+        {
+            var logger = new CapturingLogger();
+            var subscriptions = new FakeCallRecordSubscriptionManager();
+            var clock = new FixedClock(Now);
+            var timer = new CallSubscriptionMaintainer(new CallWebhook(subscriptions, logger, clock), WebhookUrl, ClientState, null, logger, clock);
+
+            await timer.RunOnceAsync();
+            clock.Advance(TimeSpan.FromMinutes(30));
+            await timer.RunOnceAsync();
+            clock.Advance(TimeSpan.FromMinutes(30));
+            await timer.RunOnceAsync();
+
+            Assert.AreEqual(1, subscriptions.Operations.Count, "Created once; the checks after that change nothing.");
+            var summary = logger.Entries.Single(e => e.Message.Contains("Summary"));
+            Assert.AreEqual(LogLevel.Information, summary.Level);
+            StringAssert.Contains(summary.Message, $"'new-subscription-id', expires {Now.AddDays(2):u} (47 h left)");
+            StringAssert.Contains(summary.Message, "3 check(s), 1 change(s) and 0 failed attempt(s)");
+        }
+
+        #endregion
+
+        #region Webhook: the previous client secret's clientState after a rotation, and refusal logging (E-2)
+
+        private static GraphChangeNotification FromSubscription(string subscriptionId, string clientState, string callId)
+        {
+            return new GraphChangeNotification { SubscriptionId = subscriptionId, ClientState = clientState, ResourceData = new ResourceData { Id = callId } };
+        }
+
+        /// <summary>
+        /// After a rotation the web app no longer has the old secret, so it used to refuse - with a 200, so Graph never
+        /// re-sent - every notification from the old subscription until the importer replaced it. It now accepts them, from
+        /// the record the importer keeps in the state table (written through the importer's own store, read through the
+        /// web app's): only from the recorded subscription, only for its recorded clientState, only within the window.
+        /// </summary>
+        [TestMethod]
+        public async Task Authenticator_AfterARotation_AcceptsThePreviousClientState_OnlyFromTheRecordedSubscription_AndOnlyWithinTheWindow()
+        {
+            var table = new InMemoryKeyValueStore();
+            var importerRecords = new CallSubscriptionRecordStore(table, new InMemoryKeyValueStore());
+            await importerRecords.SaveAsync(CurrentUrl, new CallSubscriptionRecord
+            {
+                SubscriptionId = SubscriptionA,
+                ClientStateFingerprint = ClientState.Fingerprint,
+                CreatedUtc = Now.AddDays(-10),
+                ExpiresUtc = Now.AddHours(30),
+                SupersededUtc = Now,
+            });
+            var clock = new FixedClock(Now.AddHours(1));
+            var logger = new CapturingLogger();
+            var authenticator = new CallNotificationAuthenticator(RotatedClientState, new CachedCallSubscriptionRecordSource(table, CurrentUrl, clock, logger), clock);
+            Func<List<GraphChangeNotification>> batch = () => new List<GraphChangeNotification>
+            {
+                FromSubscription(SubscriptionA, ClientState.Value, "old-subscription-old-state"),
+                FromSubscription(SubscriptionB, ClientState.Value, "other-subscription-old-state"),
+                FromSubscription(SubscriptionA, ClientState.Fingerprint, "fingerprint-as-state"),
+                FromSubscription(SubscriptionA, ClientState.Value.ToUpperInvariant(), "wrong-case"),
+                FromSubscription(SubscriptionA, RotatedClientState.Value, "current-state"),
+            };
+
+            var within = await authenticator.SelectAsync(batch(), logger);
+
+            CollectionAssert.AreEquivalent(new[] { "old-subscription-old-state", "current-state" }, within.Valid.Select(n => n.ResourceData.Id).ToList());
+            Assert.AreEqual(1, within.PreviousCount);
+            Assert.AreEqual(3, within.InvalidCount);
+            StringAssert.Contains(logger.Entries.Single(e => e.Message.Contains("before the last rotation") && e.Message.StartsWith("[Calls Webhook] Accepted")).Message,
+                $"until {Now.AddHours(24):u}");
+
+            clock.Advance(TimeSpan.FromHours(24));
+            var after = await authenticator.SelectAsync(batch(), logger);
+
+            CollectionAssert.AreEqual(new[] { "current-state" }, after.Valid.Select(n => n.ResourceData.Id).ToList(), "The window is 24 hours from when the importer noticed.");
+            Assert.AreEqual(CallNotificationRefusalReason.PreviousClientStateWindowClosed,
+                after.Refused.Single(r => r.Notification.ResourceData.Id == "old-subscription-old-state").Reason);
+            AssertNeverLogged(logger, SyntheticSecret, ClientState.Value, RotatedSyntheticSecret, RotatedClientState.Value);
+        }
+
+        /// <summary>
+        /// Fail-closed edges of the previous-clientState rule: before the importer has noticed the rotation the subscription's
+        /// recorded expiry bounds it; a record with no time at all, a record that is already current, and a web app with no
+        /// client secret of its own accept nothing.
+        /// </summary>
+        [TestMethod]
+        public void PreviousClientState_IsBoundedAndFailsClosed()
+        {
+            var fromA = FromSubscription(SubscriptionA, ClientState.Value, "call-1");
+            var notNoticedYet = new CallSubscriptionRecord { SubscriptionId = SubscriptionA, ClientStateFingerprint = ClientState.Fingerprint, ExpiresUtc = Now.AddHours(5) };
+
+            Assert.AreEqual(PreviousClientStateDecision.Accepted, CallNotificationRules.EvaluatePreviousClientState(fromA, notNoticedYet, RotatedClientState, Now, out var until));
+            Assert.AreEqual(Now.AddHours(5), until, "Before the importer notices, only as long as the subscription itself was due to live.");
+            Assert.AreEqual(PreviousClientStateDecision.WindowClosed, CallNotificationRules.EvaluatePreviousClientState(fromA, notNoticedYet, RotatedClientState, Now.AddHours(5), out _));
+
+            var noTimes = new CallSubscriptionRecord { SubscriptionId = SubscriptionA, ClientStateFingerprint = ClientState.Fingerprint };
+            Assert.AreEqual(PreviousClientStateDecision.WindowClosed, CallNotificationRules.EvaluatePreviousClientState(fromA, noTimes, RotatedClientState, Now, out _),
+                "A record written before expiries were recorded, and not yet noticed as superseded, is not trusted open-endedly.");
+
+            var current = new CallSubscriptionRecord { SubscriptionId = SubscriptionA, ClientStateFingerprint = RotatedClientState.Fingerprint, ExpiresUtc = Now.AddHours(5) };
+            Assert.AreEqual(PreviousClientStateDecision.NotApplicable, CallNotificationRules.EvaluatePreviousClientState(fromA, current, RotatedClientState, Now, out _),
+                "Once the record is the current clientState's, the old value is just a mismatch.");
+
+            Assert.AreEqual(PreviousClientStateDecision.NotApplicable, CallNotificationRules.EvaluatePreviousClientState(fromA, notNoticedYet,
+                CallWebhookClientState.For(null, SyntheticTenantId, SyntheticClientId), Now, out _), "No client secret: nothing is accepted.");
+
+            Assert.IsFalse(CallWebhookClientState.MatchesFingerprint(ClientState.Value, "not-a-fingerprint"));
+            Assert.IsFalse(CallWebhookClientState.MatchesFingerprint(null, ClientState.Fingerprint));
+            Assert.IsTrue(CallWebhookClientState.MatchesFingerprint(ClientState.Value, ClientState.Fingerprint.ToUpperInvariant()));
+        }
+
+        /// <summary>
+        /// E-2: a refused notification is answered 200, so Graph never re-sends it - the refusal is the only trace of a lost
+        /// call. Logged at Warning per subscription and reason, rate-limited, never with the clientState, and with an
+        /// anonymous caller's non-GUID "subscription id" neither echoed into the log nor given a throttle entry of its own.
+        /// </summary>
+        [TestMethod]
+        public async Task Authenticator_Refusals_AreWarnedPerSubscriptionAndReason_RateLimited_WithoutTheClientState()
+        {
+            var logger = new CapturingLogger();
+            var clock = new FixedClock(Now);
+            var authenticator = new CallNotificationAuthenticator(ClientState, null, clock);
+            Func<List<GraphChangeNotification>> batch = () => new List<GraphChangeNotification>
+            {
+                FromSubscription(SubscriptionA, "stale-state-1", "a1"),
+                FromSubscription(SubscriptionA, "stale-state-2", "a2"),
+                FromSubscription(SubscriptionA, null, "a3"),
+                FromSubscription("<script>forged</script>", "x", "f1"),
+                FromSubscription("also forged", "y", "f2"),
+            };
+
+            await authenticator.SelectAsync(batch(), logger);
+            var first = logger.Entries.Where(e => e.Message.Contains("Refused")).ToList();
+            Assert.AreEqual(3, first.Count);
+            Assert.IsTrue(first.All(e => e.Level == LogLevel.Warning));
+            StringAssert.Contains(first.Single(e => e.Message.Contains("ClientStateMismatch") && e.Message.Contains(SubscriptionA)).Message, "Refused 2 notification(s)");
+            StringAssert.Contains(first.Single(e => e.Message.Contains("MissingClientState")).Message, SubscriptionA);
+            StringAssert.Contains(first.Single(e => e.Message.Contains("(not a GUID)")).Message, "Refused 2 notification(s)");
+
+            clock.Advance(TimeSpan.FromMinutes(5));
+            await authenticator.SelectAsync(batch(), logger);
+            Assert.AreEqual(3, logger.Entries.Count(e => e.Message.Contains("Refused")), "Rate-limited.");
+
+            clock.Advance(TimeSpan.FromMinutes(11));
+            await authenticator.SelectAsync(batch(), logger);
+            StringAssert.Contains(logger.Entries.Last(e => e.Message.Contains("ClientStateMismatch") && e.Message.Contains(SubscriptionA)).Message,
+                "Refused 4 notification(s) since " + Now.ToString("u"), "The suppressed ones are counted into the next line.");
+
+            Assert.IsFalse(logger.Entries.Any(e => e.Message.Contains("forged") || e.Message.Contains("stale-state")), "Neither presented values nor forged ids are logged.");
+
+            var noSecret = new CapturingLogger();
+            await new CallNotificationAuthenticator(CallWebhookClientState.For(null, SyntheticTenantId, SyntheticClientId), null, clock)
+                .SelectAsync(new List<GraphChangeNotification> { FromSubscription(SubscriptionB, "anything", "b1") }, noSecret);
+            StringAssert.Contains(noSecret.Entries.Single(e => e.Level == LogLevel.Warning).Message, "NoClientSecretConfigured");
         }
 
         #endregion

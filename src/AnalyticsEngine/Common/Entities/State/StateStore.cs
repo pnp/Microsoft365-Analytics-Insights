@@ -162,6 +162,13 @@ namespace Common.Entities.State
         public const string TeamsChannels = "TeamsChannels";
 
         /// <summary>
+        /// Which Teams calls webhook subscription the importer created, keyed by notification URL: its id, the fingerprint
+        /// of its clientState, its last known expiry, and when a client-secret rotation superseded it. Written by the
+        /// importer, read by the web app. Never the clientState itself. See <c>Common.Entities.Calls.CallSubscriptionRecord</c>.
+        /// </summary>
+        public const string CallsWebhook = "CallsWebhook";
+
+        /// <summary>
         /// The delegated refresh token authorised for each Team in the portal (Teams deep analytics). Secrets: protected
         /// by the storage account's access control, like every other secret the App Service holds.
         /// </summary>

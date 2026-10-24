@@ -24,9 +24,12 @@ namespace Web.AnalyticsWeb.Controllers
             () => new AnalyticsLogger(Config.Value.AppInsightsConnectionString, nameof(CallRecordWebhookController)));
 
         // The clientState derived from the app's client secret (and the legacy raw secret, while subscriptions created
-        // before that change are replaced). One per process, so its legacy warning is logged once per process.
+        // before that change are replaced). One per process, so its warnings are throttled per process. After a client
+        // secret rotation it also accepts - for a bounded window, and only from the subscription the importer recorded -
+        // the previous secret's clientState, recognised by the fingerprint the importer stored in the runtime state table.
         private static readonly Lazy<CallNotificationAuthenticator> Authenticator = new Lazy<CallNotificationAuthenticator>(
-            () => new CallNotificationAuthenticator(CallWebhookClientState.ForConfig(Config.Value)));
+            () => new CallNotificationAuthenticator(CallWebhookClientState.ForConfig(Config.Value),
+                CachedCallSubscriptionRecordSource.ForConfig(Config.Value, Logger.Value)));
 
         private static readonly object QueueLock = new object();
         private static ServiceBusClient _queueClient;
@@ -39,10 +42,10 @@ namespace Web.AnalyticsWeb.Controllers
         [HttpPost]
         public async Task<HttpResponseMessage> Post([FromBody] GraphChangeNotificationList changeMsg, string validationToken = "")
         {
-            // Test ping from Graph?
+            // Test ping from Graph, or the importer warming the webhook up before it asks Graph for a subscription?
             if (!string.IsNullOrEmpty(validationToken))
             {
-                Logger.Value.LogInformation($"{nameof(CallRecordWebhookController)}: test ping from Graph received.");
+                Logger.Value.LogInformation($"{nameof(CallRecordWebhookController)}: validation request received (from Graph, or the importer's warm-up).");
                 var pingTestResponse = new HttpResponseMessage(HttpStatusCode.OK);
                 pingTestResponse.Content = new StringContent(validationToken, System.Text.Encoding.UTF8, "text/plain");
                 return pingTestResponse;
@@ -65,7 +68,7 @@ namespace Web.AnalyticsWeb.Controllers
             // Verify each msg is legit - compare its ClientState to the one derived from the app secret. A null entry
             // cannot be, and is counted as invalid.
             var notifications = changeMsg.Notifications.Where(n => n != null).ToList();
-            var selection = Authenticator.Value.Select(notifications, logger);
+            var selection = await Authenticator.Value.SelectAsync(notifications, logger);
             var changes = selection.Valid;
             var invalidChangeMsgs = selection.InvalidCount + (changeMsg.Notifications.Count - notifications.Count);
 

@@ -343,6 +343,10 @@ namespace WebJob.Office365ActivityImporter
             // the loop: it remembers when there is nothing left, so an idle database is looked at once a day, not every cycle.
             var concealedIdentityUserCleanup = ConcealedIdentityUserCleanup.ForConfig(configuredSettings, logger);
 
+            // The Teams calls webhook subscription is kept alive on its own timer, not at the start of each cycle: a cycle can
+            // take longer than the subscription lives, and a failed create must be retried in minutes, not a cycle later.
+            var callSubscriptionMaintainer = CallSubscriptionMaintainer.StartIfEnabled(configuredSettings, webHookUrl, logger);
+
             // Run app
             using (var heartbeat = new DataUtils.Health.ImporterHeartbeat(logger, DataUtils.Health.ImporterHeartbeat.ActivityJob))
             using (var health = Common.Entities.Health.DefaultRuntimeHealth.Start(configuredSettings, logger, ImporterHeartbeat.ActivityJob))

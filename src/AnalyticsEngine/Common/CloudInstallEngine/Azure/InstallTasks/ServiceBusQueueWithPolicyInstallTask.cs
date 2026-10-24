@@ -45,14 +45,26 @@ namespace CloudInstallEngine.Azure.InstallTasks
             {
                 var allQueues = sbNS.GetServiceBusQueues();
 
-                var operation = await allQueues.CreateOrUpdateAsync(WaitUntil.Completed, name, new ServiceBusQueueData());
+                var queueData = new ServiceBusQueueData();
+                ServiceBusQueueSettings.Apply(queueData, sbNS.Data?.Sku?.Name);
+                var operation = await allQueues.CreateOrUpdateAsync(WaitUntil.Completed, name, queueData);
                 queue = operation.Value;
 
-                _logger.LogInformation($"Created service-bus queue '{name}'.");
+                _logger.LogInformation($"Created service-bus queue '{name}' ({ServiceBusQueueSettings.Describe(queue.Data)}).");
             }
             else
             {
-                _logger.LogInformation($"Found existing service-bus queue '{name}'.");
+                _logger.LogInformation($"Found existing service-bus queue '{name}' ({ServiceBusQueueSettings.Describe(queue.Data)}).");
+
+                // CreateOrUpdate is a PUT, so send the queue's own settings back with only the required ones changed.
+                var queueData = queue.Data;
+                var changes = ServiceBusQueueSettings.Apply(queueData, sbNS.Data?.Sku?.Name);
+                if (changes.Count > 0)
+                {
+                    var operation = await sbNS.GetServiceBusQueues().CreateOrUpdateAsync(WaitUntil.Completed, name, queueData);
+                    queue = operation.Value;
+                    _logger.LogInformation($"Updated service-bus queue '{name}': {string.Join("; ", changes)}.");
+                }
             }
 
             // TODO: create policy against the queue, not namespace. 

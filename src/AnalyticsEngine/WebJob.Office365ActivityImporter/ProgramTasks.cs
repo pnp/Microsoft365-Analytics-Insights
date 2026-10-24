@@ -46,9 +46,6 @@ namespace WebJob.Office365ActivityImporter
         private readonly ISentEmailMailboxSkipList _sentEmailMailboxSkipList;
         private static readonly InMemoryKeyValueStore InMemoryCopilotAuditBackfillStore = new InMemoryKeyValueStore();
 
-        // This process's copy of which calls-webhook subscription it created: static, as ProgramTasks is rebuilt every cycle.
-        private static readonly InMemoryKeyValueStore CallWebhookProcessState = new InMemoryKeyValueStore();
-
         // Process-lifetime agent-cost state. ProgramTasks is rebuilt every cycle, so these must be static to outlive
         // it: the per-agent read's resume checkpoint where no Storage account is configured, and the Entra object ids
         // the directory has said do not exist (so they are neither asked about nor offered for re-linking every pass).
@@ -80,23 +77,17 @@ namespace WebJob.Office365ActivityImporter
         }
 
         /// <summary>
-        /// Start listening for queued call notifications and make sure the Graph webhook subscription
-        /// is in place. The processor is owned by the caller because it must outlive a single import
-        /// cycle - Program.cs creates it once for the process (see issue #378).
+        /// Start listening for queued call notifications. The processor is owned by the caller because it must outlive a
+        /// single import cycle - Program.cs creates it once for the process (see issue #378). The Graph webhook
+        /// subscription is no longer checked here: <see cref="CallSubscriptionMaintainer"/> keeps it alive on its own timer.
         /// </summary>
-        internal async Task ProcessCallQueueAndWebhook(Uri webHookUrl, CallQueueProcessor callQueueProcessor)
+        internal Task ProcessCallQueueAndWebhook(Uri webHookUrl, CallQueueProcessor callQueueProcessor)
         {
             if (callQueueProcessor is null) throw new ArgumentNullException(nameof(callQueueProcessor));
 
             // Fire and forget calls SB receiver
             _ = callQueueProcessor.BeginProcessCallsQueue();
-
-            _logger.LogInformation("Verifying call webhook subscription.");
-            var subscriptionRecords = new CallSubscriptionRecordStore(
-                StateStore.TryOpen(_settings, CallSubscriptionRecordStore.Partition, _logger), CallWebhookProcessState);
-            var callWebhook = new CallWebhook(_settings, _logger, subscriptionRecords);
-            await callWebhook.CreateOrUpdateWebhook(webHookUrl, CallWebhookClientState.ForConfig(_settings));
-
+            return Task.CompletedTask;
         }
 
         /// <summary>

@@ -7,24 +7,6 @@ using System.Threading.Tasks;
 
 namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
 {
-    /// <summary>
-    /// What the importer remembers about the call-records subscription it created. Graph never returns a subscription's
-    /// clientState, so this is the only way to tell a subscription created with the current
-    /// <see cref="CallWebhookClientState"/> from one created before it - or before the client secret was rotated.
-    /// Holds the <see cref="CallWebhookClientState.Fingerprint"/>, never the clientState itself.
-    /// </summary>
-    public sealed class CallSubscriptionRecord
-    {
-        [JsonProperty("subscriptionId")]
-        public string SubscriptionId { get; set; }
-
-        [JsonProperty("clientStateFingerprint")]
-        public string ClientStateFingerprint { get; set; }
-
-        [JsonProperty("createdUtc")]
-        public DateTime CreatedUtc { get; set; }
-    }
-
     /// <summary>Where <see cref="CallWebhook"/> keeps its <see cref="CallSubscriptionRecord"/>, per notification URL.</summary>
     public interface ICallSubscriptionRecordStore
     {
@@ -56,7 +38,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
     public sealed class CallSubscriptionRecordStore : ICallSubscriptionRecordStore
     {
         /// <summary>Partition of the runtime state table. Part of the stored data's address: don't rename it.</summary>
-        public const string Partition = "CallsWebhook";
+        public const string Partition = StatePartitions.CallsWebhook;
 
         private readonly IKeyValueStore _durable;
         private readonly IKeyValueStore _process;

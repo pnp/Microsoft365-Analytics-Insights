@@ -105,6 +105,41 @@ namespace Common.Entities.Calls
         }
 
         /// <summary>
+        /// Whether <paramref name="presented"/> is the clientState whose <see cref="Fingerprint"/> is
+        /// <paramref name="fingerprintHex"/> - how the web app recognises the clientState of the client secret in use before
+        /// a rotation, which it no longer has, from the fingerprint the importer recorded. Exact, ordinal and constant-time,
+        /// like <see cref="Match"/>; false for anything that is not a 64-character hex fingerprint.
+        /// </summary>
+        public static bool MatchesFingerprint(string presented, string fingerprintHex)
+        {
+            if (string.IsNullOrEmpty(presented)) return false;
+            var expected = FromHex(fingerprintHex);
+            return expected != null && FixedTimeEquals(Sha256(presented), expected);
+        }
+
+        private static byte[] FromHex(string hex)
+        {
+            if (hex == null || hex.Length != 64) return null;
+            var bytes = new byte[32];
+            for (var i = 0; i < 32; i++)
+            {
+                var hi = HexValue(hex[2 * i]);
+                var lo = HexValue(hex[2 * i + 1]);
+                if (hi < 0 || lo < 0) return null;
+                bytes[i] = (byte)((hi << 4) | lo);
+            }
+            return bytes;
+        }
+
+        private static int HexValue(char c)
+        {
+            if (c >= '0' && c <= '9') return c - '0';
+            if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+            if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+            return -1;
+        }
+
+        /// <summary>
         /// The v1 derivation. The tenant and client ids are GUIDs, so they are normalised to lower case: two processes
         /// reading differently-cased settings must still agree.
         /// </summary>
