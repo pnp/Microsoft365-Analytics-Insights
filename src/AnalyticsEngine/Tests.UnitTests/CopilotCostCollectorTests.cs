@@ -440,6 +440,12 @@ INSERT dbo.__MigrationHistory VALUES('202610221500003_UniqueOnlineMeetingIds','S
             await _store.PublishAsync(run, Observation(User2), _ => Task.CompletedTask, Ct);
             Sql("EXEC dbo.copilot_cost_purge_preview @BeforeDate='20020101';");
             Assert.AreEqual(2, Sql("SELECT COUNT(*) FROM dbo.copilot_cost_history;"));
+            // A NULL @DryRun - passed explicitly, or from a script variable never set - is not a confirmed purge: it was
+            // neither "= 0" (so the confirmation was never asked for) nor "= 1" (so the dry run did not return).
+            Sql("EXEC dbo.copilot_cost_purge_preview @BeforeDate='20020101',@DryRun=NULL;");
+            Sql("DECLARE @dryRun bit; EXEC dbo.copilot_cost_purge_preview @BeforeDate='20020101',@DryRun=@dryRun;");
+            Assert.AreEqual(2, Sql("SELECT COUNT(*) FROM dbo.copilot_cost_history;"), "A NULL @DryRun deleted history without the confirmation.");
+            Assert.AreEqual(2, Sql("SELECT COUNT(*) FROM dbo.copilot_cost_observations;"), "A NULL @DryRun deleted observations without the confirmation.");
             Assert.ThrowsException<SqlException>(() => Sql("EXEC dbo.copilot_cost_purge_preview @BeforeDate='20020101',@DryRun=0;"));
             Sql("EXEC dbo.copilot_cost_purge_preview @BeforeDate='20020101',@ObjectId='00000000-0000-0000-0000-000000000001',@BatchSize=1,@DryRun=0,@Confirm=N'PURGE COPILOT COST HISTORY';");
             Assert.AreEqual(1, Sql("SELECT COUNT(*) FROM dbo.copilot_cost_history;"));

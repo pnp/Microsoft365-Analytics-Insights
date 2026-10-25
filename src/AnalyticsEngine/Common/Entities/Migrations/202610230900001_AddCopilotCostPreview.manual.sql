@@ -113,6 +113,8 @@ AS
 BEGIN
  SET NOCOUNT ON;
  SET XACT_ABORT ON;
+ -- NULL is not 0: an unset @DryRun is a dry run, so deleting always needs @DryRun=0 and the confirmation.
+ SET @DryRun = ISNULL(@DryRun, 1);
  IF @BeforeDate IS NULL OR @BeforeDate >= CONVERT(date,SYSUTCDATETIME())
   OR @BatchSize NOT BETWEEN 1 AND 10000
   THROW 51000, 'Specify a historical cutoff and a bounded batch.', 1;
