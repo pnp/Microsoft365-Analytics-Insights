@@ -223,5 +223,12 @@ namespace Common.Entities.State
         /// when the set changes. Holds UPNs, so it is protected like every other runtime state partition.
         /// </summary>
         public const string UserIdentityQuarantine = "UserIdentityQuarantine";
+
+        /// <summary>
+        /// The web-traffic (Application Insights) import's <c>ingestion_time()</c> cursor: everything App Insights ingested
+        /// before it has been saved. One row per Application Insights application id. Deleting it makes the next cycle
+        /// start again from the newest stored hit. See <c>WebJob.AppInsightsImporter.Engine.KeyValueIngestionCursorStore</c>.
+        /// </summary>
+        public const string AppInsightsImport = "AppInsightsImport";
     }
 }

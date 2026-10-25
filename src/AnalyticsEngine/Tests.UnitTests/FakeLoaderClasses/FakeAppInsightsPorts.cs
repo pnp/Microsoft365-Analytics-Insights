@@ -2,6 +2,7 @@ using Common.Entities.Config;
 using DataUtils;
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading.Tasks;
 using WebJob.AppInsightsImporter.Engine;
 using WebJob.AppInsightsImporter.Engine.ApiImporter;
@@ -10,65 +11,145 @@ using WebJob.AppInsightsImporter.Engine.APIResponseParsers.CustomEvents;
 namespace Tests.UnitTests.FakeLoaderClasses
 {
     /// <summary>
-    /// In-memory <see cref="IAppInsightsSourceLoader"/> - the App Insights REST API replaced by a
-    /// dictionary, so the importer's day loop can be driven with no HTTP at all. See issue #374.
+    /// In-memory <see cref="IAppInsightsSourceLoader"/> - the App Insights REST API replaced by lists of rows, each with
+    /// a timestamp and an ingestion time, so the importer's day loop, windows and cursor can be driven with no HTTP at
+    /// all. Every query honours the window's timestamp and ingestion bounds, as the real KQL does. See issue #374.
     /// </summary>
     public class FakeAppInsightsSourceLoader : IAppInsightsSourceLoader
     {
-        /// <summary>Every day the importer asked for, in the order it asked.</summary>
+        /// <summary>The day of every page-view / custom-event window the importer asked for, in the order it asked.</summary>
         public List<DateTime> PageViewDaysRequested { get; } = new List<DateTime>();
         public List<DateTime> CustomEventDaysRequested { get; } = new List<DateTime>();
 
-        /// <summary>How many page-views / custom events each day returns. Missing day = empty.</summary>
+        /// <summary>Every window asked for, in order.</summary>
+        public List<AppInsightsReadWindow> PageViewWindowsRequested { get; } = new List<AppInsightsReadWindow>();
+        public List<AppInsightsReadWindow> CustomEventWindowsRequested { get; } = new List<AppInsightsReadWindow>();
+
+        /// <summary>Every range the hourly counts were asked for.</summary>
+        public List<AppInsightsReadWindow> CountRangesRequested { get; } = new List<AppInsightsReadWindow>();
+
+        /// <summary>When set, every fetch and save is recorded here in order, shared with the persistence fake.</summary>
+        public List<string> CallLog { get; set; }
+
+        /// <summary>
+        /// How many page-views / custom events each day has, at day + i minutes and ingested at the same moment.
+        /// Missing day = empty.
+        /// </summary>
         public Dictionary<DateTime, int> PageViewCountByDay { get; } = new Dictionary<DateTime, int>();
         public Dictionary<DateTime, int> CustomEventCountByDay { get; } = new Dictionary<DateTime, int>();
 
+        /// <summary>Rows with an explicit timestamp and ingestion time, in addition to the per-day counts.</summary>
+        public List<(DateTime TimestampUtc, DateTime IngestedUtc)> ExtraPageViews { get; } = new List<(DateTime, DateTime)>();
+        public List<(DateTime TimestampUtc, DateTime IngestedUtc)> ExtraCustomEvents { get; } = new List<(DateTime, DateTime)>();
+
         /// <summary>
-        /// Days whose download blows up. The importer treats that as fatal for the whole run - DEBUG
-        /// rethrows, Release abandons the run without reporting the section finished.
+        /// Days whose window downloads blow up. The importer counts that against the day and stops the cycle there,
+        /// until the day's forced retries stop.
         /// </summary>
         public HashSet<DateTime> DaysThatFailToDownload { get; } = new HashSet<DateTime>();
+
+        /// <summary>When set, the hourly count query fails with it.</summary>
+        public Exception CountsFailWith { get; set; }
 
         /// <summary>Who viewed the page, by (day, row index). Null leaves page views anonymous.</summary>
         public Func<DateTime, int, string> PageViewUsername { get; set; }
 
-        public Task<PageViewCollection> GetPageViewsAsync(DateTime forDateUtc, bool saveRestResponses)
+        private IEnumerable<(DateTime Timestamp, DateTime Ingested, string Username)> PageViewRows() =>
+            PageViewCountByDay.SelectMany(d => Enumerable.Range(0, d.Value)
+                    .Select(i => (Timestamp: d.Key.AddMinutes(i), Ingested: d.Key.AddMinutes(i), Username: PageViewUsername?.Invoke(d.Key, i))))
+                .Concat(ExtraPageViews.Select(r => (Timestamp: r.TimestampUtc, Ingested: r.IngestedUtc, Username: (string)null)));
+
+        private IEnumerable<(DateTime Timestamp, DateTime Ingested)> CustomEventRows() =>
+            CustomEventCountByDay.SelectMany(d => Enumerable.Range(0, d.Value).Select(i => (Timestamp: d.Key.AddMinutes(i), Ingested: d.Key.AddMinutes(i))))
+                .Concat(ExtraCustomEvents.Select(r => (Timestamp: r.TimestampUtc, Ingested: r.IngestedUtc)));
+
+        private static bool InWindow(DateTime timestamp, DateTime ingested, AppInsightsReadWindow w) =>
+            timestamp >= w.FromUtc && timestamp < w.ToUtc
+            && (!w.IngestedFromUtc.HasValue || ingested >= w.IngestedFromUtc.Value)
+            && (!w.IngestedBeforeUtc.HasValue || ingested < w.IngestedBeforeUtc.Value);
+
+        private static DateTime Hour(DateTime t) => new DateTime(t.Year, t.Month, t.Day, t.Hour, 0, 0, DateTimeKind.Utc);
+
+        public Task<IReadOnlyList<AppInsightsHourlyRowCount>> GetHourlyRowCountsAsync(AppInsightsReadWindow range)
         {
-            PageViewDaysRequested.Add(forDateUtc);
-            if (DaysThatFailToDownload.Contains(forDateUtc))
+            CountRangesRequested.Add(range);
+            if (CountsFailWith != null)
             {
-                // A FAULTED TASK, not a synchronous throw: that is the shape a real HTTP failure arrives in,
-                // and the importer observes it at `await Task.WhenAll(...)`. A fake that threw synchronously
-                // would let a regression that only handled the synchronous case pass.
+                return Task.FromException<IReadOnlyList<AppInsightsHourlyRowCount>>(CountsFailWith);
+            }
+            var counts = PageViewRows().Where(r => InWindow(r.Timestamp, r.Ingested, range))
+                    .GroupBy(r => Hour(r.Timestamp)).Select(g => new AppInsightsHourlyRowCount(AppInsightsTelemetryKind.PageViews, g.Key, g.Count()))
+                .Concat(CustomEventRows().Where(r => InWindow(r.Timestamp, r.Ingested, range))
+                    .GroupBy(r => Hour(r.Timestamp)).Select(g => new AppInsightsHourlyRowCount(AppInsightsTelemetryKind.Events, g.Key, g.Count())))
+                .ToList();
+            return Task.FromResult<IReadOnlyList<AppInsightsHourlyRowCount>>(counts);
+        }
+
+        public Task<PageViewCollection> GetPageViewsAsync(AppInsightsReadWindow window, bool saveRestResponses)
+        {
+            PageViewDaysRequested.Add(window.FromUtc.Date);
+            PageViewWindowsRequested.Add(window);
+            CallLog?.Add($"fetch pageviews {window.FromUtc:yyyy-MM-dd HH:mm}");
+            if (DaysThatFailToDownload.Contains(window.FromUtc.Date))
+            {
+                // A FAULTED TASK, not a synchronous throw: that is the shape a real HTTP failure arrives in.
                 return Task.FromException<PageViewCollection>(
-                    new InvalidOperationException($"Fake download failure for {forDateUtc:yyyy-MM-dd}"));
+                    new InvalidOperationException($"Fake download failure for {window.FromUtc:yyyy-MM-dd}"));
             }
 
             var result = new PageViewCollection();
-            var count = PageViewCountByDay.TryGetValue(forDateUtc, out var c) ? c : 0;
-            for (var i = 0; i < count; i++)
+            foreach (var row in PageViewRows().Where(r => InWindow(r.Timestamp, r.Ingested, window)).OrderBy(r => r.Timestamp))
             {
-                result.Rows.Add(new PageViewAppInsightsQueryResult { AppInsightsTimestamp = forDateUtc.AddMinutes(i), Username = PageViewUsername?.Invoke(forDateUtc, i) });
+                result.Rows.Add(new PageViewAppInsightsQueryResult { AppInsightsTimestamp = row.Timestamp, Username = row.Username });
             }
             return Task.FromResult(result);
         }
 
-        public Task<CustomEventsResultCollection> GetCustomEventsAsync(DateTime forDateUtc, bool saveRestResponses)
+        public Task<CustomEventsResultCollection> GetCustomEventsAsync(AppInsightsReadWindow window, bool saveRestResponses)
         {
-            CustomEventDaysRequested.Add(forDateUtc);
-            if (DaysThatFailToDownload.Contains(forDateUtc))
+            CustomEventDaysRequested.Add(window.FromUtc.Date);
+            CustomEventWindowsRequested.Add(window);
+            CallLog?.Add($"fetch events {window.FromUtc:yyyy-MM-dd HH:mm}");
+            if (DaysThatFailToDownload.Contains(window.FromUtc.Date))
             {
                 return Task.FromException<CustomEventsResultCollection>(
-                    new InvalidOperationException($"Fake download failure for {forDateUtc:yyyy-MM-dd}"));
+                    new InvalidOperationException($"Fake download failure for {window.FromUtc:yyyy-MM-dd}"));
             }
 
             var result = new CustomEventsResultCollection();
-            var count = CustomEventCountByDay.TryGetValue(forDateUtc, out var c) ? c : 0;
-            for (var i = 0; i < count; i++)
+            foreach (var row in CustomEventRows().Where(r => InWindow(r.Timestamp, r.Ingested, window)).OrderBy(r => r.Timestamp))
             {
-                result.Rows.Add(new PageExitEventAppInsightsQueryResult { AppInsightsTimestamp = forDateUtc.AddMinutes(i) });
+                result.Rows.Add(new PageExitEventAppInsightsQueryResult { AppInsightsTimestamp = row.Timestamp });
             }
             return Task.FromResult(result);
+        }
+    }
+
+    /// <summary>
+    /// In-memory <see cref="IAppInsightsIngestionCursorStore"/> that can fail on demand.
+    /// </summary>
+    public class InMemoryIngestionCursorStore : IAppInsightsIngestionCursorStore
+    {
+        public InMemoryIngestionCursorStore(DateTime? cursorUtc = null)
+        {
+            CursorUtc = cursorUtc;
+        }
+
+        public DateTime? CursorUtc { get; set; }
+        public int Writes { get; private set; }
+        public Exception ReadFailsWith { get; set; }
+        public Exception WriteFailsWith { get; set; }
+
+        public string Description => "fake cursor store";
+
+        public Task<DateTime?> ReadAsync() => ReadFailsWith != null ? Task.FromException<DateTime?>(ReadFailsWith) : Task.FromResult(CursorUtc);
+
+        public Task WriteAsync(DateTime cursorUtc)
+        {
+            if (WriteFailsWith != null) return Task.FromException(WriteFailsWith);
+            Writes++;
+            CursorUtc = cursorUtc;
+            return Task.CompletedTask;
         }
     }
 
@@ -108,6 +189,9 @@ namespace Tests.UnitTests.FakeLoaderClasses
         public List<CustomEventsResultCollection> SavedCustomEvents { get; } = new List<CustomEventsResultCollection>();
         public List<FilterUrlConfig> FiltersSeen { get; private set; }
 
+        /// <summary>When set, every save is recorded here in order - share it with the source fake's.</summary>
+        public List<string> CallLog { get; set; }
+
         /// <summary>Throw when the page-view batch's first row falls on one of these days.</summary>
         public HashSet<DateTime> DaysThatFailToSave { get; } = new HashSet<DateTime>();
 
@@ -120,6 +204,7 @@ namespace Tests.UnitTests.FakeLoaderClasses
         public Task SavePageViewsAsync(PageViewCollection pageViews, List<FilterUrlConfig> filterUrls)
         {
             FiltersSeen = filterUrls;
+            CallLog?.Add($"save pageviews {pageViews.Rows.Count}");
             var day = pageViews.Rows.Count > 0 ? pageViews.Rows[0].Timestamp.Date : (DateTime?)null;
             if (day.HasValue && DaysThatFailToSave.Contains(day.Value))
             {
@@ -131,6 +216,7 @@ namespace Tests.UnitTests.FakeLoaderClasses
 
         public Task SaveCustomEventsAsync(CustomEventsResultCollection events)
         {
+            CallLog?.Add($"save events {events.Rows.Count}");
             var day = events.Rows.Count > 0 ? events.Rows[0].Timestamp.Date : (DateTime?)null;
             if (day.HasValue && DaysWhoseEventsFailToSave.Contains(day.Value))
             {

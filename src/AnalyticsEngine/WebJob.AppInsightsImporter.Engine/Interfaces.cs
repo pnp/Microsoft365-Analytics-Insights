@@ -9,19 +9,28 @@ using WebJob.AppInsightsImporter.Engine.APIResponseParsers.CustomEvents;
 namespace WebJob.AppInsightsImporter.Engine
 {
     /// <summary>
-    /// Reads a day of telemetry from Application Insights. Implemented in production by
-    /// <see cref="AppInsightsAPIClient"/>; a fake lets the importer's orchestration - the day loop, the
-    /// per-day failure isolation, the window - be tested with no HTTP at all. See issue #374.
+    /// Reads telemetry from Application Insights. Implemented in production by <see cref="AppInsightsAPIClient"/>; a
+    /// fake lets the importer's orchestration - the day loop, the windows, the per-day failure isolation, the cursor -
+    /// be tested with no HTTP at all. See issue #374.
     /// </summary>
     public interface IAppInsightsSourceLoader
     {
-        Task<PageViewCollection> GetPageViewsAsync(DateTime forDateUtc, bool saveRestResponses);
-        Task<CustomEventsResultCollection> GetCustomEventsAsync(DateTime forDateUtc, bool saveRestResponses);
+        /// <summary>
+        /// How many page views and imported custom events <paramref name="range"/> holds, per UTC hour of their
+        /// timestamp. One small aggregate query that says which days to read and how to cut them into windows.
+        /// </summary>
+        Task<IReadOnlyList<AppInsightsHourlyRowCount>> GetHourlyRowCountsAsync(AppInsightsReadWindow range);
+
+        /// <summary>Every page view in <paramref name="window"/>, in timestamp order.</summary>
+        Task<PageViewCollection> GetPageViewsAsync(AppInsightsReadWindow window, bool saveRestResponses);
+
+        /// <summary>Every imported custom event in <paramref name="window"/>, in timestamp order.</summary>
+        Task<CustomEventsResultCollection> GetCustomEventsAsync(AppInsightsReadWindow window, bool saveRestResponses);
     }
 
     /// <summary>
-    /// The high-water mark the import resumes from: the newest hit already stored. Returns <c>null</c> when
-    /// nothing has been imported yet, which the window rule treats as "start 31 days ago".
+    /// The newest hit already stored. Returns <c>null</c> when nothing has been imported yet. The import resumes from it
+    /// only until it has an ingestion cursor (see <see cref="AppInsightsIngestionCursorPolicy"/>).
     /// </summary>
     public interface IHitWatermarkStore
     {
@@ -37,10 +46,10 @@ namespace WebJob.AppInsightsImporter.Engine
     }
 
     /// <summary>
-    /// Writes one day's telemetry. Deliberately coarse - one method per thing the importer saves - because
+    /// Writes one window's telemetry. Deliberately coarse - one method per thing the importer saves - because
     /// this is the seam the day loop needs. Issue #369 decomposes the SQL side further (page-views,
     /// searches, clicks, page-updates, hit-updates); those become collaborators of the SQL adapter rather
-    /// than changes to this port.
+    /// than changes to this port. Both saves are idempotent, so a window read again saves nothing twice.
     ///
     /// Either method throwing means the day did not save completely, and the importer retries it before any
     /// later day (see <see cref="AppInsightsDayFailureTracker"/>). <see cref="SaveCustomEventsAsync"/> therefore
