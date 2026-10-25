@@ -68,7 +68,7 @@ namespace App.ControlPanel.Engine
                     var migrator = new DbMigrator(new Common.Entities.Migrations.Configuration
                     {
                         TargetDatabase = new DbConnectionInfo(initInfo.ConnectionString, "Microsoft.Data.SqlClient")
-                    });
+                    }, context);
                     var pending = migrator.GetPendingMigrations().ToList();
                     foreach (var migration in pending)
                     {
