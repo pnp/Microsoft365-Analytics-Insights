@@ -5,7 +5,10 @@ using System.Net;
 using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Web;
+using System.Net.Http;
+using System.Web.Http;
 using System.Web.Http.ExceptionHandling;
+using System.Web.Http.Results;
 using Web.AnalyticsWeb.Models.CopilotAdoption;
 
 namespace Web.AnalyticsWeb
@@ -147,19 +150,26 @@ namespace Web.AnalyticsWeb
             {
                 var logger = loggerFactory(context);
                 CopilotAdoptionExceptionCorrelation.TryGetRunId(ex, out var runId);
-                var properties = string.IsNullOrEmpty(runId)
-                    ? null
-                    : new System.Collections.Generic.Dictionary<string, string>
-                    {
-                        { "RunId", runId },
-                    };
 
-                logger.TrackException(ex, properties, runId);
+                // The id the caller is shown (WebApiExceptionHandler), so an admin quoting it finds this exception and
+                // its error trace. It is the operation id too, unless a Copilot adoption run already owns that.
+                var errorId = WebErrorReference.For(ex);
+                var properties = new System.Collections.Generic.Dictionary<string, string>
+                {
+                    { WebErrorReference.PropertyName, errorId },
+                };
+                if (!string.IsNullOrEmpty(runId)) properties["RunId"] = runId;
+                var operationId = string.IsNullOrEmpty(runId) ? errorId : runId;
+
+                logger.TrackException(ex, properties, operationId);
 
                 // The exception telemetry carries the type and stack, but a searchable line of text is
                 // what an operator actually greps for when a customer reports "it just returns a 500".
-                var correlation = string.IsNullOrEmpty(runId) ? string.Empty : $" RunId {runId}.";
-                logger.LogError($"Unhandled web request error in {context}.{correlation} {ex.GetBaseException().Message}");
+                var correlation = (string.IsNullOrEmpty(runId) ? string.Empty : $" RunId {runId}.") + $" ErrorId {errorId}.";
+                using (logger.BeginOperationScope(operationId))
+                {
+                    logger.LogError($"Unhandled web request error in {context}.{correlation} {ex.GetBaseException().Message}");
+                }
 
                 MarkReported(ex);
             }
@@ -168,6 +178,50 @@ namespace Web.AnalyticsWeb
                 ReleaseClaim(ex);
                 // Deliberately swallowed - see above.
             }
+        }
+    }
+
+    /// <summary>
+    /// The reference a remote caller gets in place of an exception (<c>{ code: "unexpected", errorId }</c>), also stamped
+    /// on that exception's telemetry. One id per exception instance for its whole life, so a cached failure that is
+    /// rethrown to later requests (<c>SharedComputation</c>) hands every one of them the id the original was logged under.
+    /// </summary>
+    public static class WebErrorReference
+    {
+        /// <summary>The custom property on exception telemetry; the same value is in the error trace's text.</summary>
+        public const string PropertyName = "ErrorId";
+
+        /// <summary>The <c>code</c> of the generic 500 body. The SPA words it (<c>errors.http.unexpected</c>).</summary>
+        public const string UnexpectedCode = "unexpected";
+
+        private static readonly ConditionalWeakTable<Exception, string> Ids = new ConditionalWeakTable<Exception, string>();
+
+        public static string For(Exception ex)
+        {
+            return ex == null
+                ? Guid.NewGuid().ToString("D")
+                : Ids.GetValue(ex, _ => Guid.NewGuid().ToString("D"));
+        }
+    }
+
+    /// <summary>
+    /// Answers an exception that escaped a Web API controller with a generic 500 - <c>{ code, errorId }</c> - and nothing
+    /// from the exception. Registered in <see cref="WebApiConfig"/>.
+    /// </summary>
+    /// <remarks>
+    /// Without it the body was empty for a remote caller (<c>IncludeErrorDetailPolicy.LocalOnly</c>), so nothing tied what
+    /// the admin saw to the exception <see cref="AnalyticsWebApiExceptionLogger"/> had sent to Application Insights. A
+    /// cancelled request is left to Web API's default: the client has gone, and there is nobody to tell.
+    /// </remarks>
+    public class AnalyticsWebApiExceptionHandler : ExceptionHandler
+    {
+        public override void Handle(ExceptionHandlerContext context)
+        {
+            var exception = context?.Exception;
+            if (exception == null || exception is OperationCanceledException || context.Request == null) return;
+
+            var body = new { code = WebErrorReference.UnexpectedCode, errorId = WebErrorReference.For(exception) };
+            context.Result = new ResponseMessageResult(context.Request.CreateResponse(HttpStatusCode.InternalServerError, body));
         }
     }
 

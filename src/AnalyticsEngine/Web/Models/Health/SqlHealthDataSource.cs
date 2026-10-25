@@ -278,7 +278,7 @@ namespace Web.AnalyticsWeb.Models.Health
             "SELECT o.name AS TableName, SUM(p.rows) AS Rows " +
             "FROM sys.partitions p " +
             "JOIN sys.objects o ON o.object_id = p.object_id " +
-            "WHERE p.index_id IN (0,1) AND o.[type] = 'U' " +
+            "WHERE p.index_id IN (0,1) AND o.[type] = 'U' AND o.schema_id = SCHEMA_ID(N'dbo') " +
             "GROUP BY o.name";
 
         private static long ApproxFor(Dictionary<string, long> counts, string tableName)

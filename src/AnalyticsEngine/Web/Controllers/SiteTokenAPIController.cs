@@ -1,5 +1,7 @@
 using Common.Entities.Config;
 using Common.Entities.Models;
+using DataUtils;
+using Microsoft.Extensions.Logging;
 using Newtonsoft.Json;
 using System.Net;
 using System.Net.Http;
@@ -25,6 +27,9 @@ namespace Web.AnalyticsWeb.Controllers
         /// </summary>
         internal const string EntraUnavailableCode = "entraUnavailable";
 
+        private static readonly System.Lazy<AnalyticsLogger> ProductionLogger = new System.Lazy<AnalyticsLogger>(
+            () => new AnalyticsLogger(new AppConfig().AppInsightsConnectionString, "SiteToken"));
+
         // POST: api/SiteTokenAPI
         // Returns a fresh Microsoft Graph access token for the signed-in admin to the SPA.
         public async Task<JSonToken> Post()
@@ -34,7 +39,8 @@ namespace Web.AnalyticsWeb.Controllers
             // The cookie only stores the (long-lived) refresh token, so mint a fresh access token from it. This also
             // transparently handles the ~1h access-token expiry for long sessions. A 503 when Entra ID can't be reached.
             var token = await MintAccessTokenAsync(stored,
-                refreshToken => RefreshOAuthToken.GetNewRefreshToken(refreshToken, new AppConfig()));
+                refreshToken => RefreshOAuthToken.GetNewRefreshToken(refreshToken, new AppConfig()),
+                ProductionLogger.Value);
 
             if (token == null)
             {
@@ -62,7 +68,8 @@ namespace Web.AnalyticsWeb.Controllers
         /// </remarks>
         internal static async Task<JSonToken> MintAccessTokenAsync(
             RefreshOAuthToken stored,
-            System.Func<string, Task<RefreshOAuthToken>> refresh)
+            System.Func<string, Task<RefreshOAuthToken>> refresh,
+            ILogger logger = null)
         {
             if (string.IsNullOrEmpty(stored?.RefreshToken))
             {
@@ -76,17 +83,44 @@ namespace Web.AnalyticsWeb.Controllers
             }
             catch (System.Exception ex) when (RefreshTokenFailureRules.RemedyFor(ex) == RefreshTokenRemedy.TryAgainLater)
             {
+                LogRefreshFailure(logger, ex, RefreshTokenRemedy.TryAgainLater, "entraUnavailable503");
                 throw new HttpResponseException(EntraUnavailable());
             }
-            catch (System.Exception)
+            catch (System.Exception ex)
             {
                 // Expired or revoked, blocked until the admin signs in again (MFA, Conditional Access, sign-in frequency),
                 // or a failure this version doesn't recognise: the remedy the page can offer is to connect again, which
                 // captures a new refresh token.
+                LogRefreshFailure(logger, ex, RefreshTokenFailureRules.RemedyFor(ex), "notConnected401");
                 return null;
             }
 
             return string.IsNullOrEmpty(refreshed?.AccessToken) ? null : new JSonToken(refreshed);
+        }
+
+        /// <summary>
+        /// One Warning per failed refresh, so "the Teams page says not connected" or "Entra unavailable" can be matched to
+        /// what Entra ID answered. Classification and Entra's own identifiers only: never the token, the user, or the
+        /// response body (its description can name the user).
+        /// </summary>
+        private static void LogRefreshFailure(ILogger logger, System.Exception ex, RefreshTokenRemedy remedy, string outcome)
+        {
+            if (logger == null) return;
+
+            try
+            {
+                var refused = ex as RefreshTokenRequestException;
+                var message = $"SiteToken refresh failed: outcome={outcome} remedy={remedy} exceptionType={ex.GetType().Name} " +
+                    $"httpStatus={(refused != null ? ((int)refused.StatusCode).ToString() : "none")} " +
+                    $"error={refused?.Error ?? "none"} suberror={refused?.SubError ?? "none"} " +
+                    $"aadstsCodes=[{(refused != null ? string.Join(",", refused.ErrorCodes) : string.Empty)}] " +
+                    $"traceId={refused?.TraceId ?? "none"} correlationId={refused?.CorrelationId ?? "none"}";
+                logger.Log(LogLevel.Warning, 0, message, null, (state, _) => state);
+            }
+            catch (System.Exception)
+            {
+                // Logging must not change the answer the page gets.
+            }
         }
 
         private static HttpResponseMessage EntraUnavailable() => new HttpResponseMessage(HttpStatusCode.ServiceUnavailable)

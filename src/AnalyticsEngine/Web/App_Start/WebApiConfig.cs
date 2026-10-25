@@ -13,6 +13,9 @@ namespace Web.AnalyticsWeb
             // anywhere - which is precisely why the fault behind issue #360 could not be found.
             config.Services.Add(typeof(IExceptionLogger), new AnalyticsWebApiExceptionLogger());
 
+            // What the caller gets instead: a generic 500 with an errorId that matches the logged exception.
+            config.Services.Replace(typeof(IExceptionHandler), new AnalyticsWebApiExceptionHandler());
+
             // Exception type, message and stack trace in a 500 only for a request from this machine. The default
             // policy follows <customErrors>, which the site has always shipped Off, so every caller - including the
             // anonymous webhook and tracker endpoints - was sent the full exception. The details still reach

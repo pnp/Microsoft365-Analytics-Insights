@@ -24,6 +24,7 @@ import {
   TEAMS_CONNECT_URL,
 } from '../../auth/teamsConnect';
 import { SITE_TOKEN_ERROR_KEYS } from '../../auth/siteToken';
+import { ERROR_CODE_KEYS as USER_IMPORT_CHECKPOINT_ERROR_KEYS } from '../../api/userImportCheckpointApi';
 import { routesForArea } from '../../navigation';
 import { TEAMS_MEETING_BUCKET_LABEL_KEYS, TEAMS_SEGMENT_TEXT_KEYS } from '../../components/teamsExplorer/teamsShared';
 import { WEB_ACTIVITY_AVAILABILITY_REASON_KEYS } from '../../components/webActivity/AvailabilityBar';
@@ -2768,6 +2769,19 @@ describe('Teams permissions page: site-token error codes', () => {
     expect(server).toEqual(['entraUnavailable']);
     expect(sortedUnique(Object.keys(SITE_TOKEN_ERROR_KEYS))).toEqual(server);
     expect(Object.values(SITE_TOKEN_ERROR_KEYS).filter((key) => !(key in EN_CATALOG))).toEqual([]);
+  });
+});
+
+const USER_IMPORT_CHECKPOINT_CONTROLLER = join(process.cwd(), '..', '..', 'Controllers', 'UserImportCheckpointAPIController.cs');
+
+describe('User import checkpoint page: error codes', () => {
+  it('words every code the checkpoint API can send, and nothing it cannot', () => {
+    const source = readFileSync(USER_IMPORT_CHECKPOINT_CONTROLLER, 'utf8');
+    const server = sortedUnique([...source.matchAll(/internal\s+const\s+string\s+\w+Code\s*=\s*"([^"]+)"/g)].map((m) => m[1]));
+
+    expect(server).toContain('organisationTypesUnavailable');
+    expect(sortedUnique([...USER_IMPORT_CHECKPOINT_ERROR_KEYS.keys()])).toEqual(server);
+    expect([...USER_IMPORT_CHECKPOINT_ERROR_KEYS.values()].filter((key) => !(key in EN_CATALOG))).toEqual([]);
   });
 });
 

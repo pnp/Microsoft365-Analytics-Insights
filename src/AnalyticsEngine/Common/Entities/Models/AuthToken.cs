@@ -151,12 +151,20 @@ namespace Common.Entities.Models
             Error = body.Error;
             SubError = body.SubError;
             ErrorCodes = body.ErrorCodes;
+            TraceId = body.TraceId;
+            CorrelationId = body.CorrelationId;
         }
 
         public HttpStatusCode StatusCode { get; }
 
         /// <summary>The OAuth <c>error</c>, e.g. <c>invalid_grant</c>; <c>null</c> when the body wasn't Entra ID's JSON.</summary>
         public string Error { get; }
+
+        /// <summary>Entra ID's <c>trace_id</c>, when it sent a GUID.</summary>
+        public string TraceId { get; }
+
+        /// <summary>Entra ID's <c>correlation_id</c>, when it sent a GUID.</summary>
+        public string CorrelationId { get; }
 
         /// <summary>Entra ID's <c>suberror</c>, e.g. <c>bad_token</c>.</summary>
         public string SubError { get; }
@@ -218,6 +226,11 @@ namespace Common.Entities.Models
 
         public IReadOnlyList<int> ErrorCodes { get; private set; } = new int[0];
 
+        /// <summary>Entra ID's <c>trace_id</c> and <c>correlation_id</c>, only when they are GUIDs, so a log line never carries free text.</summary>
+        public string TraceId { get; private set; }
+
+        public string CorrelationId { get; private set; }
+
         public static OAuthErrorBody Parse(string responseBody)
         {
             var result = new OAuthErrorBody();
@@ -232,6 +245,8 @@ namespace Common.Entities.Models
             result.Error = StringField(body, "error");
             result.SubError = StringField(body, "suberror");
             result.ErrorDescription = StringField(body, "error_description");
+            result.TraceId = GuidField(body, "trace_id");
+            result.CorrelationId = GuidField(body, "correlation_id");
 
             if (body["error_codes"] is JArray codes)
             {
@@ -247,6 +262,12 @@ namespace Common.Entities.Models
             }
 
             return result;
+        }
+
+        private static string GuidField(JObject body, string name)
+        {
+            var value = StringField(body, name);
+            return value != null && Guid.TryParse(value, out var id) ? id.ToString() : null;
         }
 
         private static string StringField(JObject body, string name)

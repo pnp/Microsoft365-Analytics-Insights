@@ -1,5 +1,6 @@
 extern alias AnalyticsWeb;
 
+using AnalyticsWeb::Web.AnalyticsWeb;
 using AnalyticsWeb::Web.AnalyticsWeb.Security;
 using System;
 using System.Collections.Generic;
@@ -12,6 +13,7 @@ using System.Threading.Tasks;
 using System.Web.Http;
 using System.Web.Http.Controllers;
 using System.Web.Http.Dispatcher;
+using System.Web.Http.ExceptionHandling;
 
 namespace Tests.UnitTests
 {
@@ -39,10 +41,16 @@ namespace Tests.UnitTests
             IEnumerable<Type> controllers,
             IPrincipal principal,
             PortalAccessPolicy policy,
-            Func<Type, IHttpController> create = null)
+            Func<Type, IHttpController> create = null,
+            bool productionExceptionHandler = false)
         {
             Principal = principal;
             _configuration = new HttpConfiguration();
+            if (productionExceptionHandler)
+            {
+                // What WebApiConfig registers: the generic 500 with an error reference.
+                _configuration.Services.Replace(typeof(IExceptionHandler), new AnalyticsWebApiExceptionHandler());
+            }
             _configuration.Properties[typeof(PortalAccessPolicy)] = policy;
             _configuration.Services.Replace(typeof(IHttpControllerTypeResolver), new ControllerTypes(controllers.ToList()));
             _configuration.Services.Replace(typeof(IHttpControllerActivator), new ControllerActivator(create));

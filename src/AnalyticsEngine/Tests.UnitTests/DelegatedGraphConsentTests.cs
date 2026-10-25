@@ -509,6 +509,45 @@ namespace Tests.UnitTests
             }
         }
 
+        /// <summary>
+        /// Both answers the page can get from a failed refresh - 401 "not connected" and 503 "Entra unavailable" - leave one
+        /// Warning with what Entra ID said, so the page's message can be matched to a cause. No token, UPN or body.
+        /// </summary>
+        [TestMethod]
+        public async Task SiteToken_AFailedRefresh_LogsTheClassification_ButNoSecrets()
+        {
+            const string correlation = "00000000-0000-0000-0000-0000000000c1";
+            const string trace = "00000000-0000-0000-0000-0000000000a1";
+            var body = "{\"error\":\"invalid_grant\",\"suberror\":\"basic_action\",\"error_codes\":[50076],\"error_description\":\"AADSTS50076: synthetic user@contoso.com\"," +
+                $"\"trace_id\":\"{trace}\",\"correlation_id\":\"{correlation}\"}}";
+
+            var notConnected = new CapturingLogger();
+            Assert.IsNull(await SiteTokenAPIController.MintAccessTokenAsync(
+                new RefreshOAuthToken { RefreshToken = "synthetic-refresh-secret" }, _ => throw TokenEndpointRefusal(400, body), notConnected));
+
+            var warning = notConnected.Single(Microsoft.Extensions.Logging.LogLevel.Warning);
+            StringAssert.Contains(warning, "outcome=notConnected401");
+            StringAssert.Contains(warning, "remedy=SignInAgain");
+            StringAssert.Contains(warning, "httpStatus=400");
+            StringAssert.Contains(warning, "error=invalid_grant");
+            StringAssert.Contains(warning, "suberror=basic_action");
+            StringAssert.Contains(warning, "aadstsCodes=[50076]");
+            StringAssert.Contains(warning, "traceId=" + trace);
+            StringAssert.Contains(warning, "correlationId=" + correlation);
+            Assert.IsFalse(warning.Contains("synthetic-refresh-secret") || warning.Contains("contoso.com"), warning);
+
+            var unavailable = new CapturingLogger();
+            await Assert.ThrowsExceptionAsync<HttpResponseException>(() => SiteTokenAPIController.MintAccessTokenAsync(
+                new RefreshOAuthToken { RefreshToken = "synthetic-refresh-secret" },
+                _ => throw TokenEndpointRefusal(503, "{\"error\":\"temporarily_unavailable\"}"), unavailable));
+
+            var outage = unavailable.Single(Microsoft.Extensions.Logging.LogLevel.Warning);
+            StringAssert.Contains(outage, "outcome=entraUnavailable503");
+            StringAssert.Contains(outage, "remedy=TryAgainLater");
+            StringAssert.Contains(outage, "httpStatus=503");
+            StringAssert.Contains(outage, "error=temporarily_unavailable");
+        }
+
         private static async Task AssertEntraUnavailable(Func<string, Task<RefreshOAuthToken>> refresh)
         {
             var refused = await Assert.ThrowsExceptionAsync<HttpResponseException>(() =>

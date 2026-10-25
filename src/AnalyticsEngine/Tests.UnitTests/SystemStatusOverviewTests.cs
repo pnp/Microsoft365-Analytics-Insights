@@ -228,6 +228,34 @@ namespace Tests.UnitTests
         }
 
         /// <summary>
+        /// The row counts are keyed by table name, and the figures behind them read <c>[dbo]</c>. A same-named table in
+        /// another schema (a reporting copy, an add-on's) used to be added into the dbo table's count.
+        /// </summary>
+        [TestMethod]
+        public async Task RowCounts_IgnoreSameNamedTablesInOtherSchemas()
+        {
+            const string schema = "s10_rowcount_other";
+            using (var db = new AnalyticsEntitiesContext())
+            {
+                db.Database.Initialize(false);
+                await AzureSqlTokenAuth.OpenAsync(db.Database.Connection);
+                await ExecuteAsync(db, $"IF OBJECT_ID(N'[{schema}].[users]') IS NOT NULL DROP TABLE [{schema}].[users]; IF SCHEMA_ID(N'{schema}') IS NOT NULL DROP SCHEMA [{schema}];");
+                var before = (await SqlHealthDataSource.LoadApproxRowCounts(db))["users"];
+                await ExecuteAsync(db, $"EXEC(N'CREATE SCHEMA [{schema}]'); CREATE TABLE [{schema}].[users] (id int NOT NULL); INSERT [{schema}].[users] (id) VALUES (1),(2),(3),(4),(5);");
+                try
+                {
+                    var after = await SqlHealthDataSource.LoadApproxRowCounts(db);
+
+                    Assert.AreEqual(before, after["users"], "Only the [dbo] table is counted.");
+                }
+                finally
+                {
+                    await ExecuteAsync(db, $"DROP TABLE [{schema}].[users]; DROP SCHEMA [{schema}];");
+                }
+            }
+        }
+
+        /// <summary>
         /// A figure that cannot be counted keeps its place, without a count: dropped, it reads as an import that is
         /// switched off, and the page shows the audit and web freshness badges only when those figures are there.
         /// </summary>
