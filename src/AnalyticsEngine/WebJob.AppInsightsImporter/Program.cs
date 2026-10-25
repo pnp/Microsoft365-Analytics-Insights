@@ -198,7 +198,7 @@ namespace WebJob.AppInsightsImporter
                         }
 
 #if DEBUG
-                        runAgain = false; // Debug only runs once; release runs forever. 
+                        runAgain = false; // Debug only runs once; release runs forever.
 #else
                         runAgain = !debugSwitchDetected;
 #endif
