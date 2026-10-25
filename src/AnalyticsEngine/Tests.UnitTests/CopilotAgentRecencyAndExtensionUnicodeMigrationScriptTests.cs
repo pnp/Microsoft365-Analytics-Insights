@@ -3,6 +3,9 @@ using Microsoft.Data.SqlClient;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System;
 using System.IO;
+using System.Text.RegularExpressions;
+using System.Threading;
+using System.Threading.Tasks;
 
 namespace Tests.UnitTests
 {
@@ -244,6 +247,92 @@ INSERT INTO dbo.event_meta_sharepoint VALUES ('00000000-0000-0000-0000-000000000
 
                 Assert.AreEqual(1, StampCount(db, UnicodeId));
                 Assert.AreEqual("yes", StampedModelMatches(db, UnicodeId, RecencyId));
+            }
+        }
+
+        [DataTestMethod]
+        [DataRow(false)]
+        [DataRow(true)]
+        public void Unicode_FailedRepoint_RollsBackEveryReferenceAndKeepsTheMergedRows_Unstamped(bool malformedIndex)
+        {
+            using (var db = NewDatabase())
+            {
+                CreateExtensionTables(db);
+                Stamp(db, RecencyId);
+                if (malformedIndex)
+                    db.Execute(@"DROP INDEX IX_event_file_ext ON dbo.event_file_ext;
+ALTER TABLE dbo.event_file_ext ALTER COLUMN extension_name nvarchar(250) COLLATE SQL_Latin1_General_CP1_CI_AS NOT NULL;
+CREATE UNIQUE INDEX IX_event_file_ext ON dbo.event_file_ext (extension_name, id);");
+                db.Execute(@"CREATE TABLE dbo.contoso_extension_reference (
+                    file_extension_id int NOT NULL CHECK (file_extension_id <> 2));
+                    INSERT INTO dbo.contoso_extension_reference VALUES (3);");
+
+                var error = Assert.ThrowsException<SqlException>(() => db.ExecuteScript(Script(UnicodeId), quotedIdentifierOn: false));
+
+                Assert.AreEqual(547, error.Number);
+                Assert.AreEqual(1, Convert.ToInt32(db.Scalar("SELECT COUNT(*) FROM dbo.event_file_ext WHERE id = 3")),
+                    "A failed repoint must not delete the merged-away row.");
+                Assert.AreEqual(3, Convert.ToInt32(db.Scalar(
+                    "SELECT file_extension_id FROM dbo.copilot_event_files WHERE copilot_chat_id = '00000000-0000-0000-0000-000000000001'")),
+                    "Earlier repoints must roll back with the failing one.");
+                Assert.AreEqual(3, Convert.ToInt32(db.Scalar(
+                    "SELECT file_extension_id FROM dbo.event_meta_sharepoint WHERE event_id = '00000000-0000-0000-0000-000000000003'")));
+                Assert.AreEqual(0, StampCount(db, UnicodeId));
+                var batches = Regex.Split(Script(UnicodeId), @"^[ \t]*GO[ \t]*\r?$", RegexOptions.Multiline | RegexOptions.IgnoreCase);
+                var refused = Assert.ThrowsException<SqlException>(() => db.Execute(batches[batches.Length - 1]));
+                StringAssert.Contains(refused.Message, "NOT stamped", "Even a SQL client that continues to the stamp batch must refuse.");
+
+                db.Execute("DROP TABLE dbo.contoso_extension_reference;");
+                db.ExecuteScript(Script(UnicodeId), quotedIdentifierOn: false);
+                Assert.AreEqual(1, StampCount(db, UnicodeId), "A repaired dependency allows a resumable upgrade.");
+            }
+        }
+
+        [TestMethod]
+        public async Task Unicode_ConcurrentRepairWriterCannotRestoreAMergedAwayReference()
+        {
+            using (var db = NewDatabase())
+            {
+                CreateExtensionTables(db);
+                // Azure SQL commonly uses RCSI: a data lock alone must not allow a versioned lookup of the old id.
+                db.Execute("ALTER DATABASE CURRENT SET READ_COMMITTED_SNAPSHOT ON;");
+                db.Execute(@"CREATE TRIGGER dbo.contoso_pause_extension_repoint ON dbo.event_meta_sharepoint AFTER UPDATE AS
+BEGIN
+    RAISERROR('Contoso extension repoint reached', 0, 1) WITH NOWAIT;
+    WAITFOR DELAY '00:00:02';
+END;");
+                using (var reached = new ManualResetEventSlim())
+                using (var migrationConnection = new SqlConnection(db.ConnectionString))
+                using (var writerConnection = new SqlConnection(db.ConnectionString))
+                {
+                    migrationConnection.InfoMessage += (sender, args) =>
+                    {
+                        if (args.Message.Contains("Contoso extension repoint reached")) reached.Set();
+                    };
+                    migrationConnection.Open();
+                    writerConnection.Open();
+                    var migration = Task.Run(() =>
+                    {
+                        using (var command = new SqlCommand(EventFileExtensionUnicode.Up_Sql, migrationConnection))
+                            command.ExecuteNonQuery();
+                    });
+                    Assert.IsTrue(reached.Wait(TimeSpan.FromSeconds(30)), "The writer must overlap the merge transaction.");
+                    // The importer's repair UPDATE shape: the extension is read while writing its id into a row with no FK.
+                    var writer = Task.Run(() =>
+                    {
+                        using (var command = new SqlCommand(@"DECLARE @extension int;
+SELECT @extension = MAX(id) FROM dbo.event_file_ext WHERE extension_name = NCHAR(223);
+UPDATE dbo.event_meta_sharepoint SET file_extension_id = @extension
+WHERE event_id = '00000000-0000-0000-0000-000000000004';", writerConnection))
+                            command.ExecuteNonQuery();
+                    });
+                    await Task.WhenAll(migration, writer);
+                }
+                Assert.AreEqual(0, Convert.ToInt32(db.Scalar(@"SELECT COUNT(*) FROM dbo.event_meta_sharepoint AS m
+WHERE m.file_extension_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM dbo.event_file_ext AS e WHERE e.id = m.file_extension_id);")),
+                    "A concurrent repair must not retain a deleted extension id, including under RCSI.");
+                Assert.AreEqual(2, Convert.ToInt32(db.Scalar(
+                    "SELECT file_extension_id FROM dbo.event_meta_sharepoint WHERE event_id = '00000000-0000-0000-0000-000000000004'")));
             }
         }
 

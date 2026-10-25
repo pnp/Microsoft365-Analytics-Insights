@@ -125,6 +125,163 @@ CREATE INDEX IX_meeting_id ON dbo.copilot_event_meetings (meeting_id);");
         #region De-duplication
 
         [TestMethod]
+        public void Migration_MissingExpectedForeignKey_StopsBeforeChangingRows_AndDoesNotStamp()
+        {
+            using (var db = NewDatabase())
+            {
+                StampPredecessors(db);
+                var first = AddMeeting(db, MeetingId("a"), "Contoso sync");
+                var copy = AddMeeting(db, MeetingId("a"), "Contoso sync");
+                var chat = Link(db, copy);
+                db.Execute("ALTER TABLE dbo.copilot_event_meetings DROP CONSTRAINT [FK_dbo.event_copilot_meetings_dbo.online_meetings_meeting_id];");
+
+                var error = Assert.ThrowsException<SqlException>(() => db.ExecuteScript(ManualScript(), quotedIdentifierOn: false));
+
+                StringAssert.Contains(error.Message, "copilot_event_meetings.meeting_id");
+                StringAssert.Contains(error.Message, "foreign key");
+                Assert.AreEqual(2, RowsFor(db, MeetingId("a")));
+                CollectionAssert.AreEqual(new[] { copy }, LinkedRows(db, chat));
+                Assert.AreEqual(0, StampCount(db));
+                Assert.AreEqual(-1, Count(db, "SELECT max_length FROM sys.columns WHERE object_id = OBJECT_ID('dbo.online_meetings') AND name = 'meeting_id'"));
+            }
+        }
+
+        [TestMethod]
+        public void Migration_UserStatisticsOnMeetingId_DoNotBlockNarrowingOrStamping()
+        {
+            using (var db = NewDatabase())
+            {
+                StampPredecessors(db);
+                var first = AddMeeting(db, MeetingId("a"), "Contoso sync");
+                var copy = AddMeeting(db, MeetingId("a"), "Contoso sync");
+                var chat = Link(db, copy);
+                db.Execute("CREATE STATISTICS ST_contoso_meeting ON dbo.online_meetings (meeting_id);");
+
+                db.ExecuteScript(ManualScript(), quotedIdentifierOn: false);
+
+                AssertMigratedShape(db);
+                CollectionAssert.AreEqual(new[] { first }, LinkedRows(db, chat));
+                Assert.AreEqual(1, StampCount(db));
+                Assert.AreEqual(0, Count(db, "SELECT COUNT(*) FROM sys.stats WHERE object_id = OBJECT_ID('dbo.online_meetings') AND name = 'ST_contoso_meeting'"));
+            }
+        }
+
+        [TestMethod]
+        public void Migration_ReportsStartingStepsAndProgress_AndPreservesSqlErrorsWithBatchContext()
+        {
+            using (var db = NewDatabase())
+            {
+                var first = AddMeeting(db, MeetingId("a"), "Contoso sync");
+                var copy = AddMeeting(db, MeetingId("a"), "Contoso sync");
+                Link(db, copy);
+                db.Execute($"ALTER TABLE dbo.copilot_event_meetings ADD CONSTRAINT CK_contoso_no_repoint CHECK (meeting_id <> {first});");
+                var messages = new List<string>();
+                using (var connection = new SqlConnection(db.ConnectionString))
+                {
+                    connection.InfoMessage += (sender, args) => messages.Add(args.Message);
+                    connection.Open();
+                    var error = Assert.ThrowsException<SqlException>(() =>
+                    {
+                        using (var command = new SqlCommand(UniqueOnlineMeetingIds.Up_Sql, connection))
+                            command.ExecuteNonQuery();
+                    });
+                    Assert.AreEqual(547, error.Number, "The original SQL error number must survive contextual logging.");
+                    messages.AddRange(error.Errors.Cast<SqlError>().Where(e => e.Class <= 10).Select(e => e.Message));
+                }
+
+                Assert.IsTrue(messages.Any(m => m.Contains("starting step=find") && m.Contains("Z]")), "The expensive find scan needs a timestamped starting line.");
+                Assert.IsTrue(messages.Any(m => m.Contains("step=repoint") && m.Contains("pass=1") && m.Contains("batch=0") && m.Contains("sqlError=547")),
+                    "A failed batch needs step, pass, batch and original SQL error context.");
+                Assert.AreEqual(2, RowsFor(db, MeetingId("a")), "The failed batch rolls back.");
+
+                db.Execute("ALTER TABLE dbo.copilot_event_meetings DROP CONSTRAINT CK_contoso_no_repoint;");
+                messages.Clear();
+                using (var connection = new SqlConnection(db.ConnectionString))
+                {
+                    connection.InfoMessage += (sender, args) => messages.Add(args.Message);
+                    connection.Open();
+                    using (var command = new SqlCommand(UniqueOnlineMeetingIds.Up_Sql, connection))
+                        command.ExecuteNonQuery();
+                }
+                Assert.IsTrue(messages.Any(m => m.Contains("starting step=column") && m.Contains("OFFLINE") && m.Contains("blocks all access")));
+                Assert.IsTrue(messages.Any(m => m.Contains("starting step=index")));
+                Assert.IsTrue(messages.Any(m => m.Contains("rate=") && m.Contains("etaSeconds=")));
+            }
+        }
+
+        [TestMethod]
+        public void Migration_SlowBatchesReportProgressAfterThirtySeconds_NotAfterOneHundredBatches()
+        {
+            using (var db = NewDatabase())
+            {
+                db.Execute(@"INSERT INTO dbo.online_meetings (created, meeting_id, name)
+SELECT TOP (2002) '2026-04-01T09:30:00', N'Contoso synthetic meeting', N'Contoso sync'
+FROM sys.all_objects AS a CROSS JOIN sys.all_objects AS b;");
+                db.Execute(@"CREATE TRIGGER dbo.contoso_slow_first_batch ON dbo.online_meetings AFTER UPDATE AS
+BEGIN
+    IF EXISTS (SELECT 1 FROM inserted WHERE id = 2 AND meeting_id IS NULL)
+        WAITFOR DELAY '00:00:31';
+END;");
+                var messages = new List<string>();
+                using (var connection = new SqlConnection(db.ConnectionString))
+                {
+                    connection.InfoMessage += (sender, args) => messages.Add(args.Message);
+                    connection.Open();
+                    using (var command = new SqlCommand(UniqueOnlineMeetingIds.Up_Sql, connection) { CommandTimeout = 120 })
+                        command.ExecuteNonQuery();
+                }
+                Assert.IsTrue(messages.Any(m => m.Contains("removed 2000 of 2001") && m.Contains("rate=") && m.Contains("etaSeconds=")),
+                    "A slow first batch must report before the next batch, rather than waiting for 200,000 copies.");
+                AssertMigratedShape(db);
+            }
+        }
+
+        [TestMethod]
+        public void Migration_ReleasedImporterSql_LosesRenamedMeetingLinks_UntilNewContentIsDeployed()
+        {
+            using (var db = NewDatabase())
+            {
+                var first = AddMeeting(db, MeetingId("a"), "Contoso original subject");
+                RunMigration(db);
+                var chat = Guid.NewGuid();
+                db.Execute($@"INSERT INTO dbo.copilot_chats VALUES ('{chat}');
+CREATE TABLE dbo.contoso_meeting_stage (event_id uniqueidentifier, meeting_id nvarchar(max), meeting_name nvarchar(100), meeting_created_utc datetime2);
+INSERT INTO dbo.contoso_meeting_stage VALUES ('{chat}', {Sql(MeetingId("a"))}, N'Contoso renamed subject', '2026-04-01T09:30:00');");
+
+                // Verbatim origin/main SQL (released importer), with only its staging-table placeholder substituted.
+                const string releasedSql = "INSERT INTO online_meetings(created, meeting_id, name)\n"
+                    + "\tSELECT distinct meeting_created_utc, imports.meeting_id, imports.meeting_name \n"
+                    + "\tFROM ${STAGING_TABLE_ACTIVITY} imports\n"
+                    + "\tleft join \n"
+                    + "\t\tonline_meetings on online_meetings.meeting_id = imports.meeting_id\n"
+                    + "\twhere \n"
+                    + "\t\timports.meeting_id is not null AND imports.meeting_name is not null AND imports.meeting_created_utc is not null AND\n"
+                    + "\t\tnot exists(select top 1 created, meeting_id, name from online_meetings \n"
+                    + "\t\t\twhere created = imports.meeting_created_utc \n"
+                    + "\t\t\t\tand created = imports.meeting_created_utc \n"
+                    + "\t\t\t\tand imports.meeting_name = [name]\n"
+                    + "\t\t)\n\n"
+                    + "insert into copilot_event_meetings (copilot_chat_id, meeting_id)\n"
+                    + "\tSELECT \n"
+                    + "\t\timports.event_id\n"
+                    + "\t\t,online_meetings.id as meetingId\n"
+                    + "\tFROM ${STAGING_TABLE_ACTIVITY} imports\n"
+                    + "\t\tinner join online_meetings on online_meetings.meeting_id = imports.meeting_id\n"
+                    + "\t\tand online_meetings.name = imports.meeting_name\n"
+                    + "\t\tand online_meetings.created = CAST(imports.meeting_created_utc AS datetime)\t\t\n"
+                    + "\twhere not exists (\n"
+                    + "\t\tselect 1\n"
+                    + "\t\tfrom copilot_event_meetings existing\n"
+                    + "\t\twhere existing.copilot_chat_id = imports.event_id\n"
+                    + "\t)\n";
+                db.Execute(releasedSql.Replace("${STAGING_TABLE_ACTIVITY}", "dbo.contoso_meeting_stage"));
+                Assert.AreEqual(0, LinkedRows(db, chat).Count, "The old importer silently loses a renamed meeting's link on the new schema.");
+                db.Execute(TeamsMergeSql("contoso_meeting_stage"));
+                CollectionAssert.AreEqual(new[] { first }, LinkedRows(db, chat), "New content links by meeting identity alone.");
+            }
+        }
+
+        [TestMethod]
         public void Migration_LeavesOneRowPerMeeting_TheOldestCopyUnlessOnlyALaterOneHasASubject()
         {
             using (var db = NewDatabase())

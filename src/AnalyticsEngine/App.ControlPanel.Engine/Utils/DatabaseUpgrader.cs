@@ -3,6 +3,9 @@ using Common.Entities;
 using DataUtils;
 using DataUtils.Sql;
 using System;
+using System.Data.Entity.Infrastructure;
+using System.Data.Entity.Migrations;
+using System.Diagnostics;
 using System.Linq;
 
 namespace App.ControlPanel.Engine
@@ -54,13 +57,25 @@ namespace App.ControlPanel.Engine
                 }
             }
 
-            log?.Invoke($"[{DateTime.Now}]: Connecting to database @ '{StringUtils.RedactSqlConnectionString(initInfo.ConnectionString)}' with Entity Framework context initializer set to 'MigrateDatabaseToLatestVersion'...");
+            log?.Invoke($"[{DateTime.Now}]: Connecting to database @ '{StringUtils.RedactSqlConnectionString(initInfo.ConnectionString)}' for explicit Entity Framework migrations...");
 
             // Update schema with EF migration
             try
             {
-                using (var context = new AnalyticsEntitiesContext(initInfo.ConnectionString, true, true))
+                using (var progress = new MigrationProgressInterceptor(initInfo.ConnectionString, log))
+                using (var context = new AnalyticsEntitiesContext(initInfo.ConnectionString, true, false))
                 {
+                    var migrator = new DbMigrator(new Common.Entities.Migrations.Configuration
+                    {
+                        TargetDatabase = new DbConnectionInfo(initInfo.ConnectionString, "Microsoft.Data.SqlClient")
+                    });
+                    var pending = migrator.GetPendingMigrations().ToList();
+                    foreach (var migration in pending)
+                    {
+                        RunMigrationStep(migration, () => migrator.Update(migration), log);
+                    }
+                    // Keep EF's final model/snapshot validation and automatic-migration semantics.
+                    RunMigrationStep("ModelValidation", () => migrator.Update(), log);
                     log?.Invoke($"--Initializing context...");
                     context.Database.Initialize(true);
 
@@ -103,7 +118,7 @@ namespace App.ControlPanel.Engine
             // Insert org URLs
             try
             {
-                using (var context = new AnalyticsEntitiesContext(initInfo.ConnectionString, true, true))
+                using (var context = new AnalyticsEntitiesContext(initInfo.ConnectionString, true, false))
                 {
                     initInfo.EnsureOrgURLs(context);
                 }
@@ -116,6 +131,23 @@ namespace App.ControlPanel.Engine
 
             // Done
             log?.Invoke($"[{DateTime.Now}]: Database initialised successfully. Everything worked.");
+        }
+
+        private static void RunMigrationStep(string migration, Action apply, Action<string> log)
+        {
+            var elapsed = Stopwatch.StartNew();
+            log?.Invoke($"[{DateTime.UtcNow:O}] MigrationStarting: migration={migration} stage=apply.");
+            try
+            {
+                apply();
+                log?.Invoke($"[{DateTime.UtcNow:O}] MigrationOutcome: migration={migration} stage=apply outcome=Succeeded elapsedMs={elapsed.ElapsedMilliseconds}.");
+            }
+            catch (Exception ex)
+            {
+                var sqlError = ex as Microsoft.Data.SqlClient.SqlException;
+                log?.Invoke($"[{DateTime.UtcNow:O}] MigrationOutcome: migration={migration} stage=apply outcome=Failed elapsedMs={elapsed.ElapsedMilliseconds} exceptionType={ex.GetType().Name} sqlError={sqlError?.Number}.");
+                throw;
+            }
         }
 
     }

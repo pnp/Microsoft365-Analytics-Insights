@@ -44,6 +44,7 @@ namespace Tests.UnitTests
 
         private static void RunUpgrade(bool populateTeamsAddons, string dbName, bool expectTablesRetained)
         {
+            dbName += "_" + Guid.NewGuid().ToString("N");
             var connectionString = ScratchConnectionString(dbName);
             DropDatabase(connectionString, dbName);
 
