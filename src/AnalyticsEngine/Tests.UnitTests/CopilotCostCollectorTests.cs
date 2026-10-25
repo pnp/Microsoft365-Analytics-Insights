@@ -446,6 +446,47 @@ INSERT dbo.__MigrationHistory VALUES('202610221500003_UniqueOnlineMeetingIds','S
             Assert.AreEqual(1, Sql("SELECT COUNT(*) FROM dbo.copilot_cost_observations;"));
         }
 
+        /// <summary>
+        /// The manual script's last batch is all that stops a DBA stamping a half-applied preview schema, so it must
+        /// require every index the migration creates. In SSMS a CREATE INDEX that fails (a lock timeout, no space) does
+        /// not stop the batch, and once stamped the migration is never run again. The indexes are read from
+        /// <see cref="AddCopilotCostPreview.Up_Sql"/>, so one added there without a check here fails this test.
+        /// </summary>
+        [TestMethod]
+        public void ManualPostFlightRefusesToStampWithoutAnyPreviewIndex_AndStampsOnceTheSchemaIsWhole()
+        {
+            var root = new DirectoryInfo(AppDomain.CurrentDomain.BaseDirectory);
+            while (root != null && !File.Exists(Path.Combine(root.FullName, @"Common\Entities\Migrations\202610230900001_AddCopilotCostPreview.manual.sql")))
+                root = root.Parent;
+            Assert.IsNotNull(root);
+            var script = File.ReadAllText(Path.Combine(root.FullName, @"Common\Entities\Migrations\202610230900001_AddCopilotCostPreview.manual.sql"));
+            var postFlight = System.Text.RegularExpressions.Regex.Split(script, @"(?im)^\s*GO\s*$").Last(b => !string.IsNullOrWhiteSpace(b));
+            StringAssert.Contains(postFlight, "Preview schema is incomplete");
+            var indexes = System.Text.RegularExpressions.Regex.Matches(AddCopilotCostPreview.Up_Sql, @"CREATE\s+(?:UNIQUE\s+)?INDEX\s+(\w+)\s+ON\s+(dbo\.\w+)")
+                .Cast<System.Text.RegularExpressions.Match>()
+                .Select(m => new { Name = m.Groups[1].Value, Table = m.Groups[2].Value })
+                .ToList();
+            Assert.AreEqual(8, indexes.Count, "Every index the preview creates.");
+            Sql(@"IF OBJECT_ID(N'dbo.__MigrationHistory',N'U') IS NULL
+CREATE TABLE dbo.__MigrationHistory(MigrationId nvarchar(150),ContextKey nvarchar(300),Model varbinary(max),ProductVersion nvarchar(32));
+DELETE dbo.__MigrationHistory;
+INSERT dbo.__MigrationHistory VALUES('202610221500003_UniqueOnlineMeetingIds','SyntheticContext',0x010203,'6.5.2');");
+            Func<int> stamps = () => Sql("SELECT COUNT(*) FROM dbo.__MigrationHistory WHERE MigrationId='202610230900001_AddCopilotCostPreview';");
+
+            foreach (var index in indexes)
+            {
+                Sql($"DROP INDEX {index.Name} ON {index.Table};");
+                var refused = Assert.ThrowsException<SqlException>(() => Sql(postFlight), $"Stamped without {index.Name}.");
+                StringAssert.Contains(refused.Message, "Preview schema is incomplete");
+                Assert.AreEqual(0, stamps(), $"Stamped without {index.Name}.");
+                Sql(AddCopilotCostPreview.Up_Sql);
+            }
+
+            Sql(postFlight);
+            Sql(postFlight);
+            Assert.AreEqual(1, stamps(), "A whole schema is stamped, once.");
+        }
+
         [TestMethod]
         public async Task InterruptedDirectoryInventoryResumesBeforeAnyUserReadAndPublishesSeparateContext()
         {

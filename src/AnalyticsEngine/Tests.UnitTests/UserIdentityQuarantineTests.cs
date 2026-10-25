@@ -187,6 +187,66 @@ namespace Tests.UnitTests
             Assert.IsFalse(await keyValues.ExistsAsync(UserIdentityQuarantineStore.HeaderKey(Guid.Empty)));
         }
 
+        /// <summary>
+        /// A save that fails after writing some of its pages must leave the stored set exactly as it was. Pages used to be
+        /// overwritten in place, so the old header then read new pages beside old ones: users who moved to a later page were
+        /// in neither, and a quarantined user whose checkpoint had already moved was lost.
+        /// </summary>
+        [TestMethod]
+        public async Task Store_ASaveThatFailsPartWay_LeavesTheStoredSetWhole_AndTheNextSaveConverges()
+        {
+            var keyValues = new FaultyKeyValueStore();
+            var store = new UserIdentityQuarantineStore(keyValues, Guid.Empty);
+            var since = new DateTime(2026, 1, 2, 3, 4, 5, DateTimeKind.Utc);
+            var stored = Enumerable.Range(0, UserIdentityQuarantineStore.MaxEntriesPerPage + 50)
+                .Select(i => Entry("a0000000-0000-0000-0000-" + i.ToString("D12"), since)).ToList();
+            await store.SaveAsync(stored);
+
+            // Ten users who sort first push every stored user along by ten, across the page boundary.
+            var next = Enumerable.Range(0, 10).Select(i => Entry("00000000-0000-0000-0000-" + i.ToString("D12"), since)).Concat(stored).ToList();
+            var pageWrites = 0;
+            keyValues.FailSet = key => key != UserIdentityQuarantineStore.HeaderKey(Guid.Empty) && ++pageWrites == 2;
+
+            await Assert.ThrowsExceptionAsync<InvalidOperationException>(() => store.SaveAsync(next));
+
+            CollectionAssert.AreEquivalent(stored.Select(e => e.ObjectId).ToList(), (await store.LoadAsync()).Select(e => e.ObjectId).ToList(),
+                "The failed save changed nothing that is read.");
+
+            // It failed after the header: the new set is read, and the next save tidies up after both.
+            keyValues.FailSet = null;
+            keyValues.FailDelete = _ => true;
+            await Assert.ThrowsExceptionAsync<InvalidOperationException>(() => store.SaveAsync(next));
+            CollectionAssert.AreEquivalent(next.Select(e => e.ObjectId).ToList(), (await store.LoadAsync()).Select(e => e.ObjectId).ToList());
+
+            keyValues.FailDelete = null;
+            var smaller = next.Take(3).ToList();
+            await store.SaveAsync(smaller);
+            CollectionAssert.AreEquivalent(smaller.Select(e => e.ObjectId).ToList(), (await store.LoadAsync()).Select(e => e.ObjectId).ToList());
+            Assert.AreEqual(2, keyValues.Keys.Count, "The header and the one page it points at; every page of the earlier sets is gone.");
+        }
+
+        /// <summary>A set stored by the first version of the store, whose header names no slot, still loads and is replaced cleanly.</summary>
+        [TestMethod]
+        public async Task Store_ASetWrittenBeforeSlots_StillLoads_AndIsReplacedCleanly()
+        {
+            var keyValues = new FaultyKeyValueStore();
+            var since = new DateTime(2026, 1, 2, 3, 4, 5, DateTimeKind.Utc);
+            var legacy = Enumerable.Range(0, UserIdentityQuarantineStore.MaxEntriesPerPage + 1)
+                .Select(i => Entry("a0000000-0000-0000-0000-" + i.ToString("D12"), since)).ToList();
+            await keyValues.SetStringAsync(UserIdentityQuarantineStore.HeaderKey(Guid.Empty), "{\"pages\":2,\"count\":" + legacy.Count + "}");
+            await keyValues.SetStringAsync("IdentityQuarantine-" + Guid.Empty.ToString("D") + ":0",
+                JsonConvert.SerializeObject(legacy.Take(UserIdentityQuarantineStore.MaxEntriesPerPage).ToList(), UserIdentityQuarantineStore.Json));
+            await keyValues.SetStringAsync("IdentityQuarantine-" + Guid.Empty.ToString("D") + ":1",
+                JsonConvert.SerializeObject(legacy.Skip(UserIdentityQuarantineStore.MaxEntriesPerPage).ToList(), UserIdentityQuarantineStore.Json));
+            var store = new UserIdentityQuarantineStore(keyValues, Guid.Empty);
+
+            CollectionAssert.AreEquivalent(legacy.Select(e => e.ObjectId).ToList(), (await store.LoadAsync()).Select(e => e.ObjectId).ToList());
+
+            await store.SaveAsync(legacy.Take(2).ToList());
+            Assert.AreEqual(2, (await store.LoadAsync()).Count);
+            Assert.AreEqual(2, keyValues.Keys.Count, "The header and the new page; the first version's pages are gone.");
+        }
+
         [TestMethod]
         public void Merge_ANewerEntryReplacesTheStoredProfile_KeepingAManagerChangeItDoesNotRepeat()
         {
@@ -423,6 +483,29 @@ namespace Tests.UnitTests
             }
             public Task<bool> DeleteAsync(string key, CancellationToken cancellationToken = default) => _inner.DeleteAsync(key, cancellationToken);
             public Task<bool> ExistsAsync(string key, CancellationToken cancellationToken = default) => _inner.ExistsAsync(key, cancellationToken);
+        }
+
+        private sealed class FaultyKeyValueStore : IKeyValueStore
+        {
+            private readonly Dictionary<string, string> _values = new Dictionary<string, string>(StringComparer.Ordinal);
+            public Func<string, bool> FailSet { get; set; }
+            public Func<string, bool> FailDelete { get; set; }
+            public IReadOnlyCollection<string> Keys => _values.Keys.ToList();
+            public string Description => "faulty in-memory store";
+            public Task<string> GetStringAsync(string key, CancellationToken cancellationToken = default)
+                => Task.FromResult(_values.TryGetValue(key, out var value) ? value : null);
+            public Task SetStringAsync(string key, string value, TimeSpan? timeToLive = null, CancellationToken cancellationToken = default)
+            {
+                if (FailSet?.Invoke(key) == true) throw new InvalidOperationException("synthetic write failure");
+                if (value == null) _values.Remove(key); else _values[key] = value;
+                return Task.CompletedTask;
+            }
+            public Task<bool> DeleteAsync(string key, CancellationToken cancellationToken = default)
+            {
+                if (FailDelete?.Invoke(key) == true) throw new InvalidOperationException("synthetic delete failure");
+                return Task.FromResult(_values.Remove(key));
+            }
+            public Task<bool> ExistsAsync(string key, CancellationToken cancellationToken = default) => Task.FromResult(_values.ContainsKey(key));
         }
 
         private sealed class FailingQuarantineStore : IUserIdentityQuarantineStore
