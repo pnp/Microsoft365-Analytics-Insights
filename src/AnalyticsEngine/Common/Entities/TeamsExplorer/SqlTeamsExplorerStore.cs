@@ -1,5 +1,6 @@
 using Common.Entities.UserFilters;
 using Microsoft.Data.SqlClient;
+using Microsoft.Extensions.Logging;
 using System;
 using System.Collections.Generic;
 using System.Data;
@@ -57,16 +58,23 @@ namespace Common.Entities.TeamsExplorer
     {
         private readonly IAnalyticsDbContextFactory _contextFactory;
         private readonly int _commandTimeoutSeconds;
+        private readonly ILogger _logger;
 
         public SqlTeamsExplorerStore(IAnalyticsDbContextFactory contextFactory)
             : this(contextFactory, TeamsExplorerSql.CommandTimeoutSeconds)
         {
         }
 
-        public SqlTeamsExplorerStore(IAnalyticsDbContextFactory contextFactory, int commandTimeoutSeconds)
+        public SqlTeamsExplorerStore(IAnalyticsDbContextFactory contextFactory, ILogger logger)
+            : this(contextFactory, TeamsExplorerSql.CommandTimeoutSeconds, logger)
+        {
+        }
+
+        public SqlTeamsExplorerStore(IAnalyticsDbContextFactory contextFactory, int commandTimeoutSeconds, ILogger logger = null)
         {
             _contextFactory = contextFactory ?? throw new ArgumentNullException(nameof(contextFactory));
             _commandTimeoutSeconds = commandTimeoutSeconds;
+            _logger = logger;
         }
 
         #region Availability
@@ -893,6 +901,8 @@ namespace Common.Entities.TeamsExplorer
             catch (Exception ex)
             {
                 info.Error = InnermostMessage(ex);
+                watch.Stop();
+                LogQueryFailure(key, watch.ElapsedMilliseconds, ex);
             }
             finally
             {
@@ -901,6 +911,36 @@ namespace Common.Entities.TeamsExplorer
             }
 
             return result;
+        }
+
+        /// <summary>
+        /// One Warning per failed statement: the section degrades to a message and the page carries on, so nothing else
+        /// records it server-side. Exception type, SQL error number and timeout flag only - never the message, which can
+        /// carry SQL text or object names.
+        /// </summary>
+        private void LogQueryFailure(string key, long elapsedMs, Exception ex)
+        {
+            if (_logger == null) return;
+
+            try
+            {
+                var root = ex;
+                SqlException sql = null;
+                for (var current = ex; current != null; current = current.InnerException)
+                {
+                    root = current;
+                    if (sql == null) sql = current as SqlException;
+                }
+
+                var timedOut = (sql != null && sql.Number == -2) || ex is TimeoutException || root is TimeoutException;
+                var sqlNumber = sql != null ? sql.Number.ToString() : "none";
+                var message = $"TeamsExplorer query failed: key={key} elapsedMs={elapsedMs} exceptionType={root.GetType().Name} sqlError={sqlNumber} timedOut={timedOut.ToString().ToLowerInvariant()}";
+                _logger.Log(LogLevel.Warning, 0, message, null, (state, _) => state);
+            }
+            catch (Exception)
+            {
+                // Logging must not turn a degraded section into a failed page.
+            }
         }
 
         /// <summary>

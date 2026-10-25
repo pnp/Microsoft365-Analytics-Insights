@@ -6,4 +6,8 @@
 
 <h1 class="text-danger">Error.</h1>
 <h2 class="text-danger">An error occurred while processing your request.</h2>
+@if (Model != null && Model.Exception != null)
+{
+    <p>If this keeps happening, give your administrator this error reference: <code>@Web.AnalyticsWeb.WebErrorReference.For(Model.Exception)</code></p>
+}
 

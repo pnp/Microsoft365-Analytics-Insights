@@ -38,6 +38,29 @@ describe('apiFetch portal permission errors', () => {
   });
 });
 
+describe('apiFetch unexpected server errors', () => {
+  it('throws a translated error carrying the server error reference', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(
+      JSON.stringify({ code: 'unexpected', errorId: '00000000-0000-0000-0000-000000000001' }),
+      { status: 500, headers: { 'Content-Type': 'application/json' } },
+    )));
+
+    await expect(apiFetch('/api/example')).rejects.toMatchObject({
+      name: 'UnexpectedServerError',
+      errorId: '00000000-0000-0000-0000-000000000001',
+      message: 'Something went wrong on the server. If this keeps happening, give your administrator this error reference: 00000000-0000-0000-0000-000000000001',
+    });
+
+    setActiveLanguage('es');
+    await expect(apiFetch('/api/example')).rejects.toThrow(/00000000-0000-0000-0000-000000000001/);
+  });
+
+  it('leaves a 500 without the code to the caller', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('nope', { status: 500 })));
+    expect((await apiFetch('/api/example')).status).toBe(500);
+  });
+});
+
 describe('apiFetch global filter refusals', () => {
   it('throws a translated ReportScopeError when a report is refused because the global filter cannot be applied', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({

@@ -215,12 +215,72 @@ namespace Tests.UnitTests
         private static TeamsExplorerQueryInfo Failed(string key) =>
             new TeamsExplorerQueryInfo { Key = key, Error = "synthetic: the query failed" };
 
-        private static PortalTestHost ExportHost(ExportStore store) =>
+        [TestMethod]
+        public async Task FailedExport_LogsTheQueryKeyAndElapsed_WhileTheBodyCarriesNoSqlDetail()
+        {
+            var store = new ExportStore();
+            store.People.Queries.Add(new TeamsExplorerQueryInfo { Key = "people-champions", Error = "synthetic: Server=contoso-sql", ElapsedMs = 1234 });
+            var logger = new CapturingLogger();
+
+            using (var host = ExportHost(store, logger))
+            {
+                var response = await host.Client.GetAsync("api/TeamsExplorer/export/people");
+                var body = await response.Content.ReadAsStringAsync();
+
+                Assert.AreEqual(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+                Assert.IsFalse(body.Contains("contoso-sql"), body);
+            }
+
+            var line = logger.Single(Microsoft.Extensions.Logging.LogLevel.Error);
+            StringAssert.Contains(line, "section=people ");
+            StringAssert.Contains(line, "key=people-champions");
+            StringAssert.Contains(line, "elapsedMs=1234");
+            Assert.IsFalse(line.Contains("contoso-sql"), line);
+        }
+
+        [TestMethod]
+        public async Task AFailedStoreQuery_LogsATimeoutWarning_WithoutTheExceptionMessage()
+        {
+            var logger = new CapturingLogger();
+            var store = new SqlTeamsExplorerStore(
+                new FailingContextFactory(new InvalidOperationException("synthetic: Server=contoso-sql", new TimeoutException("synthetic timeout"))),
+                30,
+                logger);
+
+            var adoption = await store.GetAdoptionAsync(TeamsExplorerQuery.Create(28, DateTime.UtcNow));
+
+            Assert.IsTrue(adoption.Queries.All(q => !string.IsNullOrEmpty(q.Error)));
+            var lines = logger.Lines.Where(l => l.Level == Microsoft.Extensions.Logging.LogLevel.Warning).Select(l => l.Message).ToList();
+            Assert.AreEqual(adoption.Queries.Count, lines.Count, "One Warning per failed query.");
+            foreach (var query in adoption.Queries)
+            {
+                var line = lines.Single(l => l.Contains("key=" + query.Key + " "));
+                StringAssert.Contains(line, "exceptionType=TimeoutException");
+                StringAssert.Contains(line, "sqlError=none");
+                StringAssert.Contains(line, "timedOut=true");
+                StringAssert.Contains(line, "elapsedMs=");
+                Assert.IsFalse(line.Contains("contoso-sql"), line);
+            }
+        }
+
+        private sealed class FailingContextFactory : Common.Entities.IAnalyticsDbContextFactory
+        {
+            private readonly Exception _failure;
+
+            internal FailingContextFactory(Exception failure)
+            {
+                _failure = failure;
+            }
+
+            public Common.Entities.AnalyticsEntitiesContext Create() => throw _failure;
+        }
+
+        private static PortalTestHost ExportHost(ExportStore store, Microsoft.Extensions.Logging.ILogger logger = null) =>
             new PortalTestHost(
                 new[] { typeof(TeamsExplorerAPIController) },
                 PortalTestHost.SignedIn(PortalRoles.SeePii),
                 PortalAccessPolicy.Enforcing,
-                _ => new TeamsExplorerAPIController(store, () => new TeamsExplorerSources()));
+                _ => new TeamsExplorerAPIController(store, () => new TeamsExplorerSources(), null, logger));
 
         private sealed class ExportStore : ITeamsExplorerStore
         {

@@ -10,9 +10,10 @@ const baseUrl = (): string => `${window.location.origin}/api/UserImportCheckpoin
  * the codes this build knows. A Map rather than an object, so a code such as `constructor` can't find a match on
  * Object.prototype. Anything unrecognised gets the generic message with the HTTP status.
  */
-const ERROR_CODE_KEYS = new Map<string, TranslationKey>([
+export const ERROR_CODE_KEYS = new Map<string, TranslationKey>([
   ['storageUnavailable', 'errors.userImportCheckpoint.storageUnavailable'],
   ['storageNotConfigured', 'errors.userImportCheckpoint.storageNotConfigured'],
+  ['organisationTypesUnavailable', 'errors.userImportCheckpoint.organisationTypesUnavailable'],
 ]);
 
 async function failure(response: Response, fallbackKey: TranslationKey): Promise<Error> {

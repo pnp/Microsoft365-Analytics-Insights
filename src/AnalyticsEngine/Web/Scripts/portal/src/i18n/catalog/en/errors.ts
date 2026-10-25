@@ -15,6 +15,7 @@
 export const errors = {
   // Shared API/session errors
   'errors.http.sessionExpired': 'Your session has expired. Reload the page to sign in again.',
+  'errors.http.unexpected': 'Something went wrong on the server. If this keeps happening, give your administrator this error reference: {errorId}',
   'errors.userLookup.requestFailed': 'Request failed ({status})',
   'errors.userLookup.notFound': "No user found with UPN '{upn}'.",
   'errors.userLookup.missingUpn': "A 'upn' query parameter is required.",
@@ -99,6 +100,8 @@ export const errors = {
     "Couldn't reach Azure Table storage, where the checkpoint is kept. Check that this web app can reach the solution's storage account and that its runtime identity can read and write tables, then try again.",
   'errors.userImportCheckpoint.storageNotConfigured':
     "Azure Storage isn't configured for this deployment, so there is no checkpoint to clear.",
+  'errors.userImportCheckpoint.organisationTypesUnavailable':
+    "Couldn't read the user organisation types from the database, which decide where the checkpoint is kept, so the checkpoint can't be shown or cleared. Nothing was changed. Check that the database is reachable, then try again.",
   'errors.userScope.loadFailed': "Couldn't load the user scope ({status}).",
   'errors.userScope.refreshFailed': "Couldn't refresh the user scope from Microsoft Graph ({status}).",
   'errors.userScope.startFailed': "Couldn't start the user-scope purge ({status}).",
