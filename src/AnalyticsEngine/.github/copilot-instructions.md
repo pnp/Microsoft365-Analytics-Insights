@@ -170,6 +170,9 @@ every run that sees any Cowork use. `TimedOut` now means at least one query was 
 (`TimedOutQueryCount`). It used to mean "any step took 90 s or more", which a slow probe sequence or
 the CPU-only scoring step could trigger without a single timeout.
 
+## Diagnosing from a log export
+When someone hands over a log export (Application Insights traces, exceptions and customEvents, or Kudu / App Service console text) and asks what is failing or slow, follow the repository skill [`.github/skills/importer-log-triage/SKILL.md`](../../../.github/skills/importer-log-triage/SKILL.md). It lists where logs live, the exact KQL export to request, how to orient (build label, `RunId`, heartbeat, `ImportStage`), and for each importer area the key log lines, a "last evidence → what it proves" table and a ready-to-run query. Exports hold personal data: keep them out of the repository and use synthetic values in anything public. When you change a log line or event the skill quotes, update the skill in the same change.
+
 ## NuGet Package Management
 - When NuGet packages are added or updated, always update binding redirects in both App.Template.config and App.config for all affected projects (including test projects). App.config is generated dynamically from App.Template.config at build time, so App.Template.config is the source of truth.
 - When updating Azure SDK packages in this solution, be aware that CloudInstallEngine targets .NET Standard 2.0 while App.ControlPanel.Engine and test projects target .NET Framework 4.8. Upgrading packages in CloudInstallEngine can cause CS1705 assembly version mismatch errors in consuming .NET Framework projects that need matching direct PackageReference additions and binding redirect updates.
