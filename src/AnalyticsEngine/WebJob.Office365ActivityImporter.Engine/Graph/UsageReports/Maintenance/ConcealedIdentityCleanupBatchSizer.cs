@@ -39,7 +39,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Maintenance
     /// was set is taken up again, whatever the limited batches fitted. A deadlock, a lock timeout or a reference that
     /// appeared mid-batch is not about size or cost, so it is a detour: the next batch is half the size, and the ceiling
     /// doubles back each time a batch at it commits within the planned share of the cap - or no slower than the batches
-    /// before the failure - until the size the failure interrupted is taken up again. Neither the failure nor the batches
+    /// before the failure - until the size the failure interrupted is taken up again. Where every batch pays a known fixed cost
+    /// above the ceiling, a batch as slow as that cost says is no slower than before. Neither the failure nor the batches
     /// held down by it are remembered: they would push the proofs of that size out of the window, and add spread the sizing
     /// never chose to the fit.
     /// </para>
@@ -219,6 +220,16 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Maintenance
                     }
                     _fixedCostSeconds = null;
                 }
+            }
+            else if (_fixedCostSeconds.HasValue && IsConsistentWithFixedCost(users, seconds))
+            {
+                // Held down after a transient failure, where every batch pays a known fixed cost above the ceiling: no batch is
+                // quicker than the ceiling, and none was remembered as a proof, so a batch as slow as the fixed cost says is the
+                // database no slower than before. Read as slower, the detour never ended - and past the cap, it halved again on
+                // every batch, down to one user, for as long as the process ran.
+                _detourHalvings--;
+                Next = Clamp(Math.Min(DetourCeiling, Math.Min(_interruptedSize, _sizeLimit)));
+                return;
             }
 
             if (seconds > _capSeconds)

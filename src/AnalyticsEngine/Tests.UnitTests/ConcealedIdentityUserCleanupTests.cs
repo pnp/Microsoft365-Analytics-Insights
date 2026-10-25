@@ -931,6 +931,38 @@ DELETE FROM dbo.users WHERE id IN ({ids});");
         }
 
         [TestMethod]
+        public void BatchSizer_AfterOneDeadlock_WhenEveryBatchPaysAFixedCostAboveTheCeiling_RecoversThePreFailureSize()
+        {
+            // A detour ends when batches at its ceiling show the database is no slower than before the failure. Where a fixed
+            // cost above the ceiling is known, every batch is slower than the ceiling and none was remembered as a proof, so a
+            // batch as slow as the fixed cost says is what "no slower" looks like. Read as slower, a deadlock held the size at
+            // half (F under the cap) or, past the cap, halved it again on every batch - down to one user, for good.
+            foreach (var floor in new[] { 22.0, 40.0, 60.0, 80.0 })
+            {
+                foreach (var noise in new[] { 0.0, 0.05 })
+                {
+                    for (var seed = 1; seed <= 10; seed++)
+                    {
+                        var clean = Simulate(floor, 0.002, noise, seed, batches: 160);
+                        var once = Simulate(floor, 0.002, noise, seed, batches: 160, transientFailureAt: i => i == 60);
+                        var what = $"F {floor} s, noise {noise}, seed {seed}: {once}";
+                        Assert.AreEqual(1, once.TransientFailures, what);
+                        Assert.AreEqual(0, once.Failures, "Nothing times out: " + what);
+                        Assert.IsTrue(once.Sizes.Skip(140).Min() > ConcealedIdentityUserCleanup.MinBatchSize, "Never ratchets down to one user per batch: " + what);
+                        Assert.IsTrue(Median(once.Sizes.Skip(140)) >= 0.9 * Median(clean.Sizes.Skip(140)),
+                            $"Settles on {Median(once.Sizes.Skip(140))} against {Median(clean.Sizes.Skip(140))} without the deadlock: " + what);
+                    }
+                }
+            }
+
+            // Still a detour: while the database takes 1.5 times as long as the fixed cost says, the size keeps halving.
+            var cleanAt40 = Simulate(40, 0.002, 0.0, 1, batches: 160);
+            var slowAfter = Simulate(40, 0.002, 0.0, 1, batches: 160, transientFailureAt: i => i == 60, slowFactor: 1.5, slowAt: i => i > 60 && i <= 66);
+            Assert.IsTrue(slowAfter.Sizes[67] <= slowAfter.Sizes[61] / 32, "Halves on every slow batch: " + slowAfter);
+            Assert.IsTrue(Median(slowAfter.Sizes.Skip(140)) >= 0.9 * Median(cleanAt40.Sizes.Skip(140)), "And recovers once it is not: " + slowAfter);
+        }
+
+        [TestMethod]
         public void BatchSizer_NeverHalvesABatchThatCommittedUnderTheCap()
         {
             ConcealedIdentityCleanupBatchSizer NewSizer() => new ConcealedIdentityCleanupBatchSizer(25, ConcealedIdentityUserCleanup.MinBatchSize,
