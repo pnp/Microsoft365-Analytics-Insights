@@ -36,6 +36,9 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
         // is gone. PopulateNewMessagesAndReactions / SaveToSql iterate this directly.
         public List<TeamsTab> Tabs { get; internal set; }
 
+        /// <summary>Set by the read when Graph rejected the stored delta token and the channel was read in full instead.</summary>
+        public bool DeltaTokenWasReset { get; internal set; }
+
         /// <summary>
         /// Sort through messages found and decide what's new since last delta. Set on this object.
         /// The selection rule itself lives in <see cref="ChannelMessageScopeRules"/> so it can be

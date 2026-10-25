@@ -15,13 +15,27 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
     /// </summary>
     public class TeamsChannelCrawler
     {
+        /// <summary>
+        /// A Team's crawl stops when this many channels in a row fail to read (<see cref="ChannelReadFailureKind.ChannelFailed"/>):
+        /// one failing channel is that channel's problem, but three in a row is Graph being down, and waiting out a timeout on every
+        /// remaining channel of every Team is what an outage would otherwise cost.
+        /// </summary>
+        public const int MaxConsecutiveChannelFailures = 3;
+
         private readonly IChannelMessagesSourceLoader _messagesSource;
         private readonly TeamsChannelBudgetProgress _budget;
+        private readonly TeamsChannelFailureLedger _failures;
+        private readonly TeamsChannelCrawlStats _stats;
+        private readonly ILogger _logger;
 
-        public TeamsChannelCrawler(IChannelMessagesSourceLoader messagesSource, TeamsChannelBudgetProgress budget = null)
+        public TeamsChannelCrawler(IChannelMessagesSourceLoader messagesSource, TeamsChannelBudgetProgress budget = null,
+            TeamsChannelFailureLedger failures = null, TeamsChannelCrawlStats stats = null, ILogger logger = null)
         {
             _messagesSource = messagesSource ?? throw new System.ArgumentNullException(nameof(messagesSource));
             _budget = budget;
+            _failures = failures;
+            _stats = stats ?? new TeamsChannelCrawlStats();
+            _logger = logger ?? Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance;
         }
 
         /// <summary>
@@ -33,8 +47,12 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
         /// couldn't produce one doesn't destroy the incremental position. Channels are crawled in
         /// source order by default, or in durable round-robin order when budgeting is enabled.
         /// A channel only this person's token can't read (<see cref="ChannelReadFailureKind.SkipChannel"/>) is
-        /// skipped and the crawl carries on; any other read failure stops the Team's crawl and is rethrown for the
-        /// caller to act on (see <see cref="ChannelReadFailureKind"/>), with the earlier channels' tokens still pending.
+        /// skipped and the crawl carries on, and so is one whose read failed for a reason that isn't authentication or throttling
+        /// (<see cref="ChannelReadFailureKind.ChannelFailed"/>): one bad channel must not stall the rest of its Team, as Graph's
+        /// persistent <c>400 UnknownError</c> on a channel's delta did. That channel's delta token is left alone, its consecutive
+        /// failures are counted, and once it has failed <see cref="TeamsChannelFailureLedger.MovePastAfterFailures"/> times the budget's
+        /// cursor moves past it. Any other failure stops the Team's crawl and is rethrown for the caller to act on (see
+        /// <see cref="ChannelReadFailureKind"/>), with the earlier channels' tokens still pending.
         /// </remarks>
         public async Task<List<TeamChannelDeltaTokenCommit>> PopulateNewMessagesAndReactions(
             List<ChannelWithReactions> channels,
@@ -44,36 +62,96 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
             pendingDeltaTokenCommits = pendingDeltaTokenCommits ?? new List<TeamChannelDeltaTokenCommit>();
 
             var selected = _budget == null ? channels : await _budget.SelectChannels(channels, teamId);
-            foreach (var channel in selected)
+            _stats.ChannelsSelected = selected.Count;
+            _stats.ChannelsDeferred = channels.Count - selected.Count;
+            if (_failures != null)
             {
-                // Load stats. Throws ChannelMessagesReadException if the channel couldn't be read
-                TeamChannelDeltaTokenInfo channelDelta;
-                try
-                {
-                    channelDelta = await _messagesSource.LoadMessagesAndReactions(channel, teamId);
-                }
-                catch (ChannelMessagesReadException ex) when (ex.Kind == ChannelReadFailureKind.SkipChannel)
-                {
-                    // No delta token, so it is read again next cycle; the scheduling cursor still moves past it, or a
-                    // budget of one would pick the same unreadable channel for ever.
-                    _budget?.ReadSkipped(channel.Id);
-                    continue;
-                }
-                catch (ChannelMessagesReadException)
-                {
-                    _budget?.ReadFailed();
-                    throw;
-                }
-                _budget?.ReadCompleted(channel.Id, channelDelta != null);
+                await _failures.LoadAsync(teamId, channels.Select(c => c.Id));
+            }
 
-                if (channelDelta != null)
+            var failedInARow = 0;
+            try
+            {
+                foreach (var channel in selected)
                 {
-                    pendingDeltaTokenCommits.Add(new TeamChannelDeltaTokenCommit(channel.Id, channelDelta));
+                    // Load stats. Throws ChannelMessagesReadException if the channel couldn't be read
+                    TeamChannelDeltaTokenInfo channelDelta;
+                    try
+                    {
+                        channelDelta = await _messagesSource.LoadMessagesAndReactions(channel, teamId);
+                    }
+                    catch (ChannelMessagesReadException ex) when (ex.Kind == ChannelReadFailureKind.SkipChannel)
+                    {
+                        // No delta token, so it is read again next cycle; the scheduling cursor still moves past it, or a
+                        // budget of one would pick the same unreadable channel for ever.
+                        failedInARow = 0;
+                        _stats.ChannelsSkipped++;
+                        _budget?.ReadSkipped(channel.Id);
+                        continue;
+                    }
+                    catch (ChannelMessagesReadException ex) when (ex.Kind == ChannelReadFailureKind.ChannelFailed)
+                    {
+                        var consecutive = _failures?.RecordFailure(channel.Id) ?? 1;
+                        _stats.RecordFailure(ex);
+                        LogChannelReadFailed(teamId, channel.Id, ex, consecutive);
+                        _budget?.ReadFailedButContinuing(channel.Id, consecutive);
+
+                        if (++failedInARow >= MaxConsecutiveChannelFailures)
+                        {
+                            _stats.Stopped = true;
+                            _budget?.ReadFailed();
+                            throw;
+                        }
+                        continue;
+                    }
+                    catch (ChannelMessagesReadException ex)
+                    {
+                        _stats.Stopped = true;
+                        _stats.RecordFailure(ex);
+                        LogChannelReadFailed(teamId, channel.Id, ex, _failures?.ConsecutiveFailures(channel.Id) ?? 0);
+                        _budget?.ReadFailed();
+                        throw;
+                    }
+
+                    failedInARow = 0;
+                    _failures?.RecordSuccess(channel.Id);
+                    _stats.ChannelsRead++;
+                    if (channel.DeltaTokenWasReset)
+                    {
+                        _stats.TokensReset++;
+                    }
+                    _budget?.ReadCompleted(channel.Id, channelDelta != null);
+
+                    if (channelDelta != null)
+                    {
+                        _stats.TokensToCommit++;
+                        pendingDeltaTokenCommits.Add(new TeamChannelDeltaTokenCommit(channel.Id, channelDelta));
+                    }
+                    else
+                    {
+                        _stats.TokensWithheld++;
+                    }
+                }
+            }
+            finally
+            {
+                if (_failures != null)
+                {
+                    await _failures.SaveAsync();
                 }
             }
 
             _budget?.ReportCompleted();
             return pendingDeltaTokenCommits;
+        }
+
+        private void LogChannelReadFailed(string teamId, string channelId, ChannelMessagesReadException ex, int consecutive)
+        {
+            var inner = ex.InnerException ?? ex;
+            var status = ChannelReadFailureRules.StatusCode(inner);
+            var code = (inner as Microsoft.Graph.Models.ODataErrors.ODataError)?.Error?.Code;
+            _logger.LogWarning("TeamsChannelReadFailed: teamId={TeamId}; channelId={ChannelId}; status={Status}; code={Code}; failure={Failure}; consecutive={Consecutive}; kind={Kind}.",
+                teamId, channelId, status?.ToString() ?? "none", code ?? "none", FailureClassification.Describe(ex), consecutive, ex.Kind);
         }
     }
 
@@ -137,6 +215,25 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
         }
 
         internal void ReadFailed() => _logger.LogWarning("TeamsChannelGraphFailure: section=channelMessages; teamRef={TeamRef}; budget exhaustion is not the cause; failed read has no scheduling or Graph checkpoint.", _teamReference);
+
+        /// <summary>
+        /// A channel whose read failed but whose Team's crawl carries on. Its delta token is untouched, so nothing was certified
+        /// and nothing can be counted twice. While it has failed fewer than <see cref="TeamsChannelFailureLedger.MovePastAfterFailures"/>
+        /// times in a row the cursor stays put (a budget of one retries it, so a one-off failure costs a cycle); from then on the
+        /// cursor moves past it, so a channel Graph persistently refuses can't hold the Team's other channels back.
+        /// </summary>
+        internal void ReadFailedButContinuing(string channelId, int consecutiveFailures)
+        {
+            if (consecutiveFailures < TeamsChannelFailureLedger.MovePastAfterFailures)
+            {
+                return;
+            }
+
+            _lastRead = channelId;
+            _read++;
+            _logger.LogWarning("TeamsChannelReadWithheld: section=channelMessages; teamRef={TeamRef}; consecutiveFailures={Consecutive}; scheduling moves past the channel and its Graph checkpoint is unchanged.",
+                _teamReference, consecutiveFailures);
+        }
 
         internal void ReportCompleted()
         {

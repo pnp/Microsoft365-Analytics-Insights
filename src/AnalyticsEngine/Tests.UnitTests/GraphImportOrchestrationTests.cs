@@ -70,6 +70,81 @@ namespace Tests.UnitTests
             return captured.ToString();
         }
 
+        [DataTestMethod]
+        [DataRow(1, 24, 1)]
+        [DataRow(2, 24, 2)]
+        [DataRow(3, 24, 4)]
+        [DataRow(5, 24, 16)]
+        [DataRow(6, 24, 24)]
+        [DataRow(40, 24, 24)]
+        [DataRow(3, 2, 2)]
+        [DataRow(3, 0, 0)]
+        public void ImportFailureBackoff_GrowsFromAnHourUpToTheNormalInterval(int failures, int intervalHours, int expectedHours)
+        {
+            Assert.AreEqual(TimeSpan.FromHours(expectedHours), ImportFailureBackoff.DelayAfter(failures, intervalHours));
+        }
+
+        /// <summary>
+        /// A crawl in which every Team fails is not a completed run, so its cadence gate stays unstamped and it used to be due again
+        /// on every 10-minute cycle - re-crawling, and failing, the whole tenant each time. It now waits 1 h, 2 h, 4 h ... up to the
+        /// normal interval, and is still never recorded as having run.
+        /// </summary>
+        [TestMethod]
+        public async Task GraphImporter_ASectionThatKeepsFailing_BacksOff_AndIsNeverStampedAsRun()
+        {
+            var runs = 0;
+            var succeed = false;
+            var section = DelegateGraphImportSection.Gated("Teams-like section", "skipped", FirstSectionCadence, 24, s => true,
+                () => { runs++; return Task.FromResult(succeed); }).WithFailureBackoff();
+            var store = new InMemoryImportLastRunStore();
+            var clock = new FixedClock(Now);
+            var importer = BuildImporter(GatingSettings(), store, clock, section);
+
+            await importer.GetAndSaveAllGraphData(GatingSettings());
+            Assert.AreEqual(1, runs);
+
+            clock.Advance(TimeSpan.FromMinutes(10));
+            await importer.GetAndSaveAllGraphData(GatingSettings());
+            Assert.AreEqual(1, runs, "10 minutes after a failed crawl: still backing off (1 h).");
+
+            clock.Advance(TimeSpan.FromMinutes(51));
+            await importer.GetAndSaveAllGraphData(GatingSettings());
+            Assert.AreEqual(2, runs, "An hour on, it is tried again.");
+
+            clock.Advance(TimeSpan.FromMinutes(119));
+            await importer.GetAndSaveAllGraphData(GatingSettings());
+            Assert.AreEqual(2, runs, "The second failure doubles the wait: 2 h.");
+
+            clock.Advance(TimeSpan.FromMinutes(2));
+            await importer.GetAndSaveAllGraphData(GatingSettings());
+            Assert.AreEqual(3, runs);
+            Assert.IsNull(await store.GetLastRunUtc(FirstSectionCadence), "A failed crawl is never recorded as completed.");
+            Assert.AreEqual(3, (await store.GetFailureState(FirstSectionCadence)).ConsecutiveFailures);
+
+            clock.Advance(TimeSpan.FromHours(4));
+            succeed = true;
+            await importer.GetAndSaveAllGraphData(GatingSettings());
+            Assert.AreEqual(4, runs);
+            Assert.AreEqual(clock.UtcNow, await store.GetLastRunUtc(FirstSectionCadence), "A success stamps the gate as usual...");
+            Assert.IsNull(await store.GetFailureState(FirstSectionCadence), "...and ends the back-off.");
+        }
+
+        [TestMethod]
+        public async Task GraphImporter_ASectionWithoutBackoff_IsStillRetriedEveryCycle()
+        {
+            var section = FakeGraphImportSection.Gated("Plain section", FirstSectionCadence, 24);
+            section.Result = false;
+            var store = new InMemoryImportLastRunStore();
+            var clock = new FixedClock(Now);
+            var importer = BuildImporter(GatingSettings(), store, clock, section);
+
+            await importer.GetAndSaveAllGraphData(GatingSettings());
+            clock.Advance(TimeSpan.FromMinutes(10));
+            await importer.GetAndSaveAllGraphData(GatingSettings());
+
+            Assert.AreEqual(2, section.RunCount, "Back-off is opt-in: no other section's retry behaviour changes.");
+        }
+
         [TestMethod]
         public async Task GraphImporter_DisabledSection_IsNotRun()
         {

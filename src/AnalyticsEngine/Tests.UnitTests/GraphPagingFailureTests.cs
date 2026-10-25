@@ -510,7 +510,9 @@ namespace Tests.UnitTests
             var ex = new GraphHttpException(HttpStatusCode.Forbidden,
                 "https://graph.microsoft.com/v1.0/users/someone@contoso.com/messages", Forbidden, null);
 
-            StringAssert.Contains(ex.Message, "someone@contoso.com", "The full message keeps the URL - it is written to logs, which already record it.");
+            Assert.IsFalse(ex.Message.Contains("someone@contoso.com"), "Even the full message carries the endpoint shape, not the URL: it is logged and surfaced in the Health page.");
+            Assert.IsTrue(ex.Message.Contains("/v1.0/users/{id}/messages"), "The endpoint shape stays, so a failure is still attributable.");
+            Assert.AreEqual("https://graph.microsoft.com/v1.0/users/someone@contoso.com/messages", ex.Url, "The URL stays on the exception for code that needs it.");
 
             var stored = ex.SummaryWithoutUrl;
             Assert.IsFalse(stored.Contains("someone@contoso.com"), "The persisted summary must not carry a user principal name.");
@@ -528,6 +530,92 @@ namespace Tests.UnitTests
             var graphEx = new GraphHttpException(HttpStatusCode.InternalServerError, "https://graph.microsoft.com/x", ServerError, null);
             Assert.AreEqual(graphEx.SummaryWithoutUrl, GraphHttpException.DescribeForStorage(graphEx),
                 "A Graph HTTP failure must be stored in its URL-free form.");
+        }
+
+        #endregion
+
+        #region Graph call logging: never the URL, never the body
+
+        private sealed class CapturedLog : Microsoft.Extensions.Logging.ILogger
+        {
+            public List<string> Messages { get; } = new List<string>();
+            public List<Microsoft.Extensions.Logging.LogLevel> Levels { get; } = new List<Microsoft.Extensions.Logging.LogLevel>();
+            public IDisposable BeginScope<TState>(TState state) => null;
+            public bool IsEnabled(Microsoft.Extensions.Logging.LogLevel logLevel) => true;
+
+            public void Log<TState>(Microsoft.Extensions.Logging.LogLevel logLevel, Microsoft.Extensions.Logging.EventId eventId, TState state,
+                Exception exception, Func<TState, Exception, string> formatter)
+            {
+                Levels.Add(logLevel);
+                Messages.Add(formatter(state, exception));
+            }
+        }
+
+        private const string MailboxUrl = "https://graph.microsoft.com/v1.0/users/alex.contoso@contoso.com/mailFolders/sentitems/messages/delta?$select=id,subject&$top=200&$deltatoken=SYNTHETIC-DELTA-TOKEN";
+        private const string Subject = "Καλημέρα κόσμε Q3 redundancies";
+
+        private static void AssertNothingSensitiveLogged(CapturedLog log)
+        {
+            Assert.IsTrue(log.Messages.Count > 0, "The call must still be logged.");
+            foreach (var message in log.Messages)
+            {
+                Assert.IsFalse(message.Contains("alex.contoso@contoso.com"), "No UPN: " + message);
+                Assert.IsFalse(message.Contains("SYNTHETIC-DELTA-TOKEN"), "No delta or skip token: " + message);
+                Assert.IsFalse(message.Contains("$deltatoken") || message.Contains("$top"), "No query string: " + message);
+                Assert.IsFalse(message.Contains(Subject), "No response body: " + message);
+            }
+        }
+
+        [TestMethod]
+        public async Task FailedGraphCall_LogsEndpointShapeStatusAndRequestIds_NeverTheUrlOrBody()
+        {
+            var body = "{\"error\":{\"code\":\"UnknownError\",\"message\":\"" + Subject + "\"}}";
+            var handler = new SequenceHandler(Tuple.Create(HttpStatusCode.BadRequest, body));
+            var log = new CapturedLog();
+            using (var client = new ManualGraphCallClient(handler, log))
+            {
+                var ex = await Assert.ThrowsExceptionAsync<GraphHttpException>(() => client.GetAsyncWithThrottleRetries<JObject>(MailboxUrl));
+                Assert.IsFalse(ex.Message.Contains("alex.contoso@contoso.com") || ex.Message.Contains("SYNTHETIC-DELTA-TOKEN"), "The exception message is logged too: " + ex.Message);
+            }
+
+            AssertNothingSensitiveLogged(log);
+            var line = log.Messages.Single(m => m.StartsWith("GraphCallFailed:"));
+            StringAssert.Contains(line, "endpoint=GET /v1.0/users/{id}/mailFolders/sentitems/messages/delta");
+            StringAssert.Contains(line, "status=400");
+            StringAssert.Contains(line, "graphErrorCode=UnknownError");
+            StringAssert.Contains(line, "payloadChars=" + body.Length);
+        }
+
+        [TestMethod]
+        public async Task MalformedOkResponse_IsLoggedWithoutItsBody()
+        {
+            // A 200 that isn't the JSON we expected can still hold message subjects and bodies.
+            var handler = new SequenceHandler(Tuple.Create(HttpStatusCode.OK, "<html>" + Subject + "</html>"));
+            var log = new CapturedLog();
+            using (var client = new ManualGraphCallClient(handler, log))
+            {
+                var result = await client.GetAsyncWithThrottleRetries<JObject>(MailboxUrl);
+                Assert.IsNull(result, "A body that can't be parsed is no result, as before.");
+            }
+
+            AssertNothingSensitiveLogged(log);
+            var line = log.Messages.Single(m => m.StartsWith("GraphCallMalformedResponse:"));
+            StringAssert.Contains(line, "endpoint=GET /v1.0/users/{id}/mailFolders/sentitems/messages/delta");
+            StringAssert.Contains(line, "status=200");
+        }
+
+        [TestMethod]
+        public async Task NotFound_IsLoggedAtDebugWithoutTheUrl()
+        {
+            var handler = new SequenceHandler(Tuple.Create(HttpStatusCode.NotFound, "{\"error\":{\"code\":\"MailboxNotEnabledForRESTAPI\",\"message\":\"" + Subject + "\"}}"));
+            var log = new CapturedLog();
+            using (var client = new ManualGraphCallClient(handler, log))
+            {
+                await Assert.ThrowsExceptionAsync<GraphResourceNotFoundException>(() => client.GetStringAsyncWithThrottleRetries(MailboxUrl));
+            }
+
+            AssertNothingSensitiveLogged(log);
+            Assert.IsFalse(log.Levels.Any(l => l >= Microsoft.Extensions.Logging.LogLevel.Warning), "A missing mailbox is expected, not an error.");
         }
 
         #endregion

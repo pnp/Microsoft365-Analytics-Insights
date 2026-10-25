@@ -51,14 +51,18 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
             {
                 rootMessagesResult = await _pageReader.LoadRootMessages(teamId, channel.Id, channelDeltaInfo);
             }
-            catch (ODataError ex)
+            catch (Exception ex) when (channelDeltaInfo != null && ChannelReadFailureRules.IsInvalidDeltaToken(ex, requestCarriedToken: true))
             {
-                if (ex.Error?.Code == "BadRequest" && channelDeltaInfo != null)
-                {
-                    await _deltaTokenStore.RemoveDeltaToken(teamId, channel.Id);
-                    _logger.LogError(ex, $"Got bad request using delta token for messages. Removing from cache & will try full read next time.");
-                }
-                else throw;
+                // Graph refused the stored token: expired, the channel's sync state reset, or - Graph's persistent bare 400 - a
+                // token it won't take. Read the channel in full, once. The stored token is dropped only when that read works, so a
+                // channel that fails for some other reason keeps its checkpoint; and if this read fails too, that failure is the
+                // channel's, classified like any other.
+                _logger.LogWarning("TeamsChannelDeltaTokenRejected: stage=channelMessages; {Failure}. Reading the channel in full instead; messages already counted may be counted again.",
+                    FailureClassification.Describe(ex));
+                rootMessagesResult = await _pageReader.LoadRootMessages(teamId, channel.Id, null);
+                await _deltaTokenStore.RemoveDeltaToken(teamId, channel.Id);
+                channelDeltaInfo = null;
+                channel.DeltaTokenWasReset = true;
             }
 
             if (rootMessagesResult != null)

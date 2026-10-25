@@ -116,7 +116,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         /// that is running it (<see cref="GetAndSaveAllGraphData"/>, <see cref="GetAndSaveNonDeferredGraphData"/>
         /// or <see cref="GetAndSaveDeferredGraphData"/>) and skipping the sections that come after it.
         /// </summary>
-        private async Task RunGraphSectionIfDueAsync(string key, int intervalHours, string sectionName, Func<Task<bool>> sectionWork, StageSlot slot)
+        private async Task RunGraphSectionIfDueAsync(string key, int intervalHours, string sectionName, Func<Task<bool>> sectionWork, StageSlot slot,
+            bool backOffAfterFailure = false)
         {
             var force = _settings.ForceGraphMetadataImport;
             var lastRun = await _lastRunStore.GetLastRunUtc(key);
@@ -128,6 +129,22 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                     $"Set ForceGraphMetadataImport=true, or delete the '{key}' row (partition '{Common.Entities.State.StatePartitions.ImportSchedule}') " +
                     $"from the '{Common.Entities.State.StateStore.TableName}' table, to override.");
                 return;
+            }
+
+            // Due by the cadence gate, but a section that has just failed waits out its back-off: an outage that stops every Team
+            // loading would otherwise re-run the whole crawl, and fail every Team again, on every 10-minute cycle.
+            var failureStore = backOffAfterFailure ? _lastRunStore as IImportFailureStore : null;
+            if (failureStore != null && !force)
+            {
+                var failures = await failureStore.GetFailureState(key);
+                if (!ImportFailureBackoff.IsOver(failures, intervalHours, _clock.UtcNow))
+                {
+                    var retryAfter = failures.LastFailureUtc + ImportFailureBackoff.DelayAfter(failures.ConsecutiveFailures, intervalHours);
+                    _logger.LogInformation($"Skipping {sectionName}: backing off after {failures.ConsecutiveFailures} failed attempt(s) in a row, the last at {failures.LastFailureUtc:u} UTC. " +
+                        $"Next attempt after {retryAfter:u} UTC. Set ForceGraphMetadataImport=true, or delete the '{key}' and '{key}:FailedAttempts' rows " +
+                        $"(partition '{Common.Entities.State.StatePartitions.ImportSchedule}') from the '{Common.Entities.State.StateStore.TableName}' table, to override.");
+                    return;
+                }
             }
 
             if (force)
@@ -149,6 +166,10 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             catch (Exception ex)
             {
                 stage.Failed(ex);
+                if (failureStore != null)
+                {
+                    await RecordFailedAttemptAsync(failureStore, key, intervalHours, sectionName);
+                }
                 throw;
             }
 
@@ -163,13 +184,30 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             {
                 stage.Failed(reason: "DidNotComplete");
                 _logger.LogWarning($"{sectionName} did not complete successfully; it will be retried on the next cycle.");
+                if (failureStore != null)
+                {
+                    await RecordFailedAttemptAsync(failureStore, key, intervalHours, sectionName);
+                }
             }
 
             // The portal also uses this stamp as last completed, even when cadence gating is disabled.
             if (succeeded)
             {
                 await _lastRunStore.SetLastRunUtc(key, _clock.UtcNow);
+                if (failureStore != null)
+                {
+                    await failureStore.ClearFailureState(key);
+                }
             }
+        }
+
+        private async Task RecordFailedAttemptAsync(IImportFailureStore failureStore, string key, int intervalHours, string sectionName)
+        {
+            var previous = await failureStore.GetFailureState(key);
+            var state = new ImportFailureState { ConsecutiveFailures = (previous?.ConsecutiveFailures ?? 0) + 1, LastFailureUtc = _clock.UtcNow };
+            await failureStore.SetFailureState(key, state);
+            _logger.LogWarning($"ImportBackoff: section={sectionName}; consecutiveFailures={state.ConsecutiveFailures}; " +
+                $"nextAttemptAfterUtc={state.LastFailureUtc + ImportFailureBackoff.DelayAfter(state.ConsecutiveFailures, intervalHours):u}.");
         }
 
         /// <summary>
@@ -270,7 +308,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 var slot = deferredPass ? StageSlot.Background : StageSlot.Cycle;
                 if (section.CadenceKey != null)
                 {
-                    await RunGraphSectionIfDueAsync(section.CadenceKey, section.IntervalHours, section.Name, section.RunAsync, slot);
+                    var backsOff = section is IFailureBackoffSection backoffSection && backoffSection.BacksOffAfterFailure;
+                    await RunGraphSectionIfDueAsync(section.CadenceKey, section.IntervalHours, section.Name, section.RunAsync, slot, backsOff);
                 }
                 else
                 {

@@ -181,6 +181,44 @@ namespace Tests.UnitTests
             Assert.IsNull(section.CadenceKey, $"{section.Name} must not be cadence-gated.");
         }
 
+        /// <summary>
+        /// Without a Storage account the sent-email checkpoints are kept in memory. The sections are rebuilt every import cycle, and a
+        /// store created inside one forgot every mailbox's checkpoint each cycle - so, with the per-mailbox read bound, every mailbox
+        /// restarted from the first page of its sent items every cycle and never got further. The fallback is one store per process.
+        /// </summary>
+        [TestMethod]
+        public async Task SentEmailCheckpoints_WithoutStorage_SurviveTheNextCycle()
+        {
+            var firstCycle = ProductionGraphImportSectionFactory.SelectSentEmailDeltaTokenStore(null, AnalyticsLogger.ConsoleOnlyTracer());
+            await firstCycle.SetDeltaToken("SentEmails-user@contoso.example", "token-after-page-1");
+
+            var nextCycle = ProductionGraphImportSectionFactory.SelectSentEmailDeltaTokenStore(null, AnalyticsLogger.ConsoleOnlyTracer());
+
+            Assert.AreSame(firstCycle, nextCycle, "One in-memory store for the life of the process.");
+            Assert.AreEqual("token-after-page-1", await nextCycle.GetDeltaToken("SentEmails-user@contoso.example"));
+        }
+
+        [TestMethod]
+        public void SentEmailCheckpoints_WithStorage_AreDurable_NotTheInMemoryFallback()
+        {
+            var state = new Common.Entities.State.InMemoryKeyValueStore();
+
+            var store = ProductionGraphImportSectionFactory.SelectSentEmailDeltaTokenStore(state, AnalyticsLogger.ConsoleOnlyTracer());
+
+            Assert.IsInstanceOfType(store, typeof(WebJob.Office365ActivityImporter.Engine.Graph.Email.PersistedDeltaTokenStore));
+        }
+
+        [TestMethod]
+        public void TeamsImport_IsTheOnlySectionThatBacksOffAfterAFailedCrawl()
+        {
+            var settings = SettingsWithDistinctIntervals();
+            var sections = BuildFactory(settings, NeverCalled()).CreateSections(settings);
+
+            var backingOff = sections.Where(s => s is IFailureBackoffSection b && b.BacksOffAfterFailure).Select(s => s.Name).ToList();
+
+            CollectionAssert.AreEqual(new[] { "Teams import" }, backingOff, "Back-off is opt-in; no other section's retry changes.");
+        }
+
         [TestMethod]
         public void ProductionSections_EachMapToExactlyOneImportSettingFlag()
         {

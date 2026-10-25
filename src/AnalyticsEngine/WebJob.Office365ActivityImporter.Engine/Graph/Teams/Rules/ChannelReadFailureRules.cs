@@ -1,4 +1,5 @@
 using Microsoft.Graph.Models;
+using Microsoft.Graph.Models.ODataErrors;
 using Microsoft.Kiota.Abstractions;
 using System;
 
@@ -63,8 +64,40 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
                 return ChannelReadFailureKind.SkipChannel;
             }
 
-            // Throttling, a 5xx, a timeout, the network, or anything unrecognised: nothing to say the token is bad.
-            return ChannelReadFailureKind.Transient;
+            if (status == 429)
+            {
+                // Throttling is the app's or the tenant's, not the channel's: carrying on would only add requests to a Graph that
+                // has just asked us to slow down.
+                return ChannelReadFailureKind.Transient;
+            }
+
+            // A 400 UnknownError on one channel's delta, a 5xx, a timeout, the network, or anything unrecognised: it says nothing
+            // about the token, and nothing about the Team's other channels either.
+            return ChannelReadFailureKind.ChannelFailed;
+        }
+
+        /// <summary>
+        /// Whether Graph's refusal means the delta token this request carried is dead: HTTP 410 (Gone) or the
+        /// <c>syncStateNotFound</c> code, or any 400 to a request that carried a stored token - Graph's documented
+        /// answers when a token has expired or the channel's sync state was reset, and often a bare 400 <c>UnknownError</c>.
+        /// </summary>
+        /// <param name="requestCarriedToken">True when the failed request included a stored <c>$deltatoken</c>.</param>
+        public static bool IsInvalidDeltaToken(Exception ex, bool requestCarriedToken)
+        {
+            var status = StatusCode(ex);
+            if (status == 410)
+            {
+                return true;
+            }
+
+            var code = (ex as ODataError)?.Error?.Code;
+            if (string.Equals(code, "syncStateNotFound", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(code, "resyncRequired", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+
+            return requestCarriedToken && status == 400;
         }
     }
 }

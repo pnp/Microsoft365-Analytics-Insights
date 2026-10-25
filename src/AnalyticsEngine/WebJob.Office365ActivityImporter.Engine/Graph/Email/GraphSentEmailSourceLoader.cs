@@ -37,7 +37,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
     /// timeouts and transport failures, keep it.
     /// </para>
     /// </remarks>
-    public class GraphSentEmailSourceLoader : ISentEmailSourceLoader, ISentEmailDeltaTokenCommitter, ISentEmailSyncContinuationCommitter
+    public class GraphSentEmailSourceLoader : ISentEmailSourceLoader, ISentEmailDeltaTokenCommitter, ISentEmailSyncContinuationCommitter, ISentEmailBatchCheckpointCommitter
     {
         // Graph defaults to 10 messages per page on /messages/delta - explicitly request more.
         public const int GraphPageSize = 200;
@@ -143,7 +143,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
             }
             catch (Exception ex) when (IsRejectedStoredCheckpoint(ex, firstUrl, firstUrlCarriesStoredCheckpoint, firstUrlIsStoredContinuation: !string.IsNullOrEmpty(continuation)))
             {
-                _logger.LogWarning($"Sent emails: Microsoft Graph rejected the stored sync checkpoint for '{user.UserPrincipalName}' ({DescribeFailure(ex)}): " +
+                _logger.LogWarning($"Sent emails: Microsoft Graph rejected the stored sync checkpoint for user ID {user.ID} ({DescribeFailure(ex)}): " +
                     "it has expired, or Graph has reset synchronisation. Discarding it and reading this mailbox's sent items again from the start; " +
                     "messages already imported are recognised by their Graph message id and skipped.");
 
@@ -273,6 +273,72 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
             // the round from the token - harmless - instead of losing its place. Only mailboxes part-way through a
             // bounded read get here.
             await _deltaTokenStore.ClearDeltaToken(BuildDeltaKey(user));
+        }
+
+        public async Task CommitCheckpointsAsync(IReadOnlyList<SentEmailCheckpoint> checkpoints)
+        {
+            var batchStore = _deltaTokenStore as IBatchDeltaTokenStore;
+            if (batchStore == null)
+            {
+                foreach (var checkpoint in checkpoints)
+                {
+                    if (!string.IsNullOrEmpty(checkpoint.NextDeltaToken))
+                        await CommitDeltaTokenAsync(checkpoint.User, checkpoint.NextDeltaToken);
+                    else if (!string.IsNullOrEmpty(checkpoint.NextPageLink))
+                        await CommitContinuationAsync(checkpoint.User, checkpoint.NextPageLink);
+                }
+                return;
+            }
+
+            // One write for every mailbox's token or continuation. The deletes that retire the other half of a mailbox's pair
+            // follow it, as they do for a single mailbox - a failure in between leaves both, and the next load replays the
+            // round from the token, harmlessly - and only a mailbox part-way through a bounded read has one.
+            var writes = new List<KeyValuePair<string, string>>(checkpoints.Count);
+            var clearsAfter = new List<(string Key, string ContinuationOwnerKey)>();
+            foreach (var checkpoint in checkpoints)
+            {
+                var deltaKey = BuildDeltaKey(checkpoint.User);
+                if (!string.IsNullOrEmpty(checkpoint.NextDeltaToken))
+                {
+                    writes.Add(new KeyValuePair<string, string>(deltaKey, checkpoint.NextDeltaToken));
+                    if (_mailboxesWithStoredContinuation.ContainsKey(deltaKey))
+                    {
+                        clearsAfter.Add((BuildContinuationKey(checkpoint.User), deltaKey));
+                    }
+                }
+                else if (!string.IsNullOrEmpty(checkpoint.NextPageLink))
+                {
+                    writes.Add(new KeyValuePair<string, string>(BuildContinuationKey(checkpoint.User), checkpoint.NextPageLink));
+                    clearsAfter.Add((deltaKey, null));
+                }
+            }
+
+            if (writes.Count > 0)
+            {
+                await batchStore.SetDeltaTokens(writes);
+            }
+
+            var failures = new List<Exception>();
+            foreach (var clear in clearsAfter)
+            {
+                try
+                {
+                    await _deltaTokenStore.ClearDeltaToken(clear.Key);
+                    if (clear.ContinuationOwnerKey != null)
+                    {
+                        _mailboxesWithStoredContinuation.TryRemove(clear.ContinuationOwnerKey, out _);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    failures.Add(ex);
+                }
+            }
+
+            if (failures.Count > 0)
+            {
+                throw new AggregateException($"{failures.Count} sent-email checkpoint clean-up deletes failed after the batch was written.", failures);
+            }
         }
 
         internal static string BuildDeltaKey(Common.Entities.User user)

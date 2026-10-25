@@ -2,8 +2,12 @@ using System;
 using System.Collections.Generic;
 using System.Text.RegularExpressions;
 
-namespace WebJob.Office365ActivityImporter.Engine.Graph
+namespace DataUtils.Http
 {
+    /// <summary>
+    /// Reduces a Graph URL to its endpoint shape - the path with every identifier replaced by <c>{id}</c> and no query
+    /// string - so it can be logged without the UPNs, object ids and delta or skip tokens a raw URL carries.
+    /// </summary>
     public static class GraphEndpointTemplate
     {
         private static readonly Regex FunctionRegex = new Regex(
@@ -72,6 +76,17 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         {
             var method = string.IsNullOrWhiteSpace(httpMethod) ? "GET" : httpMethod.Trim().ToUpperInvariant();
             return method + " " + TemplatePath(url);
+        }
+
+        /// <summary>Host plus <see cref="TemplatePath"/>: safe to log for any HTTP call, Graph or not.</summary>
+        public static string Redact(string url)
+        {
+            if (!string.IsNullOrWhiteSpace(url) && Uri.TryCreate(url, UriKind.Absolute, out var uri))
+            {
+                return uri.Host + TemplatePath(url);
+            }
+
+            return TemplatePath(url);
         }
 
         public static string TemplatePath(string url)
