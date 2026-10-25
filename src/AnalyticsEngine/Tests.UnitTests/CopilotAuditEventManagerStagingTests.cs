@@ -333,16 +333,31 @@ namespace Tests.UnitTests
             Assert.AreEqual(0, writer.ChatOnlyRows.Count);
         }
 
+        /// <summary>
+        /// D-4. Without Storage there is no durable queue. Throwing here used to abandon the whole batch's metadata pass,
+        /// and the next cycle de-duplicated the merged audit rows, so every workload's metadata for the batch was lost.
+        /// The interaction is saved chat-only instead, and the batch says so once.
+        /// </summary>
         [TestMethod]
-        public async Task CopilotEventManager_TransientEnrichmentWithoutDurableStorage_DoesNotSilentlyDropTheRetry()
+        public async Task CopilotEventManager_TransientEnrichmentWithoutDurableStorage_SavesChatOnlyAndWarnsOncePerBatch()
         {
             var writer = new InMemoryCopilotStagingWriter();
+            var logger = new Tests.UnitTests.FakeLoaderClasses.RecordingLogger();
             var manager = new CopilotAuditEventManager(writer,
-                new FlakyCopilotMetadataLoader(int.MaxValue, TransientGraphFailure), NullLogger.Instance);
-            var thrown = await Assert.ThrowsExceptionAsync<InvalidOperationException>(() =>
-                manager.SaveSingleCopilotEventToSqlStaging(ContentWith(File()), NewEvent()));
-            StringAssert.Contains(thrown.Message, "no durable retry store");
-            Assert.AreEqual(0, writer.ChatOnlyRows.Count);
+                new FlakyCopilotMetadataLoader(int.MaxValue, TransientGraphFailure), logger);
+
+            await manager.SaveSingleCopilotEventToSqlStaging(ContentWith(File()), NewEvent());
+            await manager.SaveSingleCopilotEventToSqlStaging(ContentWith(Meeting()), NewEvent());
+
+            Assert.AreEqual(2, writer.ChatOnlyRows.Count, "Both interactions are saved, chat-only.");
+            Assert.AreEqual(2, manager.UnenrichedAfterTransientFailureCount);
+
+            await manager.CommitAllChanges();
+
+            var warnings = logger.Entries.Where(e => e.Level == LogLevel.Warning && e.Message.StartsWith("Copilot enrichment:")).ToList();
+            Assert.AreEqual(1, warnings.Count, "One line per batch.");
+            StringAssert.Contains(warnings[0].Message, "2 interaction(s)");
+            StringAssert.Contains(warnings[0].Message, "no durable retry queue is configured");
         }
 
         /// <summary>An interaction about the file at <paramref name="url"/>, by a user the prewarm can see.</summary>
@@ -391,12 +406,16 @@ namespace Tests.UnitTests
             var summary = logger.Entries.Where(e => e.Level == LogLevel.Warning && e.Message.StartsWith("Copilot enrichment:")).ToList();
             Assert.AreEqual(1, summary.Count, "Interactions saved without their enrichment must be visible to operators.");
             StringAssert.Contains(summary[0].Message, "1 interaction(s)");
+            // D-2: the interaction was durably queued, so the line must not claim it is lost.
+            StringAssert.Contains(summary[0].Message, "queued for durable re-enrichment");
+            Assert.IsFalse(summary[0].Message.Contains("will not be re-enriched"), summary[0].Message);
             Assert.AreEqual(0, manager.UnenrichedAfterTransientFailureCount, "The count is per batch.");
         }
 
         /// <summary>
         /// Through the real Graph loader. The save holds the process-wide SQL lock while it stages, so it must never
-        /// wait: each file lookup is made once, however many fail transiently, and none of the run's retries is spent.
+        /// wait: a file lookup is made once, and (D-3) a transient failure is remembered, so later events about the same
+        /// file in the batch are enqueued without asking Graph again. None of the run's retries is spent.
         /// </summary>
         [TestMethod]
         public async Task CopilotEventManager_InTheSaveLock_TransientFileLookupsAreTriedOnceWithoutWaiting()
@@ -406,7 +425,8 @@ namespace Tests.UnitTests
             var waits = 0;
             loader.RetryDelay = delay => { waits++; return Task.CompletedTask; };
             var writer = new InMemoryCopilotStagingWriter();
-            var manager = NewManagerWith(writer, loader);
+            var logger = new Tests.UnitTests.FakeLoaderClasses.RecordingLogger();
+            var manager = NewManagerWith(writer, loader, logger);
             const int events = 5;
 
             for (var i = 0; i < events; i++)
@@ -415,10 +435,16 @@ namespace Tests.UnitTests
             }
 
             Assert.AreEqual(0, waits, "No back-off while the save lock is held.");
-            Assert.AreEqual(events, graph.GetDriveItemByUrlCalls, "One attempt per lookup.");
+            Assert.AreEqual(1, graph.GetDriveItemByUrlCalls, "One attempt for the file; the other events find its transient outcome remembered.");
             Assert.AreEqual(0, loader.TransientRetriesSpent);
             Assert.AreEqual(events, manager.UnenrichedAfterTransientFailureCount);
             Assert.AreEqual(events, writer.SharePointRows.Count + writer.ChatOnlyRows.Count, "Every interaction is still saved.");
+
+            await manager.CommitAllChanges();
+            var stats = logger.Entries.Single(e => e.Message.StartsWith("Copilot enrichment in-lock lookups:"));
+            Assert.AreEqual(LogLevel.Warning, stats.Level);
+            StringAssert.Contains(stats.Message, $"{events} lookup(s)");
+            StringAssert.Contains(stats.Message, $"{events} transient ({events - 1} skipped Graph");
         }
 
         /// <summary>
@@ -473,7 +499,8 @@ namespace Tests.UnitTests
             var loader = new GraphFileMetadataLoader(graph, logger);
             var waits = 0;
             loader.RetryDelay = delay => { Interlocked.Increment(ref waits); return Task.CompletedTask; };
-            var prewarmer = new CopilotMetadataPrewarmer(new Tests.UnitTests.FakeLoaderClasses.FakeCopilotMetadataLoaderFactory(loader), NullLogger.Instance);
+            var prewarmLogger = new Tests.UnitTests.FakeLoaderClasses.RecordingLogger();
+            var prewarmer = new CopilotMetadataPrewarmer(new Tests.UnitTests.FakeLoaderClasses.FakeCopilotMetadataLoaderFactory(loader), prewarmLogger);
             const int batches = 4, filesPerBatch = 20;
             var unenriched = 0;
 
@@ -496,11 +523,15 @@ namespace Tests.UnitTests
             const int lookups = batches * filesPerBatch;
             Assert.AreEqual(GraphFileMetadataLoader.TransientRetryBudgetPerRun, waits, "Retries are bounded per run, not per batch.");
             Assert.AreEqual(GraphFileMetadataLoader.TransientRetryBudgetPerRun, loader.TransientRetriesSpent);
-            Assert.AreEqual(2 * lookups + GraphFileMetadataLoader.TransientRetryBudgetPerRun, sharesCalls,
-                "One attempt in the prewarm and one in the save per lookup, plus the run's retries.");
+            Assert.AreEqual(lookups + GraphFileMetadataLoader.TransientRetryBudgetPerRun, sharesCalls,
+                "One attempt in the prewarm per lookup, plus the run's retries; the save finds each transient outcome remembered.");
             Assert.AreEqual(lookups, unenriched, "Every interaction saved without its file is counted.");
             Assert.AreEqual(1, logger.Entries.Count(e => e.Level == LogLevel.Warning && e.Message.StartsWith("Copilot file enrichment:")),
                 "The spent budget is reported once.");
+            var prewarmLines = prewarmLogger.Entries.Where(e => e.Message.StartsWith("Copilot enrichment prewarm:")).ToList();
+            Assert.AreEqual(batches, prewarmLines.Count, "One prewarm line per batch.");
+            Assert.IsTrue(prewarmLines.All(e => e.Level == LogLevel.Information && e.Message.Contains($"{filesPerBatch} transient")),
+                string.Join(" | ", prewarmLines.Select(e => e.Message)));
         }
 
         [TestMethod]
@@ -752,6 +783,159 @@ namespace Tests.UnitTests
                 {
                     Execute(connection, "DELETE dbo.audit_events WHERE id = @event", ("@event", record.EventId));
                     Execute(connection, "DELETE dbo.users WHERE user_name = @upn", ("@upn", record.Upn));
+                }
+            }
+        }
+
+        /// <summary>
+        /// D-1: three kinds of durable work can never succeed, and used to be deferred every few hours for ever. Each is
+        /// now terminal, with a reason code the run summary reports.
+        /// </summary>
+        [DataTestMethod]
+        [DataRow("file-name-or-extension-empty")]
+        [DataRow("meeting-metadata-incomplete")]
+        [DataRow("user-not-found")]
+        public async Task EnrichmentWorker_WorkThatCanNeverSucceed_IsTerminalWithAReasonCode(string reason)
+        {
+            EnsureSchemaIsCurrent();
+            using (var connection = new SqlConnection(_config.ConnectionStrings.DatabaseConnectionString))
+            {
+                connection.Open();
+                var record = InsertAuditEventForNewUser(connection);
+                try
+                {
+                    var isMeeting = reason != "file-name-or-extension-empty";
+                    var payload = ContentWith(isMeeting ? Meeting() : File()).CopilotEventData;
+                    Execute(connection, "UPDATE dbo.audit_events SET event_data = @data WHERE id = @event",
+                        ("@data", Newtonsoft.Json.JsonConvert.SerializeObject(payload)), ("@event", record.EventId));
+                    var original = new SqlCopilotStagingWriter(_config.ConnectionStrings.DatabaseConnectionString, NullLogger.Instance);
+                    original.StageChatOnly(new ChatOnlyCopilotLogTempEntity { EventId = record.EventId, AppHost = "Teams" });
+                    await original.CommitAllChanges();
+                    var graph = new Tests.UnitTests.FakeLoaderClasses.FakeSpoGraphClient
+                    {
+                        // A file with no extension: the merge can never write its link.
+                        OnGetDriveItemByUrl = url => new Microsoft.Graph.Models.DriveItem { WebUrl = "https://contoso.sharepoint.com/sites/example/Shared Documents/Καλημέρα κόσμε" },
+                        OnGetOnlineMeeting = (user, meeting) => new Microsoft.Graph.Models.OnlineMeeting { Id = meeting, Subject = null, CreationDateTime = DateTimeOffset.UtcNow },
+                    };
+                    if (reason == "user-not-found")
+                        graph.OnGetUser = user => throw new ODataError { ResponseStatusCode = 404, Error = new MainError { Code = "Request_ResourceNotFound", Message = "Synthetic" } };
+                    var worker = new CopilotEnrichmentWorker(_config.ConnectionStrings.DatabaseConnectionString,
+                        new CopilotEnrichmentQueue(new Azure.Data.Tables.TableClient("UseDevelopmentStorage=true", "Unused"), "Unused"),
+                        new GraphFileMetadataLoader(graph, NullLogger.Instance), UserImportScope.Everyone("Synthetic unfiltered scope"), NullLogger.Instance);
+
+                    var terminal = await Assert.ThrowsExceptionAsync<CopilotEnrichmentTerminalException>(() => worker.EnrichEventAsync(record.EventId));
+                    Assert.AreEqual(reason, terminal.ReasonCode);
+                }
+                finally
+                {
+                    Execute(connection, "DELETE dbo.copilot_event_files WHERE copilot_chat_id = @event", ("@event", record.EventId));
+                    Execute(connection, "DELETE dbo.copilot_event_meetings WHERE copilot_chat_id = @event", ("@event", record.EventId));
+                    Execute(connection, "DELETE dbo.copilot_chats WHERE event_id = @event", ("@event", record.EventId));
+                    Execute(connection, "DELETE dbo.audit_events WHERE id = @event", ("@event", record.EventId));
+                    Execute(connection, "DELETE dbo.users WHERE user_name = @upn", ("@upn", record.Upn));
+                }
+            }
+        }
+
+        private static async Task<Azure.Data.Tables.TableClient> AzuriteTableOrSkip()
+        {
+            using (var socket = new System.Net.Sockets.TcpClient())
+            {
+                try { await socket.ConnectAsync("127.0.0.1", 10002); }
+                catch (System.Net.Sockets.SocketException)
+                {
+                    if (Environment.GetEnvironmentVariable("REQUIRE_AZURITE") == "true") Assert.Fail("Azurite is required.");
+                    Assert.Inconclusive("Azurite is not listening on port 10002.");
+                }
+            }
+            var table = new Azure.Data.Tables.TableClient("UseDevelopmentStorage=true", "EnrichmentRun" + Guid.NewGuid().ToString("N"));
+            await table.CreateIfNotExistsAsync();
+            return table;
+        }
+
+        /// <summary>
+        /// D-1: one run drained at most 25 items however large the backlog. It is now bounded by time, pages through the
+        /// due index, and reports one summary line.
+        /// </summary>
+        [TestMethod]
+        public async Task EnrichmentWorker_Run_DrainsMoreThanOneFixedBatchAndReportsOneSummary()
+        {
+            EnsureSchemaIsCurrent();
+            var table = await AzuriteTableOrSkip();
+            try
+            {
+                var queue = new CopilotEnrichmentQueue(table, "Enrichment");
+                const int items = 130;
+                // Events that no longer exist (purged): each completes after one SQL read and no Graph call.
+                await Task.WhenAll(Enumerable.Range(0, items).Select(_ => queue.EnqueueAsync(Guid.NewGuid())));
+                await Task.Delay(10);
+                var logger = new Tests.UnitTests.FakeLoaderClasses.RecordingLogger();
+                var loader = new FlakyCopilotMetadataLoader(0, TransientGraphFailure);
+                var worker = new CopilotEnrichmentWorker(_config.ConnectionStrings.DatabaseConnectionString, queue, loader,
+                    UserImportScope.Everyone("Synthetic unfiltered scope"), logger);
+
+                var summary = await worker.RunAsync();
+
+                Assert.AreEqual(items, summary.Completed);
+                Assert.AreEqual(items, summary.Due);
+                Assert.IsFalse(summary.BudgetReached);
+                Assert.AreEqual(0, (await queue.ReadDueAsync(DateTimeOffset.UtcNow.AddDays(1), 100)).Count);
+                var line = logger.Entries.Single(e => e.Message.StartsWith("Copilot enrichment queue:"));
+                Assert.AreEqual(LogLevel.Information, line.Level);
+                StringAssert.Contains(line.Message, $"completed {items}");
+                StringAssert.Contains(line.Message, "no more work due");
+            }
+            finally { await table.DeleteAsync(); }
+        }
+
+        /// <summary>
+        /// D-1: an item that keeps failing (here, an audit parent whose chat never commits) used to be deferred every six
+        /// hours for ever. On its 12th failure it is parked as an abandoned row, recorded with its reason, and an Error is
+        /// logged.
+        /// </summary>
+        [TestMethod]
+        public async Task EnrichmentWorker_ItemFailingForTheTwelfthTime_IsParkedAsAbandoned()
+        {
+            EnsureSchemaIsCurrent();
+            var table = await AzuriteTableOrSkip();
+            using (var connection = new SqlConnection(_config.ConnectionStrings.DatabaseConnectionString))
+            {
+                connection.Open();
+                var record = InsertAuditEventForNewUser(connection); // No copilot_chats row: retried as "chat-not-committed".
+                try
+                {
+                    var queue = new CopilotEnrichmentQueue(table, "Enrichment");
+                    await queue.EnqueueAsync(record.EventId);
+                    var anchor = (await table.GetEntityAsync<Azure.Data.Tables.TableEntity>("Enrichment", "event-" + record.EventId.ToString("N"))).Value;
+                    anchor["Attempts"] = CopilotEnrichmentQueue.MaxFailedAttempts - 1;
+                    await table.UpdateEntityAsync(anchor, anchor.ETag, Azure.Data.Tables.TableUpdateMode.Replace);
+                    await Task.Delay(10);
+                    var logger = new Tests.UnitTests.FakeLoaderClasses.RecordingLogger();
+                    var worker = new CopilotEnrichmentWorker(_config.ConnectionStrings.DatabaseConnectionString, queue,
+                        new FlakyCopilotMetadataLoader(0, TransientGraphFailure), UserImportScope.Everyone("Synthetic unfiltered scope"), logger);
+
+                    var summary = await worker.RunAsync();
+
+                    Assert.AreEqual(1, summary.Abandoned);
+                    Assert.AreEqual(0, summary.Deferred);
+                    Assert.AreEqual(CopilotEnrichmentQueue.MaxFailedAttempts, summary.MaxAttempts);
+                    var rows = table.Query<Azure.Data.Tables.TableEntity>(e => e.PartitionKey == "Enrichment").ToList();
+                    var parked = rows.Single();
+                    Assert.AreEqual("abandoned-" + record.EventId.ToString("N"), parked.RowKey, "Anchor and due index are gone; only the parked row remains.");
+                    Assert.AreEqual("chat-not-committed", parked.GetString("Reason"));
+                    Assert.AreEqual(CopilotEnrichmentQueue.MaxFailedAttempts, parked.GetInt32("Attempts"));
+                    var error = logger.Entries.Single(e => e.Level == LogLevel.Error);
+                    StringAssert.Contains(error.Message, "1 item(s) abandoned");
+                    StringAssert.Contains(error.Message, "chat-not-committed=1");
+
+                    await queue.EnqueueAsync(record.EventId);
+                    Assert.AreEqual(1, (await queue.ReadDueAsync(DateTimeOffset.UtcNow.AddSeconds(1), 100)).Count, "Enqueueing the event again replays it.");
+                }
+                finally
+                {
+                    Execute(connection, "DELETE dbo.audit_events WHERE id = @event", ("@event", record.EventId));
+                    Execute(connection, "DELETE dbo.users WHERE user_name = @upn", ("@upn", record.Upn));
+                    await table.DeleteAsync();
                 }
             }
         }

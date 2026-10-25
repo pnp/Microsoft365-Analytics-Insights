@@ -714,6 +714,41 @@ VALUES (2, '20000101', 0, NULL), (6, NULL, 2, '20000103');");
             }
         }
 
+        /// <summary>
+        /// D-6: when the stuck capped read happens soon after the previous cycle, resuming from the newest row read used
+        /// to start the next window after <c>read time - overlap</c>, so an interaction created in that last five minutes but
+        /// not yet visible to the read was skipped for good. The next window must still move on, but never past that point.
+        /// </summary>
+        [TestMethod]
+        public async Task CappedReadInsideTheOverlap_SoonAfterThePreviousCycle_KeepsTheLateArrivalOverlap()
+        {
+            RequireIsolatedLocalDb();
+            var now = new DateTime(2026, 6, 2, 0, 0, 0, DateTimeKind.Utc);
+            var watermark = now.AddSeconds(-60); // The previous cycle's read, a minute ago.
+            var capped = Enumerable.Range(1, 5)
+                .Select(i => NewPrompt("late-" + i, "late-thread", "late-request-" + i, watermark.AddSeconds(-250 + i * 40), GreekPrompt))
+                .ToList();
+            var newestRead = watermark.AddSeconds(-50);
+            var source = new ScriptedInteractionSource(() => new AiInteractionLoadResult { Interactions = capped, Truncated = true });
+
+            using (var fixture = await HistoryFixture.CreateAsync(watermark))
+            {
+                var first = await fixture.ImportOnceAsync(source, now);
+                Assert.IsNull(first.Error);
+
+                await fixture.ImportOnceAsync(source, now.AddMinutes(1));
+
+                var firstStart = source.Windows[0].Item1;
+                var nextStart = source.Windows[1].Item1;
+                Assert.IsTrue(nextStart > firstStart,
+                    $"The next window ({nextStart:o}) must start after this one ({firstStart:o}), or the same capped prefix is re-read for ever.");
+                Assert.IsTrue(nextStart <= now.AddSeconds(-CopilotInteractionHistoryImporter.WatermarkOverlapSeconds),
+                    $"The next window ({nextStart:o}) must not start after the read time less the overlap " +
+                    $"({now.AddSeconds(-CopilotInteractionHistoryImporter.WatermarkOverlapSeconds):o}): interactions created then may not have been visible yet.");
+                Assert.IsTrue(nextStart < newestRead);
+            }
+        }
+
         private static void RequireIsolatedLocalDb()
         {
             var connection = System.Configuration.ConfigurationManager.ConnectionStrings["SPOInsightsEntities"]?.ConnectionString;

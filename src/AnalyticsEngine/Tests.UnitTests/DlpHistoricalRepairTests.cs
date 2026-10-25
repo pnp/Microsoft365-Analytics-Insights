@@ -185,8 +185,53 @@ INSERT dbo.contoso_custom_payload SELECT event_id, N'Contoso synthetic payload' 
             finally { await table.DeleteAsync(); }
         }
 
+        /// <summary>
+        /// D-5: pages follow <c>(time_stamp, id)</c>, the order <c>IX_audit_events_time_stamp</c> provides, whatever the
+        /// user ids. Paging on <c>(time_stamp, user_id, id)</c> needed a sort the index cannot supply.
+        /// </summary>
+        [TestMethod]
+        public async Task Repair_PagesInTimeThenEventIdOrder_RegardlessOfUser()
+        {
+            using (var db = CreateFixture())
+            {
+                // User ids descend as event ids ascend, so the old (time, user, id) order would visit the events backwards.
+                db.Execute("UPDATE dbo.audit_events SET user_id = 10 - CAST(RIGHT(CAST(id AS varchar(36)), 1) AS int);");
+                var visited = new System.Collections.Generic.List<Guid>();
+                DlpHistoricalRepairBatch page = null;
+                while (true)
+                {
+                    page = await Run(db, page, 1);
+                    if (page.Scanned == 0) break;
+                    visited.Add(page.AfterEventId.Value);
+                }
+                CollectionAssert.AreEqual(new[] { 1, 2, 3, 4 }.Select(n => new Guid("00000000-0000-0000-0000-00000000000" + n)).ToList(), visited);
+            }
+        }
+
+        [TestMethod]
+        public void RepairCheckpoint_FromTheUserOrderedBuild_IsRefusedWithAClearMessage()
+        {
+            var from = From;
+            var to = To;
+            var old = Newtonsoft.Json.JsonConvert.SerializeObject(new
+            {
+                Target = "synthetic-target", FromUtc = from, ToUtc = to,
+                Batch = new { Scanned = 500, AfterTime = from, AfterUserId = 7, AfterEventId = Guid.Empty }
+            });
+            var error = Assert.ThrowsException<ArgumentException>(() => DlpHistoricalRepairCommand.ReadCheckpoint(old, "synthetic-target", from, to));
+            StringAssert.Contains(error.Message, "format version 0");
+            StringAssert.Contains(error.Message, "new checkpoint file");
+
+            var current = Newtonsoft.Json.JsonConvert.SerializeObject(new DlpHistoricalRepairCommand.Checkpoint
+            {
+                Version = DlpHistoricalRepairCommand.CheckpointVersion, Target = "synthetic-target", FromUtc = from, ToUtc = to,
+                Batch = new DlpHistoricalRepairBatch { AfterTime = from, AfterEventId = Guid.Empty }
+            });
+            Assert.AreEqual(Guid.Empty, DlpHistoricalRepairCommand.ReadCheckpoint(current, "synthetic-target", from, to).Batch.AfterEventId);
+        }
+
         private static Task<DlpHistoricalRepairBatch> Run(ScratchDatabase db, DlpHistoricalRepairBatch after, int take, IKeyValueStore archive = null) =>
-            DlpHistoricalRepair.RunBatchAsync(db.ConnectionString, From, To, after?.AfterTime, after?.AfterUserId,
+            DlpHistoricalRepair.RunBatchAsync(db.ConnectionString, From, To, after?.AfterTime,
                 after?.AfterEventId, take, NullLogger.Instance, archive ?? new RecordingArchive());
 
         private static ScratchDatabase CreateFixture()

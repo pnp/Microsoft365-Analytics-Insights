@@ -39,6 +39,12 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
         // lock every lookup is made once; see GraphFileMetadataLoader.GetSpoFileInfo for where retries happen.
         private int _totalUnenrichedAfterTransientFailure;
 
+        // Of those, the ones with no durable retry queue to recover them (no Storage connection string).
+        private int _totalUnenrichedWithoutDurableRetry;
+
+        // The run-scoped loader's in-lock lookup counters when this batch started, so the commit can report the batch's share.
+        private CopilotLookupStats _inLockStatsAtBatchStart;
+
         /// <summary>
         /// Interactions staged since the last commit without their file or meeting details because Microsoft Graph
         /// failed transiently (throttling, a server error or a timeout).
@@ -83,6 +89,7 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
             _resolveResourceMetadata = resolveResourceMetadata;
             _enqueueEnrichmentRetry = enqueueEnrichmentRetry;
+            _inLockStatsAtBatchStart = (copilotEventAdaptor as GraphFileMetadataLoader)?.InLockStats;
         }
 
         /// <summary>
@@ -194,7 +201,10 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
             {
                 var userGuid = await _copilotEventAdaptor.GetUserIdFromUpn(baseOfficeEvent.User.UserPrincipalName);
                 var meetingId = StringUtils.GetOnlineMeetingId(contextId, userGuid);
-                var meetingInfo = await _copilotEventAdaptor.GetMeetingInfo(meetingId, userGuid);
+                // Bounded and made once inside the save lock, like the file lookup below.
+                var meetingInfo = _copilotEventAdaptor is GraphFileMetadataLoader graphLoader
+                    ? await graphLoader.GetMeetingInfoSingleAttempt(meetingId, userGuid)
+                    : await _copilotEventAdaptor.GetMeetingInfo(meetingId, userGuid);
 
                 var row = new TeamsCopilotLogTempEntity
                 {
@@ -210,8 +220,7 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
             catch (Exception ex)
             {
                 await QueueTransientFailureAsync(baseOfficeEvent.Id, ex);
-                _logger.LogWarning(ex,
-                    $"Failed to resolve optional meeting metadata for event {baseOfficeEvent.Id} context {contextId}; staging the Copilot interaction without meeting enrichment.");
+                LogOptionalEnrichmentFailure(ex, $"Failed to resolve optional meeting metadata for event {baseOfficeEvent.Id} context {contextId}; staging the Copilot interaction without meeting enrichment.");
                 return false;
             }
         }
@@ -266,10 +275,21 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
             catch (Exception ex)
             {
                 await QueueTransientFailureAsync(baseOfficeEvent.Id, ex);
-                _logger.LogWarning(ex,
-                    $"Failed to resolve optional file metadata for event {baseOfficeEvent.Id} context {contextId}; staging the Copilot interaction without file enrichment.");
+                LogOptionalEnrichmentFailure(ex, $"Failed to resolve optional file metadata for event {baseOfficeEvent.Id} context {contextId}; staging the Copilot interaction without file enrichment.");
                 return false;
             }
+        }
+
+        /// <summary>
+        /// A transient failure is counted in the batch's one enrichment line at commit, so per event it is Debug only; any
+        /// other failure stays a Warning with its exception.
+        /// </summary>
+        private void LogOptionalEnrichmentFailure(Exception ex, string message)
+        {
+            if (IsTransientEnrichmentFailure(ex))
+                _logger.LogDebug(message + $" ({ex.GetType().Name})");
+            else
+                _logger.LogWarning(ex, message);
         }
 
         private async Task QueueTransientFailureAsync(Guid eventId, Exception ex)
@@ -278,8 +298,14 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
             {
                 _totalUnenrichedAfterTransientFailure++;
                 if (_enqueueEnrichmentRetry == null)
-                    throw new InvalidOperationException("Copilot enrichment failed transiently and no durable retry store is configured. " +
-                        "The audit batch must be retried, not checkpointed without its enrichment retry. Configure Storage or disable resource metadata resolution.", ex);
+                {
+                    // No Storage, so no durable queue. Failing here used to abandon the whole batch's metadata pass before
+                    // any commit ran; the next cycle then de-duplicated the already-merged audit rows and checkpointed the
+                    // blob, so the batch's Copilot, DLP, Power Platform and SharePoint metadata were lost for good. Save
+                    // the interaction chat-only instead (the caller does), and say so once per batch at commit.
+                    _totalUnenrichedWithoutDurableRetry++;
+                    return;
+                }
                 // A storage failure deliberately escapes the optional-enrichment catch: the source blob must not
                 // be acknowledged until there is either durable enrichment or durable work to recover it.
                 await _enqueueEnrichmentRetry(eventId);
@@ -557,20 +583,57 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
             else
                 _logger.LogDebug(copilotTimingMsg);
 
-            // Made visible because it is permanent: these interactions are counted, but nothing goes back for the
-            // file or meeting they were about.
-            if (_totalUnenrichedAfterTransientFailure > 0)
+            // One line per batch for what enrichment could not do. Queued interactions are recovered by the durable worker;
+            // without Storage there is no queue, so those stay chat-only.
+            var queued = _totalUnenrichedAfterTransientFailure - _totalUnenrichedWithoutDurableRetry;
+            if (queued > 0)
             {
-                _logger.LogWarning($"Copilot enrichment: {_totalUnenrichedAfterTransientFailure.ToString("n0")} interaction(s) in this batch were saved without " +
+                _logger.LogWarning($"Copilot enrichment: {queued.ToString("n0")} interaction(s) in this batch were saved without " +
                     "their file or meeting details because Microsoft Graph failed transiently (throttling, server errors or timeouts). " +
-                    "The interactions are counted as usual, but they will not be re-enriched later, so file and meeting breakdowns under-count them.");
+                    "They are queued for durable re-enrichment; until a retry succeeds or the item reaches a terminal outcome, " +
+                    "file and meeting breakdowns under-count them.");
             }
+            if (_totalUnenrichedWithoutDurableRetry > 0)
+            {
+                _logger.LogWarning($"Copilot enrichment: {_totalUnenrichedWithoutDurableRetry.ToString("n0")} interaction(s) in this batch " +
+                    "were saved chat-only, without their file or meeting details, because Microsoft Graph failed transiently and no " +
+                    "durable retry queue is configured (no Storage connection string). They will not be re-enriched, so file and meeting " +
+                    "breakdowns under-count them. Configure Storage to have such interactions retried.");
+            }
+
+            LogInLockLookupStats();
 
             // Clear counters for next batch. The staged rows are cleared by the writer.
             _totalFilesCount = 0;
             _totalMeetingsCount = 0;
             _totalChatOnlyCount = 0;
             _totalUnenrichedAfterTransientFailure = 0;
+            _totalUnenrichedWithoutDurableRetry = 0;
+        }
+
+        /// <summary>
+        /// One line per batch for the Graph lookups made while the save held its SQL lock, the cost D-3 bounded. Debug when
+        /// quick and clean, Information when slow, Warning when any failed transiently or hit their deadline.
+        /// </summary>
+        private void LogInLockLookupStats()
+        {
+            var loader = _copilotEventAdaptor as GraphFileMetadataLoader;
+            if (loader == null) return;
+            var now = loader.InLockStats;
+            var batch = now.Since(_inLockStatsAtBatchStart);
+            _inLockStatsAtBatchStart = now;
+            if (batch.Lookups == 0) return;
+
+            var message = $"Copilot enrichment in-lock lookups: {batch.Lookups:n0} lookup(s), {batch.CacheHits:n0} cache hit(s), " +
+                $"{batch.Resolved:n0} resolved, {batch.Unresolvable:n0} unresolvable, {batch.Transient:n0} transient " +
+                $"({batch.MemoSkips:n0} skipped Graph after a recent transient failure, {batch.DeadlineHits:n0} hit the deadline); " +
+                $"{batch.GraphCalls:n0} Graph call(s), no SDK retries; elapsed {batch.ElapsedMs:n0} ms.";
+            if (batch.Transient > 0)
+                _logger.LogWarning(message);
+            else if (batch.ElapsedMs >= 5000)
+                _logger.LogInformation(message);
+            else
+                _logger.LogDebug(message);
         }
 
         /// <summary>
