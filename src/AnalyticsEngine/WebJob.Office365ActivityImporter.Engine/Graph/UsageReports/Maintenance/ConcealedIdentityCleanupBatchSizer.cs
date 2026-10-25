@@ -463,11 +463,16 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Maintenance
             return floor >= _ceilingSeconds;
         }
 
-        // A batch as slow as the known fixed cost says it should be - not much slower, and still short of the timeout's margin.
+        // A batch as slow as the known fixed cost says it should be: not much slower, and it committed. Not also short of the
+        // timeout's margin: that is what FixedCostBatchSize plans to, not a sign that a batch's time is not the fixed cost's.
+        // With that bound, a fixed cost near or past the margin put batches a little over it - noise, or the fixed cost itself -
+        // and once the window had lost the spread to fit again, each was blamed on its size and halved, and the half was held,
+        // again and again down to one user per batch. A batch creeping towards the timeout is still caught: by a refit whenever
+        // the window has the spread, by running more than 30% slower than predicted, and by the timeout, which is size-dependent.
         private bool IsConsistentWithFixedCost(int users, double seconds)
         {
             var predicted = _fixedCostSeconds.Value + _fixedCostPerUser * users;
-            return seconds > _ceilingSeconds && seconds <= Math.Min(_timeoutSeconds * FixedCostShareOfTimeout, predicted * 1.3);
+            return seconds > _ceilingSeconds && seconds <= Math.Min(_timeoutSeconds, predicted * 1.3);
         }
 
         private void ChooseForFixedCost(int users)

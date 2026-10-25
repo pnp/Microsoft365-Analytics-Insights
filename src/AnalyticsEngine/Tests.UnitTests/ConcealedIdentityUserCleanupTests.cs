@@ -975,6 +975,37 @@ DELETE FROM dbo.users WHERE id IN ({ids});");
         }
 
         [TestMethod]
+        public void BatchSizer_WhenTheFixedCostIsPastTheTimeoutsMargin_ButBatchesCommit_HoldsTheSizeInsteadOfRatchetingToOne()
+        {
+            // F between the timeout's margin (FixedCostShareOfTimeout x 90 s = 72 s) and the 90 s timeout: every batch commits, at
+            // every size, in about F. No size fits any budget, so the size is held. It used to be held only while the window still
+            // had sizes far enough apart to fit the fixed cost again; once every batch in it was the held size, a batch slower than
+            // the margin was no longer "as the fixed cost says", so it was blamed on its size and halved - again and again, to one.
+            // (Just past the margin, a noisy fit can put the fixed cost under it and plan small batches for a while; that is the
+            // fit, not a ratchet, so it is left out here.)
+            foreach (var floor in new[] { 75.0, 80.0, 85.0 })
+            {
+                foreach (var noise in new[] { 0.0, 0.05 })
+                {
+                    for (var seed = 1; seed <= 10; seed++)
+                    {
+                        var run = Simulate(floor, 0.002, noise, seed, batches: 120);
+                        var what = $"F {floor} s, noise {noise}, seed {seed}: {run}";
+                        Assert.AreEqual(0, run.Failures, "Nothing times out: this is the band where every batch commits. " + what);
+                        Assert.IsTrue(run.Sizes.Skip(30).Min() > ConcealedIdentityUserCleanup.MinBatchSize,
+                            "Never ratchets down to one user per batch: " + what);
+                        Assert.AreEqual(ConcealedIdentityUserCleanup.MaxBatchSize, run.Limits.Last(),
+                            "Size was never to blame, so no lasting limit stays: " + what);
+                        if (noise == 0)
+                        {
+                            Assert.AreEqual(1, run.Sizes.Skip(10).Distinct().Count(), "Holds the size once the fixed cost is known: " + what);
+                        }
+                    }
+                }
+            }
+        }
+
+        [TestMethod]
         public void BatchSizer_WhenEverySizeTimesOut_HoldsTheSizeInsteadOfRatchetingToOne()
         {
             // F of 91 s is past the 90 s command timeout: every batch times out at every size, so size is not what is wrong.
