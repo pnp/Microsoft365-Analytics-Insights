@@ -35,7 +35,9 @@ namespace Common.Entities.Migrations
     ///   first-seen subject, which is also what the merge keeps from now on (it never updates a stored meeting).
     ///
     /// REFERENCES
-    ///   Discovered from sys.foreign_keys (today only copilot_event_meetings.meeting_id, ON DELETE CASCADE), and each
+    ///   Preflight requires the stock copilot_event_meetings.meeting_id FK to be trusted and enabled before any
+    ///   repair; restore it WITH CHECK if schema drift removed or disabled it. References are discovered from
+    ///   sys.foreign_keys (today only copilot_event_meetings.meeting_id, ON DELETE CASCADE), and each
     ///   one is moved onto the survivor. copilot_event_meetings' primary key is copilot_chat_id, so one interaction
     ///   cannot be linked to two copies and its repoint cannot collide. Where a PRIMARY KEY or UNIQUE index does
     ///   include the reference, two copies' rows can meet on the survivor. Only in copilot_event_meetings - while it
@@ -49,7 +51,10 @@ namespace Common.Entities.Migrations
     ///   conflicting rows and runs it again; it carries on with the copies that are left. References that do not
     ///   collide, or have no unique key, just move.
     ///
-    /// SAFE WITH THE IMPORTER RUNNING
+    /// CONCURRENT WRITER SAFETY
+    ///   Stop the old importer for the upgrade and leave it stopped until the matching new binaries are deployed.
+    ///   Its old link matches subject and creation time too, so IGNORE_DUP_KEY can skip a renamed meeting's copy
+    ///   while that old link finds nothing. Concurrent-write resilience below is not old-binary compatibility.
     ///   Customers do not all stop the importer, and an importer that is still the previous build keeps storing
     ///   copies. So instead of refusing to run (UniqueUrlsFullUrlIndex), each batch of copies is removed in its own
     ///   short transaction that first UPDATEs those rows, then repoints their references, then deletes them. The
@@ -188,7 +193,12 @@ DECLARE @onlineDone bit;
 DECLARE @sql nvarchar(max);
 DECLARE @rows bigint;
 DECLARE @total bigint;
+DECLARE @step nvarchar(40) = N'preflight', @target nvarchar(600) = N'dbo.online_meetings';
+DECLARE @pass int = 0, @b int = -1;
+DECLARE @lastProgress datetime2(7), @removeStart datetime2(7), @elapsedMs bigint;
+DECLARE @batchRemoved bigint, @batchRepointed bigint, @batchPruned bigint;
 
+BEGIN TRY
 IF OBJECT_ID(N'dbo.online_meetings', N'U') IS NULL OR COL_LENGTH(N'dbo.online_meetings', N'meeting_id') IS NULL
 BEGIN
     RAISERROR('UniqueOnlineMeetingIds: dbo.online_meetings.meeting_id does not exist; nothing to do.', 0, 1) WITH NOWAIT;
@@ -218,10 +228,54 @@ BEGIN
     WHERE c.object_id = OBJECT_ID(N'dbo.online_meetings') AND c.name = N'meeting_id';
     DECLARE @narrowed bit = CASE WHEN @typeName = N'nvarchar' AND @maxLength = 1700 THEN 1 ELSE 0 END;
 
+    -- The stock link must have an enabled FK: the per-batch row locks rely on FK checks to exclude late links.
+    IF NOT EXISTS (
+        SELECT 1 FROM sys.foreign_keys AS fk
+        INNER JOIN sys.foreign_key_columns AS fkc ON fkc.constraint_object_id = fk.object_id
+        WHERE fk.parent_object_id = OBJECT_ID(N'dbo.copilot_event_meetings')
+          AND fk.referenced_object_id = OBJECT_ID(N'dbo.online_meetings')
+          AND fkc.parent_column_id = COLUMNPROPERTY(OBJECT_ID(N'dbo.copilot_event_meetings'), N'meeting_id', 'ColumnId')
+          AND fkc.referenced_column_id = COLUMNPROPERTY(OBJECT_ID(N'dbo.online_meetings'), N'id', 'ColumnId')
+          AND fk.is_disabled = 0 AND fk.is_not_trusted = 0
+          AND (SELECT COUNT(*) FROM sys.foreign_key_columns AS fc WHERE fc.constraint_object_id = fk.object_id) = 1)
+        THROW 50002, 'UniqueOnlineMeetingIds: expected trusted, enabled foreign key from dbo.copilot_event_meetings.meeting_id to dbo.online_meetings.id is missing. Restore the relationship WITH CHECK before retrying; no meeting rows were changed.', 1;
+
+    IF @narrowed = 0
+    BEGIN
+        SET @step = N'statistics';
+        SET @total = 0;
+        DECLARE @statsName sysname;
+        DECLARE user_stats CURSOR LOCAL FAST_FORWARD FOR
+            SELECT s.name FROM sys.stats AS s
+            WHERE s.object_id = OBJECT_ID(N'dbo.online_meetings') AND s.user_created = 1
+              AND EXISTS (SELECT 1 FROM sys.stats_columns AS sc
+                          WHERE sc.object_id = s.object_id AND sc.stats_id = s.stats_id
+                            AND sc.column_id = COLUMNPROPERTY(s.object_id, N'meeting_id', 'ColumnId'));
+        OPEN user_stats;
+        FETCH NEXT FROM user_stats INTO @statsName;
+        WHILE @@FETCH_STATUS = 0
+        BEGIN
+            SET @sql = N'DROP STATISTICS [dbo].[online_meetings].' + QUOTENAME(@statsName) + N';';
+            EXEC sp_executesql @sql;
+            SET @total = @total + 1;
+            FETCH NEXT FROM user_stats INTO @statsName;
+        END
+        CLOSE user_stats;
+        DEALLOCATE user_stats;
+        SET @msg = N'[' + CONVERT(nvarchar(33), SYSUTCDATETIME(), 126) + N'Z] ' + @migration
+            + N': stage=statistics outcome=Succeeded dropped=' + CAST(@total AS nvarchar(20))
+            + N' elapsedMs=' + CAST(DATEDIFF_BIG(MILLISECOND, @start, SYSUTCDATETIME()) AS nvarchar(20))
+            + N'; user-created statistics on meeting_id are removed before repair and can be recreated after the upgrade.';
+        RAISERROR(@msg, 0, 1) WITH NOWAIT;
+    END
+
     /* 1. Trim any id longer than the index can hold. Real ids are ~106 characters; the merge trims the id it
           looks up to the same 850, so a trimmed row is still found. */
     IF @narrowed = 0
     BEGIN
+        SET @step = N'trim';
+        SET @msg = N'[' + CONVERT(nvarchar(33), SYSUTCDATETIME(), 126) + N'Z] ' + @migration + N': starting step=trim.';
+        RAISERROR(@msg, 0, 1) WITH NOWAIT;
         SET @total = 0;
         SET @rows = 1;
         WHILE @rows > 0
@@ -240,6 +294,7 @@ BEGIN
     /* 2. Everything that references a meeting row, and the statements that move a batch of copies' references
           onto their survivor. Discovered, not hard-coded. Dynamic SQL is schema-qualified and quoted.
           kind: 0 moves references, 1 deletes rows that would collide (the link table only), 2 stops on them. */
+    SET @step = N'references';
     DECLARE @work TABLE (seq int IDENTITY(1,1) PRIMARY KEY, kind tinyint NOT NULL, target nvarchar(600) NOT NULL, stmt nvarchar(max) NOT NULL);
     DECLARE @fkObject int, @fkColumn int, @sch sysname, @tbl sysname, @col sysname, @qualified nvarchar(600);
     DECLARE @ixId int, @ixName sysname, @others nvarchar(max), @canPrune bit, @ranked nvarchar(max), @tableText nvarchar(max), @indexText nvarchar(max);
@@ -350,14 +405,16 @@ WHERE r.batch_no = @b;');
     CREATE TABLE #om_remap (old_id int NOT NULL PRIMARY KEY, keep_id int NOT NULL, batch_no int NOT NULL);
     CREATE INDEX IX_om_remap_batch ON #om_remap (batch_no) INCLUDE (keep_id);
 
-    DECLARE @pass int = 0, @done bit = 0, @built bit, @placeholdersChecked bit = 0, @locked bit, @own bit;
-    DECLARE @b int, @lastBatch int, @retry int, @batchDone bit, @w int, @lastWork int, @kind tinyint, @stmt nvarchar(max);
+    DECLARE @done bit = 0, @built bit, @placeholdersChecked bit = 0, @locked bit, @own bit;
+    DECLARE @lastBatch int, @retry int, @batchDone bit, @w int, @lastWork int, @kind tinyint, @stmt nvarchar(max);
     DECLARE @copies bigint, @removed bigint, @repointed bigint, @pruned bigint;
     SELECT @lastWork = ISNULL(MAX(seq), 0) FROM @work;
 
     WHILE @done = 0
     BEGIN
         SET @pass = @pass + 1;
+        SET @b = -1;
+        SET @target = N'dbo.online_meetings';
         SET @built = 0;
         -- Last resort, for a writer that keeps storing copies faster than a pass removes them: one more pass and
         -- an offline build inside one transaction holding an exclusive table lock, so nothing can be stored in
@@ -368,6 +425,7 @@ WHERE r.batch_no = @b;');
         BEGIN TRY
             IF @locked = 1
             BEGIN
+                SET @step = N'lock';
                 RAISERROR('UniqueOnlineMeetingIds: meetings keep being stored again; locking dbo.online_meetings for a final pass and an offline build.', 0, 1) WITH NOWAIT;
                 SET DEADLOCK_PRIORITY HIGH;
                 BEGIN TRANSACTION;
@@ -380,6 +438,10 @@ WHERE r.batch_no = @b;');
                   so only their rows are sorted - and as nvarchar(850), which every id fits after step 1, because
                   sorting the nvarchar(max) values themselves is far slower. */
             SET @stepStart = SYSUTCDATETIME();
+            SET @step = N'find';
+            SET @msg = N'[' + CONVERT(nvarchar(33), @stepStart, 126) + N'Z] ' + @migration
+                + N': starting step=find pass=' + CAST(@pass AS nvarchar(10)) + N'; scanning dbo.online_meetings for copies.';
+            RAISERROR(@msg, 0, 1) WITH NOWAIT;
             TRUNCATE TABLE #om_remap;
 
             ;WITH suspects AS (
@@ -412,6 +474,8 @@ WHERE r.batch_no = @b;');
             IF @copies > 0
             BEGIN
                 SET @removed = 0; SET @repointed = 0; SET @pruned = 0;
+                SET @removeStart = SYSUTCDATETIME();
+                SET @lastProgress = @removeStart;
                 SELECT @lastBatch = MAX(batch_no) FROM #om_remap;
                 SET @b = 0;
                 IF @own = 1 SET DEADLOCK_PRIORITY LOW;
@@ -422,9 +486,12 @@ WHERE r.batch_no = @b;');
                     WHILE @batchDone = 0
                     BEGIN
                         BEGIN TRY
+                            SET @batchRemoved = 0; SET @batchRepointed = 0; SET @batchPruned = 0;
                             IF @own = 1 BEGIN TRANSACTION;
 
                             -- Lock AND dirty the copies first, so no reference to them can be added until this commits.
+                            SET @step = N'lock-copies';
+                            SET @target = N'dbo.online_meetings';
                             UPDATE m SET m.meeting_id = NULL
                             FROM dbo.online_meetings AS m
                             INNER JOIN #om_remap AS r ON r.old_id = m.id
@@ -433,20 +500,26 @@ WHERE r.batch_no = @b;');
                             SET @w = 1;
                             WHILE @w <= @lastWork
                             BEGIN
-                                SELECT @kind = kind, @stmt = stmt FROM @work WHERE seq = @w;
-                                EXEC sp_executesql @stmt, N'@b int', @b = @b;
-                                SET @rows = @@ROWCOUNT;
-                                IF @kind = 1 SET @pruned = @pruned + @rows; ELSE IF @kind = 0 SET @repointed = @repointed + @rows;
+                                SELECT @kind = kind, @stmt = stmt, @target = target FROM @work WHERE seq = @w;
+                                SET @step = N'repoint';
+                                SET @stmt = @stmt + N'; SET @affectedCount = @@ROWCOUNT;';
+                                EXEC sp_executesql @stmt, N'@b int, @affectedCount bigint OUTPUT', @b = @b, @affectedCount = @rows OUTPUT;
+                                IF @kind = 1 SET @batchPruned = @batchPruned + @rows; ELSE IF @kind = 0 SET @batchRepointed = @batchRepointed + @rows;
                                 SET @w = @w + 1;
                             END
 
+                            SET @step = N'delete';
+                            SET @target = N'dbo.online_meetings';
                             DELETE m
                             FROM dbo.online_meetings AS m
                             INNER JOIN #om_remap AS r ON r.old_id = m.id
                             WHERE r.batch_no = @b;
-                            SET @removed = @removed + @@ROWCOUNT;
+                            SET @batchRemoved = @@ROWCOUNT;
 
                             IF @own = 1 COMMIT TRANSACTION;
+                            SET @removed = @removed + @batchRemoved;
+                            SET @repointed = @repointed + @batchRepointed;
+                            SET @pruned = @pruned + @batchPruned;
                             SET @batchDone = 1;
                         END TRY
                         BEGIN CATCH
@@ -464,13 +537,19 @@ WHERE r.batch_no = @b;');
                         END CATCH
                     END
 
-                    IF @b % 100 = 99 OR @b = @lastBatch
+                    IF DATEDIFF_BIG(MILLISECOND, @lastProgress, SYSUTCDATETIME()) >= 30000 OR @b = @lastBatch
                     BEGIN
-                        SET @msg = @migration + N': pass ' + CAST(@pass AS nvarchar(10)) + N' removed ' + CAST(@removed AS nvarchar(20))
+                        SET @elapsedMs = DATEDIFF_BIG(MILLISECOND, @removeStart, SYSUTCDATETIME());
+                        SET @msg = N'[' + CONVERT(nvarchar(33), SYSUTCDATETIME(), 126) + N'Z] ' + @migration
+                            + N': pass ' + CAST(@pass AS nvarchar(10)) + N' removed ' + CAST(@removed AS nvarchar(20))
                             + N' of ' + CAST(@copies AS nvarchar(20)) + N' duplicate row(s), repointed ' + CAST(@repointed AS nvarchar(20))
                             + N' reference(s), pruned ' + CAST(@pruned AS nvarchar(20)) + N' colliding reference(s) in '
-                            + CAST(DATEDIFF(SECOND, @stepStart, SYSUTCDATETIME()) AS nvarchar(20)) + N's.';
+                            + CAST(@elapsedMs AS nvarchar(20)) + N'ms; rate='
+                            + CAST(CAST(@removed * 1000.0 / CASE WHEN @elapsedMs = 0 THEN 1 ELSE @elapsedMs END AS decimal(20,1)) AS nvarchar(30))
+                            + N' copies/s etaSeconds=' + COALESCE(CAST(CAST((@copies - @removed) * 1.0 * @elapsedMs / NULLIF(@removed * 1000.0, 0) AS bigint) AS nvarchar(30)), N'unknown')
+                            + N'; outcome=InProgress.';
                         RAISERROR(@msg, 0, 1) WITH NOWAIT;
+                        SET @lastProgress = SYSUTCDATETIME();
                     END
                     SET @b = @b + 1;
                 END
@@ -482,6 +561,8 @@ WHERE r.batch_no = @b;');
             IF @narrowed = 0
             BEGIN
                 SET @stepStart = SYSUTCDATETIME();
+                SET @step = N'column';
+                SET @target = N'dbo.online_meetings';
                 SET @sql = N'ALTER TABLE [dbo].[online_meetings] ALTER COLUMN [meeting_id] nvarchar(850)'
                     + CASE WHEN @collation IS NULL THEN N'' ELSE N' COLLATE ' + @collation END
                     + CASE WHEN @isNullable = 1 THEN N' NULL' ELSE N' NOT NULL' END;
@@ -489,6 +570,9 @@ WHERE r.batch_no = @b;');
                 IF @canOnline = 1
                 BEGIN
                     BEGIN TRY
+                        SET @msg = N'[' + CONVERT(nvarchar(33), SYSUTCDATETIME(), 126) + N'Z] ' + @migration
+                            + N': starting step=column mode=ONLINE; short schema locks can still block access to dbo.online_meetings.';
+                        RAISERROR(@msg, 0, 1) WITH NOWAIT;
                         DECLARE @online nvarchar(max) = @sql + N' WITH (ONLINE = ON);';
                         EXEC sp_executesql @online;
                         SET @onlineDone = 1;
@@ -500,6 +584,9 @@ WHERE r.batch_no = @b;');
                 END
                 IF @onlineDone = 0
                 BEGIN
+                    SET @msg = N'[' + CONVERT(nvarchar(33), SYSUTCDATETIME(), 126) + N'Z] ' + @migration
+                        + N': starting step=column mode=OFFLINE; this blocks all access to dbo.online_meetings until the column change finishes.';
+                    RAISERROR(@msg, 0, 1) WITH NOWAIT;
                     SET @sql = @sql + N';';
                     EXEC sp_executesql @sql;
                 END
@@ -515,6 +602,7 @@ WHERE r.batch_no = @b;');
                       No importer writes such a row; give any a placeholder no real id can match. */
                 IF @placeholdersChecked = 0
                 BEGIN
+                    SET @step = N'placeholders';
                     IF (SELECT COUNT_BIG(*) FROM dbo.online_meetings WHERE meeting_id IS NULL) > 1
                     BEGIN
                         UPDATE dbo.online_meetings SET meeting_id = N'unidentified-meeting:' + CONVERT(nvarchar(11), id) WHERE meeting_id IS NULL;
@@ -525,6 +613,8 @@ WHERE r.batch_no = @b;');
                 END
 
                 /* 6. The unique index. A copy stored after the pass above fails the build with 1505: mop up and retry. */
+                SET @step = N'index';
+                SET @target = N'dbo.online_meetings';
                 IF EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'dbo.online_meetings') AND name = N'UX_online_meetings_meeting_id')
                 BEGIN
                     RAISERROR('UniqueOnlineMeetingIds: dropping an UX_online_meetings_meeting_id of a different shape.', 0, 1) WITH NOWAIT;
@@ -532,10 +622,15 @@ WHERE r.batch_no = @b;');
                 END
 
                 SET @stepStart = SYSUTCDATETIME();
+                SET @step = N'index';
+                SET @target = N'dbo.online_meetings';
                 SET @onlineDone = 0;
                 IF @canOnline = 1 AND @locked = 0
                 BEGIN
                     BEGIN TRY
+                        SET @msg = N'[' + CONVERT(nvarchar(33), SYSUTCDATETIME(), 126) + N'Z] ' + @migration
+                            + N': starting step=index mode=ONLINE pass=' + CAST(@pass AS nvarchar(10)) + N'.';
+                        RAISERROR(@msg, 0, 1) WITH NOWAIT;
                         SET @sql = N'CREATE UNIQUE NONCLUSTERED INDEX [UX_online_meetings_meeting_id] ON [dbo].[online_meetings] ([meeting_id]) WITH (IGNORE_DUP_KEY = ON, ONLINE = ON);';
                         EXEC sp_executesql @sql;
                         SET @onlineDone = 1;
@@ -549,6 +644,9 @@ WHERE r.batch_no = @b;');
                 END
                 IF @onlineDone = 0
                 BEGIN
+                    SET @msg = N'[' + CONVERT(nvarchar(33), SYSUTCDATETIME(), 126) + N'Z] ' + @migration
+                        + N': starting step=index mode=OFFLINE pass=' + CAST(@pass AS nvarchar(10)) + N'; writes to dbo.online_meetings wait for the build.';
+                    RAISERROR(@msg, 0, 1) WITH NOWAIT;
                     SET @sql = N'CREATE UNIQUE NONCLUSTERED INDEX [UX_online_meetings_meeting_id] ON [dbo].[online_meetings] ([meeting_id]) WITH (IGNORE_DUP_KEY = ON);';
                     EXEC sp_executesql @sql;
                 END
@@ -584,6 +682,19 @@ END
 SET @msg = @migration + N': finished in ' + CAST(DATEDIFF(MILLISECOND, @start, SYSUTCDATETIME()) AS nvarchar(20)) + N'ms.';
 RAISERROR(@msg, 0, 1) WITH NOWAIT;
 IF @xactAbortWasOff = 1 SET XACT_ABORT OFF;
+END TRY
+BEGIN CATCH
+    IF XACT_STATE() <> 0 ROLLBACK TRANSACTION;
+    SET DEADLOCK_PRIORITY NORMAL;
+    SET @msg = N'[' + CONVERT(nvarchar(33), SYSUTCDATETIME(), 126) + N'Z] ' + @migration
+        + N': outcome=Failed step=' + @step + N' target=' + @target + N' pass=' + CAST(@pass AS nvarchar(10))
+        + N' batch=' + CAST(@b AS nvarchar(10)) + N' sqlError=' + CAST(ERROR_NUMBER() AS nvarchar(10))
+        + N' elapsedMs=' + CAST(DATEDIFF_BIG(MILLISECOND, @start, SYSUTCDATETIME()) AS nvarchar(20))
+        + N'; this transaction rolled back; previously committed batches remain applied. Original SQL error follows.';
+    RAISERROR(N'%s', 10, 1, @msg) WITH NOWAIT;
+    IF @xactAbortWasOff = 1 SET XACT_ABORT OFF;
+    THROW;
+END CATCH
 ";
 
         /// <summary>
@@ -600,7 +711,7 @@ RAISERROR('UniqueOnlineMeetingIds (Down): index dropped and meeting_id widened t
 
         public override void Up()
         {
-            Console.WriteLine("DB SCHEMA: Applying 'UniqueOnlineMeetingIds'. Removes duplicate Teams meeting rows (repointing every reference to one row per meeting), narrows online_meetings.meeting_id to nvarchar(850) and makes it UNIQUE. Safe with the importer running; ONLINE where the edition supports it, offline otherwise. Check the SQL session for live progress (RAISERROR ... WITH NOWAIT). Guarded and resumable: an interrupted run converges on re-run.");
+            Console.WriteLine("DB SCHEMA: Applying 'UniqueOnlineMeetingIds'. Removes duplicate Teams meeting rows (repointing every reference to one row per meeting), narrows online_meetings.meeting_id to nvarchar(850) and makes it UNIQUE. Stop the old importer until matching new binaries are deployed; concurrent-writer resilience does not make old link SQL compatible. ONLINE where the edition supports it, offline otherwise. The installer forwards live SQL progress. Guarded and resumable: an interrupted run converges on re-run.");
 
             Sql(Up_Sql, suppressTransaction: true);
         }

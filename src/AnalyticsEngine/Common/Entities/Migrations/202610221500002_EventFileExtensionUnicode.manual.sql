@@ -22,6 +22,9 @@
      the database holds such a pair, the script keeps the older row, re-points every reference to the
      other one (each foreign key to event_file_ext.id, and event_meta_sharepoint.file_extension_id),
      and deletes it, so the unique index can be re-created. Normally there is no such pair.
+     Repointing, checking for remaining references and deletion are one failure-atomic transaction.
+     A table lock and a retained schema lock on event_file_ext also exclude snapshot readers until commit.
+     A failed repoint rolls back the merge and prevents stamping; correct its cause and re-run.
 
    CLASSIFICATION: UNICODE-CORRECTNESS TYPE CHANGE
      Not performance-motivated, so the benchmark gate does not apply. The index is re-created exactly
@@ -34,7 +37,8 @@
      dbo.event_file_ext, which pauses the importer's merge for that moment; ONLINE is attempted where
      the edition supports it (Enterprise, Azure SQL Database, Azure SQL Managed Instance). Only if the
      script reports rows to re-point does it read dbo.event_meta_sharepoint once (no index on its
-     file_extension_id): allow a few minutes per 100 million rows in that case.
+     file_extension_id), followed by a verification scan: allow a few minutes per 100 million rows per scan
+     (estimate, not measured). The lookup stays schema-locked throughout that merge; use a maintenance window.
 
    BEFORE ANY CHANGE IT STOPS, CHANGING NOTHING, IF
      another index, a constraint, a foreign key onto the column or a schema-bound object depends on
@@ -60,6 +64,9 @@ DECLARE @tableId int = OBJECT_ID(N'dbo.event_file_ext', N'U');
 DECLARE @edition int = CAST(SERVERPROPERTY('EngineEdition') AS int);
 DECLARE @canOnline bit = CASE WHEN @edition IN (3, 5, 8) THEN 1 ELSE 0 END;
 DECLARE @onlineDone bit;
+DECLARE @mergeStep nvarchar(700) = N'lock';
+DECLARE @mergeStart datetime2(3);
+DECLARE @xactAbortWasOff bit = CASE WHEN (@@OPTIONS & 16384) = 0 THEN 1 ELSE 0 END;
 
 SET @msg = @migration + N': starting; EngineEdition=' + CAST(@edition AS nvarchar(10))
     + CASE WHEN @canOnline = 1 THEN N'; online operations will be attempted.'
@@ -96,7 +103,7 @@ END
 DECLARE @indexId int = (SELECT index_id FROM sys.indexes WHERE object_id = @tableId AND name = @indexName);
 DECLARE @indexIsRight bit = CASE WHEN @indexId IS NOT NULL
     AND EXISTS (SELECT 1 FROM sys.indexes
-                WHERE object_id = @tableId AND index_id = @indexId AND is_unique = 1 AND type = 2 AND has_filter = 0)
+                WHERE object_id = @tableId AND index_id = @indexId AND is_unique = 1 AND type = 2 AND has_filter = 0 AND is_disabled = 0)
     AND (SELECT COUNT(*) FROM sys.index_columns WHERE object_id = @tableId AND index_id = @indexId) = 1
     AND EXISTS (SELECT 1 FROM sys.index_columns
                 WHERE object_id = @tableId AND index_id = @indexId AND key_ordinal = 1 AND column_id = @columnId)
@@ -220,8 +227,19 @@ END
 --    a SQL collation). Merged into the oldest row of each group, so the unique index can be built.
 --    Normally there are none, and this reads only event_file_ext.
 -------------------------------------------------------------------------------------------------
+IF @indexIsRight = 0 AND @indexId IS NOT NULL
+BEGIN
+    DROP INDEX [IX_event_file_ext] ON [dbo].[event_file_ext];
+    SET @indexId = NULL;
+END
 IF OBJECT_ID(N'tempdb..#ext_merge') IS NOT NULL DROP TABLE #ext_merge;
 CREATE TABLE #ext_merge (id int NOT NULL PRIMARY KEY, keep_id int NOT NULL);
+
+SET XACT_ABORT ON;
+SET @mergeStart = SYSUTCDATETIME();
+BEGIN TRY
+BEGIN TRANSACTION;
+SELECT @rows = COUNT(*) FROM dbo.event_file_ext WITH (TABLOCKX, HOLDLOCK);
 
 INSERT INTO #ext_merge (id, keep_id)
 SELECT x.id, x.keep_id
@@ -232,6 +250,14 @@ SET @rows = @@ROWCOUNT;
 
 IF @rows > 0
 BEGIN
+    -- Retain Sch-M until commit as well as the data lock: RCSI readers otherwise see the old ids despite TABLOCKX.
+    -- Restating the existing type is metadata-only on this small lookup table, and waits out in-flight writers.
+    SET @mergeStep = N'schema-lock';
+    SET @sql = N'ALTER TABLE [dbo].[event_file_ext] ALTER COLUMN [extension_name] nvarchar(' + CAST(@chars AS nvarchar(10)) + N')'
+        + CASE WHEN @collation IS NULL THEN N'' ELSE N' COLLATE ' + @collation END
+        + CASE WHEN @isNullable = 1 THEN N' NULL' ELSE N' NOT NULL' END + N';';
+    EXEC sp_executesql @sql;
+
     SET @msg = @migration + N': ' + CAST(@rows AS nvarchar(10))
         + N' extension row(s) equal another one under Unicode comparison; re-pointing their references at the oldest row of each group.';
     RAISERROR(@msg, 0, 1) WITH NOWAIT;
@@ -253,6 +279,7 @@ BEGIN
     FETCH NEXT FROM refs INTO @refSchema, @refTable, @refColumn;
     WHILE @@FETCH_STATUS = 0
     BEGIN
+        SET @mergeStep = N'repoint ' + QUOTENAME(@refSchema) + N'.' + QUOTENAME(@refTable) + N'.' + QUOTENAME(@refColumn);
         SET @sql = N'UPDATE t SET t.' + QUOTENAME(@refColumn) + N' = m.keep_id FROM ' + QUOTENAME(@refSchema) + N'.' + QUOTENAME(@refTable)
             + N' AS t INNER JOIN #ext_merge AS m ON m.id = t.' + QUOTENAME(@refColumn) + N'; SET @n = @@ROWCOUNT;';
         EXEC sp_executesql @sql, N'@n int OUTPUT', @n = @rows OUTPUT;
@@ -262,8 +289,22 @@ BEGIN
         FETCH NEXT FROM refs INTO @refSchema, @refTable, @refColumn;
     END
     CLOSE refs;
+
+    SET @mergeStep = N'verify-references';
+    OPEN refs;
+    FETCH NEXT FROM refs INTO @refSchema, @refTable, @refColumn;
+    WHILE @@FETCH_STATUS = 0
+    BEGIN
+        SET @sql = N'IF EXISTS (SELECT 1 FROM ' + QUOTENAME(@refSchema) + N'.' + QUOTENAME(@refTable)
+            + N' AS t INNER JOIN #ext_merge AS m ON m.id = t.' + QUOTENAME(@refColumn) + N')
+            THROW 50002, ''EventFileExtensionUnicode: merged-away extension ids still have references; no extension rows were deleted.'', 1;';
+        EXEC sp_executesql @sql;
+        FETCH NEXT FROM refs INTO @refSchema, @refTable, @refColumn;
+    END
+    CLOSE refs;
     DEALLOCATE refs;
 
+    SET @mergeStep = N'delete';
     DELETE e
     FROM dbo.event_file_ext AS e
     INNER JOIN #ext_merge AS m ON m.id = e.id;
@@ -271,6 +312,22 @@ BEGIN
     RAISERROR(@msg, 0, 1) WITH NOWAIT;
 END
 
+COMMIT TRANSACTION;
+SET @msg = @migration + N': MergeOutcome: stage=merge outcome=Succeeded elapsedMs='
+    + CAST(DATEDIFF_BIG(MILLISECOND, @mergeStart, SYSUTCDATETIME()) AS nvarchar(20))
+    + N' mergedRows=' + CAST((SELECT COUNT(*) FROM #ext_merge) AS nvarchar(20)) + N'.';
+RAISERROR(@msg, 0, 1) WITH NOWAIT;
+END TRY
+BEGIN CATCH
+    IF XACT_STATE() <> 0 ROLLBACK TRANSACTION;
+    SET @msg = @migration + N': MergeOutcome: stage=' + @mergeStep + N' outcome=Failed sqlError='
+        + CAST(ERROR_NUMBER() AS nvarchar(10)) + N' elapsedMs='
+        + CAST(DATEDIFF_BIG(MILLISECOND, @mergeStart, SYSUTCDATETIME()) AS nvarchar(20)) + N'; merge rolled back.';
+    RAISERROR(N'%s', 10, 1, @msg) WITH NOWAIT;
+    IF @xactAbortWasOff = 1 SET XACT_ABORT OFF;
+    THROW;
+END CATCH
+IF @xactAbortWasOff = 1 SET XACT_ABORT OFF;
 DROP TABLE #ext_merge;
 
 -------------------------------------------------------------------------------------------------
@@ -278,14 +335,6 @@ DROP TABLE #ext_merge;
 -------------------------------------------------------------------------------------------------
 IF @indexIsRight = 0
 BEGIN
-    IF @indexId IS NOT NULL
-    BEGIN
-        -- Present but not the unique single-column index (only possible if the column was already nvarchar).
-        DROP INDEX [IX_event_file_ext] ON [dbo].[event_file_ext];
-        SET @msg = @migration + N': dropped [' + @indexName + N'], which did not have the expected shape.';
-        RAISERROR(@msg, 0, 1) WITH NOWAIT;
-    END
-
     SET @sql = N'CREATE UNIQUE NONCLUSTERED INDEX [IX_event_file_ext] ON [dbo].[event_file_ext] ([extension_name])';
     SET @onlineDone = 0;
     IF @canOnline = 1
@@ -360,7 +409,10 @@ IF NOT EXISTS (SELECT 1
                   INNER JOIN sys.index_columns AS ic ON ic.object_id = i.object_id AND ic.index_id = i.index_id
                   INNER JOIN sys.columns AS c ON c.object_id = ic.object_id AND c.column_id = ic.column_id
                   WHERE i.object_id = OBJECT_ID(N'dbo.event_file_ext') AND i.name = N'IX_event_file_ext'
-                    AND i.is_unique = 1 AND ic.key_ordinal = 1 AND c.name = N'extension_name')
+                    AND i.is_unique = 1 AND i.type = 2 AND i.has_filter = 0 AND i.is_disabled = 0
+                    AND ic.key_ordinal = 1 AND c.name = N'extension_name'
+                    AND (SELECT COUNT(*) FROM sys.index_columns AS allc
+                         WHERE allc.object_id = i.object_id AND allc.index_id = i.index_id) = 1)
 BEGIN
     RAISERROR('EventFileExtensionUnicode: NOT stamped - the schema work did not complete: dbo.event_file_ext.extension_name is not nvarchar, or its unique index IX_event_file_ext is missing. Re-run this script and read the messages above.', 16, 1);
 END
