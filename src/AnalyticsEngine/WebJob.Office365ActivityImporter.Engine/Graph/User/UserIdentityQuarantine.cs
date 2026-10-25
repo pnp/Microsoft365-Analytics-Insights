@@ -45,13 +45,20 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
 
     /// <summary>
     /// The quarantined users in <see cref="StatePartitions.UserIdentityQuarantine"/>: a header row
-    /// (<see cref="HeaderKey"/>) plus pages of at most <see cref="MaxEntriesPerPage"/> entries (<see cref="PageKey"/>).
+    /// (<see cref="HeaderKey"/>) plus pages of at most <see cref="MaxEntriesPerPage"/> entries
+    /// (<see cref="PageKey(Guid, int, int)"/>) in one of two slots.
     /// </summary>
     /// <remarks>
-    /// Pages are written before the header, and pages a smaller set no longer needs are deleted after it, so a failed
-    /// save leaves the previous header pointing at pages that still exist. A missing page fails the load rather than
-    /// reading as fewer users. Bounded at <see cref="MaxEntries"/>: a page is at most a few hundred KB of JSON, well
-    /// within one compressed table entity.
+    /// A save writes its pages into the slot the header does NOT point at, then switches the header to them, then deletes
+    /// the previous slot's pages. Until the header is written the previous set is untouched, so a save that fails part
+    /// way leaves the stored set whole: overwriting the live pages in place would have let the old header read new early
+    /// pages beside old later ones, losing users who moved across a page boundary. Every page the header names was
+    /// written by the save that wrote the header. The previous slot is deleted from its last page down, so an
+    /// interrupted cleanup leaves a run of pages from page 0, and the next save into that slot, which deletes from its
+    /// own page count up to the first page already missing, removes them. A missing page fails the load rather than
+    /// reading as fewer users. A header without a slot was written before slots, and names slot 0, whose page keys are
+    /// unchanged. Bounded at <see cref="MaxEntries"/>: a page is at most a few hundred KB of JSON, well within one
+    /// compressed table entity.
     /// </remarks>
     internal sealed class UserIdentityQuarantineStore : IUserIdentityQuarantineStore
     {
@@ -78,7 +85,14 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
 
         internal static string HeaderKey(Guid tenantId) => "IdentityQuarantine-" + tenantId.ToString("D");
 
-        internal static string PageKey(Guid tenantId, int page) => HeaderKey(tenantId) + ":" + page.ToString(CultureInfo.InvariantCulture);
+        /// <summary>A page in slot 0, whose keys are the ones the store used before it had slots.</summary>
+        internal static string PageKey(Guid tenantId, int page) => PageKey(tenantId, 0, page);
+
+        internal static string PageKey(Guid tenantId, int slot, int page) =>
+            HeaderKey(tenantId) + (slot == 0 ? ":" : ":b:") + page.ToString(CultureInfo.InvariantCulture);
+
+        /// <summary>The most pages one slot holds, at <see cref="MaxEntries"/>.</summary>
+        private const int MaxPages = (MaxEntries + MaxEntriesPerPage - 1) / MaxEntriesPerPage;
 
         public async Task<List<QuarantinedUserIdentity>> LoadAsync()
         {
@@ -90,7 +104,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             for (var first = 0; first < header.Pages; first += PageReadConcurrency)
             {
                 var batch = Enumerable.Range(first, Math.Min(PageReadConcurrency, header.Pages - first)).ToList();
-                var pages = await Task.WhenAll(batch.Select(p => _store.GetStringAsync(PageKey(_tenantId, p))));
+                var pages = await Task.WhenAll(batch.Select(p => _store.GetStringAsync(PageKey(_tenantId, header.Slot, p))));
                 for (var i = 0; i < pages.Length; i++)
                 {
                     if (pages[i] == null)
@@ -108,21 +122,35 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 .OrderBy(e => e.ObjectId, StringComparer.OrdinalIgnoreCase)
                 .ToList();
             var pageCount = (sorted.Count + MaxEntriesPerPage - 1) / MaxEntriesPerPage;
-            var previousPageCount = ParseHeaderLeniently(await _store.GetStringAsync(HeaderKey(_tenantId)))?.Pages ?? 0;
+            var previous = ParseHeaderLeniently(await _store.GetStringAsync(HeaderKey(_tenantId)));
+            var slot = previous == null ? 0 : 1 - previous.Slot;
 
+            // Into the slot nothing reads, so the stored set is untouched until the header below says otherwise.
             for (var p = 0; p < pageCount; p++)
             {
                 var page = sorted.GetRange(p * MaxEntriesPerPage, Math.Min(MaxEntriesPerPage, sorted.Count - p * MaxEntriesPerPage));
-                await _store.SetStringAsync(PageKey(_tenantId, p), JsonConvert.SerializeObject(page, Json));
+                await _store.SetStringAsync(PageKey(_tenantId, slot, p), JsonConvert.SerializeObject(page, Json));
             }
 
             if (pageCount == 0)
                 await _store.DeleteAsync(HeaderKey(_tenantId));
             else
-                await _store.SetStringAsync(HeaderKey(_tenantId), JsonConvert.SerializeObject(new Header { Pages = pageCount, Count = sorted.Count }, Json));
+                await _store.SetStringAsync(HeaderKey(_tenantId), JsonConvert.SerializeObject(new Header { Pages = pageCount, Count = sorted.Count, Slot = slot }, Json));
 
-            for (var p = pageCount; p < previousPageCount; p++)
-                await _store.DeleteAsync(PageKey(_tenantId, p));
+            // The previous set, last page first: an interrupted cleanup leaves pages 0..k, which the loop below removes
+            // the next time a save uses that slot.
+            if (previous != null)
+            {
+                for (var p = previous.Pages - 1; p >= 0; p--)
+                    await _store.DeleteAsync(PageKey(_tenantId, previous.Slot, p));
+            }
+
+            // Pages this slot still holds beyond this set: from an earlier, larger set, or a save that failed before its header.
+            for (var p = pageCount; p < MaxPages; p++)
+            {
+                if (!await _store.DeleteAsync(PageKey(_tenantId, slot, p)))
+                    break;
+            }
         }
 
         private static Header ParseHeader(string raw)
@@ -130,8 +158,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             if (string.IsNullOrEmpty(raw))
                 return null;
             var header = JsonConvert.DeserializeObject<Header>(raw, Json);
-            if (header != null && (header.Pages < 0 || header.Count < 0))
-                throw new InvalidDataException($"the identity quarantine header says {header.Pages} page(s) and {header.Count} entries");
+            if (header != null && (header.Pages < 0 || header.Count < 0 || header.Slot < 0 || header.Slot > 1))
+                throw new InvalidDataException($"the identity quarantine header says {header.Pages} page(s), {header.Count} entries and slot {header.Slot}");
             return header;
         }
 
@@ -154,6 +182,10 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
 
             [JsonProperty("count")]
             public int Count { get; set; }
+
+            /// <summary>Which slot's pages hold the set: 0 or 1. Absent, so 0, in a header written before slots.</summary>
+            [JsonProperty("slot")]
+            public int Slot { get; set; }
         }
     }
 

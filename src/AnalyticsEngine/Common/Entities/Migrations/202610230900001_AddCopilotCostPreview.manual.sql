@@ -113,6 +113,8 @@ AS
 BEGIN
  SET NOCOUNT ON;
  SET XACT_ABORT ON;
+ -- NULL is not 0: an unset @DryRun is a dry run, so deleting always needs @DryRun=0 and the confirmation.
+ SET @DryRun = ISNULL(@DryRun, 1);
  IF @BeforeDate IS NULL OR @BeforeDate >= CONVERT(date,SYSUTCDATETIME())
   OR @BatchSize NOT BETWEEN 1 AND 10000
   THROW 51000, 'Specify a historical cutoff and a bounded batch.', 1;
@@ -146,6 +148,12 @@ IF OBJECT_ID(N'dbo.copilot_cost_work',N'U') IS NULL OR OBJECT_ID(N'dbo.copilot_c
  OR COL_LENGTH(N'dbo.copilot_cost_history',N'publication_id') IS NULL
  OR NOT EXISTS(SELECT 1 FROM sys.indexes WHERE object_id=OBJECT_ID(N'dbo.copilot_cost_history') AND name=N'UX_copilot_cost_history_publication')
  OR NOT EXISTS(SELECT 1 FROM sys.indexes WHERE object_id=OBJECT_ID(N'dbo.copilot_cost_work') AND name=N'IX_copilot_cost_work_ready')
+ OR NOT EXISTS(SELECT 1 FROM sys.indexes WHERE object_id=OBJECT_ID(N'dbo.copilot_cost_runs') AND name=N'IX_copilot_cost_run_fair')
+ OR NOT EXISTS(SELECT 1 FROM sys.indexes WHERE object_id=OBJECT_ID(N'dbo.copilot_cost_observations') AND name=N'IX_copilot_cost_observation_user')
+ OR NOT EXISTS(SELECT 1 FROM sys.indexes WHERE object_id=OBJECT_ID(N'dbo.copilot_cost_history') AND name=N'IX_copilot_cost_history_scope')
+ OR NOT EXISTS(SELECT 1 FROM sys.indexes WHERE object_id=OBJECT_ID(N'dbo.copilot_cost_history') AND name=N'IX_copilot_cost_history_user')
+ OR NOT EXISTS(SELECT 1 FROM sys.indexes WHERE object_id=OBJECT_ID(N'dbo.copilot_cost_context') AND name=N'IX_copilot_cost_context_run')
+ OR NOT EXISTS(SELECT 1 FROM sys.indexes WHERE object_id=OBJECT_ID(N'dbo.copilot_cost_pages') AND name=N'IX_copilot_cost_pages_queue')
  OR OBJECT_ID(N'dbo.copilot_cost_purge_preview',N'P') IS NULL
  THROW 51000, 'Preview schema is incomplete; migration was not stamped.', 1;
 IF NOT EXISTS(SELECT 1 FROM dbo.__MigrationHistory WHERE MigrationId='202610230900001_AddCopilotCostPreview')

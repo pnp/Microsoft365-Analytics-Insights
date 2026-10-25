@@ -931,6 +931,108 @@ DELETE FROM dbo.users WHERE id IN ({ids});");
         }
 
         [TestMethod]
+        public void BatchSizer_AfterOneDeadlock_WhenEveryBatchPaysAFixedCostAboveTheCeiling_RecoversThePreFailureSize()
+        {
+            // A detour ends when batches at its ceiling show the database is no slower than before the failure. Where a fixed
+            // cost above the ceiling is known, every batch is slower than the ceiling and none was remembered as a proof, so a
+            // batch as slow as the fixed cost says is what "no slower" looks like. Read as slower, a deadlock held the size at
+            // half (F under the cap) or, past the cap, halved it again on every batch - down to one user, for good.
+            foreach (var floor in new[] { 22.0, 40.0, 60.0, 80.0 })
+            {
+                foreach (var noise in new[] { 0.0, 0.05 })
+                {
+                    for (var seed = 1; seed <= 10; seed++)
+                    {
+                        var clean = Simulate(floor, 0.002, noise, seed, batches: 160);
+                        var once = Simulate(floor, 0.002, noise, seed, batches: 160, transientFailureAt: i => i == 60);
+                        var what = $"F {floor} s, noise {noise}, seed {seed}: {once}";
+                        Assert.AreEqual(1, once.TransientFailures, what);
+                        Assert.AreEqual(0, once.Failures, "Nothing times out: " + what);
+                        Assert.IsTrue(once.Sizes.Skip(140).Min() > ConcealedIdentityUserCleanup.MinBatchSize, "Never ratchets down to one user per batch: " + what);
+                        Assert.IsTrue(Median(once.Sizes.Skip(140)) >= 0.9 * Median(clean.Sizes.Skip(140)),
+                            $"Settles on {Median(once.Sizes.Skip(140))} against {Median(clean.Sizes.Skip(140))} without the deadlock: " + what);
+                    }
+                }
+            }
+
+            // Still a detour: while the database takes 1.5 times as long as the fixed cost says, the size keeps halving.
+            var cleanAt40 = Simulate(40, 0.002, 0.0, 1, batches: 160);
+            var slowAfter = Simulate(40, 0.002, 0.0, 1, batches: 160, transientFailureAt: i => i == 60, slowFactor: 1.5, slowAt: i => i > 60 && i <= 66);
+            Assert.IsTrue(slowAfter.Sizes[67] <= slowAfter.Sizes[61] / 32, "Halves on every slow batch: " + slowAfter);
+            Assert.IsTrue(Median(slowAfter.Sizes.Skip(140)) >= 0.9 * Median(cleanAt40.Sizes.Skip(140)), "And recovers once it is not: " + slowAfter);
+        }
+
+        [TestMethod]
+        public void BatchSizer_ADetourThatNoBatchCanEnd_EndsADayAfterItBegan_AndTheSizingStartsAgain()
+        {
+            // A detour ends when batches at its ceiling show the database is no slower than before the failure. Where the
+            // database has become slower for good, or nothing committed before the failure to compare with, no batch ever does:
+            // the detour held the size at half or - every batch then past the cap - halved it on every batch, down to one user,
+            // for as long as the process ran. A batch past the cap on familiar ground starts a detour too, so a database that
+            // became slower for good did it without any failure at all.
+            var cases = new (string What, int From, Func<int, double, SimulatedRun> Run, Func<int, double, SimulatedRun> Reference)[]
+            {
+                ("F 22 s, the first batch a deadlock victim", 0,
+                    (seed, noise) => Simulate(22, 0.002, noise, seed, batches: 1500, transientFailureAt: i => i == 0),
+                    (seed, noise) => Simulate(22, 0.002, noise, seed, batches: 1500)),
+                ("F 40 s, the first batch a deadlock victim", 0,
+                    (seed, noise) => Simulate(40, 0.002, noise, seed, batches: 1500, transientFailureAt: i => i == 0),
+                    (seed, noise) => Simulate(40, 0.002, noise, seed, batches: 1500)),
+                ("15 s + 12 ms a user, twice as slow for good from batch 100", 100,
+                    (seed, noise) => Simulate(15, 0.012, noise, seed, batches: 1500, slowFactor: 2, slowAt: i => i >= 100),
+                    (seed, noise) => Simulate(30, 0.024, noise, seed, batches: 1500)),
+                ("F 19 s, rising to 40 s for good at a deadlock at batch 60", 60,
+                    (seed, noise) => Simulate(19, 0.002, noise, seed, batches: 1500, transientFailureAt: i => i == 60, slowFactor: 40.0 / 19, slowAt: i => i >= 60),
+                    (seed, noise) => Simulate(40, 0.002 * 40 / 19, noise, seed, batches: 1500)),
+            };
+            foreach (var (what, from, makeRun, makeReference) in cases)
+            {
+                foreach (var noise in new[] { 0.0, 0.05, 0.20 })
+                {
+                    for (var seed = 1; seed <= 5; seed++)
+                    {
+                        var run = makeRun(seed, noise);
+                        var tag = $"{what}, noise {noise}, seed {seed}: the last 100 at {Median(run.Sizes.Skip(1400))} users, down to {run.Sizes.Skip(1400).Min()}";
+                        Assert.AreEqual(0, run.Failures, "Nothing times out: " + tag);
+
+                        // Never a day and more at one user per batch.
+                        for (int i = 0, start = -1; i < run.Sizes.Count; i++)
+                        {
+                            if (run.Sizes[i] > ConcealedIdentityUserCleanup.MinBatchSize) start = -1;
+                            else if (start < 0) start = i;
+                            else Assert.IsTrue(run.Hours[i] - run.Hours[start] <= 25, $"One user per batch from {run.Hours[start]:F1} h to {run.Hours[i]:F1} h: " + tag);
+                        }
+                        if (noise > 0.1) continue;
+
+                        // And back, within a day and an hour, to the size the database it has become takes from the start.
+                        var settled = Median(makeReference(seed, noise).Sizes.Skip(1400));
+                        var back = Enumerable.Range(from, run.Sizes.Count - from - 10).Cast<int?>()
+                            .FirstOrDefault(i => Median(run.Sizes.Skip(i.Value).Take(10)) >= 0.9 * settled);
+                        Assert.IsTrue(back.HasValue && run.Hours[back.Value] - run.Hours[from] <= 25,
+                            $"Settles on {settled} from the start; " + (back.HasValue ? $"back {run.Hours[back.Value] - run.Hours[from]:F1} h later: " : "never back: ") + tag);
+                        Assert.IsTrue(run.Sizes.Skip(1400).Min() >= 0.9 * settled, $"Stays there, against {settled}: " + tag);
+                    }
+                }
+            }
+
+            // Not sooner: a slow spell shorter than a day - every batch past the cap for most of a working day - still ends as a
+            // detour, and the sizing takes up the size it had, inside the cap, rather than forget the database that came back.
+            foreach (var noise in new[] { 0.0, 0.05 })
+            {
+                for (var seed = 1; seed <= 5; seed++)
+                {
+                    var clean = Simulate(15, 0.012, noise, seed, batches: 1500);
+                    var spell = Simulate(15, 0.012, noise, seed, batches: 1500, slowFactor: 2, slowAt: i => i >= 300 && i < 500);
+                    var tag = $"noise {noise}, seed {seed}: the last 100 at {Median(spell.Sizes.Skip(1400))} users, against {Median(clean.Sizes.Skip(1400))}";
+                    var hours = spell.Hours[500] - spell.Hours[300];
+                    Assert.IsTrue(hours > 4 && hours < 24, $"The spell lasts {hours:F1} h: " + tag);
+                    Assert.AreEqual(Median(clean.Sizes.Skip(1400)), Median(spell.Sizes.Skip(1400)), 0.02 * Median(clean.Sizes.Skip(1400)), "Takes up the size it had: " + tag);
+                    Assert.IsTrue(spell.Seconds.Skip(600).All(s => s <= Cap), "Inside the cap again: " + tag);
+                }
+            }
+        }
+
+        [TestMethod]
         public void BatchSizer_NeverHalvesABatchThatCommittedUnderTheCap()
         {
             ConcealedIdentityCleanupBatchSizer NewSizer() => new ConcealedIdentityCleanupBatchSizer(25, ConcealedIdentityUserCleanup.MinBatchSize,
@@ -969,6 +1071,37 @@ DELETE FROM dbo.users WHERE id IN ({ids});");
                         Assert.AreEqual(ConcealedIdentityUserCleanup.MaxBatchSize, run.Limits.Last(),
                             "Size was never to blame, so no lasting limit stays: " + what);
                         if (floor <= 25) Assert.IsTrue(run.Seconds.Skip(30).All(s => s <= Cap), "Still inside the cap where the cap can be met: " + what);
+                    }
+                }
+            }
+        }
+
+        [TestMethod]
+        public void BatchSizer_WhenTheFixedCostIsPastTheTimeoutsMargin_ButBatchesCommit_HoldsTheSizeInsteadOfRatchetingToOne()
+        {
+            // F between the timeout's margin (FixedCostShareOfTimeout x 90 s = 72 s) and the 90 s timeout: every batch commits, at
+            // every size, in about F. No size fits any budget, so the size is held. It used to be held only while the window still
+            // had sizes far enough apart to fit the fixed cost again; once every batch in it was the held size, a batch slower than
+            // the margin was no longer "as the fixed cost says", so it was blamed on its size and halved - again and again, to one.
+            // (Just past the margin, a noisy fit can put the fixed cost under it and plan small batches for a while; that is the
+            // fit, not a ratchet, so it is left out here.)
+            foreach (var floor in new[] { 75.0, 80.0, 85.0 })
+            {
+                foreach (var noise in new[] { 0.0, 0.05 })
+                {
+                    for (var seed = 1; seed <= 10; seed++)
+                    {
+                        var run = Simulate(floor, 0.002, noise, seed, batches: 120);
+                        var what = $"F {floor} s, noise {noise}, seed {seed}: {run}";
+                        Assert.AreEqual(0, run.Failures, "Nothing times out: this is the band where every batch commits. " + what);
+                        Assert.IsTrue(run.Sizes.Skip(30).Min() > ConcealedIdentityUserCleanup.MinBatchSize,
+                            "Never ratchets down to one user per batch: " + what);
+                        Assert.AreEqual(ConcealedIdentityUserCleanup.MaxBatchSize, run.Limits.Last(),
+                            "Size was never to blame, so no lasting limit stays: " + what);
+                        if (noise == 0)
+                        {
+                            Assert.AreEqual(1, run.Sizes.Skip(10).Distinct().Count(), "Holds the size once the fixed cost is known: " + what);
+                        }
                     }
                 }
             }

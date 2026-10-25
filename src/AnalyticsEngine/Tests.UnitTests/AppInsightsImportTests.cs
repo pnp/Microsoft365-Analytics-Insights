@@ -1254,9 +1254,40 @@ namespace Tests.UnitTests
 
                 Assert.AreEqual(12.5, await db.hits.Where(h => h.ID == hit.ID).Select(h => h.seconds_on_page).SingleAsync());
 
-                // Every cycle re-reads the whole day, so the same exits come round again: nothing should be rewritten.
+                // The ingestion cursor's overlap and a resent batch bring the same exits round again: nothing should be rewritten.
                 Assert.AreEqual(0, await exits.SaveHitsUpdatesToSQL(logger, db));
                 Assert.AreEqual(12.5, await db.hits.Where(h => h.ID == hit.ID).Select(h => h.seconds_on_page).SingleAsync());
+            }
+        }
+
+        /// <summary>
+        /// A cycle now reads in windows, and only what was ingested since the cursor, so the exits for one page request
+        /// can be saved by different batches. A later, shorter report must not replace the longest one stored; a longer
+        /// one still does.
+        /// </summary>
+        [TestMethod]
+        public async Task PageExitEvents_ForOnePageRequest_InSeparateBatches_KeepTheLongestTime()
+        {
+            var logger = AnalyticsLogger.ConsoleOnlyTracer();
+            using (var db = new AnalyticsEntitiesContext())
+            {
+                var hit = await CreateTestHitAsync(db);
+                Func<double, Task<int>> saveExit = activeTime =>
+                {
+                    var exits = new CustomEventsResultCollection();
+                    exits.Rows.Add(new PageExitEventAppInsightsQueryResult { CustomProperties = new PageExitCustomProps { PageRequestId = hit.page_request_id, ActiveTime = activeTime } });
+                    return exits.SaveHitsUpdatesToSQL(logger, db);
+                };
+                Func<Task<double?>> stored = () => db.hits.Where(h => h.ID == hit.ID).Select(h => h.seconds_on_page).SingleAsync();
+
+                Assert.AreEqual(1, await saveExit(12.5));
+                Assert.AreEqual(12.5, await stored());
+
+                Assert.AreEqual(0, await saveExit(5), "A shorter time from a later batch is not written.");
+                Assert.AreEqual(12.5, await stored());
+
+                Assert.AreEqual(1, await saveExit(20), "A longer time from a later batch still is.");
+                Assert.AreEqual(20, await stored());
             }
         }
 
