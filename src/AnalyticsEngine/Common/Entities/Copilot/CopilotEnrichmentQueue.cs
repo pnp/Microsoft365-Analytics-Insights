@@ -16,8 +16,19 @@ namespace Common.Entities.Copilot
     /// row in the same partition. Enqueue, reschedule and removal are atomic Table transactions. No audit payload,
     /// user identifier, URL or resource name is copied here.
     /// </summary>
+    /// <remarks>
+    /// Row keys in the partition: <c>event-&lt;id&gt;</c> (anchor), <c>due-&lt;ticks&gt;-&lt;id&gt;</c> (due index) and
+    /// <c>abandoned-&lt;id&gt;</c> (parked after <see cref="MaxFailedAttempts"/> failures or <see cref="MaxAge"/>). A parked
+    /// row keeps the event id, attempts and reason; enqueueing the same event again makes it live work once more.
+    /// </remarks>
     public sealed class CopilotEnrichmentQueue
     {
+        /// <summary>Failed attempts after which an item is parked rather than deferred again.</summary>
+        public const int MaxFailedAttempts = 12;
+
+        /// <summary>Age after which a failing item is parked rather than deferred again.</summary>
+        public static readonly TimeSpan MaxAge = TimeSpan.FromDays(7);
+
         private readonly StateStore.LazyTableClient _table;
         private readonly string _partition;
 
@@ -65,13 +76,22 @@ namespace Common.Entities.Copilot
         }
 
         public async Task<IReadOnlyList<CopilotEnrichmentWorkItem>> ReadDueAsync(DateTimeOffset now, int take)
+            => await ReadDueAsync(now, take, null);
+
+        /// <summary>
+        /// Items due by <paramref name="now"/>, oldest first, after <paramref name="after"/> when given, so a caller can page
+        /// through a backlog without re-reading items it skipped (leased by another worker) or just deferred.
+        /// </summary>
+        public async Task<IReadOnlyList<CopilotEnrichmentWorkItem>> ReadDueAsync(DateTimeOffset now, int take, CopilotEnrichmentWorkItem after)
         {
             if (take < 1 || take > 100) throw new ArgumentOutOfRangeException(nameof(take));
             var rows = new List<CopilotEnrichmentWorkItem>();
             await ExecuteAsync(async table =>
             {
                 var upper = "due-" + now.UtcDateTime.Ticks.ToString("D19", CultureInfo.InvariantCulture) + "-~";
-                var filter = TableClient.CreateQueryFilter($"PartitionKey eq {_partition} and RowKey ge {"due-"} and RowKey le {upper}");
+                var filter = after == null
+                    ? TableClient.CreateQueryFilter($"PartitionKey eq {_partition} and RowKey ge {"due-"} and RowKey le {upper}")
+                    : TableClient.CreateQueryFilter($"PartitionKey eq {_partition} and RowKey gt {after.DueKey} and RowKey le {upper}");
                 var pages = table.QueryAsync<TableEntity>(filter, take, new[] { "PartitionKey", "RowKey", "EventId" }).AsPages();
                 var enumerator = pages.GetAsyncEnumerator();
                 try
@@ -141,6 +161,39 @@ namespace Common.Entities.Copilot
             });
         });
 
+        /// <summary>
+        /// True when the attempt that has just failed should be the last: the item has now failed
+        /// <see cref="MaxFailedAttempts"/> times, or was first queued <see cref="MaxAge"/> ago.
+        /// </summary>
+        public static bool ShouldAbandon(CopilotEnrichmentClaim claim, DateTimeOffset now)
+        {
+            if (claim == null) throw new ArgumentNullException(nameof(claim));
+            return claim.Attempts + 1 >= MaxFailedAttempts || (claim.CreatedUtc != null && now - claim.CreatedUtc.Value >= MaxAge);
+        }
+
+        /// <summary>
+        /// Stops retrying: removes the live anchor and its due index and parks an <c>abandoned-&lt;id&gt;</c> row, in one
+        /// transaction, recording why. The audit event and its chat-only Copilot data are untouched.
+        /// </summary>
+        public Task AbandonAsync(CopilotEnrichmentClaim claim, DateTimeOffset now, string reason) => ExecuteAsync(async table =>
+        {
+            var anchor = claim.Anchor;
+            var parked = new TableEntity(_partition, AbandonedKey(claim.EventId))
+            {
+                ["EventId"] = claim.EventId,
+                ["CreatedUtc"] = claim.CreatedUtc,
+                ["AbandonedUtc"] = now,
+                ["Attempts"] = claim.Attempts + 1,
+                ["Reason"] = reason ?? "unknown"
+            };
+            await table.SubmitTransactionAsync(new[]
+            {
+                new TableTransactionAction(TableTransactionActionType.Delete, anchor, anchor.ETag),
+                new TableTransactionAction(TableTransactionActionType.Delete, DueEntity(claim.EventId, anchor.GetString("DueKey")), ETag.All),
+                new TableTransactionAction(TableTransactionActionType.UpsertReplace, parked)
+            });
+        });
+
         private async Task ExecuteAsync(Func<TableClient, Task> action)
         {
             var client = await _table.GetAsync(CancellationToken.None);
@@ -153,9 +206,17 @@ namespace Common.Entities.Copilot
         }
 
         private static string AnchorKey(Guid id) => "event-" + id.ToString("N");
+        private static string AbandonedKey(Guid id) => "abandoned-" + id.ToString("N");
         private static string DueKey(Guid id, DateTimeOffset due) =>
             "due-" + due.UtcDateTime.Ticks.ToString("D19", CultureInfo.InvariantCulture) + "-" + id.ToString("N");
         private TableEntity DueEntity(Guid id, string key) => new TableEntity(_partition, key) { ["EventId"] = id };
+
+        internal static DateTimeOffset? DueUtcFromKey(string dueKey)
+        {
+            if (dueKey == null || dueKey.Length < 23 || !long.TryParse(dueKey.Substring(4, 19), NumberStyles.None, CultureInfo.InvariantCulture, out var ticks))
+                return null;
+            return new DateTimeOffset(ticks, TimeSpan.Zero);
+        }
     }
 
     public sealed class CopilotEnrichmentWorkItem
@@ -163,6 +224,9 @@ namespace Common.Entities.Copilot
         internal CopilotEnrichmentWorkItem(Guid eventId, string dueKey) { EventId = eventId; DueKey = dueKey; }
         public Guid EventId { get; }
         internal string DueKey { get; }
+
+        /// <summary>When the item fell due, from its due-index key.</summary>
+        public DateTimeOffset? DueUtc => CopilotEnrichmentQueue.DueUtcFromKey(DueKey);
     }
 
     public sealed class CopilotEnrichmentClaim
@@ -170,7 +234,12 @@ namespace Common.Entities.Copilot
         internal CopilotEnrichmentClaim(CopilotEnrichmentWorkItem item, TableEntity anchor)
         { EventId = item.EventId; Anchor = anchor; }
         public Guid EventId { get; }
+
+        /// <summary>Failed attempts before this one.</summary>
         public int Attempts => Anchor.GetInt32("Attempts") ?? 0;
+
+        /// <summary>When the item was first queued.</summary>
+        public DateTimeOffset? CreatedUtc => Anchor.GetDateTimeOffset("CreatedUtc");
         internal TableEntity Anchor { get; }
     }
 }

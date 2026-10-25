@@ -96,6 +96,21 @@ namespace DataUtils
             return await GetResource(id, null);
         }
 
+        /// <summary>A cache hit only: never loads.</summary>
+        public bool TryGetCached(string id, out T value)
+        {
+            value = null;
+            return !string.IsNullOrEmpty(id) && _objectCache.TryGetValue(id, out value);
+        }
+
+        /// <summary>Caches an object the caller loaded itself, keeping one already cached under the same id.</summary>
+        public T AddOrGetCached(string id, T value)
+        {
+            if (string.IsNullOrEmpty(id)) throw new ArgumentException($"'{nameof(id)}' cannot be null or empty.", nameof(id));
+            if (value == null) throw new ArgumentNullException(nameof(value));
+            return _objectCache.GetOrAdd(id, value);
+        }
+
         public async Task<T> GetResourceOrNullIfNotExists(string id)
         {
             if (string.IsNullOrEmpty(id)) throw new ArgumentException($"'{nameof(id)}' cannot be null or empty.", nameof(id));

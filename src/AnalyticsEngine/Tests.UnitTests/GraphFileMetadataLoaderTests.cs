@@ -375,8 +375,10 @@ namespace Tests.UnitTests
             CollectionAssert.AreEqual(new[] { TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(4) }, waits);
 
             fake.OnGetDriveItemByUrl = url => new DriveItem { WebUrl = url };
-            var recovered = await loader.GetSpoFileInfoSingleAttempt(ctx, "alice@contoso.com");
+            // The next batch's prewarm (outside the lock) recovers it; the in-lock lookup then finds it cached.
+            var recovered = await loader.GetSpoFileInfo(ctx, "alice@contoso.com");
             Assert.AreEqual("Καλημέρα κόσμε.docx", recovered?.Filename, "Once Graph recovers the same context resolves.");
+            Assert.AreEqual("Καλημέρα κόσμε.docx", (await loader.GetSpoFileInfoSingleAttempt(ctx, "alice@contoso.com"))?.Filename);
         }
 
         /// <summary>
@@ -421,13 +423,121 @@ namespace Tests.UnitTests
             var ctx = "https://contoso.sharepoint.com/sites/project/Shared Documents/Καλημέρα κόσμε.docx";
             var fake = new FakeSpoGraphClient { OnGetDriveItemByUrl = url => throw ApiErrorWithoutABody(503) };
             var loader = NewLoader(fake);
+            var now = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+            loader.UtcNow = () => now;
 
             for (var i = 0; i < 2; i++)
             {
                 await Assert.ThrowsExceptionAsync<CopilotEnrichmentTransientException>(
                     () => loader.GetSpoFileInfoSingleAttempt(ctx, "alice@contoso.com"));
             }
-            Assert.AreEqual(2, fake.GetDriveItemByUrlCalls, "A transient failure is not cached as unresolvable.");
+            Assert.AreEqual(1, fake.GetDriveItemByUrlCalls, "D-3: inside the lock, a recent transient outcome is remembered.");
+
+            now += GraphFileMetadataLoader.TransientOutcomeMemoTtl;
+            await Assert.ThrowsExceptionAsync<CopilotEnrichmentTransientException>(
+                () => loader.GetSpoFileInfoSingleAttempt(ctx, "alice@contoso.com"));
+            Assert.AreEqual(2, fake.GetDriveItemByUrlCalls, "Remembered only briefly - never cached as unresolvable.");
+        }
+
+        private const string SourceDocContext =
+            "https://contoso.sharepoint.com/sites/project/_layouts/15/Doc.aspx?sourcedoc=%7B00000000-0000-0000-0000-000000000001%7D&file=Καλημέρα.docx";
+
+        /// <summary>
+        /// D-3: a sourcedoc lookup's fallback chain (site, default drive, its list, /shares, then up to 50 libraries) used
+        /// to carry on after a 429 or 5xx, so one throttled context cost dozens of Graph calls inside the save lock. It now
+        /// stops at the first transient outcome.
+        /// </summary>
+        [DataTestMethod]
+        [DataRow(429)]
+        [DataRow(503)]
+        public async Task GetSpoFileInfoSingleAttempt_TransientDefaultDrive_StopsTheFallbackChain(int status)
+        {
+            var throttled = new ODataError { ResponseStatusCode = status, Error = new MainError { Code = "throttled", Message = "Synthetic" } };
+            var fake = new FakeSpoGraphClient
+            {
+                OnGetSiteDrive = site => throw throttled,
+                OnGetSiteDocumentLibraryDrives = (site, max) => new[] { DriveWithIds("site", "library-1"), DriveWithIds("site", "library-2") },
+                OnGetListItemById = (s, l, i) => throw NotFoundError(),
+                OnGetDriveItemByUrl = url => throw NotFoundError(),
+            };
+            var loader = NewLoader(fake);
+
+            await Assert.ThrowsExceptionAsync<CopilotEnrichmentTransientException>(
+                () => loader.GetSpoFileInfoSingleAttempt(SourceDocContext, "alice@contoso.com"));
+
+            Assert.AreEqual(0, fake.GetDriveItemByUrlCalls, "No /shares call after the throttled default drive.");
+            Assert.AreEqual(0, fake.GetSiteDocumentLibraryDrivesCalls, "No library enumeration after it either.");
+            Assert.AreEqual(0, fake.GetListItemByIdCalls);
+            var stats = loader.InLockStats;
+            Assert.AreEqual(1, stats.Transient);
+            Assert.AreEqual(fake.TotalCalls, stats.GraphCalls, "Every Graph call made inside the lock is counted.");
+        }
+
+        /// <summary>D-3: an in-lock lookup stops making Graph calls once its end-to-end deadline has passed.</summary>
+        [TestMethod]
+        public async Task GetSpoFileInfoSingleAttempt_DeadlinePassedMidChain_StopsAndReportsTransient()
+        {
+            var now = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+            FakeSpoGraphClient fake = null;
+            fake = new FakeSpoGraphClient
+            {
+                // The site lookup is slow: by the time it returns the lookup's deadline has passed.
+                OnGetSite = site => { now = now.AddSeconds(30); return new Site { Id = "site-id", WebUrl = "https://contoso.sharepoint.com/sites/project" }; },
+            };
+            var loader = NewLoader(fake);
+            loader.UtcNow = () => now;
+
+            await Assert.ThrowsExceptionAsync<CopilotEnrichmentTransientException>(
+                () => loader.GetSpoFileInfoSingleAttempt(SourceDocContext, "alice@contoso.com"));
+
+            Assert.AreEqual(1, fake.TotalCalls, "Nothing after the site lookup.");
+            Assert.AreEqual(1, loader.InLockStats.DeadlineHits);
+            Assert.AreEqual(1, loader.InLockStats.Transient);
+        }
+
+        /// <summary>
+        /// D-3: through the real Graph SDK pipeline. Kiota's RetryHandler retries a 429 up to three times; inside the save
+        /// lock the request must go out once. The prewarm, outside the lock, keeps the SDK's retries.
+        /// </summary>
+        [TestMethod]
+        public async Task GetSpoFileInfoSingleAttempt_RealGraphPipeline_MakesNoSdkRetries()
+        {
+            var handler = new CountingThrottledHandler();
+            var client = WebJob.Office365ActivityImporter.Engine.Graph.GraphServiceClientFactory.CreateWithTimeout(
+                new Microsoft.Kiota.Abstractions.Authentication.AnonymousAuthenticationProvider(), TimeSpan.FromSeconds(30), handler);
+            var loader = new GraphFileMetadataLoader(client, AnalyticsLogger.ConsoleOnlyTracer());
+            var ctx = "https://contoso.sharepoint.com/sites/project/Shared Documents/Καλημέρα κόσμε.docx";
+
+            await Assert.ThrowsExceptionAsync<CopilotEnrichmentTransientException>(() => loader.GetSpoFileInfoSingleAttempt(ctx, "alice@contoso.com"));
+            Assert.AreEqual(1, handler.Requests, "One HTTP request inside the lock: no SDK retries.");
+
+            loader.RetryDelay = delay => Task.CompletedTask;
+            handler.Requests = 0;
+            try
+            {
+                await loader.GetSpoFileInfo(ctx, "alice@contoso.com");
+                Assert.Fail("A throttled lookup must not look like a missing file.");
+            }
+            catch (Exception ex) when (!(ex is AssertFailedException))
+            {
+                // Kiota reports exhausted retries as an AggregateException around the 429; it is still transient.
+                Assert.IsTrue(ActivityImporter.Engine.ActivityAPI.Copilot.CopilotAuditEventManager.IsTransientEnrichmentFailure(ex), ex.GetType().Name);
+            }
+            Assert.IsTrue(handler.Requests > GraphFileMetadataLoader.TransientRetryMaxAttempts,
+                $"Outside the lock the SDK's own retries still apply ({handler.Requests} requests).");
+        }
+
+        private sealed class CountingThrottledHandler : System.Net.Http.HttpMessageHandler
+        {
+            public int Requests;
+
+            protected override Task<System.Net.Http.HttpResponseMessage> SendAsync(System.Net.Http.HttpRequestMessage request, System.Threading.CancellationToken cancellationToken)
+            {
+                System.Threading.Interlocked.Increment(ref Requests);
+                var response = new System.Net.Http.HttpResponseMessage((HttpStatusCode)429) { RequestMessage = request };
+                response.Headers.TryAddWithoutValidation("Retry-After", "0");
+                return Task.FromResult(response);
+            }
         }
 
         [TestMethod]

@@ -117,7 +117,9 @@ every row of it de-duplicates away; taking the watermark from the filtered rows 
 that user re-read the same capped pages every cycle, for ever. And if the whole capped read sat inside the
 overlap behind the watermark (more interactions in those 5 minutes than one cycle can read), the next window
 starts one second before the newest interaction read instead of re-applying the overlap - otherwise the same
-capped rows would come back every cycle.
+capped rows would come back every cycle. It never starts later than the read's own time less the overlap,
+though: an interaction created in the last 5 minutes before a read may not be visible to it yet, so moving past
+that point (a capped read soon after the previous cycle) would skip late arrivals for good.
 
 ### Why the query window overlaps
 

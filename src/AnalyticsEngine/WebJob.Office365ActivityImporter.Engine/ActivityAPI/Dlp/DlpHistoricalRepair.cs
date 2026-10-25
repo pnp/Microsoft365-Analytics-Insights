@@ -20,8 +20,13 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Dlp
     /// </summary>
     public static class DlpHistoricalRepair
     {
+        /// <summary>
+        /// One page of the repair, in <c>(time_stamp, id)</c> order - the order <c>IX_audit_events_time_stamp</c> (keyed on
+        /// <c>time_stamp</c>, with the clustered <c>id</c> as its row locator) already provides, so the page is an ordered
+        /// range seek with no sort. Resumes after (<paramref name="afterTime"/>, <paramref name="afterEventId"/>).
+        /// </summary>
         public static async Task<DlpHistoricalRepairBatch> RunBatchAsync(string connectionString, DateTime fromUtc,
-            DateTime toUtc, DateTime? afterTime, int? afterUserId, Guid? afterEventId, int take, ILogger logger, IKeyValueStore archive)
+            DateTime toUtc, DateTime? afterTime, Guid? afterEventId, int take, ILogger logger, IKeyValueStore archive)
         {
             if (fromUtc.Kind != DateTimeKind.Utc || toUtc.Kind != DateTimeKind.Utc || fromUtc >= toUtc)
                 throw new ArgumentException("A nonempty half-open UTC window is required.");
@@ -36,22 +41,19 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Dlp
             {
                 await connection.OpenAsync();
                 using (var command = new SqlCommand(@"
-SELECT TOP (@take) e.id, e.time_stamp, e.user_id
+SELECT TOP (@take) e.id, e.time_stamp
 FROM dbo.audit_events e
 LEFT JOIN dbo.event_operations o ON o.id = e.operation_id
 WHERE e.time_stamp >= @from AND e.time_stamp < @to
   AND (o.operation_name IN ('DlpRuleMatch', 'DlpRuleUndo', 'DlpInfo')
        OR EXISTS (SELECT 1 FROM dbo.dlp_rule_matches m WHERE m.event_id = e.id))
-  AND (@after IS NULL OR e.time_stamp > @after OR (e.time_stamp = @after AND (
-       e.user_id > @user OR (@user IS NULL AND e.user_id IS NOT NULL)
-       OR ((e.user_id = @user OR (e.user_id IS NULL AND @user IS NULL)) AND e.id > @event))))
-ORDER BY e.time_stamp, e.user_id, e.id OPTION (RECOMPILE);", connection) { CommandTimeout = 300 })
+  AND (@after IS NULL OR e.time_stamp > @after OR (e.time_stamp = @after AND e.id > @event))
+ORDER BY e.time_stamp, e.id OPTION (RECOMPILE);", connection) { CommandTimeout = 300 })
                 {
                     command.Parameters.Add("@take", SqlDbType.Int).Value = take;
                     command.Parameters.Add("@from", SqlDbType.DateTime).Value = fromUtc;
                     command.Parameters.Add("@to", SqlDbType.DateTime).Value = toUtc;
                     command.Parameters.Add("@after", SqlDbType.DateTime).Value = (object)afterTime ?? DBNull.Value;
-                    command.Parameters.Add("@user", SqlDbType.Int).Value = (object)afterUserId ?? DBNull.Value;
                     command.Parameters.Add("@event", SqlDbType.UniqueIdentifier).Value = (object)afterEventId ?? DBNull.Value;
                     using (var reader = await command.ExecuteReaderAsync())
                         while (await reader.ReadAsync())
@@ -59,7 +61,6 @@ ORDER BY e.time_stamp, e.user_id, e.id OPTION (RECOMPILE);", connection) { Comma
                             ids.Add(reader.GetGuid(0));
                             result.AfterEventId = reader.GetGuid(0);
                             result.AfterTime = DateTime.SpecifyKind(reader.GetDateTime(1), DateTimeKind.Utc);
-                            result.AfterUserId = reader.IsDBNull(2) ? (int?)null : reader.GetInt32(2);
                         }
                 }
                 result.Scanned = ids.Count;
@@ -203,7 +204,6 @@ WHERE EXISTS (SELECT 1 FROM dbo.event_meta_sharepoint s WHERE s.event_id = e.id)
         public int ExchangeRowsRemoved { get; set; }
         public int GeneralRowsReclassified { get; set; }
         public DateTime? AfterTime { get; set; }
-        public int? AfterUserId { get; set; }
         public Guid? AfterEventId { get; set; }
     }
 }

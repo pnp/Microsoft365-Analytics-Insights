@@ -33,12 +33,10 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Dlp
             using (var fileLock = new FileStream(path + ".lock", FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None))
             {
                 var checkpoint = File.Exists(path)
-                    ? JsonConvert.DeserializeObject<Checkpoint>(File.ReadAllText(path))
-                    : new Checkpoint { Target = target, FromUtc = from, ToUtc = to };
-                if (checkpoint == null || checkpoint.Target != target || checkpoint.FromUtc != from || checkpoint.ToUtc != to)
-                    throw new ArgumentException("Checkpoint belongs to a different repair target or UTC window.");
+                    ? ReadCheckpoint(File.ReadAllText(path), target, from, to)
+                    : new Checkpoint { Version = CheckpointVersion, Target = target, FromUtc = from, ToUtc = to };
                 var batch = await DlpHistoricalRepair.RunBatchAsync(config.ConnectionStrings.DatabaseConnectionString, from, to,
-                    checkpoint.Batch?.AfterTime, checkpoint.Batch?.AfterUserId, checkpoint.Batch?.AfterEventId, 500, NullLogger.Instance, archive);
+                    checkpoint.Batch?.AfterTime, checkpoint.Batch?.AfterEventId, 500, NullLogger.Instance, archive);
                 if (batch.Scanned > 0) checkpoint.Batch = batch;
                 var pending = path + ".pending";
                 File.WriteAllText(pending, JsonConvert.SerializeObject(checkpoint));
@@ -50,8 +48,29 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Dlp
             }
         }
 
-        private sealed class Checkpoint
+        /// <summary>
+        /// Checkpoint format. Version 2 resumes on (time_stamp, id); files without a version were written by the build that
+        /// paged on (time_stamp, user_id, id), whose cursor would skip or repeat rows in the new order, so they are refused.
+        /// </summary>
+        internal const int CheckpointVersion = 2;
+
+        internal static Checkpoint ReadCheckpoint(string json, string target, DateTime from, DateTime to)
         {
+            var checkpoint = JsonConvert.DeserializeObject<Checkpoint>(json);
+            if (checkpoint == null)
+                throw new ArgumentException("The checkpoint file is empty or not a DLP repair checkpoint.");
+            if (checkpoint.Version != CheckpointVersion)
+                throw new ArgumentException($"The checkpoint file has format version {checkpoint.Version}, but this build reads version {CheckpointVersion} " +
+                    "(it pages by time and event id; earlier builds also paged by user). Start again with a new checkpoint file: " +
+                    "the repair is idempotent, so rows already repaired are scanned again and left unchanged.");
+            if (checkpoint.Target != target || checkpoint.FromUtc != from || checkpoint.ToUtc != to)
+                throw new ArgumentException("Checkpoint belongs to a different repair target or UTC window.");
+            return checkpoint;
+        }
+
+        internal sealed class Checkpoint
+        {
+            public int Version { get; set; }
             public string Target { get; set; }
             public DateTime FromUtc { get; set; }
             public DateTime ToUtc { get; set; }
