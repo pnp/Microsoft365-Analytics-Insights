@@ -73,8 +73,8 @@ namespace WebJob.AppInsightsImporter.Engine
 
     /// <summary>
     /// Writes the time-on-page patches carried by page-exit events. Returns the number of hits whose time on page
-    /// the merge changed - not the number of events, which every cycle re-reads for the whole day - and that is
-    /// what the event save summary prints.
+    /// the merge changed - not the number of events, some of which a cycle re-reads (the ingestion cursor's overlap,
+    /// a retried day) - and that is what the event save summary prints.
     /// </summary>
     public interface IHitUpdatePersistenceManager
     {
