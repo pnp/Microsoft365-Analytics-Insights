@@ -40,7 +40,10 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Maintenance
     /// appeared mid-batch is not about size or cost, so it is a detour: the next batch is half the size, and the ceiling
     /// doubles back each time a batch at it commits within the planned share of the cap - or no slower than the batches
     /// before the failure - until the size the failure interrupted is taken up again. Where every batch pays a known fixed cost
-    /// above the ceiling, a batch as slow as that cost says is no slower than before. Neither the failure nor the batches
+    /// above the ceiling, a batch as slow as that cost says is no slower than before. A detour that has not ended
+    /// <see cref="LimitDecayInterval"/> after it began - the database has become slower for good, or nothing committed before
+    /// the failure to compare with - ends then, and the sizing starts again from scratch, as a new process would, within the
+    /// lasting limit. Neither the failure nor the batches
     /// held down by it are remembered: they would push the proofs of that size out of the window, and add spread the sizing
     /// never chose to the fit.
     /// </para>
@@ -113,7 +116,10 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Maintenance
         /// </summary>
         internal const int MaxHalvingsWithoutACommit = 3;
 
-        /// <summary>How long the lasting size limit holds without another size-dependent failure before it doubles back.</summary>
+        /// <summary>
+        /// How long the lasting size limit holds without another size-dependent failure before it doubles back; and how long a
+        /// detour may go without ending before the sizing starts again.
+        /// </summary>
         internal static readonly TimeSpan LimitDecayInterval = TimeSpan.FromHours(24);
 
         /// <summary>Batches the fit and the proofs use: recent enough to follow a change in load.</summary>
@@ -157,6 +163,12 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Maintenance
         private int _interruptedSize;
         private int _detourHalvings;
 
+        // When the detour began: one that has not ended a day later is ended then.
+        private DateTime _detourSinceUtc;
+
+        // The size the first batch took, before anything was known: taken again when the sizing starts again.
+        private readonly int _initial;
+
         // A batch that committed inside the cap.
         private struct Batch
         {
@@ -176,6 +188,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Maintenance
             _clock = clock ?? SystemClock.Instance;
             _sizeLimit = max;
             Next = Clamp(initial);
+            _initial = Next;
         }
 
         /// <summary>Users for the next batch.</summary>
@@ -198,6 +211,18 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Maintenance
             _timeoutsSinceCommit = 0;
             var seconds = Math.Max(0, took.TotalSeconds);
             var heldDown = _detourHalvings > 0 && users >= DetourCeiling;
+
+            // A detour ends when batches show the database is no slower than before the failure. When it has become slower for
+            // good - or nothing committed before the failure, so there is no "before" - no batch ever shows that, and a detour
+            // held the size for as long as the process ran: at half, or, where every batch then ran past the cap, halving on
+            // each one down to a single user. So a detour that has not ended a day after it began ends then, and what the
+            // batches before it showed is forgotten: it describes a database that is no longer there. Not sooner: a slow spell
+            // shorter than that must not make the sizing forget a database that comes back.
+            if (heldDown && _clock.UtcNow - _detourSinceUtc >= LimitDecayInterval)
+            {
+                StartAgain();
+                return;
+            }
 
             if (!heldDown)
             {
@@ -304,7 +329,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Maintenance
         /// Records a batch that failed - it rolled back - after <paramref name="took"/>. The next batch is half its size.
         /// <paramref name="sizeDependent"/> - a command timeout - also keeps later batches at or below that half, until the
         /// limit doubles back a day later; otherwise - a deadlock, a lock timeout, a reference that appeared mid-batch - the
-        /// half is a detour, and the sizing resumes where it was once batches at it show the database is no slower than before.
+        /// half is a detour, and the sizing resumes where it was once batches at it show the database is no slower than before -
+        /// or, when none has a day later, starts again from scratch.
         /// A size-dependent failure that follows <see cref="MaxHalvingsWithoutACommit"/> others with no batch committing between
         /// them does not halve again.
         /// </summary>
@@ -347,6 +373,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Maintenance
             if (_detourHalvings == 0)
             {
                 _interruptedSize = users;
+                _detourSinceUtc = _clock.UtcNow;
             }
             if (DetourCeiling > _min)
             {
@@ -524,6 +551,20 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Maintenance
         {
             _committed.Add(batch);
             if (_committed.Count > Window) _committed.RemoveAt(0);
+        }
+
+        // Sizes from scratch, as a new process would - but within the lasting limit, which doubles back by itself: the detour
+        // ends, and the batches, the fit, the fixed cost and the overruns, all from before it, are forgotten.
+        private void StartAgain()
+        {
+            _detourHalvings = 0;
+            _recent.Clear();
+            _committed.Clear();
+            _fixedCostSeconds = null;
+            _overruns = 0;
+            _lastFitted = null;
+            _lastFittedTookLargest = false;
+            Next = Clamp(Math.Min(_initial, _sizeLimit));
         }
 
         private void Remember(Batch batch)
