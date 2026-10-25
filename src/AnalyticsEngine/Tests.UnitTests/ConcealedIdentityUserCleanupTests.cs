@@ -245,6 +245,71 @@ DELETE FROM dbo.users WHERE id IN ({ids});");
             StringAssert.Contains(logger.Entries[0].Message, "deleted 2 placeholder user(s)");
             StringAssert.Contains(logger.Entries[0].Message, "4 user(s) that look like concealed identities were kept");
             StringAssert.Contains(logger.Entries[0].Message, ConcealedIdentityUserCleanup.AppSettingName);
+
+            // The numbers a log export needs to tell a slow cleanup from a stuck one: where the time went before the first batch,
+            // what the batches looked like, and what the sizer will do next.
+            StringAssert.Contains(logger.Entries[0].Message, "Preflight ");
+            StringAssert.Contains(logger.Entries[0].Message, "reference reads ");
+            StringAssert.Contains(logger.Entries[0].Message, $"Batches 1: users min/median/max {result.Candidates - result.KeptByRunSnapshot}/");
+            StringAssert.Contains(logger.Entries[0].Message, "Next batch ");
+            StringAssert.Contains(logger.Entries[0].Message, ", size limit 1,000");
+            Assert.IsTrue(result.PreflightElapsed >= result.ReferenceReadElapsed);
+            Assert.IsTrue(result.ReferenceReads.Count >= readOncePerRun, "One timed read per table with no index leading with its user column.");
+        }
+
+        [TestMethod]
+        public async Task AnUnreadableKillSwitchValue_TurnsTheCleanupOff_AndSaysSoOnceAsAnError()
+        {
+            var placeholder = InsertUser(NewHash());
+            InsertActivity("teams_user_activity_log", placeholder, days: 1);
+            var logger = new RecordingLogger();
+            var cleanup = new ConcealedIdentityUserCleanup(_connectionString, enabled: false, logger, unparseableSettingValue: "off") { MinUserIdExclusive = _baselineUserId };
+
+            var first = await cleanup.RunIfDueAsync();
+            var second = await cleanup.RunIfDueAsync();
+
+            Assert.AreEqual(ConcealedIdentityUserCleanupOutcome.Disabled, first.Outcome);
+            Assert.AreEqual(ConcealedIdentityUserCleanupOutcome.Disabled, second.Outcome);
+            Assert.IsTrue(UserExists(placeholder), "An unreadable value must never leave the irreversible delete on.");
+            Assert.AreEqual(1, logger.Entries.Count, "Once per process: " + string.Join(" | ", logger.Entries.Select(e => e.Message)));
+            Assert.AreEqual(LogLevel.Error, logger.Entries[0].Level);
+            StringAssert.Contains(logger.Entries[0].Message, ConcealedIdentityUserCleanup.AppSettingName);
+            StringAssert.Contains(logger.Entries[0].Message, "'off'");
+            StringAssert.Contains(logger.Entries[0].Message, "OFF");
+        }
+
+        [TestMethod]
+        public async Task APreflightThatRunsOutOfItsBudget_ChangesNothing_AndWaitsBeforeReadingAgain()
+        {
+            // The reads of the tables with no index on their user column run while the users-and-licences lock is held, and
+            // used to be allowed 30 minutes each, before the run's own two-minute budget was ever looked at.
+            var readOncePerRun = new[] { "copilot_usage_user_activity_log", "user_license_type_lookups" }.Count(t => !HasIndexLeadingWith(t, "user_id"));
+            if (readOncePerRun == 0) Assert.Inconclusive("Every reference has an index leading with its user column here, so there is no preflight read to bound.");
+
+            var placeholder = InsertUser(NewHash());
+            InsertActivity("teams_user_activity_log", placeholder, days: 2);
+            var logger = new RecordingLogger();
+            var cleanup = NewCleanup(logger);
+            cleanup.PreflightBudget = TimeSpan.FromMilliseconds(50);
+            cleanup.BeforeEachReferenceRead = () => Task.Delay(300);
+
+            var result = await cleanup.RunIfDueAsync();
+
+            Assert.AreEqual(ConcealedIdentityUserCleanupOutcome.Ran, result.Outcome);
+            Assert.IsTrue(result.PreflightExceeded);
+            Assert.IsNull(result.Error);
+            Assert.AreEqual(0, result.Batches);
+            Assert.AreEqual(0, result.UsersDeleted);
+            Assert.AreEqual(1, result.ReferenceReads.Count, "It stops at the first table it has no time for.");
+            Assert.IsTrue(UserExists(placeholder));
+            Assert.AreEqual(2, CountActivity("teams_user_activity_log", placeholder));
+            Assert.AreEqual(1, logger.Entries.Count);
+            Assert.AreEqual(LogLevel.Warning, logger.Entries[0].Level);
+            StringAssert.Contains(logger.Entries[0].Message, "ran out of its time budget");
+            StringAssert.Contains(logger.Entries[0].Message, "Preflight ");
+
+            var again = await cleanup.RunIfDueAsync();
+            Assert.AreEqual(ConcealedIdentityUserCleanupOutcome.NotDue, again.Outcome, "Not read again every cycle: it waits as after a failure.");
         }
 
         [TestMethod]
@@ -378,8 +443,11 @@ DELETE FROM dbo.users WHERE id IN ({ids});");
                 Assert.AreEqual(2, CountActivity("platform_user_activity_log", id));
             }
             Assert.AreEqual(1, logger.Entries.Count);
-            Assert.AreEqual(LogLevel.Warning, logger.Entries[0].Level);
+            // A unit of work failed: an Error, naming the step, the exception and the SQL error number.
+            Assert.AreEqual(LogLevel.Error, logger.Entries[0].Level);
             StringAssert.Contains(logger.Entries[0].Message, $"tries again in {ConcealedIdentityUserCleanup.FailureRetryInterval.TotalMinutes:N0} minutes");
+            StringAssert.Contains(logger.Entries[0].Message, "step 'batch' (SqlException, SQL error 1222)");
+            StringAssert.Contains(logger.Entries[0].Message, "Next batch 1 user(s), size limit 1,000");
             Assert.AreEqual(1, cleanup.BatchSize, "Any failure halves the next batch.");
             Assert.AreEqual(ConcealedIdentityUserCleanup.MaxBatchSize, cleanup.BatchSizeLimit, "A lock timeout is not about size: it sets no lasting limit.");
 
@@ -860,6 +928,95 @@ DELETE FROM dbo.users WHERE id IN ({ids});");
                         $"noise {noise}, seed {seed}: settles on {Median(once.Sizes.Skip(100))} against {Median(clean.Sizes.Skip(100))}");
                 }
             }
+        }
+
+        [TestMethod]
+        public void BatchSizer_NeverHalvesABatchThatCommittedUnderTheCap()
+        {
+            ConcealedIdentityCleanupBatchSizer NewSizer() => new ConcealedIdentityCleanupBatchSizer(25, ConcealedIdentityUserCleanup.MinBatchSize,
+                ConcealedIdentityUserCleanup.MaxBatchSize, ConcealedIdentityUserCleanup.TargetBatchDuration, ConcealedIdentityUserCleanup.MaxBatchDuration);
+
+            // Inside the 18 s ceiling but with too little room to double: it used to be halved, though nothing went wrong.
+            var inside = NewSizer();
+            inside.Observe(25, TimeSpan.FromSeconds(12));
+            Assert.IsTrue(inside.Next >= 25, $"A batch that fitted is not shrunk: {inside.Next}");
+
+            // Under the cap but over the ceiling: one batch cannot say whether its users or a fixed cost made it slow, so a
+            // modest step, never a halving.
+            var slow = NewSizer();
+            slow.Observe(25, TimeSpan.FromSeconds(19));
+            Assert.IsTrue(slow.Next > 25 / 2 && slow.Next < 25, $"A step down towards the ceiling, not a halving: {slow.Next}");
+        }
+
+        [TestMethod]
+        public void BatchSizer_WhenTheFixedCostPerBatchIsAboveTheCeiling_TakesLargeBatches_AndNeverRatchetsToOne()
+        {
+            // Every batch pays the foreign-key checks on the children of dbo.users that have no index leading with user_id, whatever
+            // its size: a constant per batch (F) plus a little per user. With F above the 18 s ceiling no size gets a batch inside
+            // it. The sizer used to halve what committed under the cap (F 19-25: settled on 12), blame the size for what ran past
+            // it (F 31-89: fell to 1, a year or two for 200,000 placeholders) and time out at every size (F 91: nothing to size).
+            foreach (var floor in new[] { 5.0, 19.0, 25.0, 31.0, 60.0 })
+            {
+                foreach (var noise in new[] { 0.0, 0.05 })
+                {
+                    for (var seed = 1; seed <= 10; seed++)
+                    {
+                        var run = Simulate(floor, 0.002, noise, seed, batches: 60);
+                        var what = $"F {floor} s, noise {noise}, seed {seed}: {run}";
+                        Assert.AreEqual(0, run.Failures, what);
+                        Assert.IsTrue(run.Sizes.Min() >= 6, "Never ratchets down to a handful of users: " + what);
+                        Assert.IsTrue(run.Sizes.Skip(30).All(s => s >= 250), "Settles on large batches, which is where a fixed cost pays: " + what);
+                        Assert.AreEqual(ConcealedIdentityUserCleanup.MaxBatchSize, run.Limits.Last(),
+                            "Size was never to blame, so no lasting limit stays: " + what);
+                        if (floor <= 25) Assert.IsTrue(run.Seconds.Skip(30).All(s => s <= Cap), "Still inside the cap where the cap can be met: " + what);
+                    }
+                }
+            }
+        }
+
+        [TestMethod]
+        public void BatchSizer_WhenEverySizeTimesOut_HoldsTheSizeInsteadOfRatchetingToOne()
+        {
+            // F of 91 s is past the 90 s command timeout: every batch times out at every size, so size is not what is wrong.
+            for (var seed = 1; seed <= 5; seed++)
+            {
+                var run = Simulate(91, 0.002, 0.0, seed, batches: 40);
+                Assert.AreEqual(40, run.Failures, run.ToString());
+                Assert.IsTrue(run.Sizes.Min() >= ConcealedIdentityUserCleanup.DefaultBatchSize >> ConcealedIdentityCleanupBatchSizer.MaxHalvingsWithoutACommit,
+                    $"seed {seed}: halves {ConcealedIdentityCleanupBatchSizer.MaxHalvingsWithoutACommit} times and then holds: {run}");
+                Assert.AreEqual(run.Sizes.Last(), run.Sizes.Skip(10).First(), $"seed {seed}: held: {run}");
+            }
+
+            // A batch that commits again lets the size be blamed for later timeouts afresh.
+            var sizer = new ConcealedIdentityCleanupBatchSizer(400, ConcealedIdentityUserCleanup.MinBatchSize, ConcealedIdentityUserCleanup.MaxBatchSize,
+                ConcealedIdentityUserCleanup.TargetBatchDuration, ConcealedIdentityUserCleanup.MaxBatchDuration);
+            var timeout = TimeSpan.FromSeconds(ConcealedIdentityUserCleanup.BatchCommandTimeoutSeconds);
+            sizer.ObserveFailure(400, timeout, sizeDependent: true);
+            sizer.Observe(sizer.Next, TimeSpan.FromSeconds(2));
+            for (var halvings = 1; halvings <= ConcealedIdentityCleanupBatchSizer.MaxHalvingsWithoutACommit; halvings++)
+            {
+                var before = sizer.Next;
+                sizer.ObserveFailure(before, timeout, sizeDependent: true);
+                Assert.IsTrue(sizer.Next <= Math.Max(1, before / 2), $"Timeout {halvings} after a commit still halves.");
+            }
+        }
+
+        [TestMethod]
+        public void BatchSizer_AnOverrunThatIsTheFixedCost_LiftsTheLimitItSetOnTheWay()
+        {
+            // 31 s per batch, however many users: the first batch past the cap looks like a size problem and sets a limit; the
+            // batches after it, at half and a quarter the size, take just as long, which shows it was not.
+            var sizer = new ConcealedIdentityCleanupBatchSizer(25, ConcealedIdentityUserCleanup.MinBatchSize, ConcealedIdentityUserCleanup.MaxBatchSize,
+                ConcealedIdentityUserCleanup.TargetBatchDuration, ConcealedIdentityUserCleanup.MaxBatchDuration);
+            sizer.Observe(25, TimeSpan.FromSeconds(31.05));
+            Assert.IsTrue(sizer.SizeLimit < ConcealedIdentityUserCleanup.MaxBatchSize, "Tentatively blamed, as any batch past the cap on new ground is.");
+            while (sizer.Next > 6) sizer.Observe(sizer.Next, TimeSpan.FromSeconds(31.02));
+            sizer.Observe(sizer.Next, TimeSpan.FromSeconds(31.01));
+
+            Assert.AreEqual(ConcealedIdentityUserCleanup.MaxBatchSize, sizer.SizeLimit, "Halving did not make a batch quicker, so no limit stays.");
+            Assert.IsTrue(sizer.Next > 25, $"Bigger batches, not smaller: {sizer.Next}");
+            Assert.IsNotNull(sizer.FixedCostSeconds);
+            Assert.IsTrue(sizer.FixedCostSeconds.Value >= 30 && sizer.FixedCostSeconds.Value <= 32, $"The fixed cost is found: {sizer.FixedCostSeconds}");
         }
 
         [TestMethod]

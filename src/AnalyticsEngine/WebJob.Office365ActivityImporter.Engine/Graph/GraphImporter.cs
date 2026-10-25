@@ -41,6 +41,24 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         private readonly IGraphImportSectionFactory _sectionFactory;
 
         private readonly IClock _clock;
+
+        // What each daily report of the usage-report phase did, and what became of the weekly one: for the phase's one summary line.
+        private readonly System.Collections.Concurrent.ConcurrentQueue<DailyReportOutcome> _dailyReportOutcomes = new System.Collections.Concurrent.ConcurrentQueue<DailyReportOutcome>();
+        private volatile string _weeklyStatus = "not run";
+
+        /// <summary>The last usage-report phase run's summary line, as logged. For tests.</summary>
+        internal string LastPhaseSummary { get; private set; }
+
+        private sealed class DailyReportOutcome
+        {
+            public string Name;
+            public int RowsRead;
+            public int RowsWritten;
+            public int Dates;
+            public int DatesSkipped;
+            public long Milliseconds;
+        }
+
         internal static readonly TimeSpan WeeklyReportNoSundayBackoff = WeeklyUsageReportRetryPolicy.RetryInterval;
 
         /// <summary>
@@ -341,6 +359,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
 
             if (!await IsReportDueAsync(reportKey, minWait))
             {
+                _weeklyStatus = "not due";
                 if (logWhenNotDue)
                 {
                     _logger.LogInformation(
@@ -357,17 +376,23 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             }
 
             WeeklyUsageReportSaveResult result;
+            var weeklyWatch = Stopwatch.StartNew();
             try
             {
                 result = await loader.LoadAndSaveLastWeeksReportsIfRefreshOnDayWithResult(System.DayOfWeek.Sunday);
             }
-            catch
+            catch (Exception ex)
             {
+                _weeklyStatus = $"failed ({ex.GetType().Name}) after {weeklyWatch.ElapsedMilliseconds:N0} ms";
                 // The caller surfaces the failure. Retry on this report's own short schedule: it no longer waits for
                 // the daily phase, and a failure must not leave it due on every cycle either.
                 await TryScheduleReportAttemptAtAsync(reportKey, _clock.UtcNow.Add(WeeklyReportNoSundayBackoff));
                 throw;
             }
+
+            _weeklyStatus = result.ObservedRefreshDayReport
+                ? $"imported Sunday's report ({result.UsableRows:N0} of {result.RowsReturned:N0} row(s) usable, {weeklyWatch.ElapsedMilliseconds:N0} ms)"
+                : $"ran but Sunday's report is not stored yet ({result.RowsReturned:N0} row(s) returned, {result.UsableRows:N0} usable, {weeklyWatch.ElapsedMilliseconds:N0} ms)";
 
             if (_reportCompletionStore != null)
             {
@@ -588,6 +613,10 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             }
             if (runImport)
             {
+                var phaseWatch = Stopwatch.StartNew();
+                _weeklyStatus = "not run";
+                while (_dailyReportOutcomes.TryDequeue(out _)) { }
+
                 // The timestamp is both the once-a-day throttle and the proof that every daily report
                 // completed. Clear it before any batched writes: if this phase fails after a
                 // partial save, the next cycle must re-import rather than trusting the old marker.
@@ -658,6 +687,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
 
                 await Task.WhenAll(importTasks);
 
+                LogPhaseSummary(importTasks.Count - 1, failedReports, concealedReports, weeklyHasOwnSchedule ? weeklyFailures : Enumerable.Empty<string>(), phaseWatch.ElapsedMilliseconds);
                 // Recorded whatever else failed, so the next cycles know an empty table is the tenant's privacy
                 // setting at work, not a fresh database; and cleared by a run that refused nothing.
                 await RecordConcealedIdentityRefusalAsync(concealedReports.Count > 0, MIN_WAIT);
@@ -723,6 +753,37 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             }
         }
 
+        /// <summary>
+        /// The one line a usage-report phase run writes however it ended: how many reports imported, failed or were refused,
+        /// rows read and written, and per report its rows, dates, finalized dates skipped and time; then the weekly report's status.
+        /// A Warning when anything failed or was refused, otherwise Information. No identifiers, only counts.
+        /// </summary>
+        private void LogPhaseSummary(int dailyReportCount, IEnumerable<string> failedDaily, IEnumerable<string> refused, IEnumerable<string> failedWeekly, long elapsedMs)
+        {
+            var failed = failedDaily.Concat(failedWeekly).OrderBy(r => r).ToList();
+            var refusedList = refused.OrderBy(r => r).ToList();
+            var outcomes = _dailyReportOutcomes.ToArray().OrderBy(o => o.Name).ToList();
+            var message = $"Usage report phase: {outcomes.Count} of {dailyReportCount} daily report(s) imported, {failed.Count} failed, {refusedList.Count} refused for concealed identities; " +
+                $"{outcomes.Sum(o => (long)o.RowsRead):N0} row(s) read, {outcomes.Sum(o => (long)o.RowsWritten):N0} written, in {elapsedMs:N0} ms. " +
+                (outcomes.Count > 0
+                    ? "Per report: " + string.Join("; ", outcomes.Select(o => $"{o.Name} {o.RowsRead:N0} read/{o.RowsWritten:N0} written, {o.Dates:N0} date(s) downloaded, " +
+                        $"{o.DatesSkipped:N0} finalized date(s) skipped, {o.Milliseconds:N0} ms")) + ". "
+                    : string.Empty) +
+                (failed.Count > 0 ? "Failed: " + string.Join(", ", failed) + ". " : string.Empty) +
+                (refusedList.Count > 0 ? "Refused: " + string.Join(", ", refusedList) + ". " : string.Empty) +
+                $"SharePoint sites weekly usage: {_weeklyStatus}.";
+
+            LastPhaseSummary = message;
+            if (failed.Count > 0 || refusedList.Count > 0)
+            {
+                _logger.LogWarning(message);
+            }
+            else
+            {
+                _logger.LogInformation(message);
+            }
+        }
+
         private const string WeeklyReportName = "SharePoint sites weekly usage";
 
         /// <summary>
@@ -783,6 +844,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             where CACHETYPE : DBLookupCache<TLookupType>
         {
             logger.LogInformation($"Importing {thingWeAreImporting} reports...");
+            var reportWatch = Stopwatch.StartNew();
 
             var instrumentation = abstractActivityLoader.SaveInstrumentation ?? NullUsageReportSaveInstrumentation.Instance;
             var instrumentationEnabled = instrumentation.IsEnabled;
@@ -824,6 +886,19 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                     }
                 }
 
+                // The whole look-back window is downloaded: said once per report, with why, because it is the costly path
+                // (up to UsageReportsDaysBack dates of every report) and looks the same in the log as a cheap run.
+                if (datesToSkip == null || datesToSkip.Count == 0)
+                {
+                    var windowDates = UsageReportRefreshPolicy.ClampDaysBack(daysBackMax);
+                    var reason = _settings.ForceUsageReportsImport
+                        ? "ForceUsageReportsImport=true"
+                        : lastSuccessfulImport == null
+                            ? "this report has no completion stamp (never completed, the runtime state store is not configured or unreachable, or its last save failed)"
+                            : "no finalized date in the window is stored yet";
+                    logger.LogInformation($"{thingWeAreImporting}: downloading the full {windowDates}-date window from Graph (UsageReportsDaysBack): {reason}.");
+                }
+
                 await abstractActivityLoader.PopulateLoadedReportPagesFromGraph(daysBackMax, datesToSkip);
 
                 if (_reportCompletionStore != null)
@@ -859,6 +934,15 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
 
                 var total = abstractActivityLoader.LoadedReportPages.SelectMany(r => r.Value).Count();
                 logger.LogInformation($"Imported {total.ToString("N0")} {thingWeAreImporting} reports.");
+                _dailyReportOutcomes.Enqueue(new DailyReportOutcome
+                {
+                    Name = thingWeAreImporting,
+                    RowsRead = total,
+                    RowsWritten = abstractActivityLoader.LastSaveDbWriteCount,
+                    Dates = abstractActivityLoader.LoadedReportPages.Count,
+                    DatesSkipped = datesToSkip?.Count ?? 0,
+                    Milliseconds = reportWatch.ElapsedMilliseconds,
+                });
 
                 // Only reached when the download AND the save both completed - anything else threw and is caught
                 // by RunReportSafely. A failed save leaves this report's stamp cleared, so its window is retried next

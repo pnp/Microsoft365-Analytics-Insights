@@ -147,10 +147,23 @@ namespace Common.Entities.Config
                 this.ForceUsageReportsImport = forceUsageReportsImportBool;
             }
 
-            // Deleting the placeholder users older builds created from concealed usage-report identities. On unless the
-            // setting is "false" (any case); anything unparseable keeps the default rather than silently turning it off.
-            this.CleanUpConcealedIdentityUsers = !bool.TryParse(ConfigurationManager.AppSettings.Get(CleanUpConcealedIdentityUsersSettingName), out var cleanUpConcealedIdentityUsers)
-                || cleanUpConcealedIdentityUsers;
+            // Deleting the placeholder users older builds created from concealed usage-report identities. Absent: on. "true" or
+            // "false" (any case): as set. Anything else - "0", "no", "off", "disabled" - is not understood, and this is an
+            // irreversible delete, so it fails closed: off, and the cleanup logs an Error naming the value (once per process).
+            var cleanUpSetting = ConfigurationManager.AppSettings.Get(CleanUpConcealedIdentityUsersSettingName);
+            if (string.IsNullOrWhiteSpace(cleanUpSetting))
+            {
+                this.CleanUpConcealedIdentityUsers = true;
+            }
+            else if (bool.TryParse(cleanUpSetting, out var cleanUpConcealedIdentityUsers))
+            {
+                this.CleanUpConcealedIdentityUsers = cleanUpConcealedIdentityUsers;
+            }
+            else
+            {
+                this.CleanUpConcealedIdentityUsers = false;
+                this.CleanUpConcealedIdentityUsersUnparseableValue = cleanUpSetting.Trim();
+            }
 
             // Optional cap on simultaneous Activity API summary fetches (default 8).
             // Prevents burst throttling when (contentTypes × timeChunks) is large.
@@ -561,10 +574,16 @@ namespace Common.Entities.Config
         /// <summary>
         /// Whether the activity importer deletes, a bounded slice per cycle, the placeholder users that versions before the
         /// concealed-identity fix created from concealed (hashed) usage-report identities, together with their usage-report
-        /// rows. Default true; set the <c>CleanUpConcealedIdentityUsers</c> app setting to <c>false</c> to turn it off. A
-        /// runtime setting only - not part of the installer's saved configuration.
+        /// rows. Default true when the <c>CleanUpConcealedIdentityUsers</c> app setting is absent; <c>false</c> turns it off.
+        /// A value that is present but is neither <c>true</c> nor <c>false</c> (<c>0</c>, <c>no</c>, <c>off</c>) also turns it
+        /// off - the delete is irreversible, so it fails closed - and is reported in
+        /// <see cref="CleanUpConcealedIdentityUsersUnparseableValue"/>. A runtime setting only - not part of the installer's
+        /// saved configuration.
         /// </summary>
         public bool CleanUpConcealedIdentityUsers { get; set; } = true;
+
+        /// <summary>The value of the <c>CleanUpConcealedIdentityUsers</c> app setting when it was present but not a boolean; otherwise null.</summary>
+        public string CleanUpConcealedIdentityUsersUnparseableValue { get; set; }
 
         /// <summary>
         /// Maximum simultaneous Activity API summary fetches (per importer instance).

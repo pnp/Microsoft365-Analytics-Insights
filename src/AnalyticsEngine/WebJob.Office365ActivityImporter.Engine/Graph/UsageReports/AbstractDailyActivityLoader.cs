@@ -394,6 +394,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
                         var seenLookupIds = new HashSet<int>();
                         var queuedLookupIds = new HashSet<int>();
                         var duplicateRows = 0;
+                        var outOfScopeRows = 0;
+                        var missingLookupRows = 0;
 
                         if (instrumentationEnabled)
                         {
@@ -419,11 +421,12 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
                             // A usage-report row with no user/group identifier (e.g. a Graph row with a null
                             // userPrincipalName when report anonymisation is enabled on the tenant) can't be matched
                             // to a DB lookup. Skip it rather than NRE / ArgumentNullException deeper in the loop.
+                            // Counted here and reported once for the date, below.
                             if (string.IsNullOrWhiteSpace(reportPage.LookupFieldValue))
                             {
                                 dateMetrics?.RecordMissingLookupValue();
                                 totals?.RecordMissingLookupValue();
-                                Telemetry.LogWarning($"Skipping a {typeof(TReportDbType).Name} report row with no lookup identifier (null/empty user or group name).");
+                                missingLookupRows++;
                                 continue;
                             }
 
@@ -448,7 +451,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
                             {
                                 dateMetrics?.RecordOutOfScope();
                                 totals?.RecordOutOfScope();
-                                Telemetry.LogInformation($"Skipping {reportPage.LookupFieldValue} as not in scope");
+                                outOfScopeRows++;
                                 continue;
                             }
 
@@ -587,6 +590,18 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
                         {
                             Telemetry.LogWarning($"{loaderType}: Graph returned {duplicateRows:N0} extra row(s) for a user or group it had already " +
                                 $"reported for {dateTime:yyyy-MM-dd}. Kept the last row for each; the report is otherwise unaffected.");
+                        }
+
+                        // One line per date for each kind of skipped row, never one per row, and never the identifier itself.
+                        if (missingLookupRows > 0)
+                        {
+                            Telemetry.LogWarning($"{loaderType}: skipped {missingLookupRows:N0} row(s) for {dateTime:yyyy-MM-dd} with no user or group identifier " +
+                                "(null or empty); they cannot be linked to anyone.");
+                        }
+                        if (outOfScopeRows > 0)
+                        {
+                            Telemetry.LogInformation($"{loaderType}: skipped {outOfScopeRows:N0} of {LoadedReportPages[dateTime].Count:N0} row(s) for {dateTime:yyyy-MM-dd} " +
+                                "as outside the configured user scope (UserGroupsFilter).");
                         }
 
                         if (instrumentationEnabled)
