@@ -6,6 +6,7 @@
 
 using Common.Entities;
 using Common.Entities.Config;
+using Common.Entities.State;
 using Common.Entities.UserScope;
 using DataUtils;
 using DataUtils.Health;
@@ -139,49 +140,77 @@ namespace WebJob.AppInsightsImporter
                 }
 #endif
                 // UserGroupsFilter, shared across cycles: the resolved scope (and the last good one to fall back on), and
-                // how far this process has read - see AppInsightsScanWatermark. Also which days failed to save, so each
-                // is retried next cycle but only a few times - see AppInsightsDayFailureTracker - and the query windows
-                // each day needed, so a day over the API's limits is not re-split every cycle - see AppInsightsQueryWindowCache.
+                // how far this process has read - see AppInsightsScanWatermark. Also which days failed, so each is retried
+                // next cycle but only a few times - see AppInsightsDayFailureTracker - and the ingestion cursor's store,
+                // durable in the runtime state table, or in memory (created once here) without Storage.
                 var userScopeProvider = UserImportScopeProvider.CreateForGraph(config, logger);
                 var scanWatermark = new Engine.AppInsightsScanWatermark();
                 var dayFailures = new Engine.AppInsightsDayFailureTracker();
-                var queryWindows = new Engine.AppInsightsQueryWindowCache();
+                var cursorStore = new Engine.KeyValueIngestionCursorStore(
+                    StateStore.TryOpen(config, StatePartitions.AppInsightsImport, logger) ?? new InMemoryKeyValueStore(),
+                    Engine.AppInsightsAPIClient.ParseConnectionStringValue(config.AppInsightsConnectionString, "ApplicationId"));
+                logger.LogInformation($"App Insights ingestion cursor: {cursorStore.Description}" +
+                    (StateStore.IsConfigured(config) ? "." : ". No Storage connection string, so after a restart the import starts again from the newest stored hit."));
 
                 while (runAgain && !HostRuntime.ShutdownRequested)
                 {
-                    var importCycleTimer = new JobTimer(logger, Process.GetCurrentProcess().ProcessName);
-                    importCycleTimer.Start();
+                    // One operation id per cycle, so every trace, exception and event of a cycle can be pulled out together.
+                    using (logger.BeginOperationScope(Guid.NewGuid().ToString("N")))
+                    {
+                        var importCycleTimer = new JobTimer(logger, Process.GetCurrentProcess().ProcessName);
+                        importCycleTimer.Start();
 
-                    // One failed cycle - e.g. a transient SQL error loading the URL filters or the newest hit - must
-                    // not end the process: the web-job would restart, losing the state above and adding downtime.
-                    // Log it and try again after the normal pause. DEBUG still stops on it, in the catch below.
-                    var cycleCompleted = false;
-                    try
-                    {
-                        var userScope = userScopeProvider.GetScopeForCycleAsync().GetAwaiter().GetResult();
-                        var importer = new Engine.AppInsightsImporter(config, logger, userScope: userScope, scanWatermark: scanWatermark,
-                            dayFailureTracker: dayFailures, queryWindowCache: queryWindows);
-                        int? readDaysBefore = daysBeforeReadOverride > 0 ? daysBeforeReadOverride : (int?)null;
-                        stages.RunAsync(logger, "AppInsightsImport", () => importer.ImportAndSave(saveRestResponses, readDaysBefore)).GetAwaiter().GetResult();
-                        cycleCompleted = true;
-                    }
-                    catch (Exception ex) when (ContinueAfterFailedCycle)
-                    {
-                        // One telemetry owner: the exception is tracked here, once, with its chain in the message and its stack on stderr.
-                        logger.LogError($"Import cycle failed: {CommonExceptionHandler.GetErrorText(ex)}. Trying again after the normal pause.", ex);
-                    }
+                        // One failed cycle - e.g. a transient SQL error loading the URL filters or the newest hit - must
+                        // not end the process: the web-job would restart, losing the state above and adding downtime.
+                        // Log it and try again after the normal pause. DEBUG still stops on it, in the catch below.
+                        Engine.AppInsightsImportCycleResult cycleResult = null;
+                        Exception cycleException = null;
+                        try
+                        {
+                            var userScope = userScopeProvider.GetScopeForCycleAsync().GetAwaiter().GetResult();
+                            var importer = new Engine.AppInsightsImporter(config, logger, userScope: userScope, scanWatermark: scanWatermark,
+                                dayFailureTracker: dayFailures, cursorStore: cursorStore);
+                            int? readDaysBefore = daysBeforeReadOverride > 0 ? daysBeforeReadOverride : (int?)null;
+                            var stage = stages.Begin(logger, "AppInsightsImport");
+                            try
+                            {
+                                cycleResult = importer.ImportAndSave(saveRestResponses, readDaysBefore).GetAwaiter().GetResult();
+                                if (cycleResult.Outcome == Engine.AppInsightsCycleOutcome.Failed)
+                                {
+                                    stage.Failed(reason: string.Join(",", cycleResult.Reasons));
+                                }
+                                else
+                                {
+                                    stage.Succeeded();
+                                }
+                            }
+                            catch (Exception ex)
+                            {
+                                stage.Failed(ex);
+                                throw;
+                            }
+                        }
+                        catch (Exception ex) when (ContinueAfterFailedCycle)
+                        {
+                            // One telemetry owner: the exception is tracked here, once, with its chain in the message and its stack on stderr.
+                            cycleException = ex;
+                            logger.LogError($"Import cycle failed: {CommonExceptionHandler.GetErrorText(ex)}. Trying again after the normal pause.", ex);
+                        }
 
 #if DEBUG
-                    runAgain = false; // Debug only runs once; release runs forever. 
+                        runAgain = false; // Debug only runs once; release runs forever.
 #else
-                    runAgain = !debugSwitchDetected;
+                        runAgain = !debugSwitchDetected;
 #endif
 
-                    // Output cycle stats - only for a cycle that ran to the end, so a failing one isn't reported as completed.
-                    if (cycleCompleted)
-                    {
-                        heartbeat.CycleCompleted(importCycleTimer.Elapsed);
-                        importCycleTimer.TrackFinishedEventAndStopTimer(AnalyticsLogger.AnalyticsEvent.FinishedImportCycle);
+                        // Every cycle reports its outcome. Only one that got to the end - Succeeded or Degraded - counts as a
+                        // completed cycle for liveness: a cycle that stopped at a failed day, or threw, is not reported as one.
+                        var outcome = Engine.AppInsightsImportTelemetry.TrackCycle(logger, cycleResult, importCycleTimer.Elapsed, cycleException);
+                        if (outcome != Engine.AppInsightsCycleOutcome.Failed)
+                        {
+                            heartbeat.CycleCompleted(importCycleTimer.Elapsed);
+                            importCycleTimer.TrackFinishedEventAndStopTimer(AnalyticsLogger.AnalyticsEvent.FinishedImportCycle);
+                        }
                     }
 
                     if (runAgain)

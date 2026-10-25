@@ -647,7 +647,10 @@ namespace DataUtils
             CopilotAuditBackfill,
             GlobalFilterChanged,
             ActivityAnalysisLoad,
-            ImportStage
+            ImportStage,
+            AppInsightsImportCycle,
+            AppInsightsDay,
+            AppInsightsDayGivenUp
         }
 
         private static bool TryMarkExceptionAsTracked(Exception ex)

@@ -505,10 +505,10 @@ namespace Tests.UnitTests
 
             // Nothing the pilot did is newer than the 7th, so resuming from the newest STORED hit would re-read the 7th
             // and 8th every cycle, and a pilot who stopped browsing would make that window grow for ever.
-            source.PageViewDaysRequested.Clear();
+            source.CountRangesRequested.Clear();
             await Run();
 
-            Assert.AreEqual(day, source.PageViewDaysRequested.First(), "It resumes from the newest page view it has read.");
+            Assert.AreEqual(day, source.CountRangesRequested.Single().FromUtc, "It resumes from the newest page view it has read.");
         }
 
         private static GraphUser DirectoryUser(string id, string upn, string managerId = null) => new GraphUser

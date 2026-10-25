@@ -5,19 +5,20 @@ using System.Linq;
 namespace WebJob.AppInsightsImporter.Engine
 {
     /// <summary>
-    /// Process-lifetime record of the import days that failed to save, so a failed day is retried before any later
-    /// day, but a day that fails every time cannot stall the import on it for ever.
+    /// Process-lifetime record of the import days that failed - to download or to save - so a failed day is retried
+    /// before any later day, but a day that fails every time cannot stall the import on it for ever.
     ///
-    /// Both halves matter. The import resumes from the newest stored hit, so carrying on past a failed day lets a
-    /// later day's hits move that watermark past it, and the failed day is never read again: a transient SQL error
-    /// on any day but the last was a permanent gap. So the importer stops at a failed day and the next cycle starts
-    /// there. But a deterministic failure would then hold the import on that one day indefinitely - the months-long
-    /// stall that 895ff223 fixed by skipping failed days. So a day is attempted at most <see cref="MaxAttempts"/>
-    /// times in a row and then given up on, as a logged permanent gap.
+    /// Both halves matter. Carrying on past a failed day lets the cycle finish and move the import's resume point (the
+    /// ingestion cursor, or before there is one the newest stored hit) past it, and what the day did not save is not
+    /// read again. So the importer stops at a failed day and the next cycle starts there. But a deterministic failure
+    /// would then hold the import on that one day indefinitely - the months-long stall that 895ff223 fixed by skipping
+    /// failed days. So a day is attempted at most <see cref="MaxAttempts"/> times in a row; after that its forced
+    /// retries stop and later days go ahead. That is not necessarily a permanent gap: rows for that day ingested
+    /// later are still read, and the day is retried whenever they are.
     ///
     /// Held by the web-job host for the life of the process, because the host creates a new importer every cycle -
     /// as <see cref="AppInsightsScanWatermark"/> is. Not persisted: after a restart a failed day is retried only if
-    /// the stored watermark has not moved past it, and its attempts start again from zero. Thread-safe.
+    /// the resume point has not moved past it, and its attempts start again from zero. Thread-safe.
     /// </summary>
     public sealed class AppInsightsDayFailureTracker
     {
@@ -58,6 +59,12 @@ namespace WebJob.AppInsightsImporter.Engine
 
         /// <summary>True once a day has failed <see cref="MaxAttempts"/> times in a row: carry on without it.</summary>
         public bool ShouldGiveUp(int consecutiveFailures) => consecutiveFailures >= MaxAttempts;
+
+        /// <summary>
+        /// True only for the failure that stops a day's forced retries, so "retries stopped" is reported once per
+        /// transition rather than on every later failure of the same day.
+        /// </summary>
+        public bool StopsRetries(int consecutiveFailures) => consecutiveFailures == MaxAttempts;
 
         /// <summary><paramref name="dayUtc"/> was processed completely; any earlier failures no longer count.</summary>
         public void RecordSuccess(DateTime dayUtc)
