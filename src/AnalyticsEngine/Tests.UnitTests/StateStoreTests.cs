@@ -221,6 +221,58 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public async Task InMemory_SetMany_WritesEveryKey_LastValueWins_AndRefusesANull()
+        {
+            var store = new InMemoryKeyValueStore();
+
+            await store.SetManyAsync(new[]
+            {
+                new KeyValuePair<string, string>("a", "1"),
+                new KeyValuePair<string, string>("b", "2"),
+                new KeyValuePair<string, string>("a", "3"),
+            });
+
+            Assert.AreEqual("3", await store.GetStringAsync("a"));
+            Assert.AreEqual("2", await store.GetStringAsync("b"));
+            await Assert.ThrowsExceptionAsync<ArgumentException>(() => store.SetManyAsync(new[] { new KeyValuePair<string, string>("c", null) }));
+            Assert.IsFalse(await store.ExistsAsync("c"));
+        }
+
+        /// <summary>The sent-email checkpoints of a chunk go through the store's batch write, one call, not one per mailbox.</summary>
+        [TestMethod]
+        public async Task PersistedDeltaTokenStore_WritesAChunksTokensThroughTheStoresBatchWrite()
+        {
+            var inner = new InMemoryKeyValueStore();
+            var batches = new CountingBatchStore(inner);
+            var tokens = new PersistedDeltaTokenStore(batches);
+
+            await tokens.SetDeltaTokens(Enumerable.Range(0, 25).Select(i => new KeyValuePair<string, string>("SentEmails-u" + i, "t" + i)).ToList());
+
+            Assert.AreEqual(1, batches.BatchCalls);
+            Assert.AreEqual(0, batches.SingleWrites, "Not 25 round trips.");
+            Assert.AreEqual("t24", await tokens.GetDeltaToken("SentEmails-u24"));
+
+            // A store with no batch write is written to one key at a time, as before.
+            var plain = new CountingKeyValueStore();
+            await new PersistedDeltaTokenStore(plain).SetDeltaTokens(new[] { new KeyValuePair<string, string>("k", "v") });
+            Assert.AreEqual("v", await plain.GetStringAsync("k"));
+        }
+
+        private sealed class CountingBatchStore : IBatchKeyValueStore
+        {
+            private readonly InMemoryKeyValueStore _inner;
+            public CountingBatchStore(InMemoryKeyValueStore inner) { _inner = inner; }
+            public int BatchCalls { get; private set; }
+            public int SingleWrites { get; private set; }
+            public string Description => _inner.Description;
+            public Task<string> GetStringAsync(string key, CancellationToken cancellationToken = default) => _inner.GetStringAsync(key, cancellationToken);
+            public Task SetStringAsync(string key, string value, TimeSpan? timeToLive = null, CancellationToken cancellationToken = default) { SingleWrites++; return _inner.SetStringAsync(key, value, timeToLive, cancellationToken); }
+            public Task<bool> DeleteAsync(string key, CancellationToken cancellationToken = default) => _inner.DeleteAsync(key, cancellationToken);
+            public Task<bool> ExistsAsync(string key, CancellationToken cancellationToken = default) => _inner.ExistsAsync(key, cancellationToken);
+            public Task SetManyAsync(IReadOnlyList<KeyValuePair<string, string>> values, CancellationToken cancellationToken = default) { BatchCalls++; return _inner.SetManyAsync(values, cancellationToken); }
+        }
+
+        [TestMethod]
         public async Task InMemory_ValuesExpireAfterTheirTimeToLive()
         {
             var now = new DateTime(2026, 9, 1, 0, 0, 0, DateTimeKind.Utc);

@@ -75,6 +75,36 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
         Task CommitContinuationAsync(Common.Entities.User user, string nextPageLink);
     }
 
+    /// <summary>The checkpoint a mailbox's read ended with: a delta token when the round is complete, a continuation link when it stopped at its bound.</summary>
+    public sealed class SentEmailCheckpoint
+    {
+        public SentEmailCheckpoint(Common.Entities.User user, string nextDeltaToken, string nextPageLink)
+        {
+            User = user;
+            NextDeltaToken = nextDeltaToken;
+            NextPageLink = nextPageLink;
+        }
+
+        public Common.Entities.User User { get; }
+
+        public string NextDeltaToken { get; }
+
+        public string NextPageLink { get; }
+    }
+
+    /// <summary>
+    /// Commits the checkpoints of a chunk of mailboxes whose messages are saved in as few storage round trips as it can, instead
+    /// of one write per mailbox. Optional: a committer without it is called once per mailbox, as before.
+    /// </summary>
+    public interface ISentEmailBatchCheckpointCommitter
+    {
+        /// <summary>
+        /// Throws when the checkpoints could not all be written - nothing is then known to be written, and the caller falls back to
+        /// committing them one at a time. Repeating a commit is safe: a checkpoint only ever moves forward over messages already saved.
+        /// </summary>
+        Task CommitCheckpointsAsync(IReadOnlyList<SentEmailCheckpoint> checkpoints);
+    }
+
     #region Graph DTO classes
 
     public class GraphSentMessage

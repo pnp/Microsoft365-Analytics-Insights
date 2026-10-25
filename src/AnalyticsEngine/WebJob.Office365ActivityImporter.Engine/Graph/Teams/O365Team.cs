@@ -69,6 +69,9 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
         public List<TeamChannelDeltaTokenCommit> PendingChannelDeltaTokenCommits { get; set; } = new List<TeamChannelDeltaTokenCommit>();
         public TeamsChannelBudgetProgress ChannelBudgetProgress { get; set; }
 
+        /// <summary>What this Team's channel crawl read, skipped and failed; <c>null</c> when no channel messages were crawled.</summary>
+        public TeamsChannelCrawlStats ChannelCrawlStats { get; set; }
+
         #endregion
 
         public Task<TeamDefinition> SaveToSQL(TeamsAndCallsDBLookupManager lookupManager, AppConfig appConfig, ILogger logger)
@@ -255,19 +258,23 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
             {
                 // We have a token. Load channel msgs/replies/reactions
                 var pendingDeltaTokenCommits = new List<TeamChannelDeltaTokenCommit>();
+                var channelState = Common.Entities.State.StateStore.TryOpen(appConfig, Common.Entities.State.StatePartitions.TeamsChannels, logger);
                 if (appConfig.TeamsMaxChannelsPerTeamPerCycle > 0)
                 {
-                    fullTeam.ChannelBudgetProgress = new TeamsChannelBudgetProgress(
-                        Common.Entities.State.StateStore.TryOpen(appConfig, Common.Entities.State.StatePartitions.TeamsChannels, logger),
-                        appConfig.TeamsMaxChannelsPerTeamPerCycle, logger);
+                    fullTeam.ChannelBudgetProgress = new TeamsChannelBudgetProgress(channelState, appConfig.TeamsMaxChannelsPerTeamPerCycle, logger);
                 }
+                var failureLedger = channelState == null ? null : new TeamsChannelFailureLedger(channelState, logger);
+                fullTeam.ChannelCrawlStats = new TeamsChannelCrawlStats();
                 try
                 {
                     fullTeam.PendingChannelDeltaTokenCommits = await fullTeam.Channels.PopulateNewMessagesAndReactions(team, teamRefreshOAuthToken,
                         teamTokenManager.ChannelDeltaTokenStore, logger, pendingDeltaTokenCommits, fullTeam.ChannelBudgetProgress,
-                        teamTokenManager.RedeemRefreshTokenAsync);
+                        teamTokenManager.RedeemRefreshTokenAsync, failureLedger, fullTeam.ChannelCrawlStats);
                     fullTeam.HasRefreshToken = true;
-                    fullTeam.LastRefreshed = DateTime.Now;
+
+                    // Refreshed means messages were read. A Team whose every channel failed has still had its token used and kept,
+                    // but nothing was refreshed - and stamping it would hide that from the Teams explorer.
+                    fullTeam.LastRefreshed = CrawlRefreshedTheTeam(fullTeam.ChannelCrawlStats) ? DateTime.Now : (DateTime?)null;
                 }
                 catch (ChannelMessagesReadException ex)
                 {
@@ -324,9 +331,18 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
                 logger.LogWarning(ex, $"Couldn't finish reading channel messages for Team '{fullTeam.DisplayName}' this cycle: '{ex.Message}' " +
                     "Its authorisation is kept: the channels already read are saved and the rest are read next cycle.");
                 fullTeam.HasRefreshToken = true;
-                fullTeam.LastRefreshed = DateTime.Now;
+
+                // Refreshed only if something was read before the failure: a Team whose first channel failed was not refreshed.
+                fullTeam.LastRefreshed = fullTeam.ChannelCrawlStats != null && fullTeam.ChannelCrawlStats.ChannelsRead > 0 ? DateTime.Now : (DateTime?)null;
             }
         }
+
+        /// <summary>
+        /// Whether a crawl that ended without stopping refreshed the Team. A Team with no channels, or none that failed, was; one
+        /// where channels failed and none could be read was not - the crawl used its token, but no messages were read.
+        /// </summary>
+        internal static bool CrawlRefreshedTheTeam(TeamsChannelCrawlStats stats)
+            => stats == null || stats.ChannelsFailed == 0 || stats.ChannelsRead > 0;
 
         /// <summary>
         /// The UPN SQL already holds for a member's Entra object id, or <c>null</c>. Several rows can share an object id

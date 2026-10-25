@@ -32,9 +32,10 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         private static string BuildMessage(string url, string responseBody)
         {
             var code = ExtractGraphErrorCode(responseBody);
+            var endpoint = DataUtils.Http.GraphEndpointTemplate.TemplatePath(url);
             return string.IsNullOrEmpty(code)
-                ? $"Graph returned 404 (Not Found) for {url}."
-                : $"Graph returned 404 (Not Found) for {url} with error code '{code}'.";
+                ? $"Graph returned 404 (Not Found) for {endpoint}."
+                : $"Graph returned 404 (Not Found) for {endpoint} with error code '{code}'.";
         }
     }
 }

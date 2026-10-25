@@ -395,6 +395,39 @@ namespace Tests.UnitTests
         }
 
         /// <summary>
+        /// The sent-email checkpoints of a chunk are written in one round trip rather than one per mailbox. A partition accepts at most
+        /// 100 operations per transaction, so 250 keys need several; row keys that must be escaped (a UPN with '#') and a
+        /// value too big for one string property (stored gzipped) must work inside a transaction too, and a key repeated in the
+        /// batch takes its last value.
+        /// </summary>
+        [TestMethod]
+        public async Task SetMany_WritesAcrossSeveralTransactions_ReplacesExistingRows_AndTheLastValueForAKeyWins()
+        {
+            var store = NewStore();
+            await store.SetStringAsync("SentEmails-user7@contoso.example", "old-token");
+            await store.SetStringAsync("SentEmails-untouched@contoso.example", "kept");
+
+            var values = Enumerable.Range(0, 250)
+                .Select(i => new System.Collections.Generic.KeyValuePair<string, string>("SentEmails-user" + i + "@contoso.example", "token-" + i))
+                .ToList();
+            values.Add(new System.Collections.Generic.KeyValuePair<string, string>("SentEmails-alex#sales@contoso.example", "hash-key-token"));
+            var huge = string.Join(",", Enumerable.Range(0, 20000).Select(i => "Καλημέρα" + i));
+            values.Add(new System.Collections.Generic.KeyValuePair<string, string>("SentEmailsNextPage-huge", huge));
+            values.Add(new System.Collections.Generic.KeyValuePair<string, string>("SentEmails-user3@contoso.example", "token-3-newest"));
+
+            await store.SetManyAsync(values);
+
+            for (var i = 0; i < 250; i++)
+            {
+                var expected = i == 3 ? "token-3-newest" : "token-" + i;
+                Assert.AreEqual(expected, await store.GetStringAsync("SentEmails-user" + i + "@contoso.example"), "key " + i);
+            }
+            Assert.AreEqual("hash-key-token", await store.GetStringAsync("SentEmails-alex#sales@contoso.example"));
+            Assert.AreEqual(huge, await store.GetStringAsync("SentEmailsNextPage-huge"));
+            Assert.AreEqual("kept", await store.GetStringAsync("SentEmails-untouched@contoso.example"), "Rows that are not in the batch are left alone.");
+        }
+
+        /// <summary>
         /// The User scope purge's records in a real table: a record with its per-table counts, which purge is the latest,
         /// and a stop request under a key of its own.
         /// </summary>

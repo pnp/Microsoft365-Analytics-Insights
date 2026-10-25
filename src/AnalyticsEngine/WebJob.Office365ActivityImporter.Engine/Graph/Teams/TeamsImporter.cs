@@ -58,6 +58,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
         /// <returns>How many Teams were saved and how many failed; a failed Team is logged and retried next cycle.</returns>
         public async Task<TeamsCrawlSummary> RefreshAndSaveAllTeamsData(TeamsCrawlConfig filterConfig)
         {
+            var timer = System.Diagnostics.Stopwatch.StartNew();
             var targetGroups = await _teamsFinder.FindGroupsWithTeamToCrawl(filterConfig);
             var summary = new TeamsCrawlSummary { NoGroupReportedWorkloads = _teamsFinder.NoGroupReportedWorkloads };
 
@@ -81,16 +82,40 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
             if (summary.TeamsFailed > 0 && summary.TeamsSaved == 0)
             {
                 _logger.LogError($"Teams import: all {summary.TeamsFailed:N0} Team(s) failed to load or save this cycle - most likely an outage " +
-                    "rather than a problem with any one Team (the error for each is logged above). The Teams import is not counted as run, " +
-                    "so it is tried again next cycle.");
+                    $"rather than a problem with any one Team (the error for each is logged above; most common: {summary.TopFailure ?? "unknown"}). " +
+                    "The Teams import is not counted as run, so it is tried again later, after a back-off that grows from one hour up to the normal interval.");
             }
             else if (summary.TeamsFailed > 0)
             {
                 _logger.LogWarning($"Teams import: {summary.TeamsFailed:N0} of {targetGroups.Count:N0} Team(s) couldn't be loaded or saved this cycle " +
-                    "and will be tried again next cycle; the error for each is logged above. The other Teams were imported.");
+                    $"and will be tried again next cycle (most common: {summary.TopFailure ?? "unknown"}); the error for each is logged above. The other Teams were imported.");
             }
+
+            LogSummary(summary, _teamsFinder, targetGroups.Count, timer.ElapsedMilliseconds);
             _logger.LogInformation($"Teams import complete.\n");
             return summary;
+        }
+
+        /// <summary>
+        /// One greppable line for the whole crawl: how many groups, Teams and channels were seen, read, skipped, failed and
+        /// left for later, what became of the delta tokens, how long it took and what failed most. Warning when anything failed.
+        /// </summary>
+        private void LogSummary(TeamsCrawlSummary summary, TeamsFinder finder, int crawled, long elapsedMs)
+        {
+            var degraded = summary.TeamsFailed > 0 || summary.ChannelsFailed > 0;
+            var message = $"TeamsCrawlSummary: groups={finder.GroupsScanned:N0}; withTeam={finder.GroupsWithTeam:N0}; crawled={crawled:N0}; " +
+                $"saved={summary.TeamsSaved:N0}; failed={summary.TeamsFailed:N0}; channelsRead={summary.ChannelsRead:N0}; " +
+                $"channelsSkipped={summary.ChannelsSkipped:N0}; channelsFailed={summary.ChannelsFailed:N0} (in {summary.TeamsWithChannelFailures:N0} Team(s)); " +
+                $"channelsWithheld={summary.ChannelsDeferred:N0}; tokensCommitted={summary.TokensToCommit:N0}; tokensKept={summary.TokensWithheld:N0}; " +
+                $"tokensReset={summary.TokensReset:N0}; elapsedMs={elapsedMs:N0}; topFailure={summary.TopFailure ?? "none"}.";
+            if (degraded)
+            {
+                _logger.LogWarning(message);
+            }
+            else
+            {
+                _logger.LogInformation(message);
+            }
         }
 
         /// <summary>
@@ -115,12 +140,12 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
         {
             return TeamsChunkCrawler.CrawlChunk(groupsWithTeams,
                 () => new TeamsChunkUnitOfWork(),
-                (unitOfWork, group) => LoadAndSaveTeam(unitOfWork.Lookup, group),
+                (unitOfWork, group) => LoadAndSaveTeam(unitOfWork.Lookup, group, summary),
                 summary, _logger);
         }
 
         /// <returns>Whether the Team was saved.</returns>
-        async Task<bool> LoadAndSaveTeam(TeamsAndCallsDBLookupManager lookupManager, Group parentGroup)
+        async Task<bool> LoadAndSaveTeam(TeamsAndCallsDBLookupManager lookupManager, Group parentGroup, TeamsCrawlSummary summary)
         {
             O365Team team;
             try
@@ -131,7 +156,13 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
             {
                 // Anything at all - not only Graph errors - so one bad Team doesn't take the rest of its chunk with it.
                 _logger.LogError(ex, $"Couldn't load team from Group {parentGroup.DisplayName}: {ex.Message}");
+                summary.RecordFailureKind(ex);
                 return false;
+            }
+
+            if (team.ChannelCrawlStats != null)
+            {
+                summary.RecordChannelStats(team.ChannelCrawlStats);
             }
 
             try
@@ -142,6 +173,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
             catch (Exception ex) when (!TeamsCrawlRules.IsCancellation(ex))
             {
                 _logger.LogError(ex, $"Couldn't save Group {parentGroup.DisplayName} to SQL: {ex.Message}");
+                summary.RecordFailureKind(ex);
                 return false;
             }
         }
@@ -192,6 +224,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
                     catch (Exception ex) when (!TeamsCrawlRules.IsCancellation(ex))
                     {
                         logger.LogError(ex, $"Couldn't import Team from Group {group.DisplayName}: {ex.Message}");
+                        summary.RecordFailureKind(ex);
                         saved = false;
                     }
 
@@ -218,12 +251,51 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
     /// <summary>The outcome of one Teams crawl. Safe to update from the parallel chunks.</summary>
     public sealed class TeamsCrawlSummary
     {
+        private readonly object _lock = new object();
+        private readonly Dictionary<string, int> _failureKinds = new Dictionary<string, int>(StringComparer.Ordinal);
         private int _saved;
         private int _failed;
+        private int _channelsRead, _channelsSkipped, _channelsFailed, _channelsDeferred, _tokensToCommit, _tokensWithheld, _tokensReset, _teamsWithChannelFailures;
 
         public int TeamsSaved => Volatile.Read(ref _saved);
 
         public int TeamsFailed => Volatile.Read(ref _failed);
+
+        public int ChannelsRead => Volatile.Read(ref _channelsRead);
+
+        public int ChannelsSkipped => Volatile.Read(ref _channelsSkipped);
+
+        public int ChannelsFailed => Volatile.Read(ref _channelsFailed);
+
+        /// <summary>Channels the per-cycle budget left for a later crawl.</summary>
+        public int ChannelsDeferred => Volatile.Read(ref _channelsDeferred);
+
+        public int TokensToCommit => Volatile.Read(ref _tokensToCommit);
+
+        public int TokensWithheld => Volatile.Read(ref _tokensWithheld);
+
+        public int TokensReset => Volatile.Read(ref _tokensReset);
+
+        /// <summary>Teams in which at least one channel failed to read, whether or not the Team itself was saved.</summary>
+        public int TeamsWithChannelFailures => Volatile.Read(ref _teamsWithChannelFailures);
+
+        /// <summary>What failed most, with how often: <c>HTTP 400 UnknownError x12</c>. Null when nothing failed.</summary>
+        public string TopFailure
+        {
+            get
+            {
+                lock (_lock)
+                {
+                    if (_failureKinds.Count == 0)
+                    {
+                        return null;
+                    }
+
+                    var top = _failureKinds.OrderByDescending(f => f.Value).ThenBy(f => f.Key, StringComparer.Ordinal).First();
+                    return $"{top.Key} x{top.Value}";
+                }
+            }
+        }
 
         /// <summary>
         /// Graph returned groups, but not one reported its provisioned workloads, so no Team could be identified - the
@@ -245,5 +317,39 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
         internal void RecordSaved() => Interlocked.Increment(ref _saved);
 
         internal void RecordFailed() => Interlocked.Increment(ref _failed);
+
+        /// <summary>Counts a failure of the given kind towards <see cref="TopFailure"/>.</summary>
+        internal void RecordFailureKind(Exception ex)
+        {
+            AddFailureKind(FailureClassification.Describe(ex), 1);
+        }
+
+        internal void RecordChannelStats(TeamsChannelCrawlStats stats)
+        {
+            Interlocked.Add(ref _channelsRead, stats.ChannelsRead);
+            Interlocked.Add(ref _channelsSkipped, stats.ChannelsSkipped);
+            Interlocked.Add(ref _channelsFailed, stats.ChannelsFailed);
+            Interlocked.Add(ref _channelsDeferred, stats.ChannelsDeferred);
+            Interlocked.Add(ref _tokensToCommit, stats.TokensToCommit);
+            Interlocked.Add(ref _tokensWithheld, stats.TokensWithheld);
+            Interlocked.Add(ref _tokensReset, stats.TokensReset);
+            if (stats.ChannelsFailed > 0)
+            {
+                Interlocked.Increment(ref _teamsWithChannelFailures);
+            }
+
+            foreach (var failure in stats.Failures)
+            {
+                AddFailureKind(failure.Key, failure.Value);
+            }
+        }
+
+        private void AddFailureKind(string kind, int count)
+        {
+            lock (_lock)
+            {
+                _failureKinds[kind] = _failureKinds.TryGetValue(kind, out var existing) ? existing + count : count;
+            }
+        }
     }
 }

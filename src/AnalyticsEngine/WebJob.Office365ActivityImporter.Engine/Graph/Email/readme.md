@@ -58,6 +58,26 @@ enabled. Relevant settings:
   once that cycle's messages are in SQL, and the next cycle continues from it (a delta token the read began from
   is retired until the round finishes - the two keys are never set together). Ordinary incremental reads fit
   in one cycle and are unaffected.
+- **Checkpoint writes** – The checkpoints of a chunk of mailboxes whose messages are saved are written in one
+  Azure Table batch (`ISentEmailBatchCheckpointCommitter`; up to 100 rows per transaction) rather than one write per
+  mailbox. If a batch fails, each mailbox is committed on its own, so one failure never withholds another's checkpoint.
+- **Without a Storage account** – checkpoints are kept in one in-memory store for the life of the web job process
+  (a `SentEmailStateDegraded` warning says so, once). Progress survives from cycle to cycle but not a restart, after which
+  every mailbox is read again from the start of its sent items.
+- **Quarantine** – A mailbox whose save or checkpoint write fails on 3 cycles in a row is quarantined for 24 hours: it is
+  not read, its failure no longer fails the section (which would skip every Graph section after it), and a
+  `SentEmailMailboxQuarantined` error names its user id. Its checkpoint is left as it was. State is one row,
+  `SentEmailMailboxQuarantine`, in the `SentEmails` partition, keyed by user id; delete it to release every mailbox. If every mailbox
+  in a chunk fails, that is the database or storage failing and nothing is counted against any mailbox.
+- **Messages with no usable sent date** – `sent_date` is a SQL `datetime` (from 1753), so a message with no `sentDateTime`
+  is skipped and counted (`skippedNoSentDate` in the chunk's log line) rather than stored with an invented date. The read does
+  not ask for another date field: changing a stored delta token's `$select` is not safe.
+
+## Logging
+
+One `SentEmailChunk:` line per chunk of mailboxes (Warning when anything failed or was skipped): mailboxes, loaded, committed,
+failed, quarantined, messages, inserted, recipients, and the milliseconds spent loading, resolving addresses, checking existing
+keys, scoring, persisting and writing checkpoints. A mailbox that fails is logged on its own, by user id - never by UPN.
 
 ## Data model
 

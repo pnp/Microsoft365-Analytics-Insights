@@ -24,6 +24,58 @@ namespace WebJob.Office365ActivityImporter.Engine
     }
 
     /// <summary>
+    /// Optional companion to <see cref="IImportLastRunStore"/> for a section that backs off after failing: how many
+    /// attempts in a row have failed and when the last one did. A last-run store that does not implement it simply gives
+    /// every section the plain cadence gate.
+    /// </summary>
+    public interface IImportFailureStore
+    {
+        /// <summary>The failed attempts since the section last succeeded, or null when there are none.</summary>
+        Task<ImportFailureState> GetFailureState(string key);
+
+        Task SetFailureState(string key, ImportFailureState state);
+
+        Task ClearFailureState(string key);
+    }
+
+    /// <summary>Consecutive failed attempts of a section, and when the latest ended (UTC).</summary>
+    public sealed class ImportFailureState
+    {
+        public int ConsecutiveFailures { get; set; }
+
+        public DateTime LastFailureUtc { get; set; }
+    }
+
+    /// <summary>
+    /// How long a section that has just failed waits before it is tried again: one hour after the first failed attempt,
+    /// two after the second, four after the third and so on, never longer than the section's normal interval. A failed
+    /// attempt is never recorded as a completed run, so the normal cadence gate is untouched.
+    /// </summary>
+    public static class ImportFailureBackoff
+    {
+        public static readonly TimeSpan FirstDelay = TimeSpan.FromHours(1);
+
+        /// <param name="consecutiveFailures">Attempts in a row that have failed, at least 1.</param>
+        /// <param name="intervalHours">The section's normal interval; <c>0</c> (gate disabled) means no back-off.</param>
+        public static TimeSpan DelayAfter(int consecutiveFailures, int intervalHours)
+        {
+            if (consecutiveFailures < 1 || intervalHours <= 0)
+            {
+                return TimeSpan.Zero;
+            }
+
+            var cap = TimeSpan.FromHours(intervalHours);
+            var doublings = Math.Min(consecutiveFailures - 1, 20);
+            var delay = TimeSpan.FromTicks(FirstDelay.Ticks * (1L << doublings));
+            return delay > cap ? cap : delay;
+        }
+
+        /// <summary>Whether the back-off after the recorded failures has passed.</summary>
+        public static bool IsOver(ImportFailureState state, int intervalHours, DateTime nowUtc)
+            => state == null || nowUtc >= state.LastFailureUtc + DelayAfter(state.ConsecutiveFailures, intervalHours);
+    }
+
+    /// <summary>
     /// Pure decision logic for the cadence gate, factored out so it can be unit tested without any store.
     /// </summary>
     public static class ImportCadenceGate
@@ -55,7 +107,7 @@ namespace WebJob.Office365ActivityImporter.Engine
     /// Each key is one row, holding the round-trip ("o") UTC timestamp in its <c>Value</c> column. Deleting a row makes
     /// that import run on the next cycle.
     /// </remarks>
-    public class PersistedImportLastRunStore : IImportLastRunStore
+    public class PersistedImportLastRunStore : IImportLastRunStore, IImportFailureStore
     {
         private readonly IKeyValueStore _store;
         private readonly ILogger _logger;
@@ -64,6 +116,48 @@ namespace WebJob.Office365ActivityImporter.Engine
         {
             _store = store ?? throw new ArgumentNullException(nameof(store));
             _logger = logger;
+        }
+
+        /// <summary>The row holding a section's failed attempts: a new kind of row beside the section's own last-run stamp.</summary>
+        internal static string FailureKey(string key) => key + ":FailedAttempts";
+
+        public async Task<ImportFailureState> GetFailureState(string key)
+        {
+            try
+            {
+                var raw = await _store.GetStringAsync(FailureKey(key));
+                return string.IsNullOrEmpty(raw) ? null : Newtonsoft.Json.JsonConvert.DeserializeObject<ImportFailureState>(raw);
+            }
+            catch (Exception ex)
+            {
+                // Fail-open, like the cadence stamp: a storage blip must not skip an attempt, so no back-off is applied.
+                _logger?.LogWarning($"Import cadence: state store read failed for the failed attempts of '{key}' ({ex.GetType().Name}); not backing off.");
+                return null;
+            }
+        }
+
+        public async Task SetFailureState(string key, ImportFailureState state)
+        {
+            try
+            {
+                await _store.SetStringAsync(FailureKey(key), Newtonsoft.Json.JsonConvert.SerializeObject(state));
+            }
+            catch (Exception ex)
+            {
+                _logger?.LogWarning($"Import cadence: state store write failed for the failed attempts of '{key}' ({ex.GetType().Name}); the next cycle may try again at once.");
+            }
+        }
+
+        public async Task ClearFailureState(string key)
+        {
+            try
+            {
+                await _store.DeleteAsync(FailureKey(key));
+            }
+            catch (Exception ex)
+            {
+                _logger?.LogWarning($"Import cadence: state store delete failed for the failed attempts of '{key}' ({ex.GetType().Name}).");
+            }
         }
 
         public async Task<DateTime?> GetLastRunUtc(string key)
@@ -102,6 +196,7 @@ namespace WebJob.Office365ActivityImporter.Engine
             try
             {
                 await _store.DeleteAsync(key);
+                await _store.DeleteAsync(FailureKey(key));
             }
             catch (Exception ex)
             {
@@ -115,10 +210,28 @@ namespace WebJob.Office365ActivityImporter.Engine
     /// works within a single WebJob process lifetime; the timestamps reset when the WebJob restarts
     /// (so a restart is itself a way to force a re-import).
     /// </summary>
-    public class InMemoryImportLastRunStore : IImportLastRunStore
+    public class InMemoryImportLastRunStore : IImportLastRunStore, IImportFailureStore
     {
         private readonly ConcurrentDictionary<string, DateTime> _lastRuns =
             new ConcurrentDictionary<string, DateTime>(StringComparer.Ordinal);
+
+        private readonly ConcurrentDictionary<string, ImportFailureState> _failures =
+            new ConcurrentDictionary<string, ImportFailureState>(StringComparer.Ordinal);
+
+        public Task<ImportFailureState> GetFailureState(string key)
+            => Task.FromResult(_failures.TryGetValue(key, out var state) ? state : null);
+
+        public Task SetFailureState(string key, ImportFailureState state)
+        {
+            _failures[key] = state;
+            return Task.CompletedTask;
+        }
+
+        public Task ClearFailureState(string key)
+        {
+            _failures.TryRemove(key, out _);
+            return Task.CompletedTask;
+        }
 
         public Task<DateTime?> GetLastRunUtc(string key)
             => Task.FromResult(_lastRuns.TryGetValue(key, out var dt) ? (DateTime?)dt : null);
@@ -132,6 +245,7 @@ namespace WebJob.Office365ActivityImporter.Engine
         public Task Clear(string key)
         {
             _lastRuns.TryRemove(key, out _);
+            _failures.TryRemove(key, out _);
             return Task.CompletedTask;
         }
     }

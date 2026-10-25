@@ -55,6 +55,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
         private readonly ISentEmailMailboxSkipList _mailboxSkipList;
         private readonly int _noMailboxRetryHours;
         private readonly IUserImportScopeProvider _userScopeProvider;
+        private readonly SentEmailMailboxQuarantine _mailboxQuarantine;
 
         // UPNs discovered during this run to have no mailbox at all (Graph 404). Concurrent because the
         // Graph load phase populates it from parallel worker threads.
@@ -66,6 +67,9 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
         private int _mailboxesFailed;
         private int _mailboxesNotFound;
         private int _mailboxesSkipped;
+        private int _mailboxesQuarantinedSkipped;
+        private int _mailboxesNewlyQuarantined;
+        private int _messagesSkippedNoSentDate;
         private int _messagesSeen;
         private int _messagesInserted;
         private int _recipientsInserted;
@@ -93,7 +97,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
             ISentEmailMailboxSkipList mailboxSkipList = null,
             int noMailboxRetryHours = 0,
             ISentEmailDeltaTokenCommitter deltaTokenCommitter = null,
-            IUserImportScopeProvider userScopeProvider = null)
+            IUserImportScopeProvider userScopeProvider = null,
+            SentEmailMailboxQuarantine mailboxQuarantine = null)
             : base(logger, settings)
         {
             _sourceLoader = sourceLoader ?? throw new ArgumentNullException(nameof(sourceLoader));
@@ -105,6 +110,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
             _mailboxSkipList = mailboxSkipList;
             _noMailboxRetryHours = noMailboxRetryHours;
             _userScopeProvider = userScopeProvider;
+            _mailboxQuarantine = mailboxQuarantine;
         }
 
         /// <summary>
@@ -191,6 +197,21 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
                     $"They'll be re-checked after {skipList.GeneratedUtc?.AddHours(_noMailboxRetryHours):u} UTC.");
             }
 
+            // A mailbox that could not be saved on several cycles in a row sits out its quarantine; see SentEmailMailboxQuarantine.
+            if (_mailboxQuarantine != null)
+            {
+                await _mailboxQuarantine.LoadAsync();
+                var beforeQuarantine = usersToScan.Count;
+                usersToScan = usersToScan.Where(u => !_mailboxQuarantine.IsQuarantined(u.ID)).ToList();
+                _mailboxesQuarantinedSkipped = beforeQuarantine - usersToScan.Count;
+                if (_mailboxesQuarantinedSkipped > 0)
+                {
+                    _logger.LogWarning(
+                        $"SentEmailQuarantine: {_mailboxesQuarantinedSkipped:N0} mailbox(es) are not read this run: their save failed {SentEmailMailboxQuarantine.QuarantineAfterConsecutiveFailures} cycles in a row. " +
+                        "Their checkpoints are unchanged and each is tried again when its quarantine ends.");
+                }
+            }
+
             if (usersToScan.Count == 0)
             {
                 _logger.LogInformation("No users left to scan for sent items once mailbox-less users are excluded.");
@@ -202,7 +223,18 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
                 $"Processing in chunks of {_userChunkSize} (Graph load parallelism: {_graphLoadParallelism}; " +
                 $"persistence uses single-connection multi-row SQL inserts to avoid unique-index deadlocks).");
 
-            var failures = await ProcessUserChunksAsync(usersToScan);
+            List<Exception> failures;
+            try
+            {
+                failures = await ProcessUserChunksAsync(usersToScan);
+            }
+            finally
+            {
+                if (_mailboxQuarantine != null)
+                {
+                    await _mailboxQuarantine.SaveAsync();
+                }
+            }
             await PersistMailboxSkipListAsync(skipList, knownNoMailbox, fullSweepDue);
 
             swTotal.Stop();
@@ -213,19 +245,17 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
         private async Task<List<Exception>> ProcessUserChunksAsync(List<Common.Entities.User> usersToScan)
         {
             var failures = new List<Exception>();
+            var chunkCount = (usersToScan.Count + _userChunkSize - 1) / _userChunkSize;
             for (int i = 0; i < usersToScan.Count; i += _userChunkSize)
             {
                 // GetRange instead of Skip().Take() - Skip() on a List walks past every
                 // prior element, so chunking N users in slices of K costs O(N^2/K). At
                 // 200k users with K=25 that's ~800M wasted iterations just for slicing.
                 var chunk = usersToScan.GetRange(i, Math.Min(_userChunkSize, usersToScan.Count - i));
-                _logger.LogInformation(
-                    $"Processing user chunk {(i / _userChunkSize) + 1} of " +
-                    $"{(usersToScan.Count + _userChunkSize - 1) / _userChunkSize} ({chunk.Count} users).");
 
                 try
                 {
-                    await ProcessUserChunkAsync(chunk);
+                    await ProcessUserChunkAsync(chunk, (i / _userChunkSize) + 1, chunkCount);
                 }
                 catch (Exception ex)
                 {
@@ -312,14 +342,34 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
         ///   4. Parallel sentiment scoring (no DB writes).
         ///   5. Single-connection two-phase multi-row INSERTs of SentEmail and SentEmailRecipient rows.
         /// </summary>
-        private async Task ProcessUserChunkAsync(List<Common.Entities.User> users)
+        private async Task ProcessUserChunkAsync(List<Common.Entities.User> users, int chunkNumber = 0, int chunkCount = 0)
+        {
+            var stats = new ChunkStats { Users = users.Count };
+            var total = Stopwatch.StartNew();
+            try
+            {
+                await ProcessUserChunkCoreAsync(users, stats);
+            }
+            catch
+            {
+                stats.Aborted = true;
+                throw;
+            }
+            finally
+            {
+                stats.TotalMs = total.ElapsedMilliseconds;
+                LogChunk(stats, chunkNumber, chunkCount);
+            }
+        }
+
+        private async Task ProcessUserChunkCoreAsync(List<Common.Entities.User> users, ChunkStats stats)
         {
             // ---- 1. Parallel Graph load -------------------------------------------------
             var swPhase = Stopwatch.StartNew();
             var loaded = await LoadChunkInParallelAsync(users);
             swPhase.Stop();
-            _logger.LogInformation(
-                $"  [chunk] graph load: {users.Count} users -> {loaded.Count} loaded in {swPhase.ElapsedMilliseconds}ms.");
+            stats.Loaded = loaded.Count;
+            stats.LoadMs = swPhase.ElapsedMilliseconds;
             if (loaded.Count == 0)
                 return;
 
@@ -334,7 +384,9 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
 
                 Interlocked.Add(ref _messagesSeen, entry.Messages.Count);
 
-                var candidates = BuildCandidates(entry.Messages, out var distinctAddresses);
+                var candidates = BuildCandidates(entry.Messages, out var distinctAddresses, out var skippedNoSentDate);
+                stats.SkippedNoSentDate += skippedNoSentDate;
+                Interlocked.Add(ref _messagesSkippedNoSentDate, skippedNoSentDate);
                 if (candidates.Count == 0)
                     continue;
 
@@ -350,14 +402,11 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
 
             if (perUser.Count == 0)
             {
-                await PersistMailboxesAsync(loaded, perUser, null, null);
+                await PersistMailboxesAsync(loaded, perUser, null, null, stats);
                 return;
             }
 
-            int totalCandidates = perUser.Sum(u => u.Candidates.Count);
-            _logger.LogInformation(
-                $"  [chunk] built {totalCandidates} candidate messages across {perUser.Count} users; " +
-                $"distinct addresses: {allDistinctAddresses.Count}.");
+            stats.Candidates = perUser.Sum(u => u.Candidates.Count);
 
             // ---- 2. Bulk address resolution (single-threaded) --------------------------
             // Doing this on one connection avoids races: parallel inserts of the same
@@ -371,8 +420,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
                 addressIds = await BulkResolveAddressIdsAsync(db, allDistinctAddresses);
             }
             swPhase.Stop();
-            _logger.LogInformation(
-                $"  [chunk] resolved {addressIds.Count} address ids in {swPhase.ElapsedMilliseconds}ms.");
+            stats.AddressMs = swPhase.ElapsedMilliseconds;
 
             // ---- 3. Bulk existing-key check across the chunk ---------------------------
             swPhase.Restart();
@@ -388,19 +436,14 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
                 existingByKey = await FindExistingEmailStateAsync(db, allKeys);
             }
             swPhase.Stop();
-            _logger.LogInformation(
-                $"  [chunk] existing-key check: {allKeys.Count} keys, {existingByKey.Count} already present, " +
-                $"in {swPhase.ElapsedMilliseconds}ms.");
+            stats.ExistingKeyMs = swPhase.ElapsedMilliseconds;
 
             // Filter each user's candidate list to the genuinely-new ones.
-            int totalToInsert = 0;
-            int totalOrphanRepairs = 0;
             foreach (var u in perUser)
             {
                 u.ToInsert = u.Candidates
                     .Where(c => !existingByKey.ContainsKey(c.GraphMessageId))
                     .ToList();
-                totalToInsert += u.ToInsert.Count;
 
                 u.OrphanRecipientRepairs = u.Candidates
                     .Where(c => existingByKey.TryGetValue(c.GraphMessageId, out var existing)
@@ -411,31 +454,61 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
                         Candidate = c
                     })
                     .ToList();
-                totalOrphanRepairs += u.OrphanRecipientRepairs.Count;
             }
 
             // ---- 4. Sentiment scoring (parallel-safe; no DB writes) --------------------
+            swPhase.Restart();
             var sentimentByMessageId = await ScoreSentimentAcrossChunkAsync(perUser);
+            swPhase.Stop();
+            stats.ScoreMs = swPhase.ElapsedMilliseconds;
 
             // ---- 5. Single-connection persistence of SentEmail + recipient rows -------
-            swPhase.Restart();
-            _logger.LogInformation(
-                $"  [chunk] persisting {totalToInsert} new messages and repairing {totalOrphanRepairs} orphaned parents across {perUser.Count} users " +
-                "(serial multi-row INSERTs on one connection to avoid unique-index races)...");
-            await PersistMailboxesAsync(loaded, perUser, addressIds, sentimentByMessageId);
-            swPhase.Stop();
-            _logger.LogInformation(
-                $"  [chunk] persistence done in {swPhase.ElapsedMilliseconds}ms.");
+            // (serial multi-row INSERTs on one connection to avoid unique-index races)
+            await PersistMailboxesAsync(loaded, perUser, addressIds, sentimentByMessageId, stats);
+        }
 
+        /// <summary>
+        /// One line per chunk of mailboxes - not several per mailbox - so a 200,000-mailbox cycle is thousands of lines, not
+        /// millions: how many mailboxes were read, saved, failed or quarantined, how many messages and recipient rows went in,
+        /// and how long each phase took. A mailbox that fails is logged on its own, by user id, where it fails.
+        /// </summary>
+        private void LogChunk(ChunkStats stats, int chunkNumber, int chunkCount)
+        {
+            var degraded = stats.Aborted || stats.MailboxesFailed > 0 || stats.SkippedNoSentDate > 0;
+            var message = $"SentEmailChunk: chunk={chunkNumber}/{chunkCount}; mailboxes={stats.Users}; loaded={stats.Loaded}; committed={stats.MailboxesCommitted}; " +
+                $"failed={stats.MailboxesFailed}; quarantined={stats.MailboxesQuarantined}; messages={stats.Candidates}; inserted={stats.MessagesInserted}; " +
+                $"recipients={stats.RecipientsInserted}; skippedNoSentDate={stats.SkippedNoSentDate}; aborted={stats.Aborted}; " +
+                $"loadMs={stats.LoadMs}; addressMs={stats.AddressMs}; existingMs={stats.ExistingKeyMs}; scoreMs={stats.ScoreMs}; persistMs={stats.PersistMs}; " +
+                $"checkpointMs={stats.CheckpointMs}; totalMs={stats.TotalMs}.";
+            if (degraded)
+            {
+                _logger.LogWarning(message);
+            }
+            else
+            {
+                _logger.LogInformation(message);
+            }
+        }
+
+        private sealed class ChunkStats
+        {
+            public int Users, Loaded, Candidates, MailboxesCommitted, MailboxesFailed, MailboxesQuarantined, MessagesInserted, RecipientsInserted, SkippedNoSentDate;
+            public bool Aborted;
+            public long LoadMs, AddressMs, ExistingKeyMs, ScoreMs, PersistMs, CheckpointMs, TotalMs;
         }
 
         private async Task PersistMailboxesAsync(List<LoadedUser> loaded, List<UserChunkResult> perUser,
-            Dictionary<string, int> addressIds, Dictionary<string, double?> sentimentByMessageId)
+            Dictionary<string, int> addressIds, Dictionary<string, double?> sentimentByMessageId, ChunkStats stats)
         {
             var workByUserId = perUser.ToDictionary(u => u.User.ID);
             var savedMessages = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
             var repairedParents = new HashSet<int>();
-            var failures = new List<Exception>();
+            var failures = new List<MailboxFailure>();
+            var saved = new List<LoadedUser>(loaded.Count);
+
+            // Each mailbox's parents and recipients are committed to SQL on their own. Checkpoints are written afterwards, for the
+            // mailboxes that saved, in one batch.
+            var swPersist = Stopwatch.StartNew();
             foreach (var mailbox in loaded)
             {
                 try
@@ -458,7 +531,9 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
 
                         // Keep the chunk-wide lookups and Graph concurrency, but commit one mailbox's parents and
                         // recipients together. A later mailbox cannot roll this one back or withhold its checkpoint.
-                        await PersistChunkAsync(new List<UserChunkResult> { work }, addressIds, sentimentByMessageId);
+                        var persisted = await PersistChunkAsync(new List<UserChunkResult> { work }, addressIds, sentimentByMessageId);
+                        stats.MessagesInserted += persisted.Parents;
+                        stats.RecipientsInserted += persisted.Recipients;
                         foreach (var candidate in work.ToInsert)
                             savedMessages[candidate.GraphMessageId] = work.User.ID;
                         foreach (var repair in work.OrphanRecipientRepairs)
@@ -468,18 +543,85 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
                     {
                         Interlocked.Increment(ref _mailboxesScanned);
                     }
-                    await CommitDeltaTokensAsync(new[] { mailbox });
+                    saved.Add(mailbox);
                 }
                 catch (Exception ex)
                 {
-                    RecordMailboxFailure(ex);
-                    failures.Add(ex);
-                    _logger.LogError(ex,
-                        $"Sent emails: persistence or checkpoint failed for user ID {mailbox.User.ID}; " +
-                        "its previous checkpoint is retained for replay. Continuing with the other mailboxes.");
+                    failures.Add(new MailboxFailure(mailbox, ex));
                 }
             }
-            CommitFailures.Rethrow(failures, "sent-email mailbox commits");
+            stats.PersistMs = swPersist.ElapsedMilliseconds;
+
+            var swCheckpoints = Stopwatch.StartNew();
+            failures.AddRange(await CommitCheckpointsAsync(saved));
+            stats.CheckpointMs = swCheckpoints.ElapsedMilliseconds;
+
+            foreach (var failure in failures)
+            {
+                RecordMailboxFailure(failure.Failure);
+                _logger.LogError(failure.Failure,
+                    $"Sent emails: persistence or checkpoint failed for user ID {failure.Mailbox.User.ID} " +
+                    $"({FailureClassification.Describe(failure.Failure)}); its previous checkpoint is retained for replay. Continuing with the other mailboxes.");
+            }
+
+            var failedIds = new HashSet<int>(failures.Select(f => f.Mailbox.User.ID));
+            var committed = loaded.Where(l => !failedIds.Contains(l.User.ID)).ToList();
+            stats.MailboxesCommitted = committed.Count;
+            stats.MailboxesFailed = failures.Count;
+            if (_mailboxQuarantine != null)
+            {
+                foreach (var mailbox in committed)
+                    _mailboxQuarantine.RecordSuccess(mailbox.User.ID);
+            }
+
+            CommitFailures.Rethrow(ApplyQuarantine(failures, committed.Count, stats), "sent-email mailbox commits");
+        }
+
+        /// <summary>
+        /// Counts each failed mailbox towards its quarantine, and returns the failures that still fail the run. A mailbox that has now
+        /// failed <see cref="SentEmailMailboxQuarantine.QuarantineAfterConsecutiveFailures"/> cycles in a row is quarantined with an
+        /// Error instead and no longer fails the section, so one mailbox that can never be saved stops holding back every Graph
+        /// section after it. When every mailbox in a chunk of at least two failed, that is the database or storage failing, not
+        /// the mailboxes, so nothing is counted against any of them.
+        /// </summary>
+        private List<Exception> ApplyQuarantine(List<MailboxFailure> failures, int succeeded, ChunkStats stats)
+        {
+            if (_mailboxQuarantine == null || (failures.Count >= 2 && succeeded == 0))
+                return failures.Select(f => f.Failure).ToList();
+
+            var stillFailing = new List<Exception>();
+            foreach (var failure in failures)
+            {
+                var decision = _mailboxQuarantine.RecordFailure(failure.Mailbox.User.ID, failure.Failure);
+                if (!decision.Quarantined)
+                {
+                    stillFailing.Add(failure.Failure);
+                    continue;
+                }
+
+                stats.MailboxesQuarantined++;
+                Interlocked.Increment(ref _mailboxesNewlyQuarantined);
+                _logger.LogError(
+                    "SentEmailMailboxQuarantined: userId={UserId}; consecutiveFailures={Failures}; failure={Failure}; sqlError={SqlError}; " +
+                    "retryAfterUtc={RetryAfter:u}. The mailbox is not read until then and its checkpoint is unchanged; the import carries on for every other mailbox.",
+                    failure.Mailbox.User.ID, decision.ConsecutiveFailures, FailureClassification.Describe(failure.Failure),
+                    FailureClassification.SqlErrorNumber(failure.Failure)?.ToString() ?? "none", decision.UntilUtc);
+            }
+
+            return stillFailing;
+        }
+
+        private sealed class MailboxFailure
+        {
+            public MailboxFailure(LoadedUser mailbox, Exception failure)
+            {
+                Mailbox = mailbox;
+                Failure = failure;
+            }
+
+            public LoadedUser Mailbox { get; }
+
+            public Exception Failure { get; }
         }
 
         private async Task<List<LoadedUser>> LoadChunkInParallelAsync(List<Common.Entities.User> users)
@@ -519,26 +661,26 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
                             _noMailboxUpns[user.UserPrincipalName] = 0;
 
                         _logger.LogDebug(
-                            $"User '{user.UserPrincipalName}' has no mailbox ({ex.GraphErrorCode ?? "unknown"}); " +
+                            $"User ID {user.ID} has no mailbox ({ex.GraphErrorCode ?? "unknown"}); " +
                             "skipping and adding to the no-mailbox list.");
                     }
                     catch (GraphHttpException ex)
                     {
                         RecordMailboxFailure(ex);
                         _logger.LogWarning(
-                            $"Could not access sent items for user '{user.UserPrincipalName}': {ex.Message}");
+                            $"Could not access sent items for user ID {user.ID} ({FailureClassification.Describe(ex)}): {ex.Message}");
                     }
                     catch (System.Net.Http.HttpRequestException ex)
                     {
                         RecordMailboxFailure(ex);
                         _logger.LogWarning(
-                            $"Could not access sent items for user '{user.UserPrincipalName}': {ex.Message}");
+                            $"Could not access sent items for user ID {user.ID} ({FailureClassification.Describe(ex)}): {ex.Message}");
                     }
                     catch (Exception ex)
                     {
                         RecordMailboxFailure(ex);
                         _logger.LogError(ex,
-                            $"Error loading sent emails for user '{user.UserPrincipalName}': {ex.Message}");
+                            $"Error loading sent emails for user ID {user.ID} ({FailureClassification.Describe(ex)}): {ex.Message}");
                     }
                     finally
                     {
@@ -589,7 +731,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
         /// keyed on the unique <c>graph_message_id</c>, so phase B can set
         /// <c>SentEmailRecipient.SentEmailID</c> without an extra round-trip per row.
         /// </summary>
-        private async Task PersistChunkAsync(
+        private async Task<(int Parents, int Recipients)> PersistChunkAsync(
             List<UserChunkResult> perUser,
             Dictionary<string, int> addressIds,
             Dictionary<string, double?> sentimentByMessageId)
@@ -635,8 +777,9 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
             }
 
             if (work.Count == 0 && perUser.All(u => u.OrphanRecipientRepairs.Count == 0))
-                return;
+                return (0, 0);
 
+            (int Parents, int Recipients) persisted = (0, 0);
             using (var db = _dbContextFactory.Create())
             {
                 var conn = db.Database.Connection;
@@ -681,10 +824,6 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
                                     "retrying that batch row by row and skipping duplicates.");
                                 parentsSaved += await RetrySentEmailBatchRowByRowAsync(conn, work, i, take, transaction);
                             }
-
-                            _logger.LogInformation(
-                                $"  [persist] phase A: saved {parentsSaved}/{work.Count} parent rows " +
-                                $"({swA.ElapsedMilliseconds}ms elapsed).");
                         }
                         swA.Stop();
 
@@ -741,19 +880,13 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
                             }
 
                             recipientsSaved += take;
-                            _logger.LogInformation(
-                                $"  [persist] phase B: saved {recipientsSaved}/{totalRecipients} recipient rows " +
-                                $"({swB.ElapsedMilliseconds}ms elapsed).");
                         }
                         swB.Stop();
 
                         transaction.Commit();
                         Interlocked.Add(ref _messagesInserted, parentsSaved);
                         Interlocked.Add(ref _recipientsInserted, recipientsSaved);
-
-                        _logger.LogInformation(
-                            $"  [persist] phase A: {parentsSaved} parents in {swA.ElapsedMilliseconds}ms; " +
-                            $"phase B: {recipientsSaved} recipients in {swB.ElapsedMilliseconds}ms.");
+                        persisted = (parentsSaved, recipientsSaved);
                     }
                     catch
                     {
@@ -762,6 +895,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
                     }
                 }
             }
+
+            return persisted;
         }
 
         internal static bool AddDistinctRecipientPair(
@@ -1030,7 +1165,9 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
                 $"(recipient rows: {_recipientsInserted}). " +
                 $"Delta tokens read: {_deltaTokenReads}, written: {_deltaTokenWrites}. " +
                 $"Mailboxes continuing a long read next cycle: {_mailboxesContinuingNextCycle}; " +
-                $"rejected sync checkpoints discarded and re-read from the start: {_mailboxCheckpointsReset}.");
+                $"rejected sync checkpoints discarded and re-read from the start: {_mailboxCheckpointsReset}; " +
+                $"mailboxes not read (quarantined): {_mailboxesQuarantinedSkipped}, newly quarantined: {_mailboxesNewlyQuarantined}; " +
+                $"messages skipped for want of a usable sent date: {_messagesSkippedNoSentDate}.");
         }
 
         internal static string FormatMailboxFailureSummary(
@@ -1080,10 +1217,29 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
         internal static List<Candidate> BuildCandidates(
             IReadOnlyList<GraphSentMessage> messages,
             out HashSet<string> distinctAddresses)
+            => BuildCandidates(messages, out distinctAddresses, out _);
+
+        /// <summary>
+        /// <see cref="SentEmail.SentDate"/> is a SQL <c>datetime</c>, which starts in 1753. A message with no usable
+        /// <c>sentDateTime</c> used to be stored as <see cref="DateTime.MinValue"/>, which overflows it and failed that mailbox's
+        /// save on every cycle, for good. The date isn't invented and no other date stands in for it: the read asks for
+        /// <c>sentDateTime</c> only, and widening the <c>$select</c> of a stored delta token's query is not safe. So the message is
+        /// skipped and counted - the caller reports the count once per chunk.
+        /// </summary>
+        internal static bool HasStorableSentDate(DateTime? sentDateTime)
+            => sentDateTime.HasValue
+               && sentDateTime.Value >= System.Data.SqlTypes.SqlDateTime.MinValue.Value
+               && sentDateTime.Value <= System.Data.SqlTypes.SqlDateTime.MaxValue.Value;
+
+        internal static List<Candidate> BuildCandidates(
+            IReadOnlyList<GraphSentMessage> messages,
+            out HashSet<string> distinctAddresses,
+            out int skippedNoSentDate)
         {
             var candidates = new List<Candidate>(messages.Count);
             var seenMessageIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             distinctAddresses = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            skippedNoSentDate = 0;
 
             foreach (var msg in messages)
             {
@@ -1097,6 +1253,12 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
                 var toRecipients = msg.ToRecipients;
                 if (toRecipients == null || toRecipients.Count == 0)
                     continue;
+
+                if (!HasStorableSentDate(msg.SentDateTime))
+                {
+                    skippedNoSentDate++;
+                    continue;
+                }
 
                 // Deduplicate the recipient list per message (the same mailbox may appear
                 // multiple times in a Graph payload).
@@ -1138,27 +1300,64 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
             return candidates;
         }
 
-        private async Task CommitDeltaTokensAsync(IEnumerable<LoadedUser> loadedUsers)
+        /// <summary>
+        /// Writes the checkpoints of the mailboxes whose messages are saved, and returns the mailboxes whose checkpoint could not be
+        /// written. A committer that can batch (<see cref="ISentEmailBatchCheckpointCommitter"/>) writes the whole chunk's in one
+        /// storage round trip instead of one write per mailbox - ~10 ms each at 200,000 mailboxes is over half an hour a cycle. If the
+        /// batch fails, each mailbox is committed on its own, so one mailbox's failure never withholds another's checkpoint.
+        /// </summary>
+        private async Task<List<MailboxFailure>> CommitCheckpointsAsync(List<LoadedUser> saved)
         {
-            if (_deltaTokenCommitter == null)
-                return;
+            var failures = new List<MailboxFailure>();
+            if (_deltaTokenCommitter == null || saved.Count == 0)
+                return failures;
 
             var continuationCommitter = _deltaTokenCommitter as ISentEmailSyncContinuationCommitter;
-            foreach (var loaded in loadedUsers)
+            var toCommit = saved.Where(l => !string.IsNullOrEmpty(l.NextDeltaToken)
+                || (!string.IsNullOrEmpty(l.NextPageLink) && continuationCommitter != null)).ToList();
+            if (toCommit.Count == 0)
+                return failures;
+
+            if (_deltaTokenCommitter is ISentEmailBatchCheckpointCommitter batchCommitter)
             {
-                if (!string.IsNullOrEmpty(loaded.NextDeltaToken))
+                try
                 {
-                    await _deltaTokenCommitter.CommitDeltaTokenAsync(loaded.User, loaded.NextDeltaToken);
-                    Interlocked.Increment(ref _deltaTokenWrites);
+                    await batchCommitter.CommitCheckpointsAsync(
+                        toCommit.Select(l => new SentEmailCheckpoint(l.User, l.NextDeltaToken, l.NextPageLink)).ToList());
+                    Interlocked.Add(ref _deltaTokenWrites, toCommit.Count);
+                    return failures;
                 }
-                else if (!string.IsNullOrEmpty(loaded.NextPageLink) && continuationCommitter != null)
+                catch (Exception ex)
                 {
-                    // The read stopped at its per-cycle bound and this chunk has now saved what it read, so the next
-                    // cycle can continue after it rather than from the start of the round.
-                    await continuationCommitter.CommitContinuationAsync(loaded.User, loaded.NextPageLink);
-                    Interlocked.Increment(ref _deltaTokenWrites);
+                    _logger.LogWarning(
+                        "SentEmailCheckpointBatchFailed: mailboxes={Mailboxes}; failure={Failure}. Committing them one at a time.",
+                        toCommit.Count, FailureClassification.Describe(ex));
                 }
             }
+
+            foreach (var mailbox in toCommit)
+            {
+                try
+                {
+                    if (!string.IsNullOrEmpty(mailbox.NextDeltaToken))
+                    {
+                        await _deltaTokenCommitter.CommitDeltaTokenAsync(mailbox.User, mailbox.NextDeltaToken);
+                    }
+                    else
+                    {
+                        // The read stopped at its per-cycle bound and this chunk has now saved what it read, so the next
+                        // cycle can continue after it rather than from the start of the round.
+                        await continuationCommitter.CommitContinuationAsync(mailbox.User, mailbox.NextPageLink);
+                    }
+                    Interlocked.Increment(ref _deltaTokenWrites);
+                }
+                catch (Exception ex)
+                {
+                    failures.Add(new MailboxFailure(mailbox, ex));
+                }
+            }
+
+            return failures;
         }
 
         private static async Task<Dictionary<string, ExistingEmailState>> FindExistingEmailStateAsync(
@@ -1344,7 +1543,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
             {
                 GraphMessageId = c.GraphMessageId,
                 Subject = msg.Subject?.Length > 1000 ? msg.Subject.Substring(0, 1000) : msg.Subject,
-                SentDate = msg.SentDateTime ?? DateTime.MinValue,
+                SentDate = msg.SentDateTime.Value,
                 FromAddressID = addressIds[c.FromAddress],
                 UserID = user.ID
             };

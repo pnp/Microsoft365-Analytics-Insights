@@ -34,7 +34,7 @@ namespace Common.Entities.State
     /// the ones nobody reads again.</description></item>
     /// </list>
     /// </remarks>
-    public sealed class AzureTableKeyValueStore : IConditionalKeyValueStore
+    public sealed class AzureTableKeyValueStore : IConditionalKeyValueStore, IBatchKeyValueStore
     {
         internal const string KeyProperty = "Key";
         internal const string ValueProperty = "Value";
@@ -62,6 +62,9 @@ namespace Common.Entities.State
 
         /// <summary>Azure Tables accepts at most 100 operations in one entity-group transaction.</summary>
         private const int MaxTransactionSize = 100;
+
+        /// <summary>An entity-group transaction's payload is capped at 4 MiB; this keeps the plain text of a batch far below it.</summary>
+        private const int MaxTransactionChars = 400000;
 
         private readonly Func<CancellationToken, Task<TableClient>> _getTable;
         private readonly Action<TableClient> _onAccessDenied;
@@ -168,6 +171,59 @@ namespace Common.Entities.State
                 // Replace, not merge: a value that shrinks from compressed chunks back to plain text must not leave the old
                 // chunks behind, and a value written without a TTL must lose any previous expiry.
                 await table.UpsertEntityAsync(entity, TableUpdateMode.Replace, cancellationToken).ConfigureAwait(false);
+                return true;
+            }, cancellationToken).ConfigureAwait(false);
+        }
+
+        /// <summary>
+        /// Upserts every value (no time-to-live) in entity-group transactions: all of this partition's rows, so at most 100 per
+        /// transaction and a bounded payload, one round trip each instead of one per key. A transaction is atomic; if one fails,
+        /// earlier ones may already be written, which is harmless for an upsert that is simply repeated.
+        /// </summary>
+        public async Task SetManyAsync(IReadOnlyList<KeyValuePair<string, string>> values, CancellationToken cancellationToken = default)
+        {
+            if (values == null) throw new ArgumentNullException(nameof(values));
+
+            // One action per row: a transaction can't touch the same entity twice, so the last value for a key wins.
+            var entities = new Dictionary<string, TableEntity>(StringComparer.Ordinal);
+            var sizes = new Dictionary<string, int>(StringComparer.Ordinal);
+            foreach (var pair in values)
+            {
+                if (pair.Value == null) throw new ArgumentException("A batch write needs a value for every key; use DeleteAsync to remove one.", nameof(values));
+
+                var rowKey = ToRowKey(pair.Key);
+                var entity = new TableEntity(_partitionKey, rowKey) { { KeyProperty, pair.Key } };
+                EncodeValue(entity, pair.Key, pair.Value);
+                entities[rowKey] = entity;
+                sizes[rowKey] = pair.Value.Length;
+            }
+
+            if (entities.Count == 0)
+            {
+                return;
+            }
+
+            await RunAsync(async table =>
+            {
+                var batch = new List<TableTransactionAction>();
+                var batchChars = 0;
+                foreach (var item in entities)
+                {
+                    if (batch.Count == MaxTransactionSize || (batch.Count > 0 && batchChars + sizes[item.Key] > MaxTransactionChars))
+                    {
+                        await table.SubmitTransactionAsync(batch, cancellationToken).ConfigureAwait(false);
+                        batch = new List<TableTransactionAction>();
+                        batchChars = 0;
+                    }
+
+                    batch.Add(new TableTransactionAction(TableTransactionActionType.UpsertReplace, item.Value));
+                    batchChars += sizes[item.Key];
+                }
+
+                if (batch.Count > 0)
+                {
+                    await table.SubmitTransactionAsync(batch, cancellationToken).ConfigureAwait(false);
+                }
                 return true;
             }, cancellationToken).ConfigureAwait(false);
         }

@@ -13,7 +13,7 @@ namespace Common.Entities.State
     /// Values live only as long as this instance, so a caller that needs them to survive across import cycles must
     /// hold ONE instance for the life of the process. Thread-safe: the importers read and write concurrently.
     /// </remarks>
-    public sealed class InMemoryKeyValueStore : IConditionalKeyValueStore
+    public sealed class InMemoryKeyValueStore : IConditionalKeyValueStore, IBatchKeyValueStore
     {
         /// <summary>How many writes happen between sweeps of expired entries, so a TTL'd cache cannot grow without bound.</summary>
         private const int SweepEveryWrites = 1000;
@@ -103,6 +103,20 @@ namespace Common.Entities.State
 
             var existed = _entries.TryRemove(key, out var entry) && !entry.IsExpired(_utcNow());
             return Task.FromResult(existed);
+        }
+
+        public async Task SetManyAsync(IReadOnlyList<KeyValuePair<string, string>> values, CancellationToken cancellationToken = default)
+        {
+            if (values == null) throw new ArgumentNullException(nameof(values));
+            foreach (var pair in values)
+            {
+                if (pair.Value == null) throw new ArgumentException("A batch write needs a value for every key.", nameof(values));
+            }
+
+            foreach (var pair in values)
+            {
+                await SetStringAsync(pair.Key, pair.Value, null, cancellationToken).ConfigureAwait(false);
+            }
         }
 
         public Task<VersionedValue> GetVersionedAsync(string key, CancellationToken cancellationToken = default)

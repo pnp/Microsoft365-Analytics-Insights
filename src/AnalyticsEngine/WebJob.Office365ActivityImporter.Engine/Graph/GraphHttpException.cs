@@ -1,4 +1,5 @@
 using DataUtils;
+using DataUtils.Http;
 using Newtonsoft.Json.Linq;
 using System;
 using System.Collections.Generic;
@@ -109,15 +110,13 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         }
 
         /// <summary>
-        /// The status and Graph error code with the URL deliberately omitted, for anywhere the text is
-        /// PERSISTED rather than logged.
+        /// The status and Graph error code with no endpoint at all, for anywhere the text is PERSISTED rather than logged.
         ///
-        /// <see cref="Exception.Message"/> embeds the failing URL, which is the right call for a log line -
-        /// and <c>ManualGraphCallClient</c> has already logged it at error level anyway. But this type is
-        /// now thrown for every Graph call, and some request paths identify a person
-        /// (<c>/users/{upn}/messages</c> in the sent-email loader). Anything writing to a database column,
-        /// a job summary or another durable store should use this instead, so a user principal name does
-        /// not end up somewhere it was never meant to be retained.
+        /// <see cref="Exception.Message"/> names the endpoint's shape (identifiers and query string replaced), never the URL,
+        /// because it is logged. But this type is thrown for every Graph call, and some request paths identify a person
+        /// (<c>/users/{upn}/messages</c> in the sent-email loader) - the full URL is only on <see cref="Url"/>. Anything
+        /// writing to a database column, a job summary or another durable store should use this, which names no endpoint
+        /// at all.
         /// </summary>
         public string SummaryWithoutUrl
         {
@@ -146,9 +145,12 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             var code = ExtractGraphErrorCode(responseBody);
             var status = $"{(int)statusCode} ({statusCode})";
 
+            // The endpoint shape, not the URL: this message is logged and persisted, and the URL carries UPNs and sync tokens.
+            // The full URL is still on <see cref="Url"/> for code that needs it.
+            var endpoint = GraphEndpointTemplate.TemplatePath(url);
             return string.IsNullOrEmpty(code)
-                ? $"Graph returned {status} for {url}."
-                : $"Graph returned {status} for {url} with error code '{code}'.";
+                ? $"Graph returned {status} for {endpoint}."
+                : $"Graph returned {status} for {endpoint} with error code '{code}'.";
         }
 
         /// <summary>

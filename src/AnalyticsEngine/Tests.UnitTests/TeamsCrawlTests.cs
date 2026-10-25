@@ -1068,9 +1068,9 @@ namespace Tests.UnitTests
         [DataRow(403, null, ChannelReadFailureKind.Transient)]
         [DataRow(401, "Standard", ChannelReadFailureKind.Transient)]
         [DataRow(429, "Standard", ChannelReadFailureKind.Transient)]
-        [DataRow(500, "Standard", ChannelReadFailureKind.Transient)]
-        [DataRow(503, "Private", ChannelReadFailureKind.Transient)]
-        [DataRow(400, "Standard", ChannelReadFailureKind.Transient)]
+        [DataRow(500, "Standard", ChannelReadFailureKind.ChannelFailed)]
+        [DataRow(503, "Private", ChannelReadFailureKind.ChannelFailed)]
+        [DataRow(400, "Standard", ChannelReadFailureKind.ChannelFailed)]
         public async Task GraphChannelRead_FailureIsClassifiedByStatusAndChannelType(int status, string membershipType, ChannelReadFailureKind expected)
         {
             var handler = new StubGraphHandler().Json("/channels/channel-1/messages/delta", StubGraphHandler.Error("Synthetic" + status), (HttpStatusCode)status);
@@ -1083,7 +1083,7 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
-        public async Task GraphChannelRead_NoAnswerFromGraph_IsTransient()
+        public async Task GraphChannelRead_NoAnswerFromGraph_IsAChannelFailure()
         {
             foreach (var failure in new Exception[] { new HttpRequestException("synthetic network failure"), new TaskCanceledException("synthetic timeout") })
             {
@@ -1092,7 +1092,7 @@ namespace Tests.UnitTests
                 var ex = await Assert.ThrowsExceptionAsync<ChannelMessagesReadException>(() =>
                     DelegatedReader(handler).LoadMessagesAndReactions(TypedChannel("channel-1", ChannelMembershipType.Standard), TeamId));
 
-                Assert.AreEqual(ChannelReadFailureKind.Transient, ex.Kind, failure.GetType().Name);
+                Assert.AreEqual(ChannelReadFailureKind.ChannelFailed, ex.Kind, failure.GetType().Name);
             }
         }
 
@@ -1536,6 +1536,145 @@ namespace Tests.UnitTests
                 }
                 response.RequestMessage = request;
                 return Task.FromResult(response);
+            }
+        }
+
+        #endregion
+
+        #region Invalid channel delta tokens (F-1)
+
+        private sealed class ScriptedPageReader : IChannelMessagesPageReader
+        {
+            private readonly Func<TeamChannelDeltaTokenInfo, ChannelRootMessagesPageResult> _root;
+
+            public ScriptedPageReader(Func<TeamChannelDeltaTokenInfo, ChannelRootMessagesPageResult> root) { _root = root; }
+
+            public List<string> TokensRequested { get; } = new List<string>();
+
+            public Task<ChannelRootMessagesPageResult> LoadRootMessages(string teamId, string channelId, TeamChannelDeltaTokenInfo channelDeltaInfo)
+            {
+                TokensRequested.Add(channelDeltaInfo?.Token ?? "(none)");
+                return Task.FromResult(_root(channelDeltaInfo));
+            }
+
+            public Task<ChannelRepliesPageResult> LoadReplies(string teamId, string channelId, string messageId)
+                => Task.FromResult(new ChannelRepliesPageResult { Completed = true });
+        }
+
+        private static Microsoft.Graph.Models.ODataErrors.ODataError GraphRefusal(int status, string code)
+            => new Microsoft.Graph.Models.ODataErrors.ODataError
+            {
+                ResponseStatusCode = status,
+                Error = new Microsoft.Graph.Models.ODataErrors.MainError { Code = code },
+            };
+
+        private static ChannelRootMessagesPageResult FullRead() => new ChannelRootMessagesPageResult
+        {
+            Messages = new List<ChatMessage> { Msg("root-1", AfterToken) },
+            Deltalink = DeltaLink("fresh-token"),
+            Completed = true,
+        };
+
+        /// <summary>
+        /// Graph refuses a stored channel delta token with 410, <c>syncStateNotFound</c>, or - its documented persistent answer - a
+        /// bare 400. The channel used to be abandoned until the next cycle (and only for a 400 coded "BadRequest"); now it is read in
+        /// full at once, and only then is the dead token dropped.
+        /// </summary>
+        [DataTestMethod]
+        [DataRow(410, null)]
+        [DataRow(410, "syncStateNotFound")]
+        [DataRow(400, "UnknownError")]
+        [DataRow(400, "BadRequest")]
+        public async Task ChannelMessagesLoader_ARejectedDeltaToken_IsDropped_AndTheChannelReadInFullOnce(int status, string code)
+        {
+            var channel = Channel("channel-1");
+            var store = new InMemoryTeamChannelDeltaTokenStore();
+            await store.SetDeltaToken("team-1", "channel-1", new TeamChannelDeltaTokenInfo { Token = "stale-token", LastUpdated = DeltaTokenWrittenAt });
+            var reader = new ScriptedPageReader(info => info != null ? throw GraphRefusal(status, code) : FullRead());
+
+            var newToken = await new ChannelMessagesLoader(reader, store, NullLogger.Instance).LoadTeamMessagesAndReplies(channel, "team-1");
+
+            CollectionAssert.AreEqual(new[] { "stale-token", "(none)" }, reader.TokensRequested.ToArray(), "The retry carries no token, so it can't be refused for one.");
+            Assert.AreEqual("fresh-token", newToken?.Token, "The full read's token is handed on to be committed after SQL.");
+            Assert.IsNull(await store.GetDeltaToken("team-1", "channel-1"), "The dead token is gone.");
+            Assert.IsTrue(channel.DeltaTokenWasReset);
+            Assert.AreEqual(1, channel.Messages.Count, "The full read's messages are kept.");
+        }
+
+        [TestMethod]
+        public async Task ChannelMessagesLoader_IfTheFullReadFailsToo_TheStoredTokenIsKept_AndTheFailureIsThrown()
+        {
+            var store = new InMemoryTeamChannelDeltaTokenStore();
+            await store.SetDeltaToken("team-1", "channel-1", new TeamChannelDeltaTokenInfo { Token = "stale-token" });
+            var reader = new ScriptedPageReader(info => throw GraphRefusal(info != null ? 400 : 500, "UnknownError"));
+
+            var ex = await Assert.ThrowsExceptionAsync<Microsoft.Graph.Models.ODataErrors.ODataError>(() =>
+                new ChannelMessagesLoader(reader, store, NullLogger.Instance).LoadTeamMessagesAndReplies(Channel("channel-1"), "team-1"));
+
+            Assert.AreEqual(500, ex.ResponseStatusCode);
+            CollectionAssert.AreEqual(new[] { "stale-token", "(none)" }, reader.TokensRequested.ToArray(), "Once - never a loop.");
+            Assert.AreEqual("stale-token", (await store.GetDeltaToken("team-1", "channel-1"))?.Token,
+                "The channel failed for a reason that isn't its token, so it keeps its place.");
+        }
+
+        [DataTestMethod]
+        [DataRow(401)]
+        [DataRow(403)]
+        [DataRow(429)]
+        [DataRow(500)]
+        [DataRow(503)]
+        public async Task ChannelMessagesLoader_OtherFailuresOfATokenRequest_AreNotMistakenForARejectedToken(int status)
+        {
+            var store = new InMemoryTeamChannelDeltaTokenStore();
+            await store.SetDeltaToken("team-1", "channel-1", new TeamChannelDeltaTokenInfo { Token = "good-token" });
+            var reader = new ScriptedPageReader(info => throw GraphRefusal(status, "Synthetic"));
+
+            await Assert.ThrowsExceptionAsync<Microsoft.Graph.Models.ODataErrors.ODataError>(() =>
+                new ChannelMessagesLoader(reader, store, NullLogger.Instance).LoadTeamMessagesAndReplies(Channel("channel-1"), "team-1"));
+
+            Assert.AreEqual(1, reader.TokensRequested.Count);
+            Assert.AreEqual("good-token", (await store.GetDeltaToken("team-1", "channel-1"))?.Token);
+        }
+
+        [TestMethod]
+        public async Task ChannelMessagesLoader_ABadRequestWithNoStoredToken_IsNotRetried()
+        {
+            var reader = new ScriptedPageReader(info => throw GraphRefusal(400, "UnknownError"));
+
+            await Assert.ThrowsExceptionAsync<Microsoft.Graph.Models.ODataErrors.ODataError>(() =>
+                new ChannelMessagesLoader(reader, new InMemoryTeamChannelDeltaTokenStore(), NullLogger.Instance).LoadTeamMessagesAndReplies(Channel("channel-1"), "team-1"));
+
+            Assert.AreEqual(1, reader.TokensRequested.Count, "A request with no token has no token to blame.");
+        }
+
+        #endregion
+
+        #region The group scan is one summary line (F-6)
+
+        [TestMethod]
+        public async Task FindGroupsWithTeamToCrawl_LogsOneSummary_NotALinePerGroupWithoutATeam()
+        {
+            var groups = new List<Group> { FakeTeamsGroupSourceLoader.GroupWithProvisioningOptions("g-team", "Contoso Marketing", "[\"Team\"]") };
+            for (var i = 0; i < 50; i++)
+            {
+                groups.Add(FakeTeamsGroupSourceLoader.GroupWithProvisioningOptions("g-dl-" + i, "Contoso Distribution List " + i, "[]"));
+            }
+            groups.Add(FakeTeamsGroupSourceLoader.GroupWithProvisioningOptions("g-unknown", "Contoso Security Group", null));
+            var source = new FakeTeamsGroupSourceLoader(groups.ToArray());
+
+            using (var captured = new CapturedAnalyticsLogger())
+            {
+                var finder = new TeamsFinder(captured.Logger, new AppConfig(), source);
+                var toCrawl = await finder.FindGroupsWithTeamToCrawl(new TeamsCrawlConfig());
+
+                Assert.AreEqual(1, toCrawl.Count);
+                var traces = captured.Messages(Microsoft.ApplicationInsights.DataContracts.SeverityLevel.Information);
+                Assert.IsFalse(traces.Any(m => m.Contains("Contoso Distribution List")), "A group's name is only a Debug (Verbose) line now, not Information.");
+                Assert.AreEqual(1, traces.Count(m => m.StartsWith("TeamsGroupScan:") && m.Contains("groups=52; withTeam=1; noTeam=50; notReported=1")),
+                    "One line with the counts: " + string.Join(" | ", traces));
+                Assert.AreEqual(50, captured.Messages(Microsoft.ApplicationInsights.DataContracts.SeverityLevel.Verbose).Count(m => m.Contains("has no Team associated")));
+                Assert.AreEqual(52, finder.GroupsScanned);
+                Assert.AreEqual(50, finder.GroupsWithoutTeam);
             }
         }
 

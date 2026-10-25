@@ -108,6 +108,7 @@ namespace Tests.UnitTests
                 {
                     Id = "m1",
                     From = Recipient("alice@x.com"),
+                    SentDateTime = DateTime.UtcNow,
                     ToRecipients = new List<GraphEmailRecipient>
                     {
                         new GraphEmailRecipient { EmailAddress = new GraphEmailAddress { Address = null } },
@@ -278,29 +279,50 @@ namespace Tests.UnitTests
             Assert.IsNull(row.Subject);
         }
 
+        /// <summary>
+        /// <c>sent_date</c> is a SQL <c>datetime</c>, which starts in 1753. A message with no sentDateTime used to be stored as
+        /// <see cref="DateTime.MinValue"/>, which overflows it - failing that mailbox's save on every cycle, for good, and (with the
+        /// rethrow) every Graph section after the sent emails with it. No date is invented now: the message is skipped and counted.
+        /// </summary>
         [TestMethod]
-        public void BuildSentEmailRow_MissingSentDateTime_DefaultsToMinValue()
+        public void BuildCandidates_SkipsMessagesWithoutAStorableSentDate_AndCountsThem()
         {
-            var addressIds = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase)
+            var good = Msg("m-good", "a@x.com", new[] { "b@x.com" });
+            var noDate = Msg("m-none", "a@x.com", new[] { "b@x.com" });
+            noDate.SentDateTime = null;
+            var tooOld = Msg("m-old", "a@x.com", new[] { "b@x.com" });
+            tooOld.SentDateTime = DateTime.MinValue;
+            var tooNew = Msg("m-new", "a@x.com", new[] { "b@x.com" });
+            tooNew.SentDateTime = DateTime.MaxValue;
+            var oldButStorable = Msg("m-1753", "a@x.com", new[] { "b@x.com" });
+            oldButStorable.SentDateTime = new DateTime(1753, 1, 1);
+
+            var candidates = SentEmailImporter.BuildCandidates(new[] { good, noDate, tooOld, tooNew, oldButStorable }, out _, out var skipped);
+
+            CollectionAssert.AreEqual(new[] { "m-good", "m-1753" }, candidates.Select(c => c.GraphMessageId).ToArray());
+            Assert.AreEqual(3, skipped);
+        }
+
+        [TestMethod]
+        public async Task ImportSentEmailsForUser_AMessageWithNoSentDate_DoesNotFailTheMailbox()
+        {
+            var user = await CreateSavedUserAsync("no-sent-date");
+            var suffix = Guid.NewGuid().ToString("N");
+            var undated = Msg("no-date-" + suffix, user.Mail, new[] { "recipient-nd@contoso.com" }, "Καλημέρα κόσμε");
+            undated.SentDateTime = null;
+            var dated = Msg("dated-" + suffix, user.Mail, new[] { "recipient-nd@contoso.com" }, "Καλημέρα κόσμε");
+            var source = new RecordingSentEmailSourceLoader((user, undated), (user, dated));
+            var committer = new RecordingDeltaTokenCommitter();
+            using (var captured = new CapturedAnalyticsLogger())
             {
-                ["a@x.com"] = 1,
-                ["b@x.com"] = 2,
-            };
-            var candidate = SentEmailImporter.BuildCandidates(
-                new List<GraphSentMessage>
-                {
-                    new GraphSentMessage
-                    {
-                        Id = "m1",
-                        From = Recipient("a@x.com"),
-                        ToRecipients = new List<GraphEmailRecipient> { Recipient("b@x.com") },
-                    },
-                }, out _).Single();
+                await NewImporter(source, committer, logger: captured.Logger).ImportSentEmailsForUser(user);
 
-            var row = SentEmailImporter.BuildSentEmailRow(
-                new User { ID = 1 }, candidate, addressIds, sentimentByMessageId: null);
-
-            Assert.AreEqual(DateTime.MinValue, row.SentDate);
+                Assert.AreEqual(1, await CountSentEmailsAsync("dated-" + suffix), "The message that can be stored is stored.");
+                Assert.AreEqual(0, await CountSentEmailsAsync("no-date-" + suffix));
+                Assert.IsTrue(committer.TryGetToken(user, out _), "The mailbox's checkpoint still moves: it does not fail every cycle.");
+                Assert.IsTrue(captured.Messages(Microsoft.ApplicationInsights.DataContracts.SeverityLevel.Warning)
+                    .Any(m => m.StartsWith("SentEmailChunk:") && m.Contains("skippedNoSentDate=1")), "The skip is counted in the chunk's line.");
+            }
         }
 
         [TestMethod]
@@ -906,6 +928,230 @@ namespace Tests.UnitTests
             Assert.AreEqual(1, await CountRecipientsAsync("checkpoint-healthy-" + suffix));
         }
 
+        #region One bad mailbox must not wedge the section for ever (F-8), and checkpoints are batched (F-7), logging (F-5)
+
+        private static async Task<(User Failed, User Healthy, RecordingSentEmailSourceLoader Source, string FailedMessageId, string HealthyMessageId)> FailedAndHealthyMailboxesAsync()
+        {
+            var failed = await CreateSavedUserAsync("poison");
+            var healthy = await CreateSavedUserAsync("fine");
+            var suffix = Guid.NewGuid().ToString("N");
+            var failedId = "poison-" + suffix;
+            var healthyId = "fine-" + suffix;
+            var source = new RecordingSentEmailSourceLoader(
+                (failed, Msg(failedId, failed.Mail, new[] { "recipient@contoso.com" })),
+                (healthy, Msg(healthyId, healthy.Mail, new[] { "recipient@contoso.com" })));
+            return (failed, healthy, source, failedId, healthyId);
+        }
+
+        [TestMethod]
+        public async Task APersistentlyFailingMailbox_IsQuarantinedAfterThreeCycles_AndNoLongerFailsTheSection()
+        {
+            var (failed, healthy, source, failedId, healthyId) = await FailedAndHealthyMailboxesAsync();
+            var committer = new RecordingDeltaTokenCommitter();
+            using (var captured = new CapturedAnalyticsLogger())
+            {
+                var quarantine = new SentEmailMailboxQuarantine(new Common.Entities.State.InMemoryKeyValueStore(), captured.Logger);
+                var importer = NewImporter(source, committer, logger: captured.Logger, quarantine: quarantine);
+                importer.BeforeSentEmailBatchInsertAsync = (connection, id) =>
+                    id == failedId ? throw new InvalidOperationException("Synthetic poisoned mailbox.") : Task.CompletedTask;
+                var both = new List<User> { failed, healthy };
+
+                for (var cycle = 1; cycle < SentEmailMailboxQuarantine.QuarantineAfterConsecutiveFailures; cycle++)
+                {
+                    await Assert.ThrowsExceptionAsync<InvalidOperationException>(() => importer.ImportSentEmailsForUsersForTest(both));
+                    Assert.IsFalse(quarantine.IsQuarantined(failed.ID), "Cycle " + cycle + ": not yet.");
+                }
+
+                await importer.ImportSentEmailsForUsersForTest(both);
+
+                Assert.IsTrue(quarantine.IsQuarantined(failed.ID));
+                Assert.IsFalse(quarantine.IsQuarantined(healthy.ID));
+                Assert.AreEqual(1, await CountSentEmailsAsync(healthyId), "Every other mailbox carried on.");
+                Assert.IsTrue(committer.TryGetToken(healthy, out _));
+                Assert.IsFalse(committer.TryGetToken(failed, out _), "The quarantined mailbox's checkpoint is left exactly as it was.");
+                Assert.AreEqual(0, await CountSentEmailsAsync(failedId));
+                var error = captured.Messages(Microsoft.ApplicationInsights.DataContracts.SeverityLevel.Error)
+                    .Single(m => m.StartsWith("SentEmailMailboxQuarantined:"));
+                StringAssert.Contains(error, "userId=" + failed.ID + ";");
+                StringAssert.Contains(error, "consecutiveFailures=3");
+                StringAssert.Contains(error, "failure=InvalidOperationException");
+                Assert.IsFalse(error.Contains("@contoso.com"), "A user id, never a UPN.");
+            }
+        }
+
+        [TestMethod]
+        public async Task EveryMailboxInAChunkFailing_IsTheDatabaseNotTheMailboxes_SoNobodyIsQuarantined()
+        {
+            var (failed, healthy, source, failedId, healthyId) = await FailedAndHealthyMailboxesAsync();
+            using (var captured = new CapturedAnalyticsLogger())
+            {
+                var quarantine = new SentEmailMailboxQuarantine(new Common.Entities.State.InMemoryKeyValueStore(), captured.Logger);
+                var importer = NewImporter(source, new RecordingDeltaTokenCommitter(), logger: captured.Logger, quarantine: quarantine);
+                importer.BeforeSentEmailBatchInsertAsync = (connection, id) => throw new InvalidOperationException("Synthetic database outage.");
+
+                for (var cycle = 0; cycle < SentEmailMailboxQuarantine.QuarantineAfterConsecutiveFailures + 2; cycle++)
+                {
+                    await Assert.ThrowsExceptionAsync<AggregateException>(() => importer.ImportSentEmailsForUsersForTest(new List<User> { failed, healthy }));
+                }
+
+                Assert.IsFalse(quarantine.IsQuarantined(failed.ID) || quarantine.IsQuarantined(healthy.ID));
+            }
+        }
+
+        [TestMethod]
+        public async Task AMailboxThatRecovers_StartsCountingFromZeroAgain()
+        {
+            var quarantine = new SentEmailMailboxQuarantine(new Common.Entities.State.InMemoryKeyValueStore(), AnalyticsLogger.ConsoleOnlyTracer());
+            await quarantine.LoadAsync();
+
+            Assert.AreEqual(1, quarantine.RecordFailure(7, new InvalidOperationException("synthetic")).ConsecutiveFailures);
+            Assert.AreEqual(2, quarantine.RecordFailure(7, new InvalidOperationException("synthetic")).ConsecutiveFailures);
+            quarantine.RecordSuccess(7);
+
+            // One failure after a success is the first of a new run, not the third of the old one: it still fails the section.
+            var decision = quarantine.RecordFailure(7, new InvalidOperationException("synthetic"));
+            Assert.AreEqual(1, decision.ConsecutiveFailures);
+            Assert.IsFalse(decision.Quarantined);
+        }
+
+        [TestMethod]
+        public async Task Quarantine_IsKeptByUserIdInOneRow_EndsAfterADay_AndSurvivesARestart()
+        {
+            var now = new DateTime(2026, 10, 1, 8, 0, 0, DateTimeKind.Utc);
+            var state = new Common.Entities.State.InMemoryKeyValueStore();
+            var logger = AnalyticsLogger.ConsoleOnlyTracer();
+            var quarantine = new SentEmailMailboxQuarantine(state, logger, () => now);
+            await quarantine.LoadAsync();
+
+            for (var i = 0; i < SentEmailMailboxQuarantine.QuarantineAfterConsecutiveFailures; i++)
+            {
+                quarantine.RecordFailure(42, new InvalidOperationException("synthetic"));
+            }
+            await quarantine.SaveAsync();
+
+            var restarted = new SentEmailMailboxQuarantine(state, logger, () => now.AddHours(1));
+            await restarted.LoadAsync();
+            Assert.IsTrue(restarted.IsQuarantined(42), "A restart does not release it.");
+            Assert.IsFalse(restarted.IsQuarantined(43));
+            Assert.AreEqual(1, restarted.QuarantinedCount());
+            var row = await state.GetStringAsync("SentEmailMailboxQuarantine");
+            Assert.IsFalse(row.Contains("@"), "User ids only: " + row);
+
+            var later = new SentEmailMailboxQuarantine(state, logger, () => now.AddHours(25));
+            await later.LoadAsync();
+            Assert.IsFalse(later.IsQuarantined(42), "A day on, the mailbox is tried again.");
+            Assert.IsTrue(later.RecordFailure(42, new InvalidOperationException("synthetic")).Quarantined,
+                "...and if it fails once more it goes straight back: it has been failing for 4 cycles.");
+        }
+
+        [TestMethod]
+        public async Task AStateStoreThatCannotBeRead_CostsOnlyTheQuarantine()
+        {
+            var quarantine = new SentEmailMailboxQuarantine(new FailingStateStore(), AnalyticsLogger.ConsoleOnlyTracer());
+            await quarantine.LoadAsync();
+
+            Assert.IsFalse(quarantine.IsQuarantined(1));
+            Assert.IsFalse(quarantine.RecordFailure(1, new InvalidOperationException("synthetic")).Quarantined);
+            await quarantine.SaveAsync();
+        }
+
+        private sealed class FailingStateStore : Common.Entities.State.IKeyValueStore
+        {
+            public string Description => "unreachable";
+            public Task<string> GetStringAsync(string key, System.Threading.CancellationToken cancellationToken = default) => throw new InvalidOperationException("synthetic outage");
+            public Task SetStringAsync(string key, string value, TimeSpan? timeToLive = null, System.Threading.CancellationToken cancellationToken = default) => throw new InvalidOperationException("synthetic outage");
+            public Task<bool> DeleteAsync(string key, System.Threading.CancellationToken cancellationToken = default) => throw new InvalidOperationException("synthetic outage");
+            public Task<bool> ExistsAsync(string key, System.Threading.CancellationToken cancellationToken = default) => throw new InvalidOperationException("synthetic outage");
+        }
+
+        [TestMethod]
+        public async Task ACommitterThatCanBatch_GetsTheWholeChunksCheckpointsInOneCall_ExceptTheFailedMailbox()
+        {
+            var (failed, healthy, source, failedId, healthyId) = await FailedAndHealthyMailboxesAsync();
+            var third = await CreateSavedUserAsync("fine-too");
+            var committer = new BatchRecordingCommitter();
+            var importer = NewImporter(source, committer);
+            importer.BeforeSentEmailBatchInsertAsync = (connection, id) =>
+                id == failedId ? throw new InvalidOperationException("Synthetic poisoned mailbox.") : Task.CompletedTask;
+
+            await Assert.ThrowsExceptionAsync<InvalidOperationException>(() => importer.ImportSentEmailsForUsersForTest(new List<User> { failed, healthy, third }));
+
+            Assert.AreEqual(1, committer.Batches.Count, "One storage round trip for the chunk, not one per mailbox.");
+            CollectionAssert.AreEquivalent(new[] { healthy.ID, third.ID }, committer.Batches[0].ToArray(),
+                "Only mailboxes whose messages are saved get a checkpoint; the failed one keeps its previous one.");
+            Assert.AreEqual(0, committer.SingleCommits.Count);
+        }
+
+        [TestMethod]
+        public async Task IfTheBatchFails_EachMailboxIsCommittedOnItsOwn_SoOneFailureNeverWithholdsAnothersCheckpoint()
+        {
+            var (first, second, source, firstId, secondId) = await FailedAndHealthyMailboxesAsync();
+            var committer = new BatchRecordingCommitter { BatchFailure = new InvalidOperationException("Synthetic batch outage."), FailSingleFor = first.ID };
+            using (var captured = new CapturedAnalyticsLogger())
+            {
+                var importer = NewImporter(source, committer, logger: captured.Logger);
+
+                await Assert.ThrowsExceptionAsync<InvalidOperationException>(() => importer.ImportSentEmailsForUsersForTest(new List<User> { first, second }));
+
+                CollectionAssert.AreEqual(new[] { second.ID }, committer.SingleCommits.ToArray(), "The mailbox that can be committed is.");
+                Assert.IsTrue(captured.Messages(Microsoft.ApplicationInsights.DataContracts.SeverityLevel.Warning).Any(m =>
+                    m.StartsWith("SentEmailCheckpointBatchFailed:") && m.Contains("mailboxes=2")));
+            }
+        }
+
+        /// <summary>
+        /// A chunk of mailboxes is one line, not about three per mailbox with no mailbox named: counts, and the time each phase took.
+        /// </summary>
+        [TestMethod]
+        public async Task AChunkIsOneOutcomeLine_NotSeveralPerMailbox()
+        {
+            var (failed, healthy, source, failedId, healthyId) = await FailedAndHealthyMailboxesAsync();
+            using (var captured = new CapturedAnalyticsLogger())
+            {
+                await NewImporter(source, new RecordingDeltaTokenCommitter(), logger: captured.Logger)
+                    .ImportSentEmailsForUsersForTest(new List<User> { failed, healthy });
+
+                var all = captured.Messages();
+                Assert.AreEqual(0, all.Count(m => m.Contains("[persist]") || m.Contains("[chunk]")), "No per-phase, per-mailbox lines: " + string.Join(" | ", all));
+                var line = all.Single(m => m.StartsWith("SentEmailChunk:"));
+                StringAssert.Contains(line, "chunk=1/1; mailboxes=2; loaded=2; committed=2; failed=0; quarantined=0; messages=2; inserted=2; recipients=2;");
+                foreach (var phase in new[] { "loadMs=", "addressMs=", "existingMs=", "scoreMs=", "persistMs=", "checkpointMs=", "totalMs=" })
+                {
+                    StringAssert.Contains(line, phase);
+                }
+            }
+        }
+
+        private sealed class BatchRecordingCommitter : ISentEmailDeltaTokenCommitter, ISentEmailSyncContinuationCommitter, ISentEmailBatchCheckpointCommitter
+        {
+            public List<List<int>> Batches { get; } = new List<List<int>>();
+            public List<int> SingleCommits { get; } = new List<int>();
+            public Exception BatchFailure { get; set; }
+            public int FailSingleFor { get; set; } = -1;
+
+            public Task CommitCheckpointsAsync(IReadOnlyList<SentEmailCheckpoint> checkpoints)
+            {
+                if (BatchFailure != null)
+                    return Task.FromException(BatchFailure);
+
+                Batches.Add(checkpoints.Select(c => c.User.ID).ToList());
+                return Task.CompletedTask;
+            }
+
+            public Task CommitDeltaTokenAsync(User user, string deltaToken)
+            {
+                if (user.ID == FailSingleFor)
+                    return Task.FromException(new InvalidOperationException("Synthetic checkpoint failure."));
+
+                SingleCommits.Add(user.ID);
+                return Task.CompletedTask;
+            }
+
+            public Task CommitContinuationAsync(User user, string nextPageLink) => CommitDeltaTokenAsync(user, nextPageLink);
+        }
+
+        #endregion
+
         [TestMethod]
         public void AddDistinctRecipientPair_SkipsDuplicatePairs()
         {
@@ -1040,16 +1286,19 @@ namespace Tests.UnitTests
 
         private static SentEmailImporter NewImporter(
             RecordingSentEmailSourceLoader source,
-            RecordingDeltaTokenCommitter committer,
-            int userChunkSize = 25)
+            ISentEmailDeltaTokenCommitter committer,
+            int userChunkSize = 25,
+            AnalyticsLogger logger = null,
+            SentEmailMailboxQuarantine quarantine = null)
             => new SentEmailImporter(
-                AnalyticsLogger.ConsoleOnlyTracer(),
+                logger ?? AnalyticsLogger.ConsoleOnlyTracer(),
                 new AppConfig(),
                 source,
                 NullSentEmailSentimentScorer.Instance,
                 userChunkSize: userChunkSize,
                 graphLoadParallelism: 1,
-                deltaTokenCommitter: committer);
+                deltaTokenCommitter: committer,
+                mailboxQuarantine: quarantine);
 
         private static async Task<User> CreateSavedUserAsync(string label)
         {

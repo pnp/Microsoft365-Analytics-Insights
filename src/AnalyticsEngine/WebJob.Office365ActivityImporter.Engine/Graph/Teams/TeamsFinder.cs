@@ -33,6 +33,18 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
         /// </summary>
         public bool NoGroupReportedWorkloads { get; private set; }
 
+        /// <summary>Groups Graph returned in the last <see cref="FindGroupsWithTeamToCrawl"/>.</summary>
+        public int GroupsScanned { get; private set; }
+
+        /// <summary>Groups that have a Team.</summary>
+        public int GroupsWithTeam { get; private set; }
+
+        /// <summary>Groups that reported their provisioned workloads and have no Team: distribution lists, security groups, groups without a Team.</summary>
+        public int GroupsWithoutTeam { get; private set; }
+
+        /// <summary>Groups that did not report their provisioned workloads at all.</summary>
+        public int GroupsNotReported { get; private set; }
+
         public async Task<List<Group>> FindGroupsWithTeamToCrawl(TeamsCrawlConfig filterConfig)
         {
             if (filterConfig is null)
@@ -41,6 +53,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
             }
 
             NoGroupReportedWorkloads = false;
+            GroupsScanned = GroupsWithTeam = GroupsWithoutTeam = GroupsNotReported = 0;
 
             // For now we're using the V1 endpoint, but leaving the beta-endpoint code in anyway for when it becomes RTM
             bool legacyAPIMode = true;
@@ -52,12 +65,13 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
             {
                 var v1Groups = await _groupSource.LoadGroupsWithProvisioningOptions();
                 var workloadsNotReported = 0;
+                var noTeam = 0;
 
                 foreach (var group in v1Groups)
                 {
-                    // Filter v1 groups by those that have a Team. Classified and logged one group at a
-                    // time, deliberately: partitioning the whole list first would swallow the log lines
-                    // for earlier groups if a later group's resourceProvisioningOptions failed to parse.
+                    // Filter v1 groups by those that have a Team. Classified one group at a time, deliberately: partitioning
+                    // the whole list first would swallow the classification of earlier groups if a later group's
+                    // resourceProvisioningOptions failed to parse.
                     var status = TeamsCrawlRules.ClassifyGroup(group);
                     if (status == GroupTeamStatus.HasTeam)
                     {
@@ -65,7 +79,10 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
                     }
                     else if (status == GroupTeamStatus.NoTeam)
                     {
-                        _logger.LogInformation($"Group name '{group.DisplayName}' has no Team associated.");
+                        // Distribution lists, security groups and Microsoft 365 groups without a Team: thousands on a large
+                        // tenant, so one summary line below carries the count and the name is Debug only.
+                        noTeam++;
+                        _logger.LogDebug($"Group name '{group.DisplayName}' has no Team associated.");
                     }
                     else
                     {
@@ -73,6 +90,12 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
                         workloadsNotReported++;
                     }
                 }
+
+                _logger.LogInformation($"TeamsGroupScan: groups={v1Groups.Count:N0}; withTeam={allGroupsWithTeams.Count:N0}; noTeam={noTeam:N0}; notReported={workloadsNotReported:N0}.");
+                GroupsScanned = v1Groups.Count;
+                GroupsWithTeam = allGroupsWithTeams.Count;
+                GroupsWithoutTeam = noTeam;
+                GroupsNotReported = workloadsNotReported;
 
                 // Microsoft 365 groups carry the property, if only as an empty array. If not one group did, the importer is
                 // almost certainly not reading it where the SDK puts it - which is how a Graph SDK upgrade once made the
@@ -97,7 +120,11 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
             var crawlPartition = TeamsCrawlRules.PartitionByCrawlConfig(allGroupsWithTeams, filterConfig);
             foreach (var g in crawlPartition.Excluded)
             {
-                _logger.LogInformation($"Excluding group '{g.DisplayName}' from crawl due to crawl configuration");
+                _logger.LogDebug($"Excluding group '{g.DisplayName}' from crawl due to crawl configuration");
+            }
+            if (crawlPartition.Excluded.Count > 0)
+            {
+                _logger.LogInformation($"TeamsGroupScan: {crawlPartition.Excluded.Count:N0} of {allGroupsWithTeams.Count:N0} Team(s) excluded by the crawl configuration; {crawlPartition.ToCrawl.Count:N0} to crawl.");
             }
 
             return crawlPartition.ToCrawl;

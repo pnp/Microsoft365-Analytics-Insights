@@ -28,10 +28,21 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
     public enum ChannelReadFailureKind
     {
         /// <summary>
-        /// Nothing to say the token is bad - throttling, a Graph or network outage, a timeout, anything unrecognised.
-        /// Stop reading this Team's channels this cycle, keep its authorisation, and save what was read.
+        /// Nothing to say the token is bad, and no reason to think the next channel will fail too - but also no reason to keep
+        /// hitting Graph: throttling, a token Graph refused that may simply have aged, a channel type that isn't known.
+        /// Stop reading this Team's channels this cycle, keep its authorisation, and save what was read. An unclassified failure
+        /// (<see cref="ChannelMessagesReadException(Exception)"/>) is this kind.
         /// </summary>
         Transient,
+
+        /// <summary>
+        /// This channel's read failed for a reason that isn't authentication or throttling: Graph's documented persistent
+        /// <c>400 UnknownError</c> on a channel's <c>messages/delta</c>, a 5xx, a timeout, the network. Carry on with the Team's
+        /// other channels - one bad channel must not stall the rest - and leave this channel's delta token alone so it resumes
+        /// when Graph answers again. Several in a row means Graph itself is down, so the crawl then stops as for
+        /// <see cref="Transient"/>; see <see cref="TeamsChannelCrawler.MaxConsecutiveChannelFailures"/>.
+        /// </summary>
+        ChannelFailed,
 
         /// <summary>
         /// Only this channel is unreadable with this person's token: a private or shared channel they aren't a member

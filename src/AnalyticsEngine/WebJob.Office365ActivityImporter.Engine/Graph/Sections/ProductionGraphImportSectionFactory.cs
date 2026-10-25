@@ -62,6 +62,33 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Sections
         private readonly ActivityReportsImport _activityReportsImport;
         private readonly IUserImportScopeProvider _userScopeProvider;
 
+        // Sent-email state when no Storage connection string is configured. Static, so created ONCE per process rather than once per
+        // import cycle (sections are rebuilt every cycle): a per-cycle store forgot every mailbox's checkpoint each time, so with the
+        // per-mailbox read bound every mailbox restarted from the beginning of its sent items every cycle and never got past the
+        // first page of them. Lost when the process restarts, like the other in-memory fallbacks.
+        private static readonly InMemoryDeltaTokenStore ProcessSentEmailDeltaTokens = new InMemoryDeltaTokenStore();
+        internal static readonly Common.Entities.State.InMemoryKeyValueStore ProcessSentEmailState = new Common.Entities.State.InMemoryKeyValueStore();
+        private static int _inMemorySentEmailStateLogged;
+
+        /// <summary>
+        /// The sent-email checkpoint store: durable when Storage is configured, otherwise the one in-memory store of this process.
+        /// Says so, once, at Warning: progress then survives cycles but not a restart.
+        /// </summary>
+        internal static IDeltaTokenStore SelectSentEmailDeltaTokenStore(Common.Entities.State.IKeyValueStore sentEmailState, ILogger logger)
+        {
+            if (sentEmailState != null)
+            {
+                return new PersistedDeltaTokenStore(sentEmailState);
+            }
+
+            if (System.Threading.Interlocked.Exchange(ref _inMemorySentEmailStateLogged, 1) == 0)
+            {
+                logger?.LogWarning("SentEmailStateDegraded: no Storage connection string is configured, so sent-email checkpoints are kept in memory. " +
+                    "Each mailbox's progress survives from cycle to cycle but not a restart of the web job, after which every mailbox is read again from the start of its sent items.");
+            }
+
+            return ProcessSentEmailDeltaTokens;
+        }
         public ProductionGraphImportSectionFactory(
             AnalyticsLogger logger,
             AppConfig settings,
@@ -186,7 +213,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Sections
                         // cadence gate is left unstamped so the crawl is retried next cycle. See TeamsCrawlSummary.Succeeded.
                         var crawl = await teamsImporter.RefreshAndSaveAllTeamsData(teamsConfig);
                         return crawl.Succeeded;
-                    }),
+                    }).WithFailureBackoff(),
 
                 DelegateGraphImportSection.Ungated(
                     "Sent emails import",
@@ -194,17 +221,10 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Sections
                     s => s.SentEmails,
                     async () =>
                     {
-                        IDeltaTokenStore deltaTokenStore;
                         var sentEmailStateStore = Common.Entities.State.StateStore.TryOpen(
                             _settings, Common.Entities.State.StatePartitions.SentEmails, _logger);
-                        if (sentEmailStateStore != null)
-                        {
-                            deltaTokenStore = new PersistedDeltaTokenStore(sentEmailStateStore);
-                        }
-                        else
-                        {
-                            deltaTokenStore = new InMemoryDeltaTokenStore();
-                        }
+                        var deltaTokenStore = SelectSentEmailDeltaTokenStore(sentEmailStateStore, _logger);
+                        var quarantine = new SentEmailMailboxQuarantine(sentEmailStateStore ?? ProcessSentEmailState, _logger);
 
                         // The primary constructor rather than the convenience overload, so the composition
                         // root supplies the DB context factory instead of the importer defaulting it.
@@ -217,7 +237,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Sections
                             dbContextFactory: _dbContextFactory,
                             mailboxSkipList: _sentEmailMailboxSkipList,
                             noMailboxRetryHours: _settings?.SentEmailNoMailboxRetryHours ?? 0,
-                            userScopeProvider: _userScopeProvider);
+                            userScopeProvider: _userScopeProvider,
+                            mailboxQuarantine: quarantine);
 
                         await sentEmailImporter.ImportSentEmails();
                         return true;
