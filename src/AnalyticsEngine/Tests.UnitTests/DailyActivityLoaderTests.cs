@@ -1,5 +1,6 @@
 using Common.Entities.LookupCaches;
 using DataUtils;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System;
@@ -203,6 +204,37 @@ namespace Tests.UnitTests
 
             Assert.AreEqual(1, store.Stored.Count, "The group filter must exclude the out-of-scope user's row.");
             Assert.AreEqual(UserAId, store.Stored[0].UserID);
+        }
+
+        [TestMethod]
+        public async Task DailyActivityLoader_SkippedRows_AreReportedOncePerDate_NeverPerRow_AndNeverByIdentifier()
+        {
+            // With a pilot UserGroupsFilter nearly every row of a full window is out of scope: that used to be one Information line
+            // per row, carrying the UPN - millions of lines and a bulk list of identities in the log.
+            var logger = new RecordingLogger();
+            var loader = new InMemoryDailyActivityLoader(logger) { InScopeRule = upn => upn == UserA };
+            var day1 = new List<FakeUserActivityDetail> { Page(UserA, 1) };
+            day1.AddRange(Enumerable.Range(1, 50).Select(i => Page($"pilot.{i}@contoso.com", i)));
+            day1.AddRange(new[] { Page(null, 1), Page(" ", 2), Page("", 3) });
+            loader.LoadedReportPages[Day1] = day1;
+            loader.LoadedReportPages[Day2] = Enumerable.Range(1, 20).Select(i => Page($"pilot.{i}@contoso.com", i)).ToList();
+
+            var store = await SaveAsync(loader, new InMemoryUsageReportStore<FakeUserUsageActivityLog>());
+
+            Assert.AreEqual(1, store.Stored.Count);
+            var all = string.Join(" | ", logger.Entries.Select(e => e.Message));
+            Assert.IsFalse(logger.Entries.Any(e => e.Message.Contains("pilot.") || e.Message.Contains("@contoso.com")), "No identifier is logged: " + all);
+
+            var outOfScope = logger.Entries.Where(e => e.Message.Contains("outside the configured user scope")).ToList();
+            Assert.AreEqual(2, outOfScope.Count, "One line per date: " + all);
+            Assert.AreEqual(LogLevel.Information, outOfScope[0].Level);
+            StringAssert.Contains(outOfScope[0].Message, "skipped 50 of 54 row(s) for 2026-05-10");
+            StringAssert.Contains(outOfScope[1].Message, "skipped 20 of 20 row(s) for 2026-05-11");
+
+            var missing = logger.Entries.Where(e => e.Message.Contains("no user or group identifier")).ToList();
+            Assert.AreEqual(1, missing.Count, "Aggregated into one line for the date, not one per row: " + all);
+            Assert.AreEqual(LogLevel.Warning, missing[0].Level);
+            StringAssert.Contains(missing[0].Message, "skipped 3 row(s) for 2026-05-10");
         }
 
         [TestMethod]

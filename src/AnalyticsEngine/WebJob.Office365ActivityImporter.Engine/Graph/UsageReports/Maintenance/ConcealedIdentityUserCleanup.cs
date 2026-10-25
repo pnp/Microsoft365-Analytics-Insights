@@ -83,6 +83,55 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Maintenance
 
         /// <summary>How long each batch took, in order. For diagnostics and the benchmark.</summary>
         internal List<TimeSpan> BatchDurations { get; } = new List<TimeSpan>();
+
+        /// <summary>How many users each batch took, in order.</summary>
+        internal List<int> BatchSizes { get; } = new List<int>();
+
+        /// <summary>The step that failed, when <see cref="Error"/> is set: <c>batch</c>, or a step of the preflight.</summary>
+        public string FailedStep { get; internal set; }
+
+        /// <summary>Users in the batch that failed, and how long it ran before it did.</summary>
+        internal int FailedBatchSize { get; set; }
+        internal TimeSpan FailedBatchElapsed { get; set; }
+
+        /// <summary>The SQL Server error number behind <see cref="Error"/>, when it is a SQL error (-2 is a command timeout).</summary>
+        public int? SqlErrorNumber => FindSqlException(Error)?.Number;
+
+        /// <summary>
+        /// Before the first batch: finding the tables that refer to users, the candidates, and the one read of each table with
+        /// no index on its user column.
+        /// </summary>
+        public TimeSpan PreflightElapsed { get; internal set; }
+
+        /// <summary>The part of <see cref="PreflightElapsed"/> spent on those reads.</summary>
+        public TimeSpan ReferenceReadElapsed { get; internal set; }
+
+        /// <summary>How long the read of each table took, in the order they ran.</summary>
+        internal List<KeyValuePair<string, TimeSpan>> ReferenceReads { get; } = new List<KeyValuePair<string, TimeSpan>>();
+
+        /// <summary>
+        /// The reads ran out of <see cref="ConcealedIdentityUserCleanup.DefaultPreflightBudget"/> before every table was read, so
+        /// no batch ran: nothing was changed, and the next attempt waits <see cref="ConcealedIdentityUserCleanup.FailureRetryInterval"/>.
+        /// </summary>
+        public bool PreflightExceeded { get; internal set; }
+
+        /// <summary>The users the next batch will take, after this run's batches.</summary>
+        public int NextBatchSize { get; internal set; }
+
+        /// <summary>The most users a batch may take for now: below the maximum once a size-dependent failure has set a limit.</summary>
+        public int BatchSizeLimit { get; internal set; }
+
+        /// <summary>Seconds every batch costs however few users it takes, when that is above what a batch is planned to take.</summary>
+        public double? FixedCostSeconds { get; internal set; }
+
+        internal static SqlException FindSqlException(Exception ex)
+        {
+            for (; ex != null; ex = ex.InnerException)
+            {
+                if (ex is SqlException sql) return sql;
+            }
+            return null;
+        }
     }
 
     /// <summary>
@@ -113,7 +162,9 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Maintenance
     /// batch past the cap at a size close to one that recently fitted - the database being slow, unless it happens three
     /// times in a row - does not. A
     /// reference from a table with no index on its user column is looked for once per run, not in every batch
-    /// (<see cref="ConcealedIdentityUserCleanupSql.ReferencesCheckedOncePerRun"/>).
+    /// (<see cref="ConcealedIdentityUserCleanupSql.ReferencesCheckedOncePerRun"/>), one timed read per table and within
+    /// <see cref="DefaultPreflightBudget"/>: a run whose reads do not finish in it changes nothing and waits
+    /// <see cref="FailureRetryInterval"/>, and what the reads found is never kept for a later run.
     /// Every run starts again from the rule, so an interrupted run resumes by itself and a finished one is a no-op. A run
     /// stops starting batches after <see cref="DefaultTimeBudget"/>, so a large backlog is spread over several cycles; when a
     /// run finds nothing to delete it does not look again for <see cref="RecheckInterval"/>, so an idle database costs one
@@ -133,7 +184,9 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Maintenance
     /// </para>
     /// <para>
     /// <b>Kill switch.</b> The <c>CleanUpConcealedIdentityUsers</c> app setting (<see cref="AppConfig.CleanUpConcealedIdentityUsers"/>),
-    /// on unless set to <c>false</c>. Never throws, and writes at most one log line a run.
+    /// on unless set to <c>false</c>; and also off, with an Error naming the value, when it is present but is neither <c>true</c> nor
+    /// <c>false</c> (<c>0</c>, <c>no</c> and <c>off</c> are such values): an irreversible delete never stays on for a value that
+    /// was meant to turn it off. Never throws, and writes at most one log line a run.
     /// </para>
     /// </remarks>
     public sealed class ConcealedIdentityUserCleanup
@@ -174,6 +227,14 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Maintenance
         /// <summary>No batch starts once a run has taken this long, so a backlog is spread over cycles.</summary>
         public static readonly TimeSpan DefaultTimeBudget = TimeSpan.FromMinutes(2);
 
+        /// <summary>
+        /// The most the preflight - finding the tables that refer to users, the candidates, and one read of each table with no
+        /// index on its user column - may take while the users-and-licences lock is held. Past it the run stops before any
+        /// batch, changes nothing, and waits <see cref="FailureRetryInterval"/>, so a read that cannot finish is paid for once an
+        /// hour instead of every cycle. Not part of <see cref="DefaultTimeBudget"/>, which only stops new batches.
+        /// </summary>
+        public static readonly TimeSpan DefaultPreflightBudget = TimeSpan.FromMinutes(10);
+
         /// <summary>After a run that found nothing to delete, how long before the database is looked at again.</summary>
         public static readonly TimeSpan RecheckInterval = TimeSpan.FromHours(24);
 
@@ -202,6 +263,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Maintenance
 
         private readonly string _connectionString;
         private readonly bool _enabled;
+        private readonly string _unparseableSettingValue;
         private readonly ILogger _logger;
         private readonly IClock _clock;
 
@@ -209,14 +271,23 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Maintenance
         private DateTime _notDueBeforeUtc = DateTime.MinValue;
         private bool _workPending;
         private bool _reportedDisabled;
+        private bool _reportedUnparseableSetting;
         private bool _reportedNothingToDo;
         private long _totalUsersDeleted;
         private long _totalRowsDeleted;
 
-        public ConcealedIdentityUserCleanup(string connectionString, bool enabled, ILogger logger, IClock clock = null)
+        // What the run in progress is doing, so a failure before any batch can say where.
+        private string _step = "start";
+
+        /// <param name="unparseableSettingValue">
+        /// The value of the app setting when it is present but is not <c>true</c> or <c>false</c>: the cleanup is then off
+        /// (<paramref name="enabled"/> is false) and the first run says so, naming the value.
+        /// </param>
+        public ConcealedIdentityUserCleanup(string connectionString, bool enabled, ILogger logger, IClock clock = null, string unparseableSettingValue = null)
         {
             _connectionString = connectionString;
             _enabled = enabled;
+            _unparseableSettingValue = unparseableSettingValue;
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
             _clock = clock ?? SystemClock.Instance;
             _sizer = NewSizer(DefaultBatchSize);
@@ -224,7 +295,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Maintenance
 
         /// <summary>The cleanup for this deployment's database and app settings.</summary>
         public static ConcealedIdentityUserCleanup ForConfig(AppConfig config, ILogger logger)
-            => new ConcealedIdentityUserCleanup(config?.ConnectionStrings?.DatabaseConnectionString, config?.CleanUpConcealedIdentityUsers ?? true, logger);
+            => new ConcealedIdentityUserCleanup(config?.ConnectionStrings?.DatabaseConnectionString, config?.CleanUpConcealedIdentityUsers ?? true, logger,
+                unparseableSettingValue: config?.CleanUpConcealedIdentityUsersUnparseableValue);
 
         /// <summary>Test hook: users in the next batch, at most <see cref="MaxBatchSize"/>; later ones are sized from there.</summary>
         internal int BatchSize
@@ -237,10 +309,17 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Maintenance
         private ConcealedIdentityCleanupBatchSizer _sizer;
 
         private ConcealedIdentityCleanupBatchSizer NewSizer(int initial)
-            => new ConcealedIdentityCleanupBatchSizer(initial, MinBatchSize, MaxBatchSize, TargetBatchDuration, MaxBatchDuration, _clock);
+            => new ConcealedIdentityCleanupBatchSizer(initial, MinBatchSize, MaxBatchSize, TargetBatchDuration, MaxBatchDuration, _clock,
+                TimeSpan.FromSeconds(BatchCommandTimeoutSeconds));
 
         /// <summary>Test hook: overrides <see cref="DefaultTimeBudget"/>.</summary>
         internal TimeSpan TimeBudget { get; set; } = DefaultTimeBudget;
+
+        /// <summary>Test hook: overrides <see cref="DefaultPreflightBudget"/>.</summary>
+        internal TimeSpan PreflightBudget { get; set; } = DefaultPreflightBudget;
+
+        /// <summary>Test hook: runs before each table is read in the preflight; the time it takes counts against that read.</summary>
+        internal Func<Task> BeforeEachReferenceRead { get; set; }
 
         /// <summary>Test hook: stop after this many batches, as an interrupted run would.</summary>
         internal int? MaxBatchesPerRun { get; set; }
@@ -280,17 +359,31 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Maintenance
             {
                 // Only reached before any batch ran - a batch's own failure is caught and reported with the run's progress.
                 _notDueBeforeUtc = _clock.UtcNow + FailureRetryInterval;
-                _logger.LogWarning($"Concealed-identity user cleanup could not run ({ex.GetType().Name}): {ex.Message} " +
+                var sqlNumber = ConcealedIdentityUserCleanupResult.FindSqlException(ex)?.Number;
+                _logger.LogError($"Concealed-identity user cleanup: could not run - failed at step '{_step}' ({ex.GetType().Name}" +
+                    $"{(sqlNumber.HasValue ? $", SQL error {sqlNumber.Value}" : string.Empty)}): {ex.Message} " +
                     $"Nothing was changed; it tries again in {FailureRetryInterval.TotalMinutes:N0} minutes.");
-                return new ConcealedIdentityUserCleanupResult(ConcealedIdentityUserCleanupOutcome.Failed) { Error = ex };
+                return new ConcealedIdentityUserCleanupResult(ConcealedIdentityUserCleanupOutcome.Failed) { Error = ex, FailedStep = _step };
             }
         }
 
         private async Task<ConcealedIdentityUserCleanupResult> RunCoreAsync(bool usageReportImportRunning)
         {
+            _step = "start";
             if (!_enabled || string.IsNullOrWhiteSpace(_connectionString))
             {
-                if (!_enabled && !_reportedDisabled)
+                if (!_enabled && _unparseableSettingValue != null)
+                {
+                    if (!_reportedUnparseableSetting)
+                    {
+                        _reportedUnparseableSetting = true;
+                        var shown = _unparseableSettingValue.Length > 50 ? _unparseableSettingValue.Substring(0, 50) + "..." : _unparseableSettingValue;
+                        _logger.LogError($"Concealed-identity user cleanup is turned OFF: the {AppSettingName} app setting is '{shown}', which is neither true nor " +
+                            "false, so it is ignored and the irreversible delete fails closed. Set it to true to run the cleanup, or to false to switch it off " +
+                            "for good (and silence this message).");
+                    }
+                }
+                else if (!_enabled && !_reportedDisabled)
                 {
                     _reportedDisabled = true;
                     _logger.LogInformation($"Concealed-identity user cleanup is turned off by the {AppSettingName}=false app setting: placeholder users " +
@@ -315,6 +408,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Maintenance
                 return new ConcealedIdentityUserCleanupResult(ConcealedIdentityUserCleanupOutcome.WaitingForUsageReports);
             }
 
+            _step = "first look";
             if (!await AnyCandidateAsync().ConfigureAwait(false))
             {
                 _workPending = false;
@@ -350,23 +444,36 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Maintenance
             var result = new ConcealedIdentityUserCleanupResult(ConcealedIdentityUserCleanupOutcome.Ran);
             var connection = writerLock.Connection;
 
+            _step = "discovery";
             var (references, activityTables) = await DiscoverAsync(connection).ConfigureAwait(false);
             var keep = ConcealedIdentityUserCleanupSql.KeepReferences(references);
             var oncePerRun = keep.Where(ConcealedIdentityUserCleanupSql.IsCheckedOncePerRun).ToList();
             var everyBatch = keep.Where(r => !ConcealedIdentityUserCleanupSql.IsCheckedOncePerRun(r)).ToList();
 
+            _step = "candidates";
             var candidates = await LoadCandidatesAsync(connection).ConfigureAwait(false);
             result.Candidates = candidates.Count;
 
-            // The tables with no index on their user column are read once, here, rather than scanned in every batch.
+            // The tables with no index on their user column are read once, here, rather than scanned in every batch. Bounded by
+            // PreflightBudget: the users-and-licences lock is held meanwhile.
             if (candidates.Count > 0 && oncePerRun.Count > 0)
             {
-                var referenced = await LoadReferencedCandidatesAsync(connection, oncePerRun).ConfigureAwait(false);
+                var referenced = await LoadReferencedCandidatesAsync(connection, oncePerRun, result, watch).ConfigureAwait(false);
+                if (referenced == null)
+                {
+                    result.PreflightExceeded = true;
+                    result.PreflightElapsed = watch.Elapsed;
+                    result.Elapsed = watch.Elapsed;
+                    FillSizing(result);
+                    return result;
+                }
                 result.KeptByRunSnapshot = candidates.RemoveAll(referenced.Contains);
             }
 
             if (AfterReferenceRead != null) await AfterReferenceRead().ConfigureAwait(false);
+            result.PreflightElapsed = watch.Elapsed;
 
+            _step = "batch";
             var next = 0;
             while (next < candidates.Count)
             {
@@ -390,44 +497,94 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Maintenance
                     // timeout also keeps later batches below that size for a day, so it is paid for at most once a day.
                     _sizer.ObserveFailure(batch.Count, batchWatch.Elapsed, IsSizeDependentFailure(ex, batchWatch.Elapsed));
                     result.Error = ex;
+                    result.FailedStep = "batch";
+                    result.FailedBatchSize = batch.Count;
+                    result.FailedBatchElapsed = batchWatch.Elapsed;
                     break;
                 }
                 _sizer.Observe(batch.Count, batchWatch.Elapsed);
                 result.BatchDurations.Add(batchWatch.Elapsed);
+                result.BatchSizes.Add(batch.Count);
                 next += batch.Count;
                 result.Examined = next;
                 result.Batches++;
             }
 
             result.Elapsed = watch.Elapsed;
+            FillSizing(result);
             return result;
+        }
+
+        private void FillSizing(ConcealedIdentityUserCleanupResult result)
+        {
+            result.NextBatchSize = _sizer.Next;
+            result.BatchSizeLimit = _sizer.SizeLimit;
+            result.FixedCostSeconds = _sizer.FixedCostSeconds;
         }
 
         /// <summary>
         /// The candidates that any of <paramref name="references"/> refers to: one plain read of each table, with no locks
         /// held afterwards. See <see cref="ConcealedIdentityUserCleanupSql.ReferencesCheckedOncePerRun"/> for why a reference
-        /// added to them later in the run is not a risk.
+        /// added to them later in the run is not a risk. Null when the preflight ran out of <see cref="PreflightBudget"/> first.
         /// </summary>
-        private async Task<HashSet<int>> LoadReferencedCandidatesAsync(SqlConnection connection, IReadOnlyList<UserReferenceColumn> references)
+        /// <remarks>
+        /// One command per table, each timed and each allowed only what is left of the budget - at most 30 minutes - so the
+        /// time they take is reported by table, and a read that cannot finish stops the run rather than the cycle. The result is
+        /// never kept for a later run: a reference may be added to any of these tables after the read, and the guarantees in
+        /// <see cref="ConcealedIdentityUserCleanupSql.ReferencesCheckedOncePerRun"/> hold only for the run that did the read,
+        /// under the users-and-licences lock.
+        /// </remarks>
+        private async Task<HashSet<int>> LoadReferencedCandidatesAsync(SqlConnection connection, IReadOnlyList<UserReferenceColumn> references,
+            ConcealedIdentityUserCleanupResult result, Stopwatch preflightWatch)
         {
+            const int GenerousSeconds = 1800;
             var referenced = new HashSet<int>();
-            // A plain read that holds no lock afterwards, so a long one only delays this run: generous, but finite.
-            using (var command = new SqlCommand(ConcealedIdentityUserCleanupSql.BuildReferencedCandidatesSql(references), connection) { CommandTimeout = 1800 })
+            var readsWatch = Stopwatch.StartNew();
+            try
             {
-                command.Parameters.Add("@minUserId", SqlDbType.Int).Value = MinUserIdExclusive;
-                using (var reader = await command.ExecuteReaderAsync().ConfigureAwait(false))
+                foreach (var reference in references)
                 {
-                    do
+                    _step = $"reference read ({reference})";
+                    var readWatch = Stopwatch.StartNew();
+                    if (BeforeEachReferenceRead != null) await BeforeEachReferenceRead().ConfigureAwait(false);
+
+                    var remaining = PreflightBudget - preflightWatch.Elapsed;
+                    if (remaining <= TimeSpan.Zero)
                     {
-                        while (await reader.ReadAsync().ConfigureAwait(false))
+                        result.ReferenceReads.Add(new KeyValuePair<string, TimeSpan>(reference.ToString() + " (not started)", readWatch.Elapsed));
+                        return null;
+                    }
+
+                    // A plain read that holds no lock afterwards, so a long one only delays this run: finite, and within the budget.
+                    var seconds = (int)Math.Max(1, Math.Min(GenerousSeconds, Math.Ceiling(remaining.TotalSeconds)));
+                    try
+                    {
+                        using (var command = new SqlCommand(ConcealedIdentityUserCleanupSql.BuildReferencedCandidatesSql(new[] { reference }), connection) { CommandTimeout = seconds })
                         {
-                            referenced.Add(reader.GetInt32(0));
+                            command.Parameters.Add("@minUserId", SqlDbType.Int).Value = MinUserIdExclusive;
+                            using (var reader = await command.ExecuteReaderAsync().ConfigureAwait(false))
+                            {
+                                while (await reader.ReadAsync().ConfigureAwait(false))
+                                {
+                                    referenced.Add(reader.GetInt32(0));
+                                }
+                            }
                         }
                     }
-                    while (await reader.NextResultAsync().ConfigureAwait(false));
+                    catch (SqlException ex) when (ex.Number == -2 && seconds < GenerousSeconds)
+                    {
+                        // The budget, not the generous limit, stopped it.
+                        result.ReferenceReads.Add(new KeyValuePair<string, TimeSpan>(reference.ToString() + " (timed out)", readWatch.Elapsed));
+                        return null;
+                    }
+                    result.ReferenceReads.Add(new KeyValuePair<string, TimeSpan>(reference.ToString(), readWatch.Elapsed));
                 }
+                return referenced;
             }
-            return referenced;
+            finally
+            {
+                result.ReferenceReadElapsed = readsWatch.Elapsed;
+            }
         }
 
         private async Task RunBatchAsync(SqlConnection connection, List<int> batch, IReadOnlyList<string> activityTables,
@@ -526,20 +683,24 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Maintenance
             _totalUsersDeleted += result.UsersDeleted;
             _totalRowsDeleted += result.ActivityRowsDeleted;
 
-            var finished = result.Remaining == 0 && result.Error == null && !result.LostLock;
+            var finished = result.Remaining == 0 && result.Error == null && !result.LostLock && !result.PreflightExceeded;
             _workPending = !finished;
             if (finished && result.UsersDeleted == 0)
             {
                 // Only users that are kept are left: look again tomorrow, not every cycle.
                 _notDueBeforeUtc = startedUtc + RecheckInterval;
             }
-            else if (result.Error != null)
+            else if (result.Error != null || result.PreflightExceeded)
             {
                 _notDueBeforeUtc = startedUtc + FailureRetryInterval;
             }
 
             var message = DescribeRun(result, finished, _totalUsersDeleted, _totalRowsDeleted);
-            if (result.Error != null || result.LostLock)
+            if (result.Error != null)
+            {
+                _logger.LogError(message);
+            }
+            else if (result.LostLock || result.PreflightExceeded)
             {
                 _logger.LogWarning(message);
             }
@@ -574,9 +735,17 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Maintenance
                     "or similar) refers to them or the user import has matched them. ");
             }
 
-            if (result.Error != null)
+            if (result.PreflightExceeded)
             {
-                text.Append($"Stopped by an error ({result.Error.GetType().Name}): {result.Error.Message} That batch was rolled back as a whole; " +
+                text.Append($"Stopped before any batch: reading the tables that refer to users ran out of its time budget after {result.PreflightElapsed.TotalMinutes:N1} minutes, " +
+                    $"so nothing was changed; the cleanup tries again in {FailureRetryInterval.TotalMinutes:N0} minutes. ");
+            }
+            else if (result.Error != null)
+            {
+                var sqlNumber = result.SqlErrorNumber;
+                text.Append($"Stopped by an error at step '{result.FailedStep ?? "batch"}' ({result.Error.GetType().Name}" +
+                    $"{(sqlNumber.HasValue ? $", SQL error {sqlNumber.Value}" : string.Empty)}): {result.Error.Message} " +
+                    $"{(result.FailedBatchSize > 0 ? $"That batch ({result.FailedBatchSize:N0} users, {result.FailedBatchElapsed.TotalSeconds:N1} s) was rolled back as a whole; " : string.Empty)}" +
                     $"the cleanup tries again in {FailureRetryInterval.TotalMinutes:N0} minutes. ");
             }
             else if (result.LostLock)
@@ -592,10 +761,23 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Maintenance
             }
             else
             {
-                text.Append(result.Error != null
+                text.Append(result.Error != null || result.PreflightExceeded
                     ? $"{result.Remaining:N0} still to check. "
                     : $"{result.Remaining:N0} still to check, in the next cycle(s). ");
             }
+
+            text.Append($"Preflight {result.PreflightElapsed.TotalMilliseconds:N0} ms (reference reads {result.ReferenceReadElapsed.TotalMilliseconds:N0} ms" +
+                (result.ReferenceReads.Count > 0 ? ": " + string.Join(", ", result.ReferenceReads.Select(r => $"{r.Key} {r.Value.TotalMilliseconds:N0} ms")) : string.Empty) + "). ");
+
+            if (result.BatchSizes.Count > 0)
+            {
+                var seconds = result.BatchDurations.Select(d => d.TotalSeconds).OrderBy(s => s).ToList();
+                var sizes = result.BatchSizes.OrderBy(s => s).ToList();
+                text.Append($"Batches {result.Batches:N0}: users min/median/max {sizes[0]:N0}/{sizes[sizes.Count / 2]:N0}/{sizes[sizes.Count - 1]:N0}, " +
+                    $"seconds min/median/max {seconds[0]:N1}/{seconds[seconds.Count / 2]:N1}/{seconds[seconds.Count - 1]:N1}. ");
+            }
+            text.Append($"Next batch {result.NextBatchSize:N0} user(s), size limit {result.BatchSizeLimit:N0}" +
+                (result.FixedCostSeconds.HasValue ? $", fixed cost about {result.FixedCostSeconds.Value:N0} s per batch whatever its size" : string.Empty) + ". ");
 
             text.Append($"Deleted since the importer started: {totalUsersDeleted:N0} user(s), {totalRowsDeleted:N0} usage-report row(s). " +
                 $"Set the {AppSettingName} app setting to false to turn this off.");

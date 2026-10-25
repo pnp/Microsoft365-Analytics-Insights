@@ -90,17 +90,32 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
-        public void CleanUpConcealedIdentityUsers_IsOnUnlessSetToFalse()
+        public void CleanUpConcealedIdentityUsers_IsOnWhenAbsent_AsSetWhenBoolean_AndFailsClosedForAnythingElse()
         {
-            ConfigurationManager.AppSettings.Set(CleanUpConcealedIdentityUsers, "false");
-            Assert.IsFalse(new AppConfig().CleanUpConcealedIdentityUsers, "The kill switch.");
-            ConfigurationManager.AppSettings.Set(CleanUpConcealedIdentityUsers, "False");
-            Assert.IsFalse(new AppConfig().CleanUpConcealedIdentityUsers);
-
-            foreach (var notFalse in new[] { string.Empty, "no", "0", "true" })
+            // The delete is irreversible, so a value that cannot be read as true or false - including the "0", "no" and "off"
+            // an operator reaches for to opt out - must not leave it on. The old rule left it on for all of them, silently.
+            foreach (var absent in new[] { string.Empty, "  " })
             {
-                ConfigurationManager.AppSettings.Set(CleanUpConcealedIdentityUsers, notFalse);
-                Assert.IsTrue(new AppConfig().CleanUpConcealedIdentityUsers, $"'{notFalse}' must not turn the cleanup off.");
+                ConfigurationManager.AppSettings.Set(CleanUpConcealedIdentityUsers, absent);
+                var cfg = new AppConfig();
+                Assert.IsTrue(cfg.CleanUpConcealedIdentityUsers, $"'{absent}' counts as not set: the default (on) stands.");
+                Assert.IsNull(cfg.CleanUpConcealedIdentityUsersUnparseableValue);
+            }
+
+            foreach (var (value, expected) in new[] { ("true", true), ("True", true), (" TRUE ", true), ("false", false), ("False", false) })
+            {
+                ConfigurationManager.AppSettings.Set(CleanUpConcealedIdentityUsers, value);
+                var cfg = new AppConfig();
+                Assert.AreEqual(expected, cfg.CleanUpConcealedIdentityUsers, $"'{value}'");
+                Assert.IsNull(cfg.CleanUpConcealedIdentityUsersUnparseableValue, $"'{value}' is a boolean, so nothing was ignored.");
+            }
+
+            foreach (var unreadable in new[] { "0", "no", "off", "disabled", "1", "yes", "tru" })
+            {
+                ConfigurationManager.AppSettings.Set(CleanUpConcealedIdentityUsers, unreadable);
+                var cfg = new AppConfig();
+                Assert.IsFalse(cfg.CleanUpConcealedIdentityUsers, $"'{unreadable}' is not true or false: the delete fails closed.");
+                Assert.AreEqual(unreadable, cfg.CleanUpConcealedIdentityUsersUnparseableValue, "The ignored value is kept so the cleanup can name it in its Error.");
             }
         }
 

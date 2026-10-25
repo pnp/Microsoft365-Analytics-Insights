@@ -506,6 +506,70 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public async Task AFullWindowDownload_IsLoggedOncePerReport_WithItsReasonAndTheNumberOfDates()
+        {
+            // Reports with no completion stamp (no runtime state store, or a failed save) download the whole look-back window, 25 dates
+            // by default: the costly path, and it used to look in the log exactly like a cheap run.
+            var now = new DateTime(2026, 9, 14, 4, 0, 0, DateTimeKind.Utc);
+            foreach (var (force, reason) in new[] { (false, "this report has no completion stamp"), (true, "ForceUsageReportsImport=true") })
+            {
+                var importer = NewImporter(new InMemoryReportCompletionStore(), forceImport: force);
+                var logger = new RecordingLogger();
+                var loader = new InMemoryDailyActivityLoader(NullLogger.Instance)
+                {
+                    Clock = new FixedClock(now),
+                    StorageInspector = new FakeUsageReportStorageInspector(),
+                    ReportStore = new InMemoryUsageReportStore<FakeUserUsageActivityLog>(),
+                };
+
+                await importer.LoadAndSaveDailyImportReport(loader, 25, "Synthetic report", logger, new DataUtils.ConcurrentLookupDbIdsCache(), null);
+
+                Assert.AreEqual(25, loader.GraphRequests.Count);
+                var lines = logger.Entries.Where(e => e.Message.Contains("downloading the full")).ToList();
+                Assert.AreEqual(1, lines.Count, $"force {force}: " + string.Join(" | ", logger.Entries.Select(e => e.Message)));
+                StringAssert.Contains(lines[0].Message, "Synthetic report: downloading the full 25-date window from Graph");
+                StringAssert.Contains(lines[0].Message, reason);
+            }
+        }
+
+        [TestMethod]
+        public async Task TheUsageReportPhase_LogsOneSummary_WithPerReportCounts_Failures_AndTheWeeklyStatus()
+        {
+            var clock = new FixedClock(new DateTime(2026, 9, 14, 4, 0, 0, DateTimeKind.Utc));
+            var importer = NewImporter(new InMemoryReportCompletionStore(), clock: clock, phaseStore: new ClockedSingleDateStore(clock));
+            var weekly = TestSharePointSitesWeeklyUsageReportLoader.WithSingleReport(new DateTime(2026, 9, 13), "https://contoso.sharepoint.com/sites/summary");
+            var idCache = new DataUtils.ConcurrentLookupDbIdsCache();
+            var users = new[] { "alice@contoso.com", "bob@contoso.com", "carol@contoso.com" };
+            for (var i = 0; i < users.Length; i++) idCache.AddOrUpdateForName<Common.Entities.User>(users[i], 11 + i);
+
+            var good = new InMemoryDailyActivityLoader(NullLogger.Instance)
+            {
+                Clock = new FixedClock(clock.UtcNow),
+                StorageInspector = new FakeUsageReportStorageInspector(),
+                ReportStore = new InMemoryUsageReportStore<FakeUserUsageActivityLog>(),
+            };
+            good.PagesByDate[clock.UtcNow.Date.AddDays(-1)] = users.Select(u => new FakeUserActivityDetail { UserPrincipalName = u, ThingCount = 1 }).ToList();
+            var failing = new FailingDownloadLoader { Clock = new FixedClock(clock.UtcNow), StorageInspector = new FakeUsageReportStorageInspector() };
+
+            var completed = await importer.RunActivityReportPhaseAsync(3,
+                () => Task.FromResult(true),
+                (lookupIdCache, lastImported) => new[]
+                {
+                    new GraphImporter.ActivityReportRun("Synthetic good", () => importer.LoadAndSaveDailyImportReport(good, 3, "Synthetic good", NullLogger.Instance, idCache, null)),
+                    new GraphImporter.ActivityReportRun("Synthetic failing", () => importer.LoadAndSaveDailyImportReport(failing, 3, "Synthetic failing", NullLogger.Instance, idCache, null)),
+                },
+                run => run(weekly));
+
+            Assert.IsFalse(completed);
+            var summary = importer.LastPhaseSummary;
+            StringAssert.Contains(summary, "Usage report phase: 1 of 2 daily report(s) imported, 1 failed, 0 refused for concealed identities; 3 row(s) read, 3 written, in ");
+            StringAssert.Contains(summary, "Synthetic good 3 read/3 written, 3 date(s) downloaded, 0 finalized date(s) skipped, ");
+            StringAssert.Contains(summary, "Failed: Synthetic failing (HTTP 500 InternalServerError).");
+            StringAssert.Contains(summary, "SharePoint sites weekly usage: imported Sunday's report");
+            Assert.IsFalse(summary.Contains("contoso.com"), "Counts only, no identifiers.");
+        }
+
+        [TestMethod]
         public async Task AFailedDownloadKeepsTheReportsCompletionStamp_AFailedSaveClearsIt()
         {
             // A failed download has written nothing, so the stamp - and the finalized-date skip list it feeds - still
