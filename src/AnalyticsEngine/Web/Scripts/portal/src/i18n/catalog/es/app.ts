@@ -13,6 +13,7 @@ import type { app as en } from '../en/app';
  */
 const app: Record<keyof typeof en, string> = {
   'app.route.agentCostConnection': 'Conexión de facturación de Copilot Studio',
+  'app.route.copilotCostConnection': 'Historial de créditos de Copilot (versión preliminar)',
   'app.signOut': 'Cerrar sesi\u00f3n',
   'app.nav.collapse': 'Contraer la navegaci\u00f3n',
   'app.nav.expand': 'Expandir la navegaci\u00f3n',
@@ -29,8 +30,10 @@ const app: Record<keyof typeof en, string> = {
   'app.area.insights': 'An\u00e1lisis',
   'app.area.admin': 'Administraci\u00f3n',
 
-  'app.navGroup.monitoring': 'Supervisi\u00f3n',
-  'app.navGroup.manage': 'Administrar',
+  'app.navGroup.service': 'Servicio',
+  'app.navGroup.connections': 'Conexiones',
+  'app.navGroup.users': 'Usuarios y ámbito',
+  'app.navGroup.reporting': 'Copilot e informes',
   'app.workload.copilot': 'Copilot',
   'app.workload.agents': 'Agentes',
   'app.workload.apps': 'Aplicaciones y licencias',

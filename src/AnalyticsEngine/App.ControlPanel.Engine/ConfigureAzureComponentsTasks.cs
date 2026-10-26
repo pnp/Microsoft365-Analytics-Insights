@@ -688,7 +688,7 @@ namespace App.ControlPanel.Engine
 
         internal const string CopilotCostConnectionSetupMessage =
             "Copilot credit history is enabled. A portal administrator with 'Portal.Administration' must connect "
-            + "a delegated reader account from Administration > Service configuration in the web app. Configure "
+            + "a delegated reader account from Administration > Connections > Copilot credit history (preview) in the web app. Configure "
             + "the Graph delegated read permissions and admin consent described there; the installer does not grant "
             + "them. Nothing is collected until that connection exists. Connection state is kept in "
             + "Azure Table storage on the solution's storage account.";

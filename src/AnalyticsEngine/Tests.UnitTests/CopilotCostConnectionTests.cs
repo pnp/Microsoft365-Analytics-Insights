@@ -34,6 +34,29 @@ namespace Tests.UnitTests
         private const string UserId = "00000000-0000-0000-0000-000000000003";
         private static readonly CancellationToken Ct = CancellationToken.None;
 
+        [DataTestMethod]
+        [DataRow("GET")]
+        [DataRow("POST")]
+        public async Task CallbackFailureReturnsToTheDedicatedCreditHistoryPage(string method)
+        {
+            var builder = new Microsoft.Owin.Builder.AppBuilder();
+            typeof(AnalyticsWeb::Web.AnalyticsWeb.Startup)
+                .GetMethod("ConfigureCostCallback", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)
+                .Invoke(null, new object[] { builder });
+            var pipeline = (Func<IDictionary<string, object>, Task>)builder.Build(typeof(Func<IDictionary<string, object>, Task>));
+            var context = new OwinContext();
+            context.Request.Scheme = "http";
+            context.Request.Method = method;
+            context.Request.Path = new PathString("/copilot-cost/callback");
+            context.Response.Body = new MemoryStream();
+
+            await pipeline(context.Environment);
+
+            Assert.AreEqual(302, context.Response.StatusCode);
+            Assert.AreEqual("/#/admin/copilot-cost-connection?costConnection=invalidCallback", context.Response.Headers["Location"]);
+            Assert.AreEqual("no-store", context.Response.Headers["Cache-Control"]);
+        }
+
         [TestMethod]
         public void CollectionMetadataKeepsCoverageDistinctAndNeverInfersIdleCompletion()
         {

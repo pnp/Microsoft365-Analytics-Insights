@@ -1,14 +1,14 @@
 import { useEffect, useState } from 'react';
 import {
   Button, Card, CardHeader, Dialog, DialogActions, DialogBody, DialogContent, DialogSurface,
-  DialogTitle, Link, MessageBar, MessageBarBody, Subtitle2, Text, makeStyles,
+  DialogTitle, Link, MessageBar, MessageBarBody, Subtitle2, Text, Title3, makeStyles,
 } from '@fluentui/react-components';
 import {
   changeCostConnection, costConnectionText, costCollectionPhaseText, fetchCostCollection, fetchCostConnection,
   type CostCollectionStatus, type CostConnectionStatus,
-} from '../../api/copilotCostConnectionApi';
-import { formatNumber, useT } from '../../i18n';
-import { formatUtc } from './healthShared';
+} from '../api/copilotCostConnectionApi';
+import { formatNumber, useT } from '../i18n';
+import { formatUtc } from '../components/health/healthShared';
 
 const useStyles = makeStyles({
   card: { minWidth: 0 },
@@ -17,7 +17,7 @@ const useStyles = makeStyles({
   permissions: { display: 'flex', flexDirection: 'column', gap: '8px', margin: 0, paddingLeft: '20px', overflowWrap: 'anywhere' },
 });
 
-export default function CostConnectionPanel() {
+export default function CopilotCostConnectionPage() {
   const t = useT();
   const styles = useStyles();
   const [state, setState] = useState<CostConnectionStatus | null>(null);
@@ -93,7 +93,7 @@ export default function CostConnectionPanel() {
   const probe = state?.probe;
   return (
     <Card className={styles.card}>
-      <CardHeader header={<Subtitle2>{t('admin.costConnection.title')}</Subtitle2>} />
+      <CardHeader header={<Title3 as="h1">{t('admin.costConnection.title')}</Title3>} />
       <div className={styles.content}>
         <Text>{t('admin.costConnection.prerequisites')}</Text>
         <Subtitle2>{t('admin.costConnection.permissionsTitle')}</Subtitle2>

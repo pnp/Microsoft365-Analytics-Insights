@@ -66,7 +66,7 @@ namespace Web.AnalyticsWeb
                 catch (OperationCanceledException) { outcome = "identityUnavailable"; }
                 if (outcome != "connected")
                     System.Diagnostics.Trace.TraceWarning("Copilot cost callback outcome: {0}", outcome);
-                context.Response.Redirect("/#/admin/configuration?costConnection=" + Uri.EscapeDataString(outcome));
+                context.Response.Redirect("/#/admin/copilot-cost-connection?costConnection=" + Uri.EscapeDataString(outcome));
             }));
         }
 

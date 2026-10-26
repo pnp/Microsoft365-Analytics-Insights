@@ -31,7 +31,6 @@ import Spinner from '../components/Spinner';
 import { EN_CATALOG, useT, useTNode, type TFunction } from '../i18n';
 import { buildLabelText } from '../product';
 import { enabledImportLabelText } from './InsightsOverviewPage';
-import CostConnectionPanel from '../components/health/CostConnectionPanel';
 
 const useStyles = makeStyles({
   cards: {
@@ -397,7 +396,6 @@ export default function ServiceConfigurationPage() {
 
       <div className={styles.cards}>
         <UpdateCheckCard styles={styles} />
-        <CostConnectionPanel />
 
         <Card>
           <CardHeader header={<Subtitle2>{t('admin.serviceConfiguration.azureResources.title')}</Subtitle2>} />
