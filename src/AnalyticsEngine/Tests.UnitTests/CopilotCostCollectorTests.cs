@@ -106,6 +106,7 @@ namespace Tests.UnitTests
         private static readonly Guid User1 = Guid.Parse("00000000-0000-0000-0000-000000000001");
         private static readonly Guid User2 = Guid.Parse("00000000-0000-0000-0000-000000000002");
         private static string _instance, _connection, _folder;
+        private static bool _instanceCreated;
         private SqlCostCollectorStore _store;
         public TestContext TestContext { get; set; }
 
@@ -116,6 +117,7 @@ namespace Tests.UnitTests
             _folder = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, _instance);
             Directory.CreateDirectory(_folder);
             LocalDb("create " + _instance);
+            _instanceCreated = true;
             LocalDb("start " + _instance);
             var master = $@"Server=(localdb)\{_instance};Database=master;Integrated Security=true;TrustServerCertificate=true";
             using (var db = new SqlConnection(master))
@@ -135,14 +137,20 @@ namespace Tests.UnitTests
         public static void Stop()
         {
             SqlConnection.ClearAllPools();
-            if (_instance != null) { LocalDb("stop " + _instance); LocalDb("delete " + _instance); }
+            if (_instanceCreated)
+            {
+                LocalDb("stop " + _instance);
+                LocalDb("delete " + _instance);
+                _instanceCreated = false;
+            }
             if (_folder != null && Directory.Exists(_folder)) Directory.Delete(_folder, true);
         }
 
         private static void LocalDb(string arguments)
         {
-            var path = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
-                @"Microsoft SQL Server\150\Tools\Binn\SqlLocalDB.exe");
+            var path = FindLocalDbExecutable(Environment.GetEnvironmentVariable("PATH"),
+                Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles));
+            Assert.IsNotNull(path, "SQL LocalDB is required: no SqlLocalDB.exe was found on PATH or in installed SQL Server tools.");
             using (var process = Process.Start(new ProcessStartInfo(path, arguments)
             { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true }))
             {
@@ -151,6 +159,23 @@ namespace Tests.UnitTests
                 process.WaitForExit();
                 Assert.AreEqual(0, process.ExitCode, output + error);
             }
+        }
+
+        internal static string FindLocalDbExecutable(string path, string programFiles)
+        {
+            var candidates = (path ?? string.Empty).Split(Path.PathSeparator)
+                .Where(p => !string.IsNullOrWhiteSpace(p))
+                .Select(p => Path.Combine(p.Trim().Trim('"'), "SqlLocalDB.exe"));
+            var serverRoot = Path.Combine(programFiles, "Microsoft SQL Server");
+            if (Directory.Exists(serverRoot))
+            {
+                candidates = candidates.Concat(Directory.GetDirectories(serverRoot)
+                    .Select(p => new { Path = p, Version = int.TryParse(Path.GetFileName(p), out var v) ? v : -1 })
+                    .Where(p => p.Version >= 0)
+                    .OrderByDescending(p => p.Version)
+                    .Select(p => Path.Combine(p.Path, "Tools", "Binn", "SqlLocalDB.exe")));
+            }
+            return candidates.FirstOrDefault(File.Exists);
         }
 
         [TestInitialize]

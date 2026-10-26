@@ -163,7 +163,8 @@ namespace Tests.UnitTests
                     new[] { typeof(DlpAPIController) },
                     PortalTestHost.SignedIn(),
                     PortalAccessPolicy.Enforcing,
-                    _ => new DlpAPIController(database, governance: governance)))
+                    _ => new DlpAPIController(database, governance: governance),
+                    productionExceptionHandler: true))
                 {
                     var requests = Enumerable.Range(0, 5).Select(_ => host.Client.GetAsync("api/Dlp/governance?days=28")).ToArray();
                     for (var waited = 0; Volatile.Read(ref database.Opens) == 0 && waited < 100; waited++) await Task.Delay(50);

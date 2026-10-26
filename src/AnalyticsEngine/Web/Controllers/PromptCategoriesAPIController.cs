@@ -153,7 +153,8 @@ namespace Web.AnalyticsWeb.Controllers
         [HttpPost, Route("reset")]
         [RequirePortalPermission(PortalPermission.Administration)]
         [RequireSameOriginXhr]
-        public async Task<IActionResult> Reset([FromBody] PromptCategoryResetRequest request)
+        public async Task<IActionResult> Reset(
+            [FromBody(EmptyBodyBehavior = Microsoft.AspNetCore.Mvc.ModelBinding.EmptyBodyBehavior.Allow)] PromptCategoryResetRequest request = null)
         {
             if (!_store.IsDurable) return Error(HttpStatusCode.Conflict, "storageNotConfigured");
             using (var timeout = new CancellationTokenSource(StorageTimeout))

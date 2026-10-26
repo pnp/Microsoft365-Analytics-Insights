@@ -621,8 +621,8 @@ namespace Tests.UnitTests
         /// <summary>
         /// Kudu runs a continuous WebJob on every instance of a scaled-out App Service unless its settings.job sets
         /// is_singleton, and both importers stage rows in fixed-name global ##temp tables that every save drops and
-        /// re-creates - so a second instance destroys the first one's staging data mid-save. The file has to be listed
-        /// in the project (both set EnableDefaultNoneItems=false) and copied to the root of the build output: that is
+        /// re-creates - so a second instance destroys the first one's staging data mid-save. The file's SDK default
+        /// item must be updated (or explicitly included) and copied to the root of the build/publish output: that is
         /// the folder CI zips, and the installer unpacks the zip into app_data\jobs\continuous\&lt;name&gt;.
         /// </summary>
         [DataTestMethod]
@@ -638,7 +638,8 @@ namespace Tests.UnitTests
             var project = System.Xml.Linq.XDocument.Load(Path.Combine(projectDirectory, projectName + ".csproj"));
             var items = project.Descendants()
                 .Where(e => e.Name.LocalName == "None" || e.Name.LocalName == "Content")
-                .Where(e => string.Equals((string)e.Attribute("Include"), "settings.job", StringComparison.OrdinalIgnoreCase))
+                .Where(e => string.Equals((string)e.Attribute("Include") ?? (string)e.Attribute("Update"),
+                    "settings.job", StringComparison.OrdinalIgnoreCase))
                 .ToList();
             Assert.AreEqual(1, items.Count, $"{projectName}.csproj must include settings.job exactly once.");
             var item = items[0];
@@ -648,6 +649,8 @@ namespace Tests.UnitTests
 
             CollectionAssert.Contains(new[] { "PreserveNewest", "Always" }, Metadata("CopyToOutputDirectory"),
                 $"{projectName}.csproj must copy settings.job to the build output.");
+            CollectionAssert.Contains(new[] { "PreserveNewest", "Always" }, Metadata("CopyToPublishDirectory"),
+                $"{projectName}.csproj must copy settings.job to the SDK publish output.");
             Assert.IsNull(item.Attribute("Condition") ?? item.Parent.Attribute("Condition"),
                 $"{projectName}.csproj must ship settings.job in every build configuration.");
             foreach (var relocation in new[] { "Link", "TargetPath" })

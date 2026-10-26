@@ -48,16 +48,37 @@ namespace DataUtils
             {
                 foreach (var name in new[] { "ResponseStatusCode", "StatusCode" })
                 {
-                    var value = e.GetType().GetProperty(name, BindingFlags.Public | BindingFlags.Instance)?.GetValue(e);
-                    if (value is int i && i >= 100 && i < 600) return i;
-                    if (value is Enum en)
+                    foreach (var value in HttpStatusValues(e, name))
                     {
-                        var numeric = Convert.ToInt32(en, CultureInfo.InvariantCulture);
-                        if (numeric >= 100 && numeric < 600) return numeric;
+                        if (value is int i && i >= 100 && i < 600) return i;
+                        if (value is Enum en)
+                        {
+                            var numeric = Convert.ToInt32(en, CultureInfo.InvariantCulture);
+                            if (numeric >= 100 && numeric < 600) return numeric;
+                        }
                     }
                 }
             }
             return null;
+        }
+
+        private static IEnumerable<object> HttpStatusValues(Exception exception, string name)
+        {
+            // Modern HttpRequestException has a nullable StatusCode. Legacy derived exceptions
+            // expose a non-nullable enum or int under the same name, making GetProperty(name)
+            // ambiguous. Prefer the most-derived declaration without replacing the failure
+            // being logged if an SDK's diagnostic getter itself throws.
+            for (var type = exception.GetType(); type != null; type = type.BaseType)
+            {
+                foreach (var property in type.GetProperties(BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly)
+                    .Where(p => p.Name == name && p.CanRead && p.GetIndexParameters().Length == 0))
+                {
+                    object value;
+                    try { value = property.GetValue(exception); }
+                    catch (TargetInvocationException) { continue; }
+                    yield return value;
+                }
+            }
         }
 
         /// <summary>
