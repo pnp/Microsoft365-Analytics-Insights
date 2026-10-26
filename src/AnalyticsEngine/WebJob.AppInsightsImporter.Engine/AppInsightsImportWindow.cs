@@ -92,5 +92,33 @@ namespace WebJob.AppInsightsImporter.Engine
         {
             return startUtc.EachDay(endUtc).ToList();
         }
+
+        /// <summary>
+        /// The shortest window a day's query is split down to when App Insights truncates its result. A minute of
+        /// telemetry over the API's limits means something is badly wrong, and splitting further would only hide it.
+        /// </summary>
+        public static readonly TimeSpan MinimumQueryWindow = TimeSpan.FromMinutes(1);
+
+        /// <summary>
+        /// Splits the half-open window [<paramref name="fromUtc"/>, <paramref name="toUtc"/>) in two, for a query
+        /// whose result App Insights truncated at its row or size limit. The split point is a whole number of
+        /// seconds after <paramref name="fromUtc"/>, so a day's windows all start and end on whole seconds and the
+        /// KQL bounds stay exact.
+        ///
+        /// False when either half would be shorter than <see cref="MinimumQueryWindow"/>: splitting cannot get
+        /// under the limit, and the import must stop rather than save a truncated result.
+        /// </summary>
+        public static bool TrySplitQueryWindow(DateTime fromUtc, DateTime toUtc, out DateTime midpointUtc)
+        {
+            var firstHalfSeconds = Math.Floor((toUtc - fromUtc).TotalSeconds / 2);
+            if (firstHalfSeconds < MinimumQueryWindow.TotalSeconds)
+            {
+                midpointUtc = default(DateTime);
+                return false;
+            }
+
+            midpointUtc = fromUtc.AddSeconds(firstHalfSeconds);
+            return true;
+        }
     }
 }

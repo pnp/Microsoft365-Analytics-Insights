@@ -28,7 +28,7 @@ namespace Web.AnalyticsWeb.Models.Health
     /// Performance: the SQL section uses a short per-query command timeout, runs its two heavy tables in
     /// parallel on separate contexts, and folds each table's 24h/7d counts + freshness into a single pass
     /// (see <see cref="SqlHealthDataSource"/>). On a very large tenant those scans degrade to a per-metric
-    /// error instead of hanging the request (mirrors <c>ProfilingStatusAPIController</c>) - the cheap DMV
+    /// error instead of hanging the request (mirrors <c>ProfilingStatusAPIController</c>) - the cheap
     /// approximate counts still show. The overall roll-up (Overview) deliberately skips those scans
     /// entirely and only probes database reachability with <c>SELECT 1</c>.
     ///
@@ -60,6 +60,7 @@ namespace Web.AnalyticsWeb.Models.Health
                 { nameof(ImportTaskSettings.Calls), "Teams calls" },
                 { nameof(ImportTaskSettings.CopilotStudioCredits), "Copilot Studio credits (billed)" },
                 { nameof(ImportTaskSettings.AzureCostManagement), "Azure costs (Cost Management)" },
+                { nameof(ImportTaskSettings.CopilotCostManagement), "Copilot credit history (preview)" },
             };
 
         // A full activity import cycle should complete at least this often (see HEALTH-MONITORING-DESIGN.md).
@@ -114,6 +115,22 @@ namespace Web.AnalyticsWeb.Models.Health
         private readonly IHealthDataSource _dataSource;
         private readonly IHealthCache _cache;
         private readonly Func<AppConfig, Task<string>> _agentCostConnectionStatus;
+        private readonly TimeSpan _sectionDeadline;
+
+        /// <summary>
+        /// The longest one shared build of an Application Insights / Service Bus / configuration section may take.
+        /// </summary>
+        /// <remarks>
+        /// App Service ends a request at about 230 seconds, and before this a single App Insights query could take
+        /// over 400 (four 100-second attempts plus back-off) while its section's gate made every other caller wait
+        /// too. A section that runs out of time is answered as unavailable - its error says so - and that answer is
+        /// cached only for <see cref="TimedOutCacheSeconds"/>, so a stalled dependency is neither hammered nor left
+        /// looking broken for long. The Overview builds its sections in parallel, so it is bounded by this as well.
+        /// </remarks>
+        internal static readonly TimeSpan DefaultSectionDeadline = TimeSpan.FromSeconds(40);
+
+        /// <summary>How long a section that ran out of time is served as unavailable before it is tried again.</summary>
+        internal const int TimedOutCacheSeconds = 20;
 
         /// <summary>
         /// The instance the Health API serves every request from. It is deliberately a singleton: the
@@ -124,10 +141,17 @@ namespace Web.AnalyticsWeb.Models.Health
 
         public HealthService(IHealthDataSource dataSource, IHealthCache cache,
             Func<AppConfig, Task<string>> agentCostConnectionStatus = null)
+            : this(dataSource, cache, agentCostConnectionStatus, null)
+        {
+        }
+
+        internal HealthService(IHealthDataSource dataSource, IHealthCache cache,
+            Func<AppConfig, Task<string>> agentCostConnectionStatus, TimeSpan? sectionDeadline)
         {
             _dataSource = dataSource ?? throw new ArgumentNullException(nameof(dataSource));
             _cache = cache ?? throw new ArgumentNullException(nameof(cache));
             _agentCostConnectionStatus = agentCostConnectionStatus ?? ReadAgentCostConnectionStatusAsync;
+            _sectionDeadline = sectionDeadline ?? DefaultSectionDeadline;
         }
 
         private static async Task<string> ReadAgentCostConnectionStatusAsync(AppConfig config)
@@ -137,41 +161,94 @@ namespace Web.AnalyticsWeb.Models.Health
         }
 
         // --- Public, independently-cached section loaders (one per api/Health route) ---
+        //
+        // A caller's cancellation token (its request being abandoned) only stops that caller waiting. The shared
+        // build it may be waiting on carries on for everyone else, bounded by the section deadline.
 
-        public Task<HealthSummary> LoadSummaryAsync(AppConfig config)
-            => GetOrBuildAsync(SummaryKey, _summaryGate, () => BuildSummaryAsync(config));
+        public Task<HealthSummary> LoadSummaryAsync(AppConfig config, CancellationToken cancellationToken = default(CancellationToken))
+            => GetOrBuildAsync(SummaryKey, _summaryGate, _ => BuildSummaryAsync(config), null, cancellationToken);
 
         public Task<DataOverviewSection> LoadDataAsync()
             => LoadDataAsync(false);
 
         public Task<DataOverviewSection> LoadDataAsync(bool agent365CatalogEnabled)
             => GetOrBuildAsync(DataKey + (agent365CatalogEnabled ? ":agent365" : ":no-agent365"),
-                _dataGate, () => BuildDataAsync(agent365CatalogEnabled));
+                _dataGate, _ => BuildDataAsync(agent365CatalogEnabled), null, CancellationToken.None);
 
-        public Task<LivenessSection> LoadLivenessAsync(AppConfig config)
-            => GetOrBuildAsync(LivenessKey, _livenessGate, () => BuildLivenessAsync(config));
+        public Task<LivenessSection> LoadLivenessAsync(AppConfig config, CancellationToken cancellationToken = default(CancellationToken))
+            => GetOrBuildAsync(LivenessKey, _livenessGate, ct => BuildLivenessAsync(config, ct),
+                () => FinishLiveness(new LivenessSection { AppInsightsConfigured = true, LivenessError = TimedOutError() }),
+                cancellationToken);
 
-        public Task<ExceptionsSection> LoadExceptionsAsync(AppConfig config)
-            => GetOrBuildAsync(ExceptionsKey, _exceptionsGate, () => BuildExceptionsAsync(config));
+        public Task<ExceptionsSection> LoadExceptionsAsync(AppConfig config, CancellationToken cancellationToken = default(CancellationToken))
+            => GetOrBuildAsync(ExceptionsKey, _exceptionsGate, ct => BuildExceptionsAsync(config, ct),
+                () => FinishExceptions(new ExceptionsSection { AppInsightsConfigured = true, ExceptionsError = TimedOutError() }),
+                cancellationToken);
 
-        public Task<ComponentsSection> LoadComponentsAsync(AppConfig config)
-            => GetOrBuildAsync(ComponentsKey, _componentsGate, () => BuildComponentsAsync(config));
+        public Task<ComponentsSection> LoadComponentsAsync(AppConfig config, CancellationToken cancellationToken = default(CancellationToken))
+            => GetOrBuildAsync(ComponentsKey, _componentsGate, ct => BuildComponentsAsync(config, ct),
+                () => FinishComponents(new ComponentsSection
+                {
+                    AppInsightsConfigured = !string.IsNullOrEmpty(config?.AppInsightsConnectionString),
+                    ComponentHealthError = TimedOutError(),
+                }, checksDidNotFinish: true),
+                cancellationToken);
 
-        public Task<ConfigSection> LoadConfigAsync(AppConfig config)
-            => GetOrBuildAsync(ConfigKey, _configGate, () => BuildConfigAsync(config));
+        public Task<ConfigSection> LoadConfigAsync(AppConfig config, CancellationToken cancellationToken = default(CancellationToken))
+            => GetOrBuildAsync(ConfigKey, _configGate, ct => BuildConfigAsync(config, ct),
+                () => FinishConfig(new ConfigSection { ConfigError = TimedOutError() }),
+                cancellationToken);
 
-        /// <summary>Cache-or-build helper: single-flight per key, caches the result (even when it carries per-section errors) for <see cref="CacheSeconds"/>.</summary>
-        private async Task<T> GetOrBuildAsync<T>(string key, SemaphoreSlim gate, Func<Task<T>> build) where T : class
+        /// <summary>The error a section that ran out of time carries - a fact for the page's "couldn't load" message.</summary>
+        private string TimedOutError()
+            => $"Timed out after {Math.Round(_sectionDeadline.TotalSeconds).ToString(CultureInfo.InvariantCulture)} seconds.";
+
+        /// <summary>
+        /// Cache-or-build helper: single-flight per key, caches the result (even when it carries per-section errors)
+        /// for <see cref="CacheSeconds"/>.
+        /// </summary>
+        /// <param name="timedOut">
+        /// The section to answer with when the build outlives <see cref="_sectionDeadline"/>; null for a section with no
+        /// deadline (Data, whose every query has its own short SQL timeout, and the Overview, whose parts each have one).
+        /// </param>
+        private async Task<T> GetOrBuildAsync<T>(string key, SemaphoreSlim gate, Func<CancellationToken, Task<T>> build,
+            Func<T> timedOut, CancellationToken cancellationToken) where T : class
         {
             if (_cache.TryGet<T>(key, out var hit)) return hit;
 
-            await gate.WaitAsync();
+            await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
             try
             {
                 // Re-check: another request may have built it while we waited for the gate.
                 if (_cache.TryGet<T>(key, out var hit2)) return hit2;
 
-                var built = await build();
+                if (timedOut == null)
+                {
+                    var unbounded = await build(CancellationToken.None).ConfigureAwait(false);
+                    _cache.Set(key, unbounded, TimeSpan.FromSeconds(CacheSeconds));
+                    return unbounded;
+                }
+
+                var deadline = new CancellationTokenSource();
+                deadline.CancelAfter(_sectionDeadline);
+
+                // On the thread pool, not the request's context: a build that outlives the deadline finishes after the
+                // request that started it has ended, and must not resume on that request's synchronization context.
+                var building = Task.Run(() => build(deadline.Token));
+
+                // Not just cancelled: waited for no longer than the deadline, because not everything a section calls
+                // honours cancellation (Key Vault, a stalled connection-status read).
+                await Task.WhenAny(building, Task.Delay(Timeout.Infinite, deadline.Token)).ConfigureAwait(false);
+                if (deadline.IsCancellationRequested)
+                {
+                    ForgetAbandonedBuild(building, deadline);
+                    var unavailable = timedOut();
+                    _cache.Set(key, unavailable, TimeSpan.FromSeconds(TimedOutCacheSeconds));
+                    return unavailable;
+                }
+
+                deadline.Dispose();
+                var built = await building.ConfigureAwait(false);
                 _cache.Set(key, built, TimeSpan.FromSeconds(CacheSeconds));
                 return built;
             }
@@ -179,6 +256,19 @@ namespace Web.AnalyticsWeb.Models.Health
             {
                 gate.Release();
             }
+        }
+
+        /// <summary>
+        /// Lets a build that ran out of time finish on its own: its failure is observed (never an unobserved task
+        /// exception) and its deadline source is disposed only once nothing can still be registered on it.
+        /// </summary>
+        private static void ForgetAbandonedBuild(Task building, CancellationTokenSource deadline)
+        {
+            building.ContinueWith(t =>
+            {
+                var ignored = t.Exception;
+                deadline.Dispose();
+            }, TaskContinuationOptions.ExecuteSynchronously);
         }
 
         // --- Overview / overall roll-up ---
@@ -274,7 +364,7 @@ namespace Web.AnalyticsWeb.Models.Health
 
         // --- Configuration (config + schema + webhook) ---
 
-        private async Task<ConfigSection> BuildConfigAsync(AppConfig config)
+        private async Task<ConfigSection> BuildConfigAsync(AppConfig config, CancellationToken cancellationToken)
         {
             var section = new ConfigSection();
 
@@ -289,6 +379,8 @@ namespace Web.AnalyticsWeb.Models.Health
             {
                 section.SchemaError = HealthDataSectionRules.InnermostMessage(ex);
             }
+
+            cancellationToken.ThrowIfCancellationRequested();
 
             try
             {
@@ -313,6 +405,12 @@ namespace Web.AnalyticsWeb.Models.Health
                 section.ConfigError = HealthDataSectionRules.InnermostMessage(ex);
             }
 
+            return FinishConfig(section);
+        }
+
+        /// <summary>Sets the section's status from what it holds - shared by a completed build and one that ran out of time.</summary>
+        private static ConfigSection FinishConfig(ConfigSection section)
+        {
             var input = new HealthRollupInput
             {
                 NowUtc = section.LoadedAtUtc,
@@ -342,7 +440,7 @@ namespace Web.AnalyticsWeb.Models.Health
 
         // --- Component health (runtime credential + Service Bus + App Insights HealthCheck) ---
 
-        private async Task<ComponentsSection> BuildComponentsAsync(AppConfig config)
+        private async Task<ComponentsSection> BuildComponentsAsync(AppConfig config, CancellationToken cancellationToken)
         {
             var section = new ComponentsSection
             {
@@ -357,16 +455,16 @@ namespace Web.AnalyticsWeb.Models.Health
             TokenCredential credential = null;
             try
             {
-                credential = await GetCredentialAsync(config);
+                credential = await GetCredentialAsync(config, cancellationToken);
             }
-            catch (Exception ex)
+            catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
             {
                 section.ComponentHealthError = "Couldn't build the Entra credential: " + HealthDataSectionRules.InnermostMessage(ex);
             }
 
             if (credential != null)
             {
-                await LoadServiceBusHealth(config, credential, section);
+                await LoadServiceBusHealth(config, credential, section, cancellationToken);
 
                 if (section.AppInsightsConfigured)
                 {
@@ -374,7 +472,7 @@ namespace Web.AnalyticsWeb.Models.Health
                     try
                     {
                         client = new AppInsightsQueryClient(config.AppInsightsConnectionString, credential, AnalyticsLogger.ConsoleOnlyTracer());
-                        await LoadComponentHealthFromTelemetry(client, section);
+                        await LoadComponentHealthFromTelemetry(client, section, cancellationToken);
                     }
                     catch (Exception ex)
                     {
@@ -387,12 +485,23 @@ namespace Web.AnalyticsWeb.Models.Health
                 }
             }
 
+            cancellationToken.ThrowIfCancellationRequested();
             await LoadAgentCostConnectionHealthAsync(config, section);
 
+            return FinishComponents(section);
+        }
+
+        /// <summary>Sets the section's status from what it holds - shared by a completed build and one that ran out of time.</summary>
+        /// <param name="checksDidNotFinish">
+        /// The section ran out of time, so it has no component rows to judge. It must not read as "All checks passing":
+        /// it is rolled up as a failed check, whether or not Application Insights is configured.
+        /// </param>
+        private static ComponentsSection FinishComponents(ComponentsSection section, bool checksDidNotFinish = false)
+        {
             var input = new HealthRollupInput
             {
                 NowUtc = section.LoadedAtUtc,
-                AppInsightsConfigured = section.AppInsightsConfigured,
+                AppInsightsConfigured = section.AppInsightsConfigured || checksDidNotFinish,
                 AnyTelemetryQueryError = !string.IsNullOrEmpty(section.ComponentHealthError),
                 Components = section.ComponentHealth
                     .Select(c => new ComponentStatusInput { Component = c.Component, Status = c.Status, Detail = c.Detail })
@@ -491,7 +600,7 @@ namespace Web.AnalyticsWeb.Models.Health
             }
         }
 
-        private static async Task LoadServiceBusHealth(AppConfig config, TokenCredential credential, ComponentsSection section)
+        private static async Task LoadServiceBusHealth(AppConfig config, TokenCredential credential, ComponentsSection section, CancellationToken cancellationToken)
         {
             // Only relevant when Teams calls import is on (that's what uses the Service Bus queue).
             var sbConn = config?.ConnectionStrings?.ServiceBusConnectionString;
@@ -503,8 +612,8 @@ namespace Web.AnalyticsWeb.Models.Health
             try
             {
                 var sbProps = ServiceBusConnectionStringProperties.Parse(sbConn);
-                var admin = new ServiceBusAdministrationClient(sbProps.FullyQualifiedNamespace, credential);
-                var runtime = await admin.GetQueueRuntimePropertiesAsync(sbProps.EntityPath);
+                var admin = new ServiceBusAdministrationClient(sbProps.FullyQualifiedNamespace, credential, ServiceBusHealthClientOptions());
+                var runtime = await admin.GetQueueRuntimePropertiesAsync(sbProps.EntityPath, cancellationToken);
                 var props = runtime.Value;
 
                 string status = props.DeadLetterMessageCount > 0 ? HealthStatusNames.Degraded : HealthStatusNames.Healthy;
@@ -541,6 +650,18 @@ namespace Web.AnalyticsWeb.Models.Health
         }
 
         /// <summary>
+        /// Service Bus's default retry policy (three retries of up to 100 seconds each) could outlast the section deadline
+        /// on its own. One retry of a short request leaves room for the rest of the section.
+        /// </summary>
+        private static ServiceBusAdministrationClientOptions ServiceBusHealthClientOptions()
+        {
+            var options = new ServiceBusAdministrationClientOptions();
+            options.Retry.MaxRetries = 1;
+            options.Retry.NetworkTimeout = TimeSpan.FromSeconds(15);
+            return options;
+        }
+
+        /// <summary>
         /// Service Bus rejects a blocked IP before the token is even validated, so the message mentions IP
         /// filtering / VNet service endpoints rather than authorisation.
         /// </summary>
@@ -561,9 +682,9 @@ namespace Web.AnalyticsWeb.Models.Health
             section.ComponentHealth = section.ComponentHealth.OrderBy(c => c.Component).ToList();
         }
 
-        private static async Task LoadComponentHealthFromTelemetry(AppInsightsQueryClient client, ComponentsSection section)
+        private static async Task LoadComponentHealthFromTelemetry(AppInsightsQueryClient client, ComponentsSection section, CancellationToken cancellationToken)
         {
-            var table = await client.RunQueryAsync(QueryComponentHealth);
+            var table = await client.RunQueryAsync(QueryComponentHealth, cancellationToken);
             ApplyComponentTelemetry(table, section, DateTime.UtcNow);
         }
 
@@ -607,7 +728,7 @@ namespace Web.AnalyticsWeb.Models.Health
 
         // --- Import liveness (App Insights) ---
 
-        private async Task<LivenessSection> BuildLivenessAsync(AppConfig config)
+        private async Task<LivenessSection> BuildLivenessAsync(AppConfig config, CancellationToken cancellationToken)
         {
             var section = new LivenessSection
             {
@@ -624,9 +745,9 @@ namespace Web.AnalyticsWeb.Models.Health
             TokenCredential credential = null;
             try
             {
-                credential = await GetCredentialAsync(config);
+                credential = await GetCredentialAsync(config, cancellationToken);
             }
-            catch (Exception ex)
+            catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
             {
                 section.LivenessError = "Couldn't build the Entra credential: " + HealthDataSectionRules.InnermostMessage(ex);
             }
@@ -637,7 +758,7 @@ namespace Web.AnalyticsWeb.Models.Health
                 try
                 {
                     client = new AppInsightsQueryClient(config.AppInsightsConnectionString, credential, AnalyticsLogger.ConsoleOnlyTracer());
-                    await LoadLiveness(client, section);
+                    await LoadLiveness(client, section, cancellationToken);
                 }
                 catch (Exception ex)
                 {
@@ -649,6 +770,12 @@ namespace Web.AnalyticsWeb.Models.Health
                 }
             }
 
+            return FinishLiveness(section);
+        }
+
+        /// <summary>Sets the section's status from what it holds - shared by a completed build and one that ran out of time.</summary>
+        private static LivenessSection FinishLiveness(LivenessSection section)
+        {
             var input = new HealthRollupInput
             {
                 NowUtc = section.LoadedAtUtc,
@@ -663,9 +790,9 @@ namespace Web.AnalyticsWeb.Models.Health
             return section;
         }
 
-        private static async Task LoadLiveness(AppInsightsQueryClient client, LivenessSection section)
+        private static async Task LoadLiveness(AppInsightsQueryClient client, LivenessSection section, CancellationToken cancellationToken)
         {
-            var cycles = await client.RunQueryAsync(QueryLastCyclePerJob);
+            var cycles = await client.RunQueryAsync(QueryLastCyclePerJob, cancellationToken);
             foreach (var row in cycles.Rows)
             {
                 var duration = cycles.GetString(row, "Duration");
@@ -680,7 +807,7 @@ namespace Web.AnalyticsWeb.Models.Health
                 });
             }
 
-            var sections = await client.RunQueryAsync(QueryLastSectionImports);
+            var sections = await client.RunQueryAsync(QueryLastSectionImports, cancellationToken);
             foreach (var row in sections.Rows)
             {
                 section.LastSectionImports.Add(new SectionImportRow
@@ -692,7 +819,7 @@ namespace Web.AnalyticsWeb.Models.Health
                 });
             }
 
-            var beats = await client.RunQueryAsync(QueryLastHeartbeats);
+            var beats = await client.RunQueryAsync(QueryLastHeartbeats, cancellationToken);
             foreach (var row in beats.Rows)
             {
                 section.LastHeartbeats.Add(new HeartbeatRow
@@ -706,7 +833,7 @@ namespace Web.AnalyticsWeb.Models.Health
 
             // Web-tracker liveness: are pageViews actually arriving in App Insights? Distinguishes
             // "tracker not deployed on the site" from "AppInsightsImporter not running".
-            var pv = await client.RunQueryAsync(QueryPageViewsLast24h);
+            var pv = await client.RunQueryAsync(QueryPageViewsLast24h, cancellationToken);
             if (pv.RowCount > 0)
             {
                 var first = pv.Rows[0];
@@ -717,7 +844,7 @@ namespace Web.AnalyticsWeb.Models.Health
 
         // --- Exceptions overview (App Insights) ---
 
-        private async Task<ExceptionsSection> BuildExceptionsAsync(AppConfig config)
+        private async Task<ExceptionsSection> BuildExceptionsAsync(AppConfig config, CancellationToken cancellationToken)
         {
             var section = new ExceptionsSection
             {
@@ -734,9 +861,9 @@ namespace Web.AnalyticsWeb.Models.Health
             TokenCredential credential = null;
             try
             {
-                credential = await GetCredentialAsync(config);
+                credential = await GetCredentialAsync(config, cancellationToken);
             }
-            catch (Exception ex)
+            catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
             {
                 section.ExceptionsError = "Couldn't build the Entra credential: " + HealthDataSectionRules.InnermostMessage(ex);
             }
@@ -747,7 +874,7 @@ namespace Web.AnalyticsWeb.Models.Health
                 try
                 {
                     client = new AppInsightsQueryClient(config.AppInsightsConnectionString, credential, AnalyticsLogger.ConsoleOnlyTracer());
-                    await LoadExceptions(client, section);
+                    await LoadExceptions(client, section, cancellationToken);
                 }
                 catch (Exception ex)
                 {
@@ -759,6 +886,12 @@ namespace Web.AnalyticsWeb.Models.Health
                 }
             }
 
+            return FinishExceptions(section);
+        }
+
+        /// <summary>Sets the section's status from what it holds - shared by a completed build and one that ran out of time.</summary>
+        private static ExceptionsSection FinishExceptions(ExceptionsSection section)
+        {
             var input = new HealthRollupInput
             {
                 NowUtc = section.LoadedAtUtc,
@@ -770,9 +903,9 @@ namespace Web.AnalyticsWeb.Models.Health
             return section;
         }
 
-        private static async Task LoadExceptions(AppInsightsQueryClient client, ExceptionsSection section)
+        private static async Task LoadExceptions(AppInsightsQueryClient client, ExceptionsSection section, CancellationToken cancellationToken)
         {
-            var perHour = await client.RunQueryAsync(QueryExceptionsPerHour);
+            var perHour = await client.RunQueryAsync(QueryExceptionsPerHour, cancellationToken);
             foreach (var row in perHour.Rows)
             {
                 var count = perHour.GetLong(row, "Count") ?? 0;
@@ -784,7 +917,7 @@ namespace Web.AnalyticsWeb.Models.Health
                 section.ExceptionsLast24h += count;
             }
 
-            var types = await client.RunQueryAsync(QueryTopExceptionTypes);
+            var types = await client.RunQueryAsync(QueryTopExceptionTypes, cancellationToken);
             foreach (var row in types.Rows)
             {
                 section.TopExceptionTypes.Add(new ExceptionTypeRow
@@ -797,7 +930,7 @@ namespace Web.AnalyticsWeb.Models.Health
 
             // SQL capacity / read-only is a distinct catastrophic state - count it out of the noise.
             // Only the COUNT is surfaced; exception message text (which can contain data) is not.
-            var cap = await client.RunQueryAsync(QuerySqlCapacityExceptions);
+            var cap = await client.RunQueryAsync(QuerySqlCapacityExceptions, cancellationToken);
             if (cap.RowCount > 0)
             {
                 section.SqlCapacityExceptions24h = cap.GetLong(cap.Rows[0], "Count") ?? 0;
@@ -807,11 +940,11 @@ namespace Web.AnalyticsWeb.Models.Health
         // --- Shared credential helper ---
 
         /// <summary>Builds (and briefly caches) the app's Entra credential, honouring certificate auth so the AI sections don't each re-hit Key Vault.</summary>
-        private async Task<TokenCredential> GetCredentialAsync(AppConfig config)
+        private async Task<TokenCredential> GetCredentialAsync(AppConfig config, CancellationToken cancellationToken)
         {
             if (_cache.TryGet<TokenCredential>(CredKey, out var cached)) return cached;
 
-            await _credGate.WaitAsync();
+            await _credGate.WaitAsync(cancellationToken);
             try
             {
                 if (_cache.TryGet<TokenCredential>(CredKey, out var cached2)) return cached2;

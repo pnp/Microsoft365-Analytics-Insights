@@ -11,12 +11,34 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Runtime.Serialization;
 using WebJob.Office365ActivityImporter.Engine.Graph;
+using Microsoft.Kiota.Abstractions;
+using Microsoft.Kiota.Abstractions.Authentication;
+using ActivityImporter.Engine.ActivityAPI.Copilot;
 
 namespace Tests.UnitTests
 {
     [TestClass]
     public class GraphBoundedRequestAndDeltaTests
     {
+        [TestMethod]
+        public async Task GraphSdk_HtmlServerError_PreservesStatusForDurableEnrichmentRetry()
+        {
+            var terminal = new SequenceHttpHandler(ct => Task.FromResult(new HttpResponseMessage(HttpStatusCode.BadGateway)
+            {
+                Content = new StringContent("<html><body>Temporary gateway failure</body></html>",
+                    System.Text.Encoding.UTF8, "text/html")
+            }));
+            using (var client = GraphServiceClientFactory.CreateWithTimeout(
+                new AnonymousAuthenticationProvider(), TimeSpan.FromSeconds(5), terminal))
+            {
+                var ex = await Assert.ThrowsExceptionAsync<ApiException>(() => client.Users["contoso-user"].GetAsync());
+                Assert.AreEqual(502, ex.ResponseStatusCode);
+                Assert.IsTrue(CopilotAuditEventManager.IsTransientEnrichmentFailure(ex));
+                Assert.IsFalse(ex.Message.Contains("<html>"), "A proxy response body must not leak into retry logs.");
+            }
+            Assert.AreEqual(1, terminal.Attempts);
+        }
+
         [TestMethod]
         public async Task BoundedGraphRequestHandler_RequestTimeoutThenHealthyResponse_RetriesSamePageOnly()
         {

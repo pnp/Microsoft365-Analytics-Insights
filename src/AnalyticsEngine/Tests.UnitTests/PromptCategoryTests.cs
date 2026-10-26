@@ -191,16 +191,148 @@ namespace Tests.UnitTests
             var durable = new PromptCategoryConfigurationStore(memory);
             var config = PromptCategoryConfiguration.Defaults();
             config.Enabled = true;
-            await durable.SaveAsync(config);
+            await durable.SaveAsync(config, (await durable.GetAsync()).Revision);
             var original = await memory.GetStringAsync("taxonomy-" + config.Version);
             var oldVersion = config.Version;
+            config.MaxPromptsPerCycle = 10;
+            await durable.SaveAsync(config, config.Revision);
+            Assert.AreEqual(original, await memory.GetStringAsync("taxonomy-" + oldVersion),
+                "Saving the same taxonomy with another cap or opt-in does not rewrite its history...");
             config.Categories[0].Description = "Contoso synthetic goal.";
-            await durable.SaveAsync(config);
-            Assert.AreEqual(original, await memory.GetStringAsync("taxonomy-" + oldVersion));
+            await durable.SaveAsync(config, config.Revision);
+            Assert.AreEqual(original, await memory.GetStringAsync("taxonomy-" + oldVersion), "...and nor does a new taxonomy.");
             Assert.AreNotEqual(oldVersion, (await durable.GetAsync()).Version);
             var fallback = new PromptCategoryConfigurationStore(memory, durable: false);
             Assert.IsFalse((await fallback.GetAsync()).Enabled);
-            await Assert.ThrowsExceptionAsync<InvalidOperationException>(() => fallback.SaveAsync(config));
+            await Assert.ThrowsExceptionAsync<InvalidOperationException>(() => fallback.SaveAsync(config, config.Revision));
+        }
+
+        /// <summary>
+        /// Two administrators have the page open. One turns categorisation off - so users' prompts stop going to Azure
+        /// OpenAI - and caps it. The other's page still shows the old settings: its save would switch categorisation back on,
+        /// and its reset would undo the cap, so both are refused, naming the settings in force. Against those, both work.
+        /// The two pages are on different web instances, sharing one table.
+        /// </summary>
+        [TestMethod]
+        public async Task Configuration_SaveOrResetMadeAgainstOlderSettings_IsRefused_AndCannotTurnCategorisationBackOn()
+        {
+            var table = new InMemoryKeyValueStore();
+            var instanceA = new PromptCategoryConfigurationStore(table);
+            var instanceB = new PromptCategoryConfigurationStore(table);
+            await instanceA.SaveAsync(Enabled(100), (await instanceA.GetAsync()).Revision);
+
+            var pageA = await instanceA.GetAsync();
+            var pageB = await instanceB.GetAsync();
+            Assert.AreEqual(pageA.Revision, pageB.Revision);
+
+            pageA.Enabled = false;
+            pageA.MaxPromptsPerCycle = 25;
+            var off = await instanceA.SaveAsync(pageA, pageA.Revision);
+            Assert.AreNotEqual(pageB.Revision, off.Revision, "The revision covers the opt-in and cap, not only the taxonomy...");
+            Assert.AreEqual(pageB.Version, off.Version, "...which did not change.");
+
+            pageB.Categories[0].Name = "Contoso Καλημέρα";
+            var refused = await Assert.ThrowsExceptionAsync<PromptCategoryConfigurationConflictException>(() => instanceB.SaveAsync(pageB, pageB.Revision));
+            Assert.IsFalse(refused.Current.Enabled, "The refusal carries the settings in force.");
+            Assert.AreEqual(off.Revision, refused.Current.Revision);
+            await Assert.ThrowsExceptionAsync<PromptCategoryConfigurationConflictException>(() => instanceB.ResetAsync(pageB.Revision));
+            await Assert.ThrowsExceptionAsync<PromptCategoryConfigurationConflictException>(() => instanceB.SaveAsync(pageB, null),
+                "A save that names no revision is refused too.");
+            await Assert.ThrowsExceptionAsync<PromptCategoryConfigurationConflictException>(() => instanceB.ResetAsync(null),
+                "So is a reset, while the saved configuration can be read.");
+            var inForce = await instanceB.GetAsync();
+            Assert.IsFalse(inForce.Enabled);
+            Assert.AreEqual(25, inForce.MaxPromptsPerCycle);
+            Assert.AreNotEqual("Contoso Καλημέρα", inForce.Categories[0].Name);
+
+            inForce.Categories[0].Name = "Contoso Καλημέρα";
+            var saved = await instanceB.SaveAsync(inForce, inForce.Revision);
+            Assert.IsFalse(saved.Enabled);
+            Assert.AreEqual(saved.Revision, (await instanceA.GetAsync()).Revision, "Every instance reads the revision it saved.");
+            Assert.IsFalse((await instanceA.ResetAsync(saved.Revision)).Enabled);
+        }
+
+        /// <summary>
+        /// Two saves made against the same revision, on different web instances, at the same moment: the second reads the
+        /// settings before the first has written them, so the revisions still match - but its write is conditional on the
+        /// row it read, so it is refused instead of overwriting the first.
+        /// </summary>
+        [TestMethod]
+        public async Task Configuration_TwoSavesAgainstTheSameRevision_ExactlyOneLands()
+        {
+            var table = new InterleavingStore();
+            var instanceA = new PromptCategoryConfigurationStore(table);
+            var instanceB = new PromptCategoryConfigurationStore(table);
+            var pageA = await instanceA.GetAsync();
+            var pageB = await instanceB.GetAsync();
+            pageA.Enabled = false;
+            pageA.MaxPromptsPerCycle = 25;
+            pageB.Enabled = true;
+
+            // B reads, then A's save lands, then B writes.
+            table.BeforeConditionalWrite = () => instanceA.SaveAsync(pageA, pageA.Revision);
+            var refused = await Assert.ThrowsExceptionAsync<PromptCategoryConfigurationConflictException>(() => instanceB.SaveAsync(pageB, pageB.Revision));
+
+            Assert.AreEqual(25, refused.Current.MaxPromptsPerCycle);
+            var inForce = await instanceB.GetAsync();
+            Assert.IsFalse(inForce.Enabled, "B did not switch categorisation on over A's save.");
+            Assert.AreEqual(25, inForce.MaxPromptsPerCycle);
+        }
+
+        /// <summary>
+        /// A configuration saved before revisions existed has none stored - nor has any document now: the revision is worked
+        /// out from what is stored. It loads as it always did, and saves against the revision it reads with.
+        /// </summary>
+        [TestMethod]
+        public async Task Configuration_SavedBeforeRevisionsExisted_StillLoads_AndSavesAgainstTheRevisionItReadsWith()
+        {
+            var table = new InMemoryKeyValueStore();
+            await table.SetStringAsync("current",
+                "{\"enabled\":true,\"maxPromptsPerCycle\":100,\"version\":\"synthetic\",\"categories\":[" +
+                "{\"id\":\"analysis\",\"name\":\"Contoso Καλημέρα\",\"description\":\"Synthetic goal.\",\"humanMode\":\"directing\"}," +
+                "{\"id\":\"other\",\"name\":\"Other\",\"description\":\"A goal that does not match another category.\"}]}");
+            var store = new PromptCategoryConfigurationStore(table);
+
+            var loaded = await store.GetAsync();
+            Assert.IsTrue(loaded.Enabled);
+            Assert.AreEqual("Contoso Καλημέρα", loaded.Categories[0].Name);
+            Assert.AreEqual(64, loaded.Revision.Length);
+            Assert.AreEqual(loaded.Revision, (await store.GetAsync()).Revision, "Reading it again gives the same revision.");
+
+            loaded.MaxPromptsPerCycle = 50;
+            var before = loaded.Revision;
+            var saved = await store.SaveAsync(loaded, before);
+            Assert.AreNotEqual(before, saved.Revision);
+            Assert.AreEqual(saved.Revision, (await store.GetAsync()).Revision);
+            Assert.AreEqual(50, (await store.GetAsync()).MaxPromptsPerCycle);
+            Assert.IsFalse((await table.GetStringAsync("current")).Contains("\"revision\""), "The revision is never stored in the document.");
+        }
+
+        /// <summary>Lets a test land a write between another writer's read and its conditional write.</summary>
+        private sealed class InterleavingStore : IConditionalKeyValueStore
+        {
+            private readonly InMemoryKeyValueStore _inner = new InMemoryKeyValueStore();
+            public Func<Task> BeforeConditionalWrite { get; set; }
+            public string Description => _inner.Description;
+            public Task<string> GetStringAsync(string key, CancellationToken cancellationToken = default) => _inner.GetStringAsync(key, cancellationToken);
+            public Task SetStringAsync(string key, string value, TimeSpan? timeToLive = null, CancellationToken cancellationToken = default)
+                => _inner.SetStringAsync(key, value, timeToLive, cancellationToken);
+            public Task<bool> DeleteAsync(string key, CancellationToken cancellationToken = default) => _inner.DeleteAsync(key, cancellationToken);
+            public Task<bool> ExistsAsync(string key, CancellationToken cancellationToken = default) => _inner.ExistsAsync(key, cancellationToken);
+            public Task<VersionedValue> GetVersionedAsync(string key, CancellationToken cancellationToken = default) => _inner.GetVersionedAsync(key, cancellationToken);
+            public Task<bool> TryDeleteAsync(string key, string expectedVersionToken, CancellationToken cancellationToken = default)
+                => _inner.TryDeleteAsync(key, expectedVersionToken, cancellationToken);
+
+            public async Task<bool> TrySetStringAsync(string key, string value, string expectedVersionToken, CancellationToken cancellationToken = default)
+            {
+                var interleave = key == "current" ? BeforeConditionalWrite : null;
+                if (interleave != null)
+                {
+                    BeforeConditionalWrite = null;
+                    await interleave();
+                }
+                return await _inner.TrySetStringAsync(key, value, expectedVersionToken, cancellationToken);
+            }
         }
 
         [TestMethod]
@@ -238,6 +370,8 @@ namespace Tests.UnitTests
                     "The aggregate action stays open to every signed-in reader.");
                 host.Principal = PortalTestHost.SignedIn(PortalRoles.Administration);
                 var config = Enabled(100);
+                config.Revision = (string)Newtonsoft.Json.Linq.JObject.Parse(
+                    await (await host.Client.GetAsync("api/PromptCategories")).Content.ReadAsStringAsync())["configuration"]["revision"];
                 Func<StringContent> body = () => new StringContent(JsonConvert.SerializeObject(config),
                     System.Text.Encoding.UTF8, "application/json");
                 Assert.AreEqual(HttpStatusCode.Forbidden, (await host.Client.PostAsync("api/PromptCategories", body())).StatusCode);
@@ -257,9 +391,63 @@ namespace Tests.UnitTests
                 Assert.IsFalse(payload.Contains("FoundryPromptCategorisationKey") || payload.Contains("FoundryPromptCategorisationEndpoint") ||
                     payload.Contains("FoundryPromptKey") || payload.Contains("FoundryPromptEndpoint"));
                 Assert.IsNotNull(Newtonsoft.Json.Linq.JObject.Parse(payload)["configuration"]["categories"][0]["id"]);
-                var reset = await host.Client.PostAsync("api/PromptCategories/reset", new StringContent(""));
+                var reset = await host.Client.PostAsync("api/PromptCategories/reset", new StringContent(
+                    JsonConvert.SerializeObject(new { expectedRevision = (string)json["revision"] }), System.Text.Encoding.UTF8, "application/json"));
                 Assert.AreEqual(HttpStatusCode.OK, reset.StatusCode);
                 Assert.AreEqual(false, (bool)Newtonsoft.Json.Linq.JObject.Parse(await reset.Content.ReadAsStringAsync())["enabled"]);
+            }
+        }
+
+        /// <summary>
+        /// The page loaded the settings with categorisation on; another administrator has since turned it off and capped
+        /// it. The page's save - which would turn it back on - and its reset are both answered 409 with the settings in
+        /// force, and change nothing.
+        /// </summary>
+        [TestMethod]
+        public async Task AdminApi_RefusesASaveOrResetMadeAgainstOlderSettings_With409AndTheSettingsInForce()
+        {
+            var store = new PromptCategoryConfigurationStore(new InMemoryKeyValueStore());
+            await store.SaveAsync(Enabled(100), (await store.GetAsync()).Revision);
+            using (var host = new PortalTestHost(new[] { typeof(PromptCategoriesAPIController) },
+                PortalTestHost.SignedIn(PortalRoles.Administration), PortalAccessPolicy.Enforcing,
+                _ => new PromptCategoriesAPIController(store)))
+            {
+                host.Client.DefaultRequestHeaders.Add("X-Requested-With", "XMLHttpRequest");
+                host.Client.DefaultRequestHeaders.Add("Sec-Fetch-Site", "same-origin");
+                StringContent Json(object value) => new StringContent(JsonConvert.SerializeObject(value), System.Text.Encoding.UTF8, "application/json");
+                async Task<Newtonsoft.Json.Linq.JObject> Read(HttpResponseMessage response) =>
+                    Newtonsoft.Json.Linq.JObject.Parse(await response.Content.ReadAsStringAsync());
+
+                var onPage = (await Read(await host.Client.GetAsync("api/PromptCategories")))["configuration"].ToObject<PromptCategoryConfiguration>();
+                Assert.IsTrue(onPage.Enabled);
+
+                var other = await store.GetAsync();
+                other.Enabled = false;
+                other.MaxPromptsPerCycle = 25;
+                await store.SaveAsync(other, other.Revision);
+
+                onPage.Categories[0].Description = "Contoso synthetic goal.";
+                var save = await host.Client.PostAsync("api/PromptCategories", Json(onPage));
+                Assert.AreEqual(HttpStatusCode.Conflict, save.StatusCode);
+                Assert.IsTrue(save.Headers.CacheControl.NoStore);
+                var refusal = await Read(save);
+                Assert.AreEqual("configurationChanged", (string)refusal["code"]);
+                Assert.AreEqual(false, (bool)refusal["configuration"]["enabled"], "The answer carries the settings in force...");
+                Assert.AreEqual(25, (int)refusal["configuration"]["maxPromptsPerCycle"]);
+
+                var reset = await host.Client.PostAsync("api/PromptCategories/reset", Json(new { expectedRevision = onPage.Revision }));
+                Assert.AreEqual(HttpStatusCode.Conflict, reset.StatusCode);
+                Assert.AreEqual(HttpStatusCode.Conflict, (await host.Client.PostAsync("api/PromptCategories/reset", new StringContent(""))).StatusCode,
+                    "Only a saved configuration that can't be read is reset without naming a revision.");
+
+                var inForce = await store.GetAsync();
+                Assert.IsFalse(inForce.Enabled, "...which nothing changed.");
+                Assert.AreEqual(25, inForce.MaxPromptsPerCycle);
+                Assert.AreNotEqual("Contoso synthetic goal.", inForce.Categories[0].Description);
+
+                var current = await host.Client.PostAsync("api/PromptCategories/reset",
+                    Json(new { expectedRevision = (string)refusal["configuration"]["revision"] }));
+                Assert.AreEqual(HttpStatusCode.OK, current.StatusCode, "Against the settings in force, it goes through.");
             }
         }
 

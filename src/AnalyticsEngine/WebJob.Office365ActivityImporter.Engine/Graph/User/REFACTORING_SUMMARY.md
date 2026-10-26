@@ -140,11 +140,15 @@ relocations, not rewrites.
 | `UserBulkUpdateRules` | `UserBatchProcessor.BuildUpdateDataTable` | The bulk-update batch's shape, per-column values and the manager foreign-key precedence chain |
 | `ManagerResolutionRules` | `UserDataMapper.UpdateUserManager` | Which manager UPNs a batch needs to look up, and how duplicate UPN rows are resolved |
 | `UserImportCommitPolicy` | `UserMetadataUpdater.InsertAndUpdateDatabaseFromExternalUsers` | The delta token is committed only after every phase succeeded |
+| `UserDeltaReadRules` | `GraphUserLoader.LoadAllActiveUsers` | Resolving each object in a `/users/delta` read to its final state (its last entry's status, its latest entry with a UPN for the profile), then sorting it: active (imported), disabled or deleted (`@removed`) - whose existing rows are marked disabled. Records every object id when the read was a complete read of the whole directory. Also used by the test fake |
+| `UserIdentityRules` | `UserMetadataUpdater` | Which row stands for an Entra object id that more than one row carries (a renamed user): Graph's current UPN, else the newest row; and which rows to mark disabled - for reported accounts, and for accounts a complete directory read did not list |
+| `DirectoryReadCompleteness` | `UserMetadataUpdater` | Whether absence from a complete directory read means deletion: the read must match Graph's own `/users/$count` within 1% (at least 10 users); only when that count cannot be read does it fall back to the users table (refusing when the read left out more of the table than it listed) |
 
 ### Ports and adapters
 | Port | Production adapter | Purpose |
 |---|---|---|
 | `IUserBulkUpdateWriter` | `SqlUserBulkUpdateWriter` | The `SqlConnection` + `SqlBulkCopy` + `#user_updates` temp table, moved out of `UserBatchProcessor` unchanged |
+| `IUserAccountStatusWriter` | `SqlUserAccountStatusWriter` | Sets only `account_enabled = 0` and `last_updated` on rows of accounts Graph reported disabled or deleted, by primary key, and only while the row still carries that account's object id |
 | `IUserLookupStore` | `SqlUserLookupStore` | Resolves a whole batch's users by UPN in one chunked `Contains(...)` query, replacing a per-user `FirstOrDefaultAsync` |
 | `IAnalyticsDbContextFactory` | `DefaultAnalyticsDbContextFactory` | `UserMetadataUpdater` no longer news up its own `AnalyticsEntitiesContext` |
 

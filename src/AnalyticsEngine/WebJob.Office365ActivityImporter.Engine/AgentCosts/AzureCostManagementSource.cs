@@ -237,11 +237,25 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
                         + "be enabled. No other import is affected.");
                 }
 
+                // Rejected as invalid: the request itself is wrong, so sending it again cannot succeed. Typed so the
+                // import backs off until the configuration changes rather than retrying - and re-reading every
+                // healthy scope alongside it - on every cycle.
                 if (response.StatusCode == HttpStatusCode.NotFound)
                 {
-                    throw new HttpRequestException(
+                    throw new AgentCostConfigurationException(
                         $"Azure Cost Management returned HTTP 404 for scope '{scope}'. Check the configured scope is a full resource path such as "
-                        + "'/subscriptions/00000000-0000-0000-0000-000000000000' and that the service principal can see it.");
+                        + "'/subscriptions/00000000-0000-0000-0000-000000000000', that it still exists, and that the service principal can see it. "
+                        + "It will be retried at the normal interval, or on the next cycle once 'AzureCostScopes' is changed.");
+                }
+
+                if (response.StatusCode == HttpStatusCode.BadRequest)
+                {
+                    var rejection = await SafeReadAsync(response);
+                    throw new AgentCostConfigurationException(
+                        $"Azure Cost Management rejected the cost query for scope '{scope}' with HTTP 400 (BadRequest). Check the "
+                        + "'AzureCostGroupBy', 'AzureCostMeterFilterDimension' and 'AzureCostMeterFilterValues' settings against the "
+                        + "dimensions Cost Management accepts. "
+                        + "It will be retried at the normal interval, or on the next cycle once the settings are changed. " + rejection);
                 }
 
                 if (!response.IsSuccessStatusCode)

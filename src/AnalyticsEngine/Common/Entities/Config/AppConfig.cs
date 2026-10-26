@@ -56,6 +56,11 @@ namespace Common.Entities.Config
                 ? daysBeforeNowToDownload
                 : 6;
 
+            // How far back the Graph daily usage reports look. Separate from DaysBeforeNowToDownload, which sizes the
+            // audit (Management Activity API) window: Graph keeps about 28 days of usage-report detail, and a day that
+            // falls out of a 6-day window before its import succeeds can never be fetched again.
+            this.UsageReportsDaysBack = ParseUsageReportsDaysBack(AnalyticsConfig.AppSettings.Get("UsageReportsDaysBack"));
+
             // Resolve Copilot file/meeting metadata from Graph. Default true so behaviour is unchanged unless
             // a tenant opts out. (The Power Platform workload is toggled separately on ImportJobSettings.)
             this.ResolveCopilotResourceMetadata = bool.TryParse(AnalyticsConfig.AppSettings.Get("ResolveCopilotResourceMetadata"), out var resolveCopilotResourceMetadata)
@@ -122,6 +127,8 @@ namespace Common.Entities.Config
                     throw new ConfigurationErrorsException("TeamsMaxChannelsPerTeamPerCycle must be an integer between 0 and 2147483647. Zero disables the budget.");
                 this.TeamsMaxChannelsPerTeamPerCycle = teamsChannelBudget;
             }
+            this.CopilotCostConnectionEnabled = ParseCopilotCostConnectionEnabled(
+                AnalyticsConfig.AppSettings.Get(CopilotCostConnectionEnabledSettingName));
 
             this.StatsApiSecret = AnalyticsConfig.AppSettings.Get("StatsApiSecret");
             this.StatsApiUrl = AnalyticsConfig.AppSettings.Get("StatsApiUrl");
@@ -141,6 +148,24 @@ namespace Common.Entities.Config
                 && bool.TryParse(forceUsageReportsImport, out var forceUsageReportsImportBool))
             {
                 this.ForceUsageReportsImport = forceUsageReportsImportBool;
+            }
+
+            // Deleting the placeholder users older builds created from concealed usage-report identities. Absent: on. "true" or
+            // "false" (any case): as set. Anything else - "0", "no", "off", "disabled" - is not understood, and this is an
+            // irreversible delete, so it fails closed: off, and the cleanup logs an Error naming the value (once per process).
+            var cleanUpSetting = AnalyticsConfig.AppSettings.Get(CleanUpConcealedIdentityUsersSettingName);
+            if (string.IsNullOrWhiteSpace(cleanUpSetting))
+            {
+                this.CleanUpConcealedIdentityUsers = true;
+            }
+            else if (bool.TryParse(cleanUpSetting, out var cleanUpConcealedIdentityUsers))
+            {
+                this.CleanUpConcealedIdentityUsers = cleanUpConcealedIdentityUsers;
+            }
+            else
+            {
+                this.CleanUpConcealedIdentityUsers = false;
+                this.CleanUpConcealedIdentityUsersUnparseableValue = cleanUpSetting.Trim();
             }
 
             // Optional cap on simultaneous Activity API summary fetches (default 8).
@@ -410,6 +435,32 @@ namespace Common.Entities.Config
 
         public int DaysBeforeNowToDownload { get; set; }
 
+        /// <summary>Default for <see cref="UsageReportsDaysBack"/>: a few days inside the ~28 Graph retains.</summary>
+        public const int DefaultUsageReportsDaysBack = 25;
+
+        /// <summary>Graph only answers usage-report dates within about the last 28 days.</summary>
+        public const int MaxUsageReportsDaysBack = 28;
+
+        /// <summary>
+        /// How many days back the Graph daily usage reports (Teams, Outlook, OneDrive, SharePoint, Yammer, apps and
+        /// platforms) are requested. Independent of <see cref="DaysBeforeNowToDownload"/>, the audit-log window. Set with
+        /// the <c>UsageReportsDaysBack</c> AppSetting; a missing, invalid or non-positive value uses
+        /// <see cref="DefaultUsageReportsDaysBack"/>, and anything above <see cref="MaxUsageReportsDaysBack"/> is capped.
+        /// Once a report has completed, the days it stored that Graph no longer changes are skipped, so the whole window
+        /// is downloaded only on a report's first run - or again after a save that failed part-way.
+        /// </summary>
+        public int UsageReportsDaysBack { get; set; } = DefaultUsageReportsDaysBack;
+
+        private static int ParseUsageReportsDaysBack(string raw)
+        {
+            if (!int.TryParse(raw, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var days) || days <= 0)
+            {
+                return DefaultUsageReportsDaysBack;
+            }
+
+            return Math.Min(days, MaxUsageReportsDaysBack);
+        }
+
         /// <summary>
         /// Resolve Copilot file + meeting resource metadata from the Graph (file name/site, meeting
         /// name/date). Default true. When false, Copilot interactions are still imported with their agent
@@ -485,6 +536,25 @@ namespace Common.Entities.Config
         /// </summary>
         public int TeamsMaxChannelsPerTeamPerCycle { get; set; }
 
+        /// <summary>App Service application setting that switches the Copilot credit history preview on.</summary>
+        public const string CopilotCostConnectionEnabledSettingName = "CopilotCostConnectionEnabled";
+
+        /// <summary>
+        /// PREVIEW. Whether the Copilot credit history connection is switched on for this deployment.
+        /// </summary>
+        /// <remarks>
+        /// The installer writes this setting from <see cref="ImportTaskSettings.CopilotCostManagement"/> on
+        /// every run (always "true" or "false"), so it mirrors the saved installer toggle. Only a value that
+        /// parses as <c>true</c> enables it; a missing or malformed value is off rather than guessed.
+        /// </remarks>
+        public bool CopilotCostConnectionEnabled { get; set; } = false;
+
+        /// <summary>Strict parse of <see cref="CopilotCostConnectionEnabledSettingName"/>: anything but "true" is off.</summary>
+        public static bool ParseCopilotCostConnectionEnabled(string value)
+        {
+            return bool.TryParse(value?.Trim(), out var enabled) && enabled;
+        }
+
         public string StatsApiSecret { get; set; } = null;
         public string StatsApiUrl { get; set; } = null;
 
@@ -500,6 +570,23 @@ namespace Common.Entities.Config
         /// Intended for development/manual reruns. Default false.
         /// </summary>
         public bool ForceUsageReportsImport { get; set; } = false;
+
+        /// <summary>App setting behind <see cref="CleanUpConcealedIdentityUsers"/>.</summary>
+        public const string CleanUpConcealedIdentityUsersSettingName = "CleanUpConcealedIdentityUsers";
+
+        /// <summary>
+        /// Whether the activity importer deletes, a bounded slice per cycle, the placeholder users that versions before the
+        /// concealed-identity fix created from concealed (hashed) usage-report identities, together with their usage-report
+        /// rows. Default true when the <c>CleanUpConcealedIdentityUsers</c> app setting is absent; <c>false</c> turns it off.
+        /// A value that is present but is neither <c>true</c> nor <c>false</c> (<c>0</c>, <c>no</c>, <c>off</c>) also turns it
+        /// off - the delete is irreversible, so it fails closed - and is reported in
+        /// <see cref="CleanUpConcealedIdentityUsersUnparseableValue"/>. A runtime setting only - not part of the installer's
+        /// saved configuration.
+        /// </summary>
+        public bool CleanUpConcealedIdentityUsers { get; set; } = true;
+
+        /// <summary>The value of the <c>CleanUpConcealedIdentityUsers</c> app setting when it was present but not a boolean; otherwise null.</summary>
+        public string CleanUpConcealedIdentityUsersUnparseableValue { get; set; }
 
         /// <summary>
         /// Maximum simultaneous Activity API summary fetches (per importer instance).

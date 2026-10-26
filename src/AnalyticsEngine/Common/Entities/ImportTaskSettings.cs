@@ -208,6 +208,27 @@ namespace Common.Entities
         [ImportProp]
         public bool AzureCostManagement { get; set; } = false;
 
+        /// <summary>
+        /// PREVIEW. Collect Microsoft 365 Copilot credit history (Copilot credit balances and consumption)
+        /// from the Microsoft Graph beta cost-management APIs, read with a separately connected
+        /// <b>delegated</b> reader account rather than the runtime app's application permissions.
+        /// </summary>
+        /// <remarks>
+        /// <para>Opt-in and off by default. The underlying Graph endpoints are beta: they can change or be
+        /// withdrawn without notice and are not supported for production use, so this toggle previews a
+        /// future capability rather than enabling a supported import.</para>
+        /// <para>Enabling it does not grant Graph permissions or consent. A portal administrator with the
+        /// existing <c>Portal.Administration</c> app role connects the delegated reader from the web app's
+        /// Administration page, which explains the separate Graph consent and reader-role requirements. Connection
+        /// state lives in Azure Table storage (the solution's <c>Storage</c> connection string), which is
+        /// mandatory - there is no in-memory fallback.</para>
+        /// <para>The installer mirrors this flag into the <c>CopilotCostConnectionEnabled</c> App Service
+        /// application setting (read as <c>AppConfig.CopilotCostConnectionEnabled</c>), so the web app and
+        /// the importer web-job agree on whether the preview is switched on.</para>
+        /// </remarks>
+        [ImportProp]
+        public bool CopilotCostManagement { get; set; } = false;
+
         IEnumerable<PropertyInfo> GetImportProps()
         {
             return this.GetType().GetProperties().Where(p => Attribute.IsDefined(p, typeof(ImportPropAttribute)));

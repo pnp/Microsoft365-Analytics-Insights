@@ -81,6 +81,15 @@ namespace WebJob.Office365ActivityImporter.Engine.StatsUploader
         private readonly ImportTaskSettings _settings;
         private readonly ILogger _logger;
 
+        /// <summary>
+        /// A block computed but not yet delivered, and when its analysis finished. Offered again - not recomputed -
+        /// until the report carrying it is uploaded and stored. Held for the life of this instance, so Program creates
+        /// the collector once, outside the import cycle; a restart just recomputes it, because nothing was stamped.
+        /// </summary>
+        private readonly object _pendingGate = new object();
+        private AnonAdoptionStats _pending;
+        private DateTime _pendingComputedUtc;
+
         public AdoptionStatsCollector(
             AppConfig config,
             IImportLastRunStore lastRunStore,
@@ -138,6 +147,15 @@ namespace WebJob.Office365ActivityImporter.Engine.StatsUploader
                     return null;
                 }
 
+                var pending = TakePendingIfCurrent();
+                if (pending != null)
+                {
+                    _logger?.LogInformation(
+                        $"{UsageStatsManager.LOG_PREFIX}re-offering the adoption metrics computed {pending.GeneratedUtc} - the "
+                        + "report that carried them was not delivered, so their week has not been used up.");
+                    return pending;
+                }
+
                 var lastRun = await _lastRunStore.GetLastRunUtc(LastRunKey);
                 if (!ImportCadenceGate.ShouldRun(lastRun, CadenceHours, force: false, nowUtc: DateTime.UtcNow))
                 {
@@ -192,15 +210,64 @@ namespace WebJob.Office365ActivityImporter.Engine.StatsUploader
                     startedUtc,
                     summary?.WindowDays ?? CopilotAdoptionOptions.Default.WindowDays);
 
-                // Only stamp the cadence gate on success, so a failed run retries next cycle rather
-                // than waiting out the full week.
-                await _lastRunStore.SetLastRunUtc(LastRunKey, DateTime.UtcNow);
+                // NOT stamped here. The week is only used up once the report carrying this block has been uploaded
+                // and stored (AcknowledgeDeliveredAsync); until then a failed upload re-offers this same block rather
+                // than losing it to the fallback - the last STORED block, a week older, or nothing on a first report.
+                lock (_pendingGate)
+                {
+                    _pending = stats;
+                    _pendingComputedUtc = DateTime.UtcNow;
+                }
 
                 _logger?.LogInformation(
                     $"{UsageStatsManager.LOG_PREFIX}anonymised adoption metrics computed in "
                     + $"{(DateTime.UtcNow - startedUtc).TotalSeconds:N0}s - {stats}");
 
                 return stats;
+            }
+        }
+
+        /// <summary>
+        /// Marks <paramref name="delivered"/> as delivered: stamps the weekly gate with the time it was computed and
+        /// stops re-offering it. A block this collector is not waiting on - a re-sent older one - changes nothing.
+        /// Never throws: telemetry must not be the reason a cycle fails.
+        /// </summary>
+        public async Task AcknowledgeDeliveredAsync(AnonAdoptionStats delivered)
+        {
+            DateTime computedUtc;
+            lock (_pendingGate)
+            {
+                if (delivered == null || !ReferenceEquals(delivered, _pending)) return;
+
+                computedUtc = _pendingComputedUtc;
+                _pending = null;
+            }
+
+            try
+            {
+                await _lastRunStore.SetLastRunUtc(LastRunKey, computedUtc);
+            }
+            catch (Exception ex)
+            {
+                _logger?.LogWarning(
+                    $"{UsageStatsManager.LOG_PREFIX}could not record when the adoption metrics were last delivered ({ex.Message}); "
+                    + "they may be recomputed sooner than weekly.");
+            }
+        }
+
+        /// <summary>
+        /// The undelivered block, unless it has been waiting longer than the cadence - by then a fresh analysis is due
+        /// anyway, and re-sending a figure that old as "this week's" would mislead.
+        /// </summary>
+        private AnonAdoptionStats TakePendingIfCurrent()
+        {
+            lock (_pendingGate)
+            {
+                if (_pending == null) return null;
+                if (DateTime.UtcNow - _pendingComputedUtc < TimeSpan.FromHours(CadenceHours)) return _pending;
+
+                _pending = null;
+                return null;
             }
         }
     }

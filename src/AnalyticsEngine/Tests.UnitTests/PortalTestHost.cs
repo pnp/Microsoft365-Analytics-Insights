@@ -83,6 +83,7 @@ namespace Tests.UnitTests
                         services.AddAuthentication(TestScheme)
                             .AddScheme<AuthenticationSchemeOptions, SuppliedPrincipalHandler>(TestScheme, null);
                         services.AddAuthorization();
+                        services.AddCopilotCostConnection();
                         if (productionExceptionHandler)
                             services.AddExceptionHandler<AnalyticsWebExceptionHandler>();
                     });

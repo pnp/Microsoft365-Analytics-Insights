@@ -93,5 +93,97 @@ namespace Tests.UnitTests
                     "Exactly one new hit row should have been inserted.");
             }
         }
+
+        /// <summary>
+        /// The tracker session id is a browser session cookie, so two people using the same browser profile share
+        /// it. Sessions used to be created only for tracker ids never seen before, while hits and searches resolve
+        /// their session by (tracker id, user) - so once the first person's session existed, everything the second
+        /// person did in that browser session was silently dropped.
+        /// </summary>
+        [TestMethod]
+        public async Task SecondPersonOnAnExistingTrackerSession_KeepsTheirHitsAndSearches()
+        {
+            using (var db = new AnalyticsEntitiesContext())
+            {
+                var token = Guid.NewGuid().ToString("N");
+                var firstPerson = new User { UserPrincipalName = $"first-{token}@contoso.com" };
+                var secondPerson = new User { UserPrincipalName = $"second-{token}@contoso.com" };
+                db.users.Add(firstPerson);
+                db.users.Add(secondPerson);
+                var sharedTrackerSession = Guid.NewGuid().ToString();
+                db.sessions.Add(new UserSession { ai_session_id = sharedTrackerSession, user = firstPerson });
+                await db.SaveChangesAsync();
+
+                var pageRequestId = Guid.NewGuid();
+                var pageViews = new PageViewCollection();
+                pageViews.Rows.Add(new PageViewAppInsightsQueryResult
+                {
+                    Url = "https://contoso.sharepoint.com/sites/example/" + token + "/Καλημέρα.aspx",
+                    CustomProperties = new PageViewCustomProps { PageRequestId = pageRequestId, SessionId = sharedTrackerSession },
+                    AppInsightsTimestamp = DateTime.UtcNow,
+                    Browser = "Edge",
+                    DeviceModel = "PC",
+                    Username = secondPerson.UserPrincipalName,
+                    ClientOS = "Windows"
+                });
+
+                await pageViews.SaveToSQL(db, AnalyticsLogger.ConsoleOnlyTracer());
+
+                var hitOwner = await db.hits.Where(h => h.page_request_id == pageRequestId).Select(h => (int?)h.session.user.ID).SingleOrDefaultAsync();
+                Assert.AreEqual(secondPerson.ID, hitOwner, "The second person's page view must be stored, against their own session.");
+                Assert.AreEqual(2, await db.sessions.CountAsync(s => s.ai_session_id == sharedTrackerSession));
+
+                var searchTerm = "Καλημέρα κόσμε " + token;
+                var search = new SearchEventAppInsightsQueryResult { AppInsightsTimestamp = DateTime.UtcNow, Username = secondPerson.UserPrincipalName };
+                search.CustomProperties.SearchText = searchTerm;
+                search.CustomProperties.SessionId = sharedTrackerSession;
+                var searches = new CustomEventsResultCollection();
+                searches.Rows.Add(search);
+
+                await searches.SaveSearchesToSQL(AnalyticsLogger.ConsoleOnlyTracer(), db);
+
+                var searchOwners = await db.searches.Where(s => s.search_term.search_term == searchTerm).Select(s => s.session.user.ID).ToListAsync();
+                CollectionAssert.AreEqual(new[] { secondPerson.ID }, searchOwners, "The second person's search must be stored, once, against their own session.");
+
+                // Saving the same page view again neither duplicates the session nor the hit.
+                await pageViews.SaveToSQL(db, AnalyticsLogger.ConsoleOnlyTracer());
+                Assert.AreEqual(2, await db.sessions.CountAsync(s => s.ai_session_id == sharedTrackerSession));
+                Assert.AreEqual(1, await db.hits.CountAsync(h => h.page_request_id == pageRequestId));
+            }
+        }
+
+        /// <summary>
+        /// dbo.sessions.ai_session_id is varchar(50). A tracker id longer than that used to reach the merge, where the
+        /// session insert failed on truncation and took every other page view in the batch down with it.
+        /// </summary>
+        [TestMethod]
+        public async Task OverLongTrackerSessionId_IsSkippedWithoutFailingTheRestOfTheBatch()
+        {
+            using (var db = new AnalyticsEntitiesContext())
+            {
+                var token = Guid.NewGuid().ToString("N");
+                var normal = Guid.NewGuid();
+                var overLong = Guid.NewGuid();
+                var pageViews = new PageViewCollection();
+                foreach (var (pageRequestId, sessionId) in new[] { (normal, Guid.NewGuid().ToString()), (overLong, new string('a', 51)) })
+                {
+                    pageViews.Rows.Add(new PageViewAppInsightsQueryResult
+                    {
+                        Url = "https://contoso.sharepoint.com/sites/example/" + token + "/Καλημέρα.aspx",
+                        CustomProperties = new PageViewCustomProps { PageRequestId = pageRequestId, SessionId = sessionId },
+                        AppInsightsTimestamp = DateTime.UtcNow,
+                        Browser = "Edge",
+                        DeviceModel = "PC",
+                        Username = $"person-{token}@contoso.com",
+                        ClientOS = "Windows"
+                    });
+                }
+
+                await pageViews.SaveToSQL(db, AnalyticsLogger.ConsoleOnlyTracer());
+
+                Assert.AreEqual(1, await db.hits.CountAsync(h => h.page_request_id == normal), "The rest of the batch is imported.");
+                Assert.AreEqual(0, await db.hits.CountAsync(h => h.page_request_id == overLong));
+            }
+        }
     }
 }

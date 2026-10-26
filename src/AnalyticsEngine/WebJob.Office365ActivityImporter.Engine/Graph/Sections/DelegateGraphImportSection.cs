@@ -14,13 +14,13 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Sections
     /// cannot accidentally build a gated section with no cadence key (or an ungated one with a key that would
     /// then never be read).
     /// </summary>
-    public sealed class DelegateGraphImportSection : IGraphImportSection
+    public sealed class DelegateGraphImportSection : IGraphImportSection, IFailureBackoffSection
     {
         private readonly Func<ImportTaskSettings, bool> _isEnabled;
         private readonly Func<Task<bool>> _run;
 
         private DelegateGraphImportSection(string name, string disabledMessage, string cadenceKey, int intervalHours,
-            Func<ImportTaskSettings, bool> isEnabled, Func<Task<bool>> run, bool isDeferred = false)
+            Func<ImportTaskSettings, bool> isEnabled, Func<Task<bool>> run, bool isDeferred = false, bool backsOffAfterFailure = false)
         {
             if (string.IsNullOrWhiteSpace(name)) throw new ArgumentException("A section needs a name.", nameof(name));
             if (string.IsNullOrWhiteSpace(disabledMessage)) throw new ArgumentException("A section needs a disabled message.", nameof(disabledMessage));
@@ -30,6 +30,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Sections
             CadenceKey = cadenceKey;
             IntervalHours = intervalHours;
             IsDeferred = isDeferred;
+            BacksOffAfterFailure = backsOffAfterFailure;
             _isEnabled = isEnabled ?? throw new ArgumentNullException(nameof(isEnabled));
             _run = run ?? throw new ArgumentNullException(nameof(run));
         }
@@ -65,7 +66,17 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Sections
         /// </summary>
         public DelegateGraphImportSection Deferred()
         {
-            return new DelegateGraphImportSection(Name, DisabledMessage, CadenceKey, IntervalHours, _isEnabled, _run, isDeferred: true);
+            return new DelegateGraphImportSection(Name, DisabledMessage, CadenceKey, IntervalHours, _isEnabled, _run, isDeferred: true, backsOffAfterFailure: BacksOffAfterFailure);
+        }
+
+        /// <summary>
+        /// This gated section, backing off after a failed attempt (see <see cref="ImportFailureBackoff"/>) instead of being
+        /// retried on every cycle until it works.
+        /// </summary>
+        public DelegateGraphImportSection WithFailureBackoff()
+        {
+            if (CadenceKey == null) throw new InvalidOperationException("Only a cadence-gated section can back off.");
+            return new DelegateGraphImportSection(Name, DisabledMessage, CadenceKey, IntervalHours, _isEnabled, _run, isDeferred: IsDeferred, backsOffAfterFailure: true);
         }
 
         public string Name { get; }
@@ -73,9 +84,19 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Sections
         public string CadenceKey { get; }
         public int IntervalHours { get; }
         public bool IsDeferred { get; }
+        public bool BacksOffAfterFailure { get; }
 
         public bool IsEnabled(ImportTaskSettings settings) => _isEnabled(settings);
 
         public Task<bool> RunAsync() => _run();
+    }
+
+    /// <summary>
+    /// A cadence-gated section that waits longer after each failed attempt, rather than being retried on every cycle. Optional,
+    /// so existing <see cref="IGraphImportSection"/> implementations are unaffected.
+    /// </summary>
+    public interface IFailureBackoffSection
+    {
+        bool BacksOffAfterFailure { get; }
     }
 }

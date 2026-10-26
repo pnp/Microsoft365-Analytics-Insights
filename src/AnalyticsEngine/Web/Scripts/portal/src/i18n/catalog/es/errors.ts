@@ -9,6 +9,7 @@ import type { errors as en } from '../en/errors';
 const errors: Record<keyof typeof en, string> = {
   // Shared API/session errors
   'errors.http.sessionExpired': 'La sesión ha caducado. Vuelva a cargar la página para iniciar sesión de nuevo.',
+  'errors.http.unexpected': 'Se ha producido un error en el servidor. Si el problema continúa, facilite esta referencia de error a su administrador: {errorId}',
   'errors.userLookup.requestFailed': 'La solicitud ha fallado ({status})',
   'errors.userLookup.notFound': "No se encontró ningún usuario con el UPN '{upn}'.",
   'errors.userLookup.missingUpn': "Se requiere el parámetro de consulta 'upn'.",
@@ -97,6 +98,8 @@ const errors: Record<keyof typeof en, string> = {
     'No se ha podido conectar con Azure Table Storage, donde se guarda el punto de control. Compruebe que esta aplicación web puede conectarse a la cuenta de almacenamiento de la solución y que su identidad en tiempo de ejecución puede leer y escribir tablas, y vuelva a intentarlo.',
   'errors.userImportCheckpoint.storageNotConfigured':
     'Azure Storage no está configurado en esta implementación, así que no hay ningún punto de control que borrar.',
+  'errors.userImportCheckpoint.organisationTypesUnavailable':
+    'No se han podido leer de la base de datos los tipos de organización de usuarios, que determinan dónde se guarda el punto de control, así que no se puede mostrar ni borrar. No se ha cambiado nada. Compruebe que la base de datos es accesible y vuelva a intentarlo.',
   'errors.userScope.loadFailed': 'No se ha podido cargar el ámbito de usuarios ({status}).',
   'errors.userScope.refreshFailed':
     'No se ha podido actualizar el ámbito de usuarios desde Microsoft Graph ({status}).',
@@ -119,6 +122,10 @@ const errors: Record<keyof typeof en, string> = {
     'La base de datos de análisis no está disponible. Compruebe la conexión de base de datos y vuelva a intentarlo.',
   'errors.userScope.storageUnavailable':
     'No se ha podido conectar con Azure Table Storage, donde las purgas guardan su progreso. Compruebe que esta aplicación web puede conectarse a la cuenta de almacenamiento de la solución y que su identidad en tiempo de ejecución puede leer y escribir tablas, y vuelva a intentarlo.',
+  'errors.userScope.purgeExceedsConfirmed':
+    'Ahora hay más personas fuera del ámbito que el número que confirmó, por lo que la purga no se ha iniciado y no se ha eliminado nada. Revise el nuevo número y vuelva a marcar la casilla para confirmarlo.',
+  'errors.userScope.filterChanged':
+    'UserGroupsFilter ha cambiado desde que se cargó esta página, por lo que la purga no se ha iniciado y no se ha eliminado nada. Revise el filtro y los nuevos números y vuelva a confirmar.',
   'errors.updateCheck.failed': 'No se han podido buscar actualizaciones ({status}).',
 
   // Licence activity API

@@ -55,11 +55,13 @@
             this.chkCopilotStudioCredits = new System.Windows.Forms.CheckBox();
             this.chkAzureCostManagement = new System.Windows.Forms.CheckBox();
             this.chkAgent365Catalog = new System.Windows.Forms.CheckBox();
+            this.chkCopilotCostManagement = new System.Windows.Forms.CheckBox();
             this.lnkInteractionHistoryHelp = new System.Windows.Forms.LinkLabel();
             this.lnkDlpHelp = new System.Windows.Forms.LinkLabel();
             this.lnkStudioCreditsHelp = new System.Windows.Forms.LinkLabel();
             this.lnkAzureCostsHelp = new System.Windows.Forms.LinkLabel();
             this.lnkAgent365CatalogHelp = new System.Windows.Forms.LinkLabel();
+            this.lnkCopilotCostHelp = new System.Windows.Forms.LinkLabel();
             this.pictureBoxCopilot = new System.Windows.Forms.PictureBox();
             this.lblCopilotHeader = new System.Windows.Forms.Label();
             this.lblCopilotDesc = new System.Windows.Forms.Label();
@@ -93,6 +95,7 @@
             this.grpProductCfgInsights.Controls.Add(this.lnkStudioCreditsHelp);
             this.grpProductCfgInsights.Controls.Add(this.lnkAzureCostsHelp);
             this.grpProductCfgInsights.Controls.Add(this.lnkAgent365CatalogHelp);
+            this.grpProductCfgInsights.Controls.Add(this.lnkCopilotCostHelp);
             this.grpProductCfgInsights.Controls.Add(this.label3);
             this.grpProductCfgInsights.Controls.Add(this.label2);
             this.grpProductCfgInsights.Controls.Add(this.label1);
@@ -106,6 +109,7 @@
             this.grpProductCfgInsights.Controls.Add(this.chkCopilotStudioCredits);
             this.grpProductCfgInsights.Controls.Add(this.chkAzureCostManagement);
             this.grpProductCfgInsights.Controls.Add(this.chkAgent365Catalog);
+            this.grpProductCfgInsights.Controls.Add(this.chkCopilotCostManagement);
             this.grpProductCfgInsights.Controls.Add(this.chkWeb);
             this.grpProductCfgInsights.Controls.Add(this.chkCalls);
             this.grpProductCfgInsights.Controls.Add(this.pictureBox3);
@@ -417,6 +421,22 @@
             this.toolTipTargets.SetToolTip(this.chkAgent365Catalog, "Imports the Agent 365 package catalog and documented usage metrics daily. Requires a Microsoft Agent 365 license and CopilotPackages.Read.All application permission with admin consent.");
             this.chkAgent365Catalog.UseVisualStyleBackColor = true;
             //
+            // chkCopilotCostManagement
+            //
+            this.chkCopilotCostManagement.AutoSize = true;
+            this.chkCopilotCostManagement.Location = new System.Drawing.Point(356, 314);
+            this.chkCopilotCostManagement.Margin = new System.Windows.Forms.Padding(2);
+            this.chkCopilotCostManagement.MaximumSize = new System.Drawing.Size(290, 0);
+            this.chkCopilotCostManagement.Name = "chkCopilotCostManagement";
+            this.chkCopilotCostManagement.Size = new System.Drawing.Size(178, 17);
+            this.chkCopilotCostManagement.TabIndex = 37;
+            this.chkCopilotCostManagement.Text = "Copilot credit history (preview)";
+            this.toolTipTargets.SetToolTip(this.chkCopilotCostManagement, "Collects Copilot credit history using a delegated reader connected from the web app's " +
+                    "Administration page by a user with Portal.Administration. The portal explains the Graph " +
+                    "permissions, admin consent and reader role needed. Uses the solution's Azure Table storage.");
+            this.chkCopilotCostManagement.UseVisualStyleBackColor = true;
+            this.chkCopilotCostManagement.CheckedChanged += new System.EventHandler(this.chkCopilotCostManagement_CheckedChanged);
+            //
             // lnkInteractionHistoryHelp
             // 
             this.lnkInteractionHistoryHelp.AutoSize = true;
@@ -486,6 +506,21 @@
             this.toolTipTargets.SetToolTip(this.lnkAgent365CatalogHelp, "Open Microsoft Learn: Agent 365 Package Management API requirements.");
             this.lnkAgent365CatalogHelp.LinkClicked += new System.Windows.Forms.LinkLabelLinkClickedEventHandler(this.HelpLink_LinkClicked);
             //
+            // lnkCopilotCostHelp
+            //
+            this.lnkCopilotCostHelp.AutoSize = true;
+            this.lnkCopilotCostHelp.Location = new System.Drawing.Point(538, 314);
+            this.lnkCopilotCostHelp.Name = "lnkCopilotCostHelp";
+            this.lnkCopilotCostHelp.Size = new System.Drawing.Size(69, 13);
+            this.lnkCopilotCostHelp.TabIndex = 38;
+            this.lnkCopilotCostHelp.TabStop = true;
+            this.lnkCopilotCostHelp.Tag = "https://github.com/pnp/Microsoft365-Analytics-Insights/wiki/Agent-Costs#copilot-c" +
+                "redit-history-preview";
+            this.lnkCopilotCostHelp.Text = "needs setup";
+            this.toolTipTargets.SetToolTip(this.lnkCopilotCostHelp, "Open the wiki: connecting the delegated reader for the Copilot credit history pre" +
+                    "view.");
+            this.lnkCopilotCostHelp.LinkClicked += new System.Windows.Forms.LinkLabelLinkClickedEventHandler(this.HelpLink_LinkClicked);
+            //
             // lblGUITargetsHeader
             //
             this.lblGUITargetsHeader.AutoSize = true;
@@ -545,7 +580,7 @@
                 lblCopilotHeader, chkCopilot, chkCopilotUsageReports, chkCopilotInteractionHistory,
                 lnkInteractionHistoryHelp, lblCopilotDesc, chkDlp, lnkDlpHelp,
                 chkCopilotStudioCredits, lnkStudioCreditsHelp, chkAzureCostManagement, lnkAzureCostsHelp,
-                chkAgent365Catalog, lnkAgent365CatalogHelp });
+                chkAgent365Catalog, lnkAgent365CatalogHelp, chkCopilotCostManagement, lnkCopilotCostHelp });
             columns.Controls.Add(left, 0, 0);
             columns.Controls.Add(right, 1, 0);
             this.grpProductCfgInsights.ColumnCount = 1;
@@ -641,11 +676,13 @@
         private System.Windows.Forms.CheckBox chkCopilotStudioCredits;
         private System.Windows.Forms.CheckBox chkAzureCostManagement;
         private System.Windows.Forms.CheckBox chkAgent365Catalog;
+        private System.Windows.Forms.CheckBox chkCopilotCostManagement;
         private System.Windows.Forms.ToolTip toolTipTargets;
         private System.Windows.Forms.LinkLabel lnkInteractionHistoryHelp;
         private System.Windows.Forms.LinkLabel lnkDlpHelp;
         private System.Windows.Forms.LinkLabel lnkStudioCreditsHelp;
         private System.Windows.Forms.LinkLabel lnkAzureCostsHelp;
         private System.Windows.Forms.LinkLabel lnkAgent365CatalogHelp;
+        private System.Windows.Forms.LinkLabel lnkCopilotCostHelp;
     }
 }

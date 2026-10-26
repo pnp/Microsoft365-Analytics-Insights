@@ -1,5 +1,6 @@
 ﻿using Common.Entities.Config;
 using System;
+using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -47,9 +48,9 @@ namespace Web.AnalyticsWeb.Controllers
         [HttpGet]
         [Route("")]
         [Route("summary")]
-        public async Task<IActionResult> Summary()
+        public async Task<IActionResult> Summary(CancellationToken cancellationToken)
         {
-            return Ok(await _health.LoadSummaryAsync(new AppConfig()));
+            return Ok(await _health.LoadSummaryAsync(new AppConfig(), cancellationToken));
         }
 
         // GET: api/Health/data
@@ -66,33 +67,33 @@ namespace Web.AnalyticsWeb.Controllers
         // GET: api/Health/liveness
         [HttpGet]
         [Route("liveness")]
-        public async Task<IActionResult> Liveness()
+        public async Task<IActionResult> Liveness(CancellationToken cancellationToken)
         {
-            return Ok(await _health.LoadLivenessAsync(new AppConfig()));
+            return Ok(await _health.LoadLivenessAsync(new AppConfig(), cancellationToken));
         }
 
         // GET: api/Health/exceptions
         [HttpGet]
         [Route("exceptions")]
-        public async Task<IActionResult> Exceptions()
+        public async Task<IActionResult> Exceptions(CancellationToken cancellationToken)
         {
-            return Ok(await _health.LoadExceptionsAsync(new AppConfig()));
+            return Ok(await _health.LoadExceptionsAsync(new AppConfig(), cancellationToken));
         }
 
         // GET: api/Health/components
         [HttpGet]
         [Route("components")]
-        public async Task<IActionResult> Components()
+        public async Task<IActionResult> Components(CancellationToken cancellationToken)
         {
-            return Ok(await _health.LoadComponentsAsync(new AppConfig()));
+            return Ok(await _health.LoadComponentsAsync(new AppConfig(), cancellationToken));
         }
 
         // GET: api/Health/config
         [HttpGet]
         [Route("config")]
-        public async Task<IActionResult> Config()
+        public async Task<IActionResult> Config(CancellationToken cancellationToken)
         {
-            return Ok(await _health.LoadConfigAsync(new AppConfig()));
+            return Ok(await _health.LoadConfigAsync(new AppConfig(), cancellationToken));
         }
     }
 }

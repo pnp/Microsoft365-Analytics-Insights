@@ -474,8 +474,13 @@ namespace Tests.UnitTests
             var source = new StubAnalysisSource();
             var collector = Collector(source, store, settings);
 
-            Assert.IsNotNull(await collector.GetAdoptionStats(null));
+            var stats = await collector.GetAdoptionStats(null);
+            Assert.IsNotNull(stats);
             Assert.AreEqual(1, source.CallCount);
+
+            // The week is used up once the report carrying the block has been delivered (see
+            // Collector_AnUndeliveredBlockIsReofferedNotRecomputed for what happens before that).
+            await collector.AcknowledgeDeliveredAsync(stats);
 
             // Same day: not due.
             Assert.IsNull(await collector.GetAdoptionStats(null));
@@ -485,6 +490,30 @@ namespace Tests.UnitTests
             await store.SetLastRunUtc(AdoptionStatsCollector.LastRunKey, DateTime.UtcNow.AddDays(-8));
             Assert.IsNotNull(await collector.GetAdoptionStats(null));
             Assert.AreEqual(2, source.CallCount);
+        }
+
+        [TestMethod]
+        public async Task Collector_AnUndeliveredBlockIsReofferedNotRecomputed()
+        {
+            var store = new InMemoryImportLastRunStore();
+            var source = new StubAnalysisSource();
+            var collector = Collector(source, store, MeasurableSettings());
+
+            var computed = await collector.GetAdoptionStats(null);
+            Assert.IsNull(await store.GetLastRunUtc(AdoptionStatsCollector.LastRunKey),
+                "Computing a block is not delivering it, so the week must not be used up yet.");
+
+            var reoffered = await collector.GetAdoptionStats(null);
+            Assert.AreSame(computed, reoffered, "Until it is delivered the same block - same GeneratedUtc - is offered again.");
+            Assert.AreEqual(1, source.CallCount, "...without repeating the analysis.");
+
+            await collector.AcknowledgeDeliveredAsync(new AnonAdoptionStats { GeneratedUtc = computed.GeneratedUtc });
+            Assert.IsNull(await store.GetLastRunUtc(AdoptionStatsCollector.LastRunKey),
+                "Delivering some other block (a re-sent older one) does not deliver this one.");
+
+            await collector.AcknowledgeDeliveredAsync(computed);
+            Assert.IsNotNull(await store.GetLastRunUtc(AdoptionStatsCollector.LastRunKey));
+            Assert.IsNull(await collector.GetAdoptionStats(null), "Delivered, so nothing new until the week is up.");
         }
 
         [TestMethod]

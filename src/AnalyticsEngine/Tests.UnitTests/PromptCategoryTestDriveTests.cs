@@ -76,7 +76,7 @@ namespace Tests.UnitTests
             var store = new PromptCategoryConfigurationStore(kv);
             var config = PromptCategoryConfiguration.Defaults();
             config.Categories[4].Name = "Contoso analysis";
-            await store.SaveAsync(config);
+            await store.SaveAsync(config, (await store.GetAsync()).Revision);
             var before = await kv.GetStringAsync("current");
             var backend = new Backend();
             using (var host = Host(store, backend))

@@ -66,6 +66,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             }
 
             handlers.Insert(0, new BoundedGraphRequestHandler(budget, logger));
+            handlers.Insert(1, new GraphTransientErrorHandler());
             if (HttpMessageTracing.Current.IsEnabled)
             {
                 handlers.Insert(1, new MessageTraceHandler("graph"));
@@ -87,13 +88,17 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         }
 
         public static GraphServiceClient CreateWithTimeout(IAuthenticationProvider authProvider, TimeSpan timeout)
+            => CreateWithTimeout(authProvider, timeout, null);
+
+        internal static GraphServiceClient CreateWithTimeout(IAuthenticationProvider authProvider, TimeSpan timeout, HttpMessageHandler finalHandler)
         {
             var handlers = GraphClientFactory.CreateDefaultHandlers(new GraphClientOptions()).ToList();
+            handlers.Insert(0, new GraphTransientErrorHandler());
             if (HttpMessageTracing.Current.IsEnabled)
             {
                 handlers.Insert(0, new MessageTraceHandler("graph"));
             }
-            var httpClient = GraphClientFactory.Create(handlers);
+            var httpClient = GraphClientFactory.Create(handlers, finalHandler: finalHandler);
             httpClient.Timeout = timeout;
             return new GraphServiceClient(httpClient, authProvider);
         }

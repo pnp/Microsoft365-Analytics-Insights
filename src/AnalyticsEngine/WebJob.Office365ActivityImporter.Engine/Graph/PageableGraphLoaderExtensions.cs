@@ -19,6 +19,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         /// request), just before the rows gathered so far are returned. Never called when every page loads, or
         /// when strict paging rethrows instead. It lets a caller keep the lenient partial result and still act on
         /// the failure: the user import uses it to recognise a delta token that Graph has rejected (issue #664).
+        /// A 200 page without a <c>value</c> collection is a failed page too, reported as a
+        /// <see cref="GraphPageWithoutValueException"/>.
         /// </param>
         public static async Task<List<T>> LoadAllPagesPlusDeltaWithThrottleRetries<T>(this ManualGraphCallClient client, string url, ILogger logger, Func<string, Task> deltaTokenFunc, bool throwOnNotFound = false, bool throwOnHttpError = false, Action<System.Net.Http.HttpRequestException, int> onPageFailed = null)
         {
@@ -35,7 +37,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         /// </param>
         /// <param name="throwOnHttpError">
         /// Strict paging. When true, any non-transient HTTP failure (403, 5xx, an exhausted retry budget)
-        /// is rethrown instead of being treated as the end of the result set.
+        /// is rethrown instead of being treated as the end of the result set - and so is a 200 page that came
+        /// back without its <c>value</c> collection, as a <see cref="GraphPageWithoutValueException"/>.
         ///
         /// The default of false truncates: it logs a warning and returns the rows gathered so far, which is
         /// safe only for a caller that treats "fewer rows" as "less data", not as a business outcome. It is
@@ -103,6 +106,27 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                         onPageFailed?.Invoke(ex, pageCount);
                         nextUrl = null;
                     }
+                }
+
+                // A 200 without a value collection is not an empty page: its rows are unknown. Stepping over it to the
+                // next page - and on to the deltaLink - would pass a partial read off as a complete one, so it fails the
+                // page exactly as an HTTP error would: thrown for a strict caller, or the end of a lenient load, which
+                // then never reaches its deltaLink. Graph has answered 200 without 'value' in the field (#392).
+                if (pageSuccess && (queryResult == null || !queryResult.HasValueCollection))
+                {
+                    pageSuccess = false;
+                    var withoutValue = new GraphPageWithoutValueException(pageCount);
+                    if (throwOnHttpError)
+                    {
+                        logger.LogWarning($"Page {pageCount} of {typeof(T).Name} came back without its 'value' collection. " +
+                            "Failing the load rather than returning a partial result.");
+                        throw withoutValue;
+                    }
+
+                    logger.LogWarning($"Page {pageCount} of {typeof(T).Name} came back without its 'value' collection. " +
+                        "Will not retry page & returning results upto the previous page.");
+                    onPageFailed?.Invoke(withoutValue, pageCount);
+                    nextUrl = null;
                 }
 
                 if (pageSuccess)

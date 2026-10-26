@@ -123,6 +123,7 @@ builder.Services.AddAuthentication(options =>
 .AddOpenIdConnect(AgentCostConsent.AuthenticationType, options => AgentCostConsent.ConfigureOptions(options, appConfig));
 
 builder.Services.AddAuthorization();
+builder.Services.AddCopilotCostConnection();
 
 // CORS for the org URLs the tracker is deployed to, replacing AllowCorsForOrgUrlsAttribute.
 builder.Services.AddCors(options =>
@@ -150,6 +151,7 @@ if (!app.Environment.IsDevelopment())
 
 // Static assets from wwwroot - but never index.html itself, which PortalHosting hands on to
 // HomeController so the build label is stamped into it and [Authorize] applies.
+app.UseCopilotCostCallback();
 app.UsePortalStaticFiles();
 app.UseRouting();
 app.UseCors(OrgUrlCorsPolicy.PolicyName);
@@ -173,6 +175,14 @@ app.Lifetime.ApplicationStopping.Register(() =>
     Web.AnalyticsWeb.Models.LicenceActivity.LicenceActivityTelemetry.Shutdown();
     Web.AnalyticsWeb.Models.UserOrgs.UserOrgImportAppInsights.Shutdown();
     Web.AnalyticsWeb.Models.CopilotAdoption.CopilotAdoptionTelemetryHost.Shutdown("ApplicationStopping");
+    try
+    {
+        Task.Run(() => DataUtils.AnalyticsLogger.FlushSharedTelemetry()).Wait(TimeSpan.FromSeconds(2));
+    }
+    catch (Exception)
+    {
+        // Match the stable host: telemetry must never hold shutdown open.
+    }
 });
 
 app.Run();

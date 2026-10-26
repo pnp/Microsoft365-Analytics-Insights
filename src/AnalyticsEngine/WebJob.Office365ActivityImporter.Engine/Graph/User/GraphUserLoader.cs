@@ -7,7 +7,9 @@ using Microsoft.Graph.Models.ODataErrors;
 using Microsoft.Kiota.Abstractions;
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
+using System.Net.Http;
 using System.Threading.Tasks;
 using GraphUserDeltaQuery = Common.Entities.State.GraphUserDeltaQuery;
 
@@ -127,6 +129,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             _hasPendingDeltaToken = false;
             _pendingBaseToken = null;
             LastLoadReachedDeltaLink = false;
+            LastLoadDeactivations = GraphUserDeactivations.None;
 
             var read = await ReadWithTokenRecovery(_orgSelection);
 
@@ -134,8 +137,10 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             // ReadWithTokenRecovery has already ruled that out. Any such failure is worth one attempt without
             // them, because the alternative is that licences, managers and department metadata stop importing
             // too. It also keeps a partial org-carrying read away from the organisation merge, which only ever
-            // sees a complete one.
-            if (read != null && read.Failure != null && !_orgSelection.IsEmpty)
+            // sees a complete one. Except a page that came back without its value collection: that says nothing
+            // about the attributes, so it must not be reported as Graph rejecting them, nor stop their values
+            // being refreshed - the read is simply incomplete, and the next cycle tries again.
+            if (read != null && read.Failure != null && !_orgSelection.IsEmpty && !(read.Failure is GraphPageWithoutValueException))
             {
                 read = await FallBackWithoutOrgAttributes(read.Failure);
             }
@@ -174,26 +179,69 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 _logger.LogInformation($"User import - read {results.Count.ToString("N0")} updated users from Graph API, using last delta.");
             }
 
-            // Graph for some reason gives duplicates; filter that out.
-            // HashSet pre-allocated to results.Count avoids the per-Grouping allocation that
-            // GroupBy + First would do - at 200k users that's ~200k fewer allocations.
-            var seenUpns = new HashSet<string>(results.Count, StringComparer.OrdinalIgnoreCase);
-            var allGraphUsers = new List<GraphUser>(results.Count);
-            foreach (var u in results)
+            // Disabled and deleted accounts are kept aside rather than dropped: the import never inserts them, but it
+            // marks the rows it already has for them disabled. Dropping them here meant leavers stayed enabled for
+            // ever, because the delta token then moved past the only time Graph reports the change. A complete read
+            // from no token is the whole directory (no $filter, members and guests alike), so it also tells the import
+            // which accounts no longer exist: a full read never reports deletions.
+            var completeDirectoryRead = LastLoadReachedDeltaLink && string.IsNullOrEmpty(usersQueryDelta);
+            var classified = UserDeltaReadRules.Classify(results, completeDirectoryRead, initialRound: string.IsNullOrEmpty(usersQueryDelta));
+            LastLoadDeactivations = classified.Deactivations;
+            if (LastLoadDeactivations.DisabledObjectIds.Count > 0 || LastLoadDeactivations.RemovedObjectIds.Count > 0)
             {
-                if (string.IsNullOrEmpty(u.UserPrincipalName))
-                {
-                    continue;
-                }
-                if (seenUpns.Add(u.UserPrincipalName))
-                {
-                    allGraphUsers.Add(u);
-                }
+                _logger.LogInformation($"User import - the read also reported {LastLoadDeactivations.DisabledObjectIds.Count:N0} disabled and " +
+                    $"{LastLoadDeactivations.RemovedObjectIds.Count:N0} deleted account(s). They are not added to the users table; " +
+                    "any row it already has for them is marked disabled.");
             }
 
-            var allActiveGraphUsers = allGraphUsers.Where(u => u.AccountEnabled.HasValue && u.AccountEnabled.Value).ToList();
+            return classified.ActiveUsers;
+        }
 
-            return allActiveGraphUsers;
+        /// <inheritdoc />
+        public GraphUserDeactivations LastLoadDeactivations { get; private set; } = GraphUserDeactivations.None;
+
+        /// <summary>The same endpoint and API version as the <c>/users/delta</c> read it is compared with.</summary>
+        internal const string DirectoryUserCountUrl = "https://graph.microsoft.com:443/v1.0/users/$count";
+
+        /// <inheritdoc />
+        /// <remarks>
+        /// <c>$count</c> on a directory collection is an advanced query: Graph answers it only with
+        /// <c>ConsistencyLevel: eventual</c>, as plain text, and with the same <c>User.Read.All</c> permission the delta
+        /// read uses. Any failure is logged and reported as null - the import then falls back to a safer check rather
+        /// than failing the cycle over a sanity check.
+        /// </remarks>
+        public async Task<int?> CountDirectoryUsersAsync()
+        {
+            try
+            {
+                using (var response = await _httpClient.ExecuteHttpCallWithThrottleRetries(ct =>
+                    {
+                        var request = new HttpRequestMessage(HttpMethod.Get, DirectoryUserCountUrl);
+                        request.Headers.TryAddWithoutValidation("ConsistencyLevel", "eventual");
+                        return _httpClient.SendAsync(request, ct);
+                    }, DirectoryUserCountUrl, isReplayableIdempotentGet: true))
+                {
+                    var body = await response.Content.ReadAsStringAsync();
+                    if (!response.IsSuccessStatusCode)
+                    {
+                        _logger.LogWarning($"User import - couldn't read Graph's count of the directory's users: HTTP {(int)response.StatusCode} ({response.StatusCode}).");
+                        return null;
+                    }
+
+                    if (int.TryParse(body?.Trim().TrimStart('\uFEFF'), NumberStyles.None, CultureInfo.InvariantCulture, out var count))
+                    {
+                        return count;
+                    }
+
+                    _logger.LogWarning("User import - Graph's count of the directory's users was not a number.");
+                    return null;
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning($"User import - couldn't read Graph's count of the directory's users: {ex.Message}");
+                return null;
+            }
         }
 
         /// <summary>

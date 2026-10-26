@@ -18,11 +18,12 @@ namespace DataUtils
         {
             var minutes = waitMinutes < 1 ? 1 : waitMinutes;
             logger.LogInformation($"Waiting {minutes} min(s)...");
-            System.Threading.Thread.Sleep(minutes * 60 * 1000);
+            // Wakes at once when Kudu asks the WebJob to stop, instead of sleeping through the stop wait.
+            HostRuntime.Wait(TimeSpan.FromMinutes(minutes));
         }
 
         /// <summary>
-        /// Exit app. 
+        /// Exit app, after a bounded flush of buffered telemetry.
         /// </summary>
         public static void BombOut(bool error)
         {
@@ -30,14 +31,7 @@ namespace DataUtils
             Console.WriteLine("\nDEBUG MODE: All done. Press any key to continue.");
             Console.ReadKey();
 #endif
-            if (error)
-            {
-                Environment.Exit(-1);
-            }
-            else
-            {
-                Environment.Exit(0);
-            }
+            HostRuntime.Exit(error ? -1 : 0);
         }
 
         public static void PrintStartupAndLoggingConfig(string efConnectionString, string buildLabel, string userGroupsFilterString, ILogger logger)

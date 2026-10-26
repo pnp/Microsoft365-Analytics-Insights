@@ -296,6 +296,23 @@ jobs:
             -c Release --nologo
           exit $LASTEXITCODE
 
+      - name: Check current stable Core callback, error and configuration ports
+        shell: pwsh
+        run: |
+          dotnet test src\AnalyticsEngine\Tests.UnitTests\Tests.UnitTests.csproj `
+            -c Release --no-build --nologo `
+            --filter "FullyQualifiedName~StableReleaseCorePortTests|FullyQualifiedName~SiteTokenRefreshCoreTests|FullyQualifiedName~CopilotCostConnectionTests|FullyQualifiedName~CopilotCostInstallerConfigTests|FullyQualifiedName~WebErrorDetailTests|FullyQualifiedName~AnalyticsLoggerSharedTelemetryTests|FullyQualifiedName~UserImportCheckpointApiTests|FullyQualifiedName~GraphPagingFailureTests|FullyQualifiedName~AppConfigDefaultsTests"
+          exit $LASTEXITCODE
+
+      - name: Check portal translation invariants
+        shell: pwsh
+        working-directory: src/AnalyticsEngine/Web/Scripts/portal
+        run: |
+          npm run lint
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npx vitest run src/i18n
+          exit $LASTEXITCODE
+
       # Guards the demo generator's entry point. Building it proves nothing about whether it RUNS:
       # the project's move to an SDK-style csproj added a target-framework folder to the output path
       # and silently invalidated the literal path Verify-DemoCommand.ps1 used to locate the exe.

@@ -186,5 +186,85 @@ namespace Tests.UnitTests
                 days.ToArray(),
                 "Documents the descending enumeration; it is not an endorsement of it.");
         }
+
+        #region Window planner and ingestion cursor
+
+        private static readonly DateTime PlanDay = new DateTime(2026, 5, 20, 0, 0, 0, DateTimeKind.Utc);
+
+        private static AppInsightsHourlyRowCount Hour(int hour, long count) =>
+            new AppInsightsHourlyRowCount(AppInsightsTelemetryKind.PageViews, PlanDay.AddHours(hour), count);
+
+        [TestMethod]
+        public void WindowPlanner_MergesHoursUpToTheLimit_AndKeepsTheWindowsContiguous()
+        {
+            var windows = AppInsightsWindowPlanner.PlanDay(PlanDay, new[] { Hour(1, 600), Hour(2, 300), Hour(5, 200), Hour(9, 900) }, maxRowsPerWindow: 1000);
+
+            // 600 + 300 fit; adding 200 would not, so the next window starts where that one ended - no gap, so a row that
+            // arrived in an hour the counts saw as empty is still read.
+            CollectionAssert.AreEqual(new[]
+            {
+                (PlanDay.AddHours(1), PlanDay.AddHours(3)),
+                (PlanDay.AddHours(3), PlanDay.AddHours(6)),
+                (PlanDay.AddHours(6), PlanDay.AddHours(10)),
+            }, windows.ToArray());
+        }
+
+        [TestMethod]
+        public void WindowPlanner_SlicesAnHourOverTheLimit_AndIgnoresOtherDays()
+        {
+            var windows = AppInsightsWindowPlanner.PlanDay(PlanDay,
+                new[] { Hour(3, 2500), new AppInsightsHourlyRowCount(AppInsightsTelemetryKind.PageViews, PlanDay.AddDays(1), 5) }, maxRowsPerWindow: 1000);
+
+            CollectionAssert.AreEqual(new[]
+            {
+                (PlanDay.AddHours(3), PlanDay.AddHours(3).AddMinutes(20)),
+                (PlanDay.AddHours(3).AddMinutes(20), PlanDay.AddHours(3).AddMinutes(40)),
+                (PlanDay.AddHours(3).AddMinutes(40), PlanDay.AddHours(4)),
+            }, windows.ToArray());
+            Assert.AreEqual(0, AppInsightsWindowPlanner.PlanDay(PlanDay, new AppInsightsHourlyRowCount[0]).Count);
+        }
+
+        [TestMethod]
+        public void IngestionCursor_IncrementalRange_ReadsTheOverlapBeforeTheCursor_WithWideTimestampBounds()
+        {
+            var cursor = Now.AddMinutes(-10);
+            var range = AppInsightsIngestionCursorPolicy.IncrementalRange(cursor, Now);
+
+            Assert.AreEqual(cursor - AppInsightsIngestionCursorPolicy.Overlap, range.IngestedFromUtc);
+            Assert.AreEqual(Now, range.IngestedBeforeUtc);
+            // Azure Monitor: a timestamp can't be more than two days before receipt or a day in the future.
+            Assert.IsTrue(range.IngestedFromUtc.Value - range.FromUtc >= TimeSpan.FromDays(2));
+            Assert.IsTrue(range.ToUtc - Now >= TimeSpan.FromDays(1));
+        }
+
+        [TestMethod]
+        public void IngestionCursor_IncrementalRange_IsBoundedByRetention_AndByTheClock()
+        {
+            var ancient = AppInsightsIngestionCursorPolicy.IncrementalRange(Now.AddYears(-1), Now);
+            Assert.AreEqual(Now - AppInsightsIngestionCursorPolicy.MaxLookback, ancient.IngestedFromUtc);
+
+            var future = AppInsightsIngestionCursorPolicy.IncrementalRange(Now.AddHours(2), Now);
+            Assert.AreEqual(Now - AppInsightsIngestionCursorPolicy.Overlap, future.IngestedFromUtc, "A cursor ahead of the clock still reads the overlap.");
+            Assert.AreEqual(Now, future.IngestedBeforeUtc);
+        }
+
+        [TestMethod]
+        public async System.Threading.Tasks.Task IngestionCursor_KeyValueStore_RoundTripsInUtc_PerApplicationId()
+        {
+            var state = new Common.Entities.State.InMemoryKeyValueStore();
+            var store = new KeyValueIngestionCursorStore(state, "00000000-0000-0000-0000-000000000001");
+            var other = new KeyValueIngestionCursorStore(state, "00000000-0000-0000-0000-000000000002");
+
+            Assert.IsNull(await store.ReadAsync());
+            await store.WriteAsync(Now);
+
+            var read = await store.ReadAsync();
+            Assert.AreEqual(Now, read);
+            Assert.AreEqual(DateTimeKind.Utc, read.Value.Kind);
+            Assert.IsNull(await other.ReadAsync(), "Another Application Insights resource has its own cursor.");
+            Assert.AreEqual(Now.ToString("o"), await state.GetStringAsync("IngestionCursor:00000000-0000-0000-0000-000000000001"));
+        }
+
+        #endregion
     }
 }

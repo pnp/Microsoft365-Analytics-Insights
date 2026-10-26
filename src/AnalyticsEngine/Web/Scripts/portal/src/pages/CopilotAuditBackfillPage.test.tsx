@@ -106,7 +106,7 @@ describe('CopilotAuditBackfillPage', () => {
     renderWithProvider(<CopilotAuditBackfillPage />);
 
     expect(await screen.findByText('Completed with gaps')).toBeVisible();
-    expect(screen.getByText('A Microsoft Graph Audit Search slice was still truncated after splitting to hours.')).toBeVisible();
+    expect(screen.getByText('A Microsoft Graph Audit Search slice was still truncated after splitting to quarter-hours. The records it returned were imported; the rest of that window is missing.')).toBeVisible();
     expect(screen.getByText('2026-09-30')).toBeVisible();
     expect(screen.getByText('2026-09-29')).toBeVisible();
   });

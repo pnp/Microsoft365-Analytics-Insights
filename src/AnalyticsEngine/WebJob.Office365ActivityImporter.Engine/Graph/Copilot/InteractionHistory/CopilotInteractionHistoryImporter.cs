@@ -621,6 +621,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.InteractionHisto
             // with this method. Everything after this point is counts.
             result.Stats = InteractionStatsExtractor.Extract(loadResult.Interactions);
             result.PromptBodies = BuildPromptBodyLookup(loadResult.Interactions, result.Stats);
+            result.NewestReadUtc = InteractionStatsExtractor.GetNewestReadUtc(loadResult.Interactions);
 
             return result;
         }
@@ -1082,9 +1083,32 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.InteractionHisto
                         // We stopped at the page cap, so the window was only partly read. Advance only as far
                         // as the newest interaction actually received; the rest resumes next cycle. Not
                         // counted as empty - this user is clearly active.
-                        var newestRead = InteractionStatsExtractor.GetNewestCreatedUtc(result.Stats);
+                        //
+                        // Taken from what Graph returned, never from Stats: by now Stats holds only rows not
+                        // yet stored, and a capped read whose rows committed but whose watermark update then
+                        // failed holds none at all when it is re-read - which used to leave the watermark
+                        // nowhere to go, re-reading the same capped pages every cycle, for ever.
+                        var newestRead = result.NewestReadUtc;
                         if (newestRead != null)
-                            AdvanceWatermark(watermark, newestRead.Value);
+                        {
+                            if (watermark.LastInteractionUtc != null && newestRead.Value <= watermark.LastInteractionUtc.Value)
+                            {
+                                // Every row the cap allowed sat inside the overlap behind the watermark, so the
+                                // usual overlap would ask for the very same capped rows next cycle, and every
+                                // cycle after. Pages arrive oldest first, so everything before the newest row
+                                // read has been seen: resume from there instead.
+                                _logger.LogWarning(
+                                    "Copilot interaction history: a user's page-capped read did not get past their " +
+                                    $"watermark - more interactions sit inside the {WatermarkOverlapSeconds}-second " +
+                                    "overlap than one cycle can read. Resuming from the newest interaction read " +
+                                    "(no earlier than the read time less the overlap), so the next cycle moves on.");
+                                AdvanceWatermark(watermark, ResumeAfterOverlapFilledTheCap(newestRead.Value, result.WindowEndUtc));
+                            }
+                            else
+                            {
+                                AdvanceWatermark(watermark, newestRead.Value);
+                            }
+                        }
 
                         watermark.ConsecutiveEmptyOrFailed = 0;
                         watermark.SkipUntilUtc = null;
@@ -1122,6 +1146,31 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.InteractionHisto
         {
             if (watermark.LastInteractionUtc == null || toUtc > watermark.LastInteractionUtc.Value)
                 watermark.LastInteractionUtc = toUtc;
+        }
+
+        /// <summary>
+        /// The watermark whose next window starts one second before <paramref name="newestReadUtc"/> - that is,
+        /// without the usual overlap behind rows already read - but never later than <paramref name="readUtc"/>, so the
+        /// next window never starts after <c>readUtc - </c><see cref="WatermarkOverlapSeconds"/>. Only for a page-capped
+        /// read that never got past the existing watermark.
+        /// </summary>
+        /// <remarks>
+        /// One second rather than none because Graph's filter is a strict <c>gt</c> at whole-second precision:
+        /// starting exactly on the newest row could skip rows sharing its timestamp that fell beyond the cap.
+        /// More than a page cap's worth of interactions inside that one second would still repeat; only a
+        /// stored Graph continuation link could get past that.
+        ///
+        /// The overlap is also the late-arrival allowance: an interaction created up to that long before a read may not
+        /// be visible to it yet. Rows older than <paramref name="newestReadUtc"/> were read, but only those created at
+        /// least the overlap before <paramref name="readUtc"/> were certainly visible, so a resume that ran past
+        /// <c>readUtc - overlap</c> (a capped read soon after the previous cycle) would skip late arrivals for good. The
+        /// clamp keeps progress: the next window still starts later than this one, because <paramref name="readUtc"/> is
+        /// after the previous cycle's read, which set the watermark.
+        /// </remarks>
+        private static DateTime ResumeAfterOverlapFilledTheCap(DateTime newestReadUtc, DateTime readUtc)
+        {
+            var resume = newestReadUtc.AddSeconds(WatermarkOverlapSeconds - 1);
+            return resume < readUtc ? resume : readUtc;
         }
 
         /// <summary>
@@ -1217,6 +1266,13 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.InteractionHisto
             public UserImportState State { get; set; }
             public DateTime WindowEndUtc { get; set; }
             public List<InteractionStats> Stats { get; set; } = new List<InteractionStats>();
+
+            /// <summary>
+            /// Newest <c>createdDateTime</c> Graph returned, captured before anything is filtered out. A truncated
+            /// read's progress comes from this, not from <see cref="Stats"/>, which de-duplication cuts down to the
+            /// rows not yet stored.
+            /// </summary>
+            public DateTime? NewestReadUtc { get; set; }
 
             /// <summary>Plain-text prompt bodies aligned with <see cref="Stats"/>; discarded after enrichment.</summary>
             public List<string> PromptBodies { get; set; }

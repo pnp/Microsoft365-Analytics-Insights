@@ -15,8 +15,10 @@ namespace Common.Entities.UserDiagnostics
     /// <para>
     /// Why a database lock and not the queue's lease: the scheduled import reads every licence holder from Graph, then
     /// writes the difference minutes later. A targeted refresh that commits in between would be overwritten by that
-    /// older reading. Holding this lock from the reading to the writing makes the two take turns, on any number of
-    /// importer instances - the web job is not a singleton.
+    /// older reading. Holding this lock from the reading to the writing makes the two take turns, however many importer
+    /// processes are running. The web job is deployed as a singleton (settings.job), but that is Kudu's lock on one
+    /// site's file system: a deployment slot or another App Service using the same database runs its own importer, and
+    /// when Kudu stops a run it releases the singleton before the old process has exited - so two can still overlap.
     /// </para>
     /// <para>
     /// A writer checks <see cref="IsStillHeldAsync"/> immediately before each write batch. If the connection dropped,

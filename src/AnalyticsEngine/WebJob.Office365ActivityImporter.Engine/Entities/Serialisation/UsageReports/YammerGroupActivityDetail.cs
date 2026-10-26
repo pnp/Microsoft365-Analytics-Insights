@@ -2,6 +2,7 @@
 using Common.Entities.Entities;
 using Newtonsoft.Json;
 using System.Threading.Tasks;
+using WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Rules;
 
 namespace WebJob.Office365ActivityImporter.Engine.Entities.Serialisation.UsageReports
 {
@@ -27,6 +28,9 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities.Serialisation.UsageRe
         public string GroupName { get; set; }
 
         public override string LookupFieldValue => GroupName;
+
+        // Group names are free text, so only the hash shape Graph substitutes for a concealed name is rejected.
+        public override bool IsLookupIdentityConcealed => UsageReportIdentityPolicy.IsConcealedGroupName(GroupName);
 
         // This is the only activity report that doesn't correspond to a user, but instead a yammer group
         public override async Task<AbstractEFEntity> GetOrCreateLookup(DBLookupCache<YammerGroup> lookupCache)

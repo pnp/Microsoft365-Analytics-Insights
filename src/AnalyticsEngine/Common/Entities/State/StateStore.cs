@@ -51,11 +51,15 @@ namespace Common.Entities.State
             if (string.IsNullOrEmpty(partition)) throw new ArgumentException("A partition is required.", nameof(partition));
             if (!IsConfigured(config)) return null;
 
-            var connectionString = config.ConnectionStrings.StorageConnectionString;
-            var table = Tables.GetOrAdd(TableCacheKey(connectionString, config), _ => new LazyTableClient(ct =>
-                StorageTableClientFactory.CreateAndEnsureTableAsync(connectionString, TableName, config, logger, Purpose, ct)));
+            return Open(GetTable(config, logger), partition);
+        }
 
-            return Open(table, partition);
+        internal static LazyTableClient GetTable(AppConfig config, ILogger logger)
+        {
+            if (!IsConfigured(config)) throw new InvalidOperationException("A Storage connection string is required for durable runtime state.");
+            var connectionString = config.ConnectionStrings.StorageConnectionString;
+            return Tables.GetOrAdd(TableCacheKey(connectionString, config), _ => new LazyTableClient(ct =>
+                StorageTableClientFactory.CreateAndEnsureTableAsync(connectionString, TableName, config, logger, Purpose, ct)));
         }
 
         /// <summary>
@@ -137,6 +141,12 @@ namespace Common.Entities.State
     /// </summary>
     public static class StatePartitions
     {
+        /// <summary>Event ids awaiting optional Copilot file/meeting enrichment; due index and ETag-protected leases.</summary>
+        public const string CopilotEnrichment = "CopilotEnrichment";
+
+        /// <summary>Immutable content-addressed copies of historical DLP workload metadata, archived before correction. No automatic expiry.</summary>
+        public const string DlpHistoricalArchive = "DlpHistoricalArchive";
+
         public const string PromptCategories = "PromptCategories";
 
         /// <summary>When each interval-gated import last ran (and when a failing usage report may next retry). Round-trip ("o") timestamps.</summary>
@@ -150,6 +160,13 @@ namespace Common.Entities.State
 
         /// <summary>Per-channel delta tokens that make Teams channel-message reads incremental.</summary>
         public const string TeamsChannels = "TeamsChannels";
+
+        /// <summary>
+        /// Which Teams calls webhook subscription the importer created, keyed by notification URL: its id, the fingerprint
+        /// of its clientState, its last known expiry, and when a client-secret rotation superseded it. Written by the
+        /// importer, read by the web app. Never the clientState itself. See <c>Common.Entities.Calls.CallSubscriptionRecord</c>.
+        /// </summary>
+        public const string CallsWebhook = "CallsWebhook";
 
         /// <summary>
         /// The delegated refresh token authorised for each Team in the portal (Teams deep analytics). Secrets: protected
@@ -198,5 +215,20 @@ namespace Common.Entities.State
         /// expire after 30 days. Holds UPNs and who asked, so it is protected like every other runtime state partition.
         /// </summary>
         public const string UserRefresh = "UserRefresh";
+
+        /// <summary>
+        /// Users the Graph user import could not safely match to a users row - their new sign-in name is held by another
+        /// person's row, Graph listed two names for them, and so on - with the latest Graph profile of each, so they are
+        /// re-checked every cycle while the <c>/users/delta</c> checkpoint moves on. A header row plus pages, rewritten only
+        /// when the set changes. Holds UPNs, so it is protected like every other runtime state partition.
+        /// </summary>
+        public const string UserIdentityQuarantine = "UserIdentityQuarantine";
+
+        /// <summary>
+        /// The web-traffic (Application Insights) import's <c>ingestion_time()</c> cursor: everything App Insights ingested
+        /// before it has been saved. One row per Application Insights application id. Deleting it makes the next cycle
+        /// start again from the newest stored hit. See <c>WebJob.AppInsightsImporter.Engine.KeyValueIngestionCursorStore</c>.
+        /// </summary>
+        public const string AppInsightsImport = "AppInsightsImport";
     }
 }

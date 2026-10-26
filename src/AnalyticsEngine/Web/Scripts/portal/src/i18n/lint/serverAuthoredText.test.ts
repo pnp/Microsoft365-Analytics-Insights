@@ -23,6 +23,8 @@ import {
   TEAMS_CONNECT_OUTCOME_PARAM,
   TEAMS_CONNECT_URL,
 } from '../../auth/teamsConnect';
+import { SITE_TOKEN_ERROR_KEYS } from '../../auth/siteToken';
+import { ERROR_CODE_KEYS as USER_IMPORT_CHECKPOINT_ERROR_KEYS } from '../../api/userImportCheckpointApi';
 import { routesForArea } from '../../navigation';
 import { TEAMS_MEETING_BUCKET_LABEL_KEYS, TEAMS_SEGMENT_TEXT_KEYS } from '../../components/teamsExplorer/teamsShared';
 import { WEB_ACTIVITY_AVAILABILITY_REASON_KEYS } from '../../components/webActivity/AvailabilityBar';
@@ -2771,6 +2773,37 @@ describe('Teams connection outcomes', () => {
     // Challenge(...) as an IActionResult, where MVC 5 issued it from a void action.
     expect(TEAMS_CONNECT_URL).toBe('/Account/ConnectTeams');
     expect(readFileSync(ACCOUNT_CONTROLLER, 'utf8')).toMatch(/public\s+(?:void|IActionResult)\s+ConnectTeams\s*\(\s*\)/);
+  });
+});
+
+/**
+ * `POST api/SiteTokenAPI` answers 503 with a code - never text - when Microsoft Entra ID couldn't be reached to refresh
+ * the admin's Teams connection. A code the page didn't word would leave it offering "Connect to Microsoft Teams",
+ * which can't help: the connection's sign-in ends at the same token endpoint, from the same server.
+ */
+const SITE_TOKEN_CONTROLLER = join(process.cwd(), '..', '..', 'Controllers', 'SiteTokenAPIController.cs');
+
+describe('Teams permissions page: site-token error codes', () => {
+  it('words every code the site-token API can send, and nothing it cannot', () => {
+    const source = readFileSync(SITE_TOKEN_CONTROLLER, 'utf8');
+    const server = sortedUnique([...source.matchAll(/internal\s+const\s+string\s+\w+Code\s*=\s*"([^"]+)"/g)].map((m) => m[1]));
+
+    expect(server).toEqual(['entraUnavailable']);
+    expect(sortedUnique(Object.keys(SITE_TOKEN_ERROR_KEYS))).toEqual(server);
+    expect(Object.values(SITE_TOKEN_ERROR_KEYS).filter((key) => !(key in EN_CATALOG))).toEqual([]);
+  });
+});
+
+const USER_IMPORT_CHECKPOINT_CONTROLLER = join(process.cwd(), '..', '..', 'Controllers', 'UserImportCheckpointAPIController.cs');
+
+describe('User import checkpoint page: error codes', () => {
+  it('words every code the checkpoint API can send, and nothing it cannot', () => {
+    const source = readFileSync(USER_IMPORT_CHECKPOINT_CONTROLLER, 'utf8');
+    const server = sortedUnique([...source.matchAll(/internal\s+const\s+string\s+\w+Code\s*=\s*"([^"]+)"/g)].map((m) => m[1]));
+
+    expect(server).toContain('organisationTypesUnavailable');
+    expect(sortedUnique([...USER_IMPORT_CHECKPOINT_ERROR_KEYS.keys()])).toEqual(server);
+    expect([...USER_IMPORT_CHECKPOINT_ERROR_KEYS.values()].filter((key) => !(key in EN_CATALOG))).toEqual([]);
   });
 });
 

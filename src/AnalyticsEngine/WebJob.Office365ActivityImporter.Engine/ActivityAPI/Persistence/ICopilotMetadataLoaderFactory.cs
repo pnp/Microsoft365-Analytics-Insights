@@ -151,6 +151,10 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Persistence
             var fileContexts = CopilotPrewarmPolicy.ExtractFileContexts(activities);
             if (fileContexts.Count == 0) return;
 
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            var graphLoader = loader as GraphFileMetadataLoader;
+            var retriesBefore = graphLoader?.TransientRetriesSpent ?? 0;
+            int resolved = 0, unresolved = 0, transient = 0, failed = 0;
             using (var throttle = new SemaphoreSlim(PrewarmConcurrency))
             {
                 var tasks = fileContexts.Select(async kvp =>
@@ -158,10 +162,17 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Persistence
                     await throttle.WaitAsync();
                     try
                     {
-                        await loader.GetSpoFileInfo(kvp.Key, kvp.Value);
+                        if (await loader.GetSpoFileInfo(kvp.Key, kvp.Value) != null)
+                            Interlocked.Increment(ref resolved);
+                        else
+                            Interlocked.Increment(ref unresolved);
                     }
                     catch (Exception ex)
                     {
+                        if (CopilotAuditEventManager.IsTransientEnrichmentFailure(ex))
+                            Interlocked.Increment(ref transient);
+                        else
+                            Interlocked.Increment(ref failed);
                         _logger.LogDebug(ex, "Copilot metadata prewarm failed for context {ctx} (will retry in the serial pass)", kvp.Key);
                     }
                     finally
@@ -171,6 +182,18 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Persistence
                 });
                 await Task.WhenAll(tasks);
             }
+
+            // One line per batch. A context that failed transiently here is remembered by the loader, so the save's in-lock
+            // pass enqueues its events without calling Graph again. Not a Warning: the prewarm is an optimisation, and the
+            // batch's outcome (including any interaction saved without its file) is reported by the save.
+            var retries = (graphLoader?.TransientRetriesSpent ?? 0) - retriesBefore;
+            var message = $"Copilot enrichment prewarm: {fileContexts.Count:n0} file context(s), {resolved:n0} resolved, " +
+                $"{unresolved:n0} unresolvable, {transient:n0} transient, {failed:n0} failed otherwise; {retries:n0} retry(ies) spent; " +
+                $"elapsed {sw.ElapsedMilliseconds:n0} ms.";
+            if (transient > 0 || failed > 0 || sw.ElapsedMilliseconds >= 5000)
+                _logger.LogInformation(message);
+            else
+                _logger.LogDebug(message);
         }
     }
 }

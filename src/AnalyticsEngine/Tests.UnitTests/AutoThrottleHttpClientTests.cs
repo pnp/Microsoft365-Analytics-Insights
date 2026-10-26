@@ -374,6 +374,39 @@ namespace Tests.UnitTests
             AssertAttemptOffsets(clock, handler, 0, 2);
         }
 
+        [TestMethod]
+        public async Task RetryLogging_NamesTheEndpointShapeNeverTheUrl()
+        {
+            // The URL of a Graph call carries the mailbox's UPN and the sync token; the retry lines are logged at every attempt.
+            const string url = "https://graph.microsoft.com/v1.0/users/alex.contoso@contoso.com/mailFolders/sentitems/messages/delta?$deltatoken=SYNTHETIC-DELTA-TOKEN";
+            var clock = new FakeRetryClock(new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero));
+            var handler = SequencedHandler.FromStatuses(clock, Status((HttpStatusCode)429), Status((HttpStatusCode)429), Status((HttpStatusCode)429));
+            var log = new LoggedLines();
+
+            using (var client = new AutoThrottleHttpClient(handler, log, clock) { MaxTotalRetryBudgetSeconds = 60, MaxRetries = 2 })
+            {
+                await AssertThrowsAsync<HttpRequestException>(() => client.GetAsyncWithThrottleRetries(url, log));
+            }
+
+            Assert.IsTrue(log.Messages.Count >= 2, "A retry and the give-up are logged.");
+            foreach (var message in log.Messages)
+            {
+                Assert.IsFalse(message.Contains("alex.contoso@contoso.com") || message.Contains("SYNTHETIC-DELTA-TOKEN") || message.Contains("$deltatoken"), message);
+            }
+            Assert.IsTrue(log.Messages.Any(m => m.Contains("graph.microsoft.com/v1.0/users/{id}/mailFolders/sentitems/messages/delta")),
+                "The endpoint shape is still logged, so a retry is attributable.");
+        }
+
+        private sealed class LoggedLines : Microsoft.Extensions.Logging.ILogger
+        {
+            public List<string> Messages { get; } = new List<string>();
+            public IDisposable BeginScope<TState>(TState state) => null;
+            public bool IsEnabled(Microsoft.Extensions.Logging.LogLevel logLevel) => true;
+
+            public void Log<TState>(Microsoft.Extensions.Logging.LogLevel logLevel, Microsoft.Extensions.Logging.EventId eventId, TState state,
+                Exception exception, Func<TState, Exception, string> formatter) => Messages.Add(formatter(state, exception));
+        }
+
         private static AutoThrottleHttpClient NewClient(HttpMessageHandler handler, FakeRetryClock clock, int retryBudgetSeconds, int maxRetries = 10)
         {
             return new AutoThrottleHttpClient(handler, AnalyticsLogger.ConsoleOnlyTracer(), clock)

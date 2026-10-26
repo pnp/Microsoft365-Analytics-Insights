@@ -4,6 +4,7 @@ using Newtonsoft.Json;
 using System.Collections.Generic;
 using System.Threading.Tasks;
 using WebJob.Office365ActivityImporter.Engine.ActivityAPI;
+using WebJob.Office365ActivityImporter.Engine.ActivityAPI.Dlp;
 
 namespace WebJob.Office365ActivityImporter.Engine.Entities.Serialisation
 {
@@ -30,6 +31,9 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities.Serialisation
     /// </remarks>
     public class DlpAuditLogContent : AbstractAuditLogContent
     {
+        /// <summary>The site collection used to enforce the SharePoint/OneDrive organisation-URL filter.</summary>
+        public DlpSharePointMetadata SharePointMetaData { get; set; }
+
         /// <summary>
         /// The policies that matched, each with the rules that fired. Mandatory in the published schema,
         /// but treated as optional here so a record with an unexpected shape degrades to "no policy

@@ -1,6 +1,10 @@
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
+using Newtonsoft.Json;
 using System;
+using System.Collections.Generic;
 using System.Linq;
+using WebJob.AppInsightsImporter.Engine.ApiImporter;
 using WebJob.AppInsightsImporter.Engine.APIResponseParsers.CustomEvents;
 using WebJob.AppInsightsImporter.Engine.Sql.Rules;
 
@@ -116,6 +120,39 @@ namespace Tests.UnitTests
             Assert.AreEqual(1, plan.RowsToStage.Count);
             StringAssert.Contains(plan.RowsToStage[0].Url, "καλημέρα", "A Greek URL must not be mangled on the way to staging.");
             Assert.AreEqual("Καλημέρα", plan.RowsToStage[0].LinkText);
+        }
+
+        /// <summary>
+        /// The tracker holds clicks made before its first page view and sends them later with the time they were
+        /// made, so a click can be filed by App Insights just after midnight while its own time is just before it.
+        /// The query already selected it by App Insights' time; it used to be dropped again by its own time, and
+        /// the previous day's query had not seen it either.
+        /// </summary>
+        [TestMethod]
+        public void Clicks_HeldOverMidnight_AreKeptByTheDayAppInsightsFiledThemUnder()
+        {
+            var day = new DateTime(2026, 5, 30, 0, 0, 0, DateTimeKind.Utc);
+            var clickedAt = day.AddSeconds(-30);
+            var table = new AppInsightsTable
+            {
+                Columns = new[] { "timestamp", "customDimensions", "user_AuthenticatedId", "name" }
+                    .Select(n => new Column { Name = n }).ToList(),
+                Rows = new List<List<object>>
+                {
+                    new List<object>
+                    {
+                        day.AddSeconds(30),
+                        JsonConvert.SerializeObject(new { timeStamp = clickedAt, pageRequestId = Guid.NewGuid(), linkText = "Καλημέρα" }),
+                        "user@contoso.com",
+                        "LinkClick"
+                    }
+                }
+            };
+
+            var events = new CustomEventsResultCollection(table, day, NullLogger.Instance);
+
+            var click = (ClickEventAppInsightsQueryResult)events.Rows.Single();
+            Assert.AreEqual(clickedAt, click.Timestamp, "The click keeps the time it was made.");
         }
     }
 }

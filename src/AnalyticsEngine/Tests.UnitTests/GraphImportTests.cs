@@ -46,6 +46,36 @@ namespace Tests.UnitTests
             Assert.IsTrue(existingLog.ChatsCount == 5);
         }
 
+        /// <summary>
+        /// Regression: a day's stored channel sentiment used to become NULL - permanently - the moment either side of an
+        /// increment had no sentiment (e.g. a cycle that ran while Cognitive Services was unavailable). An unscored side
+        /// now contributes nothing to the average, as it already did when stats were combined in memory.
+        /// </summary>
+        [TestMethod]
+        public void MessageCognitiveStats_AnUnscoredSideDoesNotWipeTheStoredSentiment()
+        {
+            ChannelStatsLog Increment(double? stored, int storedCount, double? incoming, int incomingCount)
+            {
+                var log = new ChannelStatsLog { SentimentScore = stored, ChatsCount = storedCount };
+                new MessageCognitiveStats(new ChannelWithReactions(), DateTime.Now) { Sentiment = incoming, ChatsCount = incomingCount }
+                    .IncrementMessageStatsWithThis(log);
+                return log;
+            }
+
+            var unscoredIncrement = Increment(0.8, 2, null, 3);
+            Assert.AreEqual(0.8, unscoredIncrement.SentimentScore, "Unscored new messages keep the day's existing score.");
+            Assert.AreEqual(5, unscoredIncrement.ChatsCount, "...but still count as messages.");
+
+            var firstScore = Increment(null, 2, 0.4, 1);
+            Assert.AreEqual(0.4, firstScore.SentimentScore, "The first scored increment sets the day's score.");
+            Assert.AreEqual(3, firstScore.ChatsCount);
+
+            Assert.IsNull(Increment(null, 2, null, 1).SentimentScore);
+
+            var noMessages = Increment(0.5, 0, 0.7, 0);
+            Assert.AreEqual(0.5, noMessages.SentimentScore, "Nothing to weight by is not a reason to store NaN.");
+        }
+
 #if DEBUG
         // Live Graph integration test: requires real tenant credentials in config to run.
         // Excluded from CI Release builds (CI does not have a test tenant). Run locally in Debug.

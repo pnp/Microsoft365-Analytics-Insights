@@ -126,20 +126,64 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
             }
         }
 
-        public async Task<IReadOnlyList<string>> GetUnresolvedObjectIdsAsync(int max)
+        /// <summary>
+        /// Candidate pages read at most per call while passing over skipped ids. Bounds the work when nearly every
+        /// unlinked id is a settled miss; anything beyond is reached once those misses expire.
+        /// </summary>
+        private const int MaxCandidatePages = 10;
+
+        public async Task<IReadOnlyList<string>> GetUnresolvedObjectIdsAsync(int max, Func<string, bool> skip = null)
         {
-            if (max <= 0) return new List<string>();
+            var result = new List<string>();
+            if (max <= 0) return result;
 
             using (var db = _dbContextFactory.Create())
             {
-                return await db.CopilotStudioCreditUserDaily
+                // Grouped, not Distinct: EF6 drops an OrderBy that comes before Distinct, so the cap used to take an
+                // arbitrary - in practice the same - set of ids on every pass. Ordered by the id's latest usage, with
+                // the id itself as a tie-breaker so the order (and the keyset paging below) is stable.
+                var candidates = db.CopilotStudioCreditUserDaily
                     .Where(r => r.UserId == null && r.EntraObjectId != null && r.EntraObjectId != "")
-                    .OrderByDescending(r => r.UsageDate)
-                    .Select(r => r.EntraObjectId)
-                    .Distinct()
-                    .Take(max)
-                    .ToListAsync();
+                    .GroupBy(r => r.EntraObjectId)
+                    .Select(g => new { ObjectId = g.Key, LastUsed = g.Max(r => r.UsageDate) });
+
+                DateTime? afterLastUsed = null;
+                string afterObjectId = null;
+
+                for (var page = 0; page < MaxCandidatePages; page++)
+                {
+                    var pageQuery = candidates;
+                    if (afterLastUsed.HasValue)
+                    {
+                        var lastUsed = afterLastUsed.Value;
+                        var objectId = afterObjectId;
+                        pageQuery = pageQuery.Where(c => c.LastUsed < lastUsed
+                            || (c.LastUsed == lastUsed && c.ObjectId.CompareTo(objectId) > 0));
+                    }
+
+                    var batch = await pageQuery
+                        .OrderByDescending(c => c.LastUsed)
+                        .ThenBy(c => c.ObjectId)
+                        .Take(max)
+                        .ToListAsync();
+
+                    foreach (var candidate in batch)
+                    {
+                        if (skip != null && skip(candidate.ObjectId)) continue;
+
+                        result.Add(candidate.ObjectId);
+                        if (result.Count >= max) return result;
+                    }
+
+                    // Without a skip there is nothing to pass over, so one page is the whole answer.
+                    if (skip == null || batch.Count < max) break;
+
+                    afterLastUsed = batch[batch.Count - 1].LastUsed;
+                    afterObjectId = batch[batch.Count - 1].ObjectId;
+                }
             }
+
+            return result;
         }
 
         public async Task<int> ApplyUserLinksAsync(IReadOnlyDictionary<string, int> userIdsByObjectId)

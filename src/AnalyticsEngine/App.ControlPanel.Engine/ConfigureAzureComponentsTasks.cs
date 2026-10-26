@@ -15,6 +15,7 @@ using CloudInstallEngine.Models;
 using Microsoft.Extensions.Logging;
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
@@ -94,67 +95,25 @@ namespace App.ControlPanel.Engine
             // Find downloaded installer app
             var installerExeFile = GetInstallerExe(solutionSources.GetSolutionComponentLocation(SoftwareComponent.ControlPanel));
 
-            // Stop the runtime while applying database changes so the existing website/WebJobs
-            // cannot use a partially upgraded schema.
-            var stopAttempted = false;
-            Exception upgradeFailure = null;
-            try
-            {
-                if (this.Config.TasksConfig.InstallLatestSolutionContent)
+            var sqlInstallerTasks = new SqlInstallerTasks(Config, installerExeFile, dbInfo, _logger, _installedByUsername, _configPassword,
+                async (connectionString) => await VerifySqlWithFirewallSelfHeal(connectionString, repairFirewall));
+            await RunUpgradeDeploymentAsync(Config.TasksConfig.InstallLatestSolutionContent, Config.TasksConfig.UpgradeSchema,
+                async () =>
                 {
-                    _logger.LogInformation("Stopping app-service during database upgrade...");
-
-                    // Set BEFORE awaiting: Azure can complete the stop server-side while the client sees a
-                    // timeout or transport error, so "the call threw" does not mean "the site is still up".
-                    // Assuming it stopped is the safe assumption - a redundant start is harmless.
-                    stopAttempted = true;
-                    await webApp.StopAsync();
-                }
-
-                var sqlInstallerTasks = new SqlInstallerTasks(Config, installerExeFile, dbInfo, _logger, _installedByUsername, _configPassword,
-                    async (connectionString) => await VerifySqlWithFirewallSelfHeal(connectionString, repairFirewall));
-                await sqlInstallerTasks.UpdateSqlDatabaseSchemaAndDataFromDownloadedInstaller(installerExeFile, _installLogEvents);
-            }
-            catch (Exception ex)
-            {
-                upgradeFailure = ex;
-            }
-
-            // Whatever happened above, bring the site back. A database step that turns out to be impossible
-            // must never leave the customer's web app stopped.
-            if (stopAttempted)
-            {
-                try
+                    var settings = (await webApp.GetApplicationSettingsAsync()).Value;
+                    PauseUpgradeWebJobs(settings.Properties);
+                    await webApp.UpdateApplicationSettingsAsync(settings);
+                },
+                async () =>
                 {
-                    await webApp.StartAsync();
-                    _logger.LogInformation("App Service started for SCM HTTPS deployment");
-                }
-                catch (Exception startEx)
-                {
-                    if (upgradeFailure == null)
-                    {
-                        // Nothing to mask, and the site is down - this must be fatal, not a swallowed warning,
-                        // or the install would carry on deploying content to a stopped site and report success.
-                        throw new UnexpectedInstallException(
-                            "The database step completed but the App Service could not be restarted afterwards: " +
-                            $"{startEx.Message}. Start the App Service in the Azure portal, then re-run the installer.");
-                    }
-
-                    _logger.LogError($"IMPORTANT: could not restart the App Service after the database step: {startEx.Message}. " +
-                        "Start it by hand in the Azure portal.");
-                }
-            }
-
-            if (upgradeFailure != null)
-            {
-                // Rethrow preserving the original stack, now that the site is back up.
-                System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(upgradeFailure).Throw();
-            }
-
-            if (this.Config.TasksConfig.InstallLatestSolutionContent)
-            {
-                await InstallSolutionContent(solutionSources, subscription, automationAccount);
-            }
+                    var settings = (await webApp.GetApplicationSettingsAsync()).Value;
+                    ResumeUpgradeWebJobs(settings.Properties);
+                    await webApp.UpdateApplicationSettingsAsync(settings);
+                },
+                async () => { await webApp.StopAsync(); },
+                async () => { await webApp.StartAsync(); },
+                () => sqlInstallerTasks.UpdateSqlDatabaseSchemaAndDataFromDownloadedInstaller(installerExeFile, _installLogEvents),
+                () => InstallSolutionContent(solutionSources, subscription, automationAccount), _logger);
 
             if (this.Config.SolutionConfig.ImportTaskSettings.WebTraffic)
             {
@@ -171,6 +130,107 @@ namespace App.ControlPanel.Engine
                     _logger.LogInformation("Skipping SharePoint web components (AITracker / SPFx) install because 'Update solution with latest release' is not selected.");
                 }
             }
+        }
+
+        internal static async Task RunUpgradeDeploymentAsync(bool installContent, bool upgradeSchema,
+            Func<Task> pauseWebJobs, Func<Task> resumeWebJobs, Func<Task> stopSite, Func<Task> startSite,
+            Func<Task> upgradeDatabase, Func<Task> deployContent, ILogger logger)
+        {
+            var elapsed = Stopwatch.StartNew();
+            var stage = "pause";
+            var stopAttempted = false;
+            Exception upgradeFailure = null;
+            try
+            {
+                if (installContent || upgradeSchema)
+                {
+                    await pauseWebJobs();
+                }
+
+                try
+                {
+                    if (installContent || upgradeSchema)
+                    {
+                        stage = "stop";
+                        // A failed response does not prove Azure failed to stop the site.
+                        stopAttempted = true;
+                        await stopSite();
+                    }
+                    stage = "schema";
+                    await upgradeDatabase();
+                }
+                catch (Exception ex)
+                {
+                    upgradeFailure = ex;
+                }
+
+                if (stopAttempted)
+                {
+                    try
+                    {
+                        await startSite();
+                        logger.LogInformation("UpgradeDeployment: stage=scm outcome=Started; WEBJOBS_STOPPED=1 until new content is deployed.");
+                    }
+                    catch (Exception startEx)
+                    {
+                        logger.LogCritical("UpgradeDeployment: stage=scm outcome=Failed exceptionType={ExceptionType}; start the App Service manually with WEBJOBS_STOPPED=1, then re-run the installer.",
+                            startEx.GetType().Name);
+                        if (upgradeFailure == null)
+                        {
+                            stage = "scm";
+                            upgradeFailure = startEx;
+                        }
+                    }
+                }
+
+                if (upgradeFailure != null)
+                    System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(upgradeFailure).Throw();
+
+                if (installContent)
+                {
+                    stage = "content";
+                    await deployContent();
+                    stage = "resume";
+                    await resumeWebJobs();
+                }
+                else if (upgradeSchema)
+                {
+                    logger.LogWarning("UpgradeDeployment: stage=complete outcome=Paused elapsedMs={ElapsedMs}; schema-only upgrade left WEBJOBS_STOPPED=1. Deploy matching new binaries before restoring WebJobs; re-run the installer with content deployment enabled.",
+                        elapsed.ElapsedMilliseconds);
+                    return;
+                }
+                logger.LogInformation("UpgradeDeployment: stage=complete outcome=Succeeded elapsedMs={ElapsedMs} schemaSelected={SchemaSelected} contentSelected={ContentSelected}.",
+                    elapsed.ElapsedMilliseconds, upgradeSchema, installContent);
+            }
+            catch (Exception ex)
+            {
+                logger.LogCritical("UpgradeDeployment: stage={Stage} outcome=Failed elapsedMs={ElapsedMs} exceptionType={ExceptionType} httpStatus={HttpStatus}; WebJobs resume is unconfirmed. Keep WEBJOBS_STOPPED=1 until the schema and matching binaries are deployed; re-run the installer.",
+                    stage, elapsed.ElapsedMilliseconds, ex.GetType().Name, (ex as RequestFailedException)?.Status);
+                throw;
+            }
+        }
+
+        internal const string UpgradeWebJobsStateSetting = "AnalyticsUpgradeWebJobsPreviousState";
+
+        internal static void PauseUpgradeWebJobs(IDictionary<string, string> settings)
+        {
+            // A failed upgrade leaves this marker in place, so a retry must not replace the operator's original state.
+            if (!settings.ContainsKey(UpgradeWebJobsStateSetting))
+                settings[UpgradeWebJobsStateSetting] = settings.TryGetValue("WEBJOBS_STOPPED", out var previous) ? "restore:" + previous : "remove";
+            settings["WEBJOBS_STOPPED"] = "1";
+        }
+
+        internal static void ResumeUpgradeWebJobs(IDictionary<string, string> settings)
+        {
+            if (!settings.TryGetValue(UpgradeWebJobsStateSetting, out var previous))
+                throw new InvalidOperationException("The upgrade's previous WebJobs state is missing; leave WEBJOBS_STOPPED=1 and restore it manually after verifying the deployed binaries.");
+            if (previous == "remove")
+                settings.Remove("WEBJOBS_STOPPED");
+            else if (previous != null && previous.StartsWith("restore:", StringComparison.Ordinal))
+                settings["WEBJOBS_STOPPED"] = previous.Substring("restore:".Length);
+            else
+                throw new InvalidOperationException("The upgrade's previous WebJobs state is invalid; leave WEBJOBS_STOPPED=1 and restore it manually after verifying the deployed binaries.");
+            settings.Remove(UpgradeWebJobsStateSetting);
         }
 
         /// <summary>
@@ -559,16 +619,17 @@ namespace App.ControlPanel.Engine
                 appSettings.Properties.Add(setting.Key, setting.Value);
             }
 
-            appSettings.Properties.Add("ImportJobSettings", this.Config.SolutionConfig.ImportTaskSettings.ToSettingsString());
+            AddImportSelectionAppSettings(appSettings.Properties, this.Config.SolutionConfig.ImportTaskSettings);
             appSettings.Properties.Add("EnableDefaultHealthChecks", (this.Config.HealthMonitoring?.Enabled == true).ToString());
             if (this.Config.TeamsMaxChannelsPerTeamPerCycle < 0)
                 throw new InvalidOperationException("TeamsMaxChannelsPerTeamPerCycle must be zero or positive.");
             appSettings.Properties.Add("TeamsMaxChannelsPerTeamPerCycle",
                 this.Config.TeamsMaxChannelsPerTeamPerCycle.ToString(System.Globalization.CultureInfo.InvariantCulture));
 
-            // Office 365 Management Activity API feeds to subscribe to, derived from the selected
-            // audit-based imports (Copilot => Audit.General, SharePoint audit => Audit.SharePoint).
-            appSettings.Properties.Add("ContentTypesListAsString", this.Config.SolutionConfig.ImportTaskSettings.ToActivityApiContentTypesString());
+            if (this.Config.SolutionConfig.ImportTaskSettings.CopilotCostManagement)
+            {
+                _logger.LogInformation(CopilotCostConnectionSetupMessage);
+            }
 
             // When private VNet is enabled, ensure the app service routes all outbound traffic through
             // the VNet so that private DNS zones resolve Azure PaaS hostnames to private endpoint IPs.
@@ -623,6 +684,33 @@ namespace App.ControlPanel.Engine
             await webApp.UpdateConnectionStringsAsync(connectionStrings);
 
             _logger.LogInformation("App Service connection-strings & app-settings configured");
+        }
+
+        internal const string CopilotCostConnectionSetupMessage =
+            "Copilot credit history is enabled. A portal administrator with 'Portal.Administration' must connect "
+            + "a delegated reader account from Administration > Connections > Copilot credit history (preview) in the web app. Configure "
+            + "the Graph delegated read permissions and admin consent described there; the installer does not grant "
+            + "them. Nothing is collected until that connection exists. Connection state is kept in "
+            + "Azure Table storage on the solution's storage account.";
+
+        /// <summary>
+        /// Writes the App Service settings that carry the installer's import selection.
+        /// </summary>
+        /// <remarks>
+        /// Every key is written on every run, enabled or not, so turning a toggle off in the installer clears it
+        /// on the next deployment instead of <c>PreserveUnmanagedAppSettingsAsync</c> keeping the old value.
+        /// The web app and the importer web-job run in the same App Service, so one set of settings serves both.
+        /// </remarks>
+        internal static void AddImportSelectionAppSettings(IDictionary<string, string> properties, Common.Entities.ImportTaskSettings settings)
+        {
+            properties.Add("ImportJobSettings", settings.ToSettingsString());
+
+            // Office 365 Management Activity API feeds to subscribe to, derived from the selected
+            // audit-based imports (Copilot => Audit.General, SharePoint audit => Audit.SharePoint).
+            properties.Add("ContentTypesListAsString", settings.ToActivityApiContentTypesString());
+
+            // Runtime switch for the Copilot credit history preview; mirrors the saved installer toggle.
+            properties.Add(Common.Entities.Config.AppConfig.CopilotCostConnectionEnabledSettingName, settings.CopilotCostManagement ? "true" : "false");
         }
 
         public static SiteConfigProperties BuildPostCreateSiteConfig(AppServiceSkuDescription appServicePlanSku, bool includePlanSensitiveSettings = true)

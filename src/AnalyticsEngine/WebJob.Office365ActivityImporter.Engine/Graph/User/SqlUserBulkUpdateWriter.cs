@@ -91,6 +91,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 state_or_province_id INT      NULL,
                 company_name_id INT           NULL,
                 manager_id      INT           NULL,
+                manager_reported BIT          NOT NULL,
                 last_updated    DATETIME      NOT NULL
             )";
 
@@ -105,8 +106,11 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         /// tenant that upgrades with a stored token can keep receiving responses without it. Writing
         /// those NULLs through would blank the column for every user Graph reports as changed, which
         /// would silently demote every never-used Copilot seat from "probable" to "review" and empty
-        /// the reclaim recommendation. Every other column here is genuinely mutable and is written as
-        /// supplied.
+        /// the reclaim recommendation. <c>manager_id</c> is written only when the Graph entry reported
+        /// the manager (<c>manager_reported</c>): an incremental <c>/users/delta</c> entry can leave the
+        /// annotation out when the manager did not change, and writing that through as NULL cleared the
+        /// manager of everyone whose only change was, say, being disabled. Every other column here is
+        /// genuinely mutable and is written as supplied.
         /// </remarks>
         internal const string UPDATE_FROM_TEMP_SQL = @"
             UPDATE u
@@ -122,7 +126,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 u.country_or_region_id   = t.country_or_region_id,
                 u.state_or_province_id   = t.state_or_province_id,
                 u.company_name_id        = t.company_name_id,
-                u.manager_id             = t.manager_id,
+                u.manager_id             = CASE WHEN t.manager_reported = 1 THEN t.manager_id ELSE u.manager_id END,
                 u.last_updated           = t.last_updated
             FROM dbo.users u
             INNER JOIN #user_updates t ON u.id = t.id";

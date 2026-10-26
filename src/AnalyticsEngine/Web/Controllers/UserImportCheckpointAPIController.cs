@@ -28,6 +28,12 @@ namespace Web.AnalyticsWeb.Controllers
         /// <summary>There is no Storage connection string, so there is no checkpoint to clear.</summary>
         internal const string StorageNotConfiguredCode = "storageNotConfigured";
 
+        /// <summary>
+        /// The user organisation types that decide the checkpoint's key could not be read (a SQL failure other than
+        /// their tables not existing yet), so the page can neither say whether a checkpoint is stored nor clear it.
+        /// </summary>
+        internal const string OrganisationTypesUnavailableCode = "organisationTypesUnavailable";
+
         private readonly Func<UserImportCheckpointService> _createService;
 
         public UserImportCheckpointAPIController()
@@ -53,6 +59,10 @@ namespace Web.AnalyticsWeb.Controllers
             {
                 return Failure(HttpStatusCode.ServiceUnavailable, StorageUnavailableCode);
             }
+            catch (UserImportCheckpointKeyUnavailableException)
+            {
+                return Failure(HttpStatusCode.ServiceUnavailable, OrganisationTypesUnavailableCode);
+            }
         }
 
         // POST: api/UserImportCheckpoint/clear   { "runOnNextCycle": true }
@@ -74,6 +84,12 @@ namespace Web.AnalyticsWeb.Controllers
             catch (UserImportCheckpointUnavailableException)
             {
                 return Failure(HttpStatusCode.ServiceUnavailable, StorageUnavailableCode);
+            }
+            catch (UserImportCheckpointKeyUnavailableException)
+            {
+                // Nothing was deleted: clearing only the key it could work out would have reported success while the
+                // checkpoint the importer resumes from survived.
+                return Failure(HttpStatusCode.ServiceUnavailable, OrganisationTypesUnavailableCode);
             }
         }
 

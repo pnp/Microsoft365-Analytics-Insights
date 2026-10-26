@@ -69,6 +69,9 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
         public List<TeamChannelDeltaTokenCommit> PendingChannelDeltaTokenCommits { get; set; } = new List<TeamChannelDeltaTokenCommit>();
         public TeamsChannelBudgetProgress ChannelBudgetProgress { get; set; }
 
+        /// <summary>What this Team's channel crawl read, skipped and failed; <c>null</c> when no channel messages were crawled.</summary>
+        public TeamsChannelCrawlStats ChannelCrawlStats { get; set; }
+
         #endregion
 
         public Task<TeamDefinition> SaveToSQL(TeamsAndCallsDBLookupManager lookupManager, AppConfig appConfig, ILogger logger)
@@ -165,7 +168,9 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
                     continue;
                 }
 
-                var graphUser = await context.UserCache.GetResource(groupOwner.Id);
+                // Null when Entra ID can't find the owner - a deleted account, or an app that owns the group. That used to
+                // throw, abandoning every Team left in this chunk.
+                var graphUser = await context.UserCache.GetUserOrNullIfNotFound(groupOwner.Id);
                 if (graphUser != null)
                 {
                     fullTeam.OwnerUserAccounts.Add(graphUser);
@@ -181,6 +186,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
 #endif
             var members = await LoadAllGroupMembers(context.GraphClient, parentGroup.Id, logger);
 
+            var membersNotFound = 0;
             foreach (var member in members)
             {
                 // Membership of people outside UserGroupsFilter is not recorded.
@@ -189,20 +195,26 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
                     continue;
                 }
 
-                // Multiple accounts can appear in users table if they have several logins on several domains. Pick 1st one
-                var dbUser = await db.users.Where(u => u.AzureAdId == member.Id).FirstOrDefaultAsync();
-                if (dbUser == null)
+                var userPrincipalName = await FindKnownUserPrincipalName(member.Id, context, db);
+                if (string.IsNullOrEmpty(userPrincipalName))
                 {
                     // Load direct from Graph
-                    var userInfo = await context.UserCache.GetResource(member.Id);
+                    var userInfo = await context.UserCache.GetUserOrNullIfNotFound(member.Id);
+                    userPrincipalName = userInfo?.UserPrincipalName;
+                }
 
-                    if (userInfo != null)
-                        fullTeam.Users.Add(new BaseUser { UserPrincipalName = userInfo.UserPrincipalName });
+                if (!string.IsNullOrEmpty(userPrincipalName))
+                {
+                    fullTeam.Users.Add(new BaseUser { UserPrincipalName = userPrincipalName });
                 }
                 else
                 {
-                    fullTeam.Users.Add(new BaseUser { UserPrincipalName = dbUser.UserPrincipalName });
+                    membersNotFound++;
                 }
+            }
+            if (membersNotFound > 0)
+            {
+                logger.LogInformation($"Team '{fullTeam.DisplayName}': {membersNotFound:N0} member(s) weren't found in Entra ID (deleted, or not a user account), so their membership isn't recorded.");
             }
 
             // Channels and tabs:
@@ -238,32 +250,38 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
             // Update access-token stats for Team
             if (teamRefreshOAuthToken == null)
             {
-                fullTeam.HasRefreshToken = false;
+                // Still authorised when only this cycle's refresh failed (Entra ID unreachable, throttling...): the
+                // stored token was kept, and the Team's status must say so.
+                fullTeam.HasRefreshToken = teamTokenManager.Status == TeamTokenStatus.RefreshFailed;
             }
             else
             {
                 // We have a token. Load channel msgs/replies/reactions
                 var pendingDeltaTokenCommits = new List<TeamChannelDeltaTokenCommit>();
+                var channelState = Common.Entities.State.StateStore.TryOpen(appConfig, Common.Entities.State.StatePartitions.TeamsChannels, logger);
                 if (appConfig.TeamsMaxChannelsPerTeamPerCycle > 0)
                 {
-                    fullTeam.ChannelBudgetProgress = new TeamsChannelBudgetProgress(
-                        Common.Entities.State.StateStore.TryOpen(appConfig, Common.Entities.State.StatePartitions.TeamsChannels, logger),
-                        appConfig.TeamsMaxChannelsPerTeamPerCycle, logger);
+                    fullTeam.ChannelBudgetProgress = new TeamsChannelBudgetProgress(channelState, appConfig.TeamsMaxChannelsPerTeamPerCycle, logger);
                 }
+                var failureLedger = channelState == null ? null : new TeamsChannelFailureLedger(channelState, logger);
+                fullTeam.ChannelCrawlStats = new TeamsChannelCrawlStats();
                 try
                 {
-                    fullTeam.PendingChannelDeltaTokenCommits = await fullTeam.Channels.PopulateNewMessagesAndReactions(team, teamRefreshOAuthToken, teamTokenManager.ChannelDeltaTokenStore, logger, pendingDeltaTokenCommits, fullTeam.ChannelBudgetProgress);
+                    fullTeam.PendingChannelDeltaTokenCommits = await fullTeam.Channels.PopulateNewMessagesAndReactions(team, teamRefreshOAuthToken,
+                        teamTokenManager.ChannelDeltaTokenStore, logger, pendingDeltaTokenCommits, fullTeam.ChannelBudgetProgress,
+                        teamTokenManager.RedeemRefreshTokenAsync, failureLedger, fullTeam.ChannelCrawlStats);
+                    fullTeam.HasRefreshToken = true;
+
+                    // Refreshed means messages were read. A Team whose every channel failed has still had its token used and kept,
+                    // but nothing was refreshed - and stamping it would hide that from the Teams explorer.
+                    fullTeam.LastRefreshed = CrawlRefreshedTheTeam(fullTeam.ChannelCrawlStats) ? DateTime.Now : (DateTime?)null;
                 }
                 catch (ChannelMessagesReadException ex)
                 {
+                    // Channels read before the failure are still saved, and their delta tokens committed after SQL.
                     fullTeam.PendingChannelDeltaTokenCommits = pendingDeltaTokenCommits;
-                    logger.LogError(ex, $"Couldn't get channel messages via cached token. '{ex.Message}'. Deleting token.");
-                    await teamTokenManager.TokenStore.RemoveRefreshTokenAsync(team.Id);
-                    teamRefreshOAuthToken = null;
+                    await RecordChannelReadFailure(fullTeam, ex, teamTokenManager, logger);
                 }
-
-                fullTeam.HasRefreshToken = true;
-                fullTeam.LastRefreshed = DateTime.Now;
             }
 
             // UserGroupsFilter: drop messages and reactions by people outside the scope before anything reads them,
@@ -288,6 +306,61 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
             return fullTeam;
         }
 
+        /// <summary>
+        /// What a channel read that stopped the Team's crawl means for its stored authorisation. Only evidence that the
+        /// token can't read the Team (<see cref="ChannelReadFailureKind.TokenRejected"/>) deletes it; anything else - a
+        /// throttled or failed request, an outage - used to delete it too, and an administrator had to authorise the Team
+        /// again. Takes the Team's <see cref="TeamTokenManager"/> rather than the token store, so the delete is always the
+        /// conditional one: an authorisation made while the crawl ran is never removed on evidence about an older token.
+        /// </summary>
+        internal static async Task RecordChannelReadFailure(O365Team fullTeam, ChannelMessagesReadException ex,
+            TeamTokenManager tokens, ILogger logger)
+        {
+            if (ex.Kind == ChannelReadFailureKind.TokenRejected)
+            {
+                logger.LogError(ex, $"Couldn't get channel messages via cached token for Team '{fullTeam.DisplayName}': '{ex.Message}'.");
+                var outcome = await tokens.RemoveRefusedRefreshTokenAsync(logger);
+
+                // As the token store now says: still authorised only if an administrator authorised the Team again
+                // meanwhile. Its last refresh time is left as it was; this cycle didn't read the Team with that token.
+                fullTeam.HasRefreshToken = outcome == RefusedTokenOutcome.KeptNewAuthorisation;
+                fullTeam.LastRefreshed = null;
+            }
+            else
+            {
+                logger.LogWarning(ex, $"Couldn't finish reading channel messages for Team '{fullTeam.DisplayName}' this cycle: '{ex.Message}' " +
+                    "Its authorisation is kept: the channels already read are saved and the rest are read next cycle.");
+                fullTeam.HasRefreshToken = true;
+
+                // Refreshed only if something was read before the failure: a Team whose first channel failed was not refreshed.
+                fullTeam.LastRefreshed = fullTeam.ChannelCrawlStats != null && fullTeam.ChannelCrawlStats.ChannelsRead > 0 ? DateTime.Now : (DateTime?)null;
+            }
+        }
+
+        /// <summary>
+        /// Whether a crawl that ended without stopping refreshed the Team. A Team with no channels, or none that failed, was; one
+        /// where channels failed and none could be read was not - the crawl used its token, but no messages were read.
+        /// </summary>
+        internal static bool CrawlRefreshedTheTeam(TeamsChannelCrawlStats stats)
+            => stats == null || stats.ChannelsFailed == 0 || stats.ChannelsRead > 0;
+
+        /// <summary>
+        /// The UPN SQL already holds for a member's Entra object id, or <c>null</c>. Several rows can share an object id
+        /// (one person with logins on several domains); see <see cref="TeamsCrawlRules.BuildUpnByAzureAdId"/> for which wins.
+        /// </summary>
+        private static async Task<string> FindKnownUserPrincipalName(string azureAdId, TeamsLoadContext context, AnalyticsEntitiesContext db)
+        {
+            if (context.UpnByAzureAdId != null)
+            {
+                // Built once per crawl: azure_ad_id is nvarchar(max), so every per-member query was a scan of users.
+                return context.UpnByAzureAdId.TryGetValue(azureAdId, out var mapped) ? mapped : null;
+            }
+
+            // No crawl-wide map from this caller: one query per member, as before. Pick 1st one
+            var dbUser = await db.users.Where(u => u.AzureAdId == azureAdId).FirstOrDefaultAsync();
+            return dbUser?.UserPrincipalName;
+        }
+
         #region Reactions
 
         async Task BuildAllReactionsFromMessages(TeamsLoadContext context)
@@ -302,9 +375,11 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
         {
             foreach (var r in channel.Reactions)
             {
-                if (r.User.User?.Id != null && r.CreatedDateTime.HasValue)
+                if (r.User?.User?.Id != null && r.CreatedDateTime.HasValue)
                 {
-                    var graphUser = await context.UserCache.GetResource(r.User.User.Id);
+                    // Null when Entra ID can't find the person (deleted, or from another tenant): the reaction still
+                    // happened, and is stored against "Unknown User" - how Teams itself shows them.
+                    var graphUser = await context.UserCache.GetUserOrNullIfNotFound(r.User.User.Id);
 
                     this.AllReactions.Add(
                         new UserReaction

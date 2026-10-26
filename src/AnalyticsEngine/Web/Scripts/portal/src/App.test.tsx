@@ -9,6 +9,7 @@ import { routesForArea } from './navigation';
 import { fetchAvailability } from './api/licenceActivityApi';
 import { fetchReportAreas, fetchReportArea } from './api/reportsApi';
 import { fetchActivityAnalysisAvailability, fetchActivityAnalysisReport } from './api/activityAnalysisApi';
+import { fetchCostConnection } from './api/copilotCostConnectionApi';
 import type { PortalAccessProviderValue } from './access';
 
 // Every test here mounts the whole app shell (Fluent header, TabList and NavDrawer) and then waits
@@ -23,6 +24,10 @@ vi.mock('./api/licenceActivityApi', async (importOriginal) => ({
   fetchAvailability: vi.fn(),
 }));
 vi.mock('./api/reportsApi', () => ({ fetchReportAreas: vi.fn(), fetchReportArea: vi.fn() }));
+vi.mock('./api/copilotCostConnectionApi', async (importOriginal) => ({
+  ...await importOriginal<typeof import('./api/copilotCostConnectionApi')>(),
+  fetchCostConnection: vi.fn(),
+}));
 vi.mock('./api/activityAnalysisApi', () => ({
   fetchActivityAnalysisAvailability: vi.fn(),
   fetchActivityAnalysisReport: vi.fn(),
@@ -104,6 +109,40 @@ describe('Licence activity navigation', () => {
     await user.click(within(screen.getByLabelText('Insights navigation')).getByText('Licence activity'));
     expect(await screen.findByText(/Licence activity reporting is not available on this deployment/)).toBeVisible();
     expect(screen.queryByText(/No built-in report charts are available yet/)).not.toBeInTheDocument();
+  });
+});
+
+describe('Administration connections navigation', () => {
+  it('opens credit history from its own sidebar item without needing See PII or loading service configuration', async () => {
+    vi.mocked(fetchCostConnection).mockResolvedValue({ status: 'disconnected', csrfToken: 'test-csrf' });
+    const user = userEvent.setup();
+    const log = renderAt('/admin/user-lookup', { administration: true, seePii: false });
+    const nav = await screen.findByLabelText('Administration navigation');
+    for (const group of ['Service', 'Connections', 'Users & scope', 'Copilot & reporting']) {
+      expect(within(nav).getByText(group)).toBeVisible();
+    }
+    expect(within(nav).getByText('Copilot Studio billing connection')).toBeVisible();
+    await user.click(within(nav).getByText('Copilot credit history (preview)'));
+
+    expect(await screen.findByRole('heading', { level: 1, name: 'Copilot credit history (preview)' })).toBeVisible();
+    expect(log.at(-1)).toBe('/admin/copilot-cost-connection');
+    expect(fetchCostConnection).not.toHaveBeenCalled();
+    await user.click(screen.getByRole('button', { name: 'Check connection' }));
+    expect(await screen.findByRole('button', { name: 'Connect reader' })).toBeVisible();
+  });
+
+  it('handles sign-in callback outcomes on the dedicated credit-history route', async () => {
+    renderAt('/admin/copilot-cost-connection?costConnection=untrusted-payload');
+    expect(await screen.findByRole('heading', { level: 1, name: 'Copilot credit history (preview)' })).toBeVisible();
+    expect(await screen.findByRole('alert')).toHaveTextContent('An unrecognised connection state');
+    expect(screen.queryByText('untrusted-payload')).not.toBeInTheDocument();
+  });
+
+  it('refuses a credit-history deep link without Administration', async () => {
+    renderAt('/admin/copilot-cost-connection', { administration: false, seePii: true });
+    expect(await screen.findByText('You do not have access to this page')).toBeVisible();
+    expect(screen.queryByRole('button', { name: 'Check connection' })).not.toBeInTheDocument();
+    expect(fetchCostConnection).not.toHaveBeenCalled();
   });
 });
 

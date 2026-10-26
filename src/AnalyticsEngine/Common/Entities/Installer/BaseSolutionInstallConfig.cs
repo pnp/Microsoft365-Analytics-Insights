@@ -49,7 +49,10 @@ namespace Common.Entities.Installer
         //          3.3.0 -> 3.4.0 added optional health-alert provisioning, notification email and heartbeat threshold.
         //          3.3.0 -> 3.4.0 added opt-in TeamsMaxChannelsPerTeamPerCycle (zero preserves the legacy crawl).
         //          3.3.0 -> 3.4.0 added persisted prospective private-network creator provenance.
-        const string CONFIG_VERSION = "3.4.0";
+        //          3.4.0 -> 3.5.0 added ImportTaskSettings.CopilotCostManagement (opt-in PREVIEW Copilot
+        //          credit history via a delegated reader; mirrored to the CopilotCostConnectionEnabled
+        //          app setting). Additive: older configs load with it off. See issue #769.
+        const string CONFIG_VERSION = "3.5.0";
 
         public BaseSolutionInstallConfig()
         {

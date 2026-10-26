@@ -277,6 +277,9 @@ namespace App.ControlPanel.Engine
 
         #endregion
 
+        internal const string CopilotCostStorageRequiredError =
+            "Copilot credit history (preview) needs an Azure storage account: its delegated connection is kept in Azure Table storage and it cannot run without it. Provide a storage account name, or turn the preview off.";
+
         /// <summary>
         /// Check basic settings are valid. Return list of errors.
         /// </summary>
@@ -517,6 +520,13 @@ namespace App.ControlPanel.Engine
                 {
                     errs.Add("Storage-account names can contain only lowercase letters and numbers. Name must be between 3 and 24 characters.");
                 }
+            }
+
+            // Copilot credit history (preview) keeps its delegated connection in Azure Table storage and has no
+            // in-memory fallback, so say so explicitly rather than leave the generic storage error to explain it.
+            if (SolutionConfig?.ImportTaskSettings?.CopilotCostManagement == true && string.IsNullOrWhiteSpace(this.StorageAccountName))
+            {
+                errs.Add(CopilotCostStorageRequiredError);
             }
 
             // App Insights + Log Analytics

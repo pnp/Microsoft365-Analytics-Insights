@@ -61,6 +61,18 @@ regexTarget = "secret"
 regexes = ['''^X509Certificate2$''']
 paths = ['''^src/AnalyticsEngine/Common/Entities/State/AgentCostTokenProtection\.cs$''']
 
+# --- Diagnostic outcome label in delegated token refresh ---
+[[allowlists]]
+description = """
+The SiteToken refresh failure logger's entraUnavailable503 outcome is a diagnostic label, not a
+credential. Only that exact captured label in that source file is exempt; real tokens remain scanned.
+"""
+condition = "AND"
+targetRules = ["generic-api-key"]
+regexTarget = "secret"
+regexes = ['''^entraUnavailable503$''']
+paths = ['''^src/AnalyticsEngine/Web/Controllers/SiteTokenAPIController\.cs$''']
+
 # --- Local build / IDE / dependency / generated artifacts ---
 # These are never committed (they're gitignored) and are absent from a fresh CI checkout; they only
 # appear in a local working-tree (`gitleaks dir`) scan. Allowlisting keeps the local scan meaningful.

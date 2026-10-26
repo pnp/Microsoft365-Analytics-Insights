@@ -1,5 +1,6 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import type { Team } from '@microsoft/microsoft-graph-types';
 import { renderWithProvider } from '../test/renderWithProvider';
@@ -8,7 +9,10 @@ import TeamsPermissionsPage from './TeamsPermissionsPage';
 import { fetchGraphToken } from '../auth/siteToken';
 import { fetchMsGraph, GraphRequestError, GRAPH_ENDPOINTS } from '../auth/graph';
 
-vi.mock('../auth/siteToken', () => ({ fetchGraphToken: vi.fn() }));
+vi.mock('../auth/siteToken', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../auth/siteToken')>()),
+  fetchGraphToken: vi.fn(),
+}));
 vi.mock('../auth/graph', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../auth/graph')>()),
   fetchMsGraph: vi.fn(),
@@ -155,5 +159,85 @@ describe('Teams permissions page: connecting to Microsoft Teams', () => {
     expect(screen.getByText(es('admin.teamsPermissions.noTokenMessage'))).toBeVisible();
     expect(screen.getByText('Código de error de Microsoft Entra ID: AADSTS65001')).toBeVisible();
     expect(document.body.textContent).not.toContain(CONNECT);
+  });
+});
+
+const ENTRA_UNAVAILABLE = "Couldn't reach Microsoft Entra ID to refresh your Teams connection. Try again in a few minutes.";
+
+/** A reply from the site's own API, as `fetch` resolves it. */
+function siteReply(status: number, body: unknown) {
+  return new Response(body === undefined ? null : JSON.stringify(body), {
+    status,
+    headers: { 'Content-Type': 'application/json' },
+  });
+}
+
+/**
+ * D10: Microsoft Entra ID unreachable, timing out, throttling or failing is not "not connected". The site
+ * answers 503 with the code `entraUnavailable`, and offering Connect would send the admin through an
+ * interactive sign-in whose code redemption calls the same token endpoint from the same server - so it
+ * would fail too. These run the real token fetch, and `apiFetch`, against a stubbed `fetch`.
+ */
+describe('Teams permissions page: Microsoft Entra ID unavailable', () => {
+  beforeEach(async () => {
+    const actual = await vi.importActual<typeof import('../auth/siteToken')>('../auth/siteToken');
+    vi.mocked(fetchGraphToken).mockImplementation(actual.fetchGraphToken);
+    window.o365AnalyticsTokenAPI = '/api/SiteTokenAPI';
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('says to try again in a few minutes, with a retry and no Connect', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi
+        .fn()
+        .mockResolvedValueOnce(siteReply(503, { code: 'entraUnavailable' }))
+        .mockResolvedValueOnce(siteReply(200, { accessToken: 'synthetic-token' })),
+    );
+    vi.mocked(fetchMsGraph).mockImplementation(async (url: string) =>
+      url === GRAPH_ENDPOINTS.ME
+        ? { displayName: 'Ada Contoso' }
+        : { value: [{ id: '00000000-0000-0000-0000-000000000001', displayName: 'Contoso Sales' }] },
+    );
+
+    renderAt(ROUTE);
+
+    expect(await screen.findByText(ENTRA_UNAVAILABLE)).toBeVisible();
+    expect(screen.queryByRole('link', { name: CONNECT })).not.toBeInTheDocument();
+    expect(screen.queryByText(/It doesn't ask for these when you sign in/)).not.toBeInTheDocument();
+    expect(screen.queryByText('No Teams found for your account.')).not.toBeInTheDocument();
+    expect(fetchMsGraph).not.toHaveBeenCalled();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Try again' }));
+
+    expect(await screen.findByText('Contoso Sales')).toBeVisible();
+    expect(screen.queryByText(ENTRA_UNAVAILABLE)).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: CONNECT })).not.toBeInTheDocument();
+  });
+
+  it('still offers Connect when the site has no working token for the admin (401)', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(siteReply(401, undefined)));
+
+    renderAt(ROUTE);
+
+    expect(await screen.findByRole('link', { name: CONNECT })).toHaveAttribute('href', '/Account/ConnectTeams');
+    expect(screen.queryByText(ENTRA_UNAVAILABLE)).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Try again' })).not.toBeInTheDocument();
+  });
+
+  it('says so in Spanish', async () => {
+    await loadCatalog('es');
+    const es = (key: Parameters<typeof translateStatic>[1]) => translateStatic('es', key);
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(siteReply(503, { code: 'entraUnavailable' })));
+
+    renderAt(ROUTE, 'es');
+
+    expect(await screen.findByText(es('admin.teamsPermissions.entraUnavailable.message'))).toBeVisible();
+    expect(screen.getByRole('button', { name: es('admin.teamsPermissions.entraUnavailable.retry') })).toBeVisible();
+    expect(screen.queryByRole('link', { name: es('admin.teamsPermissions.connect.button') })).not.toBeInTheDocument();
+    expect(document.body.textContent).not.toContain(ENTRA_UNAVAILABLE);
   });
 });

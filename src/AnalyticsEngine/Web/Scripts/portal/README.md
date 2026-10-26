@@ -291,6 +291,14 @@ Components use `usePortalAccess()` to check the two app-role permissions:
 | Administration | `administration` | `Portal.Administration` |
 | See PII | `seePii` | `Portal.SeePII` |
 
+The Copilot credit-history connection under **Administration > Service configuration** uses
+`administration` for all six `CopilotCostConnection` API actions and the dedicated callback.
+There is no separate connection-operator role. Tenant, application, object-ID and browser bindings
+still apply even if `EnforcePortalRoles=false`. The portal lists the four Graph delegated read
+scopes, admin consent, the reader's active tenant-wide Global Reader role, application
+`User.Read.All` for directory inventory, and the Table-storage/callback prerequisites. Portal
+Administration is not a Microsoft Graph permission and does not grant the reader source access.
+
 `src/navigation.tsx` has a `requires` field for areas and routes. New administration pages must
 live in the `admin` area so they inherit `administration`; a route that exposes individual people
 adds `requires: 'seePii'`. New per-person UI inside an aggregate page must check `seePii`, avoid

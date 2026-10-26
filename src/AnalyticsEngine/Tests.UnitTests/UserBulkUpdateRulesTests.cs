@@ -140,8 +140,9 @@ namespace Tests.UnitTests
         {
             var assignments = Assignments(SqlUserBulkUpdateWriter.UPDATE_FROM_TEMP_SQL);
 
+            // manager_reported is not a users column: it only decides whether manager_id is written (C-4).
             CollectionAssert.AreEquivalent(
-                UserBulkUpdateRules.UpdateTableColumns.Where(c => c != "id").ToArray(),
+                UserBulkUpdateRules.UpdateTableColumns.Where(c => c != "id" && c != "manager_reported").ToArray(),
                 assignments.Select(a => a.Target).ToArray(),
                 "The UPDATE ... FROM JOIN must assign every batch column except the join key - a column " +
                 "the batch carries but the statement never writes is silently dropped.");
@@ -177,12 +178,13 @@ namespace Tests.UnitTests
             var fromStart = updateSql.IndexOf("FROM dbo.users", System.StringComparison.Ordinal);
             var setClause = updateSql.Substring(setStart, fromStart - setStart);
 
-            // Two accepted shapes: a straight "u.x = t.x", and the guarded
-            // "u.x = ISNULL(t.x, u.x)" used for columns that must never be blanked by a Graph
-            // response that simply did not carry them. Both count as writing the column.
+            // Three accepted shapes: a straight "u.x = t.x", the guarded "u.x = ISNULL(t.x, u.x)"
+            // used for columns that must never be blanked by a Graph response that simply did not
+            // carry them, and "u.x = CASE WHEN t.manager_reported = 1 THEN t.x ELSE u.x END" for the
+            // manager, which an incremental read may not report. All count as writing the column.
             return Regex.Matches(
                     setClause,
-                    @"u\.(?<target>[a-z_][a-z0-9_]*)\s*=\s*(?:ISNULL\(\s*)?t\.(?<source>[a-z_][a-z0-9_]*)",
+                    @"u\.(?<target>[a-z_][a-z0-9_]*)\s*=\s*(?:ISNULL\(\s*|CASE\s+WHEN\s+t\.manager_reported\s*=\s*1\s+THEN\s+)?t\.(?<source>[a-z_][a-z0-9_]*)",
                     RegexOptions.IgnoreCase)
                 .Cast<Match>()
                 .Select(m => (Target: m.Groups["target"].Value, Source: m.Groups["source"].Value))
@@ -592,6 +594,22 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public void ManagerResolution_RowLeftBehindByARename_ResolvesToTheManagersCurrentRow()
+        {
+            // A renamed manager keeps their object id, so the row under their old sign-in name still carries it.
+            var leftBehind = new Common.Entities.User { ID = 7, AzureAdId = ManagerAadId, UserPrincipalName = "boss.old@contoso.com" };
+            var current = new Common.Entities.User { ID = 9, AzureAdId = ManagerAadId, UserPrincipalName = "boss.new@contoso.com" };
+            var managerGraphUser = new GraphUser { Id = ManagerAadId, UserPrincipalName = "boss.new@contoso.com" };
+
+            Assert.AreEqual(9, UserBulkUpdateRules.ResolveManagerId(
+                ManagerAadId, UsersByAadId(leftBehind), UsersByUpn(leftBehind, current), GraphUsersByAadId(managerGraphUser)));
+
+            Assert.AreEqual(7, UserBulkUpdateRules.ResolveManagerId(
+                ManagerAadId, UsersByAadId(leftBehind), UsersByUpn(leftBehind), GraphUsersByAadId(managerGraphUser)),
+                "With no row under the current name, the old row is still the manager - better than no manager at all.");
+        }
+
+        [TestMethod]
         public void UserBulkUpdate_ManagerIdReachesTheRow()
         {
             // The chain above is only useful if BuildUpdateTable actually calls it for the user's
@@ -615,11 +633,28 @@ namespace Tests.UnitTests
         [TestMethod]
         public void UserBulkUpdate_UserWhoseManagerWasRemoved_ClearsManagerId()
         {
-            var graphUser = GraphUserWithEverything();   // no ManagerInfo entries
+            var graphUser = GraphUserWithEverything();
+            graphUser.ManagerInfo = new List<ManagerInfo>();   // Graph reported the manager, and there is none
             var dbUser = new Common.Entities.User { ID = 42, UserPrincipalName = "jane.doe@contoso.com" };
             var row = SingleRowFor(graphUser, SavedLookupsForEverything(), dbUser);
 
             Assert.AreEqual(DBNull.Value, row["manager_id"]);
+            Assert.AreEqual(true, row["manager_reported"], "So the update writes the NULL.");
+        }
+
+        /// <summary>
+        /// C-4: an incremental <c>/users/delta</c> entry without <c>manager@delta</c> says nothing about the manager. The
+        /// row is marked so the update leaves the stored manager alone, instead of clearing it.
+        /// </summary>
+        [TestMethod]
+        public void UserBulkUpdate_EntryThatDidNotReportTheManager_LeavesItAlone()
+        {
+            var graphUser = GraphUserWithEverything();   // no manager@delta at all
+            var dbUser = new Common.Entities.User { ID = 42, UserPrincipalName = "jane.doe@contoso.com" };
+            var row = SingleRowFor(graphUser, SavedLookupsForEverything(), dbUser);
+
+            Assert.AreEqual(false, row["manager_reported"]);
+            StringAssert.Contains(SqlUserBulkUpdateWriter.UPDATE_FROM_TEMP_SQL, "CASE WHEN t.manager_reported = 1 THEN t.manager_id ELSE u.manager_id END");
         }
 
         #endregion

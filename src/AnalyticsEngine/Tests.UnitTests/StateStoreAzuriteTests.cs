@@ -1,6 +1,7 @@
 using Azure;
 using Azure.Data.Tables;
 using Common.Entities.State;
+using Common.Entities.Copilot;
 using Common.Entities.UserScope.Purge;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System;
@@ -70,6 +71,71 @@ namespace Tests.UnitTests
             Assert.IsTrue(await store.ExistsAsync("GraphUsersMetadataLastImported"));
             Assert.IsTrue(await store.DeleteAsync("GraphUsersMetadataLastImported"));
             Assert.IsNull(await store.GetStringAsync("GraphUsersMetadataLastImported"));
+        }
+
+        [TestMethod]
+        public async Task EnrichmentQueue_ConcurrentEnqueueAndReopen_KeepOneDurableWorkItem()
+        {
+            var table = _table ?? Skip();
+            var partition = "Enrichment" + Guid.NewGuid().ToString("N");
+            var queue = new CopilotEnrichmentQueue(table, partition);
+            var eventId = Guid.NewGuid();
+            await Task.WhenAll(Enumerable.Range(0, 8).Select(_ => queue.EnqueueAsync(eventId)));
+
+            var reopened = new CopilotEnrichmentQueue(table, partition);
+            var due = await reopened.ReadDueAsync(DateTimeOffset.UtcNow.AddSeconds(1), 25);
+            Assert.AreEqual(1, due.Count);
+            Assert.AreEqual(eventId, due[0].EventId);
+            var claim = await reopened.TryClaimAsync(due[0], DateTimeOffset.UtcNow);
+            Assert.IsNotNull(claim);
+            await reopened.CompleteAsync(claim);
+            Assert.AreEqual(0, (await reopened.ReadDueAsync(DateTimeOffset.UtcNow.AddDays(1), 25)).Count);
+            Assert.AreEqual(0, table.Query<TableEntity>(TableClient.CreateQueryFilter($"PartitionKey eq {partition}")).Count(),
+                "Completion removes the anchor and its due index together.");
+        }
+
+        [TestMethod]
+        public async Task EnrichmentQueue_DeferralAndRepeatedEnqueue_DoNotResetBackoffOrDuplicateWork()
+        {
+            var table = _table ?? Skip();
+            var queue = new CopilotEnrichmentQueue(table, "Enrichment" + Guid.NewGuid().ToString("N"));
+            var id = Guid.NewGuid();
+            await queue.EnqueueAsync(id);
+            var now = DateTimeOffset.UtcNow.AddSeconds(1);
+            var first = (await queue.ReadDueAsync(now, 25)).Single();
+            var claim = await queue.TryClaimAsync(first, now);
+            await queue.DeferAsync(claim, now);
+            await queue.EnqueueAsync(id);
+
+            Assert.AreEqual(0, (await queue.ReadDueAsync(now.AddMinutes(1), 25)).Count);
+            var due = (await queue.ReadDueAsync(now.AddMinutes(3), 25)).Single();
+            var retry = await queue.TryClaimAsync(due, now.AddMinutes(3));
+            Assert.AreEqual(1, retry.Attempts);
+            await queue.CompleteAsync(retry);
+        }
+
+        [TestMethod]
+        public async Task EnrichmentQueue_CrashedLeaseExpires_AndStaleWorkerCannotDeleteNewOwnersWork()
+        {
+            var table = _table ?? Skip();
+            var partition = "Enrichment" + Guid.NewGuid().ToString("N");
+            var queue = new CopilotEnrichmentQueue(table, partition);
+            await queue.EnqueueAsync(Guid.NewGuid());
+            var now = DateTimeOffset.UtcNow.AddSeconds(1);
+            var due = (await queue.ReadDueAsync(now, 25)).Single();
+            var abandoned = await queue.TryClaimAsync(due, now);
+            Assert.IsNull(await queue.TryClaimAsync(due, now.AddMinutes(1)), "Live leases prevent overlapping Graph work.");
+            var reopened = new CopilotEnrichmentQueue(table, partition);
+            var replacement = await reopened.TryClaimAsync(due, now.AddMinutes(11));
+            Assert.IsNotNull(replacement);
+            try
+            {
+                await queue.CompleteAsync(abandoned);
+                Assert.Fail("A stale worker must not acknowledge a reclaimed item.");
+            }
+            catch (RequestFailedException ex) { Assert.AreEqual(412, ex.Status); }
+            Assert.AreEqual(1, (await queue.ReadDueAsync(now.AddDays(1), 25)).Count);
+            await reopened.CompleteAsync(replacement);
         }
 
         [TestMethod]
@@ -329,6 +395,39 @@ namespace Tests.UnitTests
         }
 
         /// <summary>
+        /// The sent-email checkpoints of a chunk are written in one round trip rather than one per mailbox. A partition accepts at most
+        /// 100 operations per transaction, so 250 keys need several; row keys that must be escaped (a UPN with '#') and a
+        /// value too big for one string property (stored gzipped) must work inside a transaction too, and a key repeated in the
+        /// batch takes its last value.
+        /// </summary>
+        [TestMethod]
+        public async Task SetMany_WritesAcrossSeveralTransactions_ReplacesExistingRows_AndTheLastValueForAKeyWins()
+        {
+            var store = NewStore();
+            await store.SetStringAsync("SentEmails-user7@contoso.example", "old-token");
+            await store.SetStringAsync("SentEmails-untouched@contoso.example", "kept");
+
+            var values = Enumerable.Range(0, 250)
+                .Select(i => new System.Collections.Generic.KeyValuePair<string, string>("SentEmails-user" + i + "@contoso.example", "token-" + i))
+                .ToList();
+            values.Add(new System.Collections.Generic.KeyValuePair<string, string>("SentEmails-alex#sales@contoso.example", "hash-key-token"));
+            var huge = string.Join(",", Enumerable.Range(0, 20000).Select(i => "Καλημέρα" + i));
+            values.Add(new System.Collections.Generic.KeyValuePair<string, string>("SentEmailsNextPage-huge", huge));
+            values.Add(new System.Collections.Generic.KeyValuePair<string, string>("SentEmails-user3@contoso.example", "token-3-newest"));
+
+            await store.SetManyAsync(values);
+
+            for (var i = 0; i < 250; i++)
+            {
+                var expected = i == 3 ? "token-3-newest" : "token-" + i;
+                Assert.AreEqual(expected, await store.GetStringAsync("SentEmails-user" + i + "@contoso.example"), "key " + i);
+            }
+            Assert.AreEqual("hash-key-token", await store.GetStringAsync("SentEmails-alex#sales@contoso.example"));
+            Assert.AreEqual(huge, await store.GetStringAsync("SentEmailsNextPage-huge"));
+            Assert.AreEqual("kept", await store.GetStringAsync("SentEmails-untouched@contoso.example"), "Rows that are not in the batch are left alone.");
+        }
+
+        /// <summary>
         /// The User scope purge's records in a real table: a record with its per-table counts, which purge is the latest,
         /// and a stop request under a key of its own.
         /// </summary>
@@ -338,7 +437,7 @@ namespace Tests.UnitTests
             var state = new UserScopePurgeStateStore(NewStore(), isDurable: true);
             Assert.IsTrue(state.IsDurable);
 
-            var job = await state.CreateAsync("admin@contoso.local", "fingerprint", 5);
+            var job = await state.CreateAsync("admin@contoso.local", "fingerprint", 5, 3, "sha256:membership");
             job.State = UserScopePurgeStates.Running;
             job.RowsAffected["call_sessions.attendee_user_id"] = 2;
             job.RowsAffected["audit_events"] = 1234;
@@ -349,6 +448,8 @@ namespace Tests.UnitTests
             Assert.AreEqual(UserScopePurgeStates.Running, latest.State);
             Assert.AreEqual(2L, latest.RowsAffected["call_sessions.attendee_user_id"]);
             Assert.AreEqual(1234L, latest.RowsAffected["audit_events"]);
+            Assert.AreEqual(3, latest.ConfirmedOutsideScopeCount, "What the administrator confirmed survives a restart with the record...");
+            Assert.AreEqual("sha256:membership", latest.ScopeMembershipFingerprint, "...and so does whom it was confirmed against.");
             Assert.IsFalse(latest.CancelRequested);
 
             Assert.IsTrue(await state.RequestCancelAsync(job.Id));

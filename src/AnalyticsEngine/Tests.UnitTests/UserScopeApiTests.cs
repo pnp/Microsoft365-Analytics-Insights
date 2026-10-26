@@ -53,6 +53,8 @@ namespace Tests.UnitTests
 
         private static UserScopePurgeDatabase Database => new UserScopePurgeDatabase(ConnectionString);
 
+        private int _outsider;
+
         [TestInitialize]
         public async Task NoPurgeRunning()
         {
@@ -61,7 +63,14 @@ namespace Tests.UnitTests
                 db.Database.Initialize(false);
             }
             Assert.IsFalse(await Database.IsPurgeRunningAsync(), "No session should still hold the purge lock from an earlier test.");
+
+            // Somebody outside every scope these tests resolve, so a purge always has somebody to be about, whatever else the
+            // shared database holds. No test here lets a purge run, so nobody is ever removed.
+            _outsider = await InsertUserAsync("usa" + Guid.NewGuid().ToString("N").Substring(0, 12) + "-outsider@contoso.local");
         }
+
+        [TestCleanup]
+        public Task RemoveOutsider() => DeleteUsersAsync(new[] { _outsider });
 
         [TestMethod]
         public void EveryCallThatChangesState_IsAPostWithTheSameOriginCheck()
@@ -162,7 +171,7 @@ namespace Tests.UnitTests
 
             var json = JObject.Parse(JsonConvert.SerializeObject(status));
 
-            CollectionAssert.AreEquivalent(new[] { "filtered", "filterPatterns", "resolution", "database", "purgeUnavailableReason", "latestJob", "purgeStateDurable" },
+            CollectionAssert.AreEquivalent(new[] { "filtered", "filterPatterns", "filterFingerprint", "resolution", "database", "purgeUnavailableReason", "latestJob", "purgeStateDurable" },
                 Names(json));
             CollectionAssert.AreEquivalent(new[] { "status", "failureKind", "httpStatus", "resolvedUtc", "memberCount", "matchedNoGroup", "groups", "unmatchedPatterns" },
                 Names((JObject)json["resolution"]));
@@ -183,11 +192,11 @@ namespace Tests.UnitTests
         public void Codes_AreTheOnesThePortalTurnsIntoSentences()
         {
             CollectionAssert.AreEquivalent(
-                new[] { "acknowledgementRequired", "scopeNotFiltered", "scopeUnavailable", "scopeEmpty", "nothingToPurge", "purgeAlreadyRunning", "jobNotFound", "jobNotActive", "databaseUnavailable", "storageUnavailable" },
+                new[] { "acknowledgementRequired", "scopeNotFiltered", "scopeUnavailable", "scopeEmpty", "nothingToPurge", "purgeAlreadyRunning", "jobNotFound", "jobNotActive", "databaseUnavailable", "storageUnavailable", "purgeExceedsConfirmed", "filterChanged" },
                 ConstantValues(typeof(UserScopeErrorCodes)));
             CollectionAssert.AreEquivalent(new[] { "notFiltered", "scopeUnavailable", "scopeEmpty", "nothingToPurge", "jobActive", "storageUnavailable" },
                 ConstantValues(typeof(UserScopePurgeUnavailableReasons)));
-            CollectionAssert.AreEquivalent(new[] { "scopeUnavailable", "scopeEmpty", "databaseError", "filterChanged", "filterChangedWhileRunning", "stateUnavailable", "unexpected" },
+            CollectionAssert.AreEquivalent(new[] { "scopeUnavailable", "scopeEmpty", "databaseError", "filterChanged", "filterChangedWhileRunning", "stateUnavailable", "purgeExceedsConfirmed", "scopeMembershipChanged", "unexpected" },
                 ConstantValues(typeof(UserScopePurgeErrorCodes)));
             CollectionAssert.AreEquivalent(new[] { "queued", "running", "completed", "failed", "cancelled" }, ConstantValues(typeof(UserScopePurgeStates)));
             CollectionAssert.AreEquivalent(new[]
@@ -225,7 +234,9 @@ namespace Tests.UnitTests
             {
                 var runner = new RecordingRunner();
                 var service = new UserScopeService(provider, database, state, runner, NullLogger.Instance);
-                var refused = await Assert.ThrowsExceptionAsync<UserScopeRequestException>(() => service.StartPurgeAsync(acknowledged, "admin@contoso.local"));
+                var refused = await Assert.ThrowsExceptionAsync<UserScopeRequestException>(() => service.StartPurgeAsync(
+                    new UserScopePurgeRequest { Acknowledged = acknowledged, ConfirmedOutsideScopeCount = int.MaxValue, ConfirmedFilterFingerprint = filter.Fingerprint },
+                    "admin@contoso.local"));
                 Assert.AreEqual(0, runner.Started.Count);
                 Assert.IsFalse(await database.IsPurgeRunningAsync(), "A refused start lets go of the purge lock.");
                 return refused;
@@ -253,12 +264,12 @@ namespace Tests.UnitTests
             // Accepted: recorded, handed to the runner with the fresh resolution, and a second one can't start.
             var acceptedRunner = new RecordingRunner();
             var accepting = new UserScopeService(resolved, database, state, acceptedRunner, NullLogger.Instance);
-            var job = await accepting.StartPurgeAsync(true, "admin@contoso.local");
+            var job = await accepting.StartPurgeAsync(Confirming(await accepting.GetStatusAsync()), "admin@contoso.local");
             Assert.AreEqual(UserScopePurgeStates.Queued, job.State);
             CollectionAssert.AreEqual(new[] { job.Id }, acceptedRunner.Started);
             Assert.AreEqual(UserScopePurgeUnavailableReasons.JobActive, (await accepting.GetStatusAsync()).PurgeUnavailableReason);
             Assert.AreEqual(UserScopeErrorCodes.PurgeAlreadyRunning,
-                (await Assert.ThrowsExceptionAsync<UserScopeRequestException>(() => accepting.StartPurgeAsync(true, "admin@contoso.local"))).Code);
+                (await Assert.ThrowsExceptionAsync<UserScopeRequestException>(() => accepting.StartPurgeAsync(Acknowledged(), "admin@contoso.local"))).Code);
 
             // Stop it before it ever runs: nothing was chosen or removed. The provider handed to the run can't resolve, so
             // even if the cancel were missed it could never choose anybody in this shared database.
@@ -280,6 +291,145 @@ namespace Tests.UnitTests
             var members = new UserScopeMembers();
             foreach (var upn in upns) members.Add(Guid.NewGuid().ToString(), upn, upn);
             return members;
+        }
+
+        /// <summary>A start that confirms exactly what <paramref name="status"/> showed, as the page sends it.</summary>
+        private static UserScopePurgeRequest Confirming(UserScopeStatusModel status, int extra = 0) => new UserScopePurgeRequest
+        {
+            Acknowledged = true,
+            ConfirmedOutsideScopeCount = status.Database.OutOfScopeUsers + extra,
+            ConfirmedFilterFingerprint = status.FilterFingerprint,
+        };
+
+        /// <summary>A start refused before anything is counted, so what it confirms doesn't matter.</summary>
+        private static UserScopePurgeRequest Acknowledged() => new UserScopePurgeRequest { Acknowledged = true };
+
+        private static async Task<int> InsertUserAsync(string upn)
+        {
+            using (var connection = new Microsoft.Data.SqlClient.SqlConnection(ConnectionString))
+            using (var command = new Microsoft.Data.SqlClient.SqlCommand("INSERT INTO dbo.users (user_name, mail) OUTPUT inserted.id VALUES (@upn, @upn);", connection))
+            {
+                await connection.OpenAsync();
+                command.Parameters.AddWithValue("@upn", upn);
+                return Convert.ToInt32(await command.ExecuteScalarAsync());
+            }
+        }
+
+        private static async Task DeleteUsersAsync(IEnumerable<int> ids)
+        {
+            var list = string.Join(",", ids.Where(id => id > 0));
+            if (list.Length == 0) return;
+            using (var connection = new Microsoft.Data.SqlClient.SqlConnection(ConnectionString))
+            using (var command = new Microsoft.Data.SqlClient.SqlCommand($"DELETE FROM dbo.users WHERE id IN ({list});", connection))
+            {
+                await connection.OpenAsync();
+                await command.ExecuteNonQueryAsync();
+            }
+        }
+
+        /// <summary>
+        /// The confirmation was for the numbers the page showed, from a resolution up to an hour old. If more people are
+        /// outside the scope when the purge is asked to start - the groups shrank, users arrived - or the filter is another
+        /// one, it does not start: the answer carries the numbers as they are now, for a new confirmation. Fewer is fine,
+        /// and the number confirmed travels with the purge.
+        /// </summary>
+        [TestMethod]
+        public async Task StartPurge_IsRefusedWithTheNewNumbers_WhenMorePeopleAreOutsideTheScopeThanConfirmed_OrTheFilterChanged()
+        {
+            var filter = new UserGroupsFilterModel("Copilot pilot");
+            var members = Members("pilot@contoso.local");
+            var resolved = new FixedUserImportScopeProvider(TestUserScopes.Of("pilot@contoso.local"),
+                UserImportScopeResolution.Resolved(members, null, null, DateTime.UtcNow), filter);
+            var state = new UserScopePurgeStateStore(new InMemoryKeyValueStore(), isDurable: false);
+            var runner = new RecordingRunner();
+            var service = new UserScopeService(resolved, Database, state, runner, NullLogger.Instance);
+            var token = "usa" + Guid.NewGuid().ToString("N").Substring(0, 12);
+            var inserted = new List<int>();
+            try
+            {
+                var shown = await service.GetStatusAsync();
+                Assert.AreEqual(filter.Fingerprint, shown.FilterFingerprint);
+
+                // Somebody else ends up outside the scope between the page showing the number and Start being pressed.
+                inserted.Add(await InsertUserAsync(token + "-arrived@contoso.local"));
+
+                async Task<UserScopeRequestException> Refused(UserScopePurgeRequest request)
+                {
+                    var refused = await Assert.ThrowsExceptionAsync<UserScopeRequestException>(() => service.StartPurgeAsync(request, "admin@contoso.local"));
+                    Assert.AreEqual(HttpStatusCode.Conflict, refused.Status);
+                    Assert.AreEqual(0, runner.Started.Count, "Nothing was started...");
+                    Assert.IsNull(await state.GetLatestAsync(), "...or recorded...");
+                    Assert.IsFalse(await Database.IsPurgeRunningAsync(), "...and the purge lock was let go.");
+                    return refused;
+                }
+
+                var grown = await Refused(Confirming(shown));
+                Assert.AreEqual(UserScopeErrorCodes.PurgeExceedsConfirmed, grown.Code);
+                Assert.AreEqual(shown.Database.OutOfScopeUsers + 1, grown.Error.Database.OutOfScopeUsers, "The answer carries the number as it is now.");
+                Assert.AreEqual(shown.Database.OutOfScopeUsers, grown.Error.ConfirmedOutsideScopeCount);
+
+                var otherFilter = await Refused(new UserScopePurgeRequest
+                {
+                    Acknowledged = true,
+                    ConfirmedOutsideScopeCount = int.MaxValue,
+                    ConfirmedFilterFingerprint = new UserGroupsFilterModel("Another group").Fingerprint,
+                });
+                Assert.AreEqual(UserScopeErrorCodes.FilterChanged, otherFilter.Code, "A count confirmed under another filter is about other people.");
+                Assert.AreEqual(filter.Fingerprint, otherFilter.Error.FilterFingerprint);
+
+                Assert.AreEqual(UserScopeErrorCodes.PurgeExceedsConfirmed,
+                    (await Refused(new UserScopePurgeRequest { Acknowledged = true, ConfirmedFilterFingerprint = filter.Fingerprint })).Code,
+                    "A start that confirms no number confirms nobody.");
+
+                // The new number, confirmed - or a larger one: fewer people outside the scope than confirmed is never a risk.
+                var job = await service.StartPurgeAsync(Confirming(await service.GetStatusAsync(), extra: 5), "admin@contoso.local");
+                CollectionAssert.AreEqual(new[] { job.Id }, runner.Started);
+                var record = await state.GetAsync(job.Id);
+                Assert.AreEqual(shown.Database.OutOfScopeUsers + 1 + 5, record.ConfirmedOutsideScopeCount, "The purge never removes more than this.");
+                Assert.AreEqual(members.MembershipFingerprint, record.ScopeMembershipFingerprint, "Nor anyone, after a restart, under other groups.");
+            }
+            finally
+            {
+                await DeleteUsersAsync(inserted);
+            }
+        }
+
+        /// <summary>The page's request and the refusal's facts, as they cross the wire.</summary>
+        [TestMethod]
+        public async Task StartPurge_OverHttp_ReadsWhatThePageConfirmed_AndAnswersARefusalWithTheNumbersAsTheyAreNow()
+        {
+            var filter = new UserGroupsFilterModel("Copilot pilot");
+            var resolved = new FixedUserImportScopeProvider(TestUserScopes.Of("pilot@contoso.local"),
+                UserImportScopeResolution.Resolved(Members("pilot@contoso.local"), null, null, DateTime.UtcNow), filter);
+            var state = new UserScopePurgeStateStore(new InMemoryKeyValueStore(), isDurable: false);
+            var runner = new RecordingRunner();
+            var service = new UserScopeService(resolved, Database, state, runner, NullLogger.Instance);
+            var outside = (await service.GetStatusAsync()).Database.OutOfScopeUsers;
+
+            using (var host = UserScopeHost(PortalTestHost.SignedIn(PortalRoles.Administration), () => service))
+            {
+                var stale = JsonConvert.SerializeObject(new { acknowledged = true, confirmedOutsideScopeCount = outside - 1, confirmedFilterFingerprint = filter.Fingerprint });
+                using (var request = UserScopeRequest(HttpMethod.Post, "api/UserScope/purge", stale))
+                using (var response = await host.Client.SendAsync(request))
+                {
+                    Assert.AreEqual(HttpStatusCode.Conflict, response.StatusCode);
+                    var body = JObject.Parse(await response.Content.ReadAsStringAsync());
+                    Assert.AreEqual("purgeExceedsConfirmed", (string)body["code"]);
+                    Assert.AreEqual(outside, (int)body["database"]["outOfScopeUsers"]);
+                    Assert.AreEqual(outside - 1, (int)body["confirmedOutsideScopeCount"]);
+                    Assert.AreEqual(filter.Fingerprint, (string)body["filterFingerprint"]);
+                }
+                Assert.AreEqual(0, runner.Started.Count);
+
+                var current = JsonConvert.SerializeObject(new { acknowledged = true, confirmedOutsideScopeCount = outside, confirmedFilterFingerprint = filter.Fingerprint });
+                using (var request = UserScopeRequest(HttpMethod.Post, "api/UserScope/purge", current))
+                using (var response = await host.Client.SendAsync(request))
+                {
+                    Assert.AreEqual(HttpStatusCode.Accepted, response.StatusCode, await response.Content.ReadAsStringAsync());
+                }
+                Assert.AreEqual(1, runner.Started.Count);
+                Assert.AreEqual(outside, (await state.GetLatestAsync()).ConfirmedOutsideScopeCount);
+            }
         }
 
         /// <summary>
@@ -305,7 +455,7 @@ namespace Tests.UnitTests
                 Assert.IsNull(status.LatestJob, "This instance has no record of the other's purge...");
                 Assert.IsFalse(status.PurgeStateDurable, "...because it keeps purge records in memory.");
 
-                var refused = await Assert.ThrowsExceptionAsync<UserScopeRequestException>(() => service.StartPurgeAsync(true, "admin@contoso.local"));
+                var refused = await Assert.ThrowsExceptionAsync<UserScopeRequestException>(() => service.StartPurgeAsync(Confirming(status), "admin@contoso.local"));
                 Assert.AreEqual(UserScopeErrorCodes.PurgeAlreadyRunning, refused.Code);
                 Assert.AreEqual(HttpStatusCode.Conflict, refused.Status);
                 Assert.AreEqual(0, runner.Started.Count);
@@ -343,13 +493,13 @@ namespace Tests.UnitTests
                 Assert.AreEqual(HttpStatusCode.ServiceUnavailable, refused.Status);
             }
 
-            await AssertStorageUnavailable(() => service.StartPurgeAsync(true, "admin@contoso.local"));
+            await AssertStorageUnavailable(() => service.StartPurgeAsync(Confirming(status), "admin@contoso.local"));
             await AssertStorageUnavailable(() => service.GetPurgeAsync(1));
             await AssertStorageUnavailable(() => service.CancelPurgeAsync(1));
 
             store.Down = false;
             store.FailNextWrites = 1;
-            await AssertStorageUnavailable(() => service.StartPurgeAsync(true, "admin@contoso.local"));
+            await AssertStorageUnavailable(() => service.StartPurgeAsync(Confirming(status), "admin@contoso.local"));
             Assert.AreEqual(0, runner.Started.Count);
             Assert.IsFalse(await Database.IsPurgeRunningAsync(), "A start that couldn't record its purge lets go of the purge lock.");
         }

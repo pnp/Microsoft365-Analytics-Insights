@@ -36,6 +36,8 @@ export type UserScopePurgeUnavailableReason =
 export interface UserScopeStatus {
   filtered: boolean;
   filterPatterns: string[];
+  /** Identifies the configured filter; sent back with a purge so it is refused if the filter changed since. */
+  filterFingerprint: string;
   resolution: UserScopeResolution;
   database: UserScopeDatabaseCounts | null;
   purgeUnavailableReason: UserScopePurgeUnavailableReason | null;
@@ -87,6 +89,8 @@ export interface UserScopePurgeJob {
     | 'scopeEmpty'
     | 'filterChanged'
     | 'filterChangedWhileRunning'
+    | 'purgeExceedsConfirmed'
+    | 'scopeMembershipChanged'
     | 'databaseError'
     | 'stateUnavailable'
     | 'unexpected'

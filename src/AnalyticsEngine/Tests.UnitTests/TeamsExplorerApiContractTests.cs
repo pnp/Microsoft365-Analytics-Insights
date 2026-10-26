@@ -1,3 +1,7 @@
+extern alias AnalyticsWeb;
+
+using AnalyticsWeb::Web.AnalyticsWeb.Controllers;
+using AnalyticsWeb::Web.AnalyticsWeb.Security;
 using Common.Entities.TeamsExplorer;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using Newtonsoft.Json;
@@ -7,7 +11,9 @@ using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
+using System.Net;
 using System.Reflection;
+using System.Threading.Tasks;
 
 namespace Tests.UnitTests
 {
@@ -138,6 +144,160 @@ namespace Tests.UnitTests
                 Assert.IsFalse(string.IsNullOrWhiteSpace((string)serialised["tone"]), serialised.ToString());
             }
         }
+
+        #region Exports
+
+        /// <summary>
+        /// A failed query used to come back as a 200 with a header-only file - "nobody is dormant" - because the
+        /// store captures the failure as the section's error and returns no rows.
+        /// </summary>
+        [TestMethod]
+        public async Task Export_WhoseQueryFailed_IsA503WithItsKey_NotAnEmptyFile()
+        {
+            var store = new ExportStore();
+            store.People.Queries.Add(new TeamsExplorerQueryInfo { Key = "people-dormant", Error = "synthetic: Execution Timeout Expired on dbo.users" });
+
+            using (var host = ExportHost(store))
+            {
+                var response = await host.Client.GetAsync("api/TeamsExplorer/export/dormant");
+                var body = await response.Content.ReadAsStringAsync();
+
+                Assert.AreEqual(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+                Assert.IsNull(response.Content.Headers.ContentDisposition, "No file is offered.");
+                var failure = JObject.Parse(body);
+                Assert.AreEqual("exportQueryFailed", (string)failure["code"]);
+                Assert.AreEqual("people-dormant", (string)failure["queryKey"]);
+                Assert.IsFalse(body.Contains("dbo.users"), "The SQL error stays on the server: " + body);
+            }
+        }
+
+        [TestMethod]
+        public async Task Export_EachSectionChecksTheQueryThatProducesItsRows()
+        {
+            var cases = new Dictionary<string, Action<ExportStore>>
+            {
+                ["people"] = s => s.People.Queries.Add(Failed("people-champions")),
+                ["teams"] = s => s.Collaboration.Queries.Add(Failed("collab-teams")),
+                ["channels"] = s => s.Collaboration.Queries.Add(Failed("collab-channels")),
+                ["adoption"] = s => s.Adoption.Queries.Add(Failed("adoption-breakdown")),
+            };
+
+            foreach (var exportCase in cases)
+            {
+                var store = new ExportStore();
+                exportCase.Value(store);
+                using (var host = ExportHost(store))
+                {
+                    var response = await host.Client.GetAsync("api/TeamsExplorer/export/" + exportCase.Key);
+                    Assert.AreEqual(HttpStatusCode.ServiceUnavailable, response.StatusCode, exportCase.Key);
+                }
+            }
+        }
+
+        [TestMethod]
+        public async Task Export_IsNotSpoiledByAnotherSectionsFailure_AndAnEmptyResultIsStillAFile()
+        {
+            var store = new ExportStore();
+            store.People.Queries.Add(Failed("people-champions"));
+            store.People.Queries.Add(new TeamsExplorerQueryInfo { Key = "people-dormant" });
+
+            using (var host = ExportHost(store))
+            {
+                var response = await host.Client.GetAsync("api/TeamsExplorer/export/dormant");
+
+                Assert.AreEqual(HttpStatusCode.OK, response.StatusCode,
+                    "The dormant list's own query succeeded; the champions failing is not this file's problem.");
+                Assert.AreEqual("text/csv", response.Content.Headers.ContentType.MediaType);
+                Assert.IsNotNull(response.Content.Headers.ContentDisposition);
+            }
+        }
+
+        private static TeamsExplorerQueryInfo Failed(string key) =>
+            new TeamsExplorerQueryInfo { Key = key, Error = "synthetic: the query failed" };
+
+        [TestMethod]
+        public async Task FailedExport_LogsTheQueryKeyAndElapsed_WhileTheBodyCarriesNoSqlDetail()
+        {
+            var store = new ExportStore();
+            store.People.Queries.Add(new TeamsExplorerQueryInfo { Key = "people-champions", Error = "synthetic: Server=contoso-sql", ElapsedMs = 1234 });
+            var logger = new CapturingLogger();
+
+            using (var host = ExportHost(store, logger))
+            {
+                var response = await host.Client.GetAsync("api/TeamsExplorer/export/people");
+                var body = await response.Content.ReadAsStringAsync();
+
+                Assert.AreEqual(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+                Assert.IsFalse(body.Contains("contoso-sql"), body);
+            }
+
+            var line = logger.Single(Microsoft.Extensions.Logging.LogLevel.Error);
+            StringAssert.Contains(line, "section=people ");
+            StringAssert.Contains(line, "key=people-champions");
+            StringAssert.Contains(line, "elapsedMs=1234");
+            Assert.IsFalse(line.Contains("contoso-sql"), line);
+        }
+
+        [TestMethod]
+        public async Task AFailedStoreQuery_LogsATimeoutWarning_WithoutTheExceptionMessage()
+        {
+            var logger = new CapturingLogger();
+            var store = new SqlTeamsExplorerStore(
+                new FailingContextFactory(new InvalidOperationException("synthetic: Server=contoso-sql", new TimeoutException("synthetic timeout"))),
+                30,
+                logger);
+
+            var adoption = await store.GetAdoptionAsync(TeamsExplorerQuery.Create(28, DateTime.UtcNow));
+
+            Assert.IsTrue(adoption.Queries.All(q => !string.IsNullOrEmpty(q.Error)));
+            var lines = logger.Lines.Where(l => l.Level == Microsoft.Extensions.Logging.LogLevel.Warning).Select(l => l.Message).ToList();
+            Assert.AreEqual(adoption.Queries.Count, lines.Count, "One Warning per failed query.");
+            foreach (var query in adoption.Queries)
+            {
+                var line = lines.Single(l => l.Contains("key=" + query.Key + " "));
+                StringAssert.Contains(line, "exceptionType=TimeoutException");
+                StringAssert.Contains(line, "sqlError=none");
+                StringAssert.Contains(line, "timedOut=true");
+                StringAssert.Contains(line, "elapsedMs=");
+                Assert.IsFalse(line.Contains("contoso-sql"), line);
+            }
+        }
+
+        private sealed class FailingContextFactory : Common.Entities.IAnalyticsDbContextFactory
+        {
+            private readonly Exception _failure;
+
+            internal FailingContextFactory(Exception failure)
+            {
+                _failure = failure;
+            }
+
+            public Common.Entities.AnalyticsEntitiesContext Create() => throw _failure;
+        }
+
+        private static PortalTestHost ExportHost(ExportStore store, Microsoft.Extensions.Logging.ILogger logger = null) =>
+            new PortalTestHost(
+                new[] { typeof(TeamsExplorerAPIController) },
+                PortalTestHost.SignedIn(PortalRoles.SeePii),
+                PortalAccessPolicy.Enforcing,
+                _ => new TeamsExplorerAPIController(store, () => new TeamsExplorerSources(), null, logger));
+
+        private sealed class ExportStore : ITeamsExplorerStore
+        {
+            internal TeamsPeople People { get; } = new TeamsPeople();
+            internal TeamsCollaboration Collaboration { get; } = new TeamsCollaboration();
+            internal TeamsAdoption Adoption { get; } = new TeamsAdoption();
+
+            public Task<Tuple<int, int>> GetTeamCountsAsync() => Task.FromResult(Tuple.Create(0, 0));
+            public Task<TeamsOverview> GetOverviewAsync(TeamsExplorerQuery query, TeamsExplorerSources sources) => Task.FromResult(new TeamsOverview());
+            public Task<TeamsAdoption> GetAdoptionAsync(TeamsExplorerQuery query) => Task.FromResult(Adoption);
+            public Task<TeamsMeetings> GetMeetingsAsync(TeamsExplorerQuery query) => Task.FromResult(new TeamsMeetings());
+            public Task<TeamsCollaboration> GetCollaborationAsync(TeamsExplorerQuery query) => Task.FromResult(Collaboration);
+            public Task<TeamsConversations> GetConversationsAsync(TeamsExplorerQuery query, bool cognitiveAvailable) => Task.FromResult(new TeamsConversations());
+            public Task<TeamsPeople> GetPeopleAsync(TeamsExplorerQuery query) => Task.FromResult(People);
+        }
+
+        #endregion
 
         /// <summary>
         /// Walks the payload roots, collecting every Teams Explorer model type that ends up on the

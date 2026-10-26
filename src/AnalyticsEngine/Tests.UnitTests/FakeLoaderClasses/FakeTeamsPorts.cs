@@ -1,6 +1,7 @@
 using Microsoft.Graph.Models;
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading.Tasks;
 using WebJob.Office365ActivityImporter.Engine.Graph.Teams;
 
@@ -38,22 +39,23 @@ namespace UnitTests.FakeLoaderClasses
         }
 
         /// <summary>
-        /// Build a group as the v1 Graph endpoint returns it, with its provisioned workloads in
-        /// <c>AdditionalData</c>. Pass <c>null</c> for <paramref name="provisioningOptionsJson"/> to
-        /// model a group that didn't return the property at all.
+        /// Build a group the way the Graph SDK hands it back: its provisioned workloads in the typed
+        /// <see cref="Group.ResourceProvisioningOptions"/> list (Microsoft.Graph 5+), parsed from the JSON array Graph sends.
+        /// Pass <c>null</c> for <paramref name="provisioningOptionsJson"/> to model a group that didn't return the property at all.
         /// </summary>
         /// <remarks>
-        /// The property name is written as a literal on purpose, NOT as
-        /// <c>TeamsCrawlRules.ResourceProvisioningOptionsProperty</c>: this is the Graph wire contract,
-        /// and a typo in the production constant must fail these tests rather than move the reader and
-        /// the writer together.
+        /// This used to write the raw array into <c>AdditionalData</c>, where the v4 SDK put it - so it pinned the very
+        /// bug that left the crawl finding no Teams under SDK 6. The wire name itself is covered by
+        /// <c>TeamsCrawlTests.FindGroupsWithTeamToCrawl_RealGraphJsonThroughTheSdk_FindsTheTeams</c>, which pushes Graph's
+        /// JSON through the real SDK.
         /// </remarks>
         public static Group GroupWithProvisioningOptions(string id, string displayName, string provisioningOptionsJson)
         {
             var group = new Group { Id = id, DisplayName = displayName };
             if (provisioningOptionsJson != null)
             {
-                group.AdditionalData["resourceProvisioningOptions"] = provisioningOptionsJson;
+                group.ResourceProvisioningOptions = Newtonsoft.Json.Linq.JArray.Parse(provisioningOptionsJson)
+                    .Select(option => option.ToString()).ToList();
             }
             return group;
         }
@@ -69,7 +71,7 @@ namespace UnitTests.FakeLoaderClasses
         private readonly Dictionary<string, TeamChannelDeltaTokenInfo> _tokensByChannelId
             = new Dictionary<string, TeamChannelDeltaTokenInfo>(StringComparer.Ordinal);
 
-        private readonly HashSet<string> _failingChannelIds = new HashSet<string>(StringComparer.Ordinal);
+        private readonly Dictionary<string, ChannelReadFailureKind> _failingChannelIds = new Dictionary<string, ChannelReadFailureKind>(StringComparer.Ordinal);
 
         /// <summary>Channel ids this loader was asked to read, in order.</summary>
         public List<string> ChannelsRead { get; } = new List<string>();
@@ -89,10 +91,13 @@ namespace UnitTests.FakeLoaderClasses
             return this;
         }
 
-        /// <summary>Script a channel read that fails the way an expired user token does.</summary>
-        public FakeChannelMessagesSourceLoader Failing(string channelId)
+        /// <summary>
+        /// Script a channel read that fails. By default it fails the way an unclassified error does (which never
+        /// deletes the Team's token); pass a <paramref name="kind"/> to script a classified failure.
+        /// </summary>
+        public FakeChannelMessagesSourceLoader Failing(string channelId, ChannelReadFailureKind kind = ChannelReadFailureKind.Transient)
         {
-            _failingChannelIds.Add(channelId);
+            _failingChannelIds[channelId] = kind;
             return this;
         }
 
@@ -100,10 +105,12 @@ namespace UnitTests.FakeLoaderClasses
         {
             ChannelsRead.Add(channel.Id);
 
-            if (_failingChannelIds.Contains(channel.Id))
+            if (_failingChannelIds.TryGetValue(channel.Id, out var kind))
             {
-                return Task.FromException<TeamChannelDeltaTokenInfo>(
-                    new ChannelMessagesReadException(new InvalidOperationException("simulated expired user token")));
+                var inner = new InvalidOperationException("simulated channel read failure");
+                return Task.FromException<TeamChannelDeltaTokenInfo>(kind == ChannelReadFailureKind.Transient
+                    ? new ChannelMessagesReadException(inner)
+                    : new ChannelMessagesReadException(kind, "simulated " + kind, inner));
             }
 
             var messageId = $"{channel.Id}-message-{ChannelsRead.Count}";

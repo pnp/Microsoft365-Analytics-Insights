@@ -18,7 +18,9 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
         Task<bool> HasMailReadAccessAsync();
 
         /// <summary>
-        /// Load all new sent messages for the user since the last delta token.
+        /// Load the user's new sent messages since the last checkpoint. An implementation may stop at a per-cycle bound
+        /// and say where to continue (<see cref="SentEmailLoadResult.NextPageLink"/>), so a first or reset read of a
+        /// large mailbox is spread over several cycles instead of being held in memory, and saved, all at once.
         /// </summary>
         /// <param name="user">User whose mailbox should be scanned.</param>
         /// <param name="includeBody">Whether the message body must be returned. Implementations may
@@ -43,6 +45,16 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
         public int DeltaTokenReads { get; set; }
         public int DeltaTokenWrites { get; set; }
         public string NextDeltaToken { get; set; }
+
+        /// <summary>
+        /// Set when the read stopped at its per-cycle bound with more pages still to come: the Graph
+        /// <c>@odata.nextLink</c> to continue from on the next cycle, once this cycle's messages are saved. Never set
+        /// together with <see cref="NextDeltaToken"/>, which only the last page of a round carries.
+        /// </summary>
+        public string NextPageLink { get; set; }
+
+        /// <summary>True when Graph rejected the stored checkpoint and this load re-read the mailbox from the start.</summary>
+        public bool CheckpointWasReset { get; set; }
     }
 
     /// <summary>
@@ -51,6 +63,46 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
     public interface ISentEmailDeltaTokenCommitter
     {
         Task CommitDeltaTokenAsync(Common.Entities.User user, string deltaToken);
+    }
+
+    /// <summary>
+    /// Commits where a mailbox read that stopped at its per-cycle bound continues from, once the caller's durable save
+    /// of the pages read so far has succeeded. Separate from <see cref="ISentEmailDeltaTokenCommitter"/> so existing
+    /// implementations of that interface are unaffected; a committer without it simply re-reads those pages next cycle.
+    /// </summary>
+    public interface ISentEmailSyncContinuationCommitter
+    {
+        Task CommitContinuationAsync(Common.Entities.User user, string nextPageLink);
+    }
+
+    /// <summary>The checkpoint a mailbox's read ended with: a delta token when the round is complete, a continuation link when it stopped at its bound.</summary>
+    public sealed class SentEmailCheckpoint
+    {
+        public SentEmailCheckpoint(Common.Entities.User user, string nextDeltaToken, string nextPageLink)
+        {
+            User = user;
+            NextDeltaToken = nextDeltaToken;
+            NextPageLink = nextPageLink;
+        }
+
+        public Common.Entities.User User { get; }
+
+        public string NextDeltaToken { get; }
+
+        public string NextPageLink { get; }
+    }
+
+    /// <summary>
+    /// Commits the checkpoints of a chunk of mailboxes whose messages are saved in as few storage round trips as it can, instead
+    /// of one write per mailbox. Optional: a committer without it is called once per mailbox, as before.
+    /// </summary>
+    public interface ISentEmailBatchCheckpointCommitter
+    {
+        /// <summary>
+        /// Throws when the checkpoints could not all be written - nothing is then known to be written, and the caller falls back to
+        /// committing them one at a time. Repeating a commit is safe: a checkpoint only ever moves forward over messages already saved.
+        /// </summary>
+        Task CommitCheckpointsAsync(IReadOnlyList<SentEmailCheckpoint> checkpoints);
     }
 
     #region Graph DTO classes

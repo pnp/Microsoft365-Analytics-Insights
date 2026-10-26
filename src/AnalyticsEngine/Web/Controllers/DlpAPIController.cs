@@ -58,6 +58,29 @@ namespace Web.AnalyticsWeb.Controllers
 
         private readonly IAnalyticsDbContextFactory _contextFactory;
         private readonly ReportScopeResolver _scopes;
+        private readonly Models.SharedComputation<DlpSummary> _summaries;
+        private readonly Models.SharedComputation<DlpGovernanceSummary> _governance;
+
+        /// <summary>
+        /// SQL timeout for each statement behind the page. The default context has none (it is sized for importer
+        /// work), so one slow aggregate on a large tenant could hold a request - and every request waiting on it -
+        /// until App Service gave up on it.
+        /// </summary>
+        internal const int CommandTimeoutSeconds = 90;
+
+        /// <summary>
+        /// The summaries for every concurrent request with the same window, filter and permission, built once. Reused
+        /// for a minute; a failure is reused for 30 seconds rather than retried by every reload of a struggling
+        /// database; and nobody waits more than two and a half minutes, inside App Service's request limit.
+        /// </summary>
+        private static readonly Models.SharedComputation<DlpSummary> SharedSummaries =
+            new Models.SharedComputation<DlpSummary>(MemoryCache.Default, "DlpSummary::",
+                successTtl: TimeSpan.FromMinutes(1), failureTtl: TimeSpan.FromSeconds(30), deadline: TimeSpan.FromSeconds(150));
+
+        /// <summary>The governance figures, shared and bounded the same way, and reused for <see cref="GovernanceCacheMinutes"/>.</summary>
+        private static readonly Models.SharedComputation<DlpGovernanceSummary> SharedGovernance =
+            new Models.SharedComputation<DlpGovernanceSummary>(MemoryCache.Default, "DlpGovernance::",
+                successTtl: TimeSpan.FromMinutes(GovernanceCacheMinutes), failureTtl: TimeSpan.FromSeconds(30), deadline: TimeSpan.FromSeconds(150));
 
         public DlpAPIController()
             : this(DefaultAnalyticsDbContextFactory.Instance, ReportScopeResolver.Default)
@@ -70,10 +93,13 @@ namespace Web.AnalyticsWeb.Controllers
         /// integration test points this at a real, migrated database rather than trusting a compile.
         /// No global filter unless <paramref name="scopes"/> supplies one.
         /// </summary>
-        internal DlpAPIController(IAnalyticsDbContextFactory contextFactory, ReportScopeResolver scopes = null)
+        internal DlpAPIController(IAnalyticsDbContextFactory contextFactory, ReportScopeResolver scopes = null,
+            Models.SharedComputation<DlpSummary> summaries = null, Models.SharedComputation<DlpGovernanceSummary> governance = null)
         {
             _contextFactory = contextFactory ?? throw new ArgumentNullException(nameof(contextFactory));
             _scopes = scopes ?? new ReportScopeResolver(GlobalFilterProviders.None, CachedUserDirectorySource.Default);
+            _summaries = summaries ?? SharedSummaries;
+            _governance = governance ?? SharedGovernance;
         }
 
         // GET: api/Dlp/availability
@@ -122,15 +148,21 @@ namespace Web.AnalyticsWeb.Controllers
         // GET: api/Dlp/summary?days=28
         [HttpGet]
         [Route("summary")]
-        public async Task<IActionResult> Summary(int days = 28)
+        public async Task<IActionResult> Summary(CancellationToken cancellationToken, int days = 28)
         {
             // The administrator's global filter, resolved for this reader and enforced here whatever the page
             // sends. Everything below describes only the people it leaves them seeing.
             var scope = await _scopes.ResolveAsync(Request, User, null, CancellationToken.None);
-            return Ok(await BuildSummaryAsync(
-                days,
-                includeIndividuals: PortalAccess.Evaluate(Request, User).SeePii,
-                scope: scope.IsRestricted ? scope.Sql : null));
+            var includeIndividuals = PortalAccess.Evaluate(Request, User).SeePii;
+
+            // Keyed by everything the answer depends on: the window, who it describes, and whether it names them.
+            // The build gets the shared deadline's token, so the statements still to run stop when it is given up on,
+            // rather than carrying on against a database that is already struggling.
+            var key = SnapWindow(days).ToString(CultureInfo.InvariantCulture) + "::" + (includeIndividuals ? "named" : "anonymous") + "::" + scope.Key;
+            return Ok(await _summaries.GetAsync(
+                key,
+                ct => BuildSummaryAsync(days, includeIndividuals, scope.IsRestricted ? scope.Sql : null, ct),
+                cancellationToken));
         }
 
         /// <summary>
@@ -146,21 +178,17 @@ namespace Web.AnalyticsWeb.Controllers
         // GET: api/Dlp/governance?days=28
         [HttpGet]
         [Route("governance")]
-        public async Task<IActionResult> Governance(int days = 28)
+        public async Task<IActionResult> Governance(CancellationToken cancellationToken, int days = 28)
         {
             var scope = await _scopes.ResolveAsync(Request, User, null, CancellationToken.None);
 
             // Keyed by window and by who the figures describe, so readers under different filters never share an
             // answer and readers under the same one do.
-            var key = "DlpGovernance::" + SnapWindow(days).ToString(CultureInfo.InvariantCulture) + "::" + scope.Key;
-            if (MemoryCache.Default.Get(key) is DlpGovernanceSummary cached)
-            {
-                return Ok(cached);
-            }
-
-            var model = await BuildGovernanceAsync(days, scope.IsRestricted ? scope.Sql : null);
-            MemoryCache.Default.Set(key, model, DateTimeOffset.UtcNow.AddMinutes(GovernanceCacheMinutes));
-            return Ok(model);
+            var key = SnapWindow(days).ToString(CultureInfo.InvariantCulture) + "::" + scope.Key;
+            return Ok(await _governance.GetAsync(
+                key,
+                ct => BuildGovernanceAsync(days, scope.IsRestricted ? scope.Sql : null, ct),
+                cancellationToken));
         }
 
         /// <summary>
@@ -178,11 +206,16 @@ namespace Web.AnalyticsWeb.Controllers
         /// everyone. Narrowed in SQL through <see cref="BuildScopedSummaryAsync"/>; with no filter the summary
         /// is built exactly as before.
         /// </param>
-        internal async Task<DlpSummary> BuildSummaryAsync(int days, bool includeIndividuals = true, ReportUserScope scope = null)
+        /// <param name="cancellationToken">
+        /// Passed to every statement, so cancelling it stops the ones not yet run: the summary is a dozen or more
+        /// sequential aggregates, each allowed <see cref="CommandTimeoutSeconds"/>.
+        /// </param>
+        internal async Task<DlpSummary> BuildSummaryAsync(int days, bool includeIndividuals = true, ReportUserScope scope = null,
+            CancellationToken cancellationToken = default(CancellationToken))
         {
             if (scope != null && scope.IsRestricted)
             {
-                return await BuildScopedSummaryAsync(days, includeIndividuals, scope);
+                return await BuildScopedSummaryAsync(days, includeIndividuals, scope, cancellationToken);
             }
 
             var windowDays = SnapWindow(days);
@@ -191,25 +224,26 @@ namespace Web.AnalyticsWeb.Controllers
 
             using (var db = _contextFactory.Create())
             {
+                db.Database.CommandTimeout = CommandTimeoutSeconds;
                 var summary = new DlpSummary { FromUtc = fromUtc, ToUtc = toUtc };
 
                 var events = db.copilot_dlp_events
                     .Where(e => e.RelatedChat.TimeStampUtc >= fromUtc && e.RelatedChat.TimeStampUtc <= toUtc);
 
-                summary.CopilotBlockedCount = await events.CountAsync(e => e.IsBlocked);
-                summary.CopilotAuditedCount = await events.CountAsync(e => !e.IsBlocked);
+                summary.CopilotBlockedCount = await events.CountAsync(e => e.IsBlocked, cancellationToken);
+                summary.CopilotAuditedCount = await events.CountAsync(e => !e.IsBlocked, cancellationToken);
 
                 summary.UsersImpacted = await events
                     .Where(e => e.IsBlocked && e.RelatedChat.UserId != null)
-                    .Select(e => e.RelatedChat.UserId).Distinct().CountAsync();
+                    .Select(e => e.RelatedChat.UserId).Distinct().CountAsync(cancellationToken);
 
                 summary.AgentsImpacted = await events
                     .Where(e => e.IsBlocked && e.RelatedChat.AgentId != null)
-                    .Select(e => e.RelatedChat.AgentId).Distinct().CountAsync();
+                    .Select(e => e.RelatedChat.AgentId).Distinct().CountAsync(cancellationToken);
 
                 summary.PoliciesInvolved = await events
                     .Where(e => e.DlpPolicyId != null)
-                    .Select(e => e.DlpPolicyId).Distinct().CountAsync();
+                    .Select(e => e.DlpPolicyId).Distinct().CountAsync(cancellationToken);
 
                 summary.TopAgents = ToRows(await events
                     .Where(e => e.RelatedChat.AgentId != null)
@@ -223,11 +257,11 @@ namespace Web.AnalyticsWeb.Controllers
                         Users = g.Where(e => e.RelatedChat.UserId != null).Select(e => e.RelatedChat.UserId).Distinct().Count(),
                     })
                     .OrderByDescending(r => r.Blocked).ThenByDescending(r => r.Audited)
-                    .Take(TopN).ToListAsync(), countUsers: true);
+                    .Take(TopN).ToListAsync(cancellationToken), countUsers: true);
 
                 // "Which policies blocked THIS agent" - the cross-tab the four independent tables
                 // cannot answer on their own.
-                await AttachAgentPolicyBreakdownAsync(events, summary.TopAgents);
+                await AttachAgentPolicyBreakdownAsync(events, summary.TopAgents, cancellationToken);
 
                 summary.TopPolicies = ToRows(await events
                     .Where(e => e.DlpPolicyId != null)
@@ -241,7 +275,7 @@ namespace Web.AnalyticsWeb.Controllers
                         Users = g.Where(e => e.RelatedChat.UserId != null).Select(e => e.RelatedChat.UserId).Distinct().Count(),
                     })
                     .OrderByDescending(r => r.Blocked).ThenByDescending(r => r.Audited)
-                    .Take(TopN).ToListAsync(), countUsers: true);
+                    .Take(TopN).ToListAsync(cancellationToken), countUsers: true);
 
                 summary.TopSensitivityLabels = ToRows(await events
                     .Where(e => e.SensitivityLabelId != null)
@@ -255,7 +289,7 @@ namespace Web.AnalyticsWeb.Controllers
                         Users = g.Where(e => e.RelatedChat.UserId != null).Select(e => e.RelatedChat.UserId).Distinct().Count(),
                     })
                     .OrderByDescending(r => r.Blocked).ThenByDescending(r => r.Audited)
-                    .Take(TopN).ToListAsync(), countUsers: true);
+                    .Take(TopN).ToListAsync(cancellationToken), countUsers: true);
 
                 // copilot_chats carries only the user's integer id (there is no User navigation on it),
                 // so the UPN is joined in here. The grouping is still done in SQL.
@@ -273,10 +307,10 @@ namespace Web.AnalyticsWeb.Controllers
                                                          Audited = g.Count(e => !e.IsBlocked),
                                                      })
                                               .OrderByDescending(r => r.Blocked).ThenByDescending(r => r.Audited)
-                                              .Take(TopN).ToListAsync(), countUsers: false);
+                                              .Take(TopN).ToListAsync(cancellationToken), countUsers: false);
 
                     // "Which policies blocked THIS person", the same cross-tab as the agents table.
-                    await AttachUserPolicyBreakdownAsync(events, summary.TopUsers);
+                    await AttachUserPolicyBreakdownAsync(events, summary.TopUsers, cancellationToken);
                 }
 
                 // Grouped by date part in SQL so the trend is one aggregate query rather than pulling
@@ -289,7 +323,7 @@ namespace Web.AnalyticsWeb.Controllers
                         Blocked = g.Count(e => e.IsBlocked),
                         Audited = g.Count(e => !e.IsBlocked),
                     })
-                    .ToListAsync();
+                    .ToListAsync(cancellationToken);
 
                 summary.Trend = trend
                     .Where(p => p.Date.HasValue)
@@ -307,8 +341,8 @@ namespace Web.AnalyticsWeb.Controllers
                 var tenantMatches = db.dlp_rule_matches
                     .Where(m => m.AuditEvent.TimeStamp >= fromUtc && m.AuditEvent.TimeStamp <= toUtc);
 
-                summary.TenantBlockedCount = await tenantMatches.CountAsync(m => m.IsBlocked);
-                summary.TenantAuditedCount = await tenantMatches.CountAsync(m => !m.IsBlocked);
+                summary.TenantBlockedCount = await tenantMatches.CountAsync(m => m.IsBlocked, cancellationToken);
+                summary.TenantAuditedCount = await tenantMatches.CountAsync(m => !m.IsBlocked, cancellationToken);
 
                 summary.TenantTopPolicies = ToRows(await tenantMatches
                     .Where(m => m.DlpPolicyId != null)
@@ -321,7 +355,7 @@ namespace Web.AnalyticsWeb.Controllers
                         Audited = g.Count(m => !m.IsBlocked),
                     })
                     .OrderByDescending(r => r.Blocked).ThenByDescending(r => r.Audited)
-                    .Take(TopN).ToListAsync(), countUsers: false);
+                    .Take(TopN).ToListAsync(cancellationToken), countUsers: false);
 
                 return summary;
             }
@@ -494,7 +528,8 @@ GROUP BY p.policy_id, p.name;";
         /// <para><b>Fails closed.</b> A match with no user cannot be attributed to anyone, so a filtered summary
         /// leaves it out - the same rule as every other report under a filter.</para>
         /// </remarks>
-        private async Task<DlpSummary> BuildScopedSummaryAsync(int days, bool includeIndividuals, ReportUserScope scope)
+        private async Task<DlpSummary> BuildScopedSummaryAsync(int days, bool includeIndividuals, ReportUserScope scope,
+            CancellationToken cancellationToken)
         {
             var windowDays = SnapWindow(days);
             var toUtc = DateTime.UtcNow;
@@ -502,20 +537,22 @@ GROUP BY p.policy_id, p.name;";
 
             using (var db = _contextFactory.Create())
             {
+                db.Database.CommandTimeout = CommandTimeoutSeconds;
+
                 // Opened here, not by EF, so the temporary table lives for every statement below. Created by a
                 // command with no parameters, which runs as a plain batch: one with parameters runs inside
                 // sp_executesql, and a temporary table created there is gone when it returns.
                 await AzureSqlTokenAuth.OpenAsync(db.Database.Connection);
-                await db.Database.ExecuteSqlCommandAsync(TransactionalBehavior.DoNotEnsureTransaction, ReportScopeSql.SessionCreateSql);
+                await db.Database.ExecuteSqlCommandAsync(TransactionalBehavior.DoNotEnsureTransaction, ReportScopeSql.SessionCreateSql, cancellationToken);
                 await db.Database.ExecuteSqlCommandAsync(
-                    TransactionalBehavior.DoNotEnsureTransaction, ReportScopeSql.SessionFillSql, ReportScopeSql.CreateParameter(scope));
+                    TransactionalBehavior.DoNotEnsureTransaction, ReportScopeSql.SessionFillSql, cancellationToken, ReportScopeSql.CreateParameter(scope));
 
                 Task<List<T>> QueryAsync<T>(string sql, params SqlParameter[] extra)
                 {
                     var parameters = new object[] { new SqlParameter("@from", fromUtc), new SqlParameter("@to", toUtc) }
                         .Concat(extra)
                         .ToArray();
-                    return db.Database.SqlQuery<T>(ReportScopeSql.ApplyInSession(sql, scope), parameters).ToListAsync();
+                    return db.Database.SqlQuery<T>(ReportScopeSql.ApplyInSession(sql, scope), parameters).ToListAsync(cancellationToken);
                 }
 
                 var summary = new DlpSummary { FromUtc = fromUtc, ToUtc = toUtc };
@@ -560,7 +597,7 @@ GROUP BY p.policy_id, p.name;";
                     var ids = ranked.Select(r => r.UserId).ToList();
                     var names = ids.Count == 0
                         ? new Dictionary<int, string>()
-                        : await db.users.Where(u => ids.Contains(u.ID)).ToDictionaryAsync(u => u.ID, u => u.UserPrincipalName);
+                        : await db.users.Where(u => ids.Contains(u.ID)).ToDictionaryAsync(u => u.ID, u => u.UserPrincipalName, cancellationToken);
 
                     summary.TopUsers = ToRows(ranked.Select(r => new RankProjection
                     {
@@ -574,7 +611,7 @@ GROUP BY p.policy_id, p.name;";
                     var events = db.copilot_dlp_events
                         .Where(e => e.RelatedChat.TimeStampUtc >= fromUtc && e.RelatedChat.TimeStampUtc <= toUtc
                                     && e.RelatedChat.UserId != null);
-                    await AttachUserPolicyBreakdownAsync(events, summary.TopUsers);
+                    await AttachUserPolicyBreakdownAsync(events, summary.TopUsers, cancellationToken);
                 }
 
                 summary.Trend = (await QueryAsync<ScopedDayRow>(ScopedTrendSql))
@@ -627,7 +664,8 @@ GROUP BY p.policy_id, p.name;";
         /// </remarks>
         private static async Task AttachAgentPolicyBreakdownAsync(
             IQueryable<Common.Entities.Entities.AuditLog.CopilotDlpEvent> events,
-            List<DlpImpactRow> agents)
+            List<DlpImpactRow> agents,
+            CancellationToken cancellationToken)
         {
             var agentIds = agents.Select(a => a.Id).Where(id => !string.IsNullOrEmpty(id)).ToList();
             if (agentIds.Count == 0)
@@ -653,7 +691,7 @@ GROUP BY p.policy_id, p.name;";
                     Blocked = g.Count(e => e.IsBlocked),
                     Audited = g.Count(e => !e.IsBlocked),
                 })
-                .ToListAsync();
+                .ToListAsync(cancellationToken);
 
             AttachPolicies(agents, breakdown.Select(r => new PolicyBreakdownRow
             {
@@ -676,7 +714,8 @@ GROUP BY p.policy_id, p.name;";
         /// </remarks>
         private static async Task AttachUserPolicyBreakdownAsync(
             IQueryable<Common.Entities.Entities.AuditLog.CopilotDlpEvent> events,
-            List<DlpImpactRow> users)
+            List<DlpImpactRow> users,
+            CancellationToken cancellationToken)
         {
             var userIds = new List<int?>();
             foreach (var user in users)
@@ -711,7 +750,7 @@ GROUP BY p.policy_id, p.name;";
                     Blocked = g.Count(e => e.IsBlocked),
                     Audited = g.Count(e => !e.IsBlocked),
                 })
-                .ToListAsync();
+                .ToListAsync(cancellationToken);
 
             AttachPolicies(users, breakdown.Select(r => new PolicyBreakdownRow
             {
@@ -977,7 +1016,8 @@ OPTION (RECOMPILE);";
         /// The query work behind <see cref="Governance"/>, separated so it can run against a real database in
         /// tests. <paramref name="scope"/> is the administrator's global filter, or <c>null</c> for everyone.
         /// </summary>
-        internal async Task<DlpGovernanceSummary> BuildGovernanceAsync(int days, ReportUserScope scope = null)
+        internal async Task<DlpGovernanceSummary> BuildGovernanceAsync(int days, ReportUserScope scope = null,
+            CancellationToken cancellationToken = default(CancellationToken))
         {
             var windowDays = SnapWindow(days);
             var toUtc = DateTime.UtcNow;
@@ -987,14 +1027,16 @@ OPTION (RECOMPILE);";
 
             using (var db = _contextFactory.Create())
             {
+                db.Database.CommandTimeout = CommandTimeoutSeconds;
+
                 // Opened here, not by EF, so a scope's temporary table lives for every statement below - the same
                 // session pattern as BuildScopedSummaryAsync.
                 await AzureSqlTokenAuth.OpenAsync(db.Database.Connection);
                 if (restricted)
                 {
-                    await db.Database.ExecuteSqlCommandAsync(TransactionalBehavior.DoNotEnsureTransaction, ReportScopeSql.SessionCreateSql);
+                    await db.Database.ExecuteSqlCommandAsync(TransactionalBehavior.DoNotEnsureTransaction, ReportScopeSql.SessionCreateSql, cancellationToken);
                     await db.Database.ExecuteSqlCommandAsync(
-                        TransactionalBehavior.DoNotEnsureTransaction, ReportScopeSql.SessionFillSql, ReportScopeSql.CreateParameter(scope));
+                        TransactionalBehavior.DoNotEnsureTransaction, ReportScopeSql.SessionFillSql, cancellationToken, ReportScopeSql.CreateParameter(scope));
                 }
 
                 Task<List<T>> QueryAsync<T>(string sql)
@@ -1002,7 +1044,7 @@ OPTION (RECOMPILE);";
                     return db.Database.SqlQuery<T>(
                         ReportScopeSql.ApplyInSession(sql, effectiveScope),
                         new SqlParameter("@from", fromUtc),
-                        new SqlParameter("@to", toUtc)).ToListAsync();
+                        new SqlParameter("@to", toUtc)).ToListAsync(cancellationToken);
                 }
 
                 var messages = (await QueryAsync<GovernanceMessagesRow>(GovernanceMessagesSql)).Single();

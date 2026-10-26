@@ -179,7 +179,10 @@ The solution **already** emits two custom events the wiki's
 section alerts on, via `AnalyticsLogger.TrackEvent` / `JobTimer.TrackFinishedEventAndStopTimer`:
 
 - **`FinishedImportCycle`** — one per full importer loop (`Office365ActivityImporter` and
-  `AppInsightsImporter`), with a `context` dimension = elapsed-time string.
+  `AppInsightsImporter`), with a `context` dimension = elapsed-time string. `AppInsightsImporter` sends it
+  only for a cycle that got to the end (outcome `Succeeded` or `Degraded`), never for one that stopped at a
+  failed day; every one of its cycles, whatever the outcome, also sends an `AppInsightsImportCycle` event
+  with `Outcome`, `Reasons` and `FailedDays`, and each day it reads sends an `AppInsightsDay` event.
 - **`FinishedSectionImport`** — one per section (audit, user metadata, user apps, usage activity, Teams,
   sent emails, App Insights hits/custom events).
 

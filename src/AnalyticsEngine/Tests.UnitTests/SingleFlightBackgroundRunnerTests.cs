@@ -24,9 +24,13 @@ namespace Tests.UnitTests
 
         private static async Task<string> CaptureConsole(Func<Task> action)
         {
+            // Error and Critical lines go to stderr, so the capture is of both streams.
             var captured = new StringWriter();
             var original = Console.Out;
-            Console.SetOut(TextWriter.Synchronized(captured));
+            var originalError = Console.Error;
+            var synchronised = TextWriter.Synchronized(captured);
+            Console.SetOut(synchronised);
+            Console.SetError(synchronised);
             try
             {
                 await action();
@@ -34,6 +38,7 @@ namespace Tests.UnitTests
             finally
             {
                 Console.SetOut(original);
+                Console.SetError(originalError);
             }
 
             return captured.ToString();

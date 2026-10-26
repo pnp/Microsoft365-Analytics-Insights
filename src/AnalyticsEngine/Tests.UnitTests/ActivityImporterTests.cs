@@ -99,12 +99,8 @@ namespace Tests.UnitTests
                 }
             }
 
-            int processedCount = 0;
-            foreach (var cacheChunk in cache.GetIds(ActivityImportCache.CacheType.Processed))
-            {
-                processedCount += cacheChunk.Count;
-            }
-            Assert.AreEqual(processedCount, MAX_CHUNKS * FIVE_MILLION);
+            // One flat id set now, rather than hourly chunks of id -> timestamp dictionaries.
+            Assert.AreEqual(MAX_CHUNKS * FIVE_MILLION, cache.ProcessedIdCount);
 
         }
 

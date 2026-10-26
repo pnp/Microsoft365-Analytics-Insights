@@ -3,8 +3,10 @@ using Common.Entities.Calls;
 using Common.Entities.Config;
 using Common.Entities.Models;
 using DataUtils;
+using System;
 using System.Collections.Generic;
 using System.Text;
+using System.Linq;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
@@ -15,36 +17,68 @@ namespace Web.AnalyticsWeb.Controllers
     [Route("api/CallRecordWebhook")]
     public class CallRecordWebhookController  : ControllerBase
     {
+        // The endpoint is anonymous - Graph has to be able to POST to it - so nothing costly is built per request.
+        // Configuration, the logger and the Service Bus sender are created once per process, and the sender only once
+        // a POST has carried a notification whose clientState matches: a stranger's request never gets that far.
+        private static readonly Lazy<AppConfig> Config = new Lazy<AppConfig>(() => new AppConfig());
+        private static readonly Lazy<AnalyticsLogger> Logger = new Lazy<AnalyticsLogger>(
+            () => new AnalyticsLogger(Config.Value.AppInsightsConnectionString, nameof(CallRecordWebhookController)));
+
+        // The clientState derived from the app's client secret (and the legacy raw secret, while subscriptions created
+        // before that change are replaced). One per process, so its warnings are throttled per process. After a client
+        // secret rotation it also accepts - for a bounded window, and only from the subscription the importer recorded -
+        // the previous secret's clientState, recognised by the fingerprint the importer stored in the runtime state table.
+        private static readonly Lazy<CallNotificationAuthenticator> Authenticator = new Lazy<CallNotificationAuthenticator>(
+            () => new CallNotificationAuthenticator(CallWebhookClientState.ForConfig(Config.Value),
+                CachedCallSubscriptionRecordSource.ForConfig(Config.Value, Logger.Value)));
+
+        private static readonly object QueueLock = new object();
+        private static ServiceBusClient _queueClient;
+        private static ICallNotificationQueueSender _queue;
+
         // Webhook called by Graph for new calls
-        // POST: api/CallRecordWebhook
+        // POST: api/CallRecordWebhook - or api/CallRecordWebhook?cs=v1, the URL subscriptions with the derived clientState
+        // use (CallSubscriptionRules.CurrentNotificationUrl). The extra parameter needs no binding: Graph appends its
+        // validation token as "&validationToken=", which binds below either way.
         [HttpPost]
         public async Task<IActionResult> Post(
-            [FromBody] GraphChangeNotificationList changeMsg,
+            [FromBody(EmptyBodyBehavior = Microsoft.AspNetCore.Mvc.ModelBinding.EmptyBodyBehavior.Allow)] GraphChangeNotificationList changeMsg,
             [FromQuery] string validationToken = "")
         {
-            var config = new AppConfig();
-            var logger = new AnalyticsLogger(config.AppInsightsConnectionString, nameof(CallRecordWebhookController));
-
-            // Test ping from Graph?
+            // Test ping from Graph, or the importer warming the webhook up before it asks Graph for a subscription?
             if (!string.IsNullOrEmpty(validationToken))
             {
-                logger.LogInformation($"{nameof(CallRecordWebhookController)}: test ping from Graph received.");
+                Logger.Value.LogInformation($"{nameof(CallRecordWebhookController)}: validation request received (from Graph, or the importer's warm-up).");
                 return Content(validationToken, "text/plain", Encoding.UTF8);
             }
 
-            // Do we have a correctly deserialised body?
-            if (changeMsg != null)
+            // Do we have a correctly deserialised body? "{}" deserialises to a list with no notifications, which is
+            // just as malformed as no body at all - and used to be a NullReferenceException (a 500) for anyone.
+            if (changeMsg?.Notifications == null)
             {
-                var changes = new List<GraphChangeNotification>();
-                int invalidChangeMsgs = 0;
+                Logger.Value.LogInformation($"{nameof(CallRecordWebhookController)} invoked with invalid body.");
+                return new ContentResult
+                {
+                    StatusCode = StatusCodes.Status400BadRequest,
+                    ContentType = "text/plain; charset=utf-8",
+                    Content = $"Could not find {nameof(GraphChangeNotificationList)} in body"
+                };
+            }
 
-                // Verify each msg is legit - compare ClientState to app secret
-                var selection = CallNotificationRules.SelectValidNotifications(changeMsg.Notifications, config.ClientSecret);
-                changes = selection.Valid;
-                invalidChangeMsgs = selection.InvalidCount;
+            var config = Config.Value;
+            var logger = Logger.Value;
 
-                logger.LogInformation($"{nameof(CallRecordWebhookController)} invoked. {changes.Count} valid changes; {invalidChangeMsgs} invalid changes.");
+            // Verify each msg is legit - compare its ClientState to the one derived from the app secret. A null entry
+            // cannot be, and is counted as invalid.
+            var notifications = changeMsg.Notifications.Where(n => n != null).ToList();
+            var selection = await Authenticator.Value.SelectAsync(notifications, logger);
+            var changes = selection.Valid;
+            var invalidChangeMsgs = selection.InvalidCount + (changeMsg.Notifications.Count - notifications.Count);
 
+            logger.LogInformation($"{nameof(CallRecordWebhookController)} invoked. {changes.Count} valid changes; {invalidChangeMsgs} invalid changes.");
+
+            if (changes.Count > 0)
+            {
                 // Service Bus is required to dispatch call notifications. If it's not configured, the calls feature is disabled.
                 if (string.IsNullOrWhiteSpace(config.ConnectionStrings.ServiceBusConnectionString))
                 {
@@ -57,43 +91,43 @@ namespace Web.AnalyticsWeb.Controllers
                     };
                 }
 
-                // Create new SB client. Wrap in try/finally so client + sender are disposed
-                // even if AddChangeMsgToQueue throws - otherwise sockets leak per webhook call.
-                // Authenticate with Entra ID RBAC (runtime service principal), never a SAS key. See issue #138.
-                var sbClient = CallNotificationServiceBus.CreateRbacClient(config);
-                var sbConnectionProps = ServiceBusConnectionStringProperties.Parse(config.ConnectionStrings.ServiceBusConnectionString);
-                var sbSender = sbClient.CreateSender(sbConnectionProps.EntityPath);
-
                 try
                 {
-                    try
-                    {
-                        await CallNotificationDispatcher.AddChangeMsgToQueue(changes, logger, new ServiceBusCallNotificationQueueSender(sbSender));
-                    }
-                    catch (ServiceBusException ex)
-                    {
-                        logger.TrackException(ex);
-                        logger.LogError($"Error adding change messages to queue: {ex.Message}");
-                        return StatusCode(StatusCodes.Status500InternalServerError);
-                    }
+                    await CallNotificationDispatcher.AddChangeMsgToQueue(changes, logger, SharedQueue(config));
                 }
-                finally
+                catch (ServiceBusException ex)
                 {
-                    await sbSender.DisposeAsync();
-                    await sbClient.DisposeAsync();
+                    logger.TrackException(ex);
+                    logger.LogError($"Error adding change messages to queue: {ex.Message}");
+                    return StatusCode(StatusCodes.Status500InternalServerError);
+                }
+            }
+
+            return Content("not null and that", "text/plain", Encoding.UTF8);
+        }
+
+        /// <summary>
+        /// The process's one Service Bus sender for the calls queue.
+        /// </summary>
+        /// <remarks>
+        /// A <see cref="ServiceBusClient"/> and its senders are built to live as long as the application and are safe
+        /// to share. A client per POST opened and tore down an AMQP connection, and acquired a token, for every
+        /// notification Graph sent. Authenticates with Entra ID RBAC (runtime service principal), never a SAS key - see
+        /// issue #138. A failure to build it is not kept, so the next notification tries again.
+        /// </remarks>
+        private static ICallNotificationQueueSender SharedQueue(AppConfig config)
+        {
+            lock (QueueLock)
+            {
+                if (_queue == null || _queueClient == null)
+                {
+                    var client = CallNotificationServiceBus.CreateRbacClient(config);
+                    var entityPath = ServiceBusConnectionStringProperties.Parse(config.ConnectionStrings.ServiceBusConnectionString).EntityPath;
+                    _queue = new ServiceBusCallNotificationQueueSender(client.CreateSender(entityPath));
+                    _queueClient = client;
                 }
 
-                return Content("not null and that", "text/plain", Encoding.UTF8);
-            }
-            else
-            {
-                logger.LogInformation($"{nameof(CallRecordWebhookController)} invoked with invalid body.");
-                return new ContentResult
-                {
-                    StatusCode = StatusCodes.Status400BadRequest,
-                    ContentType = "text/plain; charset=utf-8",
-                    Content = $"Could not find {nameof(GraphChangeNotificationList)} in body"
-                };
+                return _queue;
             }
         }
     }

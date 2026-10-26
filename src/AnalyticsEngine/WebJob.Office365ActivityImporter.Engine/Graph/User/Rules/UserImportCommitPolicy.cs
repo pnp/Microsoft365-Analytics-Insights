@@ -39,6 +39,16 @@
         /// which costs one repeated enumeration and buys correctness.
         /// </remarks>
         public bool UserOrgsSucceeded { get; set; } = true;
+
+        /// <summary>
+        /// Every user quarantined for an identity conflict is safely stored for the next cycle, or nobody was.
+        /// </summary>
+        /// <remarks>
+        /// A quarantined user's changes are written only once the conflict is resolved, and the checkpoint moving past
+        /// them is what would otherwise make Graph stop reporting them. So it moves only once the store holds their latest
+        /// profile - see <c>UserIdentityQuarantineRules</c>.
+        /// </remarks>
+        public bool IdentityQuarantineSaved { get; set; } = true;
     }
 
     /// <summary>
@@ -72,7 +82,8 @@
             return results.InsertPhaseSucceeded
                 && results.UpdatePhaseSucceeded
                 && results.LicenceRefreshSucceeded
-                && results.UserOrgsSucceeded;
+                && results.UserOrgsSucceeded
+                && results.IdentityQuarantineSaved;
         }
     }
 }

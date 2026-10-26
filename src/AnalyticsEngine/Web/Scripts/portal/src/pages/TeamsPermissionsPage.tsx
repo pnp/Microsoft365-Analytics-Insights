@@ -13,7 +13,7 @@ import TeamList from '../components/teams/TeamList';
 import Spinner from '../components/Spinner';
 import { GraphResponse } from '../types/GraphResponse';
 import { fetchMsGraph, GRAPH_ENDPOINTS } from '../auth/graph';
-import { fetchGraphToken } from '../auth/siteToken';
+import { fetchGraphToken, SiteTokenUnavailableError } from '../auth/siteToken';
 import {
   TEAMS_CONNECT_URL,
   readTeamsConnectOutcome,
@@ -23,6 +23,7 @@ import {
 import type { GraphAccessToken } from '../types/graphToken';
 import type { User, Team } from '@microsoft/microsoft-graph-types';
 import { useT, type TFunction } from '../i18n';
+import type { TranslationKey } from '../i18n/catalog';
 
 type TeamsPermissionsProps = {
   t: TFunction;
@@ -35,6 +36,11 @@ type TeamsPermissionsState = {
   error: string | null;
   /** Set when the site couldn't mint a Graph token for this session - nothing can load without one. */
   noToken: boolean;
+  /**
+   * Set when the site couldn't mint a Graph token because Microsoft Entra ID couldn't be reached: the
+   * explanation to show. Connecting again wouldn't help, so the page offers to try again instead.
+   */
+  tokenUnavailable: TranslationKey | null;
   joinedTeams: Array<Team> | null;
   graphProfile: User | null;
 };
@@ -51,6 +57,8 @@ type TeamsPermissionsState = {
  * at all - used to be locked out of the whole portal. So when the site has no token, this page
  * offers "Connect to Microsoft Teams" instead (`src/auth/teamsConnect.ts`), which asks Entra ID for
  * those permissions and comes back here. If Entra ID says no, the server says why in the query string.
+ * If the site has a token but Entra ID can't be reached to refresh it, the site says so with a code,
+ * and the page offers to try again rather than to connect: connecting would fail the same way.
  *
  * There used to be a second, client-side MSAL sign-in path for when that call failed. It was
  * removed: it was pinned to a hard-coded app registration that no longer resolves, so it could
@@ -66,6 +74,7 @@ class TeamsPermissionsPageInner extends React.Component<TeamsPermissionsProps, T
       loading: true,
       error: null,
       noToken: false,
+      tokenUnavailable: null,
       joinedTeams: null,
       graphProfile: null,
     };
@@ -87,8 +96,21 @@ class TeamsPermissionsPageInner extends React.Component<TeamsPermissionsProps, T
 
   // React events
   async componentDidMount() {
+    return this.load();
+  }
+
+  async load() {
     // Ask the site for a Graph token for the signed-in admin.
-    const serverSideToken = await fetchGraphToken();
+    let serverSideToken: GraphAccessToken | null;
+    try {
+      serverSideToken = await fetchGraphToken();
+    } catch (error) {
+      if (error instanceof SiteTokenUnavailableError) {
+        this.setState({ loading: false, tokenUnavailable: error.messageKey });
+        return;
+      }
+      throw error;
+    }
 
     if (!serverSideToken) {
       this.setState({ loading: false, noToken: true });
@@ -97,6 +119,11 @@ class TeamsPermissionsPageInner extends React.Component<TeamsPermissionsProps, T
 
     return this.loadTeamsData(serverSideToken);
   }
+
+  retry = () => {
+    this.setState({ loading: true, error: null, noToken: false, tokenUnavailable: null });
+    void this.load();
+  };
 
   async getJoinedTeams(accessToken: string) {
     console.log('Loading teams for user from Graph');
@@ -157,6 +184,18 @@ class TeamsPermissionsPageInner extends React.Component<TeamsPermissionsProps, T
               </div>
             )}
 
+            {this.state.tokenUnavailable && (
+              <div style={{ marginBlock: '12px' }}>
+                <MessageBar intent="warning" layout="multiline">
+                  <MessageBarBody>{t(this.state.tokenUnavailable)}</MessageBarBody>
+                </MessageBar>
+                {/* Not Connect: its sign-in ends at the same token endpoint, from the same server, so it would fail too. */}
+                <Button appearance="primary" onClick={this.retry} style={{ marginTop: '12px' }}>
+                  {t('admin.teamsPermissions.entraUnavailable.retry')}
+                </Button>
+              </div>
+            )}
+
             {this.state.error && (
               <MessageBar intent="error" style={{ marginBlock: '12px' }}>
                 <MessageBarBody>{this.state.error}</MessageBarBody>
@@ -180,7 +219,7 @@ class TeamsPermissionsPageInner extends React.Component<TeamsPermissionsProps, T
                   </Text>
                   <TeamList teamsList={this.state.joinedTeams} />
                 </div>
-              ) : (
+              ) : this.state.tokenUnavailable ? null : (
                 <Text block>
                   {this.state.noToken
                     ? t('admin.teamsPermissions.noTokenTeamsPlaceholder')

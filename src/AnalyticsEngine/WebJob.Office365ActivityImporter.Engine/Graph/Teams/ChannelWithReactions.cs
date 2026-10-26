@@ -16,6 +16,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
         {
             this.Id = c.Id;
             this.DisplayName = c.DisplayName;
+            this.MembershipType = c.MembershipType;
 
             // We don't use hardly any data for channel so leave the rest for now
         }
@@ -23,11 +24,20 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
         public string Id { get; set; } = string.Empty;
         public string DisplayName { get; set; }
 
+        /// <summary>
+        /// Standard, private or shared. Decides whether a forbidden message read means "skip this channel" or "this
+        /// token can't read the Team" - see <see cref="ChannelReadFailureRules"/>. <c>null</c> when Graph didn't say.
+        /// </summary>
+        public ChannelMembershipType? MembershipType { get; set; }
+
         public List<ChatMessageReaction> Reactions { get; set; } = new List<ChatMessageReaction>();
         public List<ChatMessage> Messages { get; set; } = new List<ChatMessage>();
         // v5+ exposes channel tabs as List<TeamsTab>; the v4 IChannelTabsCollectionPage interface
         // is gone. PopulateNewMessagesAndReactions / SaveToSql iterate this directly.
         public List<TeamsTab> Tabs { get; internal set; }
+
+        /// <summary>Set by the read when Graph rejected the stored delta token and the channel was read in full instead.</summary>
+        public bool DeltaTokenWasReset { get; internal set; }
 
         /// <summary>
         /// Sort through messages found and decide what's new since last delta. Set on this object.

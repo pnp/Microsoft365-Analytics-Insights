@@ -281,4 +281,18 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
     {
         public AgentCostIncompleteReadException(string message) : base(message) { }
     }
+
+    /// <summary>
+    /// Thrown when a cost API rejects the request itself as invalid - an HTTP 400 for a grouping or filter it does not
+    /// accept, or a 404 for a scope that does not exist (a mistyped path, a cancelled subscription).
+    /// </summary>
+    /// <remarks>
+    /// Typed separately because, like a refusal, sending the same request again cannot succeed: retrying it every
+    /// cycle only re-reads every healthy scope alongside it and writes the same error row again. The fix is a
+    /// setting, so a changed configuration is retried straight away.
+    /// </remarks>
+    public class AgentCostConfigurationException : Exception
+    {
+        public AgentCostConfigurationException(string message) : base(message) { }
+    }
 }

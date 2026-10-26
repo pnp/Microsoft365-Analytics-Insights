@@ -5,15 +5,23 @@ import { loadCatalog, setActiveLanguage } from '../i18n';
 vi.mock('./http', () => ({ apiFetch: vi.fn() }));
 beforeEach(() => { vi.clearAllMocks(); setActiveLanguage('en'); });
 
-it('uses the same-origin helper and POSTs opt-in and reset', async () => {
+it('uses the same-origin helper and POSTs opt-in and reset, each with the revision it was made against', async () => {
   vi.mocked(apiFetch).mockImplementation(async () => new Response('{}', { status: 200 }));
-  const config = { enabled: true, maxPromptsPerCycle: 100, version: '', categories: [] };
+  const config = { enabled: true, maxPromptsPerCycle: 100, version: '', categories: [], revision: 'synthetic-revision' };
   await savePromptCategories(config);
   expect(apiFetch).toHaveBeenCalledWith(expect.stringContaining('/api/PromptCategories'), expect.objectContaining({
     method: 'POST', body: JSON.stringify(config),
   }));
-  await resetPromptCategories();
-  expect(apiFetch).toHaveBeenLastCalledWith(expect.stringContaining('/reset'), expect.objectContaining({ method: 'POST' }));
+  await resetPromptCategories('synthetic-revision');
+  expect(apiFetch).toHaveBeenLastCalledWith(expect.stringContaining('/reset'), expect.objectContaining({
+    method: 'POST', body: JSON.stringify({ expectedRevision: 'synthetic-revision' }),
+  }));
+});
+
+it('reports a save refused because the settings changed since they were loaded by its stable code', async () => {
+  vi.mocked(apiFetch).mockResolvedValue(new Response(JSON.stringify({ code: 'configurationChanged', configuration: null }), { status: 409 }));
+  await expect(savePromptCategories({ enabled: true, maxPromptsPerCycle: 100, version: '', categories: [], revision: 'stale' }))
+    .rejects.toMatchObject({ name: 'PromptCategoryApiError', code: 'configurationChanged' });
 });
 
 it('never exposes server or model text in a Spanish error', async () => {

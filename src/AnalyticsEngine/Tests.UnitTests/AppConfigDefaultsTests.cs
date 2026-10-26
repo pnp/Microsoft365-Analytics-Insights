@@ -38,6 +38,8 @@ namespace Tests.UnitTests
         private const string MessageTraceContainer = "MessageTraceContainer";
         private const string MessageTraceMaxBodyBytes = "MessageTraceMaxBodyBytes";
         private const string MessageTraceMaxPerHour = "MessageTraceMaxPerHour";
+        private const string UsageReportsDaysBack = "UsageReportsDaysBack";
+        private const string CleanUpConcealedIdentityUsers = AppConfig.CleanUpConcealedIdentityUsersSettingName;
 
 
         private static readonly string[] _trackedKeys =
@@ -60,6 +62,8 @@ namespace Tests.UnitTests
             MessageTraceContainer,
             MessageTraceMaxBodyBytes,
             MessageTraceMaxPerHour,
+            UsageReportsDaysBack,
+            CleanUpConcealedIdentityUsers,
 
         };
 
@@ -90,6 +94,36 @@ namespace Tests.UnitTests
                 // previously-missing key is restored as empty; AppConfig treats
                 // both empty and missing as "no value" via its TryParse path.
                 AnalyticsConfig.AppSettings.Set(kvp.Key, kvp.Value ?? string.Empty);
+            }
+        }
+
+        [TestMethod]
+        public void CleanUpConcealedIdentityUsers_IsOnWhenAbsent_AsSetWhenBoolean_AndFailsClosedForAnythingElse()
+        {
+            // The delete is irreversible, so a value that cannot be read as true or false - including the "0", "no" and "off"
+            // an operator reaches for to opt out - must not leave it on. The old rule left it on for all of them, silently.
+            foreach (var absent in new[] { string.Empty, "  " })
+            {
+                AnalyticsConfig.AppSettings.Set(CleanUpConcealedIdentityUsers, absent);
+                var cfg = new AppConfig();
+                Assert.IsTrue(cfg.CleanUpConcealedIdentityUsers, $"'{absent}' counts as not set: the default (on) stands.");
+                Assert.IsNull(cfg.CleanUpConcealedIdentityUsersUnparseableValue);
+            }
+
+            foreach (var (value, expected) in new[] { ("true", true), ("True", true), (" TRUE ", true), ("false", false), ("False", false) })
+            {
+                AnalyticsConfig.AppSettings.Set(CleanUpConcealedIdentityUsers, value);
+                var cfg = new AppConfig();
+                Assert.AreEqual(expected, cfg.CleanUpConcealedIdentityUsers, $"'{value}'");
+                Assert.IsNull(cfg.CleanUpConcealedIdentityUsersUnparseableValue, $"'{value}' is a boolean, so nothing was ignored.");
+            }
+
+            foreach (var unreadable in new[] { "0", "no", "off", "disabled", "1", "yes", "tru" })
+            {
+                AnalyticsConfig.AppSettings.Set(CleanUpConcealedIdentityUsers, unreadable);
+                var cfg = new AppConfig();
+                Assert.IsFalse(cfg.CleanUpConcealedIdentityUsers, $"'{unreadable}' is not true or false: the delete fails closed.");
+                Assert.AreEqual(unreadable, cfg.CleanUpConcealedIdentityUsersUnparseableValue, "The ignored value is kept so the cleanup can name it in its Error.");
             }
         }
 
@@ -179,6 +213,27 @@ namespace Tests.UnitTests
             AnalyticsConfig.AppSettings.Set(DaysBeforeNowToDownload, string.Empty);
             var cfg = new AppConfig();
             Assert.AreEqual(6, cfg.DaysBeforeNowToDownload);
+        }
+
+        [TestMethod]
+        public void UsageReportsDaysBack_IsIndependentOfTheAuditWindow_DefaultsWhenUnusable_AndIsCappedAtWhatGraphKeeps()
+        {
+            // The usage reports used to borrow the audit import's 6-day window, so a date that aged out of it before
+            // its import succeeded could never be fetched again, though Graph keeps about 28 days.
+            AnalyticsConfig.AppSettings.Set(DaysBeforeNowToDownload, "6");
+            foreach (var unusable in new[] { string.Empty, "not-an-int", "0", "-3" })
+            {
+                AnalyticsConfig.AppSettings.Set(UsageReportsDaysBack, unusable);
+                Assert.AreEqual(AppConfig.DefaultUsageReportsDaysBack, new AppConfig().UsageReportsDaysBack, $"UsageReportsDaysBack='{unusable}'");
+            }
+
+            AnalyticsConfig.AppSettings.Set(UsageReportsDaysBack, "14");
+            var cfg = new AppConfig();
+            Assert.AreEqual(14, cfg.UsageReportsDaysBack);
+            Assert.AreEqual(6, cfg.DaysBeforeNowToDownload, "The audit window is unaffected.");
+
+            AnalyticsConfig.AppSettings.Set(UsageReportsDaysBack, "90");
+            Assert.AreEqual(28, new AppConfig().UsageReportsDaysBack, "Graph cannot answer a date older than ~28 days.");
         }
 
         [TestMethod]

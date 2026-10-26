@@ -1,6 +1,7 @@
 using DataUtils;
 using Microsoft.Extensions.Logging;
 using System;
+using System.Collections.Generic;
 using System.Threading.Tasks;
 using WebJob.AppInsightsImporter.Engine.APIResponseParsers.CustomEvents;
 
@@ -38,33 +39,43 @@ namespace WebJob.AppInsightsImporter.Engine
             _clicks = clicks ?? throw new ArgumentNullException(nameof(clicks));
         }
 
-        public async Task SaveAllSectionsAsync(CustomEventsResultCollection events)
+        /// <summary>
+        /// Saves every section, in order, each isolated from the others' failures. Returns which failed, if any,
+        /// so the caller can treat the batch's day as not saved - see <see cref="CustomEventSaveResult"/>.
+        /// </summary>
+        public async Task<CustomEventSaveResult> SaveAllSectionsAsync(CustomEventsResultCollection events)
         {
             // Each section runs inside its own isolation boundary (see SaveSectionSafe). A failure
             // in one section (e.g. a page-update that trips a DbUpdateException) is logged in full
-            // but never aborts the sibling sections nor escapes to stall the whole importer.
+            // but never aborts the sibling sections nor escapes to stall the whole importer. It is
+            // reported in the result instead, so the day is retried rather than silently incomplete.
+            var failedSections = new List<string>();
+
             var hitUpdatesCount = await SaveSectionSafe(_logger, "Hit updates",
-                () => _hitUpdates.SaveHitUpdatesAsync(events));
+                () => _hitUpdates.SaveHitUpdatesAsync(events), failedSections);
 
             var searchesInserted = await SaveSectionSafe(_logger, "Searches",
-                () => _searches.SaveSearchesAsync(events));
+                () => _searches.SaveSearchesAsync(events), failedSections);
 
             var pagesUpdated = await SaveSectionSafe(_logger, "Page updates",
-                () => _pageUpdates.SavePageUpdatesAsync(events));
+                () => _pageUpdates.SavePageUpdatesAsync(events), failedSections);
 
             var clicks = await SaveSectionSafe(_logger, "Clicks",
-                () => _clicks.SaveClicksAsync(events));
+                () => _clicks.SaveClicksAsync(events), failedSections);
 
             _logger.LogInformation($"Event save summary: {hitUpdatesCount:n0} hit-updates, {searchesInserted:n0} searches, {pagesUpdated:n0} page-updates, {clicks:n0} clicks");
+
+            return new CustomEventSaveResult(failedSections);
         }
 
         /// <summary>
         /// Runs one event-save section (hit-updates / searches / page-updates / clicks) inside its own
-        /// timer and isolation boundary. A failure in one section is logged in full and reported via
-        /// TrackException, but never propagates - so a single bad section can neither abort its sibling
-        /// sections nor escape up the call stack and stall the whole importer.
+        /// timer and isolation boundary. A failure in one section is logged in full, reported via
+        /// TrackException and added to <paramref name="failedSections"/>, but never propagates - so a single
+        /// bad section can neither abort its sibling sections nor escape up the call stack and stall the whole
+        /// importer.
         /// </summary>
-        private static async Task<int> SaveSectionSafe(AnalyticsLogger logger, string sectionName, Func<Task<int>> saveAction)
+        private static async Task<int> SaveSectionSafe(AnalyticsLogger logger, string sectionName, Func<Task<int>> saveAction, List<string> failedSections)
         {
             var timer = new JobTimer(logger, sectionName);
             timer.Start();
@@ -80,8 +91,9 @@ namespace WebJob.AppInsightsImporter.Engine
             }
             catch (Exception ex)
             {
+                failedSections.Add(sectionName);
                 logger.TrackException(ex);
-                logger.LogError($"Failed importing '{sectionName}' section: {CommonExceptionHandler.GetErrorText(ex)}. Skipping this section and continuing.");
+                logger.LogError($"Failed importing '{sectionName}' section: {CommonExceptionHandler.GetErrorText(ex)}. Continuing with the other sections; the day will be retried.");
                 logger.LogError($"Exception detail: {ex}");
                 return 0;
             }

@@ -91,6 +91,9 @@ namespace DataUtils.Http
             var startedUtc = _clock.UtcNow;
             var attempt = 0;
 
+            // Everything below only logs the URL (or puts it in an exception message), and a Graph URL carries UPNs, object ids and
+            // delta or skip tokens, so only its endpoint shape is ever used from here on.
+            url = GraphEndpointTemplate.Redact(url);
             while (true)
             {
                 cancellationToken.ThrowIfCancellationRequested();

@@ -1,6 +1,8 @@
 using Microsoft.Extensions.Logging;
 using System;
 using System.Configuration;
+using System.Diagnostics;
+using System.Globalization;
 using System.Linq;
 
 namespace Common.Entities.Config
@@ -8,41 +10,35 @@ namespace Common.Entities.Config
 
     public class AppConnectionStrings
     {
-        public bool TestSQLSettings(ILogger logger)
-        {
-            // Test DB conectivity
-            logger.LogInformation("Testing SQL config...");
+        /// <summary>
+        /// A bounded connectivity and schema probe for the web-traffic importer: reads at most one row of <c>hits</c>
+        /// (a row count would scan a table that is hundreds of millions of rows on a large tenant, on every start).
+        /// </summary>
+        public bool TestSQLSettings(ILogger logger) => Probe(logger, "hits", db => db.hits.Take(1).Count());
 
-            using (var db = new AnalyticsEntitiesContext())
+        /// <summary>The same probe for the audit importer: at most one row of <c>audit_events</c>.</summary>
+        public bool TestAuditSQLSettings(ILogger logger) => Probe(logger, "audit_events", db => db.AuditEventsCommon.Take(1).Count());
+
+        private static bool Probe(ILogger logger, string table, Func<AnalyticsEntitiesContext, int> query)
+        {
+            var clock = Stopwatch.StartNew();
+            try
             {
-                try
+                using (var db = new AnalyticsEntitiesContext())
                 {
-                    int count = (from allHits in db.hits
-                                 select allHits).Count();
-                    logger.LogInformation($"Found {count.ToString("n0")} hits in table already. Test passed!");
+                    query(db);
                 }
-                catch (System.Data.Entity.Core.EntityException ex)
-                {
-                    HandleSqlTestException(ex, logger);
-                    return false;
-                }
-                catch (Microsoft.Data.SqlClient.SqlException ex)
-                {
-                    HandleSqlTestException(ex, logger);
-                    return false;
-                }
+                logger.LogInformation($"SQL startup probe passed: table={table}; ElapsedMs={clock.ElapsedMilliseconds.ToString(CultureInfo.InvariantCulture)}.");
+                return true;
             }
-
-            return true;
-        }
-
-
-        void HandleSqlTestException(Exception ex, ILogger logger)
-        {
-            logger.LogInformation("Fatal error connecting to configured SQL:");
-            logger.LogError(ex, ex.Message);
-
-            Console.WriteLine("Check your SQL configuration in the .config file / App Service settings.");
+            catch (Exception ex) when (!(ex is OutOfMemoryException))
+            {
+                // EF6 wraps a login or open failure in an EntityException; the chain carries the SQL error number.
+                // Passed as template arguments, not interpolated: an exception message may contain braces.
+                logger.LogError(ex, "SQL startup probe failed: table={Table}; ElapsedMs={ElapsedMs}; {Chain}. Check the SQL connection string and firewall/identity access, and that the database has been upgraded.",
+                    table, clock.ElapsedMilliseconds, DataUtils.ExceptionDescriber.Chain(ex));
+                return false;
+            }
         }
 
         // net10: read through AnalyticsConfig (appsettings.json + environment variables). There is no XML

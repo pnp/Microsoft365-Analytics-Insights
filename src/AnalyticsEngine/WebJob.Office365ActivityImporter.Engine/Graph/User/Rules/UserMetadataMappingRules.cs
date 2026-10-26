@@ -44,6 +44,12 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
 
         /// <summary>The manager's Entra (AAD) object id, or null when Graph reports no manager.</summary>
         public string ManagerAadId { get; set; }
+
+        /// <summary>
+        /// Whether Graph said anything about the manager (see <see cref="GraphUser.ManagerReported"/>). False leaves the
+        /// stored manager as it is; true sets it to <see cref="ManagerAadId"/>, clearing it when that is null.
+        /// </summary>
+        public bool ManagerReported { get; set; }
     }
 
     /// <summary>
@@ -112,6 +118,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 CompanyName = NormaliseLookupName(graphUser.CompanyName),
 
                 ManagerAadId = graphUser.DefaultManagerInfo?.Id,
+                ManagerReported = graphUser.ManagerReported,
             };
         }
     }

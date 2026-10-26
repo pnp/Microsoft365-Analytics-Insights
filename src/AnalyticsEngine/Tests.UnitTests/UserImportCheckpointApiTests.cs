@@ -227,10 +227,7 @@ namespace Tests.UnitTests
 
         #region Through the Web API pipeline
 
-        // net10: these drive the controller through Web API 2's in-memory HttpServer, which ASP.NET Core does not
-        // have. They need porting to the ASP.NET Core TestServer; until then the service-level tests above and the
-        // request-check tests below still cover the behaviour, just not the routing and filter wiring end to end.
-#if NETFRAMEWORK
+        // Core uses the same selected-controller TestServer as the portal's other endpoint tests.
         [TestMethod]
         public async Task Get_ReturnsCamelCaseFacts_AndNeverTheToken()
         {
@@ -422,7 +419,6 @@ namespace Tests.UnitTests
             }
         }
 
-#endif
         #endregion
 
         #region The request check on its own
@@ -552,9 +548,11 @@ namespace Tests.UnitTests
         public async Task OrganisationTypesThatCannotBeRead_MeanTheUnqualifiedKey_NotABrokenPage()
         {
             // A database that is not upgraded yet has no organisation tables, and the importer then uses the unqualified key.
+            // The failure is the real one: SQL error 208 from a database that has never had those tables.
+            var missingTables = await MissingOrganisationTablesFailureAsync();
             var store = StoreWithCheckpointAndStamp();
             var logger = new CapturingLogger();
-            Func<Task<string>> unreadable = () => { throw new InvalidOperationException("synthetic: the organisation tables do not exist yet"); };
+            Func<Task<string>> unreadable = () => Task.FromException<string>(missingTables);
 
             var status = await NewService(store, logger: logger, orgKeyQualifier: unreadable).GetStatusAsync();
             var result = await NewService(store, orgKeyQualifier: unreadable).ClearAsync(runOnNextCycle: false);
@@ -564,6 +562,59 @@ namespace Tests.UnitTests
             Assert.IsTrue(result.CheckpointCleared);
             Assert.IsFalse(store.Values.ContainsKey(CheckpointKey));
             StringAssert.Contains(logger.Messages(LogLevel.Warning).Single(), "couldn't read the configured user organisation types");
+        }
+
+        /// <summary>
+        /// Any other failure to read the organisation types - a timeout, a deadlock - says nothing about which key holds
+        /// the importer's token. Clearing only the unqualified key used to report success while the qualified
+        /// checkpoint survived, and a healthy importer then resumed from it.
+        /// </summary>
+        [TestMethod]
+        public async Task OrganisationTypesFailingTransiently_ClearDeletesNothing_AndSaysTheCheckpointIsUnavailable()
+        {
+            var store = StoreWithCheckpointAndStamp();
+            store.Values[QualifiedCheckpointKey] = TokenValue;
+            Func<Task<string>> transient = () => Task.FromException<string>(new TimeoutException("synthetic: Execution Timeout Expired"));
+
+            await Assert.ThrowsExceptionAsync<UserImportCheckpointKeyUnavailableException>(
+                () => NewService(store, orgKeyQualifier: transient).ClearAsync(runOnNextCycle: true));
+            await Assert.ThrowsExceptionAsync<UserImportCheckpointKeyUnavailableException>(
+                () => NewService(store, orgKeyQualifier: transient).GetStatusAsync());
+
+            Assert.IsTrue(store.Values.ContainsKey(QualifiedCheckpointKey));
+            Assert.IsTrue(store.Values.ContainsKey(CheckpointKey));
+            Assert.IsTrue(store.Values.ContainsKey(UserImportCheckpointKeys.LastCompleted));
+
+            using (var host = new CheckpointHost(NewService(store, orgKeyQualifier: transient)))
+            using (var request = PortalClear(runOnNextCycle: true))
+            using (var response = await host.Client.SendAsync(request))
+            {
+                Assert.AreEqual(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+                var json = JObject.Parse(await response.Content.ReadAsStringAsync());
+                Assert.AreEqual("organisationTypesUnavailable", (string)json["code"]);
+                Assert.AreEqual(1, json.Properties().Count(), "The page writes the sentence; the server sends only the code.");
+            }
+
+            Assert.AreEqual(3, store.Values.Count, "Nothing may be deleted when the key is not known.");
+        }
+
+        /// <summary>SQL error 208 from LocalDB's master database, which has no user organisation tables.</summary>
+        private static async Task<Exception> MissingOrganisationTablesFailureAsync()
+        {
+            try
+            {
+                await Common.Entities.UserOrgs.UserOrgStores
+                    .CreateTypeStore(@"Data Source=(localdb)\MSSQLLocalDB;Initial Catalog=master;Integrated Security=true")
+                    .GetEnabledEntraTypesAsync();
+            }
+            catch (Exception ex)
+            {
+                Assert.IsTrue(UserImportCheckpointService.IsMissingTable(ex), "Expected SQL error 208, got: " + ex);
+                return ex;
+            }
+
+            Assert.Fail("master unexpectedly has the user organisation tables.");
+            return null;
         }
 
         [TestMethod]
@@ -723,6 +774,26 @@ namespace Tests.UnitTests
                     return base.SendAsync(request, cancellationToken);
                 }
             }
+        }
+#else
+        private sealed class CheckpointHost : IDisposable
+        {
+            private readonly PortalTestHost _host;
+
+            public CheckpointHost(UserImportCheckpointService service, Func<IPrincipal> principal = null)
+            {
+                var administrator = new ClaimsPrincipal(new ClaimsIdentity(new[]
+                {
+                    new Claim(ClaimTypes.NameIdentifier, "synthetic-administrator"),
+                    new Claim("roles", PortalRoles.Administration),
+                }, "synthetic-admin"));
+                _host = new PortalTestHost(new[] { typeof(UserImportCheckpointAPIController) },
+                    principal?.Invoke() ?? administrator, PortalAccessPolicy.Enforcing,
+                    _ => new UserImportCheckpointAPIController(() => service));
+            }
+
+            public HttpClient Client => _host.Client;
+            public void Dispose() => _host.Dispose();
         }
 #endif
 

@@ -398,6 +398,22 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public async Task AnIncompleteReadWritesNoOrgValues_AndRecordsNoRefresh()
+        {
+            // The organisation merge is only ever given a complete read. A read that stopped early - a failed page, or one
+            // that came back without its value collection, which is not Graph rejecting the attributes - is read again
+            // next cycle from the same checkpoint, and its values are applied then.
+            var orgTypes = new FakeUserOrgTypeStore("extensionAttribute1");
+            var assignments = new FakeUserOrgAssignmentStore();
+            var loader = new FakeUserMetadataLoader(new List<GraphUser> { NewGraphUser() }) { SimulateIncompleteDeltaRead = true };
+
+            await RunImport(loader, orgTypes, assignments);
+
+            Assert.AreEqual(0, assignments.MergeCalls);
+            Assert.AreEqual(0, orgTypes.RefreshCalls.Count, "Values that were not read in full were not refreshed.");
+        }
+
+        [TestMethod]
         public async Task ASuccessfulCycleRecordsTheRefreshAsOfWhenTheCycleStarted()
         {
             // The start, not the end: on a large tenant the Graph read takes minutes, and the values
