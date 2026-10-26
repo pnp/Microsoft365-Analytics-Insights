@@ -1,5 +1,6 @@
 extern alias AnalyticsWeb;
 using AnalyticsWeb::Web.AnalyticsWeb.Models.CopilotCosts;
+using AnalyticsWeb::Web.AnalyticsWeb.Security;
 using Azure;
 using Azure.Data.Tables;
 using Azure.Core.Pipeline;
@@ -66,13 +67,44 @@ namespace Tests.UnitTests
             var claims = new List<Claim>
             {
                 new Claim("tid", Tenant), new Claim("aud", Client), new Claim("oid", UserId),
-                new Claim(ClaimTypes.Role, CostConnectionRuntime.OperatorRole)
+                new Claim(ClaimTypes.Role, PortalRoles.Administration)
             };
             var principal = new ClaimsPrincipal(new ClaimsIdentity(claims, "test"));
-            Assert.IsTrue(CostConnectionRuntime.IsOperator(principal, Tenant, Client));
-            Assert.IsFalse(CostConnectionRuntime.IsOperator(principal, Client, Client));
-            Assert.IsFalse(CostConnectionRuntime.IsOperator(principal, Tenant, Tenant));
-            Assert.IsFalse(CostConnectionRuntime.IsOperator(new ClaimsPrincipal(new ClaimsIdentity(claims.Where(c => c.Type != ClaimTypes.Role), "test")), Tenant, Client));
+            Assert.IsTrue(CostConnectionRuntime.CanManage(principal, Tenant, Client, PortalAccessPolicy.Enforcing));
+            Assert.IsFalse(CostConnectionRuntime.CanManage(principal, Client, Client, PortalAccessPolicy.Enforcing));
+            Assert.IsFalse(CostConnectionRuntime.CanManage(principal, Tenant, Tenant, PortalAccessPolicy.Enforcing));
+            Assert.IsFalse(CostConnectionRuntime.CanManage(new ClaimsPrincipal(new ClaimsIdentity(claims.Where(c => c.Type != ClaimTypes.Role), "test")),
+                Tenant, Client, PortalAccessPolicy.Enforcing));
+            Assert.IsFalse(CostConnectionRuntime.CanManage(new ClaimsPrincipal(new ClaimsIdentity(claims)), Tenant, Client, PortalAccessPolicy.NotEnforcing));
+        }
+
+        [DataTestMethod]
+        [DataRow("roles", "Portal.Administration", true)]
+        [DataRow("role", "portal.administration", true)]
+        [DataRow(ClaimTypes.Role, "Portal.SeePII", false)]
+        [DataRow(ClaimTypes.Role, "CopilotCostConnection.Operator", false)]
+        public void ConnectionUsesTheExistingAdministrationRole(string claimType, string role, bool allowed)
+        {
+            var principal = new ClaimsPrincipal(new ClaimsIdentity(new[]
+            {
+                new Claim("tid", Tenant), new Claim("aud", Client), new Claim("oid", UserId),
+                new Claim(claimType, role)
+            }, "test"));
+            Assert.AreEqual(allowed, CostConnectionRuntime.CanManage(principal, Tenant, Client, PortalAccessPolicy.Enforcing));
+        }
+
+        [TestMethod]
+        public void DisablingRoleEnforcementDoesNotDisableConnectionIdentityBinding()
+        {
+            var principal = new ClaimsPrincipal(new ClaimsIdentity(new[]
+            {
+                new Claim("tid", Tenant), new Claim("aud", Client), new Claim("oid", UserId)
+            }, "test"));
+            Assert.IsTrue(CostConnectionRuntime.CanManage(principal, Tenant, Client, PortalAccessPolicy.NotEnforcing));
+            Assert.IsFalse(CostConnectionRuntime.CanManage(principal, Client, Client, PortalAccessPolicy.NotEnforcing));
+            Assert.IsFalse(CostConnectionRuntime.CanManage(principal, Tenant, Tenant, PortalAccessPolicy.NotEnforcing));
+            principal.Identities.Single().RemoveClaim(principal.FindFirst("oid"));
+            Assert.IsFalse(CostConnectionRuntime.CanManage(principal, Tenant, Client, PortalAccessPolicy.NotEnforcing));
         }
 
         [TestMethod]

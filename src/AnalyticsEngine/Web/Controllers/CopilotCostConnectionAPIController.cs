@@ -13,10 +13,12 @@ using System.Web.Helpers;
 using System.Web.Http;
 using Web.AnalyticsWeb.Models.CopilotCosts;
 using Common.Entities.CopilotCosts;
+using Web.AnalyticsWeb.Security;
 
 namespace Web.AnalyticsWeb.Controllers
 {
     [Authorize]
+    [RequirePortalPermission(PortalPermission.Administration)]
     [RoutePrefix("api/CopilotCostConnection")]
     public sealed class CopilotCostConnectionAPIController : ApiController
     {
@@ -32,8 +34,8 @@ namespace Web.AnalyticsWeb.Controllers
         {
             NoStore();
             var runtime = Runtime;
-            if (!CostConnectionRuntime.IsOperator(User as ClaimsPrincipal, runtime.Config.TenantGUID.ToString(), runtime.Config.ClientID))
-                return Ok(new { status = "operatorRequired" });
+            if (!CostConnectionRuntime.CanManage(User as ClaimsPrincipal, runtime.Config.TenantGUID.ToString(), runtime.Config.ClientID, PortalAccess.PolicyFor(Request)))
+                return ResponseMessage(PortalPermissionDenied.Response(Request, PortalPermission.Administration));
             if (runtime.Availability != "available") return Ok(new { status = runtime.Availability });
             try
             {
@@ -74,8 +76,8 @@ namespace Web.AnalyticsWeb.Controllers
         {
             NoStore();
             var runtime = Runtime;
-            if (!CostConnectionRuntime.IsOperator(User as ClaimsPrincipal, runtime.Config.TenantGUID.ToString(), runtime.Config.ClientID))
-                return Ok(new { status = "operatorRequired" });
+            if (!CostConnectionRuntime.CanManage(User as ClaimsPrincipal, runtime.Config.TenantGUID.ToString(), runtime.Config.ClientID, PortalAccess.PolicyFor(Request)))
+                return ResponseMessage(PortalPermissionDenied.Response(Request, PortalPermission.Administration));
             if (runtime.Availability != "available") return Ok(new { status = runtime.Availability });
             try
             {
@@ -155,8 +157,8 @@ namespace Web.AnalyticsWeb.Controllers
         private async Task<IHttpActionResult> Execute(Func<CancellationToken, Task<IHttpActionResult>> action)
         {
             NoStore();
-            if (!CostConnectionRuntime.IsOperator(User as ClaimsPrincipal, Runtime.Config.TenantGUID.ToString(), Runtime.Config.ClientID))
-                return Content(HttpStatusCode.Forbidden, new { status = "operatorRequired" });
+            if (!CostConnectionRuntime.CanManage(User as ClaimsPrincipal, Runtime.Config.TenantGUID.ToString(), Runtime.Config.ClientID, PortalAccess.PolicyFor(Request)))
+                return ResponseMessage(PortalPermissionDenied.Response(Request, PortalPermission.Administration));
             try
             {
                 Runtime.RequireAvailable();

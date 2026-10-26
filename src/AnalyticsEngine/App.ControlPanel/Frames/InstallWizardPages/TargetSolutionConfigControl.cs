@@ -156,13 +156,12 @@ namespace App.ControlPanel.Controls
         }
 
         internal const string CopilotCostPreviewConfirmation =
-            "Copilot credit history is a PREVIEW and is not supported for production use.\r\n\r\n"
-            + "- It reads Microsoft Graph beta APIs, which can change or be withdrawn without notice.\r\n"
-            + "- It uses a separately connected DELEGATED reader account, not the runtime app's permissions.\r\n"
-            + "- The installer grants nothing for it: assign the 'CopilotCostConnection.Operator' app role yourself, "
-            + "then connect the reader from the web app's Administration page.\r\n"
+            "Copilot credit history uses a separately connected delegated reader account.\r\n\r\n"
+            + "- A portal administrator with 'Portal.Administration' connects the reader from "
+            + "Administration > Service configuration in the web app.\r\n"
+            + "- The portal explains the Graph delegated permissions, admin consent and reader role needed.\r\n"
             + "- It needs the solution's Azure storage account (Table storage) and will not run without it.\r\n\r\n"
-            + "Turn on the preview?";
+            + "Turn on Copilot credit history?";
 
         private void chkCopilotCostManagement_CheckedChanged(object sender, EventArgs e)
         {
