@@ -118,12 +118,14 @@ namespace Web.AnalyticsWeb
         /// </param>
         public static void Report(Exception ex, string context)
         {
-            Report(ex, context, ctx =>
-            {
-                var config = new AppConfig();
-                return new AnalyticsLogger(config.AppInsightsConnectionString, ctx);
-            });
+            Report(ex, context, ctx => new AnalyticsLogger(AppInsightsConnectionString.Value, ctx));
         }
+
+        private static readonly Lazy<string> AppInsightsConnectionString =
+            new Lazy<string>(() => new AppConfig().AppInsightsConnectionString);
+
+        public static bool IsRoutineNotFound(Exception ex) =>
+            ex is BadHttpRequestException http && http.StatusCode == StatusCodes.Status404NotFound;
 
         internal static void Report(
             Exception ex,
@@ -136,19 +138,23 @@ namespace Web.AnalyticsWeb
             {
                 var logger = loggerFactory(context);
                 CopilotAdoptionExceptionCorrelation.TryGetRunId(ex, out var runId);
-                var properties = string.IsNullOrEmpty(runId)
-                    ? null
-                    : new System.Collections.Generic.Dictionary<string, string>
-                    {
-                        { "RunId", runId },
-                    };
+                var errorId = WebErrorReference.For(ex);
+                var properties = new System.Collections.Generic.Dictionary<string, string>
+                {
+                    { WebErrorReference.PropertyName, errorId },
+                };
+                if (!string.IsNullOrEmpty(runId)) properties["RunId"] = runId;
+                var operationId = string.IsNullOrEmpty(runId) ? errorId : runId;
 
-                logger.TrackException(ex, properties, runId);
+                logger.TrackException(ex, properties, operationId);
 
                 // The exception telemetry carries the type and stack, but a searchable line of text is
                 // what an operator actually greps for when a customer reports "it just returns a 500".
-                var correlation = string.IsNullOrEmpty(runId) ? string.Empty : $" RunId {runId}.";
-                logger.LogError($"Unhandled web request error in {context}.{correlation} {ex.GetBaseException().Message}");
+                var correlation = (string.IsNullOrEmpty(runId) ? string.Empty : $" RunId {runId}.") + $" ErrorId {errorId}.";
+                using (logger.BeginOperationScope(operationId))
+                {
+                    logger.LogError($"Unhandled web request error in {context}.{correlation} {ex.GetBaseException().Message}");
+                }
 
                 MarkReported(ex);
             }
@@ -161,36 +167,47 @@ namespace Web.AnalyticsWeb
     }
 
     /// <summary>
-    /// Web API's hook for exceptions that escape a controller. Registered in <see cref="WebApiConfig"/>.
-    /// <para>
-    /// An <see cref="IExceptionLogger"/> observes only - it does not change the response - so adding it
-    /// cannot alter what any existing caller sees.
-    /// </para>
+    /// One reference per exception, shared by generic API replies, HTML and telemetry.
     /// </summary>
+    public static class WebErrorReference
+    {
+        public const string PropertyName = "ErrorId";
+        public const string UnexpectedCode = "unexpected";
+        private static readonly ConditionalWeakTable<Exception, string> Ids = new ConditionalWeakTable<Exception, string>();
+
+        public static string For(Exception ex) => ex == null
+            ? Guid.NewGuid().ToString("D")
+            : Ids.GetValue(ex, _ => Guid.NewGuid().ToString("D"));
+    }
+
     /// <summary>
-    /// ASP.NET Core's hook for exceptions that escape a controller, registered in <c>Program.cs</c>.
-    /// <para>
-    /// Returning <c>false</c> means "observed, not handled" - the request continues to the normal error
-    /// response - so adding this cannot alter what any existing caller sees. That matches the
-    /// observe-only <c>IExceptionLogger</c> it replaces.
-    /// </para>
+    /// Core equivalent of the stable Web API handler and MVC reporter. API failures receive only a
+    /// code/reference; MVC failures continue to Home/Error with the original exception feature.
     /// </summary>
     public class AnalyticsWebExceptionHandler : IExceptionHandler
     {
-        public ValueTask<bool> TryHandleAsync(HttpContext httpContext, Exception exception, System.Threading.CancellationToken cancellationToken)
+        public async ValueTask<bool> TryHandleAsync(HttpContext httpContext, Exception exception, System.Threading.CancellationToken cancellationToken)
         {
-            if (exception == null) return ValueTask.FromResult(false);
+            if (exception == null) return false;
 
             // A client that navigates away mid-request cancels it. That is normal browser behaviour, not
             // a fault, and reporting it would bury the real errors this exists to surface.
-            if (exception is OperationCanceledException) return ValueTask.FromResult(false);
+            if (exception is OperationCanceledException || WebExceptionTelemetry.IsRoutineNotFound(exception)) return false;
 
             var route = httpContext?.Request?.Path.Value;
             var where = string.IsNullOrEmpty(route) ? "Web" : $"Web {route}";
 
             WebExceptionTelemetry.Report(exception, where);
 
-            return ValueTask.FromResult(false);
+            if (!AuthRequestRules.IsApiRequest(httpContext.Request)) return false;
+            httpContext.Response.StatusCode = StatusCodes.Status500InternalServerError;
+            httpContext.Response.Headers.CacheControl = "no-store, private";
+            await httpContext.Response.WriteAsJsonAsync(new
+            {
+                code = WebErrorReference.UnexpectedCode,
+                errorId = WebErrorReference.For(exception),
+            }, cancellationToken);
+            return true;
         }
     }
 }

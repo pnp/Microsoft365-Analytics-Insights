@@ -36,6 +36,16 @@ namespace Web.AnalyticsWeb.Controllers
             return View();
         }
 
+        [AllowAnonymous]
+        public ActionResult Error()
+        {
+            var failure = HttpContext.Features.Get<Microsoft.AspNetCore.Diagnostics.IExceptionHandlerFeature>()?.Error;
+            ViewBag.ErrorId = failure == null ? null : WebErrorReference.For(failure);
+            Response.StatusCode = (int)HttpStatusCode.InternalServerError;
+            Response.Headers.CacheControl = "no-store, private";
+            return View();
+        }
+
         // Back-compat aliases for the SPA's old URLs.
         public ActionResult AdminApp()
         {

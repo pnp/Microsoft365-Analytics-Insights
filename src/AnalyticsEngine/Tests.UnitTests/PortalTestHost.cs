@@ -47,7 +47,8 @@ namespace Tests.UnitTests
             IEnumerable<Type> controllers,
             IPrincipal principal,
             PortalAccessPolicy policy,
-            Func<Type, ControllerBase> create = null)
+            Func<Type, ControllerBase> create = null,
+            bool productionExceptionHandler = false)
         {
             var selected = controllers.ToList();
             _principal = new PrincipalAccessor(principal);
@@ -82,9 +83,16 @@ namespace Tests.UnitTests
                         services.AddAuthentication(TestScheme)
                             .AddScheme<AuthenticationSchemeOptions, SuppliedPrincipalHandler>(TestScheme, null);
                         services.AddAuthorization();
+                        if (productionExceptionHandler)
+                            services.AddExceptionHandler<AnalyticsWebExceptionHandler>();
                     });
                     web.Configure(app =>
                     {
+                        if (productionExceptionHandler)
+                            app.UseExceptionHandler(new ExceptionHandlerOptions
+                            {
+                                ExceptionHandler = _ => Task.CompletedTask,
+                            });
                         app.UseRouting();
                         app.Use(async (context, next) =>
                         {
