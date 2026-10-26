@@ -75,13 +75,13 @@ namespace Web.AnalyticsWeb.Models.Health
     }
 
     /// <summary>
-    /// Data overview (SQL). Approximate row counts + DB size come from DMVs (cheap, index metadata);
+    /// Data overview (SQL). Approximate row counts + DB size come from catalog views (cheap metadata);
     /// the last-24h/7d volume and freshness come from bounded, short-timeout scans that degrade to
     /// <see cref="RecentVolumeError"/> on a huge tenant rather than hanging the request.
     /// </summary>
     public class DataOverviewSection : HealthSection
     {
-        /// <summary>Row counts are approximate (sys.dm_db_partition_stats) so a huge tenant isn't hit with COUNT(*) on every load.</summary>
+        /// <summary>Row counts are approximate (sys.partitions) so a huge tenant isn't hit with COUNT(*) on every load.</summary>
         [JsonProperty("countsAreApproximate")]
         public bool CountsAreApproximate { get; set; } = true;
         [JsonProperty("hitCount")]
@@ -147,7 +147,7 @@ namespace Web.AnalyticsWeb.Models.Health
         public int Agent365CatalogNeverUsedCount { get; set; }
         [JsonProperty("agent365CatalogStatusError")]
         public string Agent365CatalogStatusError { get; set; }
-        /// <summary>Set when the cheap DMV counts / DB size couldn't be read (e.g. no VIEW DATABASE STATE).</summary>
+        /// <summary>Set when the cheap catalog-view counts / DB size couldn't be read.</summary>
         [JsonProperty("countsError")]
         public string CountsError { get; set; }
         /// <summary>Set when the bounded 24h/7d volume + freshness scans failed or timed out (expected on very large tenants).</summary>

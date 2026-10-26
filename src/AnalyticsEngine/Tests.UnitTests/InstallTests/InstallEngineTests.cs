@@ -21,6 +21,7 @@ using System.IO;
 using System.IO.Compression;
 using System.Linq;
 using System.Text.Json;
+using System.Threading;
 using System.Threading.Tasks;
 using Tests.UnitTests.InstallTests;
 
@@ -126,10 +127,10 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
-        public void NewConfigSchemaVersionIncludesOptionalAiServices()
+        public void NewConfigSchemaVersionIncludesCopilotCreditHistoryPreview()
         {
-            Assert.AreEqual(new Version(3, 4, 0), new SolutionInstallConfig().ConfigSchemaVersion);
-            Assert.AreEqual(new Version(3, 4, 0), BaseSolutionInstallConfig.CurrentConfigSchemaVersion);
+            Assert.AreEqual(new Version(3, 5, 0), new SolutionInstallConfig().ConfigSchemaVersion);
+            Assert.AreEqual(new Version(3, 5, 0), BaseSolutionInstallConfig.CurrentConfigSchemaVersion);
         }
 
         [TestMethod]
@@ -146,10 +147,10 @@ namespace Tests.UnitTests
 
             var saved = Newtonsoft.Json.Linq.JObject.Parse(config.ToJson("synthetic-password"));
 
-            Assert.AreEqual("3.4.0", (string)saved["ConfigSchemaVersion"],
-                "Saved again it no longer has RedisName and includes the Agent 365 and optional Foundry settings; the file must carry the current schema version.");
+            Assert.AreEqual(BaseSolutionInstallConfig.CurrentConfigSchemaVersion.ToString(), (string)saved["ConfigSchemaVersion"],
+                "A re-saved legacy file must carry the current schema version.");
             Assert.IsNull(saved["RedisName"]);
-            Assert.AreEqual(new Version(3, 4, 0), config.ConfigSchemaVersion, "The in-memory config matches what was written.");
+            Assert.AreEqual(BaseSolutionInstallConfig.CurrentConfigSchemaVersion, config.ConfigSchemaVersion, "The in-memory config matches what was written.");
         }
 
         [TestMethod]
@@ -284,6 +285,150 @@ namespace Tests.UnitTests
             }
         }
 
+
+        [TestMethod]
+        public async Task UpgradeDeployment_KeepsWebJobsPausedAcrossSchemaRestartAndContentDeployment()
+        {
+            var stages = new List<string>();
+            Func<string, Task> stage = name => { stages.Add(name); return Task.CompletedTask; };
+
+            await ConfigureAzureComponentsTasks.RunUpgradeDeploymentAsync(true, true,
+                () => stage("pause"), () => stage("resume"), () => stage("stop"), () => stage("start"),
+                () => stage("schema"), () => stage("content"), _logger);
+
+            CollectionAssert.AreEqual(new[] { "pause", "stop", "schema", "start", "content", "resume" }, stages,
+                "SCM needs a running site, but old WebJobs must remain paused until new content is deployed.");
+        }
+
+        [DataTestMethod]
+        [DataRow("schema")]
+        [DataRow("content")]
+        [DataRow("stop")]
+        public async Task UpgradeDeployment_FailureNeverResumesOldOrPartiallyDeployedWebJobs(string failingStage)
+        {
+            var stages = new List<string>();
+            var failure = new InvalidOperationException("Synthetic " + failingStage + " failure");
+            Func<string, Task> stage = name =>
+            {
+                stages.Add(name);
+                return name == failingStage ? Task.FromException(failure) : Task.CompletedTask;
+            };
+
+            var error = await Assert.ThrowsExceptionAsync<InvalidOperationException>(() =>
+                ConfigureAzureComponentsTasks.RunUpgradeDeploymentAsync(true, true,
+                    () => stage("pause"), () => stage("resume"), () => stage("stop"), () => stage("start"),
+                    () => stage("schema"), () => stage("content"), _logger));
+
+            Assert.AreSame(failure, error, "The original failure and stack must survive cleanup.");
+            Assert.AreEqual("pause", stages[0]);
+            Assert.IsTrue(stages.Contains("start"), "A stop that throws may have completed server-side; restore SCM access.");
+            Assert.IsFalse(stages.Contains("resume"), "A partially upgraded deployment must stay paused for operator recovery.");
+            if (failingStage != "content") Assert.IsFalse(stages.Contains("content"));
+        }
+
+        [TestMethod]
+        public async Task UpgradeDeployment_SchemaOnlyLeavesWebJobsPausedForTheManualBinaryUpgrade()
+        {
+            var stages = new List<string>();
+            Func<string, Task> stage = name => { stages.Add(name); return Task.CompletedTask; };
+
+            await ConfigureAzureComponentsTasks.RunUpgradeDeploymentAsync(false, true,
+                () => stage("pause"), () => stage("resume"), () => stage("stop"), () => stage("start"),
+                () => stage("schema"), () => stage("content"), _logger);
+
+            CollectionAssert.AreEqual(new[] { "pause", "stop", "schema", "start" }, stages);
+        }
+
+        [DataTestMethod]
+        [DataRow(null)]
+        [DataRow("")]
+        [DataRow("0")]
+        [DataRow("1")]
+        public void UpgradeDeployment_RetryRestoresTheOriginalOperatorWebJobsSetting(string original)
+        {
+            var settings = new Dictionary<string, string> { ["ContosoUnmanagedSetting"] = "keep" };
+            if (original != null) settings["WEBJOBS_STOPPED"] = original;
+
+            ConfigureAzureComponentsTasks.PauseUpgradeWebJobs(settings);
+            Assert.AreEqual("1", settings["WEBJOBS_STOPPED"]);
+            ConfigureAzureComponentsTasks.PauseUpgradeWebJobs(settings); // Recovery run after a schema/deployment failure.
+            ConfigureAzureComponentsTasks.ResumeUpgradeWebJobs(settings);
+
+            Assert.AreEqual(original != null, settings.ContainsKey("WEBJOBS_STOPPED"));
+            if (original != null) Assert.AreEqual(original, settings["WEBJOBS_STOPPED"]);
+            Assert.IsFalse(settings.ContainsKey(ConfigureAzureComponentsTasks.UpgradeWebJobsStateSetting));
+            Assert.AreEqual("keep", settings["ContosoUnmanagedSetting"]);
+        }
+
+        [DataTestMethod]
+        [DataRow("[2000-01-01T00:00:00Z] MigrationSqlProgress: severity=Error sqlError=0; outcome=Failed sqlError=547", LogLevel.Error)]
+        [DataRow("[2000-01-01T00:00:00Z] MigrationOutcome: migration=Contoso stage=apply outcome=Failed elapsedMs=100 sqlError=547.", LogLevel.Error)]
+        [DataRow("[2000-01-01T00:00:00Z] MigrationSqlProgress: severity=Warning sqlError=0; retrying offline.", LogLevel.Warning)]
+        [DataRow("[2000-01-01T00:00:00Z] MigrationSqlProgress: severity=Information sqlError=0; starting step=find.", LogLevel.Information)]
+        public void DatabaseUpgrade_ChildProgressRetainsFailureAndWarningSeverity(string output, LogLevel expected)
+        {
+            Assert.AreEqual(expected, SqlInstallerTasks.ChildOutputLevel(output));
+        }
+
+        [DataTestMethod]
+        [DataRow(true)]
+        [DataRow(false)]
+        public async Task DatabaseUpgrade_ForwardsSqlProgressAndLogsEachMigrationsElapsedTime(bool existingSchema)
+        {
+            using (var db = ScratchDatabase.Create("upgradeprogress"))
+            {
+                if (existingSchema)
+                    new System.Data.Entity.Migrations.DbMigrator(new Common.Entities.Migrations.Configuration
+                    {
+                        TargetDatabase = new System.Data.Entity.Infrastructure.DbConnectionInfo(db.ConnectionString, "Microsoft.Data.SqlClient")
+                    }).Update("202610221500001_CopilotAgentNameAndFlagRecency");
+                var messages = new List<string>();
+
+                DatabaseUpgrader.CheckDbUpgraded(new DatabaseUpgradeInfo { ConnectionString = db.ConnectionString }, messages.Add);
+
+                Assert.IsTrue(messages.Any(m => m.Contains("MigrationSqlProgress:") && m.Contains("EventFileExtensionUnicode:")),
+                    "SQL InfoMessage progress must reach the caller's installer log.");
+                Assert.IsTrue(messages.Any(m => m.Contains("MigrationOutcome:") && m.Contains("202610221500002_EventFileExtensionUnicode")
+                    && m.Contains("elapsedMs=") && m.Contains("outcome=Succeeded")));
+                Assert.IsTrue(messages.Any(m => m.Contains("MigrationOutcome:") && m.Contains("202610221500003_UniqueOnlineMeetingIds")
+                    && m.Contains("elapsedMs=") && m.Contains("outcome=Succeeded")));
+
+                messages.Clear();
+                using (var context = new Common.Entities.AnalyticsEntitiesContext(db.ConnectionString, true, false))
+                {
+                    context.Database.Connection.Open();
+                    using (var progress = new MigrationProgressInterceptor(db.ConnectionString, messages.Add))
+                    {
+                        var error = Assert.ThrowsException<Microsoft.Data.SqlClient.SqlException>(() => context.Database.ExecuteSqlCommand(
+                            System.Data.Entity.TransactionalBehavior.DoNotEnsureTransaction,
+                            "RAISERROR('Contoso: outcome=Failed step=repoint pass=1 batch=0 sqlError=50001', 10, 1) WITH NOWAIT; THROW 50001, 'Synthetic collision', 1;"));
+                        Assert.AreEqual(50001, error.Number, "Forwarding diagnostics must never turn SQL errors into successful commands.");
+                        Assert.IsTrue(messages.Any(m => m.Contains("MigrationSqlProgress: severity=Error") && m.Contains("step=repoint")));
+                    }
+                    using (var reached = new ManualResetEventSlim())
+                    using (var progress = new MigrationProgressInterceptor(db.ConnectionString, message =>
+                    {
+                        messages.Add(message);
+                        if (message.Contains("Contoso live progress")) reached.Set();
+                    }))
+                    {
+                        var running = Task.Run(() => context.Database.ExecuteSqlCommand(
+                            System.Data.Entity.TransactionalBehavior.DoNotEnsureTransaction,
+                            "RAISERROR('Contoso live progress', 0, 1) WITH NOWAIT; WAITFOR DELAY '00:00:05';"));
+                        var arrivedBeforeCompletion = reached.Wait(TimeSpan.FromSeconds(3)) && !running.IsCompleted;
+                        await running;
+                        Assert.IsTrue(arrivedBeforeCompletion, "NOWAIT progress must reach the installer while the SQL command is still running.");
+                    }
+                    var countAfterDispose = messages.Count;
+                    using (var command = context.Database.Connection.CreateCommand())
+                    {
+                        command.CommandText = "RAISERROR('Contoso after disposal', 0, 1) WITH NOWAIT;";
+                        command.ExecuteNonQuery();
+                    }
+                    Assert.AreEqual(countAfterDispose, messages.Count, "The scoped bridge must remove its connection event handlers.");
+                }
+            }
+        }
 
         [TestMethod]
         public void PublishDataXmlTests()
@@ -422,8 +567,10 @@ namespace Tests.UnitTests
             try
             {
                 var websiteZip = CreateTestZip(testRoot, "Website", "default.htm");
-                var activityZip = CreateTestZip(testRoot, "Office365ActivityImporter", "job.exe");
-                var appInsightsZip = CreateTestZip(testRoot, "AppInsightsImporter", "job.exe");
+                var activityZip = CreateTestZip(testRoot, "Office365ActivityImporter", "job.exe",
+                    Path.Combine(AnalyticsEngineSourceRoot(), "WebJob.Office365ActivityImporter", "settings.job"));
+                var appInsightsZip = CreateTestZip(testRoot, "AppInsightsImporter", "job.exe",
+                    Path.Combine(AnalyticsEngineSourceRoot(), "WebJob.AppInsightsImporter", "settings.job"));
                 var sources = new LocalStorageInstallSourceInfo();
                 sources.GetSolutionComponentLocation(SoftwareComponent.WebSite).FileLocation = websiteZip;
                 sources.GetSolutionComponentLocation(SoftwareComponent.WebJobActivity).FileLocation = activityZip;
@@ -436,6 +583,18 @@ namespace Tests.UnitTests
                     CollectionAssert.Contains(entries, "default.htm");
                     CollectionAssert.Contains(entries, "app_data/jobs/continuous/Office365ActivityImporter/job.exe");
                     CollectionAssert.Contains(entries, "app_data/jobs/continuous/AppInsightsImporter/job.exe");
+
+                    // Kudu reads settings.job only from the root of the job's own folder.
+                    foreach (var job in new[] { "Office365ActivityImporter", "AppInsightsImporter" })
+                    {
+                        var settings = archive.Entries.SingleOrDefault(
+                            entry => entry.FullName.Replace('\\', '/') == $"app_data/jobs/continuous/{job}/settings.job");
+                        Assert.IsNotNull(settings, $"{job} must be deployed with settings.job next to its .exe.");
+                        using (var reader = new StreamReader(settings.Open()))
+                        {
+                            AssertIsSingletonSettingsJob(reader.ReadToEnd(), job);
+                        }
+                    }
                 }
             }
             finally
@@ -444,15 +603,87 @@ namespace Tests.UnitTests
             }
         }
 
-        private static string CreateTestZip(string testRoot, string rootDirectoryName, string fileName)
+        private static string CreateTestZip(string testRoot, string rootDirectoryName, string fileName, params string[] filesToCopy)
         {
             var sourceDirectory = Path.Combine(testRoot, rootDirectoryName);
             Directory.CreateDirectory(sourceDirectory);
             System.IO.File.WriteAllText(Path.Combine(sourceDirectory, fileName), "synthetic test content");
+            foreach (var file in filesToCopy)
+            {
+                System.IO.File.Copy(file, Path.Combine(sourceDirectory, Path.GetFileName(file)));
+            }
 
             var zipPath = Path.Combine(testRoot, rootDirectoryName + ".zip");
             ZipFile.CreateFromDirectory(sourceDirectory, zipPath, CompressionLevel.Optimal, true);
             return zipPath;
+        }
+
+        /// <summary>
+        /// Kudu runs a continuous WebJob on every instance of a scaled-out App Service unless its settings.job sets
+        /// is_singleton, and both importers stage rows in fixed-name global ##temp tables that every save drops and
+        /// re-creates - so a second instance destroys the first one's staging data mid-save. The file has to be listed
+        /// in the project (both set EnableDefaultNoneItems=false) and copied to the root of the build output: that is
+        /// the folder CI zips, and the installer unpacks the zip into app_data\jobs\continuous\&lt;name&gt;.
+        /// </summary>
+        [DataTestMethod]
+        [DataRow("WebJob.Office365ActivityImporter")]
+        [DataRow("WebJob.AppInsightsImporter")]
+        public void WebJobProjectShipsSingletonSettingsJob(string projectName)
+        {
+            var projectDirectory = Path.Combine(AnalyticsEngineSourceRoot(), projectName);
+            var settingsPath = Path.Combine(projectDirectory, "settings.job");
+            Assert.IsTrue(System.IO.File.Exists(settingsPath), $"{projectName} has no settings.job.");
+            AssertIsSingletonSettingsJob(System.IO.File.ReadAllText(settingsPath), projectName);
+
+            var project = System.Xml.Linq.XDocument.Load(Path.Combine(projectDirectory, projectName + ".csproj"));
+            var items = project.Descendants()
+                .Where(e => e.Name.LocalName == "None" || e.Name.LocalName == "Content")
+                .Where(e => string.Equals((string)e.Attribute("Include"), "settings.job", StringComparison.OrdinalIgnoreCase))
+                .ToList();
+            Assert.AreEqual(1, items.Count, $"{projectName}.csproj must include settings.job exactly once.");
+            var item = items[0];
+
+            string Metadata(string name) =>
+                ((string)item.Attribute(name) ?? item.Elements().FirstOrDefault(e => e.Name.LocalName == name)?.Value)?.Trim();
+
+            CollectionAssert.Contains(new[] { "PreserveNewest", "Always" }, Metadata("CopyToOutputDirectory"),
+                $"{projectName}.csproj must copy settings.job to the build output.");
+            Assert.IsNull(item.Attribute("Condition") ?? item.Parent.Attribute("Condition"),
+                $"{projectName}.csproj must ship settings.job in every build configuration.");
+            foreach (var relocation in new[] { "Link", "TargetPath" })
+            {
+                var value = Metadata(relocation);
+                Assert.IsTrue(value == null || string.Equals(value, "settings.job", StringComparison.OrdinalIgnoreCase),
+                    $"settings.job must land next to the .exe, but {relocation} moves it to '{value}'.");
+            }
+        }
+
+        /// <summary>Kudu only honours a JSON boolean: <c>"is_singleton": "true"</c> is silently ignored.</summary>
+        private static void AssertIsSingletonSettingsJob(string json, string webJob)
+        {
+            using (var settings = JsonDocument.Parse(json))
+            {
+                Assert.IsTrue(
+                    settings.RootElement.ValueKind == JsonValueKind.Object &&
+                    settings.RootElement.TryGetProperty("is_singleton", out var isSingleton) &&
+                    isSingleton.ValueKind == JsonValueKind.True,
+                    $"{webJob}'s settings.job must set \"is_singleton\": true, or Kudu runs it on every App Service instance.");
+            }
+        }
+
+        /// <summary>The src\AnalyticsEngine folder, found by walking up from the test assembly.</summary>
+        private static string AnalyticsEngineSourceRoot()
+        {
+            for (var dir = new DirectoryInfo(AppDomain.CurrentDomain.BaseDirectory); dir != null; dir = dir.Parent)
+            {
+                if (System.IO.File.Exists(Path.Combine(dir.FullName, "WebJob.Office365ActivityImporter", "WebJob.Office365ActivityImporter.csproj")))
+                {
+                    return dir.FullName;
+                }
+            }
+
+            Assert.Fail("Could not locate src\\AnalyticsEngine above the test assembly.");
+            return null;
         }
 
         [TestMethod]

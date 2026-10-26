@@ -28,18 +28,36 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
         private readonly ILogger _logger;
         private readonly bool _resolveResourceMetadata;
         private readonly ICopilotStagingWriter _stagingWriter;
+        private readonly Func<Guid, Task> _enqueueEnrichmentRetry;
 
         // Batch-level totals (across all processed events since last commit)
         private int _totalMeetingsCount;
         private int _totalFilesCount;
         private int _totalChatOnlyCount;
 
+        // Interactions staged without their file/meeting details because Graph failed transiently. Inside the save
+        // lock every lookup is made once; see GraphFileMetadataLoader.GetSpoFileInfo for where retries happen.
+        private int _totalUnenrichedAfterTransientFailure;
+
+        // Of those, the ones with no durable retry queue to recover them (no Storage connection string).
+        private int _totalUnenrichedWithoutDurableRetry;
+
+        // The run-scoped loader's in-lock lookup counters when this batch started, so the commit can report the batch's share.
+        private CopilotLookupStats _inLockStatsAtBatchStart;
+
+        /// <summary>
+        /// Interactions staged since the last commit without their file or meeting details because Microsoft Graph
+        /// failed transiently (throttling, a server error or a timeout).
+        /// </summary>
+        public int UnenrichedAfterTransientFailureCount => _totalUnenrichedAfterTransientFailure;
+
         /// <summary>
         /// Production entry point: builds the SQL staging writer from a connection string. Kept as a thin
         /// overload so SaveSession.Init() and every other existing call site is unchanged. See issue #367.
         /// </summary>
-        public CopilotAuditEventManager(string connectionString, ICopilotMetadataLoader copilotEventAdaptor, ILogger logger, bool resolveResourceMetadata = true)
-            : this(BuildSqlStagingWriter(connectionString, copilotEventAdaptor, logger), copilotEventAdaptor, logger, resolveResourceMetadata)
+        public CopilotAuditEventManager(string connectionString, ICopilotMetadataLoader copilotEventAdaptor, ILogger logger, bool resolveResourceMetadata = true,
+            Func<Guid, Task> enqueueEnrichmentRetry = null)
+            : this(BuildSqlStagingWriter(connectionString, copilotEventAdaptor, logger), copilotEventAdaptor, logger, resolveResourceMetadata, enqueueEnrichmentRetry)
         {
         }
 
@@ -63,12 +81,15 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
         /// so the context-priority order, agent-metadata-only mode and the null-record guard can all be
         /// asserted with no database.
         /// </summary>
-        internal CopilotAuditEventManager(ICopilotStagingWriter stagingWriter, ICopilotMetadataLoader copilotEventAdaptor, ILogger logger, bool resolveResourceMetadata = true)
+        internal CopilotAuditEventManager(ICopilotStagingWriter stagingWriter, ICopilotMetadataLoader copilotEventAdaptor, ILogger logger, bool resolveResourceMetadata = true,
+            Func<Guid, Task> enqueueEnrichmentRetry = null)
         {
             _stagingWriter = stagingWriter ?? throw new ArgumentNullException(nameof(stagingWriter));
             _copilotEventAdaptor = copilotEventAdaptor ?? throw new ArgumentNullException(nameof(copilotEventAdaptor));
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
             _resolveResourceMetadata = resolveResourceMetadata;
+            _enqueueEnrichmentRetry = enqueueEnrichmentRetry;
+            _inLockStatsAtBatchStart = (copilotEventAdaptor as GraphFileMetadataLoader)?.InLockStats;
         }
 
         /// <summary>
@@ -180,13 +201,17 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
             {
                 var userGuid = await _copilotEventAdaptor.GetUserIdFromUpn(baseOfficeEvent.User.UserPrincipalName);
                 var meetingId = StringUtils.GetOnlineMeetingId(contextId, userGuid);
-                var meetingInfo = await _copilotEventAdaptor.GetMeetingInfo(meetingId, userGuid);
+                // Bounded and made once inside the save lock, like the file lookup below.
+                var meetingInfo = _copilotEventAdaptor is GraphFileMetadataLoader graphLoader
+                    ? await graphLoader.GetMeetingInfoSingleAttempt(meetingId, userGuid)
+                    : await _copilotEventAdaptor.GetMeetingInfo(meetingId, userGuid);
 
                 var row = new TeamsCopilotLogTempEntity
                 {
                     MeetingId = meetingId,
                     MeetingCreatedUTC = meetingInfo?.CreatedUTC,
-                    MeetingName = meetingInfo?.Subject,
+                    // online_meetings.name is nvarchar(100); the merge trims too, but can't avoid splitting a surrogate pair.
+                    MeetingName = AuditStagingText.TrimToLength(meetingInfo?.Subject, AuditStagingText.MeetingNameMaxLength),
                 };
                 PopulateCommonStagingFields(row, auditRecord, baseOfficeEvent);
                 _stagingWriter.StageTeams(row);
@@ -194,8 +219,8 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex,
-                    $"Failed to resolve optional meeting metadata for event {baseOfficeEvent.Id} context {contextId}; staging the Copilot interaction without meeting enrichment.");
+                await QueueTransientFailureAsync(baseOfficeEvent.Id, ex);
+                LogOptionalEnrichmentFailure(ex, $"Failed to resolve optional meeting metadata for event {baseOfficeEvent.Id} context {contextId}; staging the Copilot interaction without meeting enrichment.");
                 return false;
             }
         }
@@ -217,7 +242,11 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
                 }
                 else
                 {
-                    spFileInfo = await _copilotEventAdaptor.GetSpoFileInfo(contextId, baseOfficeEvent.User.UserPrincipalName);
+                    // One attempt, and no waiting: this runs inside the save's SQL lock. Retrying with back-off is the
+                    // prewarm's job, outside the lock, through the same run-scoped loader's GetSpoFileInfo.
+                    spFileInfo = _copilotEventAdaptor is GraphFileMetadataLoader graphLoader
+                        ? await graphLoader.GetSpoFileInfoSingleAttempt(contextId, baseOfficeEvent.User.UserPrincipalName)
+                        : await _copilotEventAdaptor.GetSpoFileInfo(contextId, baseOfficeEvent.User.UserPrincipalName);
                     if (spFileInfo == null)
                     {
                         // Expected and high-volume: many copilot contexts (e.g. securitycopilot.microsoft.com
@@ -231,7 +260,9 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
                 var row = new SPCopilotLogTempEntity
                 {
                     FileExtension = spFileInfo?.Extension,
-                    FileName = spFileInfo?.Filename,
+                    // event_file_names.file_name is nvarchar(250): one longer name used to fail the merge for the
+                    // whole batch, on every retry.
+                    FileName = AuditStagingText.TrimToLength(spFileInfo?.Filename, AuditStagingText.FileNameMaxLength),
                     // Keep the SharePoint URL within the urls.full_url column width (nvarchar(850)):
                     // strip the volatile xsdata token, else reduce to the page path. See issue #122.
                     Url = StringUtils.EnsureUrlWithinLength(spFileInfo?.Url, Common.Entities.Url.FullUrlMaxLength),
@@ -243,10 +274,62 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex,
-                    $"Failed to resolve optional file metadata for event {baseOfficeEvent.Id} context {contextId}; staging the Copilot interaction without file enrichment.");
+                await QueueTransientFailureAsync(baseOfficeEvent.Id, ex);
+                LogOptionalEnrichmentFailure(ex, $"Failed to resolve optional file metadata for event {baseOfficeEvent.Id} context {contextId}; staging the Copilot interaction without file enrichment.");
                 return false;
             }
+        }
+
+        /// <summary>
+        /// A transient failure is counted in the batch's one enrichment line at commit, so per event it is Debug only; any
+        /// other failure stays a Warning with its exception.
+        /// </summary>
+        private void LogOptionalEnrichmentFailure(Exception ex, string message)
+        {
+            if (IsTransientEnrichmentFailure(ex))
+                _logger.LogDebug(message + $" ({ex.GetType().Name})");
+            else
+                _logger.LogWarning(ex, message);
+        }
+
+        private async Task QueueTransientFailureAsync(Guid eventId, Exception ex)
+        {
+            if (IsTransientEnrichmentFailure(ex))
+            {
+                _totalUnenrichedAfterTransientFailure++;
+                if (_enqueueEnrichmentRetry == null)
+                {
+                    // No Storage, so no durable queue. Failing here used to abandon the whole batch's metadata pass before
+                    // any commit ran; the next cycle then de-duplicated the already-merged audit rows and checkpointed the
+                    // blob, so the batch's Copilot, DLP, Power Platform and SharePoint metadata were lost for good. Save
+                    // the interaction chat-only instead (the caller does), and say so once per batch at commit.
+                    _totalUnenrichedWithoutDurableRetry++;
+                    return;
+                }
+                // A storage failure deliberately escapes the optional-enrichment catch: the source blob must not
+                // be acknowledged until there is either durable enrichment or durable work to recover it.
+                await _enqueueEnrichmentRetry(eventId);
+            }
+        }
+
+        /// <summary>
+        /// Graph throttling or a server error, a request that failed to connect, or one that ran out of time: a failure
+        /// that says nothing about the file or meeting, so an interaction saved without its details is worth counting.
+        /// </summary>
+        internal static bool IsTransientEnrichmentFailure(Exception ex)
+        {
+            if (GraphFileMetadataLoader.IsRetryableGraphFailure(ex))
+            {
+                return true;
+            }
+            for (var e = ex; e != null; e = e.InnerException)
+            {
+                if (e is OperationCanceledException || e is TimeoutException)
+                {
+                    return true;
+                }
+            }
+            return false;
         }
 
         /// <summary>
@@ -500,10 +583,57 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
             else
                 _logger.LogDebug(copilotTimingMsg);
 
+            // One line per batch for what enrichment could not do. Queued interactions are recovered by the durable worker;
+            // without Storage there is no queue, so those stay chat-only.
+            var queued = _totalUnenrichedAfterTransientFailure - _totalUnenrichedWithoutDurableRetry;
+            if (queued > 0)
+            {
+                _logger.LogWarning($"Copilot enrichment: {queued.ToString("n0")} interaction(s) in this batch were saved without " +
+                    "their file or meeting details because Microsoft Graph failed transiently (throttling, server errors or timeouts). " +
+                    "They are queued for durable re-enrichment; until a retry succeeds or the item reaches a terminal outcome, " +
+                    "file and meeting breakdowns under-count them.");
+            }
+            if (_totalUnenrichedWithoutDurableRetry > 0)
+            {
+                _logger.LogWarning($"Copilot enrichment: {_totalUnenrichedWithoutDurableRetry.ToString("n0")} interaction(s) in this batch " +
+                    "were saved chat-only, without their file or meeting details, because Microsoft Graph failed transiently and no " +
+                    "durable retry queue is configured (no Storage connection string). They will not be re-enriched, so file and meeting " +
+                    "breakdowns under-count them. Configure Storage to have such interactions retried.");
+            }
+
+            LogInLockLookupStats();
+
             // Clear counters for next batch. The staged rows are cleared by the writer.
             _totalFilesCount = 0;
             _totalMeetingsCount = 0;
             _totalChatOnlyCount = 0;
+            _totalUnenrichedAfterTransientFailure = 0;
+            _totalUnenrichedWithoutDurableRetry = 0;
+        }
+
+        /// <summary>
+        /// One line per batch for the Graph lookups made while the save held its SQL lock, the cost D-3 bounded. Debug when
+        /// quick and clean, Information when slow, Warning when any failed transiently or hit their deadline.
+        /// </summary>
+        private void LogInLockLookupStats()
+        {
+            var loader = _copilotEventAdaptor as GraphFileMetadataLoader;
+            if (loader == null) return;
+            var now = loader.InLockStats;
+            var batch = now.Since(_inLockStatsAtBatchStart);
+            _inLockStatsAtBatchStart = now;
+            if (batch.Lookups == 0) return;
+
+            var message = $"Copilot enrichment in-lock lookups: {batch.Lookups:n0} lookup(s), {batch.CacheHits:n0} cache hit(s), " +
+                $"{batch.Resolved:n0} resolved, {batch.Unresolvable:n0} unresolvable, {batch.Transient:n0} transient " +
+                $"({batch.MemoSkips:n0} skipped Graph after a recent transient failure, {batch.DeadlineHits:n0} hit the deadline); " +
+                $"{batch.GraphCalls:n0} Graph call(s), no SDK retries; elapsed {batch.ElapsedMs:n0} ms.";
+            if (batch.Transient > 0)
+                _logger.LogWarning(message);
+            else if (batch.ElapsedMs >= 5000)
+                _logger.LogInformation(message);
+            else
+                _logger.LogDebug(message);
         }
 
         /// <summary>

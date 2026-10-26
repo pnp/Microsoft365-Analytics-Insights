@@ -46,6 +46,13 @@ describe('userImportCheckpointApi', () => {
     await expect(fetchUserImportCheckpoint()).rejects.toThrow('No se ha podido conectar con Azure Table Storage');
   });
 
+  it('explains an organisation-types failure on both load and clear, not as a bare status', async () => {
+    mockedFetch.mockImplementation(() => Promise.resolve(jsonResponse({ code: 'organisationTypesUnavailable' }, 503)));
+
+    await expect(fetchUserImportCheckpoint()).rejects.toThrow("Couldn't read the user organisation types");
+    await expect(clearUserImportCheckpoint(false)).rejects.toThrow("Couldn't read the user organisation types");
+  });
+
   it('explains a deployment with no Azure Storage', async () => {
     mockedFetch.mockResolvedValue(jsonResponse({ code: 'storageNotConfigured' }, 409));
 

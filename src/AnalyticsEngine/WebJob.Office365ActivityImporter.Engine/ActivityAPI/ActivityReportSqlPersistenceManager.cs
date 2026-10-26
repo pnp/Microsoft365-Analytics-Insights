@@ -389,14 +389,21 @@ namespace WebJob.Office365ActivityImporter.Engine
             // Keep the SharePoint URL within the urls.full_url column width (nvarchar(850)): strip the
             // volatile xsdata token, else reduce to the page path. See issue #122.
             this.ObjectId = StringUtils.EnsureUrlWithinLength(abtractLog.ObjectId, Common.Entities.Url.FullUrlMaxLength);
-            this.Workload = abtractLog.Workload;
+
+            // A DLP.All record carries the workload where the match was DETECTED ("SharePoint", "OneDrive",
+            // "Exchange"). The merge classifies by workload, so staging that would save every policy match as file
+            // or mail activity (event_meta_sharepoint / event_meta_exchange). Its rule matches are saved by the
+            // DLP merge instead.
+            this.Workload = abtractLog is DlpAuditLogContent ? ActivityImportConstants.WORKLOAD_DLP : abtractLog.Workload;
 
 
             if (abtractLog is SharePointAuditLogContent)
             {
                 var spLog = (SharePointAuditLogContent)abtractLog;
 
-                this.FileName = spLog.SourceFileName;
+                // Trimmed to event_file_names.file_name's width: one longer name used to fail the merge for the
+                // whole batch, on every retry.
+                this.FileName = AuditStagingText.TrimToLength(spLog.SourceFileName, AuditStagingText.FileNameMaxLength);
                 this.ExtensionName = spLog.SourceFileExtension;
                 this.UrlBase = spLog.SiteUrl;
                 this.EventData = spLog.EventData;
@@ -415,7 +422,10 @@ namespace WebJob.Office365ActivityImporter.Engine
         [Column("user_name")]
         public string UserName { get; set; }
 
-        [Column("file_name", true)]
+        // Bounded like event_file_names.file_name. The constructor trims to fit, so nothing is skipped in
+        // practice; if a longer value ever got here, InsertBatch would skip and report that one row rather than
+        // let it fail the merge for the whole batch.
+        [Column("file_name", true, SqlTypeOverride = "nvarchar(250)")]
         public string FileName { get; set; }
 
         [Column("extension_name", true)]
@@ -448,5 +458,37 @@ namespace WebJob.Office365ActivityImporter.Engine
 
         [Column("web_url", true)]
         public string WebUrl { get; set; }
+    }
+
+    /// <summary>
+    /// Fits staged text to the lookup column it is merged into, so one long value can't fail a whole batch.
+    /// </summary>
+    internal static class AuditStagingText
+    {
+        /// <summary>Width of <c>dbo.event_file_names.file_name</c> (nvarchar(250), migration v1-0-4).</summary>
+        public const int FileNameMaxLength = 250;
+
+        /// <summary>Width of <c>dbo.online_meetings.name</c> (nvarchar(100), migration CopilotEvents).</summary>
+        public const int MeetingNameMaxLength = 100;
+
+        /// <summary>
+        /// Trims <paramref name="value"/> to at most <paramref name="maxLength"/> UTF-16 code units - what an
+        /// <c>nvarchar(n)</c> column counts - without splitting a surrogate pair. Shorter values (and null) are
+        /// returned unchanged.
+        /// </summary>
+        public static string TrimToLength(string value, int maxLength)
+        {
+            if (value == null || value.Length <= maxLength)
+            {
+                return value;
+            }
+
+            var length = maxLength;
+            if (length > 0 && char.IsHighSurrogate(value[length - 1]))
+            {
+                length--;
+            }
+            return value.Substring(0, length);
+        }
     }
 }

@@ -9,6 +9,7 @@ using System.Globalization;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using WebJob.AppInsightsImporter.Engine;
@@ -37,6 +38,12 @@ namespace Tests.UnitTests
             public int RequestCount { get; private set; }
             public List<string> AuthorizationHeaders { get; } = new List<string>();
 
+            /// <summary>The decoded KQL of every request, in order.</summary>
+            public List<string> Queries { get; } = new List<string>();
+
+            /// <summary>When set, answers every request from its decoded KQL instead of the queue.</summary>
+            public Func<string, HttpResponseMessage> RespondToQuery { get; set; }
+
             public StubHandler Then(Func<HttpResponseMessage> response)
             {
                 _responses.Enqueue(response);
@@ -50,6 +57,13 @@ namespace Tests.UnitTests
             {
                 RequestCount++;
                 AuthorizationHeaders.Add(request.Headers.Authorization?.Parameter);
+                var query = request.RequestUri.Query;
+                var kql = query.StartsWith("?query=") ? Uri.UnescapeDataString(query.Substring("?query=".Length)) : query;
+                Queries.Add(kql);
+                if (RespondToQuery != null)
+                {
+                    return Task.FromResult(RespondToQuery(kql));
+                }
                 var factory = _responses.Count > 0 ? _responses.Dequeue() : Fallback;
                 if (factory == null)
                 {
@@ -185,6 +199,54 @@ namespace Tests.UnitTests
             }
         }
 
+        /// <summary>
+        /// HttpClient reports its timeout as a TaskCanceledException. The Health client used to retry it three times,
+        /// so a query App Insights never answered cost four 100-second attempts plus back-off before the page heard.
+        /// </summary>
+        [TestMethod]
+        public async Task HealthQueryClient_ATimedOutQueryIsNotRetried()
+        {
+            var handler = new StubHandler { Fallback = () => throw new TaskCanceledException("synthetic: HttpClient.Timeout elapsed") };
+            using (var client = new DataUtils.AppInsights.AppInsightsQueryClient(ConnectionString,
+                new CountingCredential(TimeSpan.FromHours(1)), NullLogger.Instance, handler))
+            {
+                await Assert.ThrowsExceptionAsync<TaskCanceledException>(() => client.RunQueryAsync("customEvents | count"));
+                Assert.AreEqual(1, handler.RequestCount);
+            }
+        }
+
+        [TestMethod]
+        public async Task HealthQueryClient_CancellationStopsAQueryThatIsNeverAnswered()
+        {
+            using (var handler = new NeverAnsweringHandler())
+            using (var client = new DataUtils.AppInsights.AppInsightsQueryClient(ConnectionString,
+                new CountingCredential(TimeSpan.FromHours(1)), NullLogger.Instance, handler))
+            using (var cancellation = new CancellationTokenSource(TimeSpan.FromMilliseconds(200)))
+            {
+                var watch = Stopwatch.StartNew();
+                try
+                {
+                    await client.RunQueryAsync("customEvents | count", cancellation.Token);
+                    Assert.Fail("A query nobody answers cannot succeed.");
+                }
+                catch (OperationCanceledException)
+                {
+                }
+
+                Assert.IsTrue(watch.Elapsed < TimeSpan.FromSeconds(10), $"Cancellation took {watch.Elapsed}.");
+            }
+        }
+
+        /// <summary>Waits until the request is cancelled - an App Insights endpoint that accepted the connection and went quiet.</summary>
+        private sealed class NeverAnsweringHandler : HttpMessageHandler
+        {
+            protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+            {
+                await Task.Delay(Timeout.Infinite, cancellationToken);
+                throw new InvalidOperationException("unreachable");
+            }
+        }
+
         [TestMethod]
         public async Task AppInsightsClient_DisposesResponsesAfterReadingOrRejectingThem()
         {
@@ -197,7 +259,7 @@ namespace Tests.UnitTests
                     if (status == HttpStatusCode.OK)
                         await client.GetPageViewsAsync(Day, false);
                     else
-                        await Assert.ThrowsExceptionAsync<HttpRequestException>(() => client.GetPageViewsAsync(Day, false));
+                        await Assert.ThrowsExceptionAsync<AppInsightsQueryHttpException>(() => client.GetPageViewsAsync(Day, false));
                     Assert.IsTrue(content.Disposed, "The response must not retain its buffered body until a later GC.");
                 }
             }
@@ -284,7 +346,7 @@ namespace Tests.UnitTests
 
             using (var client = NewClient(handler))
             {
-                await Assert.ThrowsExceptionAsync<HttpRequestException>(() => client.GetPageViewsAsync(Day, false));
+                await Assert.ThrowsExceptionAsync<AppInsightsQueryHttpException>(() => client.GetPageViewsAsync(Day, false));
                 Assert.AreEqual(1, handler.RequestCount);
             }
         }
@@ -297,7 +359,7 @@ namespace Tests.UnitTests
 
             using (var client = NewClient(handler))
             {
-                await Assert.ThrowsExceptionAsync<HttpRequestException>(() => client.GetPageViewsAsync(Day, false));
+                await Assert.ThrowsExceptionAsync<AppInsightsQueryHttpException>(() => client.GetPageViewsAsync(Day, false));
 
                 // The initial attempt plus MaxRetries more, then the failure is returned rather than
                 // retried forever - an App Insights outage must not hang the web-job indefinitely.
@@ -364,5 +426,276 @@ namespace Tests.UnitTests
                 Thread.CurrentThread.CurrentCulture = original;
             }
         }
+
+        #region Query shape and partial-result splitting
+
+        private static readonly Regex WindowPattern =
+            new Regex(@"timestamp >= todatetime\('(?<from>[^']+)'\) and timestamp < todatetime\('(?<to>[^']+)'\)");
+
+        private static (DateTime From, DateTime To) WindowOf(string kql)
+        {
+            var match = WindowPattern.Match(kql);
+            Assert.IsTrue(match.Success, "No time window in: " + kql);
+            DateTime Parse(string value) => DateTime.SpecifyKind(
+                DateTime.ParseExact(value, "yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture), DateTimeKind.Utc);
+            return (Parse(match.Groups["from"].Value), Parse(match.Groups["to"].Value));
+        }
+
+        private static string[] ProjectedColumns(string kql)
+        {
+            var match = Regex.Match(kql, @"\| project (?<columns>[^|]+)");
+            Assert.IsTrue(match.Success, "No project clause in: " + kql);
+            return match.Groups["columns"].Value.Split(',').Select(c => c.Trim()).ToArray();
+        }
+
+        /// <summary>A 200 response whose table holds <paramref name="rows"/>, optionally with a top-level error.</summary>
+        private static HttpResponseMessage Table(string errorCode, string[] columns, IEnumerable<object[]> rows)
+        {
+            var body = new Dictionary<string, object>
+            {
+                ["tables"] = new[] { new { name = "PrimaryResult", columns = columns.Select(c => new { name = c, type = "string" }), rows } }
+            };
+            if (errorCode != null)
+            {
+                body["error"] = new { code = errorCode, message = "Query limit reached." };
+            }
+            return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(JsonConvert.SerializeObject(body)) };
+        }
+
+        private static HttpResponseMessage PageViewRows(string errorCode, params DateTime[] timestamps) =>
+            Table(errorCode, new[] { "timestamp", "url" },
+                timestamps.Select(t => new object[] { t, "https://contoso.sharepoint.com/sites/example/Καλημέρα-" + t.Ticks + ".aspx" }));
+
+        private static HttpResponseMessage PageExitRows(string errorCode, params DateTime[] timestamps) =>
+            Table(errorCode, new[] { "timestamp", "customDimensions", "user_AuthenticatedId", "name" },
+                timestamps.Select(t => new object[]
+                {
+                    t,
+                    JsonConvert.SerializeObject(new { pageRequestId = Guid.NewGuid(), activeTime = 3 }),
+                    "user@contoso.com",
+                    "PAGE_EXIT"
+                }));
+
+        [TestMethod]
+        public async Task AppInsightsClient_QueriesProjectOnlyTheColumnsTheParsersRead()
+        {
+            // A whole day of every column is what runs into the API's row and response-size caps first.
+            var handler = new StubHandler { Fallback = Ok };
+            using (var client = NewClient(handler))
+            {
+                await client.GetPageViewsAsync(Day, false);
+                await client.GetCustomEventsAsync(Day, false);
+            }
+
+            StringAssert.StartsWith(handler.Queries[0], "pageViews ");
+            CollectionAssert.AreEquivalent(
+                new[] { "timestamp", "customDimensions", "user_AuthenticatedId", "url", "client_Model", "client_OS", "duration",
+                    "client_City", "client_StateOrProvince", "client_CountryOrRegion", "client_Browser" },
+                ProjectedColumns(handler.Queries[0]));
+
+            StringAssert.StartsWith(handler.Queries[1], "customEvents ");
+            CollectionAssert.AreEquivalent(new[] { "timestamp", "customDimensions", "user_AuthenticatedId", "name" },
+                ProjectedColumns(handler.Queries[1]));
+            foreach (var eventName in new[] { "PAGE_EXIT", "UserSearch", "LinkClick", "PageMetadataUpdate" })
+            {
+                StringAssert.Contains(handler.Queries[1], eventName, "Only the custom events the importer reads are requested.");
+            }
+        }
+
+        [TestMethod]
+        public async Task AppInsightsClient_PartialResultForADay_IsSplitInHalf_AndEveryRowIsReturnedOnceInOrder()
+        {
+            var noon = Day.AddHours(12);
+            var handler = new StubHandler
+            {
+                RespondToQuery = kql =>
+                {
+                    var window = WindowOf(kql);
+                    if (window == (Day, Day.AddDays(1))) return PageViewRows("PartialError", Day.AddHours(1));  // truncated: discarded
+                    if (window == (Day, noon)) return PageViewRows(null, Day.AddHours(1), Day.AddHours(11));
+                    if (window == (noon, Day.AddDays(1))) return PageViewRows(null, noon, Day.AddHours(23));
+                    throw new AssertFailedException("Unexpected window " + window);
+                }
+            };
+
+            using (var client = NewClient(handler))
+            {
+                var views = await client.GetPageViewsAsync(Day, false);
+
+                // A row exactly on the split point belongs to the later half only: the windows are half-open.
+                CollectionAssert.AreEqual(new[] { Day.AddHours(1), Day.AddHours(11), noon, Day.AddHours(23) },
+                    views.Rows.Select(r => r.AppInsightsTimestamp).ToArray());
+            }
+            Assert.AreEqual(3, handler.RequestCount);
+        }
+
+        [TestMethod]
+        public async Task AppInsightsClient_PartialResultForAHalf_IsSplitAgain()
+        {
+            var sixAm = Day.AddHours(6);
+            var noon = Day.AddHours(12);
+            var handler = new StubHandler
+            {
+                RespondToQuery = kql =>
+                {
+                    var window = WindowOf(kql);
+                    if (window == (Day, Day.AddDays(1)) || window == (Day, noon)) return PageExitRows("PartialError", Day.AddHours(1));
+                    if (window == (Day, sixAm)) return PageExitRows(null, Day.AddHours(1));
+                    if (window == (sixAm, noon)) return PageExitRows(null, sixAm);
+                    if (window == (noon, Day.AddDays(1))) return PageExitRows(null, Day.AddHours(13));
+                    throw new AssertFailedException("Unexpected window " + window);
+                }
+            };
+
+            using (var client = NewClient(handler))
+            {
+                var events = await client.GetCustomEventsAsync(Day, false);
+
+                CollectionAssert.AreEqual(new[] { Day.AddHours(1), sixAm, Day.AddHours(13) },
+                    events.Rows.Select(r => r.AppInsightsTimestamp).ToArray());
+            }
+            CollectionAssert.AreEqual(
+                new[] { (Day, Day.AddDays(1)), (Day, noon), (Day, sixAm), (sixAm, noon), (noon, Day.AddDays(1)) },
+                handler.Queries.Select(WindowOf).ToArray());
+        }
+
+        [TestMethod]
+        public async Task AppInsightsClient_StillPartialAtTheSmallestWindow_FailsRatherThanSavingTruncatedData()
+        {
+            var handler = new StubHandler { RespondToQuery = kql => PageViewRows("PartialError", Day.AddHours(1)) };
+
+            using (var client = NewClient(handler))
+            {
+                await Assert.ThrowsExceptionAsync<System.IO.InvalidDataException>(() => client.GetPageViewsAsync(Day, false));
+            }
+
+            var windows = handler.Queries.Select(WindowOf).ToList();
+            Assert.IsTrue(windows.Count > 1, "Smaller windows must be tried before giving up.");
+            Assert.IsTrue(windows.Count < 20, "Splitting must stop at a minimum window rather than going on for ever.");
+            Assert.IsTrue(windows.All(w => w.To - w.From >= TimeSpan.FromMinutes(1)), "No window is smaller than a minute.");
+        }
+
+        [TestMethod]
+        public async Task AppInsightsClient_AnErrorThatIsNotAPartialResult_FailsWithoutSplitting()
+        {
+            var handler = new StubHandler { Fallback = () => PageViewRows("BadArgumentError") };
+
+            using (var client = NewClient(handler))
+            {
+                await Assert.ThrowsExceptionAsync<System.IO.InvalidDataException>(() => client.GetPageViewsAsync(Day, false));
+            }
+            Assert.AreEqual(1, handler.RequestCount);
+        }
+
+        [TestMethod]
+        public async Task AppInsightsClient_AWindowWithIngestionBounds_FiltersOnIngestionTime_BesideTheTimestampWindow()
+        {
+            var original = Thread.CurrentThread.CurrentCulture;
+            try
+            {
+                Thread.CurrentThread.CurrentCulture = new CultureInfo("th-TH");
+                var handler = new StubHandler { Fallback = Ok };
+                var window = new AppInsightsReadWindow(Day.AddHours(1), Day.AddHours(2), Day.AddHours(3), Day.AddHours(3).AddMinutes(30));
+                using (var client = NewClient(handler))
+                {
+                    await client.GetPageViewsAsync(window, false);
+                    await client.GetCustomEventsAsync(window, false);
+                }
+
+                foreach (var kql in handler.Queries)
+                {
+                    Assert.AreEqual((Day.AddHours(1), Day.AddHours(2)), WindowOf(kql));
+                    StringAssert.Contains(kql, "ingestion_time() >= todatetime('2026-05-30 03:00:00')");
+                    StringAssert.Contains(kql, "ingestion_time() < todatetime('2026-05-30 03:30:00')");
+                }
+            }
+            finally
+            {
+                Thread.CurrentThread.CurrentCulture = original;
+            }
+        }
+
+        [TestMethod]
+        public async Task AppInsightsClient_AWindowWithoutIngestionBounds_HasNoIngestionFilter()
+        {
+            var handler = new StubHandler { Fallback = Ok };
+            using (var client = NewClient(handler))
+            {
+                await client.GetPageViewsAsync(Day, false);
+            }
+            Assert.IsFalse(handler.Queries.Single().Contains("ingestion_time()"));
+        }
+
+        [TestMethod]
+        public async Task AppInsightsClient_HourlyRowCounts_CountBothKindsInTheRange_AndAreParsed()
+        {
+            var range = new AppInsightsReadWindow(Day, Day.AddDays(3), Day.AddDays(1), Day.AddDays(1).AddHours(1));
+            var handler = new StubHandler
+            {
+                Fallback = () => new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(JsonConvert.SerializeObject(new
+                    {
+                        tables = new[]
+                        {
+                            new
+                            {
+                                name = "PrimaryResult",
+                                columns = new[] { new { name = "Kind", type = "string" }, new { name = "Hour", type = "datetime" }, new { name = "RowCount", type = "long" } },
+                                rows = new[]
+                                {
+                                    new object[] { "pageview", "2026-05-30T13:00:00Z", 1500 },
+                                    new object[] { "event", "2026-05-31T02:00:00Z", 7 },
+                                }
+                            }
+                        }
+                    }))
+                }
+            };
+
+            IReadOnlyList<AppInsightsHourlyRowCount> counts;
+            using (var client = NewClient(handler))
+            {
+                counts = await client.GetHourlyRowCountsAsync(range);
+            }
+
+            var kql = handler.Queries.Single();
+            StringAssert.StartsWith(kql, "union (pageViews | where ");
+            StringAssert.Contains(kql, "(customEvents | where ");
+            StringAssert.Contains(kql, "PAGE_EXIT", "Only the custom events the importer reads are counted.");
+            Assert.AreEqual(2, Regex.Matches(kql, Regex.Escape("ingestion_time() >= todatetime('2026-05-31 00:00:00')")).Count, "Both legs carry the ingestion range.");
+            StringAssert.EndsWith(kql, "| summarize RowCount = count() by Kind, Hour = bin(timestamp, 1h)");
+
+            Assert.AreEqual(2, counts.Count);
+            Assert.AreEqual(AppInsightsTelemetryKind.PageViews, counts[0].Kind);
+            Assert.AreEqual(new DateTime(2026, 5, 30, 13, 0, 0, DateTimeKind.Utc), counts[0].HourUtc);
+            Assert.AreEqual(1500, counts[0].Count);
+            Assert.AreEqual(AppInsightsTelemetryKind.Events, counts[1].Kind);
+            Assert.AreEqual(new DateTime(2026, 5, 31, 2, 0, 0, DateTimeKind.Utc), counts[1].HourUtc);
+        }
+
+        [TestMethod]
+        public async Task AppInsightsClient_ARefusedQuery_ReportsItsStatusAndErrorCode_ButNeverTheResponseBody()
+        {
+            // The day and cycle outcome lines carry the exception chain, so the message must not echo what the API sent.
+            var handler = new StubHandler
+            {
+                Fallback = () => new HttpResponseMessage(HttpStatusCode.BadRequest)
+                {
+                    Content = new StringContent("{\"error\":{\"code\":\"BadArgumentError\",\"message\":\"Query could not be parsed near 'contoso-secret-text'\"}}")
+                }
+            };
+
+            using (var client = NewClient(handler))
+            {
+                var ex = await Assert.ThrowsExceptionAsync<AppInsightsQueryHttpException>(() => client.GetPageViewsAsync(Day, false));
+                Assert.AreEqual(400, ex.StatusCode);
+                Assert.AreEqual("BadArgumentError", ex.ErrorCode);
+                Assert.IsFalse(ex.Message.Contains("contoso-secret-text"), ex.Message);
+                Assert.AreEqual("400", DataUtils.ExceptionDescriber.Dimensions(ex)["HttpStatus"]);
+            }
+        }
+
+        #endregion
     }
 }

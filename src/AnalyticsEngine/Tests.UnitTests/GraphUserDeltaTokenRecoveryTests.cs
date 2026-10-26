@@ -477,6 +477,324 @@ namespace Tests.UnitTests
 
         #endregion
 
+        #region Disabled and deleted accounts
+
+        /// <summary>
+        /// The real JSON, through the real loader: a disabled account and an <c>@removed</c> entry (which carries nothing
+        /// but the object id) are not imported, and are not silently dropped either - the delta token moves past them.
+        /// </summary>
+        [TestMethod]
+        public async Task DisabledAndDeletedAccounts_AreLeftOutOfTheActiveUsers_ButReported()
+        {
+            const string disabledId = "00000000-0000-0000-0000-0000000000d1";
+            const string deletedId = "00000000-0000-0000-0000-0000000000d2";
+            var disabledJson = "{\"id\":\"" + disabledId + "\",\"userPrincipalName\":\"leaver@contoso.com\",\"accountEnabled\":false,\"department\":\"" + GreekDepartment + "\"}";
+            var deletedJson = "{\"@odata.type\":\"#microsoft.graph.user\",\"id\":\"" + deletedId + "\",\"@removed\":{\"reason\":\"changed\"}}";
+
+            var store = new RecordingDeltaValueProvider(StoredToken);
+            var logger = new CapturingLogger();
+            var handler = new ScriptedGraphHandler()
+                .Then(HttpStatusCode.OK, FinalPage(FreshToken, UserJson(1), disabledJson, deletedJson));
+
+            using (var client = new ManualGraphCallClient(handler, logger))
+            {
+                var loader = new GraphUserLoader(client, store, logger, null);
+
+                var users = await loader.LoadAllActiveUsers();
+
+                Assert.AreEqual("user1@contoso.com", users.Single().UserPrincipalName, "Only the active user is returned for inserting and updating.");
+                var deactivations = loader.LastLoadDeactivations;
+                Assert.AreEqual("leaver@contoso.com", deactivations.DisabledUsers.Single().UserPrincipalName);
+                Assert.AreEqual(GreekDepartment, deactivations.DisabledUsers.Single().Department, "A disabled user keeps the rest of their profile, for the update of their row.");
+                CollectionAssert.AreEqual(new[] { disabledId }, deactivations.DisabledObjectIds.ToArray());
+                CollectionAssert.AreEqual(new[] { deletedId }, deactivations.RemovedObjectIds.ToArray());
+                Assert.IsTrue(loader.LastLoadReachedDeltaLink);
+                Assert.IsFalse(deactivations.IsCompleteDirectoryRead, "An incremental read lists only what changed, so absence from it means nothing.");
+                Assert.IsTrue(logger.Messages(LogLevel.Information).Any(m => m.Contains("1 disabled and 1 deleted account(s)")));
+            }
+        }
+
+        [TestMethod]
+        public async Task OnlyACompleteReadFromNoToken_IsTheWholeDirectory()
+        {
+            var logger = new CapturingLogger();
+
+            // From no token, over every page, to the deltaLink.
+            var complete = new ScriptedGraphHandler()
+                .Then(HttpStatusCode.OK, PageWithNextLink(UserJson(1)))
+                .Then(HttpStatusCode.OK, FinalPage(FreshToken, UserJson(2)));
+            using (var client = new ManualGraphCallClient(complete, logger))
+            {
+                var loader = new GraphUserLoader(client, new RecordingDeltaValueProvider(), logger, null);
+                await loader.LoadAllActiveUsers();
+
+                Assert.IsTrue(loader.LastLoadDeactivations.IsCompleteDirectoryRead);
+                Assert.AreEqual(2, loader.LastLoadDeactivations.CompleteReadCount);
+                Assert.IsTrue(loader.LastLoadDeactivations.CompleteReadIncludes("00000000-0000-0000-0000-000000000002"));
+            }
+
+            // Stopped part-way: only what was read before the failure, so nobody can be judged absent.
+            var partial = new ScriptedGraphHandler()
+                .Then(HttpStatusCode.OK, PageWithNextLink(UserJson(1)))
+                .Then(HttpStatusCode.InternalServerError, ServerErrorBody);
+            using (var client = new ManualGraphCallClient(partial, logger))
+            {
+                var loader = new GraphUserLoader(client, new RecordingDeltaValueProvider(), logger, null);
+                await loader.LoadAllActiveUsers();
+
+                Assert.IsFalse(loader.LastLoadReachedDeltaLink);
+                Assert.IsFalse(loader.LastLoadDeactivations.IsCompleteDirectoryRead);
+            }
+        }
+
+        /// <summary>
+        /// Graph's own count of the directory's users - what a complete read is checked against before absence from it
+        /// counts as deletion. <c>$count</c> on users is an advanced query, and its answer is plain text.
+        /// </summary>
+        [TestMethod]
+        public async Task DirectoryUserCount_IsAnAdvancedQuery_AndAnyFailureIsJustUnavailable()
+        {
+            var logger = new CapturingLogger();
+            var handler = new ScriptedGraphHandler()
+                .Then(HttpStatusCode.OK, "\uFEFF30150")
+                .Then(HttpStatusCode.Forbidden, ForbiddenBody)
+                .Then(HttpStatusCode.OK, "not a number");
+
+            using (var client = new ManualGraphCallClient(handler, logger))
+            {
+                var loader = new GraphUserLoader(client, new RecordingDeltaValueProvider(), logger, null);
+
+                Assert.AreEqual(30150, await loader.CountDirectoryUsersAsync());
+                StringAssert.EndsWith(handler.Requests[0], "/v1.0/users/$count");
+                Assert.AreEqual("eventual", handler.ConsistencyLevels[0], "Graph answers $count on users only with ConsistencyLevel: eventual.");
+
+                Assert.IsNull(await loader.CountDirectoryUsersAsync(), "A refused count is unavailable: the import falls back, it does not fail.");
+                Assert.IsNull(await loader.CountDirectoryUsersAsync(), "So is an answer that is not a number.");
+                Assert.AreEqual(3, handler.Requests.Count);
+            }
+        }
+
+        [TestMethod]
+        public void Classify_AnObjectBothDeletedAndLiveInOneRead_IsWhicheverItWasLast()
+        {
+            var deletedThenRestored = UserDeltaReadRules.Classify(new List<GraphUser> { Tombstone("a"), Live("a", "a@contoso.com", true) });
+            Assert.AreEqual(1, deletedThenRestored.ActiveUsers.Count, "Restored after the delete: imported as usual.");
+            Assert.AreEqual(0, deletedThenRestored.Deactivations.RemovedObjectIds.Count);
+
+            var changedThenDeleted = UserDeltaReadRules.Classify(new List<GraphUser> { Live("a", "a@contoso.com", true), Tombstone("a") });
+            Assert.AreEqual(0, changedThenDeleted.ActiveUsers.Count, "Deleted after the change: not imported.");
+            CollectionAssert.AreEqual(new[] { "a" }, changedThenDeleted.Deactivations.RemovedObjectIds.ToArray());
+        }
+
+        /// <summary>
+        /// Graph lists an object once per change, in the order the changes happened, so its last entry is its current
+        /// state - and that entry can leave out what did not change, the sign-in name included.
+        /// </summary>
+        [DataTestMethod]
+        [DataRow(true, DisplayName = "Re-enabling entry carries the sign-in name")]
+        [DataRow(false, DisplayName = "Re-enabling entry has no sign-in name")]
+        public void Classify_DisabledThenReEnabledInOneRead_IsImportedAsEnabled(bool laterEntryHasUpn)
+        {
+            var read = UserDeltaReadRules.Classify(new List<GraphUser>
+            {
+                Live("a", "x@contoso.com", false),
+                Live("a", laterEntryHasUpn ? "x@contoso.com" : null, true),
+            });
+
+            var user = read.ActiveUsers.Single();
+            Assert.AreEqual("x@contoso.com", user.UserPrincipalName);
+            Assert.AreEqual(true, user.AccountEnabled, "Written as it is now.");
+            Assert.AreEqual(0, read.Deactivations.DisabledUsers.Count);
+            Assert.AreEqual(0, read.Deactivations.DisabledObjectIds.Count);
+        }
+
+        [DataTestMethod]
+        [DataRow(true, DisplayName = "Disabling entry carries the sign-in name")]
+        [DataRow(false, DisplayName = "Disabling entry has no sign-in name")]
+        public void Classify_EnabledThenDisabledInOneRead_IsDisabled(bool laterEntryHasUpn)
+        {
+            var read = UserDeltaReadRules.Classify(new List<GraphUser>
+            {
+                Live("a", "x@contoso.com", true),
+                Live("a", laterEntryHasUpn ? "x@contoso.com" : null, false),
+            });
+
+            Assert.AreEqual(0, read.ActiveUsers.Count);
+            var user = read.Deactivations.DisabledUsers.Single();
+            Assert.AreEqual("x@contoso.com", user.UserPrincipalName, "The row is still found by sign-in name, from the earlier entry.");
+            Assert.AreEqual(false, user.AccountEnabled, "Written as it is now.");
+            CollectionAssert.AreEqual(new[] { "a" }, read.Deactivations.DisabledObjectIds.ToArray());
+        }
+
+        [TestMethod]
+        public void Classify_AnEntryWithoutAccountStatus_LeavesTheStatus_AndBringsTheNewestProfile()
+        {
+            var read = UserDeltaReadRules.Classify(new List<GraphUser>
+            {
+                // A change reported with only the properties that changed: no sign-in name, but plainly disabled.
+                new GraphUser { Id = "no-upn", AccountEnabled = false },
+                // A later entry without accountEnabled leaves the account disabled, and carries the newer profile.
+                Live("b", "b@contoso.com", false),
+                new GraphUser { Id = "b", UserPrincipalName = "b.renamed@contoso.com", Department = "Πωλήσεις" },
+                // No accountEnabled at all: neither imported nor disabled, as before.
+                Live("unknown", "unknown@contoso.com", null),
+            });
+
+            Assert.AreEqual(0, read.ActiveUsers.Count);
+            CollectionAssert.AreEqual(new[] { "no-upn", "b" }, read.Deactivations.DisabledObjectIds.ToArray());
+            var b = read.Deactivations.DisabledUsers.Single();
+            Assert.AreEqual("b.renamed@contoso.com", b.UserPrincipalName);
+            Assert.AreEqual("Πωλήσεις", b.Department);
+            Assert.AreEqual(false, b.AccountEnabled);
+        }
+
+        private static GraphUser Tombstone(string id)
+            => new GraphUser { Id = id, Removed = Newtonsoft.Json.Linq.JObject.Parse("{\"reason\":\"deleted\"}") };
+
+        /// <summary>
+        /// C-4: Graph includes <c>manager@delta</c> in every entry of a read's initial round, but an incremental entry can
+        /// leave it out when the manager did not change. The loader says which it was, so the import clears a manager only
+        /// when Graph reported that there is none.
+        /// </summary>
+        [TestMethod]
+        public async Task ManagerAnnotation_AbsentFromAFullRead_MeansNoManager_ButAbsentFromAnIncrementalRead_MeansUnchanged()
+        {
+            var store = new RecordingDeltaValueProvider();
+            var logger = new CapturingLogger();
+            var handler = new ScriptedGraphHandler()
+                .Then(HttpStatusCode.OK, FinalPage("checkpoint-1", UserJson(1)))
+                .Then(HttpStatusCode.OK, FinalPage("checkpoint-2", UserJson(1)));
+
+            using (var client = new ManualGraphCallClient(handler, logger))
+            {
+                var loader = new GraphUserLoader(client, store, logger, null);
+
+                var full = (await loader.LoadAllActiveUsers()).Single();
+                Assert.IsTrue(full.ManagerReported, "In a full read, no manager@delta means no manager.");
+                Assert.IsNull(full.DefaultManagerInfo);
+                Assert.IsTrue(await loader.CommitDeltaTokenAsync());
+
+                var incremental = (await loader.LoadAllActiveUsers()).Single();
+                StringAssert.Contains(handler.Requests[1], "$deltatoken=checkpoint-1");
+                Assert.IsFalse(incremental.ManagerReported, "In an incremental read, it only means the manager did not change.");
+                Assert.IsFalse(UserMetadataMappingRules.BuildPlan(incremental).ManagerReported);
+            }
+        }
+
+        private static GraphUser Live(string id, string upn, bool? enabled)
+            => new GraphUser { Id = id, UserPrincipalName = upn, AccountEnabled = enabled };
+
+        #endregion
+
+        #region A page that comes back without its value collection
+
+        /// <summary>
+        /// A 200 page with no <c>value</c> collection is a page whose users are unknown, not an empty page. Stepping over
+        /// it to the deltaLink made the read look complete - and a complete read is now what decides who has been
+        /// deleted. It must stop the read exactly as an HTTP failure on that page would, and it is not Graph rejecting
+        /// the configured organisation attributes.
+        /// </summary>
+        [TestMethod]
+        public async Task APageWithoutItsValueCollection_StopsTheRead_LikeAnyFailedPage()
+        {
+            var store = new RecordingDeltaValueProvider();
+            var logger = new CapturingLogger();
+            var handler = new ScriptedGraphHandler()
+                .Then(HttpStatusCode.OK, PageWithNextLink(UserJson(1)))
+                .Then(HttpStatusCode.OK, PageWithoutValue("page-3"))
+                .Then(HttpStatusCode.OK, FinalPage(FreshToken, UserJson(3)));
+
+            using (var client = new ManualGraphCallClient(handler, logger))
+            {
+                var loader = new GraphUserLoader(client, store, logger, null);
+                loader.SetOrgSelection(GraphUserOrgSelection.FromAttributeNames(new[] { "extensionAttribute1" }));
+
+                var users = await loader.LoadAllActiveUsers();
+
+                Assert.AreEqual(2, handler.Requests.Count, "The read stops at that page, and is not read again without the organisation attributes.");
+                Assert.AreEqual(1, users.Count, "The users read before it are still returned, as for any failed page.");
+                Assert.IsFalse(loader.LastLoadReachedDeltaLink, "A read that skipped a page is not complete.");
+                Assert.IsFalse(loader.LastLoadDeactivations.IsCompleteDirectoryRead, "So nobody can be judged deleted by their absence from it.");
+                Assert.IsFalse(loader.OrgSelectionWasRejected, "Graph did not reject the organisation attributes.");
+                Assert.IsFalse(await loader.CommitDeltaTokenAsync(), "There is no new checkpoint to save.");
+                Assert.AreEqual(0, store.SetCalls);
+                StringAssert.Contains(logger.Messages(LogLevel.Warning).Single(m => m.Contains("/users/delta read stopped")), "page 2");
+            }
+        }
+
+        /// <summary>
+        /// The same through the whole import: the full read after a cleared checkpoint loses the page that held one
+        /// user. Before, that read counted as complete, the user was absent from it, and their row was marked disabled.
+        /// </summary>
+        [TestMethod]
+        public async Task FullReadWithAPageMissingItsValue_DisablesNobodyForBeingAbsent_AndSavesNoCheckpoint()
+        {
+            var ticks = DateTime.UtcNow.Ticks;
+            var firstId = Guid.NewGuid().ToString();
+            var lostId = Guid.NewGuid().ToString();
+            var lastId = Guid.NewGuid().ToString();
+            var firstUpn = $"page-first-{ticks}@contoso.com";
+            var lostUpn = $"page-lost-{ticks}@contoso.com";
+            var lastUpn = $"page-last-{ticks}@contoso.com";
+            await DeleteTestUsers(firstUpn, lostUpn, lastUpn);
+
+            // Everyone else in the shared test database is in this directory too, as entries that change nothing.
+            var everyoneElse = await EveryoneElseInTheUsersTableAsJsonAsync();
+            var store = new RecordingDeltaValueProvider();
+            var channel = new RecordingTelemetryChannel();
+            var handler = new ScriptedGraphHandler()
+                .Then(HttpStatusCode.OK, FinalPage("checkpoint-1", everyoneElse.Concat(new[] { UserJson(firstId, firstUpn, "10001"), UserJson(lostId, lostUpn, "10001"), UserJson(lastId, lastUpn, "10001") }).ToArray()))
+                .Then(HttpStatusCode.OK, PageWithNextLink(everyoneElse.Concat(new[] { UserJson(firstId, firstUpn, "10001") }).ToArray()))
+                .Then(HttpStatusCode.OK, PageWithoutValue("page-3"))
+                .Then(HttpStatusCode.OK, FinalPage("checkpoint-2", UserJson(lastId, lastUpn, "10001")));
+
+            try
+            {
+                using (var configuration = NewTelemetryConfiguration(channel))
+                {
+                    var logger = new AnalyticsLogger(new TelemetryClient(configuration), "UserImportTest");
+                    using (var client = new ManualGraphCallClient(handler, logger))
+                    {
+                        var loader = new GraphDeltaReadWithoutLicenceCalls(new GraphUserLoader(client, store, logger, null));
+                        Assert.IsTrue(await new UserMetadataUpdater(logger, new AppConfig(), loader).InsertAndUpdateDatabaseFromExternalUsers(), "Run 1");
+
+                        // The checkpoint is cleared - an admin's full re-read, or a UserGroupsFilter catch-up - so run 2 reads everyone.
+                        await store.ClearDeltaToken();
+                        Assert.IsFalse(await new UserMetadataUpdater(logger, new AppConfig(), loader).InsertAndUpdateDatabaseFromExternalUsers(),
+                            "A read that skipped a page is not a finished user import.");
+                        Assert.IsNull(store.Token, "Nor is its checkpoint saved: the next run reads everyone again.");
+                    }
+                }
+
+                Assert.AreEqual(3, handler.Requests.Count, "Run 2 stops at the page without its value collection.");
+                using (var db = new AnalyticsEntitiesContext())
+                {
+                    Assert.AreEqual(true, (await db.users.SingleAsync(u => u.UserPrincipalName == lostUpn)).AccountEnabled,
+                        "The user on the lost page was not shown to be deleted, so must not be disabled.");
+                }
+                Assert.IsTrue(Warnings(channel).Any(w => w.Contains("NOT moving the user checkpoint forward")));
+            }
+            finally
+            {
+                await DeleteTestUsers(firstUpn, lostUpn, lastUpn);
+            }
+        }
+
+        private static string PageWithoutValue(string nextSkipToken)
+            => "{\"@odata.nextLink\":\"https://graph.microsoft.com/v1.0/users/delta?$skiptoken=" + nextSkipToken + "\"}";
+
+        /// <summary>Every users row with an object id, as a directory entry with nothing else - so it changes nothing.</summary>
+        private static async Task<string[]> EveryoneElseInTheUsersTableAsJsonAsync()
+        {
+            using (var db = new AnalyticsEntitiesContext())
+            {
+                var ids = await db.users.Where(u => u.AzureAdId != null && u.AzureAdId != "").Select(u => u.AzureAdId).ToListAsync();
+                return ids.Select(id => "{\"id\":" + Newtonsoft.Json.JsonConvert.ToString(id) + "}").ToArray();
+            }
+        }
+
+        #endregion
+
         #region UserMetadataUpdater: an incomplete read is not a finished import
 
         [TestMethod]
@@ -728,6 +1046,7 @@ namespace Tests.UnitTests
             private readonly object _gate = new object();
             private readonly Queue<Func<HttpResponseMessage>> _responses = new Queue<Func<HttpResponseMessage>>();
             private readonly List<string> _requests = new List<string>();
+            private readonly List<string> _consistencyLevels = new List<string>();
 
             public IReadOnlyList<string> Requests
             {
@@ -736,6 +1055,18 @@ namespace Tests.UnitTests
                     lock (_gate)
                     {
                         return _requests.ToList();
+                    }
+                }
+            }
+
+            /// <summary>Each request's <c>ConsistencyLevel</c> header, or null when it had none.</summary>
+            public IReadOnlyList<string> ConsistencyLevels
+            {
+                get
+                {
+                    lock (_gate)
+                    {
+                        return _consistencyLevels.ToList();
                     }
                 }
             }
@@ -760,6 +1091,7 @@ namespace Tests.UnitTests
                 lock (_gate)
                 {
                     _requests.Add(request.RequestUri.OriginalString);
+                    _consistencyLevels.Add(request.Headers.TryGetValues("ConsistencyLevel", out var levels) ? string.Join(",", levels) : null);
                     next = _responses.Count > 0 ? _responses.Dequeue() : null;
                 }
 
@@ -888,6 +1220,10 @@ namespace Tests.UnitTests
             public Task ClearStoredDeltaTokensAsync() => _graph.ClearStoredDeltaTokensAsync();
             public bool OrgSelectionWasRejected => _graph.OrgSelectionWasRejected;
             public Task<List<GraphUser>> LoadAllActiveUsers() => _graph.LoadAllActiveUsers();
+            public GraphUserDeactivations LastLoadDeactivations => _graph.LastLoadDeactivations;
+
+            /// <summary>"Could not be read": these tests script every request, and the count is not what they are about.</summary>
+            public Task<int?> CountDirectoryUsersAsync() => Task.FromResult<int?>(null);
             public Task<bool> CommitDeltaTokenAsync() => _graph.CommitDeltaTokenAsync();
             public Task<List<SubscribedSku>> LoadTenantSkus()
             {

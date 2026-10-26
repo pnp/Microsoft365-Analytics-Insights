@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { ALL_GRANTED_PORTAL_ACCESS, type PortalAccessValue } from './access';
-import { ROUTES, WORKLOADS, missingPermission, visibleAreas, visibleRoutesForArea } from './navigation';
+import { ROUTES, WORKLOADS, groupedRoutesForArea, missingPermission, visibleAreas, visibleRoutesForArea } from './navigation';
 import { REPORT_PAGES, reportPageEnabled, reportMonths } from './reportNavigation';
 import type { ReportAreas } from './types/reports';
 
@@ -63,6 +63,37 @@ describe('portal access navigation helpers', () => {
     const lookup = ROUTES.find((route) => route.path === '/admin/user-lookup')!;
     expect(missingPermission(health, restricted)).toBe('administration');
     expect(missingPermission(lookup, { ...restricted, administration: true })).toBe('seePii');
+  });
+
+  it('groups administration by task without losing destinations or mixing connections into configuration', () => {
+    expect(groupedRoutesForArea('admin').map(group => ({
+      key: group.groupKey,
+      paths: group.routes.map(route => route.path),
+    }))).toEqual([
+      { key: 'app.navGroup.service', paths: [
+        '/admin/health', '/admin/configuration', '/admin/install-log', '/admin/profiling',
+      ] },
+      { key: 'app.navGroup.connections', paths: [
+        '/admin/teams-permissions', '/admin/agent-cost-connection', '/admin/copilot-cost-connection',
+      ] },
+      { key: 'app.navGroup.users', paths: [
+        '/admin/user-import', '/admin/user-scope', '/admin/user-orgs', '/admin/user-lookup',
+      ] },
+      { key: 'app.navGroup.reporting', paths: [
+        '/admin/global-filter', '/admin/copilot-adoption-settings', '/admin/leadership-cohort',
+        '/admin/prompt-categories', '/admin/copilot-audit-backfill', '/admin/agent365-catalog',
+      ] },
+    ]);
+  });
+
+  it('requires Administration, but not See PII, for the dedicated credit-history connection', () => {
+    const connection = ROUTES.find(route => route.path === '/admin/copilot-cost-connection')!;
+    expect(connection).toBeDefined();
+    expect(missingPermission(connection, restricted)).toBe('administration');
+    expect(missingPermission(connection, { ...restricted, administration: true })).toBeNull();
+    const groups = groupedRoutesForArea('admin', visibleRoutesForArea('admin', { ...restricted, administration: true }));
+    expect(groups.find(group => group.groupKey === 'app.navGroup.connections')?.routes).toContain(connection);
+    expect(groups.flatMap(group => group.routes).some(route => route.path === '/admin/user-lookup')).toBe(false);
   });
 
   it('opens Activity analysis to every reader: it trims small groups itself and offers people only with See PII', () => {

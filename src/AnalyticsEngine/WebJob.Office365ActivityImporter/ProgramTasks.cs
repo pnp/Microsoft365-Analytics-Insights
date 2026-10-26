@@ -1,6 +1,9 @@
 using Common.Entities;
+using Common.Entities.Calls;
 using Common.Entities.Config;
 using Common.Entities.CopilotAuditBackfill;
+using Common.Entities.Copilot;
+using ActivityImporter.Engine.ActivityAPI.Copilot;
 using Common.Entities.State;
 using Common.Entities.UserScope;
 using DataUtils;
@@ -15,6 +18,7 @@ using WebJob.Office365ActivityImporter.Engine;
 using WebJob.Office365ActivityImporter.Engine.ActivityAPI;
 using WebJob.Office365ActivityImporter.Engine.ActivityAPI.Loaders;
 using WebJob.Office365ActivityImporter.Engine.AgentCosts;
+using Common.Entities.CopilotCosts;
 using WebJob.Office365ActivityImporter.Engine.Graph;
 using WebJob.Office365ActivityImporter.Engine.Graph.Copilot.AuditBackfill;
 using WebJob.Office365ActivityImporter.Engine.Graph.Calls;
@@ -42,6 +46,13 @@ namespace WebJob.Office365ActivityImporter
         private readonly ISentEmailMailboxSkipList _sentEmailMailboxSkipList;
         private static readonly InMemoryKeyValueStore InMemoryCopilotAuditBackfillStore = new InMemoryKeyValueStore();
 
+        // Process-lifetime agent-cost state. ProgramTasks is rebuilt every cycle, so these must be static to outlive
+        // it: the per-agent read's resume checkpoint where no Storage account is configured, and the Entra object ids
+        // the directory has said do not exist (so they are neither asked about nor offered for re-linking every pass).
+        private static readonly InMemoryKeyValueStore InMemoryAgentCostStateStore = new InMemoryKeyValueStore();
+        private static readonly AgentCostDirectoryMissCache AgentCostDirectoryMisses = new AgentCostDirectoryMissCache();
+        private DateTimeOffset _copilotCostRetryAt;
+
         public ProgramTasks(AnalyticsLogger logger, AppConfig settings, ISingleDateStore activityReportsLastImportedStore = null, IImportLastRunStore graphLastRunStore = null, ISentEmailMailboxSkipList sentEmailMailboxSkipList = null)
             : this(logger, settings, activityReportsLastImportedStore, graphLastRunStore, sentEmailMailboxSkipList, reportCompletionStore: null)
         {
@@ -66,21 +77,17 @@ namespace WebJob.Office365ActivityImporter
         }
 
         /// <summary>
-        /// Start listening for queued call notifications and make sure the Graph webhook subscription
-        /// is in place. The processor is owned by the caller because it must outlive a single import
-        /// cycle - Program.cs creates it once for the process (see issue #378).
+        /// Start listening for queued call notifications. The processor is owned by the caller because it must outlive a
+        /// single import cycle - Program.cs creates it once for the process (see issue #378). The Graph webhook
+        /// subscription is no longer checked here: <see cref="CallSubscriptionMaintainer"/> keeps it alive on its own timer.
         /// </summary>
-        internal async Task ProcessCallQueueAndWebhook(Uri webHookUrl, CallQueueProcessor callQueueProcessor)
+        internal Task ProcessCallQueueAndWebhook(Uri webHookUrl, CallQueueProcessor callQueueProcessor)
         {
             if (callQueueProcessor is null) throw new ArgumentNullException(nameof(callQueueProcessor));
 
             // Fire and forget calls SB receiver
             _ = callQueueProcessor.BeginProcessCallsQueue();
-
-            _logger.LogInformation("Verifying call webhook subscription.");
-            var callWebhook = new CallWebhook(_settings, _logger);
-            await callWebhook.CreateOrUpdateWebhook(webHookUrl, _settings.ClientSecret);
-
+            return Task.CompletedTask;
         }
 
         /// <summary>
@@ -91,8 +98,10 @@ namespace WebJob.Office365ActivityImporter
         {
             _logger.LogInformation("Starting Teams & Graph import.");
 
-            if (await RunGraphImportPass(graphReader => graphReader.GetAndSaveNonDeferredGraphData(_settings),
-                "ERROR: Can't access Teams user data - are application permissions configured correctly?"))
+            var completed = await RunGraphStageAsync("GraphMainPass", StageSlot.Cycle, graphReader => graphReader.GetAndSaveNonDeferredGraphData(_settings),
+                "ERROR: Can't access Teams user data - are application permissions configured correctly?");
+
+            if (completed)
             {
                 _logger.LogInformation("Finished Graph API import tasks.");
             }
@@ -110,10 +119,29 @@ namespace WebJob.Office365ActivityImporter
         {
             _logger.LogInformation("Starting deferred Graph import (usage reports) in the background.");
 
-            if (await RunGraphImportPass(graphReader => graphReader.GetAndSaveDeferredGraphData(_settings),
-                "ERROR: Can't access Graph usage reports - are application permissions configured correctly?"))
+            var completed = await RunGraphStageAsync("GraphDeferredPass", StageSlot.Background, graphReader => graphReader.GetAndSaveDeferredGraphData(_settings),
+                "ERROR: Can't access Graph usage reports - are application permissions configured correctly?");
+
+            if (completed)
             {
                 _logger.LogInformation("Finished deferred Graph API import tasks.");
+            }
+        }
+
+        /// <summary>A Graph pass as a stage: a 403 (not completed, already logged as a warning) is recorded as a failed stage.</summary>
+        private async Task<bool> RunGraphStageAsync(string stageName, StageSlot slot, Func<GraphImporter, Task> pass, string forbiddenWarning)
+        {
+            var stage = StageTracker.Process.Begin(_logger, stageName, slot);
+            try
+            {
+                var completed = await RunGraphImportPass(pass, forbiddenWarning);
+                if (completed) stage.Succeeded(); else stage.Failed(reason: "GraphForbidden");
+                return completed;
+            }
+            catch (Exception ex)
+            {
+                stage.Failed(ex);
+                throw;
             }
         }
 
@@ -142,7 +170,9 @@ namespace WebJob.Office365ActivityImporter
                 }
                 else
                 {
-                    _logger.LogError(ex, ex.Message);
+                    // Tracked once: the caller that catches the rethrow below logs the same exception object again, and
+                    // the logger sends an exception to App Insights only the first time it sees it.
+                    _logger.LogError($"Graph import pass failed: {CommonExceptionHandler.GetErrorText(ex)} (HTTP {ex.ResponseStatusCode}, Graph error code '{ex.Error?.Code}').", ex);
                     throw;
                 }
             }
@@ -154,6 +184,7 @@ namespace WebJob.Office365ActivityImporter
             {
                 return;
             }
+
             await _graphAppIndentityOAuthContext.InitClientCredential();
             _graphClient = GraphServiceClientFactory.CreateForGraphImport(_graphAppIndentityOAuthContext.Creds, _logger);
             _manualGraphCallClient = new ManualGraphCallClient(_graphAppIndentityOAuthContext, _logger);
@@ -162,6 +193,21 @@ namespace WebJob.Office365ActivityImporter
             _isInitialized = true;
 
         }
+
+        internal async Task ImportCopilotCosts()
+        {
+            if (!_settings.ImportJobSettings.CopilotCostManagement) return;
+            if (DateTimeOffset.UtcNow < _copilotCostRetryAt) return;
+            var status = await CostCollectorRuntime.RunAsync(_settings, System.Threading.CancellationToken.None);
+            if (status != "sliceCompleted" && status != "observed" && status != "partial")
+                _copilotCostRetryAt = DateTimeOffset.UtcNow.AddMinutes(status == "idle" ? 1 : 5);
+            // Only stable, application-authored classifications; never exception text/SQL/request URLs.
+            _logger.LogInformation("Copilot cost preview collection: {Outcome}", status);
+        }
+
+        internal bool CopilotCostsEnabled => _settings.ImportJobSettings.CopilotCostManagement
+            && _settings.CopilotCostConnectionEnabled
+            && !string.IsNullOrWhiteSpace(_settings.ConnectionStrings?.StorageConnectionString);
 
         /// <summary>
         /// Refreshes the Copilot Adoption leadership cohort's membership when it is due (#654). Does nothing when no
@@ -181,7 +227,7 @@ namespace WebJob.Office365ActivityImporter
             }
             catch (Exception ex)
             {
-                _logger.LogWarning($"Leadership cohort refresh skipped this cycle ({ex.GetType().Name}): {ex.Message}");
+                _logger.LogWarning($"Leadership cohort refresh skipped this cycle ({ex.GetType().Name}): {CommonExceptionHandler.GetErrorText(ex)}", ex);
             }
         }
 
@@ -211,6 +257,9 @@ namespace WebJob.Office365ActivityImporter
                 var store = new SqlAgentCostStore(DefaultAnalyticsDbContextFactory.Instance, _logger);
                 AgentCostConnectionStore connectionStore = null;
                 AgentCostConnectionHead connectionHead = null;
+
+                // The ImportSchedule partition, like the cadence stamps: the resume checkpoint is scheduling state.
+                var agentCostState = StateStore.TryOpen(_settings, StatePartitions.ImportSchedule, _logger) ?? InMemoryAgentCostStateStore;
 
                 var phase = new AgentCostImportPhase(
                     _logger,
@@ -250,9 +299,12 @@ namespace WebJob.Office365ActivityImporter
                             userResolver: new AgentCostUserResolver(
                                 new SqlAgentCostUserLinkStore(DefaultAnalyticsDbContextFactory.Instance, _logger),
                                 _manualGraphCallClient == null ? null : new GraphEntraUserLookup(_manualGraphCallClient, _logger),
-                                _logger),
+                                _logger,
+                                misses: AgentCostDirectoryMisses),
                             // Per-user credits for anyone outside UserGroupsFilter are not stored.
-                            userScopeProvider: _userScopeProvider);
+                            userScopeProvider: _userScopeProvider,
+                            // Lets a retry skip the days an unfinished read already stored. Per connection generation.
+                            checkpoint: new CopilotStudioCreditCheckpointStore(agentCostState, connectionHead?.Version, _logger));
                     },
                     creditConnectionVersion: async () =>
                     {
@@ -272,16 +324,19 @@ namespace WebJob.Office365ActivityImporter
                             _logger,
                             new AzureCostManagementSource(httpClient, _settings.AzureCostImport, _logger),
                             store,
-                            _settings.AzureCostImport);
+                            _settings.AzureCostImport,
+                            clock: null,
+                            // Each scope's "last closed period read while final" marker. Process-lifetime (and durable
+                            // where Storage is configured), so a closed period leaves the window once it has been read.
+                            periodState: _graphLastRunStore);
                     });
 
                 await phase.RunAsync();
             }
             catch (Exception ex)
             {
-                _logger.TrackException(ex);
-                _logger.LogError(ex, $"Agent cost import phase failed to run: {ex.Message}. "
-                    + "No other import is affected; it will be retried on the next cycle.");
+                _logger.LogError($"Agent cost import phase failed to run: {CommonExceptionHandler.GetErrorText(ex)}. "
+                    + "No other import is affected; it will be retried on the next cycle.", ex);
             }
         }
 
@@ -291,6 +346,7 @@ namespace WebJob.Office365ActivityImporter
         internal async Task DownloadActivityData()
         {
             await InitAuth();
+            await AdvanceCopilotEnrichmentSafely();
 
             // Remember start time
             DateTime startTime = DateTime.Now;
@@ -360,7 +416,7 @@ namespace WebJob.Office365ActivityImporter
                 }
                 catch (System.Net.Http.HttpRequestException ex)
                 {
-                    _logger.LogError(ex, $"Got unexpected exception importing activity: {ex.Message}");
+                    _logger.LogError($"Got unexpected exception importing activity: {CommonExceptionHandler.GetErrorText(ex)}", ex);
                 }
 
                 await AdvanceCopilotAuditBackfillSafely(sqlAdaptor);
@@ -383,6 +439,23 @@ namespace WebJob.Office365ActivityImporter
                     _logger);
                 await backfill.AdvanceLatestAsync();
             }, _logger);
+        }
+
+        internal async Task AdvanceCopilotEnrichmentSafely()
+        {
+            if (!_settings.ResolveCopilotResourceMetadata || !StateStore.IsConfigured(_settings))
+                return;
+            try
+            {
+                var worker = new CopilotEnrichmentWorker(_settings.ConnectionStrings.DatabaseConnectionString,
+                    new CopilotEnrichmentQueue(_settings, _logger), new GraphFileMetadataLoader(_graphClient, _logger),
+                    await _userScopeProvider.GetScopeAsync(), _logger);
+                await worker.RunAsync();
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Copilot enrichment retry pass failed; queued work remains durable and will retry next cycle. New audit import can continue.");
+            }
         }
     }
 }

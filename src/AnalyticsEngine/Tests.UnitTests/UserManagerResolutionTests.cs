@@ -173,6 +173,104 @@ namespace Tests.UnitTests
             Assert.IsTrue(index.ContainsKey("boss@contoso.com"));
         }
 
+        [TestMethod]
+        public void ObjectIdIndex_SharedObjectId_IsTheCurrentSignInNamesRow_ElseTheNewest_InAnyOrder()
+        {
+            // A renamed user keeps their object id, and the import records the new sign-in name as a new row.
+            var original = new Common.Entities.User { ID = 3, AzureAdId = "aad-boss", UserPrincipalName = "boss.renamed.back@contoso.com" };
+            var renamed = new Common.Entities.User { ID = 8, AzureAdId = "aad-boss", UserPrincipalName = "boss.interim@contoso.com" };
+
+            foreach (var rows in new[] { new[] { original, renamed }, new[] { renamed, original } })
+            {
+                Assert.AreEqual(8, UserIdentityRules.IndexByObjectId(rows, id => null)["AAD-BOSS"].ID,
+                    "Not in this read: the newest row - the one the rename inserted.");
+                Assert.AreEqual(3, UserIdentityRules.IndexByObjectId(rows, id => "Boss.Renamed.Back@contoso.com")["aad-boss"].ID,
+                    "In this read: the row with the sign-in name Graph reports now, even when it is the older one.");
+            }
+        }
+
+        [TestMethod]
+        public void RowsToDeactivate_ReportedAccounts_EveryRowCarryingTheId_WhateverTheScope_NotAlreadyDisabled()
+        {
+            var deactivations = new GraphUserDeactivations(new GraphUser[0], new[] { "aad-leaver" }, new[] { "aad-deleted" });
+
+            var rows = UserIdentityRules.SelectRowsToDeactivate(
+                new[]
+                {
+                    new Common.Entities.User { ID = 1, AzureAdId = "aad-leaver", UserPrincipalName = "leaver.old@contoso.com", AccountEnabled = true },
+                    new Common.Entities.User { ID = 2, AzureAdId = "AAD-LEAVER", UserPrincipalName = "leaver@contoso.com", AccountEnabled = null },
+                    new Common.Entities.User { ID = 3, AzureAdId = "aad-leaver", UserPrincipalName = "leaver.done@contoso.com", AccountEnabled = false },
+                    new Common.Entities.User { ID = 4, AzureAdId = "aad-deleted", UserPrincipalName = "deleted@contoso.com", AccountEnabled = true },
+                    new Common.Entities.User { ID = 5, AzureAdId = "aad-stayer", UserPrincipalName = "stayer@contoso.com", AccountEnabled = true },
+                },
+                deactivations);
+
+            CollectionAssert.AreEqual(new[] { 1, 2, 4 }, rows.Reported.Select(r => r.UserId).ToArray(),
+                "A rename's left-behind row too; not a row already disabled, or anyone else.");
+            CollectionAssert.AreEqual(new[] { "aad-leaver", "AAD-LEAVER", "aad-deleted" }, rows.Reported.Select(r => r.ObjectId).ToArray(),
+                "Each row keeps its own spelling of the id, which the write checks again.");
+            Assert.AreEqual(0, rows.NoLongerInDirectory.Count, "Only a complete read of the directory says who is absent.");
+        }
+
+        [TestMethod]
+        public void RowsToDeactivate_AfterACompleteRead_TheAccountsItLeftOut()
+        {
+            var table = new[]
+            {
+                new Common.Entities.User { ID = 1, AzureAdId = "aad-1", AccountEnabled = true },
+                new Common.Entities.User { ID = 2, AzureAdId = "aad-2", AccountEnabled = true },
+                new Common.Entities.User { ID = 3, AzureAdId = "aad-gone", AccountEnabled = true },
+                new Common.Entities.User { ID = 4, AzureAdId = "aad-gone-before", AccountEnabled = false },
+                new Common.Entities.User { ID = 5, AzureAdId = "", UserPrincipalName = "by.name.only@contoso.com", AccountEnabled = true },
+            };
+
+            var complete = UserIdentityRules.SelectRowsToDeactivate(table, CompleteRead("aad-1", "AAD-2", "aad-never-imported"));
+            CollectionAssert.AreEqual(new[] { 3 }, complete.NoLongerInDirectory.Select(r => r.UserId).ToArray(),
+                "Not a row already disabled, nor one another import created by sign-in name alone.");
+            Assert.AreEqual(2, complete.ConfirmedByCompleteRead);
+
+            Assert.AreEqual(0, UserIdentityRules.SelectRowsToDeactivate(table, GraphUserDeactivations.None).NoLongerInDirectory.Count,
+                "An incremental read lists only what changed, so absence from it means nothing.");
+        }
+
+        [TestMethod]
+        public void CompleteRead_MatchingGraphsCount_IsTrusted_HoweverManyOldLeaversItLeavesOut()
+        {
+            // The first complete read after an upgrade: 30,000 people today, and 35,000 rows for people who have left since.
+            var verdict = DirectoryReadCompleteness.Judge(usersInRead: 30_000, usersInDirectory: 30_150, leftOut: 35_000, confirmed: 30_000);
+
+            Assert.AreEqual(DirectoryReadVerdict.MatchesDirectoryCount, verdict);
+            Assert.IsTrue(DirectoryReadCompleteness.IsTrusted(verdict));
+        }
+
+        [DataTestMethod]
+        [DataRow(30_000, 31_000, "ShortOfDirectoryCount", DisplayName = "1,000 short of 31,000: more than 1%")]
+        [DataRow(30_000, 29_000, "BeyondDirectoryCount", DisplayName = "1,000 over 29,000: more than 1%")]
+        [DataRow(990, 1_000, "MatchesDirectoryCount", DisplayName = "Exactly 1% short")]
+        [DataRow(989, 1_000, "ShortOfDirectoryCount", DisplayName = "Just over 1% short")]
+        [DataRow(1_010, 1_000, "MatchesDirectoryCount", DisplayName = "Exactly 1% over")]
+        [DataRow(1_011, 1_000, "BeyondDirectoryCount", DisplayName = "Just over 1% over")]
+        [DataRow(40, 50, "MatchesDirectoryCount", DisplayName = "Small directory: 10 users of slack")]
+        [DataRow(39, 50, "ShortOfDirectoryCount", DisplayName = "Small directory: 11 short")]
+        public void CompleteRead_ComparedWithGraphsCount(int usersInRead, int usersInDirectory, string expected)
+        {
+            // The users table plays no part once the count is known: here it would allow anything.
+            Assert.AreEqual(expected, DirectoryReadCompleteness.Judge(usersInRead, usersInDirectory, leftOut: 1, confirmed: usersInRead).ToString());
+        }
+
+        [TestMethod]
+        public void CompleteRead_GraphsCountUnavailable_FallsBackToTheUsersTable()
+        {
+            Assert.AreEqual(DirectoryReadVerdict.ConfirmedByUsersTable, DirectoryReadCompleteness.Judge(usersInRead: 100, usersInDirectory: null, leftOut: 100, confirmed: 100));
+            Assert.AreEqual(DirectoryReadVerdict.LeftOutMoreThanConfirmed, DirectoryReadCompleteness.Judge(usersInRead: 100, usersInDirectory: null, leftOut: 101, confirmed: 100));
+            Assert.IsFalse(DirectoryReadCompleteness.IsTrusted(DirectoryReadVerdict.LeftOutMoreThanConfirmed));
+            Assert.AreEqual(DirectoryReadVerdict.EmptyRead, DirectoryReadCompleteness.Judge(usersInRead: 0, usersInDirectory: 0, leftOut: 5, confirmed: 0),
+                "A read that listed nobody is never evidence, even when the count agrees.");
+        }
+
+        private static GraphUserDeactivations CompleteRead(params string[] objectIds)
+            => new GraphUserDeactivations(new GraphUser[0], new string[0], new string[0], objectIds);
+
         #endregion
 
         #region The N+1 guard

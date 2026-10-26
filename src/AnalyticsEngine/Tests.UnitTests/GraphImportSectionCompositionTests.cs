@@ -181,6 +181,44 @@ namespace Tests.UnitTests
             Assert.IsNull(section.CadenceKey, $"{section.Name} must not be cadence-gated.");
         }
 
+        /// <summary>
+        /// Without a Storage account the sent-email checkpoints are kept in memory. The sections are rebuilt every import cycle, and a
+        /// store created inside one forgot every mailbox's checkpoint each cycle - so, with the per-mailbox read bound, every mailbox
+        /// restarted from the first page of its sent items every cycle and never got further. The fallback is one store per process.
+        /// </summary>
+        [TestMethod]
+        public async Task SentEmailCheckpoints_WithoutStorage_SurviveTheNextCycle()
+        {
+            var firstCycle = ProductionGraphImportSectionFactory.SelectSentEmailDeltaTokenStore(null, AnalyticsLogger.ConsoleOnlyTracer());
+            await firstCycle.SetDeltaToken("SentEmails-user@contoso.example", "token-after-page-1");
+
+            var nextCycle = ProductionGraphImportSectionFactory.SelectSentEmailDeltaTokenStore(null, AnalyticsLogger.ConsoleOnlyTracer());
+
+            Assert.AreSame(firstCycle, nextCycle, "One in-memory store for the life of the process.");
+            Assert.AreEqual("token-after-page-1", await nextCycle.GetDeltaToken("SentEmails-user@contoso.example"));
+        }
+
+        [TestMethod]
+        public void SentEmailCheckpoints_WithStorage_AreDurable_NotTheInMemoryFallback()
+        {
+            var state = new Common.Entities.State.InMemoryKeyValueStore();
+
+            var store = ProductionGraphImportSectionFactory.SelectSentEmailDeltaTokenStore(state, AnalyticsLogger.ConsoleOnlyTracer());
+
+            Assert.IsInstanceOfType(store, typeof(WebJob.Office365ActivityImporter.Engine.Graph.Email.PersistedDeltaTokenStore));
+        }
+
+        [TestMethod]
+        public void TeamsImport_IsTheOnlySectionThatBacksOffAfterAFailedCrawl()
+        {
+            var settings = SettingsWithDistinctIntervals();
+            var sections = BuildFactory(settings, NeverCalled()).CreateSections(settings);
+
+            var backingOff = sections.Where(s => s is IFailureBackoffSection b && b.BacksOffAfterFailure).Select(s => s.Name).ToList();
+
+            CollectionAssert.AreEqual(new[] { "Teams import" }, backingOff, "Back-off is opt-in; no other section's retry changes.");
+        }
+
         [TestMethod]
         public void ProductionSections_EachMapToExactlyOneImportSettingFlag()
         {
@@ -214,13 +252,16 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
-        public async Task UsageReportSection_PassesTheDaysWindowAndTheSharedUserScope()
+        public async Task UsageReportSection_PassesTheUsageReportWindowAndTheSharedUserScope()
         {
             // Guards the one place the section list reads the per-cycle settings ARGUMENT rather than the
             // factory's own AppConfig, plus that the usage reports apply the process's shared UserGroupsFilter scope.
+            // The window is UsageReportsDaysBack, NOT the audit import's DaysBeforeNowToDownload: Graph keeps ~28 days
+            // of usage detail, and borrowing the audit's 6-day window lost any date that aged out before it imported.
             var fieldSettings = SettingsWithDistinctIntervals();
             var argumentSettings = SettingsWithDistinctIntervals();
-            argumentSettings.DaysBeforeNowToDownload = 42;
+            argumentSettings.DaysBeforeNowToDownload = 6;
+            argumentSettings.UsageReportsDaysBack = 21;
 
             int observedDays = -1;
             UserImportScope observedScope = null;
@@ -238,7 +279,7 @@ namespace Tests.UnitTests
             Assert.AreEqual(-1, observedDays, "Composing the sections must not run any of them.");
 
             Assert.IsTrue(await usageReports.RunAsync());
-            Assert.AreEqual(42, observedDays, "The days window comes from the settings passed to GetAndSaveAllGraphData.");
+            Assert.AreEqual(21, observedDays, "The days window is the UsageReportsDaysBack passed to GetAndSaveAllGraphData.");
             Assert.AreSame(sharedScope, observedScope,
                 "The usage reports apply the shared scope, so every import in the process uses the same resolution.");
         }

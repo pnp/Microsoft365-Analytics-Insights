@@ -14,6 +14,7 @@ using System.Security.Cryptography;
 using System.Threading;
 using System.Threading.Tasks;
 using Tests.UnitTests.FakeEntities;
+using WebJob.Office365ActivityImporter.Engine;
 using WebJob.Office365ActivityImporter.Engine.Engine.Entities;
 
 namespace Tests.UnitTests
@@ -382,6 +383,96 @@ namespace Tests.UnitTests
             {
                 var cached = await callbackCache.GetResource(id);
                 Assert.IsNotNull(cached);
+            }
+        }
+
+        /// <summary>
+        /// Regression (B6/D6): the cache used to hold one lock across every load, so two unrelated ids could not be
+        /// looked up at the same time and even a cache hit queued behind somebody else's slow (e.g. throttled) Graph call.
+        /// </summary>
+        [TestMethod]
+        public async Task ObjectByIdCache_UnrelatedKeysLoadConcurrently_AndAHitNeverWaitsBehindALoad()
+        {
+            var cache = new GatedObjectByIdCache();
+            cache.Release("primed");
+            var primed = await cache.GetResource("primed");
+
+            var slowA = cache.GetResource("slow-a");
+            var slowB = cache.GetResource("slow-b");
+            Assert.IsTrue(await cache.WaitUntilLoading(TimeSpan.FromSeconds(10), "slow-a", "slow-b"),
+                "Two unrelated ids must be able to load at the same time.");
+
+            var hit = cache.GetResource("PRIMED");
+            Assert.AreSame(hit, await Task.WhenAny(hit, Task.Delay(TimeSpan.FromSeconds(10))),
+                "A cache hit must not wait for an unrelated load to finish.");
+            Assert.AreSame(primed, await hit);
+
+            cache.Release("slow-a");
+            cache.Release("slow-b");
+            await Task.WhenAll(slowA, slowB);
+        }
+
+        /// <summary>
+        /// Callers asking for the same id share one load, and a load that failed is retried by the next caller rather
+        /// than remembered.
+        /// </summary>
+        [TestMethod]
+        public async Task ObjectByIdCache_SameKeySharesOneLoad_AndAFailedLoadIsRetried()
+        {
+            var cache = new GatedObjectByIdCache();
+            var callers = Enumerable.Range(0, 10).Select(i => cache.GetResource(i % 2 == 0 ? "shared" : "SHARED")).ToList();
+            Assert.IsTrue(await cache.WaitUntilLoading(TimeSpan.FromSeconds(10), "shared"));
+            cache.Release("shared");
+            var results = await Task.WhenAll(callers);
+            Assert.IsTrue(results.All(r => ReferenceEquals(r, results[0])));
+            Assert.AreEqual(1, cache.LoadCount("shared"), "Concurrent callers for one id share a single load.");
+
+            cache.FailNextLoad("flaky");
+            cache.Release("flaky");
+            await Assert.ThrowsExceptionAsync<InvalidOperationException>(() => cache.GetResource("flaky"));
+            Assert.IsNotNull(await cache.GetResource("flaky"), "A failed load must not be cached.");
+            Assert.AreEqual(2, cache.LoadCount("flaky"));
+        }
+
+        /// <summary>A cache whose loads wait until the test releases them, recording which ids are loading.</summary>
+        class GatedObjectByIdCache : ObjectByIdCache<TestObject>
+        {
+            private readonly System.Collections.Concurrent.ConcurrentDictionary<string, TaskCompletionSource<bool>> _gates
+                = new System.Collections.Concurrent.ConcurrentDictionary<string, TaskCompletionSource<bool>>(StringComparer.OrdinalIgnoreCase);
+            private readonly System.Collections.Concurrent.ConcurrentDictionary<string, int> _loads
+                = new System.Collections.Concurrent.ConcurrentDictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+            private readonly System.Collections.Concurrent.ConcurrentDictionary<string, bool> _failNext
+                = new System.Collections.Concurrent.ConcurrentDictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
+
+            private TaskCompletionSource<bool> Gate(string id) =>
+                _gates.GetOrAdd(id, _ => new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously));
+
+            public void Release(string id) => Gate(id).TrySetResult(true);
+
+            public void FailNextLoad(string id) => _failNext[id] = true;
+
+            public int LoadCount(string id) => _loads.TryGetValue(id, out var count) ? count : 0;
+
+            public async Task<bool> WaitUntilLoading(TimeSpan timeout, params string[] ids)
+            {
+                var deadline = DateTime.UtcNow + timeout;
+                while (!ids.All(id => LoadCount(id) > 0))
+                {
+                    if (DateTime.UtcNow > deadline) return false;
+                    await Task.Delay(10);
+                }
+                return true;
+            }
+
+            public override async Task<TestObject> Load(string id)
+            {
+                _loads.AddOrUpdate(id, 1, (_, count) => count + 1);
+                await Gate(id).Task;
+                if (_failNext.TryRemove(id, out _))
+                {
+                    throw new InvalidOperationException("Synthetic load failure");
+                }
+                return new TestObject();
             }
         }
         class TestObjectByIdCache : ObjectByIdCache<TestObject>
@@ -1213,6 +1304,390 @@ namespace Tests.UnitTests
 
             longString = "123456";
             Assert.IsTrue(StringUtils.EnsureMaxLength(longString, 4) == "1...");
+        }
+
+        // ---- Host logging foundation: exception text, console format, stages, shutdown, command lines ----
+
+        // A real SqlException (its constructor is internal): opening a database that does not exist on the test server.
+        private static Microsoft.Data.SqlClient.SqlException RealSqlException()
+        {
+            var builder = new Microsoft.Data.SqlClient.SqlConnectionStringBuilder(new AppConfig().ConnectionStrings.DatabaseConnectionString)
+            {
+                InitialCatalog = "DoesNotExist_" + Guid.NewGuid().ToString("N"),
+                ConnectTimeout = 15,
+            };
+            using (var connection = new Microsoft.Data.SqlClient.SqlConnection(builder.ConnectionString))
+            {
+                try
+                {
+                    connection.Open();
+                }
+                catch (Microsoft.Data.SqlClient.SqlException ex)
+                {
+                    return ex;
+                }
+            }
+            Assert.Fail("Opening a missing database must fail.");
+            return null;
+        }
+
+        private static string[] CaptureConsole(Action action)
+        {
+            var originalOut = Console.Out;
+            var originalError = Console.Error;
+            var stdout = new System.IO.StringWriter();
+            var stderr = new System.IO.StringWriter();
+            try
+            {
+                Console.SetOut(stdout);
+                Console.SetError(stderr);
+                action();
+            }
+            finally
+            {
+                Console.SetOut(originalOut);
+                Console.SetError(originalError);
+            }
+            return new[] { stdout.ToString(), stderr.ToString() };
+        }
+
+        [TestMethod]
+        public void SqlStartupProbe_PassesAgainstTheTestDatabase_AndNeverCountsTheWholeTable()
+        {
+            var logger = AnalyticsLogger.ConsoleOnlyTracer();
+            var connectionStrings = new AppConfig().ConnectionStrings;
+
+            var captured = CaptureConsole(() =>
+            {
+                Assert.IsTrue(connectionStrings.TestSQLSettings(logger));
+                Assert.IsTrue(connectionStrings.TestAuditSQLSettings(logger));
+            });
+
+            StringAssert.Contains(captured[0], "SQL startup probe passed: table=hits; ElapsedMs=");
+            StringAssert.Contains(captured[0], "SQL startup probe passed: table=audit_events; ElapsedMs=");
+
+            // The query the probe runs: a COUNT over a TOP (1) subquery, not over the table.
+            var sql = new System.Text.StringBuilder();
+            using (var db = new AnalyticsEntitiesContext())
+            {
+                db.Database.Log = s => sql.Append(s);
+                db.hits.Take(1).Count();
+                db.AuditEventsCommon.Take(1).Count();
+            }
+            var executed = sql.ToString();
+            StringAssert.Contains(executed, "TOP (1)");
+            Assert.IsFalse(System.Text.RegularExpressions.Regex.IsMatch(executed, @"COUNT\(1\) AS \[A1\]\s+FROM \[dbo\]\.\[(hits|audit_events)\]"),
+                "The probe must not count every row of the table.");
+        }
+
+        [TestMethod]
+        public void ExceptionDescriber_Chain_NamesEveryExceptionAndTheSqlErrorNumber()
+        {
+            var sql = RealSqlException();
+            // EF6 wraps a login or open failure; async code wraps again in an AggregateException.
+            var wrapped = new AggregateException(new InvalidOperationException("The underlying provider failed on Open.", sql));
+
+            var chain = ExceptionDescriber.Chain(wrapped);
+
+            StringAssert.Contains(chain, "AggregateException");
+            StringAssert.Contains(chain, "InvalidOperationException: The underlying provider failed on Open.");
+            StringAssert.Contains(chain, "SqlException");
+            StringAssert.Contains(chain, "(SQL error " + sql.Number + ")");
+            Assert.AreEqual(sql.Number, ExceptionDescriber.FindSqlErrorNumber(wrapped));
+            Assert.IsFalse(chain.Contains("   at "), "The chain is one line; stacks are printed separately.");
+        }
+
+        [TestMethod]
+        public void ExceptionDescriber_Dimensions_ClassifyWithoutMessageText()
+        {
+            var dimensions = ExceptionDescriber.Dimensions(new InvalidOperationException("secret-looking message", new TimeoutException("inner")));
+
+            Assert.AreEqual("InvalidOperationException", dimensions["ExceptionType"]);
+            Assert.AreEqual("TimeoutException", dimensions["RootExceptionType"]);
+            Assert.IsFalse(dimensions.Values.Any(v => v.Contains("secret-looking")), "Dimensions classify; they never carry message text.");
+            Assert.IsFalse(dimensions.ContainsKey("SqlErrorNumber"));
+        }
+
+        [TestMethod]
+        public void HostRuntime_FatalMessage_NamesTheJobTheStageAndTheWholeChain()
+        {
+            var message = HostRuntime.FatalMessage("Office365ActivityImporter", "Main",
+                new InvalidOperationException("The underlying provider failed on Open.", new System.IO.IOException("Login failed")));
+
+            StringAssert.StartsWith(message, "FATAL Office365ActivityImporter: unhandled exception in Main");
+            StringAssert.Contains(message, "InvalidOperationException: The underlying provider failed on Open. ---> IOException: Login failed");
+        }
+
+        [TestMethod]
+        public void ConsoleLog_Format_HasUtcTimestampLevelAndShortOperationId()
+        {
+            var line = ConsoleLog.Format(new DateTime(2026, 1, 2, 3, 4, 5, 678, DateTimeKind.Utc), "ERR", "0123456789abcdef", "something failed");
+
+            Assert.AreEqual("2026-01-02T03:04:05.678Z [ERR] [op 01234567] something failed", line);
+            Assert.AreEqual("2026-01-02T03:04:05.678Z [INF] hello",
+                ConsoleLog.Format(new DateTime(2026, 1, 2, 3, 4, 5, 678, DateTimeKind.Utc), "INF", null, "hello"));
+        }
+
+        [TestMethod]
+        public void AnalyticsLogger_Console_SendsErrorsToStderrWithChainAndStack_AndTheRestToStdout()
+        {
+            var logger = AnalyticsLogger.ConsoleOnlyTracer();
+            Exception thrown;
+            try
+            {
+                throw new InvalidOperationException("outer failure", new TimeoutException("inner timeout"));
+            }
+            catch (Exception ex)
+            {
+                thrown = ex;
+            }
+
+            var captured = CaptureConsole(() =>
+            {
+                logger.LogInformation("an information line");
+                logger.LogWarning("a warning line");
+                logger.LogError("the unit of work failed", thrown);
+                logger.LogCritical("the feature is down");
+            });
+            var stdout = captured[0];
+            var stderr = captured[1];
+
+            StringAssert.Contains(stdout, "[INF] an information line");
+            StringAssert.Contains(stdout, "[WRN] a warning line");
+            Assert.IsFalse(stdout.Contains("[ERR]") || stdout.Contains("[CRT]"), "Errors must not be on stdout, or an error-level filter loses them.");
+            StringAssert.Contains(stderr, "[ERR] the unit of work failed");
+            StringAssert.Contains(stderr, "InvalidOperationException: outer failure ---> TimeoutException: inner timeout");
+            StringAssert.Contains(stderr, " at ", "An error line carries the full stack.");
+            StringAssert.Contains(stderr, "[CRT] the feature is down");
+        }
+
+        [TestMethod]
+        public void AnalyticsLogger_Console_WarningWithExceptionHasTheChainButNoStack()
+        {
+            var logger = AnalyticsLogger.ConsoleOnlyTracer();
+
+            var captured = CaptureConsole(() => logger.LogWarning("degraded", new InvalidOperationException("synthetic")));
+
+            StringAssert.Contains(captured[0], "[WRN] degraded Exception: InvalidOperationException: synthetic");
+            Assert.AreEqual(string.Empty, captured[1]);
+        }
+
+        [TestMethod]
+        public void AnalyticsLogger_Console_EventLinesAreTimestampedAndCarryTheOperation()
+        {
+            var logger = AnalyticsLogger.ConsoleOnlyTracer();
+
+            var captured = CaptureConsole(() =>
+            {
+                using (logger.BeginOperationScope("fedcba9876543210"))
+                {
+                    logger.TrackEvent(AnalyticsLogger.AnalyticsEvent.ImportStage, "x");
+                }
+            });
+
+            Assert.IsTrue(System.Text.RegularExpressions.Regex.IsMatch(captured[0],
+                @"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z \[EVT\] \[op fedcba98\] New event 'ImportStage'"), captured[0]);
+        }
+
+        [TestMethod]
+        public void StageTracker_ReportsTheCurrentStagePerSlot_AndEmitsAFinishEventOnFailureToo()
+        {
+            var tracker = new StageTracker();
+            var logger = AnalyticsLogger.ConsoleOnlyTracer();
+            Assert.IsNull(tracker.Snapshot(StageSlot.Cycle));
+
+            var captured = CaptureConsole(() =>
+            {
+                var outer = tracker.Begin(logger, "GraphMainPass");
+                var inner = tracker.Begin(logger, "UserMetadata");
+                var background = tracker.Begin(logger, "GraphDeferredPass", StageSlot.Background);
+
+                Assert.AreEqual("GraphMainPass/UserMetadata", tracker.Snapshot(StageSlot.Cycle).Stage);
+                Assert.IsTrue((DateTime.UtcNow - tracker.Snapshot(StageSlot.Cycle).StartedUtc.Value).TotalMinutes < 1);
+                Assert.AreEqual("GraphDeferredPass", tracker.Snapshot(StageSlot.Background).Stage);
+
+                inner.Failed(new InvalidOperationException("synthetic"));
+                Assert.AreEqual("GraphMainPass", tracker.Snapshot(StageSlot.Cycle).Stage);
+                outer.Succeeded();
+                background.Skipped("throttled");
+                Assert.IsNull(tracker.Snapshot(StageSlot.Cycle));
+                Assert.IsNull(tracker.Snapshot(StageSlot.Background));
+            });
+
+            StringAssert.Contains(captured[0], "ImportStage start: Stage=GraphMainPass; Slot=Cycle");
+            StringAssert.Contains(captured[0], "Stage=UserMetadata;Slot=Cycle;Outcome=Failed;ExceptionType=InvalidOperationException");
+            StringAssert.Contains(captured[0], "Stage=GraphMainPass;Slot=Cycle;Outcome=Succeeded");
+            StringAssert.Contains(captured[0], "Stage=GraphDeferredPass;Slot=Background;Outcome=Skipped;Reason=throttled");
+            StringAssert.Contains(captured[1], "[ERR] ImportStage finish: Stage=UserMetadata; Outcome=Failed; DurationMs=");
+        }
+
+        [TestMethod]
+        public void StageTracker_RunAsync_RecordsFailureAndRethrows_AndAStageWithNoOutcomeIsFailedNotDropped()
+        {
+            var tracker = new StageTracker();
+            var logger = AnalyticsLogger.ConsoleOnlyTracer();
+            var captured = CaptureConsole(() =>
+            {
+                Assert.ThrowsException<InvalidOperationException>(() =>
+                    tracker.RunAsync(logger, "ActivityImport", () => throw new InvalidOperationException("synthetic")).GetAwaiter().GetResult());
+                using (tracker.Begin(logger, "Abandoned"))
+                {
+                }
+            });
+
+            StringAssert.Contains(captured[0], "Stage=ActivityImport;Slot=Cycle;Outcome=Failed");
+            StringAssert.Contains(captured[0], "Stage=Abandoned;Slot=Cycle;Outcome=Failed;Reason=NoOutcomeRecorded");
+            Assert.IsNull(tracker.Snapshot(), "A finished stage must leave the slot idle.");
+        }
+
+        [TestMethod]
+        public void ShutdownWatcher_NoticesTheFileKuduCreates_OnceAndWakesWaiters()
+        {
+            var path = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "shutdown-" + Guid.NewGuid().ToString("N"));
+            var raised = 0;
+            try
+            {
+                using (var watcher = new ShutdownWatcher(path, TimeSpan.FromMilliseconds(100), () => Interlocked.Increment(ref raised)))
+                {
+                    Assert.IsFalse(watcher.IsRequested);
+                    Assert.IsFalse(watcher.Wait(TimeSpan.FromMilliseconds(150)), "Nothing has asked for a stop yet.");
+
+                    System.IO.File.WriteAllText(path, string.Empty);
+
+                    Assert.IsTrue(watcher.Wait(TimeSpan.FromSeconds(10)), "The watcher or the poll must see the file.");
+                    Assert.IsTrue(watcher.IsRequested);
+                    watcher.Check();
+                    Thread.Sleep(300);
+                    Assert.AreEqual(1, raised, "The shutdown callback runs once.");
+                }
+            }
+            finally
+            {
+                System.IO.File.Delete(path);
+            }
+        }
+
+        [TestMethod]
+        public void ShutdownWatcher_WithNoFileConfigured_NeverRequestsShutdown()
+        {
+            using (var watcher = new ShutdownWatcher(null, TimeSpan.FromMilliseconds(50)))
+            {
+                Assert.IsFalse(watcher.Wait(TimeSpan.FromMilliseconds(200)));
+                Assert.IsFalse(watcher.IsRequested);
+            }
+        }
+
+        [TestMethod]
+        public void StrictArguments_RefusesWhatItDoesNotUnderstand()
+        {
+            var flags = new[] { "-logApiResponses" };
+            var values = new[] { "-readHitsDaysBeforeToday" };
+
+            var ok = StrictArguments.Parse(new[] { "-LOGAPIRESPONSES", "-readHitsDaysBeforeToday", "3" }, flags, values);
+            Assert.IsTrue(ok.IsValid);
+            Assert.IsTrue(ok.Has("-logApiResponses"));
+            Assert.AreEqual("3", ok.ValueOf("-readHitsDaysBeforeToday"));
+
+            Assert.IsTrue(StrictArguments.Parse(new string[0], flags, values).IsValid);
+            StringAssert.Contains(StrictArguments.Parse(new[] { "-logApiResponse" }, flags, values).Error, "Unrecognised argument '-logApiResponse'");
+            StringAssert.Contains(StrictArguments.Parse(new[] { "-readHitsDaysBeforeToday" }, flags, values).Error, "needs a value");
+            StringAssert.Contains(StrictArguments.Parse(new[] { "-readHitsDaysBeforeToday", "-logApiResponses" }, flags, values).Error, "needs a value");
+            StringAssert.Contains(StrictArguments.Parse(new[] { "-logApiResponses", "-logApiResponses" }, flags, values).Error, "more than once");
+        }
+
+        [TestMethod]
+        public void StartupSqlCheck_BacksOffAndRetriesAtCritical_InsteadOfExiting()
+        {
+            var logger = AnalyticsLogger.ConsoleOnlyTracer();
+            var probes = 0;
+            var waits = new List<TimeSpan>();
+
+            bool result = false;
+            var captured = CaptureConsole(() => result = StartupSqlCheck.WaitUntilReachable(
+                () => ++probes >= 3, logger, "Office365ActivityImporter",
+                wait: d => { waits.Add(d); return false; },
+                backoff: new[] { TimeSpan.FromSeconds(15), TimeSpan.FromSeconds(30) }));
+
+            Assert.IsTrue(result);
+            Assert.AreEqual(3, probes);
+            CollectionAssert.AreEqual(new[] { TimeSpan.FromSeconds(15), TimeSpan.FromSeconds(30) }, waits);
+            StringAssert.Contains(captured[1], "[CRT] STARTUP-SQL-CHECK Failed: job=Office365ActivityImporter; attempt=1;");
+            StringAssert.Contains(captured[1], "attempt=2;");
+            StringAssert.Contains(captured[0], "STARTUP-SQL-CHECK Recovered: job=Office365ActivityImporter; attempt=3;");
+        }
+
+        [TestMethod]
+        public void StartupSqlCheck_StopsWaitingWhenTheHostAsksTheJobToStop()
+        {
+            var logger = AnalyticsLogger.ConsoleOnlyTracer();
+
+            bool result = true;
+            var captured = CaptureConsole(() => result = StartupSqlCheck.WaitUntilReachable(() => false, logger, "AppInsightsImporter", wait: d => true));
+
+            Assert.IsFalse(result);
+            StringAssert.Contains(captured[0], "STARTUP-SQL-CHECK Abandoned: job=AppInsightsImporter; shutdown requested by host");
+        }
+
+        [DataTestMethod]
+        [DataRow("--repair-dlp-history", "2026-01-01T00:00:00Z", "2026-01-02T00:00:00Z", "checkpoint.json")]
+        [DataRow("--repair-copilot-history", "2026-01-01T00:00:00Z", "2026-01-02T00:00:00Z", "checkpoint.json")]
+        public void ImporterCommandLine_AcceptsAWellFormedRepairCommand(string command, string from, string to, string file)
+        {
+            var parsed = ImporterCommandLine.Parse(new[] { command, from, to, file }, name => null);
+
+            Assert.IsTrue(parsed.IsValid, parsed.Error);
+            Assert.AreEqual(command == "--repair-dlp-history" ? ImporterMode.RepairDlpHistory : ImporterMode.RepairCopilotHistory, parsed.Mode);
+        }
+
+        [DataTestMethod]
+        [DataRow("--repair-dlp-histor|a|b|c")]                                              // mistyped: would have started the endless import
+        [DataRow("--repair-DLP-history|a|b|c")]                                             // case
+        [DataRow("--webhook|https://contoso.example/hook|--repair-dlp-history|a|b|c")]      // misplaced
+        [DataRow("--repair-copilot-history|a|b")]                                           // missing value
+        [DataRow("--repair-copilot-history|a|b|c|d")]                                       // extra value
+        [DataRow("import-now")]                                                             // unknown positional
+        [DataRow("--callId")]                                                               // option without its value
+        [DataRow("--webhook|not a url")]
+        [DataRow("--traceAuditEmail|a@contoso.example|--traceAuditEmail|b@contoso.example")]
+        public void ImporterCommandLine_RefusesAnythingItDoesNotUnderstand_RatherThanStartingTheImport(string joinedArgs)
+        {
+            var args = joinedArgs.Split('|');
+            var parsed = ImporterCommandLine.Parse(args, name => "SomeWebJob");
+
+            Assert.IsFalse(parsed.IsValid, "Accepted: " + string.Join(" ", args));
+            Assert.IsNotNull(parsed.Error);
+            StringAssert.Contains(ImporterCommandLine.Usage, "--repair-dlp-history");
+        }
+
+        [TestMethod]
+        public void ImporterCommandLine_EndlessImportOutsideAWebJob_NeedsConsoleImport()
+        {
+            Assert.IsTrue(ImporterCommandLine.Parse(new string[0], name => "Office365ActivityImporter").IsValid, "Kudu sets WEBJOBS_NAME.");
+            Assert.IsTrue(ImporterCommandLine.Parse(new string[0], name => null, interactiveImportAllowed: true).IsValid);
+
+            var refused = ImporterCommandLine.Parse(new string[0], name => null);
+            Assert.IsFalse(refused.IsValid);
+            StringAssert.Contains(refused.Error, "--console-import");
+
+            var allowed = ImporterCommandLine.Parse(new[] { "--console-import", "--traceAuditDir", "C:\\temp\\trace" }, name => null);
+            Assert.IsTrue(allowed.IsValid, allowed.Error);
+            Assert.AreEqual(ImporterMode.Import, allowed.Mode);
+            Assert.AreEqual("C:\\temp\\trace", allowed.TraceAuditDirectory);
+        }
+
+        [TestMethod]
+        public void ImporterCommandLine_RoutesTheOtherModes()
+        {
+            var single = ImporterCommandLine.Parse(new[] { "--callId", "00000000-0000-0000-0000-000000000000" }, name => null);
+            Assert.IsTrue(single.IsValid, single.Error);
+            Assert.AreEqual(ImporterMode.SingleCall, single.Mode);
+            Assert.AreEqual("00000000-0000-0000-0000-000000000000", single.CallId);
+
+            Assert.AreEqual(ImporterMode.ReplayCallDeadLetters,
+                ImporterCommandLine.Parse(new[] { "--replayCallDeadLetters", "--dry-run" }, name => null).Mode);
+
+            var hook = ImporterCommandLine.Parse(new[] { "--webhook", "https://contoso.example/api/CallRecordWebhook" }, name => "SomeWebJob");
+            Assert.AreEqual("https://contoso.example/api/CallRecordWebhook", hook.WebhookOverride.ToString());
         }
     }
 }

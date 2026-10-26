@@ -79,11 +79,21 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities
 
         public void IncrementMessageStatsWithThis(ChannelStatsLog existingLog)
         {
-            var previousSentimentTotal = existingLog.SentimentScore * existingLog.ChatsCount;
-            var thisSentimentTotal = this.Sentiment * this.ChatsCount;
-            var newSentimentScore = (previousSentimentTotal + thisSentimentTotal) / (existingLog.ChatsCount + this.ChatsCount);
-
-            existingLog.SentimentScore = newSentimentScore;
+            // A side with no sentiment (not scored - e.g. a cycle that ran while Cognitive Services was unavailable)
+            // contributes nothing to the average, as when stats are combined in memory (Concat). Lifted nullable
+            // arithmetic used to turn the day's stored score into NULL for good.
+            if (this.Sentiment.HasValue && existingLog.SentimentScore.HasValue)
+            {
+                var totalChats = existingLog.ChatsCount + this.ChatsCount;
+                if (totalChats > 0)
+                {
+                    existingLog.SentimentScore = (existingLog.SentimentScore.Value * existingLog.ChatsCount + this.Sentiment.Value * this.ChatsCount) / totalChats;
+                }
+            }
+            else if (this.Sentiment.HasValue)
+            {
+                existingLog.SentimentScore = this.Sentiment;
+            }
 
             existingLog.ChatsCount += this.ChatsCount;
         }

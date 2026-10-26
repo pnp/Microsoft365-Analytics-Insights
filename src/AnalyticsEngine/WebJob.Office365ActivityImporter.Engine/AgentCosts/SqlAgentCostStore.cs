@@ -210,6 +210,11 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
                         existing.Unit = row.Unit;
                         existing.EnvironmentName = row.EnvironmentName;
                         existing.ImportedUtc = row.ImportedUtc;
+
+                        // The re-read has just resolved the user, so it is the cheapest moment to link a row an
+                        // earlier run stored unlinked. Never the reverse: a re-read whose lookup failed (throttled,
+                        // directory unreachable) must not undo a link that is already known.
+                        if (row.UserId.HasValue) existing.UserId = row.UserId;
                     }
                     else
                     {

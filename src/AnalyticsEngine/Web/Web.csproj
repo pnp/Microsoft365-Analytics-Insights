@@ -319,6 +319,7 @@
     <Compile Include="Models\Health\IHealthDataSource.cs" />
     <Compile Include="Models\Health\SqlHealthDataSource.cs" />
     <Compile Include="Models\SystemStatusApiModel.cs" />
+    <Compile Include="Models\SharedComputation.cs" />
     <Compile Include="Models\UpdateCheck\BuildVersion.cs" />
     <Compile Include="Models\UpdateCheck\UpdateCheckApiModel.cs" />
     <Compile Include="Models\UpdateCheck\UpdateChecker.cs" />
@@ -420,4 +421,10 @@
   <Target Name="BeforeBuild">
     <TransformXml Source="Web.Template.config" Transform="Web.$(Configuration).config" Destination="Web.config" />
   </Target>
+  <ItemGroup>
+    <Compile Include="App_Start\Startup.CopilotCosts.cs" />
+    <Compile Include="Controllers\CopilotCostConnectionAPIController.cs" />
+    <Compile Include="Models\CopilotCosts\CostConnectionRuntime.cs" />
+    <Compile Include="Models\CopilotCosts\CostMsalIdentity.cs" />
+  </ItemGroup>
 </Project>

@@ -10,15 +10,18 @@
 -- deliberately contains NO classification logic, so there is exactly one implementation of
 -- "what counts as a block" and it is the unit-tested C# one.
 --
--- Guarded on table existence so the importer keeps working against a database that has not yet had the
--- DLP migration applied - the staged rows are simply discarded that cycle, and the rolling look-back
--- window re-imports them once the schema is upgraded.
-IF OBJECT_ID('dbo.copilot_dlp_events', 'U') IS NOT NULL
-   AND OBJECT_ID('dbo.dlp_policies', 'U') IS NOT NULL
-   AND OBJECT_ID('dbo.dlp_rules', 'U') IS NOT NULL
-   AND OBJECT_ID('dbo.dlp_actions', 'U') IS NOT NULL
-   AND OBJECT_ID('dbo.copilot_chat_duplicates', 'U') IS NOT NULL
+-- The importer only runs this script when it has staged rows, so a missing table means the database is behind
+-- the importer: fail the batch rather than discard the rows. A failed batch's content blob is not checkpointed,
+-- so these interactions are imported again once the database has been upgraded. (This used to skip the rows
+-- silently; the batch then counted as saved and its blob was checkpointed, which made the loss permanent.)
+IF OBJECT_ID('dbo.copilot_dlp_events', 'U') IS NULL
+   OR OBJECT_ID('dbo.dlp_policies', 'U') IS NULL
+   OR OBJECT_ID('dbo.dlp_rules', 'U') IS NULL
+   OR OBJECT_ID('dbo.dlp_actions', 'U') IS NULL
+   OR OBJECT_ID('dbo.copilot_chat_duplicates', 'U') IS NULL
 BEGIN
+    ;THROW 50001, N'Database upgrade required: a Copilot DLP table (copilot_dlp_events, dlp_policies, dlp_rules, dlp_actions or copilot_chat_duplicates) is missing, so this batch''s Copilot DLP policy matches cannot be saved. Upgrade the database with the installer; the affected audit content is retried automatically and nothing is lost while it is within the import look-back window.', 1;
+END
 
 -- 1. Upsert policies. LEFT() to the column widths so an unexpectedly long name truncates rather than
 --    failing the whole batch: losing the tail of a policy name is recoverable, losing the import is not.
@@ -190,5 +193,3 @@ WHERE s.turn_copy = 1
                  s.resource_name_id, s.resource_type_id, s.sensitivity_label_id, s.is_blocked
       )
 );
-
-END

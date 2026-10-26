@@ -77,6 +77,20 @@ namespace Common.Entities.UserScope.Purge
         /// </summary>
         public const string StateUnavailable = "stateUnavailable";
 
+        /// <summary>
+        /// More people are outside the scope than the administrator confirmed when starting the purge - the groups
+        /// shrank, or new users arrived, after the confirmation - so it stopped before removing any more of them rather
+        /// than remove people nobody agreed to. What it had removed before stays removed.
+        /// </summary>
+        public const string PurgeExceedsConfirmed = "purgeExceedsConfirmed";
+
+        /// <summary>
+        /// Starting again after a restart, the purge found that the members of the <c>UserGroupsFilter</c> groups are no
+        /// longer the ones it was confirmed against, so it stopped rather than remove people chosen under a scope nobody
+        /// confirmed. What it had removed before stays removed.
+        /// </summary>
+        public const string ScopeMembershipChanged = "scopeMembershipChanged";
+
         public const string Unexpected = "unexpected";
     }
 
@@ -103,6 +117,19 @@ namespace Common.Entities.UserScope.Purge
         public string RequestedBy { get; set; }
         public string FilterFingerprint { get; set; }
         public int? ScopeMemberCount { get; set; }
+
+        /// <summary>
+        /// How many people outside the scope the administrator agreed to remove: the number the confirmation showed.
+        /// The purge never removes more people than this in total, including across restarts. Null only in a record
+        /// written before it was kept; such a purge is held to the people it had already found (<see cref="CandidateCount"/>).
+        /// </summary>
+        public int? ConfirmedOutsideScopeCount { get; set; }
+
+        /// <summary>
+        /// <see cref="UserScopeMembers.MembershipFingerprint"/> of the scope the purge was confirmed against. A purge that
+        /// has to read the groups again - it is starting again after a restart - stops if they no longer resolve to it.
+        /// </summary>
+        public string ScopeMembershipFingerprint { get; set; }
 
         /// <summary>
         /// People outside the scope: the users the purge removes. A purge that starts again after a restart adds the

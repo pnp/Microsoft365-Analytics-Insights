@@ -22,6 +22,12 @@ namespace WebJob.Office365ActivityImporter.Engine.StatsUploader
 
         public abstract Task<AnonUsageStatsModel> LoadUsageStatsModel(BaseSolutionInstallConfig lastSettings);
         public abstract Task SaveUsageStatsModelToDatabase(AnonUsageStatsModel latestStats);
+
+        /// <summary>
+        /// Called once a report has been both uploaded and stored. Anything that must only count as delivered when
+        /// the report carrying it was - the weekly adoption block above all - is committed here, not when it is built.
+        /// </summary>
+        public virtual Task OnReportDeliveredAsync(AnonUsageStatsModel deliveredStats) => Task.CompletedTask;
     }
 
     public interface IStatsDatesLoader
@@ -49,5 +55,11 @@ namespace WebJob.Office365ActivityImporter.Engine.StatsUploader
     public interface IAnonAdoptionStatsProvider
     {
         Task<AnonAdoptionStats> GetAdoptionStats(BaseSolutionInstallConfig lastSettings);
+
+        /// <summary>
+        /// The report carrying <paramref name="delivered"/> has been uploaded and stored. Until this is called a
+        /// freshly computed block has not been delivered, so it is offered again rather than counted as done.
+        /// </summary>
+        Task AcknowledgeDeliveredAsync(AnonAdoptionStats delivered);
     }
 }

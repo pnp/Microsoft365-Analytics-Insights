@@ -129,7 +129,8 @@ cycle, so a systemic outage cannot burn every slice's attempts in one run. A 400
 A failed slice is retried up to `MaxSliceAttempts` (3) submissions across cycles; after that it is
 recorded as a gap and the job continues. If Graph reports the non-nullable `isRecordCountLimitExceeded`, the importer
 discards the partial result and splits a day into four six-hour slices; a truncated six-hour slice splits
-into hours; a truncated hour is recorded as incomplete and the job continues. Any failed or incomplete
+into hours, and a truncated hour into quarter-hours. A quarter-hour that is still truncated keeps the records
+it returned - they are imported - and is then recorded as incomplete, and the job continues. Any failed or incomplete
 slice makes the final state `completedWithGaps`, which the portal lists by affected day. Only systemic
 conditions stop the whole job: missing permission, the Copilot import toggle being off, Graph 401/403,
 Graph 400 query rejection, or a succeeded query whose returned `auditData` shape this build cannot
@@ -157,7 +158,7 @@ including mapping-failure counts by stable code; it never sends payloads, UPNs, 
 record ids or Graph Audit Search query ids. The shared Graph HTTP client can still log failing request
 URLs in its generic retry/error traces, as other Graph imports do; stored job error detail is sanitised to
 stable status/error codes rather than URLs or skip tokens. With the 100/day budget, 180 unsplit days take
-just under two days of available budget; tenants that split many days into six-hour or hourly slices take
+just under two days of available budget; tenants that split many days into six-hour, hourly or quarter-hour slices take
 proportionally longer. Like the live import, the backfill assumes a single active importer instance; there
 is no lease or ETag around the job state in this preview.
 

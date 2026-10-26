@@ -70,6 +70,10 @@ namespace WebJob.Office365ActivityImporter.Engine.StatsUploader
                             await _statsBuilder.SaveUsageStatsModelToDatabase(latestStats);
                             _logger.LogInformation($"{LOG_PREFIX}saved latest stats to database - see table 'sys_telemetry_reports'");
 
+                            // Only now does anything the report carries count as delivered. Before this, a failed
+                            // upload or save leaves it to be offered again on the retry.
+                            await _statsBuilder.OnReportDeliveredAsync(latestStats);
+
                             // Remember last upload dt
                             await _statsDatesLoader.RegisterLastUploadDt();
                             return true;

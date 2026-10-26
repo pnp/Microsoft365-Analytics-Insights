@@ -12,6 +12,7 @@
  */
 export const app = {
   'app.route.agentCostConnection': 'Copilot Studio billing connection',
+  'app.route.copilotCostConnection': 'Copilot credit history (preview)',
   'app.signOut': 'Sign out',
   'app.nav.collapse': 'Collapse navigation',
   'app.nav.expand': 'Expand navigation',
@@ -29,8 +30,10 @@ export const app = {
   'app.area.insights': 'Insights',
   'app.area.admin': 'Administration',
 
-  'app.navGroup.monitoring': 'Monitoring',
-  'app.navGroup.manage': 'Manage',
+  'app.navGroup.service': 'Service',
+  'app.navGroup.connections': 'Connections',
+  'app.navGroup.users': 'Users & scope',
+  'app.navGroup.reporting': 'Copilot & reporting',
   'app.workload.copilot': 'Copilot',
   'app.workload.agents': 'Agents',
   'app.workload.apps': 'Apps & licences',

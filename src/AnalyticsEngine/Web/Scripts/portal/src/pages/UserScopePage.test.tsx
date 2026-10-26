@@ -41,6 +41,7 @@ const runningJob = (over: Partial<UserScopePurgeJob> = {}): UserScopePurgeJob =>
 const status = (over: Partial<UserScopeStatus> = {}): UserScopeStatus => ({
   filtered: true,
   filterPatterns: ['Finance*', 'Athens'],
+  filterFingerprint: 'sha256:0000000000000000000000000000000000000000000000000000000000000000',
   resolution: {
     status: 'resolved',
     failureKind: null,
@@ -181,8 +182,38 @@ describe('UserScopePage', () => {
     fireEvent.click(start);
 
     await waitFor(() => expect(mockStartPurge).toHaveBeenCalledTimes(1));
+    expect(mockStartPurge).toHaveBeenCalledWith(25, status().filterFingerprint);
     expect(await screen.findByText('The purge is running.')).toBeInTheDocument();
     expect(screen.getByText('Usage reports: 8 of 14 steps complete')).toBeInTheDocument();
+  });
+
+  it('asks for a new confirmation, of the new number, when more people are outside the scope than were confirmed', async () => {
+    const grown = { totalUsers: 100, inScopeUsers: 60, outOfScopeUsers: 40 };
+    mockFetchStatus.mockResolvedValueOnce(status()).mockResolvedValue(status({ database: grown }));
+    mockStartPurge.mockRejectedValueOnce(
+      Object.assign(new Error('More people are outside the scope now than the number you confirmed.'), {
+        name: 'UserScopeApiError',
+        code: 'purgeExceedsConfirmed',
+        database: grown,
+      }),
+    );
+
+    renderWithProvider(<UserScopePage />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Purge 25 people...' }));
+    const dialog = (await screen.findByText('Purge people outside the scope?')).closest('[role="dialog"]') as HTMLElement;
+    fireEvent.click(within(dialog).getByRole('checkbox', { name: /these 25 people/ }));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Start purge' }));
+
+    expect(await within(dialog).findByText(/than the number you confirmed/)).toBeInTheDocument();
+    const checkbox = await within(dialog).findByRole('checkbox', { name: /these 40 people/ });
+    expect(checkbox).not.toBeChecked();
+    expect(within(dialog).getByRole('button', { name: 'Start purge' })).toBeDisabled();
+    await waitFor(() => expect(mockFetchStatus).toHaveBeenCalledTimes(2));
+
+    fireEvent.click(checkbox);
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Start purge' }));
+    await waitFor(() => expect(mockStartPurge).toHaveBeenCalledTimes(2));
+    expect(mockStartPurge).toHaveBeenLastCalledWith(40, status().filterFingerprint);
   });
 
   it('polls a running purge until completion and reloads the full status', async () => {
@@ -313,6 +344,22 @@ describe('UserScopePage', () => {
     expect(
       await screen.findByText(/The purge stopped because UserGroupsFilter changed while it was running\. What it had already removed stays removed/),
     ).toBeInTheDocument();
+  });
+
+  it.each([
+    ['purgeExceedsConfirmed', /more people are outside the scope than the number confirmed when it started/],
+    ['scopeMembershipChanged', /the members of the UserGroupsFilter groups had changed since it was confirmed/],
+  ] as const)("explains a purge that stopped with '%s' rather than remove people nobody confirmed", async (errorCode, expected) => {
+    mockFetchStatus.mockResolvedValue(
+      status({
+        latestJob: runningJob({ state: 'failed', errorCode, completedUtc: '2026-09-01T09:05:00Z' }),
+        purgeUnavailableReason: null,
+      }),
+    );
+
+    renderWithProvider(<UserScopePage />);
+
+    expect(await screen.findByText(expected)).toBeInTheDocument();
   });
 
   it('says a restart stops a purge when its progress is kept in memory, and that it starts again when it is not', async () => {

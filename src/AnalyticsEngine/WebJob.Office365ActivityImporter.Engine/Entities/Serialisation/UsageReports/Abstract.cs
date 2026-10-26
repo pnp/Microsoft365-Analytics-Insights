@@ -1,6 +1,7 @@
 ﻿using Common.Entities;
 using Newtonsoft.Json;
 using System.Threading.Tasks;
+using WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Rules;
 
 namespace WebJob.Office365ActivityImporter.Engine.Entities.Serialisation.UsageReports
 {
@@ -29,6 +30,14 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities.Serialisation.UsageRe
         /// this key, so it finds the same record the per-row path would.
         /// </summary>
         public virtual string LookupKey => LookupFieldValue;
+
+        /// <summary>
+        /// True when Graph replaced this row's identity with a pseudonym because the tenant conceals user, group and
+        /// site names in usage reports. Such a row can never be linked to a real record, so the save path skips it
+        /// instead of creating a placeholder lookup for it. Must depend only on <see cref="LookupFieldValue"/>: the
+        /// save path evaluates it once per distinct value. Never true for a blank value.
+        /// </summary>
+        public virtual bool IsLookupIdentityConcealed => false;
     }
 
     public abstract class AbstractUserActivityUserDetail : AbstractActivityRecord<User>
@@ -42,6 +51,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities.Serialisation.UsageRe
         public override string LookupFieldValue => UserEmailFieldVal;
 
         public override string LookupKey => UserEmailFieldVal?.ToLower();
+
+        public override bool IsLookupIdentityConcealed => UsageReportIdentityPolicy.IsConcealedUserIdentity(UserEmailFieldVal);
 
         public override async Task<AbstractEFEntity> GetOrCreateLookup(DBLookupCache<User> lookupCache)
         {

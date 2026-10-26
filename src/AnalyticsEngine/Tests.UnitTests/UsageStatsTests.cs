@@ -364,6 +364,108 @@ namespace Tests.UnitTests
             Assert.IsTrue(Math.Abs((DateTime.UtcNow - model.Generated.Value).TotalMinutes) < 5);
         }
 
+        /// <summary>
+        /// The weekly adoption block used to use up its week as soon as it was computed - before the report carrying
+        /// it had been uploaded or stored. A failed upload then lost it: the retry fell back to the last STORED block,
+        /// which is a week older, or nothing at all on a first report.
+        /// </summary>
+        [TestMethod]
+        public async Task UsageStatsManager_AFailedUploadKeepsTheFreshAdoptionBlockForTheRetry()
+        {
+            var logger = AnalyticsLogger.ConsoleOnlyTracer();
+            var startedUtc = DateTime.UtcNow.AddSeconds(-1);
+            var oldBlockGenerated = new DateTime(2001, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+
+            using (var db = new AnalyticsEntitiesContext())
+            {
+                var config = new Common.Entities.Config.ConfigState
+                {
+                    ConfigJson = JsonConvert.SerializeObject(new BaseSolutionInstallConfig { AllowTelemetry = true, SolutionConfig = new TargetSolutionConfig() }),
+                    DateApplied = DateTime.Now,
+                };
+                db.ConfigStates.Add(config);
+
+                // An older stored block, as the last stored report would carry. The fresh one must win over it.
+                db.TelemetryReports.Add(new Common.Entities.Entities.TelemetryReport
+                {
+                    Report = JsonConvert.SerializeObject(new AnonUsageStatsModel
+                    {
+                        AnonClientId = Guid.NewGuid().ToString("N"),
+                        Adoption = new AnonAdoptionStats { GeneratedUtc = oldBlockGenerated, WindowDays = 28 },
+                    }),
+                    ReportSubmitted = DateTime.UtcNow,
+                });
+                await db.SaveChangesAsync();
+
+                try
+                {
+                    var cadence = new WebJob.Office365ActivityImporter.Engine.InMemoryImportLastRunStore();
+                    var analysis = new CountingAdoptionAnalysisSource();
+                    var collector = new AdoptionStatsCollector(analysis, cadence, new EmbeddedCsvSkuAllowList(),
+                        new ImportTaskSettings { GraphUsersMetadata = true, Copilot = true }, logger);
+                    var uploader = new RecordingStatsUploader { FailuresRemaining = 1 };
+                    var manager = new UsageStatsManager(new SqlUsageStatsBuilder(db, logger, Guid.NewGuid(), collector),
+                        new InMemoryStatsDatesLoader(), uploader, logger);
+
+                    Assert.IsFalse(await manager.ProcessAndFailSilently(), "The first upload is rejected.");
+                    Assert.IsNull(await cadence.GetLastRunUtc(AdoptionStatsCollector.LastRunKey),
+                        "A block that never reached the server must not use up the week.");
+
+                    Assert.IsTrue(await manager.ProcessAndFailSilently(), "The next cycle retries the upload.");
+
+                    var first = uploader.Attempts[0].Adoption;
+                    var retried = uploader.Attempts[1].Adoption;
+                    Assert.IsNotNull(first);
+                    Assert.IsNotNull(retried, "The retry must carry the adoption block.");
+                    Assert.AreEqual(first.GeneratedUtc, retried.GeneratedUtc,
+                        "It must be the block computed for the failed upload - not the older stored one.");
+                    Assert.AreNotEqual(oldBlockGenerated, retried.GeneratedUtc);
+                    Assert.AreEqual(1, analysis.Calls, "The retry re-sends the block it has, rather than repeating the analysis.");
+                    Assert.IsNotNull(await cadence.GetLastRunUtc(AdoptionStatsCollector.LastRunKey),
+                        "Once the report carrying it is uploaded and stored, the week is used up.");
+                }
+                finally
+                {
+                    db.ConfigStates.Remove(config);
+                    db.TelemetryReports.RemoveRange(db.TelemetryReports.Where(r => r.ReportSubmitted >= startedUtc).ToList());
+                    await db.SaveChangesAsync();
+                }
+            }
+        }
+
+        /// <summary>Counts analyses; returns a small synthetic summary.</summary>
+        private class CountingAdoptionAnalysisSource : IAdoptionAnalysisSource
+        {
+            public int Calls { get; private set; }
+
+            public Task<Common.Entities.CopilotAdoption.CopilotAdoptionSummary> GetCopilotSummary(CancellationToken cancellationToken)
+            {
+                Calls++;
+                return Task.FromResult(new Common.Entities.CopilotAdoption.CopilotAdoptionSummary { WindowDays = 28, LicensedUsers = 500 });
+            }
+
+            public Task<Common.Entities.LicenceActivity.LicenceActivityOverview> GetLicenceOverview(CancellationToken cancellationToken)
+                => Task.FromResult<Common.Entities.LicenceActivity.LicenceActivityOverview>(null);
+        }
+
+        /// <summary>Records every payload it is given, and rejects the first <see cref="FailuresRemaining"/>.</summary>
+        private class RecordingStatsUploader : IStatsUploader
+        {
+            public int FailuresRemaining { get; set; }
+            public System.Collections.Generic.List<AnonUsageStatsModel> Attempts { get; } = new System.Collections.Generic.List<AnonUsageStatsModel>();
+
+            public Task UploadToServer(AnonUsageStatsModel stats)
+            {
+                Attempts.Add(stats);
+                if (FailuresRemaining > 0)
+                {
+                    FailuresRemaining--;
+                    throw new HttpRequestException("Synthetic rejected upload");
+                }
+                return Task.CompletedTask;
+            }
+        }
+
         /// <summary>Always returns the configured status code, so upload handling can be tested offline.</summary>
         private class StubHandler : HttpMessageHandler
         {

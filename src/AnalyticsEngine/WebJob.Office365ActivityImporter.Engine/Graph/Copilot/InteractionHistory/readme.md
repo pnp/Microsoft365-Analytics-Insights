@@ -108,8 +108,18 @@ The watermark is **not** advanced when a read was incomplete:
 |---|---|---|
 | Complete read | end of window | Everything up to that instant has been seen |
 | Page failure / HTTP error | unchanged | The window is retried in full; advancing would skip unread data |
-| Stopped at the page cap | newest interaction actually read | The rest resumes next cycle |
+| Stopped at the page cap | newest interaction Graph returned | The rest resumes next cycle |
 | User not available (no licence) | unchanged | Nothing was read; back-off applies |
+
+At the page cap the watermark comes from what Graph **returned**, before already-stored rows are filtered out.
+A capped read whose rows were saved but whose watermark update then failed is re-read in full next cycle, and
+every row of it de-duplicates away; taking the watermark from the filtered rows left it with nowhere to go, so
+that user re-read the same capped pages every cycle, for ever. And if the whole capped read sat inside the
+overlap behind the watermark (more interactions in those 5 minutes than one cycle can read), the next window
+starts one second before the newest interaction read instead of re-applying the overlap - otherwise the same
+capped rows would come back every cycle. It never starts later than the read's own time less the overlap,
+though: an interaction created in the last 5 minutes before a read may not be visible to it yet, so moving past
+that point (a capped read soon after the previous cycle) would skip late arrivals for good.
 
 ### Why the query window overlaps
 

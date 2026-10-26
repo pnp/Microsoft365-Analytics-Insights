@@ -19,7 +19,8 @@
 -- A display name logged by Microsoft 365 Copilot (on a "T_..." row) wins. The bare-GUID row of a split Copilot
 -- Studio agent was only ever named from its schema name, if at all. Failing that, the kept row's own name; then
 -- any other. If an agent has since been renamed, the importer's next Microsoft 365 Copilot record corrects it.
--- is_custom_agent: true wins, as in the upsert.
+-- is_custom_agent: true wins. The rows merged here carry no record of how recent their flags are, unlike the
+-- upsert, which keeps the newest batch's flag.
 --
 -- WHEN IT RUNS
 -- From the web-job top level, once per import cycle, straight after repair_denormalised_copilot_columns.sql and

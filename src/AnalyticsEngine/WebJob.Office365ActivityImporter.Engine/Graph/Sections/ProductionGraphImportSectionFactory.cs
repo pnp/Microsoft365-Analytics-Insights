@@ -62,6 +62,33 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Sections
         private readonly ActivityReportsImport _activityReportsImport;
         private readonly IUserImportScopeProvider _userScopeProvider;
 
+        // Sent-email state when no Storage connection string is configured. Static, so created ONCE per process rather than once per
+        // import cycle (sections are rebuilt every cycle): a per-cycle store forgot every mailbox's checkpoint each time, so with the
+        // per-mailbox read bound every mailbox restarted from the beginning of its sent items every cycle and never got past the
+        // first page of them. Lost when the process restarts, like the other in-memory fallbacks.
+        private static readonly InMemoryDeltaTokenStore ProcessSentEmailDeltaTokens = new InMemoryDeltaTokenStore();
+        internal static readonly Common.Entities.State.InMemoryKeyValueStore ProcessSentEmailState = new Common.Entities.State.InMemoryKeyValueStore();
+        private static int _inMemorySentEmailStateLogged;
+
+        /// <summary>
+        /// The sent-email checkpoint store: durable when Storage is configured, otherwise the one in-memory store of this process.
+        /// Says so, once, at Warning: progress then survives cycles but not a restart.
+        /// </summary>
+        internal static IDeltaTokenStore SelectSentEmailDeltaTokenStore(Common.Entities.State.IKeyValueStore sentEmailState, ILogger logger)
+        {
+            if (sentEmailState != null)
+            {
+                return new PersistedDeltaTokenStore(sentEmailState);
+            }
+
+            if (System.Threading.Interlocked.Exchange(ref _inMemorySentEmailStateLogged, 1) == 0)
+            {
+                logger?.LogWarning("SentEmailStateDegraded: no Storage connection string is configured, so sent-email checkpoints are kept in memory. " +
+                    "Each mailbox's progress survives from cycle to cycle but not a restart of the web job, after which every mailbox is read again from the start of its sent items.");
+            }
+
+            return ProcessSentEmailDeltaTokens;
+        }
         public ProductionGraphImportSectionFactory(
             AnalyticsLogger logger,
             AppConfig settings,
@@ -102,8 +129,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Sections
         /// <param name="settings">
         /// The per-cycle settings passed to the <c>GraphImporter</c> pass being run. In production this is the same
         /// object as the <see cref="AppConfig"/> given to the constructor; the distinction is preserved
-        /// because the original code read <c>DaysBeforeNowToDownload</c> and the <c>ImportJobSettings</c>
-        /// flags from the method argument and everything else from the field.
+        /// because the original code read <c>DaysBeforeNowToDownload</c> (now <c>UsageReportsDaysBack</c>) and the
+        /// <c>ImportJobSettings</c> flags from the method argument and everything else from the field.
         /// </param>
         public IReadOnlyList<IGraphImportSection> CreateSections(AppConfig settings)
         {
@@ -182,9 +209,11 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Sections
                             teamsConfig = await TeamsCrawlConfig.LoadFromDb(db);
                         }
 
-                        await teamsImporter.RefreshAndSaveAllTeamsData(teamsConfig);
-                        return true;
-                    }),
+                        // Not a completed run when every Team failed (an outage) or no group reported its workloads: the
+                        // cadence gate is left unstamped so the crawl is retried next cycle. See TeamsCrawlSummary.Succeeded.
+                        var crawl = await teamsImporter.RefreshAndSaveAllTeamsData(teamsConfig);
+                        return crawl.Succeeded;
+                    }).WithFailureBackoff(),
 
                 DelegateGraphImportSection.Ungated(
                     "Sent emails import",
@@ -192,17 +221,10 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Sections
                     s => s.SentEmails,
                     async () =>
                     {
-                        IDeltaTokenStore deltaTokenStore;
                         var sentEmailStateStore = Common.Entities.State.StateStore.TryOpen(
                             _settings, Common.Entities.State.StatePartitions.SentEmails, _logger);
-                        if (sentEmailStateStore != null)
-                        {
-                            deltaTokenStore = new PersistedDeltaTokenStore(sentEmailStateStore);
-                        }
-                        else
-                        {
-                            deltaTokenStore = new InMemoryDeltaTokenStore();
-                        }
+                        var deltaTokenStore = SelectSentEmailDeltaTokenStore(sentEmailStateStore, _logger);
+                        var quarantine = new SentEmailMailboxQuarantine(sentEmailStateStore ?? ProcessSentEmailState, _logger);
 
                         // The primary constructor rather than the convenience overload, so the composition
                         // root supplies the DB context factory instead of the importer defaulting it.
@@ -215,7 +237,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Sections
                             dbContextFactory: _dbContextFactory,
                             mailboxSkipList: _sentEmailMailboxSkipList,
                             noMailboxRetryHours: _settings?.SentEmailNoMailboxRetryHours ?? 0,
-                            userScopeProvider: _userScopeProvider);
+                            userScopeProvider: _userScopeProvider,
+                            mailboxQuarantine: quarantine);
 
                         await sentEmailImporter.ImportSentEmails();
                         return true;
@@ -262,13 +285,15 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Sections
                 // at source. Listed last because it runs last. Its gating, completion stamps and log lines are unchanged.
                 //
                 // Not cadence-gated: the activity/usage-report phase owns its own once-a-day throttle via
-                // ISingleDateStore, and reports "did I import" itself.
+                // ISingleDateStore, and reports "did I import" itself. Its look-back is UsageReportsDaysBack, not the
+                // audit import's DaysBeforeNowToDownload: Graph keeps ~28 days of usage detail, and a date that ages out
+                // of a short window before its import succeeds can never be fetched again.
                 DelegateGraphImportSection.Ungated(
                     "Usage reports",
                     "Skipping usage reports import",
                     s => s.GraphUsageReports,
                     // Global user activity report. Each thread creates own context.
-                    async () => await _activityReportsImport(settings.DaysBeforeNowToDownload, httpClient, await _userScopeProvider.GetScopeAsync()))
+                    async () => await _activityReportsImport(settings.UsageReportsDaysBack, httpClient, await _userScopeProvider.GetScopeAsync()))
                     .Deferred(),
             };
         }

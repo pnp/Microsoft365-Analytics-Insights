@@ -383,6 +383,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.AuditBackfill
             slice.ImportingRecords = false;
             slice.HasSeenRecords = false;
             slice.HasRecognisedRecords = false;
+            slice.QueryTruncated = false;
             job.SlicesSubmitted++;
             job.SubmissionTimestampsUtc.Add(submittedUtc);
             _logger?.LogInformation($"Copilot audit backfill {job.Id}: submitted Audit Search query for {slice.StartUtc:o} to {slice.EndUtc:o} (attempt {slice.AttemptCount}).");
@@ -428,18 +429,21 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.AuditBackfill
 
                         if (query.IsTruncated)
                         {
-                            if (slice.SplitLevel >= 2)
+                            if (CopilotAuditBackfillSlicer.CanSplitForTruncation(slice))
                             {
-                                RecordGap(job, slice, CopilotAuditBackfillErrorCodes.QueryTruncated, "An hourly Audit Search slice was still truncated at the service limit.", incomplete: true);
+                                // The partial result is discarded: the smaller slices re-read this whole window.
+                                var split = CopilotAuditBackfillSlicer.SplitForTruncation(slice);
+                                job.PendingSlices.InsertRange(0, split);
+                                job.SlicesSplit++;
+                                _logger?.LogWarning($"Copilot audit backfill {job.Id}: Audit Search query was truncated; split its slice into {split.Count} smaller slice(s).");
+                                Track(job, "truncated");
                                 continue;
                             }
 
-                            var split = CopilotAuditBackfillSlicer.SplitForTruncation(slice);
-                            job.PendingSlices.InsertRange(0, split);
-                            job.SlicesSplit++;
-                            _logger?.LogWarning($"Copilot audit backfill {job.Id}: Audit Search query was truncated; split its slice into {split.Count} smaller slice(s).");
-                            Track(job, "truncated");
-                            continue;
+                            // Nothing narrower to re-query, so keep what Graph did return rather than discarding it.
+                            // The slice is still recorded as incomplete once those records have been read.
+                            slice.QueryTruncated = true;
+                            _logger?.LogWarning($"Copilot audit backfill {job.Id}: the Audit Search query for {slice.StartUtc:o} to {slice.EndUtc:o} was still truncated at the narrowest slice; importing the records it returned, then recording the slice as incomplete.");
                         }
 
                         slice.ImportingRecords = true;
@@ -469,6 +473,15 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.AuditBackfill
 
                     slice.ImportingRecords = false;
                     slice.RecordsNextLink = null;
+                    if (slice.QueryTruncated)
+                    {
+                        _logger?.LogInformation($"Copilot audit backfill {job.Id}: imported {imported.Imported:N0} of {imported.Seen:N0} record(s) from a truncated Audit Search query; {imported.AlreadyPresent:N0} already existed.");
+                        RecordGap(job, slice, CopilotAuditBackfillErrorCodes.QueryTruncated,
+                            "The narrowest Audit Search slice was still truncated at the service record limit; the records it returned were imported, the rest of its window was not.",
+                            incomplete: true);
+                        continue;
+                    }
+
                     job.SlicesCompleted++;
                     // Retain whole-day evidence if a later slice aborts this poll before queue publication.
                     if ((slice.EndUtc - slice.StartUtc).TotalHours >= 23)
@@ -509,6 +522,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.AuditBackfill
                 slice.ImportingRecords = false;
                 slice.HasSeenRecords = false;
                 slice.HasRecognisedRecords = false;
+                slice.QueryTruncated = false;
                 job.PendingSlices.Add(slice);
                 job.LastErrorCode = errorCode;
                 job.LastErrorDetail = Truncate(detail);

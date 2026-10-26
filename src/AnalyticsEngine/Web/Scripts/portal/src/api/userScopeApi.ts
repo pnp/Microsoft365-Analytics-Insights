@@ -1,7 +1,7 @@
 import { translateActive } from '../i18n/runtime';
 import type { TranslationKey } from '../i18n';
 import { apiFetch } from './http';
-import type { UserScopePurgeJob, UserScopeStatus } from '../types/userScope';
+import type { UserScopeDatabaseCounts, UserScopePurgeJob, UserScopeStatus } from '../types/userScope';
 
 const baseUrl = (): string => `${window.location.origin}/api/UserScope`;
 
@@ -21,18 +21,41 @@ const ERROR_CODE_KEYS = new Map<string, TranslationKey>([
   ['jobNotActive', 'errors.userScope.jobNotActive'],
   ['databaseUnavailable', 'errors.userScope.databaseUnavailable'],
   ['storageUnavailable', 'errors.userScope.storageUnavailable'],
+  ['purgeExceedsConfirmed', 'errors.userScope.purgeExceedsConfirmed'],
+  ['filterChanged', 'errors.userScope.filterChanged'],
 ]);
 
+/**
+ * A refused call: the translated sentence, the server's stable code, and - when a purge was refused because the scope
+ * changed since it was confirmed - the people inside and outside the scope now.
+ */
+export class UserScopeApiError extends Error {
+  readonly code: string | null;
+  readonly database: UserScopeDatabaseCounts | null;
+  constructor(message: string, code: string | null, database: UserScopeDatabaseCounts | null) {
+    super(message);
+    this.name = 'UserScopeApiError';
+    this.code = code;
+    this.database = database;
+  }
+}
+
 async function failure(response: Response, fallbackKey: TranslationKey): Promise<Error> {
-  let code: unknown;
+  let body: { code?: unknown; database?: unknown } | null = null;
   try {
-    code = ((await response.json()) as { code?: unknown } | null)?.code;
+    body = (await response.json()) as { code?: unknown; database?: unknown } | null;
   } catch {
     // No JSON body - the same-origin check's bare 403, or an error page from IIS.
   }
 
-  const key = typeof code === 'string' ? ERROR_CODE_KEYS.get(code) : undefined;
-  return new Error(key ? translateActive(key) : translateActive(fallbackKey, { status: response.status }));
+  const code = typeof body?.code === 'string' ? body.code : null;
+  const key = code !== null ? ERROR_CODE_KEYS.get(code) : undefined;
+  const database = body?.database && typeof body.database === 'object' ? (body.database as UserScopeDatabaseCounts) : null;
+  return new UserScopeApiError(
+    key ? translateActive(key) : translateActive(fallbackKey, { status: response.status }),
+    key ? code : null,
+    database,
+  );
 }
 
 /** Current user-scope filter resolution, database counts and the latest purge job if one exists. */
@@ -72,13 +95,18 @@ export async function refreshUserScope(): Promise<UserScopeStatus> {
  * Starts the irreversible background purge of people outside the resolved scope.
  *
  * The explicit acknowledgement is part of the server contract; the page only calls this after the admin has ticked
- * the confirmation checkbox.
+ * the confirmation checkbox. It also sends what the admin confirmed - how many people the dialog said are outside the
+ * scope, under which filter - and the server refuses (`purgeExceedsConfirmed`, `filterChanged`) rather than remove
+ * more people than that, or people chosen under another filter.
  */
-export async function startUserScopePurge(): Promise<UserScopePurgeJob> {
+export async function startUserScopePurge(
+  confirmedOutsideScopeCount: number,
+  confirmedFilterFingerprint: string,
+): Promise<UserScopePurgeJob> {
   const response = await apiFetch(`${baseUrl()}/purge`, {
     method: 'POST',
     headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
-    body: JSON.stringify({ acknowledged: true }),
+    body: JSON.stringify({ acknowledged: true, confirmedOutsideScopeCount, confirmedFilterFingerprint }),
   });
 
   if (!response.ok) {

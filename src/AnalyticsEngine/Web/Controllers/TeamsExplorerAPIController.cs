@@ -2,7 +2,10 @@ using Common.Entities;
 using Common.Entities.Config;
 using Common.Entities.CopilotAdoption;
 using Common.Entities.TeamsExplorer;
+using DataUtils;
+using Microsoft.Extensions.Logging;
 using System;
+using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
@@ -58,12 +61,17 @@ namespace Web.AnalyticsWeb.Controllers
         private readonly ITeamsExplorerStore _store;
         private readonly Func<TeamsExplorerSources> _sourcesFactory;
         private readonly ReportScopeResolver _scopes;
+        private readonly ILogger _logger;
+
+        private static readonly Lazy<AnalyticsLogger> ProductionLogger = new Lazy<AnalyticsLogger>(
+            () => new AnalyticsLogger(new AppConfig().AppInsightsConnectionString, "TeamsExplorer"));
 
         public TeamsExplorerAPIController()
             : this(
-                new SqlTeamsExplorerStore(DefaultAnalyticsDbContextFactory.Instance),
+                new SqlTeamsExplorerStore(DefaultAnalyticsDbContextFactory.Instance, ProductionLogger.Value),
                 () => TeamsExplorerSources.FromConfig(new AppConfig()),
-                ReportScopeResolver.Default)
+                ReportScopeResolver.Default,
+                ProductionLogger.Value)
         {
         }
 
@@ -74,11 +82,12 @@ namespace Web.AnalyticsWeb.Controllers
         /// <paramref name="scopes"/> supplies one.
         /// </summary>
         internal TeamsExplorerAPIController(
-            ITeamsExplorerStore store, Func<TeamsExplorerSources> sourcesFactory, ReportScopeResolver scopes = null)
+            ITeamsExplorerStore store, Func<TeamsExplorerSources> sourcesFactory, ReportScopeResolver scopes = null, ILogger logger = null)
         {
             _store = store ?? throw new ArgumentNullException(nameof(store));
             _sourcesFactory = sourcesFactory ?? throw new ArgumentNullException(nameof(sourcesFactory));
             _scopes = scopes ?? new ReportScopeResolver(GlobalFilterProviders.None, CachedUserDirectorySource.Default);
+            _logger = logger;
         }
 
         // GET: api/TeamsExplorer/availability
@@ -169,9 +178,18 @@ namespace Web.AnalyticsWeb.Controllers
         /// A section as a CSV download.
         /// </summary>
         /// <remarks>
+        /// <para>
         /// Exports are NOT served from the section cache. A cached payload is capped at the page's
         /// display row count, and someone clicking Export wants the rows they asked for, not the
         /// twenty the chart happened to show.
+        /// </para>
+        /// <para>
+        /// A failed query is a 503, NOT an empty file - as in <c>WebActivityAPIController.Export</c>. The store
+        /// captures a failure as a per-section error and returns no rows, so serialising them anyway would hand an
+        /// admin a header-only spreadsheet that reads as "nobody is dormant". Only the query that produces the
+        /// file's rows decides: another section of the same tab failing does not spoil a good export. The reply
+        /// carries the failed query's key and no SQL text; the page writes its own message for any failure.
+        /// </para>
         /// </remarks>
         // GET: api/TeamsExplorer/export/people?days=28&top=500
         [HttpGet]
@@ -200,12 +218,14 @@ namespace Web.AnalyticsWeb.Controllers
             var query = await BuildQueryAsync(days, groupBy, top).ConfigureAwait(false);
             var normalised = section.ToLowerInvariant();
             byte[] csv;
-
+            string failedQuery;
+            TeamsExplorerQueryInfo failedInfo;
             switch (normalised)
             {
                 case "dormant":
                 {
                     var people = await _store.GetPeopleAsync(query).ConfigureAwait(false);
+                    failedQuery = FailedQuery(people, "people-dormant", out failedInfo);
                     csv = CsvSerialiser.ToBytes(people.Dormant, TeamsExplorerExports.PersonColumns());
                     break;
                 }
@@ -213,6 +233,7 @@ namespace Web.AnalyticsWeb.Controllers
                 case "teams":
                 {
                     var collaboration = await _store.GetCollaborationAsync(query).ConfigureAwait(false);
+                    failedQuery = FailedQuery(collaboration, "collab-teams", out failedInfo);
                     csv = CsvSerialiser.ToBytes(collaboration.Teams, TeamsExplorerExports.TeamColumns());
                     break;
                 }
@@ -220,6 +241,7 @@ namespace Web.AnalyticsWeb.Controllers
                 case "channels":
                 {
                     var collaboration = await _store.GetCollaborationAsync(query).ConfigureAwait(false);
+                    failedQuery = FailedQuery(collaboration, "collab-channels", out failedInfo);
                     csv = CsvSerialiser.ToBytes(collaboration.Channels, TeamsExplorerExports.ChannelColumns());
                     break;
                 }
@@ -227,6 +249,7 @@ namespace Web.AnalyticsWeb.Controllers
                 case "adoption":
                 {
                     var adoption = await _store.GetAdoptionAsync(query).ConfigureAwait(false);
+                    failedQuery = FailedQuery(adoption, "adoption-breakdown", out failedInfo);
                     csv = CsvSerialiser.ToBytes(
                         adoption.Breakdown,
                         TeamsExplorerExports.DemographicColumns(query.GroupBy));
@@ -236,15 +259,52 @@ namespace Web.AnalyticsWeb.Controllers
                 default:
                 {
                     var people = await _store.GetPeopleAsync(query).ConfigureAwait(false);
+                    failedQuery = FailedQuery(people, "people-champions", out failedInfo);
                     csv = CsvSerialiser.ToBytes(people.Champions, TeamsExplorerExports.PersonColumns());
                     break;
                 }
+            }
+
+            if (failedQuery != null)
+            {
+                LogExportFailure(normalised, failedQuery, failedInfo);
+                return Request.CreateResponse(HttpStatusCode.ServiceUnavailable, new TeamsExplorerExportFailure
+                {
+                    Code = TeamsExplorerExportFailure.QueryFailedCode,
+                    QueryKey = failedQuery,
+                });
             }
 
             // A file narrowed by the administrator's global filter says so in its name: it outlives the page.
             return CsvResponse(csv, CsvSerialiser.FileName(
                 TeamsExplorerExports.FileNamePrefix(normalised) + (query.UserScope.IsRestricted ? "-filtered" : string.Empty),
                 DateTime.UtcNow));
+        }
+
+        /// <summary>The key of the query behind an export's rows when that query failed; null when it succeeded.</summary>
+        private static string FailedQuery(TeamsExplorerSection section, string queryKey, out TeamsExplorerQueryInfo info)
+        {
+            info = section?.Queries?.FirstOrDefault(q => q != null && q.Key == queryKey && !string.IsNullOrEmpty(q.Error));
+            return info != null ? queryKey : null;
+        }
+
+        /// <summary>
+        /// The 503 carries no SQL detail, so this is where an operator learns an export failed. The store has already
+        /// logged the exception type, SQL error number and timeout flag for the same query key.
+        /// </summary>
+        private void LogExportFailure(string section, string queryKey, TeamsExplorerQueryInfo info)
+        {
+            if (_logger == null) return;
+
+            try
+            {
+                var message = $"TeamsExplorer export failed: section={section} key={queryKey} elapsedMs={info?.ElapsedMs ?? 0} status=503";
+                _logger.Log(LogLevel.Error, 0, message, null, (state, _) => state);
+            }
+            catch (Exception)
+            {
+                // Logging must not change the 503 the caller gets.
+            }
         }
 
         #region Helpers
@@ -330,5 +390,21 @@ namespace Web.AnalyticsWeb.Controllers
         }
 
         #endregion
+    }
+
+    /// <summary>
+    /// The reply to an export whose query failed (503): a stable code and the failed query's key, never its SQL
+    /// error. The page shows its own translated message for a failed export.
+    /// </summary>
+    public sealed class TeamsExplorerExportFailure
+    {
+        public const string QueryFailedCode = "exportQueryFailed";
+
+        [Newtonsoft.Json.JsonProperty("code")]
+        public string Code { get; set; }
+
+        /// <summary>The <see cref="TeamsExplorerQueryInfo.Key"/> of the query that failed.</summary>
+        [Newtonsoft.Json.JsonProperty("queryKey")]
+        public string QueryKey { get; set; }
     }
 }

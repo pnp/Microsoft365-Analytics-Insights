@@ -1,14 +1,125 @@
 ﻿using DataUtils.Health;
 using Microsoft.ApplicationInsights;
 using Microsoft.ApplicationInsights.DataContracts;
+using Microsoft.ApplicationInsights.Extensibility;
 using Microsoft.Extensions.Logging;
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Threading;
+using System.Threading.Tasks;
 
 namespace DataUtils
 {
+    /// <summary>
+    /// One <see cref="TelemetryClient"/> per Application Insights connection string, for the life of the process.
+    /// </summary>
+    /// <remarks>
+    /// A default <see cref="TelemetryConfiguration"/> owns an in-memory channel whose transmitter runs on its own
+    /// long-running thread until the configuration is disposed - and an <see cref="AnalyticsLogger"/> never disposes
+    /// anything. Built per logger, every web request that logged (each call-record webhook POST, each unhandled
+    /// exception, each 404) left one more of those threads behind for the life of the worker process. Sharing one
+    /// client per connection string bounds that at one thread per distinct string; in practice one per process, as a
+    /// connection-string change rewrites the configuration and recycles the web application.
+    /// <para>
+    /// The client is shared, so nothing per logger is written to its <see cref="TelemetryClient.Context"/>: each
+    /// logger stamps its own operation name on each item it sends.
+    /// </para>
+    /// </remarks>
+    internal sealed class SharedTelemetryClients
+    {
+        internal static readonly SharedTelemetryClients Process =
+            new SharedTelemetryClients(CreateProcessConfiguration);
+
+        /// <summary>
+        /// The process-wide configuration: stamps <see cref="ProcessIdentity"/> (build label, job name, run id) on every item.
+        /// </summary>
+        internal static TelemetryConfiguration CreateProcessConfiguration(string connectionString)
+        {
+            var configuration = new TelemetryConfiguration { ConnectionString = connectionString };
+            configuration.TelemetryInitializers.Add(new ProcessIdentityTelemetryInitializer());
+            return configuration;
+        }
+
+        private readonly ConcurrentDictionary<string, Lazy<TelemetryClient>> _clients =
+            new ConcurrentDictionary<string, Lazy<TelemetryClient>>(StringComparer.Ordinal);
+        private readonly Func<string, TelemetryConfiguration> _createConfiguration;
+
+        internal SharedTelemetryClients(Func<string, TelemetryConfiguration> createConfiguration)
+        {
+            _createConfiguration = createConfiguration ?? throw new ArgumentNullException(nameof(createConfiguration));
+        }
+
+        internal TelemetryClient For(string connectionString)
+        {
+            var entry = _clients.GetOrAdd(connectionString, cs => new Lazy<TelemetryClient>(
+                () => new TelemetryClient(_createConfiguration(cs)), LazyThreadSafetyMode.ExecutionAndPublication));
+            try
+            {
+                return entry.Value;
+            }
+            catch
+            {
+                // An unusable connection string throws here, as it always has; don't keep the failure, so a corrected
+                // one in a later configuration read is not stuck behind it.
+                ((ICollection<KeyValuePair<string, Lazy<TelemetryClient>>>)_clients)
+                    .Remove(new KeyValuePair<string, Lazy<TelemetryClient>>(connectionString, entry));
+                throw;
+            }
+        }
+
+        /// <summary>Requests transmission of everything buffered by every shared client. Never throws.</summary>
+        internal void FlushAll()
+        {
+            foreach (var entry in _clients.Values)
+            {
+                try
+                {
+                    if (entry.IsValueCreated) entry.Value.Flush();
+                }
+                catch (Exception)
+                {
+                    // Best effort: this runs while a process is stopping.
+                }
+            }
+        }
+
+        /// <summary>
+        /// Flushes every shared client and waits at most <paramref name="timeout"/> for the buffered items to be sent.
+        /// Never throws. The in-memory channel buffers for about 30 seconds, so anything logged just before an exit or
+        /// crash is lost unless this runs first.
+        /// </summary>
+        /// <returns>False when the wait ran out, or a flush failed, before everything was sent.</returns>
+        internal bool FlushAllBounded(TimeSpan timeout)
+        {
+            var flushes = new List<Task<bool>>();
+            using (var cts = new CancellationTokenSource(timeout))
+            {
+                foreach (var entry in _clients.Values)
+                {
+                    try
+                    {
+                        if (entry.IsValueCreated) flushes.Add(entry.Value.FlushAsync(cts.Token));
+                    }
+                    catch (Exception)
+                    {
+                        // Best effort: this runs while a process is stopping.
+                    }
+                }
+
+                try
+                {
+                    return Task.WaitAll(flushes.ToArray(), timeout) && flushes.TrueForAll(f => f.Status == TaskStatus.RanToCompletion && f.Result);
+                }
+                catch (Exception)
+                {
+                    return false;
+                }
+            }
+        }
+    }
+
     public abstract class BaseAnalyticsLogger : ILogger
     {
         public bool IsEnabled(LogLevel logLevel)
@@ -34,6 +145,12 @@ namespace DataUtils
 
         private TelemetryClient AppInsights { get; set; }
 
+        /// <summary>
+        /// This logger's App Insights operation name, stamped on every item it sends. Kept here rather than on the
+        /// client's context because the client is shared (see <see cref="SharedTelemetryClients"/>).
+        /// </summary>
+        private readonly string _operationName;
+
         #region Constructors
 
         private AnalyticsLogger() : this(string.Empty, string.Empty)
@@ -43,25 +160,24 @@ namespace DataUtils
         public AnalyticsLogger(TelemetryClient appInsights, string context)
         {
             AppInsights = appInsights;
-            if (AppInsights != null && !string.IsNullOrEmpty(context))
-            {
-                AppInsights.Context.Operation.Name = context;
-            }
+            _operationName = context;
         }
 
+        /// <summary>
+        /// A logger sending to the process-wide client for <paramref name="appInsightsConnectionString"/>: cheap to
+        /// create, so a request may build one without leaving a telemetry channel behind.
+        /// </summary>
         public AnalyticsLogger(string appInsightsConnectionString, string context)
+            : this(appInsightsConnectionString, context, SharedTelemetryClients.Process)
+        {
+        }
+
+        internal AnalyticsLogger(string appInsightsConnectionString, string context, SharedTelemetryClients clients)
         {
             if (!string.IsNullOrEmpty(appInsightsConnectionString))
             {
-                AppInsights = new TelemetryClient(new Microsoft.ApplicationInsights.Extensibility.TelemetryConfiguration()
-                {
-                    ConnectionString = appInsightsConnectionString
-                });
-
-                if (!string.IsNullOrEmpty(context))
-                {
-                    AppInsights.Context.Operation.Name = context;
-                }
+                AppInsights = clients.For(appInsightsConnectionString);
+                _operationName = context;
             }
             else
             {
@@ -71,6 +187,22 @@ namespace DataUtils
 
         public static AnalyticsLogger ConsoleOnlyTracer() { return new AnalyticsLogger(); }
 
+        /// <summary>
+        /// Requests transmission of everything every connection-string logger in this process has buffered. For a
+        /// host that is stopping; never throws.
+        /// </summary>
+        public static void FlushSharedTelemetry() => SharedTelemetryClients.Process.FlushAll();
+
+        /// <summary>
+        /// Flushes everything this process has buffered and waits at most <paramref name="timeout"/> (default 5 seconds)
+        /// for it to be sent. Every exit path of a host goes through this. Never throws.
+        /// </summary>
+        /// <returns>False when the wait ran out before everything was sent.</returns>
+        public static bool DrainSharedTelemetry(TimeSpan? timeout = null) =>
+            SharedTelemetryClients.Process.FlushAllBounded(timeout ?? DefaultDrainTimeout);
+
+        /// <summary>How long an exit path waits for telemetry to leave the process.</summary>
+        public static readonly TimeSpan DefaultDrainTimeout = TimeSpan.FromSeconds(5);
 
         #endregion
 
@@ -101,12 +233,14 @@ namespace DataUtils
         {
             if (AppInsights != null && ex != null)
             {
-                var safeDetails = ex as IExceptionTelemetryDetails;
-                if (safeDetails != null && !TryMarkExceptionAsTracked(ex))
+                // One telemetry owner per exception: the same exception object logged twice (TrackException then
+                // LogError(ex, ...)), or again further up after a rethrow, is sent once.
+                if (!TryMarkExceptionAsTracked(ex))
                 {
                     return;
                 }
 
+                var safeDetails = ex as IExceptionTelemetryDetails;
                 var telemetry = new ExceptionTelemetry(safeDetails?.ToTelemetryException() ?? ex);
                 if (safeDetails != null && !string.IsNullOrEmpty(safeDetails.TelemetryProblemId))
                 {
@@ -118,9 +252,9 @@ namespace DataUtils
                 {
                     telemetry.Context.Operation.Id = effectiveOperationId;
                 }
-                if (!string.IsNullOrEmpty(AppInsights.Context.Operation.Name))
+                if (!string.IsNullOrEmpty(_operationName))
                 {
-                    telemetry.Context.Operation.Name = AppInsights.Context.Operation.Name;
+                    telemetry.Context.Operation.Name = _operationName;
                 }
                 if (safeDetails?.TelemetryProperties != null)
                 {
@@ -128,6 +262,10 @@ namespace DataUtils
                     {
                         telemetry.Properties[property.Key] = property.Value;
                     }
+                }
+                foreach (var dimension in ExceptionDescriber.Dimensions(ex))
+                {
+                    if (!telemetry.Properties.ContainsKey(dimension.Key)) telemetry.Properties[dimension.Key] = dimension.Value;
                 }
                 if (properties != null)
                 {
@@ -141,9 +279,9 @@ namespace DataUtils
             }
         }
 
-        void TrackTrace(string sayWut, Microsoft.ApplicationInsights.DataContracts.SeverityLevel severityLevel)
+        void TrackTrace(string sayWut, Microsoft.ApplicationInsights.DataContracts.SeverityLevel severityLevel, Exception exception = null)
         {
-            Console.WriteLine($"{DateTime.Now.ToString("HH:mm:ss")}: {sayWut}");
+            ConsoleLog.Write(severityLevel, CurrentOperationId.Value, sayWut, exception);
 
             if (AppInsights != null)
             {
@@ -152,9 +290,9 @@ namespace DataUtils
                 {
                     telemetry.Context.Operation.Id = CurrentOperationId.Value;
                 }
-                if (!string.IsNullOrEmpty(AppInsights.Context.Operation.Name))
+                if (!string.IsNullOrEmpty(_operationName))
                 {
-                    telemetry.Context.Operation.Name = AppInsights.Context.Operation.Name;
+                    telemetry.Context.Operation.Name = _operationName;
                 }
                 AppInsights.TrackTrace(telemetry);
             }
@@ -180,6 +318,30 @@ namespace DataUtils
         public void LogWarning(string sayWut)
         {
             TrackTrace(sayWut, Microsoft.ApplicationInsights.DataContracts.SeverityLevel.Warning);
+        }
+
+        // The overloads below take the message as plain text. The ILogger extensions (LogError(ex, message, ...)) parse
+        // the message as a template, so an exception message that contains braces can make them throw.
+
+        /// <summary>Warning with the exception: tracked once as exception telemetry, and its chain printed on the console.</summary>
+        public void LogWarning(string sayWut, Exception exception)
+        {
+            TrackException(exception);
+            TrackTrace(sayWut, Microsoft.ApplicationInsights.DataContracts.SeverityLevel.Warning, exception);
+        }
+
+        /// <summary>Error with the exception: tracked once as exception telemetry; the chain and full stack go to stderr.</summary>
+        public void LogError(string sayWut, Exception exception)
+        {
+            TrackException(exception);
+            TrackTrace(sayWut, Microsoft.ApplicationInsights.DataContracts.SeverityLevel.Error, exception);
+        }
+
+        /// <summary>Critical with the exception: tracked once as exception telemetry; the chain and full stack go to stderr.</summary>
+        public void LogCritical(string sayWut, Exception exception)
+        {
+            TrackException(exception);
+            TrackTrace(sayWut, Microsoft.ApplicationInsights.DataContracts.SeverityLevel.Critical, exception);
         }
         /// <summary>
         /// Track event with a default "context=X" value for X
@@ -233,7 +395,8 @@ namespace DataUtils
                 }
                 contextString = contextString.TrimEnd(SEP.ToCharArray());
             }
-            Console.WriteLine($"New event '{Enum.GetName(typeof(AnalyticsEvent), analyticsEvent)}'; '{contextString}'.");
+            ConsoleLog.WriteEvent(CurrentOperationId.Value,
+                $"New event '{Enum.GetName(typeof(AnalyticsEvent), analyticsEvent)}'; '{contextString}'.");
 
             if (AppInsights != null)
             {
@@ -248,9 +411,9 @@ namespace DataUtils
                 {
                     telemetry.Context.Operation.Id = effectiveOperationId;
                 }
-                if (!string.IsNullOrEmpty(AppInsights.Context.Operation.Name))
+                if (!string.IsNullOrEmpty(_operationName))
                 {
-                    telemetry.Context.Operation.Name = AppInsights.Context.Operation.Name;
+                    telemetry.Context.Operation.Name = _operationName;
                 }
                 if (context != null)
                 {
@@ -329,7 +492,9 @@ namespace DataUtils
             TrackImporterHeartbeat(jobName, (DateTime?)lastCycleUtc, lastCycleDurationSeconds);
         }
 
-        public void TrackImporterHeartbeat(string jobName, DateTime? lastCycleUtc, double? lastCycleDurationSeconds, DateTime? processStartedUtc = null)
+        public void TrackImporterHeartbeat(string jobName, DateTime? lastCycleUtc, double? lastCycleDurationSeconds, DateTime? processStartedUtc = null,
+            string buildLabel = null, string currentStage = null, DateTime? stageStartedUtc = null,
+            string backgroundStage = null, DateTime? backgroundStageStartedUtc = null)
         {
             var context = new Dictionary<string, string>
             {
@@ -341,6 +506,17 @@ namespace DataUtils
                 context.Add("LastCycleDurationSeconds", lastCycleDurationSeconds.Value.ToString(CultureInfo.InvariantCulture));
             if (processStartedUtc.HasValue)
                 context.Add("ProcessStartedUtc", processStartedUtc.Value.ToUniversalTime().ToString("o", CultureInfo.InvariantCulture));
+            if (!string.IsNullOrEmpty(buildLabel))
+                context.Add("BuildLabel", buildLabel);
+            // What the process is doing right now, and since when: a stuck stage is visible without a Kudu session.
+            if (!string.IsNullOrEmpty(currentStage))
+                context.Add("CurrentStage", currentStage);
+            if (stageStartedUtc.HasValue)
+                context.Add("StageStartedUtc", stageStartedUtc.Value.ToUniversalTime().ToString("o", CultureInfo.InvariantCulture));
+            if (!string.IsNullOrEmpty(backgroundStage))
+                context.Add("BackgroundStage", backgroundStage);
+            if (backgroundStageStartedUtc.HasValue)
+                context.Add("BackgroundStageStartedUtc", backgroundStageStartedUtc.Value.ToUniversalTime().ToString("o", CultureInfo.InvariantCulture));
             TrackEvent(AnalyticsEvent.ImporterHeartbeat, context);
         }
 
@@ -439,30 +615,18 @@ namespace DataUtils
             // stack trace entirely - it is NOT recorded as App Insights exception telemetry unless we do this.
             if (exception != null) TrackException(exception);
 
-            if (logLevel == LogLevel.Debug)
+            var severity = ToSeverity(logLevel);
+            TrackTrace(message, severity, exception);
+        }
+
+        private static SeverityLevel ToSeverity(LogLevel logLevel)
+        {
+            switch (logLevel)
             {
-                LogInformation(message);
-            }
-            else if (logLevel == LogLevel.Information)
-            {
-                LogInformation(message);
-            }
-            else if (logLevel == LogLevel.Warning)
-            {
-                LogWarning(message);
-            }
-            else if (logLevel == LogLevel.Error)
-            {
-                LogError(message);
-            }
-            else if (logLevel == LogLevel.Critical)
-            {
-                LogCritical(message);
-            }
-            else
-            {
-                // Unknown log level
-                LogInformation(message);
+                case LogLevel.Warning: return SeverityLevel.Warning;
+                case LogLevel.Error: return SeverityLevel.Error;
+                case LogLevel.Critical: return SeverityLevel.Critical;
+                default: return SeverityLevel.Information; // Debug and any unknown level, as before
             }
         }
 
@@ -482,7 +646,11 @@ namespace DataUtils
             UserScopePurge,
             CopilotAuditBackfill,
             GlobalFilterChanged,
-            ActivityAnalysisLoad
+            ActivityAnalysisLoad,
+            ImportStage,
+            AppInsightsImportCycle,
+            AppInsightsDay,
+            AppInsightsDayGivenUp
         }
 
         private static bool TryMarkExceptionAsTracked(Exception ex)

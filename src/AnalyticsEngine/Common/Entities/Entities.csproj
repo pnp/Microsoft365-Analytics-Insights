@@ -60,6 +60,13 @@
     <AssemblyOriginatorKeyFile>..\Certificates\SPOInsightsBinaries.pfx</AssemblyOriginatorKeyFile>
   </PropertyGroup>
   <ItemGroup>
+    <Compile Update="Migrations\202610230900001_AddCopilotCostPreview.Designer.cs">
+      <DependentUpon>202610230900001_AddCopilotCostPreview.cs</DependentUpon>
+    </Compile>
+    <EmbeddedResource Include="Migrations\202610230900001_AddCopilotCostPreview.resx">
+      <DependentUpon>202610230900001_AddCopilotCostPreview.cs</DependentUpon>
+    </EmbeddedResource>
+    <None Include="Migrations\202610230900001_AddCopilotCostPreview.manual.sql" />
     <Reference Include="Microsoft.CSharp" />
     <Reference Include="System" />
     <Reference Include="System.ComponentModel.Composition" />
@@ -77,6 +84,7 @@
     <Reference Include="System.Security" />
     <Reference Include="System.Data" />
     <Reference Include="System.Windows.Forms" />
+    <Reference Include="System.Web" />
     <Reference Include="System.Xml" />
     <Reference Include="System.Xml.Linq" />
   </ItemGroup>
@@ -91,6 +99,27 @@
     <EmbeddedResource Include="Migrations\202610080900001_AddPromptCategories.resx">
       <DependentUpon>202610080900001_AddPromptCategories.cs</DependentUpon>
     </EmbeddedResource>
+    <Compile Update="Migrations\202610221500001_CopilotAgentNameAndFlagRecency.Designer.cs">
+      <DependentUpon>202610221500001_CopilotAgentNameAndFlagRecency.cs</DependentUpon>
+    </Compile>
+    <EmbeddedResource Include="Migrations\202610221500001_CopilotAgentNameAndFlagRecency.resx">
+      <DependentUpon>202610221500001_CopilotAgentNameAndFlagRecency.cs</DependentUpon>
+    </EmbeddedResource>
+    <None Include="Migrations\202610221500001_CopilotAgentNameAndFlagRecency.manual.sql" />
+    <Compile Update="Migrations\202610221500002_EventFileExtensionUnicode.Designer.cs">
+      <DependentUpon>202610221500002_EventFileExtensionUnicode.cs</DependentUpon>
+    </Compile>
+    <EmbeddedResource Include="Migrations\202610221500002_EventFileExtensionUnicode.resx">
+      <DependentUpon>202610221500002_EventFileExtensionUnicode.cs</DependentUpon>
+    </EmbeddedResource>
+    <None Include="Migrations\202610221500002_EventFileExtensionUnicode.manual.sql" />
+    <Compile Update="Migrations\202610221500003_UniqueOnlineMeetingIds.Designer.cs">
+      <DependentUpon>202610221500003_UniqueOnlineMeetingIds.cs</DependentUpon>
+    </Compile>
+    <EmbeddedResource Include="Migrations\202610221500003_UniqueOnlineMeetingIds.resx">
+      <DependentUpon>202610221500003_UniqueOnlineMeetingIds.cs</DependentUpon>
+    </EmbeddedResource>
+    <None Include="Migrations\202610221500003_UniqueOnlineMeetingIds.manual.sql" />
     <Compile Update="Migrations\201808231327312_v1-0-6.Designer.cs">
       <DependentUpon>201808231327312_v1-0-6.cs</DependentUpon>
     </Compile>

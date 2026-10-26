@@ -41,18 +41,29 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
         private readonly AzureCostImportSettings _settings;
         private readonly IClock _clock;
 
+        /// <summary>
+        /// Per-scope record of the latest billing period read in full while final. See <see cref="FinalisedPeriodKey"/>.
+        /// </summary>
+        private readonly IImportLastRunStore _periodState;
+
+        /// <param name="periodState">
+        /// Where each scope's "read while final" marker is kept: the process-lifetime ImportSchedule store in
+        /// production. Without one, every run reads the latest closed period again - wasteful, but never wrong.
+        /// </param>
         public AzureCostImporter(
             ILogger logger,
             IAzureCostSource source,
             IAgentCostStore store,
             AzureCostImportSettings settings,
-            IClock clock = null)
+            IClock clock = null,
+            IImportLastRunStore periodState = null)
         {
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
             _source = source ?? throw new ArgumentNullException(nameof(source));
             _store = store ?? throw new ArgumentNullException(nameof(store));
             _settings = settings ?? throw new ArgumentNullException(nameof(settings));
             _clock = clock ?? SystemClock.Instance;
+            _periodState = periodState ?? new InMemoryImportLastRunStore();
         }
 
         /// <summary>
@@ -72,8 +83,8 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
             // Those two are not the same span, and assuming they were left rows stale for ever: Azure keeps
             // amending an open billing period until a few days after it ends, so a charge dated the 1st is
             // still mutable a month later - long after a 5-day trailing window has stopped re-reading it. The
-            // refresh window also reaches a few days PAST the close, so a closing period is read at least
-            // once while final rather than keeping its last estimate for ever.
+            // refresh window also reaches PAST the close, so a closing period is read at least once while final
+            // rather than keeping its last estimate for ever - per scope, until that read has actually happened.
             var provisionalFrom = EarliestRefreshDate(today);
             var trailingFrom = today.AddDays(-(windowDays - 1));
             var from = provisionalFrom < trailingFrom ? provisionalFrom : trailingFrom;
@@ -106,6 +117,7 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
 
             var errors = new List<string>();
             var sawAuthorisationFailure = false;
+            var sawConfigurationFailure = false;
             var sawTransientFailure = false;
 
             if (_settings.GroupByWasTruncated)
@@ -142,12 +154,21 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
                                   + "export from this scope, because a filter that matches nothing is indistinguishable from no spend."
                                 : "No meter filter is configured, so this scope genuinely had no spend in the window."));
                     }
+
+                    await ReadClosedPeriodAsFinalIfDueAsync(scope, from, today, log);
                 }
                 catch (AgentCostAuthorisationException ex)
                 {
                     errors.Add(ex.Message);
                     sawAuthorisationFailure = true;
                     _logger.LogError(ex, $"Azure cost import failed for scope '{scope}': " + ex.Message);
+                }
+                catch (AgentCostConfigurationException ex)
+                {
+                    errors.Add(ex.Message);
+                    sawConfigurationFailure = true;
+                    _logger.LogError(ex, $"Azure cost import failed for scope '{scope}': {ex.Message} "
+                        + "The remaining scopes and all other imports are unaffected.");
                 }
                 catch (Exception ex)
                 {
@@ -166,15 +187,49 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
 
             await SafeSaveLogAsync(log);
 
-            // Back off only when every failing scope was REFUSED. Comparing the error count to the scope
-            // count is not the same test: with one scope refused and another merely timing out, both fail,
-            // the counts match, and the timeout would be suppressed for a full interval despite being
-            // exactly the kind of failure a prompt retry fixes.
-            var allFailuresWereRefusals = sawAuthorisationFailure && !sawTransientFailure;
-            return new AgentCostImportOutcome(log, allFailuresWereRefusals);
+            // Back off only when every failing scope was REFUSED or REJECTED. Comparing the error count to the scope
+            // count is not the same test: with one scope refused and another merely timing out, both fail, the counts
+            // match, and the timeout would be suppressed for a full interval despite being exactly the kind of failure
+            // a prompt retry fixes. A rejected configuration is reported as such only when nothing was refused, so a
+            // refusal keeps its own (permission) guidance.
+            var noTransientFailure = !sawTransientFailure;
+            return new AgentCostImportOutcome(log,
+                isAuthorisationFailure: sawAuthorisationFailure && noTransientFailure,
+                isConfigurationFailure: sawConfigurationFailure && !sawAuthorisationFailure && noTransientFailure);
         }
 
         private bool HasFilter => _settings.MeterFilterValues != null && _settings.MeterFilterValues.Count > 0;
+
+        /// <summary>
+        /// Reads the latest closed billing period once more, as final, if this scope has not yet done so - then records
+        /// that it has. See <see cref="PeriodAwaitingFinalRead"/>. Throws like the main read, so a failure fails the
+        /// scope (and is retried) without touching what the main read already stored.
+        /// </summary>
+        private async Task ReadClosedPeriodAsFinalIfDueAsync(string scope, DateTime windowFrom, DateTime today, AgentCostImportLog log)
+        {
+            // Fail-open store: if the marker cannot be read, the period is simply read again.
+            var finalisedThrough = await _periodState.GetLastRunUtc(FinalisedPeriodKey(scope));
+            var due = PeriodAwaitingFinalRead(today, finalisedThrough?.Date);
+            if (!due.HasValue) return;
+
+            var periodStart = due.Value;
+            if (periodStart < windowFrom)
+            {
+                var periodEnd = periodStart.AddMonths(1).AddDays(-1);
+                _logger.LogInformation($"Azure costs for scope '{scope}': the billing period "
+                    + $"{periodStart.ToString("yyyy-MM", CultureInfo.InvariantCulture)} has closed but has not been read since it "
+                    + "became final, so it is read again now and its rows stored as final rather than as estimates.");
+
+                var rows = await _source.GetDailyCostsAsync(scope, periodStart, periodEnd);
+                log.RowsRead += rows.Count;
+                var mapped = MapAndAggregate(rows, scope, today, _clock.UtcNow);
+                log.RowsSaved += await _store.ReplaceAzureCostsAsync(mapped, scope, periodStart, periodEnd);
+                if (log.WindowFrom == null || periodStart < log.WindowFrom) log.WindowFrom = periodStart;
+            }
+
+            // Otherwise the main window already covered the whole period, after it became final.
+            await _periodState.SetLastRunUtc(FinalisedPeriodKey(scope), DateTime.SpecifyKind(periodStart, DateTimeKind.Utc));
+        }
 
         /// <summary>
         /// Maps cost rows onto entities, combining any that land on the same identity.
@@ -298,9 +353,10 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
         /// the window contracted the moment that happened, the period would never once be read while final.
         /// Its rows would keep whatever estimate they last received, stay flagged as estimates for ever, and
         /// any adjustment Azure made at close would be missed entirely.</para>
-        /// <para>Keeping the previous period in the window for a few days past its close guarantees at least
-        /// one read of it as final, at which point <see cref="IsStillProvisional"/> returns false and the
-        /// rows are rewritten with <c>is_estimated = 0</c>.</para>
+        /// <para>Keeping the previous period in the window for a few days past its close gives every run in those
+        /// days a read of it as final, at which point <see cref="IsStillProvisional"/> returns false and the rows are
+        /// rewritten with <c>is_estimated = 0</c>. It is not a guarantee on its own - no run may succeed in those days
+        /// - which is what <see cref="PeriodAwaitingFinalRead"/> adds.</para>
         /// </remarks>
         internal static DateTime EarliestRefreshDate(DateTime today)
         {
@@ -310,6 +366,46 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
             return today.Day <= BillingPeriodFinalisationLagDays + PostCloseRefreshDays
                 ? startOfLastPeriod
                 : startOfThisPeriod;
+        }
+
+        /// <summary>
+        /// Row key prefix (ImportSchedule partition) of each scope's marker: the first day of the latest billing period
+        /// that scope has been read in full while final. Deleting a row re-reads that scope's last closed period once.
+        /// </summary>
+        public const string FinalisedPeriodKeyPrefix = "AzureCostFinalisedPeriod_";
+
+        internal static string FinalisedPeriodKey(string scope) => FinalisedPeriodKeyPrefix + scope;
+
+        /// <summary>
+        /// The first day of the billing period this scope still has to read while final, or null when there is none.
+        /// </summary>
+        /// <remarks>
+        /// <para>The calendar rule in <see cref="EarliestRefreshDate(DateTime)"/> keeps a closed period in the window
+        /// for <see cref="PostCloseRefreshDays"/> days after it becomes final, which is enough only if a run succeeds
+        /// in those days. If none did, the period left the window anyway and its rows kept their last estimate - and
+        /// <c>is_estimated = 1</c> - for ever.</para>
+        /// <para>So the latest final period stays due until this scope has actually read it while final. Only that one
+        /// period is caught up, never older ones, and it is read as a query of its own rather than by widening the
+        /// window: a month is no more than the window already spans, so a catch-up cannot push a large unfiltered
+        /// scope past Cost Management's paging limit. With no record at all (a new scope, or the first run of this
+        /// version) it is read once.</para>
+        /// </remarks>
+        internal static DateTime? PeriodAwaitingFinalRead(DateTime today, DateTime? finalisedPeriodStart)
+        {
+            var latestFinal = LatestFinalPeriodStart(today);
+            return finalisedPeriodStart.HasValue && finalisedPeriodStart.Value.Date >= latestFinal
+                ? (DateTime?)null
+                : latestFinal;
+        }
+
+        /// <summary>
+        /// The first day of the most recent billing period that is final (past its finalisation lag) on
+        /// <paramref name="today"/>: last month once the lag has passed, otherwise the month before.
+        /// </summary>
+        internal static DateTime LatestFinalPeriodStart(DateTime today)
+        {
+            var startOfLastPeriod = new DateTime(today.Year, today.Month, 1).AddMonths(-1);
+            return IsStillProvisional(startOfLastPeriod, today) ? startOfLastPeriod.AddMonths(-1) : startOfLastPeriod;
         }
 
         /// <summary>

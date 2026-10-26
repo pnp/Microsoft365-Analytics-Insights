@@ -156,6 +156,8 @@ const en = {
   'promptCategories.error.storageNotConfigured': 'No Azure Storage connection string is configured for the web app, so these settings cannot be saved.',
   'promptCategories.error.invalidTaxonomy': 'The server rejected the taxonomy. Check the category ids, names and descriptions, then save again.',
   'promptCategories.error.storedConfigurationInvalid': 'The saved configuration cannot be read. Reset to defaults to replace it; categorisation stays off.',
+  'promptCategories.error.configurationChanged': 'The prompt categorisation settings were changed after this page loaded them, so nothing was saved. Reload to see the current settings, then make your changes again.',
+  'promptCategories.reload': 'Reload',
   'promptCategories.error.databaseNotUpgraded': 'The database has not been upgraded for prompt categories. Apply the 202610080900001_AddPromptCategories upgrade, then retry.',
   'promptCategories.error.reportUnavailable': 'The category report could not be loaded. Retry in a moment.',
   'promptCategories.error.clientTimeout': 'The server did not answer in time. Retry in a moment.',

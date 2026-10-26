@@ -84,6 +84,15 @@ namespace Tests.UnitTests
                 Assert.AreEqual(1, await db.TeamChannelStatLanguages.CountAsync(s => s.ChannelStatsLogID == stats.ID));
                 Assert.AreEqual(2, await db.TeamsUserReactions.CountAsync(r => r.ChannelID == savedChannel.ID), "Existing append-only reaction semantics are unchanged.");
                 Assert.IsTrue(db.Configuration.AutoDetectChangesEnabled);
+
+                // Still authorised, but this cycle's token refresh failed: the last successful refresh time is kept.
+                source.HasRefreshToken = true;
+                source.LastRefreshed = null;
+                using (var adapter = new SqlTeamsPersistenceStore(lookup))
+                    await adapter.SaveChanges(source, saved);
+                var stillAuthorised = await db.Teams.AsNoTracking().SingleAsync(t => t.ID == saved.ID);
+                Assert.IsTrue(stillAuthorised.HasRefreshToken);
+                Assert.AreEqual(date.AddDays(1), stillAuthorised.LastRefreshed);
                 transaction.Rollback();
             }
         }

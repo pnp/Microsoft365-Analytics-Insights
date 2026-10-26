@@ -9,6 +9,7 @@ using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using System;
 using System.Collections.Generic;
+using System.Data.Entity;
 using System.Linq;
 using System.Threading.Tasks;
 using Tests.UnitTests.FakeLoaderClasses;
@@ -633,6 +634,229 @@ VALUES (2, '20000101', 0, NULL), (6, NULL, 2, '20000103');");
             Assert.IsFalse(new UserGroupsFilterModel("Copilot Pilot").MatchesEverything);
             Assert.IsFalse(new UserGroupsFilterModel(string.Empty).MatchesEverything,
                 "No filter is 'unscoped', which the importer handles separately - not 'matches everything'.");
+        }
+
+        #endregion
+
+        #region Capped reads - watermark progress through the real pipeline (LocalDB)
+
+        /// <summary>
+        /// A page-capped read whose interactions committed but whose watermark update did not (a crash, or a
+        /// failed save) is re-read in full next cycle. Every row is then already stored and de-duplicates away -
+        /// which used to leave the truncated-read watermark with no timestamp to advance to, so the user re-read
+        /// the same capped pages every cycle, for ever, with no error and no back-off.
+        /// </summary>
+        [TestMethod]
+        public async Task CappedReplay_OfPagesAlreadyImported_StillAdvancesTheWatermark()
+        {
+            RequireIsolatedLocalDb();
+            var now = new DateTime(2026, 6, 2, 0, 0, 0, DateTimeKind.Utc);
+            var watermark = now.AddHours(-12);
+            var capped = Enumerable.Range(1, 6)
+                .Select(i => NewPrompt("replay-" + i, "replay-thread", "replay-request-" + i, watermark.AddMinutes(i), GreekPrompt))
+                .ToList();
+            var newestRead = watermark.AddMinutes(6);
+            var source = new ScriptedInteractionSource(() => new AiInteractionLoadResult { Interactions = capped, Truncated = true });
+
+            using (var fixture = await HistoryFixture.CreateAsync(watermark))
+            {
+                var first = await fixture.ImportOnceAsync(source, now);
+                Assert.IsNull(first.Error);
+                Assert.AreEqual(6, first.InteractionsSaved);
+                Assert.AreEqual(newestRead, await fixture.ReadWatermarkAsync(), "A capped read advances to the newest row read.");
+
+                // The failure this guards: the interactions committed, the watermark update did not.
+                await fixture.SetWatermarkAsync(watermark);
+
+                var replay = await fixture.ImportOnceAsync(source, now.AddDays(1));
+
+                Assert.AreEqual(source.Windows[0].Item1, source.Windows[1].Item1, "Sanity: the replay asked for the same window.");
+                Assert.IsNull(replay.Error);
+                Assert.AreEqual(0, replay.InteractionsSaved, "Everything re-read was already stored.");
+                Assert.AreEqual(newestRead, await fixture.ReadWatermarkAsync(),
+                    "Truncated-read progress must come from what Graph returned, not from what was left after " +
+                    "de-duplication - otherwise the user re-reads the same capped pages for ever.");
+            }
+        }
+
+        /// <summary>
+        /// When the whole page-capped read sits inside the overlap behind the watermark, re-applying the overlap
+        /// asks for the very same capped prefix next cycle - a permanent replay with no failure anywhere. The next
+        /// window must start later than this one, but never after a row that was not read.
+        /// </summary>
+        [TestMethod]
+        public async Task CappedReadInsideTheOverlap_NextWindowMovesOnWithoutSkippingUnreadRows()
+        {
+            RequireIsolatedLocalDb();
+            var now = new DateTime(2026, 6, 2, 0, 0, 0, DateTimeKind.Utc);
+            var watermark = now.AddHours(-12);
+            var capped = Enumerable.Range(1, 5)
+                .Select(i => NewPrompt("dense-" + i, "dense-thread", "dense-request-" + i, watermark.AddSeconds(-250 + i * 30), GreekPrompt))
+                .ToList();
+            var newestRead = watermark.AddSeconds(-100);
+            var source = new ScriptedInteractionSource(() => new AiInteractionLoadResult { Interactions = capped, Truncated = true });
+
+            using (var fixture = await HistoryFixture.CreateAsync(watermark))
+            {
+                var first = await fixture.ImportOnceAsync(source, now);
+                Assert.IsNull(first.Error);
+                Assert.AreEqual(5, first.InteractionsSaved);
+
+                await fixture.ImportOnceAsync(source, now.AddDays(1));
+
+                var firstStart = source.Windows[0].Item1;
+                var nextStart = source.Windows[1].Item1;
+                Assert.AreEqual(watermark.AddSeconds(-CopilotInteractionHistoryImporter.WatermarkOverlapSeconds), firstStart);
+                Assert.IsTrue(nextStart > firstStart,
+                    $"The next window ({nextStart:o}) must start after this one ({firstStart:o}), or the same capped prefix is re-read for ever.");
+                Assert.IsTrue(nextStart < newestRead,
+                    $"The next window ({nextStart:o}) must start before the newest row read ({newestRead:o}), so rows sharing its timestamp beyond the cap are not skipped.");
+            }
+        }
+
+        /// <summary>
+        /// D-6: when the stuck capped read happens soon after the previous cycle, resuming from the newest row read used
+        /// to start the next window after <c>read time - overlap</c>, so an interaction created in that last five minutes but
+        /// not yet visible to the read was skipped for good. The next window must still move on, but never past that point.
+        /// </summary>
+        [TestMethod]
+        public async Task CappedReadInsideTheOverlap_SoonAfterThePreviousCycle_KeepsTheLateArrivalOverlap()
+        {
+            RequireIsolatedLocalDb();
+            var now = new DateTime(2026, 6, 2, 0, 0, 0, DateTimeKind.Utc);
+            var watermark = now.AddSeconds(-60); // The previous cycle's read, a minute ago.
+            var capped = Enumerable.Range(1, 5)
+                .Select(i => NewPrompt("late-" + i, "late-thread", "late-request-" + i, watermark.AddSeconds(-250 + i * 40), GreekPrompt))
+                .ToList();
+            var newestRead = watermark.AddSeconds(-50);
+            var source = new ScriptedInteractionSource(() => new AiInteractionLoadResult { Interactions = capped, Truncated = true });
+
+            using (var fixture = await HistoryFixture.CreateAsync(watermark))
+            {
+                var first = await fixture.ImportOnceAsync(source, now);
+                Assert.IsNull(first.Error);
+
+                await fixture.ImportOnceAsync(source, now.AddMinutes(1));
+
+                var firstStart = source.Windows[0].Item1;
+                var nextStart = source.Windows[1].Item1;
+                Assert.IsTrue(nextStart > firstStart,
+                    $"The next window ({nextStart:o}) must start after this one ({firstStart:o}), or the same capped prefix is re-read for ever.");
+                Assert.IsTrue(nextStart <= now.AddSeconds(-CopilotInteractionHistoryImporter.WatermarkOverlapSeconds),
+                    $"The next window ({nextStart:o}) must not start after the read time less the overlap " +
+                    $"({now.AddSeconds(-CopilotInteractionHistoryImporter.WatermarkOverlapSeconds):o}): interactions created then may not have been visible yet.");
+                Assert.IsTrue(nextStart < newestRead);
+            }
+        }
+
+        private static void RequireIsolatedLocalDb()
+        {
+            var connection = System.Configuration.ConfigurationManager.ConnectionStrings["SPOInsightsEntities"]?.ConnectionString;
+            if (connection == null || new Microsoft.Data.SqlClient.SqlConnectionStringBuilder(connection).DataSource
+                    .IndexOf("(localdb)", StringComparison.OrdinalIgnoreCase) < 0)
+                Assert.Inconclusive("An isolated synthetic LocalDB test database is required.");
+        }
+
+        /// <summary>One synthetic user with a seeded watermark, imported through the real importer and SQL.</summary>
+        private sealed class HistoryFixture : IDisposable
+        {
+            private readonly string _upn;
+            private readonly int _userId;
+            private readonly List<int> _runIds = new List<int>();
+
+            private HistoryFixture(string upn, int userId)
+            {
+                _upn = upn;
+                _userId = userId;
+            }
+
+            public static async Task<HistoryFixture> CreateAsync(DateTime watermarkUtc)
+            {
+                var upn = "history-fixture-" + Guid.NewGuid().ToString("N") + "@contoso.com";
+                using (var db = new AnalyticsEntitiesContext())
+                {
+                    var user = new User { UserPrincipalName = upn, AccountEnabled = true };
+                    db.users.Add(user);
+                    await db.SaveChangesAsync();
+                    db.CopilotInteractionUserWatermarks.Add(new CopilotInteractionUserWatermark { UserId = user.ID, LastInteractionUtc = watermarkUtc });
+                    await db.SaveChangesAsync();
+                    return new HistoryFixture(upn, user.ID);
+                }
+            }
+
+            public async Task<CopilotInteractionImportLog> ImportOnceAsync(IAiInteractionSourceLoader source, DateTime nowUtc)
+            {
+                var importer = new CopilotInteractionHistoryImporter(
+                    AnalyticsLogger.ConsoleOnlyTracer(),
+                    new AppConfig { CopilotInteractionHistoryMaxUsersPerCycle = 1 },
+                    source,
+                    NullInteractionCognitiveEnricher.Instance,
+                    new FakePilotGroupMemberResolver(_upn),
+                    new UserGroupsFilterModel("Contoso synthetic pilot"),
+                    clock: new global::UnitTests.FakeLoaderClasses.FixedClock(nowUtc),
+                    promptClassifier: new PromptCategoryClassifier(null, null),
+                    promptRunStore: new global::Common.Entities.PromptCategories.PromptCategoryRunStore(
+                        new global::Common.Entities.State.InMemoryKeyValueStore()));
+                var run = await importer.ImportAsync();
+                _runIds.Add(run.ID);
+                return run;
+            }
+
+            public async Task<DateTime?> ReadWatermarkAsync()
+            {
+                using (var db = new AnalyticsEntitiesContext())
+                {
+                    return await db.CopilotInteractionUserWatermarks
+                        .Where(w => w.UserId == _userId)
+                        .Select(w => w.LastInteractionUtc)
+                        .SingleAsync();
+                }
+            }
+
+            public async Task SetWatermarkAsync(DateTime watermarkUtc)
+            {
+                using (var db = new AnalyticsEntitiesContext())
+                {
+                    var row = await db.CopilotInteractionUserWatermarks.SingleAsync(w => w.UserId == _userId);
+                    row.LastInteractionUtc = watermarkUtc;
+                    await db.SaveChangesAsync();
+                }
+            }
+
+            public void Dispose()
+            {
+                using (var db = new AnalyticsEntitiesContext())
+                {
+                    db.Database.ExecuteSqlCommand(
+                        @"DELETE dbo.copilot_interactions WHERE user_id=@p0;
+                          DELETE dbo.copilot_interaction_sessions WHERE user_id=@p0;
+                          DELETE dbo.copilot_interaction_user_watermarks WHERE user_id=@p0;
+                          DELETE dbo.users WHERE id=@p0;", _userId);
+                    foreach (var id in _runIds)
+                        db.Database.ExecuteSqlCommand("DELETE dbo.copilot_interaction_import_log WHERE id=@p0", id);
+                }
+            }
+        }
+
+        /// <summary>Returns a scripted load result and records every window the importer asked for.</summary>
+        private sealed class ScriptedInteractionSource : IAiInteractionSourceLoader
+        {
+            private readonly Func<AiInteractionLoadResult> _result;
+
+            public ScriptedInteractionSource(Func<AiInteractionLoadResult> result)
+            {
+                _result = result;
+            }
+
+            public List<Tuple<DateTime, DateTime>> Windows { get; } = new List<Tuple<DateTime, DateTime>>();
+
+            public Task<bool> HasInteractionReadAccessAsync() => Task.FromResult(true);
+
+            public Task<AiInteractionLoadResult> LoadInteractionsForUserAsync(Common.Entities.User user, DateTime fromUtc, DateTime toUtc)
+            {
+                Windows.Add(Tuple.Create(fromUtc, toUtc));
+                return Task.FromResult(_result());
+            }
         }
 
         #endregion

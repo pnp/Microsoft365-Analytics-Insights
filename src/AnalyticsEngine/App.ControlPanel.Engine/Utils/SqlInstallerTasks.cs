@@ -218,7 +218,7 @@ namespace App.ControlPanel.Engine.InstallerTasks
                 {
                     if (e.Data == null) return;
                     stdout.AppendLine(e.Data);
-                    _logger.LogInformation($"  [child] {e.Data}");
+                    _logger.Log(ChildOutputLevel(e.Data), "  [child] {ChildOutput}", e.Data);
                 };
                 proc.ErrorDataReceived += (s, e) =>
                 {
@@ -240,6 +240,16 @@ namespace App.ControlPanel.Engine.InstallerTasks
                     StandardError = stderr.ToString(),
                 };
             }
+        }
+
+        internal static LogLevel ChildOutputLevel(string line)
+        {
+            if (line != null && (line.Contains("MigrationSqlProgress:") || line.Contains("MigrationOutcome:")))
+            {
+                if (line.Contains("severity=Error") || line.Contains("outcome=Failed")) return LogLevel.Error;
+                if (line.Contains("severity=Warning")) return LogLevel.Warning;
+            }
+            return LogLevel.Information;
         }
 
         private static string LastNonEmptyLine(params string[] sources)

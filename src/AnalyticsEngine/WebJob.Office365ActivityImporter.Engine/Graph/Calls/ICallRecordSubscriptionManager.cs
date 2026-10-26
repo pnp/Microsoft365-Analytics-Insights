@@ -24,5 +24,12 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
         Task<CallRecordSubscription> CreateSubscription(Uri notificationUrl, string clientState, DateTime expiryUtc);
 
         Task<CallRecordSubscription> RenewSubscription(string subscriptionId, DateTime expiryUtc);
+
+        /// <summary>
+        /// Deletes a subscription this deployment replaced. Graph cannot change a subscription's clientState, so moving
+        /// to a new one means creating a replacement and deleting the old. Only ever called with the id of a
+        /// subscription <see cref="ICallRecordSubscriptionReader.FindCallRecordSubscriptions"/> returned.
+        /// </summary>
+        Task DeleteSubscription(string subscriptionId);
     }
 }

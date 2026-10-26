@@ -505,10 +505,10 @@ namespace Tests.UnitTests
 
             // Nothing the pilot did is newer than the 7th, so resuming from the newest STORED hit would re-read the 7th
             // and 8th every cycle, and a pilot who stopped browsing would make that window grow for ever.
-            source.PageViewDaysRequested.Clear();
+            source.CountRangesRequested.Clear();
             await Run();
 
-            Assert.AreEqual(day, source.PageViewDaysRequested.First(), "It resumes from the newest page view it has read.");
+            Assert.AreEqual(day, source.CountRangesRequested.Single().FromUtc, "It resumes from the newest page view it has read.");
         }
 
         private static GraphUser DirectoryUser(string id, string upn, string managerId = null) => new GraphUser
@@ -688,6 +688,105 @@ namespace Tests.UnitTests
             {
                 await DeleteUsersAsync(token);
             }
+        }
+
+        /// <summary>
+        /// Deleting a user also takes them out of every group, so by the time an incremental read reports the deletion
+        /// they are outside <c>UserGroupsFilter</c>. Their row is still marked disabled: that stores nothing new about
+        /// them, and leaving it enabled kept a leaver's licence off the reclaim list for ever.
+        /// </summary>
+        [TestMethod]
+        public async Task UserDirectory_DeletedMember_IsMarkedDisabled_ThoughTheDeletionTookThemOutOfTheGroup()
+        {
+            var token = Guid.NewGuid().ToString("N");
+            var pilot = DirectoryUser(Guid.NewGuid().ToString(), $"pilot-{token}@contoso.local");
+            var leaver = DirectoryUser(Guid.NewGuid().ToString(), $"leaver-{token}@contoso.local");
+            var loader = new FakeUserMetadataLoader(new List<GraphUser> { pilot, leaver });
+
+            // No last-run store, so no membership catch-up: the deletion arrives in an incremental read.
+            Task<bool> Import(params GraphUser[] members) => new UserMetadataUpdater(AnalyticsLogger.ConsoleOnlyTracer(), new AppConfig(), loader)
+                .WithUserScope(TestUserScopes.Provider(TestUserScopes.OfMembers(members.Select(m => (m.Id, m.UserPrincipalName, m.Mail)).ToArray())), lastRunStore: null)
+                .InsertAndUpdateDatabaseFromExternalUsers();
+
+            try
+            {
+                Assert.IsTrue(await Import(pilot, leaver));
+
+                loader.DeltaUsersOverride = new List<GraphUser>
+                {
+                    new GraphUser { Id = leaver.Id, Removed = Newtonsoft.Json.Linq.JObject.Parse("{\"reason\":\"changed\"}") },
+                };
+                Assert.IsTrue(await Import(pilot));
+
+                var rows = await UsersNamedLikeAsync(token);
+                Assert.AreEqual(false, rows.Single(u => u.AzureAdId == leaver.Id).AccountEnabled, "A deleted member must not stay enabled.");
+                Assert.AreEqual(true, rows.Single(u => u.AzureAdId == pilot.Id).AccountEnabled);
+            }
+            finally
+            {
+                await DeleteUsersAsync(token);
+            }
+        }
+
+        /// <summary>
+        /// Under <c>UserGroupsFilter</c> a deletion usually never arrives as an <c>@removed</c> entry at all: leaving the
+        /// group changes the enabled membership, and the catch-up that starts reads the directory in full - and a full
+        /// read lists only the accounts that exist. A complete one is the whole directory, so an account it leaves out
+        /// is gone.
+        /// </summary>
+        [TestMethod]
+        public async Task UserDirectory_DeletedMember_IsMarkedDisabled_ByTheFullReadTheMembershipChangeStarts()
+        {
+            var token = Guid.NewGuid().ToString("N");
+            var pilot = DirectoryUser(Guid.NewGuid().ToString(), $"pilot-{token}@contoso.local");
+            var leaver = DirectoryUser(Guid.NewGuid().ToString(), $"leaver-{token}@contoso.local");
+            var everyoneElse = await EveryoneElseInTheUsersTableAsync();
+            var loader = new FakeUserMetadataLoader(DirectoryOf(everyoneElse, pilot, leaver)) { DeltaUsersOverride = new List<GraphUser>() };
+            var marker = new InMemoryUserImportScopeMarkerStore();
+            var lastRun = new InMemoryImportLastRunStore();
+            var clock = new FixedClock(new DateTime(2026, 9, 30, 8, 0, 0, DateTimeKind.Utc));
+
+            Task<bool> Import(params GraphUser[] members) => new UserMetadataUpdater(AnalyticsLogger.ConsoleOnlyTracer(), new AppConfig(), loader, clock)
+                .WithUserScope(TestUserScopes.Provider(TestUserScopes.OfMembers(members.Select(m => (m.Id, m.UserPrincipalName, m.Mail)).ToArray())), lastRun, marker)
+                .InsertAndUpdateDatabaseFromExternalUsers();
+
+            try
+            {
+                Assert.IsTrue(await Import(pilot, leaver));
+
+                // The leaver is deleted: gone from the directory, and from the group.
+                loader.SetFakeState(DirectoryOf(everyoneElse, pilot), null, null);
+                clock.Advance(TimeSpan.FromHours(1));
+                Assert.IsTrue(await Import(pilot));
+
+                var rows = await UsersNamedLikeAsync(token);
+                Assert.AreEqual(false, rows.Single(u => u.AzureAdId == leaver.Id).AccountEnabled, "An account a complete read of the directory leaves out no longer exists.");
+                Assert.AreEqual(true, rows.Single(u => u.AzureAdId == pilot.Id).AccountEnabled);
+            }
+            finally
+            {
+                await DeleteUsersAsync(token);
+            }
+        }
+
+        /// <summary>
+        /// Everyone already in the users table with an object id, as directory entries that change nothing: no sign-in
+        /// name and no account status. A fake directory has to include them to be the whole directory.
+        /// </summary>
+        private static async Task<List<GraphUser>> EveryoneElseInTheUsersTableAsync()
+        {
+            using (var db = new AnalyticsEntitiesContext())
+            {
+                var ids = await db.users.Where(u => u.AzureAdId != null && u.AzureAdId != "").Select(u => u.AzureAdId).ToListAsync();
+                return ids.Select(id => new GraphUser { Id = id }).ToList();
+            }
+        }
+
+        private static List<GraphUser> DirectoryOf(List<GraphUser> everyoneElse, params GraphUser[] users)
+        {
+            var directory = new List<GraphUser>(everyoneElse);
+            directory.AddRange(users);
+            return directory;
         }
 
         [TestMethod]

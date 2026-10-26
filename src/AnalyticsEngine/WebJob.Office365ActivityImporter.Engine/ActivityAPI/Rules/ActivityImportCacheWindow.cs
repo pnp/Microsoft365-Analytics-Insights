@@ -8,21 +8,23 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Rules
     public enum ActivityDedupCacheScope
     {
         /// <summary>
-        /// Default. One cache covering the whole download window, built once for the import cycle and kept
-        /// current in memory as batches commit.
+        /// Default. One cache for the whole import cycle, shared by every save batch. It loads nothing up front:
+        /// each batch checks its own event ids against the database by primary key, and what the cycle stages
+        /// or ignores is kept in memory as batches commit.
         /// </summary>
         PerRun,
 
         /// <summary>
-        /// The <c>AUDIT_PERBATCH_DEDUP_CACHE</c> safety-valve: rebuild the cache for every batch, over just
-        /// that batch's own [oldest, newest] span. Restores the pre-optimisation behaviour without a
-        /// redeploy.
+        /// The <c>AUDIT_PERBATCH_DEDUP_CACHE</c> safety-valve: rebuild the cache for every batch by loading every
+        /// processed id in that batch's own [oldest, newest] span. Restores the pre-optimisation behaviour without
+        /// a redeploy.
         /// </summary>
         PerBatch
     }
 
     /// <summary>
-    /// The window of <c>audit_events</c> / <c>ignored_audit_events</c> a de-duplication cache is loaded for.
+    /// The window a de-duplication cache covers. The per-batch safety-valve loads every processed id in it; the
+    /// per-run cache only reports it, because it looks each batch's own ids up instead.
     /// </summary>
     public sealed class ActivityDedupCacheWindow
     {
@@ -39,8 +41,8 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Rules
         public ActivityDedupCacheScope Scope { get; }
 
         /// <summary>
-        /// How many days back a per-run window reaches. Reported in the operator-facing "built run dedup
-        /// cache" log line. Zero for a per-batch window, where the span comes from the batch itself.
+        /// How many days back a per-run window reaches. Reported in the operator-facing "run dedup cache ready"
+        /// log line. Zero for a per-batch window, where the span comes from the batch itself.
         /// </summary>
         public int DaysBack { get; }
     }
@@ -56,22 +58,22 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Rules
     public static class ActivityImportCacheWindow
     {
         /// <summary>
-        /// Extra lower margin, in days, on the per-run window. The download window is computed slightly
-        /// earlier (at cycle start) than the cache is built, so a day of slack guarantees an event created
-        /// just outside the exact boundary can never be missed.
+        /// Extra lower margin, in days, on the per-run window, from when that window was loaded at the start of
+        /// each cycle. It is now only reported: the per-run cache looks each batch's ids up instead.
         /// </summary>
         public const int RunWindowLowerMarginDays = 1;
 
         /// <summary>
-        /// Upper margin on the per-run window, covering events created between the cache being built and the
+        /// Upper margin on the per-run window, covering events created between the cycle starting and the
         /// batch being processed.
         /// </summary>
         public static readonly TimeSpan RunWindowUpperMargin = TimeSpan.FromMinutes(2);
 
         /// <summary>
-        /// Padding applied to any cache-load range. EF6 maps <c>DateTime</c> to <c>datetime2</c>, whose
-        /// precision differs from the <c>datetime</c> columns actually in the database, so an exact boundary
-        /// comparison can miss edge values. A minute either side is cheaper than migrating every date column.
+        /// Padding applied to a cache-load range. The load's parameters are <c>datetime2</c> (as EF6 maps
+        /// <c>DateTime</c>), whose precision differs from the <c>datetime</c> columns actually in the database,
+        /// so an exact boundary comparison can miss edge values. A minute either side is cheaper than migrating
+        /// every date column.
         /// </summary>
         public static readonly TimeSpan DateTime2EdgePadding = TimeSpan.FromMinutes(1);
 
@@ -91,18 +93,16 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Rules
                 return new ActivityDedupCacheWindow(oldestContentUtc, newestContentUtc, ActivityDedupCacheScope.PerBatch, 0);
             }
 
-            // Every event processed this cycle has a CreationTime inside the download window (the API only
-            // serves it there) and the cache is keyed by event id, so one full-window load is equivalent to
-            // the old per-batch [Min,Max] loads - without the redundancy of reloading almost the whole
-            // in-window event set on every batch.
+            // The per-run window is the download window plus a margin. The run cache no longer loads it - each
+            // batch looks its own ids up by primary key, whatever their age - so it is reported, not queried.
             var daysBack = Math.Max(daysBeforeNowToDownload, 1) + RunWindowLowerMarginDays;
             return new ActivityDedupCacheWindow(nowUtc.AddDays(-daysBack), nowUtc.Add(RunWindowUpperMargin),
                 ActivityDedupCacheScope.PerRun, daysBack);
         }
 
         /// <summary>
-        /// Lower bound of a cache load, widened by <see cref="DateTime2EdgePadding"/>. Applied when the cache
-        /// is actually loaded, to both scopes.
+        /// Lower bound of a cache load, widened by <see cref="DateTime2EdgePadding"/>. Applied when a window is
+        /// actually loaded - the per-batch safety-valve.
         /// </summary>
         public static DateTime PadFrom(DateTime fromUtc) => fromUtc.Subtract(DateTime2EdgePadding);
 

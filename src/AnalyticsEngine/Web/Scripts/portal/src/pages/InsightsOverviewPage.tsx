@@ -89,6 +89,7 @@ export const ENABLED_IMPORT_LABELS_BY_SETTING_PROPERTY: Record<string, { english
   Calls: { english: 'Teams calls', key: 'overview.enabledImport.teamsCalls' },
   CopilotStudioCredits: { english: phrase('Copilot', 'Studio', 'credits', '(billed)'), key: 'overview.enabledImport.copilotStudioCredits' },
   AzureCostManagement: { english: phrase('Azure', 'costs', '(Cost', 'Management)'), key: 'overview.enabledImport.azureCosts' },
+  CopilotCostManagement: { english: phrase('Copilot', 'credit', 'history', '(preview)'), key: 'overview.enabledImport.copilotCreditHistory' },
 };
 
 const ENABLED_IMPORT_KEY_BY_ENGLISH = new Map(
@@ -187,7 +188,7 @@ export default function InsightsOverviewPage() {
 
   const counts = useMemo(() => status?.dataCounts ?? [], [status]);
   const countKeys = useMemo(() => counts.map((c) => c.key), [counts]);
-  const hasAnyData = useMemo(() => counts.some((c) => c.count > 0), [counts]);
+  const hasAnyData = useMemo(() => counts.some((c) => (c.count ?? 0) > 0), [counts]);
 
   if (loading) {
     return (

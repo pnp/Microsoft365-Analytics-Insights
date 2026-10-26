@@ -59,6 +59,9 @@ namespace WebJob.AppInsightsImporter.Engine.Sql
         private readonly IPageViewsPersistenceManager _pageViews;
         private readonly IAnalyticsDbContextFactory _contextFactory;
 
+        // The four custom-event sections, run over SQL ports in production - see SaveCustomEventsAsync.
+        private readonly Func<CustomEventsResultCollection, Task<CustomEventSaveResult>> _saveEventSections;
+
         public SqlAppInsightsDayPersistenceManager(AnalyticsEntitiesContext db, AnalyticsLogger logger, AppConfig config)
             : this(db, logger, config, DefaultAnalyticsDbContextFactory.Instance)
         {
@@ -79,6 +82,7 @@ namespace WebJob.AppInsightsImporter.Engine.Sql
             // Built after the guards above so the ParamName a caller sees is unchanged (the adapter has
             // guards of its own, and a constructor initialiser would run them first).
             _pageViews = new SqlPageViewsPersistenceManager(db, logger);
+            _saveEventSections = SaveEventSectionsToSql;
         }
 
         /// <summary>
@@ -94,12 +98,36 @@ namespace WebJob.AppInsightsImporter.Engine.Sql
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
             _config = config;
             _contextFactory = contextFactory ?? throw new ArgumentNullException(nameof(contextFactory));
+            _saveEventSections = SaveEventSectionsToSql;
+        }
+
+        /// <summary>
+        /// As above, with the custom-event section save supplied as well - in production it runs the sections over
+        /// SQL ports with a context of its own - so what the day manager does with a section's failure can be
+        /// asserted without a database. Internal: a test seam, like the constructor above.
+        /// </summary>
+        internal SqlAppInsightsDayPersistenceManager(IPageViewsPersistenceManager pageViews,
+            Func<CustomEventsResultCollection, Task<CustomEventSaveResult>> saveEventSections, AnalyticsLogger logger)
+        {
+            _pageViews = pageViews ?? throw new ArgumentNullException(nameof(pageViews));
+            _saveEventSections = saveEventSections ?? throw new ArgumentNullException(nameof(saveEventSections));
+            _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         }
 
         public Task SavePageViewsAsync(PageViewCollection pageViews, List<FilterUrlConfig> filterUrls)
             => _pageViews.SavePageViewsAsync(pageViews, filterUrls);
 
-        public Task SaveCustomEventsAsync(CustomEventsResultCollection events)
+        /// <summary>
+        /// Throws once every section has been attempted if any of them failed, so the importer retries the day
+        /// instead of moving past it. See <see cref="CustomEventSaveResult"/>.
+        /// </summary>
+        public async Task SaveCustomEventsAsync(CustomEventsResultCollection events)
+        {
+            var result = await _saveEventSections(events);
+            result.ThrowIfIncomplete();
+        }
+
+        private Task<CustomEventSaveResult> SaveEventSectionsToSql(CustomEventsResultCollection events)
             => events.SaveAllEventTypesToSql(_logger, _config, _contextFactory);
     }
 

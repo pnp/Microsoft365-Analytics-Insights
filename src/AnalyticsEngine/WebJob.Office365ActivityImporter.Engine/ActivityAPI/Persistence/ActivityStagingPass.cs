@@ -156,6 +156,11 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Persistence
 
             try
             {
+                // Ask the database - once per batch, and only about ids whose outcome depends on it - which of
+                // this batch's events are already imported or ignored. The answers live in a view of the run
+                // cache that is dropped with the batch; nothing beyond this batch is loaded.
+                var batchCache = await cache.WithStoreLookupAsync(IdsWhoseOutcomeDependsOnTheStore(activities, retryState));
+
                 foreach (var abtractLog in activities)
                 {
                     // Don't insert duplicates in same set. The decision itself (dedup -> URL scope -> user
@@ -163,10 +168,10 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Persistence
                     // asserted with no SQL and no Graph; see issue #373.
                     var recoverMetadata = (activities.RecoverMissingCopilotMetadata && abtractLog is CopilotAuditLogContent)
                         || (activities.RequiresMetadataRecovery(abtractLog)
-                            && cache.HaveSeenInProcessedOrIgnoredEvents(abtractLog)
-                            && !cache.WasRememberedThisCycle(abtractLog));
+                            && batchCache.HaveSeenInProcessedOrIgnoredEvents(abtractLog)
+                            && !batchCache.WasRememberedThisCycle(abtractLog));
                     var decision = await ActivityStagingRules.DecideAndRememberAsync(
-                        abtractLog, processedIds, cache, urlInScope, userInGroupsFilter, stageRow,
+                        abtractLog, processedIds, batchCache, urlInScope, userInGroupsFilter, stageRow,
                         retryState?.ShouldRetry(abtractLog.Id) == true || recoverMetadata);
 
                     if (!decision.IsDuplicate)
@@ -221,6 +226,23 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Persistence
                         "released their in-memory dedup markers so a retry can stage them again.");
                 }
                 throw;
+            }
+        }
+
+        /// <summary>
+        /// The batch's ids for which the database's answer can change the decision. An event forced through by
+        /// the retry state or by Copilot metadata recovery is never skipped as a duplicate, whatever the database
+        /// holds, so there is nothing to ask about it - which matters for the Copilot backfill, whose Copilot
+        /// events are all forced.
+        /// </summary>
+        private static IEnumerable<Guid> IdsWhoseOutcomeDependsOnTheStore(ActivityReportSet activities, ActivitySaveRetryState retryState)
+        {
+            foreach (var log in activities)
+            {
+                if (log == null) continue;
+                if (activities.RecoverMissingCopilotMetadata && log is CopilotAuditLogContent) continue;
+                if (retryState?.ShouldRetry(log.Id) == true) continue;
+                yield return log.Id;
             }
         }
     }

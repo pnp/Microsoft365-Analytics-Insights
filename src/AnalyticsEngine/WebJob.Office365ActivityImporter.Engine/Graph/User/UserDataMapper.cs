@@ -59,6 +59,18 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         public Dictionary<string, GraphUser> GraphUsersByAadId => _graphUsersByAadId;
 
         /// <summary>
+        /// The sign-in name Graph reports for <paramref name="aadId"/> in this read, or null when the user is not in it
+        /// (or <see cref="SetGraphUserLookup"/> has not been called).
+        /// </summary>
+        internal string CurrentUpnInThisRead(string aadId)
+        {
+            GraphUser graphUser;
+            return !string.IsNullOrEmpty(aadId) && _graphUsersByAadId != null && _graphUsersByAadId.TryGetValue(aadId, out graphUser)
+                ? graphUser.UserPrincipalName
+                : null;
+        }
+
+        /// <summary>
         /// Pre-builds a dictionary for O(1) graph user lookups by AAD ID.
         /// Call once before processing batches to avoid O(n) linear scans per user.
         /// </summary>
@@ -217,8 +229,11 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 dbUser.CompanyNameId = null;
             }
 
-            // Update manager
-            await UpdateUserManager(db, plan.ManagerAadId, allGraphUsers, dbUser, dbUsersByAadId, allDbUsers);
+            // Update manager - only when Graph said something about it (see GraphUser.ManagerReported).
+            if (plan.ManagerReported)
+            {
+                await UpdateUserManager(db, plan.ManagerAadId, allGraphUsers, dbUser, dbUsersByAadId, allDbUsers);
+            }
 
             dbUser.LastUpdated = lastUpdatedUtc ?? _clock.UtcNow;
         }
@@ -251,13 +266,19 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             {
                 // Try getting manager from DB using dictionary lookup if available
                 Common.Entities.User dbManager = null;
-                if (dbUsersByAadId != null && dbUsersByAadId.TryGetValue(managerAadId, out dbManager))
+                Common.Entities.User mappedManager;
+                if (dbUsersByAadId != null && dbUsersByAadId.TryGetValue(managerAadId, out mappedManager))
                 {
-                    // Found manager using fast dictionary lookup
-                    // CRITICAL: Ensure manager is tracked by EF before assignment
-                    // If we assign a detached entity to a tracked entity's navigation property,
-                    // EF will try to INSERT it, causing duplicate key errors
-                    dbManager = await EnsureUserIsTrackedAsync(db, dbManager, dbUsersByAadId);
+                    // A row a rename left behind still carries the manager's object id. When this read has the manager
+                    // under another sign-in name, their current row is found by that name below instead.
+                    if (!UserIdentityRules.IsLeftBehindByRename(mappedManager, CurrentUpnInThisRead(managerAadId)))
+                    {
+                        // Found manager using fast dictionary lookup
+                        // CRITICAL: Ensure manager is tracked by EF before assignment
+                        // If we assign a detached entity to a tracked entity's navigation property,
+                        // EF will try to INSERT it, causing duplicate key errors
+                        dbManager = await EnsureUserIsTrackedAsync(db, mappedManager, dbUsersByAadId);
+                    }
                 }
                 else if (allDbUsers != null)
                 {

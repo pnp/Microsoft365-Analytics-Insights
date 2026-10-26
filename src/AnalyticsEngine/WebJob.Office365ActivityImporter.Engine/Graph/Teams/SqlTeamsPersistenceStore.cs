@@ -159,7 +159,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
             foreach (var r in reactions)
             {
                 var reaction = await _lookup.GetOrCreateTeamsReactionType(r.Reaction);
-                var user = r.GraphUser != null
+                // Someone Entra ID couldn't find is stored as "Unknown User", as Teams shows them.
+                var user = !string.IsNullOrEmpty(r.GraphUser?.UserPrincipalName)
                     ? await _lookup.GetOrCreateUser(r.GraphUser.UserPrincipalName, false)
                     : await _lookup.GetOrCreateUnknownUser(false);
                 var channel = await _lookup.GetTeamChannel(r.ChannelId);
@@ -170,7 +171,12 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
         public async Task SaveChanges(O365Team source, TeamDefinition team)
         {
             team.HasRefreshToken = source.HasRefreshToken;
-            team.LastRefreshed = source.LastRefreshed;
+
+            // A Team still authorised, whose token just couldn't be refreshed this cycle, keeps its last refresh time.
+            if (source.LastRefreshed.HasValue || !source.HasRefreshToken)
+            {
+                team.LastRefreshed = source.LastRefreshed;
+            }
             _lookup.Database.ChangeTracker.DetectChanges();
             await _lookup.Database.SaveChangesAsync();
         }

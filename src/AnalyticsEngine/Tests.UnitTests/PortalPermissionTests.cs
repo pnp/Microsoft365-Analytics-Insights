@@ -98,6 +98,13 @@ namespace Tests.UnitTests
             ["CopilotAdoptionAPIController.ExportCowork"] = Pii,
             ["CopilotAdoptionAPIController.ExportWorkbook"] = Any,     // trims the per-person sheets
 
+            ["CopilotCostConnectionAPIController.Status"] = Admin,
+            ["CopilotCostConnectionAPIController.Collection"] = Admin,
+            ["CopilotCostConnectionAPIController.Connect"] = Admin,
+            ["CopilotCostConnectionAPIController.Disconnect"] = Admin,
+            ["CopilotCostConnectionAPIController.Probe"] = Admin,
+            ["CopilotCostConnectionAPIController.ResetProbe"] = Admin,
+
             ["DlpAPIController.Availability"] = Any,
             ["DlpAPIController.Summary"] = Any,                        // trims the top-users table
             ["DlpAPIController.Governance"] = Any,                     // tenant-level rates and model/plugin names only
@@ -418,6 +425,28 @@ namespace Tests.UnitTests
         #endregion
 
         #region The filter
+
+        [DataTestMethod]
+        [DataRow("GET", "")]
+        [DataRow("GET", "/collection")]
+        [DataRow("POST", "/connect")]
+        [DataRow("POST", "/disconnect")]
+        [DataRow("POST", "/probe")]
+        [DataRow("POST", "/resetProbe")]
+        public async Task CopilotCostConnection_RequiresAdministrationBeforeOpeningRuntime(string method, string path)
+        {
+            using (var host = new PortalTestHost(new[] { typeof(CopilotCostConnectionAPIController) },
+                PortalTestHost.SignedIn(PortalRoles.SeePii), PortalAccessPolicy.Enforcing))
+            using (var request = new HttpRequestMessage(new HttpMethod(method), "api/CopilotCostConnection" + path))
+            {
+                var response = await host.Client.SendAsync(request);
+                Assert.AreEqual(HttpStatusCode.Forbidden, response.StatusCode);
+                var body = JObject.Parse(await response.Content.ReadAsStringAsync());
+                Assert.AreEqual(PortalPermissionDeniedModel.ErrorCode, (string)body["code"]);
+                Assert.AreEqual(PortalRoles.Administration, (string)body["role"]);
+                Assert.IsTrue(response.Headers.CacheControl.NoStore);
+            }
+        }
 
         [TestMethod]
         public async Task Filter_RefusesWith403AndSaysWhichRoleToAskFor_WithoutRunningTheAction()

@@ -11,6 +11,11 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Aggregate
         [JsonProperty("reportRefreshDate")]
         public string ReportRefreshDateString { get; set; }
         public DateTime ReportRefreshDate { get => DateTime.ParseExact(ReportRefreshDateString, DATE_FORMAT, CultureInfo.InvariantCulture); set => ReportRefreshDateString = value.ToString(DATE_FORMAT, CultureInfo.InvariantCulture); }
+
+        /// <summary>The refresh date, when the row carries a readable one. Unlike <see cref="ReportRefreshDate"/>, never throws.</summary>
+        internal bool TryGetReportRefreshDate(out DateTime refreshDate)
+            => DateTime.TryParseExact(ReportRefreshDateString, DATE_FORMAT, CultureInfo.InvariantCulture, DateTimeStyles.None, out refreshDate);
+
         public abstract string OfficeUniqueIdField { get; }
     }
 

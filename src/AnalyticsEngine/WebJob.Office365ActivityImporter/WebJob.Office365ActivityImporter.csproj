@@ -119,6 +119,12 @@
     <None Include="AutomationPS\ProfilingJobs\Database_Maintenance.ps1" />
     <None Include="AutomationPS\ProfilingJobs\Weekly.ps1" />
     <None Include="AutomationPS\readme.md" />
+    <!-- Kudu starts a continuous WebJob on every instance of a scaled-out App Service unless settings.job says
+         is_singleton, and the importers stage rows in fixed-name ##temp tables that every save drops and re-creates.
+         Copied next to the .exe: CI zips the build output and the installer unpacks it into app_data\jobs\continuous\<name>. -->
+    <None Include="settings.job">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\Common\DataUtils\DataUtils.csproj">

@@ -9,6 +9,7 @@ using Microsoft.Owin.Security.Cookies;
 using Microsoft.Owin.Security.OpenIdConnect;
 using Owin;
 using System;
+using System.Security.Claims;
 using System.Threading.Tasks;
 
 namespace Web.AnalyticsWeb
@@ -28,8 +29,10 @@ namespace Web.AnalyticsWeb
         public void ConfigureAuth(IAppBuilder app)
         {
             var config = new AppConfig();
+            // Entra's identity-provider claim is optional; bind anti-forgery tokens to the OIDC subject.
+            System.Web.Helpers.AntiForgeryConfig.UniqueClaimTypeIdentifier = ClaimTypes.NameIdentifier;
 
-            // One logger for the life of the app: each AnalyticsLogger builds its own TelemetryClient.
+            // One logger for the life of the app (loggers share one Application Insights channel per connection string).
             var teamsConnectionLog = new Lazy<AnalyticsLogger>(
                 () => new AnalyticsLogger(config.AppInsightsConnectionString, TeamsConnectionTelemetryContext));
 
@@ -52,6 +55,7 @@ namespace Web.AnalyticsWeb
 
             app.UseCookieAuthentication(new CookieAuthenticationOptions());
 
+            ConfigureCostCallback(app);
             app.UseOpenIdConnectAuthentication(openIdConnectOptions);
         }
 

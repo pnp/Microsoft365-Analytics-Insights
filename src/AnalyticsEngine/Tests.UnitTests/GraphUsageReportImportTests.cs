@@ -324,6 +324,85 @@ namespace Tests.UnitTests
             Assert.IsTrue(fakeData.Count() == 2);
         }
 
+        [TestMethod]
+        public async Task WeeklyReport_UnreadablePage_FailsTheReportInsteadOfRequestingItForEver()
+        {
+            // A 200 with an empty or malformed body comes back as a null page. The loader used to log a warning and ask
+            // for the same URL again, for ever: the import cycle hung and Graph was hammered.
+            var loader = new ScriptedWeeklyUsageReportLoader((AggregateResourceUsageDetail<FakeStats>)null);
+
+            var ex = await Assert.ThrowsExceptionAsync<InvalidOperationException>(() => loader.LoadReportData());
+
+            Assert.AreEqual(1, loader.RequestCount, "One request, then the report fails for this cycle.");
+            StringAssert.Contains(ex.Message, loader.ReportName);
+            StringAssert.Contains(ex.Message, "page 1");
+        }
+
+        [TestMethod]
+        public async Task WeeklyReport_PageWithoutItsValueCollection_FailsTheReportWithoutSavingAnyOfIt()
+        {
+            // Stats has no default, so null means the page had no "value" collection: its rows are unknown, not absent.
+            const string skipToken = "synthetic-skip-token";
+            var loader = new ScriptedWeeklyUsageReportLoader(
+                new AggregateResourceUsageDetail<FakeStats>
+                {
+                    Stats = new List<FakeStats> { new FakeStats { RandoId = "1", ReportRefreshDateString = "2024-02-25" } },
+                    NextLink = "https://graph.microsoft.com/beta/reports/syntheticWeeklyReport?$skiptoken=" + skipToken,
+                },
+                new AggregateResourceUsageDetail<FakeStats> { Stats = null });
+
+            var ex = await Assert.ThrowsExceptionAsync<InvalidOperationException>(
+                () => loader.LoadAndSaveLastWeeksReportsIfRefreshOnDayWithResult(DayOfWeek.Sunday));
+
+            StringAssert.Contains(ex.Message, "page 2");
+            Assert.IsFalse(ex.Message.Contains(skipToken), "The paging link, and its skip token, stay out of the message.");
+            Assert.AreEqual(0, loader.ItemsQueuedForSave, "Page 1's Sunday row must not be saved without the rest of the report.");
+            Assert.AreEqual(0, loader.CommitCount);
+        }
+
+        /// <summary>Returns scripted pages in order; fails fast if asked for more than a loop would, instead of hanging.</summary>
+        private sealed class ScriptedWeeklyUsageReportLoader : AbstractAggregateWeeklyUsageReportLoader<FakeStats>
+        {
+            private readonly Queue<AggregateResourceUsageDetail<FakeStats>> _pages;
+
+            public ScriptedWeeklyUsageReportLoader(params AggregateResourceUsageDetail<FakeStats>[] pages)
+                : base(AnalyticsLogger.ConsoleOnlyTracer())
+            {
+                _pages = new Queue<AggregateResourceUsageDetail<FakeStats>>(pages);
+            }
+
+            public int RequestCount { get; private set; }
+            public int ItemsQueuedForSave { get; private set; }
+            public int CommitCount { get; private set; }
+
+            public override string ReportGraphURL => "https://graph.microsoft.com/beta/reports/syntheticWeeklyReport";
+            public override string ReportName => "Synthetic weekly usage";
+
+            public override Task<AggregateResourceUsageDetail<FakeStats>> LoadReportDataForUrl(string requestUrl)
+            {
+                RequestCount++;
+                if (RequestCount > 5)
+                {
+                    throw new TimeoutException($"The report was requested {RequestCount} times: the loader is looping.");
+                }
+                return Task.FromResult(_pages.Count > 0 ? _pages.Dequeue() : null);
+            }
+
+            protected override Task<DateTime?> GetLastStoredResultFor(FakeStats item) => Task.FromResult<DateTime?>(null);
+
+            protected override Task AddItemToSaveList(FakeStats item)
+            {
+                ItemsQueuedForSave++;
+                return Task.CompletedTask;
+            }
+
+            protected override Task CommitAllChanges()
+            {
+                CommitCount++;
+                return Task.CompletedTask;
+            }
+        }
+
         /// <summary>
         /// Regression: Teams audio/video/screen-share durations were stored with TimeSpan.Seconds
         /// (the 0-59 seconds COMPONENT), silently truncating any duration of a minute or more

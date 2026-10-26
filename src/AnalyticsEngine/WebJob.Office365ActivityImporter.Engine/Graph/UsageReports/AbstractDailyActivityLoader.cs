@@ -180,6 +180,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
             daysBackMax = ClampDaysBack(daysBackMax);
 
             LoadedReportPages.Clear();
+            var sawIdentifiableRow = false;
 
             for (int daysBackIdx = 0; daysBackIdx < daysBackMax; daysBackIdx++)
             {
@@ -210,6 +211,67 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
                     Telemetry.LogInformation($"Finished loading {this.GetType().Name} for date {dt.ToString("dd-MM-yyyy")}");
                     LoadedReportPages.Add(dt, dayReports);
                 }
+
+                // A tenant that conceals identities conceals every row of every date. Once a whole date has come back
+                // concealed, and no earlier date carried a real identity, the save will refuse the report anyway
+                // (ConcealedUsageReportException) - so stop rather than page through the rest of the window for rows
+                // that cannot be used. A date with any real identity disables this for the rest of the download.
+                if (!sawIdentifiableRow && dayReports != null)
+                {
+                    CountIdentities(dayReports, out var concealedRows, out var identifiableRows);
+                    if (identifiableRows > 0)
+                    {
+                        sawIdentifiableRow = true;
+                    }
+                    else if (concealedRows > 0)
+                    {
+                        Telemetry.LogWarning($"{this.GetType().Name}: every identity Graph returned for {dt.ToString("dd-MM-yyyy")} is concealed (hashed), " +
+                            "so the report cannot be imported; not downloading its remaining dates.");
+                        break;
+                    }
+                }
+            }
+        }
+
+        // Concealment is decided once per distinct identity value: the same user appears on every date of the window,
+        // and the user rule parses the value as an e-mail address.
+        private readonly Dictionary<string, bool> _concealedByLookupValue = new Dictionary<string, bool>(StringComparer.Ordinal);
+
+        private bool IsConcealed(TUserActivityUserDetail row)
+        {
+            var value = row.LookupFieldValue;
+            if (string.IsNullOrWhiteSpace(value))
+            {
+                return false;
+            }
+
+            if (!_concealedByLookupValue.TryGetValue(value, out var concealed))
+            {
+                concealed = row.IsLookupIdentityConcealed;
+                _concealedByLookupValue[value] = concealed;
+            }
+            return concealed;
+        }
+
+        private void CountIdentities(IEnumerable<TUserActivityUserDetail> rows, out int concealedRows, out int identifiableRows)
+        {
+            concealedRows = 0;
+            identifiableRows = 0;
+            foreach (var row in rows)
+            {
+                if (row == null || string.IsNullOrWhiteSpace(row.LookupFieldValue))
+                {
+                    continue;
+                }
+
+                if (IsConcealed(row))
+                {
+                    concealedRows++;
+                }
+                else
+                {
+                    identifiableRows++;
+                }
             }
         }
 
@@ -227,7 +289,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
         ///
         /// Throwing restores the contract the phase is already written around: see
         /// <c>GraphImporter.GetAndSaveActivityReportsMultiThreaded</c>, which deletes the "last imported"
-        /// timestamp BEFORE loading and only re-saves it after every loader has completed, precisely so
+        /// timestamp BEFORE loading and only re-saves it after every daily loader has completed, precisely so
         /// that "if this phase fails after a partial save, the next cycle must re-import". The exception
         /// propagates out of the <c>Task.WhenAll</c>, the timestamp is never re-saved, and the phase is
         /// retried next cycle with the real HTTP status recorded in Application Insights.
@@ -281,6 +343,21 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
             var store = StoreFor(db);
             try
             {
+                // Concealed identities are dealt with before anything is resolved or written, so a pseudonym never
+                // reaches the batched pre-resolution, the scope filter or the get-or-create path below. Every
+                // identifiable row concealed means the tenant conceals identities: refuse the whole report rather
+                // than invent one placeholder user per row. Some concealed: skip those, save the rest.
+                CountIdentities(LoadedReportPages.Values.SelectMany(page => page), out var concealedRowCount, out var identifiableRowCount);
+                if (concealedRowCount > 0 && identifiableRowCount == 0)
+                {
+                    throw new ConcealedUsageReportException(loaderType, concealedRowCount);
+                }
+                if (concealedRowCount > 0)
+                {
+                    Telemetry.LogWarning($"{loaderType}: skipping {concealedRowCount:N0} of {concealedRowCount + identifiableRowCount:N0} row(s) whose identity " +
+                        "Graph returned concealed (hashed); they cannot be linked to a real user or group. The other rows are saved normally.");
+                }
+
                 // Resolve every user (or group) this report names that already exists in SQL in set-based batches,
                 // BEFORE the row loop, instead of one query per user, per report, inside it (#705). The row loop
                 // below is unchanged: pre-resolved values are cache hits, and anything left - a user not yet in
@@ -311,6 +388,15 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
                             existingByLookupId[existingRow.AssociatedLookupId] = existingRow;
                         }
 
+                        // Lookups seen on this date, and lookups whose row is queued for an INSERT or UPDATE in the
+                        // current, not-yet-flushed batch. Graph is meant to send one row per lookup per date, but
+                        // does not always (OneDrive is keyed by owner UPN alone, so a re-hired owner can appear twice).
+                        var seenLookupIds = new HashSet<int>();
+                        var queuedLookupIds = new HashSet<int>();
+                        var duplicateRows = 0;
+                        var outOfScopeRows = 0;
+                        var missingLookupRows = 0;
+
                         if (instrumentationEnabled)
                         {
                             totals.ExistingRowLoadTicks += existingLoadWatch.ElapsedTicks;
@@ -335,11 +421,20 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
                             // A usage-report row with no user/group identifier (e.g. a Graph row with a null
                             // userPrincipalName when report anonymisation is enabled on the tenant) can't be matched
                             // to a DB lookup. Skip it rather than NRE / ArgumentNullException deeper in the loop.
+                            // Counted here and reported once for the date, below.
                             if (string.IsNullOrWhiteSpace(reportPage.LookupFieldValue))
                             {
                                 dateMetrics?.RecordMissingLookupValue();
                                 totals?.RecordMissingLookupValue();
-                                Telemetry.LogWarning($"Skipping a {typeof(TReportDbType).Name} report row with no lookup identifier (null/empty user or group name).");
+                                missingLookupRows++;
+                                continue;
+                            }
+
+                            // Counted and reported once for the whole report above.
+                            if (IsConcealed(reportPage))
+                            {
+                                dateMetrics?.RecordConcealedIdentity();
+                                totals?.RecordConcealedIdentity();
                                 continue;
                             }
 
@@ -356,7 +451,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
                             {
                                 dateMetrics?.RecordOutOfScope();
                                 totals?.RecordOutOfScope();
-                                Telemetry.LogInformation($"Skipping {reportPage.LookupFieldValue} as not in scope");
+                                outOfScopeRows++;
                                 continue;
                             }
 
@@ -375,6 +470,13 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
                             if (i > 0 && i % 1000 == 0)
                             {
                                 Console.WriteLine($"{loaderType}: Saved {i} / {totalReports}");
+                            }
+
+                            if (!seenLookupIds.Add(lookupId))
+                            {
+                                duplicateRows++;
+                                dateMetrics?.RecordDuplicateLookup();
+                                totals?.RecordDuplicateLookup();
                             }
 
                             var isNewLog = !existingByLookupId.TryGetValue(lookupId, out var dateRequestedLog);
@@ -429,6 +531,16 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
                                 dateMetrics?.RecordAdded();
                                 totals?.RecordAdded();
                             }
+                            else if (queuedLookupIds.Contains(lookupId))
+                            {
+                                // A further row for a lookup whose row is already queued in this batch. The projection
+                                // above has just overwritten that queued entity in place, so the pending INSERT or UPDATE
+                                // already carries this row's values - the last row wins - and there is nothing more to
+                                // queue. Asking the store would also be wrong: EF6 cannot read OriginalValues for an
+                                // entity still in the Added state, and that exception used to fail the whole report on
+                                // every cycle.
+                                willWrite = false;
+                            }
                             else
                             {
                                 willWrite = store.MarkUpdatedIfChanged(dateRequestedLog);
@@ -453,6 +565,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
                             i++;
                             if (willWrite)
                             {
+                                queuedLookupIds.Add(lookupId);
                                 dbWrites++;
                                 pendingChanges++;
                                 pendingBatchRows++;
@@ -461,6 +574,9 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
                                     await SavePendingBatchAsync(store, instrumentation, loaderType, reportTable, pendingBatchRows);
                                     pendingChanges = 0;
                                     pendingBatchRows = 0;
+                                    // Flushed rows are tracked as unchanged from here on, so a later duplicate is
+                                    // dirty-checked against what was just written.
+                                    queuedLookupIds.Clear();
                                 }
                             }
                         }
@@ -468,6 +584,24 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
                         if (pendingChanges > 0)
                         {
                             await SavePendingBatchAsync(store, instrumentation, loaderType, reportTable, pendingBatchRows);
+                        }
+
+                        if (duplicateRows > 0)
+                        {
+                            Telemetry.LogWarning($"{loaderType}: Graph returned {duplicateRows:N0} extra row(s) for a user or group it had already " +
+                                $"reported for {dateTime:yyyy-MM-dd}. Kept the last row for each; the report is otherwise unaffected.");
+                        }
+
+                        // One line per date for each kind of skipped row, never one per row, and never the identifier itself.
+                        if (missingLookupRows > 0)
+                        {
+                            Telemetry.LogWarning($"{loaderType}: skipped {missingLookupRows:N0} row(s) for {dateTime:yyyy-MM-dd} with no user or group identifier " +
+                                "(null or empty); they cannot be linked to anyone.");
+                        }
+                        if (outOfScopeRows > 0)
+                        {
+                            Telemetry.LogInformation($"{loaderType}: skipped {outOfScopeRows:N0} of {LoadedReportPages[dateTime].Count:N0} row(s) for {dateTime:yyyy-MM-dd} " +
+                                "as outside the configured user scope (UserGroupsFilter).");
                         }
 
                         if (instrumentationEnabled)
@@ -687,6 +821,12 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
                         continue;
                     }
 
+                    // A pseudonym is never looked up: the row loop skips it.
+                    if (IsConcealed(row))
+                    {
+                        continue;
+                    }
+
                     // DBLookupCache trims the key before it reaches SQL; do the same so both paths ask for one key.
                     var key = row.LookupKey?.Trim();
                     if (string.IsNullOrEmpty(key))
@@ -828,6 +968,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
         {
             public long InputRows;
             public long MissingLookupValueRows;
+            public long ConcealedIdentityRows;
+            public long DuplicateLookupRows;
             public long OutOfScopeRows;
             public long AddedRows;
             public long ChangedRows;
@@ -851,6 +993,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
 
             public void RecordInputRow() => InputRows++;
             public void RecordMissingLookupValue() => MissingLookupValueRows++;
+            public void RecordConcealedIdentity() => ConcealedIdentityRows++;
+            public void RecordDuplicateLookup() => DuplicateLookupRows++;
             public void RecordOutOfScope() => OutOfScopeRows++;
             public void RecordAdded() => AddedRows++;
             public void RecordChanged() => ChangedRows++;
@@ -886,6 +1030,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
                 if (dateIndex.HasValue) metrics["DateIndex"] = dateIndex.Value;
                 metrics["InputRowCount"] = InputRows;
                 metrics["MissingLookupValueRowCount"] = MissingLookupValueRows;
+                metrics["ConcealedIdentityRowCount"] = ConcealedIdentityRows;
+                metrics["DuplicateLookupRowCount"] = DuplicateLookupRows;
                 metrics["OutOfScopeRowCount"] = OutOfScopeRows;
                 metrics["AddedRowCount"] = AddedRows;
                 metrics["ChangedRowCount"] = ChangedRows;

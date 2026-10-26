@@ -14,6 +14,11 @@ export interface PromptCategoryConfiguration {
   maxPromptsPerCycle: number;
   version: string;
   categories: PromptCategoryDefinition[];
+  /**
+   * Identifies the saved document as a whole - opt-in, cap and taxonomy - unlike `version`, which identifies only the
+   * taxonomy. Sent back with a save or reset, so neither can overwrite settings someone else saved in the meantime.
+   */
+  revision?: string | null;
 }
 export interface PromptCategoryAdmin {
   configuration: PromptCategoryConfiguration;
@@ -45,7 +50,7 @@ export interface PromptCategoryRun {
 /** Stable failure codes the server sends beside a non-2xx status; the portal writes the sentence for each. */
 export const PROMPT_CATEGORY_ERROR_CODES = [
   'storageUnavailable', 'storageTimeout', 'storageNotConfigured', 'invalidTaxonomy',
-  'storedConfigurationInvalid', 'databaseNotUpgraded', 'reportUnavailable',
+  'storedConfigurationInvalid', 'configurationChanged', 'databaseNotUpgraded', 'reportUnavailable',
   'invalidTestPrompt', 'backendNotConfigured', 'taxonomyChanged', 'testBusy', 'testThrottled',
   'testAccessDenied', 'testTimeout', 'testRefused', 'testInvalidResponse', 'testServiceFailure',
 ] as const;
@@ -69,12 +74,14 @@ async function errorCodeOf(response: Response): Promise<PromptCategoryErrorCode 
     ? body!.code as PromptCategoryErrorCode : null;
 }
 
-async function call<T>(path = '', body?: PromptCategoryConfiguration | { prompt: string; version: string }, reset = false, timeoutMs = CLIENT_TIMEOUT_MS): Promise<T> {
+type RequestBody = PromptCategoryConfiguration | { prompt: string; version: string } | { expectedRevision: string | null };
+
+async function call<T>(path = '', body?: RequestBody, timeoutMs = CLIENT_TIMEOUT_MS): Promise<T> {
   const controller = new AbortController();
   const timer = window.setTimeout(() => controller.abort(), timeoutMs);
   try {
     const response = await apiFetch(`${window.location.origin}/api/PromptCategories${path}`, {
-      method: body || reset ? 'POST' : 'GET',
+      method: body ? 'POST' : 'GET',
       headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
       signal: controller.signal,
       ...(body ? { body: JSON.stringify(body) } : {}),
@@ -89,10 +96,16 @@ async function call<T>(path = '', body?: PromptCategoryConfiguration | { prompt:
   }
 }
 export const fetchPromptCategoryAdmin = () => call<PromptCategoryAdmin>();
+/** Saves against `configuration.revision`; refused with `configurationChanged` if the settings changed since. */
 export const savePromptCategories = (configuration: PromptCategoryConfiguration) => call<PromptCategoryConfiguration>('', configuration);
-export const resetPromptCategories = () => call<PromptCategoryConfiguration>('/reset', undefined, true);
+/**
+ * Resets to the disabled defaults, if the settings are still at `expectedRevision`. Null only replaces a saved
+ * configuration the server can't read.
+ */
+export const resetPromptCategories = (expectedRevision: string | null) =>
+  call<PromptCategoryConfiguration>('/reset', { expectedRevision });
 export const fetchPromptCategoryRuns = () => call<PromptCategoryRun[]>('/runs');
 export const testPromptCategory = (prompt: string, version: string) =>
-  call<PromptCategoryTestResult>('/test', { prompt, version }, false, 40000);
+  call<PromptCategoryTestResult>('/test', { prompt, version }, 40000);
 export const fetchPromptCategoryReport = (months: number, version?: string) =>
   call<PromptCategoryReport>(`/report?months=${months}${version ? `&version=${encodeURIComponent(version)}` : ''}`);

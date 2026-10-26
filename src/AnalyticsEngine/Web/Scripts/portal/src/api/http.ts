@@ -175,6 +175,33 @@ async function reportScopeError(response: Response): Promise<ReportScopeError | 
 }
 
 /**
+ * Thrown for the server's generic 500: `{ code: 'unexpected', errorId }`. The detail never leaves the server (it is
+ * logged there under the same `errorId`), so the reference is all an admin has to find the failure in the logs.
+ */
+export class UnexpectedServerError extends Error {
+  readonly errorId: string;
+
+  constructor(errorId: string) {
+    super(translateActive('errors.http.unexpected', { errorId }));
+    this.name = 'UnexpectedServerError';
+    this.errorId = errorId;
+  }
+}
+
+async function unexpectedServerError(response: Response): Promise<UnexpectedServerError | null> {
+  if (response.status !== 500) return null;
+
+  try {
+    const body = (await response.clone().json()) as { code?: unknown; errorId?: unknown } | null;
+    return body?.code === 'unexpected' && typeof body.errorId === 'string' && body.errorId.length > 0
+      ? new UnexpectedServerError(body.errorId)
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Restores the route the user was on before an expired session bounced them through sign-in.
  * Called once from the app entry point, before the router reads the URL.
  *
@@ -251,6 +278,9 @@ export async function apiFetch(input: string, init: RequestInit = {}): Promise<R
 
   const scopeError = await reportScopeError(response);
   if (scopeError) throw scopeError;
+
+  const unexpectedError = await unexpectedServerError(response);
+  if (unexpectedError) throw unexpectedError;
 
   return response;
 }

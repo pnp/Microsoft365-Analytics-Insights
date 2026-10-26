@@ -116,6 +116,27 @@ namespace Tests.UnitTests
         }
 
         /// <summary>
+        /// The hit-import staging entity's <c>ai_session_id</c> joins <c>dbo.sessions.ai_session_id</c> - varchar(50),
+        /// case-sensitive, indexed by IX_ai_session_id - in both the session insert and the hit insert of "Migrate
+        /// Hits Import into Hits.sql". As nvarchar(max) the join converted the table's column, which cannot seek
+        /// IX_ai_session_id and scanned dbo.sessions every cycle; and an id too long for the table failed the whole
+        /// merge instead of just its row. Tracker session ids are machine-generated ASCII, not tenant text, so varchar
+        /// is right here (see migration RetireImportDbHacks).
+        /// </summary>
+        [TestMethod]
+        public void HitTempEntitySessionIdColumnMatchesSessionsAiSessionId()
+        {
+            var cache = new InsertBatchTypeFieldCache<HitTempEntity>();
+            var info = cache.PropertyMappingInfo.Single(p => p.SqlInfo.FieldName == "ai_session_id");
+
+            Assert.AreEqual("varchar(50)", info.SqlInfo.SqlColDefinition,
+                "##import_staging_hit_imports.ai_session_id must match sessions.ai_session_id so IX_ai_session_id is usable.");
+            Assert.AreEqual("SQL_Latin1_General_CP1_CS_AS", info.SqlInfo.ColationOverride,
+                "Session ids are case-sensitive, like sessions.ai_session_id.");
+            Assert.AreEqual(50, info.SqlInfo.MaxLength, "An over-long id must be skipped in memory, not fail the merge.");
+        }
+
+        /// <summary>
         /// The Office 365 activity staging entity's <c>object_id</c> column joins
         /// <c>urls.full_url</c> in "Insert Activity from Staging Table.sql". Same constraint
         /// as <see cref="HitTempEntityUrlColumnIsNvarchar850"/>: must be <c>nvarchar(850)</c>

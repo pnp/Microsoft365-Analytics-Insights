@@ -275,14 +275,14 @@ DELETE FROM dbo.users WHERE id IN ({users});");
         private static async Task<int> CountAsync(string sql, params (string Name, object Value)[] parameters)
             => Convert.ToInt32(await ScalarAsync(sql, parameters));
 
-        /// <summary>A queued purge that removes exactly <paramref name="userIds"/> (see <see cref="NewEngine"/>).</summary>
+        /// <summary>A queued purge that removes exactly <paramref name="userIds"/> (see <see cref="NewEngine"/>), confirmed for that many.</summary>
         private Task<int> StartJobWithCandidatesAsync(params int[] userIds) => StartJobWithCandidatesAsync(null, userIds);
 
         /// <summary>The same, confirmed against the filter with <paramref name="filterFingerprint"/>.</summary>
-        private async Task<int> StartJobWithCandidatesAsync(string filterFingerprint, int[] userIds)
+        private async Task<int> StartJobWithCandidatesAsync(string filterFingerprint, int[] userIds, string membershipFingerprint = null)
         {
             _candidates = userIds;
-            var job = await State.CreateAsync("admin@contoso.local", filterFingerprint, 1);
+            var job = await State.CreateAsync("admin@contoso.local", filterFingerprint, 1, userIds.Length, membershipFingerprint);
             Assert.AreEqual(UserScopePurgeStates.Queued, job.State);
             return job.Id;
         }
@@ -533,6 +533,144 @@ DELETE FROM dbo.users WHERE id IN ({users});");
             }
         }
 
+        /// <summary>
+        /// The administrator confirmed removing one person, but by the time the purge works out who to remove there are
+        /// two: the importers added a user, or the groups shrank, after the confirmation. It removes nobody - not even the
+        /// one it was confirmed for, nor any unlinked credit rows - rather than remove somebody nobody agreed to.
+        /// </summary>
+        [TestMethod]
+        public async Task Purge_RemovesNobody_WhenMorePeopleAreOutsideTheScopeThanWereConfirmed()
+        {
+            Seed seed = null;
+            var newcomer = 0;
+            try
+            {
+                seed = await SeedAsync();
+                newcomer = Convert.ToInt32(await ScalarAsync("INSERT INTO dbo.users (user_name) OUTPUT inserted.id VALUES (@n);", ("@n", seed.Token + "-newcomer@contoso.local")));
+                _candidates = new[] { seed.Outsider, newcomer };
+                var job = await State.CreateAsync("admin@contoso.local", null, 1, confirmedOutsideScopeCount: 1);
+
+                Assert.AreEqual(UserScopePurgeRunOutcome.Failed, await NewEngine().RunAsync(job.Id, scopeProvider: null));
+
+                var ended = await State.GetAsync(job.Id);
+                Assert.AreEqual(UserScopePurgeStates.Failed, ended.State);
+                Assert.AreEqual(UserScopePurgeErrorCodes.PurgeExceedsConfirmed, ended.ErrorCode);
+                Assert.AreEqual(0, ended.CandidateCount, "Nobody was chosen...");
+                Assert.AreEqual(0, ended.RowsAffected.Count, "...and nothing was removed:");
+                Assert.AreEqual(2, await CountAsync("SELECT COUNT(*) FROM dbo.audit_events WHERE user_id = @id", ("@id", seed.Outsider)));
+                Assert.AreEqual(2, await CountAsync("SELECT COUNT(*) FROM dbo.users WHERE id IN (@a, @b)", ("@a", seed.Outsider), ("@b", newcomer)));
+                Assert.IsFalse(await Database.IsPurgeRunningAsync(), "It let go of the purge lock.");
+
+                // Confirmed for both, it goes ahead.
+                var confirmedForBoth = await State.CreateAsync("admin@contoso.local", null, 1, confirmedOutsideScopeCount: 2);
+                Assert.AreEqual(UserScopePurgeRunOutcome.Completed, await NewEngine().RunAsync(confirmedForBoth.Id, scopeProvider: null));
+                await AssertPurgedAsync(seed);
+            }
+            finally
+            {
+                await CleanupAsync(seed, newcomer);
+            }
+        }
+
+        /// <summary>
+        /// A purge confirmed for one person starts again after a restart and finds a second outside the scope. The total it
+        /// would have removed is over what was confirmed, so it stops where it was, removing nobody more.
+        /// </summary>
+        [TestMethod]
+        public async Task Purge_StartedAgainAfterARestart_NeverRemovesMoreThanWasConfirmedInAll()
+        {
+            Seed seed = null;
+            var newcomer = 0;
+            try
+            {
+                seed = await SeedAsync();
+                var jobId = await StartJobWithCandidatesAsync(seed.Outsider);
+
+                var hostStopping = new CancellationTokenSource();
+                var first = NewEngine();
+                first.AfterWindow = (step, window) =>
+                {
+                    if (UserScopePurgePlan.PhaseOf(step) == UserScopePurgePhases.WebActivity) hostStopping.Cancel();
+                    return Task.CompletedTask;
+                };
+                Assert.AreEqual(UserScopePurgeRunOutcome.Paused, await first.RunAsync(jobId, null, null, hostStopping.Token));
+                var sessionsBefore = await CountAsync("SELECT COUNT(*) FROM dbo.sessions WHERE user_id = @id", ("@id", seed.Outsider));
+
+                newcomer = Convert.ToInt32(await ScalarAsync("INSERT INTO dbo.users (user_name) OUTPUT inserted.id VALUES (@n);", ("@n", seed.Token + "-newcomer@contoso.local")));
+                _candidates = new[] { seed.Outsider, newcomer };
+                Assert.AreEqual(UserScopePurgeRunOutcome.Failed, await NewEngine().RunAsync(jobId, null));
+
+                var job = await State.GetAsync(jobId);
+                Assert.AreEqual(UserScopePurgeErrorCodes.PurgeExceedsConfirmed, job.ErrorCode);
+                Assert.AreEqual(UserScopePurgePhases.WebActivity, job.Phase, "It reports where it had got to.");
+                Assert.AreEqual(0, await CountAsync("SELECT COUNT(*) FROM dbo.audit_events WHERE user_id = @id", ("@id", seed.Outsider)),
+                    "What it removed before the restart stays removed...");
+                Assert.AreEqual(sessionsBefore, await CountAsync("SELECT COUNT(*) FROM dbo.sessions WHERE user_id = @id", ("@id", seed.Outsider)),
+                    "...but it removed nothing after it.");
+                Assert.AreEqual(2, await CountAsync("SELECT COUNT(*) FROM dbo.users WHERE id IN (@a, @b)", ("@a", seed.Outsider), ("@b", newcomer)));
+            }
+            finally
+            {
+                await CleanupAsync(seed, newcomer);
+            }
+        }
+
+        /// <summary>
+        /// A purge that has to read the groups again - here, starting again after a restart - carries on while they resolve
+        /// to the same people, however they come back ordered or cased, and stops, removing nobody more, once they resolve
+        /// to anyone else: the people it would now remove are not the ones the administrator was shown.
+        /// </summary>
+        [TestMethod]
+        public async Task Purge_ThatReadsTheGroupsAgain_StopsWhenTheyNoLongerResolveToThePeopleItWasConfirmedAgainst()
+        {
+            Seed seed = null;
+            try
+            {
+                seed = await SeedAsync();
+                var filter = new UserGroupsFilterModel("Copilot pilot");
+                string idA = Guid.NewGuid().ToString(), idB = Guid.NewGuid().ToString(), idC = Guid.NewGuid().ToString();
+                var confirmed = new UserScopeMembers();
+                confirmed.Add(idA, "pilot.a@contoso.local", "pilot.a@contoso.local");
+                confirmed.Add(idB, "pilot.b@contoso.local", "Pilot.B@Contoso.local");
+                var jobId = await StartJobWithCandidatesAsync(filter.Fingerprint, new[] { seed.Outsider }, confirmed.MembershipFingerprint);
+
+                IUserImportScopeProvider ProviderFor(params (string Id, string Upn)[] people)
+                {
+                    var members = new UserScopeMembers();
+                    foreach (var person in people) members.Add(person.Id, person.Upn, person.Upn);
+                    return new FixedUserImportScopeProvider(TestUserScopes.Of("pilot.a@contoso.local"),
+                        UserImportScopeResolution.Resolved(members, null, null, DateTime.UtcNow), filter);
+                }
+
+                // The same two people, read back in another order and case: the purge runs.
+                var hostStopping = new CancellationTokenSource();
+                var first = NewEngine();
+                first.AfterWindow = (step, window) =>
+                {
+                    if (UserScopePurgePlan.PhaseOf(step) == UserScopePurgePhases.WebActivity) hostStopping.Cancel();
+                    return Task.CompletedTask;
+                };
+                Assert.AreEqual(UserScopePurgeRunOutcome.Paused,
+                    await first.RunAsync(jobId, ProviderFor((idB.ToUpperInvariant(), "PILOT.B@CONTOSO.LOCAL"), (idA, "Pilot.A@contoso.local")), null, hostStopping.Token));
+                var sessionsBefore = await CountAsync("SELECT COUNT(*) FROM dbo.sessions WHERE user_id = @id", ("@id", seed.Outsider));
+
+                // One of them has left the groups and somebody else has joined: it stops.
+                Assert.AreEqual(UserScopePurgeRunOutcome.Failed, await NewEngine().RunAsync(jobId, ProviderFor((idA, "pilot.a@contoso.local"), (idC, "pilot.c@contoso.local"))));
+
+                var job = await State.GetAsync(jobId);
+                Assert.AreEqual(UserScopePurgeStates.Failed, job.State);
+                Assert.AreEqual(UserScopePurgeErrorCodes.ScopeMembershipChanged, job.ErrorCode);
+                Assert.AreEqual(sessionsBefore, await CountAsync("SELECT COUNT(*) FROM dbo.sessions WHERE user_id = @id", ("@id", seed.Outsider)),
+                    "It removed nothing after the restart...");
+                Assert.AreEqual(1, await CountAsync("SELECT COUNT(*) FROM dbo.users WHERE id = @id", ("@id", seed.Outsider)), "...so the outsider is still there.");
+                Assert.IsFalse(await Database.IsPurgeRunningAsync(), "It let go of the purge lock.");
+            }
+            finally
+            {
+                await CleanupAsync(seed);
+            }
+        }
+
         [TestMethod]
         public async Task Purge_Cancelled_StopsAfterTheBatchItIsOn_AndKeepsWhatItRemoved()
         {
@@ -742,7 +880,7 @@ DELETE FROM dbo.users WHERE id IN ({users});");
                 (provider: otherFilter, expected: UserScopePurgeErrorCodes.FilterChanged),
             })
             {
-                var job = await State.CreateAsync("admin@contoso.local", filter.Fingerprint, 1);
+                var job = await State.CreateAsync("admin@contoso.local", filter.Fingerprint, 1, 1);
 
                 Assert.AreEqual(UserScopePurgeRunOutcome.Failed, await NewEngine().RunAsync(job.Id, provider), expected);
 
@@ -824,10 +962,10 @@ DELETE FROM dbo.users WHERE id IN ({users});");
             Assert.IsFalse(state.IsDurable, "Memory doesn't survive a restart.");
             Assert.IsNull(await state.GetLatestAsync());
 
-            var first = await state.CreateAsync("admin@contoso.local", "fingerprint", 5);
+            var first = await state.CreateAsync("admin@contoso.local", "fingerprint", 5, 5);
             Assert.AreEqual(UserScopePurgeStates.Queued, first.State);
             Assert.AreEqual(UserScopePurgePlan.StepCount, first.StepCount);
-            var second = await state.CreateAsync("admin@contoso.local", "fingerprint", 5);
+            var second = await state.CreateAsync("admin@contoso.local", "fingerprint", 5, 5);
             Assert.IsTrue(second.Id > first.Id, "Ids count up.");
             Assert.AreEqual(second.Id, (await state.GetLatestAsync()).Id);
 
@@ -850,7 +988,7 @@ DELETE FROM dbo.users WHERE id IN ({users});");
             Assert.IsNotNull(await state.GetAsync(first.Id), "One still queued is not.");
 
             var restarted = new UserScopePurgeStateStore(new InMemoryKeyValueStore(() => now), isDurable: false, () => now);
-            Assert.IsTrue((await restarted.CreateAsync("admin@contoso.local", "fingerprint", 5)).Id > second.Id,
+            Assert.IsTrue((await restarted.CreateAsync("admin@contoso.local", "fingerprint", 5, 5)).Id > second.Id,
                 "After a restart loses the records, a new purge still doesn't reuse an id a browser may still be asking about.");
         }
 

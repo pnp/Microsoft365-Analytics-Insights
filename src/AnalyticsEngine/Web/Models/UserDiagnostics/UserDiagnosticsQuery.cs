@@ -95,9 +95,11 @@ namespace Web.AnalyticsWeb.Models.UserDiagnostics
         {
             using (var db = _contextFactory.Create())
             {
-                // Equality on the indexed, case-insensitive user_name - never ToLower(), which would scan.
+                // Equality on the indexed, case-insensitive user_name - never ToLower(), which would scan. The value goes
+                // as varchar: user_name is varchar(250), and an nvarchar parameter makes SQL Server convert the column,
+                // which scans IX_users under a SQL collation (#713).
                 return await db.users
-                    .Where(u => u.UserPrincipalName == upn)
+                    .Where(u => u.UserPrincipalName == DbFunctions.AsNonUnicode(upn))
                     .Select(u => new StoredUserRow
                     {
                         Id = u.ID,

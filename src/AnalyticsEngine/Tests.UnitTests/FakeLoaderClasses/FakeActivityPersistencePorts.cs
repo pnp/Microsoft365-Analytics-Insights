@@ -104,14 +104,17 @@ namespace Tests.UnitTests.FakeLoaderClasses
     }
 
     /// <summary>
-    /// In-memory <see cref="IActivityImportCacheLoader"/>. Records every window it was asked to load so a
-    /// test can tell a run-scoped (whole-window, built once) load from the per-batch safety-valve's
-    /// rebuild-every-batch behaviour. See issue #373.
+    /// In-memory <see cref="IActivityImportCacheLoader"/>. Records every window it was asked to load - only the
+    /// per-batch safety-valve loads one now - so a test can tell that rebuild-every-batch behaviour from the
+    /// run-scoped cache, which loads nothing. See issue #373. Also stands in for the database's per-batch
+    /// primary-key lookup: <see cref="AlreadyProcessedIds"/> is what the "database" holds, and every lookup
+    /// is recorded.
     /// </summary>
     public class FakeActivityImportCacheLoader : IActivityImportCacheLoader
     {
         private readonly object _lock = new object();
         private readonly List<CacheLoad> _loads = new List<CacheLoad>();
+        private readonly List<Guid[]> _lookups = new List<Guid[]>();
 
         /// <summary>A single load request.</summary>
         public class CacheLoad
@@ -146,6 +149,36 @@ namespace Tests.UnitTests.FakeLoaderClasses
             var cache = ActivityImportCache.GetEmptyCache();
             SeedCache?.Invoke(cache);
             return cache;
+        }
+
+        /// <summary>Ids the fake database already holds as imported or ignored.</summary>
+        public HashSet<Guid> AlreadyProcessedIds { get; } = new HashSet<Guid>();
+
+        /// <summary>Optional: every lookup fails with this (as a faulted task), e.g. a dropped connection.</summary>
+        public Exception LookupFailure { get; set; }
+
+        /// <summary>The ids of every per-batch lookup, in call order.</summary>
+        public IReadOnlyList<Guid[]> Lookups
+        {
+            get { lock (_lock) { return _lookups.ToArray(); } }
+        }
+
+        public Task<ICollection<Guid>> FindAlreadyProcessedAsync(IReadOnlyList<Guid> eventIds)
+        {
+            lock (_lock)
+            {
+                _lookups.Add(new List<Guid>(eventIds).ToArray());
+                if (LookupFailure != null)
+                {
+                    return Task.FromException<ICollection<Guid>>(LookupFailure);
+                }
+                var found = new List<Guid>();
+                foreach (var id in eventIds)
+                {
+                    if (AlreadyProcessedIds.Contains(id)) found.Add(id);
+                }
+                return Task.FromResult<ICollection<Guid>>(found);
+            }
         }
     }
 

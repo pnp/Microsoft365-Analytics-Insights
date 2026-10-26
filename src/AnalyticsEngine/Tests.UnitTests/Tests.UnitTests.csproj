@@ -370,4 +370,14 @@
   <Target Name="TransformAppConfig" BeforeTargets="PrepareForBuild">
     <TransformXml Source="App.Template.config" Transform="App.$(Configuration).config" Destination="App.config" />
   </Target>
+  <ItemGroup>
+    <Compile Update="CopilotCostConnectionTests.cs" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- #769 installer/config preview toggle -->
+    <Compile Update="InstallTests\CopilotCostInstallerConfigTests.cs" />
+  </ItemGroup>
+  <ItemGroup>
+    <Compile Update="CopilotCostCollectorTests.cs" />
+  </ItemGroup>
 </Project>

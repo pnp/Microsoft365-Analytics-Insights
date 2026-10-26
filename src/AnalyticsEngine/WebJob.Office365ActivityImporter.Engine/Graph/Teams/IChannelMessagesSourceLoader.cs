@@ -17,8 +17,11 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
         /// not hand one back - in which case the caller must leave any previously stored token alone.
         /// </returns>
         /// <exception cref="ChannelMessagesReadException">
-        /// The user-delegated token was rejected. The caller treats this as "the cached token is bad",
-        /// deletes it and retries next cycle.
+        /// The channel couldn't be read. Its <see cref="ChannelMessagesReadException.Kind"/> says what that means:
+        /// <see cref="ChannelReadFailureKind.SkipChannel"/> - only this channel is unreadable with this token, so the crawl
+        /// skips it and carries on; <see cref="ChannelReadFailureKind.Transient"/> - stop this Team's crawl for this cycle
+        /// but keep its token; <see cref="ChannelReadFailureKind.TokenRejected"/> - the token can't read this Team, and the
+        /// caller deletes it. See <see cref="ChannelReadFailureRules"/>.
         /// </exception>
         Task<TeamChannelDeltaTokenInfo> LoadMessagesAndReactions(ChannelWithReactions channel, string teamId);
     }

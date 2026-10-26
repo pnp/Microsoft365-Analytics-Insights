@@ -18,8 +18,14 @@ namespace Web.AnalyticsWeb.Models
         [JsonProperty("name")]
         public string Name { get; set; }
 
+        /// <summary>
+        /// The table's row count. Long, because the fact tables (<c>audit_events</c>, <c>hits</c>) are not bounded by
+        /// tenant size. Most figures come from the sys.partitions catalog view rather than a <c>COUNT(*)</c> scan; see
+        /// <c>SystemStatusAPIController</c>. Null when the figure could not be counted just now: the figure is still
+        /// sent, so the page does not mistake it for an import that is switched off.
+        /// </summary>
         [JsonProperty("count")]
-        public int Count { get; set; }
+        public long? Count { get; set; }
 
         /// <summary>One short line saying where the number comes from, shown under the figure.</summary>
         [JsonProperty("hint")]
@@ -27,7 +33,7 @@ namespace Web.AnalyticsWeb.Models
 
         public NamedCountModel() { }
 
-        public NamedCountModel(string key, string name, int count, string hint = null)
+        public NamedCountModel(string key, string name, long? count, string hint = null)
         {
             Key = key;
             Name = name;

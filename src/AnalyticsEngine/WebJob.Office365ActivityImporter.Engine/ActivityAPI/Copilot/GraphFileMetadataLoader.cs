@@ -3,16 +3,90 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Graph;
 using Microsoft.Graph.Models;
 using Microsoft.Graph.Models.ODataErrors;
+using Microsoft.Kiota.Abstractions;
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Net;
+using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
 using WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot;
 
 namespace ActivityImporter.Engine.ActivityAPI.Copilot
 {
+    /// <summary>
+    /// A file or meeting lookup that Microsoft Graph failed transiently (throttling, a server error) rather than
+    /// answered. Distinct from a <c>null</c> result, which means the file or meeting genuinely can't be resolved,
+    /// so a caller can retry instead of saving the interaction as if it had nothing to enrich.
+    /// </summary>
+    public class CopilotEnrichmentTransientException : Exception
+    {
+        public CopilotEnrichmentTransientException(string message) : base(message)
+        {
+        }
+
+        public CopilotEnrichmentTransientException(string message, Exception innerException) : base(message, innerException)
+        {
+        }
+    }
+
+    /// <summary>
+    /// A durable-queue lookup that can never succeed however often it is retried (a meeting Graph returns without a
+    /// subject or creation time, a user Graph no longer knows, a file with no name or extension). The worker completes
+    /// the item and reports <see cref="ReasonCode"/>.
+    /// </summary>
+    public class CopilotEnrichmentTerminalException : Exception
+    {
+        public CopilotEnrichmentTerminalException(string reasonCode, string message, Exception innerException = null)
+            : base(message, innerException)
+        {
+            ReasonCode = reasonCode;
+        }
+
+        public string ReasonCode { get; }
+    }
+
+    /// <summary>A lookup ran out of its end-to-end time before it made its next Graph call.</summary>
+    internal sealed class CopilotLookupDeadlineException : Exception
+    {
+        public CopilotLookupDeadlineException() : base("The Copilot metadata lookup reached its end-to-end deadline.")
+        {
+        }
+    }
+
+    /// <summary>Counts of the file and meeting lookups made while the save held its SQL lock. Cumulative per loader.</summary>
+    public sealed class CopilotLookupStats
+    {
+        public long Lookups { get; set; }
+        public long CacheHits { get; set; }
+        public long Resolved { get; set; }
+        public long Unresolvable { get; set; }
+        public long Transient { get; set; }
+        public long MemoSkips { get; set; }
+        public long DeadlineHits { get; set; }
+        public long GraphCalls { get; set; }
+        public long ElapsedMs { get; set; }
+
+        public CopilotLookupStats Since(CopilotLookupStats earlier)
+        {
+            if (earlier == null) return this;
+            return new CopilotLookupStats
+            {
+                Lookups = Lookups - earlier.Lookups,
+                CacheHits = CacheHits - earlier.CacheHits,
+                Resolved = Resolved - earlier.Resolved,
+                Unresolvable = Unresolvable - earlier.Unresolvable,
+                Transient = Transient - earlier.Transient,
+                MemoSkips = MemoSkips - earlier.MemoSkips,
+                DeadlineHits = DeadlineHits - earlier.DeadlineHits,
+                GraphCalls = GraphCalls - earlier.GraphCalls,
+                ElapsedMs = ElapsedMs - earlier.ElapsedMs,
+            };
+        }
+    }
+
     /// <summary>
     /// Populates file metadata from Graph API
     /// </summary>
@@ -58,6 +132,80 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
 
         private const int MaxDocumentLibrariesToSearch = 50;
 
+        // Retrying a file lookup that Graph failed transiently. Only GetSpoFileInfo does: the prewarm calls it OUTSIDE
+        // the save lock. The save, inside the lock, calls GetSpoFileInfoSingleAttempt and never waits. The budget is
+        // this loader's, and the shared loader lives for the whole import run.
+
+        /// <summary>Tries per file lookup in <see cref="GetSpoFileInfo"/>, the first included.</summary>
+        internal const int TransientRetryMaxAttempts = 3;
+
+        /// <summary>Retries this loader may spend in its life (the run); after that a transient failure isn't retried.</summary>
+        internal const int TransientRetryBudgetPerRun = 50;
+
+        /// <summary>Back-off before retry n is n times this.</summary>
+        internal static readonly TimeSpan TransientRetryBaseDelay = TimeSpan.FromSeconds(2);
+
+        /// <summary>How a retry waits. Replaceable so tests don't sleep, and can see every wait.</summary>
+        internal Func<TimeSpan, Task> RetryDelay { get; set; } = Task.Delay;
+
+        private int _transientRetriesSpent;
+        private int _transientRetryBudgetSpentLogged;
+
+        /// <summary>Retries spent so far on file lookups that Graph failed transiently, out of <see cref="TransientRetryBudgetPerRun"/>.</summary>
+        public int TransientRetriesSpent => Volatile.Read(ref _transientRetriesSpent);
+
+        /// <summary>
+        /// End-to-end time for one lookup made inside the save lock. Such a lookup also runs with the SDK's retries off and
+        /// stops its fallback chain at the first throttling or server error, so its cost is bounded by this, not by up to
+        /// ~55 Graph calls each with its own retries and 100-second timeout.
+        /// </summary>
+        internal TimeSpan InLockLookupDeadline { get; set; } = TimeSpan.FromSeconds(20);
+
+        /// <summary>End-to-end time for one durable-queue item's lookup (the SDK's retries stay on).</summary>
+        internal TimeSpan WorkerLookupDeadline { get; set; } = TimeSpan.FromSeconds(90);
+
+        /// <summary>
+        /// How long a transient outcome stops in-lock lookups of the same file or meeting calling Graph again. The prewarm
+        /// that precedes each batch ignores it and tries afresh, so in practice it lasts until the next batch.
+        /// </summary>
+        internal static readonly TimeSpan TransientOutcomeMemoTtl = TimeSpan.FromMinutes(10);
+
+        /// <summary>Clock for deadlines and the transient memo. Replaceable so tests can move time.</summary>
+        internal Func<DateTime> UtcNow { get; set; } = () => DateTime.UtcNow;
+
+        private readonly ConcurrentDictionary<string, DateTime> _transientOutcomeUntil =
+            new ConcurrentDictionary<string, DateTime>(StringComparer.OrdinalIgnoreCase);
+
+        private long _inLockLookups, _inLockCacheHits, _inLockResolved, _inLockUnresolvable, _inLockTransient,
+            _inLockMemoSkips, _inLockDeadlineHits, _inLockGraphCalls, _inLockElapsedMs;
+
+        /// <summary>What the lookups made inside the save lock have cost so far. Take the difference across a batch.</summary>
+        public CopilotLookupStats InLockStats => new CopilotLookupStats
+        {
+            Lookups = Interlocked.Read(ref _inLockLookups),
+            CacheHits = Interlocked.Read(ref _inLockCacheHits),
+            Resolved = Interlocked.Read(ref _inLockResolved),
+            Unresolvable = Interlocked.Read(ref _inLockUnresolvable),
+            Transient = Interlocked.Read(ref _inLockTransient),
+            MemoSkips = Interlocked.Read(ref _inLockMemoSkips),
+            DeadlineHits = Interlocked.Read(ref _inLockDeadlineHits),
+            GraphCalls = Interlocked.Read(ref _inLockGraphCalls),
+            ElapsedMs = Interlocked.Read(ref _inLockElapsedMs),
+        };
+
+        /// <summary>Who is asking, which decides the retry policy, the deadline and whether the transient memo applies.</summary>
+        internal enum LookupMode
+        {
+            /// <summary>The prewarm (outside the lock) and legacy callers: SDK retries, no deadline, memo ignored.</summary>
+            Unbounded,
+
+            /// <summary>Inside the save lock: no SDK retries, <see cref="InLockLookupDeadline"/>, memo honoured.</summary>
+            InLock,
+
+            /// <summary>The durable-queue worker: SDK retries, <see cref="WorkerLookupDeadline"/>, memo ignored.</summary>
+            Worker,
+        }
+
         public GraphFileMetadataLoader(GraphServiceClient graphServiceClient, ILogger logger)
             : this(new GraphSpoClient(graphServiceClient), logger)
         {
@@ -71,31 +219,83 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
             _userGraphCache = new UserGraphCache(spoGraphClient);
         }
 
-        public async Task<MeetingMetadata> GetMeetingInfo(string meetingId, string userGuid)
+        public Task<MeetingMetadata> GetMeetingInfo(string meetingId, string userGuid)
+            => GetMeetingInfoAsync(meetingId, userGuid, requireDefiniteResult: false, LookupMode.Unbounded);
+
+        /// <summary>
+        /// The meeting lookup for a caller holding the save lock: once, with the SDK's retries off, within
+        /// <see cref="InLockLookupDeadline"/>, and not at all while a recent transient failure for the same meeting is
+        /// remembered. A transient failure throws <see cref="CopilotEnrichmentTransientException"/>.
+        /// </summary>
+        public Task<MeetingMetadata> GetMeetingInfoSingleAttempt(string meetingId, string userGuid)
+            => GetMeetingInfoAsync(meetingId, userGuid, requireDefiniteResult: false, LookupMode.InLock);
+
+        /// <summary>
+        /// The durable worker's lookup. With <paramref name="requireDefiniteResult"/>, a meeting Graph returns without a
+        /// subject or creation time throws <see cref="CopilotEnrichmentTerminalException"/>: retrying cannot change it.
+        /// </summary>
+        internal Task<MeetingMetadata> GetMeetingInfo(string meetingId, string userGuid, bool requireDefiniteResult)
+            => GetMeetingInfoAsync(meetingId, userGuid, requireDefiniteResult, requireDefiniteResult ? LookupMode.Worker : LookupMode.Unbounded);
+
+        private async Task<MeetingMetadata> GetMeetingInfoAsync(string meetingId, string userGuid, bool requireDefiniteResult, LookupMode mode)
         {
             // Requires OnlineMeetings.Read.All and https://learn.microsoft.com/en-us/graph/cloud-communication-online-meeting-application-access-policy#configure-application-access-policy
+            var inLock = mode == LookupMode.InLock;
+            if (inLock) Interlocked.Increment(ref _inLockLookups);
 
             // A tenant that hasn't granted the application access policy rejects *every* online-meeting read for
             // that user, so once we've seen it don't keep calling Graph for the same user this run.
             if (userGuid != null && _usersWithoutMeetingAccessPolicy.ContainsKey(userGuid))
             {
                 _logger.LogDebug("Skipping meeting lookup for meetingId {meetingId}: no Teams application access policy for this app on the user", meetingId);
+                if (inLock) Interlocked.Increment(ref _inLockUnresolvable);
                 return null;
             }
 
             if (meetingId != null && _unresolvableMeetingIds.ContainsKey(meetingId))
             {
                 _logger.LogDebug("Skipping meeting lookup for meetingId {meetingId}: it already failed with an expected Graph response this run", meetingId);
+                if (inLock) Interlocked.Increment(ref _inLockUnresolvable);
                 return null;
             }
 
+            var memoKey = "meeting|" + meetingId;
+            if (inLock && meetingId != null && IsTransientOutcomeRemembered(memoKey))
+            {
+                Interlocked.Increment(ref _inLockMemoSkips);
+                Interlocked.Increment(ref _inLockTransient);
+                throw new CopilotEnrichmentTransientException("Microsoft Graph failed transiently reading this online meeting moments ago; not asking again inside the save lock.");
+            }
+
+            var sw = Stopwatch.StartNew();
+            var scope = OpenScope(mode);
             try
             {
-                var meeting = await _spoGraphClient.GetOnlineMeetingAsync(userGuid, meetingId);
+                scope.BeforeGraphCall();
+                var meeting = await scope.Client.GetOnlineMeetingAsync(userGuid, meetingId);
 
-                return new MeetingMetadata(meeting);
+                MeetingMetadata metadata;
+                if (requireDefiniteResult)
+                {
+                    try
+                    {
+                        metadata = new MeetingMetadata(meeting);
+                    }
+                    catch (ArgumentException ex)
+                    {
+                        throw new CopilotEnrichmentTerminalException("meeting-metadata-incomplete",
+                            "Microsoft Graph returned the online meeting without a subject or creation time.", ex);
+                    }
+                }
+                else
+                {
+                    metadata = new MeetingMetadata(meeting);
+                }
+                ForgetTransientOutcome(memoKey);
+                if (inLock) Interlocked.Increment(ref _inLockResolved);
+                return metadata;
             }
-            catch (ODataError ex) when (IsMissingApplicationAccessPolicy(ex))
+            catch (ApiException ex) when (IsMissingApplicationAccessPolicy(ex))
             {
                 // Expected tenant-configuration condition rather than a product fault, and it hits every
                 // meeting-context Copilot event. Log the actionable explanation once per import run (without the
@@ -119,9 +319,10 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
                     _logger.LogDebug("Skipping meeting info for meetingId {meetingId}: no Teams application access policy for this app on the user", meetingId);
                 }
 
+                if (inLock) Interlocked.Increment(ref _inLockUnresolvable);
                 return null;
             }
-            catch (ODataError ex) when (IsMeetingForbidden(ex))
+            catch (ApiException ex) when (IsMeetingForbidden(ex))
             {
                 if (meetingId != null)
                 {
@@ -141,9 +342,10 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
                     _logger.LogDebug("Skipping meeting info for meetingId {meetingId}: Graph returned HTTP 403 for this online-meeting lookup", meetingId);
                 }
 
+                if (inLock) Interlocked.Increment(ref _inLockUnresolvable);
                 return null;
             }
-            catch (ODataError ex) when (IsMeetingNotFound(ex))
+            catch (ApiException ex) when (IsMeetingNotFound(ex))
             {
                 if (meetingId != null)
                 {
@@ -162,12 +364,49 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
                     _logger.LogDebug("Skipping meeting info for meetingId {meetingId}: Graph returned HTTP 404 for this online-meeting lookup", meetingId);
                 }
 
+                if (inLock) Interlocked.Increment(ref _inLockUnresolvable);
                 return null;
             }
-            catch (ODataError ex)
+            catch (ApiException ex) when (IsTransientFileResolutionFailure(ex))
+            {
+                // Throttling or a server error that outlasted the Graph SDK's own retries (inside the lock there are none).
+                // Not "this meeting has no details": the save counts the interaction it has to save without them.
+                RememberTransientOutcome(memoKey);
+                if (inLock) Interlocked.Increment(ref _inLockTransient);
+                throw new CopilotEnrichmentTransientException(
+                    $"Microsoft Graph failed transiently reading an online meeting (HTTP {ex.ResponseStatusCode}).", ex);
+            }
+            catch (Exception ex) when (IsDeadlineReached(scope, ex))
+            {
+                RememberTransientOutcome(memoKey);
+                if (inLock)
+                {
+                    Interlocked.Increment(ref _inLockTransient);
+                    Interlocked.Increment(ref _inLockDeadlineHits);
+                }
+                throw new CopilotEnrichmentTransientException("Reading an online meeting reached its end-to-end deadline.", ex);
+            }
+            catch (Exception ex) when (IsRetryableGraphFailure(ex))
+            {
+                RememberTransientOutcome(memoKey);
+                if (inLock) Interlocked.Increment(ref _inLockTransient);
+                throw;
+            }
+            catch (ApiException ex)
             {
                 _logger.LogWarning(ex, "Error getting meeting info for meetingId {meetingId}", meetingId);
+                if (requireDefiniteResult) throw;
+                if (inLock) Interlocked.Increment(ref _inLockUnresolvable);
                 return null;
+            }
+            finally
+            {
+                if (inLock)
+                {
+                    Interlocked.Add(ref _inLockGraphCalls, scope.GraphCalls);
+                    Interlocked.Add(ref _inLockElapsedMs, sw.ElapsedMilliseconds);
+                }
+                scope.Dispose();
             }
         }
 
@@ -175,7 +414,7 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
         /// Is this the "No application access policy found for this app ... on the user" 403 that Graph returns when
         /// the tenant hasn't run New-CsApplicationAccessPolicy / Grant-CsApplicationAccessPolicy for the importer app?
         /// </summary>
-        internal static bool IsMissingApplicationAccessPolicy(ODataError ex)
+        internal static bool IsMissingApplicationAccessPolicy(ApiException ex)
         {
             if (ex == null) return false;
 
@@ -183,17 +422,58 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
             // message text is the reliable discriminator; just make sure we never swallow a non-forbidden error.
             if (ex.ResponseStatusCode != (int)HttpStatusCode.Forbidden && ex.ResponseStatusCode != 0) return false;
 
-            var message = ex.Error?.Message ?? ex.Message ?? string.Empty;
+            var message = (ex as ODataError)?.Error?.Message ?? ex.Message ?? string.Empty;
             return message.IndexOf("application access policy", StringComparison.OrdinalIgnoreCase) >= 0;
         }
 
-        internal static bool IsMeetingForbidden(ODataError ex)
+        internal static bool IsMeetingForbidden(ApiException ex)
             => ex?.ResponseStatusCode == (int)HttpStatusCode.Forbidden && !IsMissingApplicationAccessPolicy(ex);
 
-        internal static bool IsMeetingNotFound(ODataError ex)
+        internal static bool IsMeetingNotFound(ApiException ex)
             => ex?.ResponseStatusCode == (int)HttpStatusCode.NotFound;
 
+        /// <summary>
+        /// Resolves a Copilot file context, retrying a lookup that Graph failed transiently (throttling, a server error or
+        /// a dropped connection) with a short back-off, within the run's <see cref="TransientRetryBudgetPerRun"/>. The
+        /// prewarm calls this, outside the save lock, so a lookup that recovers is cached before the save needs it.
+        /// Gives up with <see cref="CopilotEnrichmentTransientException"/>.
+        /// </summary>
         public async Task<SpoDocumentFileInfo> GetSpoFileInfo(string copilotDocContextId, string eventUpn)
+        {
+            for (var attempt = 1; ; attempt++)
+            {
+                try
+                {
+                    return await LookupFileAsync(copilotDocContextId, requireDefiniteResult: false, LookupMode.Unbounded);
+                }
+                catch (Exception ex) when (attempt < TransientRetryMaxAttempts && IsRetryableGraphFailure(ex))
+                {
+                    if (!TryTakeTransientRetry())
+                    {
+                        throw;
+                    }
+                }
+                await RetryDelay(TimeSpan.FromTicks(TransientRetryBaseDelay.Ticks * attempt));
+            }
+        }
+
+        /// <summary>
+        /// The same lookup for a caller holding the save lock: made once, with the SDK's retries off, within
+        /// <see cref="InLockLookupDeadline"/>, stopping at the first throttling or server error, and not made at all while a
+        /// recent transient failure for the same context is remembered. A transient failure throws
+        /// <see cref="CopilotEnrichmentTransientException"/> and is not cached as unresolvable.
+        /// </summary>
+        public Task<SpoDocumentFileInfo> GetSpoFileInfoSingleAttempt(string copilotDocContextId, string eventUpn)
+            => LookupFileAsync(copilotDocContextId, requireDefiniteResult: false, LookupMode.InLock);
+
+        /// <summary>
+        /// With <paramref name="requireDefiniteResult"/>, the durable worker's lookup: the SDK's retries stay on, within
+        /// <see cref="WorkerLookupDeadline"/>, and an unexpected Graph error throws rather than reading as "no file".
+        /// </summary>
+        internal Task<SpoDocumentFileInfo> GetSpoFileInfoSingleAttempt(string copilotDocContextId, string eventUpn, bool requireDefiniteResult)
+            => LookupFileAsync(copilotDocContextId, requireDefiniteResult, requireDefiniteResult ? LookupMode.Worker : LookupMode.InLock);
+
+        private async Task<SpoDocumentFileInfo> LookupFileAsync(string copilotDocContextId, bool requireDefiniteResult, LookupMode mode)
         {
             // Skip anything that can't be a SharePoint/OneDrive file (securitycopilot.microsoft.com, local
             // Outlook attachment paths, other hosts) before doing any Graph work - these fail on every import.
@@ -203,6 +483,9 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
                 return null;
             }
 
+            var inLock = mode == LookupMode.InLock;
+            if (inLock) Interlocked.Increment(ref _inLockLookups);
+
             // File resolution is based only on the context URL: OneDrive URLs are resolved through the owner's
             // personal site named in the URL, not through the Copilot user's drive.
             var cacheKey = FileCacheKey(copilotDocContextId);
@@ -210,6 +493,7 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
             // Already resolved this context earlier in the run? Return the cached result (no Graph call).
             if (_fileInfoByContext.TryGetValue(cacheKey, out var cached))
             {
+                if (inLock) Interlocked.Increment(ref _inLockCacheHits);
                 return cached;
             }
 
@@ -217,78 +501,221 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
             if (_unresolvableContextIds.ContainsKey(cacheKey))
             {
                 _logger.LogDebug("Copilot context '{ctx}' was already unresolvable this run; skipping Graph lookup", copilotDocContextId);
+                if (inLock) Interlocked.Increment(ref _inLockUnresolvable);
                 return null;
             }
 
-            var result = await ResolveSpoFileInfoAsync(copilotDocContextId);
+            // The prewarm (or an earlier event in this batch) has just seen Graph fail transiently for this context. Asking
+            // again inside the lock would only repeat it while every other save waits, so the caller enqueues it instead.
+            var memoKey = "file|" + cacheKey;
+            if (inLock && IsTransientOutcomeRemembered(memoKey))
+            {
+                Interlocked.Increment(ref _inLockMemoSkips);
+                Interlocked.Increment(ref _inLockTransient);
+                throw new CopilotEnrichmentTransientException("Microsoft Graph failed transiently resolving this Copilot file context moments ago; not asking again inside the save lock.");
+            }
+
+            var sw = Stopwatch.StartNew();
+            FileResolutionResult result;
+            var scope = OpenScope(mode);
+            try
+            {
+                result = await ResolveSpoFileInfoAsync(copilotDocContextId, scope);
+            }
+            catch (Exception ex) when (IsDeadlineReached(scope, ex))
+            {
+                RememberTransientOutcome(memoKey);
+                if (inLock)
+                {
+                    Interlocked.Increment(ref _inLockTransient);
+                    Interlocked.Increment(ref _inLockDeadlineHits);
+                }
+                throw new CopilotEnrichmentTransientException("Resolving a Copilot file context reached its end-to-end deadline.", ex);
+            }
+            catch (Exception ex) when (IsRetryableGraphFailure(ex))
+            {
+                RememberTransientOutcome(memoKey);
+                if (inLock) Interlocked.Increment(ref _inLockTransient);
+                throw;
+            }
+            finally
+            {
+                if (inLock)
+                {
+                    Interlocked.Add(ref _inLockGraphCalls, scope.GraphCalls);
+                    Interlocked.Add(ref _inLockElapsedMs, sw.ElapsedMilliseconds);
+                }
+                scope.Dispose();
+            }
+
             if (result.FileInfo == null)
             {
                 if (result.CacheAsUnresolvable)
                 {
                     _unresolvableContextIds.TryAdd(cacheKey, 0);
+                    ForgetTransientOutcome(memoKey);
+                    if (inLock) Interlocked.Increment(ref _inLockUnresolvable);
+                }
+                else if (result.Failure == ResolutionFailure.Transient)
+                {
+                    // Throttling or a server error rather than an answer, so not "no such file": GetSpoFileInfo retries
+                    // it (outside the save lock), and the save counts the interaction if it goes without its file.
+                    RememberTransientOutcome(memoKey);
+                    if (inLock) Interlocked.Increment(ref _inLockTransient);
+                    throw new CopilotEnrichmentTransientException("Microsoft Graph failed transiently resolving a Copilot file context.");
+                }
+                else if (requireDefiniteResult && result.Failure == ResolutionFailure.Unexpected)
+                {
+                    throw new InvalidOperationException("Microsoft Graph did not give a definite file-resolution result; durable enrichment must be retried.");
+                }
+                else if (inLock)
+                {
+                    // An unexpected Graph error, already logged with its exception: not cached, so a later batch tries
+                    // again, but not retried now - waiting a few seconds doesn't change a 400.
+                    Interlocked.Increment(ref _inLockUnresolvable);
                 }
             }
             else
             {
                 _fileInfoByContext.TryAdd(cacheKey, result.FileInfo);
+                ForgetTransientOutcome(memoKey);
+                if (inLock) Interlocked.Increment(ref _inLockResolved);
             }
             return result.FileInfo;
+        }
+
+        private bool IsTransientOutcomeRemembered(string memoKey)
+        {
+            if (!_transientOutcomeUntil.TryGetValue(memoKey, out var until)) return false;
+            if (UtcNow() < until) return true;
+            ((ICollection<KeyValuePair<string, DateTime>>)_transientOutcomeUntil).Remove(new KeyValuePair<string, DateTime>(memoKey, until));
+            return false;
+        }
+
+        private void RememberTransientOutcome(string memoKey) => _transientOutcomeUntil[memoKey] = UtcNow() + TransientOutcomeMemoTtl;
+
+        private void ForgetTransientOutcome(string memoKey) => _transientOutcomeUntil.TryRemove(memoKey, out _);
+
+        private LookupScope OpenScope(LookupMode mode)
+        {
+            switch (mode)
+            {
+                case LookupMode.InLock: return new LookupScope(_spoGraphClient, InLockLookupDeadline, disableSdkRetries: true, UtcNow);
+                case LookupMode.Worker: return new LookupScope(_spoGraphClient, WorkerLookupDeadline, disableSdkRetries: false, UtcNow);
+                default: return new LookupScope(_spoGraphClient, null, disableSdkRetries: false, UtcNow);
+            }
+        }
+
+        private static bool IsDeadlineReached(LookupScope scope, Exception ex)
+            => ex is CopilotLookupDeadlineException || (ex is OperationCanceledException && scope.DeadlineReached);
+
+        /// <summary>
+        /// One lookup's Graph client and budget. With a deadline, every request carries a token cancelled at it, so a slow
+        /// request ends there too, and no further call starts once it has passed.
+        /// </summary>
+        private sealed class LookupScope : IDisposable
+        {
+            private readonly CancellationTokenSource _cts;
+            private readonly Func<DateTime> _utcNow;
+            private readonly DateTime? _deadlineUtc;
+
+            public LookupScope(ISpoGraphClient client, TimeSpan? limit, bool disableSdkRetries, Func<DateTime> utcNow)
+            {
+                _utcNow = utcNow;
+                if (limit == null)
+                {
+                    Client = client;
+                    return;
+                }
+                _deadlineUtc = utcNow() + limit.Value;
+                _cts = new CancellationTokenSource(limit.Value);
+                Client = (client as IBoundableSpoGraphClient)?.WithRequestPolicy(disableSdkRetries, _cts.Token) ?? client;
+            }
+
+            public ISpoGraphClient Client { get; }
+
+            public bool IsBounded => _deadlineUtc != null;
+
+            /// <summary>Graph calls this lookup made (a scope is one sequential lookup).</summary>
+            public int GraphCalls { get; private set; }
+
+            public bool DeadlineReached => _cts?.IsCancellationRequested == true || (_deadlineUtc != null && _utcNow() >= _deadlineUtc.Value);
+
+            public void BeforeGraphCall()
+            {
+                if (DeadlineReached) throw new CopilotLookupDeadlineException();
+                GraphCalls++;
+            }
+
+            /// <summary>The client for the next Graph call, once the deadline has been checked and the call counted.</summary>
+            public ISpoGraphClient Next()
+            {
+                BeforeGraphCall();
+                return Client;
+            }
+
+            public void Dispose() => _cts?.Dispose();
         }
 
         private static string FileCacheKey(string copilotDocContextId) => copilotDocContextId;
 
         // Example: https://contoso-my.sharepoint.com/personal/alex_contoso_com/_layouts/15/Doc.aspx?sourcedoc=%7B00000000-0000-0000-0000-000000000000%7D&file=Presentation.pptx&action=edit&mobileredirect=true
-        private async Task<FileResolutionResult> ResolveSpoFileInfoAsync(string copilotDocContextId)
+        // Stops at the first transient (429/5xx) outcome: every later fallback would hit the same throttled tenant.
+        private async Task<FileResolutionResult> ResolveSpoFileInfoAsync(string copilotDocContextId, LookupScope scope)
         {
             var siteUrl = StringUtils.GetSiteUrl(copilotDocContextId);
             if (siteUrl == null) return FileResolutionResult.Unresolvable;
 
-            var siteResult = await GetSiteFromSiteUrl(siteUrl);
+            var siteResult = await GetSiteFromSiteUrl(siteUrl, scope);
             if (siteResult.ShouldStop)
             {
-                return FileResolutionResult.FromFailure(siteResult.CacheAsUnresolvable);
+                return FileResolutionResult.FromFailure(siteResult.Failure);
             }
 
             var site = siteResult.Site;
             var driveItemId = StringUtils.GetDriveItemId(copilotDocContextId);
             if (driveItemId == null)
             {
-                return await ResolveDriveItemByUrlAsync(copilotDocContextId, site);
+                return await ResolveDriveItemByUrlAsync(copilotDocContextId, site, scope);
             }
 
             var spSiteId = site.Id;
-            var defaultDriveResult = await GetSpoInfoFromSiteUrl(siteUrl);
-            var sawTransientFailure = defaultDriveResult.ShouldStop && !defaultDriveResult.CacheAsUnresolvable;
+            var defaultDriveResult = await GetSpoInfoFromSiteUrl(siteUrl, scope);
+            if (defaultDriveResult.Failure == ResolutionFailure.Transient)
+            {
+                return FileResolutionResult.TransientFailure;
+            }
+            var failure = defaultDriveResult.ShouldStop ? defaultDriveResult.Failure : ResolutionFailure.Unresolvable;
 
             if (defaultDriveResult.Drive != null)
             {
                 var defaultListId = defaultDriveResult.Drive.SharePointIds?.ListId;
                 if (!string.IsNullOrEmpty(defaultListId))
                 {
-                    var defaultListResult = await TryGetListItemByIdAsync(spSiteId, defaultListId, driveItemId, site, copilotDocContextId);
-                    if (defaultListResult.FileInfo != null)
+                    var defaultListResult = await TryGetListItemByIdAsync(spSiteId, defaultListId, driveItemId, site, copilotDocContextId, scope);
+                    if (defaultListResult.FileInfo != null || defaultListResult.Failure == ResolutionFailure.Transient)
                     {
                         return defaultListResult;
                     }
-                    sawTransientFailure |= !defaultListResult.CacheAsUnresolvable;
+                    failure = Worst(failure, defaultListResult.Failure);
                 }
             }
 
-            var sharesResult = await ResolveDriveItemByUrlAsync(copilotDocContextId, site);
-            if (sharesResult.FileInfo != null)
+            var sharesResult = await ResolveDriveItemByUrlAsync(copilotDocContextId, site, scope);
+            if (sharesResult.FileInfo != null || sharesResult.Failure == ResolutionFailure.Transient)
             {
                 return sharesResult;
             }
-            sawTransientFailure |= !sharesResult.CacheAsUnresolvable;
+            failure = Worst(failure, sharesResult.Failure);
 
-            var librarySearchResult = await ResolveDriveItemFromSiteLibrariesAsync(spSiteId, defaultDriveResult.Drive?.SharePointIds?.ListId, driveItemId, site, copilotDocContextId);
+            var librarySearchResult = await ResolveDriveItemFromSiteLibrariesAsync(spSiteId, defaultDriveResult.Drive?.SharePointIds?.ListId, driveItemId, site, copilotDocContextId, scope);
             if (librarySearchResult.FileInfo != null)
             {
                 return librarySearchResult;
             }
-            sawTransientFailure |= !librarySearchResult.CacheAsUnresolvable;
+            failure = Worst(failure, librarySearchResult.Failure);
 
-            return FileResolutionResult.FromFailure(!sawTransientFailure);
+            return FileResolutionResult.FromFailure(failure);
         }
 
         public async Task<string> GetUserIdFromUpn(string userPrincipalName)
@@ -297,75 +724,111 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
             return user.Id ?? throw new Exception($"No user ID found on user in Graph by upn {userPrincipalName}");
         }
 
-        private async Task<FileResolutionResult> ResolveDriveItemByUrlAsync(string copilotDocContextId, Site site)
+        /// <summary>
+        /// The durable worker's user lookup, within <see cref="WorkerLookupDeadline"/>. A user Graph no longer knows (404)
+        /// throws <see cref="CopilotEnrichmentTerminalException"/>: the meeting id needs that user's object id, so retrying
+        /// cannot succeed.
+        /// </summary>
+        internal async Task<string> GetUserIdForDurableRetry(string userPrincipalName)
+        {
+            if (_userGraphCache.TryGetCached(userPrincipalName, out var cachedUser) && cachedUser.Id != null)
+            {
+                return cachedUser.Id;
+            }
+
+            var scope = OpenScope(LookupMode.Worker);
+            try
+            {
+                var user = await scope.Next().GetUserAsync(userPrincipalName);
+                if (user?.Id == null)
+                {
+                    throw new CopilotEnrichmentTerminalException("user-not-found", "Microsoft Graph returned no object id for the retained user.");
+                }
+                return _userGraphCache.AddOrGetCached(userPrincipalName, user).Id;
+            }
+            catch (ApiException ex) when (ex.ResponseStatusCode == (int)HttpStatusCode.NotFound)
+            {
+                throw new CopilotEnrichmentTerminalException("user-not-found", "Microsoft Graph no longer knows the retained user (HTTP 404).", ex);
+            }
+            catch (Exception ex) when (IsDeadlineReached(scope, ex))
+            {
+                throw new CopilotEnrichmentTransientException("Reading the retained user reached its end-to-end deadline.", ex);
+            }
+            finally
+            {
+                scope.Dispose();
+            }
+        }
+
+        private async Task<FileResolutionResult> ResolveDriveItemByUrlAsync(string copilotDocContextId, Site site, LookupScope scope)
         {
             // Resolve the URL directly via /shares without first loading a drive. This is one Graph call and
             // works for plain SharePoint/OneDrive file URLs, including files in another user's OneDrive.
             try
             {
-                var driveItem = await _spoGraphClient.GetDriveItemByUrlAsync(copilotDocContextId);
+                var driveItem = await scope.Next().GetDriveItemByUrlAsync(copilotDocContextId);
                 if (driveItem != null)
                 {
                     return FileResolutionResult.Resolved(new SpoDocumentFileInfo(driveItem, site));
                 }
             }
-            catch (ODataError ex) when (IsExpectedFileResolutionFailure(ex))
+            catch (ApiException ex) when (IsExpectedFileResolutionFailure(ex))
             {
                 _logger.LogDebug("Graph could not resolve Copilot context '{ctx}' through /shares (status {status}, code {code}); trying any remaining bounded fallbacks",
-                    copilotDocContextId, ex.ResponseStatusCode, ex.Error?.Code);
+                    copilotDocContextId, ex.ResponseStatusCode, GraphErrorCode(ex));
                 return FileResolutionResult.Unresolvable;
             }
-            catch (ODataError ex) when (IsTransientFileResolutionFailure(ex))
+            catch (ApiException ex) when (IsTransientFileResolutionFailure(ex))
             {
                 _logger.LogWarning("Transient Graph error resolving Copilot context '{ctx}' through /shares (status {status}, code {code}); it will not be cached as unresolvable",
-                    copilotDocContextId, ex.ResponseStatusCode, ex.Error?.Code);
+                    copilotDocContextId, ex.ResponseStatusCode, GraphErrorCode(ex));
                 return FileResolutionResult.TransientFailure;
             }
-            catch (ODataError ex)
+            catch (ApiException ex)
             {
                 _logger.LogWarning(ex, "Unexpected error resolving driveItem for copilotDocContextId {copilotDocContextId}", copilotDocContextId);
-                return FileResolutionResult.TransientFailure;
+                return FileResolutionResult.UnexpectedFailure;
             }
 
             _logger.LogDebug("Graph /shares returned no driveItem for Copilot context '{ctx}'", copilotDocContextId);
             return FileResolutionResult.Unresolvable;
         }
 
-        private async Task<FileResolutionResult> TryGetListItemByIdAsync(string spSiteId, string spListId, string driveItemId, Site site, string copilotDocContextId)
+        private async Task<FileResolutionResult> TryGetListItemByIdAsync(string spSiteId, string spListId, string driveItemId, Site site, string copilotDocContextId, LookupScope scope)
         {
             try
             {
-                var item = await _spoGraphClient.GetListItemByIdAsync(spSiteId, spListId, driveItemId);
+                var item = await scope.Next().GetListItemByIdAsync(spSiteId, spListId, driveItemId);
                 return FileResolutionResult.Resolved(new SpoDocumentFileInfo(item, site));
             }
-            catch (ODataError ex) when (IsExpectedFileResolutionFailure(ex))
+            catch (ApiException ex) when (IsExpectedFileResolutionFailure(ex))
             {
                 _logger.LogDebug("Graph could not resolve Copilot context '{ctx}' as list item {itemId} in list {listId} (status {status}, code {code})",
-                    copilotDocContextId, driveItemId, spListId, ex.ResponseStatusCode, ex.Error?.Code);
+                    copilotDocContextId, driveItemId, spListId, ex.ResponseStatusCode, GraphErrorCode(ex));
                 return FileResolutionResult.Unresolvable;
             }
-            catch (ODataError ex) when (IsTransientFileResolutionFailure(ex))
+            catch (ApiException ex) when (IsTransientFileResolutionFailure(ex))
             {
                 _logger.LogWarning("Transient Graph error resolving Copilot context '{ctx}' as list item {itemId} in list {listId} (status {status}, code {code}); it will not be cached as unresolvable",
-                    copilotDocContextId, driveItemId, spListId, ex.ResponseStatusCode, ex.Error?.Code);
+                    copilotDocContextId, driveItemId, spListId, ex.ResponseStatusCode, GraphErrorCode(ex));
                 return FileResolutionResult.TransientFailure;
             }
-            catch (ODataError ex)
+            catch (ApiException ex)
             {
                 _logger.LogWarning(ex, "Unexpected error getting file info for copilotDocContextId {copilotDocContextId}", copilotDocContextId);
-                return FileResolutionResult.TransientFailure;
+                return FileResolutionResult.UnexpectedFailure;
             }
         }
 
-        private async Task<FileResolutionResult> ResolveDriveItemFromSiteLibrariesAsync(string spSiteId, string defaultListId, string driveItemId, Site site, string copilotDocContextId)
+        private async Task<FileResolutionResult> ResolveDriveItemFromSiteLibrariesAsync(string spSiteId, string defaultListId, string driveItemId, Site site, string copilotDocContextId, LookupScope scope)
         {
-            var drivesResult = await GetDocumentLibraryDrivesAsync(spSiteId);
+            var drivesResult = await GetDocumentLibraryDrivesAsync(spSiteId, scope);
             if (drivesResult.ShouldStop)
             {
-                return FileResolutionResult.FromFailure(drivesResult.CacheAsUnresolvable);
+                return FileResolutionResult.FromFailure(drivesResult.Failure);
             }
 
-            var sawTransientFailure = false;
+            var failure = ResolutionFailure.Unresolvable;
             foreach (var drive in drivesResult.Drives)
             {
                 var listId = drive.SharePointIds?.ListId;
@@ -374,18 +837,18 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
                     continue;
                 }
 
-                var result = await TryGetListItemByIdAsync(spSiteId, listId, driveItemId, site, copilotDocContextId);
-                if (result.FileInfo != null)
+                var result = await TryGetListItemByIdAsync(spSiteId, listId, driveItemId, site, copilotDocContextId, scope);
+                if (result.FileInfo != null || result.Failure == ResolutionFailure.Transient)
                 {
                     return result;
                 }
-                sawTransientFailure |= !result.CacheAsUnresolvable;
+                failure = Worst(failure, result.Failure);
             }
 
-            return FileResolutionResult.FromFailure(!sawTransientFailure);
+            return FileResolutionResult.FromFailure(failure);
         }
 
-        private async Task<DocumentLibraryDrivesResult> GetDocumentLibraryDrivesAsync(string spSiteId)
+        private async Task<DocumentLibraryDrivesResult> GetDocumentLibraryDrivesAsync(string spSiteId, LookupScope scope)
         {
             if (_documentLibraryDrivesBySite.TryGetValue(spSiteId, out var cached))
             {
@@ -394,31 +857,31 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
 
             try
             {
-                var drives = await _spoGraphClient.GetSiteDocumentLibraryDrivesAsync(spSiteId, MaxDocumentLibrariesToSearch);
+                var drives = await scope.Next().GetSiteDocumentLibraryDrivesAsync(spSiteId, MaxDocumentLibrariesToSearch);
                 _documentLibraryDrivesBySite.TryAdd(spSiteId, drives);
                 return DocumentLibraryDrivesResult.Found(drives);
             }
-            catch (ODataError ex) when (IsExpectedFileResolutionFailure(ex))
+            catch (ApiException ex) when (IsExpectedFileResolutionFailure(ex))
             {
                 _logger.LogDebug("Graph could not enumerate document libraries for site {siteId} (status {status}, code {code})",
-                    spSiteId, ex.ResponseStatusCode, ex.Error?.Code);
+                    spSiteId, ex.ResponseStatusCode, GraphErrorCode(ex));
                 _documentLibraryDrivesBySite.TryAdd(spSiteId, Array.Empty<Drive>());
                 return DocumentLibraryDrivesResult.Found(Array.Empty<Drive>());
             }
-            catch (ODataError ex) when (IsTransientFileResolutionFailure(ex))
+            catch (ApiException ex) when (IsTransientFileResolutionFailure(ex))
             {
                 _logger.LogWarning("Transient Graph error enumerating document libraries for site {siteId} (status {status}, code {code}); contexts depending on this fallback will not be cached as unresolvable",
-                    spSiteId, ex.ResponseStatusCode, ex.Error?.Code);
+                    spSiteId, ex.ResponseStatusCode, GraphErrorCode(ex));
                 return DocumentLibraryDrivesResult.TransientFailure;
             }
-            catch (ODataError ex)
+            catch (ApiException ex)
             {
                 _logger.LogWarning(ex, "Unexpected error enumerating document libraries for site {siteId}", spSiteId);
-                return DocumentLibraryDrivesResult.TransientFailure;
+                return DocumentLibraryDrivesResult.UnexpectedFailure;
             }
         }
 
-        private async Task<SiteResolutionResult> GetSiteFromSiteUrl(string siteUrl)
+        private async Task<SiteResolutionResult> GetSiteFromSiteUrl(string siteUrl, LookupScope scope)
         {
             var siteAddress = StringUtils.GetHostAndSiteRelativeUrl(siteUrl);
             if (siteAddress == null)
@@ -429,29 +892,45 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
 
             try
             {
-                var site = await _siteGraphCache.GetResource(siteAddress);
+                Site site;
+                if (_siteGraphCache.TryGetCached(siteAddress, out var cachedSite))
+                {
+                    site = cachedSite;
+                }
+                else if (scope.IsBounded)
+                {
+                    // The cache's own loader uses the unbounded client, so a bounded lookup loads the site itself.
+                    site = await scope.Next().GetSiteAsync(siteAddress);
+                    if (site == null) return SiteResolutionResult.Unresolvable;
+                    site = _siteGraphCache.AddOrGetCached(siteAddress, site);
+                }
+                else
+                {
+                    scope.BeforeGraphCall();
+                    site = await _siteGraphCache.GetResource(siteAddress);
+                }
                 return SiteResolutionResult.Found(site);
             }
-            catch (ODataError ex) when (IsExpectedFileResolutionFailure(ex))
+            catch (ApiException ex) when (IsExpectedFileResolutionFailure(ex))
             {
                 _logger.LogDebug("Graph could not resolve SharePoint site {siteUrl} (status {status}, code {code})",
-                    siteUrl, ex.ResponseStatusCode, ex.Error?.Code);
+                    siteUrl, ex.ResponseStatusCode, GraphErrorCode(ex));
                 return SiteResolutionResult.Unresolvable;
             }
-            catch (ODataError ex) when (IsTransientFileResolutionFailure(ex))
+            catch (ApiException ex) when (IsTransientFileResolutionFailure(ex))
             {
                 _logger.LogWarning("Transient Graph error resolving SharePoint site {siteUrl} (status {status}, code {code}); context will not be cached as unresolvable",
-                    siteUrl, ex.ResponseStatusCode, ex.Error?.Code);
+                    siteUrl, ex.ResponseStatusCode, GraphErrorCode(ex));
                 return SiteResolutionResult.TransientFailure;
             }
-            catch (ODataError ex)
+            catch (ApiException ex)
             {
                 _logger.LogWarning(ex, "Unexpected error getting site info for site {siteUrl}", siteUrl);
-                return SiteResolutionResult.TransientFailure;
+                return SiteResolutionResult.UnexpectedFailure;
             }
         }
 
-        private async Task<DriveResolutionResult> GetSpoInfoFromSiteUrl(string siteUrl)
+        private async Task<DriveResolutionResult> GetSpoInfoFromSiteUrl(string siteUrl, LookupScope scope)
         {
             var siteAddress = StringUtils.GetHostAndSiteRelativeUrl(siteUrl);
             if (siteAddress == null)
@@ -463,9 +942,15 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
             Drive siteDrive = null;
             try
             {
-                siteDrive = await _spoGraphClient.GetSiteDriveAsync(siteAddress);
+                siteDrive = await scope.Next().GetSiteDriveAsync(siteAddress);
             }
-            catch (ODataError)
+            catch (ApiException ex) when (IsTransientFileResolutionFailure(ex))
+            {
+                _logger.LogWarning("Transient Graph error loading the default drive of SharePoint site {siteUrl} (status {status}, code {code}); context will not be cached as unresolvable",
+                    siteUrl, ex.ResponseStatusCode, GraphErrorCode(ex));
+                return DriveResolutionResult.TransientFailure;
+            }
+            catch (ApiException)
             {
                 // We can't get the drive via the site address, for some reason. Most of the time we can, but sometimes it doesn't work...
                 // Load just the site and then try getting the drive using the loaded site ID
@@ -476,47 +961,47 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
                 Site site = null;
                 try
                 {
-                    site = await _spoGraphClient.GetSiteAsync(siteAddress) ?? throw new ArgumentOutOfRangeException(siteAddress);
+                    site = await scope.Next().GetSiteAsync(siteAddress) ?? throw new ArgumentOutOfRangeException(siteAddress);
                 }
-                catch (ODataError ex) when (IsExpectedFileResolutionFailure(ex))
+                catch (ApiException ex) when (IsExpectedFileResolutionFailure(ex))
                 {
                     _logger.LogDebug("Graph could not resolve SharePoint site {siteUrl} while loading its default drive (status {status}, code {code})",
-                        siteUrl, ex.ResponseStatusCode, ex.Error?.Code);
+                        siteUrl, ex.ResponseStatusCode, GraphErrorCode(ex));
                     return DriveResolutionResult.Unresolvable;
                 }
-                catch (ODataError ex) when (IsTransientFileResolutionFailure(ex))
+                catch (ApiException ex) when (IsTransientFileResolutionFailure(ex))
                 {
                     _logger.LogWarning("Transient Graph error resolving SharePoint site {siteUrl} while loading its default drive (status {status}, code {code}); context will not be cached as unresolvable",
-                        siteUrl, ex.ResponseStatusCode, ex.Error?.Code);
+                        siteUrl, ex.ResponseStatusCode, GraphErrorCode(ex));
                     return DriveResolutionResult.TransientFailure;
                 }
-                catch (ODataError ex)
+                catch (ApiException ex)
                 {
                     _logger.LogWarning(ex, "Unexpected error getting site info for site {siteUrl}", siteUrl);
-                    return DriveResolutionResult.TransientFailure;
+                    return DriveResolutionResult.UnexpectedFailure;
                 }
                 if (site != null)
                 {
                     try
                     {
                         // Try one more time using site ID
-                        siteDrive = await _spoGraphClient.GetSiteDriveAsync(site.Id);
+                        siteDrive = await scope.Next().GetSiteDriveAsync(site.Id);
                     }
-                    catch (ODataError ex) when (IsExpectedFileResolutionFailure(ex))
+                    catch (ApiException ex) when (IsExpectedFileResolutionFailure(ex))
                     {
                         _logger.LogDebug("Graph could not resolve default drive for site {siteId} (status {status}, code {code})",
-                            site.Id, ex.ResponseStatusCode, ex.Error?.Code);
+                            site.Id, ex.ResponseStatusCode, GraphErrorCode(ex));
                     }
-                    catch (ODataError ex) when (IsTransientFileResolutionFailure(ex))
+                    catch (ApiException ex) when (IsTransientFileResolutionFailure(ex))
                     {
                         _logger.LogWarning("Transient Graph error resolving default drive for site {siteId} (status {status}, code {code}); context will not be cached as unresolvable",
-                            site.Id, ex.ResponseStatusCode, ex.Error?.Code);
+                            site.Id, ex.ResponseStatusCode, GraphErrorCode(ex));
                         return DriveResolutionResult.TransientFailure;
                     }
-                    catch (ODataError ex)
+                    catch (ApiException ex)
                     {
                         _logger.LogWarning(ex, "Unexpected error resolving default drive for site {siteId}", site.Id);
-                        return DriveResolutionResult.TransientFailure;
+                        return DriveResolutionResult.UnexpectedFailure;
                     }
 
                     if (siteDrive == null)
@@ -543,60 +1028,143 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
             }
         }
 
-        private static bool IsExpectedFileResolutionFailure(ODataError ex)
+        // Graph errors are classified by status code on Kiota's ApiException rather than on ODataError, its subclass:
+        // an error response whose body is empty or can't be parsed - common for throttling and gateway errors -
+        // arrives as a plain ApiException, which every ODataError-only handler here used to let escape unclassified.
+
+        private static bool IsExpectedFileResolutionFailure(ApiException ex)
         {
             if (ex == null) return false;
             return ex.ResponseStatusCode == (int)HttpStatusCode.NotFound
                 || ex.ResponseStatusCode == (int)HttpStatusCode.Forbidden;
         }
 
-        private static bool IsTransientFileResolutionFailure(ODataError ex)
+        private static bool IsTransientFileResolutionFailure(ApiException ex)
         {
             if (ex == null) return false;
             return ex.ResponseStatusCode == 429
                 || ex.ResponseStatusCode >= 500;
         }
 
+        /// <summary>Graph's error code, for the log, when the response had a body to read it from.</summary>
+        private static string GraphErrorCode(ApiException ex) => (ex as ODataError)?.Error?.Code;
+
+        /// <summary>
+        /// Worth retrying: Graph throttling or a server error, or a request that couldn't connect.
+        /// <see cref="CopilotEnrichmentTransientException"/> is how a lookup here reports giving up on one of those.
+        /// </summary>
+        internal static bool IsRetryableGraphFailure(Exception ex)
+        {
+            for (var e = ex; e != null; e = e.InnerException)
+            {
+                if (e is CopilotEnrichmentTransientException || e is HttpRequestException)
+                {
+                    return true;
+                }
+                if (e is ApiException apiError && IsTransientFileResolutionFailure(apiError))
+                {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        /// <summary>
+        /// Takes one retry from the run's budget. Once it is spent, says so once: under sustained throttling, retrying
+        /// every lookup for the rest of the run would only add load on a tenant that is already being throttled.
+        /// </summary>
+        private bool TryTakeTransientRetry()
+        {
+            int spent;
+            do
+            {
+                spent = Volatile.Read(ref _transientRetriesSpent);
+                if (spent >= TransientRetryBudgetPerRun)
+                {
+                    if (Interlocked.Exchange(ref _transientRetryBudgetSpentLogged, 1) == 0)
+                    {
+                        _logger.LogWarning($"Copilot file enrichment: the {TransientRetryBudgetPerRun} retries this import run allows for file lookups " +
+                            "that Microsoft Graph failed transiently (throttling or server errors) are spent, so for the rest of the run such a " +
+                            "lookup is tried once, and an interaction whose file can't be read then is saved without its file details.");
+                    }
+                    return false;
+                }
+            }
+            while (Interlocked.CompareExchange(ref _transientRetriesSpent, spent + 1, spent) != spent);
+            return true;
+        }
+
+        /// <summary>
+        /// Why a lookup produced nothing. Ordered so the worst of several lookups' outcomes is the largest: a context
+        /// that failed transiently on any path might still resolve, so that outcome wins.
+        /// </summary>
+        private enum ResolutionFailure
+        {
+            None = 0,
+
+            /// <summary>Graph answered that it isn't there or can't be seen (404/403). Cached for the run.</summary>
+            Unresolvable = 1,
+
+            /// <summary>
+            /// Any other Graph error. Not cached, since it may be specific to this attempt, but not retried either:
+            /// waiting a few seconds doesn't change a 400.
+            /// </summary>
+            Unexpected = 2,
+
+            /// <summary>Throttling or a server error (429/5xx). Not cached, and reported so the caller can retry.</summary>
+            Transient = 3,
+        }
+
+        private static ResolutionFailure Worst(ResolutionFailure a, ResolutionFailure b) => a > b ? a : b;
+
         private sealed class FileResolutionResult
         {
             public SpoDocumentFileInfo FileInfo { get; private set; }
-            public bool CacheAsUnresolvable { get; private set; }
+            public ResolutionFailure Failure { get; private set; }
+            public bool CacheAsUnresolvable => Failure == ResolutionFailure.Unresolvable;
 
-            public static FileResolutionResult Unresolvable { get; } = new FileResolutionResult { CacheAsUnresolvable = true };
-            public static FileResolutionResult TransientFailure { get; } = new FileResolutionResult { CacheAsUnresolvable = false };
-            public static FileResolutionResult Resolved(SpoDocumentFileInfo fileInfo) => new FileResolutionResult { FileInfo = fileInfo, CacheAsUnresolvable = false };
-            public static FileResolutionResult FromFailure(bool cacheAsUnresolvable) => cacheAsUnresolvable ? Unresolvable : TransientFailure;
+            public static FileResolutionResult Unresolvable { get; } = new FileResolutionResult { Failure = ResolutionFailure.Unresolvable };
+            public static FileResolutionResult TransientFailure { get; } = new FileResolutionResult { Failure = ResolutionFailure.Transient };
+            public static FileResolutionResult UnexpectedFailure { get; } = new FileResolutionResult { Failure = ResolutionFailure.Unexpected };
+            public static FileResolutionResult Resolved(SpoDocumentFileInfo fileInfo) => new FileResolutionResult { FileInfo = fileInfo };
+            public static FileResolutionResult FromFailure(ResolutionFailure failure)
+                => failure == ResolutionFailure.Transient ? TransientFailure
+                : failure == ResolutionFailure.Unexpected ? UnexpectedFailure
+                : Unresolvable;
         }
 
         private sealed class SiteResolutionResult
         {
             public Site Site { get; private set; }
-            public bool CacheAsUnresolvable { get; private set; }
+            public ResolutionFailure Failure { get; private set; }
             public bool ShouldStop => Site == null;
 
-            public static SiteResolutionResult Unresolvable { get; } = new SiteResolutionResult { CacheAsUnresolvable = true };
-            public static SiteResolutionResult TransientFailure { get; } = new SiteResolutionResult { CacheAsUnresolvable = false };
+            public static SiteResolutionResult Unresolvable { get; } = new SiteResolutionResult { Failure = ResolutionFailure.Unresolvable };
+            public static SiteResolutionResult TransientFailure { get; } = new SiteResolutionResult { Failure = ResolutionFailure.Transient };
+            public static SiteResolutionResult UnexpectedFailure { get; } = new SiteResolutionResult { Failure = ResolutionFailure.Unexpected };
             public static SiteResolutionResult Found(Site site) => new SiteResolutionResult { Site = site };
         }
 
         private sealed class DriveResolutionResult
         {
             public Drive Drive { get; private set; }
-            public bool CacheAsUnresolvable { get; private set; }
+            public ResolutionFailure Failure { get; private set; }
             public bool ShouldStop => Drive == null;
 
-            public static DriveResolutionResult Unresolvable { get; } = new DriveResolutionResult { CacheAsUnresolvable = true };
-            public static DriveResolutionResult TransientFailure { get; } = new DriveResolutionResult { CacheAsUnresolvable = false };
+            public static DriveResolutionResult Unresolvable { get; } = new DriveResolutionResult { Failure = ResolutionFailure.Unresolvable };
+            public static DriveResolutionResult TransientFailure { get; } = new DriveResolutionResult { Failure = ResolutionFailure.Transient };
+            public static DriveResolutionResult UnexpectedFailure { get; } = new DriveResolutionResult { Failure = ResolutionFailure.Unexpected };
             public static DriveResolutionResult Found(Drive drive) => new DriveResolutionResult { Drive = drive };
         }
 
         private sealed class DocumentLibraryDrivesResult
         {
             public IReadOnlyList<Drive> Drives { get; private set; }
-            public bool CacheAsUnresolvable { get; private set; }
+            public ResolutionFailure Failure { get; private set; }
             public bool ShouldStop => Drives == null;
 
-            public static DocumentLibraryDrivesResult TransientFailure { get; } = new DocumentLibraryDrivesResult { CacheAsUnresolvable = false };
+            public static DocumentLibraryDrivesResult TransientFailure { get; } = new DocumentLibraryDrivesResult { Failure = ResolutionFailure.Transient };
+            public static DocumentLibraryDrivesResult UnexpectedFailure { get; } = new DocumentLibraryDrivesResult { Failure = ResolutionFailure.Unexpected };
             public static DocumentLibraryDrivesResult Found(IReadOnlyList<Drive> drives) => new DocumentLibraryDrivesResult { Drives = drives ?? Array.Empty<Drive>() };
         }
     }

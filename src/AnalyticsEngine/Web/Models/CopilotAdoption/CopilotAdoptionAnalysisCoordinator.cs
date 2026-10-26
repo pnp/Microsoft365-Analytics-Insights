@@ -197,6 +197,17 @@ namespace Web.AnalyticsWeb.Models.CopilotAdoption
         /// </summary>
         public static readonly TimeSpan DefaultQueuePollInterval = TimeSpan.FromSeconds(15);
 
+        /// <summary>
+        /// The longest an analysis whose headline figures are incomplete (<see cref="CopilotAdoptionSummary.FiguresIncomplete"/>)
+        /// is reused.
+        /// </summary>
+        /// <remarks>
+        /// Still cached, so a page that keeps polling does not re-run the queries that just failed on a struggling
+        /// database every few seconds - but not for the ten minutes a complete result is kept: the failure is usually a
+        /// passing timeout, and the admin should not have to wait that long for figures they can act on.
+        /// </remarks>
+        public static readonly TimeSpan IncompleteFiguresCacheTtl = TimeSpan.FromMinutes(1);
+
         public static readonly CopilotAdoptionAnalysisCoordinator Default =
             new CopilotAdoptionAnalysisCoordinator(
                 new CopilotAdoptionAnalysisRunner(),
@@ -259,6 +270,12 @@ namespace Web.AnalyticsWeb.Models.CopilotAdoption
             _settingsSource = settingsSource ?? DefaultCopilotAdoptionScoreSettingsSource.Instance;
             _licenceGeneration = licenceGeneration ?? LicenceDataGenerationSource.None;
         }
+
+        /// <summary>How long a finished analysis is reused: the configured TTL, or less when its figures are incomplete.</summary>
+        internal TimeSpan CacheTtlFor(CopilotAdoptionAnalysis analysis)
+            => analysis?.Summary?.FiguresIncomplete == true && IncompleteFiguresCacheTtl < _cacheTtl
+                ? IncompleteFiguresCacheTtl
+                : _cacheTtl;
 
         /// <summary>
         /// The administrator's score settings, read before the cache is consulted because their version is part of
@@ -602,7 +619,7 @@ namespace Web.AnalyticsWeb.Models.CopilotAdoption
                 // Publish first. A blocked or broken telemetry channel must never keep the page polling
                 // after the analysis has already produced a valid result.
                 var cacheWatch = System.Diagnostics.Stopwatch.StartNew();
-                _cache.Set(cacheKey, analysis, _cacheTtl);
+                _cache.Set(cacheKey, analysis, CacheTtlFor(analysis));
                 cacheWatch.Stop();
 
                 telemetry.Checkpoint(

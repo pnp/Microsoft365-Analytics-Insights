@@ -38,6 +38,7 @@ namespace App.ControlPanel.Controls
                         CopilotStudioCredits = chkCopilotStudioCredits.Checked,
                         AzureCostManagement = chkAzureCostManagement.Checked,
                         Agent365PackageCatalog = chkAgent365Catalog.Checked,
+                        CopilotCostManagement = chkCopilotCostManagement.Checked,
                         ImportDlp = chkDlp.Checked
                     }
                 };
@@ -51,6 +52,23 @@ namespace App.ControlPanel.Controls
         public event EventHandler SolutionSelectionChange;
 
         private void SetGui(TargetSolutionConfig value)
+        {
+            _settingGui = true;
+            try
+            {
+                SetCheckBoxes(value);
+            }
+            finally
+            {
+                _settingGui = false;
+            }
+        }
+
+        // True while a loaded config is being applied, so the preview confirmation only interrupts a person
+        // ticking the box - not opening a config file that already has it on.
+        private bool _settingGui;
+
+        private void SetCheckBoxes(TargetSolutionConfig value)
         {
             chkAuditLog.Checked = value.ImportTaskSettings.ActivityLog;
             chkTeams.Checked = value.ImportTaskSettings.GraphTeams;
@@ -67,6 +85,7 @@ namespace App.ControlPanel.Controls
             chkCopilotStudioCredits.Checked = value.ImportTaskSettings.CopilotStudioCredits;
             chkAzureCostManagement.Checked = value.ImportTaskSettings.AzureCostManagement;
             chkAgent365Catalog.Checked = value.ImportTaskSettings.Agent365PackageCatalog;
+            chkCopilotCostManagement.Checked = value.ImportTaskSettings.CopilotCostManagement;
         }
 
 
@@ -82,6 +101,7 @@ namespace App.ControlPanel.Controls
             BindHelpLink(lnkStudioCreditsHelp, chkCopilotStudioCredits);
             BindHelpLink(lnkAzureCostsHelp, chkAzureCostManagement);
             BindHelpLink(lnkAgent365CatalogHelp, chkAgent365Catalog);
+            BindHelpLink(lnkCopilotCostHelp, chkCopilotCostManagement);
         }
 
         private static void BindHelpLink(LinkLabel link, CheckBox owner)
@@ -133,6 +153,26 @@ namespace App.ControlPanel.Controls
         private void chkAuditLog_CheckedChanged(object sender, System.EventArgs e)
         {
             SolutionSelectionUIChange();
+        }
+
+        internal const string CopilotCostPreviewConfirmation =
+            "Copilot credit history uses a separately connected delegated reader account.\r\n\r\n"
+            + "- A portal administrator with 'Portal.Administration' connects the reader from "
+            + "Administration > Service configuration in the web app.\r\n"
+            + "- The portal explains the Graph delegated permissions, admin consent and reader role needed.\r\n"
+            + "- It needs the solution's Azure storage account (Table storage) and will not run without it.\r\n\r\n"
+            + "Turn on Copilot credit history?";
+
+        private void chkCopilotCostManagement_CheckedChanged(object sender, EventArgs e)
+        {
+            if (_settingGui || !chkCopilotCostManagement.Checked) return;
+
+            var answer = MessageBox.Show(this, CopilotCostPreviewConfirmation, "Copilot credit history (preview)",
+                MessageBoxButtons.YesNo, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2);
+            if (answer != DialogResult.Yes)
+            {
+                chkCopilotCostManagement.Checked = false;
+            }
         }
 
         private void SolutionSelectionUIChange()

@@ -426,6 +426,128 @@ namespace Tests.UnitTests
                 $"...and must not be charged to the dedup phase; SaveDedupMs was {result.Stats.SaveDedupMs}.");
         }
 
+        [TestMethod]
+        public async Task SavePipeline_RunCache_SkipsEventsTheDatabaseHoldsAcrossHourBoundaries()
+        {
+            // Straddle the hour and the half hour: the old cache bucketed ids by hour, rounded at :30. The run
+            // cache now answers by id alone - from the database for history, from memory for this cycle.
+            var times = new[]
+            {
+                new DateTime(2026, 3, 1, 9, 29, 59, 997, DateTimeKind.Utc),
+                new DateTime(2026, 3, 1, 9, 30, 0, 3, DateTimeKind.Utc),
+                new DateTime(2026, 3, 1, 9, 59, 59, 997, DateTimeKind.Utc),
+                new DateTime(2026, 3, 1, 10, 0, 0, DateTimeKind.Utc),
+            };
+            var alreadyInDatabase = times.Select(t => SpEventAt(t)).ToList();   // imported or ignored by an earlier cycle
+            var brandNew = times.Select(t => SpEventAt(t)).ToList();
+            var store = new FakeActivityImportCacheLoader();
+            foreach (var e in alreadyInDatabase) store.AlreadyProcessedIds.Add(e.Id);
+
+            var runCache = ActivityImportCache.ForRun(store);
+            var writer = new InMemoryActivityStagingWriter();
+            var pass = PassFor(new AllowAllFilterConfig(), new RecordingLogger());
+
+            var first = await pass.RunAsync(SetOf(alreadyInDatabase.Concat(brandNew).ToArray()),
+                runCache, writer.CreateBatch(null), stagingTableName: null, mergeLock: null);
+
+            Assert.AreEqual(brandNew.Count, first.Stats.Imported);
+            CollectionAssert.AreEquivalent(brandNew.Select(e => e.Id).ToList(), writer.LastBatch.Rows.Select(r => r.Id).ToList(),
+                "Only events the database does not already hold may be staged.");
+
+            // A later batch of the same cycle carries them all again, the new ones re-presented a second later
+            // (across the boundary for two of them). Nothing may be staged twice.
+            var again = alreadyInDatabase.Concat(brandNew.Select(e => SpEventAt(e.CreationTime.AddSeconds(1), e.Id))).ToArray();
+            var second = await pass.RunAsync(SetOf(again), runCache, writer.CreateBatch(null), stagingTableName: null, mergeLock: null);
+
+            Assert.AreEqual(0, second.Stats.Imported);
+            Assert.AreEqual(0, writer.LastBatch.Rows.Count);
+            Assert.IsTrue(brandNew.All(e => runCache.WasRememberedThisCycle(SpEventAt(e.CreationTime.AddSeconds(1), e.Id))),
+                "A reservation is found by id, whatever time the event is presented with.");
+
+            // Memory: the run holds only what it staged; the database's answers went with each batch's view, so the
+            // second batch asked about those ids again - and about nothing it had staged itself.
+            Assert.AreEqual(brandNew.Count, runCache.ProcessedIdCount);
+            CollectionAssert.AreEquivalent(alreadyInDatabase.Select(e => e.Id).ToList(), store.Lookups[1]);
+        }
+
+        [TestMethod]
+        public async Task SavePipeline_RunCache_RecoveryMarkedEventTheDatabaseHolds_IsStagedAgainForItsMetadata()
+        {
+            // An earlier cycle committed the audit row but not its metadata and left a durable recovery marker on
+            // the blob. The database's answer has to reach the recovery check as well as the dedup rule: if only
+            // the rule saw it, the event would be skipped as a duplicate and its metadata never repaired.
+            var log = SpEvent(InScopeUpn);
+            log.SourceContentId = "metadata-recovery-blob";
+            var store = new FakeActivityImportCacheLoader();
+            store.AlreadyProcessedIds.Add(log.Id);
+            var recoverySet = SetOf(log);
+            recoverySet.MetadataRecoveryBlobIds.Add(log.SourceContentId);
+            var writer = new InMemoryActivityStagingWriter();
+
+            var result = await PassFor(new AllowAllFilterConfig(), new RecordingLogger()).RunAsync(
+                recoverySet, ActivityImportCache.ForRun(store), writer.CreateBatch(null), stagingTableName: null, mergeLock: null,
+                new ActivitySaveRetryState());
+
+            Assert.AreEqual(1, result.Stats.Imported);
+            Assert.AreEqual(log.Id, writer.LastBatch.Rows.Single().Id);
+        }
+
+        [TestMethod]
+        public async Task SavePipeline_RunCache_LookupFailure_FailsTheBatchBeforeAnythingIsStaged()
+        {
+            var log = SpEvent(InScopeUpn);
+            var store = new FakeActivityImportCacheLoader { LookupFailure = new InvalidOperationException("lookup failed") };
+            var runCache = ActivityImportCache.ForRun(store);
+            var writer = new InMemoryActivityStagingWriter();
+            var pass = PassFor(new AllowAllFilterConfig(), new RecordingLogger());
+
+            await Assert.ThrowsExceptionAsync<InvalidOperationException>(() => pass.RunAsync(
+                SetOf(log), runCache, writer.CreateBatch(null), stagingTableName: null, mergeLock: null));
+
+            Assert.AreEqual(0, writer.LastBatch.Rows.Count, "Nothing may be staged without a dedup answer.");
+            Assert.AreEqual(0, writer.LastBatch.MergeCount);
+            Assert.IsFalse(runCache.HaveSeenInProcessedOrIgnoredEvents(log), "The failed attempt must leave no reservation behind.");
+
+            // The retry (the whole save is re-run on a transient SQL fault) asks again and goes through.
+            store.LookupFailure = null;
+            var retried = await pass.RunAsync(SetOf(log), runCache, writer.CreateBatch(null), stagingTableName: null, mergeLock: null);
+            Assert.AreEqual(1, retried.Stats.Imported);
+        }
+
+        [TestMethod]
+        public async Task SavePipeline_RunCache_EventsStagedWhateverTheDatabaseHolds_AreNotLookedUp()
+        {
+            // The Copilot backfill forces every Copilot event through metadata recovery, so asking the database
+            // about them would be pure cost.
+            var copilot = new CopilotAuditLogContent
+            {
+                Id = Guid.NewGuid(),
+                UserId = InScopeUpn,
+                CreationTime = Created,
+                Operation = "CopilotInteraction",
+                Workload = "Copilot",
+                EventRaw = "{}",
+                CopilotEventData = new CopilotEventData()
+            };
+            var sharePoint = SpEvent(InScopeUpn);
+            var records = SetOf(copilot, sharePoint);
+            records.RecoverMissingCopilotMetadata = true;
+            var store = new FakeActivityImportCacheLoader();
+
+            await PassFor(new AllowAllFilterConfig(), new RecordingLogger()).RunAsync(
+                records, ActivityImportCache.ForRun(store), new InMemoryActivityStagingWriter().CreateBatch(null),
+                stagingTableName: null, mergeLock: null);
+
+            CollectionAssert.AreEqual(new[] { sharePoint.Id }, store.Lookups.Single());
+        }
+
+        private static SharePointAuditLogContent SpEventAt(DateTime createdUtc, Guid? id = null)
+        {
+            var log = SpEvent(InScopeUpn, id: id);
+            log.CreationTime = createdUtc;
+            return log;
+        }
+
         /// <summary>MockUserGroupsCache takes an ILogger; these tests do not assert on its output.</summary>
         private class NullLoggerShim : ILogger
         {

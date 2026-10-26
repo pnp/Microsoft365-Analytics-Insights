@@ -955,6 +955,13 @@ namespace App.ControlPanel.Engine
                 + "RBAC (or, for EA/MCA billing accounts, a billing-portal) assignment outside this installer's "
                 + "control. The scope itself comes from the AzureCostScopes App Service application setting, "
                 + "which is not set at install time."),
+
+            new ImportToggleCoverage(nameof(ImportTaskSettings.CopilotCostManagement), null,
+                "this import reads Microsoft Graph APIs with a DELEGATED reader account, and Test Configuration "
+                + "only signs in as the runtime app with application permissions - so a passing run proves nothing "
+                + "about the delegated access it needs. A portal administrator with 'Portal.Administration' connects "
+                + "the reader from Administration > Service configuration in the web app, which explains the Graph "
+                + "delegated permissions, admin consent and reader role, and reports whether the connection works."),
         };
 
         /// <summary>
@@ -1288,32 +1295,10 @@ namespace App.ControlPanel.Engine
         async Task VerifyTeamsImport(Microsoft.Graph.GraphServiceClient graphClient)
         {
             _logger.LogInformation("Verifying Graph API for Teams...");
+            (TeamsReadCheck Outcome, int GroupsChecked) check;
             try
             {
-                var groups = await graphClient.Groups.GetAsync(rc =>
-                {
-                    rc.QueryParameters.Select = new[] { "displayName", "id", "resourceProvisioningOptions" };
-                });
-                bool channelsRead = false;
-                foreach (var group in groups?.Value ?? new List<Microsoft.Graph.Models.Group>())
-                {
-                    if (group.AdditionalData.ContainsKey("resourceProvisioningOptions"))
-                    {
-                        var resourceProvisioningOptions = group.AdditionalData["resourceProvisioningOptions"].ToString();
-                        var options = Newtonsoft.Json.Linq.JArray.Parse(resourceProvisioningOptions);
-                        foreach (var option in options)
-                        {
-                            if (option.ToString().ToLower() == "team")
-                            {
-                                // Load team
-                                var channels = await graphClient.Teams[group.Id].Channels.GetAsync();
-                                channelsRead = true;
-                                break;
-                            }
-                        }
-                    }
-                    if (channelsRead) break;
-                }
+                check = await FindAndReadATeamAsync(graphClient);
             }
             catch (Microsoft.Graph.Models.ODataErrors.ODataError ex)
             {
@@ -1322,7 +1307,112 @@ namespace App.ControlPanel.Engine
                 return;
             }
 
-            _logger.LogInformation("Successfully verified Graph API for Teams.");
+            var (level, message) = DescribeTeamsReadCheck(check.Outcome, check.GroupsChecked);
+            _logger.Log(level, message);
+        }
+
+        /// <summary>How far <see cref="FindAndReadATeamAsync"/> got.</summary>
+        internal enum TeamsReadCheck
+        {
+            /// <summary>Found a group with a Team and read that Team's channels.</summary>
+            ChannelsRead,
+
+            /// <summary>Graph returned no groups at all.</summary>
+            NoGroups,
+
+            /// <summary>Groups reported their workloads, but none of those checked has a Team.</summary>
+            NoTeamFound,
+
+            /// <summary>Groups came back, but not one reported its workloads, so no Team could be identified.</summary>
+            WorkloadsNotReported
+        }
+
+        /// <summary>The most groups the Teams check reads looking for one with a Team.</summary>
+        internal const int TeamsCheckMaxGroups = 5000;
+
+        /// <summary>
+        /// Finds a group with a Team - classified exactly as the Teams crawl classifies them, by
+        /// <c>TeamsCrawlRules.ClassifyGroup</c> - and reads that Team's channels.
+        /// </summary>
+        /// <remarks>
+        /// This used to look for the workloads in the group's <c>AdditionalData</c>, where Microsoft.Graph 4 put them.
+        /// Microsoft.Graph 5 and later deserialise them into <c>Group.ResourceProvisioningOptions</c>, so the check never
+        /// found a Team, never read a channel, and still reported "Successfully verified Graph API for Teams". It also only
+        /// ever looked at the first page of groups.
+        /// </remarks>
+        internal static async Task<(TeamsReadCheck Outcome, int GroupsChecked)> FindAndReadATeamAsync(Microsoft.Graph.GraphServiceClient graphClient)
+        {
+            var firstPage = await graphClient.Groups.GetAsync(rc =>
+            {
+                rc.QueryParameters.Select = new[] { "displayName", "id", WebJob.Office365ActivityImporter.Engine.Graph.Teams.TeamsCrawlRules.ResourceProvisioningOptionsProperty };
+                rc.QueryParameters.Top = 999;
+            });
+
+            Microsoft.Graph.Models.Group groupWithTeam = null;
+            int groupsChecked = 0, workloadsNotReported = 0;
+            if (firstPage?.Value != null)
+            {
+                var pages = Microsoft.Graph.PageIterator<Microsoft.Graph.Models.Group, Microsoft.Graph.Models.GroupCollectionResponse>
+                    .CreatePageIterator(graphClient, firstPage, group =>
+                    {
+                        groupsChecked++;
+                        var status = WebJob.Office365ActivityImporter.Engine.Graph.Teams.TeamsCrawlRules.ClassifyGroup(group);
+                        if (status == WebJob.Office365ActivityImporter.Engine.Graph.Teams.GroupTeamStatus.HasTeam)
+                        {
+                            groupWithTeam = group;
+                            return false;
+                        }
+                        if (status == WebJob.Office365ActivityImporter.Engine.Graph.Teams.GroupTeamStatus.WorkloadsNotReported)
+                        {
+                            workloadsNotReported++;
+                        }
+                        return groupsChecked < TeamsCheckMaxGroups;
+                    });
+                await pages.IterateAsync();
+            }
+
+            if (groupWithTeam == null)
+            {
+                if (groupsChecked == 0)
+                {
+                    return (TeamsReadCheck.NoGroups, 0);
+                }
+                return (workloadsNotReported == groupsChecked ? TeamsReadCheck.WorkloadsNotReported : TeamsReadCheck.NoTeamFound, groupsChecked);
+            }
+
+            // Load team
+            await graphClient.Teams[groupWithTeam.Id].Channels.GetAsync();
+            return (TeamsReadCheck.ChannelsRead, groupsChecked);
+        }
+
+        /// <summary>
+        /// Maps how far the Teams check got to what Test Configuration reports. Only a Team whose channels were actually
+        /// read is a pass: a check that couldn't find a Team proved nothing, and must not say it did.
+        /// </summary>
+        internal static (LogLevel level, string message) DescribeTeamsReadCheck(TeamsReadCheck outcome, int groupsChecked)
+        {
+            switch (outcome)
+            {
+                case TeamsReadCheck.ChannelsRead:
+                    return (LogLevel.Information, "Successfully verified Graph API for Teams: found a Team and read its channels.");
+
+                case TeamsReadCheck.WorkloadsNotReported:
+                    return (LogLevel.Error,
+                        $"ERROR: Graph returned {groupsChecked:N0} group(s) but not one reported its provisioned workloads " +
+                        "('resourceProvisioningOptions'), so no Team could be identified - and the Teams import identifies Teams " +
+                        "the same way, so it would import none. This is a fault in the importer, not in the tenant's permissions.");
+
+                case TeamsReadCheck.NoTeamFound:
+                    return (LogLevel.Warning,
+                        $"Graph API for Teams was NOT verified: none of the {groupsChecked:N0} group(s) checked has a Team, so reading " +
+                        "a Team's channels could not be tested. If the tenant has Teams, create one (or check after the first import) " +
+                        "before relying on the Teams import.");
+
+                default:
+                    return (LogLevel.Warning,
+                        "Graph API for Teams was NOT verified: Graph returned no groups at all, so no Team could be tested. If the " +
+                        "tenant does have groups, the runtime account may be missing 'Group.Read.All'.");
+            }
         }
 
         // Graph usage-report aggregation period for the Teams user-activity verification call.

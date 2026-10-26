@@ -46,13 +46,13 @@ namespace Web.AnalyticsWeb.Controllers
         public Task<IHttpActionResult> Refresh()
             => Answer(async service => Ok(await service.RefreshAsync()));
 
-        // POST: api/UserScope/purge   { "acknowledged": true }
+        // POST: api/UserScope/purge   { "acknowledged": true, "confirmedOutsideScopeCount": 25, "confirmedFilterFingerprint": "sha256:..." }
         [HttpPost]
         [Route("purge")]
         [RequireSameOriginXhr]
         public Task<IHttpActionResult> StartPurge([FromBody] UserScopePurgeRequest request)
             => Answer(async service => Content(HttpStatusCode.Accepted,
-                await service.StartPurgeAsync(request?.Acknowledged ?? false, User?.Identity?.Name)));
+                await service.StartPurgeAsync(request, User?.Identity?.Name)));
 
         // GET: api/UserScope/purge/{id}
         [HttpGet]
@@ -75,7 +75,7 @@ namespace Web.AnalyticsWeb.Controllers
             }
             catch (UserScopeRequestException ex)
             {
-                return Content(ex.Status, new UserScopeError { Code = ex.Code });
+                return Content(ex.Status, ex.Error);
             }
         }
     }

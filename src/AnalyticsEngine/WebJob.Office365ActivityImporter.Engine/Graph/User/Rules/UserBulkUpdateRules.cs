@@ -59,6 +59,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             "state_or_province_id",
             "company_name_id",
             "manager_id",
+            "manager_reported",
             "last_updated",
         };
 
@@ -80,6 +81,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             dt.Columns.Add("state_or_province_id", typeof(int));
             dt.Columns.Add("company_name_id", typeof(int));
             dt.Columns.Add("manager_id", typeof(int));
+            dt.Columns.Add("manager_reported", typeof(bool));
             dt.Columns.Add("last_updated", typeof(DateTime));
             return dt;
         }
@@ -135,7 +137,10 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 row["country_or_region_id"] = ResolveLookupId(plan.CountryName, maps.Countries);
                 row["state_or_province_id"] = ResolveLookupId(plan.StateOrProvinceName, maps.StatesOrProvinces);
                 row["company_name_id"] = ResolveLookupId(plan.CompanyName, maps.CompanyNames);
-                row["manager_id"] = ResolveManagerId(plan.ManagerAadId, dbUsersByAadId, dbUsersByUpn, graphUsersByAadId);
+                row["manager_id"] = plan.ManagerReported
+                    ? ResolveManagerId(plan.ManagerAadId, dbUsersByAadId, dbUsersByUpn, graphUsersByAadId)
+                    : DBNull.Value;
+                row["manager_reported"] = plan.ManagerReported;
                 row["last_updated"] = lastUpdated;
 
                 dt.Rows.Add(row);
@@ -159,12 +164,16 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         /// <summary>
         /// The manager foreign-key precedence chain for the bulk path, in order:
         /// <list type="number">
-        /// <item>the manager's Entra id is already in the DB-users-by-AAD-id map;</item>
+        /// <item>the manager's Entra id is already in the DB-users-by-AAD-id map - unless that row carries a sign-in
+        /// name other than the one Graph reports for the manager in this batch, which makes it a row a rename left
+        /// behind;</item>
         /// <item>otherwise look the manager up in the current Graph batch by Entra id, take its UPN
         /// and find that UPN in the DB-users-by-UPN map;</item>
+        /// <item>otherwise the row a rename left behind, if that is all there is - it is still the manager;</item>
         /// <item>otherwise leave the column NULL, which clears any previously stored manager.</item>
         /// </list>
-        /// A user Graph reports no manager for also clears the column. In every case the candidate
+        /// A user Graph reports no manager for also clears the column; an entry that did not report the manager at all
+        /// (<see cref="UserMetadataChangePlan.ManagerReported"/> false) leaves it as it is. In every case the candidate
         /// must already be saved (<c>ID &gt; 0</c>), because the value becomes a foreign key.
         /// </summary>
         /// <param name="managerAadId">
@@ -180,18 +189,24 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             if (managerAadId == null)
                 return DBNull.Value;
 
-            if (dbUsersByAadId.TryGetValue(managerAadId, out var manager) && manager.ID > 0)
-                return manager.ID;
+            string currentUpn = null;
+            if (graphUsersByAadId != null && graphUsersByAadId.TryGetValue(managerAadId, out var mgrGraph))
+                currentUpn = mgrGraph.UserPrincipalName;
 
-            if (graphUsersByAadId != null &&
-                graphUsersByAadId.TryGetValue(managerAadId, out var mgrGraph) &&
-                !string.IsNullOrEmpty(mgrGraph.UserPrincipalName) &&
-                dbUsersByUpn.TryGetValue(mgrGraph.UserPrincipalName, out var mgrByUpn) && mgrByUpn.ID > 0)
+            Common.Entities.User byObjectId = null;
+            if (dbUsersByAadId.TryGetValue(managerAadId, out var manager) && manager.ID > 0)
+                byObjectId = manager;
+
+            if (byObjectId != null && !UserIdentityRules.IsLeftBehindByRename(byObjectId, currentUpn))
+                return byObjectId.ID;
+
+            if (!string.IsNullOrEmpty(currentUpn) &&
+                dbUsersByUpn.TryGetValue(currentUpn, out var mgrByUpn) && mgrByUpn.ID > 0)
             {
                 return mgrByUpn.ID;
             }
 
-            return DBNull.Value;
+            return byObjectId != null ? (object)byObjectId.ID : DBNull.Value;
         }
     }
 }

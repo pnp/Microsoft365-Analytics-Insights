@@ -13,7 +13,7 @@ vi.mock('../api/promptCategoriesApi', () => ({
 }));
 
 const configuration = () => ({
-  enabled: false, maxPromptsPerCycle: 1000, version: 'synthetic-version',
+  enabled: false, maxPromptsPerCycle: 1000, version: 'synthetic-version', revision: 'synthetic-revision-1',
   categories: [
     { id: 'analysis', name: 'Analysis', description: 'Analyse information, reason or compare options.', humanMode: null,
       nameKey: 'promptCategories.defaults.analysis.name', descriptionKey: 'promptCategories.defaults.analysis.description' },
@@ -105,8 +105,37 @@ describe('prompt categorisation editor', () => {
     await user.click(enabled);
     expect(screen.getByText(/Changes are not active until you save/)).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Save taxonomy and opt-in' }));
-    await waitFor(() => expect(savePromptCategories).toHaveBeenCalledWith(expect.objectContaining({ enabled: true })));
+    await waitFor(() => expect(savePromptCategories).toHaveBeenCalledWith(expect.objectContaining({ enabled: true, revision: 'synthetic-revision-1' })));
     expect(await screen.findByText('Configuration saved.')).toBeInTheDocument();
+  });
+
+  it('refuses to overwrite settings changed by someone else, keeps the edit on screen and reloads on request', async () => {
+    const user = userEvent.setup();
+    vi.mocked(savePromptCategories).mockRejectedValueOnce(
+      Object.assign(new Error('x'), { name: 'PromptCategoryApiError', code: 'configurationChanged' }));
+    renderWithProvider(<PromptCategoriesPage />);
+    await user.click(await screen.findByLabelText('Enable Foundry prompt categorisation'));
+    await user.click(screen.getByRole('button', { name: 'Save taxonomy and opt-in' }));
+    expect(await screen.findByText(/were changed after this page loaded them, so nothing was saved/)).toBeInTheDocument();
+    expect(screen.queryByText('Configuration saved.')).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Enable Foundry prompt categorisation')).toBeChecked();
+
+    const current = { ...configuration(), maxPromptsPerCycle: 250, revision: 'synthetic-revision-2' };
+    vi.mocked(fetchPromptCategoryAdmin).mockResolvedValue({ configuration: current, storageAvailable: true, backendConfigured: true });
+    await user.click(screen.getByRole('button', { name: 'Reload' }));
+    await waitFor(() => expect(screen.getByLabelText('Enable Foundry prompt categorisation')).not.toBeChecked());
+    expect(screen.getByDisplayValue('250')).toBeInTheDocument();
+    expect(screen.queryByText(/were changed after this page loaded them/)).not.toBeInTheDocument();
+  });
+
+  it('replaces a saved configuration it cannot read with a reset that names no revision', async () => {
+    const user = userEvent.setup();
+    vi.mocked(fetchPromptCategoryAdmin).mockRejectedValueOnce(
+      Object.assign(new Error('x'), { name: 'PromptCategoryApiError', code: 'storedConfigurationInvalid' }));
+    renderWithProvider(<PromptCategoriesPage />);
+    await user.click(await screen.findByRole('button', { name: 'Reset and disable' }));
+    await waitFor(() => expect(resetPromptCategories).toHaveBeenCalledWith(null));
+    expect(await screen.findByLabelText('Enable Foundry prompt categorisation')).toBeInTheDocument();
   });
 
   it('does not let a memory fallback enable or save and resets to disabled defaults', async () => {
@@ -152,6 +181,7 @@ describe('prompt categorisation editor', () => {
     expect(resetPromptCategories).not.toHaveBeenCalled();
     await user.click(await screen.findByText('Reset and disable', { selector: 'button, button *' }));
     await waitFor(() => expect(resetPromptCategories).toHaveBeenCalledTimes(1));
+    expect(resetPromptCategories).toHaveBeenCalledWith('synthetic-revision-1');
   });
 
   it('shows a distinct storage error with retry instead of a generic message', async () => {

@@ -1,6 +1,7 @@
 extern alias AnalyticsWeb;
 
 using AnalyticsWeb::Web.AnalyticsWeb.Models.UserDataLookup;
+using AnalyticsWeb::Web.AnalyticsWeb.Models.UserDiagnostics;
 using Common.Entities;
 using Common.Entities.LookupCaches;
 using DataUtils;
@@ -294,6 +295,36 @@ namespace Tests.UnitTests
             }
 
             AssertEveryComparisonIsVarchar(recorder, upn, expectedCount: 2);
+            AssertEveryComparisonIsVarchar(recorder, upn.ToUpperInvariant(), expectedCount: 1);
+        }
+
+        /// <summary>The per-user diagnostics find the person by UPN before every other read.</summary>
+        [TestMethod]
+        public async Task UserDiagnostics_FindUser_SendsTheUpnAsVarchar()
+        {
+            var upn = $"userdiagnostics.varchar.{Guid.NewGuid():N}@contoso.com";
+            var userId = await SeedUserAsync(upn);
+            var recorder = new UserNameComparisonRecorder();
+            try
+            {
+                var query = new SqlUserDiagnosticsQuery();
+                DbInterception.Add(recorder);
+                try
+                {
+                    Assert.AreEqual(userId, (await query.FindUserAsync(upn))?.Id);
+                    Assert.AreEqual(userId, (await query.FindUserAsync(upn.ToUpperInvariant()))?.Id, "Matching stays case-insensitive.");
+                }
+                finally
+                {
+                    DbInterception.Remove(recorder);
+                }
+            }
+            finally
+            {
+                await DeleteUserAsync(userId);
+            }
+
+            AssertEveryComparisonIsVarchar(recorder, upn, expectedCount: 1);
             AssertEveryComparisonIsVarchar(recorder, upn.ToUpperInvariant(), expectedCount: 1);
         }
 
