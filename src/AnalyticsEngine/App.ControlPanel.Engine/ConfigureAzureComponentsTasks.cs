@@ -628,7 +628,7 @@ namespace App.ControlPanel.Engine
 
             if (this.Config.SolutionConfig.ImportTaskSettings.CopilotCostManagement)
             {
-                _logger.LogWarning(CopilotCostPreviewDeploymentWarning);
+                _logger.LogInformation(CopilotCostConnectionSetupMessage);
             }
 
             // When private VNet is enabled, ensure the app service routes all outbound traffic through
@@ -686,12 +686,11 @@ namespace App.ControlPanel.Engine
             _logger.LogInformation("App Service connection-strings & app-settings configured");
         }
 
-        internal const string CopilotCostPreviewDeploymentWarning =
-            "Copilot credit history (PREVIEW) is enabled. It reads Microsoft Graph beta APIs that can change without "
-            + "notice and are not supported for production use. The installer has NOT granted any permission, consent "
-            + "or app-role assignment for it: assign the 'CopilotCostConnection.Operator' app role to the administrators "
-            + "who will operate it, then sign in to the web app and connect a delegated reader account from the "
-            + "Administration page. Nothing is collected until that connection exists. Connection state is kept in "
+        internal const string CopilotCostConnectionSetupMessage =
+            "Copilot credit history is enabled. A portal administrator with 'Portal.Administration' must connect "
+            + "a delegated reader account from Administration > Service configuration in the web app. Configure "
+            + "the Graph delegated read permissions and admin consent described there; the installer does not grant "
+            + "them. Nothing is collected until that connection exists. Connection state is kept in "
             + "Azure Table storage on the solution's storage account.";
 
         /// <summary>

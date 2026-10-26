@@ -22,7 +22,20 @@ describe('CostConnectionPanel', () => {
     expect(fetchCostConnection).not.toHaveBeenCalled();
     expect(fetchCostCollection).not.toHaveBeenCalled();
     expect(screen.queryByRole('button', { name: 'Connect reader' })).not.toBeInTheDocument();
-    expect(screen.getByText(/Graph beta: test\/pilot use only/)).toBeVisible();
+    expect(screen.getByText('Copilot credit history (preview)')).toBeVisible();
+    expect(screen.queryByText(/not supported for production/)).not.toBeInTheDocument();
+  });
+
+  it.each(['en', 'es'] as const)('explains portal, reader and runtime permissions in %s before connecting', async (language) => {
+    renderWithProvider(<CostConnectionPanel />, { language });
+    expect(await screen.findByText(language === 'es' ? 'Permisos y configuración de la conexión' : 'Connection permissions and setup')).toBeVisible();
+    expect(screen.getByText(/Portal\.Administration/)).toBeVisible();
+    expect(screen.getByText(/CopilotCostManagement-UserData.Read.All/)).toHaveTextContent('CopilotCostManagement-Policy.Read.All');
+    expect(screen.getByText(/CopilotCostManagement-Assignment.Read.All/)).toHaveTextContent('CopilotCostManagement.Read.All');
+    expect(screen.getByText(/Global Reader/)).toBeVisible();
+    expect(screen.getByText(/User.Read.All/)).toHaveTextContent('Storage Table Data Contributor');
+    expect(screen.getByText(/\/copilot-cost\/callback/)).toBeVisible();
+    expect(fetchCostConnection).not.toHaveBeenCalled();
   });
 
   it('keeps missing storage unavailable instead of offering an in-memory connection', async () => {
@@ -46,7 +59,7 @@ describe('CostConnectionPanel', () => {
     expect(await screen.findByText('No dedicated reader is connected.')).toBeVisible();
   });
 
-  it('collects bounded slices only after authorization and never labels observations approved', async () => {
+  it('collects bounded slices only after authorization and retains coverage qualifications', async () => {
     const completed: CostConnectionStatus = {
       ...connected, probe: { phase: 'observed', directoryUsers: 100, inventoryComplete: true, observed: 90,
         measured: 70, empty: 10, partial: 5, unevaluated: 10, failed: 10, denied: 10, lastOutcome: 'sliceCompleted' },
@@ -58,7 +71,7 @@ describe('CostConnectionPanel', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Run or resume read-only probe' }));
     expect(changeCostConnection).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole('button', { name: 'Confirm' }));
-    expect(await screen.findByText(/feasibility is NOT approved/)).toBeVisible();
+    expect(await screen.findByText(/completion alone does not establish full coverage/)).toBeVisible();
     expect(changeCostConnection).toHaveBeenCalledTimes(1);
     expect(changeCostConnection).toHaveBeenCalledWith('probe', 'test-csrf');
   });

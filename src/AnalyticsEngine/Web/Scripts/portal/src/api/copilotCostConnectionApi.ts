@@ -59,7 +59,7 @@ const STATUS_KEYS: Record<string, TranslationKey> = {
   disabled: 'admin.costConnection.disabled',
   storageRequired: 'admin.costConnection.storageRequired',
   configurationRequired: 'admin.costConnection.configurationRequired',
-  operatorRequired: 'admin.costConnection.operatorRequired',
+  administrationRequired: 'admin.costConnection.administrationRequired',
   disconnected: 'admin.costConnection.disconnected',
   connected: 'admin.costConnection.connected',
   reconnectRequired: 'admin.costConnection.reconnectRequired',

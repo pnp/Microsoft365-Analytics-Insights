@@ -431,11 +431,9 @@
             this.chkCopilotCostManagement.Size = new System.Drawing.Size(178, 17);
             this.chkCopilotCostManagement.TabIndex = 37;
             this.chkCopilotCostManagement.Text = "Copilot credit history (preview)";
-            this.toolTipTargets.SetToolTip(this.chkCopilotCostManagement, "PREVIEW - not supported for production use. Collects Copilot credit history from " +
-                    "Microsoft Graph beta APIs, which can change or be withdrawn without notice. Needs a d" +
-                    "elegated reader connected from the web app's Administration page by a user holding t" +
-                    "he CopilotCostConnection.Operator app role - the installer grants neither. Uses the s" +
-                    "olution's Azure storage account (Table storage).");
+            this.toolTipTargets.SetToolTip(this.chkCopilotCostManagement, "Collects Copilot credit history using a delegated reader connected from the web app's " +
+                    "Administration page by a user with Portal.Administration. The portal explains the Graph " +
+                    "permissions, admin consent and reader role needed. Uses the solution's Azure Table storage.");
             this.chkCopilotCostManagement.UseVisualStyleBackColor = true;
             this.chkCopilotCostManagement.CheckedChanged += new System.EventHandler(this.chkCopilotCostManagement_CheckedChanged);
             //

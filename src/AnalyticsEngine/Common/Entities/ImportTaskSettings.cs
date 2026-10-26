@@ -217,9 +217,9 @@ namespace Common.Entities
         /// <para>Opt-in and off by default. The underlying Graph endpoints are beta: they can change or be
         /// withdrawn without notice and are not supported for production use, so this toggle previews a
         /// future capability rather than enabling a supported import.</para>
-        /// <para>Enabling it grants nothing. The installer creates no permission, consent or app-role
-        /// assignment for it: an administrator assigns the <c>CopilotCostConnection.Operator</c> app role by
-        /// hand and then connects the delegated reader from the web app's Administration page. Connection
+        /// <para>Enabling it does not grant Graph permissions or consent. A portal administrator with the
+        /// existing <c>Portal.Administration</c> app role connects the delegated reader from the web app's
+        /// Administration page, which explains the separate Graph consent and reader-role requirements. Connection
         /// state lives in Azure Table storage (the solution's <c>Storage</c> connection string), which is
         /// mandatory - there is no in-memory fallback.</para>
         /// <para>The installer mirrors this flag into the <c>CopilotCostConnectionEnabled</c> App Service

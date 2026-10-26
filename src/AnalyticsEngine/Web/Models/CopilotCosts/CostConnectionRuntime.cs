@@ -7,12 +7,12 @@ using Azure;
 using Azure.Identity;
 using Azure.Data.Tables;
 using Common.Entities.CopilotCosts;
+using Web.AnalyticsWeb.Security;
 
 namespace Web.AnalyticsWeb.Models.CopilotCosts
 {
     public sealed class CostConnectionRuntime
     {
-        public const string OperatorRole = "CopilotCostConnection.Operator";
         public const string CallbackPath = "/copilot-cost/callback";
         public const string BindingCookie = "__Host-CopilotCostBinding";
         public static readonly Lazy<CostConnectionRuntime> Default = new Lazy<CostConnectionRuntime>(() => new CostConnectionRuntime(new AppConfig()));
@@ -71,13 +71,13 @@ namespace Web.AnalyticsWeb.Models.CopilotCosts
             return "available";
         }
 
-        public static bool IsOperator(ClaimsPrincipal principal, string tenant, string client)
+        public static bool CanManage(ClaimsPrincipal principal, string tenant, string client, PortalAccessPolicy policy = null)
         {
             return principal?.Identity?.IsAuthenticated == true
                 && (principal.FindFirst("tid")?.Value ?? principal.FindFirst("http://schemas.microsoft.com/identity/claims/tenantid")?.Value) == tenant
                 && principal.HasClaim("aud", client)
                 && Guid.TryParse(OperatorId(principal), out _)
-                && (principal.IsInRole(OperatorRole) || principal.HasClaim("roles", OperatorRole));
+                && (policy ?? PortalAccessPolicy.FromAppSettings()).Evaluate(principal).Administration;
         }
 
         public static string OperatorId(ClaimsPrincipal principal) =>

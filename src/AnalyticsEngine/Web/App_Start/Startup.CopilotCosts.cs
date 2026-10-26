@@ -50,8 +50,8 @@ namespace Web.AnalyticsWeb
                         throw new CostConnectionException("invalidCallback");
                     var auth = await context.Authentication.AuthenticateAsync(CookieAuthenticationDefaults.AuthenticationType);
                     var principal = auth?.Identity == null ? null : new ClaimsPrincipal(auth.Identity);
-                    if (!CostConnectionRuntime.IsOperator(principal, runtime.Config.TenantGUID.ToString(), runtime.Config.ClientID))
-                        throw new CostConnectionException("operatorRequired");
+                    if (!CostConnectionRuntime.CanManage(principal, runtime.Config.TenantGUID.ToString(), runtime.Config.ClientID))
+                        throw new CostConnectionException("administrationRequired");
                     using (var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(45)))
                     {
                         await runtime.Service.CompleteAsync(CostConnectionRuntime.OperatorId(principal),

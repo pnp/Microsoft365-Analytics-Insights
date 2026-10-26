@@ -14,6 +14,7 @@ const useStyles = makeStyles({
   card: { minWidth: 0 },
   actions: { display: 'flex', flexWrap: 'wrap', gap: '8px', '> button': { maxWidth: '100%', whiteSpace: 'normal' } },
   content: { display: 'flex', flexDirection: 'column', gap: '12px', minWidth: 0 },
+  permissions: { display: 'flex', flexDirection: 'column', gap: '8px', margin: 0, paddingLeft: '20px', overflowWrap: 'anywhere' },
 });
 
 export default function CostConnectionPanel() {
@@ -94,8 +95,14 @@ export default function CostConnectionPanel() {
     <Card className={styles.card}>
       <CardHeader header={<Subtitle2>{t('admin.costConnection.title')}</Subtitle2>} />
       <div className={styles.content}>
-        <MessageBar intent="warning"><MessageBarBody>{t('admin.costConnection.experimental')}</MessageBarBody></MessageBar>
         <Text>{t('admin.costConnection.prerequisites')}</Text>
+        <Subtitle2>{t('admin.costConnection.permissionsTitle')}</Subtitle2>
+        <ul className={styles.permissions}>
+          <li><Text>{t('admin.costConnection.portalPermission')}</Text></li>
+          <li><Text>{t('admin.costConnection.delegatedPermissions')}</Text></li>
+          <li><Text>{t('admin.costConnection.readerPermission')}</Text></li>
+          <li><Text>{t('admin.costConnection.runtimePermissions')}</Text></li>
+        </ul>
         <Link href="https://github.com/pnp/Microsoft365-Analytics-Insights/wiki/Experimental-Copilot-Credit-Connection" target="_blank" rel="noopener noreferrer">
           {t('admin.costConnection.help')}
         </Link>
