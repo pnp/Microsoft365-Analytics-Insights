@@ -31,7 +31,7 @@ namespace Common.Entities.CopilotSpend
         public StudioFacts Studio { get; set; }
         public bool StudioImportEnabled { get; set; }
 
-        /// <summary>The scoped per-day and per-agent Studio breakdown, read in SQL; null when it could not be read.</summary>
+        /// <summary>The scoped per-day and per-environment Studio breakdown (and, unfiltered, the agent ledger), read in SQL; null when it could not be read.</summary>
         public CopilotSpendStudioBreakdown StudioBreakdown { get; set; }
     }
 
@@ -80,7 +80,6 @@ namespace Common.Entities.CopilotSpend
                 {
                     row.StudioCredits = Math.Round(used.Credits, 6);
                     row.StudioDays = used.ActiveDays;
-                    row.StudioAgents = used.Agents;
                 }
                 if (balances.TryGetValue(userId, out var balance))
                 {
@@ -141,7 +140,18 @@ namespace Common.Entities.CopilotSpend
                 return section;
             }
             section.Days = breakdown.Days.OrderBy(d => d.Date).ToList();
-            section.Agents = breakdown.Agents.OrderByDescending(a => a.Credits).ThenBy(a => a.AgentId, StringComparer.Ordinal).ToList();
+            section.Environments = breakdown.Environments.OrderByDescending(e => e.Credits).ThenBy(e => e.EnvironmentId, StringComparer.Ordinal).ToList();
+            if (input.Filtered || breakdown.Agents == null)
+            {
+                // Recorded per agent, not per person: a filtered view cannot be shown its share of it.
+                section.Agents = null;
+                section.AgentLedgerCredits = null;
+            }
+            else
+            {
+                section.Agents = breakdown.Agents.OrderByDescending(a => a.Credits).ThenBy(a => a.AgentId, StringComparer.Ordinal).ToList();
+                section.AgentLedgerCredits = Math.Round(section.Agents.Sum(a => a.Credits), 6);
+            }
             return section;
         }
 
@@ -240,13 +250,13 @@ namespace Common.Entities.CopilotSpend
 
         private static string NullIfBlank(string value) => string.IsNullOrWhiteSpace(value) ? null : value;
 
-        /// <summary>One person's drill-down from their own facts: balance by category, balance over time, Studio by agent.</summary>
+        /// <summary>One person's drill-down from their own facts: balance by category, balance over time, Studio by environment.</summary>
         public static CopilotSpendPersonDetail Detail(CopilotSpendPersonRow person, PersonDetailFacts facts) => new CopilotSpendPersonDetail
         {
             Person = person,
             Services = CopilotInvestmentPersonDetailBuilder.CreditServices(facts),
             Balances = (facts ?? new PersonDetailFacts()).Balances.OrderBy(b => b.Date).ToList(),
-            StudioAgents = CopilotInvestmentPersonDetailBuilder.StudioAgents(facts),
+            StudioEnvironments = CopilotInvestmentPersonDetailBuilder.StudioEnvironments(facts),
         };
     }
 
@@ -254,7 +264,10 @@ namespace Common.Entities.CopilotSpend
     public sealed class CopilotSpendStudioBreakdown
     {
         public List<CopilotSpendDay> Days { get; set; } = new List<CopilotSpendDay>();
-        public List<CopilotSpendAgent> Agents { get; set; } = new List<CopilotSpendAgent>();
+        public List<CopilotSpendEnvironment> Environments { get; set; } = new List<CopilotSpendEnvironment>();
+
+        /// <summary>The tenant agent ledger by agent; null when not read, as for a filtered view.</summary>
+        public List<CopilotSpendAgent> Agents { get; set; }
         public string FailureCode { get; set; }
     }
 
@@ -306,7 +319,6 @@ namespace Common.Entities.CopilotSpend
                 case "department": return new Func<CopilotSpendPersonRow, object>[] { r => NullIfBlank(r.Department) };
                 case "manager": return new Func<CopilotSpendPersonRow, object>[] { r => NullIfBlank(r.Manager) };
                 case "studioDays": return new Func<CopilotSpendPersonRow, object>[] { r => r.StudioDays };
-                case "studioAgents": return new Func<CopilotSpendPersonRow, object>[] { r => r.StudioAgents };
                 case "balanceCredits": return new Func<CopilotSpendPersonRow, object>[] { r => r.BalanceCredits };
                 case "balanceDate": return new Func<CopilotSpendPersonRow, object>[] { r => r.BalanceDate };
                 case "studioCredits":

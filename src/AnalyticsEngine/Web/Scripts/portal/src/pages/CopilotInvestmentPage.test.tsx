@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { act, configure, fireEvent, screen, waitFor, within } from '@testing-library/react';
 
 import { renderWithProvider } from '../test/renderWithProvider';
 import CopilotInvestmentPage from './CopilotInvestmentPage';
@@ -12,8 +12,15 @@ import {
   fetchInvestmentTrend,
   investmentWorkbookUrl,
   queryParams,
+  saveInvestmentSettings,
 } from '../api/copilotInvestmentApi';
+import { ILLUSTRATIVE_SCENARIO } from '../components/copilotInvestment/WhatIfDialog';
 import type { CopilotInvestmentSummary, InvestmentPeoplePage } from '../types/copilotInvestment';
+
+// Whole-page tests that open dialogs several times: under a parallel run the Fluent tree renders slowly, so the async
+// matchers and each test get the same headroom LicenceActivityPage.test.tsx gives its page tests.
+configure({ asyncUtilTimeout: 3000 });
+vi.setConfig({ testTimeout: 20000 });
 
 vi.mock('../api/copilotInvestmentApi', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../api/copilotInvestmentApi')>()),
@@ -22,6 +29,7 @@ vi.mock('../api/copilotInvestmentApi', async (importOriginal) => ({
   fetchInvestmentTrend: vi.fn(),
   fetchInvestmentPeople: vi.fn(),
   fetchInvestmentPerson: vi.fn(),
+  saveInvestmentSettings: vi.fn(),
 }));
 
 vi.mock('../api/userFilterApi', () => ({
@@ -219,15 +227,28 @@ beforeEach(() => {
   vi.mocked(fetchInvestmentPeople).mockResolvedValue(people);
 });
 
+/**
+ * A dialog opened again in the same test. Fluent's focus manager hides a dialog from assistive technology until focus is
+ * inside it, and a busy parallel run can query it before that has happened; moving focus in, as Fluent itself does on
+ * open, settles it - and the dialog must then be fully accessible.
+ */
+async function reopenedDialog(): Promise<HTMLElement> {
+  const dialog = await screen.findByRole('dialog', { hidden: true });
+  const first = (await within(dialog).findAllByRole('button', { hidden: true }))[0];
+  act(() => first.focus());
+  await waitFor(() => expect(dialog).not.toHaveAttribute('aria-hidden'));
+  return dialog;
+}
+
 describe('CopilotInvestmentPage', () => {
   it('leads with the answer and the modelled figures it rests on, each labelled as modelled', async () => {
     renderWithProvider(<CopilotInvestmentPage />, { access: { administration: false, seePii: false } });
 
     expect(
-      await screen.findByText(/the seats return 1\.68\u00d7 in the base case \(0\.54\u00d7 to 3\.91\u00d7\): \u20ac4,900 a month more than their modelled cost/),
+      await screen.findByText(/the licences return 1\.68\u00d7 in the base case \(0\.54\u00d7 to 3\.91\u00d7\): \u20ac4,900 a month more than their modelled cost/),
     ).toBeInTheDocument();
     expect(screen.getByText('Modelled cost a month')).toBeInTheDocument();
-    expect(screen.getByText('\u20ac7,200 in seats + \u20ac100 in Copilot Studio credits')).toBeInTheDocument();
+    expect(screen.getByText('\u20ac7,200 in licences + \u20ac100 in Copilot Studio credits')).toBeInTheDocument();
     expect(screen.getByText('Modelled value (base)')).toBeInTheDocument();
     expect(screen.getByText('+\u20ac4,900 a month')).toBeInTheDocument();
     expect(screen.getByText('1.68\u00d7')).toBeInTheDocument();
@@ -254,20 +275,20 @@ describe('CopilotInvestmentPage', () => {
 
     expect(await screen.findByText(/\u20ac2,190 a month short of their modelled cost/)).toBeInTheDocument();
     expect(
-      screen.getByText('Close the \u20ac2,190 a month shortfall with 584 more active seat-days a month - about 2.4 more for each holder who already uses Copilot.'),
+      screen.getByText('Close the \u20ac2,190 a month shortfall with 584 more active licence-days a month - about 2.4 more for each holder who already uses Copilot.'),
     ).toBeInTheDocument();
-    expect(screen.getByText(/frees \u20ac480 a month of seat cost and moves the base return to 0\.84\u00d7/)).toBeInTheDocument();
-    expect(screen.getByText(/Reclaimed seats could cover 16 of them; seats for the other 16 would add \u20ac480 a month/)).toBeInTheDocument();
+    expect(screen.getByText(/frees \u20ac480 a month of licence cost and moves the base return to 0\.84\u00d7/)).toBeInTheDocument();
+    expect(screen.getByText(/Reclaimed licences could cover 16 of them; licences for the other 16 would add \u20ac480 a month/)).toBeInTheDocument();
     // Amounts of different kinds never read as one column of savings.
-    expect(screen.getByText('Frees \u20ac1,140 a month of seat cost')).toBeInTheDocument();
+    expect(screen.getByText('Frees \u20ac1,140 a month of licence cost')).toBeInTheDocument();
     expect(screen.getByText('\u20ac42.00 a month if the balances were a month\u2019s spend')).toBeInTheDocument();
     // The bars under break-even are marked in words as well as colour.
     expect(screen.getAllByText(/below break-even/).length).toBe(3);
-    expect(screen.getByText('150 of 240 analysed seat holders are at or above break-even; 50 use Copilot less often and 40 not at all.')).toBeInTheDocument();
+    expect(screen.getByText('150 of 240 analysed licensed users are at or above break-even; 50 use Copilot less often and 40 not at all.')).toBeInTheDocument();
     // Confidence per question, and the weekly trend in words.
     expect(screen.getByText('Evidence of use')).toBeInTheDocument();
     expect(screen.getByText('Credit balances (preview)')).toBeInTheDocument();
-    expect(screen.getByText(/Weekly active seat holders went from 150 to 180/)).toBeInTheDocument();
+    expect(screen.getByText(/Weekly active licensed users went from 150 to 180/)).toBeInTheDocument();
     expect(screen.getByRole('listitem', { name: /not covered by the audit import/ })).toBeInTheDocument();
   });
 
@@ -298,7 +319,7 @@ describe('CopilotInvestmentPage', () => {
       person: people.rows[0], currency: 'EUR', activityAssessed: true, apps: [], weeks: [], agentTurns: 0, coworkTurns: 0, totalTurns: 0, activeWeeks: 0,
       promptsAssessed: false, prompts: 0, responses: 0, promptApps: [], promptCategories: [],
       creditServices: [{ category: 'coworkAgent', policyId: 'contoso-demo-policy-all-users', consumed: 1050, unit: 'copilotCredit', allowed: true, decisionReason: 'allowed', perUserLimit: 1200, perUserLimitKind: 'limited', remaining: 150, lastModified: null, unevaluatedReason: null }],
-      balances: [], studioAgents: [], evidence: ['noActivity'],
+      balances: [], studioEnvironments: [], evidence: ['noActivity'],
     });
     fireEvent.click(screen.getByRole('button', { name: 'Open evidence for person7@contoso.example' }));
     const dialog = await screen.findByRole('dialog');
@@ -353,6 +374,74 @@ describe('CopilotInvestmentPage', () => {
     expect(screen.queryByRole('img', { name: 'Has a Microsoft 365 Copilot licence' })).not.toBeInTheDocument();
   });
 
+  it('explains why money is withheld, tries clearly labelled example figures in this browser only, and goes back to the organisation figures', async () => {
+    const withoutFigures = summary();
+    withoutFigures.assumptions = {
+      ...withoutFigures.assumptions,
+      status: 'missing',
+      values: null,
+      missingForValue: ['currency', 'seatPricePerMonth', 'hourlyCost'],
+    };
+    vi.mocked(fetchInvestmentSummary).mockResolvedValue(withoutFigures);
+    renderWithProvider(<CopilotInvestmentPage />, { access: { administration: true, seePii: true } });
+
+    // The toolbar's button comes first; the executive panel offers the same dialog.
+    fireEvent.click((await screen.findAllByRole('button', { name: 'What-if' }))[0]);
+    let dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByText(/No organisation figures are set yet/)).toBeInTheDocument();
+    expect(within(dialog).getByRole('link', { name: 'Set the organisation\u2019s figures' })).toHaveAttribute('href', '#/admin/copilot-investment-assumptions');
+    expect(within(dialog).getAllByText('Not set by the organisation').length).toBeGreaterThan(5);
+    expect(within(dialog).getByText(/not Microsoft prices, not your organisation\u2019s figures and not measured savings/)).toBeInTheDocument();
+    expect(within(dialog).getByText('Needed to model the return')).toBeInTheDocument();
+    expect(within(dialog).getByText('Optional')).toBeInTheDocument();
+
+    // One click applies the example as this reader's what-if: nothing is saved as the organisation's figures.
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Try illustrative example figures' }));
+    await waitFor(() => expect(vi.mocked(fetchInvestmentSummary).mock.calls.at(-1)![0].scenario).toEqual({ ...ILLUSTRATIVE_SCENARIO }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    expect(saveInvestmentSettings).not.toHaveBeenCalled();
+    expect(await screen.findByText(/Illustrative example figures are in use/)).toBeInTheDocument();
+    // The Excel export models the same figures as the page.
+    await waitFor(() => expect(screen.getByText('Excel report').closest('a')?.getAttribute('href')).toContain('hourlyCost=45'));
+    const href = new URL(screen.getByText('Excel report').closest('a')!.getAttribute('href')!, 'https://contoso.example');
+    expect(href.searchParams.get('realisationBase')).toBe('0.5');
+    expect(href.searchParams.get('seatPrice')).toBe(String(ILLUSTRATIVE_SCENARIO.seatPrice));
+
+    // Clearing the example returns to the organisation's (empty) figures.
+    fireEvent.click(screen.getByRole('button', { name: 'Clear example figures' }));
+    await waitFor(() => expect(vi.mocked(fetchInvestmentSummary).mock.calls.at(-1)![0].scenario).toBeNull());
+    expect(screen.queryByText(/Illustrative example figures are in use/)).not.toBeInTheDocument();
+
+    // Realisation is entered as a percentage and sent as a share; out-of-range figures are refused before anything is sent.
+    fireEvent.click(screen.getAllByRole('button', { name: 'What-if' })[0]);
+    dialog = await reopenedDialog();
+    const realisation = within(dialog).getAllByRole('textbox').at(-4)!;
+    fireEvent.change(realisation, { target: { value: '140' } });
+    expect(within(dialog).getByText('Enter a number from 0 to 100.')).toBeInTheDocument();
+    expect(within(dialog).getByRole('button', { name: 'Apply' })).toBeDisabled();
+    fireEvent.change(realisation, { target: { value: '40' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Apply' }));
+    await waitFor(() => expect(vi.mocked(fetchInvestmentSummary).mock.calls.at(-1)![0].scenario).toEqual({ realisationBase: 0.4 }));
+    expect(screen.queryByText(/Illustrative example figures are in use/)).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: 'What-if (1 changed)' }));
+    fireEvent.click(within(await reopenedDialog()).getByRole('button', { name: 'Back to organisation defaults' }));
+    await waitFor(() => expect(vi.mocked(fetchInvestmentSummary).mock.calls.at(-1)![0].scenario).toBeNull());
+  });
+
+  it('tells a reader who cannot set the organisation figures who can', async () => {
+    const withoutFigures = summary();
+    withoutFigures.assumptions = { ...withoutFigures.assumptions, status: 'missing', values: null, missingForValue: ['hourlyCost'] };
+    vi.mocked(fetchInvestmentSummary).mockResolvedValue(withoutFigures);
+    renderWithProvider(<CopilotInvestmentPage />, { access: { administration: false, seePii: false } });
+
+    fireEvent.click((await screen.findAllByRole('button', { name: 'What-if' }))[0]);
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByText(/A portal administrator sets them for everyone under Administration/)).toBeInTheDocument();
+    expect(within(dialog).queryByRole('link', { name: 'Set the organisation\u2019s figures' })).not.toBeInTheDocument();
+  });
+
   it('says which assumptions are missing instead of modelling money with figures nobody chose', async () => {
     vi.mocked(fetchInvestmentSummary).mockResolvedValue(
       summary({
@@ -371,7 +460,7 @@ describe('CopilotInvestmentPage', () => {
     expect(screen.getAllByText('Edit assumptions')[0]).toHaveAttribute('href', '#/admin/copilot-investment-assumptions');
   });
 
-  it('says plainly when no seat holder\u2019s use was measured in this period, rather than valuing another period', async () => {
+  it('says plainly when no licensed user\u2019s use was measured in this period, rather than valuing another period', async () => {
     vi.mocked(fetchInvestmentSummary).mockResolvedValue(
       summary({
         value: { available: false, unavailableReason: 'noMatchedHolders', missing: [], scenarios: [], valuePerActiveHolderMonthly: null },
@@ -382,7 +471,7 @@ describe('CopilotInvestmentPage', () => {
     );
     renderWithProvider(<CopilotInvestmentPage />, { access: { administration: false, seePii: false } });
 
-    expect(await screen.findByText(/No seat holder\u2019s Copilot use was measured in this period, so value and return are not modelled/)).toBeInTheDocument();
+    expect(await screen.findByText(/No licensed user\u2019s Copilot use was measured in this period, so value and return are not modelled/)).toBeInTheDocument();
   });
 
   it('reads in Spanish, with numbers in Spanish conventions and tenant names left as stored', async () => {

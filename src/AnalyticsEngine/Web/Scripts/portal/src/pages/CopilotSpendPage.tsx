@@ -23,6 +23,7 @@ import {
   Table,
   TableBody,
   TableCell,
+  TableCellLayout,
   TableHeader,
   TableHeaderCell,
   TableRow,
@@ -97,14 +98,15 @@ const useStyles = makeStyles({
   badges: { display: 'flex', gap: '6px', flexWrap: 'wrap' },
   num: { textAlign: 'right', fontVariantNumeric: 'tabular-nums' },
   numHeader: { justifyContent: 'flex-end', textAlign: 'right' },
-  facts: { display: 'grid', gridTemplateColumns: 'minmax(200px, 1fr) auto', gap: '6px 16px', alignItems: 'baseline' },
+  facts: { display: 'grid', gridTemplateColumns: 'minmax(200px, 360px) auto', justifyContent: 'start', gap: '6px 24px', alignItems: 'baseline' },
   chart: { display: 'flex', alignItems: 'flex-end', gap: '2px', height: '120px', paddingTop: '8px', borderBottom: `1px solid ${tokens.colorNeutralStroke1}` },
   bar: { flex: '1 1 0', minWidth: '3px', backgroundColor: tokens.colorBrandBackground, borderRadius: '2px 2px 0 0' },
   barEmpty: { backgroundColor: tokens.colorNeutralBackground5 },
   axis: { display: 'flex', justifyContent: 'space-between' },
   toolbarRow: { display: 'flex', gap: '12px', alignItems: 'flex-end', flexWrap: 'wrap' },
-  table: { minWidth: '820px' },
-  personCol: { width: '28%', minWidth: '220px' },
+  table: { minWidth: '900px' },
+  personCol: { minWidth: '200px' },
+  nowrap: { whiteSpace: 'nowrap' },
   personLink: { textAlign: 'start', overflowWrap: 'anywhere' },
   pager: { display: 'flex', gap: '12px', alignItems: 'center', justifyContent: 'flex-end' },
   dialog: { maxWidth: 'min(860px, calc(100vw - 32px))', width: '100%' },
@@ -530,17 +532,63 @@ function StudioPanel({ summary }: { summary: CopilotSpendSummary }) {
         <DayChart summary={summary} />
       </Card>
       <Card className={styles.card}>
-        <SectionHeading title={t('copilotSpend.studio.agentsTitle')} description={t('copilotSpend.studio.agentsDescription')} />
-        {studio.agents.length === 0 ? (
-          <Text size={200}>{studio.breakdownFailureCode ? t('copilotSpend.studio.breakdownUnavailable') : t('copilotSpend.studio.noDays')}</Text>
+        <SectionHeading title={t('copilotSpend.studio.environmentsTitle')} description={t('copilotSpend.studio.environmentsDescription')} />
+        {studio.breakdownFailureCode ? (
+          <Text size={200}>{t('copilotSpend.studio.breakdownUnavailable')}</Text>
+        ) : studio.environments.length === 0 ? (
+          <Text size={200}>{t('copilotSpend.studio.noDays')}</Text>
+        ) : (
+          <Table size="small" aria-label={t('copilotSpend.studio.environmentsTitle')}>
+            <TableHeader>
+              <TableRow>
+                <TableHeaderCell>{t('copilotSpend.studio.col.environment')}</TableHeaderCell>
+                <TableHeaderCell className={styles.num} button={{ className: styles.numHeader }}>{t('copilotSpend.studio.col.credits')}</TableHeaderCell>
+                <TableHeaderCell className={styles.num} button={{ className: styles.numHeader }}>{t('copilotSpend.studio.col.people')}</TableHeaderCell>
+                <TableHeaderCell className={styles.num} button={{ className: styles.numHeader }}>{t('copilotSpend.studio.col.days')}</TableHeaderCell>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {studio.environments.map((e) => (
+                <TableRow key={e.environmentId ?? '-'}>
+                  <TableCell>
+                    {e.environmentName ?? t('copilotSpend.studio.unnamedEnvironment')}
+                    {e.environmentId && (
+                      <Text size={100} block className={`${styles.muted} ${styles.code}`}>
+                        {e.environmentId}
+                      </Text>
+                    )}
+                  </TableCell>
+                  <TableCell className={styles.num}>{formatCredits(e.credits)}</TableCell>
+                  <TableCell className={styles.num}>{formatNumber(e.people)}</TableCell>
+                  <TableCell className={styles.num}>{formatNumber(e.days)}</TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        )}
+      </Card>
+      <Card className={styles.card}>
+        <SectionHeading
+          title={t('copilotSpend.studio.agentsTitle')}
+          description={
+            studio.agents === null || studio.agentLedgerCredits === null
+              ? undefined
+              : t('copilotSpend.studio.agentsDescription', { credits: formatCredits(studio.agentLedgerCredits) })
+          }
+        />
+        {studio.breakdownFailureCode ? (
+          <Text size={200}>{t('copilotSpend.studio.breakdownUnavailable')}</Text>
+        ) : studio.agents === null ? (
+          <Text size={200}>{t('copilotSpend.studio.agentsWithheld')}</Text>
+        ) : studio.agents.length === 0 ? (
+          <Text size={200}>{t('copilotSpend.studio.noAgents')}</Text>
         ) : (
           <Table size="small" aria-label={t('copilotSpend.studio.agentsTitle')}>
             <TableHeader>
               <TableRow>
                 <TableHeaderCell>{t('copilotSpend.studio.col.agent')}</TableHeaderCell>
-                <TableHeaderCell className={styles.num}>{t('copilotSpend.studio.col.credits')}</TableHeaderCell>
-                <TableHeaderCell className={styles.num}>{t('copilotSpend.studio.col.people')}</TableHeaderCell>
-                <TableHeaderCell className={styles.num}>{t('copilotSpend.studio.col.days')}</TableHeaderCell>
+                <TableHeaderCell className={styles.num} button={{ className: styles.numHeader }}>{t('copilotSpend.studio.col.credits')}</TableHeaderCell>
+                <TableHeaderCell className={styles.num} button={{ className: styles.numHeader }}>{t('copilotSpend.studio.col.days')}</TableHeaderCell>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -555,7 +603,6 @@ function StudioPanel({ summary }: { summary: CopilotSpendSummary }) {
                     )}
                   </TableCell>
                   <TableCell className={styles.num}>{formatCredits(a.credits)}</TableCell>
-                  <TableCell className={styles.num}>{formatNumber(a.people)}</TableCell>
                   <TableCell className={styles.num}>{formatNumber(a.days)}</TableCell>
                 </TableRow>
               ))}
@@ -657,24 +704,34 @@ function BalancesPanel({ summary, query, reloadKey }: { summary: CopilotSpendSum
         ) : trend.points.length === 0 ? (
           <Text size={200}>{t('copilotSpend.balances.noData')}</Text>
         ) : (
-          <div className={styles.chart} role="list" aria-label={t('copilotSpend.balances.trendTitle')}>
-            {trend.points.map((p) => {
-              const label = t('copilotSpend.balances.trendPoint', {
-                date: formatShortDate(p.date),
-                credits: formatCredits(p.credits),
-                people: formatNumber(p.consumingUsers),
-              });
-              return (
-                <div
-                  key={p.date}
-                  role="listitem"
-                  aria-label={label}
-                  title={label}
-                  className={styles.bar}
-                  style={{ height: `${Math.max(2, ((p.credits ?? 0) / maxTrend) * 100)}%` }}
-                />
-              );
-            })}
+          <div>
+            <div className={styles.chart} role="list" aria-label={t('copilotSpend.balances.trendTitle')}>
+              {trend.points.map((p) => {
+                const label = t('copilotSpend.balances.trendPoint', {
+                  date: formatShortDate(p.date),
+                  credits: formatCredits(p.credits),
+                  people: formatNumber(p.consumingUsers),
+                });
+                return (
+                  <div
+                    key={p.date}
+                    role="listitem"
+                    aria-label={label}
+                    title={label}
+                    className={styles.bar}
+                    style={{ height: `${Math.max(2, ((p.credits ?? 0) / maxTrend) * 100)}%` }}
+                  />
+                );
+              })}
+            </div>
+            <div className={styles.axis} aria-hidden="true">
+              <Text size={100} className={styles.muted}>
+                {formatShortDate(trend.points[0].date)}
+              </Text>
+              <Text size={100} className={styles.muted}>
+                {formatShortDate(trend.points[trend.points.length - 1].date)}
+              </Text>
+            </div>
           </div>
         )}
       </Card>
@@ -689,11 +746,11 @@ function BalancesPanel({ summary, query, reloadKey }: { summary: CopilotSpendSum
               <TableRow>
                 <TableHeaderCell>{t('copilotInvestment.services.col.service')}</TableHeaderCell>
                 <TableHeaderCell>{t('copilotInvestment.services.col.unit')}</TableHeaderCell>
-                <TableHeaderCell className={styles.num}>{t('copilotInvestment.services.col.consumers')}</TableHeaderCell>
-                <TableHeaderCell className={styles.num}>{t('copilotInvestment.services.col.quantity')}</TableHeaderCell>
-                <TableHeaderCell className={styles.num}>{t('copilotInvestment.services.col.refused')}</TableHeaderCell>
-                <TableHeaderCell className={styles.num}>{t('copilotInvestment.services.col.unevaluated')}</TableHeaderCell>
-                <TableHeaderCell className={styles.num}>{t('copilotInvestment.services.col.unknown')}</TableHeaderCell>
+                <TableHeaderCell className={styles.num} button={{ className: styles.numHeader }}>{t('copilotInvestment.services.col.consumers')}</TableHeaderCell>
+                <TableHeaderCell className={styles.num} button={{ className: styles.numHeader }}>{t('copilotInvestment.services.col.quantity')}</TableHeaderCell>
+                <TableHeaderCell className={styles.num} button={{ className: styles.numHeader }}>{t('copilotInvestment.services.col.refused')}</TableHeaderCell>
+                <TableHeaderCell className={styles.num} button={{ className: styles.numHeader }}>{t('copilotInvestment.services.col.unevaluated')}</TableHeaderCell>
+                <TableHeaderCell className={styles.num} button={{ className: styles.numHeader }}>{t('copilotInvestment.services.col.unknown')}</TableHeaderCell>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -779,12 +836,12 @@ function GroupTable({ summary, groups, customDimensions }: { summary: CopilotSpe
       <TableHeader>
         <TableRow>
           <TableHeaderCell>{dimensionLabel(t, summary.organisation.dimension, source)}</TableHeaderCell>
-          <TableHeaderCell className={styles.num}>{t('copilotSpend.org.col.people')}</TableHeaderCell>
-          <TableHeaderCell className={styles.num}>{t('copilotSpend.org.col.studioCredits')}</TableHeaderCell>
-          <TableHeaderCell className={styles.num}>{t('copilotSpend.org.col.shareOfStudio')}</TableHeaderCell>
-          <TableHeaderCell className={styles.num}>{t('copilotSpend.org.col.balanceCredits')}</TableHeaderCell>
-          <TableHeaderCell className={styles.num}>{t('copilotSpend.org.col.shareOfBalances')}</TableHeaderCell>
-          <TableHeaderCell className={styles.num}>{t('copilotSpend.org.col.unknown')}</TableHeaderCell>
+          <TableHeaderCell className={styles.num} button={{ className: styles.numHeader }}>{t('copilotSpend.org.col.people')}</TableHeaderCell>
+          <TableHeaderCell className={styles.num} button={{ className: styles.numHeader }}>{t('copilotSpend.org.col.studioCredits')}</TableHeaderCell>
+          <TableHeaderCell className={styles.num} button={{ className: styles.numHeader }}>{t('copilotSpend.org.col.shareOfStudio')}</TableHeaderCell>
+          <TableHeaderCell className={styles.num} button={{ className: styles.numHeader }}>{t('copilotSpend.org.col.balanceCredits')}</TableHeaderCell>
+          <TableHeaderCell className={styles.num} button={{ className: styles.numHeader }}>{t('copilotSpend.org.col.shareOfBalances')}</TableHeaderCell>
+          <TableHeaderCell className={styles.num} button={{ className: styles.numHeader }}>{t('copilotSpend.org.col.unknown')}</TableHeaderCell>
         </TableRow>
       </TableHeader>
       <TableBody>
@@ -849,17 +906,17 @@ function OrganisationSpendPanel({ summary, dimension, onDimensionChange, canSeeP
   );
 }
 
-/** A sortable column of the people table, by the server's sort key. */
-type SpendSortKey = 'user' | 'department' | 'studioCredits' | 'studioDays' | 'studioAgents' | 'balanceCredits' | 'balanceDate';
+/** A sortable column of the people table, by the server's sort key, with its share of the table's width. */
+type SpendSortKey = 'user' | 'department' | 'manager' | 'studioCredits' | 'studioDays' | 'balanceCredits' | 'balanceDate';
 
-const PEOPLE_COLUMNS: { key: SpendSortKey; labelKey: TranslationKey; numeric: boolean; firstDescending: boolean }[] = [
-  { key: 'user', labelKey: 'copilotSpend.people.col.person', numeric: false, firstDescending: false },
-  { key: 'department', labelKey: 'copilotSpend.people.col.department', numeric: false, firstDescending: false },
-  { key: 'studioCredits', labelKey: 'copilotSpend.people.col.studioCredits', numeric: true, firstDescending: true },
-  { key: 'studioDays', labelKey: 'copilotSpend.people.col.studioDays', numeric: true, firstDescending: true },
-  { key: 'studioAgents', labelKey: 'copilotSpend.people.col.studioAgents', numeric: true, firstDescending: true },
-  { key: 'balanceCredits', labelKey: 'copilotSpend.people.col.balance', numeric: true, firstDescending: true },
-  { key: 'balanceDate', labelKey: 'copilotSpend.people.col.balanceDate', numeric: true, firstDescending: true },
+const PEOPLE_COLUMNS: { key: SpendSortKey; labelKey: TranslationKey; numeric: boolean; firstDescending: boolean; width: string }[] = [
+  { key: 'user', labelKey: 'copilotSpend.people.col.person', numeric: false, firstDescending: false, width: '26%' },
+  { key: 'department', labelKey: 'copilotSpend.people.col.department', numeric: false, firstDescending: false, width: '11%' },
+  { key: 'manager', labelKey: 'copilotSpend.people.col.manager', numeric: false, firstDescending: false, width: '14%' },
+  { key: 'studioCredits', labelKey: 'copilotSpend.people.col.studioCredits', numeric: true, firstDescending: true, width: '9%' },
+  { key: 'studioDays', labelKey: 'copilotSpend.people.col.studioDays', numeric: true, firstDescending: true, width: '7%' },
+  { key: 'balanceCredits', labelKey: 'copilotSpend.people.col.balance', numeric: true, firstDescending: true, width: '9%' },
+  { key: 'balanceDate', labelKey: 'copilotSpend.people.col.balanceDate', numeric: true, firstDescending: true, width: '10%' },
 ];
 
 export const DEFAULT_SPEND_PEOPLE_FILTERS: SpendPeopleFilters = { search: '', origin: 'all', sortBy: 'studioCredits', sortDesc: true };
@@ -974,7 +1031,8 @@ function SpendPeoplePanel({ query, filters, onFiltersChange }: {
                   return (
                     <TableHeaderCell
                       key={c.key}
-                      className={c.key === 'user' ? styles.personCol : c.numeric ? styles.num : undefined}
+                      className={c.numeric ? styles.num : undefined}
+                      style={{ width: c.width }}
                       button={c.numeric ? { className: styles.numHeader } : undefined}
                       sortDirection={filters.sortBy === c.key ? (filters.sortDesc ? 'descending' : 'ascending') : undefined}
                       onClick={() => sortOn(c.key)}
@@ -984,7 +1042,7 @@ function SpendPeoplePanel({ query, filters, onFiltersChange }: {
                     </TableHeaderCell>
                   );
                 })}
-                <TableHeaderCell>{t('copilotSpend.people.col.notes')}</TableHeaderCell>
+                <TableHeaderCell style={{ width: '14%' }}>{t('copilotSpend.people.col.notes')}</TableHeaderCell>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -1004,9 +1062,14 @@ function SpendPeoplePanel({ query, filters, onFiltersChange }: {
                       )}
                     </TableCell>
                     <TableCell>{row.department ?? '\u2014'}</TableCell>
+                    <TableCell>
+                      {/* A sign-in name can be wider than its column: cut short on screen, whole on hover and to a screen reader. */}
+                      <TableCellLayout truncate title={row.manager ?? undefined}>
+                        {row.manager ?? '\u2014'}
+                      </TableCellLayout>
+                    </TableCell>
                     <TableCell className={styles.num}>{formatCredits(row.studioCredits)}</TableCell>
                     <TableCell className={styles.num}>{formatNumber(row.studioDays)}</TableCell>
-                    <TableCell className={styles.num}>{formatNumber(row.studioAgents)}</TableCell>
                     <TableCell className={styles.num}>
                       {row.balanceCredits === null ? (
                         <span title={t('copilotSpend.people.noReading')} aria-label={t('copilotSpend.people.noReading')} role="img">
@@ -1016,7 +1079,7 @@ function SpendPeoplePanel({ query, filters, onFiltersChange }: {
                         formatCredits(row.balanceCredits)
                       )}
                     </TableCell>
-                    <TableCell className={styles.num}>{row.balanceDate ? formatShortDate(row.balanceDate) : '\u2014'}</TableCell>
+                    <TableCell className={`${styles.num} ${styles.nowrap}`}>{row.balanceDate ? formatShortDate(row.balanceDate) : '\u2014'}</TableCell>
                     <TableCell>
                       <div className={styles.badges}>
                         {flags.map((f) => (
@@ -1050,7 +1113,7 @@ function SpendPeoplePanel({ query, filters, onFiltersChange }: {
   );
 }
 
-/** One person's consumption: their latest balance by category and over time, and their billed Studio use by agent. */
+/** One person's consumption: their latest balance by category and over time, and their billed Studio use by environment. */
 function SpendPersonDialog({ query, person, onClose }: { query: SpendQuery; person: SpendPersonRow; onClose: () => void }) {
   const styles = useStyles();
   const t = useT();
@@ -1085,15 +1148,15 @@ function SpendPersonDialog({ query, person, onClose }: { query: SpendQuery; pers
               <>
                 <div className={styles.section}>
                   <Text weight="semibold">{t('copilotSpend.person.studioTitle')}</Text>
-                  {detail.studioAgents.length === 0 ? (
+                  {detail.studioEnvironments.length === 0 ? (
                     <Text size={200}>{t('copilotSpend.person.noStudio')}</Text>
                   ) : (
                     <div className={styles.list}>
-                      {detail.studioAgents.map((a) => (
+                      {detail.studioEnvironments.map((e) => (
                         <AgentLine
-                          key={a.agentId}
-                          name={a.agentName ?? a.agentId}
-                          text={t('copilotSpend.person.studioRow', { credits: formatCredits(a.credits), days: formatNumber(a.activeDays) })}
+                          key={e.environmentId ?? '-'}
+                          name={e.environmentName ?? e.environmentId ?? t('copilotSpend.studio.unnamedEnvironment')}
+                          text={t('copilotSpend.person.studioRow', { credits: formatCredits(e.credits), days: formatNumber(e.activeDays) })}
                         />
                       ))}
                     </div>
@@ -1154,7 +1217,7 @@ function SpendPersonDialog({ query, person, onClose }: { query: SpendQuery; pers
   );
 }
 
-/** A name from the tenant (an agent, a category) shown verbatim, beside a translated description. */
+/** A name from the tenant (an environment, a category) shown verbatim, beside a translated description. */
 function AgentLine({ name, text }: { name: string; text: string }) {
   const styles = useStyles();
   return (

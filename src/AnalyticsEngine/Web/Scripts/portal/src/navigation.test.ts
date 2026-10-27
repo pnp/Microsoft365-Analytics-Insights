@@ -95,6 +95,16 @@ describe('portal access navigation helpers', () => {
     expect(missingPermission(assumptions, { ...restricted, administration: true })).toBeNull();
   });
 
+  it('puts the spend report under Copilot, beside the investment report, for every reader', () => {
+    const spend = ROUTES.find(route => route.path === '/insights/copilot-spend')!;
+    expect(spend).toBeDefined();
+    expect(spend.workload).toBe('copilot');
+    expect(spend.labelKey).toBe('app.route.copilotSpend');
+    expect(missingPermission(spend, restricted)).toBeNull();
+    const copilot = ROUTES.filter(route => route.workload === 'copilot').map(route => route.path);
+    expect(copilot.indexOf('/insights/copilot-spend')).toBe(copilot.indexOf('/insights/copilot-investment') + 1);
+  });
+
   it('requires Administration, but not See PII, for the dedicated credit-history connection', () => {
     const connection = ROUTES.find(route => route.path === '/admin/copilot-cost-connection')!;
     expect(connection).toBeDefined();

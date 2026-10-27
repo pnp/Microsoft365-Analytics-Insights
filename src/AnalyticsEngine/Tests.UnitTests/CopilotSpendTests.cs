@@ -58,10 +58,10 @@ namespace Tests.UnitTests
             var studio = new StudioFacts { HasData = true, EarliestDate = From.AddDays(-60) };
             studio.Users.AddRange(new[]
             {
-                new StudioUserFact { UserId = 1, Credits = 10, ActiveDays = 3, Agents = 1 },
-                new StudioUserFact { UserId = 5, Credits = 20, ActiveDays = 5, Agents = 2 },
-                new StudioUserFact { UserId = 4, Credits = 30, ActiveDays = 2, Agents = 1 },
-                new StudioUserFact { UserId = null, Credits = 7, ActiveDays = 1, Agents = 1 },
+                new StudioUserFact { UserId = 1, Credits = 10, ActiveDays = 3 },
+                new StudioUserFact { UserId = 5, Credits = 20, ActiveDays = 5 },
+                new StudioUserFact { UserId = 4, Credits = 30, ActiveDays = 2 },
+                new StudioUserFact { UserId = null, Credits = 7, ActiveDays = 1 },
             });
             return new CopilotSpendInput
             {
@@ -86,7 +86,16 @@ namespace Tests.UnitTests
                 StudioBreakdown = new CopilotSpendStudioBreakdown
                 {
                     Days = { new CopilotSpendDay { Date = From, Credits = 67, People = 3 } },
-                    Agents = { new CopilotSpendAgent { AgentId = "agent-1", AgentName = "Contoso helpdesk agent", Credits = 67, People = 3, Days = 1 } },
+                    Environments =
+                    {
+                        new CopilotSpendEnvironment { EnvironmentId = "env-2", EnvironmentName = "Contoso " + GreekDepartment, Credits = 17, People = 1, Days = 1 },
+                        new CopilotSpendEnvironment { EnvironmentId = "env-1", EnvironmentName = "Contoso (default)", Credits = 50, People = 3, Days = 1 },
+                    },
+                    Agents = new List<CopilotSpendAgent>
+                    {
+                        new CopilotSpendAgent { AgentId = "agent-1", AgentName = "Contoso helpdesk agent", Credits = 40, Days = 1 },
+                        new CopilotSpendAgent { AgentId = "agent-2", AgentName = null, Credits = 24.5, Days = 1 },
+                    },
                 },
             };
         }
@@ -101,6 +110,13 @@ namespace Tests.UnitTests
             Assert.AreEqual(7, summary.Studio.UnmatchedCredits.Value, 1e-9);
             Assert.AreEqual(3, summary.Studio.People);
             Assert.IsTrue(summary.Studio.CoversWindow);
+            CollectionAssert.AreEqual(new[] { "env-1", "env-2" }, summary.Studio.Environments.Select(e => e.EnvironmentId).ToList(), "Largest first.");
+            Assert.AreEqual(summary.Studio.Credits, summary.Studio.Environments.Sum(e => e.Credits), 1e-9, "The per-person ledger by environment adds up.");
+
+            // The agent ledger is a different route: its own total, which need not match and is never added in.
+            Assert.AreEqual(2, summary.Studio.Agents.Count);
+            Assert.AreEqual(64.5, summary.Studio.AgentLedgerCredits.Value, 1e-9);
+            Assert.AreEqual(67, summary.Studio.Credits, 1e-9, "Not 131.5: the two Studio ledgers are never added.");
 
             // Balances are each person's latest reading, never added to the Studio figures.
             Assert.AreEqual(220, summary.Balances.Credits, 1e-9, "100 + 70 + the unmatched account's 50; the unknown amount adds nothing.");
@@ -130,6 +146,8 @@ namespace Tests.UnitTests
 
             Assert.AreEqual(30, summary.Studio.Credits, 1e-9, "Only the people in view: 10 + 20.");
             Assert.IsNull(summary.Studio.UnmatchedCredits, "Charges no person was matched to cannot be shown to belong to this view.");
+            Assert.IsNull(summary.Studio.Agents, "The agent ledger is not kept per person, so a filtered view has no share of it to show.");
+            Assert.IsNull(summary.Studio.AgentLedgerCredits);
             Assert.AreEqual(100, summary.Balances.Credits, 1e-9);
             Assert.IsNull(summary.Balances.UnresolvedAccounts);
             Assert.IsNull(summary.Balances.UnresolvedCredits);
@@ -210,6 +228,9 @@ namespace Tests.UnitTests
             CollectionAssert.Contains(texts, es.Text("copilotSpend.workbook.summary.sourcesNote"));
             CollectionAssert.Contains(texts, GreekDepartment);
             CollectionAssert.Contains(texts, "Contoso helpdesk agent");
+            CollectionAssert.Contains(texts, "Contoso " + GreekDepartment, "Environment names round-trip as stored.");
+            CollectionAssert.Contains(texts, es.Text("copilotSpend.workbook.studio.agentsNote"));
+            CollectionAssert.Contains(texts, es.Text("copilotSpend.workbook.studio.unnamedAgent"));
             Assert.IsTrue(sheets.SelectMany(s => s.Cells).Any(c => c.Type == "inlineStr" && c.Text.StartsWith("=HYPERLINK", StringComparison.Ordinal)),
                 "A value that looks like a formula stays text.");
             Assert.AreEqual(CopilotSpendWorkbook.FileName(summary), CopilotSpendWorkbook.FileName(summary, PortalLanguage.English));
@@ -221,10 +242,13 @@ namespace Tests.UnitTests
             Assert.IsFalse(CopilotInvestmentWorkbookLanguageTests.Texts(aggregates).Any(t => t.Contains("@contoso.example")));
             CollectionAssert.Contains(CopilotInvestmentWorkbookLanguageTests.Texts(aggregates), es.Text("copilotSpend.workbook.summary.personDataExcluded"));
 
-            // A filtered workbook leaves the tenant's own policies and pool balances out, and says so.
+            // A filtered workbook leaves the tenant's own policies, pool balances and agent ledger out, and says so.
             var filtered = CopilotSpendCalculator.Calculate(Input(id => id != 4, filtered: true));
-            CollectionAssert.Contains(CopilotInvestmentWorkbookLanguageTests.Texts(CopilotInvestmentWorkbookLanguageTests.Sheets(
-                CopilotSpendWorkbook.Build(filtered, true, "test", PortalLanguage.Spanish))), es.Text("copilotSpend.workbook.balances.tenantWithheld"));
+            var filteredTexts = CopilotInvestmentWorkbookLanguageTests.Texts(CopilotInvestmentWorkbookLanguageTests.Sheets(
+                CopilotSpendWorkbook.Build(filtered, true, "test", PortalLanguage.Spanish)));
+            CollectionAssert.Contains(filteredTexts, es.Text("copilotSpend.workbook.balances.tenantWithheld"));
+            CollectionAssert.Contains(filteredTexts, es.Text("copilotSpend.workbook.studio.agentsWithheld"));
+            CollectionAssert.DoesNotContain(filteredTexts, "Contoso helpdesk agent");
         }
 
         [TestMethod]

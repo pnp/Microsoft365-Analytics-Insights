@@ -4,6 +4,7 @@ import {
   Body1,
   Button,
   MessageBar,
+  MessageBarActions,
   MessageBarBody,
   Select,
   Tab,
@@ -48,7 +49,7 @@ import CreditsPanel from '../components/copilotInvestment/CreditsPanel';
 import PeoplePanel, { DEFAULT_PEOPLE_FILTERS } from '../components/copilotInvestment/PeoplePanel';
 import MethodPanel from '../components/copilotInvestment/MethodPanel';
 import WhatIfDialog, { countOverrides } from '../components/copilotInvestment/WhatIfDialog';
-import { AVAILABILITY_NOTE_KEYS, formatShortDate } from '../components/copilotInvestment/investmentShared';
+import { AVAILABILITY_NOTE_KEYS, FIELD_LABEL_KEYS, formatShortDate } from '../components/copilotInvestment/investmentShared';
 
 type InvestmentTab = 'executive' | 'value' | 'organisation' | 'credits' | 'people' | 'method';
 
@@ -126,6 +127,8 @@ function InvestmentView({ userFilter: controlledFilter, onUserFilterChange }: {
   const [windowDays, setWindowDays] = useState(28);
   const [dimension, setDimension] = useState('department');
   const [scenario, setScenario] = useState<InvestmentScenarioOverrides | null>(null);
+  // True while the figures in force are the illustrative example, so the page says so beside every modelled amount.
+  const [exampleInUse, setExampleInUse] = useState(false);
   const [whatIfOpen, setWhatIfOpen] = useState(false);
   const [tab, setTab] = useState<InvestmentTab>('executive');
   const [reloadKey, setReloadKey] = useState(0);
@@ -301,6 +304,22 @@ function InvestmentView({ userFilter: controlledFilter, onUserFilterChange }: {
       )}
 
       <div className={styles.notes}>
+        {exampleInUse && scenario && (
+          <MessageBar intent="warning">
+            <MessageBarBody>{t('copilotInvestment.whatIf.example.active')}</MessageBarBody>
+            <MessageBarActions>
+              <Button
+                size="small"
+                onClick={() => {
+                  setScenario(null);
+                  setExampleInUse(false);
+                }}
+              >
+                {t('copilotInvestment.whatIf.example.clear')}
+              </Button>
+            </MessageBarActions>
+          </MessageBar>
+        )}
         {availabilityError && (
           <MessageBar intent="error">
             <MessageBarBody>{availabilityError}</MessageBarBody>
@@ -385,8 +404,13 @@ function InvestmentView({ userFilter: controlledFilter, onUserFilterChange }: {
           open
           scenario={scenario}
           defaults={tenantDefaults}
-          onApply={(next) => {
+          missing={(summary?.assumptions.scenarioApplied ? [] : summary?.assumptions.missingForValue ?? []).map((f) =>
+            FIELD_LABEL_KEYS[f] ? t(FIELD_LABEL_KEYS[f]) : f,
+          )}
+          settingsHref={isAdmin ? ASSUMPTIONS_SETTINGS_HREF : undefined}
+          onApply={(next, origin) => {
             setScenario(next);
+            setExampleInUse(origin === 'example' && next !== null);
             setWhatIfOpen(false);
           }}
           onClose={() => setWhatIfOpen(false)}

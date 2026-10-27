@@ -523,8 +523,17 @@ export interface InvestmentPersonDetail {
     unevaluatedReason: string | null;
   }[];
   balances: { date: string; credits: number | null; quality: number; limitExhausted: boolean }[];
-  studioAgents: { agentId: string; agentName: string | null; credits: number; activeDays: number }[];
+  /** Billed Studio credits by Power Platform environment: the per-user ledger does not name the agent. */
+  studioEnvironments: StudioEnvironmentUse[];
   evidence: string[];
+}
+
+/** A person's billed Copilot Studio credits in one environment; the name is null when the lookup was unavailable at import. */
+export interface StudioEnvironmentUse {
+  environmentId: string | null;
+  environmentName: string | null;
+  credits: number;
+  activeDays: number;
 }
 
 export interface InvestmentTrendPoint {

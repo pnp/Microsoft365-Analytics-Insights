@@ -612,7 +612,7 @@ const copilotInvestment: Record<keyof typeof en, string> = {
   'copilotInvestment.person.evidence.declining': 'El uso está bajando',
   'copilotInvestment.person.evidence.promptHistory': 'Historial de indicaciones disponible',
   'copilotInvestment.person.evidence.limitReached': 'Alcanzó un límite de créditos',
-  'copilotInvestment.person.evidence.studioAgents': 'Agentes de Copilot Studio facturados',
+  'copilotInvestment.person.evidence.studioUsage': 'Uso facturado de Copilot Studio',
   'copilotInvestment.person.weeks.title': 'Semana a semana',
   'copilotInvestment.person.weeks.cell': 'Semana del {week}: {days} días activos, {turns} interacciones',
   'copilotInvestment.person.weeks.caption': 'Días activos en cada semana del periodo. La primera y la última barra pueden ser semanas incompletas.',
@@ -634,7 +634,8 @@ const copilotInvestment: Record<keyof typeof en, string> = {
   'copilotInvestment.person.credits.unevaluated': 'Sin evaluar',
   'copilotInvestment.person.credits.history': 'Saldo por barrido',
   'copilotInvestment.person.credits.historyPoint': '{date}: {credits}',
-  'copilotInvestment.person.studio.title': 'Agentes de Copilot Studio facturados',
+  'copilotInvestment.person.studio.title': 'Uso facturado de Copilot Studio por entorno',
+  'copilotInvestment.person.studio.unnamed': 'Entorno no notificado',
   'copilotInvestment.person.studio.row': '{credits} créditos en {days} días',
   'copilotInvestment.reason.allowed': 'Permitido',
   'copilotInvestment.reason.notEntitled': 'Sin derecho',
@@ -735,18 +736,47 @@ const copilotInvestment: Record<keyof typeof en, string> = {
   // Panel de simulación
   'copilotInvestment.whatIf.title': 'Simulación',
   'copilotInvestment.whatIf.description':
-    'Pruebe sus propias cifras. Se aplican solo a esta página y a su exportación de Excel, no se guardan y nadie más las ve. Deje un campo vacío para usar el valor de la organización.',
+    'Pruebe sus propias cifras. Solo se aplican a esta página y a su exportación a Excel, en esta pestaña del navegador; nunca se guardan y nadie más las ve. Deje un campo vacío para mantener la cifra de la organización.',
   'copilotInvestment.whatIf.apply': 'Aplicar',
   'copilotInvestment.whatIf.reset': 'Volver a los valores de la organización',
   'copilotInvestment.whatIf.close': 'Cerrar',
-  'copilotInvestment.whatIf.defaultValue': 'Valor de la organización: {value}',
-  'copilotInvestment.whatIf.noDefault': 'Sin valor de la organización',
+  'copilotInvestment.whatIf.defaultValue': 'Cifra de la organización: {value}',
+  'copilotInvestment.whatIf.noDefault': 'La organización no la ha definido',
+  'copilotInvestment.whatIf.defaultPercent': 'Cifra de la organización: {value} %',
   'copilotInvestment.whatIf.low': 'Prudente',
   'copilotInvestment.whatIf.base': 'Central',
   'copilotInvestment.whatIf.high': 'Optimista',
   'copilotInvestment.whatIf.minutes': 'Minutos que Copilot devuelve en un día activo',
-  'copilotInvestment.whatIf.realisation': 'Proporción de ese tiempo que se convierte en valor (de 0 a 1)',
+  'copilotInvestment.whatIf.realisation': 'Parte de ese tiempo que se convierte en valor para el negocio (%)',
   'copilotInvestment.whatIf.invalidNumber': 'Escriba un número, con punto o coma para los decimales.',
+  'copilotInvestment.whatIf.outOfRange': 'Escriba un número entre {min} y {max}.',
+  'copilotInvestment.whatIf.outOfRangeAbove': 'Escriba un número mayor que {min} y como máximo {max}.',
+  'copilotInvestment.whatIf.status.none':
+    'La organización aún no ha definido ninguna cifra, así que esta página muestra la evidencia de uso pero ningún importe. Los importes aparecen cuando están definidos la moneda, el precio de la licencia, el coste por hora, los minutos y el aprovechamiento: por un administrador para todos, o aquí solo para usted.',
+  'copilotInvestment.whatIf.status.partial':
+    'Los importes no se muestran hasta que se definan estas cifras de la organización: {fields}. Puede probarlas aquí, solo para usted.',
+  'copilotInvestment.whatIf.status.setDefaults': 'Definir las cifras de la organización',
+  'copilotInvestment.whatIf.status.askAdmin': 'Un administrador del portal las define para todos en Administración.',
+  'copilotInvestment.whatIf.example.button': 'Probar cifras de ejemplo ilustrativas',
+  'copilotInvestment.whatIf.example.note':
+    'Cifras ilustrativas para probar la página: no son precios de Microsoft, ni las cifras de su organización, ni ahorros medidos. Solo se aplican en esta pestaña del navegador y nunca se guardan.',
+  'copilotInvestment.whatIf.example.active':
+    'Se están usando cifras de ejemplo ilustrativas. Todos los importes de abajo se modelan con ellas: no son precios de Microsoft, ni las cifras de su organización, ni ahorros medidos, y solo usted las ve.',
+  'copilotInvestment.whatIf.example.clear': 'Quitar las cifras de ejemplo',
+  'copilotInvestment.whatIf.required': 'Necesarias para modelar la rentabilidad',
+  'copilotInvestment.whatIf.optional': 'Opcionales',
+  'copilotInvestment.whatIf.optional.description': 'Cada una añade una fuente de coste; los importes se modelan sin ellas.',
+  'copilotInvestment.whatIf.guide.currency': 'Código ISO de tres letras, como EUR o USD. Todos los precios y el coste por hora van en esta moneda.',
+  'copilotInvestment.whatIf.guide.seatPrice': 'Lo que le cuesta al mes una licencia de Microsoft 365 Copilot, según su contrato o factura.',
+  'copilotInvestment.whatIf.guide.hourlyCost': 'Salario más cargas sociales de una hora de una persona típica, según finanzas.',
+  'copilotInvestment.whatIf.guide.studioCreditPrice':
+    'Lo que le cuesta un crédito facturado de Copilot Studio. Añade al coste el uso de Studio de los propios titulares.',
+  'copilotInvestment.whatIf.guide.creditPrice':
+    'Lo que le cuesta un crédito de Copilot. Solo valora los saldos preliminares, que quedan fuera de la rentabilidad.',
+  'copilotInvestment.whatIf.guide.minutes':
+    'En un día en que se usa Copilot, de 0 a 480, de menor a mayor. Básese en su propio piloto o encuesta; no hay un valor medido por defecto.',
+  'copilotInvestment.whatIf.guide.realisation':
+    'De 0 a 100 %, de menor a mayor. Un 50 % significa que la mitad del tiempo recuperado se dedica a trabajo de valor.',
 
   // Administración: supuestos
   'copilotInvestment.settings.title': 'Supuestos de inversión en Copilot',

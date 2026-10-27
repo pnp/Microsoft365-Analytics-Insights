@@ -587,15 +587,15 @@ function PersonDialog({ query, person, licenceKnown, onClose }: {
                   )}
                 </div>
 
-                {detail.studioAgents.length > 0 && (
+                {detail.studioEnvironments.length > 0 && (
                   <div className={styles.section}>
                     <Text weight="semibold">{t('copilotInvestment.person.studio.title')}</Text>
                     <div className={styles.list}>
-                      {detail.studioAgents.map((a) => (
+                      {detail.studioEnvironments.map((e) => (
                         <AppLine
-                          key={a.agentId}
-                          app={a.agentName ?? a.agentId}
-                          text={t('copilotInvestment.person.studio.row', { credits: formatCredits(a.credits), days: formatNumber(a.activeDays) })}
+                          key={e.environmentId ?? '-'}
+                          app={e.environmentName ?? e.environmentId ?? t('copilotInvestment.person.studio.unnamed')}
+                          text={t('copilotInvestment.person.studio.row', { credits: formatCredits(e.credits), days: formatNumber(e.activeDays) })}
                         />
                       ))}
                     </div>

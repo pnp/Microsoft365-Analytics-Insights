@@ -119,7 +119,6 @@ namespace Common.Entities.CopilotInvestment
         public double Credits { get; set; }
         public double PriorCredits { get; set; }
         public int ActiveDays { get; set; }
-        public int Agents { get; set; }
     }
 
     public sealed class StudioFacts
@@ -167,7 +166,7 @@ namespace Common.Entities.CopilotInvestment
         public List<CreditServiceFact> CreditServices { get; set; } = new List<CreditServiceFact>();
         public List<CreditUnevaluatedFact> CreditUnevaluated { get; set; } = new List<CreditUnevaluatedFact>();
         public List<PersonBalancePoint> Balances { get; set; } = new List<PersonBalancePoint>();
-        public List<PersonStudioAgentRow> StudioAgents { get; set; } = new List<PersonStudioAgentRow>();
+        public List<PersonStudioEnvironmentRow> StudioEnvironments { get; set; } = new List<PersonStudioEnvironmentRow>();
         public HashSet<int> CoworkAgentIds { get; set; } = new HashSet<int>();
     }
 
@@ -209,10 +208,14 @@ namespace Common.Entities.CopilotInvestment
         public bool LimitExhausted { get; set; }
     }
 
-    public sealed class PersonStudioAgentRow
+    /// <summary>
+    /// One person's billed Studio credits in one Power Platform environment. The per-user ledger is kept by day, person and
+    /// environment: Microsoft's per-user route does not name the agent, so the importer never stores one there.
+    /// </summary>
+    public sealed class PersonStudioEnvironmentRow
     {
-        public string AgentId { get; set; }
-        public string AgentName { get; set; }
+        public string EnvironmentId { get; set; }
+        public string EnvironmentName { get; set; }
         public double Credits { get; set; }
         public int ActiveDays { get; set; }
     }
@@ -359,30 +362,24 @@ namespace Common.Entities.CopilotInvestment
             "ORDER BY t.observation_date;";
 
         /// <summary>
-        /// Billed Copilot Studio credits per person in the window and the equal-length period before it. Days and agents
-        /// are counted in two plain aggregates rather than two COUNT(DISTINCT CASE ...) in one, which SQL Server answers
-        /// with table spools: at 200,000 synthetic users (600K ledger rows) 52K logical reads and 0.94 s against 1.77M
-        /// and 1.09 s for 90 days, 50K and 0.26 s against 511K and 0.38 s for 28. People the user import never matched
-        /// share one NULL user id, joined on a sentinel because NULL never equals NULL (user ids start at 1).
+        /// Billed Copilot Studio credits per person in the window and the equal-length period before it, with days counted
+        /// from a per-day aggregate rather than with COUNT(DISTINCT CASE ...), which SQL Server answers with table spools.
+        /// Measured at 200,000 synthetic users (600K ledger rows) while this statement also counted each person's agents:
+        /// 52K logical reads and 0.94 s for 90 days, 50K and 0.26 s for 28. That count has since gone, because the per-user
+        /// ledger never names an agent, so those figures are an upper bound. People the user import never matched share one
+        /// NULL user id.
         /// </summary>
         public const string StudioUsersSql =
             "WITH per_day AS (\r\n" +
             "    SELECT r.user_id, r.usage_date, SUM(r.billed_credits) AS credits\r\n" +
             "    FROM dbo.copilot_studio_credit_user_daily AS r\r\n" +
             "    WHERE r.usage_date >= @priorFrom AND r.usage_date < @toExclusive\r\n" +
-            "    GROUP BY r.user_id, r.usage_date),\r\n" +
-            "agents AS (\r\n" +
-            "    SELECT r.user_id, COUNT(DISTINCT r.agent_id) AS agents\r\n" +
-            "    FROM dbo.copilot_studio_credit_user_daily AS r\r\n" +
-            "    WHERE r.usage_date >= @from AND r.usage_date < @toExclusive\r\n" +
-            "    GROUP BY r.user_id)\r\n" +
+            "    GROUP BY r.user_id, r.usage_date)\r\n" +
             "SELECT p.user_id AS UserId,\r\n" +
             "       CAST(SUM(CASE WHEN p.usage_date >= @from THEN p.credits ELSE 0 END) AS float) AS Credits,\r\n" +
             "       CAST(SUM(CASE WHEN p.usage_date < @from THEN p.credits ELSE 0 END) AS float) AS PriorCredits,\r\n" +
-            "       SUM(CASE WHEN p.usage_date >= @from THEN 1 ELSE 0 END) AS ActiveDays,\r\n" +
-            "       ISNULL(MAX(a.agents), 0) AS Agents\r\n" +
+            "       SUM(CASE WHEN p.usage_date >= @from THEN 1 ELSE 0 END) AS ActiveDays\r\n" +
             "FROM per_day AS p\r\n" +
-            "LEFT JOIN agents AS a ON ISNULL(a.user_id, -1) = ISNULL(p.user_id, -1)\r\n" +
             "GROUP BY p.user_id;";
 
         public const string StudioImportSql =
@@ -451,15 +448,17 @@ namespace Common.Entities.CopilotInvestment
             "GROUP BY o.observation_date, o.quality\r\n" +
             "ORDER BY o.observation_date;";
 
-        /// <summary>One person's billed Copilot Studio credits by agent in the window.</summary>
+        /// <summary>
+        /// One person's billed Copilot Studio credits by Power Platform environment in the window (an index seek on user id).
+        /// The per-user ledger names no agent, so environment is the finest breakdown it can give. A renamed environment
+        /// shows one of its names.
+        /// </summary>
         public const string PersonStudioSql =
-            "SELECT r.agent_id AS AgentId, MAX(n.agent_name) AS AgentName,\r\n" +
+            "SELECT r.environment_id AS EnvironmentId, MAX(r.environment_name) AS EnvironmentName,\r\n" +
             "       CAST(SUM(r.billed_credits) AS float) AS Credits, COUNT(DISTINCT r.usage_date) AS ActiveDays\r\n" +
             "FROM dbo.copilot_studio_credit_user_daily AS r\r\n" +
-            "OUTER APPLY (SELECT TOP (1) d.agent_name FROM dbo.copilot_studio_credit_daily AS d\r\n" +
-            "             WHERE d.agent_id = r.agent_id ORDER BY d.usage_date DESC) AS n\r\n" +
             "WHERE r.user_id = @userId AND r.usage_date >= @from AND r.usage_date < @toExclusive\r\n" +
-            "GROUP BY r.agent_id;";
+            "GROUP BY r.environment_id;";
 
         /// <summary>The sample dates for a balance trend: every k-th day back from the snapshot, at most <see cref="MaxTrendPoints"/>.</summary>
         public static List<DateTime> TrendDates(DateTime from, DateTime snapshot)
@@ -693,7 +692,6 @@ namespace Common.Entities.CopilotInvestment
                             Credits = reader.IsDBNull(1) ? 0 : reader.GetDouble(1),
                             PriorCredits = reader.IsDBNull(2) ? 0 : reader.GetDouble(2),
                             ActiveDays = reader.GetInt32(3),
-                            Agents = reader.GetInt32(4),
                         });
                     }
                 }
@@ -849,10 +847,10 @@ namespace Common.Entities.CopilotInvestment
                     {
                         while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
                         {
-                            detail.StudioAgents.Add(new PersonStudioAgentRow
+                            detail.StudioEnvironments.Add(new PersonStudioEnvironmentRow
                             {
-                                AgentId = reader.IsDBNull(0) ? null : reader.GetString(0),
-                                AgentName = reader.IsDBNull(1) ? null : reader.GetString(1),
+                                EnvironmentId = reader.IsDBNull(0) ? null : reader.GetString(0),
+                                EnvironmentName = reader.IsDBNull(1) ? null : reader.GetString(1),
                                 Credits = reader.IsDBNull(2) ? 0 : reader.GetDouble(2),
                                 ActiveDays = reader.GetInt32(3),
                             });

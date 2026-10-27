@@ -20,12 +20,12 @@ namespace Common.Entities.CopilotInvestment
             public const string Declining = "declining";
             public const string PromptHistory = "promptHistory";
             public const string LimitReached = "limitReached";
-            public const string StudioAgents = "studioAgents";
+            public const string StudioUsage = "studioUsage";
 
             public static readonly string[] All =
             {
                 NoActivity, RegularHabit, Occasional, Rare, MultiApp, AgentUse, CoworkUse, Growing, Declining,
-                PromptHistory, LimitReached, StudioAgents,
+                PromptHistory, LimitReached, StudioUsage,
             };
         }
 
@@ -82,7 +82,7 @@ namespace Common.Entities.CopilotInvestment
                 .OrderByDescending(c => c.Prompts).ThenBy(c => c.CategoryId, StringComparer.Ordinal).ToList();
 
             detail.CreditServices = CreditServices(facts);
-            detail.StudioAgents = StudioAgents(facts);
+            detail.StudioEnvironments = StudioEnvironments(facts);
 
             detail.Evidence = EvidenceFor(detail, person, byDay.Keys, fromUtc, toExclusiveUtc);
             return detail;
@@ -109,12 +109,15 @@ namespace Common.Entities.CopilotInvestment
                 .Select(u => new CopilotInvestmentPersonService { Category = u.Category, UnevaluatedReason = u.Reason }))
                 .OrderBy(s => s.Category, StringComparer.Ordinal).ToList();
 
-        /// <summary>The person's billed Copilot Studio credits by agent, largest first. Shared with the Copilot Spend drill-down.</summary>
-        public static List<CopilotInvestmentStudioAgent> StudioAgents(PersonDetailFacts facts) =>
-            (facts ?? new PersonDetailFacts()).StudioAgents.Select(a => new CopilotInvestmentStudioAgent
+        /// <summary>
+        /// The person's billed Copilot Studio credits by Power Platform environment, largest first. Shared with the Copilot
+        /// Spend drill-down. Environment, not agent: Microsoft's per-user consumption does not name the agent.
+        /// </summary>
+        public static List<CopilotInvestmentStudioEnvironment> StudioEnvironments(PersonDetailFacts facts) =>
+            (facts ?? new PersonDetailFacts()).StudioEnvironments.Select(e => new CopilotInvestmentStudioEnvironment
             {
-                AgentId = a.AgentId, AgentName = a.AgentName, Credits = Math.Round(a.Credits, 6), ActiveDays = a.ActiveDays,
-            }).OrderByDescending(a => a.Credits).ThenBy(a => a.AgentId, StringComparer.Ordinal).ToList();
+                EnvironmentId = e.EnvironmentId, EnvironmentName = e.EnvironmentName, Credits = Math.Round(e.Credits, 6), ActiveDays = e.ActiveDays,
+            }).OrderByDescending(e => e.Credits).ThenBy(e => e.EnvironmentId, StringComparer.Ordinal).ToList();
 
         /// <summary>Halves shorter than this cannot show a direction of travel.</summary>
         private const int MinTrendHalfDays = 14;
@@ -152,7 +155,7 @@ namespace Common.Entities.CopilotInvestment
             }
             if (detail.Prompts > 0) codes.Add(EvidenceCodes.PromptHistory);
             if (person?.Flags?.Contains(CopilotInvestmentFlags.LimitExhausted) == true) codes.Add(EvidenceCodes.LimitReached);
-            if (detail.StudioAgents.Count > 0) codes.Add(EvidenceCodes.StudioAgents);
+            if (detail.StudioEnvironments.Any(e => e.Credits > 0)) codes.Add(EvidenceCodes.StudioUsage);
             return codes;
         }
     }

@@ -91,9 +91,18 @@ export function formatMinutes(t: TFunction, value: number | null | undefined): s
 }
 
 /** A UTC date or instant as a short date in the reader's language. */
+/**
+ * A server date as a moment in UTC. The API sends the dates it reads from SQL without an offset ("2026-10-26T00:00:00"),
+ * which a browser would otherwise read as its own local midnight: a day early anywhere east of UTC. Every date these
+ * reports send is UTC, so one without an offset is read as UTC too.
+ */
+export function parseUtcDate(iso: string): Date {
+  return new Date(/T[^Zz+-]*$/.test(iso) ? `${iso}Z` : iso);
+}
+
 export function formatShortDate(iso: string | null | undefined): string {
   if (!iso) return '\u2014';
-  return formatDateParts(new Date(iso), { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' });
+  return formatDateParts(parseUtcDate(iso), { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' });
 }
 
 export const SIGNAL_LABEL_KEYS: Record<string, TranslationKey> = {
@@ -150,7 +159,7 @@ export const EVIDENCE_LABEL_KEYS: Record<string, TranslationKey> = {
   declining: 'copilotInvestment.person.evidence.declining',
   promptHistory: 'copilotInvestment.person.evidence.promptHistory',
   limitReached: 'copilotInvestment.person.evidence.limitReached',
-  studioAgents: 'copilotInvestment.person.evidence.studioAgents',
+  studioUsage: 'copilotInvestment.person.evidence.studioUsage',
 };
 
 export const REASON_LABEL_KEYS: Record<string, TranslationKey> = {

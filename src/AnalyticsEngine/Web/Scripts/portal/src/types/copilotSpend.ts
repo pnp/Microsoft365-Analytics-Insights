@@ -5,6 +5,7 @@ import type {
   InvestmentServiceRow,
   InvestmentTenantBalanceRow,
   InvestmentTrend,
+  StudioEnvironmentUse,
 } from './copilotInvestment';
 
 /**
@@ -42,7 +43,12 @@ export interface SpendStudio {
   /** Of `credits`, charges never matched to a person. Null in a filtered view. */
   unmatchedCredits: number | null;
   days: SpendDay[];
-  agents: SpendAgent[];
+  /** Per-person ledger by Power Platform environment: adds up to `credits` with the days. */
+  environments: SpendEnvironment[];
+  /** The tenant agent ledger by agent: a separate route, never added to `credits`. Null in a filtered view. */
+  agents: SpendAgent[] | null;
+  /** The agent ledger's own total; null in a filtered view. */
+  agentLedgerCredits: number | null;
   breakdownFailureCode: string | null;
 }
 
@@ -52,11 +58,18 @@ export interface SpendDay {
   people: number;
 }
 
+export interface SpendEnvironment {
+  environmentId: string | null;
+  environmentName: string | null;
+  credits: number;
+  people: number;
+  days: number;
+}
+
 export interface SpendAgent {
   agentId: string | null;
   agentName: string | null;
   credits: number;
-  people: number;
   days: number;
 }
 
@@ -121,7 +134,6 @@ export interface SpendPersonRow {
   manager: string | null;
   studioCredits: number;
   studioDays: number;
-  studioAgents: number;
   /** Null when there is no reading, or none in Copilot credits: absent, not zero. */
   balanceCredits: number | null;
   balanceDate: string | null;
@@ -155,7 +167,7 @@ export interface SpendPersonDetail {
   person: SpendPersonRow;
   services: SpendPersonService[];
   balances: { date: string; credits: number | null; quality: number; limitExhausted: boolean }[];
-  studioAgents: { agentId: string; agentName: string | null; credits: number; activeDays: number }[];
+  studioEnvironments: StudioEnvironmentUse[];
 }
 
 export type SpendTrend = InvestmentTrend;

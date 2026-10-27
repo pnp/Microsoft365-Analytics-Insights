@@ -1621,8 +1621,8 @@ namespace Common.Entities.CopilotInvestment
         [JsonProperty("balances")]
         public List<PersonBalancePoint> Balances { get; set; } = new List<PersonBalancePoint>();
 
-        [JsonProperty("studioAgents")]
-        public List<CopilotInvestmentStudioAgent> StudioAgents { get; set; } = new List<CopilotInvestmentStudioAgent>();
+        [JsonProperty("studioEnvironments")]
+        public List<CopilotInvestmentStudioEnvironment> StudioEnvironments { get; set; } = new List<CopilotInvestmentStudioEnvironment>();
 
         [JsonProperty("evidence")]
         public List<string> Evidence { get; set; } = new List<string>();
@@ -1701,13 +1701,15 @@ namespace Common.Entities.CopilotInvestment
         public string UnevaluatedReason { get; set; }
     }
 
-    public sealed class CopilotInvestmentStudioAgent
+    /// <summary>A person's billed Copilot Studio credits in one Power Platform environment: the finest grain the per-user ledger has.</summary>
+    public sealed class CopilotInvestmentStudioEnvironment
     {
-        [JsonProperty("agentId")]
-        public string AgentId { get; set; }
+        [JsonProperty("environmentId")]
+        public string EnvironmentId { get; set; }
 
-        [JsonProperty("agentName")]
-        public string AgentName { get; set; }
+        /// <summary>Null when the environment lookup was unavailable at import.</summary>
+        [JsonProperty("environmentName")]
+        public string EnvironmentName { get; set; }
 
         [JsonProperty("credits")]
         public double Credits { get; set; }

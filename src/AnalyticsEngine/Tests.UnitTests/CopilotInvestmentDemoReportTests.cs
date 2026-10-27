@@ -200,7 +200,9 @@ namespace Tests.UnitTests
                     range.FromUtc, range.ToExclusiveUtc, lastDay, CancellationToken.None);
                 Assert.IsTrue(sentinelDetail.Balances.Count > 0 && sentinelDetail.Balances.All(b => b.Date <= lastDay),
                     "The drill-down's balance curve stops at the window's last day.");
-                Assert.IsFalse(sentinelDetail.StudioAgents.Any(a => a.AgentId == SentinelAgent), "Nor does its Studio ledger reach the day after.");
+                Assert.IsFalse(sentinelDetail.StudioEnvironments.Any(e => e.EnvironmentId == SentinelEnvironment), "Nor does its Studio ledger reach the day after.");
+                Assert.IsTrue(detail.StudioEnvironments.All(e => e.EnvironmentId != null),
+                    "The per-person ledger is kept by environment: the drill-down groups by what it stores.");
 
                 // Copilot Spend over the same generated database, through its own SQL and the shared fact cache: no adoption
                 // analysis and no assumptions needed. The two sources stay apart and each adds up the way it should.
@@ -213,12 +215,18 @@ namespace Tests.UnitTests
                 var spendReport = await spendService.BuildAsync(new CopilotSpendRequest { Range = range, Scope = ReportScope.Unrestricted }, CancellationToken.None);
                 TestContext.WriteLine($"Spend report built in {watch.Elapsed.TotalSeconds:F2}s for {spendReport.People.Count:N0} people.");
                 var billed = spendReport.Studio;
-                Assert.IsTrue(billed.Credits > 0 && billed.Days.Count > 0 && billed.Agents.Count > 0, "The demo's Studio ledger must reach the spend report.");
+                Assert.IsTrue(billed.Credits > 0 && billed.Days.Count > 0 && billed.Environments.Count > 1, "The demo's Studio ledger must reach the spend report.");
                 Assert.AreEqual(billed.Credits, billed.Days.Sum(d => d.Credits), 0.01, "Billed usage is a daily ledger: the days add up to the period.");
-                Assert.AreEqual(billed.Credits, billed.Agents.Sum(a => a.Credits), 0.01, "And so do the agents.");
+                Assert.AreEqual(billed.Credits, billed.Environments.Sum(e => e.Credits), 0.01, "And so do the environments.");
+                Assert.IsTrue(billed.Environments.All(e => e.EnvironmentName != null), "Each environment keeps the name the import recorded.");
                 Assert.AreEqual(billed.Credits, spendReport.People.Sum(p => p.StudioCredits) + (billed.UnmatchedCredits ?? 0), 0.01, "And so do the people.");
                 Assert.IsFalse(billed.Days.Any(d => d.Date > lastDay), "No billed day after the window's last day.");
-                Assert.IsFalse(billed.Agents.Any(a => a.AgentId == SentinelAgent), "Nor the next day's charge.");
+                Assert.IsFalse(billed.Environments.Any(e => e.EnvironmentId == SentinelEnvironment), "Nor the next day's charge.");
+                // The agent ledger is its own route: named agents with its own total, never added to the people's.
+                Assert.IsTrue(billed.Agents != null && billed.Agents.Count > 1 && billed.Agents.All(a => a.AgentName != null));
+                Assert.IsTrue(billed.Agents.Any(a => a.AgentName.Contains("\u039a\u03b1\u03bb\u03b7\u03bc\u03ad\u03c1\u03b1")), "Agent names keep their Unicode.");
+                Assert.AreEqual(billed.AgentLedgerCredits.Value, billed.Agents.Sum(a => a.Credits), 0.01);
+                Assert.IsFalse(billed.Agents.Any(a => a.AgentId == SentinelAgent), "The agent ledger stops at the window's last day too.");
                 Assert.IsTrue(spendReport.Balances.Credits < SentinelCredits && spendReport.Balances.SnapshotDate == lastDay, "Balances read on the window's last day.");
                 Assert.AreEqual(spendReport.Balances.Credits,
                     spendReport.People.Sum(p => p.BalanceCredits ?? 0) + (spendReport.Balances.UnresolvedCredits ?? 0), 0.01,
@@ -233,6 +241,9 @@ namespace Tests.UnitTests
                 Assert.IsTrue(spendSales.Filtered && spendSales.People.Count > 0 && spendSales.People.All(p => p.Department == "Sales"));
                 Assert.IsTrue(spendSales.Studio.Credits < billed.Credits && spendSales.Studio.UnmatchedCredits == null);
                 Assert.AreEqual(spendSales.Studio.Credits, spendSales.Studio.Days.Sum(d => d.Credits), 0.01, "The scoped ledger in SQL matches the scoped people.");
+                Assert.AreEqual(spendSales.Studio.Credits, spendSales.Studio.Environments.Sum(e => e.Credits), 0.01, "So does its environment breakdown.");
+                Assert.IsNull(spendSales.Studio.Agents, "The agent ledger is not kept per person, so a filtered view cannot have its share of it.");
+                Assert.IsNull(spendSales.Studio.AgentLedgerCredits);
                 Assert.IsTrue(spendSales.Balances.Policies.Count == 0 && spendSales.Balances.TenantBalances.Count == 0 && spendSales.Balances.UnresolvedAccounts == null);
                 CopilotInvestmentWorkbookLanguageTests.AssertSpanishCounterpart(
                     CopilotSpendWorkbook.Build(spendReport, true, "test", PortalLanguage.English),
@@ -243,10 +254,11 @@ namespace Tests.UnitTests
 
         private const double SentinelCredits = 999999;
         private const string SentinelAgent = "sentinel-next-day";
+        private const string SentinelEnvironment = "env-sentinel-next-day";
 
         /// <summary>
         /// Copies one consuming person's sweep of the 26th to the 27th with an outsized balance, and bills them an outsized
-        /// Copilot Studio charge on the 27th. Returns that person.
+        /// Copilot Studio charge on the 27th, in both the per-person ledger and the agent ledger. Returns that person.
         /// </summary>
         private static (int UserId, Guid ObjectId) AddNextDaySentinels(string connection)
         {
@@ -273,10 +285,14 @@ SELECT '2026-10-27', s.object_id, s.category_hash, s.category, s.policy_id, @cre
 FROM dbo.copilot_cost_services AS s WHERE s.observation_date = '2026-10-26' AND s.object_id = @object;
 INSERT dbo.copilot_studio_credit_user_daily (usage_date, entra_object_id, user_id, environment_id, environment_name, agent_id,
        billed_credits, unit, dimension_hash, imported_utc)
-VALUES ('2026-10-27', CONVERT(nvarchar(200), @object), @user, N'env-sentinel', N'Contoso sentinel', @agent, @credits, N'credit', @agent, SYSUTCDATETIME());
+VALUES ('2026-10-27', CONVERT(nvarchar(200), @object), @user, @environment, N'Contoso sentinel', NULL, @credits, N'credit', @environment, SYSUTCDATETIME());
+INSERT dbo.copilot_studio_credit_daily (usage_date, environment_id, environment_name, agent_id, agent_name, harness, feature_name,
+       billed_credits, non_billed_credits, distinct_users, last_refreshed_utc, dimension_hash, imported_utc)
+VALUES ('2026-10-27', @environment, N'Contoso sentinel', @agent, N'Contoso sentinel agent', NULL, N'Generative answer', @credits, 0, 1, NULL, @agent, SYSUTCDATETIME());
 SELECT @user, @object;";
                     command.Parameters.AddWithValue("@credits", SentinelCredits);
                     command.Parameters.AddWithValue("@agent", SentinelAgent);
+                    command.Parameters.AddWithValue("@environment", SentinelEnvironment);
                     using (var reader = command.ExecuteReader())
                     {
                         Assert.IsTrue(reader.Read() && !reader.IsDBNull(0), "The demo must have a consuming person on the 26th.");

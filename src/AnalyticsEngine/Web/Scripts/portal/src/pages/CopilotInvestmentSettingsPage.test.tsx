@@ -52,7 +52,7 @@ describe('CopilotInvestmentSettingsPage', () => {
     renderWithProvider(<CopilotInvestmentSettingsPage />);
 
     fireEvent.change(await screen.findByLabelText('Currency'), { target: { value: 'eur' } });
-    fireEvent.change(screen.getByLabelText('Seat price a month'), { target: { value: '30' } });
+    fireEvent.change(screen.getByLabelText('Licence price a month'), { target: { value: '30' } });
     fireEvent.change(screen.getByLabelText('Fully loaded hourly cost'), { target: { value: '52,5' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save assumptions' }));
 
@@ -70,7 +70,7 @@ describe('CopilotInvestmentSettingsPage', () => {
   it('refuses text that is not a number without sending anything', async () => {
     renderWithProvider(<CopilotInvestmentSettingsPage />);
 
-    fireEvent.change(await screen.findByLabelText('Seat price a month'), { target: { value: 'thirty' } });
+    fireEvent.change(await screen.findByLabelText('Licence price a month'), { target: { value: 'thirty' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save assumptions' }));
 
     expect(await screen.findByText('Enter a number, using a full stop or comma for decimals.')).toBeInTheDocument();
@@ -81,7 +81,7 @@ describe('CopilotInvestmentSettingsPage', () => {
     vi.mocked(saveInvestmentSettings).mockRejectedValueOnce(new InvestmentSettingsError('versionConflict', []));
     renderWithProvider(<CopilotInvestmentSettingsPage />);
 
-    fireEvent.change(await screen.findByLabelText('Seat price a month'), { target: { value: '30' } });
+    fireEvent.change(await screen.findByLabelText('Licence price a month'), { target: { value: '30' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save assumptions' }));
     expect(await screen.findByText(/Someone else saved the assumptions while you were editing/)).toBeInTheDocument();
 
@@ -96,7 +96,7 @@ describe('CopilotInvestmentSettingsPage', () => {
     vi.mocked(fetchInvestmentSettings).mockResolvedValue({ ...neverSaved, durable: false });
     renderWithProvider(<CopilotInvestmentSettingsPage />);
 
-    expect(await screen.findByLabelText('Seat price a month')).toBeDisabled();
+    expect(await screen.findByLabelText('Licence price a month')).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Save assumptions' })).toBeDisabled();
   });
 });

@@ -121,10 +121,26 @@ namespace Common.Entities.CopilotSpend
         [JsonProperty("days")]
         public List<CopilotSpendDay> Days { get; set; } = new List<CopilotSpendDay>();
 
+        /// <summary>
+        /// Billed credits per Power Platform environment for the people in view. The per-user ledger is kept by day, person
+        /// and environment, so this is its finest "what": Microsoft's per-user consumption does not name the agent.
+        /// </summary>
+        [JsonProperty("environments")]
+        public List<CopilotSpendEnvironment> Environments { get; set; } = new List<CopilotSpendEnvironment>();
+
+        /// <summary>
+        /// Billed credits per agent from the tenant's agent ledger, a different Microsoft route recorded per agent and not
+        /// per person. Its total stands on its own: it need not equal <see cref="Credits"/> and is never added to it. Null in
+        /// a filtered view, which it cannot be narrowed to.
+        /// </summary>
         [JsonProperty("agents")]
         public List<CopilotSpendAgent> Agents { get; set; } = new List<CopilotSpendAgent>();
 
-        /// <summary>A stable code when the per-day and per-agent breakdown could not be read.</summary>
+        /// <summary>The agent ledger's own total for the period; null in a filtered view.</summary>
+        [JsonProperty("agentLedgerCredits")]
+        public double? AgentLedgerCredits { get; set; }
+
+        /// <summary>A stable code when the per-day, per-environment and per-agent breakdown could not be read.</summary>
         [JsonProperty("breakdownFailureCode")]
         public string BreakdownFailureCode { get; set; }
     }
@@ -141,6 +157,26 @@ namespace Common.Entities.CopilotSpend
         public int People { get; set; }
     }
 
+    public sealed class CopilotSpendEnvironment
+    {
+        [JsonProperty("environmentId")]
+        public string EnvironmentId { get; set; }
+
+        /// <summary>Null when the environment lookup was unavailable at import.</summary>
+        [JsonProperty("environmentName")]
+        public string EnvironmentName { get; set; }
+
+        [JsonProperty("credits")]
+        public double Credits { get; set; }
+
+        [JsonProperty("people")]
+        public int People { get; set; }
+
+        [JsonProperty("days")]
+        public int Days { get; set; }
+    }
+
+    /// <summary>One agent's billed credits in the tenant agent ledger. No people count: that ledger is not kept per person.</summary>
     public sealed class CopilotSpendAgent
     {
         [JsonProperty("agentId")]
@@ -151,9 +187,6 @@ namespace Common.Entities.CopilotSpend
 
         [JsonProperty("credits")]
         public double Credits { get; set; }
-
-        [JsonProperty("people")]
-        public int People { get; set; }
 
         [JsonProperty("days")]
         public int Days { get; set; }
@@ -339,9 +372,6 @@ namespace Common.Entities.CopilotSpend
         [JsonProperty("studioDays")]
         public int StudioDays { get; set; }
 
-        [JsonProperty("studioAgents")]
-        public int StudioAgents { get; set; }
-
         /// <summary>Null when the person has no reading, or no category in Copilot credits: absent, not zero.</summary>
         [JsonProperty("balanceCredits")]
         public double? BalanceCredits { get; set; }
@@ -377,7 +407,7 @@ namespace Common.Entities.CopilotSpend
         public List<CopilotSpendPersonRow> Rows { get; set; } = new List<CopilotSpendPersonRow>();
     }
 
-    /// <summary>One person's drill-down: their balance by category and over time, and their billed Studio use by agent.</summary>
+    /// <summary>One person's drill-down: their balance by category and over time, and their billed Studio use by environment.</summary>
     public sealed class CopilotSpendPersonDetail
     {
         [JsonProperty("person")]
@@ -389,8 +419,8 @@ namespace Common.Entities.CopilotSpend
         [JsonProperty("balances")]
         public List<PersonBalancePoint> Balances { get; set; } = new List<PersonBalancePoint>();
 
-        [JsonProperty("studioAgents")]
-        public List<CopilotInvestmentStudioAgent> StudioAgents { get; set; } = new List<CopilotInvestmentStudioAgent>();
+        [JsonProperty("studioEnvironments")]
+        public List<CopilotInvestmentStudioEnvironment> StudioEnvironments { get; set; } = new List<CopilotInvestmentStudioEnvironment>();
     }
 
     /// <summary>Stable codes the API answers with; the portal writes the words.</summary>

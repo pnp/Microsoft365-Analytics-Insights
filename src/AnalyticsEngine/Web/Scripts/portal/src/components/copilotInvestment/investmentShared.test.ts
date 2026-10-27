@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { setActiveLanguage, translateActive } from '../../i18n/runtime';
 import { loadCatalog, type TFunction } from '../../i18n';
 import type { InvestmentAction, InvestmentFinding } from '../../types/copilotInvestment';
-import { actionText, findingText, formatMoney } from './investmentShared';
+import { actionText, findingText, formatMoney, formatShortDate, parseUtcDate } from './investmentShared';
 
 const t = translateActive as unknown as TFunction;
 
@@ -54,12 +54,31 @@ describe('investment wording for one person and for none', () => {
       '7 people have used their whole credit limit; one of them shows strong, regular use.',
     );
     expect(findingText(t, finding('idleSeats', { idle: 61, share: 0.17, reclaimable: 0, review: 61, tooNew: 0, monthly: null, roiAfter: null }), 'EUR')).toBe(
-      '61 seat holders (17%) did not use Copilot at all in the period; 61 of them need a review before any seat is reassigned.',
+      '61 licensed users (17%) did not use Copilot at all in the period; 61 of them need a review before any licence is reassigned.',
     );
   });
 
   it('shows whole currency units from 100 up and cents below it', () => {
     expect(formatMoney(480, 'EUR')).toBe('\u20ac480');
     expect(formatMoney(43.72, 'EUR')).toBe('\u20ac43.72');
+  });
+});
+
+describe('server dates', () => {
+  it('reads a date the API sent without an offset as UTC, not as the browser\u2019s local midnight', () => {
+    const previous = process.env.TZ;
+    // East of UTC, a date read as local midnight would show the day before.
+    process.env.TZ = 'Asia/Tokyo';
+    try {
+      expect(formatShortDate('2026-10-26T00:00:00')).toBe('26 Oct 2026');
+      expect(formatShortDate('2026-10-26T23:30:00.1234567')).toBe('26 Oct 2026');
+      expect(formatShortDate('2026-10-26T00:00:00Z')).toBe('26 Oct 2026');
+      expect(formatShortDate('2026-10-26T08:00:00+09:00')).toBe('25 Oct 2026');
+      expect(formatShortDate('2026-10-26')).toBe('26 Oct 2026');
+      expect(parseUtcDate('2026-10-26T00:00:00').toISOString()).toBe('2026-10-26T00:00:00.000Z');
+    } finally {
+      if (previous === undefined) delete process.env.TZ;
+      else process.env.TZ = previous;
+    }
   });
 });

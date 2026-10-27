@@ -156,10 +156,24 @@ namespace Common.Entities.CopilotSpend
             sheet.AddHeaderRow(words.W("studio.col.date"), words.W("studio.col.credits"), words.W("studio.col.people"));
             foreach (var day in studio.Days) sheet.AddRow(XlsxCell.Date(day.Date), day.Credits, XlsxCell.Number(day.People));
             sheet.AddBlankRow();
-            sheet.AddHeaderRow(words.W("studio.col.agent"), words.W("studio.col.agentId"), words.W("studio.col.credits"), words.W("studio.col.people"),
+            sheet.AddRow(words.W("studio.environmentsTitle"));
+            sheet.AddHeaderRow(words.W("studio.col.environment"), words.W("studio.col.environmentId"), words.W("studio.col.credits"), words.W("studio.col.people"),
                 words.W("studio.col.days"));
+            foreach (var environment in studio.Environments)
+                sheet.AddRow(environment.EnvironmentName ?? words.W("studio.unnamedEnvironment"), environment.EnvironmentId, environment.Credits,
+                    XlsxCell.Number(environment.People), XlsxCell.Number(environment.Days));
+            sheet.AddBlankRow();
+            sheet.AddRow(words.W("studio.agentsTitle"));
+            if (studio.Agents == null)
+            {
+                sheet.AddRow(XlsxCell.Wrapped(words.W("studio.agentsWithheld")));
+                return;
+            }
+            sheet.AddRow(XlsxCell.Wrapped(words.W("studio.agentsNote")));
+            sheet.AddHeaderRow(words.W("studio.col.agent"), words.W("studio.col.agentId"), words.W("studio.col.credits"), words.W("studio.col.days"));
             foreach (var agent in studio.Agents)
-                sheet.AddRow(agent.AgentName ?? words.W("studio.unnamedAgent"), agent.AgentId, agent.Credits, XlsxCell.Number(agent.People), XlsxCell.Number(agent.Days));
+                sheet.AddRow(agent.AgentName ?? words.W("studio.unnamedAgent"), agent.AgentId, agent.Credits, XlsxCell.Number(agent.Days));
+            sheet.AddRow(words.W("studio.agentsTotal"), null, studio.AgentLedgerCredits);
         }
 
         private static void WriteBalances(XlsxWriter workbook, CopilotSpendSummary summary, Words words)
@@ -219,14 +233,14 @@ namespace Common.Entities.CopilotSpend
             {
                 words.W("people.col.upn"), words.W("people.col.department"), words.W("people.col.jobTitle"), words.W("people.col.company"),
                 words.W("people.col.country"), words.W("people.col.manager"), words.W("people.col.studioCredits"), words.W("people.col.studioDays"),
-                words.W("people.col.studioAgents"), words.W("people.col.balance"), words.W("people.col.balanceDate"), words.W("people.col.partial"),
+                words.W("people.col.balance"), words.W("people.col.balanceDate"), words.W("people.col.partial"),
                 words.W("people.col.unknown"), words.W("people.col.otherUnits"), words.W("people.col.limit"), words.W("people.col.notEntitled"),
             };
             sheet.SetColumnWidths(headers.Select(h => (double)Math.Max(12, Math.Min(30, h.Length + 4))).ToArray());
             sheet.AddHeaderRow(headers);
             foreach (var p in CopilotSpendPeople.Sort(summary.People, "user", false))
                 sheet.AddRow(p.UserPrincipalName, p.Department, p.JobTitle, p.Company, p.Country, p.Manager, p.StudioCredits, XlsxCell.Number(p.StudioDays),
-                    XlsxCell.Number(p.StudioAgents), p.BalanceCredits, p.BalanceDate.HasValue ? (object)XlsxCell.Date(p.BalanceDate.Value) : null,
+                    p.BalanceCredits, p.BalanceDate.HasValue ? (object)XlsxCell.Date(p.BalanceDate.Value) : null,
                     p.BalanceDate.HasValue ? (object)p.BalancePartial : null, p.BalanceDate.HasValue ? (object)p.UnknownAmounts : null,
                     p.BalanceDate.HasValue ? (object)p.OtherUnits : null, p.BalanceDate.HasValue ? (object)p.LimitExhausted : null,
                     p.BalanceDate.HasValue ? (object)p.NotEntitled : null);
