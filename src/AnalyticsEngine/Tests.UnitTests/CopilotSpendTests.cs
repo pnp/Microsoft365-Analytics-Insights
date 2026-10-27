@@ -106,20 +106,20 @@ namespace Tests.UnitTests
             var summary = CopilotSpendCalculator.Calculate(Input());
 
             // Billed Studio usage sums over the period: everyone's charges, including the ones no person was matched to.
-            Assert.AreEqual(67, summary.Studio.Credits, 1e-9);
+            Assert.AreEqual(67, summary.Studio.Credits.Value, 1e-9);
             Assert.AreEqual(7, summary.Studio.UnmatchedCredits.Value, 1e-9);
             Assert.AreEqual(3, summary.Studio.People);
             Assert.IsTrue(summary.Studio.CoversWindow);
             CollectionAssert.AreEqual(new[] { "env-1", "env-2" }, summary.Studio.Environments.Select(e => e.EnvironmentId).ToList(), "Largest first.");
-            Assert.AreEqual(summary.Studio.Credits, summary.Studio.Environments.Sum(e => e.Credits), 1e-9, "The per-person ledger by environment adds up.");
+            Assert.AreEqual(summary.Studio.Credits.Value, summary.Studio.Environments.Sum(e => e.Credits).Value, 1e-9, "The per-person ledger by environment adds up.");
 
             // The agent ledger is a different route: its own total, which need not match and is never added in.
             Assert.AreEqual(2, summary.Studio.Agents.Count);
             Assert.AreEqual(64.5, summary.Studio.AgentLedgerCredits.Value, 1e-9);
-            Assert.AreEqual(67, summary.Studio.Credits, 1e-9, "Not 131.5: the two Studio ledgers are never added.");
+            Assert.AreEqual(67, summary.Studio.Credits.Value, 1e-9, "Not 131.5: the two Studio ledgers are never added.");
 
             // Balances are each person's latest reading, never added to the Studio figures.
-            Assert.AreEqual(220, summary.Balances.Credits, 1e-9, "100 + 70 + the unmatched account's 50; the unknown amount adds nothing.");
+            Assert.AreEqual(220, summary.Balances.Credits.Value, 1e-9, "100 + 70 + the unmatched account's 50; the unknown amount adds nothing.");
             Assert.AreEqual(4, summary.Balances.ObservedPeople);
             Assert.AreEqual(2, summary.Balances.ConsumingPeople);
             Assert.AreEqual(1, summary.Balances.UnknownAmountPeople);
@@ -144,11 +144,11 @@ namespace Tests.UnitTests
         {
             var summary = CopilotSpendCalculator.Calculate(Input(id => id != 4, filtered: true));
 
-            Assert.AreEqual(30, summary.Studio.Credits, 1e-9, "Only the people in view: 10 + 20.");
+            Assert.AreEqual(30, summary.Studio.Credits.Value, 1e-9, "Only the people in view: 10 + 20.");
             Assert.IsNull(summary.Studio.UnmatchedCredits, "Charges no person was matched to cannot be shown to belong to this view.");
             Assert.IsNull(summary.Studio.Agents, "The agent ledger is not kept per person, so a filtered view has no share of it to show.");
             Assert.IsNull(summary.Studio.AgentLedgerCredits);
-            Assert.AreEqual(100, summary.Balances.Credits, 1e-9);
+            Assert.AreEqual(100, summary.Balances.Credits.Value, 1e-9);
             Assert.IsNull(summary.Balances.UnresolvedAccounts);
             Assert.IsNull(summary.Balances.UnresolvedCredits);
             Assert.AreEqual(0, summary.Balances.Policies.Count);
@@ -165,13 +165,134 @@ namespace Tests.UnitTests
 
             var sales = summary.Organisation.Groups.Single(g => g.Label == "Sales");
             Assert.AreEqual(3, sales.People);
-            Assert.AreEqual(40, sales.StudioCredits, 1e-9, "Persons 1 and 4: 10 + 30.");
-            Assert.AreEqual(170, sales.BalanceCredits, 1e-9, "Persons 1 and 4: 100 + 70; person 2's amount is unknown.");
+            Assert.AreEqual(40, sales.StudioCredits.Value, 1e-9, "Persons 1 and 4: 10 + 30.");
+            Assert.AreEqual(170, sales.BalanceCredits.Value, 1e-9, "Persons 1 and 4: 100 + 70; person 2's amount is unknown.");
             Assert.AreEqual(1, sales.UnknownAmountPeople);
             var folded = summary.Organisation.Groups.Single(g => g.Label == null);
-            Assert.AreEqual(CopilotInvestmentCalculator.GroupKeys.OtherSmallGroups, folded.EmptyKey, "A group of one would stand for one person.");
+            Assert.AreEqual(CopilotInvestmentCalculator.GroupKeys.OtherSmallGroups, folded.EmptyKey);
             Assert.AreEqual(1, summary.Organisation.FoldedGroups);
-            Assert.AreEqual(sales.StudioCredits + folded.StudioCredits, summary.People.Sum(p => p.StudioCredits), 1e-9);
+            // The combined row holds one person - fewer than the smallest group shown - so it shows no figures at all.
+            Assert.AreEqual(1, folded.People);
+            Assert.IsTrue(folded.Withheld);
+            Assert.IsNull(folded.StudioCredits);
+            Assert.IsNull(folded.BalanceCredits);
+            Assert.IsNull(folded.ShareOfStudio);
+            Assert.IsNull(folded.UnknownAmountPeople);
+        }
+
+        [TestMethod]
+        public void EveryCalendarDayKeepsItsPlace_AndOnlyTheLedgersOwnDaysCanHaveNoCharges()
+        {
+            // Two weeks from Monday 12 Oct: charges on weekdays to Thursday 22 Oct, the ledger's latest stored day.
+            var monday = new DateTime(2026, 10, 12);
+            var input = Input();
+            input.FromUtc = monday;
+            input.LastDay = monday.AddDays(13);
+            input.Studio.LatestDate = new DateTime(2026, 10, 22);
+            input.StudioBreakdown.Days.Clear();
+            foreach (var day in Enumerable.Range(0, 11).Select(d => monday.AddDays(d)).Where(d => d.DayOfWeek != DayOfWeek.Saturday && d.DayOfWeek != DayOfWeek.Sunday))
+                input.StudioBreakdown.Days.Add(new CopilotSpendDay { Date = day, Credits = 10, People = 2 });
+
+            var days = CopilotSpendCalculator.Calculate(input).Studio.Days;
+
+            CollectionAssert.AreEqual(Enumerable.Range(0, 14).Select(d => monday.AddDays(d)).ToList(), days.Select(d => d.Date).ToList(), "Every day, weekends included.");
+            Assert.AreEqual(CopilotSpendDayStatus.NoneRecorded, days.Single(d => d.Date == new DateTime(2026, 10, 17)).Status, "A Saturday inside the ledger: nothing recorded.");
+            Assert.IsNull(days.Single(d => d.Date == new DateTime(2026, 10, 17)).Credits, "No charges recorded is not a reported zero.");
+            Assert.AreEqual(CopilotSpendDayStatus.Recorded, days.Single(d => d.Date == new DateTime(2026, 10, 22)).Status);
+            CollectionAssert.AreEqual(new[] { CopilotSpendDayStatus.NotReported, CopilotSpendDayStatus.NotReported },
+                days.Where(d => d.Date > new DateTime(2026, 10, 23)).Select(d => d.Status).ToList(), "After the latest stored day: not reported yet, not zero.");
+            Assert.AreEqual(CopilotSpendDayStatus.NotReported, days.Single(d => d.Date == new DateTime(2026, 10, 23)).Status, "Friday 23rd is after the ledger's last day.");
+            Assert.AreEqual(90, days.Sum(d => d.Credits ?? 0), 1e-9, "Nine recorded weekdays, nothing invented.");
+        }
+
+        [TestMethod]
+        public void ASourceThatIsOffOrUnreadable_ReadsAsNotAvailable_NeverAsZero_WhileAKnownZeroStaysZero()
+        {
+            // The Studio ledger was never imported (import off, no rows): every Studio figure is unknown.
+            var input = Input();
+            input.Studio = new StudioFacts();
+            input.StudioImportEnabled = false;
+            var summary = CopilotSpendCalculator.Calculate(input);
+            Assert.IsFalse(summary.Studio.Available);
+            Assert.IsNull(summary.Studio.Credits);
+            Assert.IsNull(summary.Studio.People);
+            Assert.AreEqual(0, summary.Studio.Days.Count);
+            Assert.IsTrue(summary.People.All(p => p.StudioCredits == null && p.StudioDays == null), "Nobody's Studio use is known.");
+            Assert.IsTrue(summary.Organisation.Groups.All(g => g.StudioCredits == null && g.ShareOfStudio == null && g.StudioPeople == null));
+            Assert.IsTrue(summary.Organisation.Groups.Any(g => g.BalanceCredits > 0), "The other source still reports.");
+
+            // An unreadable ledger is the same, even with its import switched on.
+            input.Studio = new StudioFacts { FailureCode = "studioUnavailable" };
+            input.StudioImportEnabled = true;
+            Assert.IsNull(CopilotSpendCalculator.Calculate(input).Studio.Credits);
+
+            // Retained history: the import is off now but the ledger holds rows, so its figures - zeros included - are real.
+            input = Input();
+            input.StudioImportEnabled = false;
+            summary = CopilotSpendCalculator.Calculate(input);
+            Assert.IsTrue(summary.Studio.Available);
+            Assert.AreEqual(67, summary.Studio.Credits.Value, 1e-9);
+            Assert.AreEqual(0, summary.People.Single(p => p.UserId == 2).StudioCredits, "A person the readable ledger has no charges for: a known zero.");
+
+            // No balance readings at all: balance figures are unknown, the Studio ones unaffected.
+            input = Input();
+            input.Credits = new CreditFacts { TablesPresent = false };
+            summary = CopilotSpendCalculator.Calculate(input);
+            Assert.IsFalse(summary.Balances.Available);
+            Assert.IsNull(summary.Balances.Credits);
+            Assert.IsNull(summary.Balances.UnresolvedAccounts);
+            Assert.IsTrue(summary.Organisation.Groups.All(g => g.BalanceCredits == null && g.ShareOfBalances == null && g.UnknownAmountPeople == null));
+            Assert.AreEqual(67, summary.Studio.Credits.Value, 1e-9);
+
+            // The workbook leaves those cells empty and says why, in the reader's language.
+            input = Input();
+            input.Studio = new StudioFacts();
+            var sheets = CopilotInvestmentWorkbookLanguageTests.Sheets(CopilotSpendWorkbook.Build(CopilotSpendCalculator.Calculate(input), true, "test", PortalLanguage.Spanish));
+            var es = PortalCatalog.For(CopilotSpendWorkbook.CatalogModule, PortalLanguage.Spanish);
+            var texts = CopilotInvestmentWorkbookLanguageTests.Texts(sheets);
+            CollectionAssert.Contains(texts, es.Text("copilotSpend.workbook.studio.notAvailable"));
+            var studioCredits = sheets[0].Cells.Single(c => c.Text == es.Text("copilotSpend.workbook.studio.credits"));
+            var row = studioCredits.Ref.Substring(1);
+            Assert.IsNull(sheets[0].Cells.SingleOrDefault(c => c.Ref == "B" + row)?.Value, "An empty cell, not a 0.");
+            var people = sheets.Last().Cells;
+            Assert.IsFalse(people.Any(c => c.Ref.StartsWith("G", StringComparison.Ordinal) && c.Ref != "G1" && c.Value == "0"), "No person's Studio credits written as 0.");
+        }
+
+        [TestMethod]
+        public void AReadingOlderThanThePeriod_IsFlagged_NotPassedOffAsThePeriodsConsumption()
+        {
+            // A seven-day view whose newest reading is from before it starts (the collector stopped).
+            var input = Input();
+            input.FromUtc = Snapshot.AddDays(5);
+            input.LastDay = Snapshot.AddDays(11);
+            var summary = CopilotSpendCalculator.Calculate(input);
+            Assert.IsTrue(summary.Balances.SnapshotBeforeWindow);
+            var es = PortalCatalog.For(CopilotSpendWorkbook.CatalogModule, PortalLanguage.Spanish);
+            CollectionAssert.Contains(CopilotInvestmentWorkbookLanguageTests.Texts(CopilotInvestmentWorkbookLanguageTests.Sheets(
+                    CopilotSpendWorkbook.Build(summary, false, "test", PortalLanguage.Spanish))),
+                es.Text("copilotSpend.workbook.balances.snapshotBeforeWindow", ("date", "26 oct 2026")));
+
+            Assert.IsFalse(CopilotSpendCalculator.Calculate(Input()).Balances.SnapshotBeforeWindow, "The control: a reading inside the period.");
+        }
+
+        [TestMethod]
+        public void SmallEnvironments_AreCombinedForAReaderWithoutSeePii_OnACopy()
+        {
+            var input = Input();
+            input.StudioBreakdown.Environments.Clear();
+            input.StudioBreakdown.Environments.Add(new CopilotSpendEnvironment { EnvironmentId = "env-1", EnvironmentName = "Contoso (default)", Credits = 50, People = 12, Days = 9 });
+            input.StudioBreakdown.Environments.Add(new CopilotSpendEnvironment { EnvironmentId = "env-2", EnvironmentName = "Contoso \u2013 " + GreekDepartment + " dev", Credits = 17, People = 1, Days = 3 });
+            var summary = CopilotSpendCalculator.Calculate(input);
+
+            var trimmed = summary.WithoutIndividualData();
+            Assert.AreEqual(2, summary.Studio.Environments.Count, "The cached summary keeps every environment for a reader with See PII.");
+            Assert.IsFalse(trimmed.Studio.Environments.Any(e => e.EnvironmentId == "env-2" || (e.EnvironmentName ?? string.Empty).Contains("dev")),
+                "A one-person environment's name does not reach a reader without See PII.");
+            var combined = trimmed.Studio.Environments.Single(e => e.EmptyKey == CopilotSpendGroupKeys.OtherEnvironments);
+            Assert.AreEqual(1, combined.People);
+            Assert.IsTrue(combined.Withheld && combined.Credits == null && combined.Days == null, "Still one person: no amount either.");
+            Assert.IsFalse(CopilotInvestmentWorkbookLanguageTests.Texts(CopilotInvestmentWorkbookLanguageTests.Sheets(
+                CopilotSpendWorkbook.Build(trimmed, false, "test", PortalLanguage.English))).Any(t => t.Contains(" dev")));
         }
 
         [TestMethod]

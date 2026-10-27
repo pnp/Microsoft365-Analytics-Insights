@@ -65,9 +65,12 @@ namespace Common.Entities.CopilotSpend
             var people = words.W("unit.people");
             var studio = summary.Studio;
             sheet.AddHeaderRow(words.W("summary.col.studio"), words.W("col.value"), words.W("col.unit"), words.W("col.note"));
+            // A source that is not available leaves its cells empty: never a zero the source did not report.
             sheet.AddRow(words.W("studio.credits"), studio.Credits, credits,
-                studio.UnmatchedCredits > 0 ? words.W("studio.creditsUnmatched", ("credits", words.Num(studio.UnmatchedCredits))) : words.W("studio.creditsNote"));
-            sheet.AddRow(words.W("studio.people"), XlsxCell.Number(studio.People), people);
+                !studio.Available ? words.W("studio.notAvailable")
+                : studio.UnmatchedCredits > 0 ? words.W("studio.creditsUnmatched", ("credits", words.Num(studio.UnmatchedCredits))) : words.W("studio.creditsNote"));
+            sheet.AddRow(words.W("studio.people"), Count(studio.People), people);
+            sheet.AddRow(words.W("studio.latest"), studio.LatestDate, null, words.W("studio.latestNote"));
             sheet.AddRow(words.W("studio.earliest"), studio.EarliestDate, null,
                 studio.EarliestDate.HasValue && !studio.CoversWindow ? words.W("studio.partialWindow") : null);
             sheet.AddRow(words.W("studio.lastImport"), studio.LastImportUtc, null, studio.LastImportFailed ? words.W("studio.lastImportFailed") : null);
@@ -77,9 +80,12 @@ namespace Common.Entities.CopilotSpend
 
             var balances = summary.Balances;
             sheet.AddHeaderRow(words.W("summary.col.balances"), words.W("col.value"), words.W("col.unit"), words.W("col.note"));
-            sheet.AddRow(words.W("balances.credits"), balances.Credits, credits, words.W("balances.creditsNote"));
+            sheet.AddRow(words.W("balances.credits"), balances.Credits, credits,
+                balances.Available ? words.W("balances.creditsNote") : words.W("balances.notAvailable"));
             sheet.AddRow(words.W("balances.snapshot"), balances.SnapshotDate, null,
                 words.W("balances.snapshotNote", ("days", words.Count(CopilotInvestmentSql.SnapshotBandDays))));
+            if (balances.SnapshotBeforeWindow)
+                sheet.AddRow(XlsxCell.Wrapped(words.W("balances.snapshotBeforeWindow", ("date", words.Date(balances.SnapshotDate)))));
             sheet.AddRow(words.W("balances.periodStatus"), balances.PeriodStatus == null ? words.W("balances.periodStatus.none")
                 : words.Shared("copilotInvestment.quality.period." + balances.PeriodStatus, balances.PeriodStatus));
             sheet.AddRow(words.W("balances.observed"), XlsxCell.Number(balances.ObservedPeople), people);
@@ -118,26 +124,46 @@ namespace Common.Entities.CopilotSpend
         {
             var sheet = workbook.AddSheet(words.W("sheet.organisation"));
             var organisation = summary.Organisation;
-            sheet.SetColumnWidths(34, 12, 14, 16, 14, 16, 16, 14, 14);
+            sheet.SetColumnWidths(34, 12, 14, 16, 14, 16, 16, 14, 14, 40);
             sheet.AddRow(words.W("org.groupedBy"), FilterWording.DimensionLabel(organisation.Dimension, organisation.DimensionName, words.Language), null,
-                words.W("org.minGroup", ("count", words.Count(organisation.MinGroupSize))));
+                organisation.MinGroupSize > 1 ? words.W("org.minGroup", ("count", words.Count(organisation.MinGroupSize))) : words.W("org.everyGroup"));
             sheet.AddRow(XlsxCell.Wrapped(words.W("org.note")));
             if (organisation.Hidden)
             {
                 sheet.AddRow(words.W("org.hidden"));
                 return;
             }
+            if (organisation.UnavailableCode != null)
+            {
+                sheet.AddRow(XlsxCell.Wrapped(words.W("org.unavailable." + organisation.UnavailableCode)));
+                return;
+            }
             sheet.AddHeaderRow(words.W("org.col.group"), words.W("org.col.people"), words.W("org.col.studioPeople"), words.W("org.col.studioCredits"),
                 words.W("org.col.shareOfStudio"), words.W("org.col.balancePeople"), words.W("org.col.balanceCredits"), words.W("org.col.shareOfBalances"),
-                words.W("org.col.unknown"));
+                words.W("org.col.unknown"), words.W("col.note"));
             var first = sheet.CurrentRow;
-            foreach (var g in organisation.Groups)
-                sheet.AddRow(g.Label ?? (g.EmptyKey == CopilotInvestmentCalculator.GroupKeys.NotSet ? words.W("org.notSet") : words.W("org.combined")),
-                    XlsxCell.Number(g.People), XlsxCell.Number(g.StudioPeople), g.StudioCredits,
-                    g.ShareOfStudio.HasValue ? (object)XlsxCell.Percent(g.ShareOfStudio.Value) : null, XlsxCell.Number(g.BalancePeople), g.BalanceCredits,
-                    g.ShareOfBalances.HasValue ? (object)XlsxCell.Percent(g.ShareOfBalances.Value) : null, XlsxCell.Number(g.UnknownAmountPeople));
+            // Every group, not the page's top ones: only groups too small to show alone are combined, and that row says so.
+            foreach (var g in organisation.AllGroups)
+                sheet.AddRow(GroupLabel(g, words), XlsxCell.Number(g.People), Count(g.StudioPeople), g.StudioCredits, Percent(g.ShareOfStudio),
+                    Count(g.BalancePeople), g.BalanceCredits, Percent(g.ShareOfBalances), Count(g.UnknownAmountPeople), GroupNote(g, organisation, words));
             sheet.FreezeTopRows(first);
-            if (sheet.CurrentRow > first) sheet.AddAutoFilter(first, sheet.CurrentRow, 1, 9);
+            if (sheet.CurrentRow > first) sheet.AddAutoFilter(first, sheet.CurrentRow, 1, 10);
+        }
+
+        private static string GroupLabel(CopilotSpendGroupRow g, Words words) =>
+            g.Label ?? (g.EmptyKey == CopilotInvestmentCalculator.GroupKeys.NotSet ? words.W("org.notSet")
+                : g.EmptyKey == CopilotSpendGroupKeys.MoreGroups ? words.W("org.moreGroups", ("count", words.Count(g.Folded)))
+                : words.W("org.combined"));
+
+        private static string GroupNote(CopilotSpendGroupRow g, CopilotSpendOrganisation organisation, Words words)
+        {
+            var notes = new List<string>();
+            if (g.EmptyKey == CopilotInvestmentCalculator.GroupKeys.OtherSmallGroups)
+                notes.Add(words.W("org.combinedNote", ("groups", words.Count(g.Folded)), ("count", words.Count(organisation.MinGroupSize))));
+            if (g.Withheld) notes.Add(words.W("org.withheld", ("count", words.Count(organisation.MinGroupSize))));
+            if (g.StudioCredits == null && !g.Withheld) notes.Add(words.W("org.studioNotAvailable"));
+            if (g.BalanceCredits == null && !g.Withheld) notes.Add(words.W("org.balancesNotAvailable"));
+            return notes.Count == 0 ? null : string.Join(" ", notes);
         }
 
         private static void WriteStudio(XlsxWriter workbook, CopilotSpendSummary summary, Words words)
@@ -147,26 +173,39 @@ namespace Common.Entities.CopilotSpend
             var studio = summary.Studio;
             sheet.AddTitle(words.W("studio.title"));
             sheet.AddRow(XlsxCell.Wrapped(words.W("studio.intro")));
+            if (!studio.Available)
+            {
+                sheet.AddRow(XlsxCell.Wrapped(words.W("studio.notAvailable")));
+                return;
+            }
             if (studio.BreakdownFailureCode != null)
             {
                 sheet.AddRow(words.W("studio.breakdownUnavailable"));
                 return;
             }
             sheet.AddBlankRow();
-            sheet.AddHeaderRow(words.W("studio.col.date"), words.W("studio.col.credits"), words.W("studio.col.people"));
-            foreach (var day in studio.Days) sheet.AddRow(XlsxCell.Date(day.Date), day.Credits, XlsxCell.Number(day.People));
+            sheet.AddRow(words.W("studio.latest"), studio.LatestDate, null, words.W("studio.latestNote"));
+            sheet.AddHeaderRow(words.W("studio.col.date"), words.W("studio.col.credits"), words.W("studio.col.people"), words.W("col.note"));
+            // Every calendar day: a day the ledger has no charges for is said to be so, and one after its latest day is not reported.
+            foreach (var day in studio.Days)
+                sheet.AddRow(XlsxCell.Date(day.Date), day.Credits, Count(day.People),
+                    day.Status == CopilotSpendDayStatus.Recorded ? null : words.W("studio.day." + day.Status));
             sheet.AddBlankRow();
             sheet.AddRow(words.W("studio.environmentsTitle"));
             sheet.AddHeaderRow(words.W("studio.col.environment"), words.W("studio.col.environmentId"), words.W("studio.col.credits"), words.W("studio.col.people"),
                 words.W("studio.col.days"));
             foreach (var environment in studio.Environments)
-                sheet.AddRow(environment.EnvironmentName ?? words.W("studio.unnamedEnvironment"), environment.EnvironmentId, environment.Credits,
-                    XlsxCell.Number(environment.People), XlsxCell.Number(environment.Days));
+                sheet.AddRow(environment.EmptyKey == CopilotSpendGroupKeys.OtherEnvironments
+                        ? words.W("studio.otherEnvironments", ("count", words.Count(environment.Folded)))
+                        : environment.EnvironmentName ?? words.W("studio.unnamedEnvironment"),
+                    environment.Withheld ? words.W("studio.environmentsWithheld") : environment.EnvironmentId, environment.Credits,
+                    XlsxCell.Number(environment.People), Count(environment.Days));
             sheet.AddBlankRow();
             sheet.AddRow(words.W("studio.agentsTitle"));
             if (studio.Agents == null)
             {
-                sheet.AddRow(XlsxCell.Wrapped(words.W("studio.agentsWithheld")));
+                // Withheld from a filtered view by design; unfiltered, the agent ledger simply was not there to read.
+                sheet.AddRow(XlsxCell.Wrapped(words.W(summary.Filtered ? "studio.agentsWithheld" : "studio.agentsNotAvailable")));
                 return;
             }
             sheet.AddRow(XlsxCell.Wrapped(words.W("studio.agentsNote")));
@@ -239,7 +278,7 @@ namespace Common.Entities.CopilotSpend
             sheet.SetColumnWidths(headers.Select(h => (double)Math.Max(12, Math.Min(30, h.Length + 4))).ToArray());
             sheet.AddHeaderRow(headers);
             foreach (var p in CopilotSpendPeople.Sort(summary.People, "user", false))
-                sheet.AddRow(p.UserPrincipalName, p.Department, p.JobTitle, p.Company, p.Country, p.Manager, p.StudioCredits, XlsxCell.Number(p.StudioDays),
+                sheet.AddRow(p.UserPrincipalName, p.Department, p.JobTitle, p.Company, p.Country, p.Manager, p.StudioCredits, Count(p.StudioDays),
                     p.BalanceCredits, p.BalanceDate.HasValue ? (object)XlsxCell.Date(p.BalanceDate.Value) : null,
                     p.BalanceDate.HasValue ? (object)p.BalancePartial : null, p.BalanceDate.HasValue ? (object)p.UnknownAmounts : null,
                     p.BalanceDate.HasValue ? (object)p.OtherUnits : null, p.BalanceDate.HasValue ? (object)p.LimitExhausted : null,
@@ -283,6 +322,15 @@ namespace Common.Entities.CopilotSpend
             }
 
             internal string Count(double? value) => Num(value, 0);
+
+            /// <summary>A date inside a sentence, as the page writes it in this language (26 Oct 2026 / 26 oct 2026).</summary>
+            internal string Date(DateTime? value) =>
+                value.HasValue ? value.Value.ToString("d MMM yyyy", Culture).Replace(".", string.Empty) : "-";
         }
+
+        /// <summary>A typed number cell, or an empty cell for a figure that is not available - never a zero the source did not report.</summary>
+        private static object Count(int? value) => value.HasValue ? (object)XlsxCell.Number(value.Value) : null;
+
+        private static object Percent(double? value) => value.HasValue ? (object)XlsxCell.Percent(value.Value) : null;
     }
 }

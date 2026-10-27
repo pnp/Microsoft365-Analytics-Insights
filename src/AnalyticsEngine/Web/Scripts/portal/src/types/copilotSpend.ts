@@ -38,32 +38,44 @@ export interface SpendStudio {
   lastImportFailed: boolean;
   earliestDate: string | null;
   coversWindow: boolean;
-  credits: number;
-  people: number;
+  /** The ledger's latest stored day: how far it reaches, not proof every earlier day was imported. */
+  latestDate: string | null;
+  /** False when the ledger is off with no history, or unreadable: every Studio figure is then null, never zero. */
+  available: boolean;
+  credits: number | null;
+  people: number | null;
   /** Of `credits`, charges never matched to a person. Null in a filtered view. */
   unmatchedCredits: number | null;
   days: SpendDay[];
   /** Per-person ledger by Power Platform environment: adds up to `credits` with the days. */
   environments: SpendEnvironment[];
-  /** The tenant agent ledger by agent: a separate route, never added to `credits`. Null in a filtered view. */
+  /** The tenant agent ledger by agent: a separate route, never added to `credits`. Null in a filtered view or when not read. */
   agents: SpendAgent[] | null;
   /** The agent ledger's own total; null in a filtered view. */
   agentLedgerCredits: number | null;
   breakdownFailureCode: string | null;
 }
 
-export interface SpendDay {
+/** `recorded`: charges held; `noneRecorded`: within the ledger's stored days, none held; `notReported`: outside them, which is not zero. */ type SpendDayStatus = 'recorded' | 'noneRecorded' | 'notReported';
+
+/** One calendar day of the window. */ interface SpendDay {
   date: string;
-  credits: number;
-  people: number;
+  status: SpendDayStatus;
+  credits: number | null;
+  people: number | null;
 }
 
 export interface SpendEnvironment {
   environmentId: string | null;
   environmentName: string | null;
-  credits: number;
+  /** `otherEnvironments` on the row combining environments too small to show to a reader without See PII. */
+  emptyKey: 'otherEnvironments' | null;
+  folded: number;
+  /** A combined row still too small to show figures for: credits and days are null. */
+  withheld: boolean;
+  credits: number | null;
   people: number;
-  days: number;
+  days: number | null;
 }
 
 export interface SpendAgent {
@@ -79,12 +91,16 @@ export interface SpendBalances {
   hasData: boolean;
   failureCode: string | null;
   snapshotDate: string | null;
+  /** The newest reading predates the selected period: it is the latest reading, not this period's consumption. */
+  snapshotBeforeWindow: boolean;
+  /** False when no readings could be used: balance figures are then null, never zero. */
+  available: boolean;
   snapshotBandFrom: string | null;
   firstObservationDate: string | null;
   periodStatus: 'verified' | 'unverified' | 'mixed' | null;
   oldestFreshness: string | null;
   newestFreshness: string | null;
-  credits: number;
+  credits: number | null;
   observedPeople: number;
   consumingPeople: number;
   partialPeople: number;
@@ -107,21 +123,30 @@ export interface SpendOrganisation {
   dimensionName: string | null;
   minGroupSize: number;
   foldedGroups: number;
+  /** Groups beyond the most the page lists, combined into one row here and listed one by one in the Excel export. */
+  moreGroups: number;
+  /** Why the people cannot be grouped at all; groups are then empty. */
+  unavailableCode: 'directoryUnavailable' | 'dimensionUnknown' | null;
   hidden: boolean;
   groups: SpendGroupRow[];
 }
 
 export interface SpendGroupRow {
   label: string | null;
-  emptyKey: 'notSet' | 'otherSmallGroups' | null;
+  emptyKey: 'notSet' | 'otherSmallGroups' | 'moreGroups' | null;
+  /** How many groups a combined row holds. */
+  folded: number;
+  /** A combined row with fewer people than the smallest group shown: its figures are null. */
+  withheld: boolean;
   people: number;
-  studioPeople: number;
-  studioCredits: number;
+  /** Null when the source is not available, or the row is withheld: not zero. */
+  studioPeople: number | null;
+  studioCredits: number | null;
   shareOfStudio: number | null;
-  balancePeople: number;
-  balanceCredits: number;
+  balancePeople: number | null;
+  balanceCredits: number | null;
   shareOfBalances: number | null;
-  unknownAmountPeople: number;
+  unknownAmountPeople: number | null;
 }
 
 export interface SpendPersonRow {
@@ -132,8 +157,9 @@ export interface SpendPersonRow {
   company: string | null;
   country: string | null;
   manager: string | null;
-  studioCredits: number;
-  studioDays: number;
+  /** Null when the Studio ledger is not available: unknown, not zero. */
+  studioCredits: number | null;
+  studioDays: number | null;
   /** Null when there is no reading, or none in Copilot credits: absent, not zero. */
   balanceCredits: number | null;
   balanceDate: string | null;

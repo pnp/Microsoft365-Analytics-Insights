@@ -11,6 +11,9 @@ namespace Common.Entities.CopilotSpend
         public DateTime GeneratedUtc { get; set; }
         public DateTime FromUtc { get; set; }
         public DateTime ToUtc { get; set; }
+
+        /// <summary>The window's last calendar day: the Studio days run from <see cref="FromUtc"/> to it, inclusive.</summary>
+        public DateTime? LastDay { get; set; }
         public int WindowDays { get; set; }
 
         /// <summary>True when a filter narrows the view: tenant-only facts (unmatched accounts, policies, pool balances) are withheld.</summary>
@@ -22,7 +25,11 @@ namespace Common.Entities.CopilotSpend
         public string Dimension { get; set; } = CopilotInvestmentDimensions.Department;
         public string DimensionName { get; set; }
         public Func<int, string> GroupOf { get; set; }
+
+        /// <summary>Why the people cannot be grouped (<see cref="CopilotSpendGroupingUnavailable"/>), or null.</summary>
+        public string GroupingUnavailable { get; set; }
         public int MinGroupSize { get; set; } = CopilotSpendCalculator.DefaultMinGroupSize;
+        public int MaxGroups { get; set; } = CopilotSpendCalculator.MaxGroups;
 
         public CreditFacts Credits { get; set; }
         public bool CreditCollectionEnabled { get; set; }
@@ -38,10 +45,14 @@ namespace Common.Entities.CopilotSpend
     /// <summary>Builds the descriptive summary. No price, no value, no judgement: counts and quantities as the sources report them.</summary>
     public static class CopilotSpendCalculator
     {
-        /// <summary>A group with fewer people than this is folded into one row, so an aggregate never stands in for one person.</summary>
+        /// <summary>
+        /// A group with fewer people than this is combined with the other small ones, and a combination still that small
+        /// shows no figures, so no row's figures describe fewer people than this. A grouping that names people (manager) is
+        /// served only to a reader with See PII and shows every group.
+        /// </summary>
         public const int DefaultMinGroupSize = 5;
 
-        /// <summary>The most groups listed; the rest are folded into one row.</summary>
+        /// <summary>The most groups the page lists; the rest are combined into one labelled row and listed in full in the export.</summary>
         public const int MaxGroups = 100;
 
         public static CopilotSpendSummary Calculate(CopilotSpendInput input)
@@ -50,6 +61,10 @@ namespace Common.Entities.CopilotSpend
             var inScope = input.InScope ?? (_ => true);
             var credits = input.Credits ?? new CreditFacts();
             var studio = input.Studio ?? new StudioFacts();
+
+            // A source counts as zero only when it was read and holds data; otherwise its figures are not available (null).
+            var studioAvailable = studio.FailureCode == null && studio.EarliestDate.HasValue;
+            var balancesAvailable = credits.FailureCode == null && credits.SnapshotDate.HasValue;
 
             // One latest reading per person in view. A person is one directory object, but the newest reading wins if not.
             var balances = credits.Users.Where(u => u.UserId.HasValue && inScope(u.UserId.Value))
@@ -60,7 +75,7 @@ namespace Common.Entities.CopilotSpend
             var studioByUser = studio.Users.Where(u => u.UserId.HasValue && inScope(u.UserId.Value) && u.Credits > 0)
                 .GroupBy(u => u.UserId.Value)
                 .ToDictionary(g => g.Key, g => g.First());
-            var unmatchedStudio = input.Filtered ? (double?)null : Math.Round(studio.Users.Where(u => !u.UserId.HasValue).Sum(u => u.Credits), 6);
+            var unmatchedStudio = input.Filtered || !studioAvailable ? (double?)null : Math.Round(studio.Users.Where(u => !u.UserId.HasValue).Sum(u => u.Credits), 6);
 
             var people = new List<CopilotSpendPersonRow>();
             foreach (var userId in studioByUser.Keys.Union(balances.Where(b => Consumed(b.Value)).Select(b => b.Key)))
@@ -75,6 +90,9 @@ namespace Common.Entities.CopilotSpend
                     Company = entry?.Company,
                     Country = entry?.Country,
                     Manager = entry?.Manager,
+                    // A readable ledger with no charges for this person is a real zero; an unreadable or absent one is unknown.
+                    StudioCredits = studioAvailable ? 0 : (double?)null,
+                    StudioDays = studioAvailable ? 0 : (int?)null,
                 };
                 if (studioByUser.TryGetValue(userId, out var used))
                 {
@@ -105,9 +123,9 @@ namespace Common.Entities.CopilotSpend
                 People = CopilotSpendPeople.Sort(people, null, true).ToList(),
                 PeopleCount = people.Count,
             };
-            summary.Studio = Studio(input, studio, studioByUser.Values.ToList(), unmatchedStudio);
-            summary.Balances = Balances(input, credits, balances.Values.ToList(), unresolved);
-            summary.Organisation = Organisation(input, people);
+            summary.Studio = Studio(input, studio, studioAvailable, studioByUser.Values.ToList(), unmatchedStudio);
+            summary.Balances = Balances(input, credits, balancesAvailable, balances.Values.ToList(), unresolved);
+            summary.Organisation = Organisation(input, people, studioAvailable, balancesAvailable);
             return summary;
         }
 
@@ -118,7 +136,7 @@ namespace Common.Entities.CopilotSpend
         internal static bool Consumed(CreditUserFact balance) =>
             (balance.Credits ?? 0) > 0 || balance.UnknownConsumptionRows > 0 || balance.OtherUnitRows > 0 || balance.LimitExhaustedRows > 0;
 
-        private static CopilotSpendStudio Studio(CopilotSpendInput input, StudioFacts studio, List<StudioUserFact> used, double? unmatched)
+        private static CopilotSpendStudio Studio(CopilotSpendInput input, StudioFacts studio, bool available, List<StudioUserFact> used, double? unmatched)
         {
             var section = new CopilotSpendStudio
             {
@@ -128,18 +146,22 @@ namespace Common.Entities.CopilotSpend
                 LastImportUtc = studio.LastImportUtc,
                 LastImportFailed = !string.IsNullOrEmpty(studio.LastImportError),
                 EarliestDate = studio.EarliestDate,
+                LatestDate = studio.LatestDate,
                 CoversWindow = studio.EarliestDate.HasValue && studio.EarliestDate.Value.Date <= input.FromUtc.Date,
-                People = used.Count,
+                Available = available,
+                People = available ? used.Count : (int?)null,
                 UnmatchedCredits = unmatched,
-                Credits = Math.Round(used.Sum(u => u.Credits) + (unmatched ?? 0), 6),
+                Credits = available ? Math.Round(used.Sum(u => u.Credits) + (unmatched ?? 0), 6) : (double?)null,
             };
+            if (!available) return section;
+
             var breakdown = input.StudioBreakdown;
             if (breakdown == null || breakdown.FailureCode != null)
             {
                 section.BreakdownFailureCode = breakdown?.FailureCode ?? CopilotSpendErrorCodes.StudioBreakdownUnavailable;
                 return section;
             }
-            section.Days = breakdown.Days.OrderBy(d => d.Date).ToList();
+            section.Days = CalendarDays(input, studio, breakdown.Days);
             section.Environments = breakdown.Environments.OrderByDescending(e => e.Credits).ThenBy(e => e.EnvironmentId, StringComparer.Ordinal).ToList();
             if (input.Filtered || breakdown.Agents == null)
             {
@@ -155,15 +177,44 @@ namespace Common.Entities.CopilotSpend
             return section;
         }
 
-        private static CopilotSpendBalances Balances(CopilotSpendInput input, CreditFacts credits, List<CreditUserFact> observed, List<CreditUserFact> unresolved)
+        /// <summary>
+        /// Every calendar day of the window, so a weekend or a quiet day keeps its place on the axis. A day the ledger holds
+        /// rows for is <c>recorded</c>; a day between the ledger's first and latest stored days with no rows for the people
+        /// in view is <c>noneRecorded</c> (the ledger has nothing, which is all it can say); a day outside those - before it
+        /// starts, or after its latest stored day - is <c>notReported</c>, which is not zero.
+        /// </summary>
+        internal static List<CopilotSpendDay> CalendarDays(CopilotSpendInput input, StudioFacts studio, IEnumerable<CopilotSpendDay> rows)
+        {
+            var recorded = (rows ?? Enumerable.Empty<CopilotSpendDay>()).GroupBy(d => d.Date.Date).ToDictionary(g => g.Key, g => g.First());
+            var first = input.FromUtc.Date;
+            var last = (input.LastDay ?? input.ToUtc).Date;
+            var days = new List<CopilotSpendDay>();
+            for (var day = first; day <= last; day = day.AddDays(1))
+            {
+                if (recorded.TryGetValue(day, out var row))
+                {
+                    days.Add(new CopilotSpendDay { Date = day, Status = CopilotSpendDayStatus.Recorded, Credits = row.Credits, People = row.People });
+                    continue;
+                }
+                var stored = studio.EarliestDate.HasValue && studio.LatestDate.HasValue
+                    && day >= studio.EarliestDate.Value.Date && day <= studio.LatestDate.Value.Date;
+                days.Add(new CopilotSpendDay { Date = day, Status = stored ? CopilotSpendDayStatus.NoneRecorded : CopilotSpendDayStatus.NotReported });
+            }
+            return days;
+        }
+
+        private static CopilotSpendBalances Balances(CopilotSpendInput input, CreditFacts credits, bool available, List<CreditUserFact> observed,
+            List<CreditUserFact> unresolved)
         {
             var section = new CopilotSpendBalances
             {
                 TablesPresent = credits.TablesPresent,
                 CollectionEnabled = input.CreditCollectionEnabled,
                 HasData = credits.SnapshotDate.HasValue,
+                Available = available,
                 FailureCode = credits.FailureCode,
                 SnapshotDate = credits.SnapshotDate,
+                SnapshotBeforeWindow = credits.SnapshotDate.HasValue && credits.SnapshotDate.Value.Date < input.FromUtc.Date,
                 SnapshotBandFrom = credits.SnapshotBandFrom,
                 FirstObservationDate = credits.FirstObservationDate,
                 PeriodStatus = CopilotInvestmentCalculator.CreditPeriodStatus(observed.Concat(unresolved)),
@@ -176,76 +227,132 @@ namespace Common.Entities.CopilotSpend
                 OtherUnitPeople = observed.Count(o => o.OtherUnitRows > 0),
                 LimitExhaustedPeople = observed.Count(o => o.LimitExhaustedRows > 0),
                 NotEntitledPeople = observed.Count(o => o.NotEntitledRows > 0),
-                Credits = Math.Round(observed.Concat(unresolved).Sum(o => o.Credits ?? 0), 6),
+                Credits = available ? Math.Round(observed.Concat(unresolved).Sum(o => o.Credits ?? 0), 6) : (double?)null,
                 SweepsInWindow = credits.Sweeps.Count,
                 CompletedSweepsInWindow = credits.Sweeps.Count(s => s.LastCompleted.HasValue),
                 Services = CopilotInvestmentCalculator.ServiceRows(credits, observed, input.Filtered),
             };
-            if (!input.Filtered)
+            if (!input.Filtered && available)
             {
                 section.UnresolvedAccounts = unresolved.Count;
                 section.UnresolvedCredits = Math.Round(unresolved.Sum(u => u.Credits ?? 0), 6);
+            }
+            if (!input.Filtered)
+            {
                 section.Policies = CopilotInvestmentCalculator.PolicyRows(credits);
                 section.TenantBalances = CopilotInvestmentCalculator.TenantBalanceRows(credits);
             }
             return section;
         }
 
-        private static CopilotSpendOrganisation Organisation(CopilotSpendInput input, List<CopilotSpendPersonRow> people)
+        /// <summary>
+        /// Both sources side by side per group. Every group with at least <see cref="CopilotSpendOrganisation.MinGroupSize"/>
+        /// people is kept; smaller ones are combined (with no figures if the combination is still that small). The page lists
+        /// the largest <see cref="CopilotSpendInput.MaxGroups"/> and combines the rest into a labelled row; the export
+        /// (<see cref="CopilotSpendOrganisation.AllGroups"/>) lists every group.
+        /// </summary>
+        private static CopilotSpendOrganisation Organisation(CopilotSpendInput input, List<CopilotSpendPersonRow> people, bool studioAvailable,
+            bool balancesAvailable)
         {
             var organisation = new CopilotSpendOrganisation
             {
                 Dimension = input.Dimension,
                 DimensionName = input.DimensionName,
-                MinGroupSize = Math.Max(1, input.MinGroupSize),
+                // A grouping that names people is only ever served to a reader with See PII: every manager is shown.
+                MinGroupSize = CopilotInvestmentDimensions.NamesPeople(input.Dimension) ? 1 : Math.Max(1, input.MinGroupSize),
+                UnavailableCode = input.GroupingUnavailable,
             };
-            if (input.GroupOf == null) return organisation;
+            if (input.GroupOf == null)
+            {
+                organisation.UnavailableCode = organisation.UnavailableCode ?? CopilotSpendGroupingUnavailable.Dimension;
+                return organisation;
+            }
 
-            var studioTotal = people.Sum(p => p.StudioCredits);
-            var balanceTotal = people.Sum(p => p.BalanceCredits ?? 0);
+            var totals = new GroupTotals
+            {
+                Studio = people.Sum(p => p.StudioCredits ?? 0),
+                Balances = people.Sum(p => p.BalanceCredits ?? 0),
+                StudioAvailable = studioAvailable,
+                BalancesAvailable = balancesAvailable,
+            };
             var groups = people.GroupBy(p => NullIfBlank(input.GroupOf(p.UserId)), StringComparer.Ordinal)
                 .Select(g => new { Label = g.Key, People = g.ToList() })
                 .ToList();
-            var shown = groups.Where(g => g.People.Count >= organisation.MinGroupSize)
-                .OrderByDescending(g => g.People.Sum(p => p.StudioCredits))
+            var kept = groups.Where(g => g.People.Count >= organisation.MinGroupSize)
+                .OrderByDescending(g => g.People.Sum(p => p.StudioCredits ?? 0))
                 .ThenByDescending(g => g.People.Sum(p => p.BalanceCredits ?? 0))
                 .ThenBy(g => g.Label, StringComparer.Ordinal)
-                .Take(MaxGroups)
                 .ToList();
-            var folded = groups.Except(shown).ToList();
+            var small = groups.Where(g => g.People.Count < organisation.MinGroupSize).ToList();
+            var maxGroups = Math.Max(1, input.MaxGroups);
 
-            foreach (var group in shown)
+            foreach (var group in kept)
             {
-                var row = GroupRow(group.People, studioTotal, balanceTotal);
+                var row = GroupRow(group.People, totals, organisation.MinGroupSize);
                 if (group.Label == null) row.EmptyKey = CopilotInvestmentCalculator.GroupKeys.NotSet;
                 else row.Label = group.Label;
-                organisation.Groups.Add(row);
+                organisation.AllGroups.Add(row);
             }
-            if (folded.Count > 0)
+            organisation.Groups.AddRange(organisation.AllGroups.Take(maxGroups));
+
+            var more = kept.Skip(maxGroups).ToList();
+            if (more.Count > 0)
             {
-                var row = GroupRow(folded.SelectMany(g => g.People).ToList(), studioTotal, balanceTotal);
-                row.EmptyKey = CopilotInvestmentCalculator.GroupKeys.OtherSmallGroups;
+                // Large groups beyond what the page lists: one labelled row on the page, every one of them in the export.
+                var row = GroupRow(more.SelectMany(g => g.People).ToList(), totals, organisation.MinGroupSize);
+                row.EmptyKey = CopilotSpendGroupKeys.MoreGroups;
+                row.Folded = more.Count;
                 organisation.Groups.Add(row);
-                organisation.FoldedGroups = folded.Count;
+                organisation.MoreGroups = more.Count;
+            }
+            if (small.Count > 0)
+            {
+                var row = GroupRow(small.SelectMany(g => g.People).ToList(), totals, organisation.MinGroupSize);
+                row.EmptyKey = CopilotInvestmentCalculator.GroupKeys.OtherSmallGroups;
+                row.Folded = small.Count;
+                organisation.Groups.Add(row);
+                organisation.AllGroups.Add(row);
+                organisation.FoldedGroups = small.Count;
             }
             return organisation;
         }
 
-        private static CopilotSpendGroupRow GroupRow(List<CopilotSpendPersonRow> people, double studioTotal, double balanceTotal)
+        private sealed class GroupTotals
         {
-            var studio = people.Sum(p => p.StudioCredits);
-            var balance = people.Sum(p => p.BalanceCredits ?? 0);
-            return new CopilotSpendGroupRow
+            public double Studio;
+            public double Balances;
+            public bool StudioAvailable;
+            public bool BalancesAvailable;
+        }
+
+        /// <summary>
+        /// One group's figures: a source that is not available leaves its figures null, and a row with fewer people than the
+        /// smallest group shown (only ever a combination of small groups) shows none at all.
+        /// </summary>
+        private static CopilotSpendGroupRow GroupRow(List<CopilotSpendPersonRow> people, GroupTotals totals, int minGroupSize)
+        {
+            var row = new CopilotSpendGroupRow { People = people.Count };
+            if (people.Count < minGroupSize)
             {
-                People = people.Count,
-                StudioPeople = people.Count(p => p.StudioCredits > 0),
-                StudioCredits = Math.Round(studio, 6),
-                ShareOfStudio = studioTotal > 0 ? Math.Round(studio / studioTotal, 4) : (double?)null,
-                BalancePeople = people.Count(p => (p.BalanceCredits ?? 0) > 0),
-                BalanceCredits = Math.Round(balance, 6),
-                ShareOfBalances = balanceTotal > 0 ? Math.Round(balance / balanceTotal, 4) : (double?)null,
-                UnknownAmountPeople = people.Count(p => p.UnknownAmounts),
-            };
+                row.Withheld = true;
+                return row;
+            }
+            if (totals.StudioAvailable)
+            {
+                var studio = people.Sum(p => p.StudioCredits ?? 0);
+                row.StudioPeople = people.Count(p => p.StudioCredits > 0);
+                row.StudioCredits = Math.Round(studio, 6);
+                row.ShareOfStudio = totals.Studio > 0 ? Math.Round(studio / totals.Studio, 4) : (double?)null;
+            }
+            if (totals.BalancesAvailable)
+            {
+                var balance = people.Sum(p => p.BalanceCredits ?? 0);
+                row.BalancePeople = people.Count(p => (p.BalanceCredits ?? 0) > 0);
+                row.BalanceCredits = Math.Round(balance, 6);
+                row.ShareOfBalances = totals.Balances > 0 ? Math.Round(balance / totals.Balances, 4) : (double?)null;
+                row.UnknownAmountPeople = people.Count(p => p.UnknownAmounts);
+            }
+            return row;
         }
 
         private static string NullIfBlank(string value) => string.IsNullOrWhiteSpace(value) ? null : value;

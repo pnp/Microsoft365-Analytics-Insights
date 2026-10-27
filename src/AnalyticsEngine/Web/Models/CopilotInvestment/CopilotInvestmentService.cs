@@ -195,7 +195,7 @@ namespace Web.AnalyticsWeb.Models.CopilotInvestment
                 RuntimeHelpers.GetHashCode(studio), directory == null ? "-" : directory.LoadedUtc.Ticks.ToString(CultureInfo.InvariantCulture),
                 scope.Key, assumptions.Document?.Version.ToString(CultureInfo.InvariantCulture) ?? "unavailable",
                 request.Scenario.Key, request.Dimension);
-            if (_results.Get(cacheKey) is CopilotInvestmentSummary cached) return cached;
+            if (_results.Get(cacheKey) is CopilotInvestmentSummary cached) return ForThisReader(cached, scope);
 
             var adoptionScope = scope.IsRestricted
                 ? CopilotAdoptionScope.Create(null, scope.UserFilter, scope.Restriction, scope.GlobalEcho, scope.Global?.DescribeInEnglish())
@@ -247,13 +247,19 @@ namespace Web.AnalyticsWeb.Models.CopilotInvestment
             };
 
             var summary = CopilotInvestmentCalculator.Calculate(input);
-            summary.UserFilter = scope.UserFilter?.ToEcho(scope.Restriction);
-            summary.UserFilterDescription = scope.UserFilter?.DescribeInEnglish();
-            summary.GlobalFilter = scope.GlobalEcho;
-            summary.GlobalFilterDescription = scope.Global?.DescribeInEnglish();
+            // Cached without the filter echoes: the scope key is shared by readers whose echoes differ (see ForThisReader).
             _results.Set(cacheKey, summary, DateTimeOffset.UtcNow.AddMinutes(2));
-            return summary;
+            return ForThisReader(summary, scope);
         }
+
+        /// <summary>
+        /// The cached summary with this request's filter echoes, on a copy. The cache key is the people a scope covers, which
+        /// readers with and without See PII share, but the administrator's filter echo and description withhold people's
+        /// names from a reader without See PII - so they belong to the request, never to the cached object.
+        /// </summary>
+        internal static CopilotInvestmentSummary ForThisReader(CopilotInvestmentSummary summary, ReportScope scope) =>
+            summary.WithFilterEchoes(scope.UserFilter?.ToEcho(scope.Restriction), scope.UserFilter?.DescribeInEnglish(), scope.GlobalEcho,
+                scope.Global?.DescribeInEnglish());
 
         private static string AnalysisIdentity(CopilotAdoptionAnalysis analysis) =>
             analysis == null ? "none" : RuntimeHelpers.GetHashCode(analysis).ToString(CultureInfo.InvariantCulture) + ":"

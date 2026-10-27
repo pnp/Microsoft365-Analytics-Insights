@@ -94,31 +94,50 @@ namespace Web.AnalyticsWeb.Models.CopilotSpend
             var cacheKey = string.Join("|", _prefix + "Summary", RuntimeHelpers.GetHashCode(credits), RuntimeHelpers.GetHashCode(studio),
                 RuntimeHelpers.GetHashCode(breakdown), directory == null ? "-" : directory.LoadedUtc.Ticks.ToString(CultureInfo.InvariantCulture),
                 scope.Key, request.Dimension, range.WindowDays.ToString(CultureInfo.InvariantCulture));
-            if (_results.Get(cacheKey) is CopilotSpendSummary cached) return cached;
+            if (_results.Get(cacheKey) is CopilotSpendSummary cached) return ForThisReader(cached, scope);
 
             Func<int, bool> inScope = scope.IsRestricted ? (Func<int, bool>)scope.Includes : _ => true;
+            var grouping = Grouping(directory, request.Dimension);
             var summary = CopilotSpendCalculator.Calculate(new CopilotSpendInput
             {
                 GeneratedUtc = DateTime.UtcNow,
                 FromUtc = range.FromUtc,
                 ToUtc = CopilotInvestmentWindow.End(range),
+                LastDay = CopilotInvestmentWindow.LastDay(range),
                 WindowDays = range.WindowDays,
                 Filtered = scope.IsRestricted,
                 InScope = inScope,
                 Directory = id => CopilotInvestmentReportService.DirectoryEntry(directory, id),
                 Dimension = request.Dimension,
                 DimensionName = directory?.DimensionName(request.Dimension),
-                GroupOf = CopilotInvestmentReportService.GroupFunction(directory, request.Dimension, new List<CopilotInvestmentPerson>()),
+                GroupOf = grouping.GroupOf,
+                GroupingUnavailable = grouping.UnavailableCode,
                 Credits = credits,
                 CreditCollectionEnabled = CreditCollectionEnabled,
                 Studio = studio,
                 StudioImportEnabled = StudioImportEnabled,
                 StudioBreakdown = breakdown,
             });
-            summary.UserFilter = scope.UserFilter?.ToEcho(scope.Restriction);
-            summary.GlobalFilter = scope.GlobalEcho;
+            // Cached without the filter echoes: readers with and without See PII share the scope key, but the administrator's
+            // filter echo withholds people's names from the second - so the echoes belong to each request (ForThisReader).
             _results.Set(cacheKey, summary, DateTimeOffset.UtcNow.AddMinutes(2));
-            return summary;
+            return ForThisReader(summary, scope);
+        }
+
+        /// <summary>The cached summary with this request's filter echoes, on a copy; the cached object never holds them.</summary>
+        internal static CopilotSpendSummary ForThisReader(CopilotSpendSummary summary, ReportScope scope) =>
+            summary.WithFilterEchoes(scope.UserFilter?.ToEcho(scope.Restriction), scope.GlobalEcho);
+
+        /// <summary>
+        /// How to group people by <paramref name="dimension"/>, or why the report cannot: with no directory there is nothing
+        /// to group by, and a dimension the directory does not hold (a custom organisation type since removed) is not "not set"
+        /// for everyone. Either way a reason is reported rather than invented values.
+        /// </summary>
+        internal static (Func<int, string> GroupOf, string UnavailableCode) Grouping(UserDirectorySnapshot directory, string dimension)
+        {
+            if (directory == null) return (null, CopilotSpendGroupingUnavailable.Directory);
+            if (directory.Column(dimension) == null) return (null, CopilotSpendGroupingUnavailable.Dimension);
+            return (id => directory.TryGetRow(id, out var row) ? directory.ValueOf(dimension, row) : null, null);
         }
 
         /// <summary>

@@ -3,6 +3,7 @@ using Common.Entities.UserFilters;
 using Newtonsoft.Json;
 using System;
 using System.Collections.Generic;
+using System.Linq;
 
 namespace Common.Entities.CopilotSpend
 {
@@ -60,8 +61,9 @@ namespace Common.Entities.CopilotSpend
         public List<CopilotSpendPersonRow> People { get; set; } = new List<CopilotSpendPersonRow>();
 
         /// <summary>
-        /// A copy for a reader without See PII: no people, and no grouping that names a person. Summaries are cached and
-        /// shared between readers, so the cached object is never edited.
+        /// A copy for a reader without See PII: no people, no grouping that names a person, and no environment small enough
+        /// to stand for one (its name and amount are combined with the other small ones). Summaries are cached and shared
+        /// between readers, so the cached object is never edited.
         /// </summary>
         public CopilotSpendSummary WithoutIndividualData()
         {
@@ -72,9 +74,24 @@ namespace Common.Entities.CopilotSpend
             {
                 var organisation = (CopilotSpendOrganisation)Organisation.MemberwiseCopy();
                 organisation.Groups = new List<CopilotSpendGroupRow>();
+                organisation.AllGroups = new List<CopilotSpendGroupRow>();
                 organisation.Hidden = true;
                 copy.Organisation = organisation;
             }
+            if (Studio != null) copy.Studio = Studio.WithSmallEnvironmentsCombined(CopilotSpendCalculator.DefaultMinGroupSize);
+            return copy;
+        }
+
+        /// <summary>
+        /// A copy carrying one request's filter echoes. Readers who cover the same people share a cached summary, but the
+        /// administrator's filter echo withholds people's names from a reader without See PII, so the echoes are attached per
+        /// request and never stored on the cached object.
+        /// </summary>
+        public CopilotSpendSummary WithFilterEchoes(UserFilterEcho userFilter, GlobalFilterEcho globalFilter)
+        {
+            var copy = (CopilotSpendSummary)MemberwiseClone();
+            copy.UserFilter = userFilter;
+            copy.GlobalFilter = globalFilter;
             return copy;
         }
     }
@@ -106,18 +123,31 @@ namespace Common.Entities.CopilotSpend
         [JsonProperty("coversWindow")]
         public bool CoversWindow { get; set; }
 
-        /// <summary>Billed credits in the window for the people in view; unfiltered, also the charges no user matched.</summary>
-        [JsonProperty("credits")]
-        public double Credits { get; set; }
+        /// <summary>The ledger's latest stored day, whatever the window: how far it reaches, not proof every earlier day was imported.</summary>
+        [JsonProperty("latestDate")]
+        public DateTime? LatestDate { get; set; }
 
-        /// <summary>People in view with billed credits in the window.</summary>
+        /// <summary>
+        /// True when the ledger's figures are known: it was read and holds rows. Otherwise (the import is off and nothing was
+        /// ever imported, or the ledger could not be read) every Studio figure is null - not available - rather than zero.
+        /// A ledger whose import has since been switched off but still holds rows is available: its history is real.
+        /// </summary>
+        [JsonProperty("available")]
+        public bool Available { get; set; }
+
+        /// <summary>Billed credits in the window for the people in view; unfiltered, also the charges no user matched. Null when not available.</summary>
+        [JsonProperty("credits")]
+        public double? Credits { get; set; }
+
+        /// <summary>People in view with billed credits in the window. Null when not available.</summary>
         [JsonProperty("people")]
-        public int People { get; set; }
+        public int? People { get; set; }
 
         /// <summary>Of <see cref="Credits"/>, charges the user import never matched to a person. Null in a filtered view.</summary>
         [JsonProperty("unmatchedCredits")]
         public double? UnmatchedCredits { get; set; }
 
+        /// <summary>Every calendar day of the window, in order, each saying whether the ledger recorded charges for it.</summary>
         [JsonProperty("days")]
         public List<CopilotSpendDay> Days { get; set; } = new List<CopilotSpendDay>();
 
@@ -131,18 +161,59 @@ namespace Common.Entities.CopilotSpend
         /// <summary>
         /// Billed credits per agent from the tenant's agent ledger, a different Microsoft route recorded per agent and not
         /// per person. Its total stands on its own: it need not equal <see cref="Credits"/> and is never added to it. Null in
-        /// a filtered view, which it cannot be narrowed to.
+        /// a filtered view, which it cannot be narrowed to, and when the agent ledger was not read.
         /// </summary>
         [JsonProperty("agents")]
         public List<CopilotSpendAgent> Agents { get; set; } = new List<CopilotSpendAgent>();
 
-        /// <summary>The agent ledger's own total for the period; null in a filtered view.</summary>
+        /// <summary>The agent ledger's own total for the period; null when <see cref="Agents"/> is.</summary>
         [JsonProperty("agentLedgerCredits")]
         public double? AgentLedgerCredits { get; set; }
 
         /// <summary>A stable code when the per-day, per-environment and per-agent breakdown could not be read.</summary>
         [JsonProperty("breakdownFailureCode")]
         public string BreakdownFailureCode { get; set; }
+
+        /// <summary>
+        /// A copy whose environments used by fewer than <paramref name="minPeople"/> people are combined into one row, named
+        /// by the report rather than by the tenant, and whose figures are withheld if the combination is still that small:
+        /// a developer's own environment would otherwise show one person's charges under a name that identifies them.
+        /// </summary>
+        public CopilotSpendStudio WithSmallEnvironmentsCombined(int minPeople)
+        {
+            var copy = (CopilotSpendStudio)MemberwiseClone();
+            var small = Environments.Where(e => e.EmptyKey == null && e.People < minPeople).ToList();
+            if (small.Count == 0) return copy;
+            copy.Environments = Environments.Except(small).ToList();
+            var people = small.Sum(e => e.People);
+            var combined = new CopilotSpendEnvironment
+            {
+                EmptyKey = CopilotSpendGroupKeys.OtherEnvironments,
+                Folded = small.Count,
+                People = people,
+                Withheld = people < minPeople,
+            };
+            if (!combined.Withheld)
+            {
+                combined.Credits = Math.Round(small.Sum(e => e.Credits ?? 0), 6);
+                combined.Days = small.Max(e => e.Days);
+            }
+            copy.Environments.Add(combined);
+            return copy;
+        }
+    }
+
+    /// <summary>The ledger's recording state for one calendar day.</summary>
+    public static class CopilotSpendDayStatus
+    {
+        /// <summary>The ledger holds charges for the day.</summary>
+        public const string Recorded = "recorded";
+
+        /// <summary>The day lies within the ledger's stored days but it holds no charges for it, for the people in view.</summary>
+        public const string NoneRecorded = "noneRecorded";
+
+        /// <summary>After the ledger's latest stored day (or before its first): not reported yet, which is not zero.</summary>
+        public const string NotReported = "notReported";
     }
 
     public sealed class CopilotSpendDay
@@ -150,11 +221,16 @@ namespace Common.Entities.CopilotSpend
         [JsonProperty("date")]
         public DateTime Date { get; set; }
 
+        /// <summary>One of <see cref="CopilotSpendDayStatus"/>.</summary>
+        [JsonProperty("status")]
+        public string Status { get; set; } = CopilotSpendDayStatus.Recorded;
+
+        /// <summary>Billed credits; null unless <see cref="Status"/> is <c>recorded</c>.</summary>
         [JsonProperty("credits")]
-        public double Credits { get; set; }
+        public double? Credits { get; set; }
 
         [JsonProperty("people")]
-        public int People { get; set; }
+        public int? People { get; set; }
     }
 
     public sealed class CopilotSpendEnvironment
@@ -162,18 +238,30 @@ namespace Common.Entities.CopilotSpend
         [JsonProperty("environmentId")]
         public string EnvironmentId { get; set; }
 
-        /// <summary>Null when the environment lookup was unavailable at import.</summary>
+        /// <summary>Null when the environment lookup was unavailable at import, or on a row the report labels itself.</summary>
         [JsonProperty("environmentName")]
         public string EnvironmentName { get; set; }
 
+        /// <summary><c>otherEnvironments</c> on the row that combines environments too small to show on their own.</summary>
+        [JsonProperty("emptyKey")]
+        public string EmptyKey { get; set; }
+
+        /// <summary>How many environments the combined row holds.</summary>
+        [JsonProperty("folded")]
+        public int Folded { get; set; }
+
+        /// <summary>True when the combined row is still too small to show figures for: its credits and days are null.</summary>
+        [JsonProperty("withheld")]
+        public bool Withheld { get; set; }
+
         [JsonProperty("credits")]
-        public double Credits { get; set; }
+        public double? Credits { get; set; }
 
         [JsonProperty("people")]
         public int People { get; set; }
 
         [JsonProperty("days")]
-        public int Days { get; set; }
+        public int? Days { get; set; }
     }
 
     /// <summary>One agent's billed credits in the tenant agent ledger. No people count: that ledger is not kept per person.</summary>
@@ -212,6 +300,17 @@ namespace Common.Entities.CopilotSpend
         [JsonProperty("snapshotDate")]
         public DateTime? SnapshotDate { get; set; }
 
+        /// <summary>
+        /// True when the newest reading is older than the selected period's first day (the collector stopped, say): it is
+        /// still each person's latest reading, but it says nothing about consumption in this period.
+        /// </summary>
+        [JsonProperty("snapshotBeforeWindow")]
+        public bool SnapshotBeforeWindow { get; set; }
+
+        /// <summary>True when readings were found; otherwise every balance figure is null - not available - rather than zero.</summary>
+        [JsonProperty("available")]
+        public bool Available { get; set; }
+
         [JsonProperty("snapshotBandFrom")]
         public DateTime? SnapshotBandFrom { get; set; }
 
@@ -229,9 +328,9 @@ namespace Common.Entities.CopilotSpend
         [JsonProperty("newestFreshness")]
         public DateTimeOffset? NewestFreshness { get; set; }
 
-        /// <summary>Latest balances, in credits, of the people in view; unfiltered, also the accounts no user matched.</summary>
+        /// <summary>Latest balances, in credits, of the people in view; unfiltered, also the accounts no user matched. Null when not available.</summary>
         [JsonProperty("credits")]
-        public double Credits { get; set; }
+        public double? Credits { get; set; }
 
         /// <summary>People in view with a latest reading at all, zero or not.</summary>
         [JsonProperty("observedPeople")]
@@ -291,55 +390,111 @@ namespace Common.Entities.CopilotSpend
         [JsonProperty("dimensionName")]
         public string DimensionName { get; set; }
 
+        /// <summary>
+        /// The smallest group shown on its own: 5 for a grouping any reader may see, so no group's figures describe fewer
+        /// people; 1 for a grouping that names people (manager), which only a reader with See PII is served anyway.
+        /// </summary>
         [JsonProperty("minGroupSize")]
         public int MinGroupSize { get; set; }
 
+        /// <summary>Groups below <see cref="MinGroupSize"/>, combined into the <c>otherSmallGroups</c> row.</summary>
         [JsonProperty("foldedGroups")]
         public int FoldedGroups { get; set; }
+
+        /// <summary>
+        /// Groups beyond the most the page lists, combined into the <c>moreGroups</c> row. They are not small: the Excel
+        /// export lists every one of them.
+        /// </summary>
+        [JsonProperty("moreGroups")]
+        public int MoreGroups { get; set; }
+
+        /// <summary>
+        /// A stable code when the people cannot be grouped at all (<see cref="CopilotSpendGroupingUnavailable"/>): no
+        /// directory, or a dimension the directory does not hold. Groups are then empty rather than all "not set".
+        /// </summary>
+        [JsonProperty("unavailableCode")]
+        public string UnavailableCode { get; set; }
 
         /// <summary>True when the grouping names people and the reader may not see them.</summary>
         [JsonProperty("hidden")]
         public bool Hidden { get; set; }
 
+        /// <summary>The groups the page lists: the largest, then the combined rows.</summary>
         [JsonProperty("groups")]
         public List<CopilotSpendGroupRow> Groups { get; set; } = new List<CopilotSpendGroupRow>();
+
+        /// <summary>Every group, with only the small ones combined: what the Excel export lists. Not sent to the page.</summary>
+        [JsonIgnore]
+        public List<CopilotSpendGroupRow> AllGroups { get; set; } = new List<CopilotSpendGroupRow>();
 
         internal object MemberwiseCopy() => MemberwiseClone();
     }
 
+    /// <summary>
+    /// One group's consumption. A source that is not available leaves its figures null - not zero - and a combined row too
+    /// small to show is <see cref="Withheld"/>, with its figures null.
+    /// </summary>
     public sealed class CopilotSpendGroupRow
     {
         /// <summary>The tenant's own value (a department name, say). Null for a row the report labels itself.</summary>
         [JsonProperty("label")]
         public string Label { get; set; }
 
-        /// <summary><c>notSet</c> or <c>otherSmallGroups</c> when <see cref="Label"/> is null.</summary>
+        /// <summary><c>notSet</c>, <c>otherSmallGroups</c> or <c>moreGroups</c> when <see cref="Label"/> is null.</summary>
         [JsonProperty("emptyKey")]
         public string EmptyKey { get; set; }
+
+        /// <summary>How many groups a combined row holds.</summary>
+        [JsonProperty("folded")]
+        public int Folded { get; set; }
+
+        /// <summary>True when a combined row still has fewer people than the smallest group shown: its figures are null.</summary>
+        [JsonProperty("withheld")]
+        public bool Withheld { get; set; }
 
         [JsonProperty("people")]
         public int People { get; set; }
 
         [JsonProperty("studioPeople")]
-        public int StudioPeople { get; set; }
+        public int? StudioPeople { get; set; }
 
         [JsonProperty("studioCredits")]
-        public double StudioCredits { get; set; }
+        public double? StudioCredits { get; set; }
 
         [JsonProperty("shareOfStudio")]
         public double? ShareOfStudio { get; set; }
 
         [JsonProperty("balancePeople")]
-        public int BalancePeople { get; set; }
+        public int? BalancePeople { get; set; }
 
         [JsonProperty("balanceCredits")]
-        public double BalanceCredits { get; set; }
+        public double? BalanceCredits { get; set; }
 
         [JsonProperty("shareOfBalances")]
         public double? ShareOfBalances { get; set; }
 
         [JsonProperty("unknownAmountPeople")]
-        public int UnknownAmountPeople { get; set; }
+        public int? UnknownAmountPeople { get; set; }
+    }
+
+    /// <summary>Why the people cannot be grouped.</summary>
+    public static class CopilotSpendGroupingUnavailable
+    {
+        /// <summary>The user directory could not be read, so nobody's department, manager or other value is known.</summary>
+        public const string Directory = "directoryUnavailable";
+
+        /// <summary>The directory does not hold this dimension (a custom organisation type since removed, say).</summary>
+        public const string Dimension = "dimensionUnknown";
+    }
+
+    /// <summary>Labels of the rows the report names itself.</summary>
+    public static class CopilotSpendGroupKeys
+    {
+        /// <summary>Groups beyond the most the page lists. Not small: listed one by one in the Excel export.</summary>
+        public const string MoreGroups = "moreGroups";
+
+        /// <summary>Environments used by too few people to show on their own to a reader without See PII.</summary>
+        public const string OtherEnvironments = "otherEnvironments";
     }
 
     /// <summary>One person's consumption: billed Studio usage in the period beside their latest balance, never added.</summary>
@@ -366,11 +521,12 @@ namespace Common.Entities.CopilotSpend
         [JsonProperty("manager")]
         public string Manager { get; set; }
 
+        /// <summary>Billed Studio credits in the period; null when the ledger is not available (unknown, not zero).</summary>
         [JsonProperty("studioCredits")]
-        public double StudioCredits { get; set; }
+        public double? StudioCredits { get; set; }
 
         [JsonProperty("studioDays")]
-        public int StudioDays { get; set; }
+        public int? StudioDays { get; set; }
 
         /// <summary>Null when the person has no reading, or no category in Copilot credits: absent, not zero.</summary>
         [JsonProperty("balanceCredits")]

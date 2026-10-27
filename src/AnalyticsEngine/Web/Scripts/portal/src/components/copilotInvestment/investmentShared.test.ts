@@ -36,7 +36,7 @@ describe('investment wording for one person and for none', () => {
     expect(actionText(t, action('raiseLimitEvidenced', 3))?.body).toBe(
       '3 people with strong, regular Copilot use are at or near their credit limit (1,200 credits).',
     );
-    expect(findingText(t, finding('highSpendThinEvidence', { people: 1, credits: 900 }), 'EUR')).toMatch(/^One person holds one of the highest/);
+    expect(findingText(t, finding('highSpendThinEvidence', { people: 1, credits: 900 }), 'EUR')).toMatch(/^One person is among those who consumed the most credits/);
 
     await loadCatalog('es');
     setActiveLanguage('es');

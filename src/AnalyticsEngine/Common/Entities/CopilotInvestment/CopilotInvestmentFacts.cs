@@ -132,6 +132,9 @@ namespace Common.Entities.CopilotInvestment
         /// <summary>The ledger's first day, whatever the window.</summary>
         public DateTime? EarliestDate { get; set; }
 
+        /// <summary>The ledger's latest stored day, whatever the window: how far it reaches, not a promise of completeness.</summary>
+        public DateTime? LatestDate { get; set; }
+
         /// <summary>Whether the ledger covers the whole equal-length period before the window, so the two compare like for like.</summary>
         public bool PriorComplete { get; set; }
     }
@@ -388,9 +391,12 @@ namespace Common.Entities.CopilotInvestment
             "WHERE l.import_name = @name\r\n" +
             "ORDER BY l.imported_utc DESC;";
 
-        /// <summary>The ledger's first day: a seek on the (usage_date, dimension_hash) index, so free at any size.</summary>
+        /// <summary>
+        /// The ledger's first and latest stored days: two ends of the (usage_date, dimension_hash) index, so free at any size.
+        /// The latest stored day is how far the ledger reaches, not proof that every earlier day was imported.
+        /// </summary>
         public const string StudioEarliestSql =
-            "SELECT MIN(r.usage_date) FROM dbo.copilot_studio_credit_user_daily AS r;";
+            "SELECT MIN(r.usage_date), MAX(r.usage_date) FROM dbo.copilot_studio_credit_user_daily AS r;";
 
         /// <summary>One person's Copilot turns per day, host and agent, through their own audit rows (an index seek on user id).</summary>
         public static readonly string PersonActivitySql =
@@ -697,9 +703,13 @@ namespace Common.Entities.CopilotInvestment
                 }
                 facts.HasData = facts.Users.Count > 0;
                 using (var cmd = Command(db, CopilotInvestmentSql.StudioEarliestSql))
+                using (var reader = await cmd.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false))
                 {
-                    var earliest = await cmd.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
-                    facts.EarliestDate = earliest == null || earliest is DBNull ? (DateTime?)null : (DateTime)earliest;
+                    if (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+                    {
+                        facts.EarliestDate = reader.IsDBNull(0) ? (DateTime?)null : reader.GetDateTime(0);
+                        facts.LatestDate = reader.IsDBNull(1) ? (DateTime?)null : reader.GetDateTime(1);
+                    }
                 }
                 // Only a ledger that reaches back over the whole previous period can be compared with it: a ledger that
                 // starts part-way through would read as growth that is only the import starting.

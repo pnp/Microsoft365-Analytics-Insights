@@ -216,10 +216,10 @@ namespace Tests.UnitTests
                 TestContext.WriteLine($"Spend report built in {watch.Elapsed.TotalSeconds:F2}s for {spendReport.People.Count:N0} people.");
                 var billed = spendReport.Studio;
                 Assert.IsTrue(billed.Credits > 0 && billed.Days.Count > 0 && billed.Environments.Count > 1, "The demo's Studio ledger must reach the spend report.");
-                Assert.AreEqual(billed.Credits, billed.Days.Sum(d => d.Credits), 0.01, "Billed usage is a daily ledger: the days add up to the period.");
-                Assert.AreEqual(billed.Credits, billed.Environments.Sum(e => e.Credits), 0.01, "And so do the environments.");
+                Assert.AreEqual(billed.Credits.Value, billed.Days.Sum(d => d.Credits ?? 0), 0.01, "Billed usage is a daily ledger: the days add up to the period.");
+                Assert.AreEqual(billed.Credits.Value, billed.Environments.Sum(e => e.Credits ?? 0), 0.01, "And so do the environments.");
                 Assert.IsTrue(billed.Environments.All(e => e.EnvironmentName != null), "Each environment keeps the name the import recorded.");
-                Assert.AreEqual(billed.Credits, spendReport.People.Sum(p => p.StudioCredits) + (billed.UnmatchedCredits ?? 0), 0.01, "And so do the people.");
+                Assert.AreEqual(billed.Credits.Value, spendReport.People.Sum(p => p.StudioCredits ?? 0) + (billed.UnmatchedCredits ?? 0), 0.01, "And so do the people.");
                 Assert.IsFalse(billed.Days.Any(d => d.Date > lastDay), "No billed day after the window's last day.");
                 Assert.IsFalse(billed.Environments.Any(e => e.EnvironmentId == SentinelEnvironment), "Nor the next day's charge.");
                 // The agent ledger is its own route: named agents with its own total, never added to the people's.
@@ -228,20 +228,20 @@ namespace Tests.UnitTests
                 Assert.AreEqual(billed.AgentLedgerCredits.Value, billed.Agents.Sum(a => a.Credits), 0.01);
                 Assert.IsFalse(billed.Agents.Any(a => a.AgentId == SentinelAgent), "The agent ledger stops at the window's last day too.");
                 Assert.IsTrue(spendReport.Balances.Credits < SentinelCredits && spendReport.Balances.SnapshotDate == lastDay, "Balances read on the window's last day.");
-                Assert.AreEqual(spendReport.Balances.Credits,
+                Assert.AreEqual(spendReport.Balances.Credits.Value,
                     spendReport.People.Sum(p => p.BalanceCredits ?? 0) + (spendReport.Balances.UnresolvedCredits ?? 0), 0.01,
                     "Latest balances: the people's readings plus the accounts no user matched - and never a sum of days.");
                 Assert.AreEqual(spendReport.Balances.UnknownAmountPeople, spendReport.People.Count(p => p.UnknownAmounts));
                 Assert.IsTrue(spendReport.Organisation.Groups.Count >= 2);
-                Assert.AreEqual(spendReport.People.Sum(p => p.StudioCredits), spendReport.Organisation.Groups.Sum(g => g.StudioCredits), 0.01);
+                Assert.AreEqual(spendReport.People.Sum(p => p.StudioCredits ?? 0), spendReport.Organisation.Groups.Sum(g => g.StudioCredits ?? 0), 0.01);
                 Assert.IsTrue(spendReport.Balances.Policies.Any(p => p.DisplayName == DemoCopilotCredits.PausedPolicyName), "Tenant context, with its Unicode intact.");
 
                 var spendSales = await spendService.BuildAsync(new CopilotSpendRequest { Range = range, Scope = new ReportScope(null, null, sales, "sales") },
                     CancellationToken.None);
                 Assert.IsTrue(spendSales.Filtered && spendSales.People.Count > 0 && spendSales.People.All(p => p.Department == "Sales"));
                 Assert.IsTrue(spendSales.Studio.Credits < billed.Credits && spendSales.Studio.UnmatchedCredits == null);
-                Assert.AreEqual(spendSales.Studio.Credits, spendSales.Studio.Days.Sum(d => d.Credits), 0.01, "The scoped ledger in SQL matches the scoped people.");
-                Assert.AreEqual(spendSales.Studio.Credits, spendSales.Studio.Environments.Sum(e => e.Credits), 0.01, "So does its environment breakdown.");
+                Assert.AreEqual(spendSales.Studio.Credits.Value, spendSales.Studio.Days.Sum(d => d.Credits ?? 0), 0.01, "The scoped ledger in SQL matches the scoped people.");
+                Assert.AreEqual(spendSales.Studio.Credits.Value, spendSales.Studio.Environments.Sum(e => e.Credits ?? 0), 0.01, "So does its environment breakdown.");
                 Assert.IsNull(spendSales.Studio.Agents, "The agent ledger is not kept per person, so a filtered view cannot have its share of it.");
                 Assert.IsNull(spendSales.Studio.AgentLedgerCredits);
                 Assert.IsTrue(spendSales.Balances.Policies.Count == 0 && spendSales.Balances.TenantBalances.Count == 0 && spendSales.Balances.UnresolvedAccounts == null);

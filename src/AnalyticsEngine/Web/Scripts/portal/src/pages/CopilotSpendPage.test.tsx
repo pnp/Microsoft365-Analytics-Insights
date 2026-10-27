@@ -38,18 +38,19 @@ function summary(overrides: Partial<CopilotSpendSummary> = {}): CopilotSpendSumm
     globalFilter: null,
     studio: {
       importEnabled: true, hasData: true, failureCode: null, lastImportUtc: '2026-10-27T02:00:00Z', lastImportFailed: false,
-      earliestDate: '2026-06-01', coversWindow: true, credits: 1250, people: 40, unmatchedCredits: 50,
+      earliestDate: '2026-06-01', coversWindow: true, latestDate: '2026-10-25', available: true, credits: 1250, people: 40, unmatchedCredits: 50,
       days: [
-        { date: '2026-10-25', credits: 400, people: 12 },
-        { date: '2026-10-26', credits: 850, people: 30 },
+        { date: '2026-10-24', status: 'noneRecorded', credits: null, people: null },
+        { date: '2026-10-25', status: 'recorded', credits: 1250, people: 40 },
+        { date: '2026-10-26', status: 'notReported', credits: null, people: null },
       ],
       agents: [{ agentId: 'agent-1', agentName: 'Contoso helpdesk agent', credits: 1180, days: 2 }],
       agentLedgerCredits: 1180,
-      environments: [{ environmentId: 'env-1', environmentName: `Contoso \u2013 ${GREEK}`, credits: 1250, people: 40, days: 2 }],
+      environments: [{ environmentId: 'env-1', environmentName: `Contoso \u2013 ${GREEK}`, emptyKey: null, folded: 0, withheld: false, credits: 1250, people: 40, days: 2 }],
       breakdownFailureCode: null,
     },
     balances: {
-      tablesPresent: true, collectionEnabled: true, hasData: true, failureCode: null, snapshotDate: '2026-10-26', snapshotBandFrom: '2026-10-24',
+      tablesPresent: true, collectionEnabled: true, hasData: true, available: true, failureCode: null, snapshotDate: '2026-10-26', snapshotBeforeWindow: false, snapshotBandFrom: '2026-10-24',
       firstObservationDate: '2026-07-01', periodStatus: 'unverified', oldestFreshness: '2026-10-25T00:00:00Z', newestFreshness: '2026-10-26T00:00:00Z',
       credits: 9800, observedPeople: 300, consumingPeople: 90, partialPeople: 3, unknownAmountPeople: 4, otherUnitPeople: 1,
       limitExhaustedPeople: 2, notEntitledPeople: 5, unresolvedAccounts: 3, unresolvedCredits: 120, sweepsInWindow: 28, completedSweepsInWindow: 26,
@@ -62,10 +63,10 @@ function summary(overrides: Partial<CopilotSpendSummary> = {}): CopilotSpendSumm
       tenantBalances: [],
     },
     organisation: {
-      dimension: 'department', dimensionName: null, minGroupSize: 5, foldedGroups: 2, hidden: false,
+      dimension: 'department', dimensionName: null, minGroupSize: 5, foldedGroups: 2, moreGroups: 0, unavailableCode: null, hidden: false,
       groups: [
-        { label: `Ventas \u2013 ${GREEK}`, emptyKey: null, people: 30, studioPeople: 25, studioCredits: 900, shareOfStudio: 0.75, balancePeople: 20, balanceCredits: 6000, shareOfBalances: 0.62, unknownAmountPeople: 2 },
-        { label: null, emptyKey: 'otherSmallGroups', people: 7, studioPeople: 5, studioCredits: 300, shareOfStudio: 0.25, balancePeople: 4, balanceCredits: 3680, shareOfBalances: 0.38, unknownAmountPeople: 2 },
+        { label: `Ventas \u2013 ${GREEK}`, emptyKey: null, folded: 0, withheld: false, people: 30, studioPeople: 25, studioCredits: 900, shareOfStudio: 0.75, balancePeople: 20, balanceCredits: 6000, shareOfBalances: 0.62, unknownAmountPeople: 2 },
+        { label: null, emptyKey: 'otherSmallGroups', folded: 2, withheld: false, people: 7, studioPeople: 5, studioCredits: 300, shareOfStudio: 0.25, balancePeople: 4, balanceCredits: 3680, shareOfBalances: 0.38, unknownAmountPeople: 2 },
       ],
     },
     peopleCount: 120,
@@ -103,13 +104,17 @@ describe('CopilotSpendPage', () => {
 
     expect(await screen.findByText('Credits billed in the period')).toBeInTheDocument();
     expect(screen.getByText('1,250')).toBeInTheDocument();
-    expect(screen.getByText('Latest balances, in credits')).toBeInTheDocument();
+    expect(screen.getAllByText('Consumed credits (latest reading)').length).toBeGreaterThan(0);
     expect(screen.getByText('9,800')).toBeInTheDocument();
     expect(screen.queryByText('11,050')).not.toBeInTheDocument();
     expect(screen.getByText('Latest reading, not a bill')).toBeInTheDocument();
     expect(screen.getByText('Period not confirmed by the source')).toBeInTheDocument();
     expect(screen.getByText(/Two sources, kept apart/)).toBeInTheDocument();
-    expect(screen.getByRole('listitem', { name: '26 Oct 2026: 850 credits, 30 people' })).toBeInTheDocument();
+    expect(screen.getByRole('listitem', { name: '25 Oct 2026: 1,250 credits, 40 people' })).toBeInTheDocument();
+    // Every calendar day keeps its place: a day with nothing recorded, and one after the ledger's latest day, said in words.
+    expect(screen.getByRole('listitem', { name: '24 Oct 2026: no charges recorded' })).toBeInTheDocument();
+    expect(screen.getByRole('listitem', { name: '26 Oct 2026: not in the ledger yet' })).toBeInTheDocument();
+    expect(screen.getByText(/Latest day in the ledger: 25 Oct 2026\./)).toBeInTheDocument();
     expect(screen.getByText(`Ventas \u2013 ${GREEK}`)).toBeInTheDocument();
     expect(screen.getByText('Other small groups (2)')).toBeInTheDocument();
     // Nothing here models money or recommends anything.
@@ -142,11 +147,11 @@ describe('CopilotSpendPage', () => {
     );
     renderWithProvider(<CopilotSpendPage />, { access: { administration: false, seePii: false } });
 
-    fireEvent.click(await screen.findByRole('tab', { name: 'Copilot credit balances' }));
+    fireEvent.click(await screen.findByRole('tab', { name: 'Copilot credits consumed (readings)' }));
     expect(await screen.findByText('Source last changed the readings')).toBeInTheDocument();
     expect(screen.getByText('Not confirmed by the source')).toBeInTheDocument();
-    expect(screen.getByText(/Readings on different dates are the same balances read again/)).toBeInTheDocument();
-    expect(await screen.findByRole('listitem', { name: '26 Oct 2026: 9,800 credits, 90 people with a balance' })).toBeInTheDocument();
+    expect(screen.getByText(/Readings on different dates can count the same consumption again/)).toBeInTheDocument();
+    expect(await screen.findByRole('listitem', { name: '26 Oct 2026: 9,800 credits, 90 people with consumed credits' })).toBeInTheDocument();
     expect(screen.getByText(/a filtered view does not show them/)).toBeInTheDocument();
     expect(screen.queryByText('Accounts not matched to a person')).not.toBeInTheDocument();
 
@@ -165,15 +170,15 @@ describe('CopilotSpendPage', () => {
     const table = screen.getByRole('table', { name: 'People' });
     const header = (name: RegExp) => within(table).getByRole('columnheader', { name });
     expect(header(/Studio credits/)).toHaveAttribute('aria-sort', 'descending');
-    expect(screen.getByRole('img', { name: 'No balance reading in Copilot credits' })).toBeInTheDocument();
+    expect(screen.getByRole('img', { name: 'No reading of Copilot credits consumed' })).toBeInTheDocument();
     expect(screen.getByText('At credit limit')).toBeInTheDocument();
     expect(within(table).getByText('lead3@contoso.example')).toBeInTheDocument();
     expect(header(/Manager/)).toHaveAttribute('aria-sort', 'none');
 
-    fireEvent.click(within(header(/Latest balance/)).getByRole('button'));
+    fireEvent.click(within(header(/Consumed credits/)).getByRole('button'));
     await waitFor(() => expect(vi.mocked(fetchSpendPeople).mock.calls.at(-1)![1]).toMatchObject({ sortBy: 'balanceCredits', sortDesc: true }));
     expect(vi.mocked(fetchSpendPeople).mock.calls.at(-1)![2]).toBe(0);
-    fireEvent.keyDown(within(header(/Latest balance/)).getByRole('button'), { key: 'Enter' });
+    fireEvent.keyDown(within(header(/Consumed credits/)).getByRole('button'), { key: 'Enter' });
     await waitFor(() => expect(vi.mocked(fetchSpendPeople).mock.calls.at(-1)![1]).toMatchObject({ sortBy: 'balanceCredits', sortDesc: false }));
     expect(screen.getByRole('combobox', { name: 'Sort by' })).toHaveValue('balanceCredits');
 
@@ -192,7 +197,7 @@ describe('CopilotSpendPage', () => {
     expect(within(dialog).getByText('Contoso (default)')).toBeInTheDocument();
     expect(within(dialog).getByText(/^\d[\d,.]* credits on 4 days$/)).toBeInTheDocument();
     expect(within(dialog).getByText(/26 Oct 2026: 1,050 credits/)).toBeInTheDocument();
-    expect(within(dialog).getByText('Each reading is the balance on that date, not a day\u2019s spend.')).toBeInTheDocument();
+    expect(within(dialog).getByText('Each reading is the credits consumed as of that date, not a day\u2019s spend.')).toBeInTheDocument();
   });
 
   it('reads in Spanish, with Spanish numbers and the export in Spanish, and tenant names left as stored', async () => {
@@ -205,4 +210,96 @@ describe('CopilotSpendPage', () => {
     expect(screen.getByText(`Ventas \u2013 ${GREEK}`)).toBeInTheDocument();
     expect(screen.getByText('Informe de Excel').closest('a')?.getAttribute('href')).toContain('language=es');
   });
-});
+
+      it('keeps the page and its Group by control while a new grouping loads, and drops stale or failed answers', async () => {
+        const pending: { resolve: (s: CopilotSpendSummary) => void; reject: (e: Error) => void; signal?: AbortSignal }[] = [];
+        vi.mocked(fetchSpendSummary).mockImplementation((query, signal) =>
+          query.dimension === 'department' ? Promise.resolve(summary()) : new Promise((resolve, reject) => pending.push({ resolve, reject, signal })),
+        );
+        const grouped = (dimension: string, label: string) =>
+          summary({ organisation: { ...summary().organisation, dimension, groups: [{ ...summary().organisation.groups[0], label }] } });
+        renderWithProvider(<CopilotSpendPage />, { access: { administration: false, seePii: true } });
+
+        fireEvent.click(await screen.findByRole('tab', { name: 'Organisation' }));
+        const select = screen.getByRole('combobox', { name: 'Group by' });
+        select.focus();
+        fireEvent.change(select, { target: { value: 'country' } });
+        // The previous grouping stays, labelled as what it is; the control the reader is using is never unmounted.
+        expect(await screen.findByText('Grouping by Country or region\u2026')).toBeInTheDocument();
+        expect(within(screen.getByRole('table', { name: 'Organisation' })).getByRole('columnheader', { name: 'Department' })).toBeInTheDocument();
+        expect(screen.getByRole('combobox', { name: 'Group by' })).toBe(select);
+        expect(document.activeElement).toBe(select);
+
+        // Changed again before the first answer: that answer is stale and never shown.
+        fireEvent.change(select, { target: { value: 'companyName' } });
+        await waitFor(() => expect(pending.length).toBe(2));
+        expect(pending[0].signal?.aborted).toBe(true);
+        pending[1].resolve(grouped('companyName', 'Contoso Ltd'));
+        expect(await screen.findByText('Contoso Ltd')).toBeInTheDocument();
+        pending[0].resolve(grouped('country', 'Spain'));
+        await new Promise((r) => setTimeout(r, 0));
+        expect(screen.queryByText('Spain')).not.toBeInTheDocument();
+        expect(within(screen.getByRole('table', { name: 'Organisation' })).getByRole('columnheader', { name: 'Company' })).toBeInTheDocument();
+
+        // A regrouping that fails keeps the last good table and says what went wrong.
+        fireEvent.change(select, { target: { value: 'country' } });
+        await waitFor(() => expect(pending.length).toBe(3));
+        pending[2].reject(new Error('Could not load the grouping'));
+        expect(await screen.findByText('Could not load the grouping')).toBeInTheDocument();
+        expect(screen.getByText('Contoso Ltd')).toBeInTheDocument();
+      });
+
+      it('shows a source that is off as not available rather than zero, keeps a known zero, and says why a row or a grouping has no figures', async () => {
+        const groups = summary().organisation.groups;
+        vi.mocked(fetchSpendSummary).mockResolvedValue(
+          summary({
+            studio: {
+              ...summary().studio, importEnabled: false, hasData: false, available: false, credits: null, people: null, unmatchedCredits: null,
+              days: [], environments: [], agents: null, agentLedgerCredits: null, earliestDate: null, latestDate: null,
+            },
+            organisation: {
+              ...summary().organisation,
+              groups: [
+                { ...groups[0], studioPeople: null, studioCredits: null, shareOfStudio: null, balanceCredits: 0, shareOfBalances: 0 },
+                { ...groups[1], withheld: true, people: 2, studioPeople: null, studioCredits: null, shareOfStudio: null, balancePeople: null, balanceCredits: null, shareOfBalances: null, unknownAmountPeople: null },
+              ],
+            },
+          }),
+        );
+        renderWithProvider(<CopilotSpendPage />, { access: { administration: false, seePii: false } });
+
+        expect(await screen.findByText('The Copilot Studio credit import is turned off, so there is no billed usage to show.')).toBeInTheDocument();
+        expect(screen.queryByText(/people with billed usage/)).not.toBeInTheDocument();
+        const table = screen.getByRole('table', { name: 'Organisation' });
+        expect(within(table).getAllByRole('img', { name: 'Not available' })).toHaveLength(2);
+        expect(within(table).getAllByRole('img', { name: 'Fewer than 5 people: figures not shown' })).toHaveLength(5);
+        expect(within(table).getByText('0')).toBeInTheDocument();
+
+        fireEvent.click(screen.getByRole('tab', { name: 'Copilot Studio billed usage' }));
+        expect((await screen.findAllByText(/Not available: the Copilot Studio ledger has not been imported or could not be read/)).length).toBe(2);
+      });
+
+      it('gives the right reason for a missing agent ledger and a grouping that cannot be made', async () => {
+        vi.mocked(fetchSpendSummary).mockResolvedValue(
+          summary({
+            studio: { ...summary().studio, agents: null, agentLedgerCredits: null },
+            organisation: { ...summary().organisation, groups: [], unavailableCode: 'directoryUnavailable' },
+          }),
+        );
+        renderWithProvider(<CopilotSpendPage />, { access: { administration: false, seePii: false } });
+
+        expect(await screen.findByText(/The people cannot be grouped right now: the user directory could not be read/)).toBeInTheDocument();
+        expect(screen.queryByText('No Copilot consumption in this period.')).not.toBeInTheDocument();
+        fireEvent.click(screen.getByRole('tab', { name: 'Copilot Studio billed usage' }));
+        // Unfiltered, so not "withheld from a filtered view": the ledger was simply not there.
+        expect(await screen.findByText('The agent ledger has not been imported, so there is no breakdown by agent.')).toBeInTheDocument();
+        expect(screen.queryByText(/Not shown in a filtered view/)).not.toBeInTheDocument();
+      });
+
+      it('warns when the newest reading is older than the period, rather than passing it off as the period', async () => {
+        vi.mocked(fetchSpendSummary).mockResolvedValue(summary({ balances: { ...summary().balances, snapshotBeforeWindow: true, snapshotDate: '2026-10-10' } }));
+        renderWithProvider(<CopilotSpendPage />, { access: { administration: false, seePii: false } });
+
+        expect(await screen.findByText(/The newest reading is from 10 Oct 2026, before the selected period starts/)).toBeInTheDocument();
+      });
+    });

@@ -102,6 +102,11 @@ const useStyles = makeStyles({
   chart: { display: 'flex', alignItems: 'flex-end', gap: '2px', height: '120px', paddingTop: '8px', borderBottom: `1px solid ${tokens.colorNeutralStroke1}` },
   bar: { flex: '1 1 0', minWidth: '3px', backgroundColor: tokens.colorBrandBackground, borderRadius: '2px 2px 0 0' },
   barEmpty: { backgroundColor: tokens.colorNeutralBackground5 },
+  barUnreported: {
+    backgroundColor: 'transparent',
+    border: `1px dashed ${tokens.colorNeutralStroke1}`,
+    boxSizing: 'border-box',
+  },
   axis: { display: 'flex', justifyContent: 'space-between' },
   toolbarRow: { display: 'flex', gap: '12px', alignItems: 'flex-end', flexWrap: 'wrap' },
   table: { minWidth: '900px' },
@@ -181,9 +186,12 @@ function SpendView({ userFilter: controlledFilter, onUserFilterChange }: {
     [windowDays, userFilterParam, effectiveDimension],
   );
   const queryKey = JSON.stringify(query);
+  // The people the figures cover: a new grouping of the same people keeps the page on screen while it loads.
+  const scopeKey = JSON.stringify({ windowDays, userFilter: userFilterParam });
 
   const [summary, setSummary] = useState<CopilotSpendSummary | null>(null);
   const [summaryKey, setSummaryKey] = useState<string | null>(null);
+  const [summaryScopeKey, setSummaryScopeKey] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -193,8 +201,11 @@ function SpendView({ userFilter: controlledFilter, onUserFilterChange }: {
     setError(null);
     fetchSpendSummary(query, controller.signal)
       .then((result) => {
+        // A response for a query the reader has since changed is never shown under the new one.
+        if (controller.signal.aborted) return;
         setSummary(result);
         setSummaryKey(queryKey);
+        setSummaryScopeKey(scopeKey);
       })
       .catch((e: unknown) => {
         if (!controller.signal.aborted) setError(e instanceof Error ? e.message : String(e));
@@ -210,8 +221,10 @@ function SpendView({ userFilter: controlledFilter, onUserFilterChange }: {
   const visibleTabs = (Object.keys(TAB_LABEL_KEYS) as SpendTab[]).filter((value) => canSeePii || value !== 'people');
   const activeTab: SpendTab = visibleTabs.includes(tab) ? tab : 'overview';
   const onTabSelect: SelectTabEventHandler = (_e, data) => setTab(data.value as SpendTab);
-  // Only the figures for the scope on screen: a stale report under a new filter would be read as the new one.
-  const current = summary && summaryKey === queryKey ? summary : null;
+  // Only the figures for the scope on screen: a stale report under a new filter or period would be read as the new one.
+  // A new grouping of the same scope keeps the previous report, labelled with its own grouping, until the new one arrives.
+  const current = summary && summaryScopeKey === scopeKey ? summary : null;
+  const regrouping = current !== null && summaryKey !== queryKey && loading;
 
   return (
     <div>
@@ -306,6 +319,7 @@ function SpendView({ userFilter: controlledFilter, onUserFilterChange }: {
               onDimensionChange={setDimension}
               canSeePii={canSeePii}
               customDimensions={filterDimensions?.dimensions ?? []}
+              regrouping={regrouping}
             />
           )}
           {activeTab === 'people' && canSeePii && <SpendPeoplePanel query={query} filters={peopleFilters} onFiltersChange={setPeopleFilters} />}
@@ -340,10 +354,12 @@ function OverviewPanel({ summary, customDimensions, onOpenTab }: {
           />
           <StudioStatus summary={summary} />
           <div className={styles.kpiRow}>
-            <span className={styles.kpi}>{formatCredits(studio.credits)}</span>
+            <span className={styles.kpi} title={studio.credits === null ? t('copilotSpend.studio.notAvailable') : undefined}>
+              {formatCredits(studio.credits)}
+            </span>
             <Text>{t('copilotSpend.overview.studioCredits')}</Text>
           </div>
-          <Text>{t('copilotSpend.overview.studioPeople', { people: formatNumber(studio.people) })}</Text>
+          {studio.people !== null && <Text>{t('copilotSpend.overview.studioPeople', { people: formatNumber(studio.people) })}</Text>}
           {studio.unmatchedCredits !== null && studio.unmatchedCredits > 0 && (
             <Text size={200} className={styles.muted}>
               {t('copilotSpend.overview.unmatched', { credits: formatCredits(studio.unmatchedCredits) })}
@@ -362,7 +378,9 @@ function OverviewPanel({ summary, customDimensions, onOpenTab }: {
           />
           <BalanceStatus summary={summary} />
           <div className={styles.kpiRow}>
-            <span className={styles.kpi}>{balances.hasData ? formatCredits(balances.credits) : '\u2014'}</span>
+            <span className={styles.kpi} title={balances.credits === null ? t('copilotSpend.studio.notAvailable') : undefined}>
+              {formatCredits(balances.credits)}
+            </span>
             <Text>{t('copilotSpend.overview.balanceCredits')}</Text>
           </div>
           {balances.snapshotDate && (
@@ -409,6 +427,8 @@ function OverviewPanel({ summary, customDimensions, onOpenTab }: {
         />
         {summary.organisation.hidden ? (
           <Text>{t('copilotSpend.org.hidden')}</Text>
+        ) : summary.organisation.unavailableCode ? (
+          <Text>{t(GROUPING_UNAVAILABLE_KEYS[summary.organisation.unavailableCode])}</Text>
         ) : groups.length === 0 ? (
           <Text>{t('copilotSpend.org.empty')}</Text>
         ) : (
@@ -453,6 +473,8 @@ function BalanceStatus({ summary }: { summary: CopilotSpendSummary }) {
   else if (!balances.tablesPresent) notes.push({ key: 'tables', intent: 'info', text: t('copilotSpend.balances.notInstalled') });
   else if (!balances.hasData) notes.push({ key: 'empty', intent: 'info', text: t('copilotSpend.balances.noData') });
   if (balances.tablesPresent && !balances.collectionEnabled) notes.push({ key: 'off', intent: 'info', text: t('copilotSpend.balances.notCollecting') });
+  if (balances.snapshotBeforeWindow && balances.snapshotDate)
+    notes.push({ key: 'stale', intent: 'warning', text: t('copilotSpend.balances.snapshotBeforeWindow', { date: formatShortDate(balances.snapshotDate) }) });
   return (
     <>
       {notes.map((n) => (
@@ -464,14 +486,25 @@ function BalanceStatus({ summary }: { summary: CopilotSpendSummary }) {
   );
 }
 
-/** Billed credits per day as bars, each with its figures in words for a screen reader and on hover. */
+/**
+ * Billed credits for every calendar day of the period, so weekends and quiet days keep their place. A day the ledger holds
+ * no charges for is drawn as a short empty bar; a day after the ledger's latest stored day is drawn as an outline, because
+ * it is not reported yet, which is not zero. Every bar says so in words, for a screen reader and on hover.
+ */
 function DayChart({ summary }: { summary: CopilotSpendSummary }) {
   const styles = useStyles();
   const t = useT();
   const studio = summary.studio;
+  if (!studio.available) return null;
   if (studio.breakdownFailureCode) return <Text size={200}>{t('copilotSpend.studio.breakdownUnavailable')}</Text>;
   if (studio.days.length === 0) return <Text size={200}>{t('copilotSpend.studio.noDays')}</Text>;
-  const max = Math.max(...studio.days.map((d) => d.credits), 0) || 1;
+  const max = Math.max(...studio.days.map((d) => d.credits ?? 0), 0) || 1;
+  const label = (d: (typeof studio.days)[number]) =>
+    d.status === 'recorded'
+      ? t('copilotSpend.studio.dayCell', { date: formatShortDate(d.date), credits: formatCredits(d.credits), people: formatNumber(d.people ?? 0) })
+      : d.status === 'noneRecorded'
+        ? t('copilotSpend.studio.dayNoneRecorded', { date: formatShortDate(d.date) })
+        : t('copilotSpend.studio.dayNotReported', { date: formatShortDate(d.date) });
   return (
     <div>
       <Text size={200} weight="semibold">
@@ -479,17 +512,11 @@ function DayChart({ summary }: { summary: CopilotSpendSummary }) {
       </Text>
       <div className={styles.chart} role="list" aria-label={t('copilotSpend.studio.daysTitle')}>
         {studio.days.map((d) => {
-          const label = t('copilotSpend.studio.dayCell', { date: formatShortDate(d.date), credits: formatCredits(d.credits), people: formatNumber(d.people) });
-          return (
-            <div
-              key={d.date}
-              role="listitem"
-              aria-label={label}
-              title={label}
-              className={`${styles.bar} ${d.credits === 0 ? styles.barEmpty : ''}`}
-              style={{ height: `${Math.max(2, (d.credits / max) * 100)}%` }}
-            />
-          );
+          const text = label(d);
+          const className =
+            d.status === 'recorded' ? styles.bar : d.status === 'noneRecorded' ? `${styles.bar} ${styles.barEmpty}` : `${styles.bar} ${styles.barUnreported}`;
+          const height = d.status === 'recorded' ? Math.max(2, ((d.credits ?? 0) / max) * 100) : d.status === 'noneRecorded' ? 2 : 100;
+          return <div key={d.date} role="listitem" aria-label={text} title={text} className={className} style={{ height: `${height}%` }} />;
         })}
       </div>
       <div className={styles.axis}>
@@ -500,6 +527,10 @@ function DayChart({ summary }: { summary: CopilotSpendSummary }) {
           {formatShortDate(studio.days[studio.days.length - 1].date)}
         </Text>
       </div>
+      <Text size={100} block className={styles.muted}>
+        {studio.latestDate ? `${t('copilotSpend.studio.latestDay', { date: formatShortDate(studio.latestDate) })} ` : ''}
+        {t('copilotSpend.studio.dayLegend')}
+      </Text>
     </div>
   );
 }
@@ -517,7 +548,7 @@ function StudioPanel({ summary }: { summary: CopilotSpendSummary }) {
           <Text size={200}>{t('copilotSpend.overview.studioCredits')}</Text>
           <Text weight="semibold">{formatCredits(studio.credits)}</Text>
           <Text size={200}>{t('copilotSpend.studio.peopleLabel')}</Text>
-          <Text weight="semibold">{formatNumber(studio.people)}</Text>
+          <Text weight="semibold">{studio.people === null ? '\u2014' : formatNumber(studio.people)}</Text>
           {studio.unmatchedCredits !== null && (
             <>
               <Text size={200}>{t('copilotSpend.studio.unmatchedLabel')}</Text>
@@ -526,6 +557,8 @@ function StudioPanel({ summary }: { summary: CopilotSpendSummary }) {
           )}
           <Text size={200}>{t('copilotSpend.studio.ledgerSince')}</Text>
           <Text weight="semibold">{studio.earliestDate ? formatShortDate(studio.earliestDate) : '\u2014'}</Text>
+          <Text size={200}>{t('copilotSpend.studio.ledgerLatest')}</Text>
+          <Text weight="semibold">{studio.latestDate ? formatShortDate(studio.latestDate) : '\u2014'}</Text>
           <Text size={200}>{t('copilotSpend.studio.lastImport')}</Text>
           <Text weight="semibold">{studio.lastImportUtc ? formatShortDate(studio.lastImportUtc) : '\u2014'}</Text>
         </div>
@@ -533,7 +566,9 @@ function StudioPanel({ summary }: { summary: CopilotSpendSummary }) {
       </Card>
       <Card className={styles.card}>
         <SectionHeading title={t('copilotSpend.studio.environmentsTitle')} description={t('copilotSpend.studio.environmentsDescription')} />
-        {studio.breakdownFailureCode ? (
+        {!studio.available ? (
+          <Text size={200}>{t('copilotSpend.studio.notAvailableLong')}</Text>
+        ) : studio.breakdownFailureCode ? (
           <Text size={200}>{t('copilotSpend.studio.breakdownUnavailable')}</Text>
         ) : studio.environments.length === 0 ? (
           <Text size={200}>{t('copilotSpend.studio.noDays')}</Text>
@@ -549,9 +584,16 @@ function StudioPanel({ summary }: { summary: CopilotSpendSummary }) {
             </TableHeader>
             <TableBody>
               {studio.environments.map((e) => (
-                <TableRow key={e.environmentId ?? '-'}>
+                <TableRow key={e.emptyKey ?? e.environmentId ?? '-'}>
                   <TableCell>
-                    {e.environmentName ?? t('copilotSpend.studio.unnamedEnvironment')}
+                    {e.emptyKey === 'otherEnvironments'
+                      ? t('copilotSpend.studio.otherEnvironments', { count: formatNumber(e.folded) })
+                      : (e.environmentName ?? t('copilotSpend.studio.unnamedEnvironment'))}
+                    {e.withheld && (
+                      <Text size={100} block className={styles.muted}>
+                        {t('copilotSpend.studio.environmentsWithheld')}
+                      </Text>
+                    )}
                     {e.environmentId && (
                       <Text size={100} block className={`${styles.muted} ${styles.code}`}>
                         {e.environmentId}
@@ -560,7 +602,7 @@ function StudioPanel({ summary }: { summary: CopilotSpendSummary }) {
                   </TableCell>
                   <TableCell className={styles.num}>{formatCredits(e.credits)}</TableCell>
                   <TableCell className={styles.num}>{formatNumber(e.people)}</TableCell>
-                  <TableCell className={styles.num}>{formatNumber(e.days)}</TableCell>
+                  <TableCell className={styles.num}>{e.days === null ? '\u2014' : formatNumber(e.days)}</TableCell>
                 </TableRow>
               ))}
             </TableBody>
@@ -576,10 +618,13 @@ function StudioPanel({ summary }: { summary: CopilotSpendSummary }) {
               : t('copilotSpend.studio.agentsDescription', { credits: formatCredits(studio.agentLedgerCredits) })
           }
         />
-        {studio.breakdownFailureCode ? (
+        {!studio.available ? (
+          <Text size={200}>{t('copilotSpend.studio.notAvailableLong')}</Text>
+        ) : studio.breakdownFailureCode ? (
           <Text size={200}>{t('copilotSpend.studio.breakdownUnavailable')}</Text>
         ) : studio.agents === null ? (
-          <Text size={200}>{t('copilotSpend.studio.agentsWithheld')}</Text>
+          // Withheld from a filtered view by design; unfiltered, the agent ledger simply was not there to read.
+          <Text size={200}>{t(summary.filtered ? 'copilotSpend.studio.agentsWithheld' : 'copilotSpend.studio.agentsNotAvailable')}</Text>
         ) : studio.agents.length === 0 ? (
           <Text size={200}>{t('copilotSpend.studio.noAgents')}</Text>
         ) : (
@@ -831,6 +876,17 @@ function GroupTable({ summary, groups, customDimensions }: { summary: CopilotSpe
   const styles = useStyles();
   const t = useT();
   const source = { dimensions: customDimensions, names: { [summary.organisation.dimension]: summary.organisation.dimensionName ?? '' } };
+  const withheld = t('copilotSpend.org.withheld', { count: formatNumber(summary.organisation.minGroupSize) });
+  const notAvailable = t('copilotSpend.studio.notAvailable');
+  // A figure the source did not provide, or a combined row too small to show, reads as a dash with its reason - never 0.
+  const cell = (text: string, missing: boolean, reason: string) =>
+    missing ? (
+      <span title={reason} aria-label={reason} role="img">
+        {'\u2014'}
+      </span>
+    ) : (
+      text
+    );
   return (
     <Table size="small" aria-label={t('copilotSpend.org.title')} className={styles.table}>
       <TableHeader>
@@ -845,47 +901,66 @@ function GroupTable({ summary, groups, customDimensions }: { summary: CopilotSpe
         </TableRow>
       </TableHeader>
       <TableBody>
-        {groups.map((g) => (
-          <TableRow key={g.label ?? g.emptyKey ?? '-'}>
-            <TableCell>
-              {g.label ??
-                (g.emptyKey === 'otherSmallGroups'
-                  ? t('copilotSpend.org.combined', { count: formatNumber(summary.organisation.foldedGroups) })
-                  : t('copilotSpend.org.notSet'))}
-            </TableCell>
-            <TableCell className={styles.num}>{formatNumber(g.people)}</TableCell>
-            <TableCell className={styles.num}>{formatCredits(g.studioCredits)}</TableCell>
-            <TableCell className={styles.num}>{formatShare(g.shareOfStudio)}</TableCell>
-            <TableCell className={styles.num}>{formatCredits(g.balanceCredits)}</TableCell>
-            <TableCell className={styles.num}>{formatShare(g.shareOfBalances)}</TableCell>
-            <TableCell className={styles.num}>{formatNumber(g.unknownAmountPeople)}</TableCell>
-          </TableRow>
-        ))}
+        {groups.map((g) => {
+          const reason = g.withheld ? withheld : notAvailable;
+          return (
+            <TableRow key={g.label ?? g.emptyKey ?? '-'}>
+              <TableCell>
+                {g.label ??
+                  (g.emptyKey === 'otherSmallGroups'
+                    ? t('copilotSpend.org.combined', { count: formatNumber(g.folded) })
+                    : g.emptyKey === 'moreGroups'
+                      ? t('copilotSpend.org.moreGroups', { count: formatNumber(g.folded) })
+                      : t('copilotSpend.org.notSet'))}
+                {g.withheld && (
+                  <Text size={100} block className={styles.muted}>
+                    {withheld}
+                  </Text>
+                )}
+              </TableCell>
+              <TableCell className={styles.num}>{formatNumber(g.people)}</TableCell>
+              <TableCell className={styles.num}>{cell(formatCredits(g.studioCredits), g.studioCredits === null, reason)}</TableCell>
+              <TableCell className={styles.num}>{cell(formatShare(g.shareOfStudio), g.studioCredits === null, reason)}</TableCell>
+              <TableCell className={styles.num}>{cell(formatCredits(g.balanceCredits), g.balanceCredits === null, reason)}</TableCell>
+              <TableCell className={styles.num}>{cell(formatShare(g.shareOfBalances), g.balanceCredits === null, reason)}</TableCell>
+              <TableCell className={styles.num}>
+                {cell(g.unknownAmountPeople === null ? '' : formatNumber(g.unknownAmountPeople), g.unknownAmountPeople === null, reason)}
+              </TableCell>
+            </TableRow>
+          );
+        })}
       </TableBody>
     </Table>
   );
 }
 
-function OrganisationSpendPanel({ summary, dimension, onDimensionChange, canSeePii, customDimensions }: {
+function OrganisationSpendPanel({ summary, dimension, onDimensionChange, canSeePii, customDimensions, regrouping }: {
   summary: CopilotSpendSummary;
   dimension: string;
   onDimensionChange: (dimension: string) => void;
   canSeePii: boolean;
   customDimensions: UserFilterDimension[];
+  regrouping: boolean;
 }) {
   const styles = useStyles();
   const t = useT();
   const extra: string[] = canSeePii ? ['manager', ...customDimensions.filter((d) => d.kind === 'custom').map((d) => d.key)] : [];
   const options = [...GROUPING_DIMENSIONS, ...extra];
   const source = { dimensions: customDimensions };
+  const organisation = summary.organisation;
   return (
     <Card className={styles.card}>
       <SectionHeading
         title={t('copilotSpend.org.title')}
-        description={t('copilotSpend.org.description', { count: formatNumber(summary.organisation.minGroupSize) })}
+        description={
+          organisation.minGroupSize > 1
+            ? t('copilotSpend.org.description', { count: formatNumber(organisation.minGroupSize) })
+            : t('copilotSpend.org.descriptionEveryGroup')
+        }
       />
       <div className={styles.toolbarRow} data-print="hide">
         <Field label={t('copilotSpend.org.groupBy')}>
+          {/* Stays mounted while a new grouping loads, so keyboard focus and the native list stay where the reader left them. */}
           <Select value={dimension} onChange={(_e, data) => onDimensionChange(data.value)}>
             {options.map((key) => (
               <option key={key} value={key}>
@@ -894,17 +969,29 @@ function OrganisationSpendPanel({ summary, dimension, onDimensionChange, canSeeP
             ))}
           </Select>
         </Field>
+        {regrouping && (
+          <FluentSpinner size="tiny" label={t('copilotSpend.org.regrouping', { dimension: dimensionLabel(t, dimension, source) })} />
+        )}
       </div>
-      {summary.organisation.hidden ? (
+      {organisation.hidden ? (
         <Text>{t('copilotSpend.org.hidden')}</Text>
-      ) : summary.organisation.groups.length === 0 ? (
+      ) : organisation.unavailableCode ? (
+        <MessageBar intent="warning">
+          <MessageBarBody>{t(GROUPING_UNAVAILABLE_KEYS[organisation.unavailableCode])}</MessageBarBody>
+        </MessageBar>
+      ) : organisation.groups.length === 0 ? (
         <Text>{t('copilotSpend.org.empty')}</Text>
       ) : (
-        <GroupTable summary={summary} groups={summary.organisation.groups} customDimensions={customDimensions} />
+        <GroupTable summary={summary} groups={organisation.groups} customDimensions={customDimensions} />
       )}
     </Card>
   );
 }
+
+const GROUPING_UNAVAILABLE_KEYS: Record<'directoryUnavailable' | 'dimensionUnknown', TranslationKey> = {
+  directoryUnavailable: 'copilotSpend.org.unavailable.directoryUnavailable',
+  dimensionUnknown: 'copilotSpend.org.unavailable.dimensionUnknown',
+};
 
 /** A sortable column of the people table, by the server's sort key, with its share of the table's width. */
 type SpendSortKey = 'user' | 'department' | 'manager' | 'studioCredits' | 'studioDays' | 'balanceCredits' | 'balanceDate';
@@ -1068,8 +1155,16 @@ function SpendPeoplePanel({ query, filters, onFiltersChange }: {
                         {row.manager ?? '\u2014'}
                       </TableCellLayout>
                     </TableCell>
-                    <TableCell className={styles.num}>{formatCredits(row.studioCredits)}</TableCell>
-                    <TableCell className={styles.num}>{formatNumber(row.studioDays)}</TableCell>
+                    <TableCell className={styles.num}>
+                      {row.studioCredits === null ? (
+                        <span title={t('copilotSpend.studio.notAvailable')} aria-label={t('copilotSpend.studio.notAvailable')} role="img">
+                          {'\u2014'}
+                        </span>
+                      ) : (
+                        formatCredits(row.studioCredits)
+                      )}
+                    </TableCell>
+                    <TableCell className={styles.num}>{row.studioDays === null ? '\u2014' : formatNumber(row.studioDays)}</TableCell>
                     <TableCell className={styles.num}>
                       {row.balanceCredits === null ? (
                         <span title={t('copilotSpend.people.noReading')} aria-label={t('copilotSpend.people.noReading')} role="img">

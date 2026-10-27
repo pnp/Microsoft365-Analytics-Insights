@@ -255,7 +255,7 @@ describe('CopilotInvestmentPage', () => {
     expect(screen.getByText('Break-even')).toBeInTheDocument();
     expect(screen.getAllByText('Modelled').length).toBeGreaterThanOrEqual(6);
     // Balances are reported beside the return, never inside it.
-    expect(screen.getByText('150 people with a balance \u00b7 not part of the return')).toBeInTheDocument();
+    expect(screen.getByText('150 people with consumed credits \u00b7 not part of the return')).toBeInTheDocument();
     // The verdict says the value range once; the findings list does not repeat it.
     expect(screen.queryByText(/is worth \u20ac3,900 to \u20ac28,500/)).not.toBeInTheDocument();
     expect(screen.getByText(/More spend is not more evidence/)).toBeInTheDocument();
@@ -281,13 +281,13 @@ describe('CopilotInvestmentPage', () => {
     expect(screen.getByText(/Reclaimed licences could cover 16 of them; licences for the other 16 would add \u20ac480 a month/)).toBeInTheDocument();
     // Amounts of different kinds never read as one column of savings.
     expect(screen.getByText('Frees \u20ac1,140 a month of licence cost')).toBeInTheDocument();
-    expect(screen.getByText('\u20ac42.00 a month if the balances were a month\u2019s spend')).toBeInTheDocument();
+    expect(screen.getByText('\u20ac42.00 a month if the readings were a month\u2019s spend')).toBeInTheDocument();
     // The bars under break-even are marked in words as well as colour.
     expect(screen.getAllByText(/below break-even/).length).toBe(3);
     expect(screen.getByText('150 of 240 analysed licensed users are at or above break-even; 50 use Copilot less often and 40 not at all.')).toBeInTheDocument();
     // Confidence per question, and the weekly trend in words.
     expect(screen.getByText('Evidence of use')).toBeInTheDocument();
-    expect(screen.getByText('Credit balances (preview)')).toBeInTheDocument();
+    expect(screen.getByText('Consumed credits (preview readings)')).toBeInTheDocument();
     expect(screen.getByText(/Weekly active licensed users went from 150 to 180/)).toBeInTheDocument();
     expect(screen.getByRole('listitem', { name: /not covered by the audit import/ })).toBeInTheDocument();
   });
@@ -334,20 +334,20 @@ describe('CopilotInvestmentPage', () => {
     expect(await screen.findByText('person7@contoso.example')).toBeInTheDocument();
     const header = (name: RegExp) => within(screen.getByRole('table', { name: 'People' })).getByRole('columnheader', { name });
     const lastFilters = () => vi.mocked(fetchInvestmentPeople).mock.calls.at(-1)!;
-    expect(header(/Credit balance/)).toHaveAttribute('aria-sort', 'none');
-    expect(header(/Credit balance/)).toHaveAttribute('title', 'Sort by Credit balance');
+    expect(header(/Consumed credits/)).toHaveAttribute('aria-sort', 'none');
+    expect(header(/Consumed credits/)).toHaveAttribute('title', 'Sort by Consumed credits (latest reading)');
 
     // A column sorts on the server, from the first person, largest first.
-    fireEvent.click(within(header(/Credit balance/)).getByRole('button'));
+    fireEvent.click(within(header(/Consumed credits/)).getByRole('button'));
     await waitFor(() => expect(lastFilters()[1]).toMatchObject({ sortBy: 'credits', sortDesc: true }));
     expect(lastFilters()[2]).toBe(0);
-    await waitFor(() => expect(header(/Credit balance/)).toHaveAttribute('aria-sort', 'descending'));
+    await waitFor(() => expect(header(/Consumed credits/)).toHaveAttribute('aria-sort', 'descending'));
     expect(screen.getByRole('combobox', { name: 'Sort by' })).toHaveValue('credits');
 
     // Enter on the focused header reverses it.
-    fireEvent.keyDown(within(header(/Credit balance/)).getByRole('button'), { key: 'Enter' });
+    fireEvent.keyDown(within(header(/Consumed credits/)).getByRole('button'), { key: 'Enter' });
     await waitFor(() => expect(lastFilters()[1]).toMatchObject({ sortBy: 'credits', sortDesc: false }));
-    await waitFor(() => expect(header(/Credit balance/)).toHaveAttribute('aria-sort', 'ascending'));
+    await waitFor(() => expect(header(/Consumed credits/)).toHaveAttribute('aria-sort', 'ascending'));
 
     // Names start A to Z; the sort control moves the header arrow too.
     fireEvent.click(within(header(/Person/)).getByRole('button'));

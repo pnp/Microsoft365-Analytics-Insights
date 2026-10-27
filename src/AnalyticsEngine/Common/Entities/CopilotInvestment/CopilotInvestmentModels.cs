@@ -139,6 +139,22 @@ namespace Common.Entities.CopilotInvestment
             }
             return copy;
         }
+
+        /// <summary>
+        /// A copy carrying one request's filter echoes and descriptions. Readers who cover the same people share a cached
+        /// summary, but what the administrator's filter may show differs between them (people's names are withheld from a
+        /// reader without See PII), so the echoes are attached per request and the cached object never holds them.
+        /// </summary>
+        public CopilotInvestmentSummary WithFilterEchoes(UserFilterEcho userFilter, string userFilterDescription, GlobalFilterEcho globalFilter,
+            string globalFilterDescription)
+        {
+            var copy = (CopilotInvestmentSummary)MemberwiseClone();
+            copy.UserFilter = userFilter;
+            copy.UserFilterDescription = userFilterDescription;
+            copy.GlobalFilter = globalFilter;
+            copy.GlobalFilterDescription = globalFilterDescription;
+            return copy;
+        }
     }
 
     /// <summary>The org dimensions a breakdown may use, and which of them name people.</summary>

@@ -43,19 +43,19 @@ const copilotInvestment: Record<keyof typeof en, string> = {
 
   'copilotInvestment.availability.userMetadataDisabled': 'La importación de usuarios está desactivada, así que no hay nadie sobre quien informar.',
   'copilotInvestment.availability.copilotSourcesDisabled':
-    'No están activadas ni la importación de auditoría de Copilot ni los informes de uso de Copilot de Microsoft, así que no hay evidencia de uso. Los costes y los saldos se siguen mostrando.',
+    'No están activadas ni la importación de auditoría de Copilot ni los informes de uso de Copilot de Microsoft, así que no hay evidencia de uso. Los costes y los créditos consumidos se siguen mostrando.',
   'copilotInvestment.availability.auditDisabled':
     'La importación de auditoría de Copilot está desactivada. La evidencia procede solo del informe de uso de Microsoft, que no tiene detalle diario para el desglose de una persona.',
   'copilotInvestment.availability.studioDisabled':
     'La importación de créditos de Copilot Studio por usuario está desactivada, así que no se muestran créditos de Studio facturados.',
   'copilotInvestment.availability.creditsDisabled':
-    'El historial de créditos de Copilot (versión preliminar) no se está recopilando. Los saldos que aparezcan se conservaron de antes de que se detuviera la recopilación.',
+    'El historial de créditos de Copilot (versión preliminar) no se está recopilando. Las lecturas que aparezcan se conservaron de antes de que se detuviera la recopilación.',
 
   'copilotInvestment.error.stillBuilding':
     'La evidencia de Copilot en la que se basa este informe está tardando más de lo previsto en prepararse. Vuelva a intentarlo dentro de unos minutos.',
   'copilotInvestment.error.availabilityFailed': 'No se pudo comprobar qué fuentes puede usar este informe (HTTP {status}).',
   'copilotInvestment.error.summaryFailed': 'No se pudo cargar el informe de inversión (HTTP {status}).',
-  'copilotInvestment.error.trendFailed': 'No se pudo cargar la evolución de los saldos de créditos (HTTP {status}).',
+  'copilotInvestment.error.trendFailed': 'No se pudieron cargar las lecturas de créditos consumidos (HTTP {status}).',
   'copilotInvestment.error.peopleFailed': 'No se pudo cargar la lista de personas (HTTP {status}).',
   'copilotInvestment.error.personFailed': 'No se pudo cargar la evidencia de esta persona (HTTP {status}).',
   'copilotInvestment.error.personNotFound': 'Esta persona no está en el informe para el periodo y los filtros actuales.',
@@ -123,7 +123,7 @@ const copilotInvestment: Record<keyof typeof en, string> = {
   'copilotInvestment.kpi.roi.hint': 'Prudente {low} \u00b7 optimista {high}',
   'copilotInvestment.kpi.roi.what': 'El valor modelado de todos los titulares analizados dividido por el coste modelado de esos mismos titulares.',
   'copilotInvestment.kpi.roi.how':
-    'El numerador y el denominador cubren las mismas personas y el mismo periodo. El coste son sus licencias más sus propios créditos de Copilot Studio facturados si hay un precio de Studio; los saldos de créditos en versión preliminar nunca entran.',
+    'El numerador y el denominador cubren las mismas personas y el mismo periodo. El coste son sus licencias más sus propios créditos de Copilot Studio facturados si hay un precio de Studio; las lecturas preliminares de créditos consumidos nunca entran.',
   'copilotInvestment.kpi.roi.formula': 'valor modelado \u00f7 (coste de licencias del periodo + créditos de Studio facturados a los titulares \u00d7 precio de Studio)',
 
   'copilotInvestment.kpi.breakEven.label': 'Umbral de rentabilidad',
@@ -133,11 +133,11 @@ const copilotInvestment: Record<keyof typeof en, string> = {
     'Un margen de seguridad mayor que cero significa que el supuesto central puede bajar esa proporción antes de que la inversión deje de amortizarse.',
   'copilotInvestment.kpi.breakEven.formula': 'coste modelado \u00f7 (días activos \u00d7 aprovechamiento \u00d7 coste por hora \u00f7 60)',
 
-  'copilotInvestment.kpi.balances.label': 'Saldos de créditos (últimos)',
-  'copilotInvestment.kpi.balances.hint': '{consumers} personas con saldo \u00b7 fuera de la rentabilidad',
+  'copilotInvestment.kpi.balances.label': 'Créditos consumidos (última lectura)',
+  'copilotInvestment.kpi.balances.hint': '{consumers} personas con créditos consumidos \u00b7 fuera de la rentabilidad',
   'copilotInvestment.kpi.balances.what': 'Los créditos de Copilot que cada persona había consumido en el periodo actual de la fuente, según el barrido más reciente.',
   'copilotInvestment.kpi.balances.how':
-    'Un saldo es una lectura puntual. La fuente no indica qué periodo cubre, así que los saldos nunca se suman entre días, nunca se tratan como gasto mensual y nunca entran en la rentabilidad.',
+    'Los créditos consumidos son una lectura puntual. La fuente no indica qué periodo cubre, así que las lecturas nunca se suman entre días, nunca se tratan como gasto mensual y nunca entran en la rentabilidad.',
   'copilotInvestment.kpi.balances.source': 'Historial de créditos de Copilot (versión preliminar)',
 
   'copilotInvestment.kpi.studio.label': 'Créditos de Copilot Studio (facturados)',
@@ -215,7 +215,7 @@ const copilotInvestment: Record<keyof typeof en, string> = {
     'No se pudieron leer los supuestos guardados, así que no se modela el dinero. La evidencia se sigue mostrando.',
 
   'copilotInvestment.exec.trust.title': 'Hasta qué punto fiarse',
-  'copilotInvestment.exec.trust.description': 'Se responde por separado para cada pregunta. El nivel general deja fuera los saldos de créditos, que no forman parte de la rentabilidad.',
+  'copilotInvestment.exec.trust.description': 'Se responde por separado para cada pregunta. El nivel general deja fuera las lecturas de créditos consumidos, que no forman parte de la rentabilidad.',
   'copilotInvestment.exec.trust.high': 'Fiabilidad alta',
   'copilotInvestment.exec.trust.medium': 'Fiabilidad media',
   'copilotInvestment.exec.trust.low': 'Fiabilidad baja',
@@ -224,7 +224,7 @@ const copilotInvestment: Record<keyof typeof en, string> = {
   'copilotInvestment.exec.trust.area.evidence': 'Evidencia de uso',
   'copilotInvestment.exec.trust.area.cost': 'Coste',
   'copilotInvestment.exec.trust.area.assumptions': 'Supuestos',
-  'copilotInvestment.exec.trust.area.balances': 'Saldos de créditos (versión preliminar)',
+  'copilotInvestment.exec.trust.area.balances': 'Créditos consumidos (lecturas preliminares)',
   'copilotInvestment.exec.trust.level.high': 'Alta',
   'copilotInvestment.exec.trust.level.medium': 'Media',
   'copilotInvestment.exec.trust.level.low': 'Baja',
@@ -246,10 +246,10 @@ const copilotInvestment: Record<keyof typeof en, string> = {
   'copilotInvestment.finding.idleSeatsReclaim': '{idle} titulares ({share}) no usaron Copilot en el periodo. {reclaimable} se pueden recuperar con seguridad, lo que libera {monthly} al mes de coste de licencias y lleva la rentabilidad central a {roiAfter}; otros {review} necesitan revisión.',
   'copilotInvestment.finding.evidenceConcentration': 'El {topFraction} más activo de los titulares acumula el {topShare} de todos los días activos.',
   'copilotInvestment.finding.creditConcentration':
-    'El {topFraction} de los consumidores de créditos con más saldo concentra el {topShare} de los últimos saldos ({consumers} personas con saldo).',
+    'El {topFraction} de los consumidores de créditos con más consumo concentra el {topShare} de los créditos consumidos en las últimas lecturas ({consumers} personas con créditos consumidos).',
   'copilotInvestment.finding.highSpendThinEvidence':
-    '{people} personas tienen los saldos de créditos más altos con poco uso propio de Copilot ({credits} créditos). Más gasto no es más evidencia: revise qué se ejecuta en su nombre.',
-  'copilotInvestment.finding.highSpendThinEvidenceOne': 'Una persona tiene uno de los saldos de créditos más altos con poco uso propio de Copilot ({credits} créditos). Más gasto no es más evidencia: revise qué se ejecuta en su nombre.',
+    '{people} personas son las que más créditos han consumido, con poco uso propio de Copilot ({credits} créditos). Más gasto no es más evidencia: revise qué se ejecuta en su nombre.',
+  'copilotInvestment.finding.highSpendThinEvidenceOne': 'Una persona está entre las que más créditos han consumido, con poco uso propio de Copilot ({credits} créditos). Más gasto no es más evidencia: revise qué se ejecuta en su nombre.',
   'copilotInvestment.finding.expandEvidenced':
     '{people} personas sin licencia ya usan Copilot más días activos de los que una licencia necesita para amortizarse. Darles licencia costaría {monthly} al mes.',
   'copilotInvestment.finding.expandEvidencedOne': 'Una persona sin licencia ya usa Copilot más días activos de los que una licencia necesita para amortizarse. Darle licencia costaría {monthly} al mes.',
@@ -266,8 +266,8 @@ const copilotInvestment: Record<keyof typeof en, string> = {
     'Copilot Studio facturó {credits} créditos en el periodo y nada en el periodo anterior de la misma duración.',
   'copilotInvestment.finding.studioTrendNotComparable': 'Copilot Studio facturó {credits} créditos en el periodo. El registro no cubre el periodo anterior de la misma duración, así que no se compara.',
   'copilotInvestment.finding.balancesUnverified':
-    '{consumers} personas suman {credits} créditos en los últimos saldos. La fuente no confirma qué periodo cubren, así que se muestran junto a la rentabilidad, no dentro de ella.',
-  'copilotInvestment.finding.balancesUnverifiedIfMonthly': '{consumers} personas tienen {credits} créditos en los últimos saldos, sin periodo confirmado. Como suelo de estrés (cada saldo como un mes más de gasto sobre todo lo demás) la rentabilidad central sería {roiIfMonthly}; los saldos pueden solaparse con la facturación de Studio ya contada.',
+    '{consumers} personas suman {credits} créditos consumidos en las últimas lecturas. La fuente no confirma qué periodo cubren, así que se muestran junto a la rentabilidad, no dentro de ella.',
+  'copilotInvestment.finding.balancesUnverifiedIfMonthly': '{consumers} personas tienen {credits} créditos consumidos en las últimas lecturas, sin periodo confirmado. Como suelo de estrés (cada lectura como un mes más de gasto sobre todo lo demás) la rentabilidad central sería {roiIfMonthly}; las lecturas pueden solaparse con la facturación de Studio ya contada.',
   'copilotInvestment.finding.trajectory': 'Los titulares activos por semana pasaron de {first} a {last} en las últimas {weeks} semanas medidas ({change}); el {share} de las licencias actuales estuvo activo la última semana.',
 
   // Acciones
@@ -292,8 +292,8 @@ const copilotInvestment: Record<keyof typeof en, string> = {
   'copilotInvestment.action.expandRecommended.bodyOne': 'El análisis de adopción recomienda licencia para una persona que no la tiene.',
   'copilotInvestment.action.reviewHighSpendThinEvidence.title': 'Revisar gasto alto con poca evidencia',
   'copilotInvestment.action.reviewHighSpendThinEvidence.body':
-    '{people} personas tienen los saldos más altos ({credits} créditos) con poco uso propio. Busque agentes programados o automatizaciones antes de subir ningún límite.',
-  'copilotInvestment.action.reviewHighSpendThinEvidence.bodyOne': 'Una persona tiene uno de los saldos más altos ({credits} créditos) con poco uso propio. Busque agentes programados o automatizaciones antes de subir ningún límite.',
+    '{people} personas son las que más créditos han consumido ({credits} créditos) con poco uso propio. Busque agentes programados o automatizaciones antes de subir ningún límite.',
+  'copilotInvestment.action.reviewHighSpendThinEvidence.bodyOne': 'Una persona está entre las que más créditos han consumido ({credits} créditos) con poco uso propio. Busque agentes programados o automatizaciones antes de subir ningún límite.',
   'copilotInvestment.action.raiseLimitEvidenced.title': 'Revisar límites de los usuarios intensivos con evidencia',
   'copilotInvestment.action.raiseLimitEvidenced.body':
     '{people} personas con un uso intenso y regular de Copilot están en su límite de créditos o cerca de él ({credits} créditos).',
@@ -304,16 +304,16 @@ const copilotInvestment: Record<keyof typeof en, string> = {
   'copilotInvestment.action.licenceMeteredHeavy.bodyOne': 'A una persona sin licencia se le facturaron más créditos de Copilot Studio de lo que costaría una licencia.',
   'copilotInvestment.action.improveCoverage.title': 'Cerrar huecos en los datos de créditos',
   'copilotInvestment.action.improveCoverage.body':
-    '{people} saldos son parciales, están desactualizados o pertenecen a cuentas que la importación de usuarios no ha emparejado. Revise el recopilador y la importación de usuarios.',
-  'copilotInvestment.action.improveCoverage.bodyOne': 'Un saldo es parcial, está desactualizado o pertenece a una cuenta que la importación de usuarios no ha emparejado. Revise el recopilador y la importación de usuarios.',
+    '{people} lecturas son parciales, están desactualizadas o pertenecen a cuentas que la importación de usuarios no ha emparejado. Revise el recopilador y la importación de usuarios.',
+  'copilotInvestment.action.improveCoverage.bodyOne': 'Una lectura es parcial, está desactualizada o pertenece a una cuenta que la importación de usuarios no ha emparejado. Revise el recopilador y la importación de usuarios.',
   'copilotInvestment.action.setAssumptions.title': 'Definir los supuestos de inversión',
   'copilotInvestment.action.setAssumptions.body': 'Faltan {count} supuestos, así que no se pueden modelar el valor, la rentabilidad ni el umbral.',
-  'copilotInvestment.action.monthlyBalanceCaveat': 'Valorado como si el saldo fuera el gasto de un mes.',
+  'copilotInvestment.action.monthlyBalanceCaveat': 'Valorado como si la lectura fuera el gasto de un mes.',
   'copilotInvestment.action.effect.freesSeatCost': 'Libera {amount} al mes de coste de licencias',
   'copilotInvestment.action.effect.idleSeatCost': '{amount} al mes de coste en licencias sin uso',
   'copilotInvestment.action.effect.valueShortfall': 'Faltan {amount} al mes de valor modelado',
   'copilotInvestment.action.effect.addsSeatCost': 'Añade {amount} al mes en licencias',
-  'copilotInvestment.action.effect.balanceIfMonthly': '{amount} al mes si los saldos fueran el gasto de un mes',
+  'copilotInvestment.action.effect.balanceIfMonthly': '{amount} al mes si las lecturas fueran el gasto de un mes',
   'copilotInvestment.action.effect.meteredSpend': '{amount} al mes facturados en créditos de Copilot Studio',
 
   // Valor y umbral de rentabilidad
@@ -351,8 +351,8 @@ const copilotInvestment: Record<keyof typeof en, string> = {
   'copilotInvestment.value.levers.hourlyMinus': 'Coste por hora un 20 % menor',
   'copilotInvestment.value.levers.hourlyPlus': 'Coste por hora un 20 % mayor',
   'copilotInvestment.value.levers.afterReclaim': 'Sin las licencias que se pueden recuperar (su uso de Studio sigue facturado)',
-  'copilotInvestment.value.levers.ifMonthly': 'Suelo de estrés: cada saldo como un mes más de gasto',
-  'copilotInvestment.value.levers.ifMonthlyNote': 'Solo una prueba de estrés: la fuente no indica qué periodo cubre un saldo, y los saldos pueden solaparse con la facturación de Studio ya incluida en el coste.',
+  'copilotInvestment.value.levers.ifMonthly': 'Suelo de estrés: cada lectura como un mes más de gasto',
+  'copilotInvestment.value.levers.ifMonthlyNote': 'Solo una prueba de estrés: la fuente no indica qué periodo cubre una lectura, y las lecturas pueden solaparse con la facturación de Studio ya incluida en el coste.',
   'copilotInvestment.value.levers.delta': '{value} ({delta} frente al caso central)',
 
   'copilotInvestment.value.breakEven.title': 'Umbral de rentabilidad',
@@ -373,7 +373,7 @@ const copilotInvestment: Record<keyof typeof en, string> = {
   'copilotInvestment.value.col.shareOfDays': 'Proporción de días activos',
   'copilotInvestment.value.col.cost': 'Coste modelado al mes',
   'copilotInvestment.value.col.valueMonthly': 'Valor modelado al mes (central)',
-  'copilotInvestment.value.col.credits': 'Saldos de créditos (últimos)',
+  'copilotInvestment.value.col.credits': 'Créditos consumidos (última lectura)',
   'copilotInvestment.value.col.studio': 'Créditos de Studio (periodo)',
 
   // Organización
@@ -388,7 +388,7 @@ const copilotInvestment: Record<keyof typeof en, string> = {
   'copilotInvestment.org.col.cost': 'Coste modelado al mes',
   'copilotInvestment.org.col.value': 'Valor modelado al mes (central)',
   'copilotInvestment.org.col.roi': 'Rentabilidad',
-  'copilotInvestment.org.col.credits': 'Saldos de créditos (últimos)',
+  'copilotInvestment.org.col.credits': 'Créditos consumidos (última lectura)',
   'copilotInvestment.org.col.studio': 'Créditos de Studio (periodo)',
   'copilotInvestment.org.col.unlicensedActive': 'Activos sin licencia',
   'copilotInvestment.org.folded': 'Se combinan {count} grupos más pequeños.',
@@ -399,19 +399,19 @@ const copilotInvestment: Record<keyof typeof en, string> = {
   'copilotInvestment.concentration.description':
     'Lo repartidos que están el uso y el gasto. Una curva pegada a la diagonal indica un reparto uniforme; una curva muy combada, que unas pocas personas acumulan la mayor parte.',
   'copilotInvestment.concentration.activeDays': 'Días activos entre los titulares',
-  'copilotInvestment.concentration.credits': 'Saldos de créditos entre los consumidores',
+  'copilotInvestment.concentration.credits': 'Créditos consumidos entre los consumidores',
   'copilotInvestment.concentration.summary': 'El {fraction} superior acumula el {share}; Gini {gini}.',
   'copilotInvestment.concentration.equality': 'Reparto uniforme',
   'copilotInvestment.concentration.curve': 'Reparto observado',
   'copilotInvestment.concentration.peopleAxis': 'Proporción de personas',
   'copilotInvestment.concentration.amountAxis': 'Proporción del total',
   'copilotInvestment.concentration.none': 'Demasiadas pocas personas para medirlo.',
-  'copilotInvestment.quadrants.title': 'Saldo de créditos frente al uso propio',
-  'copilotInvestment.quadrants.description': 'Personas con saldo de créditos, divididas por el saldo mediano ({median} créditos) y por {days} días activos al mes. Un corte más amplio que la marca de gasto alto, que mira el 10 % de saldos más altos.',
-  'copilotInvestment.quadrants.highSpendHighEvidence': 'Saldo más alto, uso regular',
-  'copilotInvestment.quadrants.highSpendLowEvidence': 'Saldo más alto, uso ligero',
-  'copilotInvestment.quadrants.lowSpendHighEvidence': 'Saldo más bajo, uso regular',
-  'copilotInvestment.quadrants.lowSpendLowEvidence': 'Saldo más bajo, uso ligero',
+  'copilotInvestment.quadrants.title': 'Créditos consumidos frente al uso propio',
+  'copilotInvestment.quadrants.description': 'Personas con créditos consumidos, divididas por la lectura mediana ({median} créditos) y por {days} días activos al mes. Un corte más amplio que la marca de gasto alto, que mira el 10 % de lecturas más altas.',
+  'copilotInvestment.quadrants.highSpendHighEvidence': 'Más créditos consumidos, uso regular',
+  'copilotInvestment.quadrants.highSpendLowEvidence': 'Más créditos consumidos, uso ligero',
+  'copilotInvestment.quadrants.lowSpendHighEvidence': 'Menos créditos consumidos, uso regular',
+  'copilotInvestment.quadrants.lowSpendLowEvidence': 'Menos créditos consumidos, uso ligero',
   'copilotInvestment.quadrants.people': '{count} personas \u00b7 {credits} créditos',
 
   // Créditos y fuentes
@@ -420,42 +420,42 @@ const copilotInvestment: Record<keyof typeof en, string> = {
   'copilotInvestment.sources.adoption.ok': 'Se analizaron {holders} titulares. Generado el {when}.',
   'copilotInvestment.sources.adoption.off': 'No hay evidencia de Copilot disponible en esta implementación.',
   'copilotInvestment.sources.adoption.unmatched': 'De otros {otherPeriod} solo hay medida en el informe de uso de Microsoft, con su propio periodo, y {notAnalysed} no se analizaron: cuentan como licencias, fuera del valor.',
-  'copilotInvestment.sources.credits': 'Saldos de créditos de Copilot (versión preliminar)',
+  'copilotInvestment.sources.credits': 'Créditos de Copilot consumidos, últimas lecturas (versión preliminar)',
   'copilotInvestment.sources.credits.ok':
     'Último barrido el {date}: {observed} personas observadas. Se completaron {sweeps} de los {started} barridos del periodo.',
-  'copilotInvestment.sources.credits.none': 'No se han recopilado saldos para este periodo.',
+  'copilotInvestment.sources.credits.none': 'No se han recopilado lecturas para este periodo.',
   'copilotInvestment.sources.credits.tablesMissing': 'La base de datos aún no se ha actualizado para el historial de créditos.',
-  'copilotInvestment.sources.credits.failed': 'No se pudo leer el historial de créditos en este momento: los saldos faltan, no son cero.',
+  'copilotInvestment.sources.credits.failed': 'No se pudo leer el historial de créditos en este momento: las lecturas faltan, no son cero.',
   'copilotInvestment.sources.studio': 'Registro de Copilot Studio',
   'copilotInvestment.sources.studio.ok': 'Última importación el {when}.',
   'copilotInvestment.sources.studio.none': 'No hay créditos de Studio facturados guardados para este periodo.',
   'copilotInvestment.sources.studio.failed': 'La última importación notificó un error.',
   'copilotInvestment.sources.studio.unreadable': 'No se pudo leer el registro en este momento: sus cifras faltan, no son cero.',
 
-  'copilotInvestment.trend.title': 'Saldos de créditos a lo largo del tiempo',
+  'copilotInvestment.trend.title': 'Lecturas de créditos consumidos a lo largo del tiempo',
   'copilotInvestment.trend.description':
-    'Cada punto son los saldos de un barrido, leídos ese día. Los puntos nunca se suman: un saldo vuelve a bajar cuando la fuente empieza un periodo nuevo. Los días sin barrido no tienen punto.',
+    'Cada punto son las lecturas de un barrido, tomadas ese día. Los puntos nunca se suman: una lectura vuelve a bajar cuando la fuente empieza un periodo nuevo. Los días sin barrido no tienen punto.',
   'copilotInvestment.trend.date': 'Fecha del barrido',
-  'copilotInvestment.trend.credits': 'Créditos en saldos',
-  'copilotInvestment.trend.consumers': 'Personas con saldo',
+  'copilotInvestment.trend.credits': 'Créditos consumidos',
+  'copilotInvestment.trend.consumers': 'Personas con créditos consumidos',
   'copilotInvestment.trend.point': '{date}: {credits} créditos, {consumers} personas',
-  'copilotInvestment.trend.empty': 'No hay historial de saldos en este periodo.',
-  'copilotInvestment.trend.loading': 'Cargando el historial de saldos\u2026',
+  'copilotInvestment.trend.empty': 'No hay lecturas de consumo en este periodo.',
+  'copilotInvestment.trend.loading': 'Cargando las lecturas de consumo\u2026',
 
   'copilotInvestment.services.title': 'Por servicio',
   'copilotInvestment.services.description':
     'Cada servicio tal como lo nombra la fuente, con su unidad. Una cantidad en una unidad distinta de los créditos de Copilot se muestra aparte y nunca se suma a los créditos.',
   'copilotInvestment.services.col.service': 'Servicio',
   'copilotInvestment.services.col.unit': 'Unidad',
-  'copilotInvestment.services.col.consumers': 'Personas con saldo',
-  'copilotInvestment.services.col.quantity': 'Últimos saldos',
+  'copilotInvestment.services.col.consumers': 'Personas con créditos consumidos',
+  'copilotInvestment.services.col.quantity': 'Créditos consumidos (última lectura)',
   'copilotInvestment.services.col.refused': 'En el límite / sin derecho',
   'copilotInvestment.services.col.unevaluated': 'Sin evaluar',
   'copilotInvestment.services.col.unknown': 'Cantidad desconocida',
   'copilotInvestment.services.unitCredits': 'Créditos de Copilot',
   'copilotInvestment.services.unitOther': 'Otra unidad: {unit}',
   'copilotInvestment.services.unitMissing': 'Sin unidad indicada',
-  'copilotInvestment.services.empty': 'Ningún servicio tiene saldo en este periodo.',
+  'copilotInvestment.services.empty': 'Ningún servicio tiene lecturas en este periodo.',
 
   'copilotInvestment.policies.title': 'Directivas de gasto',
   'copilotInvestment.policies.description':
@@ -494,7 +494,7 @@ const copilotInvestment: Record<keyof typeof en, string> = {
   'copilotInvestment.metered.people': 'Personas en esta vista',
   'copilotInvestment.metered.active': 'Usaron Copilot',
   'copilotInvestment.metered.studio': 'Créditos de Studio facturados',
-  'copilotInvestment.metered.balances': 'Saldos de créditos',
+  'copilotInvestment.metered.balances': 'Créditos consumidos (última lectura)',
   'copilotInvestment.metered.evidenced': 'Lo usan tanto como necesita una licencia',
   'copilotInvestment.metered.recommended': 'Recomendadas para una licencia',
   'copilotInvestment.metered.studioAboveSeat': 'Facturado más que una licencia',
@@ -540,7 +540,7 @@ const copilotInvestment: Record<keyof typeof en, string> = {
   'copilotInvestment.people.col.apps': 'Aplicaciones',
   'copilotInvestment.people.col.cost': 'Coste modelado (periodo)',
   'copilotInvestment.people.col.need': 'Días al mes para el umbral',
-  'copilotInvestment.people.col.credits': 'Saldo de créditos',
+  'copilotInvestment.people.col.credits': 'Créditos consumidos (última lectura)',
   'copilotInvestment.people.col.studio': 'Créditos de Studio',
   'copilotInvestment.people.col.signal': 'Señal',
   'copilotInvestment.people.seatHeld': 'Con licencia',
@@ -573,7 +573,7 @@ const copilotInvestment: Record<keyof typeof en, string> = {
   'copilotInvestment.flag.nearLimit': 'Cerca del límite de créditos',
   'copilotInvestment.flag.notEntitled': 'Sin derecho',
   'copilotInvestment.flag.highSpendThinEvidence': 'Gasto alto, poca evidencia',
-  'copilotInvestment.flag.creditsPartial': 'Saldo parcial',
+  'copilotInvestment.flag.creditsPartial': 'Lectura parcial',
   'copilotInvestment.flag.otherUnit': 'Otra unidad',
   'copilotInvestment.flag.reclaimExcluded': 'Excluida de la recuperación',
   'copilotInvestment.flag.accountDisabled': 'Cuenta deshabilitada',
@@ -627,12 +627,12 @@ const copilotInvestment: Record<keyof typeof en, string> = {
   'copilotInvestment.person.prompts.counts': '{prompts} indicaciones, {responses} respuestas',
   'copilotInvestment.person.prompts.notAssessed': 'El historial de interacciones no se importa, así que no se cuentan las indicaciones.',
   'copilotInvestment.person.prompts.categories': 'De qué trataban las indicaciones',
-  'copilotInvestment.person.credits.title': 'Saldo de créditos por servicio',
-  'copilotInvestment.person.credits.none': 'Esta persona no tiene saldo de créditos.',
+  'copilotInvestment.person.credits.title': 'Créditos consumidos por servicio (última lectura)',
+  'copilotInvestment.person.credits.none': 'Esta persona no tiene lecturas de créditos consumidos.',
   'copilotInvestment.person.credits.remaining': 'Quedan {remaining}',
   'copilotInvestment.person.credits.limit': 'Límite {limit}',
   'copilotInvestment.person.credits.unevaluated': 'Sin evaluar',
-  'copilotInvestment.person.credits.history': 'Saldo por barrido',
+  'copilotInvestment.person.credits.history': 'Créditos consumidos por barrido',
   'copilotInvestment.person.credits.historyPoint': '{date}: {credits}',
   'copilotInvestment.person.studio.title': 'Uso facturado de Copilot Studio por entorno',
   'copilotInvestment.person.studio.unnamed': 'Entorno no notificado',
@@ -664,7 +664,7 @@ const copilotInvestment: Record<keyof typeof en, string> = {
   'copilotInvestment.method.rule.activeDays': 'El valor se cuenta por día activo. Enviar más indicaciones el mismo día no suma nada.',
   'copilotInvestment.method.rule.population': 'La rentabilidad compara a las mismas personas en los dos lados: titulares cuyo uso de Copilot se midió en este periodo. Los que solo constan en el informe de uso de Microsoft, o no se analizaron, cuentan como licencias pero no se valoran. Las personas sin licencia se presentan aparte.',
   'copilotInvestment.method.rule.balances':
-    'Los saldos de créditos en versión preliminar son lecturas puntuales con un periodo sin confirmar. Se muestran junto a la rentabilidad y se someten a pruebas de estrés, pero nunca se suman a ella ni entre días.',
+    'Las lecturas preliminares de créditos consumidos son lecturas puntuales con un periodo sin confirmar. Se muestran junto a la rentabilidad y se someten a pruebas de estrés, pero nunca se suman a ella ni entre días.',
   'copilotInvestment.method.rule.studio':
     'Los créditos facturados de Copilot Studio proceden de un registro diario y solo se comparan con el periodo anterior de la misma duración.',
   'copilotInvestment.method.rule.seats':
@@ -672,7 +672,7 @@ const copilotInvestment: Record<keyof typeof en, string> = {
   'copilotInvestment.method.rule.noCausality':
     'Correlación no es causalidad: un uso alto es evidencia de que una licencia se usa, no prueba del valor que genera.',
   'copilotInvestment.method.rule.sources':
-    'Los créditos de Studio y los saldos en versión preliminar pueden describir el mismo consumo desde dos fuentes, así que nunca se suman.',
+    'Los créditos de Studio y las lecturas preliminares de créditos consumidos pueden describir el mismo consumo desde dos fuentes, así que nunca se suman.',
   'copilotInvestment.method.assumptions': 'Supuestos',
   'copilotInvestment.method.col.assumption': 'Supuesto',
   'copilotInvestment.method.col.value': 'Valor',
@@ -715,13 +715,13 @@ const copilotInvestment: Record<keyof typeof en, string> = {
   'copilotInvestment.trust.seatsCurrentAssignments':
     'El coste de licencias supone que las licencias actuales se tuvieron todo el periodo: falta el historial de licencias de algunos titulares.',
   'copilotInvestment.trust.balancesUnverified':
-    'La fuente no confirma qué periodo cubre un saldo de créditos, así que los saldos quedan fuera de la rentabilidad.',
+    'La fuente no confirma qué periodo cubre una lectura de créditos consumidos, así que las lecturas quedan fuera de la rentabilidad.',
   'copilotInvestment.trust.creditCoverage': 'El último barrido de créditos observó el {coverage} del directorio.',
-  'copilotInvestment.trust.creditsStale': 'El saldo de créditos más reciente es {days} días anterior al final del periodo.',
-  'copilotInvestment.trust.creditsPartial': 'El {share} de los saldos de créditos son parciales.',
+  'copilotInvestment.trust.creditsStale': 'La lectura de créditos consumidos más reciente es {days} días anterior al final del periodo.',
+  'copilotInvestment.trust.creditsPartial': 'El {share} de las lecturas de créditos consumidos son parciales.',
   'copilotInvestment.trust.creditsUnresolved': 'Hay {credits} créditos en {objects} cuentas no emparejadas con un usuario importado.',
-  'copilotInvestment.trust.creditsMissing': 'No hay saldos de créditos de Copilot disponibles para este periodo.',
-  'copilotInvestment.trust.creditsUnavailable': 'No se pudieron leer los saldos de créditos de Copilot en este momento: faltan, no son cero.',
+  'copilotInvestment.trust.creditsMissing': 'No hay lecturas de créditos de Copilot consumidos disponibles para este periodo.',
+  'copilotInvestment.trust.creditsUnavailable': 'No se pudieron leer los créditos de Copilot consumidos en este momento: faltan, no son cero.',
   'copilotInvestment.trust.shortWindow': 'Un periodo de {days} días: las cifras mensuales se extrapolan de una muestra corta.',
   'copilotInvestment.trust.studioImportFailed': 'La última importación de créditos de Copilot Studio notificó un error.',
   'copilotInvestment.trust.studioUnavailable': 'No se pudo leer el registro de Copilot Studio, así que el coste de la rentabilidad solo cubre licencias y la rentabilidad puede estar sobrestimada.',
@@ -772,7 +772,7 @@ const copilotInvestment: Record<keyof typeof en, string> = {
   'copilotInvestment.whatIf.guide.studioCreditPrice':
     'Lo que le cuesta un crédito facturado de Copilot Studio. Añade al coste el uso de Studio de los propios titulares.',
   'copilotInvestment.whatIf.guide.creditPrice':
-    'Lo que le cuesta un crédito de Copilot. Solo valora los saldos preliminares, que quedan fuera de la rentabilidad.',
+    'Lo que le cuesta un crédito de Copilot. Solo valora las lecturas preliminares de créditos consumidos, que quedan fuera de la rentabilidad.',
   'copilotInvestment.whatIf.guide.minutes':
     'En un día en que se usa Copilot, de 0 a 480, de menor a mayor. Básese en su propio piloto o encuesta; no hay un valor medido por defecto.',
   'copilotInvestment.whatIf.guide.realisation':
@@ -792,7 +792,7 @@ const copilotInvestment: Record<keyof typeof en, string> = {
     'Cuánto tiempo devuelve Copilot el día que alguien lo usa y qué parte de ese tiempo se convierte en valor en lugar de holgura. Tres valores para cada uno, de prudente a optimista.',
   'copilotInvestment.settings.currency.hint': 'Código ISO de tres letras, por ejemplo EUR o USD. Todos los precios y el coste por hora están en esta moneda.',
   'copilotInvestment.settings.seatPrice.hint': 'Lo que cuesta al mes una licencia de Microsoft 365 Copilot por persona.',
-  'copilotInvestment.settings.creditPrice.hint': 'Lo que cuesta un crédito de Copilot. Sirve para valorar los saldos, que quedan fuera de la rentabilidad.',
+  'copilotInvestment.settings.creditPrice.hint': 'Lo que cuesta un crédito de Copilot. Sirve para valorar los créditos consumidos, que quedan fuera de la rentabilidad.',
   'copilotInvestment.settings.studioCreditPrice.hint': 'Lo que cuesta un crédito facturado de Copilot Studio.',
   'copilotInvestment.settings.hourlyCost.hint': 'Salario más cargas de una hora del tiempo de una persona típica.',
   'copilotInvestment.settings.minutes.hint': 'Hasta 480 minutos. De menor a mayor.',
@@ -862,7 +862,7 @@ const copilotInvestment: Record<keyof typeof en, string> = {
   'copilotInvestment.workbook.col.costPeriod': 'Coste modelado (en el periodo)',
   'copilotInvestment.workbook.col.valuePeriod': 'Valor modelado, central (en el periodo)',
   'copilotInvestment.workbook.col.roiBase': 'Rentabilidad (central)',
-  'copilotInvestment.workbook.col.credits': 'Créditos (último saldo)',
+  'copilotInvestment.workbook.col.credits': 'Créditos consumidos (última lectura)',
   'copilotInvestment.workbook.col.studioPeriod': 'Créditos de Studio (en el periodo)',
   'copilotInvestment.workbook.sheet.executive': 'Resumen ejecutivo',
   'copilotInvestment.workbook.sheet.value': 'Valor y umbral de rentabilidad',
@@ -941,10 +941,10 @@ const copilotInvestment: Record<keyof typeof en, string> = {
   'copilotInvestment.workbook.exec.studioPrior': 'Créditos de Copilot Studio, periodo anterior',
   'copilotInvestment.workbook.exec.studioPrior.basis': 'Mismo registro, periodo anterior de igual duración',
   'copilotInvestment.workbook.studio.notCompared': 'Sin comparar: el registro no cubre todo el periodo anterior',
-  'copilotInvestment.workbook.exec.balances': 'Últimos saldos de créditos (versión preliminar)',
-  'copilotInvestment.workbook.exec.balances.basis': 'Saldo en el periodo propio de la fuente (sin verificar); no es gasto',
-  'copilotInvestment.workbook.exec.balanceValue': 'Saldo valorado al precio del crédito',
-  'copilotInvestment.workbook.exec.balanceValue.basis': 'Una valoración del saldo, no un coste del periodo',
+  'copilotInvestment.workbook.exec.balances': 'Créditos consumidos, últimas lecturas preliminares',
+  'copilotInvestment.workbook.exec.balances.basis': 'Consumo en el periodo propio de la fuente (sin verificar); no es gasto',
+  'copilotInvestment.workbook.exec.balanceValue': 'Créditos consumidos valorados al precio del crédito',
+  'copilotInvestment.workbook.exec.balanceValue.basis': 'Una valoración de los créditos consumidos, no un coste del periodo',
   'copilotInvestment.workbook.basis.unavailable': 'No se pudieron leer los supuestos guardados, así que no se modela ningún importe.',
   'copilotInvestment.workbook.basis.missing': 'No hay supuestos establecidos, así que no se modela ningún importe.',
   'copilotInvestment.workbook.basis.partial': 'Faltan algunos supuestos: {fields}.',
@@ -955,7 +955,7 @@ const copilotInvestment: Record<keyof typeof en, string> = {
   'copilotInvestment.workbook.effect.idleSeatCost': '[Importe: coste de las licencias sin uso]',
   'copilotInvestment.workbook.effect.valueShortfall': '[Importe: valor modelado que aún falta]',
   'copilotInvestment.workbook.effect.addsSeatCost': '[Importe: coste de licencias añadido]',
-  'copilotInvestment.workbook.effect.balanceIfMonthly': '[Importe: saldos valorados como si fueran el gasto de un mes]',
+  'copilotInvestment.workbook.effect.balanceIfMonthly': '[Importe: lecturas valoradas como si fueran el gasto de un mes]',
   'copilotInvestment.workbook.effect.meteredSpend': '[Importe: créditos de Studio facturados al mes]',
   'copilotInvestment.workbook.action.reclaimIdle':
     'Recuperar las licencias sin actividad en Copilot que el informe de adopción califica de seguras o probables de recuperar. Libera coste de licencias; solo es un ahorro de caja si se puede reducir el número de licencias.',
@@ -969,9 +969,9 @@ const copilotInvestment: Record<keyof typeof en, string> = {
     'Ofrecer licencia a las personas sin ella cuyo uso de Copilot ya supera los {days} días activos al mes que necesita una licencia. El importe es el coste de licencias que añadiría; su uso muestra demanda, no la ganancia que aportaría una licencia.',
   'copilotInvestment.workbook.action.expandRecommended': 'Ofrecer licencia a las personas que recomienda el informe de adopción.',
   'copilotInvestment.workbook.action.reviewHighSpendThinEvidence':
-    'Revisar los mayores saldos de créditos que van acompañados de poca actividad en Copilot ({credits} créditos).',
+    'Revisar a los mayores consumidores de créditos con poca actividad en Copilot ({credits} créditos).',
   'copilotInvestment.workbook.action.reviewHighSpendThinEvidence.monthly':
-    'El importe supone que cada saldo es un mes de uso, algo que la fuente no confirma.',
+    'El importe supone que cada lectura es un mes de uso, algo que la fuente no confirma.',
   'copilotInvestment.workbook.action.raiseLimitEvidenced':
     'Valorar subir los límites por usuario de las personas con una actividad intensa en Copilot que los han alcanzado o casi.',
   'copilotInvestment.workbook.action.licenceMeteredHeavy':
@@ -991,9 +991,9 @@ const copilotInvestment: Record<keyof typeof en, string> = {
   'copilotInvestment.workbook.finding.evidenceConcentration':
     'El {topFraction} más activo de los titulares reúne el {topShare} de todos los días activos en Copilot (Gini {gini}).',
   'copilotInvestment.workbook.finding.creditConcentration':
-    'Consumidores de créditos: {consumers}. El {topFraction} superior de ellos concentra el {topShare} de los últimos saldos.',
+    'Consumidores de créditos: {consumers}. El {topFraction} superior de ellos concentra el {topShare} de los créditos consumidos en las últimas lecturas.',
   'copilotInvestment.workbook.finding.highSpendThinEvidence':
-    'Personas entre los mayores saldos de créditos con poca actividad en Copilot: {people} ({credits} créditos). Revise qué impulsa ese consumo.',
+    'Personas entre los mayores consumidores de créditos con poca actividad en Copilot: {people} ({credits} créditos). Revise qué impulsa ese consumo.',
   'copilotInvestment.workbook.finding.expandCandidates':
     'Personas sin licencia cuyo uso de Copilot ya justifica una: {people}. Darles licencia costaría {monthly} {currency} al mes (modelado).',
   'copilotInvestment.workbook.finding.limitBlocked':
@@ -1001,7 +1001,7 @@ const copilotInvestment: Record<keyof typeof en, string> = {
   'copilotInvestment.workbook.finding.assumptionsMissing':
     'Supuestos que faltan: {missing}. No se modelan los importes, la rentabilidad ni el umbral.',
   'copilotInvestment.workbook.finding.balancesUnverified':
-    'Los últimos saldos suman {credits} créditos (consumidores: {consumers}). La fuente no identifica su periodo, así que no se cuentan como gasto.',
+    'Las últimas lecturas suman {credits} créditos consumidos (consumidores: {consumers}). La fuente no identifica su periodo, así que no se cuentan como gasto.',
   'copilotInvestment.workbook.finding.balancesStressFloor':
     'Suelo de estrés: si cada uno fuera un mes más de gasto además de todo lo demás, la rentabilidad central sería {roi}x (pueden solaparse con el registro de Studio).',
   'copilotInvestment.workbook.finding.studioTrend':
@@ -1031,7 +1031,7 @@ const copilotInvestment: Record<keyof typeof en, string> = {
   'copilotInvestment.workbook.value.afterReclaim':
     'Rentabilidad central sin las licencias seguras de recuperar (solo el coste de licencias; el uso de Studio se sigue facturando)',
   'copilotInvestment.workbook.value.stressFloor':
-    'Suelo de estrés: rentabilidad central SI cada último saldo de créditos fuera un mes más de gasto (sin verificar; puede solaparse con el registro de Studio)',
+    'Suelo de estrés: rentabilidad central SI cada última lectura de créditos consumidos fuera un mes más de gasto (sin verificar; puede solaparse con el registro de Studio)',
   'copilotInvestment.workbook.value.col.from': 'Días activos al mes, desde',
   'copilotInvestment.workbook.value.col.to': 'hasta',
   'copilotInvestment.workbook.value.col.holders': 'Titulares',
@@ -1059,14 +1059,14 @@ const copilotInvestment: Record<keyof typeof en, string> = {
   'copilotInvestment.workbook.path.col.topShare': 'Proporción del grupo superior',
   'copilotInvestment.workbook.path.col.topFraction': 'Grupo superior',
   'copilotInvestment.workbook.path.activeDays': 'Días activos entre los titulares analizados',
-  'copilotInvestment.workbook.path.balances': 'Últimos saldos de créditos entre las personas que tienen uno',
+  'copilotInvestment.workbook.path.balances': 'Últimas lecturas de créditos consumidos entre las personas que tienen una',
   'copilotInvestment.workbook.path.col.withoutSeat': 'Personas sin licencia',
-  'copilotInvestment.workbook.path.metered.people': 'Personas del ámbito sin licencia con alguna actividad, saldo o facturación de Copilot',
+  'copilotInvestment.workbook.path.metered.people': 'Personas del ámbito sin licencia con alguna actividad, consumo de créditos o facturación de Copilot',
   'copilotInvestment.workbook.path.metered.active': 'De ellas, activas en Copilot',
   'copilotInvestment.workbook.path.metered.days': 'Sus días activos',
   'copilotInvestment.workbook.path.metered.studio': 'Créditos facturados de Copilot Studio',
   'copilotInvestment.workbook.studio.valued': 'Valorado al precio del crédito de Studio',
-  'copilotInvestment.workbook.path.metered.balances': 'Últimos saldos de créditos',
+  'copilotInvestment.workbook.path.metered.balances': 'Últimas lecturas de créditos consumidos',
   'copilotInvestment.workbook.path.metered.aboveSeat': 'Personas cuya facturación de Studio ya cuesta una licencia al mes',
   'copilotInvestment.workbook.path.metered.evidenced': 'Personas activas los días suficientes para pagar una licencia',
   'copilotInvestment.workbook.path.metered.recommended': 'Recomendadas para una licencia por el análisis de adopción',
@@ -1087,15 +1087,15 @@ const copilotInvestment: Record<keyof typeof en, string> = {
   'copilotInvestment.workbook.org.col.unlicensed': 'Usuarios de Copilot sin licencia',
   'copilotInvestment.workbook.org.notSet': '(sin valor)',
   'copilotInvestment.workbook.org.combined': '(grupos pequeños combinados)',
-  'copilotInvestment.workbook.credits.title': 'Saldos de créditos de Copilot (versión preliminar) y registro de Copilot Studio',
+  'copilotInvestment.workbook.credits.title': 'Créditos de Copilot consumidos (lecturas preliminares) y registro de Copilot Studio',
   'copilotInvestment.workbook.credits.intro':
-    'Los saldos de créditos son lecturas puntuales en el periodo propio de la fuente, que la fuente no identifica. Nunca se suman entre días ni se tratan como gasto diario o mensual.',
+    'Los créditos consumidos son lecturas puntuales en el periodo propio de la fuente, que la fuente no identifica. Nunca se suman entre días ni se tratan como gasto diario o mensual.',
   'copilotInvestment.workbook.credits.snapshot': 'Fecha de la instantánea',
   'copilotInvestment.workbook.credits.snapshotNote': 'Última observación por persona en los {days} días hasta esta fecha',
   'copilotInvestment.workbook.credits.first': 'Primera observación registrada',
   'copilotInvestment.workbook.credits.periodStatus': 'Estado del periodo',
   'copilotInvestment.workbook.credits.status.none': '(sin datos)',
-  'copilotInvestment.workbook.credits.observed': 'Personas con saldo en esta vista',
+  'copilotInvestment.workbook.credits.observed': 'Personas con créditos consumidos en esta vista',
   'copilotInvestment.workbook.credits.partial': 'Observaciones parciales',
   'copilotInvestment.workbook.credits.unresolvedObjects': 'Objetos del directorio no emparejados con un usuario (inquilino)',
   'copilotInvestment.workbook.credits.unresolvedCredits': 'Créditos en objetos no emparejados (inquilino)',
@@ -1138,7 +1138,7 @@ const copilotInvestment: Record<keyof typeof en, string> = {
   'copilotInvestment.workbook.method.col.meaning': 'Significado',
   'copilotInvestment.workbook.method.meaning.currency': 'Moneda de todos los importes.',
   'copilotInvestment.workbook.method.meaning.seatPrice': 'Lo que cuesta una licencia de Copilot por persona y mes.',
-  'copilotInvestment.workbook.method.meaning.creditPrice': 'Lo que cuesta un crédito de Copilot; solo se usa para valorar los saldos preliminares.',
+  'copilotInvestment.workbook.method.meaning.creditPrice': 'Lo que cuesta un crédito de Copilot; solo se usa para valorar las lecturas preliminares de créditos consumidos.',
   'copilotInvestment.workbook.method.meaning.studioCreditPrice': 'Lo que cuesta un crédito facturado de Copilot Studio.',
   'copilotInvestment.workbook.method.meaning.hourlyCost': 'Coste con cargas de una hora del tiempo de un empleado.',
   'copilotInvestment.workbook.method.meaning.minutesConservative': 'Minutos de ayuda de Copilot en un día en que se usa: escenario prudente.',
@@ -1171,7 +1171,7 @@ const copilotInvestment: Record<keyof typeof en, string> = {
     'Precio de licencia / (minutos centrales / 60 x aprovechamiento central x coste por hora). La necesidad propia de una persona suma sus créditos facturados de Studio al precio de licencia.',
   'copilotInvestment.workbook.method.extraDays': 'Días activos adicionales para alcanzar el umbral',
   'copilotInvestment.workbook.method.extraDays.definition': '(Coste modelado mensual - valor central mensual) / valor de un día activo.',
-  'copilotInvestment.workbook.method.balances': 'Saldos de créditos',
+  'copilotInvestment.workbook.method.balances': 'Créditos consumidos (última lectura)',
   'copilotInvestment.workbook.method.balances.definition':
     'Última observación por persona; nunca se suma entre días, nunca se trata como gasto y queda fuera de la rentabilidad.',
   'copilotInvestment.workbook.method.concentration.definition':
@@ -1203,9 +1203,9 @@ const copilotInvestment: Record<keyof typeof en, string> = {
   'copilotInvestment.workbook.people.col.lastActivity': 'Última actividad (UTC)',
   'copilotInvestment.workbook.people.col.reclaim': 'Posibilidad de recuperar',
   'copilotInvestment.workbook.people.col.recommended': 'Recomendada para una licencia',
-  'copilotInvestment.workbook.people.col.balance': 'Saldo de créditos',
-  'copilotInvestment.workbook.people.col.balanceValue': 'Valor del saldo',
-  'copilotInvestment.workbook.people.col.balanceDate': 'Fecha del saldo',
+  'copilotInvestment.workbook.people.col.balance': 'Créditos consumidos (última lectura)',
+  'copilotInvestment.workbook.people.col.balanceValue': 'Valor de los créditos consumidos',
+  'copilotInvestment.workbook.people.col.balanceDate': 'Fecha de la lectura',
   'copilotInvestment.workbook.people.col.studioCredits': 'Créditos de Studio',
   'copilotInvestment.workbook.people.col.studioCost': 'Coste de Studio',
   'copilotInvestment.workbook.people.col.seatCost': 'Coste de la licencia',
