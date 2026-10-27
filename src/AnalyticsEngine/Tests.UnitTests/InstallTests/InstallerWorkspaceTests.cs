@@ -710,6 +710,87 @@ namespace Tests.UnitTests.InstallTests
             });
         }
 
+        [DataTestMethod]
+        [DataRow("http://proxy.contoso.com:3128", 3128)]
+        [DataRow("https://proxy.contoso.com:443", 443)]
+        [DataRow("proxy.contoso.com:8081", 8081)]
+        [DataRow("http://[2001:db8::1]:3128/", 3128)]
+        public void ProxyAddress_InlinePortDisablesSeparateFieldAndControlsSavedPort(string address, int expectedPort)
+        {
+            RunSta(() =>
+            {
+                using (var form = new ProxyConfigForm())
+                {
+                    form.ProxyConfig = new InstallerProxyConfig
+                    {
+                        UseProxy = true, Host = address, Port = 8080, IntegratedAuth = true
+                    };
+                    form.Show();
+                    var host = Find<TextBox>(form, "txtProxyHost");
+                    var port = Find<TextBox>(form, "txtProxyPort");
+                    var portLabel = Find<Label>(form, "label3");
+                    Assert.IsFalse(port.Enabled, "An inline port must be the only editable port.");
+                    Assert.IsFalse(portLabel.Enabled);
+                    Assert.AreEqual(expectedPort.ToString(), port.Text, "The disabled field must show the port actually used.");
+                    Assert.IsNull(form.ProxyConfig.ValidationError, "A stale separate port must not contradict the URL.");
+
+                    host.Text = "https://proxy.contoso.com";
+                    Assert.IsTrue(port.Enabled, "Removing the inline port must re-enable the field.");
+                    Assert.IsTrue(portLabel.Enabled);
+                    port.Text = "8181";
+                    Assert.IsTrue(form.ProxyConfig.TryGetProxyAddress(out var manualAddress, out _));
+                    Assert.AreEqual(8181, manualAddress.Port);
+
+                    host.Text = address;
+                    Assert.IsFalse(port.Enabled, "Editing an address must update the port state immediately.");
+                    Assert.AreEqual(expectedPort.ToString(), port.Text);
+                    Find<CheckBox>(form, "chkProxy").Checked = false;
+                    Find<CheckBox>(form, "chkProxy").Checked = true;
+                    Assert.IsFalse(port.Enabled, "Re-enabling the proxy must respect the inline port.");
+                    Assert.IsNull(form.ProxyConfig.ValidationError);
+
+                    var directory = Environment.GetEnvironmentVariable("INSTALLER_PREVIEW_DIR");
+                    if (!string.IsNullOrEmpty(directory) && address == "http://proxy.contoso.com:3128")
+                        Capture(form, directory, "proxy-inline-port");
+
+                    InstallerProxyConfig savedConfig = null;
+                    form.FormClosing += (sender, args) => savedConfig = form.ProxyConfig;
+                    Find<Button>(form, "btnOk").PerformClick();
+                    Assert.AreEqual(DialogResult.OK, form.DialogResult);
+                    Assert.IsNotNull(savedConfig);
+                    Assert.IsTrue(savedConfig.TryGetProxyAddress(out var savedAddress, out _));
+                    Assert.AreEqual(expectedPort, savedAddress.Port);
+                }
+            });
+        }
+
+        [DataTestMethod]
+        [DataRow("proxy.contoso.com")]
+        [DataRow("http://proxy.contoso.com")]
+        [DataRow("https://[2001:db8::1]")]
+        public void ProxyAddress_WithoutInlinePortKeepsSeparateFieldEditable(string address)
+        {
+            RunSta(() =>
+            {
+                using (var form = new ProxyConfigForm())
+                {
+                    form.ProxyConfig = new InstallerProxyConfig
+                    {
+                        UseProxy = true, Host = address, Port = 8080, IntegratedAuth = true
+                    };
+                    form.Show();
+                    var port = Find<TextBox>(form, "txtProxyPort");
+                    Assert.IsTrue(port.Enabled, "A scheme's implicit default port must not disable explicit port entry.");
+                    Assert.IsTrue(Find<Label>(form, "label3").Enabled);
+                    Assert.AreEqual("8080", port.Text);
+
+                    Find<TextBox>(form, "txtProxyHost").Text = "http://proxy.contoso.com:65536";
+                    Assert.IsTrue(port.Enabled, "An invalid inline port must not lock the field.");
+                    Assert.IsNotNull(form.ProxyConfig.ValidationError);
+                }
+            });
+        }
+
         [TestMethod]
         public void ReviewScope_ListsConfiguredSitesAndLocalPackages_ButNeverCredentials()
         {

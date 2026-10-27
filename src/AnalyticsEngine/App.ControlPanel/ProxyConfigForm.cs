@@ -25,6 +25,8 @@ namespace App.ControlPanel
             foreach (var control in new Control[] { chkBasicAuthentication, label4, txtProxyUsername, label5, txtProxyPassword })
                 control.Top += offset;
             grpProxy.Height += offset;
+            txtProxyHost.TextChanged += txtProxyHost_TextChanged;
+            UpdateResponsiveUIControls();
         }
 
         public InstallerProxyConfig ProxyConfig
@@ -52,6 +54,7 @@ namespace App.ControlPanel
                 txtProxyPort.Text = value.Port.ToString();
                 txtProxyUsername.Text = value.Username;
                 chkBasicAuthentication.Checked = !value.IntegratedAuth;
+                UpdateResponsiveUIControls();
             }
         }
 
@@ -60,10 +63,21 @@ namespace App.ControlPanel
             UpdateResponsiveUIControls();
         }
 
+        private void txtProxyHost_TextChanged(object sender, EventArgs e)
+        {
+            UpdateResponsiveUIControls();
+        }
+
         private void UpdateResponsiveUIControls()
         {
             grpProxy.Enabled = ProxyConfig.UseProxy;
             chkProxy.Checked = ProxyConfig.UseProxy;
+            // With no fallback port, normalisation succeeds only for an explicitly supplied port.
+            var hasInlinePort = InstallerProxyConfig.TryNormalise(txtProxyHost.Text, 0, out _, out var port, out _);
+            if (hasInlinePort)
+                txtProxyPort.Text = port.ToString(CultureInfo.InvariantCulture);
+            txtProxyPort.Enabled = !hasInlinePort;
+            label3.Enabled = !hasInlinePort;
         }
 
         private void btnOk_Click(object sender, EventArgs e)
