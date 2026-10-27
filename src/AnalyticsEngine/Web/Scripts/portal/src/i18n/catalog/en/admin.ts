@@ -62,6 +62,8 @@ export const admin = {
   'admin.costConnection.notChecked': 'Connection status has not been checked.',
   'admin.costConnection.check': 'Refresh status',
   'admin.costConnection.connect': 'Connect reader',
+  'admin.costConnection.connecting': 'Opening sign-in...',
+  'admin.costConnection.openingSignIn': 'Opening Microsoft sign-in... You will be taken to Microsoft to choose an account. Please wait.',
   'admin.costConnection.reconnect': 'Reconnect same reader',
   'admin.costConnection.disconnect': 'Disconnect reader',
   'admin.costConnection.runProbe': 'Run or resume data check',

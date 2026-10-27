@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import {
   Button, Card, CardHeader, Dialog, DialogActions, DialogBody, DialogContent, DialogSurface,
-  DialogTitle, Link, MessageBar, MessageBarBody, Subtitle2, Text, Title3, makeStyles, tokens,
+  DialogTitle, Link, MessageBar, MessageBarBody, Spinner, Subtitle2, Text, Title3, makeStyles, tokens,
 } from '@fluentui/react-components';
 import { CheckmarkCircle24Filled } from '@fluentui/react-icons';
 import {
@@ -30,6 +30,7 @@ export default function CopilotCostConnectionPage() {
   const styles = useStyles();
   const [state, setState] = useState<CostConnectionStatus | null>(null);
   const [busy, setBusy] = useState(true);
+  const [connecting, setConnecting] = useState(false);
   const [running, setRunning] = useState(false);
   const [confirmation, setConfirmation] = useState<'probe' | 'disconnect' | 'resetProbe' | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -64,9 +65,11 @@ export default function CopilotCostConnectionPage() {
   }
 
   async function change(action: 'connect' | 'disconnect' | 'resetProbe') {
-    if (!state?.csrfToken) return;
+    if (!state?.csrfToken || busy || connecting) return;
     setBusy(true);
+    setConnecting(action === 'connect');
     setError(null);
+    let redirectStarted = false;
     try {
       const result = await changeCostConnection(action, state.csrfToken);
       if (result.authorizationUrl) {
@@ -74,9 +77,15 @@ export default function CopilotCostConnectionPage() {
         if (destination.protocol !== 'https:' || destination.hostname !== 'login.microsoftonline.com')
           throw new Error(t('admin.costConnection.invalidCallback'));
         window.location.assign(destination.href);
+        redirectStarted = true;
       } else setState(await fetchCostConnection());
     } catch (e) { setError(e instanceof Error ? e.message : t('admin.costConnection.requestFailed')); }
-    finally { setBusy(false); }
+    finally {
+      if (!redirectStarted) {
+        setBusy(false);
+        setConnecting(false);
+      }
+    }
   }
 
   useEffect(() => {
@@ -111,6 +120,7 @@ export default function CopilotCostConnectionPage() {
   }, [running, t]);
 
   const manageable = !!state?.csrfToken;
+  const pending = busy || connecting || running;
   const probe = state?.probe;
   const knownPhase = probe && ['context', 'inventory', 'users', 'observed'].includes(probe.phase);
   return (
@@ -119,7 +129,8 @@ export default function CopilotCostConnectionPage() {
       <Text>{t('admin.costConnection.prerequisites')}</Text>
       <Card className={styles.card}>
         <CardHeader header={<Subtitle2>{t('admin.costConnection.statusTitle')}</Subtitle2>} />
-        {busy ? <Text role="status">{t('admin.costConnection.working')}</Text> : state?.status === 'connected' ? (
+        {connecting ? <div role="status"><Spinner size="tiny" label={t('admin.costConnection.openingSignIn')} /></div>
+          : busy ? <Text role="status">{t('admin.costConnection.working')}</Text> : state?.status === 'connected' ? (
           <div role="status" className={styles.connected}>
             <CheckmarkCircle24Filled aria-hidden="true" className={styles.success} />
             <div className={styles.content}>
@@ -135,13 +146,13 @@ export default function CopilotCostConnectionPage() {
         </MessageBar>}
         {error && <MessageBar intent="error"><MessageBarBody><span role="alert">{error}</span></MessageBarBody></MessageBar>}
         <div className={styles.actions}>
-          <Button onClick={() => void refresh()} disabled={busy || running}>{t('admin.costConnection.check')}</Button>
+          <Button onClick={() => void refresh()} disabled={pending}>{t('admin.costConnection.check')}</Button>
           {manageable && (
             <>
-              <Button onClick={() => void change('connect')} disabled={busy || running}>
-                {state?.status === 'disconnected' ? t('admin.costConnection.connect') : t('admin.costConnection.reconnect')}
+              <Button onClick={() => void change('connect')} disabled={pending}>
+                {connecting ? t('admin.costConnection.connecting') : state?.status === 'disconnected' ? t('admin.costConnection.connect') : t('admin.costConnection.reconnect')}
               </Button>
-              <Button onClick={() => setConfirmation('disconnect')} disabled={busy || running || state?.status === 'disconnected'}>
+              <Button onClick={() => setConfirmation('disconnect')} disabled={pending || state?.status === 'disconnected'}>
                 {t('admin.costConnection.disconnect')}
               </Button>
             </>
@@ -152,7 +163,7 @@ export default function CopilotCostConnectionPage() {
         <CardHeader header={<Subtitle2>{t('admin.costConnection.testTitle')}</Subtitle2>} />
         <Text>{t('admin.costConnection.testExplanation')}</Text>
         <div className={styles.actions}>
-          <Button onClick={() => setConfirmation(probe?.phase === 'observed' ? 'resetProbe' : 'probe')} disabled={!manageable || busy || running || state?.status !== 'connected'}>
+          <Button onClick={() => setConfirmation(probe?.phase === 'observed' ? 'resetProbe' : 'probe')} disabled={!manageable || pending || state?.status !== 'connected'}>
             {probe?.phase === 'observed' ? t('admin.costConnection.newProbe') : t('admin.costConnection.runProbe')}
           </Button>
           {running && <Button onClick={() => setRunning(false)}>{t('admin.costConnection.stop')}</Button>}
@@ -182,7 +193,7 @@ export default function CopilotCostConnectionPage() {
       <Card className={styles.card}>
         <Subtitle2>{t('admin.costConnection.collectionTitle')}</Subtitle2>
         <Text>{t('admin.costConnection.previewCollection')}</Text>
-        <Button onClick={() => void refreshCollection()} disabled={collectionBusy || busy || running}>
+        <Button onClick={() => void refreshCollection()} disabled={collectionBusy || pending}>
           {t('admin.costConnection.collectionCheck')}
         </Button>
         {collectionError && <MessageBar intent="error"><MessageBarBody><span role="alert">{collectionError}</span></MessageBarBody></MessageBar>}

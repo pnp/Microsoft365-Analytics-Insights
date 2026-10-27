@@ -64,6 +64,8 @@ const admin: Record<keyof typeof en, string> = {
   'admin.costConnection.notChecked': 'Todavía no se ha comprobado el estado de la conexión.',
   'admin.costConnection.check': 'Actualizar estado',
   'admin.costConnection.connect': 'Conectar lector',
+  'admin.costConnection.connecting': 'Abriendo el inicio de sesión...',
+  'admin.costConnection.openingSignIn': 'Abriendo el inicio de sesión de Microsoft... Se le redirigirá a Microsoft para elegir una cuenta. Espere, por favor.',
   'admin.costConnection.reconnect': 'Volver a conectar al mismo lector',
   'admin.costConnection.disconnect': 'Desconectar lector',
   'admin.costConnection.runProbe': 'Ejecutar o reanudar comprobación de datos',

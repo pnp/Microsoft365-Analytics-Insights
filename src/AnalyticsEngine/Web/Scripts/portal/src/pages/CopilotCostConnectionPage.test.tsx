@@ -1,5 +1,5 @@
-import { fireEvent, screen, waitFor } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { act, fireEvent, screen, waitFor } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { renderWithProvider } from '../test/renderWithProvider';
 import CopilotCostConnectionPage from './CopilotCostConnectionPage';
 import { changeCostConnection, costConnectionText, fetchCostCollection, fetchCostConnection, type CostCollectionStatus, type CostConnectionStatus } from '../api/copilotCostConnectionApi';
@@ -12,6 +12,8 @@ vi.mock('../api/copilotCostConnectionApi', async (importOriginal) => {
 const connected: CostConnectionStatus = { status: 'connected', csrfToken: 'test-csrf' };
 
 describe('CopilotCostConnectionPage', () => {
+  afterEach(() => { vi.unstubAllGlobals(); });
+
   beforeEach(() => {
     vi.resetAllMocks();
     vi.mocked(fetchCostConnection).mockResolvedValue({ status: 'disconnected', csrfToken: 'test-csrf' });
@@ -154,5 +156,44 @@ describe('CopilotCostConnectionPage', () => {
     expect(screen.getByRole('button', { name: 'Reconnect same reader' })).toBeEnabled();
     expect(screen.getByRole('button', { name: 'Run or resume data check' })).toBeDisabled();
     expect(screen.queryByText('Connected — account saved')).not.toBeInTheDocument();
+  });
+
+  it.each([
+    { language: 'en', status: 'disconnected', button: 'Connect reader', opening: 'Opening sign-in...', explanation: /You will be taken to Microsoft to choose an account/ },
+    { language: 'es', status: 'connected', button: 'Volver a conectar al mismo lector', opening: 'Abriendo el inicio de sesión...', explanation: /Se le redirigirá a Microsoft para elegir una cuenta/ },
+  ] as const)('explains the redirect immediately and prevents repeated $language connection attempts', async ({ language, status, button, opening, explanation }) => {
+    vi.mocked(fetchCostConnection).mockResolvedValue({ ...connected, status });
+    let complete!: (result: { authorizationUrl: string }) => void;
+    vi.mocked(changeCostConnection).mockReturnValue(new Promise(resolve => { complete = resolve; }));
+    renderWithProvider(<CopilotCostConnectionPage />, { language });
+    const connect = await screen.findByRole('button', { name: button });
+    const assign = vi.fn();
+    const location = { ...window.location, assign };
+    vi.stubGlobal('window', new Proxy(window, {
+      get: (target, key) => key === 'location' ? location : Reflect.get(target, key, target),
+    }));
+
+    fireEvent.click(connect);
+    expect(screen.getByText(explanation)).toBeVisible();
+    expect(screen.getByRole('button', { name: opening })).toBeDisabled();
+    fireEvent.click(connect);
+    expect(changeCostConnection).toHaveBeenCalledTimes(1);
+
+    await act(async () => { complete({ authorizationUrl: 'https://login.microsoftonline.com/organizations/oauth2/v2.0/authorize' }); });
+    expect(assign).toHaveBeenCalledOnce();
+    expect(screen.getByRole('button', { name: opening })).toBeDisabled();
+    expect(screen.getByText(explanation)).toBeVisible();
+    fireEvent.click(connect);
+    expect(changeCostConnection).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['failure', 'unsafeRedirect'] as const)('restores the connect control after $value', async (outcome) => {
+    if (outcome === 'failure') vi.mocked(changeCostConnection).mockRejectedValue(new Error('Synthetic connection failure'));
+    else vi.mocked(changeCostConnection).mockResolvedValue({ authorizationUrl: 'https://contoso.example/invalid-sign-in' });
+    renderWithProvider(<CopilotCostConnectionPage />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Connect reader' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent(outcome === 'failure' ? 'Synthetic connection failure' : 'callback could not be validated');
+    expect(screen.getByRole('button', { name: 'Connect reader' })).toBeEnabled();
+    expect(screen.queryByText(/You will be taken to Microsoft/)).not.toBeInTheDocument();
   });
 });
