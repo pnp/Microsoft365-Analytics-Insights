@@ -3,6 +3,7 @@ extern alias AnalyticsWeb;
 using Common.Entities;
 using Common.Entities.CopilotAdoption;
 using Common.Entities.CopilotInvestment;
+using Common.Entities.Localisation;
 using Common.Entities.State;
 using Common.Entities.UserFilters;
 using Microsoft.Data.SqlClient;
@@ -70,6 +71,9 @@ namespace Tests.UnitTests
                     TestContext.WriteLine($"Generated {summary.TotalRows:N0} rows ({summary.Rows["copilot_cost_observations"]:N0} credit observations) in {watch.Elapsed.TotalSeconds:F1}s.");
                 }
                 var connection = SqlDemoDatabase.LocalConnection(name);
+                // A sweep and a Copilot Studio charge on the 27th - the day after the window ends. A window ending on the
+                // 26th must read neither: not in its balances, not in its Studio cost, not in a person's drill-down.
+                var (sentinelUser, sentinelObject) = AddNextDaySentinels(connection);
 
                 var range = CopilotAdoptionDateRange.Create(28, "2026-09-29", "2026-10-26", AsOf.AddDays(1));
                 var analysis = await new CopilotAdoptionService(new CopilotAdoptionOptions
@@ -111,7 +115,12 @@ namespace Tests.UnitTests
                 // Sources and honesty.
                 var credits = report.Sources.Credits;
                 Assert.IsTrue(credits.HasData && credits.CollectionEnabled);
-                Assert.AreEqual(new DateTime(2026, 10, 26), credits.SnapshotDate);
+                Assert.AreEqual(new DateTime(2026, 10, 26), credits.SnapshotDate, "The sweep of the 27th is after the window.");
+                Assert.AreEqual(new DateTime(2026, 10, 26), report.ToUtc, "The window says it ends on the 26th.");
+                var sentinelRow = report.People.Single(p => p.UserId == sentinelUser);
+                Assert.IsTrue(sentinelRow.StudioCredits < SentinelCredits && (sentinelRow.Credits ?? 0) < SentinelCredits,
+                    "Neither the Studio charge nor the balance of the 27th belongs to a window ending on the 26th.");
+                Assert.IsTrue(spend.Studio.Credits < SentinelCredits);
                 Assert.IsTrue(credits.ObservedUsers >= 380, "Nearly every person is observed on the latest sweep: " + credits.ObservedUsers);
                 Assert.IsTrue(credits.UnresolvedObjects > 0 && credits.UnresolvedCredits > 0);
                 Assert.IsTrue(credits.SweepsInWindow > credits.CompletedSweepsInWindow, "Some sweeps in the window did not complete.");
@@ -150,6 +159,12 @@ namespace Tests.UnitTests
                 Assert.IsTrue(report.Policies.Any(p => p.DisplayName == DemoCopilotCredits.PausedPolicyName && p.Status == "disabled"));
                 Assert.AreEqual(2, report.TenantBalances.Count);
 
+                // The real report's workbook, in both languages: every finding, action and caveat the demo produces has its
+                // Spanish words, with the same typed cells as the English one.
+                CopilotInvestmentWorkbookLanguageTests.AssertSpanishCounterpart(
+                    CopilotInvestmentWorkbook.Build(report, true, "test", PortalLanguage.English),
+                    CopilotInvestmentWorkbook.Build(report, true, "test", PortalLanguage.Spanish));
+
                 // A balance trend is a set of snapshots: the period reset shows as a drop, and a day without a sweep has no point.
                 var trend = await source.GetCreditTrendAsync(new[] { new DateTime(2026, 9, 30), new DateTime(2026, 10, 1), new DateTime(2026, 10, 2) },
                     ReportUserScope.Everyone, CancellationToken.None);
@@ -171,13 +186,65 @@ namespace Tests.UnitTests
 
                 // The person drill-down reads one person's own evidence.
                 var person = report.People.First(p => p.Licensed && p.ActiveDays > 3 && (p.Credits ?? 0) > 0);
+                var lastDay = CopilotInvestmentWindow.LastDay(range);
                 var detail = await source.GetPersonDetailAsync(person.UserId, person.CreditObjectId, person.CreditObservationDate,
-                    range.FromUtc, range.ToExclusiveUtc, CancellationToken.None);
+                    range.FromUtc, range.ToExclusiveUtc, lastDay, CancellationToken.None);
                 Assert.IsTrue(detail.ActivityAssessed && detail.Activity.Count > 0, "The drill-down must show where the person used Copilot.");
                 Assert.IsTrue(detail.CreditServices.Count > 0);
                 Assert.IsTrue(detail.Balances.Count > 1, "A person's balance history is a curve, not one reading.");
+
+                var sentinelDetail = await source.GetPersonDetailAsync(sentinelUser, sentinelObject, sentinelRow.CreditObservationDate,
+                    range.FromUtc, range.ToExclusiveUtc, lastDay, CancellationToken.None);
+                Assert.IsTrue(sentinelDetail.Balances.Count > 0 && sentinelDetail.Balances.All(b => b.Date <= lastDay),
+                    "The drill-down's balance curve stops at the window's last day.");
+                Assert.IsFalse(sentinelDetail.StudioAgents.Any(a => a.AgentId == SentinelAgent), "Nor does its Studio ledger reach the day after.");
             }
             finally { Drop(name); }
+        }
+
+        private const double SentinelCredits = 999999;
+        private const string SentinelAgent = "sentinel-next-day";
+
+        /// <summary>
+        /// Copies one consuming person's sweep of the 26th to the 27th with an outsized balance, and bills them an outsized
+        /// Copilot Studio charge on the 27th. Returns that person.
+        /// </summary>
+        private static (int UserId, Guid ObjectId) AddNextDaySentinels(string connection)
+        {
+            using (var db = new SqlConnection(connection))
+            {
+                db.Open();
+                using (var command = db.CreateCommand())
+                {
+                    command.CommandText = @"
+SET NOCOUNT ON;
+DECLARE @object uniqueidentifier, @user int;
+SELECT TOP (1) @object = o.object_id, @user = o.user_id
+FROM dbo.copilot_cost_observations AS o
+JOIN dbo.copilot_cost_services AS s ON s.observation_date = o.observation_date AND s.object_id = o.object_id
+WHERE o.observation_date = '2026-10-26' AND o.user_id IS NOT NULL AND s.consumed_quantity > 0
+ORDER BY o.user_id;
+INSERT dbo.copilot_cost_observations (observation_date, object_id, user_id, observed_at, quality, source_month, period_status, selection_status)
+SELECT '2026-10-27', o.object_id, o.user_id, '2026-10-27T06:00:00+00:00', o.quality, o.source_month, o.period_status, o.selection_status
+FROM dbo.copilot_cost_observations AS o WHERE o.observation_date = '2026-10-26' AND o.object_id = @object;
+INSERT dbo.copilot_cost_services (observation_date, object_id, category_hash, category, policy_id, consumed_quantity, unit, allowed,
+       decision_reason, source_modified, period_limit, per_user_limit, capacity, remaining, data_status)
+SELECT '2026-10-27', s.object_id, s.category_hash, s.category, s.policy_id, @credits, s.unit, s.allowed,
+       s.decision_reason, s.source_modified, s.period_limit, s.per_user_limit, s.capacity, s.remaining, s.data_status
+FROM dbo.copilot_cost_services AS s WHERE s.observation_date = '2026-10-26' AND s.object_id = @object;
+INSERT dbo.copilot_studio_credit_user_daily (usage_date, entra_object_id, user_id, environment_id, environment_name, agent_id,
+       billed_credits, unit, dimension_hash, imported_utc)
+VALUES ('2026-10-27', CONVERT(nvarchar(200), @object), @user, N'env-sentinel', N'Contoso sentinel', @agent, @credits, N'credit', @agent, SYSUTCDATETIME());
+SELECT @user, @object;";
+                    command.Parameters.AddWithValue("@credits", SentinelCredits);
+                    command.Parameters.AddWithValue("@agent", SentinelAgent);
+                    using (var reader = command.ExecuteReader())
+                    {
+                        Assert.IsTrue(reader.Read() && !reader.IsDBNull(0), "The demo must have a consuming person on the 26th.");
+                        return (reader.GetInt32(0), reader.GetGuid(1));
+                    }
+                }
+            }
         }
 
         private static void Drop(string name)

@@ -1,6 +1,7 @@
 import { apiFetch } from './http';
 import { translateActive } from '../i18n/runtime';
 import type { TranslationKey } from '../i18n/catalog';
+import type { Language } from '../i18n/languages';
 import type {
   CopilotInvestmentAvailability,
   CopilotInvestmentSummary,
@@ -151,9 +152,14 @@ export function fetchInvestmentPerson(query: InvestmentQuery, userId: number, si
   return getJson(`${BASE}/person/${encodeURIComponent(String(userId))}?${queryParams(query)}`, 'copilotInvestment.error.personFailed', signal);
 }
 
-/** A plain link, so the browser's own download handles it; it carries the same scope and what-if figures as the page. */
-export function investmentWorkbookUrl(query: InvestmentQuery): string {
-  return `${BASE}/export/workbook?${queryParams(query)}`;
+/**
+ * A plain link, so the browser's own download handles it; it carries the same scope and what-if figures as the
+ * page, and the reader's language, which the workbook is written in. Without one the server writes English.
+ */
+export function investmentWorkbookUrl(query: InvestmentQuery, language: Language): string {
+  const params = queryParams(query);
+  params.set('language', language);
+  return `${BASE}/export/workbook?${params}`;
 }
 
 /** Every code the assumptions API can answer with (`CopilotInvestmentErrorCodes`), plus two client fallbacks. */

@@ -480,7 +480,13 @@ namespace Common.Entities.CopilotInvestment
         Task<CreditFacts> GetCreditFactsAsync(DateTime from, DateTime to, CancellationToken cancellationToken);
         Task<StudioFacts> GetStudioFactsAsync(DateTime from, DateTime toExclusive, CancellationToken cancellationToken);
         Task<List<CreditTrendPoint>> GetCreditTrendAsync(IReadOnlyList<DateTime> dates, ReportUserScope scope, CancellationToken cancellationToken);
-        Task<PersonDetailFacts> GetPersonDetailAsync(int userId, Guid? objectId, DateTime? creditDate, DateTime from, DateTime toExclusive, CancellationToken cancellationToken);
+        /// <summary>
+        /// One person's evidence. Activity and prompts are timestamps read over [<paramref name="from"/>,
+        /// <paramref name="toExclusive"/>); balances and the Studio ledger are kept by day and read through
+        /// <paramref name="lastDay"/>, the window's last calendar day (<see cref="CopilotInvestmentWindow.LastDay"/>).
+        /// </summary>
+        Task<PersonDetailFacts> GetPersonDetailAsync(int userId, Guid? objectId, DateTime? creditDate, DateTime from, DateTime toExclusive,
+            DateTime lastDay, CancellationToken cancellationToken);
     }
 
     /// <summary>The SQL implementation. Each read is one bounded statement; nothing loops a query per person.</summary>
@@ -745,7 +751,7 @@ namespace Common.Entities.CopilotInvestment
         }
 
         public async Task<PersonDetailFacts> GetPersonDetailAsync(int userId, Guid? objectId, DateTime? creditDate, DateTime from,
-            DateTime toExclusive, CancellationToken cancellationToken)
+            DateTime toExclusive, DateTime lastDay, CancellationToken cancellationToken)
         {
             var detail = new PersonDetailFacts();
             using (var db = _connection())
@@ -820,7 +826,7 @@ namespace Common.Entities.CopilotInvestment
                         }
                     }
 
-                    using (var cmd = Command(db, CopilotInvestmentSql.PersonBalancesSql, "@objectId", objectId.Value, "@from", from.Date, "@to", toExclusive.Date))
+                    using (var cmd = Command(db, CopilotInvestmentSql.PersonBalancesSql, "@objectId", objectId.Value, "@from", from.Date, "@to", lastDay.Date))
                     using (var reader = await cmd.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false))
                     {
                         while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
@@ -838,7 +844,7 @@ namespace Common.Entities.CopilotInvestment
 
                 if (await TableExistsAsync(db, "copilot_studio_credit_user_daily", cancellationToken))
                 {
-                    using (var cmd = Command(db, CopilotInvestmentSql.PersonStudioSql, "@userId", userId, "@from", from.Date, "@toExclusive", toExclusive.Date))
+                    using (var cmd = Command(db, CopilotInvestmentSql.PersonStudioSql, "@userId", userId, "@from", from.Date, "@toExclusive", lastDay.Date.AddDays(1)))
                     using (var reader = await cmd.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false))
                     {
                         while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))

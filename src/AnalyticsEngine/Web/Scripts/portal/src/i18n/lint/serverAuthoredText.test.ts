@@ -3,7 +3,7 @@ import { beforeAll, describe, it, expect } from 'vitest';
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { loadCatalog, translateStatic, type TFunction } from '..';
+import { loadCatalog, translateStatic, type TFunction, type TranslationKey } from '..';
 import { EN_CATALOG } from '../catalog';
 import { DEFAULT_SCORE_VALUES, SCORE_FIELD_LABEL_KEYS } from '../../components/copilotAdoption/scoreSettings';
 import { COPILOT_ADOPTION_WARNING_KEYS, COWORK_TIER_LABEL_KEYS, TENURE_BASIS_LABEL_KEYS } from '../../components/copilotAdoption/serverText';
@@ -2933,5 +2933,79 @@ describe('Copilot investment server codes', () => {
     const notes = sortedUnique([...controller.matchAll(/notes\.Add\("([^"]+)"\)/g)].map((m) => m[1]));
     expect(notes.length).toBeGreaterThanOrEqual(4);
     expect(sortedUnique(Object.keys(INVESTMENT_AVAILABILITY_NOTE_KEYS))).toEqual(notes);
+  });
+});
+
+describe('Copilot investment workbook wording', () => {
+  // The workbook is written on the server from this catalog (Common.Entities embeds it). A key the server reads that the
+  // catalog lacks fails in production, not here; a workbook key the server no longer reads is dead text nobody reviews.
+  const workbookSources = readdirSync(INVESTMENT_DIR)
+    .filter((name) => name.startsWith('CopilotInvestmentWorkbook') && name.endsWith('.cs'))
+    .map((name) => readFileSync(join(INVESTMENT_DIR, name), 'utf8'))
+    .join('\n');
+  const controller = readFileSync(join(process.cwd(), '..', '..', 'Controllers', 'CopilotInvestmentAPIController.cs'), 'utf8');
+  const filterWording = readFileSync(join(process.cwd(), '..', '..', '..', 'Common', 'Entities', 'Localisation', 'FilterWording.cs'), 'utf8');
+  const prefix = 'copilotInvestment.workbook.';
+  const sections = /"((?:fileName|noCurrency)|(?:unit|tone|col|sheet|exec|basis|studio|effect|action|finding|value|path|cohort|org|credits|method|people|seatBasis|signalSource|reclaim|error)\.[A-Za-z.]*[A-Za-z])"/g;
+  const workbookKeys = Object.keys(EN_CATALOG).filter((key) => key.startsWith(prefix));
+
+  it('finds every workbook key, every reused page key and every error the server can write', () => {
+    const read = sortedUnique([...workbookSources.matchAll(sections)].map((m) => prefix + m[1]));
+    expect(read.length).toBeGreaterThan(200);
+    expect(read.filter((key) => !(key in EN_CATALOG))).toEqual([]);
+
+    const reused = sortedUnique([...workbookSources.matchAll(/"(copilotInvestment\.[A-Za-z.]*[A-Za-z])"/g)].map((m) => m[1]));
+    expect(reused.filter((key) => !(key in EN_CATALOG))).toEqual([]);
+
+    const errors = sortedUnique([...controller.matchAll(/WorkbookError\([^,]+, "([^"]+)"/g)].map((m) => `${prefix}error.${m[1]}`));
+    expect(errors).toEqual([`${prefix}error.failed`, `${prefix}error.invalid`, `${prefix}error.notReady`, `${prefix}error.whatIf`]);
+    expect(errors.filter((key) => !(key in EN_CATALOG))).toEqual([]);
+
+    const filterKeys = sortedUnique([...filterWording.matchAll(/"((?:userFilter|globalFilter)\.[A-Za-z.]*[A-Za-z])"/g)].map((m) => m[1]));
+    expect(filterKeys.filter((key) => !(key in EN_CATALOG))).toEqual([]);
+    for (const kind of ['own', 'self', 'manager']) {
+      for (const family of ['globalFilter.reader.', 'globalFilter.reader.hidden.', 'globalFilter.reader.unresolved.']) {
+        expect(`${family}${kind}` in EN_CATALOG, `${family}${kind}`).toBe(true);
+      }
+    }
+  });
+
+  it('reads every key written for the workbook, so none is left behind untranslated or unreviewed', () => {
+    const read = new Set([...workbookSources.matchAll(sections)].map((m) => prefix + m[1]));
+    for (const m of controller.matchAll(/WorkbookError\([^,]+, "([^"]+)"/g)) read.add(`${prefix}error.${m[1]}`);
+    // Families read by code: Words.Tone, Effect, SeatBasis, SignalSource and Reclaim.
+    const families = sortedUnique([...workbookSources.matchAll(/Prefix \+ "([A-Za-z.]+\.)"/g)].map((m) => prefix + m[1]));
+    expect(families).toEqual([`${prefix}effect.`, `${prefix}reclaim.`, `${prefix}seatBasis.`, `${prefix}signalSource.`, `${prefix}tone.`]);
+    const unread = workbookKeys.filter((key) => !read.has(key) && !families.some((family) => key.startsWith(family)));
+    expect(unread).toEqual([]);
+  });
+
+  it('names every sheet within the Excel limits in both languages', async () => {
+    await loadCatalog('es');
+    const sheets = workbookKeys.filter((key) => key.startsWith(`${prefix}sheet.`)) as TranslationKey[];
+    expect(sheets.length).toBe(8);
+    for (const language of ['en', 'es'] as const) {
+      const names = sheets.map((key) => translateStatic(language, key));
+      for (const name of names) {
+        expect(name.length, `${language}: ${name}`).toBeLessThanOrEqual(31);
+        expect(name, `${language}: ${name}`).not.toMatch(/[[\]:*?/\\]/);
+      }
+      expect(new Set(names.map((n) => n.toLowerCase())).size, language).toBe(names.length);
+    }
+  });
+
+  it('labels every finding tone and action effect the calculator can send', () => {
+    for (const effect of csharpClassConstants(INVESTMENT_MODELS_CS, 'CopilotInvestmentActionEffects').filter((e) => e !== 'none')) {
+      expect(`${prefix}effect.${effect}` in EN_CATALOG, effect).toBe(true);
+    }
+    // A finding's tone is the literal (or ternary of literals) passed to Finding(code, tone, ...), or the local `tone`.
+    const sections = readFileSync(join(INVESTMENT_DIR, 'CopilotInvestmentCalculator.Sections.cs'), 'utf8');
+    const toneArguments = [
+      ...[...sections.matchAll(/Finding\(CopilotInvestmentFindingCodes\.\w+,\s*([^,)]*)/g)].map((m) => m[1]),
+      ...[...sections.matchAll(/var tone = ([^;]*);/g)].map((m) => m[1]),
+    ];
+    const tones = sortedUnique(toneArguments.flatMap((argument) => [...argument.matchAll(/"([A-Za-z]+)"/g)].map((m) => m[1])));
+    expect(tones).toEqual(['critical', 'good', 'neutral', 'opportunity', 'warning']);
+    for (const tone of tones) expect(`${prefix}tone.${tone}` in EN_CATALOG, tone).toBe(true);
   });
 });

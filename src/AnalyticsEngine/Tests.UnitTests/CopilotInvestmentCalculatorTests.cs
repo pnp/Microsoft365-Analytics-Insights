@@ -23,9 +23,9 @@ namespace Tests.UnitTests
     [TestClass]
     public class CopilotInvestmentCalculatorTests
     {
-        private static readonly DateTime From = new DateTime(2026, 9, 29, 0, 0, 0, DateTimeKind.Utc);
+        internal static readonly DateTime From = new DateTime(2026, 9, 29, 0, 0, 0, DateTimeKind.Utc);
 
-        private static CopilotInvestmentAssumptions Assumptions(Action<CopilotInvestmentAssumptions> change = null)
+        internal static CopilotInvestmentAssumptions Assumptions(Action<CopilotInvestmentAssumptions> change = null)
         {
             // Test inputs only - round numbers chosen so the arithmetic can be checked by hand.
             var a = new CopilotInvestmentAssumptions
@@ -42,7 +42,7 @@ namespace Tests.UnitTests
             return a;
         }
 
-        private static CopilotInvestmentPerson Holder(int id, int activeDays, string band = "Established", long interactions = 10,
+        internal static CopilotInvestmentPerson Holder(int id, int activeDays, string band = "Established", long interactions = 10,
             CreditUserFact credit = null, StudioUserFact studio = null, string department = "Sales") =>
             new CopilotInvestmentPerson
             {
@@ -58,7 +58,7 @@ namespace Tests.UnitTests
                 ReclaimEligibility = "certain",
             };
 
-        private static CreditUserFact Balance(int userId, double credits, string period = "unverified") => new CreditUserFact
+        internal static CreditUserFact Balance(int userId, double credits, string period = "unverified") => new CreditUserFact
         {
             ObjectId = new Guid(userId, 0, 0, new byte[8]),
             UserId = userId,
@@ -70,7 +70,7 @@ namespace Tests.UnitTests
             Credits = credits,
         };
 
-        private static CopilotInvestmentInput Input(List<CopilotInvestmentPerson> people, CopilotInvestmentAssumptions assumptions = null, int windowDays = 28)
+        internal static CopilotInvestmentInput Input(List<CopilotInvestmentPerson> people, CopilotInvestmentAssumptions assumptions = null, int windowDays = 28)
         {
             // As in production, every balance a person carries is also one of the facts the sources read.
             var credits = new CreditFacts { TablesPresent = true };

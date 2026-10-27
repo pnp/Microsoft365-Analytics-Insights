@@ -345,17 +345,22 @@ describe('CopilotInvestmentPage', () => {
     expect(await screen.findByText('Coste modelado al mes')).toBeInTheDocument();
     expect(screen.getByText('Rentabilidad modelada (central)')).toBeInTheDocument();
     expect(screen.getByText('1,68\u00d7')).toBeInTheDocument();
+    // The workbook is written in the language the page is read in.
+    expect(screen.getByText('Informe de Excel').closest('a')?.getAttribute('href')).toContain('language=es');
     fireEvent.click(screen.getByRole('tab', { name: 'Organización' }));
     expect(await screen.findByText('Ventas \u2013 \u0391\u03b8\u03ae\u03bd\u03b1')).toBeInTheDocument();
   });
 
-  it('sends what-if figures culture-free and keeps the export on the same scope', () => {
+  it('sends what-if figures culture-free and keeps the export on the same scope, in the reader\u2019s language', () => {
     const query = { windowDays: 90, userFilter: null, dimension: 'companyName', scenario: { hourlyCost: 62.5, realisationBase: 0.45, currency: 'EUR' } };
     const params = queryParams(query);
     expect(params.get('hourlyCost')).toBe('62.5');
     expect(params.get('realisationBase')).toBe('0.45');
     expect(params.get('windowDays')).toBe('90');
-    expect(investmentWorkbookUrl(query)).toContain('dimension=companyName');
-    expect(investmentWorkbookUrl(query)).toContain('hourlyCost=62.5');
+    const url = new URL(investmentWorkbookUrl(query, 'es'), 'https://contoso.example');
+    expect(url.searchParams.get('dimension')).toBe('companyName');
+    expect(url.searchParams.get('hourlyCost')).toBe('62.5');
+    expect(url.searchParams.get('language')).toBe('es');
+    expect(new URL(investmentWorkbookUrl(query, 'en'), 'https://contoso.example').searchParams.get('language')).toBe('en');
   });
 });

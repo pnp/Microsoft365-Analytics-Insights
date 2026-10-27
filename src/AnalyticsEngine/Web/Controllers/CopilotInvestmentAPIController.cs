@@ -1,6 +1,7 @@
 using Common.Entities;
 using Common.Entities.CopilotAdoption;
 using Common.Entities.CopilotInvestment;
+using Common.Entities.Localisation;
 using Common.Entities.UserFilters;
 using System;
 using System.Collections.Generic;
@@ -105,7 +106,7 @@ namespace Web.AnalyticsWeb.Controllers
                 var request = await PrepareAsync(windowDays, userFilter, null, cancellationToken);
                 if (request.Refusal != null) return ResponseMessage(request.Refusal);
                 var range = request.Request.Range;
-                var credits = await Service.Facts.CreditsAsync(range.FromUtc.Date, range.ToExclusiveUtc.Date);
+                var credits = await Service.Facts.CreditsAsync(range.FromUtc.Date, CopilotInvestmentWindow.LastDay(range));
                 if (!credits.SnapshotDate.HasValue)
                     return Ok(new { points = new List<CreditTrendPoint>(), snapshotDate = (DateTime?)null, failureCode = credits.FailureCode });
 
@@ -164,14 +165,17 @@ namespace Web.AnalyticsWeb.Controllers
 
                 var range = request.Request.Range;
                 var facts = await Service.Facts.Source.GetPersonDetailAsync(userId, person.CreditObjectId, person.CreditObservationDate,
-                    range.FromUtc, range.ToExclusiveUtc, cancellationToken);
+                    range.FromUtc, range.ToExclusiveUtc, CopilotInvestmentWindow.LastDay(range), cancellationToken);
                 return Ok(CopilotInvestmentPersonDetailBuilder.Build(person, facts, report.Investment.Currency, range.FromUtc, range.ToExclusiveUtc));
             });
 
         [HttpGet, Route("export/workbook")]
         public async Task<HttpResponseMessage> ExportWorkbook(int windowDays = 28, string userFilter = null, string dimension = null,
-            CancellationToken cancellationToken = default(CancellationToken))
+            string language = null, CancellationToken cancellationToken = default(CancellationToken))
         {
+            // The page sends the reader's language. A link from before it did - or any value but a language the portal
+            // ships - gets English, and nothing the caller wrote ever reaches a CultureInfo.
+            var lang = PortalLanguages.Parse(language);
             try
             {
                 var request = await PrepareAsync(windowDays, userFilter, dimension, cancellationToken);
@@ -179,21 +183,18 @@ namespace Web.AnalyticsWeb.Controllers
                 var report = await ReportAsync(request.Request, ExportWaitBudget, cancellationToken);
                 if (report == null)
                 {
-                    var notReady = Request.CreateResponse(HttpStatusCode.ServiceUnavailable);
-                    notReady.Content = new StringContent(
-                        "The Copilot evidence behind this report is still being prepared, so the workbook is not ready yet. "
-                        + "Open the Copilot investment page, wait for it to load, then use its Excel button.", Encoding.UTF8, "text/plain");
+                    var notReady = WorkbookError(HttpStatusCode.ServiceUnavailable, "notReady", lang);
                     notReady.Headers.RetryAfter = new RetryConditionHeaderValue(TimeSpan.FromSeconds(RetryAfterSeconds));
                     return notReady;
                 }
 
                 var includePeople = CanSeeIndividuals();
-                var bytes = CopilotInvestmentWorkbook.Build(includePeople ? report : report.WithoutIndividualData(), includePeople, BuildConstants.BuildLabel);
+                var bytes = CopilotInvestmentWorkbook.Build(includePeople ? report : report.WithoutIndividualData(), includePeople, BuildConstants.BuildLabel, lang);
                 var response = new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent(bytes) };
                 response.Content.Headers.ContentType = new MediaTypeHeaderValue(CopilotInvestmentWorkbook.ContentType);
                 response.Content.Headers.ContentDisposition = new ContentDispositionHeaderValue("attachment")
                 {
-                    FileName = CopilotInvestmentWorkbook.FileName(report),
+                    FileName = CopilotInvestmentWorkbook.FileName(report, lang),
                 };
                 response.Headers.CacheControl = new CacheControlHeaderValue { NoStore = true, Private = true };
                 return response;
@@ -204,17 +205,38 @@ namespace Web.AnalyticsWeb.Controllers
             }
             catch (CopilotInvestmentAssumptionsRejectedException ex)
             {
-                return Plain(HttpStatusCode.BadRequest, "The what-if figures in this link are not valid: " + string.Join(", ", ex.ValidationErrors));
+                return WhatIfWorkbookError(ex, lang);
             }
-            catch (ArgumentException ex)
+            catch (ArgumentException)
             {
-                return Plain(HttpStatusCode.BadRequest, ex.Message);
+                return WorkbookError(HttpStatusCode.BadRequest, "invalid", lang);
             }
             catch (Exception ex)
             {
                 WebExceptionTelemetry.Report(ex, "CopilotInvestment.Workbook");
-                return Plain(HttpStatusCode.InternalServerError, "The Copilot investment workbook could not be generated. The failure has been logged.");
+                return WorkbookError(HttpStatusCode.InternalServerError, "failed", lang);
             }
+        }
+
+        /// <summary>
+        /// The text a workbook link answers with instead of a file. The Excel button is a plain link, so the browser shows
+        /// this in place of the download: it is written in the reader's language, from the same catalog as the page.
+        /// </summary>
+        internal static HttpResponseMessage WorkbookError(HttpStatusCode status, string error, PortalLanguage language, params (string Name, string Value)[] values) =>
+            Plain(status, PortalCatalog.For(CopilotInvestmentWorkbook.CatalogModule, language).Text("copilotInvestment.workbook.error." + error, values));
+
+        /// <summary>
+        /// A what-if the workbook link carried that breaks a rule, in the page's own words for each rule it breaks. A figure
+        /// that could not be read at all names a field rather than a rule, so it reads as the general "the figures break a rule".
+        /// </summary>
+        internal static HttpResponseMessage WhatIfWorkbookError(CopilotInvestmentAssumptionsRejectedException rejected, PortalLanguage language)
+        {
+            const string rule = "copilotInvestment.settings.error.";
+            var text = PortalCatalog.For(CopilotInvestmentWorkbook.CatalogModule, language);
+            var errors = rejected.ValidationErrors.Where(code => text.Has(rule + code)).Select(code => text.Text(rule + code)).Distinct().ToList();
+            if (errors.Count == 0)
+                errors.Add(text.Text(rule + (text.Has(rule + rejected.Code) ? rejected.Code : CopilotInvestmentErrorCodes.ScenarioInvalid)));
+            return WorkbookError(HttpStatusCode.BadRequest, "whatIf", language, ("errors", string.Join(" ", errors)));
         }
 
         #region Request handling

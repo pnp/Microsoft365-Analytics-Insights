@@ -16,7 +16,7 @@ import {
   type SelectTabEventHandler,
 } from '@fluentui/react-components';
 import { ArrowClockwise16Regular, ArrowDownload16Regular, Beaker20Regular } from '@fluentui/react-icons';
-import { formatNumber, useT, type TranslationKey } from '../i18n';
+import { formatNumber, useI18n, useT, type TranslationKey } from '../i18n';
 import { usePortalAccess } from '../access';
 import Spinner from '../components/Spinner';
 import PrintButton from '../components/shared/PrintButton';
@@ -116,6 +116,7 @@ function InvestmentView({ userFilter: controlledFilter, onUserFilterChange }: {
 }) {
   const styles = useStyles();
   const t = useT();
+  const { language } = useI18n();
   const access = usePortalAccess();
   const canSeePii = access.seePii;
   const isAdmin = access.administration;
@@ -263,7 +264,7 @@ function InvestmentView({ userFilter: controlledFilter, onUserFilterChange }: {
             appearance="primary"
             icon={<ArrowDownload16Regular />}
             as="a"
-            href={current ? investmentWorkbookUrl(query) : undefined}
+            href={current ? investmentWorkbookUrl(query, language) : undefined}
             disabled={!current}
           >
             {t('copilotInvestment.controls.excel')}

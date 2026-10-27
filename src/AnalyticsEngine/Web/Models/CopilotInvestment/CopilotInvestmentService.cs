@@ -175,8 +175,9 @@ namespace Web.AnalyticsWeb.Models.CopilotInvestment
             CancellationToken cancellationToken)
         {
             var range = request.Range;
-            var creditsTask = _facts.CreditsAsync(range.FromUtc.Date, range.ToExclusiveUtc.Date);
-            var studioTask = _facts.StudioAsync(range.FromUtc.Date, range.ToExclusiveUtc.Date.AddDays(1));
+            // Both sources are kept by day: read the window's own days, never the day after an explicit end date.
+            var creditsTask = _facts.CreditsAsync(range.FromUtc.Date, CopilotInvestmentWindow.LastDay(range));
+            var studioTask = _facts.StudioAsync(range.FromUtc.Date, CopilotInvestmentWindow.DayAfter(range));
             var directoryTask = ReadDirectoryAsync(cancellationToken);
             var assumptions = await ReadAssumptionsAsync(cancellationToken).ConfigureAwait(false);
 
@@ -210,7 +211,7 @@ namespace Web.AnalyticsWeb.Models.CopilotInvestment
             {
                 GeneratedUtc = DateTime.UtcNow,
                 FromUtc = range.FromUtc,
-                ToUtc = range.ToExclusiveUtc,
+                ToUtc = CopilotInvestmentWindow.End(range),
                 WindowDays = range.WindowDays,
                 WorkingDaysPerWeek = analysis?.Summary?.Options?.WorkingDaysPerWeek ?? 5,
                 MinGroupSize = analysis?.Summary?.Options?.MinSeatsPerSegment ?? 5,
