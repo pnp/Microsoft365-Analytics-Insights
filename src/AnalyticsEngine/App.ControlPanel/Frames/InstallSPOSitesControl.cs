@@ -31,6 +31,8 @@ namespace App.ControlPanel.Frames
         private Panel _selectedPage;
         private readonly Panel tabOverview = new Panel { Name = "tabOverview", Text = "Overview" };
         private readonly ConfigurationOverviewControl _overview = new ConfigurationOverviewControl { Dock = DockStyle.Fill };
+        private readonly Panel tabPrerequisites = new Panel { Name = "tabPrerequisites", Text = "Prerequisites" };
+        private readonly DeploymentPrerequisitesControl _prerequisites = new DeploymentPrerequisitesControl { Dock = DockStyle.Fill };
         public event EventHandler OpenConfigurationRequested;
         public event EventHandler NewConfigurationRequested;
         public InstallSPOSitesControl()
@@ -42,11 +44,14 @@ namespace App.ControlPanel.Frames
             installSolutionControl1.CancelRequested += InstallSolutionControl1_CancelRequested;
             tabOverview.Controls.Add(_overview);
             pageHost.Controls.Add(tabOverview);
+            tabPrerequisites.Controls.Add(_prerequisites);
+            pageHost.Controls.Add(tabPrerequisites);
+            _prerequisites.ConfigurationProvider = GetConfigFromGUI;
             _overview.OpenRequested += (sender, args) => OpenConfigurationRequested?.Invoke(this, args);
             _overview.NewRequested += (sender, args) => NewConfigurationRequested?.Invoke(this, args);
             _overview.ContinueRequested += (sender, args) => SelectPage(tabTargets);
             _pages.AddRange(new[] { tabOverview, tabTargets, tabCredentials, tabPageAzureConfig, tabAzureResources,
-                tabAzureAI, tabAzureStorage, tabNetworking, tabSharePoint, tabSources, tabInstall });
+                tabAzureAI, tabAzureStorage, tabNetworking, tabPrerequisites, tabSharePoint, tabSources, tabInstall });
             foreach (var page in _pages)
             {
                 page.Dock = DockStyle.Fill;
@@ -122,6 +127,7 @@ namespace App.ControlPanel.Frames
             _selectedPage = page;
             page.BringToFront();
             if (page == tabOverview) _overview.RefreshConfiguration(GetConfigFromGUI(), SelectedWorkloadCount());
+            if (page == tabPrerequisites) _prerequisites.RefreshConfiguration(GetConfigFromGUI());
             var node = navigator.Nodes.Cast<TreeNode>().SelectMany(group => group.Nodes.Cast<TreeNode>())
                 .FirstOrDefault(item => item.Tag == page);
             if (navigator.SelectedNode != node) navigator.SelectedNode = node;
@@ -138,7 +144,7 @@ namespace App.ControlPanel.Frames
             foreach (var page in _pages)
             {
                 var group = page == tabOverview || page == tabTargets || page == tabCredentials ? configuration
-                    : page == tabSharePoint || page == tabSources || page == tabInstall ? deployment : infrastructure;
+                    : page == tabPrerequisites || page == tabSharePoint || page == tabSources || page == tabInstall ? deployment : infrastructure;
                 group.Nodes.Add(new TreeNode(PageTitle(page)) { Name = page.Name, Tag = page });
             }
             navigator.ExpandAll();
