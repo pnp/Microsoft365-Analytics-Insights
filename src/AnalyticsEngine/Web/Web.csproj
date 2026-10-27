@@ -424,6 +424,9 @@
   <ItemGroup>
     <Compile Include="App_Start\Startup.CopilotCosts.cs" />
     <Compile Include="Controllers\CopilotCostConnectionAPIController.cs" />
+    <Compile Include="Controllers\CopilotInvestmentAPIController.cs" />
+    <Compile Include="Controllers\CopilotInvestmentSettingsAPIController.cs" />
+    <Compile Include="Models\CopilotInvestment\CopilotInvestmentService.cs" />
     <Compile Include="Models\CopilotCosts\CostConnectionRuntime.cs" />
     <Compile Include="Models\CopilotCosts\CostMsalIdentity.cs" />
   </ItemGroup>

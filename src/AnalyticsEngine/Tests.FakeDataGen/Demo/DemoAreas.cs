@@ -23,7 +23,8 @@ namespace Tests.FakeDataGen.Demo
         PowerBI = 8192,
         CopilotStudio = 16384,
         Dlp = 32768,
-        All = 65535
+        CopilotCredits = 65536,
+        All = 131071
     }
 
     internal sealed class DemoAreaDescription
@@ -60,7 +61,9 @@ namespace Tests.FakeDataGen.Demo
             new DemoAreaDescription(DemoArea.PowerAutomate, "powerautomate", "Power Automate activity, sharing and connectors"),
             new DemoAreaDescription(DemoArea.PowerBI, "powerbi", "Power BI report usage"),
             new DemoAreaDescription(DemoArea.CopilotStudio, "copilot-studio", "Copilot Studio bot activity"),
-            new DemoAreaDescription(DemoArea.Dlp, "dlp", "DLP policy matches and Copilot impact")
+            new DemoAreaDescription(DemoArea.Dlp, "dlp", "DLP policy matches and Copilot impact"),
+            new DemoAreaDescription(DemoArea.CopilotCredits, "copilot-credits",
+                "Copilot credit balances (preview): daily sweeps, service readings, policies, tenant balance")
         };
 
         public static DemoArea Parse(string value)

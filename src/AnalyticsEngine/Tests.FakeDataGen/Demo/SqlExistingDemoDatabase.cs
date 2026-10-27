@@ -34,11 +34,17 @@ namespace Tests.FakeDataGen.Demo
         /// which is UNIQUE on copilot_studio_credit_user_daily: a second population regenerates the same
         /// agent/environment dimensions for the same dates, so appending them is a duplicate-key failure
         /// rather than more data.
+        /// <para>The Copilot credit balance history is tenant-wide too: it is one collector's sweeps of the whole
+        /// directory, with a single control row and generation, the tenant's policies and its credit pool. Appending
+        /// a second population's sweeps would forge a second collector run for days the existing tenant already
+        /// swept (one run per day is UNIQUE), or overwrite its live control row, so it is never appended.</para>
         /// </summary>
         private static readonly DemoTable[] TenantWideTables =
         {
             DemoTables.CopilotCounts, DemoTables.StudioCredits, DemoTables.StudioUserCredits,
             DemoTables.StudioCapacity, DemoTables.AzureCosts, DemoTables.AgentCostImports,
+            DemoTables.CostControl, DemoTables.CostRuns, DemoTables.CostWork, DemoTables.CostObservations,
+            DemoTables.CostServices, DemoTables.CostUnevaluated, DemoTables.CostHistory, DemoTables.CostContext,
         };
 
         private static bool IsTenantWide(DemoTable table) => Array.IndexOf(TenantWideTables, table) >= 0;
@@ -93,7 +99,7 @@ namespace Tests.FakeDataGen.Demo
                     Execute(command, command.ExecuteNonQuery);
                 _ready = true;
                 progress?.Invoke("Existing-target append: fresh synthetic users; existing users and activities are never updated.");
-                progress?.Invoke("Tenant-wide Copilot count snapshots, Copilot Studio credits, capacity and Azure agent spend will be skipped: this population does not represent the existing tenant.");
+                progress?.Invoke("Tenant-wide Copilot count snapshots, Copilot Studio credits, capacity, Azure agent spend and Copilot credit balance history will be skipped: this population does not represent the existing tenant.");
                 if (_options.CompileProfiles)
                     progress?.Invoke("Global weekly profiling is skipped for existing targets; existing profiles are not recomputed.");
                 progress?.Invoke("Batches commit independently." + FailureAdvice);
@@ -134,7 +140,7 @@ namespace Tests.FakeDataGen.Demo
                 var reused = _plans.Values.Sum(p => p.Reused);
                 var skipped = _plans.Values.Sum(p => p.Skipped);
                 progress?.Invoke($"Append verified from committed batches: {inserted:N0} inserted rows; {reused:N0} reused dimension rows.");
-                progress?.Invoke($"Skipped {skipped:N0} tenant-wide Copilot count snapshot and agent-cost rows; no global profiling or new-demo completion marker was written.");
+                progress?.Invoke($"Skipped {skipped:N0} tenant-wide Copilot count snapshot, agent-cost and credit-history rows; no global profiling or new-demo completion marker was written.");
                 summary.Rows.Clear();
                 foreach (var plan in _plans.Values.Where(p => p.Received > 0))
                     summary.Rows.Add(plan.Table.Name, plan.Inserted);
@@ -243,6 +249,9 @@ WHERE f.parent_object_id=OBJECT_ID(@table);"))
                 plan.ReuseKey = NaturalKey(plan);
             foreach (var plan in _plans.Values.OrderBy(p => p.Order))
             {
+                // Never written by an append (counted, then dropped by the sink), so nothing needs mapping. The
+                // credit history's composite keys and unlinked user ids would otherwise be refused here.
+                if (IsTenantWide(plan.Table)) continue;
                 // An unused nullable relationship must not inherit a non-NULL schema default.
                 plan.NullColumns = plan.ForeignKeys.Select(f => f.Column).Distinct(StringComparer.OrdinalIgnoreCase)
                     .Where(name => !plan.Table.Columns.Any(c => c.Name.Equals(name, StringComparison.OrdinalIgnoreCase))

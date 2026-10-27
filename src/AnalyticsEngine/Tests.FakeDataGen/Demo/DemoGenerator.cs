@@ -39,6 +39,9 @@ namespace Tests.FakeDataGen.Demo
         public int UserOrgTypes { get; set; }
         public int UserOrgValues { get; set; }
         public int CompletedProfileWeeks { get; set; }
+
+        /// <summary>Days of preview Copilot credit balance sweeps generated; 0 when that area was not selected.</summary>
+        public int CreditHistoryDays { get; set; }
     }
 
     internal sealed class CountingDemoSink : IDemoSink
@@ -73,6 +76,7 @@ namespace Tests.FakeDataGen.Demo
         private DemoWebActivityGenerator _web;
         private DemoPowerPlatformGenerator _powerPlatform;
         private DemoAgentCosts _agentCosts;
+        private DemoCopilotCredits _credits;
         private readonly PromptCategoryConfiguration _taxonomy = PromptCategoryConfiguration.Defaults();
         private int _interactionId;
 
@@ -128,6 +132,11 @@ namespace Tests.FakeDataGen.Demo
             _collaboration.WriteDimensions();
             _powerPlatform = new DemoPowerPlatformGenerator(_options, _calendar, _sink);
             _powerPlatform.WriteDimensions();
+            if (_options.Includes(DemoArea.CopilotCredits))
+            {
+                _credits = new DemoCopilotCredits(_options, _sink);
+                _credits.WriteRuns();
+            }
             _sink.Flush();
 
             int progressEvery = Math.Max(1, _options.Users / 20);
@@ -137,6 +146,7 @@ namespace Tests.FakeDataGen.Demo
                 var user = _population.User(id);
                 var timeline = new DemoTimeline(_options, user);
                 WriteTimeline(user, timeline);
+                _credits?.WriteUser(user, timeline);
                 if (id % progressEvery == 0 || id == _options.Users)
                     progress?.Invoke($"Activity: {id:N0}/{_options.Users:N0} users; {summary.TotalRows:N0} source rows.");
             }
@@ -146,6 +156,13 @@ namespace Tests.FakeDataGen.Demo
             {
                 progress?.Invoke("Writing billed Copilot Studio credits, capacity and Azure agent spend...");
                 _agentCosts.Write();
+            }
+            if (_credits != null)
+            {
+                progress?.Invoke($"Writing {_credits.HistoryDays} days of preview Copilot credit balances: unlinked accounts and policy context...");
+                _credits.WriteUnresolved();
+                _credits.WriteContext();
+                summary.CreditHistoryDays = _credits.HistoryDays;
             }
             _sink.Flush();
             return summary;

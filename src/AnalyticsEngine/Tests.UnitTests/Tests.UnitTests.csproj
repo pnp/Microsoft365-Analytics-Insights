@@ -105,6 +105,9 @@
     <Compile Include="..\Tests.FakeDataGen\Demo\DemoAgentCosts.cs">
       <Link>DemoGenerator\DemoAgentCosts.cs</Link>
     </Compile>
+    <Compile Include="..\Tests.FakeDataGen\Demo\DemoCopilotCredits.cs">
+      <Link>DemoGenerator\DemoCopilotCredits.cs</Link>
+    </Compile>
     <Compile Include="..\Tests.FakeDataGen\Demo\DemoAreas.cs">
       <Link>DemoGenerator\DemoAreas.cs</Link>
     </Compile>
