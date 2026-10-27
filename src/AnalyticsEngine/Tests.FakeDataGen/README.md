@@ -244,8 +244,8 @@ Things worth knowing about that data:
 
 The `copilot-credits` area (part of `all`) fills the preview credit collector's own
 `copilot_cost_*` tables exactly as the collector leaves them, so the **Copilot
-investment** report (`#/insights/copilot-investment`) and the Copilot credit history
-connection page have data. It is generated after the Copilot activity, from the same
+investment** report (`#/insights/copilot-investment`), the **Copilot spend** report
+(`#/insights/copilot-spend`) and the Copilot credit history connection page have data. It is generated after the Copilot activity, from the same
 synthetic people and IDs:
 
 - **One sweep a day of every directory object**, each person's latest reading per
@@ -258,9 +258,9 @@ synthetic people and IDs:
   `source_month` is NULL and `period_status` is `unverified`: the report never adds
   successive readings together or infers a daily cost from them.
 - **Spend follows each person's own Copilot activity**, with deliberate
-  counter-examples so more spend is not read as more value: lightly evidenced seat
-  holders whose scheduled agent spends heavily on days they never open Copilot,
-  well-evidenced agent power users, people without a seat paying for metered agents,
+  counter-examples so more spend is not read as more value: lightly evidenced licensed
+  users whose scheduled agent spends heavily on days they never open Copilot,
+  well-evidenced agent power users, people without a Microsoft 365 Copilot licence paying for metered agents,
   heavy users who hit a pooled per-user limit, and disabled accounts that are refused.
 - **Imperfect, like a real sweep:** a few days have no sweep (absent, not zero), a
   throttled day misses part of the directory, a degraded day leaves readings partial

@@ -20,6 +20,10 @@ namespace Common.Entities.CopilotSpend
         /// Billed credits and people per day: a daily ledger, so these add up over the period. People the user import never
         /// matched share a NULL user id: an unfiltered view counts their credits (the tenant's whole bill) but not as people,
         /// and a filtered view, which cannot show they belong to it, leaves them out.
+        /// <para>Measured on LocalDB over a synthetic 200,000-user ledger (1.2M rows, 180 days): a clustered index scan of
+        /// 57.6K logical reads whatever the window, 0.16 s for 28 days and 0.59 s for 90; 0.10 s and 0.17 s narrowed to
+        /// 20,000 people. The ledger has no index covering this query, so it reads the table; no index is added for it
+        /// here, as none has been measured.</para>
         /// </summary>
         public const string StudioDaysSql =
             "SELECT r.usage_date AS UsageDate, CAST(SUM(r.billed_credits) AS float) AS Credits, COUNT(DISTINCT r.user_id) AS People\r\n" +
@@ -32,6 +36,11 @@ namespace Common.Entities.CopilotSpend
         /// <summary>
         /// Billed credits per Power Platform environment, from the same per-person ledger and scope as the days, so the two
         /// add up to the same total. The ledger is kept by day, person and environment; it has no agent.
+        /// <para>Two distinct counts (people and days) make SQL Server spool the rows: on the same synthetic 200,000-user
+        /// ledger 626K logical reads (mostly the worktable) and 0.58 s for 28 days, 1.94M and 1.96 s for 90; 97K / 0.14 s and
+        /// 221K / 0.30 s narrowed to 20,000 people. GROUPING SETS, a per-person pre-aggregation and a single distinct count
+        /// were measured too and none was faster (1.9M reads and 4.5 s, 115K reads and 6.2 s, 58K reads and 3.4 s for 90
+        /// days), so this form stays. The result is cached per window and scope.</para>
         /// </summary>
         public const string StudioEnvironmentsSql =
             "SELECT r.environment_id AS EnvironmentId, MAX(r.environment_name) AS EnvironmentName,\r\n" +
@@ -46,6 +55,8 @@ namespace Common.Entities.CopilotSpend
         /// Billed credits per agent from the tenant's agent ledger, with each agent's newest name in the window. That ledger
         /// is recorded per agent and not per person, through a different route from the per-person one, so it is read only
         /// for an unfiltered view and its total is reported on its own, never added to or reconciled with the people's.
+        /// Measured over a synthetic 86,400-row ledger (40 agents, 4 environments, 180 days): 9.6K logical reads, 0.02 s for
+        /// 28 days and 0.35 s for 90.
         /// </summary>
         public const string LedgerAgentsSql =
             ReportScopeSql.TenantWideMarker + "WITH win AS (\r\n" +
