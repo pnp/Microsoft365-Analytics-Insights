@@ -49,6 +49,7 @@ export const app = {
   'app.route.activityAnalysis': 'Activity analysis',
   'app.route.agentCosts': 'Agent costs',
   'app.route.copilotInvestment': 'Copilot investment',
+  'app.route.copilotSpend': 'Copilot spend',
   'app.route.copilotInvestmentAssumptions': 'Copilot investment assumptions',
   'app.route.dlp': 'DLP impact',
   'app.route.health': 'Service health',

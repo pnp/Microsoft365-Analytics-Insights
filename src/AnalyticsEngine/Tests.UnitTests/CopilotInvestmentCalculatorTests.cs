@@ -556,6 +556,64 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public void ThePeopleList_SortsEveryoneBeforePaging_MissingValuesLast_TiesByName()
+        {
+            var rows = Enumerable.Range(1, 120).Select(i => new CopilotInvestmentPersonRow
+            {
+                UserId = i,
+                UserPrincipalName = $"person{i:000}@contoso.example",
+                Licensed = i % 2 == 0,
+                Band = i % 3 == 0 ? null : i % 3 == 1 ? "Developing" : "Dormant",
+                ActiveDaysPerMonth = i % 10,
+                AppsUsed = i % 4,
+                Cost = i % 5 == 0 ? (double?)null : i,
+                Credits = i == 117 ? 5000 : i % 7 == 0 ? (double?)null : i,
+                StudioCredits = 200 - i,
+                BreakEvenDaysPerMonth = i % 6 == 0 ? (double?)null : 30 - i % 30,
+                Signal = i == 101 ? CopilotInvestmentSignals.Supported : i == 2 ? "someFutureSignal" : CopilotInvestmentSignals.NoEvidence,
+            }).ToList();
+            List<int> Ids(string key, bool descending) => CopilotInvestmentAPIController.SortPeople(rows, key, descending).Select(r => r.UserId).ToList();
+            bool HasCredits(int id) => rows[id - 1].Credits.HasValue;
+
+            // The largest balance is the 117th person's: past the first page of fifty, and first once the column is sorted.
+            Assert.AreEqual(117, Ids("credits", true).First());
+            Assert.AreEqual(1, Ids("credits", false).First());
+            // People with no balance sort last whichever way the column is read.
+            var withBalance = rows.Count(r => r.Credits.HasValue);
+            foreach (var descending in new[] { true, false })
+            {
+                var order = Ids("credits", descending);
+                Assert.IsTrue(order.Take(withBalance).All(HasCredits) && order.Skip(withBalance).All(id => !HasCredits(id)), "descending: " + descending);
+            }
+            Assert.IsTrue(Ids("cost", false).Skip(rows.Count(r => r.Cost.HasValue)).All(id => !rows[id - 1].Cost.HasValue));
+            Assert.IsTrue(Ids("breakEven", true).Skip(rows.Count(r => r.BreakEvenDaysPerMonth.HasValue)).All(id => !rows[id - 1].BreakEvenDaysPerMonth.HasValue));
+
+            // Text, yes/no and numbers both ways.
+            Assert.AreEqual(1, Ids("user", false).First());
+            Assert.AreEqual(120, Ids("user", true).First());
+            CollectionAssert.AreEqual(rows.Where(r => r.Licensed).Select(r => r.UserId).ToList(), Ids("licensed", true).Take(60).ToList(),
+                "Licensed people first, in name order.");
+            Assert.IsFalse(rows[Ids("licensed", false).First() - 1].Licensed);
+            Assert.AreEqual(1, Ids("studioCredits", true).First());
+            Assert.AreEqual(120, Ids("studioCredits", false).First());
+
+            // Derived orders: a band by how established the habit is, a signal by the strength of its evidence; neither is alphabetical.
+            var bands = Ids("band", true);
+            Assert.AreEqual("Developing", rows[bands.First() - 1].Band);
+            Assert.IsNull(rows[bands.Last() - 1].Band, "No band sorts last.");
+            Assert.AreEqual("Dormant", rows[Ids("band", false).First() - 1].Band);
+            Assert.AreEqual(101, Ids("signal", true).First());
+            Assert.AreEqual(2, Ids("signal", true).Last(), "A signal this build does not know has no rank, so it sorts last.");
+            Assert.AreEqual(2, Ids("signal", false).Last());
+
+            // Ties fall back to the name, then the id, so a page boundary never moves between two identical requests.
+            var apps = Ids("apps", true);
+            CollectionAssert.AreEqual(apps, Ids("apps", true));
+            CollectionAssert.AreEqual(rows.Where(r => r.AppsUsed == 3).Select(r => r.UserId).ToList(), apps.Take(30).ToList());
+            CollectionAssert.AreEqual(new[] { 3, 13, 23 }, Ids("activeDays", true).Where(id => rows[id - 1].ActiveDaysPerMonth == 3).Take(3).ToList());
+        }
+
+        [TestMethod]
         public void TheHost_LetsThroughAUserFilterWithEveryWhatIfFigure()
         {
             // The export is a plain link, so the reader's filter and what-if figures ride on the query string; over the

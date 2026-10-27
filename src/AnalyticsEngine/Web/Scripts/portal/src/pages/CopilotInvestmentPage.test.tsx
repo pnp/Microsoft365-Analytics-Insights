@@ -306,6 +306,53 @@ describe('CopilotInvestmentPage', () => {
     expect(within(dialog).getByText(/not how productive anyone is/)).toBeInTheDocument();
   });
 
+  it('sorts the whole list by any column header, from the mouse or the keyboard, and keeps the sort control in step', async () => {
+    renderWithProvider(<CopilotInvestmentPage />, { access: { administration: true, seePii: true } });
+
+    fireEvent.click(await screen.findByRole('tab', { name: 'People' }));
+    expect(await screen.findByText('person7@contoso.example')).toBeInTheDocument();
+    const header = (name: RegExp) => within(screen.getByRole('table', { name: 'People' })).getByRole('columnheader', { name });
+    const lastFilters = () => vi.mocked(fetchInvestmentPeople).mock.calls.at(-1)!;
+    expect(header(/Credit balance/)).toHaveAttribute('aria-sort', 'none');
+    expect(header(/Credit balance/)).toHaveAttribute('title', 'Sort by Credit balance');
+
+    // A column sorts on the server, from the first person, largest first.
+    fireEvent.click(within(header(/Credit balance/)).getByRole('button'));
+    await waitFor(() => expect(lastFilters()[1]).toMatchObject({ sortBy: 'credits', sortDesc: true }));
+    expect(lastFilters()[2]).toBe(0);
+    await waitFor(() => expect(header(/Credit balance/)).toHaveAttribute('aria-sort', 'descending'));
+    expect(screen.getByRole('combobox', { name: 'Sort by' })).toHaveValue('credits');
+
+    // Enter on the focused header reverses it.
+    fireEvent.keyDown(within(header(/Credit balance/)).getByRole('button'), { key: 'Enter' });
+    await waitFor(() => expect(lastFilters()[1]).toMatchObject({ sortBy: 'credits', sortDesc: false }));
+    await waitFor(() => expect(header(/Credit balance/)).toHaveAttribute('aria-sort', 'ascending'));
+
+    // Names start A to Z; the sort control moves the header arrow too.
+    fireEvent.click(within(header(/Person/)).getByRole('button'));
+    await waitFor(() => expect(lastFilters()[1]).toMatchObject({ sortBy: 'user', sortDesc: false }));
+    fireEvent.change(screen.getByRole('combobox', { name: 'Sort by' }), { target: { value: 'signal' } });
+    await waitFor(() => expect(header(/Signal/)).toHaveAttribute('aria-sort', 'descending'));
+    expect(header(/Person/)).toHaveAttribute('aria-sort', 'none');
+
+    // The licence is a tick or a cross with its words, never colour alone.
+    expect(header(/Copilot licence/)).toBeInTheDocument();
+    const tick = screen.getByRole('img', { name: 'Has a Microsoft 365 Copilot licence' });
+    expect(tick).toHaveAttribute('title', 'Has a Microsoft 365 Copilot licence');
+    expect(screen.getByRole('combobox', { name: 'Microsoft 365 Copilot licence' })).toBeInTheDocument();
+  });
+
+  it('says a licence is not known, rather than absent, when no adoption evidence was read', async () => {
+    const withoutAdoption = summary();
+    withoutAdoption.sources = { ...withoutAdoption.sources, adoption: { ...withoutAdoption.sources.adoption, available: false } };
+    vi.mocked(fetchInvestmentSummary).mockResolvedValue(withoutAdoption);
+    renderWithProvider(<CopilotInvestmentPage />, { access: { administration: true, seePii: true } });
+
+    fireEvent.click(await screen.findByRole('tab', { name: 'People' }));
+    expect(await screen.findByRole('img', { name: 'Licence not known: no adoption evidence was read' })).toBeInTheDocument();
+    expect(screen.queryByRole('img', { name: 'Has a Microsoft 365 Copilot licence' })).not.toBeInTheDocument();
+  });
+
   it('says which assumptions are missing instead of modelling money with figures nobody chose', async () => {
     vi.mocked(fetchInvestmentSummary).mockResolvedValue(
       summary({

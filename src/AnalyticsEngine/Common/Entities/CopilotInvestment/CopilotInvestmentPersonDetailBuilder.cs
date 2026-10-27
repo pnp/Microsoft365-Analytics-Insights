@@ -81,7 +81,19 @@ namespace Common.Entities.CopilotInvestment
                 .Select(c => new CopilotInvestmentCategoryUse { CategoryId = c.CategoryId, HumanMode = c.HumanMode, Prompts = c.Prompts })
                 .OrderByDescending(c => c.Prompts).ThenBy(c => c.CategoryId, StringComparer.Ordinal).ToList();
 
-            detail.CreditServices = facts.CreditServices.Select(s => new CopilotInvestmentPersonService
+            detail.CreditServices = CreditServices(facts);
+            detail.StudioAgents = StudioAgents(facts);
+
+            detail.Evidence = EvidenceFor(detail, person, byDay.Keys, fromUtc, toExclusiveUtc);
+            return detail;
+        }
+
+        /// <summary>
+        /// Every category of the person's latest balance, as the source reported it, and the categories it could not evaluate.
+        /// Shared with the Copilot Spend drill-down.
+        /// </summary>
+        public static List<CopilotInvestmentPersonService> CreditServices(PersonDetailFacts facts) =>
+            (facts ?? new PersonDetailFacts()).CreditServices.Select(s => new CopilotInvestmentPersonService
             {
                 Category = s.Category,
                 PolicyId = s.PolicyId,
@@ -97,14 +109,12 @@ namespace Common.Entities.CopilotInvestment
                 .Select(u => new CopilotInvestmentPersonService { Category = u.Category, UnevaluatedReason = u.Reason }))
                 .OrderBy(s => s.Category, StringComparer.Ordinal).ToList();
 
-            detail.StudioAgents = facts.StudioAgents.Select(a => new CopilotInvestmentStudioAgent
+        /// <summary>The person's billed Copilot Studio credits by agent, largest first. Shared with the Copilot Spend drill-down.</summary>
+        public static List<CopilotInvestmentStudioAgent> StudioAgents(PersonDetailFacts facts) =>
+            (facts ?? new PersonDetailFacts()).StudioAgents.Select(a => new CopilotInvestmentStudioAgent
             {
                 AgentId = a.AgentId, AgentName = a.AgentName, Credits = Math.Round(a.Credits, 6), ActiveDays = a.ActiveDays,
-            }).OrderByDescending(a => a.Credits).ToList();
-
-            detail.Evidence = EvidenceFor(detail, person, byDay.Keys, fromUtc, toExclusiveUtc);
-            return detail;
-        }
+            }).OrderByDescending(a => a.Credits).ThenBy(a => a.AgentId, StringComparer.Ordinal).ToList();
 
         /// <summary>Halves shorter than this cannot show a direction of travel.</summary>
         private const int MinTrendHalfDays = 14;

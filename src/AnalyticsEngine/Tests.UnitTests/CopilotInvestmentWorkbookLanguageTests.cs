@@ -127,7 +127,7 @@ namespace Tests.UnitTests
         /// The Spanish workbook is the English one in other words: the same cells, every number, date and yes/no the same
         /// typed value, no formula anywhere, no figure turned into text, and not one cell of product wording left in English.
         /// </summary>
-        internal static void AssertSpanishCounterpart(byte[] englishBook, byte[] spanishBook)
+        internal static void AssertSpanishCounterpart(byte[] englishBook, byte[] spanishBook, string module = Module)
         {
             var english = Sheets(englishBook);
             var spanish = Sheets(spanishBook);
@@ -152,8 +152,8 @@ namespace Tests.UnitTests
             var numberAsText = spanish.SelectMany(s => s.Cells).Where(c => c.Type == "inlineStr" && IsNumber(c.Text)).Select(c => c.Text).ToList();
             Assert.AreEqual(0, numberAsText.Count, "Numbers written as text: " + string.Join(" | ", numberAsText));
 
-            var enText = PortalCatalog.For(Module, PortalLanguage.English);
-            var esText = PortalCatalog.For(Module, PortalLanguage.Spanish);
+            var enText = PortalCatalog.For(module, PortalLanguage.English);
+            var esText = PortalCatalog.For(module, PortalLanguage.Spanish);
             var englishOnly = new HashSet<string>(enText.Entries
                 .Where(e => esText.Entries.TryGetValue(e.Key, out var s) && !string.Equals(s, e.Value, StringComparison.Ordinal))
                 .Select(e => e.Value));
@@ -360,7 +360,7 @@ namespace Tests.UnitTests
         {
             var resources = typeof(PortalCatalog).Assembly.GetManifestResourceNames();
             var entryLine = new Regex(@"^\s*'[A-Za-z0-9_.\-]+':", RegexOptions.Multiline);
-            foreach (var module in new[] { Module, "userFilter", "globalFilter", "common" })
+            foreach (var module in new[] { Module, "copilotSpend", "userFilter", "globalFilter", "common" })
             {
                 var en = PortalCatalog.For(module, PortalLanguage.English);
                 var es = PortalCatalog.For(module, PortalLanguage.Spanish);
@@ -468,7 +468,7 @@ namespace Tests.UnitTests
             && (double.TryParse(text, NumberStyles.Float | NumberStyles.AllowThousands, CultureInfo.InvariantCulture, out _)
                 || double.TryParse(text, NumberStyles.Float | NumberStyles.AllowThousands, CultureInfo.GetCultureInfo("es-ES"), out _));
 
-        private sealed class Cell
+        internal sealed class Cell
         {
             public string Ref;
             public string Type;
@@ -478,14 +478,14 @@ namespace Tests.UnitTests
             public bool Formula;
         }
 
-        private static List<string> Texts(IEnumerable<(string Name, List<Cell> Cells)> sheets) =>
+        internal static List<string> Texts(IEnumerable<(string Name, List<Cell> Cells)> sheets) =>
             sheets.SelectMany(s => s.Cells).Where(c => c.Text != null).Select(c => c.Text).ToList();
 
         private static string Flatten(IEnumerable<(string Name, List<Cell> Cells)> sheets) =>
             string.Join("\n", sheets.SelectMany(s => s.Cells.Select(c => string.Join("|", s.Name, c.Ref, c.Type, c.Style, c.Text, c.Value))));
 
         /// <summary>Every sheet's cells, in workbook order.</summary>
-        private static List<(string Name, List<Cell> Cells)> Sheets(byte[] bytes)
+        internal static List<(string Name, List<Cell> Cells)> Sheets(byte[] bytes)
         {
             XNamespace ns = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
             var sheets = new List<(string Name, List<Cell> Cells)>();

@@ -456,6 +456,9 @@ namespace Common.Entities.CopilotInvestment
             return sources;
         }
 
+        /// <summary>Whether the source confirmed the accounting period of every balance: verified, unverified or mixed. Shared with Copilot Spend.</summary>
+        internal static string CreditPeriodStatus(IEnumerable<CreditUserFact> facts) => PeriodStatus(facts);
+
         private static string PeriodStatus(IEnumerable<CreditUserFact> facts)
         {
             var statuses = facts.Select(f => string.Equals(f.PeriodStatus, "verified", StringComparison.Ordinal) && f.SourceMonth.HasValue ? "verified" : "unverified")

@@ -265,6 +265,16 @@ namespace Common.Entities.CopilotInvestment
                 Unit = quantity.Unit,
             };
 
+        /// <summary>The latest balances' categories for the given people (and, unfiltered, the accounts no user matched). Shared with Copilot Spend.</summary>
+        internal static List<CopilotInvestmentServiceRow> ServiceRows(CreditFacts credits, IEnumerable<CreditUserFact> observed, bool filtered) =>
+            Services(new CopilotInvestmentInput { Credits = credits, ScopedCredits = observed.ToList(), Filtered = filtered }, null);
+
+        /// <summary>The tenant-wide spending policies of the newest complete context. Shared with Copilot Spend.</summary>
+        internal static List<CopilotInvestmentPolicyRow> PolicyRows(CreditFacts credits) => Policies(new CopilotInvestmentInput { Credits = credits });
+
+        /// <summary>The tenant-wide pool balances of the newest complete context. Shared with Copilot Spend.</summary>
+        internal static List<CopilotInvestmentTenantBalanceRow> TenantBalanceRows(CreditFacts credits) =>
+            TenantBalances(new CopilotInvestmentInput { Credits = credits });
         private static List<CopilotInvestmentTenantBalanceRow> TenantBalances(CopilotInvestmentInput input)
         {
             var balances = input.Credits?.Context?.TenantBalances;

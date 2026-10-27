@@ -26,7 +26,8 @@ import {
   makeStyles,
   tokens,
 } from '@fluentui/react-components';
-import { formatNumber, useT } from '../../i18n';
+import { Checkmark16Filled, Dismiss16Regular } from '@fluentui/react-icons';
+import { formatNumber, useT, type TFunction, type TranslationKey } from '../../i18n';
 import { fetchInvestmentPeople, fetchInvestmentPerson, type InvestmentQuery } from '../../api/copilotInvestmentApi';
 import type { InvestmentPeopleFilters, InvestmentPeoplePage, InvestmentPersonDetail, InvestmentPersonRow } from '../../types/copilotInvestment';
 import {
@@ -56,6 +57,11 @@ const useStyles = makeStyles({
   signalCol: { width: '170px' },
   toolbar: { display: 'flex', gap: '12px', alignItems: 'flex-end', flexWrap: 'wrap' },
   num: { textAlign: 'right', fontVariantNumeric: 'tabular-nums' },
+  // A sortable header's label sits in Fluent's own button; numeric columns keep it, and the arrow, at the right edge.
+  numHeader: { justifyContent: 'flex-end', textAlign: 'right' },
+  licence: { display: 'inline-flex', alignItems: 'center', justifyContent: 'center', minWidth: '20px' },
+  licensed: { color: tokens.colorPaletteGreenForeground1 },
+  notLicensed: { color: tokens.colorNeutralForeground3 },
   flags: { display: 'flex', gap: '4px', flexWrap: 'wrap' },
   pager: { display: 'flex', gap: '12px', alignItems: 'center', justifyContent: 'flex-end' },
   muted: { color: tokens.colorNeutralForeground3 },
@@ -73,6 +79,53 @@ const useStyles = makeStyles({
   code: { fontFamily: tokens.fontFamilyMonospace, fontSize: tokens.fontSizeBase200 },
 });
 
+/** A sortable column of the people table, by the server's sort key. */
+type PeopleSortKey = 'user' | 'licensed' | 'band' | 'activeDays' | 'breakEven' | 'apps' | 'cost' | 'credits' | 'studioCredits' | 'signal';
+
+/**
+ * The columns, in order. A column sorts the whole list on the server - every person the filters keep, before paging - and
+ * its first click goes the useful way: names A to Z, everything else largest (or strongest) first.
+ */
+const COLUMNS: { key: PeopleSortKey; labelKey: TranslationKey; numeric: boolean; firstDescending: boolean }[] = [
+  { key: 'user', labelKey: 'copilotInvestment.people.col.person', numeric: false, firstDescending: false },
+  { key: 'licensed', labelKey: 'copilotInvestment.people.col.seat', numeric: false, firstDescending: true },
+  { key: 'band', labelKey: 'copilotInvestment.people.col.band', numeric: false, firstDescending: true },
+  { key: 'activeDays', labelKey: 'copilotInvestment.people.col.activeDays', numeric: true, firstDescending: true },
+  { key: 'breakEven', labelKey: 'copilotInvestment.people.col.need', numeric: true, firstDescending: true },
+  { key: 'apps', labelKey: 'copilotInvestment.people.col.apps', numeric: true, firstDescending: true },
+  { key: 'cost', labelKey: 'copilotInvestment.people.col.cost', numeric: true, firstDescending: true },
+  { key: 'credits', labelKey: 'copilotInvestment.people.col.credits', numeric: true, firstDescending: true },
+  { key: 'studioCredits', labelKey: 'copilotInvestment.people.col.studio', numeric: true, firstDescending: true },
+  { key: 'signal', labelKey: 'copilotInvestment.people.col.signal', numeric: false, firstDescending: true },
+];
+
+/** The direction a sort key starts in: the "Investment" ranking and every column but names are read largest first. */
+function firstDescending(sortBy: string): boolean {
+  return COLUMNS.find((c) => c.key === sortBy)?.firstDescending ?? true;
+}
+
+/**
+ * Whether a person holds a Microsoft 365 Copilot licence, as a tick or a cross with its words for a screen reader and on
+ * hover - never colour alone. Without adoption evidence the licences were never read, which is "not known", not "no".
+ */
+function LicenceMark({ licensed, known, t }: { licensed: boolean; known: boolean; t: TFunction }) {
+  const styles = useStyles();
+  if (!known) {
+    const label = t('copilotInvestment.people.licence.unknown');
+    return (
+      <span role="img" aria-label={label} title={label} className={styles.licence}>
+        {'\u2014'}
+      </span>
+    );
+  }
+  const label = t(licensed ? 'copilotInvestment.people.licence.yes' : 'copilotInvestment.people.licence.no');
+  return (
+    <span role="img" aria-label={label} title={label} className={`${styles.licence} ${licensed ? styles.licensed : styles.notLicensed}`}>
+      {licensed ? <Checkmark16Filled aria-hidden /> : <Dismiss16Regular aria-hidden />}
+    </span>
+  );
+}
+
 export const DEFAULT_PEOPLE_FILTERS: InvestmentPeopleFilters = {
   search: '',
   signals: [],
@@ -82,11 +135,13 @@ export const DEFAULT_PEOPLE_FILTERS: InvestmentPeopleFilters = {
   sortDesc: true,
 };
 
-/** Each person's seat, observed use and modelled value, with a drill-down into what supports the investment. */
-export default function PeoplePanel({ query, filters, onFiltersChange }: {
+/** Each person's licence, observed use and modelled value, with a drill-down into what supports the investment. */
+export default function PeoplePanel({ query, filters, onFiltersChange, licenceKnown = true }: {
   query: InvestmentQuery;
   filters: InvestmentPeopleFilters;
   onFiltersChange: (filters: InvestmentPeopleFilters) => void;
+  /** False when no adoption evidence was read, so nobody's licence is known either way. */
+  licenceKnown?: boolean;
 }) {
   const styles = useStyles();
   const t = useT();
@@ -131,6 +186,9 @@ export default function PeoplePanel({ query, filters, onFiltersChange }: {
 
   const currency = page?.currency ?? null;
   const total = page?.total ?? 0;
+  // Clicking the column the list is sorted by reverses it; another column starts in its own useful direction.
+  const sortOn = (key: PeopleSortKey) =>
+    onFiltersChange({ ...filters, sortBy: key, sortDesc: filters.sortBy === key ? !filters.sortDesc : firstDescending(key) });
 
   return (
     <div className={styles.stack}>
@@ -174,12 +232,15 @@ export default function PeoplePanel({ query, filters, onFiltersChange }: {
           </Select>
         </Field>
         <Field label={t('copilotInvestment.people.sort')}>
-          <Select value={filters.sortBy} onChange={(_e, data) => onFiltersChange({ ...filters, sortBy: data.value, sortDesc: data.value !== 'user' })}>
+          {/* The same sort as the column headers: choosing here moves the header arrow, and a header click shows here. */}
+          <Select value={filters.sortBy} onChange={(_e, data) => onFiltersChange({ ...filters, sortBy: data.value, sortDesc: firstDescending(data.value) })}>
             <option value="default">{t('copilotInvestment.people.sort.default')}</option>
-            <option value="activeDays">{t('copilotInvestment.people.sort.activeDays')}</option>
-            <option value="credits">{t('copilotInvestment.people.sort.credits')}</option>
+            {COLUMNS.map((c) => (
+              <option key={c.key} value={c.key}>
+                {t(c.labelKey)}
+              </option>
+            ))}
             <option value="gap">{t('copilotInvestment.people.sort.gap')}</option>
-            <option value="user">{t('copilotInvestment.people.sort.user')}</option>
           </Select>
         </Field>
       </div>
@@ -196,19 +257,24 @@ export default function PeoplePanel({ query, filters, onFiltersChange }: {
         ) : page && page.rows.length === 0 ? (
           <Text>{t('copilotInvestment.people.empty')}</Text>
         ) : page ? (
-          <Table size="small" aria-label={t('copilotInvestment.people.title')} className={styles.table}>
+          <Table size="small" sortable aria-label={t('copilotInvestment.people.title')} className={styles.table}>
             <TableHeader>
               <TableRow>
-                <TableHeaderCell className={styles.personCol}>{t('copilotInvestment.people.col.person')}</TableHeaderCell>
-                <TableHeaderCell className={styles.narrowCol}>{t('copilotInvestment.people.col.seat')}</TableHeaderCell>
-                <TableHeaderCell className={styles.narrowCol}>{t('copilotInvestment.people.col.band')}</TableHeaderCell>
-                <TableHeaderCell className={styles.num}>{t('copilotInvestment.people.col.activeDays')}</TableHeaderCell>
-                <TableHeaderCell className={styles.num}>{t('copilotInvestment.people.col.need')}</TableHeaderCell>
-                <TableHeaderCell className={styles.num}>{t('copilotInvestment.people.col.apps')}</TableHeaderCell>
-                <TableHeaderCell className={styles.num}>{t('copilotInvestment.people.col.cost')}</TableHeaderCell>
-                <TableHeaderCell className={styles.num}>{t('copilotInvestment.people.col.credits')}</TableHeaderCell>
-                <TableHeaderCell className={styles.num}>{t('copilotInvestment.people.col.studio')}</TableHeaderCell>
-                <TableHeaderCell className={styles.signalCol}>{t('copilotInvestment.people.col.signal')}</TableHeaderCell>
+                {COLUMNS.map((c) => {
+                  const label = t(c.labelKey);
+                  return (
+                    <TableHeaderCell
+                      key={c.key}
+                      className={c.key === 'user' ? styles.personCol : c.key === 'signal' ? styles.signalCol : c.numeric ? styles.num : styles.narrowCol}
+                      button={c.numeric ? { className: styles.numHeader } : undefined}
+                      sortDirection={filters.sortBy === c.key ? (filters.sortDesc ? 'descending' : 'ascending') : undefined}
+                      onClick={() => sortOn(c.key)}
+                      title={t('copilotInvestment.people.sortColumn', { column: label })}
+                    >
+                      {label}
+                    </TableHeaderCell>
+                  );
+                })}
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -226,7 +292,9 @@ export default function PeoplePanel({ query, filters, onFiltersChange }: {
                         </Text>
                       )}
                     </TableCell>
-                    <TableCell>{t(row.licensed ? 'copilotInvestment.people.seatHeld' : 'copilotInvestment.people.noSeat')}</TableCell>
+                    <TableCell>
+                      <LicenceMark licensed={row.licensed} known={licenceKnown} t={t} />
+                    </TableCell>
                     <TableCell>{row.band && BAND_LABEL_KEYS[row.band] ? t(BAND_LABEL_KEYS[row.band]) : '\u2014'}</TableCell>
                     <TableCell className={styles.num}>{formatDecimal(row.activeDaysPerMonth)}</TableCell>
                     <TableCell className={styles.num}>{formatDecimal(row.breakEvenDaysPerMonth)}</TableCell>
@@ -269,7 +337,7 @@ export default function PeoplePanel({ query, filters, onFiltersChange }: {
         )}
       </Card>
 
-      {selected && <PersonDialog query={query} person={selected} onClose={() => setSelected(null)} />}
+      {selected && <PersonDialog query={query} person={selected} licenceKnown={licenceKnown} onClose={() => setSelected(null)} />}
     </div>
   );
 }
@@ -294,7 +362,12 @@ function signalColour(signal: string): 'success' | 'warning' | 'danger' | 'infor
 }
 
 /** One person's evidence: where, how often and with what they use Copilot, and what their balance is. */
-function PersonDialog({ query, person, onClose }: { query: InvestmentQuery; person: InvestmentPersonRow; onClose: () => void }) {
+function PersonDialog({ query, person, licenceKnown, onClose }: {
+  query: InvestmentQuery;
+  person: InvestmentPersonRow;
+  licenceKnown: boolean;
+  onClose: () => void;
+}) {
   const styles = useStyles();
   const t = useT();
   const [detail, setDetail] = useState<InvestmentPersonDetail | null>(null);
@@ -338,7 +411,10 @@ function PersonDialog({ query, person, onClose }: { query: InvestmentQuery; pers
               <>
                 <div className={styles.section}>
                   <div className={styles.detailGrid}>
-                    <Figure label={t('copilotInvestment.person.summary.seat')} value={t(row.licensed ? 'copilotInvestment.people.seatHeld' : 'copilotInvestment.people.noSeat')} />
+                    <Figure
+                      label={t('copilotInvestment.person.summary.seat')}
+                      value={t(!licenceKnown ? 'copilotInvestment.people.licence.unknown' : row.licensed ? 'copilotInvestment.people.seatHeld' : 'copilotInvestment.people.noSeat')}
+                    />
                     <Figure label={t('copilotInvestment.person.summary.activeDays')} value={formatNumber(row.activeDays)} />
                     <Figure
                       label={t('copilotInvestment.person.summary.weeks')}

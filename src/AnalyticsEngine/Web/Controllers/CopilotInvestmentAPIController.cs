@@ -358,31 +358,79 @@ namespace Web.AnalyticsWeb.Controllers
         private static bool Contains(string value, string term) =>
             value != null && value.IndexOf(term, StringComparison.CurrentCultureIgnoreCase) >= 0;
 
+        /// <summary>
+        /// Orders the whole filtered list - before it is paged, so a column sorts every person, not the fifty on screen. A value
+        /// a person cannot have yet (no modelled cost without prices, no balance without an observation, no band without
+        /// adoption evidence) sorts last whichever way the column is read; ties fall back to the sign-in name and then the user
+        /// id, so the same request always pages the same way.
+        /// </summary>
         internal static IEnumerable<CopilotInvestmentPersonRow> SortPeople(IEnumerable<CopilotInvestmentPersonRow> rows, string sortBy, bool descending)
         {
-            var keys = new List<Func<CopilotInvestmentPersonRow, object>>();
+            IOrderedEnumerable<CopilotInvestmentPersonRow> ordered = null;
+            foreach (var key in PeopleSortKeys(sortBy))
+            {
+                var value = key;
+                ordered = ordered == null ? rows.OrderBy(r => value(r) == null) : ordered.ThenBy(r => value(r) == null);
+                ordered = descending ? ordered.ThenByDescending(value, SortValueOrder) : ordered.ThenBy(value, SortValueOrder);
+            }
+            return ordered.ThenBy(r => r.UserPrincipalName ?? string.Empty, StringComparer.OrdinalIgnoreCase).ThenBy(r => r.UserId);
+        }
+
+        /// <summary>Text compares case-insensitively and culture-free, so the order is the same on every server.</summary>
+        private static readonly IComparer<object> SortValueOrder = Comparer<object>.Create((a, b) =>
+            a is string x && b is string y ? StringComparer.OrdinalIgnoreCase.Compare(x, y) : Comparer<object>.Default.Compare(a, b));
+
+        /// <summary>What each column sorts by. A key returns null for a value the person does not have.</summary>
+        private static Func<CopilotInvestmentPersonRow, object>[] PeopleSortKeys(string sortBy)
+        {
             switch ((sortBy ?? string.Empty).Trim())
             {
-                case "user": keys.Add(r => r.UserPrincipalName ?? string.Empty); break;
-                case "activeDays": keys.Add(r => r.ActiveDays); break;
-                case "credits": keys.Add(r => r.Credits ?? -1); break;
-                case "studioCredits": keys.Add(r => r.StudioCredits); break;
-                case "cost": keys.Add(r => r.Cost ?? -1); break;
-                case "valueBase": keys.Add(r => r.ValueBase ?? -1); break;
-                case "valueToCost": keys.Add(r => r.ValueToCostBase ?? -1); break;
-                case "gap": keys.Add(r => r.BreakEvenGapDaysPerMonth ?? -1); break;
+                case "user": return new Func<CopilotInvestmentPersonRow, object>[] { r => r.UserPrincipalName };
+                case "licensed": return new Func<CopilotInvestmentPersonRow, object>[] { r => r.Licensed };
+                case "band": return new Func<CopilotInvestmentPersonRow, object>[] { r => BandRank(r.Band) };
+                case "activeDays": return new Func<CopilotInvestmentPersonRow, object>[] { r => r.ActiveDaysPerMonth, r => r.ActiveDays };
+                case "breakEven": return new Func<CopilotInvestmentPersonRow, object>[] { r => r.BreakEvenDaysPerMonth };
+                case "apps": return new Func<CopilotInvestmentPersonRow, object>[] { r => r.AppsUsed };
+                case "credits": return new Func<CopilotInvestmentPersonRow, object>[] { r => r.Credits };
+                case "studioCredits": return new Func<CopilotInvestmentPersonRow, object>[] { r => r.StudioCredits };
+                case "cost": return new Func<CopilotInvestmentPersonRow, object>[] { r => r.Cost };
+                case "signal": return new Func<CopilotInvestmentPersonRow, object>[] { r => SignalRank(r.Signal) };
+                case "valueBase": return new Func<CopilotInvestmentPersonRow, object>[] { r => r.ValueBase };
+                case "valueToCost": return new Func<CopilotInvestmentPersonRow, object>[] { r => r.ValueToCostBase };
+                case "gap": return new Func<CopilotInvestmentPersonRow, object>[] { r => r.BreakEvenGapDaysPerMonth };
                 default:
                     // Modelled cost, then the latest balance, then Studio credits: ranked one after another and never
                     // added, because a period cost and a balance in an unverified period are not the same kind of money.
-                    keys.Add(r => r.Cost ?? -1);
-                    keys.Add(r => r.Credits ?? -1);
-                    keys.Add(r => r.StudioCredits);
-                    break;
+                    return new Func<CopilotInvestmentPersonRow, object>[] { r => r.Cost, r => r.Credits, r => r.StudioCredits };
             }
-            var ordered = descending ? rows.OrderByDescending(keys[0]) : rows.OrderBy(keys[0]);
-            foreach (var key in keys.Skip(1)) ordered = descending ? ordered.ThenByDescending(key) : ordered.ThenBy(key);
-            return ordered.ThenBy(r => r.UserId);
         }
+
+        /// <summary>An adoption band by how established the habit is: never used lowest. Unknown bands have no rank.</summary>
+        private static object BandRank(string band) =>
+            Enum.TryParse(band, out AdoptionBand parsed) && Enum.IsDefined(typeof(AdoptionBand), parsed) ? (object)(int)parsed : null;
+
+        /// <summary>
+        /// A signal by the strength of the evidence it reports, strongest highest, so "descending" reads strongest first. The
+        /// signals that do not judge at all (another period, not analysed, too new) sit just above no evidence.
+        /// </summary>
+        private static readonly Dictionary<string, int> SignalRanks = new Dictionary<string, int>(StringComparer.Ordinal)
+        {
+            [CopilotInvestmentSignals.Supported] = 12,
+            [CopilotInvestmentSignals.StrongEvidence] = 11,
+            [CopilotInvestmentSignals.ExpandCandidate] = 10,
+            [CopilotInvestmentSignals.Plausible] = 9,
+            [CopilotInvestmentSignals.Developing] = 8,
+            [CopilotInvestmentSignals.BelowBreakEven] = 7,
+            [CopilotInvestmentSignals.LightEvidence] = 6,
+            [CopilotInvestmentSignals.Metered] = 5,
+            [CopilotInvestmentSignals.ObservedUnlicensed] = 4,
+            [CopilotInvestmentSignals.OtherPeriod] = 3,
+            [CopilotInvestmentSignals.TooNewToJudge] = 2,
+            [CopilotInvestmentSignals.NotAnalysed] = 1,
+            [CopilotInvestmentSignals.NoEvidence] = 0,
+        };
+
+        private static object SignalRank(string signal) => signal != null && SignalRanks.TryGetValue(signal, out var rank) ? (object)rank : null;
 
         private bool CanSeeIndividuals() => PortalAccess.Evaluate(Request, User).SeePii;
 

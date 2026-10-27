@@ -300,7 +300,7 @@ namespace Web.AnalyticsWeb.Models.CopilotInvestment
             }
         }
 
-        private static CopilotInvestmentDirectoryEntry DirectoryEntry(UserDirectorySnapshot directory, int userId)
+        internal static CopilotInvestmentDirectoryEntry DirectoryEntry(UserDirectorySnapshot directory, int userId)
         {
             if (directory == null || !directory.TryGetRow(userId, out var row)) return null;
             var status = directory.ValueOf(UserFilterDimensions.AccountStatus, row);
@@ -316,7 +316,7 @@ namespace Web.AnalyticsWeb.Models.CopilotInvestment
             };
         }
 
-        private static Func<int, string> GroupFunction(UserDirectorySnapshot directory, string dimension, List<CopilotInvestmentPerson> people)
+        internal static Func<int, string> GroupFunction(UserDirectorySnapshot directory, string dimension, List<CopilotInvestmentPerson> people)
         {
             if (directory != null && directory.Column(dimension) != null)
                 return id => directory.TryGetRow(id, out var row) ? directory.ValueOf(dimension, row) : null;

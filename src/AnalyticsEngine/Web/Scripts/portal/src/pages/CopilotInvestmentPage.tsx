@@ -368,7 +368,14 @@ function InvestmentView({ userFilter: controlledFilter, onUserFilterChange }: {
           {activeTab === 'credits' && (
             <CreditsPanel summary={current} trend={trendKey === trendScope ? trend : null} trendLoading={trendLoading} trendError={trendError} />
           )}
-          {activeTab === 'people' && canSeePii && <PeoplePanel query={query} filters={peopleFilters} onFiltersChange={setPeopleFilters} />}
+          {activeTab === 'people' && canSeePii && (
+            <PeoplePanel
+              query={query}
+              filters={peopleFilters}
+              onFiltersChange={setPeopleFilters}
+              licenceKnown={current.sources.adoption.available}
+            />
+          )}
           {activeTab === 'method' && <MethodPanel summary={current} />}
         </div>
       )}

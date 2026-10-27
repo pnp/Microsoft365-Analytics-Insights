@@ -1,0 +1,166 @@
+using Common.Entities;
+using Common.Entities.Config;
+using Common.Entities.CopilotAdoption;
+using Common.Entities.CopilotInvestment;
+using Common.Entities.CopilotSpend;
+using Common.Entities.UserFilters;
+using DataUtils.Sql;
+using System;
+using System.Collections.Generic;
+using System.Globalization;
+using System.Runtime.Caching;
+using System.Runtime.CompilerServices;
+using System.Threading;
+using System.Threading.Tasks;
+using Web.AnalyticsWeb.Models.CopilotInvestment;
+using Web.AnalyticsWeb.Models.UserFilters;
+
+namespace Web.AnalyticsWeb.Models.CopilotSpend
+{
+    /// <summary>One request's choices: period, scope and the breakdown dimension. No prices: this report has none.</summary>
+    internal sealed class CopilotSpendRequest
+    {
+        public CopilotAdoptionDateRange Range { get; set; }
+        public ReportScope Scope { get; set; }
+        public string Dimension { get; set; } = CopilotInvestmentDimensions.Department;
+    }
+
+    /// <summary>
+    /// Builds the Copilot Spend report. It shares the investment report's tenant-wide fact cache, so one read of the latest
+    /// balances and of the Studio ledger serves both pages, and reads only the scoped Studio breakdown itself. It needs no
+    /// adoption analysis and no assumptions, so it works on a deployment that has neither.
+    /// </summary>
+    internal sealed class CopilotSpendReportService
+    {
+        private static readonly TimeSpan BreakdownTtl = TimeSpan.FromMinutes(10);
+        private static readonly TimeSpan FailedTtl = TimeSpan.FromSeconds(30);
+        private readonly CopilotInvestmentFactsCache _facts;
+        private readonly ICopilotSpendFactsSource _spend;
+        private readonly IUserDirectorySource _directory;
+        private readonly Func<ImportTaskSettings> _settings;
+        private readonly Func<bool> _creditCollectionEnabled;
+        private readonly MemoryCache _results;
+        private readonly string _prefix = "CopilotSpend::" + Guid.NewGuid().ToString("N") + "::";
+
+        public CopilotSpendReportService(
+            CopilotInvestmentFactsCache facts,
+            ICopilotSpendFactsSource spend,
+            IUserDirectorySource directory,
+            Func<ImportTaskSettings> settings,
+            Func<bool> creditCollectionEnabled,
+            MemoryCache results = null)
+        {
+            _facts = facts ?? throw new ArgumentNullException(nameof(facts));
+            _spend = spend ?? throw new ArgumentNullException(nameof(spend));
+            _directory = directory ?? throw new ArgumentNullException(nameof(directory));
+            _settings = settings ?? (() => new ImportTaskSettings());
+            _creditCollectionEnabled = creditCollectionEnabled ?? (() => false);
+            _results = results ?? MemoryCache.Default;
+        }
+
+        private static readonly Lazy<CopilotSpendReportService> Production = new Lazy<CopilotSpendReportService>(() =>
+        {
+            var investment = CopilotInvestmentReportService.ForThisDeployment();
+            var connection = new AppConfig().ConnectionStrings?.DatabaseConnectionString;
+            return new CopilotSpendReportService(
+                investment.Facts,
+                new SqlCopilotSpendFactsSource(() => AzureSqlTokenAuth.CreateConnection(connection)),
+                CachedUserDirectorySource.Default,
+                () => investment.Settings,
+                () => investment.CreditCollectionEnabled);
+        });
+
+        public static CopilotSpendReportService ForThisDeployment() => Production.Value;
+
+        public CopilotInvestmentFactsCache Facts => _facts;
+
+        public bool StudioImportEnabled => _settings().CopilotStudioCredits;
+
+        public bool CreditCollectionEnabled => _creditCollectionEnabled();
+
+        public async Task<CopilotSpendSummary> BuildAsync(CopilotSpendRequest request, CancellationToken cancellationToken)
+        {
+            var range = request.Range;
+            var scope = request.Scope ?? ReportScope.Unrestricted;
+            // Both sources are kept by day: the window's own days, never the day after an explicit end date.
+            var creditsTask = _facts.CreditsAsync(range.FromUtc.Date, CopilotInvestmentWindow.LastDay(range));
+            var studioTask = _facts.StudioAsync(range.FromUtc.Date, CopilotInvestmentWindow.DayAfter(range));
+            var breakdownTask = BreakdownAsync(range.FromUtc.Date, CopilotInvestmentWindow.DayAfter(range), scope.Sql);
+            var directory = await ReadDirectoryAsync(cancellationToken).ConfigureAwait(false);
+            var credits = await creditsTask.ConfigureAwait(false);
+            var studio = await studioTask.ConfigureAwait(false);
+            var breakdown = await breakdownTask.ConfigureAwait(false);
+
+            var cacheKey = string.Join("|", _prefix + "Summary", RuntimeHelpers.GetHashCode(credits), RuntimeHelpers.GetHashCode(studio),
+                RuntimeHelpers.GetHashCode(breakdown), directory == null ? "-" : directory.LoadedUtc.Ticks.ToString(CultureInfo.InvariantCulture),
+                scope.Key, request.Dimension, range.WindowDays.ToString(CultureInfo.InvariantCulture));
+            if (_results.Get(cacheKey) is CopilotSpendSummary cached) return cached;
+
+            Func<int, bool> inScope = scope.IsRestricted ? (Func<int, bool>)scope.Includes : _ => true;
+            var summary = CopilotSpendCalculator.Calculate(new CopilotSpendInput
+            {
+                GeneratedUtc = DateTime.UtcNow,
+                FromUtc = range.FromUtc,
+                ToUtc = CopilotInvestmentWindow.End(range),
+                WindowDays = range.WindowDays,
+                Filtered = scope.IsRestricted,
+                InScope = inScope,
+                Directory = id => CopilotInvestmentReportService.DirectoryEntry(directory, id),
+                Dimension = request.Dimension,
+                DimensionName = directory?.DimensionName(request.Dimension),
+                GroupOf = CopilotInvestmentReportService.GroupFunction(directory, request.Dimension, new List<CopilotInvestmentPerson>()),
+                Credits = credits,
+                CreditCollectionEnabled = CreditCollectionEnabled,
+                Studio = studio,
+                StudioImportEnabled = StudioImportEnabled,
+                StudioBreakdown = breakdown,
+            });
+            summary.UserFilter = scope.UserFilter?.ToEcho(scope.Restriction);
+            summary.GlobalFilter = scope.GlobalEcho;
+            _results.Set(cacheKey, summary, DateTimeOffset.UtcNow.AddMinutes(2));
+            return summary;
+        }
+
+        /// <summary>
+        /// The scoped Studio breakdown, shared per window and scope for a few minutes; the running task is shared, so
+        /// concurrent first requests run one query. A failure is kept briefly and reported as a code.
+        /// </summary>
+        private Task<CopilotSpendStudioBreakdown> BreakdownAsync(DateTime from, DateTime toExclusive, ReportUserScope scope)
+        {
+            var key = _prefix + "Breakdown::" + from.ToString("yyyyMMdd", CultureInfo.InvariantCulture) + "::"
+                + toExclusive.ToString("yyyyMMdd", CultureInfo.InvariantCulture) + "::" + (scope ?? ReportUserScope.Everyone).Key;
+            var lazy = new Lazy<Task<CopilotSpendStudioBreakdown>>(() => LoadBreakdownAsync(key, from, toExclusive, scope), LazyThreadSafetyMode.ExecutionAndPublication);
+            var existing = _results.AddOrGetExisting(key, lazy, DateTimeOffset.UtcNow.Add(BreakdownTtl)) as Lazy<Task<CopilotSpendStudioBreakdown>> ?? lazy;
+            return existing.Value;
+        }
+
+        private async Task<CopilotSpendStudioBreakdown> LoadBreakdownAsync(string key, DateTime from, DateTime toExclusive, ReportUserScope scope)
+        {
+            try
+            {
+                return await _spend.GetStudioBreakdownAsync(from, toExclusive, scope, CancellationToken.None).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                WebExceptionTelemetry.Report(ex, "CopilotSpend.StudioBreakdown");
+                var failed = new CopilotSpendStudioBreakdown { FailureCode = CopilotSpendErrorCodes.StudioBreakdownUnavailable };
+                _results.Set(key, new Lazy<Task<CopilotSpendStudioBreakdown>>(() => Task.FromResult(failed)), DateTimeOffset.UtcNow.Add(FailedTtl));
+                return failed;
+            }
+        }
+
+        private async Task<UserDirectorySnapshot> ReadDirectoryAsync(CancellationToken cancellationToken)
+        {
+            try
+            {
+                return await _directory.GetAsync(cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
+            {
+                // Rows then carry user ids only and no grouping is offered; nothing is invented.
+                WebExceptionTelemetry.Report(ex, "CopilotSpend.Directory");
+                return null;
+            }
+        }
+    }
+}

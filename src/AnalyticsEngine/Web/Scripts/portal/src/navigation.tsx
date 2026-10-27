@@ -22,6 +22,7 @@ import {
   Settings20Regular,
   ShieldProhibited20Regular,
   Sparkle20Regular,
+  Wallet20Regular,
 } from '@fluentui/react-icons';
 
 import { lazyWithReload } from './lazyWithReload';
@@ -35,6 +36,7 @@ const InsightsOverviewPage = lazyWithReload(() => import('./pages/InsightsOvervi
 const ReportsPage = lazyWithReload(() => import('./pages/ReportsPage'));
 const CopilotAdoptionPage = lazyWithReload(() => import('./pages/CopilotAdoptionPage'));
 const CopilotInvestmentPage = lazyWithReload(() => import('./pages/CopilotInvestmentPage'));
+const CopilotSpendPage = lazyWithReload(() => import('./pages/CopilotSpendPage'));
 const TeamsExplorerPage = lazyWithReload(() => import('./pages/TeamsExplorerPage'));
 const WebActivityPage = lazyWithReload(() => import('./pages/WebActivityPage'));
 const AgentCostsPage = lazyWithReload(() => import('./pages/AgentCostsPage'));
@@ -177,6 +179,15 @@ export const ROUTES: PortalRoute[] = [
     // A calculator rather than the coin Agent costs uses: this page models value against cost, it is not a bill.
     icon: <MoneyCalculator20Regular />,
     element: <CopilotInvestmentPage />,
+    workload: 'copilot',
+  },
+  {
+    area: 'insights',
+    path: '/insights/copilot-spend',
+    labelKey: 'app.route.copilotSpend',
+    // A wallet: who consumed which credits, as the sources report them - no prices, value or modelling.
+    icon: <Wallet20Regular />,
+    element: <CopilotSpendPage />,
     workload: 'copilot',
   },
   {

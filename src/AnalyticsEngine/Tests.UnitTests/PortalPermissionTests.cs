@@ -114,6 +114,12 @@ namespace Tests.UnitTests
             ["CopilotInvestmentSettingsAPIController.Get"] = Admin,    // the history names who changed what
             ["CopilotInvestmentSettingsAPIController.Save"] = Admin,
 
+            ["CopilotSpendAPIController.Summary"] = Any,               // trims the people; a user filter or manager grouping needs See PII
+            ["CopilotSpendAPIController.Trend"] = Any,                 // balance totals only; a user filter needs See PII
+            ["CopilotSpendAPIController.People"] = Pii,
+            ["CopilotSpendAPIController.Person"] = Pii,
+            ["CopilotSpendAPIController.ExportWorkbook"] = Any,        // trims the people sheet
+
             ["DlpAPIController.Availability"] = Any,
             ["DlpAPIController.Summary"] = Any,                        // trims the top-users table
             ["DlpAPIController.Governance"] = Any,                     // tenant-level rates and model/plugin names only
