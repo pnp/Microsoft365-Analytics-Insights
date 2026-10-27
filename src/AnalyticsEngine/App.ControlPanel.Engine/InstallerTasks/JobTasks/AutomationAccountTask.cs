@@ -43,7 +43,7 @@ namespace App.ControlPanel.Engine.InstallerTasks.Tasks
         public override async Task<AutomationAccountResource> ExecuteTaskReturnResult(object contextArg)
         {
             // Get/create app-service with plan
-            var automationAccount = Container.GetAutomationAccounts().AsEnumerable().Where(s => s.Data.Name == _config.ResourceName).SingleOrDefault();
+            var automationAccount = Container.GetAutomationAccounts().GetAll(cancellationToken: CancellationToken).Where(s => s.Data.Name == _config.ResourceName).SingleOrDefault();
             if (automationAccount == null)
             {
                 var newAutomationAccountInfo = new AutomationAccountCreateOrUpdateContent()
@@ -64,7 +64,7 @@ namespace App.ControlPanel.Engine.InstallerTasks.Tasks
                 _logger.LogInformation($"Creating Automation account '{_config.ResourceName}' (public access: {(_allowPublicAccess ? "enabled" : "disabled")}) ...");
                 try
                 {
-                    var newAccountReq = await Container.GetAutomationAccounts().CreateOrUpdateAsync(WaitUntil.Completed, _config.ResourceName, newAutomationAccountInfo);
+                    var newAccountReq = await Container.GetAutomationAccounts().CreateOrUpdateAsync(WaitUntil.Completed, _config.ResourceName, newAutomationAccountInfo, cancellationToken: CancellationToken);
                     automationAccount = newAccountReq.Value;
                 }
                 catch (RequestFailedException ex)
@@ -119,7 +119,7 @@ namespace App.ControlPanel.Engine.InstallerTasks.Tasks
 
                     try
                     {
-                        var updateReq = await automationAccount.UpdateAsync(patch);
+                        var updateReq = await automationAccount.UpdateAsync(patch, cancellationToken: CancellationToken);
                         automationAccount = updateReq.Value;
                     }
                     catch (RequestFailedException ex)
@@ -174,7 +174,7 @@ namespace App.ControlPanel.Engine.InstallerTasks.Tasks
             {
                 _logger.LogInformation($"Creating/updating automation credentials for '{_config.ResourceName}'...");
                 var credSql = new AutomationCredentialCreateOrUpdateContent(CRED_SQL_NAME, _config[CONFIG_PARAM_NAME_SQL_USERNAME], _config[CONFIG_PARAM_NAME_SQL_PASSWORD]);
-                await automationAccount.GetAutomationCredentials().CreateOrUpdateAsync(WaitUntil.Completed, CRED_SQL_NAME, credSql);
+                await automationAccount.GetAutomationCredentials().CreateOrUpdateAsync(WaitUntil.Completed, CRED_SQL_NAME, credSql, cancellationToken: CancellationToken);
             }
 
             // Schedules
@@ -201,7 +201,7 @@ namespace App.ControlPanel.Engine.InstallerTasks.Tasks
 
         async Task CreateVariableIfMissingAsync(AutomationVariableCollection variables, string varName, AutomationVariableCreateOrUpdateContent varContent)
         {
-            if ((await variables.ExistsAsync(varName)).Value)
+            if ((await variables.ExistsAsync(varName, cancellationToken: CancellationToken)).Value)
             {
                 _logger.LogInformation($"Automation variable '{varName}' already exists in '{_config.ResourceName}' — leaving existing value untouched.");
                 return;
@@ -209,7 +209,7 @@ namespace App.ControlPanel.Engine.InstallerTasks.Tasks
 
             try
             {
-                await variables.CreateOrUpdateAsync(WaitUntil.Completed, varName, varContent);
+                await variables.CreateOrUpdateAsync(WaitUntil.Completed, varName, varContent, cancellationToken: CancellationToken);
                 _logger.LogInformation($"Created automation variable '{varName}'.");
             }
             catch (ArgumentNullException)
@@ -220,13 +220,13 @@ namespace App.ControlPanel.Engine.InstallerTasks.Tasks
 
         async Task CreateScheduleIfMissingAsync(AutomationScheduleCollection schedules, AutomationScheduleCreateOrUpdateContent scheduleContent)
         {
-            if ((await schedules.ExistsAsync(scheduleContent.Name)).Value)
+            if ((await schedules.ExistsAsync(scheduleContent.Name, cancellationToken: CancellationToken)).Value)
             {
                 _logger.LogInformation($"Automation schedule '{scheduleContent.Name}' already exists in '{_config.ResourceName}' — leaving existing start time and runbook bindings untouched.");
                 return;
             }
 
-            await schedules.CreateOrUpdateAsync(WaitUntil.Completed, scheduleContent.Name, scheduleContent);
+            await schedules.CreateOrUpdateAsync(WaitUntil.Completed, scheduleContent.Name, scheduleContent, cancellationToken: CancellationToken);
             _logger.LogInformation($"Created automation schedule '{scheduleContent.Name}'.");
         }
 

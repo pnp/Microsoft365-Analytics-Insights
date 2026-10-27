@@ -47,6 +47,7 @@ namespace CloudInstallEngine.Azure.InstallTasks
 
             // Read AppInsights info
             var appInsightsManager = new AppInsightsManager(_credential, _subscriptionId, _resourceGroupName, name);
+            appInsightsManager.CancellationToken = CancellationToken;
             var appProps = await appInsightsManager.GetAppInsightsInstanceProperties(_logger);
 
             if (resourceCreateInfo.CreatedNew)

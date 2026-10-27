@@ -3,6 +3,8 @@ using DataUtils;
 using Microsoft.Extensions.Logging;
 using System;
 using System.IO;
+using System.IO.Compression;
+using System.Threading;
 
 namespace App.ControlPanel.Engine.InstallerTasks
 {
@@ -11,8 +13,10 @@ namespace App.ControlPanel.Engine.InstallerTasks
     /// </summary>
     public class ZipFileTasks
     {
-        public static DirectoryInfo Unzip(LocalStorageBlobInfo localStorageBlobInfo, ILogger logger)
+        public static DirectoryInfo Unzip(LocalStorageBlobInfo localStorageBlobInfo, ILogger logger,
+            CancellationToken cancellationToken = default(CancellationToken))
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var zipFile = new FileInfo(localStorageBlobInfo.FileLocation);
 
             var zipFileNameMinusExtension = zipFile.Name.TrimEnd(zipFile.Extension.ToCharArray());
@@ -36,7 +40,25 @@ namespace App.ControlPanel.Engine.InstallerTasks
                 // Delete dir
                 Directory.Delete(extractPath, true);
             }
-            System.IO.Compression.ZipFile.ExtractToDirectory(localStorageBlobInfo.FileLocation, extractPath);
+            var root = Path.GetFullPath(extractPath) + Path.DirectorySeparatorChar;
+            Directory.CreateDirectory(root);
+            using (var archive = ZipFile.OpenRead(localStorageBlobInfo.FileLocation))
+            {
+                foreach (var entry in archive.Entries)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    var destination = Path.GetFullPath(Path.Combine(root, entry.FullName));
+                    if (!destination.StartsWith(root, StringComparison.OrdinalIgnoreCase))
+                        throw new IOException("The release ZIP contains a path outside its extraction directory.");
+                    if (entry.Name.Length == 0)
+                        Directory.CreateDirectory(destination);
+                    else
+                    {
+                        Directory.CreateDirectory(Path.GetDirectoryName(destination));
+                        entry.ExtractToFile(destination);
+                    }
+                }
+            }
 
             var extractPathDir = new DirectoryInfo(extractPath);
 

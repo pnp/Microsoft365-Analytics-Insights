@@ -37,7 +37,7 @@ namespace CloudInstallEngine.Azure.InstallTasks
             var supportsAlwaysOn = AppServicePlanCapabilities.SupportsAlwaysOn(appServicePlanSku);
 
             // Get/create app-service with plan
-            var webApp = Container.GetWebSites().AsEnumerable().Where(s => s.Data.Name == _config.ResourceName).SingleOrDefault();
+            var webApp = Container.GetWebSites().GetAll(cancellationToken: CancellationToken).Where(s => s.Data.Name == _config.ResourceName).SingleOrDefault();
             if (webApp == null)
             {
                 var newWebAppInfo = BuildNewWebSiteData(base.AzureLocation, appServicePlan.Id, appServicePlanSku, _allowPublicAccess);
@@ -49,14 +49,14 @@ namespace CloudInstallEngine.Azure.InstallTasks
                 _logger.LogInformation($"Creating App Service '{_config.ResourceName}' on plan '{appServicePlan.Data.Name}' (public access: {(_allowPublicAccess ? "enabled" : "disabled")})...");
                 try
                 {
-                    var newWebAppReq = await Container.GetWebSites().CreateOrUpdateAsync(WaitUntil.Completed, _config.ResourceName, newWebAppInfo);
+                    var newWebAppReq = await Container.GetWebSites().CreateOrUpdateAsync(WaitUntil.Completed, _config.ResourceName, newWebAppInfo, cancellationToken: CancellationToken);
                     webApp = newWebAppReq.Value;
                 }
                 catch (RequestFailedException ex) when (AppServicePlanCapabilities.IsPlanCapabilityConflict(ex))
                 {
                     _logger.LogWarning(AppServicePlanCapabilities.BuildAlwaysOnUnsupportedWarning(appServicePlan.Data.Name, appServicePlanSku));
                     newWebAppInfo.SiteConfig = BuildSecureSiteConfig(appServicePlanSku, includeAlwaysOn: false);
-                    var newWebAppReq = await Container.GetWebSites().CreateOrUpdateAsync(WaitUntil.Completed, _config.ResourceName, newWebAppInfo);
+                    var newWebAppReq = await Container.GetWebSites().CreateOrUpdateAsync(WaitUntil.Completed, _config.ResourceName, newWebAppInfo, cancellationToken: CancellationToken);
                     webApp = newWebAppReq.Value;
                 }
             }
@@ -74,7 +74,7 @@ namespace CloudInstallEngine.Azure.InstallTasks
                 }
 
                 // Ensure minimum TLS version is 1.2 and enable Always On when the plan supports it.
-                var siteConfig = (await webApp.GetWebSiteConfig().GetAsync()).Value.Data;
+                var siteConfig = (await webApp.GetWebSiteConfig().GetAsync(cancellationToken: CancellationToken)).Value.Data;
                 var needsTlsUpdate = siteConfig.MinTlsVersion == null || !siteConfig.MinTlsVersion.Value.ToString().Equals(AppServiceSupportedTlsVersion.Tls1_2.ToString());
                 var needsAlwaysOnUpdate = supportsAlwaysOn && siteConfig.IsAlwaysOn != true;
                 var needsFtpsDisable = siteConfig.FtpsState != AppServiceFtpsState.Disabled;
@@ -99,14 +99,14 @@ namespace CloudInstallEngine.Azure.InstallTasks
                     base.EnsureTagsOnNew(webAppUpdateInfo.Tags);
                     try
                     {
-                        await Container.GetWebSites().CreateOrUpdateAsync(WaitUntil.Completed, _config.ResourceName, webAppUpdateInfo);
+                        await Container.GetWebSites().CreateOrUpdateAsync(WaitUntil.Completed, _config.ResourceName, webAppUpdateInfo, cancellationToken: CancellationToken);
                     }
                     catch (RequestFailedException ex) when (AppServicePlanCapabilities.IsPlanCapabilityConflict(ex))
                     {
                         _logger.LogWarning(AppServicePlanCapabilities.BuildAlwaysOnUnsupportedWarning(appServicePlan.Data.Name, appServicePlanSku));
                         if (webAppUpdateInfo.SiteConfig != null)
                             webAppUpdateInfo.SiteConfig.IsAlwaysOn = null;
-                        await Container.GetWebSites().CreateOrUpdateAsync(WaitUntil.Completed, _config.ResourceName, webAppUpdateInfo);
+                        await Container.GetWebSites().CreateOrUpdateAsync(WaitUntil.Completed, _config.ResourceName, webAppUpdateInfo, cancellationToken: CancellationToken);
                     }
                 }
 
@@ -116,8 +116,8 @@ namespace CloudInstallEngine.Azure.InstallTasks
             }
 
             // Kudu ZIP deployment requires SCM publishing credentials.
-            var scmPolicy = await webApp.GetScmSiteBasicPublishingCredentialsPolicy().GetAsync();
-            var ftpPolicy = await webApp.GetWebSiteFtpPublishingCredentialsPolicy().GetAsync();
+            var scmPolicy = await webApp.GetScmSiteBasicPublishingCredentialsPolicy().GetAsync(cancellationToken: CancellationToken);
+            var ftpPolicy = await webApp.GetWebSiteFtpPublishingCredentialsPolicy().GetAsync(cancellationToken: CancellationToken);
 
             var publishingCredentialsPolicyData = new CsmPublishingCredentialsPoliciesEntityData()
             {
@@ -128,14 +128,14 @@ namespace CloudInstallEngine.Azure.InstallTasks
             {
                 _logger.LogInformation($"Enabling basic publishing credentials (SCM) for '{_config.ResourceName}'...");
                 await webApp.GetScmSiteBasicPublishingCredentialsPolicy().CreateOrUpdateAsync(
-                    WaitUntil.Completed, publishingCredentialsPolicyData);
+                    WaitUntil.Completed, publishingCredentialsPolicyData, cancellationToken: CancellationToken);
             }
             if (ftpPolicy.Value.Data.Allow != false)
             {
                 _logger.LogInformation($"Disabling FTP basic publishing credentials for '{_config.ResourceName}'...");
                 await webApp.GetWebSiteFtpPublishingCredentialsPolicy().CreateOrUpdateAsync(
                     WaitUntil.Completed,
-                    new CsmPublishingCredentialsPoliciesEntityData { Allow = false });
+                    new CsmPublishingCredentialsPoliciesEntityData { Allow = false }, cancellationToken: CancellationToken);
             }
             // Configure VNet integration if a subnet ID is provided
             var vnetSubnetId = _config.ContainsKey(CONFIG_KEY_VNET_INTEGRATION_SUBNET_ID) ? _config.GetConfigValue(CONFIG_KEY_VNET_INTEGRATION_SUBNET_ID) : null;
@@ -148,7 +148,7 @@ namespace CloudInstallEngine.Azure.InstallTasks
                     {
                         Id = webApp.Id.ToString(), Kind = PrivateNetworkProvenance.Integration,
                         TargetId = webApp.Id.ToString(), SubnetId = vnetSubnetId,
-                        PreviousRouteAllEnabled = (await webApp.GetWebSiteConfig().GetAsync()).Value.Data.IsVnetRouteAllEnabled == true
+                        PreviousRouteAllEnabled = (await webApp.GetWebSiteConfig().GetAsync(cancellationToken: CancellationToken)).Value.Data.IsVnetRouteAllEnabled == true
                     };
                     if (Networking != null)
                     {
@@ -168,7 +168,7 @@ namespace CloudInstallEngine.Azure.InstallTasks
                                 IsVnetRouteAllEnabled = true
                             }
                         };
-                        await Container.GetWebSites().CreateOrUpdateAsync(WaitUntil.Completed, _config.ResourceName, vnetUpdateData);
+                        await Container.GetWebSites().CreateOrUpdateAsync(WaitUntil.Completed, _config.ResourceName, vnetUpdateData, cancellationToken: CancellationToken);
                         Networking?.ConfirmCreate(integration.Id);
                         _logger.LogInformation($"VNet integration configured for App Service '{_config.ResourceName}' with route-all enabled.");
                     }

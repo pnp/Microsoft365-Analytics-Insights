@@ -58,7 +58,7 @@ namespace CloudInstallEngine.Azure.InstallTasks
             var desiredAccess = _allowPublicAccess ? ServerNetworkAccessFlag.Enabled : ServerNetworkAccessFlag.Disabled;
 
             SqlServerResource sqlServer = null;
-            foreach (var server in Container.GetSqlServers())
+            foreach (var server in Container.GetSqlServers().GetAll(cancellationToken: CancellationToken))
             {
                 if (server.Data.Name == serverName)
                 {
@@ -102,7 +102,7 @@ namespace CloudInstallEngine.Azure.InstallTasks
                 CreatedWithEntraOnlyAuth = entraOnly;
 
                 base.EnsureTagsOnNew(sqlServerData.Tags);
-                var serverCreateResult = await Container.GetSqlServers().CreateOrUpdateAsync(WaitUntil.Completed, serverName, sqlServerData);
+                var serverCreateResult = await Container.GetSqlServers().CreateOrUpdateAsync(WaitUntil.Completed, serverName, sqlServerData, cancellationToken: CancellationToken);
                 sqlServer = serverCreateResult.Value;
             }
             else
@@ -134,7 +134,7 @@ namespace CloudInstallEngine.Azure.InstallTasks
                 // other consumer of the database. See issue #117.
                 if (needsUpdate)
                 {
-                    await Container.GetSqlServers().CreateOrUpdateAsync(WaitUntil.Completed, serverName, updateData);
+                    await Container.GetSqlServers().CreateOrUpdateAsync(WaitUntil.Completed, serverName, updateData, cancellationToken: CancellationToken);
                 }
 
                 _logger.LogInformation($"Found existing SQL Server '{sqlServer.Data.FullyQualifiedDomainName}'.");

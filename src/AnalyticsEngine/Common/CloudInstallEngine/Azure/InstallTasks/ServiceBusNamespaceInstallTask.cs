@@ -81,7 +81,7 @@ namespace CloudInstallEngine.Azure.InstallTasks
             var name = base._config.GetNameConfigValue();
             var desiredAccess = _allowPublicAccess ? ServiceBusPublicNetworkAccess.Enabled : ServiceBusPublicNetworkAccess.Disabled;
 
-            var sbNS = allNSs.AsEnumerable().Where(ns => ns.Data.Name.ToLower() == name.ToLower()).SingleOrDefault();
+            var sbNS = allNSs.GetAll(cancellationToken: CancellationToken).Where(ns => ns.Data.Name.ToLower() == name.ToLower()).SingleOrDefault();
 
             if (sbNS == null)
             {
@@ -96,7 +96,7 @@ namespace CloudInstallEngine.Azure.InstallTasks
                     newResourceData.Sku = new ServiceBusSku(ServiceBusSkuName.Premium);
                 }
                 base.EnsureTagsOnNew(newResourceData.Tags);
-                var operation = await allNSs.CreateOrUpdateAsync(WaitUntil.Completed, name, newResourceData);
+                var operation = await allNSs.CreateOrUpdateAsync(WaitUntil.Completed, name, newResourceData, cancellationToken: CancellationToken);
 
                 sbNS = operation.Value;
 
@@ -167,7 +167,7 @@ namespace CloudInstallEngine.Azure.InstallTasks
 
                 if (needsUpdate)
                 {
-                    var operation = await allNSs.CreateOrUpdateAsync(WaitUntil.Completed, name, updateData);
+                    var operation = await allNSs.CreateOrUpdateAsync(WaitUntil.Completed, name, updateData, cancellationToken: CancellationToken);
                     sbNS = operation.Value;
                 }
             }

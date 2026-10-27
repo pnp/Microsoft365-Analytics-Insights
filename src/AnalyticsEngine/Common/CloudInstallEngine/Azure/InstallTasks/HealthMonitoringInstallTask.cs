@@ -84,7 +84,7 @@ namespace CloudInstallEngine.Azure.InstallTasks
 
         protected virtual async Task<ResourceIdentifier> ReadHostingPlanIdAsync()
         {
-            var site = (await Container.GetWebSiteAsync(_config.ResourceName)).Value;
+            var site = (await Container.GetWebSiteAsync(_config.ResourceName, cancellationToken: CancellationToken)).Value;
             var plan = site.Data.AppServicePlanId;
             if (plan == null || !string.Equals(plan.ResourceType.ToString(), "Microsoft.Web/serverfarms", StringComparison.OrdinalIgnoreCase))
                 throw new InstallException("The App Service did not report a valid hosting plan; no health-alert resources were changed.");
@@ -95,7 +95,7 @@ namespace CloudInstallEngine.Azure.InstallTasks
         {
             get
             {
-                var scope = Container.GetGenericResources("resourceType eq 'Microsoft.Insights/components'")
+                var scope = Container.GetGenericResources("resourceType eq 'Microsoft.Insights/components'", cancellationToken: CancellationToken)
                     .Single(r => string.Equals(r.Data.Name, _config.GetConfigValue(AppInsightsNameSetting), StringComparison.OrdinalIgnoreCase));
                 return scope.Data.Location.Name;
             }
@@ -105,7 +105,7 @@ namespace CloudInstallEngine.Azure.InstallTasks
         {
             var names = new HashSet<string>(ResourceNames, StringComparer.OrdinalIgnoreCase);
             return new[] { RuleType, GroupType, MetricType }
-                .SelectMany(type => Container.GetGenericResources("resourceType eq '" + type + "'")
+                .SelectMany(type => Container.GetGenericResources("resourceType eq '" + type + "'", cancellationToken: CancellationToken)
                     .Where(r => type == GroupType
                         ? string.Equals(r.Data.Name, ResourceNames[0], StringComparison.OrdinalIgnoreCase)
                         : names.Contains(r.Data.Name) && !string.Equals(r.Data.Name, ResourceNames[0], StringComparison.OrdinalIgnoreCase)))

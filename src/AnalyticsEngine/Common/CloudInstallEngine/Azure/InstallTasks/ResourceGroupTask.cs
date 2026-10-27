@@ -29,6 +29,7 @@ namespace CloudInstallEngine.Azure.InstallTasks
         public override async Task<ResourceGroupResource> ExecuteTaskReturnResult(object contextArg)
         {
             var rgTask = new GetOrCreateResourceGroupTask(_config, _logger, _location, _tags, _subscription);
+            rgTask.CancellationToken = CancellationToken;
             var rg = await rgTask.GetOrCreateResourceGroup(true, false);
 
             return rg;
@@ -62,7 +63,7 @@ namespace CloudInstallEngine.Azure.InstallTasks
             ResourceGroupResource resourceGroup = null;
             try
             {
-                resourceGroup = await resourceGroups.GetAsync(_config.ResourceName);
+                resourceGroup = await resourceGroups.GetAsync(_config.ResourceName, CancellationToken);
             }
             catch (RequestFailedException ex) when (ex.Status == 404)
             {
@@ -92,7 +93,7 @@ namespace CloudInstallEngine.Azure.InstallTasks
 
                 var resourceGroupData = new ResourceGroupData(_location);
                 base.EnsureTagsOnNew(resourceGroupData.Tags, _tags);
-                var operation = await resourceGroups.CreateOrUpdateAsync(WaitUntil.Completed, _config.ResourceName, resourceGroupData);
+                var operation = await resourceGroups.CreateOrUpdateAsync(WaitUntil.Completed, _config.ResourceName, resourceGroupData, CancellationToken);
 
                 _logger.LogInformation($"Created resource-group '{_config.ResourceName}'.");
 

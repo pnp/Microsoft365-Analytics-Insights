@@ -5,6 +5,7 @@ using System;
 using System.Collections.Concurrent;
 using System.IdentityModel.Tokens.Jwt;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace CloudInstallEngine.Azure
@@ -33,8 +34,10 @@ namespace CloudInstallEngine.Azure
         /// Cached per (tenantId, clientId) for the lifetime of the process. Returns true if the value came from cache,
         /// so callers can skip noisy per-call "Resolved X to Y" log lines on repeat lookups.
         /// </summary>
-        public static async Task<(string ObjectId, bool WasCached)> GetObjectIdFromClientCredentialsWithCacheInfo(string tenantId, string clientId, string clientSecret)
+        public static async Task<(string ObjectId, bool WasCached)> GetObjectIdFromClientCredentialsWithCacheInfo(string tenantId, string clientId, string clientSecret,
+            CancellationToken cancellationToken = default(CancellationToken))
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var cacheKey = $"{tenantId ?? string.Empty}|{clientId ?? string.Empty}";
             if (_cache.TryGetValue(cacheKey, out var cached))
             {
@@ -42,7 +45,7 @@ namespace CloudInstallEngine.Azure
             }
 
             var creds = new ClientSecretCredential(tenantId, clientId, clientSecret);
-            var credTokenResponse = await creds.GetTokenAsync(new TokenRequestContext(new string[] { "https://management.core.windows.net/.default" }, null));
+            var credTokenResponse = await creds.GetTokenAsync(new TokenRequestContext(new string[] { "https://management.core.windows.net/.default" }, null), cancellationToken);
             var handler = new JwtSecurityTokenHandler();
             var jwtSecurityToken = handler.ReadJwtToken(credTokenResponse.Token);
             var objectIdClaim = jwtSecurityToken.Claims.Where(c => c.Type == "oid").FirstOrDefault();
@@ -60,11 +63,11 @@ namespace CloudInstallEngine.Azure
         /// <see cref="GetObjectIdFromClientCredentialsWithCacheInfo"/> when you want to suppress
         /// repeat "Resolved" log lines on cache hits.
         /// </summary>
-        public static async Task<string> GetObjectIdFromClientCredentials(string tenantId, string clientId, string clientSecret)
+        public static async Task<string> GetObjectIdFromClientCredentials(string tenantId, string clientId, string clientSecret,
+            CancellationToken cancellationToken = default(CancellationToken))
         {
-            var (objectId, _) = await GetObjectIdFromClientCredentialsWithCacheInfo(tenantId, clientId, clientSecret);
+            var (objectId, _) = await GetObjectIdFromClientCredentialsWithCacheInfo(tenantId, clientId, clientSecret, cancellationToken);
             return objectId;
         }
     }
 }
-

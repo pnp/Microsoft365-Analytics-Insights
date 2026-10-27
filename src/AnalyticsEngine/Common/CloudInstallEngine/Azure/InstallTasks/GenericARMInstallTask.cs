@@ -35,7 +35,7 @@ namespace CloudInstallEngine.Azure.InstallTasks
             try
             {
                 var result = await Container.GetArmDeployments()
-                    .CreateOrUpdateAsync(WaitUntil.Completed, this.GetType().Name + DateTime.Now.Ticks, armDeploymentInfo);
+                    .CreateOrUpdateAsync(WaitUntil.Completed, this.GetType().Name + DateTime.Now.Ticks, armDeploymentInfo, cancellationToken: CancellationToken);
                 return result.Value;
             }
 

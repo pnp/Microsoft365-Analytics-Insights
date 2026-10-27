@@ -26,7 +26,7 @@ namespace App.ControlPanel.Engine.InstallerTasks
         internal async Task InstallAITracker(SharePointInstallConfig sharePointInstallConfig, LocalStorageBlobInfo aiTrackerZipFile, string appInsightsConnectionString)
         {
             Console.WriteLine("Extracting AITracker from downloaded zip...");
-            var zipContentsDir = ZipFileTasks.Unzip(aiTrackerZipFile, _logger);
+            var zipContentsDir = ZipFileTasks.Unzip(aiTrackerZipFile, _logger, CancellationToken);
 
             // Find AI tracker
             FileInfo aiTrackerTempFile = null, aiTrackerSPFx = null;
@@ -53,12 +53,14 @@ namespace App.ControlPanel.Engine.InstallerTasks
             // One interactive sign-in covers the app catalog & every target site - they're all in the same SPO tenant
             using (var authenticator = new InteractiveSpoAuthenticator(sharePointInstallConfig, _logger))
             {
+                authenticator.CancellationToken = CancellationToken;
                 // Upload SPFx solution
                 await ExecuteReportFailureAndThrowExceptionIfCritical("Upload SPFx solution",
                             () => UploadApp(sharePointInstallConfig, aiTrackerSPFx.FullName, authenticator));
 
                 // Install into sites. Hard-code library name "SPOInsights" for now
                 var siteInstaller = new SpoSiteListInstaller(authenticator, _logger);
+                siteInstaller.CancellationToken = CancellationToken;
                 await siteInstaller.InstallToSites(sharePointInstallConfig.TargetSites, aiTrackerTempFile, appInsightsConnectionString,
                     "SPOInsights", "https://" + _defaultHostName);
             }
@@ -77,6 +79,7 @@ namespace App.ControlPanel.Engine.InstallerTasks
                 // so the whole SharePoint stage aborts instead of reporting a misleading success later.
                 using (var rest = new SpoRestClient(authenticator, _logger))
                 {
+                    rest.CancellationToken = CancellationToken;
                     // Test-load the web & check template
                     Newtonsoft.Json.Linq.JObject web;
                     try
@@ -119,6 +122,7 @@ namespace App.ControlPanel.Engine.InstallerTasks
                 // Add modern UI package
                 using (var appCatalog = new TenantAppCatalogManager(authenticator, _logger))
                 {
+                    appCatalog.CancellationToken = CancellationToken;
                     var appId = await appCatalog.AddAsync(sharePointInstallConfig.AppCatalogueURL, packagePath);
                     await appCatalog.DeployAsync(sharePointInstallConfig.AppCatalogueURL, appId);
                     success = true;

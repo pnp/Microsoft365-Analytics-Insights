@@ -44,7 +44,7 @@ namespace App.ControlPanel.Engine.InstallerTasks.Tasks
             try
             {
                 // Find automation account
-                var automationAccount = Container.GetAutomationAccounts().AsEnumerable().Where(s => s.Data.Name == automationAccountName).SingleOrDefault();
+                var automationAccount = Container.GetAutomationAccounts().GetAll(cancellationToken: CancellationToken).Where(s => s.Data.Name == automationAccountName).SingleOrDefault();
                 if (automationAccount == null)
                 {
                     _logger.LogError($"Automation account '{automationAccountName}' not found. Cannot create hybrid worker group.");
@@ -55,7 +55,7 @@ namespace App.ControlPanel.Engine.InstallerTasks.Tasks
                 HybridRunbookWorkerGroupResource group = null;
                 try
                 {
-                    var response = await automationAccount.GetHybridRunbookWorkerGroupAsync(groupName);
+                    var response = await automationAccount.GetHybridRunbookWorkerGroupAsync(groupName, cancellationToken: CancellationToken);
                     group = response.Value;
                 }
                 catch (RequestFailedException ex) when (ex.Status == 404)
@@ -72,14 +72,14 @@ namespace App.ControlPanel.Engine.InstallerTasks.Tasks
                     };
                     try
                     {
-                        var operation = await automationAccount.GetHybridRunbookWorkerGroups().CreateOrUpdateAsync(WaitUntil.Completed, groupName, createContent);
+                        var operation = await automationAccount.GetHybridRunbookWorkerGroups().CreateOrUpdateAsync(WaitUntil.Completed, groupName, createContent, cancellationToken: CancellationToken);
                         group = operation.Value;
                     }
                     catch (RequestFailedException ex) when (ex.Status == 201)
                     {
                         // Azure SDK bug: 201 Created is a valid success response but the SDK throws.
                         // Retrieve the newly created group instead.
-                        var response = await automationAccount.GetHybridRunbookWorkerGroupAsync(groupName);
+                        var response = await automationAccount.GetHybridRunbookWorkerGroupAsync(groupName, cancellationToken: CancellationToken);
                         group = response.Value;
                     }
                     _logger.LogInformation($"Created hybrid worker group '{group.Data.Name}'.");
@@ -130,7 +130,7 @@ namespace App.ControlPanel.Engine.InstallerTasks.Tasks
 
                     try
                     {
-                        await group.GetHybridRunbookWorkers().CreateOrUpdateAsync(WaitUntil.Completed, workerName, workerContent);
+                        await group.GetHybridRunbookWorkers().CreateOrUpdateAsync(WaitUntil.Completed, workerName, workerContent, cancellationToken: CancellationToken);
                         _logger.LogInformation($"Registered VM as hybrid worker '{workerName}' in group '{groupName}'.");
                     }
                     catch (RequestFailedException ex) when (ex.Status == 201)
@@ -154,7 +154,7 @@ namespace App.ControlPanel.Engine.InstallerTasks.Tasks
 
                 return group;
             }
-            catch (Exception ex)
+            catch (Exception ex) when (!CancellationToken.IsCancellationRequested)
             {
                 _logger.LogError($"Hybrid worker group setup failed (non-fatal): {ex.Message}");
                 return null;
@@ -178,7 +178,7 @@ namespace App.ControlPanel.Engine.InstallerTasks.Tasks
 
             try
             {
-                vmResource = await vmResource.GetAsync();
+                vmResource = await vmResource.GetAsync(cancellationToken: CancellationToken);
             }
             catch (RequestFailedException ex)
             {
@@ -205,7 +205,7 @@ namespace App.ControlPanel.Engine.InstallerTasks.Tasks
                 var deadline = DateTime.UtcNow.AddSeconds(60);
                 while (DateTime.UtcNow < deadline)
                 {
-                    await Task.Delay(TimeSpan.FromSeconds(15));
+                    await Task.Delay(TimeSpan.FromSeconds(15), cancellationToken: CancellationToken);
                     powerState = await ReadVmPowerStateAsync(vmResource, vmShortName);
                     if (powerState == null) return false;
                     if (!string.Equals(powerState, "starting", StringComparison.OrdinalIgnoreCase)) break;
@@ -228,11 +228,11 @@ namespace App.ControlPanel.Engine.InstallerTasks.Tasks
             // without a working HybridWorkerService, causing "Cannot find any service" errors.
             try
             {
-                var existingExtension = await vmResource.GetVirtualMachineExtensionAsync(EXTENSION_NAME);
+                var existingExtension = await vmResource.GetVirtualMachineExtensionAsync(EXTENSION_NAME, cancellationToken: CancellationToken);
                 if (existingExtension?.Value != null)
                 {
                     _logger.LogInformation($"Removing existing Hybrid Worker extension from VM to ensure clean install...");
-                    await existingExtension.Value.DeleteAsync(WaitUntil.Completed);
+                    await existingExtension.Value.DeleteAsync(WaitUntil.Completed, cancellationToken: CancellationToken);
                     _logger.LogInformation($"Existing extension removed.");
                 }
             }
@@ -273,14 +273,14 @@ namespace App.ControlPanel.Engine.InstallerTasks.Tasks
 
                 var runCommandInput = new RunCommandInput("RunPowerShellScript");
                 runCommandInput.Script.Add(cleanupScript);
-                await vmResource.RunCommandAsync(WaitUntil.Completed, runCommandInput);
+                await vmResource.RunCommandAsync(WaitUntil.Completed, runCommandInput, cancellationToken: CancellationToken);
                 _logger.LogInformation("VM cleanup script completed.");
             }
             catch (RequestFailedException ex)
             {
                 _logger.LogWarning($"VM cleanup script failed (will attempt extension install anyway): {FirstLine(ex.Message)} (HTTP {ex.Status} {ex.ErrorCode}).");
             }
-            catch (Exception ex)
+            catch (Exception ex) when (!CancellationToken.IsCancellationRequested)
             {
                 _logger.LogWarning($"VM cleanup script failed (will attempt extension install anyway): {FirstLine(ex.Message)}");
             }
@@ -290,14 +290,14 @@ namespace App.ControlPanel.Engine.InstallerTasks.Tasks
             _logger.LogInformation("Restarting VM to ensure clean state before extension install...");
             try
             {
-                await vmResource.RestartAsync(WaitUntil.Completed);
+                await vmResource.RestartAsync(WaitUntil.Completed, cancellationToken: CancellationToken);
                 _logger.LogInformation("VM restarted successfully.");
             }
             catch (RequestFailedException ex)
             {
                 _logger.LogWarning($"VM restart failed (will attempt extension install anyway): {FirstLine(ex.Message)} (HTTP {ex.Status} {ex.ErrorCode}).");
             }
-            catch (Exception ex)
+            catch (Exception ex) when (!CancellationToken.IsCancellationRequested)
             {
                 _logger.LogWarning($"VM restart failed (will attempt extension install anyway): {FirstLine(ex.Message)}");
             }
@@ -321,7 +321,7 @@ namespace App.ControlPanel.Engine.InstallerTasks.Tasks
 
             try
             {
-                await vmResource.GetVirtualMachineExtensions().CreateOrUpdateAsync(WaitUntil.Completed, EXTENSION_NAME, extensionData);
+                await vmResource.GetVirtualMachineExtensions().CreateOrUpdateAsync(WaitUntil.Completed, EXTENSION_NAME, extensionData, cancellationToken: CancellationToken);
                 _logger.LogInformation($"Hybrid Worker extension installed/updated successfully on VM '{vmShortName}'.");
                 return true;
             }
@@ -340,7 +340,7 @@ namespace App.ControlPanel.Engine.InstallerTasks.Tasks
         {
             try
             {
-                var iv = await vmResource.InstanceViewAsync();
+                var iv = await vmResource.InstanceViewAsync(cancellationToken: CancellationToken);
                 return iv.Value.Statuses
                     .Where(s => s.Code != null && s.Code.StartsWith("PowerState/", StringComparison.OrdinalIgnoreCase))
                     .Select(s => s.Code.Substring("PowerState/".Length))
@@ -392,27 +392,31 @@ namespace App.ControlPanel.Engine.InstallerTasks.Tasks
                 var resourceId = automationAccount.Data.Id;
 
                 var tokenRequest = new Azure.Core.TokenRequestContext(new[] { "https://management.azure.com/.default" });
-                var token = await _credential.GetTokenAsync(tokenRequest, default);
+                var token = await _credential.GetTokenAsync(tokenRequest, CancellationToken);
 
                 using (var httpClient = new System.Net.Http.HttpClient())
                 {
                     httpClient.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token.Token);
                     var restUrl = $"https://management.azure.com{resourceId}?api-version=2023-11-01";
-                    var restResponse = await httpClient.GetStringAsync(restUrl);
-
-                    var json = Newtonsoft.Json.Linq.JObject.Parse(restResponse);
-                    var hybridUrl = json.SelectToken("properties.automationHybridServiceUrl")?.ToString();
-
-                    if (!string.IsNullOrEmpty(hybridUrl))
+                    using (var response = await httpClient.GetAsync(restUrl, CancellationToken))
                     {
-                        // Internal/debug detail — only useful when troubleshooting an automation
-                        // hybrid worker registration. Suppress from normal install logs.
-                        _logger.LogDebug($"Retrieved Automation Hybrid Service URL via REST: {hybridUrl}");
-                        return hybridUrl;
+                        response.EnsureSuccessStatusCode();
+                        var restResponse = await response.Content.ReadAsStringAsync();
+
+                        var json = Newtonsoft.Json.Linq.JObject.Parse(restResponse);
+                        var hybridUrl = json.SelectToken("properties.automationHybridServiceUrl")?.ToString();
+
+                        if (!string.IsNullOrEmpty(hybridUrl))
+                        {
+                            // Internal/debug detail — only useful when troubleshooting an automation
+                            // hybrid worker registration. Suppress from normal install logs.
+                            _logger.LogDebug($"Retrieved Automation Hybrid Service URL via REST: {hybridUrl}");
+                            return hybridUrl;
+                        }
                     }
                 }
             }
-            catch (Exception ex)
+            catch (Exception ex) when (!CancellationToken.IsCancellationRequested)
             {
                 _logger.LogError($"Failed to retrieve Automation Hybrid Service URL: {ex.Message}");
             }

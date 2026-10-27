@@ -4,6 +4,7 @@ using Azure.ResourceManager.Resources.Models;
 using CloudInstallEngine.Models;
 using Microsoft.Extensions.Logging;
 using System.Collections.Generic;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace CloudInstallEngine
@@ -13,6 +14,8 @@ namespace CloudInstallEngine
     /// </summary>
     public abstract class BaseInstallTask
     {
+        public CancellationToken CancellationToken { get; set; }
+
         /// <summary>
         /// Return object because the installer can't dynamically return T
         /// </summary>
@@ -67,8 +70,8 @@ namespace CloudInstallEngine
             }
             if (addedTags)
             {
-                var r = await tagResource.GetAsync();
-                await r.Value.UpdateAsync(WaitUntil.Completed, tagPatch);
+                var r = await tagResource.GetAsync(CancellationToken);
+                await r.Value.UpdateAsync(WaitUntil.Completed, tagPatch, CancellationToken);
                 // Intentionally no log line: tag updates are an implementation detail and
                 // every "Found existing X" line is already adjacent — emitting "Updated resource tags"
                 // for almost every resource only adds noise to the install log.
@@ -98,7 +101,10 @@ namespace CloudInstallEngine
 
         public sealed override async Task<object> ExecuteTask(object contextArg)
         {
-            return await ExecuteTaskReturnResult(contextArg);
+            CancellationToken.ThrowIfCancellationRequested();
+            var result = await ExecuteTaskReturnResult(contextArg);
+            CancellationToken.ThrowIfCancellationRequested();
+            return result;
         }
 
         public abstract Task<TASKRESULTINGRESOURCE> ExecuteTaskReturnResult(object contextArg);

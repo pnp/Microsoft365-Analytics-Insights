@@ -3,6 +3,7 @@ using Azure.ResourceManager.Resources;
 using CloudInstallEngine.Azure;
 using Common.Entities.Installer;
 using Microsoft.Extensions.Logging;
+using System.Threading;
 
 namespace App.ControlPanel.Engine.InstallerTasks
 {
@@ -22,10 +23,10 @@ namespace App.ControlPanel.Engine.InstallerTasks
             _config = config;
         }
 
-        public static SubscriptionResource FromConfig(SolutionInstallConfig config)
+        public static SubscriptionResource FromConfig(SolutionInstallConfig config, CancellationToken cancellationToken = default(CancellationToken))
         {
             var azureSub = FromTokenCredential(new ClientSecretCredential(config.InstallerAccount.DirectoryId, config.InstallerAccount.ClientId,
-                config.InstallerAccount.Secret), config.Subscription.SubId);
+                config.InstallerAccount.Secret), config.Subscription.SubId, cancellationToken);
 
 
             return azureSub;
